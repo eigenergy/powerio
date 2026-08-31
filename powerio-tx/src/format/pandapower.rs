@@ -9,8 +9,8 @@ use std::collections::{BTreeMap, HashMap};
 use serde_json::{Map, Value};
 
 use super::{
-    Conversion, bus_kv, finish, jnum, nonzero_differs, set_bus_kind, warn_extra_branch_rating_sets,
-    zbase,
+    TextEmission, bus_kv, finish, jnum, nonzero_differs, set_bus_kind,
+    warn_extra_branch_rating_sets, zbase,
 };
 use crate::diagnostics::codes::EMIT_PANDAPOWER as F;
 use crate::diagnostics::{Diagnostics, codes};
@@ -665,7 +665,7 @@ pub(crate) fn parse_pandapower_source(
                 to,
                 in_service: row.bool_or("in_service", true),
                 pf,
-                pt: Hvdc::delivered_power(pf, loss_mw, loss_percent / 100.0),
+                pt: Hvdc::calc_delivered_power(pf, loss_mw, loss_percent / 100.0),
                 qf: 0.0,
                 qt: 0.0,
                 vf: row.f_or("vm_from_pu", 1.0),
@@ -855,7 +855,7 @@ fn warn_nonempty_table(
 }
 
 #[must_use]
-pub fn write_pandapower_json(net: &BalancedNetwork) -> Conversion {
+pub fn write_pandapower_json(net: &BalancedNetwork) -> TextEmission {
     let mut warnings = Diagnostics::new();
     warn_pandapower_writer_losses(net, &mut warnings);
 
@@ -1407,13 +1407,13 @@ fn branch_frames(
                 net.base_mva()
             };
             let z = (br.r * br.r + br.x * br.x).sqrt();
-            let tap = br.effective_tap();
+            let tap = br.calc_effective_tap();
             let tap_delta = tap - 1.0;
             // pandapower's trafo magnetizing branch is inductive only and
             // single sided; MATPOWER's capacitive charging maps exactly onto a
             // bus shunt at each terminal instead (the from-side half sits
             // behind the tap in MATPOWER's model, hence the tap² rebase).
-            let terminal = br.terminal_charging();
+            let terminal = br.calc_terminal_charging();
             if terminal.g_fr != 0.0 || terminal.b_fr != 0.0 {
                 charging.push((
                     br.from,
@@ -1460,7 +1460,7 @@ fn branch_frames(
                 Value::Bool(br.in_service),
             ]);
         } else {
-            let terminal = br.terminal_charging();
+            let terminal = br.calc_terminal_charging();
             if br.charging.is_some()
                 && ((terminal.g_fr - terminal.g_to).abs() > f64::EPSILON
                     || (terminal.b_fr - terminal.b_to).abs() > f64::EPSILON)
@@ -1480,7 +1480,9 @@ fn branch_frames(
                 jnum(br.r * zb),
                 jnum(br.x * zb),
                 jnum(
-                    terminal.total_b() / zb / (2.0 * std::f64::consts::PI * net.base_frequency())
+                    terminal.calc_total_b()
+                        / zb
+                        / (2.0 * std::f64::consts::PI * net.base_frequency())
                         * 1e9,
                 ),
                 jnum((terminal.g_fr + terminal.g_to) / zb * 1e6),
@@ -2474,7 +2476,7 @@ mod tests {
     }
 
     impl Parsed {
-        fn rendered_diagnostics(&self) -> Vec<String> {
+        fn render_diagnostics(&self) -> Vec<String> {
             crate::diagnostics::render_diagnostics(&self.diagnostics)
         }
     }
@@ -2545,11 +2547,11 @@ mod tests {
 
         let conv = write_pandapower_json(&net);
         assert!(
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("negative vk_percent")),
             "the nonstandard spelling must be declared: {:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
         let back = parse_pandapower_json(&conv.text).unwrap().network;
         let b = &back.branches()[0];
@@ -3067,11 +3069,11 @@ mod tests {
         assert!((br.x - 0.1 * 1.06 * 1.06).abs() < 1e-12);
         assert!(
             !parsed
-                .rendered_diagnostics()
+                .render_diagnostics()
                 .iter()
                 .any(|w| w.contains("tap")),
             "{:?}",
-            parsed.rendered_diagnostics()
+            parsed.render_diagnostics()
         );
     }
 
@@ -3096,11 +3098,11 @@ mod tests {
         assert_eq!(parsed.network.branches()[0].tap, 1.0);
         assert!(
             !parsed
-                .rendered_diagnostics()
+                .render_diagnostics()
                 .iter()
                 .any(|w| w.contains("tap")),
             "{:?}",
-            parsed.rendered_diagnostics()
+            parsed.render_diagnostics()
         );
     }
 
@@ -3181,7 +3183,7 @@ mod tests {
             parsed.diagnostics.iter().any(|d| d.message()
                 == "`trafo`: 1 row(s) have a tabular or unrecognized tap changer; those taps were ignored"),
             "{:?}",
-            parsed.rendered_diagnostics()
+            parsed.render_diagnostics()
         );
     }
 
@@ -3262,7 +3264,7 @@ mod tests {
                 .iter()
                 .any(|d| d.message() == "`svc` table ignored (1 rows): not mapped"),
             "{:?}",
-            parsed.rendered_diagnostics()
+            parsed.render_diagnostics()
         );
     }
 
@@ -3302,11 +3304,11 @@ mod tests {
         let conv = write_pandapower_json(&net);
         assert!(
             !conv
-                .rendered_diagnostics()
+                .render_diagnostics()
                 .iter()
                 .any(|w| w.contains("non-finite")),
             "{:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
     }
 
@@ -3322,7 +3324,7 @@ mod tests {
             conv.diagnostics.iter().any(|d| d.message()
                 == "`gen`: non-finite value(s) written as null in column(s) `min_q_mvar` (1), `max_q_mvar` (1); pandapower reads them as NaN"),
             "{:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
     }
 
@@ -3366,7 +3368,7 @@ mod tests {
             assert!(
                 parsed.diagnostics.iter().any(|d| d.message() == expected),
                 "missing {expected:?} in {:?}",
-                parsed.rendered_diagnostics()
+                parsed.render_diagnostics()
             );
         }
     }
@@ -3395,7 +3397,7 @@ mod tests {
             parsed.diagnostics.iter().any(|d| d.message()
                 == "`poly_cost`: reactive cost coefficients (cq*) nonzero on 1 rows; only active power costs are read"),
             "{:?}",
-            parsed.rendered_diagnostics()
+            parsed.render_diagnostics()
         );
     }
 
@@ -3407,9 +3409,9 @@ mod tests {
         ]))
         .unwrap();
         assert!(
-            parsed.rendered_diagnostics().is_empty(),
+            parsed.render_diagnostics().is_empty(),
             "{:?}",
-            parsed.rendered_diagnostics()
+            parsed.render_diagnostics()
         );
     }
 
@@ -3444,16 +3446,16 @@ mod tests {
         ]))
         .unwrap();
         assert!(
-            parsed.rendered_diagnostics().is_empty(),
+            parsed.render_diagnostics().is_empty(),
             "{:?}",
-            parsed.rendered_diagnostics()
+            parsed.render_diagnostics()
         );
         assert!(matches!(
             &parsed.network.loads()[0].voltage_model,
             Some(LoadVoltageModel::Zip { p_constant_impedance, .. }) if *p_constant_impedance == 0.2
         ));
-        assert!(parsed.network.branches()[0].terminal_charging().g_fr > 0.0);
-        assert!(parsed.network.branches()[1].terminal_charging().b_fr < 0.0);
+        assert!(parsed.network.branches()[0].calc_terminal_charging().g_fr > 0.0);
+        assert!(parsed.network.branches()[1].calc_terminal_charging().b_fr < 0.0);
     }
 
     #[test]
@@ -3481,9 +3483,9 @@ mod tests {
         ]))
         .unwrap();
         assert!(
-            parsed.rendered_diagnostics().is_empty(),
+            parsed.render_diagnostics().is_empty(),
             "{:?}",
-            parsed.rendered_diagnostics()
+            parsed.render_diagnostics()
         );
         assert!(matches!(
             &parsed.network.loads()[0].voltage_model,
@@ -3678,9 +3680,9 @@ mod tests {
 
         let conv = write_pandapower_json(&net);
         assert!(
-            conv.rendered_diagnostics().is_empty(),
+            conv.render_diagnostics().is_empty(),
             "{:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
         let load = written_frame(&conv.text, "load");
         assert_eq!(col(&load, "p_mw"), vec![json!(20.0)]);
@@ -3723,7 +3725,7 @@ mod tests {
                 || d.message()
                     .starts_with("2 transformer terminal charging shunt(s) written into `shunt`")),
             "{:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
         let shunt = written_frame(&conv.text, "shunt");
         assert_eq!(shunt.data.len(), 2);
@@ -3751,7 +3753,7 @@ mod tests {
                 .message()
                 .starts_with("2 bus(es) carry no base_kv; written with vn_kv = 1")),
             "{:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
         let rt = parse_pandapower_json(&conv.text).unwrap();
         let b = &rt.network.branches()[0];
@@ -3827,7 +3829,7 @@ mod tests {
             conv.diagnostics.iter().any(|d| d.message()
                 == "1 generator costs truncated to quadratic: poly_cost carries cp0/cp1/cp2 only"),
             "{:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
     }
 
@@ -3862,7 +3864,7 @@ mod tests {
             assert!(
                 conv.diagnostics.iter().any(|d| d.message() == expected),
                 "missing {expected:?} in {:?}",
-                conv.rendered_diagnostics()
+                conv.render_diagnostics()
             );
         }
     }
@@ -3895,7 +3897,7 @@ mod tests {
                 .iter()
                 .any(|d| d.message().contains("absolute objective level is unstated")),
             "{:?}",
-            parsed.rendered_diagnostics()
+            parsed.render_diagnostics()
         );
     }
 
@@ -3953,7 +3955,7 @@ mod tests {
                 .iter()
                 .any(|d| d.message().contains("absolute objective shifts")),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
         // The shape survives; the level restarts at zero on read back.
         let again = parse_pandapower_json(&out.text).unwrap();

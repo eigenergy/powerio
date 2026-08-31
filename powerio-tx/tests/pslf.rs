@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use powerio_tx::{
     BalancedNetwork, Bus, BusId, BusType, Generator, Load, Shunt, ShuntBlock, SourceFormat,
-    SwitchedShuntControl, SwitchedShuntMode, TargetFormat, target_format_from_name, write_pslf,
+    SwitchedShuntControl, SwitchedShuntMode, TargetFormat, parse_target_format,
 };
 
 const EPC: &str = r#"title
@@ -59,8 +59,8 @@ fn parse_file_accepts_case_insensitive_pslf_hint() {
 
 #[test]
 fn pslf_is_a_write_target() {
-    assert_eq!(target_format_from_name("pslf"), Some(TargetFormat::Pslf));
-    assert_eq!(target_format_from_name("epc"), Some(TargetFormat::Pslf));
+    assert_eq!(parse_target_format("pslf"), Some(TargetFormat::Pslf));
+    assert_eq!(parse_target_format("epc"), Some(TargetFormat::Pslf));
 }
 
 #[test]
@@ -69,7 +69,7 @@ fn pslf_write_read_round_trip_preserves_the_core() {
     // transformer and ZIP load split exercise the multi-line record and the
     // replayed pslf_* extras.)
     let net0 = parse_pslf(EPC_WITH_TRANSFORMER).unwrap();
-    let text = write_pslf(&net0).text;
+    let text = emit_pslf(&net0).text;
     let net1 = parse_pslf(&text).unwrap();
 
     assert_eq!(net1.buses().len(), net0.buses().len());
@@ -102,7 +102,7 @@ fn pslf_write_read_round_trip_preserves_the_core() {
 fn pslf_same_format_write_echoes_source() {
     // A PSLF-sourced network writes back byte-for-byte through the retained source.
     let parsed = parse_str(EPC, "pslf").unwrap();
-    assert_eq!(parsed.to_format(TargetFormat::Pslf).unwrap().text, EPC);
+    assert_eq!(parsed.emit(TargetFormat::Pslf).unwrap().text, EPC);
 }
 
 #[test]
@@ -126,13 +126,13 @@ fn pslf_write_reports_dropped_transformer_control() {
     let net = parse_psse(raw).unwrap();
     assert!(net.branches()[0].control.is_some());
 
-    let conv = write_pslf(&net);
+    let conv = emit_pslf(&net);
     assert!(
-        conv.rendered_diagnostics()
+        conv.render_diagnostics()
             .iter()
             .any(|w| w.contains("regulating control")),
         "expected a control-drop warning, got {:?}",
-        conv.rendered_diagnostics()
+        conv.render_diagnostics()
     );
 }
 
@@ -157,13 +157,13 @@ fn pslf_write_reports_dropped_generator_regulated_bus() {
         Some(powerio_tx::BusId(7))
     );
 
-    let conv = write_pslf(&net);
+    let conv = emit_pslf(&net);
     assert!(
-        conv.rendered_diagnostics()
+        conv.render_diagnostics()
             .iter()
             .any(|w| w.contains("remote regulated bus")),
         "expected a regulated-bus-drop warning, got {:?}",
-        conv.rendered_diagnostics()
+        conv.render_diagnostics()
     );
 }
 
@@ -206,7 +206,7 @@ fn pslf_write_preserves_generator_voltage_setpoint() {
     net.buses_mut().push(bus);
     net.generators_mut().push(generator);
 
-    let text = write_pslf(&net).text;
+    let text = emit_pslf(&net).text;
     let reparsed = parse_pslf(&text).unwrap();
 
     assert_eq!(reparsed.generators().len(), 1);
@@ -231,14 +231,14 @@ fn pslf_write_reports_dropped_switched_shunt_control() {
     ));
     net.shunts_mut().push(shunt);
 
-    let conv = write_pslf(&net);
+    let conv = emit_pslf(&net);
 
     assert!(
-        conv.rendered_diagnostics()
+        conv.render_diagnostics()
             .iter()
             .any(|w| w.contains("switched shunt") && w.contains("fixed")),
         "expected switched-shunt warning, got {:?}",
-        conv.rendered_diagnostics()
+        conv.render_diagnostics()
     );
 }
 
@@ -254,7 +254,7 @@ fn pslf_write_gives_parallel_devices_distinct_ids() {
     net.shunts_mut().push(Shunt::new(BusId(1), 0.0, 5.0));
     net.shunts_mut().push(Shunt::new(BusId(1), 0.0, 7.0));
 
-    let back = parse_pslf(&write_pslf(&net).text).unwrap();
+    let back = parse_pslf(&emit_pslf(&net).text).unwrap();
 
     assert_eq!(back.loads().len(), 2);
     assert_eq!(back.shunts().len(), 2);
@@ -303,7 +303,7 @@ end
     assert_eq!(as_id(&net.shunts()[0].extras).as_deref(), Some("S2"));
 
     // The direct writer (no retained-source echo) keeps the ids.
-    let back = parse_pslf(&write_pslf(&net).text).unwrap();
+    let back = parse_pslf(&emit_pslf(&net).text).unwrap();
     assert_eq!(as_id(&back.loads()[0].extras).as_deref(), Some("L7"));
     assert_eq!(as_id(&back.shunts()[0].extras).as_deref(), Some("S2"));
 }
@@ -336,7 +336,7 @@ fn pslf_reads_and_writes_a_three_winding_transformer() {
     assert!((t.windings[0].tap - 1.05).abs() < 1e-9);
 
     // Round trip through the writer keeps the buses, impedances, and primary tap.
-    let net2 = parse_pslf(&write_pslf(&net).text).unwrap();
+    let net2 = parse_pslf(&emit_pslf(&net).text).unwrap();
     assert_eq!(net2.transformers_3w().len(), 1);
     assert!(net2.branches().is_empty());
     let t2 = &net2.transformers_3w()[0];
@@ -414,11 +414,11 @@ fn pslf_missing_end_marker_warns_without_panic() {
     let parsed = outcome.unwrap().expect("single bus PSLF case should parse");
     assert!(
         parsed
-            .rendered_diagnostics()
+            .render_diagnostics()
             .iter()
             .any(|warning| warning.contains("no end marker")),
         "expected no end marker warning, got {:?}",
-        parsed.rendered_diagnostics()
+        parsed.render_diagnostics()
     );
 }
 

@@ -1,18 +1,18 @@
-//! Read and write legacy GE PSLF `.epc` power flow cases.
+//! Parse and emit legacy GE PSLF `.epc` power flow cases.
 //!
 //! EPC files contain named data sections with colon separated record bodies.
-//! The reader keeps raw physical lines plus token lists on both sides of each
+//! The parser keeps raw physical lines plus token lists on both sides of each
 //! colon, then maps the static power flow core into [`BalancedNetwork`]. Records outside
-//! that model stay in retained source text and read warnings. [`write_pslf`]
-//! inverts the reader's column layout for the cross-format write path (same
-//! format writes echo the retained source).
+//! that model stay in retained source text and parse diagnostics. [`write_pslf`]
+//! inverts the parser's column layout for cross format emission (same format
+//! emission echoes the retained source).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 
 use serde_json::{Number, Value};
 
-use super::{Conversion, sanitize_quoted, warn_extra_branch_rating_sets};
+use super::{TextEmission, sanitize_quoted, warn_extra_branch_rating_sets};
 use crate::diagnostics::codes::EMIT_PSLF as F;
 use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
@@ -29,9 +29,9 @@ const NAME_FORBIDDEN: &[char] = &['"'];
 
 /// Parse a PSLF `.epc` case into a [`BalancedNetwork`].
 ///
-/// Read warnings are available through the shared [`crate::parse_file`] /
-/// [`crate::parse_str`] entry points. This direct helper keeps the older
-/// format-module convention and returns only the typed network.
+/// Parse diagnostics are available on the module returned by the `powerio`
+/// facade's `parse_file` or `parse_text` entry. This direct helper returns
+/// only the typed network.
 /// Parse retained source from the format hub.
 pub(crate) fn parse_pslf_source(
     source: &str,
@@ -1211,13 +1211,13 @@ struct BusRef<'a> {
 /// not name under a `pslf_*` extras key (the ZIP load split, the per unit shunt
 /// G/B, the branch circuit id, the transformer winding base), the writer replays
 /// it; otherwise it synthesizes the column. Same-format byte-exact echo rides the
-/// retained source (see [`crate::write_as`]); this is the cross format path and
+/// retained source (see [`crate::emit`]); this is the cross format path and
 /// the fallback when the source text was dropped (e.g. after a JSON round trip).
 #[must_use]
 // A flat serializer: one stanza per EPC section; splitting it would add
 // indirection without clarity.
 #[expect(clippy::too_many_lines)]
-pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
+pub fn write_pslf(net: &BalancedNetwork) -> TextEmission {
     let mut warnings = Diagnostics::new();
     let mut nonfinite = false;
     let mut sanitized_names = 0usize;
@@ -1436,7 +1436,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
                 i32::from(br.in_service),
                 num(br.r),
                 num(br.x),
-                num(br.total_charging_b()),
+                num(br.calc_total_charging_b()),
                 num(br.rate_a),
                 num(br.rate_b),
                 num(br.rate_c),
@@ -1484,7 +1484,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
             line2[7] = num(br.rate_b);
             line2[8] = num(br.rate_c);
             line2[10] = num(br.shift);
-            line2[16] = num(br.effective_tap());
+            line2[16] = num(br.calc_effective_tap());
             let _ = writeln!(s, "{}", line2.join(" "));
         }
         for tr in net.transformers_3w() {
@@ -1693,8 +1693,8 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
         .iter()
         .filter(|b| {
             b.is_transformer()
-                && (b.terminal_charging().total_g().abs() > 1e-12
-                    || b.terminal_charging().total_b().abs() > 1e-12)
+                && (b.calc_terminal_charging().calc_total_g().abs() > 1e-12
+                    || b.calc_terminal_charging().calc_total_b().abs() > 1e-12)
         })
         .count();
     if transformer_charging > 0 {
@@ -1824,7 +1824,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
         );
     }
 
-    Conversion::new(s, warnings)
+    TextEmission::new(s, warnings)
 }
 
 /// Neutral bus kind -> PSLF bus type code (inverse of [`pslf_bus_type`]).
@@ -2172,11 +2172,11 @@ end
 
         let conv = write_pslf(&net);
         assert!(
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("transformer charging admittance")),
             "{:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
     }
 

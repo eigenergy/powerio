@@ -13,13 +13,13 @@ use sprs::CsMat;
 
 use crate::{Error, Result};
 
-pub fn write_mtx(matrix: &CsMat<f64>, path: impl AsRef<Path>) -> Result<()> {
-    commit_one_file(path.as_ref(), mtx_bytes(matrix)?)
+pub fn emit_mtx(matrix: &CsMat<f64>, path: impl AsRef<Path>) -> Result<()> {
+    commit_one_file(path.as_ref(), to_mtx_bytes(matrix)?)
 }
 
 /// The complete Matrix Market text for one matrix, symmetric when the header
 /// round trips exactly and general otherwise.
-pub fn mtx_bytes(matrix: &CsMat<f64>) -> Result<Vec<u8>> {
+pub fn to_mtx_bytes(matrix: &CsMat<f64>) -> Result<Vec<u8>> {
     if is_exactly_symmetric(matrix) {
         symmetric_mtx_bytes(matrix)
     } else {
@@ -83,7 +83,7 @@ pub fn read_mtx(path: impl AsRef<Path>) -> Result<CsMat<f64>> {
     Ok(tri.to_csr())
 }
 
-/// Read a dense vector written by [`write_vector_mtx`] (`array real general`):
+/// Read a dense vector emitted by [`emit_vector_mtx`] (`array real general`):
 /// `%`-comment lines, a `<len> 1` dimensions line, then one value per line.
 pub fn read_vector_mtx(path: impl AsRef<Path>) -> Result<Vec<f64>> {
     let text = std::fs::read_to_string(path)?;
@@ -113,13 +113,13 @@ pub fn read_vector_mtx(path: impl AsRef<Path>) -> Result<Vec<f64>> {
     Ok(values)
 }
 
-/// Write a dense vector as Matrix Market `array real general`.
-pub fn write_vector_mtx(values: &[f64], path: impl AsRef<Path>) -> Result<()> {
-    commit_one_file(path.as_ref(), vector_mtx_bytes(values)?)
+/// Emit a dense vector as Matrix Market `array real general`.
+pub fn emit_vector_mtx(values: &[f64], path: impl AsRef<Path>) -> Result<()> {
+    commit_one_file(path.as_ref(), to_vector_mtx_bytes(values)?)
 }
 
 /// The complete Matrix Market `array real general` text for one vector.
-pub fn vector_mtx_bytes(values: &[f64]) -> Result<Vec<u8>> {
+pub fn to_vector_mtx_bytes(values: &[f64]) -> Result<Vec<u8>> {
     let mut w = Vec::new();
     writeln!(w, "%%MatrixMarket matrix array real general")?;
     writeln!(w, "% written by powerio")?;
@@ -157,7 +157,7 @@ fn is_exactly_symmetric(a: &CsMat<f64>) -> bool {
 mod tests {
     use sprs::TriMat;
 
-    use super::write_mtx;
+    use super::emit_mtx;
 
     #[test]
     fn single_file_writers_take_any_platform_legal_target_name() {
@@ -179,12 +179,12 @@ mod tests {
         let nonportable = ["with space.mtx"];
         for name in nonportable {
             let target = base.join(name);
-            super::write_vector_mtx(&[3.0], &target).unwrap_or_else(|error| {
+            super::emit_vector_mtx(&[3.0], &target).unwrap_or_else(|error| {
                 panic!("{name}: {error}");
             });
             assert_eq!(super::read_vector_mtx(&target).unwrap(), vec![3.0]);
             // An existing entry at the same platform-legal name still refuses.
-            let error = super::write_vector_mtx(&[4.0], &target).unwrap_err();
+            let error = super::emit_vector_mtx(&[4.0], &target).unwrap_err();
             assert!(matches!(error, crate::Error::Commit(_)), "{error:?}");
             assert_eq!(super::read_vector_mtx(&target).unwrap(), vec![3.0]);
         }
@@ -197,7 +197,7 @@ mod tests {
             let raw =
                 std::ffi::OsStr::from_bytes(&[b'r', b'a', b'w', 0xFF, b'.', b'm', b't', b'x']);
             let target = base.join(raw);
-            super::write_vector_mtx(&[5.0], &target).unwrap();
+            super::emit_vector_mtx(&[5.0], &target).unwrap();
             assert_eq!(super::read_vector_mtx(&target).unwrap(), vec![5.0]);
         }
         let _ = std::fs::remove_dir_all(&base);
@@ -207,14 +207,14 @@ mod tests {
     fn single_file_writers_never_replace_an_existing_entry() {
         let path = temp_path("no-clobber-single");
         std::fs::write(&path, b"precious").unwrap();
-        let error = super::write_vector_mtx(&[1.0, 2.0], &path).unwrap_err();
+        let error = super::emit_vector_mtx(&[1.0, 2.0], &path).unwrap_err();
         assert!(matches!(error, crate::Error::Commit(_)), "{error:?}");
         assert_eq!(std::fs::read(&path).unwrap(), b"precious");
         let _ = std::fs::remove_file(&path);
 
         // A fresh target commits and reads back.
         let fresh = temp_path("no-clobber-single-fresh");
-        super::write_vector_mtx(&[1.0, 2.0], &fresh).unwrap();
+        super::emit_vector_mtx(&[1.0, 2.0], &fresh).unwrap();
         assert_eq!(super::read_vector_mtx(&fresh).unwrap(), vec![1.0, 2.0]);
         let _ = std::fs::remove_file(&fresh);
     }
@@ -229,7 +229,7 @@ mod tests {
         let matrix = tri.to_csr();
 
         let path = temp_path("value-asymmetric");
-        write_mtx(&matrix, &path).unwrap();
+        emit_mtx(&matrix, &path).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         let _ = std::fs::remove_file(&path);
 
@@ -253,7 +253,7 @@ mod tests {
         let matrix = tri.to_csr();
 
         let path = temp_path("near-symmetric");
-        write_mtx(&matrix, &path).unwrap();
+        emit_mtx(&matrix, &path).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         let _ = std::fs::remove_file(&path);
 
@@ -274,7 +274,7 @@ mod tests {
         let matrix = tri.to_csr();
 
         let path = temp_path("structurally-asymmetric");
-        write_mtx(&matrix, &path).unwrap();
+        emit_mtx(&matrix, &path).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         let _ = std::fs::remove_file(&path);
 
@@ -294,7 +294,7 @@ mod tests {
         let matrix = tri.to_csr();
 
         let path = temp_path("exactly-symmetric");
-        write_mtx(&matrix, &path).unwrap();
+        emit_mtx(&matrix, &path).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         let _ = std::fs::remove_file(&path);
 

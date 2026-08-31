@@ -1,4 +1,4 @@
-//! Typed balanced network models, parsers, and writers.
+//! Typed balanced network models and format implementations.
 //!
 //! Readers and writers cover MATPOWER `.m`, PowerModels JSON, PSS/E `.raw`,
 //! PowerWorld `.aux`, pandapower JSON, PyPSA CSV, egret JSON, PSLF `.epc`, GO
@@ -6,16 +6,16 @@
 //! case files are read only, and GO Challenge 3 and OPFData JSON have no
 //! canonical writer beyond same source echo; `.pwd` display files parse through
 //! [`parse_display_file`].
-//! Each reader produces a [`BalancedNetwork`]. [`BalancedNetwork::to_format`] returns the
-//! serialized target and warnings for fields the target cannot represent. See
-//! [`crate::format`] for format routing and fidelity rules.
+//! Each reader produces a [`BalancedNetwork`]. The top level `powerio` facade
+//! owns universal parsing and `emit`; this component crate supplies the typed
+//! transmission implementation.
 //!
 //! A reader that retains source text can return those bytes when writing the
 //! same format. Matrix and problem instance builders live in separate crates.
 //!
 //! ```
 //! use powerio_core::Source;
-//! use powerio_tx::{TargetFormat, format_id_for, parse, write_as};
+//! use powerio_tx::{parse, parse_format_id};
 //!
 //! let src = "\
 //! function mpc = example
@@ -30,11 +30,9 @@
 //! ];
 //! ";
 //! let source = Source::from_bytes("example.m", src.as_bytes().to_vec())?
-//!     .with_format(format_id_for("matpower")?);
+//!     .with_format(parse_format_id("matpower")?);
 //! let module = parse(source)?;
 //! assert_eq!(module.value().buses().len(), 2);
-//! // An unchanged parsed module echoes its source bytes exactly.
-//! assert_eq!(write_as(&module, TargetFormat::Matpower)?.text, src);
 //! # Ok::<(), powerio_core::Error>(())
 //! ```
 
@@ -53,33 +51,34 @@ pub mod indexed;
 pub mod network;
 mod normalize;
 mod operations;
+#[doc(hidden)]
 pub mod solver_tables;
 pub mod version;
 
-pub use dc::{BranchSusceptanceFormula, DcConvention, DcNetworkData, dc_network_data};
+pub use dc::BranchSusceptanceFormula;
 pub use diagnostics::{Diagnostic, DiagnosticCode, DiagnosticSeverity, EmitFamily};
 pub use error::{Error, ErrorCategory, Result};
 pub use format::routing::{
     Detection, JSON_CLASSES, JsonClass, classify_json_bytes, classify_json_text,
+    parse_distribution_format, parse_transmission_format,
 };
 #[cfg(test)]
 pub(crate) use format::test_parse::{parse_file, parse_str};
 pub use format::{
-    Conversion, DisplayData, DisplayFormat, OpfDataSolution, PwdDisplay, PwdSubstation,
-    PypsaCsvOutputs, PypsaCsvSequence, SOURCE_FORMAT_NAMES, TargetFormat, WriteOptions,
-    convert_file, convert_file_with_options, convert_str, convert_str_with_options,
-    display_format_from_name, format_id_for, parse, parse_display_bytes, parse_display_file,
-    parse_egret_time_series, parse_goc3_json, parse_opfdata_json, parse_pypsa_csv_time_series,
-    target_format_from_name, write, write_as, write_as_with_options, write_dir,
-    write_dir_with_options, write_egret_json, write_matpower, write_network, write_pandapower_json,
-    write_powermodels_json, write_powerworld, write_pslf, write_psse, write_psse_rev,
-    write_pypsa_csv, write_pypsa_csv_folder, write_surge_json, write_with_options,
+    DisplayData, DisplayFormat, EmitOptions, OpfDataSolution, PwdDisplay, PwdSubstation,
+    PypsaCsvSequence, SOURCE_FORMAT_NAMES, TargetFormat, emit, emit_with_options, parse,
+    parse_display, parse_display_file, parse_display_format, parse_egret_time_series,
+    parse_format_id, parse_goc3_json, parse_opfdata_json, parse_pypsa_csv_time_series,
+    parse_target_format,
 };
+
+#[doc(hidden)]
+pub use format::{__emit_pypsa_csv, __emit_pypsa_csv_with_options};
 pub use gen_cost::{GenCostPatch, GenCostPolicyReport, MissingGenCostPolicy, parse_gen_cost_csv};
 pub use geo::{
     Canvas, CoordinateSpace, CoordsKind, ElementKey, GeoApplyReport, GeoFeature, GeoGeometry,
     GeoLayer, GeoMeta, GeoParsed, GeoTarget, Location, apply_substation_points,
-    geo_layer_from_aux_substations, geo_layer_from_pwd, pwd_mercator_to_lonlat,
+    to_geo_layer_from_aux_substations, to_geo_layer_from_pwd, to_lonlat_from_pwd_mercator,
 };
 pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork};
 pub use network::{
@@ -87,13 +86,14 @@ pub use network::{
     BranchSolution, Bus, BusId, BusType, DEFAULT_BASE_FREQUENCY, Extras, GenCaps, GenCost,
     Generator, Hvdc, Impedance, Load, LoadVoltageModel, Shunt, ShuntBlock, SolverParams,
     SourceFormat, Storage, Switch, SwitchedShuntControl, SwitchedShuntMode, Transformer3W,
-    TransformerControl, TransformerControlMode, Winding, repair_values, series_admittance_of,
+    TransformerControl, TransformerControlMode, Winding, calc_series_admittance_of, repair_values,
 };
 pub use normalize::{
     NormalizeOptions, NormalizeSourceRows, NormalizedNetwork, POWER_MODELS_ANGLE_BOUND_PAD,
 };
 pub use operations::Selector;
 
+#[doc(hidden)]
 pub use solver_tables::{
     NORMALIZED_SOLVER_TABLES_PASS, NormalizedSolverTables, SolverArcRow, SolverArcTerminal,
     SolverBranchRow, SolverBusRow, SolverCostRow, SolverGeneratorRow, SolverHvdcRow, SolverLoadRow,

@@ -25,8 +25,9 @@ could not be settled from source definitions alone:
   values;
 - `PioValue` is the finite built in dynamic boundary, with a flat
   nonexhaustive enum and stable `PioValueKind` strings;
-- `powerio::try_into_typed::<T>` moves value and module records, and failed
-  narrowing returns the original module;
+- ordinary Rust matches `module.value()`; the advanced
+  `module.into_typed::<T>()` operation moves value and module records, and
+  failed narrowing returns the original module;
 - opaque immutable network snapshots, sibling instances, and solutions share
   owners without a public `BalancedNetworkData` type;
 - ordinary generic time series and scenario containers work without public

@@ -11,7 +11,7 @@ use powerio_dist::{
 
 mod helpers;
 use helpers::{
-    parse_dss_file, parse_dss_str, parse_pmd_file, parse_pmd_str, write_bmopf_json, write_pmd_json,
+    emit_bmopf_json, emit_pmd_json, parse_dss_file, parse_dss_str, parse_pmd_file, parse_pmd_str,
 };
 
 fn fixture(rel: &str) -> PathBuf {
@@ -130,9 +130,9 @@ fn four_wire_reference_agrees() {
 #[test]
 fn canonical_output_is_idempotent() {
     let net = parse_pmd_file(fixture("pmd/ieee13.json")).unwrap();
-    let once = write_pmd_json(&net);
+    let once = emit_pmd_json(&net);
     let again = parse_pmd_str(&once.text).unwrap();
-    let twice = write_pmd_json(&again);
+    let twice = emit_pmd_json(&again);
     assert_eq!(once.text, twice.text);
 }
 
@@ -140,7 +140,7 @@ fn canonical_output_is_idempotent() {
 #[test]
 fn pmd_round_trips_to_model_equality() {
     let net = parse_pmd_file(fixture("pmd/ieee13.json")).unwrap();
-    let out = write_pmd_json(&net);
+    let out = emit_pmd_json(&net);
     let again = parse_pmd_str(&out.text).unwrap();
     let strip = |n: &MulticonductorNetwork| {
         let mut n = n.clone();
@@ -166,7 +166,7 @@ fn dss_delta_shunt_writes_pmd_delta_configuration() {
          New Capacitor.capd bus1=b2.1.2.3 phases=3 conn=delta kvar=900 kv=4.16\n\
          New Capacitor.capw bus1=b3.1.2.3 phases=3 kvar=900 kv=4.16\n",
     );
-    let out = write_pmd_json(&net);
+    let out = emit_pmd_json(&net);
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     // A delta bank carries a line to line admittance, so it must not emit as
     // WYE; a plain wye bank still does.
@@ -182,7 +182,7 @@ fn dss_delta_shunt_writes_pmd_delta_configuration() {
 #[test]
 fn dss_to_pmd_reproduces_the_reference_essentials() {
     let net = parse_dss_file(fixture("opendss/ieee13/IEEE13Nodeckt.dss")).unwrap();
-    let out = write_pmd_json(&net);
+    let out = emit_pmd_json(&net);
     let emitted: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     let reference: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(fixture("pmd/ieee13.json")).unwrap())
@@ -260,7 +260,7 @@ fn pmd_typed_locations_emit_only_when_geographic() {
     });
     let mut net = MulticonductorNetwork::default();
     *net.buses_mut() = vec![bus];
-    let unknown = write_pmd_json(&net);
+    let unknown = emit_pmd_json(&net);
     let doc: serde_json::Value = serde_json::from_str(&unknown.text).unwrap();
     assert!(doc["bus"]["b1"].get("lon").is_none());
     assert!(doc["bus"]["b1"].get("lat").is_none());
@@ -277,7 +277,7 @@ fn pmd_typed_locations_emit_only_when_geographic() {
         space: CoordinateSpace::Geographic { crs: None },
         kind: Some(DistCoordsKind::Source),
     });
-    let geographic = write_pmd_json(&net);
+    let geographic = emit_pmd_json(&net);
     let doc: serde_json::Value = serde_json::from_str(&geographic.text).unwrap();
     assert_eq!(doc["bus"]["b1"]["lon"], serde_json::json!(-80.0));
     assert_eq!(doc["bus"]["b1"]["lat"], serde_json::json!(35.0));
@@ -291,7 +291,7 @@ fn zero_winding_transformer_does_not_panic_on_write() {
     let pmd = r#"{"data_model": "ENGINEERING", "transformer": {"t1": {}}}"#;
     let net = parse_pmd_str(pmd).unwrap();
     assert!(net.transformers().iter().any(|t| t.windings.is_empty()));
-    let out = write_pmd_json(&net);
+    let out = emit_pmd_json(&net);
     let v: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     assert_eq!(v["transformer"]["t1"]["sm_ub"], serde_json::json!(0.0));
 
@@ -305,7 +305,7 @@ fn zero_winding_transformer_does_not_panic_on_write() {
 
 fn rewrite(text: &str) -> serde_json::Value {
     let net = parse_pmd_str(text).unwrap();
-    serde_json::from_str(&write_pmd_json(&net).text).unwrap()
+    serde_json::from_str(&emit_pmd_json(&net).text).unwrap()
 }
 
 /// A non ENABLED status survives the round trip on every component class
@@ -542,7 +542,7 @@ fn settings_and_files_round_trip() {
 #[test]
 fn dss_settings_match_the_reference() {
     let net = parse_dss_file(fixture("opendss/ieee13/IEEE13Nodeckt.dss")).unwrap();
-    let out: serde_json::Value = serde_json::from_str(&write_pmd_json(&net).text).unwrap();
+    let out: serde_json::Value = serde_json::from_str(&emit_pmd_json(&net).text).unwrap();
     let reference: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(fixture("pmd/ieee13.json")).unwrap())
             .unwrap();
@@ -627,7 +627,7 @@ fn inline_linecode_collision_with_document_linecode() {
 
     // The BMOPF projection keys linecodes by name; line foo must carry its
     // own 0.111, not the document code's 0.5.
-    let out = write_bmopf_json(&net);
+    let out = emit_bmopf_json(&net);
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     let code = doc["line"]["foo"]["linecode"].as_str().unwrap();
     assert_eq!(code, "foo_z2");
@@ -670,7 +670,7 @@ fn linecode_sized_from_widest_matrix() {
             .any(|w| w.contains("linecode ragged: matrix sizes disagree"))
     );
 
-    let out = write_bmopf_json(&net);
+    let out = emit_bmopf_json(&net);
     assert!(
         out.warnings
             .iter()
@@ -901,7 +901,7 @@ fn wide_terminal_maps_do_not_expand_quadratically() {
     let net = parse_pmd_str(&text).unwrap();
     assert_eq!(net.switches()[0].terminal_map_from.len(), n);
 
-    let out = write_pmd_json(&net);
+    let out = emit_pmd_json(&net);
     for what in ["switch s", "voltage source src"] {
         assert!(
             out.diagnostics.iter().any(|d| {
@@ -998,7 +998,7 @@ fn a_two_megabyte_dss_case_writes_pmd_json_within_a_time_budget() {
     assert_eq!(net.loads().len(), n);
 
     let start = std::time::Instant::now();
-    let out = write_pmd_json(&net);
+    let out = emit_pmd_json(&net);
     let elapsed = start.elapsed();
     // The index maps write this in about two seconds; a linear scan per
     // line and per load measured over five and a half. A loaded CI runner
@@ -1028,7 +1028,7 @@ fn degenerate_matrix_shapes_do_not_panic() {
     })
     .to_string();
     let net = parse_pmd_str(&text).unwrap();
-    let out = write_pmd_json(&net);
+    let out = emit_pmd_json(&net);
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     let rs = doc["linecode"]["c"]["rs"].as_array().unwrap();
     assert_eq!(rs.len(), 3);
@@ -1049,7 +1049,7 @@ fn a_huge_terminal_name_does_not_enumerate_conductor_ids() {
     })
     .to_string();
     let net = parse_pmd_str(&text).unwrap();
-    let out = write_pmd_json(&net);
+    let out = emit_pmd_json(&net);
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     assert_eq!(doc["conductor_ids"].as_array().unwrap().len(), 64);
     assert!(
@@ -1078,7 +1078,7 @@ fn a_renamed_terminal_takes_the_next_free_id_and_the_write_is_a_fixed_point() {
             .any(|b| b.terminals.iter().any(|t| t == "n"))
     );
 
-    let first = write_pmd_json(&net);
+    let first = emit_pmd_json(&net);
     let doc: serde_json::Value = serde_json::from_str(&first.text).unwrap();
     assert_eq!(
         doc["conductor_ids"],
@@ -1089,7 +1089,7 @@ fn a_renamed_terminal_takes_the_next_free_id_and_the_write_is_a_fixed_point() {
     // Every use of the name maps to the same id, and the write is a fixed
     // point through a read back.
     let again = parse_pmd_str(&first.text).unwrap();
-    let second = write_pmd_json(&again);
+    let second = emit_pmd_json(&again);
     assert_eq!(first.text, second.text);
 }
 
@@ -1109,7 +1109,7 @@ fn a_saturating_numeric_terminal_name_does_not_merge_renamed_conductors() {
         "status": "ENABLED"}}
     }"#;
     let net = parse_pmd_str(text).unwrap();
-    let out = write_pmd_json(&net);
+    let out = emit_pmd_json(&net);
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     let load = doc["load"]["la"]["connections"][0].as_i64().unwrap();
     let generator = doc["generator"]["g1"]["connections"][0].as_i64().unwrap();
@@ -1138,7 +1138,7 @@ fn bus_voltage_bounds_ride_vm_lb_and_vm_ub() {
         "the fixture states bounds"
     );
 
-    let pmd = base.to_format(powerio_dist::DistTargetFormat::PmdJson);
+    let pmd = base.emit(powerio_dist::DistTargetFormat::PmdJson);
     assert!(
         !pmd.warnings
             .iter()
@@ -1175,7 +1175,7 @@ fn a_rated_capacitor_converts_to_an_engineering_shunt() {
                New Capacitor.cbank bus1=sb.1.2.3 phases=3 kv=4.16 kvar=300 conn=wye\n\
                Solve\n";
     let net = parse_dss_str(dss);
-    let out = write_pmd_json(&net);
+    let out = emit_pmd_json(&net);
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     let shunt = &doc["shunt"]["cbank"];
     assert_eq!(shunt["model"], "CAPACITOR", "{doc}");
@@ -1202,7 +1202,7 @@ fn a_two_terminal_delta_capacitor_keeps_its_full_rating() {
                New Capacitor.cpp bus1=sb.1.2 phases=1 kv=4.16 kvar=100 conn=delta\n\
                Solve\n";
     let net = parse_dss_str(dss);
-    let out = write_pmd_json(&net);
+    let out = emit_pmd_json(&net);
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     let shunt = &doc["shunt"]["cpp"];
     assert_eq!(shunt["configuration"], "DELTA", "{doc}");

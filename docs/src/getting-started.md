@@ -5,11 +5,11 @@
 Rust:
 
 ```sh
-cargo add powerio            # parsing, conversion, .pio.json
+cargo add powerio            # parsing, emission, .pio.json
 cargo add powerio -F matrix  # + sparse matrices and graph data
 ```
 
-Python (parse, convert, and write need only the interpreter; matrices pull scipy):
+Python (parse and emit need only the interpreter; matrices pull scipy):
 
 ```sh
 pip install powerio          # or: pip install "powerio[all]"

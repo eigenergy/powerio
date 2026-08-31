@@ -165,9 +165,7 @@ def check_allowed_path(
     admitting_root(path, for_write=for_write, purpose=purpose)
 
 
-def checked_path(
-    value: str, *, purpose: str = "path", for_write: bool = False
-) -> str:
+def checked_path(value: str, *, purpose: str = "path", for_write: bool = False) -> str:
     """Decode a tool argument and confine it to the allowed roots.
 
     Returns the decoded path as a string, ready to hand to a powerio reader or
@@ -184,7 +182,9 @@ def _inside(path: Path, root: Path) -> bool:
     return path == root or root in path.parents
 
 
-def _check_tree_target(path: Path, root: Path | None, *, purpose: str) -> os.stat_result:
+def _check_tree_target(
+    path: Path, root: Path | None, *, purpose: str
+) -> os.stat_result:
     """Resolve one read-tree entry and return its followed stat record."""
     try:
         resolved = path.resolve(strict=True)
@@ -251,9 +251,13 @@ def _plain_tree(root: Path, *, purpose: str) -> tuple[list[Path], list[Path]]:
     try:
         root_info = root.lstat()
     except OSError as exc:
-        raise PathNotAllowed(f"cannot inspect `{purpose}` directory {root}: {exc}") from exc
+        raise PathNotAllowed(
+            f"cannot inspect `{purpose}` directory {root}: {exc}"
+        ) from exc
     if stat.S_ISLNK(root_info.st_mode) or not stat.S_ISDIR(root_info.st_mode):
-        raise PathNotAllowed(f"`{purpose}` must be a real directory, not a link or file")
+        raise PathNotAllowed(
+            f"`{purpose}` must be a real directory, not a link or file"
+        )
 
     directories: list[Path] = []
     files: list[Path] = []
@@ -332,7 +336,9 @@ def staged_directory_write(
     output = Path(os.path.abspath(out_path))
     parent = output.parent
     if not parent.is_dir():
-        raise PathNotAllowed(f"cannot resolve `out_path`: parent does not exist: {parent}")
+        raise PathNotAllowed(
+            f"cannot resolve `out_path`: parent does not exist: {parent}"
+        )
     check_allowed_path(output, for_write=True, purpose="out_path")
 
     workspace = Path(tempfile.mkdtemp(prefix=f".{output.name}.stage-", dir=parent))
@@ -361,7 +367,9 @@ def staged_directory_write(
         existing_file_set = set(existing_files)
         for relative in staged_dirs:
             if relative in existing_file_set:
-                raise ValueError(f"cannot replace file with directory: {output / relative}")
+                raise ValueError(
+                    f"cannot replace file with directory: {output / relative}"
+                )
         for relative in staged_files:
             target = output / relative
             if relative in existing_dir_set:

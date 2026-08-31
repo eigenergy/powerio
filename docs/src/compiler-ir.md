@@ -16,7 +16,7 @@ PowerIO's design borrows from LLVM and MLIR where their problems genuinely overl
 
 **Verification at representation boundaries.** Parsers and transformations verify what they produce and report findings rather than repairing silently; repairs are explicit operations that leave history records.
 
-**Shared operations instead of per format switches.** The parse and write dispatchers route once, at the facade; matrix builders, writers, and inspectors consume the concrete typed values, so a new format adds one parser and one writer rather than a case in every consumer.
+**Shared operations instead of per format switches.** The parse and emission dispatchers route once, at the facade; matrix calculations, serializers, and inspectors consume the concrete typed values, so a new format adds one parser and one serializer rather than a case in every consumer.
 
 **Analysis caches.** Factorizations and prepared solver arrays are derived data behind the public results, invalidated when their inputs change, the way pass manager analyses are; `IndexedNetwork`, the derived index view, stays public in 1.0 because downstream consumers build matrices through it directly.
 

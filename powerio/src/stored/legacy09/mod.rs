@@ -18,6 +18,7 @@ pub mod operating;
 pub mod provenance;
 pub mod study;
 pub mod summary;
+pub mod transform;
 pub mod validation;
 
 // The frozen 0.9 severity doc names this path, and the generated 0.9 schema
@@ -39,4 +40,5 @@ pub use provenance::{
 };
 pub use study::{StudyBlock, StudyCommit, StudyEdit};
 pub use summary::{ObjectSummary, ObjectTopology, ObjectUnits};
+pub use transform::LoweringRecord;
 pub use validation::{ValidationCounts, ValidationPass, ValidationStatus, ValidationSummary};

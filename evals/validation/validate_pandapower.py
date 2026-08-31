@@ -70,7 +70,7 @@ def sum_by_bus(elems, ka, kb):
 def check_case(path):
     """Validate one case. Returns the mark: "ok", "FAIL", or "n/a"."""
     name = path.name
-    case = powerio.parse(str(path), value_type=powerio.BalancedNetwork).value
+    case = powerio.parse_file(path, value_type=powerio.BalancedNetwork).value
     try:
         ppc = _m2ppc(str(path), "mpc")
     except OverflowError as exc:
@@ -144,7 +144,7 @@ def check_case(path):
     check_vec(problems, "gen.pmin", [g["pmin"] for g in gn], gen[:, PMIN])
 
     # --- Y_bus, element for element -------------------------------------
-    yc = case.ybus().tocsr()
+    yc = case.calc_admittance_matrix().tocsr()
     # makeYbus uses branch endpoints directly as dense row indices, so it needs
     # buses numbered 0..nb-1. _m2ppc keeps the raw MATPOWER ids (id-1), which are
     # gappy on pegase-style cases, so renumber endpoints to ppc row positions.

@@ -75,17 +75,18 @@ int main(void) {
     pio_balanced_network_branches(net, from, to, NULL, x, NULL, NULL, NULL, NULL, m);
     /* ... assemble L = A diag(1/x) A^T from (from, to, x) ... */
 
-    /* One write operation on the module: the same format echoes byte exact,
-     * a cross format write reports its losses through the out handle. */
-    char *matpower = pio_module_write_str(module, "matpower", NULL, &error);
+    /* One emit operation on the module: the same format echoes byte exact,
+     * a cross format emission reports its losses through the out handle. */
+    char *matpower = pio_module_emit_string(module, "matpower", NULL, &error);
     if (matpower) { /* ... byte exact MATPOWER text ... */ pio_string_release(matpower); }
 
     PioDiagnostics *losses = NULL;
-    char *json = pio_module_write_str(module, "powermodels-json", &losses, &error);
+    char *json = pio_module_emit_string(module, "powermodels-json", &losses, &error);
     if (json) { /* ... PowerModels JSON text ... */ pio_string_release(json); }
     pio_diagnostics_release(losses);
 
-    /* One call conversion without keeping a handle. */
+    /* Released compatibility helper for one call conversion without keeping
+     * a handle. New code keeps the module and calls emit as above. */
     char *raw = pio_convert_file("case9.m", NULL, "psse", NULL, NULL, &error);
     if (raw) { /* ... PSS/E text ... */ pio_string_release(raw); }
 
@@ -98,6 +99,13 @@ int main(void) {
 
 Every handle type has a `retain`/`release` pair; `release(NULL)` is a no-op, and releasing the module never invalidates the network handle taken from it. Every fallible entry point takes a `PioError **` out parameter (NULL to ignore) and catches panics at the boundary.
 
+`pio_module_inspect_json` keeps the released `operations` array and adds
+`preferred_operations` and `compatibility_operations`. The preferred C
+transformations are `pio_balanced_network_to_normalized`, the balanced and
+multiconductor `*_to_geo_layer_json` and `*_to_module` functions, and the
+verb-led `*_apply_geo_layer` functions. Low level branch flow calculation uses
+`pio_dc_data_calc_branch_flow` with the structured error channel.
+
 ## Julia
 
 Use [PowerIO.jl](https://github.com/eigenergy/PowerIO.jl): `parse_file(path)` returns the typed `PioModule{T}` over this ABI, with the ownership rules held by finalizers and borrowed views that root their owner. The raw `ccall` shape it builds on is one symbol per operation, resolved with `dlsym` after the `pio_abi_version()` handshake.
@@ -108,7 +116,17 @@ For consumers that want the whole case rather than the dense table slices, `pio_
 
 ## The stored module
 
-`pio_module_read_json` and `pio_module_write_json` carry the versioned `.pio.json` document for any value kind, including the one way upgrade of released 0.9 documents. State selection over series and scenario sets (`pio_module_export_state`, `pio_module_state_inventory_json`), the explicit balanced lowering (`pio_module_lower_to_balanced`), and DC branch data (`pio_dc_data_*`, feature `prob`) operate on the same handles.
+The ordinary path uses `pio_parse_file` to read `.pio.json` and
+`pio_module_emit_string` or `pio_module_emit_file` with format `pio-json` to
+emit it. `pio_module_read_json` and `pio_module_write_json` remain ABI
+conveniences for callers that already hold the versioned document in memory,
+including the one way upgrade of released 0.9 documents. State selection over
+series and scenario sets (`pio_module_export_state`,
+`pio_module_list_states_json`), the explicit balanced transformation
+(`pio_module_to_balanced`), and the `PioDcData` ABI arrays (`pio_dc_data_*`,
+feature `prob`) operate on the same handles. The released `lower` spelling remains a
+compatibility alias, as does `pio_module_state_inventory_json` for
+`pio_module_list_states_json`.
 
 ## Optional features
 

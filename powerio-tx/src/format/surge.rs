@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
-use super::{Conversion, finish, jnum, warn_extra_branch_rating_sets};
+use super::{TextEmission, finish, jnum, warn_extra_branch_rating_sets};
 use crate::diagnostics::codes::EMIT_SURGE as F;
 use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
@@ -26,7 +26,7 @@ const SCHEMA_VERSION: &str = "0.1.0";
 const EPS: f64 = 1e-12;
 
 #[must_use]
-pub fn write_surge_json(net: &BalancedNetwork) -> Conversion {
+pub fn write_surge_json(net: &BalancedNetwork) -> TextEmission {
     let mut warnings = Diagnostics::new();
     let mut network = Map::new();
 
@@ -194,19 +194,19 @@ fn shunt_obj((i, shunt): (usize, &Shunt)) -> Value {
 }
 
 fn branch_obj((_i, branch): (usize, &Branch)) -> Value {
-    let charging = branch.terminal_charging();
+    let charging = branch.calc_terminal_charging();
     let mut obj = Map::new();
     obj.insert("from_bus".into(), Value::from(branch.from.0 as u64));
     obj.insert("to_bus".into(), Value::from(branch.to.0 as u64));
     obj.insert("circuit".into(), Value::String("1".into()));
     obj.insert("r".into(), jnum(branch.r));
     obj.insert("x".into(), jnum(branch.x));
-    obj.insert("b".into(), jnum(branch.total_charging_b()));
+    obj.insert("b".into(), jnum(branch.calc_total_charging_b()));
     obj.insert("g_shunt_from".into(), jnum(charging.g_fr));
     obj.insert("b_shunt_from".into(), jnum(charging.b_fr));
     obj.insert("g_shunt_to".into(), jnum(charging.g_to));
     obj.insert("b_shunt_to".into(), jnum(charging.b_to));
-    obj.insert("tap".into(), jnum(branch.effective_tap()));
+    obj.insert("tap".into(), jnum(branch.calc_effective_tap()));
     obj.insert("phase_shift_rad".into(), jnum(branch.shift.to_radians()));
     obj.insert("rating_a_mva".into(), jnum(branch.rate_a));
     obj.insert("rating_b_mva".into(), jnum(branch.rate_b));
@@ -1044,7 +1044,7 @@ fn read_hvdc_link(value: &Value) -> Result<Hvdc> {
         // received power, so derive it. [`Hvdc::pt`] is MATPOWER's PT column:
         // power arriving at the to end, positive, the sign every other reader
         // here stores.
-        pt: Hvdc::delivered_power(setpoint, loss0, loss1),
+        pt: Hvdc::calc_delivered_power(setpoint, loss0, loss1),
         qf: 0.0,
         qt: 0.0,
         vf: f_map_or(from_terminal, "ac_setpoint", 1.0)?,

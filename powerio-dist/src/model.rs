@@ -42,7 +42,7 @@ pub enum DistSourceFormat {
 
 impl DistSourceFormat {
     /// The canonical format name (`dss`, `pmd-json`, `bmopf-json`), accepted
-    /// back by [`crate::dist_target_from_name`].
+    /// back by [`crate::parse_dist_target_format`].
     pub fn name(self) -> &'static str {
         match self {
             DistSourceFormat::Dss => "dss",
@@ -1179,7 +1179,7 @@ pub(crate) fn warn_defaulted_frequency(
 /// per finding: the same walk the reader's warning pass runs, exposed so a
 /// decoder can refuse a document whose network fails it.
 #[must_use]
-pub fn unresolved_references(net: &MulticonductorNetwork) -> Vec<String> {
+pub fn find_unresolved_references(net: &MulticonductorNetwork) -> Vec<String> {
     let mut diags = crate::collect::Diagnostics::new();
     warn_unresolved_references(net, &mut diags);
     diags

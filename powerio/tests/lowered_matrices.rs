@@ -1,5 +1,5 @@
-use powerio::transform::{MulticonductorToBalancedOptions, lower_multiconductor_to_balanced};
-use powerio_matrix::{BuildOptions, IndexedNetwork, build_bprime, build_ybus};
+use powerio::transform::{MulticonductorToBalancedOptions, to_balanced_network};
+use powerio_matrix::{BuildOptions, IndexedNetwork, calc_admittance_matrix, calc_bprime_matrix};
 
 const FOUR_WIRE_DSS: &str = r"! Four wire line with an explicit neutral conductor (no Kron reduction).
 Clear
@@ -28,13 +28,12 @@ fn lowered_multiconductor_balanced_model_builds_matrices() {
     let net = powerio_dist::parse(source)
         .expect("distribution text parses")
         .into_value();
-    let lowered =
-        lower_multiconductor_to_balanced(&net, MulticonductorToBalancedOptions::default())
-            .expect("lower to balanced");
+    let lowered = to_balanced_network(&net, MulticonductorToBalancedOptions::default())
+        .expect("lower to balanced");
 
     let view = IndexedNetwork::new(&lowered.network);
-    let bprime = build_bprime(&view, &BuildOptions::default()).expect("build B prime");
-    let ybus = build_ybus(&view, &BuildOptions::default()).expect("build Y bus");
+    let bprime = calc_bprime_matrix(&view, &BuildOptions::default()).expect("calculate Bp");
+    let ybus = calc_admittance_matrix(&view, &BuildOptions::default()).expect("calculate Y bus");
 
     assert_eq!(bprime.rows(), view.n());
     assert_eq!(bprime.cols(), view.n());

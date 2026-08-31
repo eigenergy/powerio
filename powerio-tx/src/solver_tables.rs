@@ -349,6 +349,7 @@ impl BalancedNetwork {
     /// Propagates [`BalancedNetwork::to_normalized`] errors and reports
     /// [`Error::UnknownBus`] if the derived normalized network contains an
     /// internal dangling bus reference.
+    #[doc(hidden)]
     pub fn to_normalized_solver_tables(&self) -> Result<NormalizedSolverTables> {
         NormalizedSolverTables::from_network(self)
     }
@@ -378,7 +379,7 @@ impl NormalizedSolverTables {
             index: SolverTableIndex {
                 bus_ids: net.buses().iter().map(|b| b.id).collect(),
                 reference_bus_indices: view.reference_bus_indices(),
-                component_labels: view.connected_component_labels(),
+                component_labels: view.calc_island_labels(),
                 branch_from_arc_indices: branch_arcs.branch_from_arc_indices,
                 branch_to_arc_indices: branch_arcs.branch_to_arc_indices,
                 bus_source_rows: provenance.buses,
@@ -511,7 +512,7 @@ fn branch_and_arc_rows(
         .map(|(i, branch)| {
             let from_bus_index = dense_bus(view, branch.from, i)?;
             let to_bus_index = dense_bus(view, branch.to, i)?;
-            let charging = branch.terminal_charging();
+            let charging = branch.calc_terminal_charging();
             let from_arc = arcs.len();
             arcs.push(SolverArcRow {
                 index: from_arc,

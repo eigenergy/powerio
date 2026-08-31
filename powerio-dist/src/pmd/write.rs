@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value, json};
 
-use crate::convert::Conversion;
+use crate::convert::TextEmission;
 use crate::diagnostics::codes as C;
 use crate::geo::CoordinateSpace;
 use crate::model::{
@@ -23,19 +23,19 @@ use crate::model::{
     DistWinding, DistWindingConn, Extras, Mat, MulticonductorNetwork, VoltageSource,
 };
 
-/// Writes the ENGINEERING document.
+/// Emits the ENGINEERING document.
 ///
 /// # Panics
 ///
 /// Never in practice: the document is maps, strings, finite numbers, and
 /// nulls, which always serialize.
-pub fn write_pmd_json(net: &MulticonductorNetwork) -> Conversion {
+pub(crate) fn emit_pmd_json_text(net: &MulticonductorNetwork) -> TextEmission {
     let mut w = Writer {
         warnings: crate::diagnostics::Diagnostics::new(),
         renamed_terminals: renamed_terminals(net),
     };
     let doc = w.document(net);
-    Conversion::new(
+    TextEmission::new(
         serde_json::to_string_pretty(&doc).expect("maps and finite numbers") + "\n",
         Vec::new(),
         w.warnings,

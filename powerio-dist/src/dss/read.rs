@@ -78,7 +78,7 @@ pub(crate) fn parse_dss_collecting(
     diags: &mut crate::collect::Diagnostics,
 ) -> Result<MulticonductorNetwork> {
     let raw = super::raw::parse_raw_from_source(source)?;
-    let (net, found) = network_from_raw(&raw);
+    let (net, found) = to_network_from_raw(&raw);
     diags.absorb(found);
     Ok(net)
 }
@@ -88,7 +88,7 @@ pub(crate) fn parse_dss_collecting(
 // One pass per object class in script order; splitting the class dispatch
 // would scatter a list that reads end to end.
 #[allow(clippy::too_many_lines)]
-pub fn network_from_raw(
+pub fn to_network_from_raw(
     raw: &RawDss,
 ) -> (MulticonductorNetwork, Vec<crate::diagnostics::Diagnostic>) {
     let mut diags = crate::collect::Diagnostics::new();
@@ -502,7 +502,7 @@ impl Reader<'_> {
     /// codes to UNITS_NONE. Unknown codes warn.
     fn units_code(&mut self, units: Option<&str>, class: &str, name: &str) -> Option<f64> {
         let u = units?;
-        if let Some(f) = dd::unit_to_meters(u) {
+        if let Some(f) = dd::calc_meters_per_unit(u) {
             return Some(f);
         }
         if !u.to_ascii_lowercase().starts_with("no") {
@@ -758,8 +758,8 @@ impl Reader<'_> {
             if n == 1 {
                 return vec![vec![v1]];
             }
-            // Symmetric component to phase: diag (2 z1 + z0)/3, off
-            // diagonal (z0 - z1)/3.
+            // Symmetric component to phase: diagonal (2 z1 + z0)/3,
+            // off-diagonal (z0 - z1)/3.
             let s = (2.0 * v1 + v0) / 3.0;
             let m = (v0 - v1) / 3.0;
             let mut mat = vec![vec![m; n]; n];

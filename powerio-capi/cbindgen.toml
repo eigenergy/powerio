@@ -23,10 +23,15 @@ header = """
  * hand back independently owned network handles; pio_module_diagnostics is
  * the module's stored findings list; pio_module_emit_string /
  * pio_module_emit_file emit a supported target, echoing the retained source
- * bytes exactly for an unchanged same format emission; and
- * pio_module_read_json / pio_module_write_json carry the stored .pio.json
- * document. pio_parse_str, pio_parse_bytes, and pio_module_write_* remain
- * ABI compatibility and in-memory acquisition functions.
+ * bytes exactly for an unchanged same format emission. pio_parse_file also
+ * recognizes stored .pio.json, and pio_module_emit_string /
+ * pio_module_emit_file emit it with format "pio-json". The direct
+ * pio_module_read_json / pio_module_write_json symbols remain compatibility
+ * conveniences for callers that already hold the stored document in memory.
+ * pio_parse_text is the text acquisition function. pio_parse_str and
+ * pio_parse_bytes remain ABI 6 acquisition functions.
+ * pio_convert_file, pio_convert_str, and pio_module_write_* remain ABI
+ * compatibility conveniences; new code composes parse and emit.
  *
  * Naming grammar:
  * - pio_<handle noun>_<operation or field>: module, balanced_network,

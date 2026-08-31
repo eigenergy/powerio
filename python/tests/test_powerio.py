@@ -4,10 +4,12 @@ Run with `pytest python/tests` after `maturin develop`. The matrix and graph
 tests need the optional extras: `pip install '.[all]'`.
 """
 
+import ast
 import json
 import math
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -20,9 +22,77 @@ import powerio
 DATA = Path(__file__).resolve().parents[2] / "tests" / "data"
 
 
-def parse_text(text, from_):
-    """The old parse_str shape over the universal parse, for the fixtures."""
-    return powerio.parse(text.encode(), from_, value_type=powerio.BalancedNetwork).value
+def _parse(
+    source,
+    format=None,
+    *,
+    include_root=None,
+    value_type=None,
+    name=None,
+):
+    """Exercise the canonical path or text parser for test fixtures."""
+    if isinstance(source, (bytes, bytearray, memoryview)):
+        data = bytes(source)
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            suffix = {
+                "pwb": ".pwb",
+                "powerworld-pwb": ".pwb",
+            }.get(format, ".bin")
+            with tempfile.NamedTemporaryFile(suffix=suffix) as handle:
+                handle.write(data)
+                handle.flush()
+                return powerio.parse_file(
+                    handle.name,
+                    format,
+                    value_type=value_type,
+                )
+        return powerio.parse_text(
+            text,
+            name=name or "fixture",
+            format=format,
+            value_type=value_type,
+        )
+    return powerio.parse_file(
+        source,
+        format,
+        include_root=include_root,
+        value_type=value_type,
+    )
+
+
+def parse_text(text, format):
+    return powerio.parse_text(
+        text,
+        name="fixture",
+        format=format,
+        value_type=powerio.BalancedNetwork,
+    ).value
+
+
+def _emit_value(value, format, destination=None):
+    return powerio.PioModule.from_value(value).emit(format, destination)
+
+
+def _emit_module(module):
+    return module.emit("pio-json").text
+
+
+def _parse_module(text):
+    return powerio.parse_text(text, name="module.pio.json")
+
+
+def _emit_file(path, format, from_=None, destination=None, **_options):
+    module = powerio.parse_file(path, from_)
+    return module.emit(format, destination)
+
+
+def _emit_text(text, format, from_="matpower", *, name="fixture", **_options):
+    module = powerio.parse_text(text, name=name, format=from_)
+    return module.emit(format)
+
+
 SMALL = ["case9", "case30"]
 
 # A 3-bus case authored inline so tests can reach paths the vendored fixtures
@@ -67,7 +137,9 @@ Q
 
 
 def load(name):
-    return powerio.parse(DATA / f"{name}.m", value_type=powerio.BalancedNetwork).value
+    return powerio.parse_file(
+        DATA / f"{name}.m", value_type=powerio.BalancedNetwork
+    ).value
 
 
 def is_symmetric(m, tol=1e-9):
@@ -90,16 +162,16 @@ def test_parse_metadata(case9):
     assert case9.name == "case9"
     assert case9.n_buses == 9
     assert case9.n_branches == 9
-    assert case9.n_gens == 3
+    assert case9.n_generators == 3
     assert case9.base_mva == 100.0
     assert not case9.is_radial  # case9 is meshed
-    assert case9.n_connected_components == 1
+    assert case9.n_islands == 1
 
 
 def test_preferred_balanced_names_and_complete_tables():
     net = load("api_conformance")
-    assert net.n_generators == net.n_gens == len(net.generators) == 2
-    assert net.n_islands == net.n_connected_components == 1
+    assert net.n_generators == net.n_generators == len(net.generators) == 2
+    assert net.n_islands == net.n_islands == 1
     assert net.base_frequency == 60.0
     for table, count in [
         ("storage", "n_storage"),
@@ -115,6 +187,8 @@ def test_preferred_balanced_names_and_complete_tables():
 def test_public_type_is_balanced_network(case9):
     assert isinstance(case9, powerio.BalancedNetwork)
     assert "BalancedNetwork" in powerio.__all__
+    assert "EmitResult" in powerio.__all__
+    assert not hasattr(powerio, "Conversion")
     assert not hasattr(powerio, "Case")
     # The 0.8 bridge alias is gone at 1.0.0.
     assert not hasattr(powerio, "Network")
@@ -135,6 +209,74 @@ def test_features_reports_compiled_in_surface():
     assert "features" in powerio.__all__
 
 
+def test_private_extension_stub_hides_legacy_boundary_helpers():
+    stub_path = Path(powerio.__file__).with_name("_powerio.pyi")
+    tree = ast.parse(stub_path.read_text())
+    exports = next(
+        ast.literal_eval(node.value)
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "__all__"
+            for target in node.targets
+        )
+    )
+    hidden_functions = {
+        "convert_file",
+        "convert_str",
+        "dist_convert_file",
+        "dist_convert_str",
+        "dist_parse_file",
+        "dist_parse_str",
+        "parse_display_bytes",
+        "read_gridfm",
+        "read_gridfm_scenarios",
+        "write_gridfm_batch",
+    }
+    assert hidden_functions.isdisjoint(exports)
+
+    module_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "_PioModule"
+    )
+    stubbed_methods = {
+        node.name
+        for node in module_class.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert {
+        "from_file",
+        "from_str",
+        "from_bytes",
+        "from_json",
+        "to_json",
+        "to_format",
+        "write_file",
+        "diagnostics",
+    }.isdisjoint(stubbed_methods)
+
+    for class_name in ("_BalancedNetwork", "_MulticonductorNetwork"):
+        value_class = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == class_name
+        )
+        value_methods = {
+            node.name
+            for node in value_class.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        assert {"to_format", "to_canonical_format", "write_file"}.isdisjoint(
+            value_methods
+        )
+
+    # The implementation retains these operations only for the high level
+    # wrapper's private boundary; users discover the typed facade instead.
+    assert hasattr(powerio._powerio._PioModule, "from_file")
+    assert not hasattr(powerio, "convert_file")
+
+
 def test_parse_infers_format_from_extension():
     # parse_file dispatches on the extension; a .m file lands on MATPOWER.
     case = powerio.parse_file(
@@ -144,24 +286,25 @@ def test_parse_infers_format_from_extension():
     assert case.source_format == "matpower"
 
 
-def test_parse_file_uses_format_and_keeps_from_as_a_compatibility_keyword():
+def test_parse_file_and_parse_text_are_the_only_public_parse_entries():
     path = DATA / "case9.m"
     assert powerio.parse_file(path, format="matpower").kind == "balanced_network"
-    assert powerio.parse_file(path, from_="matpower").kind == "balanced_network"
-    with pytest.raises(TypeError, match="either format or from_"):
-        powerio.parse_file(path, format="matpower", from_="matpower")
-    with pytest.raises(TypeError, match=r"path must be text, not bytes.*parse\(\)"):
+    with pytest.raises(TypeError, match="path must be text, not bytes"):
         powerio.parse_file(path.read_bytes(), format="matpower")
-    with pytest.raises(TypeError, match=r"path must be text, not bytes.*parse\(\)"):
+    with pytest.raises(TypeError, match="path must be text, not bytes"):
         powerio.parse_file(str(path).encode(), format="matpower")
-
-    # Generic parse remains the explicit in-memory compatibility entry.
-    assert powerio.parse(path.read_bytes(), "matpower").kind == "balanced_network"
+    in_memory = powerio.parse_text(path.read_text(), name="case9.m", format="matpower")
+    assert in_memory.kind == "balanced_network"
+    assert in_memory.value.n_buses == 9
+    assert not hasattr(powerio, "parse")
+    for name in ("from_file", "from_str", "from_bytes", "from_json"):
+        assert not hasattr(powerio.PioModule, name)
+    assert not hasattr(powerio.PioModule, "to_json")
 
 
 def test_opfdata_parses_to_its_solved_calculation():
     path = DATA / "opfdataset" / "example_0.json"
-    module = powerio.parse(path)
+    module = powerio.parse_file(path)
     assert module.kind == "ac_opf_solution"
     with pytest.raises(powerio.PowerIODataError, match="ac_opf_solution"):
         module.as_balanced_network()
@@ -173,14 +316,17 @@ def test_opfdata_parses_to_its_solved_calculation():
     assert value.kind == "ac_opf_solution"
     assert value.module is module
 
-    converted = powerio.convert_file(path, "matpower")
-    assert "mpc.bus" in converted.text
+    with pytest.raises(powerio.PowerIOError, match="no matpower writer"):
+        module.emit("matpower")
+    assert (
+        json.loads(module.emit("pio-json").text)["value"]["kind"] == "ac_opf_solution"
+    )
 
 
 def test_value_type_is_an_assertion_returning_the_module():
-    # value_type narrows what parse() asserts, not what it returns: the call
+    # value_type narrows what parse_file() asserts, not what it returns: the call
     # always hands back the PioModule, and .value reads the typed value.
-    module = powerio.parse(DATA / "case9.m", value_type=powerio.BalancedNetwork)
+    module = _parse(DATA / "case9.m", value_type=powerio.BalancedNetwork)
     assert isinstance(module, powerio.PioModule)
     assert module.kind == "balanced_network"
     net = module.value
@@ -188,10 +334,13 @@ def test_value_type_is_an_assertion_returning_the_module():
     assert net.n_buses == 9
 
     # None (the default) and PioModule itself both skip the assertion.
-    assert powerio.parse(DATA / "case9.m").kind == "balanced_network"
-    assert powerio.parse(DATA / "case9.m", value_type=powerio.PioModule).kind == "balanced_network"
+    assert _parse(DATA / "case9.m").kind == "balanced_network"
+    assert (
+        _parse(DATA / "case9.m", value_type=powerio.PioModule).kind
+        == "balanced_network"
+    )
 
-    solved = powerio.parse(
+    solved = _parse(
         DATA / "opfdataset" / "example_0.json",
         value_type=powerio.AcOpfSolution,
     )
@@ -202,7 +351,7 @@ def test_value_type_is_an_assertion_returning_the_module():
 def test_value_type_mismatch_names_both_kinds():
     path = DATA / "dist" / "micro" / "xfmr_single_phase.dss"
     with pytest.raises(ValueError) as excinfo:
-        powerio.parse(path, value_type=powerio.BalancedNetwork)
+        _parse(path, value_type=powerio.BalancedNetwork)
     message = str(excinfo.value)
     # The detected kind and the requested type both appear, so the caller
     # sees what it got and what it asked for.
@@ -210,18 +359,18 @@ def test_value_type_mismatch_names_both_kinds():
     assert "BalancedNetwork" in message
 
     with pytest.raises(ValueError, match="AcOpfSolution"):
-        powerio.parse(DATA / "case9.m", value_type=powerio.AcOpfSolution)
+        _parse(DATA / "case9.m", value_type=powerio.AcOpfSolution)
 
 
 def test_native_diagnostics_fields_and_types():
     # The pandapower fixture carries a switch table the reader cannot model,
-    # so the parse reports it (see test_read_warnings_surface); read that
-    # same finding as a native Diagnostic off the PioModule directly.
-    module = powerio.parse(DATA / "pandapower" / "example.json")
+    # so the parse reports it; read that finding as a native Diagnostic from
+    # the PioModule directly.
+    module = _parse(DATA / "pandapower" / "example.json")
     diagnostics = module.diagnostics
     assert diagnostics
-    # The released method spelling remains a quiet 0.10 compatibility path.
-    assert diagnostics() is diagnostics
+    with pytest.raises(TypeError):
+        diagnostics()
     for d in diagnostics:
         assert isinstance(d, powerio.Diagnostic)
         assert isinstance(d.code, str) and d.code
@@ -251,6 +400,11 @@ def test_native_diagnostics_fields_and_types():
     assert str(switch) == f"WARNING {switch.code}: {switch.message}"
 
 
+def test_network_diagnostics_belong_only_to_the_module(case9):
+    assert not hasattr(case9, "diagnostics")
+    assert not hasattr(case9, "read_warnings")
+
+
 def test_new_typed_value_classes_are_exported():
     for name in [
         "TimeSeries",
@@ -275,12 +429,12 @@ def test_new_typed_value_classes_are_exported():
         assert hasattr(powerio, name), name
 
 
-def test_parse_powerworld_display_file_and_bytes():
+def test_parse_powerworld_display_file():
     path = DATA / "powerworld" / "ACTIVSg200.pwd"
     parsed = powerio.parse_display_file(path)
-    from_bytes = powerio.parse_display_bytes(path.read_bytes(), "powerworld-pwd")
 
-    assert parsed == from_bytes
+    assert not hasattr(powerio, "parse_display_bytes")
+    assert not hasattr(powerio, "parse_display_text")
     assert parsed.kind == "powerworld"
     assert isinstance(parsed.data, powerio.PwdDisplay)
     assert parsed.data.canvas_width == 200
@@ -372,7 +526,7 @@ def test_branch_table_b_is_terminal_projection():
 
 
 def test_loads_and_shunts_are_first_class():
-    case = powerio.parse(DATA / "case30.m", value_type=powerio.BalancedNetwork).value
+    case = _parse(DATA / "case30.m", value_type=powerio.BalancedNetwork).value
     # MATPOWER folds demand onto the bus row; powerio splits it back out.
     assert case.n_loads > 0
     assert all({"bus", "p", "q", "in_service"} <= set(load) for load in case.loads)
@@ -380,62 +534,67 @@ def test_loads_and_shunts_are_first_class():
     assert "pd" not in case.buses[0]
 
 
-def test_parse_str_roundtrip(case9):
+def test_parse_text_roundtrip(case9):
     text = (DATA / "case9.m").read_text()
-    c = powerio.parse((text).encode(), "matpower", value_type=powerio.BalancedNetwork).value
+    c = _parse(
+        text.encode(),
+        "matpower",
+        name="case9.m",
+        value_type=powerio.BalancedNetwork,
+    ).value
     assert c.name == "case9"
     assert c.n_buses == case9.n_buses
-    assert np.allclose(c.bprime().toarray(), case9.bprime().toarray())
+    assert np.allclose(
+        c.calc_bprime_matrix().toarray(), case9.calc_bprime_matrix().toarray()
+    )
 
 
-def test_parse_str_general():
+def test_parse_text_general():
     text = (DATA / "case9.m").read_text()
-    c = powerio.parse((text).encode(), "matpower", value_type=powerio.BalancedNetwork).value
+    c = _parse((text).encode(), "matpower", value_type=powerio.BalancedNetwork).value
     assert c.n_buses == 9
 
 
-def test_parse_bytes_reaches_the_binary_reader():
-    # PowerWorld binary has no text form, so parse_str cannot read one; this is
-    # the in-memory door for an upload or an archive member.
+def test_parse_file_reaches_the_binary_reader():
+    # PowerWorld binary has no text form, so binary input uses a temporary path
+    # and the public file parser.
     pwb = (DATA / "powerworld" / "ACTIVSg200.pwb").read_bytes()
-    c = powerio.parse(pwb, "pwb", value_type=powerio.BalancedNetwork).value
+    c = _parse(pwb, "pwb", value_type=powerio.BalancedNetwork).value
     assert c.n_buses == 200
     assert c.n_branches == 246
 
     # Text formats agree with the path parse.
     m = (DATA / "case9.m").read_bytes()
-    assert powerio.parse(m, "matpower", value_type=powerio.BalancedNetwork).value.n_buses == 9
+    assert _parse(m, "matpower", value_type=powerio.BalancedNetwork).value.n_buses == 9
 
     # Bytes a text format cannot decode raise, rather than blaming the case.
     with pytest.raises(powerio.PowerIOError, match="UTF-8"):
-        powerio.parse(b"\xff\xfe\x00", "matpower", value_type=powerio.BalancedNetwork)
+        _parse(b"\xff\xfe\x00", "matpower", value_type=powerio.BalancedNetwork)
 
 
-def test_parse_bytes_name_reaches_detection_and_source_naming():
+def test_parse_text_name_reaches_detection_and_source_naming():
     data = (DATA / "case9.m").read_bytes()
 
     # A name with a recognized extension lets format detection run without an
     # explicit from_, and the retained source records the given name.
-    named = powerio.parse(data, name="mycase.m")
+    named = _parse(data, name="mycase.m")
     assert named.kind == "balanced_network"
-    sources = json.loads(named.to_json())["sources"]
+    sources = json.loads(_emit_module(named))["sources"]
     assert [s["name"] for s in sources] == ["mycase.m"]
 
-    # Without a name, in-memory bytes still get an explicit format and fall
-    # back to the placeholder name.
-    unnamed = powerio.parse(data, "matpower")
-    sources = json.loads(unnamed.to_json())["sources"]
-    assert [s["name"] for s in sources] == ["<memory>"]
+    with pytest.raises(TypeError, match="name"):
+        powerio.parse_text(data.decode(), format="matpower")
 
 
-def test_read_warnings_surface():
+def test_parse_diagnostics_are_module_records():
     # The genuine pandapower fixture carries a switch table the reader cannot
     # model, so the parse reports it; the MATPOWER reader is total and reports
     # nothing.
-    case = powerio.parse(DATA / "pandapower" / "example.json", value_type=powerio.BalancedNetwork).value
-    assert case.read_warnings
-    assert any("switch" in w for w in case.read_warnings)
-    assert powerio.parse(DATA / "case9.m", value_type=powerio.BalancedNetwork).value.read_warnings == []
+    module = _parse(
+        DATA / "pandapower" / "example.json", value_type=powerio.BalancedNetwork
+    )
+    assert any("switch" in diagnostic.message for diagnostic in module.diagnostics)
+    assert _parse(DATA / "case9.m").diagnostics == []
 
 
 def test_pio_module_multiconductor_accessor_keeps_every_diagnostic():
@@ -446,8 +605,8 @@ def test_pio_module_multiconductor_accessor_keeps_every_diagnostic():
     list and the first span-bearing diagnostic silently dropped itself and
     every diagnostic after it."""
     path = DATA / "dist" / "micro" / "xfmr_single_phase.dss"
-    module = powerio.PioModule.from_file(path)
-    doc = json.loads(module.to_json())
+    module = powerio.parse_file(path)
+    doc = json.loads(_emit_module(module))
     source_id = doc["sources"][0]["id"]
     doc["diagnostics"] = [
         {"id": "d0", "severity": "warning", "code": "A.B.C", "message": "no span here"},
@@ -460,51 +619,72 @@ def test_pio_module_multiconductor_accessor_keeps_every_diagnostic():
         },
         {"id": "d2", "severity": "error", "code": "G.H.I", "message": "trailing error"},
     ]
-    reloaded = powerio.PioModule.from_json(json.dumps(doc))
-    net = reloaded._inner.as_multiconductor_network()
-    assert net.warnings() == [
-        "A.B.C: no span here",
-        "D.E.F: in range span",
-        "G.H.I: trailing error",
+    reloaded = _parse_module(json.dumps(doc))
+    assert [diagnostic.message for diagnostic in reloaded.diagnostics] == [
+        "no span here",
+        "in range span",
+        "trailing error",
     ]
+    assert not hasattr(reloaded.value, "diagnostics")
 
 
 def test_json_roundtrip_and_parsed_conversion():
-    c = powerio.parse(DATA / "case9.m", value_type=powerio.BalancedNetwork).value
+    c = _parse(DATA / "case9.m", value_type=powerio.BalancedNetwork).value
     back = powerio.from_json(c.to_json())
     assert back.n_buses == c.n_buses
     assert back.base_mva == c.base_mva
 
-    conv = c.to_format("powermodels-json")
+    conv = powerio.PioModule.from_value(c).emit("powermodels-json")
     assert json.loads(conv.text)["name"] == "case9"
-    assert conv.warnings == []
-    assert conv.diagnostics is conv.warnings
-    assert powerio.to_matpower(c) == c.to_matpower()
+    assert conv.diagnostics == []
+    assert not hasattr(conv, "warnings")
+    assert powerio.PioModule.from_value(c).emit("matpower").text
 
 
-def test_pio_module_write_surface_uses_dynamic_writer(tmp_path):
+def test_pio_module_from_value_keeps_records_and_wraps_generated_networks():
     source = DATA / "api_conformance.m"
-    module = powerio.parse(source)
+    parsed = powerio.parse_file(source)
+    wrapped = powerio.PioModule.from_value(parsed.value)
+    assert wrapped.kind == "balanced_network"
+    assert wrapped.diagnostics == parsed.diagnostics
+    assert wrapped.emit("matpower").text.encode() == source.read_bytes()
 
-    conversion = module.to_format("matpower")
+    generated = powerio.from_json(parsed.value.to_json())
+    generated_module = powerio.PioModule.from_value(generated)
+    assert generated_module.value.n_buses == generated.n_buses
+    assert "mpc.baseMVA" in generated_module.emit("matpower").text
+
+    with pytest.raises(TypeError, match="BalancedNetwork or MulticonductorNetwork"):
+        powerio.PioModule.from_value(object())
+
+
+def test_pio_module_emit_uses_dynamic_writer(tmp_path):
+    source = DATA / "api_conformance.m"
+    module = powerio.parse_file(source)
+
+    conversion = module.emit("matpower")
     assert conversion.text.encode() == source.read_bytes()
-    assert conversion.diagnostics is conversion.warnings
     assert conversion.diagnostics == []
 
-    # With no format, retain the module's recorded source format.
     echoed = tmp_path / "echo.m"
-    assert module.write_file(echoed) == []
+    result = module.emit("matpower", echoed)
+    assert result.text is None
+    assert result.diagnostics == []
     assert echoed.read_bytes() == source.read_bytes()
 
-    # The destination suffix takes precedence when it explicitly requests the
-    # stored module document.
+    stored_text = module.emit("pio-json").text
+    stored_doc = json.loads(stored_text)
+    assert stored_doc["source_map"]
+
     stored = tmp_path / "case.pio.json"
-    assert module.write_file(stored) == []
+    result = module.emit("pio-json", stored)
+    assert result.text is None
+    assert result.diagnostics == []
     assert json.loads(stored.read_text())["value"]["kind"] == "balanced_network"
 
     # A nonnetwork calculation has the same stored writer through PioModule.
-    solved = powerio.parse(DATA / "opfdataset" / "example_0.json")
-    solved_text = solved.to_format("pio-json").text
+    solved = powerio.parse_file(DATA / "opfdataset" / "example_0.json")
+    solved_text = solved.emit("pio-json").text
     assert json.loads(solved_text)["value"]["kind"] == "ac_opf_solution"
 
 
@@ -517,8 +697,11 @@ def test_pio_module_emit_covers_memory_and_file_destinations(tmp_path):
     assert conversion.diagnostics == []
 
     destination = tmp_path / "case.raw"
-    diagnostics = module.emit("psse", destination)
-    assert all(isinstance(diagnostic, powerio.Diagnostic) for diagnostic in diagnostics)
+    result = module.emit("psse", destination)
+    assert result.text is None
+    assert all(
+        isinstance(diagnostic, powerio.Diagnostic) for diagnostic in result.diagnostics
+    )
     assert destination.read_text().startswith("0, 100,")
 
 
@@ -526,10 +709,8 @@ def test_inspect_advertises_only_operations_that_resolve_on_pio_module():
     modules = [
         powerio.parse_file(DATA / "api_conformance.m"),
         powerio.parse_file(DATA / "dist" / "micro" / "fourwire_linecode.dss"),
-        powerio.PioModule.from_json(
-            (DATA / "package" / "frozen-0.9-series.pio.json").read_text()
-        ),
-        powerio.PioModule.from_json(
+        _parse_module((DATA / "package" / "frozen-0.9-series.pio.json").read_text()),
+        _parse_module(
             (DATA / "module-v1" / "mc-operating-point-series.pio.json").read_text()
         ),
     ]
@@ -546,13 +727,13 @@ def test_inspect_advertises_only_operations_that_resolve_on_pio_module():
     } <= set(multiconductor.inspect()["operations"])
     assert {
         "emit",
-        "state_inventory",
+        "list_states",
         "inspect_state",
         "export_state",
     } <= set(series.inspect()["operations"])
     assert "emit" in multiconductor_series.inspect()["operations"]
     assert not {
-        "state_inventory",
+        "list_states",
         "inspect_state",
         "export_state",
     } & set(multiconductor_series.inspect()["operations"])
@@ -563,7 +744,7 @@ def test_inspect_advertises_only_operations_that_resolve_on_pio_module():
 
 
 def test_typed_collection_protocols_and_inspect_state():
-    series_module = powerio.PioModule.from_json(
+    series_module = _parse_module(
         (DATA / "package" / "frozen-0.9-series.pio.json").read_text()
     )
     series = series_module.value
@@ -571,13 +752,15 @@ def test_typed_collection_protocols_and_inspect_state():
     assert len(series) == 2
     assert series[-1].kind == "balanced_network"
     assert [item.kind for item in series] == ["balanced_network", "balanced_network"]
+    assert series_module.list_states()["time_points"]
     with pytest.raises(IndexError):
         _ = series[2]
-    assert series_module.inspect_state(time_position=0) == series_module.select_state(
-        time_position=0
+    assert (
+        series_module.inspect_state(time_position=0)["item"]
+        == "balanced_operating_point"
     )
 
-    parsed = json.loads(powerio.parse(DATA / "api_conformance.m").to_json())
+    parsed = json.loads(_emit_module(powerio.parse_file(DATA / "api_conformance.m")))
     network = parsed["value"]["data"]
     scenario_doc = {
         "schema": "powerio.module",
@@ -593,7 +776,7 @@ def test_typed_collection_protocols_and_inspect_state():
             },
         },
     }
-    scenarios = powerio.PioModule.from_json(json.dumps(scenario_doc)).value
+    scenarios = _parse_module(json.dumps(scenario_doc)).value
     assert isinstance(scenarios, powerio.ScenarioSet)
     assert len(scenarios) == 2
     assert scenarios.keys() == ("base", "peak")
@@ -604,45 +787,41 @@ def test_typed_collection_protocols_and_inspect_state():
         _ = scenarios["winter"]
 
 
-def test_source_format_round_trips_through_to_format(case9):
-    # `net.to_format(other.source_format)` must work for every format: since
-    # 0.9 the property returns the same token every `from`/`to` accepts (the
-    # #75 camel-case spellings are retired).
-    pm = parse_text(case9.to_format("powermodels-json").text, "powermodels-json")
+def test_source_format_round_trips_through_emit(case9):
+    pm = parse_text(_emit_value(case9, "powermodels-json").text, "powermodels-json")
     assert pm.source_format == "powermodels-json"
-    eg = parse_text(case9.to_format("egret-json").text, "egret-json")
+    eg = parse_text(_emit_value(case9, "egret-json").text, "egret-json")
     assert eg.source_format == "egret-json"
     for other in (case9, pm, eg):
-        # The raw source_format string feeds straight back into to_format.
-        assert case9.to_format(other.source_format).text
+        assert _emit_value(case9, other.source_format).text
 
 
 def test_write_is_byte_exact():
     src = (DATA / "case9.m").read_text()
-    case = powerio.parse(DATA / "case9.m", value_type=powerio.BalancedNetwork).value
-    assert case.to_matpower() == src
+    case = _parse(DATA / "case9.m", value_type=powerio.BalancedNetwork).value
+    assert _emit_value(case, "matpower").text == src
 
 
 def test_to_normalized_is_per_unit_and_in_memory(case9):
     n = case9.to_normalized()
     # case9 is fully in service with one reference bus, so nothing is dropped.
     assert n.n_buses == case9.n_buses
-    assert n.n_gens == case9.n_gens
+    assert n.n_generators == case9.n_generators
     # A derived product with no retained source: it serializes from the model.
     assert n.source_format == "normalized"
     # Powers are per unit (divided by baseMVA).
     g, rg = n.generators[0], case9.generators[0]
     assert abs(g["pmax"] - rg["pmax"] / case9.base_mva) < 1e-9
-    # The result is a full BalancedNetwork, so the matrix builders work on it.
-    assert n.bprime().shape == (n.n_buses, n.n_buses)
+    # The result is a full BalancedNetwork, so matrix calculations work on it.
+    assert n.calc_bprime_matrix().shape == (n.n_buses, n.n_buses)
 
 
 def test_to_normalized_filters_out_of_service():
-    case = powerio.parse(str(DATA / "t_case9_oos.m"), value_type=powerio.BalancedNetwork).value
+    case = _parse(str(DATA / "t_case9_oos.m"), value_type=powerio.BalancedNetwork).value
     n = case.to_normalized()
     # The fixture marks one generator and one branch out of service; no isolated
     # buses, so every bus survives.
-    assert n.n_gens == case.n_gens - 1
+    assert n.n_generators == case.n_generators - 1
     assert n.n_branches == case.n_branches - 1
     assert n.n_buses == 9
     assert n.source_format == "normalized"
@@ -669,15 +848,19 @@ mpc.branch = [
 \t4\t10\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
 ];
 """
-    n = powerio.parse((src).encode(), "matpower", value_type=powerio.BalancedNetwork).value.to_normalized()
+    n = _parse(
+        (src).encode(), "matpower", value_type=powerio.BalancedNetwork
+    ).value.to_normalized()
     assert [bus["id"] for bus in n.buses] == [1, 2, 3, 4, 10]
     assert n.loads[0]["bus"] == 10
     assert n.branches[-1]["from_id"] == 4
     assert n.branches[-1]["to_id"] == 10
 
 
-def test_to_normalized_with_options_clamps_angle_bounds():
-    case = powerio.parse(DATA / "angle_bounds_clamp.m", value_type=powerio.BalancedNetwork).value
+def test_to_normalized_clamps_angle_bounds_with_keywords():
+    case = _parse(
+        DATA / "angle_bounds_clamp.m", value_type=powerio.BalancedNetwork
+    ).value
 
     plain = case.to_normalized()
     assert plain.branches[0]["angmin"] == pytest.approx(-2.0 * math.pi)
@@ -689,7 +872,8 @@ def test_to_normalized_with_options_clamps_angle_bounds():
     assert plain.branches[4]["angmin"] == pytest.approx(100.0 * math.pi / 180.0)
     assert plain.branches[4]["angmax"] == pytest.approx(120.0 * math.pi / 180.0)
 
-    repaired = case.to_normalized_with_options(clamp_angle_bounds=True)
+    repaired = case.to_normalized(clamp_angle_bounds=True)
+    repaired_diagnostics = powerio.PioModule.from_value(repaired).diagnostics
     assert repaired.branches[0]["angmin"] == pytest.approx(-1.0472)
     assert repaired.branches[0]["angmax"] == pytest.approx(1.0472)
     assert repaired.branches[1]["angmin"] == pytest.approx(-1.0472)
@@ -703,23 +887,23 @@ def test_to_normalized_with_options_clamps_angle_bounds():
     assert all(branch["angmin"] <= branch["angmax"] for branch in repaired.branches)
     assert any(
         "branch 0 angle difference bounds clamped" in warning
-        for warning in repaired.read_warnings
+        for warning in (diagnostic.message for diagnostic in repaired_diagnostics)
     )
     assert any(
         "branch 1 angle difference bounds clamped" in warning
-        for warning in repaired.read_warnings
+        for warning in (diagnostic.message for diagnostic in repaired_diagnostics)
     )
     assert any(
         "branch 3 angle difference bounds clamped" in warning
-        for warning in repaired.read_warnings
+        for warning in (diagnostic.message for diagnostic in repaired_diagnostics)
     )
     assert any(
         "branch 4 angle difference bounds clamped" in warning
-        for warning in repaired.read_warnings
+        for warning in (diagnostic.message for diagnostic in repaired_diagnostics)
     )
 
     with pytest.raises(powerio.PowerIODataError):
-        case.to_normalized_with_options(
+        case.to_normalized(
             clamp_angle_bounds=True, angle_bound_pad=math.pi / 2.0
         )
 
@@ -727,12 +911,16 @@ def test_to_normalized_with_options_clamps_angle_bounds():
 def test_parse_bad_path_raises():
     # I/O failures map to the standard OSError subclass, not PowerIOError.
     with pytest.raises(FileNotFoundError):
-        powerio.parse(DATA / "does_not_exist.m", value_type=powerio.BalancedNetwork)
+        _parse(DATA / "does_not_exist.m", value_type=powerio.BalancedNetwork)
 
 
 def test_bad_parse_raises_powerio_error():
     with pytest.raises(powerio.PowerIOError):
-        powerio.parse(("this is not a matpower case").encode(), "matpower", value_type=powerio.BalancedNetwork)
+        _parse(
+            ("this is not a matpower case").encode(),
+            "matpower",
+            value_type=powerio.BalancedNetwork,
+        )
 
 
 def test_error_subclasses_are_powerio_errors():
@@ -748,28 +936,36 @@ def test_error_subclasses_are_powerio_errors():
 def test_malformed_case_raises_parse_error():
     # A malformed/unparseable case file is a parse-category error.
     with pytest.raises(powerio.PowerIOParseError):
-        powerio.parse(("this is not a matpower case").encode(), "matpower", value_type=powerio.BalancedNetwork)
+        _parse(
+            ("this is not a matpower case").encode(),
+            "matpower",
+            value_type=powerio.BalancedNetwork,
+        )
 
 
 def test_unmet_precondition_raises_data_error(tmp_path):
     # A well-formed case that can't satisfy an operation (here: DC-OPF with no
     # generators) is a data-category error, not a parse error.
     genless = TINY[: TINY.index("mpc.gen = [")]
-    case = powerio.parse((genless).encode(), "matpower", value_type=powerio.BalancedNetwork).value
+    case = _parse(
+        (genless).encode(), "matpower", value_type=powerio.BalancedNetwork
+    ).value
     with pytest.raises(powerio.PowerIODataError):
-        case.write_dcopf_bundle(str(tmp_path))
+        case.emit_dcopf_bundle(str(tmp_path))
 
 
 def test_reference_bus_count_is_data_error():
     two_ref = TINY.replace("\t3\t2\t0", "\t3\t3\t0")  # bus 3: PV -> ref
     with pytest.raises(powerio.PowerIODataError):
-        powerio.parse((two_ref).encode(), "matpower", value_type=powerio.BalancedNetwork).value.reference_bus_index()
+        _parse(
+            (two_ref).encode(), "matpower", value_type=powerio.BalancedNetwork
+        ).value.reference_bus_index()
 
 
 def test_dcopf_bundle_paths_are_clean_unicode(case9, tmp_path):
     # The returned dir/files must be exact strings that re-open the written
     # files, never lossily mangled (no U+FFFD).
-    out = case9.write_dcopf_bundle(str(tmp_path))
+    out = case9.emit_dcopf_bundle(str(tmp_path))
     assert "�" not in out["dir"]
     for f in out["files"]:
         assert "�" not in f
@@ -785,11 +981,11 @@ def test_delegated_surface_resolves(case9):
         "source_format",
         "n_buses",
         "n_branches",
-        "n_gens",
+        "n_generators",
         "n_loads",
         "n_shunts",
         "is_radial",
-        "n_connected_components",
+        "n_islands",
         "buses",
         "loads",
         "shunts",
@@ -797,17 +993,43 @@ def test_delegated_surface_resolves(case9):
         "generators",
         "reference_bus_index",
         "reference_bus_indices",
-        "connectivity_report",
-        "to_matpower",
-        "write_dcopf_bundle",
+        "calc_connectivity_report",
+        "to_geo_layer",
+        "emit_dcopf_bundle",
     ]:
         assert hasattr(case9, attr), attr
+    for removed in [
+        "n_gens",
+        "n_connected_components",
+        "connectivity_report",
+        "geo_layer",
+        "to_matpower",
+        "to_format",
+        "write_file",
+        "dc_data",
+        "bprime",
+        "bdoubleprime",
+        "ybus",
+        "ybus_parts",
+        "adjacency",
+        "ptdf",
+        "lodf",
+        "lacpf",
+        "weighted_laplacian",
+        "incidence",
+        "write_gridfm",
+        "write_dcopf_bundle",
+        "write_pypsa_csv_folder",
+    ]:
+        assert not hasattr(case9, removed), removed
+    assert "lowered" not in dir(case9)
+    assert not hasattr(case9, "lowered")
     with pytest.raises(AttributeError):
         case9.does_not_exist  # noqa: B018 -- the attribute access is the assertion
 
 
 def test_import_and_parse_pull_in_no_optional_deps():
-    # The zero-dep promise: parse/convert/write need nothing but the
+    # The zero-dep promise: parse and emit need nothing but the
     # interpreter. Run in a fresh process so another test importing scipy can't
     # pollute it, and parse + write a real case so the whole IO path is covered.
     # `mcp` is checked too: the powerio.mcp submodule must never be imported from
@@ -823,8 +1045,8 @@ def test_import_and_parse_pull_in_no_optional_deps():
     ]
     code = (
         "import sys, powerio\n"
-        f"c = powerio.parse(r'{DATA / 'case9.m'}', value_type=powerio.BalancedNetwork).value\n"
-        "assert c.to_matpower()\n"
+        f"m = powerio.parse_file(r'{DATA / 'case9.m'}', value_type=powerio.BalancedNetwork)\n"
+        "assert m.emit('matpower').text\n"
         f"for name in {optional_modules!r}:\n"
         "    assert name not in sys.modules, f'powerio dragged in {name}'\n"
     )
@@ -844,9 +1066,9 @@ def test_missing_matrix_extra_raises_clear_importerror(case9, monkeypatch):
     monkeypatch.setattr(powerio.importlib, "import_module", missing_module)
 
     with pytest.raises(ImportError, match=r"powerio\[matrix\]"):
-        case9.bdoubleprime()
+        case9.calc_bdoubleprime_matrix()
     with pytest.raises(ImportError, match=r"powerio\[matrix\]"):
-        case9.bprime()
+        case9.calc_bprime_matrix()
 
 
 def test_missing_graph_extra_raises_clear_importerror(case9, monkeypatch):
@@ -868,7 +1090,7 @@ def test_missing_graph_extra_raises_clear_importerror(case9, monkeypatch):
 @pytest.mark.parametrize("name", SMALL)
 def test_bprime_is_singular_laplacian(name):
     c = load(name)
-    b = c.bprime()
+    b = c.calc_bprime_matrix()
     assert sp.issparse(b) and b.format == "csr"
     assert b.shape == (c.n_buses, c.n_buses)
     assert b.indices.dtype == np.int32  # COO indices emitted as i32
@@ -884,45 +1106,49 @@ def test_bprime_is_singular_laplacian(name):
 
 def test_bprime_xb_equals_weighted_laplacian(case9):
     # Exact cross-check across two boundary paths: Bp in the XB scheme is the
-    # reactance-only weighted Laplacian (b = 1/x). Catches a shared bug in
+    # Reactance only weighted Laplacian (b = 1/x). Catches a shared bug in
     # the COO conversion that the symmetric self-check can't.
     assert np.allclose(
-        case9.bprime("xb").toarray(),
-        case9.weighted_laplacian("reactance-only").toarray(),
+        case9.calc_bprime_matrix("xb").toarray(),
+        case9.calc_weighted_laplacian("reactance_only").toarray(),
     )
 
 
 def test_bdoubleprime_shunts_and_scheme():
     c = load("case30")  # has bus shunts
-    bpp = c.bdoubleprime()
+    bpp = c.calc_bdoubleprime_matrix()
     assert bpp.shape == (c.n_buses, c.n_buses)
     # Bpp keeps shunts, so it differs from Bp on this case.
-    assert not np.allclose(bpp.toarray(), c.bprime().toarray())
+    assert not np.allclose(bpp.toarray(), c.calc_bprime_matrix().toarray())
     # The scheme kwarg is wired: BX zeroes line resistance, XB does not.
-    assert not np.allclose(c.bdoubleprime("bx").toarray(), c.bdoubleprime("xb").toarray())
+    assert not np.allclose(
+        c.calc_bdoubleprime_matrix("bx").toarray(),
+        c.calc_bdoubleprime_matrix("xb").toarray(),
+    )
 
 
 @pytest.mark.parametrize("name", SMALL)
-def test_ybus_complex_equals_parts(name):
+def test_admittance_matrix_is_complex(name):
     c = load(name)
-    y = c.ybus()
+    y = c.calc_admittance_matrix()
     assert y.dtype == np.complex128 and y.shape == (c.n_buses, c.n_buses)
-    g, b = c.ybus_parts()
-    assert np.allclose(y.toarray(), (g + 1j * b).toarray())
 
 
 def test_kwargs_change_output():
     # case14 carries nonzero taps, so taps/scheme are observable here.
     c = load("case14")
-    assert not np.allclose(c.bprime("xb").toarray(), c.bprime("bx").toarray())
     assert not np.allclose(
-        c.ybus(include_taps=True).toarray(),
-        c.ybus(include_taps=False).toarray(),
+        c.calc_bprime_matrix("xb").toarray(),
+        c.calc_bprime_matrix("bx").toarray(),
+    )
+    assert not np.allclose(
+        c.calc_admittance_matrix(include_taps=True).toarray(),
+        c.calc_admittance_matrix(include_taps=False).toarray(),
     )
 
 
 def test_adjacency_is_binary_symmetric(case9):
-    a = case9.adjacency()
+    a = case9.calc_adjacency_matrix()
     assert a.shape == (9, 9)
     assert is_symmetric(a)
     assert set(np.unique(a.data)).issubset({0.0, 1.0})
@@ -930,14 +1156,14 @@ def test_adjacency_is_binary_symmetric(case9):
 
 
 def test_lacpf_block_shape(case9):
-    block = case9.lacpf()
+    block = case9.calc_lacpf_matrix()
     assert block.shape == (2 * case9.n_buses, 2 * case9.n_buses)
 
 
 @pytest.mark.parametrize("name", SMALL)
 def test_sensitivities(name):
     c = load(name)
-    ptdf, lodf = c.ptdf(), c.lodf()
+    ptdf, lodf = c.calc_ptdf(), c.calc_lodf()
     m, n = ptdf.shape
     assert n == c.n_buses
     assert lodf.shape == (m, m)
@@ -947,29 +1173,10 @@ def test_sensitivities(name):
     assert np.allclose(ptdf.toarray()[:, c.reference_bus_index()], 0.0, atol=1e-9)
 
 
-def test_incidence_column_structure(case9):
-    # Catches a row/col transpose in the COO conversion that symmetric matrices
-    # cannot: each incidence column has +1 at the from bus, -1 at the to bus.
-    inc = case9.incidence()
-    n, m = inc.A.shape
-    assert n == case9.n_buses
-    assert len(inc.b) == m and len(inc.p_shift) == n and len(inc.branch_of_col) == m
-    assert list(inc.branch_of_col) == list(range(m))  # all in service, in order
-    assert inc.branch_of_col.dtype == np.int64
-    a = inc.A.tocsc()
-    idmap = id_to_dense(case9)
-    for k in range(m):
-        br = case9.branches[inc.branch_of_col[k]]
-        col = a[:, k].toarray().ravel()
-        assert np.count_nonzero(col) == 2
-        assert col[idmap[br["from_id"]]] == 1.0
-        assert col[idmap[br["to_id"]]] == -1.0
-
-
-def test_weighted_laplacian_matches_incidence(case9):
-    inc = case9.incidence()
-    rebuilt = inc.A @ sp.diags(inc.b) @ inc.A.T
-    assert np.allclose(case9.weighted_laplacian().toarray(), rebuilt.toarray())
+def test_weighted_laplacian_is_negative_bus_susceptance(case9):
+    laplacian = case9.calc_weighted_laplacian().toarray()
+    bus_susceptance = case9.calc_bus_susceptance_matrix().toarray()
+    assert np.allclose(laplacian, -bus_susceptance)
 
 
 def _float_bits(value):
@@ -1002,7 +1209,8 @@ def _real_matrix_arrow_payload(matrix, table):
 
 
 def _ybus_arrow_payload(case):
-    g, b = case.ybus_parts()
+    ybus = case.calc_admittance_matrix()
+    g, b = ybus.real, ybus.imag
     entries = {}
     for key, matrix in [("g_bits", g.tocsr()), ("b_bits", b.tocsr())]:
         for row in range(matrix.shape[0]):
@@ -1037,7 +1245,9 @@ def _ybus_arrow_payload(case):
 
 
 def _matrix_axis_payload(case):
-    inc = case.incidence()
+    active_branches = [
+        index for index, branch in enumerate(case.branches) if branch["in_service"]
+    ]
     return {
         "matrix_bus": {
             "bus_id": [bus["id"] for bus in case.buses],
@@ -1053,16 +1263,14 @@ def _matrix_axis_payload(case):
         "matrix_branch": {
             "format": "axis_map",
             "from_bus_id": [
-                case.branches[int(idx)]["from_id"] for idx in inc.branch_of_col
+                case.branches[index]["from_id"] for index in active_branches
             ],
-            "index": list(range(len(inc.branch_of_col))),
+            "index": list(range(len(active_branches))),
             "row_axis": "matrix_branch",
             "powerio_version": powerio.__version__,
-            "source_row": [int(idx) for idx in inc.branch_of_col],
+            "source_row": active_branches,
             "table": "matrix_branch",
-            "to_bus_id": [
-                case.branches[int(idx)]["to_id"] for idx in inc.branch_of_col
-            ],
+            "to_bus_id": [case.branches[index]["to_id"] for index in active_branches],
         },
     }
 
@@ -1075,10 +1283,15 @@ def test_matrix_methods_match_rust_arrow_golden(name):
         "case": f"{name}.m",
         "tables": {
             "bdoubleprime": _real_matrix_arrow_payload(
-                case.bdoubleprime(), "bdoubleprime"
+                case.calc_bdoubleprime_matrix(), "bdoubleprime"
             ),
-            "bprime": _real_matrix_arrow_payload(case.bprime(), "bprime"),
-            "incidence": _real_matrix_arrow_payload(case.incidence().A, "incidence"),
+            "bprime": _real_matrix_arrow_payload(case.calc_bprime_matrix(), "bprime"),
+            "incidence": _real_matrix_arrow_payload(
+                # ABI 6 Arrow keeps its released bus by branch table layout;
+                # Python exposes the PowerModels branch by bus orientation.
+                case.calc_incidence_matrix().T,
+                "incidence",
+            ),
             "ybus": _ybus_arrow_payload(case),
         },
     }
@@ -1104,7 +1317,7 @@ def test_ppc_round_trip(case9):
     back = powerio.from_ppc(ppc)
     assert back.n_buses == case9.n_buses
     assert back.n_branches == case9.n_branches
-    assert back.n_gens == case9.n_gens
+    assert back.n_generators == case9.n_generators
     # The ppc projection is a fixed point: to_ppc(from_ppc(ppc)) == ppc.
     again = back.to_ppc()
     for key in ("bus", "gen", "branch", "gencost"):
@@ -1149,7 +1362,7 @@ def test_ppc_keeps_demand_on_a_de_energized_bus():
         "\t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;\n"
         "];\n"
     )
-    net = powerio.parse((src).encode(), "matpower", value_type=powerio.BalancedNetwork).value
+    net = _parse((src).encode(), "matpower", value_type=powerio.BalancedNetwork).value
     assert not net.loads[0]["in_service"] and not net.shunts[0]["in_service"]
 
     row = net.to_ppc()["bus"][1]
@@ -1166,10 +1379,14 @@ def test_ppc_gen_width_follows_the_capability_columns(case9):
     assert case9.to_ppc()["gen"].shape == (3, 21)
     assert all(c is not None for c in case9.generators[0]["caps"])
 
-    src = case9.to_matpower().split("mpc.gen = [")
+    src = _emit_value(case9, "matpower").text.split("mpc.gen = [")
     rows = src[1].split("];")[0].strip().split("\n")
-    narrow = "\n".join("\t" + "\t".join(r.strip().rstrip(";").split()[:10]) + ";" for r in rows)
-    net = parse_text(f"{src[0]}mpc.gen = [\n{narrow}\n];{src[1].split('];', 1)[1]}", "matpower")
+    narrow = "\n".join(
+        "\t" + "\t".join(r.strip().rstrip(";").split()[:10]) + ";" for r in rows
+    )
+    net = parse_text(
+        f"{src[0]}mpc.gen = [\n{narrow}\n];{src[1].split('];', 1)[1]}", "matpower"
+    )
     assert all(c is None for c in net.generators[0]["caps"])
 
     ppc = net.to_ppc()
@@ -1215,69 +1432,62 @@ def test_from_ppc_names_the_table_and_row_for_malformed_input(case9):
         powerio.from_ppc(lettered)
 
 
-# Every valid convention spelling, grouped by the formula it selects: the
-# 1.0 stable name (what a caller matching the diagnostic and CLI vocabulary
-# would use) first, then every 0.9-era alias PowerIO still accepts.
-CONVENTION_ALIASES = {
-    "series_susceptance": ["series", "series-impedance", "SERIES_SUSCEPTANCE"],
-    "tap_adjusted_reactance": ["matpower", "mp", "TAP_ADJUSTED_REACTANCE"],
-    "reactance_only": ["reactance-only", "REACTANCE_ONLY"],
-}
+FORMULAS = [
+    "series_susceptance",
+    "tap_adjusted_reactance",
+    "reactance_only",
+]
 
 
-@pytest.mark.parametrize("canonical", CONVENTION_ALIASES)
-def test_convention_aliases(case9, canonical):
-    # Every spelling in the group resolves on every convention-taking
-    # method, and produces the identical matrix its 1.0 name does.
-    names = [canonical, *CONVENTION_ALIASES[canonical]]
-    base = case9.ptdf(canonical).toarray()
-    for conv in names:
-        assert sp.issparse(case9.ptdf(conv))
-        assert sp.issparse(case9.lodf(conv))
-        assert sp.issparse(case9.weighted_laplacian(conv))
-        assert sp.issparse(case9.incidence(conv).A)
-        assert np.allclose(case9.ptdf(conv).toarray(), base)
+@pytest.mark.parametrize("formula", FORMULAS)
+def test_branch_susceptance_formulas(case9, formula):
+    assert sp.issparse(case9.calc_ptdf(formula))
+    assert sp.issparse(case9.calc_lodf(formula))
+    assert sp.issparse(case9.calc_weighted_laplacian(formula))
+    assert sp.issparse(case9.calc_incidence_matrix(formula))
 
 
-def test_convention_paper_pure_is_refused(case9):
-    # 0.8's default spelling. The nearest-looking survivor, "series", is a
-    # different formula, so the error has to name the successor or a caller
-    # who guesses gets numbers instead of a failure.
-    for old in ["paper-pure", "paper", "PAPER_PURE"]:
-        with pytest.raises(ValueError, match="reactance-only"):
-            case9.ptdf(old)
+@pytest.mark.parametrize(
+    "old",
+    [
+        "series",
+        "series-impedance",
+        "matpower",
+        "mp",
+        "reactance-only",
+        "paper-pure",
+        "paper",
+        "SERIES_SUSCEPTANCE",
+    ],
+)
+def test_branch_susceptance_formula_aliases_are_refused(case9, old):
+    with pytest.raises(ValueError, match="branch susceptance formula"):
+        case9.calc_ptdf(old)
 
 
 def test_scheme_aliases(case9):
     for scheme in ["bx", "XB"]:
-        assert sp.issparse(case9.bprime(scheme))
+        assert sp.issparse(case9.calc_bprime_matrix(scheme))
 
 
-# Every matrix builder that threads a skip_zero_impedance keyword through to
+# Every matrix calculation that threads a skip_zero_impedance keyword through to
 # BuildOptions. Only the acceptance half is pinned here: on this vintage
 # BuildOptions::default() still silently skips a zero impedance branch, so a
 # case with none (case9) is unaffected by either value, and asserting the
 # refusal-by-default behavior has to wait for the lower branch's default flip
 # to cascade in.
 SKIP_ZERO_IMPEDANCE_METHODS = [
-    "bprime",
-    "bdoubleprime",
-    "lacpf",
-    "ybus_parts",
-    "ybus",
-    "weighted_laplacian",
-    "incidence",
+    "calc_bprime_matrix",
+    "calc_bdoubleprime_matrix",
+    "calc_lacpf_matrix",
+    "calc_admittance_matrix",
 ]
 
 
 @pytest.mark.parametrize("method", SKIP_ZERO_IMPEDANCE_METHODS)
 def test_skip_zero_impedance_kwarg_is_accepted(case9, method):
     def matrices(result):
-        if method == "incidence":
-            return [result.A]
-        if method == "ybus_parts":
-            return [result.g, result.b]
-        if method == "ybus":
+        if method == "calc_admittance_matrix":
             return [result]
         return [result]
 
@@ -1295,33 +1505,33 @@ def test_sensitivity_solver_kwarg(case9):
     # On a small case the auto policy picks the dense path, so the explicit
     # spellings must agree with the default. The sparse path agrees only
     # to its 1e-10 relative residual.
-    base = case9.ptdf().toarray()
-    assert np.allclose(case9.ptdf(solver="dense").toarray(), base, atol=1e-9)
-    assert np.allclose(case9.ptdf(solver="sparse").toarray(), base, atol=1e-6)
-    lodf = case9.lodf().toarray()
-    assert np.allclose(case9.lodf(solver="dense").toarray(), lodf, atol=1e-9)
-    assert np.allclose(case9.lodf(solver="sparse").toarray(), lodf, atol=1e-6)
+    base = case9.calc_ptdf().toarray()
+    assert np.allclose(case9.calc_ptdf(solver="dense").toarray(), base, atol=1e-9)
+    assert np.allclose(case9.calc_ptdf(solver="sparse").toarray(), base, atol=1e-6)
+    lodf = case9.calc_lodf().toarray()
+    assert np.allclose(case9.calc_lodf(solver="dense").toarray(), lodf, atol=1e-9)
+    assert np.allclose(case9.calc_lodf(solver="sparse").toarray(), lodf, atol=1e-6)
     # The CG path is retired; its spelling is refused with the accepted set.
     with pytest.raises(ValueError, match="expected 'auto', 'dense', or 'sparse'"):
-        case9.lodf(solver="CG")
+        case9.calc_lodf(solver="CG")
 
 
 def test_bad_enum_strings_raise(case9, tmp_path):
     with pytest.raises(ValueError):
-        case9.bprime(scheme="nonsense")
+        case9.calc_bprime_matrix(scheme="nonsense")
     with pytest.raises(ValueError):
-        case9.ptdf(convention="nope")
+        case9.calc_ptdf(formula="nope")
     with pytest.raises(ValueError):
-        case9.ptdf(solver="bogus")
+        case9.calc_ptdf(solver="bogus")
     with pytest.raises(ValueError):
-        case9.write_dcopf_bundle(str(tmp_path), units="bogus")
+        case9.emit_dcopf_bundle(str(tmp_path), units="bogus")
 
 
 # --- graph view ---------------------------------------------------------
 
 
 def test_to_networkx_attrs_and_status_filter():
-    c = powerio.parse((TINY).encode(), "matpower", value_type=powerio.BalancedNetwork).value
+    c = _parse((TINY).encode(), "matpower", value_type=powerio.BalancedNetwork).value
     g = c.to_networkx()
     assert g.number_of_nodes() == 3 and g.number_of_edges() == 2
     # Edge attributes mirror the branch table.
@@ -1332,14 +1542,19 @@ def test_to_networkx_attrs_and_status_filter():
         "2\t3\t0.01\t0.1\t0\t250\t250\t250\t0\t0\t1\t-360\t360",
         "2\t3\t0.01\t0.1\t0\t250\t250\t250\t0\t0\t0\t-360\t360",
     )
-    assert powerio.parse((oos).encode(), "matpower", value_type=powerio.BalancedNetwork).value.to_networkx().number_of_edges() == 1
+    assert (
+        _parse((oos).encode(), "matpower", value_type=powerio.BalancedNetwork)
+        .value.to_networkx()
+        .number_of_edges()
+        == 1
+    )
 
 
 # --- connectivity & reference bus --------------------------------------
 
 
 def test_connectivity_report(case9):
-    rep = case9.connectivity_report()
+    rep = case9.calc_connectivity_report()
     assert rep["n_buses"] == 9
     assert rep["n_components"] == 1
     assert rep["isolated_buses"] == []
@@ -1352,7 +1567,9 @@ def test_reference_bus_index(case9):
 
 def test_reference_bus_error_on_two_refs():
     two_ref = TINY.replace("\t3\t2\t0", "\t3\t3\t0")  # bus 3: PV -> ref
-    case = powerio.parse((two_ref).encode(), "matpower", value_type=powerio.BalancedNetwork).value
+    case = _parse(
+        (two_ref).encode(), "matpower", value_type=powerio.BalancedNetwork
+    ).value
     # The single-ref query raises; the reference-set query returns both, so a
     # multi-slack case stays legible from Python.
     with pytest.raises(powerio.PowerIOError):
@@ -1363,8 +1580,8 @@ def test_reference_bus_error_on_two_refs():
 # --- DC-OPF bundle ------------------------------------------------------
 
 
-def test_write_dcopf_bundle_content(case9, tmp_path):
-    out = case9.write_dcopf_bundle(str(tmp_path))
+def test_emit_dcopf_bundle_content(case9, tmp_path):
+    out = case9.emit_dcopf_bundle(str(tmp_path))
     files = out["files"]
     assert Path(out["dir"]).is_dir()
     names = {Path(f).name for f in files}
@@ -1386,75 +1603,87 @@ def test_dcopf_units_change_cost(case9, tmp_path):
 
 def _bundle_file(case, out_dir, name, **kw):
     out_dir.mkdir()
-    out = case.write_dcopf_bundle(str(out_dir), **kw)
+    out = case.emit_dcopf_bundle(str(out_dir), **kw)
     return next(f for f in out["files"] if Path(f).name == name)
 
 
 def test_dcopf_requires_generators(tmp_path):
     genless = TINY[: TINY.index("mpc.gen = [")]
-    case = powerio.parse((genless).encode(), "matpower", value_type=powerio.BalancedNetwork).value
-    assert case.n_gens == 0
+    case = _parse(
+        (genless).encode(), "matpower", value_type=powerio.BalancedNetwork
+    ).value
+    assert case.n_generators == 0
     with pytest.raises(powerio.PowerIOError):
-        case.write_dcopf_bundle(str(tmp_path))
+        case.emit_dcopf_bundle(str(tmp_path))
 
 
 # --- convert -----------------------------------------------------------
 
 
-def test_convert_matpower_echo_is_byte_exact():
+def test_emit_matpower_echo_is_byte_exact():
     src = (DATA / "case14.m").read_text()
-    conv = powerio.convert_file(DATA / "case14.m", "matpower")
+    conv = _emit_file(DATA / "case14.m", "matpower")
     assert conv.text == src
-    assert conv.warnings == []
+    assert conv.diagnostics == []
 
 
-def test_convert_matpower_to_each_format():
-    for fmt in ["powermodels-json", "egret-json", "psse", "powerworld", "pandapower-json"]:
-        r = powerio.convert_file(str(DATA / "case30.m"), fmt)
+def test_emit_matpower_to_each_format():
+    for fmt in [
+        "powermodels-json",
+        "egret-json",
+        "psse",
+        "powerworld",
+        "pandapower-json",
+    ]:
+        r = _emit_file(str(DATA / "case30.m"), fmt)
         assert isinstance(r.text, str) and len(r.text) > 0
-        assert isinstance(r.warnings, list)
+        assert isinstance(r.diagnostics, list)
     # PowerModels JSON output parses as JSON and keeps the bus count.
-    pm = json.loads(powerio.convert_file(str(DATA / "case30.m"), "powermodels-json").text)
+    pm = json.loads(_emit_file(str(DATA / "case30.m"), "powermodels-json").text)
     assert len(pm["bus"]) == 30
-    pp = json.loads(powerio.convert_file(str(DATA / "case30.m"), "pandapower-json").text)
+    pp = json.loads(_emit_file(str(DATA / "case30.m"), "pandapower-json").text)
     assert pp["_class"] == "pandapowerNet"
 
 
-def test_convert_round_trip_through_psse(tmp_path):
-    raw = powerio.convert_file(str(DATA / "case30.m"), "psse").text
+def test_emit_round_trip_through_psse(tmp_path):
+    raw = _emit_file(str(DATA / "case30.m"), "psse").text
     p = tmp_path / "case30.raw"
     p.write_text(raw)
-    back = powerio.convert_file(str(p), "matpower")  # PSS/E inferred from .raw extension
-    case = powerio.parse((back.text).encode(), "matpower", value_type=powerio.BalancedNetwork).value
+    back = _emit_file(str(p), "matpower")  # PSS/E inferred from .raw extension
+    case = _parse(
+        (back.text).encode(), "matpower", value_type=powerio.BalancedNetwork
+    ).value
     assert case.n_buses == 30
 
 
-def test_write_file_preserves_the_crlf_echo(tmp_path):
+def test_emit_destination_preserves_the_crlf_echo(tmp_path):
     # A same-format echo of a CRLF source must reach disk byte exact.
-    # Writing to_format text through open(path, "w") corrupts it on Windows
-    # (text mode turns each \r\n into \r\r\n); write_file bypasses that.
+    # Writing emitted text through open(path, "w") corrupts it on Windows
+    # (text mode turns each \r\n into \r\r\n); module.emit(path) bypasses that.
     src = DATA / "psse" / "case14.raw"
     assert b"\r\n" in src.read_bytes()
-    case = powerio.parse(src, value_type=powerio.BalancedNetwork).value
+    case = _parse(src, value_type=powerio.BalancedNetwork).value
     out = tmp_path / "echo.raw"
-    warnings = case.write_file(out, "psse")
-    assert warnings == []
+    result = _emit_value(case, "psse", out)
+    assert result.text is None
+    assert result.diagnostics == []
     assert out.read_bytes() == src.read_bytes()
 
 
-def test_convert_file_out_writes_the_text_byte_exact(tmp_path):
+def test_emit_file_destination_writes_the_text_byte_exact(tmp_path):
     src = DATA / "psse" / "case14.raw"
     out = tmp_path / "echo.raw"
-    conv = powerio.convert_file(src, "psse", out=out)
-    assert out.read_bytes() == conv.text.encode()
+    result = _emit_file(src, "psse", destination=out)
+    assert result.text is None
+    assert result.diagnostics == []
     assert out.read_bytes() == src.read_bytes()
 
 
-def test_convert_psse_start_of_markers_to_powermodels(tmp_path):
+def test_emit_psse_start_of_markers_to_powermodels(tmp_path):
     p = tmp_path / "start_markers.raw"
     p.write_text(PSSE_START_OF_MARKERS)
 
-    pm = json.loads(powerio.convert_file(p, "powermodels-json", from_="psse").text)
+    pm = json.loads(_emit_file(p, "powermodels-json", from_="psse").text)
 
     assert len(pm["bus"]) == 2
     assert len(pm["load"]) == 1
@@ -1462,54 +1691,62 @@ def test_convert_psse_start_of_markers_to_powermodels(tmp_path):
     assert len(pm["branch"]) == 1
 
 
-def test_convert_unknown_format_raises():
+def test_emit_unknown_format_raises():
     with pytest.raises(ValueError):
-        powerio.convert_file(str(DATA / "case30.m"), "nonsense")
+        _emit_file(str(DATA / "case30.m"), "nonsense")
 
 
-def test_convert_str_matches_convert_file():
+def test_emit_text_matches_emit_file():
     text = (DATA / "case30.m").read_text()
-    for fmt in ["powermodels-json", "egret-json", "psse", "powerworld", "pandapower-json"]:
-        from_str = powerio.convert_str(text, fmt)
-        from_file = powerio.convert_file(str(DATA / "case30.m"), fmt)
-        assert from_str.text == from_file.text
-        assert from_str.warnings == from_file.warnings
+    for fmt in [
+        "powermodels-json",
+        "egret-json",
+        "psse",
+        "powerworld",
+        "pandapower-json",
+    ]:
+        from_text = _emit_text(text, fmt, name="case30.m")
+        from_path = _emit_file(str(DATA / "case30.m"), fmt)
+        assert from_text.text == from_path.text
+        assert from_text.diagnostics == from_path.diagnostics
 
 
-def test_convert_str_matpower_echo_is_byte_exact():
+def test_emit_text_matpower_echo_is_byte_exact():
     src = (DATA / "case14.m").read_text()
-    conv = powerio.convert_str(src, "matpower")
+    conv = _emit_text(src, "matpower")
     assert conv.text == src
-    assert conv.warnings == []
+    assert conv.diagnostics == []
 
 
-def test_to_canonical_format_bypasses_matpower_echo():
+def test_emit_preserves_matpower_source_echo():
     src = (DATA / "case14.m").read_text()
-    net = powerio.parse((src).encode(), "matpower", value_type=powerio.BalancedNetwork).value
-    assert net.to_format("matpower").text == src
-    canonical = net.to_canonical_format("matpower")
-    assert canonical.text != src
-    assert powerio.parse((canonical.text).encode(), "matpower", value_type=powerio.BalancedNetwork).value.n_buses == net.n_buses
+    net = _parse((src).encode(), "matpower", value_type=powerio.BalancedNetwork).value
+    assert _emit_value(net, "matpower").text == src
 
 
-def test_convert_str_named_input_format():
-    raw = powerio.convert_file(str(DATA / "case30.m"), "psse").text
-    back = powerio.convert_str(raw, "matpower", from_="psse")
-    assert powerio.parse((back.text).encode(), "matpower", value_type=powerio.BalancedNetwork).value.n_buses == 30
+def test_emit_text_named_input_format():
+    raw = _emit_file(str(DATA / "case30.m"), "psse").text
+    back = _emit_text(raw, "matpower", from_="psse")
+    assert (
+        _parse(
+            (back.text).encode(), "matpower", value_type=powerio.BalancedNetwork
+        ).value.n_buses
+        == 30
+    )
 
 
 def test_single_file_writes_never_replace_an_existing_entry(tmp_path):
-    case = powerio.parse(DATA / "case9.m", value_type=powerio.BalancedNetwork).value
+    case = _parse(DATA / "case9.m", value_type=powerio.BalancedNetwork).value
 
-    # write_file: an existing entry keeps its bytes; a fresh path commits.
+    # emit: an existing entry keeps its bytes; a fresh path commits.
     target = tmp_path / "case9.raw"
     target.write_text("precious")
     with pytest.raises(powerio.PowerIOError) as refusal:
-        case.write_file(str(target), "psse")
+        _emit_value(case, "psse", target)
     assert getattr(refusal.value, "code", "").startswith("REQUEST.OUTPUT")
     assert target.read_text() == "precious"
     fresh = tmp_path / "fresh.raw"
-    case.write_file(str(fresh), "psse")
+    _emit_value(case, "psse", fresh)
     assert fresh.read_text().strip()
 
     # A symbolic link at the target is neither followed nor replaced.
@@ -1518,56 +1755,59 @@ def test_single_file_writes_never_replace_an_existing_entry(tmp_path):
     linked = tmp_path / "linked.raw"
     linked.symlink_to(designated)
     with pytest.raises(powerio.PowerIOError):
-        case.write_file(str(linked), "psse")
+        _emit_value(case, "psse", linked)
     assert linked.is_symlink()
     assert designated.read_text() == "designated"
 
-    # convert_file's out target follows the same rule.
-    out = tmp_path / "converted.m"
+    # A file emission destination follows the same rule.
+    out = tmp_path / "emitted.m"
     out.write_text("precious")
     with pytest.raises(powerio.PowerIOError):
-        powerio.convert_file(str(DATA / "case9.m"), "matpower", out=str(out))
+        _emit_file(str(DATA / "case9.m"), "matpower", destination=str(out))
     assert out.read_text() == "precious"
 
 
 def test_pypsa_csv_folder_never_replaces_an_existing_target(tmp_path):
-    case = powerio.parse(DATA / "case9.m", value_type=powerio.BalancedNetwork).value
+    case = _parse(DATA / "case9.m", value_type=powerio.BalancedNetwork).value
     out = tmp_path / "pypsa"
     out.mkdir()
     (out / "buses.csv").write_text("precious")
     with pytest.raises(powerio.PowerIOError) as refusal:
-        case.write_pypsa_csv_folder(out)
+        _emit_value(case, "pypsa-csv", out)
     assert getattr(refusal.value, "code", "").startswith("REQUEST.OUTPUT")
     assert (out / "buses.csv").read_text() == "precious"
 
 
 def test_pypsa_csv_folder_wrapper(tmp_path):
-    case = powerio.parse(DATA / "case9.m", value_type=powerio.BalancedNetwork).value
+    case = _parse(DATA / "case9.m", value_type=powerio.BalancedNetwork).value
     out = tmp_path / "pypsa"
-    result = case.write_pypsa_csv_folder(out)
+    result = _emit_value(case, "pypsa-csv", out)
     assert (out / "network.csv").is_file()
     assert (out / "buses.csv").is_file()
-    assert result["dir"] == str(out)
-    assert "warnings" in result
+    assert result.text is None
+    assert result.diagnostics
+    assert all(
+        isinstance(diagnostic, powerio.Diagnostic) for diagnostic in result.diagnostics
+    )
 
-    back = powerio.parse(out, "pypsa-csv", value_type=powerio.BalancedNetwork).value
+    back = _parse(out, "pypsa-csv", value_type=powerio.BalancedNetwork).value
     assert back.n_buses == case.n_buses
     assert back.n_branches == case.n_branches
-    assert back.n_gens == case.n_gens
+    assert back.n_generators == case.n_generators
 
 
-def test_convert_str_errors():
+def test_emit_text_errors():
     with pytest.raises(powerio.PowerIOError):
-        powerio.convert_str("not a case", "psse")
+        _emit_text("not a case", "psse")
     with pytest.raises(ValueError):
-        powerio.convert_str((DATA / "case14.m").read_text(), "nonsense")
+        _emit_text((DATA / "case14.m").read_text(), "nonsense")
 
 
 def test_missing_json_file_raises_oserror():
     # The non-MATPOWER read path must raise OSError too: a missing file is a
     # missing file, not a ValueError, regardless of the inferred format.
     with pytest.raises(OSError):
-        powerio.convert_file(DATA / "definitely_missing.json", "matpower")
+        _emit_file(DATA / "definitely_missing.json", "matpower")
 
 
 # --- large case integration --------------------------------------------
@@ -1577,9 +1817,9 @@ def test_large_case_pegase():
     path = DATA / "case2869pegase.m"
     if not path.is_file():
         pytest.skip("case2869pegase.m not vendored")
-    c = powerio.parse(str(path), value_type=powerio.BalancedNetwork).value
+    c = _parse(str(path), value_type=powerio.BalancedNetwork).value
     assert c.n_buses == 2869
-    b = c.bprime()
+    b = c.calc_bprime_matrix()
     assert b.shape == (2869, 2869)
     # MATPOWER Bp keeps phase shifts. This case has phase shifters, so the
     # off diagonal entries are asymmetric.
@@ -1596,20 +1836,18 @@ gridfm_only = pytest.mark.skipif(
 
 
 def test_gridfm_absent_raises_clean_importerror(case9, tmp_path):
-    # Custom native builds can compile the write path out, so the wrapper must
+    # Custom native builds can compile the emit path out, so the wrapper must
     # still raise ImportError rather than AttributeError.
     if HAS_GRIDFM:
         pytest.skip("extension built with gridfm; the absent-path is not exercised")
     with pytest.raises(ImportError, match="gridfm"):
-        case9.write_gridfm(str(tmp_path))
-    with pytest.raises(ImportError, match="gridfm"):
-        powerio.read_gridfm(str(tmp_path))
+        case9.emit_gridfm(str(tmp_path))
 
 
 @gridfm_only
-def test_gridfm_write_single(case9, tmp_path):
+def test_gridfm_emit_single(case9, tmp_path):
     pl = pytest.importorskip("polars")
-    out = case9.write_gridfm(str(tmp_path))
+    out = case9.emit_gridfm(str(tmp_path))
     raw = Path(out["dir"])
     assert raw.is_dir()
     names = {Path(f).name for f in out["files"]}
@@ -1631,7 +1869,7 @@ def test_gridfm_write_single(case9, tmp_path):
 def test_gridfm_include_y_bus_false_omits_table(case9, tmp_path):
     # The include_y_bus kwarg crosses the native boundary: disabling it must drop
     # y_bus_data.parquet (the other three tables stay).
-    out = case9.write_gridfm(str(tmp_path), include_y_bus=False)
+    out = case9.emit_gridfm(str(tmp_path), include_y_bus=False)
     names = {Path(f).name for f in out["files"]}
     assert "y_bus_data.parquet" not in names
     assert {"bus_data.parquet", "gen_data.parquet", "branch_data.parquet"} <= names
@@ -1644,7 +1882,7 @@ def test_gridfm_batch_stacks_and_keys_by_scenario(tmp_path):
     # BalancedNetwork is read-only, so the two snapshots share values; the test pins the
     # row-stack and scenario keying, which the Rust tests pair with perturbation.)
     case = load("case9")
-    out = powerio.write_gridfm_batch([case, case], str(tmp_path))
+    out = powerio.emit_gridfm_batch([case, case], str(tmp_path))
     raw = Path(out["dir"])
 
     bus = pl.read_parquet(raw / "bus_data.parquet")
@@ -1664,76 +1902,41 @@ def test_gridfm_batch_stacks_and_keys_by_scenario(tmp_path):
 
 
 @gridfm_only
-def test_read_gridfm_round_trips(case9, tmp_path):
-    # write → read back: the recovered BalancedNetwork mirrors the source's element counts
-    # and base_mva, surfaces fidelity warnings, sets source_format Gridfm, and is
-    # runnable (serializes to MATPOWER and re-parses).
-    out = case9.write_gridfm(str(tmp_path))
-    r = powerio.read_gridfm(out["dir"])
-    assert isinstance(r.network, powerio.BalancedNetwork)
-    assert r.scenario == 0
-    assert r.warnings and all(isinstance(w, str) for w in r.warnings)
-    net = r.network
-    assert (net.n_buses, net.n_branches, net.n_gens) == (
-        case9.n_buses,
-        case9.n_branches,
-        case9.n_gens,
+def test_parse_file_reads_gridfm_scenarios_with_module_diagnostics(tmp_path):
+    case = load("case9")
+    out = powerio.emit_gridfm_batch([case, case], str(tmp_path))
+
+    module = powerio.parse_file(out["dir"])
+    assert module.kind == "balanced_network_scenario_set"
+    assert module.diagnostics
+    assert all(
+        isinstance(diagnostic, powerio.Diagnostic) for diagnostic in module.diagnostics
     )
-    assert net.base_mva == case9.base_mva
-    assert net.source_format == "gridfm"
-    text = net.to_matpower()
-    assert text.startswith("function mpc")
-    assert powerio.parse((text).encode(), "matpower", value_type=powerio.BalancedNetwork).value.n_buses == case9.n_buses
+    assert module.list_states() == {
+        "keyed_by": "scenario",
+        "scenarios": [
+            {"id": "0", "probability": None},
+            {"id": "1", "probability": None},
+        ],
+    }
+    for scenario in ("0", "1"):
+        selected = module.export_state(scenario=scenario)
+        assert selected.kind == "balanced_network"
+        assert selected.value.n_buses == case.n_buses
+        assert selected.value.source_format == "gridfm"
 
 
-@gridfm_only
-def test_read_gridfm_is_unpackable(case9, tmp_path):
-    # GridfmRead is a namedtuple: tuple-unpack and attribute access both work.
-    out = case9.write_gridfm(str(tmp_path))
-    net, scenario, warnings = powerio.read_gridfm(out["dir"])
-    assert isinstance(net, powerio.BalancedNetwork)
-    assert scenario == 0
-    assert isinstance(warnings, list)
-
-
-@gridfm_only
-def test_read_gridfm_scenarios_round_trips_each(tmp_path):
-    # The batch write stacks two scenarios; the read side rebuilds one BalancedNetwork per
-    # scenario id, ascending.
-    case = load("case9")
-    out = powerio.write_gridfm_batch([case, case], str(tmp_path))
-    reads = powerio.read_gridfm_scenarios(out["dir"])
-    assert [r.scenario for r in reads] == [0, 1]
-    for r in reads:
-        assert isinstance(r.network, powerio.BalancedNetwork)
-        assert r.network.n_buses == case.n_buses
-
-
-@gridfm_only
-def test_read_gridfm_selects_scenario(tmp_path):
-    case = load("case9")
-    out = powerio.write_gridfm_batch([case, case], str(tmp_path))
-    assert powerio.read_gridfm(out["dir"], scenario=1).scenario == 1
-
-
-@gridfm_only
-def test_read_gridfm_missing_dir_raises(tmp_path):
-    # A nonexistent dataset directory surfaces as a powerio error, not a panic.
-    with pytest.raises(powerio.PowerIOError):
-        powerio.read_gridfm(tmp_path / "does_not_exist")
-
-
-@gridfm_only
-def test_gridfm_in_all_export():
-    # The gridfm read/write surface is part of the package's public API.
-    for name in (
+def test_gridfm_public_surface_uses_parse_and_emit():
+    assert "emit_gridfm_batch" in powerio.__all__
+    assert hasattr(powerio, "emit_gridfm_batch")
+    for removed in (
         "write_gridfm_batch",
         "read_gridfm",
         "read_gridfm_scenarios",
         "GridfmRead",
     ):
-        assert name in powerio.__all__
-        assert hasattr(powerio, name)
+        assert removed not in powerio.__all__
+        assert not hasattr(powerio, removed)
 
 
 def test_source_format_stubs_cover_every_variant():
@@ -1759,116 +1962,86 @@ def test_source_format_stubs_cover_every_variant():
 
 
 def test_direct_dc_operations_follow_powermodels_orientation_and_sign():
-    """The ordinary Python surface exposes named matrices and calculations;
-    the raw coefficient dictionary remains a compatibility path."""
+    """Named DC calculations match the PowerModels orientation and sign."""
     net = powerio.parse_file(
         DATA / "api_conformance.m", value_type=powerio.BalancedNetwork
     ).value
-    data = net.dc_data()
-    assert isinstance(data, dict)
-    assert sorted(data) == [
-        "bus_ids",
-        "formula",
-        "from_indices",
-        "omitted_ids",
-        "omitted_reasons",
-        "row_ids",
-        "shift",
-        "shift_injection",
-        "susceptance",
-        "to_indices",
-    ]
-    assert data["formula"] == "series_susceptance"
-    assert len(data["from_indices"]) == 2
-    assert data["shift"] == pytest.approx([0.0, math.radians(10.0)])
-    assert len(data["bus_ids"]) == 3
-    assert data["row_ids"][0] == "branches:0"
-    assert all(b < 0 for b in data["susceptance"])
-    assert data["omitted_ids"] == [] and data["omitted_reasons"] == []
-    # The tap adjusted formula divides by x*tap; taps are nominal, so
-    # the reactance only and tap adjusted rows agree.
-    tap = net.dc_data(formula="tap_adjusted_reactance")
-    reactance = net.dc_data(formula="reactance_only")
-    assert tap["susceptance"] == reactance["susceptance"]
-
     A = net.calc_incidence_matrix()
     Bf = net.calc_branch_susceptance_matrix()
     B = net.calc_bus_susceptance_matrix()
     assert A.shape == Bf.shape == (2, 3)
     assert B.shape == (3, 3)
     assert A.toarray().tolist() == [[1.0, -1.0, 0.0], [1.0, 0.0, -1.0]]
-    np.testing.assert_allclose(Bf.toarray(), np.diag(data["susceptance"]) @ A.toarray())
+    susceptance = np.asarray(
+        [
+            -branch["x"] / (branch["r"] ** 2 + branch["x"] ** 2)
+            for branch in net.branches
+        ]
+    )
+    shift = np.radians([branch["shift"] for branch in net.branches])
+    np.testing.assert_allclose(Bf.toarray(), np.diag(susceptance) @ A.toarray())
     np.testing.assert_allclose(B.toarray(), (A.T @ Bf).toarray())
     va = np.zeros(3)
     branch_flow = net.calc_branch_flow_dc(va)
     shift_injection = net.calc_phase_shift_injection()
-    bus_injection = A.T @ branch_flow
+    bus_injection = net.calc_bus_injection_dc(va)
     np.testing.assert_allclose(
         branch_flow,
-        np.asarray(data["susceptance"]) * np.asarray(data["shift"]),
+        susceptance * shift,
     )
     np.testing.assert_allclose(bus_injection, A.T @ branch_flow)
     np.testing.assert_allclose(bus_injection, shift_injection)
-    np.testing.assert_allclose(shift_injection, data["shift_injection"])
+    np.testing.assert_allclose(shift_injection, A.T @ (susceptance * shift))
+    nonzero_va = np.asarray([0.01, -0.02, 0.03])
+    nonzero_branch_flow = net.calc_branch_flow_dc(nonzero_va)
+    np.testing.assert_allclose(
+        nonzero_branch_flow,
+        -(Bf @ nonzero_va) + susceptance * shift,
+    )
+    np.testing.assert_allclose(
+        net.calc_bus_injection_dc(nonzero_va),
+        -(B @ nonzero_va) + shift_injection,
+    )
+    np.testing.assert_allclose(
+        net.calc_bus_injection_dc(nonzero_va),
+        A.T @ nonzero_branch_flow,
+    )
+    np.testing.assert_allclose(
+        net.calc_branch_susceptance_matrix("tap_adjusted_reactance").toarray(),
+        net.calc_branch_susceptance_matrix("reactance_only").toarray(),
+    )
     with pytest.raises(ValueError, match="length 3"):
         net.calc_branch_flow_dc([0.0, 0.0])
+    with pytest.raises(ValueError, match="length 3"):
+        net.calc_bus_injection_dc([0.0, 0.0])
     with pytest.raises(ValueError, match="susceptance formula"):
-        net.dc_data(formula="mystery")
+        net.calc_incidence_matrix(formula="mystery")
+    assert not hasattr(net, "dc_data")
 
 
-def test_calc_matrix_and_sensitivity_names_match_released_aliases(case9):
-    for preferred, released in [
-        (case9.calc_admittance_matrix(), case9.ybus()),
-        (case9.calc_bprime_matrix(), case9.bprime()),
-        (case9.calc_bdoubleprime_matrix(), case9.bdoubleprime()),
-        (case9.calc_lacpf_matrix(), case9.lacpf()),
-        (case9.calc_adjacency_matrix(), case9.adjacency()),
-        (case9.calc_ptdf(), case9.ptdf()),
-        (case9.calc_lodf(), case9.lodf()),
-        (case9.calc_weighted_laplacian(), case9.weighted_laplacian()),
-    ]:
-        np.testing.assert_allclose(
-            preferred.toarray(), released.toarray(), equal_nan=True
-        )
-
-    preferred_parts = case9.calc_admittance_matrix_parts()
-    released_parts = case9.ybus_parts()
-    np.testing.assert_allclose(preferred_parts.g.toarray(), released_parts.g.toarray())
-    np.testing.assert_allclose(preferred_parts.b.toarray(), released_parts.b.toarray())
-
-    preferred_factors = case9.calc_incidence_factors()
-    released_factors = case9.incidence()
-    np.testing.assert_allclose(
-        preferred_factors.A.toarray(), released_factors.A.toarray()
-    )
-    np.testing.assert_allclose(preferred_factors.b, released_factors.b)
-    np.testing.assert_allclose(preferred_factors.p_shift, released_factors.p_shift)
-    np.testing.assert_array_equal(
-        preferred_factors.branch_of_col, released_factors.branch_of_col
-    )
+def test_canonical_matrix_methods_are_the_only_public_spellings(case9):
+    assert case9.calc_admittance_matrix().shape == (9, 9)
+    assert case9.calc_bprime_matrix().shape == (9, 9)
+    assert case9.calc_bdoubleprime_matrix().shape == (9, 9)
+    assert case9.calc_lacpf_matrix().shape == (18, 18)
+    assert case9.calc_adjacency_matrix().shape == (9, 9)
+    assert case9.calc_incidence_matrix().shape == (9, 9)
+    assert case9.calc_connectivity_report()["n_components"] == 1
 
 
-def test_direct_branch_axis_dc_operations_refuse_omitted_rows():
+def test_direct_branch_axis_dc_operations_use_active_branch_order():
     net = powerio.parse_file(
         DATA / "t_case9_oos.m", value_type=powerio.BalancedNetwork
     ).value
-    data = net.dc_data()
-    assert len(data["row_ids"]) + len(data["omitted_ids"]) == net.n_branches
-    assert data["omitted_ids"]
-    assert any("out of service" in reason for reason in data["omitted_reasons"])
+    assert any(not branch["in_service"] for branch in net.branches)
 
-    for operation, arguments in [
-        (net.calc_incidence_matrix, ()),
-        (net.calc_branch_susceptance_matrix, ()),
-        (net.calc_branch_flow_dc, (np.zeros(net.n_buses),)),
-    ]:
-        with pytest.raises(
-            powerio.PowerIODataError,
-            match="complete branch table axis.*out of service.*dc_data",
-        ):
-            operation(*arguments)
+    n_active = sum(branch["in_service"] for branch in net.branches)
+    assert net.calc_incidence_matrix().shape == (n_active, net.n_buses)
+    assert net.calc_branch_susceptance_matrix().shape == (n_active, net.n_buses)
+    assert net.calc_branch_flow_dc(np.zeros(net.n_buses)).shape == (n_active,)
 
-    # Bus axis calculations remain complete: an out of service branch
-    # contributes zero without shortening either returned axis.
+    # Bus axis calculations remain complete; inactive branches contribute no
+    # operator row.
     assert net.calc_bus_susceptance_matrix().shape == (net.n_buses, net.n_buses)
     assert net.calc_phase_shift_injection().shape == (net.n_buses,)
+    assert net.calc_bus_injection_dc(np.zeros(net.n_buses)).shape == (net.n_buses,)

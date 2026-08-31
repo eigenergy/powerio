@@ -45,14 +45,14 @@ When `include_root` is omitted, a file's referenced includes resolve only beneat
 module = pio.parse_file("case9.m")
 module.kind                        # "balanced_network"
 net = module.value                 # typed handle
-text = module.to_json()            # the .pio.json stored document
-psse = module.emit("psse")         # Conversion(text, diagnostics)
-findings = module.emit("psse", "case.raw")
+stored = module.emit("pio-json")   # EmitResult(text, diagnostics)
+psse = module.emit("psse")         # EmitResult(text, diagnostics)
+written = module.emit("psse", "case.raw")  # text is None after commit
 ```
 
-`module.value` returns a `BalancedNetwork`, `MulticonductorNetwork`, collection, calculation instance, or solution according to `module.kind`. `as_balanced_network()` and `as_multiconductor_network()` remain useful when a type checker needs a narrow return type. `PioModule.from_json` reads stored `.pio.json` text; a released 0.9 document upgrades one way on read.
+`module.value` returns a `BalancedNetwork`, `MulticonductorNetwork`, collection, calculation instance, or solution according to `module.kind`. `as_balanced_network()` and `as_multiconductor_network()` remain useful when a type checker needs a narrow return type. `parse_text(text, name="module.pio.json")` reads stored `.pio.json` text; a released 0.9 document upgrades one way on read.
 
-`module.emit(format)` selects the writer from the value kind and returns one text artifact as `Conversion(text, diagnostics)`. `module.emit(format, destination)` commits the complete artifact inventory to a file or directory and returns the writer's diagnostics. The explicit format keeps JSON destinations unambiguous. A parsed, unchanged module emitted to its source format reproduces the retained bytes.
+`module.emit(format)` selects the emitter from the value kind and returns `EmitResult(text, diagnostics)`. `module.emit(format, destination)` commits the complete artifact inventory to a file or directory and returns the same `EmitResult` shape with `text=None`. The explicit format keeps JSON destinations unambiguous. A parsed, unchanged module emitted to its source format reproduces the retained bytes.
 
 ## Findings are records
 
@@ -76,28 +76,33 @@ module = pio.parse_file("case9.m")
 net = module.value
 normalized = net.to_normalized()               # in-memory transformation
 psse = module.emit("psse")                     # text plus diagnostics
-findings = module.emit("psse", "case9.raw")  # file output
+written = module.emit("psse", "case9.raw")    # None text plus diagnostics
 
 feeder = pio.parse_file("IEEE13Nodeckt.dss")
 report = feeder.to_balanced_report()            # inspect family conversion
-balanced_module = feeder.to_balanced()          # explicit family conversion
+if report["ready"]:
+    balanced_module = feeder.to_balanced()      # explicit family conversion
 ```
 
-`Conversion` is a named tuple of the output text and the writer's `Diagnostic` records. A parsed, unchanged module emitted to its own format echoes the retained source bytes exactly.
+`EmitResult` is a named tuple of optional output text and the emitter's `Diagnostic` records. Its `text` is `None` when a destination received the artifact. A parsed, unchanged module emitted to its own format echoes the retained source bytes exactly.
 
-The network handles expose their model tables as detached Python lists of dictionaries. Mutating those copies does not change the native network. Balanced tables include `buses`, `branches`, `generators`, `loads`, `shunts`, `switches`, `storage`, `hvdc`, `transformers_3w`, and `areas`; use `n_generators` and `n_islands` for their preferred counts. A multiconductor network exposes `buses`, `line_codes`, `lines`, `switches`, `transformers`, `loads`, `generators`, `ibrs`, `control_profiles`, `shunts`, `capacitors`, `voltage_sources`, and `untyped_objects`, with matching counts.
+The network handles expose their model tables as detached Python lists of dictionaries. Mutating those copies does not change the native network. Parse findings remain on the owning `PioModule.diagnostics` field. Balanced tables include `buses`, `branches`, `generators`, `loads`, `shunts`, `switches`, `storage`, `hvdc`, `transformers_3w`, and `areas`; use `n_generators` and `n_islands` for their preferred counts. A multiconductor network exposes `buses`, `line_codes`, `lines`, `switches`, `transformers`, `loads`, `generators`, `ibrs`, `control_profiles`, `shunts`, `capacitors`, `voltage_sources`, and `untyped_objects`, with matching counts.
 
-The matrix extra serves sparse matrices under verb names: `net.calc_bprime_matrix()`, `net.calc_bdoubleprime_matrix()`, `net.calc_admittance_matrix()`, `net.calc_admittance_matrix_parts()`, `net.calc_incidence_matrix()`, `net.calc_branch_susceptance_matrix()`, `net.calc_bus_susceptance_matrix()`, `net.calc_phase_shift_injection()`, `net.calc_branch_flow_dc(va)`, `net.calc_adjacency_matrix()`, `net.calc_ptdf()`, `net.calc_lodf()`, `net.calc_lacpf_matrix()`, `net.calc_weighted_laplacian()`, and `net.calc_incidence_factors()`. The `calc_*` prefix marks values computed from the network; nouns remain fields and accessors. The DC incidence matrix `A` is branches by buses with `+1` at the from bus and `-1` at the to bus. The bus and branch matrices are `B = A.T @ diag(b) @ A` and `Bf = diag(b) @ A`; branch flow is `-Bf @ va + b * shift`. The released noun spellings remain quiet 0.10 aliases. Graph projections use `net.to_networkx()` for balanced networks and `feeder.to_graph()` for multiconductor networks.
+`net.calc_connectivity_report()` computes the balanced network's island and
+isolation summary. `net.to_geo_layer()` and `feeder.to_geo_layer()` transform
+stored coordinates to the shared geographic layer.
+
+The matrix extra serves sparse matrices under verb names: `net.calc_bprime_matrix()`, `net.calc_bdoubleprime_matrix()`, `net.calc_admittance_matrix()`, `net.calc_incidence_matrix()`, `net.calc_branch_susceptance_matrix()`, `net.calc_bus_susceptance_matrix()`, `net.calc_phase_shift_injection()`, `net.calc_branch_flow_dc(va)`, `net.calc_bus_injection_dc(va)`, `net.calc_adjacency_matrix()`, `net.calc_ptdf()`, `net.calc_lodf()`, and `net.calc_lacpf_matrix()`. The `calc_*` prefix marks values computed from the network; nouns remain fields and accessors. The admittance calculation returns the complex `Y_bus` matrix directly. The DC incidence matrix `A` is branches by buses with `+1` at the from bus and `-1` at the to bus. The bus and branch matrices are `B = A.T @ diag(b) @ A` and `Bf = diag(b) @ A`; branch flow is `-Bf @ va + b * shift` and bus injection is `-B @ va + p_shift`. Select the branch susceptance formula with the `formula` argument. Graph projections use `net.to_networkx()` for balanced networks and `feeder.to_graph()` for multiconductor networks.
+
+`net.emit_dcopf_bundle(destination)` emits the specialized Matrix Market DC
+OPF bundle.
 
 ## Display artifacts
 
 Display artifacts are drawings rather than network cases, so they use the separate display API:
 
 ```python
-from pathlib import Path
-
 display = pio.parse_display_file("case.pwd")
-same = pio.parse_display_bytes(Path("case.pwd").read_bytes(), "pwd")
 
 assert display.kind == "powerworld"
 first = display.data.substations[0]
@@ -112,7 +117,7 @@ A source that defines a calculation parses to that calculation's typed value: DO
 
 ## Collections and state selection
 
-Balanced network time series, balanced operating point time series, and balanced network scenario sets are collections. A `TimeSeries` supports `len(series)`, integer and negative indexing, and iteration; each item exports an independently usable static `PioModule`. A `ScenarioSet` supports `len(scenarios)`, `keys()`, membership, iteration over ids, and string indexing to an exported module. Export does not reparse the source. It carries the producer, source descriptions, diagnostics, history, and extensions into a fresh module, severs targets that referred to the collection value, and records the selection in history. `module.state_inventory()` lists the typed time points or scenario ids, `module.inspect_state(...)` describes one selected item, and `module.export_state(...)` performs the explicit export. A static or instance module refuses these operations with `REQUEST.STATE.NOT_A_COLLECTION`.
+Balanced network time series, balanced operating point time series, and balanced network scenario sets are collections. A `TimeSeries` supports `len(series)`, integer and negative indexing, and iteration; each item exports an independently usable static `PioModule`. A `ScenarioSet` supports `len(scenarios)`, `keys()`, membership, iteration over ids, and string indexing to an exported module. Export does not reparse the source. It carries the producer, source descriptions, diagnostics, history, and extensions into a fresh module, severs targets that referred to the collection value, and records the selection in history. `module.list_states()` lists the typed time points or scenario ids, `module.inspect_state(...)` describes one selected item, and `module.export_state(...)` performs the explicit export. A static or instance module refuses these operations with `REQUEST.STATE.NOT_A_COLLECTION`.
 
 A multiconductor operating point series stays an `UnknownValue` in Python for
 now: its terminal voltages, per winding tap state, and capacitor steps have no
@@ -123,7 +128,7 @@ through `module.to_balanced_report()` and transform through
 `module.to_balanced()`.
 
 ```python
-module = pio.PioModule.from_json(stored_series_text)
+module = pio.parse_text(stored_series_text, name="series.pio.json")
 series = module.value
 static_module = series[-1]
 net = static_module.as_balanced_network()
@@ -131,11 +136,11 @@ net = static_module.as_balanced_network()
 
 ## PyPSA folders
 
-PyPSA CSV folders contain several files, so emit them to a directory rather than requesting `Conversion.text`.
+PyPSA CSV folders contain several files, so emit them to a directory. The returned `EmitResult.text` is `None` and its diagnostics describe any fidelity loss.
 
 ```python
 case = pio.parse_file("case14.m")
-findings = case.emit("pypsa-csv", "case14-pypsa")
+written = case.emit("pypsa-csv", "case14-pypsa")
 round_trip = pio.parse_file("case14-pypsa", "pypsa-csv").value
 ```
 
@@ -143,16 +148,22 @@ The written folder can be imported with `pypsa.Network().import_from_csv_folder(
 
 CSV folders are PyPSA's native static component format and carry the network topology: buses, lines, transformers, generators, loads, shunts, storage units, and links (read as HVDC). NetCDF and HDF5 time series are not supported; they are tracked in [#107](https://github.com/eigenergy/powerio/issues/107).
 
-## GridFM reads
+## GridFM directories
 
-The native wheel includes the GridFM Parquet writer and reader.
-
-`read_gridfm(dir, scenario=0)` rebuilds a `BalancedNetwork` from a dataset, the inverse of `BalancedNetwork.write_gridfm`, returning a `GridfmRead(network, scenario, warnings)` named tuple. The read is lossy but recovers everything a power flow needs; `warnings` lists what the gridfm schema could not round trip (synthesized bus ids, folded per bus load and shunt, dropped HVDC and storage, piecewise costs). `read_gridfm_scenarios(dir)` returns one `GridfmRead` per scenario. `dir` resolves the `raw/` leaf, a `<case>/` directory, or a parent with one `*/raw/` child.
+The native wheel includes the GridFM Parquet writer and parser. GridFM is a
+directory format, so it uses the same `parse_file` entry point as PyPSA. A one
+scenario dataset parses to a balanced network module. A multi scenario dataset
+parses to a scenario set that shares one network identity set. Parse losses are
+`Diagnostic` records on the returned module, not a separate warning channel.
 
 ```python
-out = pio.parse_file("case14.m").value.write_gridfm("out")
-net, scenario, warnings = pio.read_gridfm(out["dir"])
-print(scenario, net.n_buses, warnings)
+out = pio.parse_file("case14.m").value.emit_gridfm("out")
+dataset = pio.parse_file(out["dir"], format="gridfm")
+print(dataset.kind, dataset.diagnostics)
+
+if dataset.kind == "balanced_network_scenario_set":
+    scenario_id = dataset.value.keys()[0]
+    first = dataset.export_state(scenario=scenario_id)
 ```
 
 To inspect the raw Parquet tables instead, the preferred read extra is Polars:
@@ -165,28 +176,20 @@ bus = pl.read_parquet(f"{out['dir']}/bus_data.parquet")
 
 Use `powerio[pandas]` only for downstream code that expects pandas DataFrames.
 
-## 0.10 compatibility
+## The 1.0 grammar
 
-The documented path is `parse_file -> PioModule { value, diagnostics } -> transform
-or named matrix operation -> emit`. PowerIO 0.10 keeps the earlier Python
-spellings without warnings:
+The Python surface follows one path:
 
-- `parse` accepts paths and in-memory bytes; `PioModule.from_file`,
-  `from_str`, and `from_bytes` are equivalent constructors.
-- `PioModule.to_format` and `write_file`, the network `to_format` and
-  `write_file` methods, and the top level `convert_file` and `convert_str`
-  functions remain available.
-- `BalancedNetwork.dc_data()` returns the original coefficient dictionary.
-  New code should call the named matrix and flow methods instead.
-- The released `bprime`, `bdoubleprime`, `ybus`, `ybus_parts`, `lacpf`,
-  `adjacency`, `ptdf`, `lodf`, `weighted_laplacian`, and `incidence` methods
-  forward to their `calc_*` replacements.
-- `conversion.warnings`, `n_gens`, `n_connected_components`,
-  `to_balanced_inspect`, `select_state`, and the callable
-  `module.diagnostics()` spelling remain aliases for their preferred names.
+```text
+parse_file(path) or parse_text(text)
+    -> PioModule { value, diagnostics }
+    -> to_* transformation or calc_* calculation
+    -> emit(format, destination)
+```
 
-These names are compatibility shims, not a parallel object model. The exact
-removal inventory for 1.0 is in [Final 1.0 API cleanup](final-v1-api-cleanup.md).
+There is no second `parse`, `read`, `write`, `to_format`, warning, DC data, or
+noun named calculation surface. The exact 0.10 removals are listed in
+[Final 1.0 API cleanup](final-v1-api-cleanup.md).
 
 ## Build identity
 
@@ -199,13 +202,15 @@ MCP clients can request stored module output from `parse` through the `module` t
 ```python
 parsed = parse(path="case9.m", transport="module")
 stored = parsed["module_json"]
-summary(module_json=stored)
-matrix("bprime", module_json=stored)
-save(out_path="case9.raw", to_format="psse", module_json=stored)
+summarize(module_json=stored)
+calc_matrix("bprime", module_json=stored)
+emit(format="psse", destination="case9.raw", module_json=stored)
 diagnostics(stored)
 ```
 
-`summary`, `normalize`, `matrix`, and `save` also detect stored module JSON passed through the `json` argument. The stored metadata routes balanced and multiconductor model JSON.
+`summarize`, `to_normalized`, `calc_matrix`, and `emit` also detect stored
+module JSON passed through the `json` argument. The stored metadata routes
+balanced and multiconductor model JSON.
 
 `python -m powerio.mcp` and the `powerio-mcp` console script are consumer entry points and do not move without a version bump.
 

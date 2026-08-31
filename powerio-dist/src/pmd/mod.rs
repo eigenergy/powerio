@@ -11,4 +11,4 @@
 pub(crate) mod read;
 mod write;
 
-pub use write::write_pmd_json;
+pub(crate) use write::emit_pmd_json_text;

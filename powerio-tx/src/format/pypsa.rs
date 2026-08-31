@@ -1,12 +1,14 @@
 //! Read and write PyPSA CSV folders.
 //!
 //! PyPSA's CSV folder is a directory format, so it does not fit the
-//! `Conversion { text }` API used by single-file formats. The reader and writer
+//! `TextEmission { text }` API used by single-file formats. The reader and writer
 //! are exposed as path-based helpers and through `parse_file(..., "pypsa-csv")`.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 
 use super::{bus_kv, set_bus_kind, warn_extra_branch_rating_sets, zbase};
 use crate::diagnostics::codes::EMIT_PYPSA as F;
@@ -19,19 +21,20 @@ use crate::{Error, Result};
 
 const FMT: &str = "PyPSA CSV";
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
-#[non_exhaustive]
-pub struct PypsaCsvOutputs {
+struct PypsaCsvOutputs {
     pub dir: PathBuf,
     pub files: Vec<PathBuf>,
     /// The writer's findings as structured records.
     pub diagnostics: Vec<crate::diagnostics::Diagnostic>,
 }
 
+#[cfg(test)]
 impl PypsaCsvOutputs {
     /// The findings as `CODE: message` lines, rendered on request.
     #[must_use]
-    pub fn rendered_diagnostics(&self) -> Vec<String> {
+    pub fn render_diagnostics(&self) -> Vec<String> {
         crate::diagnostics::render_diagnostics(&self.diagnostics)
     }
 }
@@ -404,7 +407,7 @@ fn read_pypsa_csv_static(
                 to,
                 in_service: row.bool("active").unwrap_or(true),
                 pf,
-                pt: Hvdc::delivered_power(pf, 0.0, 1.0 - efficiency),
+                pt: Hvdc::calc_delivered_power(pf, 0.0, 1.0 - efficiency),
                 qf: 0.0,
                 qt: 0.0,
                 vf: 1.0,
@@ -513,7 +516,8 @@ fn read_pypsa_csv_static(
 /// A refused commit: `out_dir` already exists, cannot be staged, or the
 /// destination cannot commit without risking replacement.
 #[allow(clippy::missing_panics_doc)] // the destination kind is ours by construction
-pub fn write_pypsa_csv_folder(
+#[cfg(test)]
+fn write_pypsa_csv_folder(
     net: &BalancedNetwork,
     out_dir: impl AsRef<Path>,
 ) -> std::result::Result<PypsaCsvOutputs, powerio_core::Error> {
@@ -532,7 +536,7 @@ pub fn write_pypsa_csv_folder(
         inventory,
         Vec::new(),
     )?;
-    let powerio_core::WrittenOutput::Path { root, artifacts } = result.into_output() else {
+    let powerio_core::EmittedOutput::Path { root, artifacts } = result.into_output() else {
         unreachable!("a path destination returns a path output")
     };
     Ok(PypsaCsvOutputs {
@@ -951,7 +955,7 @@ fn loads_csv(net: &BalancedNetwork, key_of: &HashMap<BusId, String>) -> String {
 }
 
 fn pypsa_loses_terminal_charging(br: &Branch) -> bool {
-    let charging = br.terminal_charging();
+    let charging = br.calc_terminal_charging();
     if br.is_transformer() {
         charging.g_to.abs() > f64::EPSILON || charging.b_to.abs() > f64::EPSILON
     } else {
@@ -974,7 +978,7 @@ fn lines_csv(
     {
         // PyPSA per-unitizes line ohms on the BUS0 v_nom, not bus1.
         let zb = zbase(*kv_of.get(&br.from).unwrap_or(&0.0), net.base_mva());
-        let charging = br.terminal_charging();
+        let charging = br.calc_terminal_charging();
         let _ = writeln!(
             s,
             "line_{},{},{},{},{},{},{},{},{},{},{}",
@@ -983,7 +987,7 @@ fn lines_csv(
             key_for(key_of, br.to),
             br.r * zb,
             br.x * zb,
-            charging.total_b() / zb,
+            charging.calc_total_b() / zb,
             (charging.g_fr + charging.g_to) / zb,
             br.rate_a,
             br.angmin,
@@ -1012,7 +1016,7 @@ fn transformers_csv(net: &BalancedNetwork, key_of: &HashMap<BusId, String>) -> S
         };
         let charging = br.charging.unwrap_or(BranchCharging {
             g_fr: 0.0,
-            b_fr: br.total_charging_b(),
+            b_fr: br.calc_total_charging_b(),
             g_to: 0.0,
             b_to: 0.0,
         });
@@ -1027,7 +1031,7 @@ fn transformers_csv(net: &BalancedNetwork, key_of: &HashMap<BusId, String>) -> S
             charging.b_fr * net.base_mva() / s_nom,
             charging.g_fr * net.base_mva() / s_nom,
             s_nom,
-            br.effective_tap(),
+            br.calc_effective_tap(),
             br.shift,
             br.in_service
         );
@@ -1569,7 +1573,7 @@ mod tests {
     }
 
     impl Parsed {
-        fn rendered_diagnostics(&self) -> Vec<String> {
+        fn render_diagnostics(&self) -> Vec<String> {
             crate::diagnostics::render_diagnostics(&self.diagnostics)
         }
     }
@@ -1846,15 +1850,15 @@ mod tests {
         close(br.r, 0.125); // 0.0625 * 100/50
         close(br.x, 0.5);
         close(br.b, 0.25); // 0.5 * 50/100
-        close(br.terminal_charging().g_fr, 0.05);
-        close(br.terminal_charging().b_fr, 0.25);
-        close(br.terminal_charging().g_to, 0.0);
+        close(br.calc_terminal_charging().g_fr, 0.05);
+        close(br.calc_terminal_charging().b_fr, 0.25);
+        close(br.calc_terminal_charging().g_to, 0.0);
         assert_eq!(br.rate_a, 50.0);
         assert_eq!(br.tap, 1.05);
         assert!(
-            parsed.rendered_diagnostics().is_empty(),
+            parsed.render_diagnostics().is_empty(),
             "{:?}",
-            parsed.rendered_diagnostics()
+            parsed.render_diagnostics()
         );
     }
 
@@ -1892,13 +1896,13 @@ mod tests {
             ],
         );
         let parsed = read_pypsa_csv_folder(&dir).unwrap();
-        let charging = parsed.network.branches()[0].terminal_charging();
+        let charging = parsed.network.branches()[0].calc_terminal_charging();
         close(charging.g_fr, 1815.0);
         close(charging.g_to, 1815.0);
         assert!(
-            parsed.rendered_diagnostics().is_empty(),
+            parsed.render_diagnostics().is_empty(),
             "{:?}",
-            parsed.rendered_diagnostics()
+            parsed.render_diagnostics()
         );
     }
 
@@ -1982,12 +1986,12 @@ mod tests {
             .collect();
         folder_names.sort();
         let module = powerio_core::PioModule::new(net.clone());
-        let committed = crate::format::write_pypsa_csv(
+        let committed = crate::format::__emit_pypsa_csv(
             &module,
             powerio_core::Destination::memory("case").unwrap(),
         )
         .unwrap();
-        let powerio_core::WrittenOutput::Memory { artifacts } = committed.into_output() else {
+        let powerio_core::EmittedOutput::Memory { artifacts } = committed.into_output() else {
             panic!("memory output")
         };
         let mut memory_names: Vec<String> = artifacts
@@ -2013,11 +2017,11 @@ mod tests {
         let out = write_pypsa_csv_folder(&net, tmp_dir("xf-legacy-b-warning")).unwrap();
 
         assert!(
-            out.rendered_diagnostics()
+            out.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("terminal admittance")),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
     }
 
@@ -2035,11 +2039,11 @@ mod tests {
         let dir = tmp_dir("line-g-write");
         let out = write_pypsa_csv_folder(&net, &dir).unwrap();
         assert!(
-            !out.rendered_diagnostics()
+            !out.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("terminal admittance")),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
         let text = fs::read_to_string(dir.join("lines.csv")).unwrap();
         assert_eq!(
@@ -2048,7 +2052,7 @@ mod tests {
         );
 
         let back = read_pypsa_csv_folder(&dir).unwrap().network;
-        let charging = back.branches()[0].terminal_charging();
+        let charging = back.branches()[0].calc_terminal_charging();
         close(charging.g_fr, 0.4);
         close(charging.g_to, 0.4);
         close(charging.b_fr, 0.1);
@@ -2069,15 +2073,15 @@ mod tests {
         let dir = tmp_dir("xf-g-write");
         let out = write_pypsa_csv_folder(&net, &dir).unwrap();
         assert!(
-            !out.rendered_diagnostics()
+            !out.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("terminal admittance")),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
 
         let back = read_pypsa_csv_folder(&dir).unwrap().network;
-        let charging = back.branches()[0].terminal_charging();
+        let charging = back.branches()[0].calc_terminal_charging();
         close(charging.g_fr, 0.05);
         close(charging.g_to, 0.0);
         close(charging.b_fr, 0.25);
@@ -2091,11 +2095,11 @@ mod tests {
         let dir = tmp_dir("storage-rt");
         let out = write_pypsa_csv_folder(&net, &dir).unwrap();
         assert!(
-            !out.rendered_diagnostics()
+            !out.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("storage units")),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
         let text = fs::read_to_string(dir.join("storage_units.csv")).unwrap();
         assert_eq!(
@@ -2129,7 +2133,7 @@ mod tests {
             out.diagnostics.iter().any(|d| d.message()
                 == "1 storage units lose fields PyPSA storage_units cannot carry (asymmetric charge/discharge ratings collapse to p_nom = max; thermal_rating, qmin/qmax, r/x, p_loss/q_loss dropped)"),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
     }
 
@@ -2175,7 +2179,7 @@ mod tests {
             out.diagnostics.iter().any(|d| d.message()
                 == "buses.csv: bus names `X` collide with another bus name or id; those buses are keyed by their numeric id instead"),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
         let buses = fs::read_to_string(dir.join("buses.csv")).unwrap();
         let keys: Vec<&str> = buses
@@ -2228,9 +2232,9 @@ mod tests {
         let dir = tmp_dir("name-id-clash");
         let out = write_pypsa_csv_folder(&net, &dir).unwrap();
         assert!(
-            out.rendered_diagnostics().iter().any(|w| w.contains("`2`")),
+            out.render_diagnostics().iter().any(|w| w.contains("`2`")),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
         let buses = fs::read_to_string(dir.join("buses.csv")).unwrap();
         let keys: Vec<&str> = buses
@@ -2270,7 +2274,7 @@ mod tests {
             parsed.diagnostics.iter().any(|d| d.message()
                 == "links.csv: 1 links read as HVDC lines; PyPSA links carry no reactive or voltage data (q limits 0, voltage setpoints 1.0)"),
             "{:?}",
-            parsed.rendered_diagnostics()
+            parsed.render_diagnostics()
         );
     }
 
@@ -2286,7 +2290,7 @@ mod tests {
         assert!(
             read_pypsa_csv_folder(&dir)
                 .unwrap()
-                .rendered_diagnostics()
+                .render_diagnostics()
                 .is_empty()
         );
         let dir = folder(
@@ -2303,7 +2307,7 @@ mod tests {
                 .iter()
                 .any(|d| d.message() == "stores.csv ignored (1 rows): PyPSA stores are not mapped"),
             "{:?}",
-            parsed.rendered_diagnostics()
+            parsed.render_diagnostics()
         );
     }
 

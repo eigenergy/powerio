@@ -7,12 +7,12 @@ use helpers::*;
 use powerio_tx::format::powerworld::parse_aux;
 use powerio_tx::{
     BalancedNetwork, Bus, BusId, BusType, CoordinateSpace, CoordsKind, GeoGeometry, GeoLayer,
-    GeoTarget, Location, apply_substation_points, geo_layer_from_aux_substations,
-    geo_layer_from_pwd, parse_display_file, pwd_mercator_to_lonlat,
+    GeoTarget, Location, apply_substation_points, parse_display_file,
+    to_geo_layer_from_aux_substations, to_geo_layer_from_pwd, to_lonlat_from_pwd_mercator,
 };
 
-fn parse(bytes: &[u8], hint: Option<&str>) -> powerio_tx::GeoParsed {
-    GeoLayer::parse_bytes(bytes, hint).expect("parse geo layer")
+fn parse(text: &str, hint: Option<&str>) -> powerio_tx::GeoParsed {
+    GeoLayer::parse_text(text, hint).expect("parse geo layer")
 }
 
 fn small_network() -> BalancedNetwork {
@@ -33,7 +33,7 @@ fn small_network() -> BalancedNetwork {
 
 #[test]
 fn headerless_buscoords_csv_reads_as_bus_points() {
-    let parsed = parse(b"b1, -89.6, 40.6\nb2, -89.2, 39.8\n", None);
+    let parsed = parse("b1, -89.6, 40.6\nb2, -89.2, 39.8\n", None);
     assert_eq!(parsed.layer.features.len(), 2);
     let feature = &parsed.layer.features[0];
     assert_eq!(feature.target, GeoTarget::Bus);
@@ -48,25 +48,25 @@ fn headerless_buscoords_csv_reads_as_bus_points() {
 
 #[test]
 fn whitespace_separated_buscoords_read() {
-    let parsed = parse(b"b1 -89.6 40.6\nb2 -89.2 39.8\n", None);
+    let parsed = parse("b1 -89.6 40.6\nb2 -89.2 39.8\n", None);
     assert_eq!(parsed.layer.features.len(), 2);
 }
 
 #[test]
 fn projected_buscoords_read_as_unknown_space() {
-    let parsed = parse(b"b1, 653800.0, 3626000.0\n", None);
+    let parsed = parse("b1, 653800.0, 3626000.0\n", None);
     assert!(matches!(parsed.layer.space, CoordinateSpace::Unknown));
 }
 
 #[test]
 fn aliased_csv_header_reads_points_and_branch_segments() {
     let text = "Bus Number,Latitude,Longitude\n312,34.2,-80.05\n410,34.3,-80.10\n";
-    let parsed = parse(text.as_bytes(), Some("layout.csv"));
+    let parsed = parse(text, Some("layout.csv"));
     assert_eq!(parsed.layer.features.len(), 2);
     assert_eq!(parsed.layer.features[0].key.id.as_deref(), Some("312"));
 
     let branch_csv = "from_bus,to_bus,lat1,lon1,lat2,lon2\n312,410,34.2,-80.05,34.3,-80.10\n";
-    let parsed = parse(branch_csv.as_bytes(), Some("routes.csv"));
+    let parsed = parse(branch_csv, Some("routes.csv"));
     let branch = parsed
         .layer
         .features
@@ -84,13 +84,13 @@ fn aliased_csv_header_reads_points_and_branch_segments() {
 #[test]
 fn json_records_read_with_aliases() {
     let text = r#"[{"bus_i": 312, "lat": "34.2", "lng": "-80.05"}]"#;
-    let parsed = parse(text.as_bytes(), None);
+    let parsed = parse(text, None);
     assert_eq!(parsed.layer.features.len(), 1);
     assert_eq!(parsed.layer.features[0].key.id.as_deref(), Some("312"));
 
     // Records nested under an object key (the PowerModels-style dict).
     let nested = r#"{"buses": [{"id": "1", "x": -80.0, "y": 34.0}]}"#;
-    let parsed = parse(nested.as_bytes(), None);
+    let parsed = parse(nested, None);
     assert_eq!(parsed.layer.features.len(), 1);
 }
 
@@ -107,7 +107,7 @@ fn geojson_features_read_points_and_linestrings() {
          "properties": {"from": "312", "to": "410"}}
       ]
     }"#;
-    let parsed = parse(text.as_bytes(), None);
+    let parsed = parse(text, None);
     assert_eq!(parsed.layer.features.len(), 2);
     assert_eq!(parsed.layer.features[0].target, GeoTarget::Bus);
     assert_eq!(parsed.layer.features[1].target, GeoTarget::Branch);
@@ -128,7 +128,7 @@ fn a_bare_feature_id_does_not_place_a_branch() {
          "properties": {"id": 1}}
       ]
     }"#;
-    let parsed = parse(text.as_bytes(), None);
+    let parsed = parse(text, None);
     assert!(
         parsed
             .layer
@@ -154,7 +154,7 @@ fn a_capitalized_target_reads_as_a_substation() {
          "properties": {"target": "Substation", "id": "1"}}
       ]
     }"#;
-    let parsed = parse(text.as_bytes(), None);
+    let parsed = parse(text, None);
     assert_eq!(parsed.layer.features[0].target, GeoTarget::Substation);
 
     let mut net = small_network();
@@ -168,7 +168,7 @@ fn a_named_feature_id_still_matches_a_branch_uid() {
     // Dropping the counter case must not drop the whole key: a foreign record
     // that writes a source uid under `id` matches it.
     let text = r#"[{"id": "tie-a", "lat1": 34.2, "lon1": -80.05, "lat2": 34.3, "lon2": -80.1}]"#;
-    let parsed = parse(text.as_bytes(), None);
+    let parsed = parse(text, None);
     let feature = &parsed.layer.features[0];
     assert_eq!(feature.target, GeoTarget::Branch);
     assert_eq!(feature.key.index, None);
@@ -183,7 +183,7 @@ fn a_named_feature_id_still_matches_a_branch_uid() {
 #[test]
 fn positional_branch_id_is_a_read_only_row_alias() {
     let text = r#"[{"branch": 1, "lat1": 34.2, "lon1": -80.05, "lat2": 34.3, "lon2": -80.1}]"#;
-    let parsed = parse(text.as_bytes(), None);
+    let parsed = parse(text, None);
     let feature = &parsed.layer.features[0];
     assert_eq!(feature.key.index, Some(1));
 
@@ -193,7 +193,7 @@ fn positional_branch_id_is_a_read_only_row_alias() {
     assert!(net.branches()[0].route.is_some());
 
     // Never written: the canonical form carries the payload uid instead.
-    let round = parse(net.geo_layer().to_geojson().as_bytes(), None);
+    let round = parse(&net.to_geo_layer().to_geojson(), None);
     let branch = round
         .layer
         .features
@@ -238,7 +238,8 @@ fn canonical_write_round_trips_space_kind_and_keys() {
         kind: Some(CoordsKind::Synthetic),
     });
 
-    let layer = net.geo_layer();
+    let layer = net.to_geo_layer();
+    assert_eq!(net.to_geo_layer().features, layer.features);
     assert_eq!(layer.kind, Some(CoordsKind::Synthetic));
     let text = layer.to_geojson();
     let document: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
@@ -246,7 +247,7 @@ fn canonical_write_round_trips_space_kind_and_keys() {
     assert_eq!(document["powerio_geo"]["space"], "geographic");
     assert_eq!(document["powerio_geo"]["kind"], "synthetic");
 
-    let round = parse(text.as_bytes(), Some("case.geo.json"));
+    let round = parse(&text, Some("case.geo.json"));
     assert_eq!(round.layer, layer);
 
     // Applying onto a coordinate-free copy restores every location.
@@ -265,7 +266,7 @@ fn canonical_write_round_trips_space_kind_and_keys() {
 #[test]
 fn provenance_stamping_survives_the_wire() {
     // A consumer exporting a hand layout stamps `kind = manual`.
-    let mut layer = small_network().geo_layer();
+    let mut layer = small_network().to_geo_layer();
     layer.features.push(powerio_tx::GeoFeature {
         target: GeoTarget::Bus,
         key: powerio_tx::ElementKey {
@@ -278,7 +279,7 @@ fn provenance_stamping_survives_the_wire() {
         kind: None,
     });
     layer.kind = Some(CoordsKind::Manual);
-    let round = parse(layer.to_geojson().as_bytes(), None);
+    let round = parse(&layer.to_geojson(), None);
     assert_eq!(round.layer.kind, Some(CoordsKind::Manual));
 }
 
@@ -294,7 +295,7 @@ fn apply_matches_by_id_name_and_pair_and_counts_misses() {
       {"bus": "77", "lat": 34.4, "lon": -80.2},
       {"from_bus": 2, "to_bus": 1, "lat1": 34.2, "lon1": -80.05, "lat2": 34.3, "lon2": -80.1}
     ]"#;
-    let parsed = parse(text.as_bytes(), None);
+    let parsed = parse(text, None);
     let mut net = small_network();
     let report = net.apply_geo_layer(&parsed.layer);
     // "1" matches by external id, "south" case insensitively by name, "77"
@@ -309,9 +310,8 @@ fn apply_matches_by_id_name_and_pair_and_counts_misses() {
 
 #[test]
 fn bom_prefixed_json_reads() {
-    let mut bytes = b"\xef\xbb\xbf".to_vec();
-    bytes.extend_from_slice(br#"[{"bus": "1", "lat": 34.2, "lon": -80.05}]"#);
-    let parsed = parse(&bytes, None);
+    let text = "\u{feff}[{\"bus\": \"1\", \"lat\": 34.2, \"lon\": -80.05}]";
+    let parsed = parse(text, None);
     assert_eq!(parsed.layer.features.len(), 1);
 }
 
@@ -321,7 +321,7 @@ fn branch_routes_match_source_uids_arriving_as_id_or_name() {
     net.branches_mut()[0].uid = Some("line-1".to_owned());
     let text =
         r#"[{"branch": "line-1", "lat1": 34.2, "lon1": -80.05, "lat2": 34.3, "lon2": -80.1}]"#;
-    let report = net.apply_geo_layer(&parse(text.as_bytes(), None).layer);
+    let report = net.apply_geo_layer(&parse(text, None).layer);
     assert_eq!(report.matched_branches, 1);
     assert!(net.branches()[0].route.is_some());
 }
@@ -331,7 +331,7 @@ fn apply_matches_source_uids() {
     let mut net = small_network();
     net.buses_mut()[0].uid = Some("bus_00".to_owned());
     let text = r#"[{"uid": "bus_00", "id": "999", "lat": 34.2, "lon": -80.05}]"#;
-    let report = net.apply_geo_layer(&parse(text.as_bytes(), None).layer);
+    let report = net.apply_geo_layer(&parse(text, None).layer);
     assert_eq!(report.matched_buses, 1);
     assert!(net.buses()[0].location.is_some());
 }
@@ -340,7 +340,7 @@ fn apply_matches_source_uids() {
 fn a_layer_that_matches_nothing_still_counts_the_unlocated_model() {
     let mut net = small_network();
     let report =
-        net.apply_geo_layer(&parse(br#"[{"bus": "77", "lat": 34.4, "lon": -80.2}]"#, None).layer);
+        net.apply_geo_layer(&parse(r#"[{"bus": "77", "lat": 34.4, "lon": -80.2}]"#, None).layer);
     assert_eq!(report.matched_buses, 0);
     assert_eq!(report.unlocated_buses, 2);
     assert_eq!(report.unlocated_branches, 1);
@@ -351,7 +351,7 @@ fn a_layer_that_matches_nothing_still_counts_the_unlocated_model() {
       {"bus": "2", "lat": 34.3, "lon": -80.1},
       {"from_bus": 1, "to_bus": 2, "lat1": 34.2, "lon1": -80.05, "lat2": 34.3, "lon2": -80.1}
     ]"#;
-    let report = net.apply_geo_layer(&parse(text.as_bytes(), None).layer);
+    let report = net.apply_geo_layer(&parse(text, None).layer);
     assert_eq!(report.unlocated_buses, 0);
     assert_eq!(report.unlocated_branches, 0);
     report.require_located().expect("everything placed");
@@ -368,7 +368,8 @@ fn pwd_promotes_to_a_diagram_layer_and_joins_on_subnum() {
     let powerio_tx::DisplayData::PowerWorld(display) = display else {
         panic!("expected PowerWorld display data");
     };
-    let layer = geo_layer_from_pwd(&display);
+    let layer = to_geo_layer_from_pwd(&display);
+    assert_eq!(layer, to_geo_layer_from_pwd(&display));
     assert!(matches!(
         layer.space,
         CoordinateSpace::Diagram { canvas: Some(_) }
@@ -413,7 +414,7 @@ fn pwd_promotes_to_a_diagram_layer_and_joins_on_subnum() {
 fn aux_substations_lift_into_a_geographic_layer_that_joins_on_subnum() {
     let text =
         std::fs::read_to_string("../tests/data/powerworld/ACTIVSg200.aux").expect("read aux");
-    let layer = geo_layer_from_aux_substations(&parse_aux(&text).expect("parse aux"));
+    let layer = to_geo_layer_from_aux_substations(&parse_aux(&text).expect("parse aux"));
     assert!(matches!(
         layer.space,
         CoordinateSpace::Geographic { crs: None }
@@ -450,7 +451,7 @@ fn aux_substation_rows_skip_unusable_fields_and_keep_file_order() {
          12 35.0 -81.00\n}\n",
     )
     .expect("parse aux");
-    let layer = geo_layer_from_aux_substations(&aux);
+    let layer = to_geo_layer_from_aux_substations(&aux);
     // "12.0" and "12" name one substation; the non-finite and the empty row
     // are dropped.
     let keys: Vec<Option<&str>> = layer.features.iter().map(|f| f.key.id.as_deref()).collect();
@@ -485,7 +486,7 @@ fn a_substation_join_counts_the_buses_it_leaves_unplaced() {
     net.buses_mut()[0]
         .extras
         .insert("SubNum".to_owned(), serde_json::json!("7"));
-    let report = apply_substation_points(&mut net, &geo_layer_from_aux_substations(&aux));
+    let report = apply_substation_points(&mut net, &to_geo_layer_from_aux_substations(&aux));
     assert_eq!(report.matched_buses, 1);
     // Bus 2 is in no substation, and the join places no route.
     assert_eq!(report.unlocated_buses, 1);
@@ -507,7 +508,7 @@ fn pwd_mercator_inverse_lands_near_the_aux_coordinates() {
         .iter()
         .find(|s| s.number == 1)
         .expect("substation 1");
-    let (lon, lat) = pwd_mercator_to_lonlat(substation.x, substation.y);
+    let (lon, lat) = to_lonlat_from_pwd_mercator(substation.x, substation.y);
     assert!((lon - -89.599_56).abs() < 0.05, "lon {lon}");
     assert!((lat - 40.642_116).abs() < 0.05, "lat {lat}");
 }
@@ -518,28 +519,23 @@ fn pwd_mercator_inverse_lands_near_the_aux_coordinates() {
 
 #[test]
 fn malformed_inputs_error_without_panicking() {
-    let cases: &[&[u8]] = &[
-        b"",
-        b"{",
-        b"[1, 2",
-        b"\xff\xfe\x00garbage",
-        b"not,a,geo\nfile,at,all\n",
-        b"bus,x\nb1,1\n",
-        br#"{"features": "not an array"}"#,
-        br#"{"features": [{"geometry": {"type": "Point", "coordinates": "x"}}]}"#,
-        br#"{"features": [{"geometry": {"type": "Polygon", "coordinates": []}}]}"#,
-        br#"[{"bus": "1", "lat": "nope", "lon": "-80"}]"#,
-        br#"[{"lat": 1.0, "lon": 2.0}]"#,
-        br#"{"type": "FeatureCollection", "powerio_geo": 7, "features": []}"#,
-        br#"[{"branch": "b", "path": [[0]]}]"#,
+    let cases = [
+        "",
+        "{",
+        "[1, 2",
+        "not,a,geo\nfile,at,all\n",
+        "bus,x\nb1,1\n",
+        r#"{"features": "not an array"}"#,
+        r#"{"features": [{"geometry": {"type": "Point", "coordinates": "x"}}]}"#,
+        r#"{"features": [{"geometry": {"type": "Polygon", "coordinates": []}}]}"#,
+        r#"[{"bus": "1", "lat": "nope", "lon": "-80"}]"#,
+        r#"[{"lat": 1.0, "lon": 2.0}]"#,
+        r#"{"type": "FeatureCollection", "powerio_geo": 7, "features": []}"#,
+        r#"[{"branch": "b", "path": [[0]]}]"#,
     ];
-    for bytes in cases {
-        let result = GeoLayer::parse_bytes(bytes, None);
-        assert!(
-            result.is_err(),
-            "expected an error for {:?}",
-            String::from_utf8_lossy(bytes)
-        );
+    for text in cases {
+        let result = GeoLayer::parse_text(text, None);
+        assert!(result.is_err(), "expected an error for {text:?}");
     }
 }
 
@@ -550,14 +546,14 @@ fn tolerant_reader_skips_bad_records_but_keeps_good_ones() {
       {"bus": "2", "lat": null, "lon": -80.1},
       {"bus": "", "lat": 34.4, "lon": -80.2}
     ]"#;
-    let parsed = parse(text.as_bytes(), None);
+    let parsed = parse(text, None);
     assert_eq!(parsed.layer.features.len(), 1);
 }
 
 #[test]
 fn oversized_coordinate_values_read_but_stay_unknown_space() {
-    let parsed = parse(b"b1, 1e308, -1e308\n", None);
+    let parsed = parse("b1, 1e308, -1e308\n", None);
     assert!(matches!(parsed.layer.space, CoordinateSpace::Unknown));
     // Non-finite coordinates are dropped, so an all-inf file errors.
-    assert!(GeoLayer::parse_bytes(b"b1, inf, nan\n", None).is_err());
+    assert!(GeoLayer::parse_text("b1, inf, nan\n", None).is_err());
 }

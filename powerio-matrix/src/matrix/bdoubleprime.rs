@@ -18,7 +18,8 @@ use crate::indexed::IndexedNetwork;
 use super::ybus::{YbusFlags, build_ybus_with_flags};
 use super::{BuildOptions, Scheme, negate_into};
 
-pub fn build_bdoubleprime(case: &IndexedNetwork, opts: &BuildOptions) -> Result<CsMat<f64>> {
+/// Calculate the MATPOWER fast decoupled power flow `Bpp` matrix.
+pub fn calc_bdoubleprime_matrix(case: &IndexedNetwork, opts: &BuildOptions) -> Result<CsMat<f64>> {
     let flags = YbusFlags {
         zero_resistance: matches!(opts.scheme, Scheme::Bx),
         zero_charging: false,

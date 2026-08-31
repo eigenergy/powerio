@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use crate::convert::{Conversion, DistTargetFormat};
+use crate::convert::{DistTargetFormat, TextEmission};
 use crate::model::MulticonductorNetwork;
 
 /// The old parse output shape: the typed network with the reader's findings
@@ -37,13 +37,17 @@ impl std::ops::DerefMut for Parsed {
 impl Parsed {
     /// Write through the module: a same format target echoes the retained
     /// source bytes exactly.
-    pub fn to_format(&self, target: DistTargetFormat) -> Conversion {
-        crate::convert::write_as(&self.module, target)
+    pub fn emit(&self, target: DistTargetFormat) -> TextEmission {
+        crate::convert::emit_text_with_options(
+            &self.module,
+            target,
+            &crate::convert::EmitOptions::default(),
+        )
     }
 
     /// Write from the typed value, bypassing the echo tier.
-    pub fn to_canonical_format(&self, target: DistTargetFormat) -> Conversion {
-        crate::convert::write_network(&self.network, target)
+    pub fn emit_value(&self, target: DistTargetFormat) -> TextEmission {
+        crate::convert::emit_value_text(&self.network, target)
     }
 }
 
@@ -71,7 +75,7 @@ fn declared(
         Some(token) => {
             // The old entries settled the format before any work; keep the
             // error shape.
-            if crate::convert::dist_target_from_name(token).is_none() {
+            if crate::convert::parse_dist_target_format(token).is_none() {
                 return Err(crate::Error::UnknownFormat(token.to_string()));
             }
             let id = powerio_core::FormatId::new(token.to_ascii_lowercase().replace('_', "-"))
@@ -104,7 +108,7 @@ pub(crate) fn parse_file(
     from: Option<&str>,
 ) -> crate::Result<Parsed> {
     if let Some(token) = from
-        && crate::convert::dist_target_from_name(token).is_none()
+        && crate::convert::parse_dist_target_format(token).is_none()
     {
         return Err(crate::Error::UnknownFormat(token.to_string()));
     }

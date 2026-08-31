@@ -7,14 +7,23 @@ fn main() {
         .expect("usage: emit <file.m> [powermodels|egret]");
     let fmt = args.get(2).map_or("powermodels", String::as_str);
     let source = powerio_core::Source::open(path).unwrap();
-    let net = powerio_tx::parse(source).unwrap().into_value();
-    let conv = match fmt {
-        "egret" => powerio_tx::write_egret_json(&net),
-        _ => powerio_tx::write_powermodels_json(&net),
+    let module = powerio_tx::parse(source).unwrap();
+    let target = match fmt {
+        "egret" => powerio_tx::TargetFormat::EgretJson,
+        _ => powerio_tx::TargetFormat::PowerModelsJson,
     };
-    let findings = conv.rendered_diagnostics();
+    let emitted = powerio_tx::emit(
+        &module,
+        target,
+        powerio_core::Destination::memory("case").unwrap(),
+    )
+    .unwrap();
+    let findings = powerio_tx::diagnostics::render_diagnostics(emitted.diagnostics());
     if !findings.is_empty() {
         eprintln!("findings: {findings:?}");
     }
-    print!("{}", conv.text);
+    let powerio_core::EmittedOutput::Memory { artifacts } = emitted.into_output() else {
+        unreachable!("memory destination returns memory output")
+    };
+    print!("{}", String::from_utf8_lossy(artifacts[0].bytes()));
 }

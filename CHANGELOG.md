@@ -57,6 +57,45 @@ and solution pair join the AC pair at the crate root. `HistoryEntry`,
 `HistoryId`, `HistoryKind`, and `Producer` are also available through the main
 facade.
 
+**The four language surfaces use one ordinary path.** Rust, Python, Julia, and
+C now document `parse_file`, a `PioModule` containing its value and
+diagnostics, explicit `to_*` transformations, and `emit`. Computed matrices and
+vectors use `calc_*`; the direct PowerModels incidence operation is
+`calc_incidence_matrix` and returns branches by buses. Python exposes `value`
+and `diagnostics` as properties. Julia dispatches `parse_file` over paths and
+`IO`. Rust narrows through `PioValue` enum matching and `module.value()`.
+Rust, Python, and Julia expose DC work through the direct named
+`calc_incidence_matrix`, `calc_bus_susceptance_matrix`,
+`calc_branch_susceptance_matrix`, `calc_phase_shift_injection`, and
+`calc_branch_flow_dc` operations. Rust `DcNetworkData` and `dc_network_data`,
+Python `dc_data`, and Julia `DcData` are removed without a renamed container
+replacement. The ABI 6 C `PioDcData` type and functions remain callable. Rust
+preparation projections use
+`calc_fixed_nodal_withdrawal`, `calc_branch_flow_offset`, and
+`calc_nodal_generator_data`, and emit the legacy matrix bundle with
+`emit_dcopf_bundle`.
+
+Rust computed values now lead with an action across the component crates.
+Electrical and matrix results use `calc_*`; format lookup uses `parse_*`;
+grounded index conversion uses `map_*`; state and scenario discovery use
+`list_*`; diagnostic text uses `render_*`; and in memory geographic, GridFM,
+and Matrix Market projections use `to_*`. `check_sddm`,
+`select_solver_for_shape`, and `number_snapshots` state their operations
+directly.
+
+The released 0.10 source aliases are removed at the 1.0 boundary; the migration
+guide inventories each replacement. ABI 6 is unchanged and the new C names are
+additive. The preferred C transformations are
+`pio_balanced_network_to_normalized` and the balanced and multiconductor
+`*_to_geo_layer_json`, `*_apply_geo_layer`, and `*_to_module` functions.
+`pio_dc_data_calc_branch_flow` is the structured low level calculation name.
+`pio_module_list_states_json` lists a collection's states; the released
+`pio_module_state_inventory_json` spelling remains available.
+Module inspection preserves its released `operations` array and adds
+`preferred_operations` and `compatibility_operations`. Same format directory
+emission and typed module transformations now preserve source, diagnostic,
+history, producer, descriptor, and extension records.
+
 ## 0.10.0
 
 PowerIO 0.10 is the public beta of the 1.0 API. API corrections may land before 1.0.0 as downstream integrations exercise the new design.

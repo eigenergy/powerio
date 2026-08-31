@@ -1,38 +1,38 @@
 # Matrix outputs and conventions
 
-`powerio-matrix` builds sparse matrices and graph data from the parsed
+`powerio-matrix` calculates sparse matrices and graph data from parsed
 networks. Every numerical result carries the element mappings needed to read
 its rows and columns: source bus identifiers are not dense indices, and the
 dense `[0, n)` space exists only inside results that state their own mapping.
 
 `powerio-prob` owns the calculation instances (matrix free by design), and
 the matrix crate projects them into sparse operators. The DC OPF bundle schema is in
-[the DC OPF bundle guide](https://eigenergy.github.io/powerio/guide/dcopf-bundle.html). Per-builder API detail is in the
+[the DC OPF bundle guide](https://eigenergy.github.io/powerio/guide/dcopf-bundle.html). Calculation API detail is in the
 [crate docs](https://eigenergy.github.io/powerio/powerio_matrix/).
 
 ## Capabilities
 
-| matrix | shape | builder | notes |
+| matrix | shape | calculation | notes |
 | --- | --- | --- | --- |
-| MATPOWER `Bp` (FDPF) | \\(n \times n\\) | `build_bprime` | `-Im(Y_bus)` after the `makeB` `Bp` edits |
-| MATPOWER `Bpp` (FDPF) | \\(n \times n\\) | `build_bdoubleprime` | `-Im(Y_bus)` after the `makeB` `Bpp` edits |
-| \\(\Re(Y_{\mathrm{bus}})\\), \\(-\Im(Y_{\mathrm{bus}})\\) | \\(n \times n\\) | `build_ybus` | full admittance, keeps taps and shifts |
-| LACPF (linear AC power flow) block | \\(2n \times 2n\\) | `build_lacpf` | \\(\begin{bmatrix}G & -B \\\\ -B & -G\end{bmatrix}\\), flat start, indefinite |
+| MATPOWER `Bp` (FDPF) | \\(n \times n\\) | `calc_bprime_matrix` | `-Im(Y_bus)` after the `makeB` `Bp` edits |
+| MATPOWER `Bpp` (FDPF) | \\(n \times n\\) | `calc_bdoubleprime_matrix` | `-Im(Y_bus)` after the `makeB` `Bpp` edits |
+| \\(\Re(Y_{\mathrm{bus}})\\), \\(-\Im(Y_{\mathrm{bus}})\\) | \\(n \times n\\) | `calc_admittance_matrix` | full admittance, keeps taps and shifts |
+| LACPF (linear AC power flow) block | \\(2n \times 2n\\) | `calc_lacpf_matrix` | \\(\begin{bmatrix}G & -B \\\\ -B & -G\end{bmatrix}\\), flat start, indefinite |
 | PowerModels DC incidence \\(A\\) | \\(m \times n\\) | `DcOperators::calc_incidence_matrix` | row \\(e\\) has \\(+1\\) at the from bus, \\(-1\\) at the to bus |
 | DC branch susceptance \\(B_f\\) | \\(m \times n\\) | `DcOperators::calc_branch_susceptance_matrix` | \\(B_f = \operatorname{diag}(b)A\\) |
 | DC bus susceptance \\(B\\) | \\(n \times n\\) | `DcOperators::calc_bus_susceptance_matrix` | \\(B = A^\mathsf{T}\operatorname{diag}(b)A\\) |
 | phase shift injection \\(p_{shift}\\) | \\(n\\) | `DcOperators::calc_phase_shift_injection` | \\(p_{shift} = A^\mathsf{T}(b .* shift)\\) |
-| solver incidence factor \\(C=A^\mathsf{T}\\) | \\(n \times m\\) | `build_incidence` | the transposed, column oriented factor used by matrix algorithms |
-| weighted bus factor \\(L\\) | \\(n \times n\\) | `build_weighted_laplacian` | \\(L = C \operatorname{diag}(w) C^\mathsf{T}\\); internal solver data |
-| solver flow factor | \\(m \times n\\) | `build_flow_map` | branch weights times \\(C^\mathsf{T}\\) |
-| PTDF | \\(m \times n\\) | `build_ptdf` | routes through `Auto` solver selection; `build_ptdf_lodf_with_options` exposes the choice |
-| LODF | \\(m \times m\\) | `build_lodf` | routes through `Auto` solver selection; option based builds can prune small output entries |
-| adjacency | \\(n \times n\\) | `build_adjacency` | sparse graph adjacency |
+| DC bus injection \\(p_{bus}\\) | \\(n\\) | `DcOperators::calc_bus_injection_dc` | \\(p_{bus} = -Bv_a + p_{shift}\\) |
+| weighted bus factor \\(L\\) | \\(n \times n\\) | `calc_weighted_laplacian` | \\(L = C \operatorname{diag}(w) C^\mathsf{T}\\); internal solver data |
+| solver branch flow matrix | \\(m \times n\\) | `calc_branch_flow_matrix` | positive solver susceptance magnitudes times \\(C^\mathsf{T}\\) |
+| PTDF | \\(m \times n\\) | `calc_ptdf` | routes through `Auto` solver selection; `calc_ptdf_lodf_with_options` exposes the choice |
+| LODF | \\(m \times m\\) | `calc_lodf` | routes through `Auto` solver selection; option based builds can prune small output entries |
+| adjacency | \\(n \times n\\) | `calc_adjacency_matrix` | sparse graph adjacency |
 | petgraph graph | n/a | `IndexedNetwork::to_petgraph` | `UnGraph<usize, usize>` |
 
-Computing PTDF and LODF matrices requires a linear solve. Every builder —
-`build_ptdf`, `build_lodf`, `build_ptdf_lodf`, and the option based
-`build_ptdf_lodf_with_options` — routes through the same solver selection.
+Computing PTDF and LODF matrices requires a linear solve. Each calculation —
+`calc_ptdf`, `calc_lodf`, `calc_ptdf_lodf`, and the option based
+`calc_ptdf_lodf_with_options` — routes through the same solver selection.
 `SensitivitySolver`, the `solver` field on `SensitivityOptions`, names the choice: `Dense` forces the dense grounded
 factorization, `Sparse` factors the grounded DC bus susceptance matrix once
 with a sparse Cholesky and reuses the factorization across every right hand
@@ -56,15 +56,13 @@ callers can apply their own bus type reduction.
 
 `DcOperators` exposes the public DC calculations through
 `calc_incidence_matrix`, `calc_branch_susceptance_matrix`,
-`calc_bus_susceptance_matrix`, `calc_phase_shift_injection`, and
-`calc_branch_flow_dc`. The `calc_*` prefix marks a newly computed result;
+`calc_bus_susceptance_matrix`, `calc_phase_shift_injection`,
+`calc_bus_injection_dc`, and `calc_branch_flow_dc`. The `calc_*` prefix marks a newly computed result;
 nouns remain stored fields or borrowed accessors. The incidence matrix follows
 PowerModels: branches by buses, with \\(+1\\) at the from bus and \\(-1\\) at the
-to bus. Phase shift injection stays separate. `build_incidence`,
-`build_weighted_laplacian`, and `build_flow_map` remain available to matrix
-crate users as transposed solver factors; they are not the binding level DC
-incidence API. The noun `DcOperators` calculation methods remain 0.10
-compatibility shims.
+to bus. Phase shift injection stays separate. The transposed incidence factor
+used inside the sensitivity and DC OPF builders is compiler data rather than a
+second public incidence API.
 
 ## GridFM datasets
 
@@ -94,7 +92,7 @@ cubic costs, HVDC, or storage. These losses are returned as diagnostics.
   The matrix builders turn that into `Error::UnknownBus` at the point they
   need a bus that is not in the network.
 - **Taps and shifts.** \\(\mathrm{tap} = 0\\) means \\(\mathrm{tap} = 1\\)
-  (`Branch::effective_tap`). MATPOWER `Bp` clears bus shunts and line
+  (`Branch::calc_effective_tap`). MATPOWER `Bp` clears bus shunts and line
   charging, sets tap magnitudes to one, and keeps phase shifts. MATPOWER `Bpp`
   keeps bus shunts, line charging, and tap magnitudes while clearing phase
   shifts. \\(Y_{\mathrm{bus}}\\) keeps both tap magnitudes and phase shifts.
@@ -102,23 +100,23 @@ cubic costs, HVDC, or storage. These losses are returned as diagnostics.
   stored per terminal admittance when present: `g_fr`, `b_fr`, `g_to`, and
   `b_to` are already per unit on the system base. `Branch::b` is the legacy
   MATPOWER `BR_B` total projection for formats that carry only one charging
-  value. Matrix builders use `Branch::terminal_charging()`, so terminal values
+  value. Matrix builders use `Branch::calc_terminal_charging()`, so terminal values
   feed \\(Y_{\mathrm{bus}}\\) even when the legacy total is zero or stale.
 - **FDPF scheme.** `Scheme` selects between the two MATPOWER fast decoupled
   variants. `Xb` clears resistance for `Bp`; `Bx` clears resistance for `Bpp`.
   The default is `Bx`.
 - **Zero impedance branches.** `BuildOptions::skip_zero_impedance` controls the
-  builders whose branch denominator can be zero. The default `true` skips the
-  branch and records the skipped source branch rows in `MatrixStats` as
-  `skipped_zero_impedance` and `skipped_zero_impedance_branches`; `false`
-  returns `Error::ZeroImpedance`. Full AC admittance builders use
+  builders whose branch denominator can be zero. The default `false` returns
+  `Error::ZeroImpedance`; `true` skips the branch and records the skipped
+  source branch rows in `MatrixStats` as `skipped_zero_impedance` and
+  `skipped_zero_impedance_branches`. Full AC admittance builders use
   \\(r^2 + x^2\\); DC incidence and reactance only FDPF variants use \\(x\\).
   The gridfm export still zeros its admittance and flow columns for these rows
   and records `dropped_zero_impedance` in `gridfm_meta.json`.
 - **Reference coverage.** `IndexedNetwork::check_reference_coverage` verifies that
   every in-service island has a reference bus.
-- **Susceptance formulas for the DC approximation.** `BranchSusceptanceFormula` selects
-  the branch susceptance vector \\(b\\) and, for conventions that carry shifts,
+- **Branch susceptance formulas.** `BranchSusceptanceFormula` selects the
+  branch susceptance vector \\(b\\) and, for formulas that include phase shifts,
   the phase shift injection. The direct PowerModels operation
   `DcOperators::calc_incidence_matrix` returns the \\(m \\times n\\) branch by
   bus matrix \\(A_{pm}\\). Each branch row has \\(+1\\) at the from bus and
@@ -154,13 +152,15 @@ cubic costs, HVDC, or storage. These losses are returned as diagnostics.
 
 Matrices write as Matrix Market files or stay in memory. A symmetric matrix is
 stored as its lower triangle with the `symmetric` header and 1-based indices
-(`io::mtx::write_mtx`). The `sensitivities` command writes
+(`io::mtx::emit_mtx`). The `sensitivities` command writes
 `<case>_ptdf.mtx`, `<case>_lodf.mtx`, and `<case>_sensitivity_meta.json`. Use
+`--formula series-susceptance|tap-adjusted-reactance|reactance-only` to select
+the branch susceptance formula. Use
 `--solver dense|sparse|auto` to choose the PTDF/LODF solve path and
 `--drop-tolerance <value>` to omit entries with absolute value at or below the
 tolerance. When the CLI uses the sparse path, it writes retained Matrix
 Market coordinates through temp files and does not hold the full sparse output
-in memory. The Rust `build_ptdf_lodf_with_options` API still returns `CsMat`
+in memory. The Rust `calc_ptdf_lodf_with_options` API still returns `CsMat`
 values and is intended for outputs that fit in memory. The metadata records the
 requested solver, the actual solver path, matrix dimensions, nonzero counts,
 tolerance, and dropped entry counts. The `dcopf` CLI subcommand bundles its

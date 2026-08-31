@@ -32,7 +32,7 @@ Use the smallest gate set that covers the changed surface, then run the
 | --- | --- |
 | parser or writer semantics | `bash evals/validation/run_validation.sh`; format round trip tests; affected `cargo +nightly fuzz run <target> -- -runs=1` harnesses |
 | rich model fields | `bash evals/validation/run_rich_validation.sh` |
-| matrix builders | `cargo test -p powerio-matrix`; `cargo bench -p powerio-matrix --bench matrix` |
+| matrix calculations | `cargo test -p powerio-matrix`; `cargo bench -p powerio-matrix --bench matrix` |
 | problem instances or DC OPF bundles | `cargo test -p powerio-prob --no-default-features`; `cargo test -p powerio --features matrix` |
 | PowerWorld binary reader | PowerWorld parser tests plus `cargo bench -p powerio-tx --bench parse -- "parse_aux_|parse_pwb_"` |
 | C ABI | `scripts/capi-header-parity.sh`; `scripts/capi-smoke.sh`; `cargo test -p powerio-capi --no-default-features`; `cargo test -p powerio-capi --features arrow,matrix,gridfm,dist,prob`; `bash scripts/ci-clippy.sh capi-no-default`; `bash scripts/ci-clippy.sh capi-release` |

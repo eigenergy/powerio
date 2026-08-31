@@ -154,9 +154,7 @@ fn main() {
         let (parsed, s) = measure(|| {
             powerio_core::Source::open(&path)
                 .map_err(|e| e.to_string())
-                .and_then(|source| {
-                    powerio::format::parse(source).map_err(|e| e.to_string())
-                })
+                .and_then(|source| powerio_tx::format::parse(source).map_err(|e| e.to_string()))
                 .map(powerio_core::PioModule::into_value)
         });
         let parsed = match parsed {
@@ -170,22 +168,21 @@ fn main() {
 
         let net = parsed;
 
-        let (indexed, s) = measure(|| powerio::indexed::IndexedNetwork::new(&net));
+        let (indexed, s) = measure(|| powerio_matrix::IndexedNetwork::new(&net));
         row(name, "indexed_build", len, s);
 
         let (_, s) = measure(|| net.clone());
         row(name, "network_clone", len, s);
 
         let opts = powerio_matrix::matrix::BuildOptions::default();
-        let (_, s) = measure(|| powerio_matrix::matrix::build_ybus(&indexed, &opts));
+        let (_, s) = measure(|| powerio_matrix::matrix::calc_admittance_matrix(&indexed, &opts));
         row(name, "ybus", len, s);
 
+        let dc_instance = powerio::DcPfInstance::from_network(net.clone())
+            .expect("parsed case has a DC power flow instance");
         let (_, s) = measure(|| {
-            powerio_matrix::matrix::incidence::build_incidence(
-                &indexed,
-                powerio::dc::DcConvention::default(),
-                &opts,
-            )
+            powerio_matrix::DcOperators::build(&dc_instance)
+                .map(|operators| operators.calc_incidence_matrix())
         });
         row(name, "dc_incidence", len, s);
 
@@ -193,17 +190,17 @@ fn main() {
         // is still measurable in a reasonable time.
         if indexed.n() <= 3000 {
             let (_, s) = measure(|| {
-                powerio_matrix::matrix::sensitivity::build_ptdf(
+                powerio_matrix::matrix::sensitivity::calc_ptdf(
                     &indexed,
-                    powerio::dc::DcConvention::default(),
+                    powerio_matrix::BranchSusceptanceFormula::default(),
                 )
             });
             row(name, "ptdf", len, s);
 
             let (_, s) = measure(|| {
-                powerio_matrix::matrix::sensitivity::build_ptdf_lodf(
+                powerio_matrix::matrix::sensitivity::calc_ptdf_lodf(
                     &indexed,
-                    powerio::dc::DcConvention::default(),
+                    powerio_matrix::BranchSusceptanceFormula::default(),
                 )
             });
             row(name, "ptdf_lodf", len, s);
@@ -237,11 +234,10 @@ fn main() {
         let (r, s) = measure(|| {
             let mut source = powerio_core::Source::open(&path).map_err(|e| e.to_string())?;
             if let Some(token) = from {
-                source = source.with_format(
-                    powerio_core::FormatId::new(token).map_err(|e| e.to_string())?,
-                );
+                source = source
+                    .with_format(powerio_core::FormatId::new(token).map_err(|e| e.to_string())?);
             }
-            powerio::format::parse(source)
+            powerio_tx::format::parse(source)
                 .map(powerio_core::PioModule::into_value)
                 .map_err(|e| e.to_string())
         });
@@ -259,7 +255,7 @@ fn main() {
     if big.exists() {
         let module = powerio_core::Source::open(&big)
             .map_err(|e| e.to_string())
-            .and_then(|s| powerio::format::parse(s).map_err(|e| e.to_string()))
+            .and_then(|s| powerio_tx::format::parse(s).map_err(|e| e.to_string()))
             .expect("case2869pegase parses");
         for (op, token) in [
             ("parse_powermodels_2869", "powermodels-json"),
@@ -268,14 +264,32 @@ fn main() {
             ("parse_psse_2869", "psse"),
             ("parse_aux_2869", "aux"),
         ] {
-            let Some(target) = powerio::format::target_format_from_name(token) else {
+            let Some(target) = powerio_tx::format::parse_target_format(token) else {
                 eprintln!("unknown target {token}");
                 continue;
             };
-            let text = match powerio::format::write_as(&module, target) {
-                Ok(conversion) => conversion.text,
+            let destination = match powerio_core::Destination::memory("case") {
+                Ok(destination) => destination,
                 Err(e) => {
-                    eprintln!("write failed {token}: {e}");
+                    eprintln!("emit destination failed {token}: {e}");
+                    continue;
+                }
+            };
+            let text = match powerio_tx::emit(&module, target, destination) {
+                Ok(result) => {
+                    let powerio_core::EmittedOutput::Memory { mut artifacts } =
+                        result.into_output()
+                    else {
+                        unreachable!("memory destination returns memory output");
+                    };
+                    let bytes = artifacts
+                        .pop()
+                        .expect("text emission has one artifact")
+                        .into_bytes();
+                    String::from_utf8(bytes).expect("case text is UTF-8")
+                }
+                Err(e) => {
+                    eprintln!("emit failed {token}: {e}");
                     continue;
                 }
             };
@@ -288,7 +302,7 @@ fn main() {
                         let source = source.with_format(
                             powerio_core::FormatId::new(token).map_err(|e| e.to_string())?,
                         );
-                        powerio::format::parse(source)
+                        powerio_tx::format::parse(source)
                             .map(powerio_core::PioModule::into_value)
                             .map_err(|e| e.to_string())
                     })
@@ -333,10 +347,13 @@ fn main() {
         let (r, s) = measure(|| {
             let mut source = powerio_core::Source::open(&path).map_err(|e| e.to_string())?;
             if let Some(token) = from {
-                let token = if token == "bmopf" { "bmopf-json" } else { token };
-                source = source.with_format(
-                    powerio_core::FormatId::new(token).map_err(|e| e.to_string())?,
-                );
+                let token = if token == "bmopf" {
+                    "bmopf-json"
+                } else {
+                    token
+                };
+                source = source
+                    .with_format(powerio_core::FormatId::new(token).map_err(|e| e.to_string())?);
             }
             powerio_dist::parse(source)
                 .map(powerio_core::PioModule::into_value)

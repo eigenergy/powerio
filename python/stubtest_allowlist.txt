@@ -6,17 +6,15 @@
 # Anything NOT listed here that drifts fails CI (python.yml).
 powerio.Branch
 powerio.BranchRatingSet
+powerio.BranchSusceptanceFormula
 powerio.Bus
-powerio.Convention
 powerio.Format
 powerio.Gen
 powerio.GenCost
 powerio.GridfmOutputs
 powerio.Load
-powerio.BalancedNetwork.connectivity_report
 powerio.BalancedNetwork.reference_bus_index
 powerio.BalancedNetwork.reference_bus_indices
-powerio.BalancedNetwork.write_dcopf_bundle
 powerio.Scheme
 powerio.SensitivitySolver
 powerio.Shunt

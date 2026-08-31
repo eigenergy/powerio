@@ -12,7 +12,7 @@ use std::fmt::Write as _;
 use super::auxiliary::{AuxFile, AuxObject, parse_aux};
 use crate::diagnostics::codes::EMIT_POWERWORLD as F;
 use crate::diagnostics::{Diagnostics, codes};
-use crate::format::{Conversion, sanitize_quoted, warn_extra_branch_rating_sets};
+use crate::format::{TextEmission, sanitize_quoted, warn_extra_branch_rating_sets};
 use crate::network::{
     BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, Extras, Generator, Load,
     LoadVoltageModel, Shunt, SourceFormat,
@@ -706,7 +706,7 @@ fn read_branch(
 // A flat serializer: one section per PowerWorld object type; splitting it would
 // add indirection without clarity.
 #[expect(clippy::too_many_lines)]
-pub fn write_powerworld(net: &BalancedNetwork) -> Conversion {
+pub(crate) fn write_powerworld(net: &BalancedNetwork) -> TextEmission {
     let mut warnings = Diagnostics::new();
     let mut nonfinite = false;
     let mut sanitized_names = 0usize;
@@ -874,11 +874,11 @@ pub fn write_powerworld(net: &BalancedNetwork) -> Conversion {
                     circuit,
                     n(br.r),
                     n(br.x),
-                    n(br.total_charging_b()),
+                    n(br.calc_total_charging_b()),
                     n(br.rate_a),
                     n(br.rate_b),
                     n(br.rate_c),
-                    n(br.effective_tap()),
+                    n(br.calc_effective_tap()),
                     n(br.shift),
                     status(br.in_service),
                     kind
@@ -1012,7 +1012,7 @@ pub fn write_powerworld(net: &BalancedNetwork) -> Conversion {
         );
     }
 
-    Conversion::new(s, warnings)
+    TextEmission::new(s, warnings)
 }
 
 /// Device ID for the writer: the retained PowerWorld ID from `extras` when the

@@ -1,7 +1,7 @@
 //! The `.pio.json` version 1 wire: round trips, refusals, and the one way
 //! 0.9 upgrade.
 
-use powerio::stored::{read_module, write_module};
+use powerio::stored::{emit_module, read_module};
 use powerio::{BalancedNetwork, PioValue};
 use powerio_core::{
     Diagnostic, DiagnosticCode, DiagnosticId, DiagnosticSeverity, HistoryEntry, HistoryId,
@@ -71,7 +71,7 @@ fn module_with_records() -> PioModule<PioValue> {
 #[test]
 fn version_one_round_trips_with_records_and_nonfinite_bounds() {
     let module = module_with_records();
-    let text = write_module(&module).unwrap();
+    let text = emit_module(&module).unwrap();
 
     // The exact top level identity and the stored nonfinite spelling.
     let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -93,7 +93,7 @@ fn version_one_round_trips_with_records_and_nonfinite_bounds() {
     assert!(back.extensions().contains_key("org.example.note"));
 
     // Writing again reproduces the document byte for byte.
-    assert_eq!(write_module(&back).unwrap(), text);
+    assert_eq!(emit_module(&back).unwrap(), text);
 }
 
 /// A repair finding's target is an RFC 6901 pointer into `value.data`, not
@@ -120,7 +120,7 @@ fn a_repair_finding_target_is_a_pointer_the_writer_accepts() {
     let target = diagnostic.target().unwrap().to_owned();
 
     let module = module.map_value(PioValue::BalancedNetwork);
-    let text = write_module(&module).unwrap();
+    let text = emit_module(&module).unwrap();
 
     let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(
@@ -190,7 +190,7 @@ fn an_id_synthesized_for_an_unlabeled_diagnostic_never_collides_with_an_explicit
     for order in [["d0", "d1"], ["d1", "d0"]] {
         // "a .pio.json ... reads": round trip through real stored text first,
         // the same as any external document would arrive.
-        let starting_text = write_module(&module_with_d0_and_d1(order)).unwrap();
+        let starting_text = emit_module(&module_with_d0_and_d1(order)).unwrap();
         let mut module = read_module(&starting_text).unwrap();
 
         // Appended with no id of its own, matching the repair pass shape.
@@ -202,7 +202,7 @@ fn an_id_synthesized_for_an_unlabeled_diagnostic_never_collides_with_an_explicit
             ))
             .unwrap();
 
-        let text = write_module(&module).unwrap();
+        let text = emit_module(&module).unwrap();
         let back = read_module(&text).unwrap();
 
         assert_eq!(back.diagnostics().len(), 3, "order {order:?}");
@@ -264,7 +264,7 @@ fn every_source_relation_and_history_kind_round_trips() {
             .unwrap();
     }
 
-    let text = write_module(&module).unwrap();
+    let text = emit_module(&module).unwrap();
     let back = read_module(&text).unwrap();
     assert_eq!(
         back.source_map()
@@ -301,7 +301,7 @@ fn operating_point_series_round_trips_typed() {
         .build()
         .unwrap();
     let module = PioModule::new(PioValue::BalancedOperatingPointTimeSeries(series));
-    let text = write_module(&module).unwrap();
+    let text = emit_module(&module).unwrap();
     let back = read_module(&text).unwrap();
     let PioValue::BalancedOperatingPointTimeSeries(series) = back.value() else {
         panic!("wrong kind");
@@ -321,7 +321,7 @@ fn operating_point_series_round_trips_typed() {
 #[test]
 fn unknown_semantic_fields_are_refused() {
     let module = module_with_records();
-    let text = write_module(&module).unwrap();
+    let text = emit_module(&module).unwrap();
     let mut raw: serde_json::Value = serde_json::from_str(&text).unwrap();
     raw["surprise"] = serde_json::json!(true);
     let error = read_module(&raw.to_string()).unwrap_err().to_string();
@@ -399,7 +399,7 @@ fn multiconductor_network_round_trips() {
         vec!["1".into(), "2".into()],
     ));
     let module = PioModule::new(PioValue::MulticonductorNetwork(network));
-    let text = write_module(&module).unwrap();
+    let text = emit_module(&module).unwrap();
     let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(raw["value"]["kind"], "multiconductor_network");
     let back = read_module(&text).unwrap();
@@ -407,7 +407,7 @@ fn multiconductor_network_round_trips() {
         panic!("wrong kind");
     };
     assert_eq!(network.buses().len(), 1);
-    assert_eq!(write_module(&back).unwrap(), text);
+    assert_eq!(emit_module(&back).unwrap(), text);
 }
 
 #[test]
@@ -423,7 +423,7 @@ fn balanced_network_time_series_round_trips() {
     )
     .unwrap();
     let module = PioModule::new(PioValue::BalancedNetworkTimeSeries(series));
-    let text = write_module(&module).unwrap();
+    let text = emit_module(&module).unwrap();
     let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(raw["value"]["kind"], "balanced_network_time_series");
     let back = read_module(&text).unwrap();
@@ -432,7 +432,7 @@ fn balanced_network_time_series_round_trips() {
     };
     assert_eq!(series.len(), 2);
     assert!((series.values()[1].loads()[0].p - 55.0).abs() < 1e-12);
-    assert_eq!(write_module(&back).unwrap(), text);
+    assert_eq!(emit_module(&back).unwrap(), text);
 }
 
 #[test]
@@ -444,7 +444,7 @@ fn balanced_network_scenario_set_round_trips() {
     ])
     .unwrap();
     let module = PioModule::new(PioValue::BalancedNetworkScenarioSet(set));
-    let text = write_module(&module).unwrap();
+    let text = emit_module(&module).unwrap();
     let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(raw["value"]["kind"], "balanced_network_scenario_set");
     let back = read_module(&text).unwrap();
@@ -453,7 +453,7 @@ fn balanced_network_scenario_set_round_trips() {
     };
     assert_eq!(set.len(), 2);
     assert_eq!(set.get("peak").unwrap().probability(), Some(0.4));
-    assert_eq!(write_module(&back).unwrap(), text);
+    assert_eq!(emit_module(&back).unwrap(), text);
 }
 
 // ---- reference validation ----------------------------------------------------
@@ -461,7 +461,7 @@ fn balanced_network_scenario_set_round_trips() {
 #[test]
 fn a_span_past_its_source_is_refused() {
     let module = module_with_records();
-    let text = write_module(&module).unwrap();
+    let text = emit_module(&module).unwrap();
     let mut raw: serde_json::Value = serde_json::from_str(&text).unwrap();
     raw["source_map"][0]["spans"][0]["byte_end"] = serde_json::json!(999);
     let error = read_module(&raw.to_string()).unwrap_err().to_string();
@@ -471,7 +471,7 @@ fn a_span_past_its_source_is_refused() {
 #[test]
 fn an_unnamespaced_extension_is_refused() {
     let module = module_with_records();
-    let text = write_module(&module).unwrap();
+    let text = emit_module(&module).unwrap();
     let mut raw: serde_json::Value = serde_json::from_str(&text).unwrap();
     raw["extensions"] = serde_json::json!({"note": 1});
     let error = read_module(&raw.to_string()).unwrap_err().to_string();
@@ -482,14 +482,14 @@ fn an_unnamespaced_extension_is_refused() {
 fn suggested_action_survives_the_stored_round_trip() {
     let mut module = powerio_core::PioModule::new(PioValue::BalancedNetwork(small_network()));
     let diagnostic = powerio_core::Diagnostic::of(
-        &powerio::write::codes::REQUEST_WRITE_UNKNOWN_FORMAT,
+        &powerio::codes::READ_MODULE_UPGRADED,
         "a finding with an action",
     )
     .with_suggested_action("rerun with --strict");
     module
         .add_diagnostic(diagnostic)
         .expect("diagnostic attaches");
-    let text = powerio::stored::write_module(&module).expect("writes");
+    let text = powerio::stored::emit_module(&module).expect("writes");
     assert!(
         text.contains("\"suggested_action\"") && text.contains("rerun with --strict"),
         "the stored document carries the action: {text}"

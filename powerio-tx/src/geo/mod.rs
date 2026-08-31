@@ -10,8 +10,8 @@ pub use layer::{
     GeoLayer, GeoParsed, GeoTarget, apply_geo_features,
 };
 pub use pwd::{
-    PWD_MERCATOR_K, apply_substation_points, geo_layer_from_aux_substations, geo_layer_from_pwd,
-    pwd_mercator_to_lonlat,
+    PWD_MERCATOR_K, apply_substation_points, to_geo_layer_from_aux_substations,
+    to_geo_layer_from_pwd, to_lonlat_from_pwd_mercator,
 };
 
 use serde::{Deserialize, Serialize};

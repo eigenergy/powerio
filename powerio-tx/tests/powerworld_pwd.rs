@@ -18,7 +18,7 @@ use std::fs;
 use std::path::Path;
 
 use powerio_tx::format::powerworld::{parse_aux, parse_pwd, parse_pwd_display, parse_pwd_file};
-use powerio_tx::{DisplayData, PwdDisplay, PwdSubstation, parse_display_bytes, parse_display_file};
+use powerio_tx::{DisplayData, PwdDisplay, PwdSubstation, parse_display, parse_display_file};
 
 /// (number, name, latitude, longitude) per aux Substation row. Handles both
 /// naming vocabularies (classic SubNum/SubName, 2022 Number/Name).
@@ -122,7 +122,7 @@ fn pwd_display_metadata_and_file_helper_match_byte_parser() {
     let from_file = parse_pwd_file(&path).unwrap();
     let legacy = parse_pwd(&bytes).unwrap();
     let generic_file = powerworld_display(parse_display_file(&path, None).unwrap());
-    let generic_bytes = powerworld_display(parse_display_bytes(&bytes, "pwd").unwrap());
+    let generic_bytes = powerworld_display(parse_display(&bytes, "pwd").unwrap());
 
     assert_eq!(display.canvas_width, 200);
     assert_eq!(display.canvas_height, 200);
@@ -147,7 +147,7 @@ fn display_api_accepts_powerworld_aliases() {
             "file alias {alias}"
         );
         assert_eq!(
-            powerworld_display(parse_display_bytes(&bytes, alias).unwrap()),
+            powerworld_display(parse_display(&bytes, alias).unwrap()),
             expected,
             "byte alias {alias}"
         );

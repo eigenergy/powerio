@@ -2,7 +2,8 @@
 
 PowerIO 1.0 corrects OPF preparation and solution contracts found during the
 0.10 consumer integration. The `.pio.json` schema remains `powerio.module/1`,
-but the stored OPF result fields and the Rust API changed.
+but the stored OPF result fields and the Rust, Python, and Julia APIs changed.
+C ABI 6 remains compatible.
 
 ## OPF preparation follows the instance
 
@@ -20,10 +21,11 @@ values are unchanged. The polynomial `q`, `c`, and `c0` entries for that
 generator are zero. Malformed and nonconvex curves return typed errors instead
 of being fitted or silently convexified.
 
-`nodal_generator_data` now returns `Result`. It rejects a piecewise curve
-because one nodal quadratic cannot represent it. `write_dcopf_bundle` uses that
+`calc_nodal_generator_data` returns `Result`. It rejects a piecewise curve
+because one nodal quadratic cannot represent it. `emit_dcopf_bundle` uses that
 projection and returns the same error; use the generator space preparation for
-an exact piecewise objective.
+an exact piecewise objective. The released `nodal_generator_data` and
+`write_dcopf_bundle` names were removed in 1.0.
 
 Each preparation carries stable identities, analysis rows, and source rows
 beside its dense bus, generator, and branch arrays. Source rows use
@@ -80,12 +82,51 @@ with an opaque unknown enum variant.
 
 Use `DcOpfInstance::with_network` or `AcOpfInstance::with_network` when a
 counterfactual changes network parameters. The checked consuming method keeps
-the objective, constraints, DC approximation, and any compatible initial
-state. This prevents a solution for an amended network from being attached to
-an instance rebuilt from defaults.
+the objective, constraints, branch susceptance formula, and any compatible
+initial state. This prevents a solution for an amended network from being
+attached to an instance rebuilt from defaults.
 
 ## DC sign conventions
 
 The public DC susceptance remains negative for an inductive branch. OPF
 preparation exposes the distinct positive solver edge weight. The formulas and
 matrix shapes are listed in [Matrices and Graphs](matrices.md).
+
+The advanced solver preparation names now state that distinction. Use
+`DcBranchParameters`, `DcGeneratorParameters`, and
+`NodalGeneratorParameters` in place of the 0.10 `*Data` types. The positive
+weight vector is `branches.susceptance_magnitude`, not `branches.b`.
+`DcOpfMatrices.bus_branch_incidence` states its bus by branch orientation, and
+`DcOpfMatrices.branch_flow_matrix` is the branch by bus factor over those
+positive magnitudes. The corresponding calculation is
+`calc_branch_flow_matrix`. The DC OPF bundle keeps `BAt.mtx` unchanged and
+uses `branch_flow_matrix` as its manifest operator name in place of
+`flow_map`.
+
+## Rust callables start with actions
+
+Rust 1.0 uses verb first names and removes the 0.10 forwarding spellings. Use
+`list_states` for a typed collection inventory. Electrical calculations use
+`calc_branch_susceptance`, `calc_solver_edge_weight`, the `GenCost::calc_quadratic*`
+family, `Branch::calc_effective_tap`, `calc_divisible_tap`,
+`calc_terminal_charging`, `calc_series_admittance`, and
+`calc_total_charging_b`. The related charging, HVDC, transformer, and AC start
+calculations follow the same `calc_*` rule. `to_star_expansion` names the
+three winding transformer projection.
+
+Matrix helpers now lead with their operation: `calc_diagonal`,
+`calc_susceptance_diagonal`, `calc_unit_vector`,
+`calc_reference_indicator`, `calc_zero_impedance_skips`,
+`calc_matrix_stats_for_kind`, `check_sddm`, `select_solver_for_shape`, and the
+`map_*` grounded index methods. In memory serialization uses `to_mtx_bytes`,
+`to_vector_mtx_bytes`, and `to_gridfm_record_batches*`; `number_snapshots`
+stamps the scenario identifiers.
+
+Format name lookup uses `parse_*`. Geographic projections use
+`to_geo_layer_from_pwd`, `to_geo_layer_from_aux_substations`, and
+`to_lonlat_from_pwd_mercator`. GridFM discovery uses `list_*` and the base case
+uses universal `parse_file` plus `export_state` when the parsed value is a
+scenario set. Diagnostic projections use `render_*` or `to_*`.
+The released noun and adjective spellings do not remain as 1.0 aliases. The
+[1.0 API surface](final-v1-api-cleanup.md) lists every removed source name and
+its replacement. C ABI 6 keeps all released symbols.

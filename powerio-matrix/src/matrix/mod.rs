@@ -1,4 +1,4 @@
-//! Sparse matrix builders for power system cases.
+//! Sparse matrix calculations for power system cases.
 //!
 //! DC OPF and sensitivity builders use the DC bus susceptance matrix
 //! `L = A diag(b) Aᵀ`, where `A` is the signed bus by branch incidence matrix
@@ -10,7 +10,7 @@
 mod adjacency;
 mod bdoubleprime;
 mod bprime;
-pub mod incidence;
+mod incidence;
 mod lacpf;
 pub mod laplacian;
 pub mod multiconductor;
@@ -21,33 +21,32 @@ mod ybus;
 #[cfg(test)]
 mod tests;
 
-pub use adjacency::build_adjacency;
-pub use bdoubleprime::build_bdoubleprime;
-pub use bprime::build_bprime;
-pub use incidence::{
-    BranchSusceptanceFormula, DcConvention, IncidenceParts, build_flow_map, build_incidence,
-    susceptance_diag,
-};
-pub use lacpf::build_lacpf;
+pub use adjacency::calc_adjacency_matrix;
+pub use bdoubleprime::calc_bdoubleprime_matrix;
+pub use bprime::calc_bprime_matrix;
+pub(crate) use incidence::{IncidenceParts, build_incidence};
+pub use incidence::{calc_branch_flow_matrix, calc_diagonal, calc_susceptance_diagonal};
+pub use lacpf::calc_lacpf_matrix;
 pub use laplacian::{
-    GroundedIndexMap, build_weighted_laplacian, ground_at, ground_at_each, reference_indicator,
-    unit_vector,
+    GroundedIndexMap, calc_reference_indicator, calc_unit_vector, calc_weighted_laplacian,
+    ground_at, ground_at_each,
 };
+pub use powerio_tx::BranchSusceptanceFormula;
 pub use sensitivity::{
     SensitivityMatrices, SensitivityMatrixMetadata, SensitivityMetadata, SensitivityOptions,
-    SensitivitySolver, SensitivitySolverPath, build_lodf, build_ptdf, build_ptdf_lodf,
-    build_ptdf_lodf_with_options,
+    SensitivitySolver, SensitivitySolverPath, calc_lodf, calc_ptdf, calc_ptdf_lodf,
+    calc_ptdf_lodf_with_options,
 };
-pub use ybus::{YbusParts, build_ybus};
+pub use ybus::{YbusParts, calc_admittance_matrix};
 // Crate-internal: the gridfm columnar export reuses the per-branch admittance and
-// flow kernels so its branch table and Y_bus agree with `build_ybus` by construction.
+// flow kernels so its branch table and Y_bus agree with `calc_admittance_matrix` by construction.
 #[cfg(feature = "gridfm")]
 pub(crate) use ybus::{YbusFlags, branch_admittance, branch_flows};
 
 use sprs::CsMat;
 
 // The bound the matrix and instance builders share; it lives beside the DC
-// convention because both are properties of the branch primitives.
+// formula because both are properties of the branch primitives.
 pub(crate) use powerio_tx::dc::MIN_DIVISIBLE_MAGNITUDE;
 
 /// Which MATPOWER fast decoupled scheme to use.
@@ -128,7 +127,7 @@ impl ZeroImpedanceSkips {
 
 /// Count in-service branch rows the given builder rule will skip. This is the
 /// shared accounting used by matrix metadata and solver property regressions.
-pub fn skipped_zero_impedance(
+pub fn calc_zero_impedance_skips(
     case: &crate::indexed::IndexedNetwork,
     rule: ZeroImpedanceRule,
 ) -> ZeroImpedanceSkips {
@@ -226,7 +225,7 @@ pub(crate) fn negate_into(mut a: CsMat<f64>) -> CsMat<f64> {
 
 /// Whether a matrix is SDDM (symmetric diagonally dominant M-matrix).
 /// Useful as a quick sanity check before feeding it to an SDDM solver.
-pub fn sddm_check(a: &CsMat<f64>) -> bool {
+pub fn check_sddm(a: &CsMat<f64>) -> bool {
     if !is_symmetric(a) {
         return false;
     }

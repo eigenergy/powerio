@@ -1,7 +1,7 @@
 //! Unit tests for the generic aux grammar, one per construct of the format
 //! guide.
 
-use super::auxiliary::{AuxSection, parse_aux, write_aux};
+use super::auxiliary::{AuxSection, emit_aux, parse_aux};
 use crate::Error;
 
 fn one_object(text: &str) -> super::AuxObject<'_> {
@@ -133,8 +133,8 @@ fn script_section_is_retained_verbatim() {
     };
     assert_eq!(sc.name.as_deref(), Some("MyActions"));
     assert_eq!(sc.lines, ["SolvePowerFlow;", "EnterMode(RUN);"]);
-    // And it survives the canonical write.
-    let out = write_aux(&file);
+    // And it survives canonical emission.
+    let out = emit_aux(&file);
     assert!(out.contains("SCRIPT MyActions"));
     assert!(out.contains("SolvePowerFlow;"));
 }
@@ -146,10 +146,10 @@ fn brace_on_header_line_is_accepted() {
 }
 
 #[test]
-fn canonical_write_is_idempotent() {
+fn canonical_emission_is_idempotent() {
     let text = "DATA Named(Bus, [BusNum, BusName], AUXDEF, NO)\n{\n1 \"A B\"\n2 \"\"\n<SUBDATA Memo>\nnote line\n</SUBDATA>\n}\n\nSCRIPT\n{\nSolvePowerFlow;\n}\n";
-    let first = write_aux(&parse_aux(text).unwrap());
-    let second = write_aux(&parse_aux(&first).unwrap());
+    let first = emit_aux(&parse_aux(text).unwrap());
+    let second = emit_aux(&parse_aux(&first).unwrap());
     assert_eq!(first, second, "canonical aux output must be idempotent");
 }
 
@@ -175,19 +175,19 @@ fn unmodeled_data_blocks_warn_on_parse() {
     assert_eq!(parsed.network.buses().len(), 1);
     assert!(
         parsed
-            .rendered_diagnostics()
+            .render_diagnostics()
             .iter()
             .any(|w| w.contains("DATA Owner") && w.contains("not modeled")),
         "missing Owner warning: {:?}",
-        parsed.rendered_diagnostics()
+        parsed.render_diagnostics()
     );
     assert!(
         parsed
-            .rendered_diagnostics()
+            .render_diagnostics()
             .iter()
             .any(|w| w.contains("DATA Area") && w.contains("not modeled")),
         "missing Area warning: {:?}",
-        parsed.rendered_diagnostics()
+        parsed.render_diagnostics()
     );
 }
 
@@ -271,11 +271,11 @@ fn writer_sanitizes_bus_names_that_would_corrupt_a_value() {
     assert_eq!(reparsed.buses()[1].base_kv, 138.0);
     assert!(!reparsed.buses()[0].name.as_deref().unwrap().contains('"'));
     assert!(
-        conv.rendered_diagnostics()
+        conv.render_diagnostics()
             .iter()
             .any(|w| w.contains("bus name")),
         "expected a sanitization warning, got {:?}",
-        conv.rendered_diagnostics()
+        conv.render_diagnostics()
     );
 }
 

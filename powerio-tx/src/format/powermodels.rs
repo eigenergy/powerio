@@ -28,7 +28,7 @@ use super::decode::{
     lenient_bool, lenient_f64, lenient_flag, lenient_i64, lenient_string, lenient_table,
     lenient_u64, sorted_rows,
 };
-use super::{Conversion, finish, jnum, warn_extra_branch_rating_sets};
+use super::{TextEmission, finish, jnum, warn_extra_branch_rating_sets};
 use crate::diagnostics::codes::EMIT_POWERMODELS as F;
 use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
@@ -40,7 +40,7 @@ use crate::normalize::{self, GEN_PU_KEYS};
 use crate::{Error, Result};
 
 #[must_use]
-pub fn write_powermodels_json(net: &BalancedNetwork) -> Conversion {
+pub fn write_powermodels_json(net: &BalancedNetwork) -> TextEmission {
     let mut warnings = Diagnostics::new();
 
     // Per-unit write factors, the exact inverse of the reader's pscale/ascale:
@@ -187,12 +187,12 @@ fn branch_obj(br: &Branch, idx: usize, p: f64, a: f64) -> Value {
     m.insert("t_bus".into(), Value::from(br.to.0 as u64));
     m.insert("br_r".into(), jnum(br.r));
     m.insert("br_x".into(), jnum(br.x));
-    let charging = br.terminal_charging();
+    let charging = br.calc_terminal_charging();
     m.insert("b_fr".into(), jnum(charging.b_fr));
     m.insert("b_to".into(), jnum(charging.b_to));
     m.insert("g_fr".into(), jnum(charging.g_fr));
     m.insert("g_to".into(), jnum(charging.g_to));
-    m.insert("tap".into(), jnum(br.effective_tap()));
+    m.insert("tap".into(), jnum(br.calc_effective_tap()));
     m.insert("shift".into(), jnum(br.shift * a));
     m.insert("br_status".into(), status_int(br.in_service));
     m.insert("angmin".into(), jnum(br.angmin * a));

@@ -6,10 +6,11 @@ evals/validation/requirements.txt), not powerio; makePTDF and makeLODF below
 are transcribed from the published MATPOWER source, never from powerio's own
 incidence or susceptance construction. Fixtures are case118.m and case30.m:
 both are small enough to form the dense n x n sensitivity matrices directly,
-and their identity mapping is MATPOWER's own BUS_I bus order plus the
-`branches:<i>` row order dc_data reports. The large real grid fixtures used
-by validate_dc_matpower.py for the shift sign leg are skipped here — a dense
-PTDF over 10000+ buses is not worth the wall time, and case118/case30
+and their identity mapping is MATPOWER's own BUS_I bus order plus the input
+order of in-service branches. The oracle checks both mappings. The large real
+grid fixtures used by validate_dc_matpower.py for the shift sign leg are
+skipped here — a dense PTDF over 10000+ buses is not worth the wall time, and
+case118/case30
 exercise every formula and the bridge branch case already.
 
 Every PTDF and LODF entry is asserted at ABS_TOL below; the largest error
@@ -130,33 +131,47 @@ def compare(path: str) -> list[str]:
     failures: list[str] = []
     print(f"\n===== {path}")
     cf = CaseFrames(path)
-    net = powerio.parse(path).as_balanced_network()
-    for pio_name, oracle_name in [
-        ("series", "series"),
-        ("matpower", "matpower"),
+    module = powerio.parse_file(path, value_type=powerio.BalancedNetwork)
+    net = module.value
+    pio_bus_ids = np.array([int(bus["id"]) for bus in net.buses])
+    expected_bus_ids = cf.bus["BUS_I"].astype(np.int64).to_numpy()
+    if not np.array_equal(pio_bus_ids, expected_bus_ids):
+        return ["bus axis differs from MATPOWER's BUS_I order"]
+
+    active_idx = np.flatnonzero(
+        cf.branch["BR_STATUS"].astype(float).to_numpy() != 0.0
+    )
+    active_branches = [branch for branch in net.branches if branch["in_service"]]
+    pio_endpoints = np.array(
+        [
+            [int(branch["from_id"]), int(branch["to_id"])]
+            for branch in active_branches
+        ]
+    )
+    expected_endpoints = cf.branch[["F_BUS", "T_BUS"]].astype(np.int64).to_numpy()[
+        active_idx
+    ]
+    if not np.array_equal(pio_endpoints, expected_endpoints):
+        return ["active branch axis differs from MATPOWER branch order"]
+
+    for formula, oracle_name in [
+        ("series_susceptance", "series"),
+        ("tap_adjusted_reactance", "matpower"),
         ("reactance_only", "reactance_only"),
     ]:
         m = build(cf, oracle_name)
         H = ptdf(m)
         L, hdiag = lodf(m, H)
-        d = net.dc_data(
-            {
-                "series": "series_susceptance",
-                "matpower": "tap_adjusted_reactance",
-                "reactance_only": "reactance_only",
-            }[pio_name]
-        )
-        idx = np.array([int(r.split(":")[1]) for r in d["row_ids"]])
-        P = net.ptdf(pio_name).toarray()
-        Lp = net.lodf(pio_name).toarray()
-        dP = np.max(np.abs(P - H[idx, :]))
+        P = net.calc_ptdf(formula).toarray()
+        Lp = net.calc_lodf(formula).toarray()
+        dP = np.max(np.abs(P - H[active_idx, :]))
 
         # Bridge columns: classify by powerio's own tolerance, exclude them
         # from the value comparison (the oracle's raw formula is undefined
         # there), and separately check powerio's structural convention.
-        denom = np.abs(1.0 - hdiag[idx])
+        denom = np.abs(1.0 - hdiag[active_idx])
         good = denom >= LODF_ISLAND_TOLERANCE
-        Lo = L[np.ix_(idx, idx)]
+        Lo = L[np.ix_(active_idx, active_idx)]
         dL = np.max(np.abs(Lp[:, good] - Lo[:, good])) if good.any() else 0.0
         bad_idx = np.where(~good)[0]
         max_off_diag = 0.0
@@ -169,23 +184,23 @@ def compare(path: str) -> list[str]:
             max_diag_err = float(np.max(np.abs(diag_vals - (-1.0))))
 
         print(
-            f"  {pio_name:<16} PTDF diff={dP:.3e}   LODF diff={dL:.3e}"
+            f"  {formula:<24} PTDF diff={dP:.3e}   LODF diff={dL:.3e}"
             f"   bridge cols={bad_idx.size} (off diag<={max_off_diag:.1e},"
             f" diag err={max_diag_err:.1e})"
             f"   min|1-h| kept={denom[good].min() if good.any() else float('nan'):.3e}"
         )
         if dP >= ABS_TOL:
-            failures.append(f"{pio_name}: ptdf diff {dP:.3e} >= {ABS_TOL:.0e}")
+            failures.append(f"{formula}: ptdf diff {dP:.3e} >= {ABS_TOL:.0e}")
         if dL >= ABS_TOL:
-            failures.append(f"{pio_name}: lodf diff {dL:.3e} >= {ABS_TOL:.0e}")
+            failures.append(f"{formula}: lodf diff {dL:.3e} >= {ABS_TOL:.0e}")
         if max_off_diag >= ABS_TOL:
             failures.append(
-                f"{pio_name}: lodf bridge column off diagonal {max_off_diag:.3e}"
+                f"{formula}: lodf bridge column off diagonal {max_off_diag:.3e}"
                 f" >= {ABS_TOL:.0e} (should be zeroed)"
             )
         if max_diag_err >= ABS_TOL:
             failures.append(
-                f"{pio_name}: lodf bridge column diagonal off by {max_diag_err:.3e}"
+                f"{formula}: lodf bridge column diagonal off by {max_diag_err:.3e}"
                 " (should stay the structural -1)"
             )
 
@@ -201,7 +216,7 @@ def main() -> int:
     for path in paths:
         try:
             failures = compare(path)
-        except Exception as err:  # noqa: BLE001
+        except Exception as err:
             failures = [str(err)]
         mark = "ok" if not failures else "FAIL"
         append_result(path, "dc_ptdf_lodf", mark)

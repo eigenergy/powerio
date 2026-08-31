@@ -9,7 +9,6 @@ use powerio::BalancedNetwork;
 use powerio_core::{FormatId, Source};
 
 use powerio::Diagnostic;
-pub use powerio::write_network;
 
 /// The old parse output shape: the typed network plus the reader's findings,
 /// and the typed DOE GO Challenge 3 document when that reader produced one.
@@ -17,12 +16,12 @@ pub use powerio::write_network;
 pub struct Parsed {
     pub network: BalancedNetwork,
     pub diagnostics: Vec<Diagnostic>,
-    pub document: Option<std::sync::Arc<powerio::format::goc3::Goc3Document>>,
+    pub document: Option<std::sync::Arc<powerio_tx::format::goc3::Goc3Document>>,
 }
 
 impl Parsed {
-    pub fn rendered_diagnostics(&self) -> Vec<String> {
-        powerio::diagnostics::render_diagnostics(&self.diagnostics)
+    pub fn render_diagnostics(&self) -> Vec<String> {
+        powerio_core::render_diagnostics(&self.diagnostics)
     }
 }
 
@@ -48,7 +47,7 @@ pub fn parse_file(
     from: Option<&str>,
 ) -> Result<Parsed, powerio_core::Error> {
     let source = declared(Source::open(path.as_ref())?, from)?;
-    powerio::format::parse(source).map(module_to_parsed)
+    powerio_tx::format::parse(source).map(module_to_parsed)
 }
 
 pub fn parse_module(
@@ -56,7 +55,7 @@ pub fn parse_module(
     from: Option<&str>,
 ) -> Result<powerio_core::PioModule<BalancedNetwork>, powerio_core::Error> {
     let source = declared(Source::open(path.as_ref())?, from)?;
-    powerio::format::parse(source)
+    powerio_tx::format::parse(source)
 }
 
 pub fn parse_str(text: &str, from: &str) -> Result<Parsed, powerio_core::Error> {
@@ -70,7 +69,7 @@ pub fn parse_str_with_name(
 ) -> Result<Parsed, powerio_core::Error> {
     if from.eq_ignore_ascii_case("goc3-json") {
         let (network, diagnostics, document) =
-            powerio::parse_goc3_json(text).map_err(tx_error_to_core)?;
+            powerio_tx::format::parse_goc3_json(text).map_err(tx_error_to_core)?;
         return Ok(Parsed {
             network,
             diagnostics,
@@ -82,7 +81,7 @@ pub fn parse_str_with_name(
         Source::from_bytes(name, text.as_bytes().to_vec())?,
         Some(from),
     )?;
-    powerio::format::parse(source).map(module_to_parsed)
+    powerio_tx::format::parse(source).map(module_to_parsed)
 }
 
 pub fn parse_bytes(bytes: &[u8], from: &str) -> Result<Parsed, powerio_core::Error> {
@@ -96,7 +95,7 @@ pub fn parse_bytes_with_name(
 ) -> Result<Parsed, powerio_core::Error> {
     let name = name_hint.map_or_else(|| "<memory>".to_owned(), std::string::ToString::to_string);
     let source = declared(Source::from_bytes(name, bytes.to_vec())?, Some(from))?;
-    powerio::format::parse(source).map(module_to_parsed)
+    powerio_tx::format::parse(source).map(module_to_parsed)
 }
 
 pub fn parse_matpower(text: &str) -> Result<BalancedNetwork, powerio_core::Error> {
@@ -143,7 +142,7 @@ pub fn read_pypsa_csv_folder(path: impl AsRef<Path>) -> Result<Parsed, powerio_c
     parse_file(path, Some("pypsa-csv"))
 }
 
-fn tx_error_to_core(error: powerio::error::Error) -> powerio_core::Error {
+fn tx_error_to_core(error: powerio_tx::Error) -> powerio_core::Error {
     powerio_core::Error::new(error.code(), error.to_string()).with_cause(error)
 }
 

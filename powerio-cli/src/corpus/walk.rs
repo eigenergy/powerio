@@ -371,23 +371,23 @@ impl Net {
         }
     }
 
-    /// Write as `to` and read back, collecting both sides' warnings. A panic
+    /// Emit as `to` and read back, collecting both sides' warnings. A panic
     /// on either side comes back as a message rather than unwinding.
     fn convert(&self, to: &str, warnings: &mut Vec<String>) -> std::result::Result<Net, String> {
         match self {
             Self::Balanced(net) => {
-                let Some(target) = powerio_matrix::target_format_from_name(to) else {
+                let Some(target) = powerio_tx::format::parse_target_format(to) else {
                     return Err(format!("no writer for {to}"));
                 };
-                let written = match catch_panic(|| powerio_matrix::write_network(net, target)) {
-                    Ok(Ok(conversion)) => conversion,
-                    Ok(Err(err)) => return Err(format!("write: {err}")),
-                    Err(message) => return Err(format!("write panicked: {message}")),
+                let emission = match catch_panic(|| crate::compat::emit_tx_value(net, target)) {
+                    Ok(Ok(emission)) => emission,
+                    Ok(Err(err)) => return Err(format!("emit: {err}")),
+                    Err(message) => return Err(format!("emit panicked: {message}")),
                 };
-                warnings.extend(written.rendered_diagnostics());
-                match catch_panic(|| crate::compat::parse_str(&written.text, to)) {
+                warnings.extend(emission.render_diagnostics());
+                match catch_panic(|| crate::compat::parse_str(&emission.text, to)) {
                     Ok(Ok(parsed)) => {
-                        warnings.extend(parsed.rendered_diagnostics());
+                        warnings.extend(parsed.render_diagnostics());
                         Ok(Self::Balanced(parsed.network))
                     }
                     Ok(Err(err)) => Err(format!("readback: {err}")),
@@ -395,20 +395,21 @@ impl Net {
                 }
             }
             Self::Dist(net) => {
-                let Some(target) = powerio_dist::dist_target_from_name(to) else {
+                let Some(target) = powerio_dist::parse_dist_target_format(to) else {
                     return Err(format!("no writer for {to}"));
                 };
-                let written = match catch_panic(|| powerio_dist::write_network(net, target)) {
-                    Ok(conversion) => conversion,
-                    Err(message) => return Err(format!("write panicked: {message}")),
+                let emission = match catch_panic(|| crate::compat::emit_dist_value(net, target)) {
+                    Ok(Ok(emission)) => emission,
+                    Ok(Err(err)) => return Err(format!("emit: {err}")),
+                    Err(message) => return Err(format!("emit panicked: {message}")),
                 };
-                warnings.extend(written.rendered_diagnostics());
+                warnings.extend(emission.render_diagnostics());
                 // A deck that pulls in other files cannot be read back from a
                 // string; see the same test in the pairwise compare.
-                if super::has_include(&written.text) {
-                    return Err("written deck redirects to include files".to_string());
+                if super::has_include(&emission.text) {
+                    return Err("emitted deck redirects to include files".to_string());
                 }
-                match catch_panic(|| crate::compat::dist_parse_str(&written.text, to)) {
+                match catch_panic(|| crate::compat::dist_parse_str(&emission.text, to)) {
                     Ok(Ok(parsed)) => {
                         warnings.extend(parsed.warnings.iter().cloned());
                         Ok(Self::Dist(parsed.network))

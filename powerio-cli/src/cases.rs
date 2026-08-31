@@ -4,9 +4,9 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use powerio::transform::{MulticonductorToBalancedOptions, lower_multiconductor_to_balanced};
-use powerio_matrix::format::routing::{Detection, JsonClass, SourceFormat as DetectedFormat};
-use powerio_matrix::network::BalancedNetwork;
+use powerio::BalancedNetwork;
+use powerio::transform::{MulticonductorToBalancedOptions, to_balanced_network};
+use powerio_tx::format::routing::{Detection, JsonClass, SourceFormat as DetectedFormat};
 
 /// Extensions (lowercase) that identify a transmission case file.
 pub const TRANSMISSION_EXTENSIONS: &[&str] = &["m", "raw", "aux", "epc", "pwb"];
@@ -69,7 +69,7 @@ pub fn stored_json(input: &Path) -> anyhow::Result<Option<String>> {
     let text = std::fs::read_to_string(input)
         .with_context(|| format!("reading JSON format markers from {}", input.display()))?;
     if matches!(
-        powerio_matrix::format::routing::classify_json_text(&text),
+        powerio_tx::format::routing::classify_json_text(&text),
         JsonClass::Module
     ) {
         return Ok(Some(text));
@@ -109,7 +109,7 @@ pub fn classified_json(input: &Path) -> anyhow::Result<Option<ClassifiedCase>> {
 /// outcomes (package, ambiguous markers, no markers) into errors
 /// that name the fix.
 fn classify_case_json(text: &str, path: &Path) -> anyhow::Result<DetectedFormat> {
-    match powerio_matrix::format::routing::classify_json_text(text) {
+    match powerio_tx::format::routing::classify_json_text(text) {
         JsonClass::Case(Detection::Known(format)) => Ok(format),
         JsonClass::Module => anyhow::bail!(
             "{} is a stored .pio.json module; `summary`, `convert`, and `matrix` \
@@ -221,7 +221,7 @@ pub fn load_network(path: &Path) -> anyhow::Result<LoadedCase> {
                     let parsed = crate::compat::parse_str_with_name(&text, format.name(), stem)
                         .with_context(|| format!("parse {}", path.display()))?;
                     Ok(LoadedCase {
-                        warnings: parsed.rendered_diagnostics(),
+                        warnings: parsed.render_diagnostics(),
                         network: parsed.network,
                     })
                 }
@@ -241,7 +241,7 @@ pub fn load_network(path: &Path) -> anyhow::Result<LoadedCase> {
             let parsed = crate::compat::parse_file(path, None)
                 .with_context(|| format!("parse {}", path.display()))?;
             Ok(LoadedCase {
-                warnings: parsed.rendered_diagnostics(),
+                warnings: parsed.render_diagnostics(),
                 network: parsed.network,
             })
         }
@@ -264,33 +264,23 @@ fn lower_to_balanced(
         *net.name_mut() = stem.map(str::to_owned);
     }
     let lowered =
-        lower_multiconductor_to_balanced(&net, MulticonductorToBalancedOptions::default())
-            .map_err(|e| {
-                let diagnostics = e
-                    .diagnostics
-                    .iter()
-                    .map(powerio_core::Diagnostic::message)
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                if diagnostics.is_empty() {
-                    // Diagnostics should always be present on a refusal, but
-                    // an empty list must not render a bare trailing colon.
-                    anyhow::anyhow!("lower {} to balanced: {e}", path.display())
-                } else {
-                    anyhow::anyhow!("lower {} to balanced: {diagnostics}", path.display())
-                }
-            })?;
+        to_balanced_network(&net, MulticonductorToBalancedOptions::default()).map_err(|e| {
+            let diagnostics = e
+                .diagnostics
+                .iter()
+                .map(powerio_core::Diagnostic::message)
+                .collect::<Vec<_>>()
+                .join("; ");
+            if diagnostics.is_empty() {
+                // Diagnostics should always be present on a refusal, but
+                // an empty list must not render a bare trailing colon.
+                anyhow::anyhow!("lower {} to balanced: {e}", path.display())
+            } else {
+                anyhow::anyhow!("lower {} to balanced: {diagnostics}", path.display())
+            }
+        })?;
     let mut warnings = parsed.warnings;
-    warnings.extend(
-        (lowered.record.approximations.iter())
-            .chain(&lowered.record.dropped_fields)
-            .map(|s| {
-                format!(
-                    "{}: lowering: {s}",
-                    powerio::codes::TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_OBJECT.code
-                )
-            }),
-    );
+    warnings.extend(powerio_core::render_diagnostics(&lowered.diagnostics));
     Ok(LoadedCase {
         network: lowered.network,
         warnings,
@@ -373,9 +363,11 @@ mod tests {
             "/../tests/data/dist/micro/fourwire_linecode.dss"
         );
         let source = powerio_core::Source::open(dss).unwrap();
-        let conv = powerio_dist::convert_source(source, powerio_dist::DistTargetFormat::BmopfJson)
-            .unwrap();
-        let mut doc: serde_json::Value = serde_json::from_str(&conv.text).unwrap();
+        let module = powerio_dist::parse(source).unwrap();
+        let emission =
+            crate::compat::emit_dist_module(&module, powerio_dist::DistTargetFormat::BmopfJson)
+                .unwrap();
+        let mut doc: serde_json::Value = serde_json::from_str(&emission.text).unwrap();
         doc.as_object_mut().unwrap().remove("name");
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("myfeeder.json");

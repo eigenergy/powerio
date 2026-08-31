@@ -6,7 +6,7 @@
 use powerio_core::Source;
 use powerio_matrix::DcOperators;
 use powerio_prob::{DcPfInstance, merge_zero_impedance_buses};
-use powerio_tx::{BalancedNetwork, Branch, Bus, BusId, BusType, DcConvention};
+use powerio_tx::{BalancedNetwork, Branch, BranchSusceptanceFormula, Bus, BusId, BusType};
 
 fn case9() -> BalancedNetwork {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case9.m");
@@ -134,17 +134,12 @@ fn the_branch_flow_identity_holds() {
     let va: Vec<f64> = (0..n).map(|row| 0.01 * row as f64).collect();
     let bf = dense(&operators.calc_branch_susceptance_matrix());
     let b = operators.branch_susceptances();
-    let a = dense(operators.incidence());
-    let power_models_a = dense(&operators.calc_incidence_matrix());
-    assert_eq!(power_models_a.len(), m);
-    assert_eq!(power_models_a[0].len(), n);
-    for (branch, row) in power_models_a.iter().enumerate() {
-        for (bus, &entry) in row.iter().enumerate() {
-            assert!((entry - a[bus][branch]).abs() < f64::EPSILON);
-        }
-    }
+    let a = dense(&operators.calc_incidence_matrix());
+    assert_eq!(a.len(), m);
+    assert_eq!(a[0].len(), n);
 
     let calculated = operators.calc_branch_flow_dc(&va).unwrap();
+    let calculated_bus = operators.calc_bus_injection_dc(&va).unwrap();
 
     for column in 0..m {
         // p_branch = -Bf va + b .* shift; case9 states no phase shifts, so
@@ -159,8 +154,8 @@ fn the_branch_flow_identity_holds() {
         // Independent spelling: the flow from angle difference over the
         // series reactance, f = (va_from - va_to) * (-b) for the PowerModels
         // sign of b.
-        let from = (0..n).find(|&row| a[row][column] > 0.0).unwrap();
-        let to = (0..n).find(|&row| a[row][column] < 0.0).unwrap();
+        let from = (0..n).find(|&bus| a[column][bus] > 0.0).unwrap();
+        let to = (0..n).find(|&bus| a[column][bus] < 0.0).unwrap();
         let direct = (va[from] - va[to]) * -b[column];
         assert!(
             (p_branch - direct).abs() < 1e-12,
@@ -180,13 +175,19 @@ fn the_branch_flow_identity_holds() {
         let mut through_branches = 0.0;
         for column in 0..m {
             let bf_va: f64 = (0..n).map(|k| bf[column][k] * va[k]).sum();
-            through_branches += a[row][column] * -bf_va;
+            through_branches += a[column][row] * -bf_va;
         }
         assert!(
-            ((-b_va + shift[row]) - (through_branches + shift[row])).abs() < 1e-9,
+            ((-b_va + shift[row]) - calculated_bus[row]).abs() < 1e-9,
+            "row {row}: direct bus calculation"
+        );
+        assert!(
+            (calculated_bus[row] - (through_branches + shift[row])).abs() < 1e-9,
             "row {row}"
         );
     }
+    let error = operators.calc_bus_injection_dc(&va[..n - 1]).unwrap_err();
+    assert!(error.to_string().contains("voltage_angles has length"));
 }
 
 #[test]
@@ -225,7 +226,7 @@ fn the_reference_constrained_system_solves_the_stated_problem() {
     }
     // Its entries are the negation of the public bus susceptance matrix at
     // the retained rows: the sign conversion happens at this fill only.
-    let public = dense(&operators.bus_susceptance_matrix());
+    let public = dense(&operators.calc_bus_susceptance_matrix());
     for (reduced_row, &row) in system.retained_rows.iter().enumerate() {
         for (reduced_col, &col) in system.retained_rows.iter().enumerate() {
             assert!(
@@ -245,7 +246,7 @@ fn the_reference_constrained_system_solves_the_stated_problem() {
     }
     va_full[ref_row] = va_ref;
     let p = operators.bus_power_injection();
-    let shift = operators.phase_shift_injection();
+    let shift = operators.calc_phase_shift_injection();
     for &row in &system.retained_rows {
         let b_va: f64 = (0..n).map(|col| public[row][col] * va_full[col]).sum();
         assert!(
@@ -290,17 +291,20 @@ fn guards_read_only_the_selected_formula() {
     let mut net = case9();
     net.branches_mut()[0].tap = 1e-200;
 
-    for approximation in [DcConvention::SeriesSusceptance, DcConvention::ReactanceOnly] {
+    for formula in [
+        BranchSusceptanceFormula::SeriesSusceptance,
+        BranchSusceptanceFormula::ReactanceOnly,
+    ] {
         let instance = DcPfInstance::from_network(net.clone())
             .unwrap()
-            .with_approximation(approximation);
+            .with_branch_susceptance_formula(formula);
         DcOperators::build(&instance).unwrap_or_else(|error| {
-            panic!("{approximation:?} read an unread tap: {error}");
+            panic!("{formula:?} read an unread tap: {error}");
         });
     }
     let instance = DcPfInstance::from_network(net.clone())
         .unwrap()
-        .with_approximation(DcConvention::TapAdjustedReactance);
+        .with_branch_susceptance_formula(BranchSusceptanceFormula::TapAdjustedReactance);
     let error = DcOperators::build(&instance).unwrap_err();
     assert!(error.to_string().contains("tap"), "{error}");
 }
@@ -328,11 +332,11 @@ fn zero_impedance_refuses_and_the_merge_resolves() {
 }
 
 #[test]
-fn injection_updates_reconstruct_no_matrix() {
+fn injection_updates_preserve_operator_storage() {
     let net = case9();
     let instance = DcPfInstance::from_network(net.clone()).unwrap();
     let mut operators = DcOperators::build(&instance).unwrap();
-    let incidence_before: *const f64 = operators.incidence().data().as_ptr();
+    let susceptance_before = operators.branch_susceptances().as_ptr();
     let before = operators.bus_power_injection().to_vec();
 
     // A changed operating state: scale every load; the instance rebuilds its
@@ -346,9 +350,9 @@ fn injection_updates_reconstruct_no_matrix() {
     let after = operators.bus_power_injection().to_vec();
     assert_ne!(before, after, "the injections moved");
     assert_eq!(
-        operators.incidence().data().as_ptr(),
-        incidence_before,
-        "the incidence matrix was not reconstructed"
+        operators.branch_susceptances().as_ptr(),
+        susceptance_before,
+        "the branch operator storage was not reconstructed"
     );
 }
 
@@ -363,7 +367,7 @@ fn the_grounded_rhs_subtracts_the_shift_injection() {
     let system = operators.calc_reference_constrained_system().unwrap();
 
     let p = operators.bus_power_injection().to_vec();
-    let shift = operators.phase_shift_injection();
+    let shift = operators.calc_phase_shift_injection();
     assert!(
         shift.iter().any(|value| value.abs() > 1e-9),
         "the shifted branch must inject"
@@ -401,9 +405,9 @@ fn reference_angles_couple_into_the_grounded_rhs() {
     // Independent rhs, built from the already validated public susceptance
     // matrix (untouched by this fix) rather than any internal state it
     // changes: p - p_shift - L(:, ref) * va_ref, with L = -B.
-    let public_b = dense(&operators.bus_susceptance_matrix());
+    let public_b = dense(&operators.calc_bus_susceptance_matrix());
     let p = operators.bus_power_injection().to_vec();
-    let shift = operators.phase_shift_injection();
+    let shift = operators.calc_phase_shift_injection();
     for (reduced, &row) in system.retained_rows.iter().enumerate() {
         let expected = independent_grounded_rhs(&public_b, &p, &shift, &reference, row);
         assert!(
@@ -469,9 +473,9 @@ fn two_reference_buses_in_one_island_carry_a_nonzero_flow() {
     // public susceptance matrix, summed over both eliminated reference rows.
     let reference = reference_rows_radians(&net);
     assert_eq!(reference.len(), 2, "both bus 1 and bus 3 are reference");
-    let public_b = dense(&operators.bus_susceptance_matrix());
+    let public_b = dense(&operators.calc_bus_susceptance_matrix());
     let p = operators.bus_power_injection().to_vec();
-    let shift = operators.phase_shift_injection();
+    let shift = operators.calc_phase_shift_injection();
     let retained_row = system.retained_rows[0];
     let expected_rhs = independent_grounded_rhs(&public_b, &p, &shift, &reference, retained_row);
     assert!(

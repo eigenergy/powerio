@@ -2,7 +2,7 @@
 
 Status: historical implementation plan from 2026-08-25. It records the
 technical order and validation gates that led to the PowerIO 0.10 beta and
-informed later 1.0 corrections. It is not current API authority or an
+informed the final 1.0 corrections. It is not current API authority or an
 execution guide.
 
 `PioModule<T>` is the accepted top level compiler type. Every successful parse
@@ -113,8 +113,8 @@ same input and build profile.
   either network crate's format enum.
 - Add record preserving `PioModule::map_value` in `powerio-core`. In the
   facade, implement sealed behavioral `FromPioValue` once per registered
-  `PioValue` variant and expose
-  `powerio::try_into_typed::<T>(module)`. Reverse conversion uses
+  `PioValue` variant and expose the advanced owned conversion
+  `module.into_typed::<T>()`. Reverse conversion uses
   `module.map_value(PioValue::from)`. A successful conversion moves the value,
   source owner, and common records with no allocation. `ValueKindMismatch`
   reports the expected and actual `PioValueKind`, owns the original
@@ -271,7 +271,8 @@ The sensitivity work factors once, reuses scratch buffers, changes dense
 loop order for cache locality, and removes avoidable quadratic buffers.
 
 Issue coverage: #232, #291, #294, #324, and #407.
-Issue #400 closes later when the C surface exposes the completed DC data.
+Issue #400 closed when ABI 6 exposed its opaque `PioDcData` array owner. That
+FFI owner is not a shared high level domain type.
 
 #### Formats
 

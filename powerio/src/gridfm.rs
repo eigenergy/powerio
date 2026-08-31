@@ -56,9 +56,6 @@ pub struct GridfmRead {
     /// What the gridfm schema couldn't round-trip — synthesized bus ids, folded
     /// per-bus load/shunt, dropped HVDC/storage, etc., as structured records.
     pub diagnostics: Vec<powerio_core::Diagnostic>,
-    /// The same findings as `CODE: message` lines, rendered from
-    /// `diagnostics`.
-    pub warnings: Vec<String>,
 }
 
 /// Build one [`BalancedNetwork`] from in-memory gridfm tables, selecting
@@ -137,7 +134,7 @@ fn open_dataset_tables(dir: &Path) -> Result<DatasetTables> {
 }
 
 /// Read one `scenario` from a gridfm dataset on disk and rebuild a [`BalancedNetwork`].
-/// The inverse of `powerio_matrix::write_gridfm_dataset`.
+/// The inverse of `powerio_matrix::emit_gridfm_dataset`.
 ///
 /// `dir` is resolved leniently: the leaf `raw/` directory holding the parquet
 /// files, a `<case>/` directory with a `raw/` child, or a parent directory with
@@ -194,7 +191,7 @@ pub fn read_gridfm_scenarios(dir: impl AsRef<Path>) -> Result<Vec<GridfmRead>> {
 ///
 /// # Errors
 /// Propagates the directory resolution and `bus_data.parquet` read errors.
-pub fn gridfm_scenario_ids(dir: impl AsRef<Path>) -> Result<Vec<i64>> {
+pub fn list_gridfm_scenario_ids(dir: impl AsRef<Path>) -> Result<Vec<i64>> {
     let source = powerio_core::Source::open(dir.as_ref()).map_err(|error| {
         powerio_tx::Error::FormatRead {
             format: "gridfm",
@@ -271,7 +268,7 @@ pub fn read_gridfm_scenario_set(
 ///
 /// # Errors
 /// Propagates [`read_gridfm_dataset`].
-pub fn gridfm_base_case(dir: impl AsRef<Path>) -> Result<GridfmRead> {
+pub fn read_gridfm_base_case(dir: impl AsRef<Path>) -> Result<GridfmRead> {
     read_gridfm_dataset(dir, 0)
 }
 
@@ -516,7 +513,7 @@ fn build_network_from_columns(
     let br_status = &branch.status;
 
     let mut branches = Vec::with_capacity(br_rows.len());
-    // The writer stores the *effective* tap (`Branch::effective_tap`), so a line
+    // The writer stores the *effective* tap (`Branch::calc_effective_tap`), so a line
     // (raw tap 0) lands as 1.0. Map unit tap + no shift back to the raw `tap == 0`
     // line convention, otherwise every line reads as a transformer
     // (`is_transformer` keys off `tap != 0`) and a read→write to a format that
@@ -610,7 +607,6 @@ fn build_network_from_columns(
     Ok(GridfmRead {
         network: net,
         scenario,
-        warnings: warnings.lines(),
         diagnostics: warnings.into_records(),
     })
 }
@@ -741,9 +737,9 @@ pub fn read_dataset_dir(
 ///
 /// # Errors
 /// As [`read_dataset_dir`].
-pub fn dataset_scenario_ids(dir: impl AsRef<std::path::Path>, from: &str) -> Result<Vec<i64>> {
+pub fn list_dataset_scenario_ids(dir: impl AsRef<std::path::Path>, from: &str) -> Result<Vec<i64>> {
     require_dataset_format(from)?;
-    gridfm_scenario_ids(dir)
+    list_gridfm_scenario_ids(dir)
 }
 
 fn require_dataset_format(from: &str) -> Result<()> {

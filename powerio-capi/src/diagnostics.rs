@@ -91,12 +91,9 @@ impl CodedError for powerio::Error {
 }
 
 /// `powerio::Error` above is `powerio_core::Error`, the type `powerio::parse`
-/// and the source layer return; the balanced network readers and writers
-/// still raise their own `powerio_tx::Error`, reached through the facade at
-/// its module path (`powerio::error::Error`, since this crate has no direct
-/// `powerio-tx` dependency) as e.g. `powerio::GeoLayer::parse_bytes`, so it
-/// needs its own impl.
-impl CodedError for powerio::error::Error {
+/// and the source layer return; balanced network operations raise their own
+/// component error.
+impl CodedError for powerio_tx::Error {
     fn code_str(&self) -> &'static str {
         self.code().code
     }
@@ -138,12 +135,12 @@ mod workspace {
 
     fn registries() -> Vec<(&'static str, Vec<&'static DiagnosticInfo>)> {
         vec![
-            ("powerio", powerio::diagnostics::registry()),
+            ("powerio-tx", powerio_tx::diagnostics::registry()),
             ("powerio (stored + transform)", powerio::codes::registry()),
             #[cfg(feature = "gridfm")]
             (
                 "powerio (gridfm reader)",
-                powerio::gridfm::codes::ALL.to_vec(),
+                powerio::gridfm_codes::ALL.to_vec(),
             ),
             ("powerio-dist", powerio_dist::diagnostics::registry()),
             ("powerio-matrix", powerio_matrix::diagnostics::registry()),

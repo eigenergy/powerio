@@ -3,7 +3,7 @@
 //! The record, the code grammar, and the severity ladder live in
 //! `powerio-core`; the entries here are the matrix, sensitivity, and dataset
 //! side of the workspace registry. A hub failure that arrives through
-//! [`crate::Error::Core`] keeps the hub's own code.
+//! [`crate::Error::Transmission`] keeps the hub's own code.
 
 pub use powerio_core::{
     Diagnostic, DiagnosticInfo, DiagnosticSeverity, check_registry, render_diagnostic,

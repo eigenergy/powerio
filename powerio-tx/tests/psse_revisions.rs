@@ -16,7 +16,7 @@ use helpers::*;
 
 use std::path::{Path, PathBuf};
 
-use powerio_tx::{BalancedNetwork, TransformerControl, TransformerControlMode, write_psse_rev};
+use powerio_tx::{BalancedNetwork, TransformerControl, TransformerControlMode};
 
 fn data(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -89,7 +89,7 @@ fn transformer_control_round_trips_at_v34_and_v35() {
     net.branches_mut()[idx].control = Some(ctl);
 
     for rev in [34u32, 35] {
-        let text = write_psse_rev(&net, rev).text;
+        let text = emit_psse_rev(&net, rev).text;
         let back = parse_psse(&text).unwrap();
         let br = back
             .branches()

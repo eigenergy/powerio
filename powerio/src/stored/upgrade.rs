@@ -416,7 +416,7 @@ fn upgrade_diagnostic(
 mod upgrade_tests {
     use std::collections::BTreeMap;
 
-    use crate::stored::{read_module, write_module};
+    use crate::stored::{emit_module, read_module};
     use crate::value::PioValue;
     use powerio_core::HistoryKind;
     use powerio_tx::{BalancedNetwork, Bus, BusId, BusType, Load};
@@ -597,7 +597,7 @@ mod upgrade_tests {
             .expect("the legacy finding survives");
         assert_eq!(upgraded.target(), Some("/network/buses/1/vm"));
         // The rewritten document passes its own reference validation.
-        write_module(&module).unwrap();
+        emit_module(&module).unwrap();
     }
 }
 

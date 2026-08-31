@@ -10,10 +10,15 @@
  * hand back independently owned network handles; pio_module_diagnostics is
  * the module's stored findings list; pio_module_emit_string /
  * pio_module_emit_file emit a supported target, echoing the retained source
- * bytes exactly for an unchanged same format emission; and
- * pio_module_read_json / pio_module_write_json carry the stored .pio.json
- * document. pio_parse_str, pio_parse_bytes, and pio_module_write_* remain
- * ABI compatibility and in-memory acquisition functions.
+ * bytes exactly for an unchanged same format emission. pio_parse_file also
+ * recognizes stored .pio.json, and pio_module_emit_string /
+ * pio_module_emit_file emit it with format "pio-json". The direct
+ * pio_module_read_json / pio_module_write_json symbols remain compatibility
+ * conveniences for callers that already hold the stored document in memory.
+ * pio_parse_text is the text acquisition function. pio_parse_str and
+ * pio_parse_bytes remain ABI 6 acquisition functions.
+ * pio_convert_file, pio_convert_str, and pio_module_write_* remain ABI
+ * compatibility conveniences; new code composes parse and emit.
  *
  * Naming grammar:
  * - pio_<handle noun>_<operation or field>: module, balanced_network,
@@ -246,15 +251,11 @@ typedef struct {
 } PioNormalizeOptions;
 
 /**
- * Write-time policies for the four transmission write entry points, in the
+ * Output policies for the four transmission emission entry points, in the
  * extensible options struct convention this header states once. Zero the
  * struct, set `struct_size` to `sizeof(PioWriteOptions)`, fill what you need;
  * NULL is every default and is what these entry points did before the
  * parameter existed.
- *
- * The three `pio_dist_*` write entry points take no options struct: the
- * multiconductor writers carry their own per format options and none of them
- * is reachable from this policy set.
  */
 typedef struct {
     /**
@@ -421,12 +422,12 @@ PioBalancedNetwork *pio_balanced_network_retain(const PioBalancedNetwork *net);
 void pio_balanced_network_release(PioBalancedNetwork *net);
 
 /**
- * Normalize `net` into a NEW network handle: per unit, radians, out of service
- * filtered, source bus ids preserved, bus types canonicalized (see
- * `BalancedNetwork::to_normalized`). A value transform, not a serialization, hence
- * the verb, while the `to_*` family re-encodes unchanged data. The result is
- * independent of `net`; release both when done. Every extractor
- * and serializer works on it unchanged (the handle is per unit, not MW).
+ * Compatibility spelling for [`pio_balanced_network_to_normalized`]. Normalize
+ * `net` into a NEW network handle: per unit, radians, out of service filtered,
+ * source bus ids preserved, and bus types canonicalized (see
+ * `BalancedNetwork::to_normalized`). The result is independent of `net`;
+ * release both when done. Every extractor and serializer works on it
+ * unchanged (the handle is per unit, not MW).
  *
  * `opts` turns on the solver preparation repairs; see [`PioNormalizeOptions`].
  * NULL is every default and is the plain pass. The findings already on
@@ -439,6 +440,17 @@ void pio_balanced_network_release(PioBalancedNetwork *net);
 PioBalancedNetwork *pio_balanced_network_normalize(const PioBalancedNetwork *net,
                                                    const PioNormalizeOptions *opts,
                                                    PioError **error);
+
+/**
+ * Return a normalized copy of `net`: per unit, radians, out of service
+ * elements filtered, source bus ids preserved, and bus types canonicalized.
+ * This is the preferred transformation spelling. The released
+ * [`pio_balanced_network_normalize`] symbol remains as an ABI 6 compatibility
+ * alias. The returned handle, options, diagnostics, and errors are identical.
+ */
+PioBalancedNetwork *pio_balanced_network_to_normalized(const PioBalancedNetwork *net,
+                                                       const PioNormalizeOptions *opts,
+                                                       PioError **error);
 
 size_t pio_balanced_network_n_buses(const PioBalancedNetwork *net);
 
@@ -511,10 +523,13 @@ size_t pio_balanced_network_n_islands(const PioBalancedNetwork *net);
 int32_t pio_balanced_network_is_radial(const PioBalancedNetwork *net);
 
 /**
- * Convert the case file at `path` from format `from` (NULL to infer from the
- * path, as `pio_parse_file`) to format `to`, without keeping a handle.
+ * Compatibility one-call helper. New code composes `pio_parse_file` and
+ * `pio_module_emit_string` or `pio_module_emit_file` so it can inspect the
+ * module and its diagnostics between operations. Convert the case file at
+ * `path` from format `from` (NULL to infer from the path) to format `to`,
+ * without keeping a handle.
  * `to` names any balanced or multiconductor text format; `opts` carries the
- * balanced write-time cost policies (NULL for every default, ignored by a
+ * balanced emission cost policies (NULL for every default, ignored by a
  * multiconductor target); see [`PioWriteOptions`].
  * Returns the converted text as an owned C string (free with
  * [`pio_string_release`]), `NULL` on error. The findings, read side first, are
@@ -532,10 +547,12 @@ char *pio_convert_file(const char *path,
                        PioError **error);
 
 /**
- * Convert in-memory case `text` from format `from` (required; there is no
- * path to infer from) to format `to` without keeping a handle. `to` names any
- * balanced or multiconductor text format; `opts` carries the balanced
- * write-time cost policies (NULL for every default, ignored by a
+ * Compatibility one-call helper. New code composes `pio_parse_text` and
+ * `pio_module_emit_string` so it can inspect the module and its diagnostics
+ * between operations. Convert in-memory case `text` from format `from`
+ * (required; there is no path to infer from) to format `to` without keeping
+ * a handle. `to` names any balanced or multiconductor text format; `opts`
+ * carries the balanced emission cost policies (NULL for every default, ignored by a
  * multiconductor target); see [`PioWriteOptions`]. Returns the converted text
  * as an owned C string (free with [`pio_string_release`]), `NULL` on error.
  * The findings, read side first, are published through `out_diagnostics` as
@@ -719,46 +736,80 @@ char *pio_geo_parse(const char *text,
                     PioError **error);
 
 /**
+ * Compatibility spelling for [`pio_balanced_network_to_geo_layer_json`].
  * Extract a network's coordinates as the canonical GeoJSON layer: one point
- * per located bus, one route per routed branch. Free the returned string
- * with `pio_string_release`. Returns `NULL` (with a message) when the network
- * carries no coordinates.
+ * per located bus, one route per routed branch. Free the returned string with
+ * `pio_string_release`. Returns `NULL` (with a message) when the network carries
+ * no coordinates.
  */
 char *pio_balanced_network_geo_extract(const PioBalancedNetwork *net, PioError **error);
 
 /**
- * Apply a geographic sidecar (any form [`pio_geo_parse`] accepts) onto a NEW
- * network handle; the input handle is unchanged and both are freed with
- * [`pio_balanced_network_release`]. `name_hint` (a file name, nullable) picks CSV against
- * JSON as in [`pio_geo_parse`]. Matched bus points land in `Bus.location`,
- * matched branch routes in `Branch.route`. The returned handle drops the
- * retained source text, so a same-format write re-serializes the placed case
- * instead of echoing the original. The reader's notes and an apply summary
- * (`geo apply: N bus point(s), ...`) are appended to the returned handle's
- * findings. Returns `NULL` on error.
+ * Return the network's coordinates as the canonical GeoJSON layer. This is
+ * the preferred in-memory conversion spelling. The released
+ * [`pio_balanced_network_geo_extract`] symbol remains as an ABI 6
+ * compatibility alias. Free the returned string with [`pio_string_release`].
+ */
+char *pio_balanced_network_to_geo_layer_json(const PioBalancedNetwork *net, PioError **error);
+
+/**
+ * Compatibility spelling for [`pio_balanced_network_apply_geo_layer`]. Apply
+ * a geographic sidecar (any form [`pio_geo_parse`] accepts) onto a NEW network
+ * handle; the input handle is unchanged and both are freed with
+ * [`pio_balanced_network_release`]. `name_hint` (a file name, nullable) picks
+ * CSV against JSON as in [`pio_geo_parse`]. Matched bus points land in
+ * `Bus.location`, matched branch routes in `Branch.route`. The returned handle
+ * drops the retained source text, so a same format emission serializes the
+ * placed case instead of echoing the original. The reader's notes and an
+ * apply summary (`geo apply: N bus point(s), ...`) are appended to the
+ * returned handle's findings. Returns `NULL` on error.
  */
 PioBalancedNetwork *pio_balanced_network_geo_apply(const PioBalancedNetwork *net,
                                                    const char *layer,
                                                    const char *name_hint,
                                                    PioError **error);
 
+/**
+ * Apply a geographic sidecar to a NEW network handle. This is the preferred
+ * verb-led spelling of [`pio_balanced_network_geo_apply`]. The input handle,
+ * output handle, diagnostics, ownership, and errors are identical.
+ */
+PioBalancedNetwork *pio_balanced_network_apply_geo_layer(const PioBalancedNetwork *net,
+                                                         const char *layer,
+                                                         const char *name_hint,
+                                                         PioError **error);
+
 #if defined(PIO_DIST)
 /**
- * Extract a multiconductor network's coordinates as the canonical GeoJSON
- * layer, keyed by the string bus and line names. Free the returned string
- * with `pio_string_release`. Returns `NULL` (with a message) when the network
- * carries no coordinates.
+ * Compatibility spelling for
+ * [`pio_multiconductor_network_to_geo_layer_json`]. Extract a multiconductor
+ * network's coordinates as the canonical GeoJSON layer, keyed by the string
+ * bus and line names. Free the returned string with `pio_string_release`.
+ * Returns `NULL` (with a message) when the network carries no coordinates.
  */
 char *pio_multiconductor_network_geo_extract(const PioMulticonductorNetwork *net, PioError **error);
 #endif
 
 #if defined(PIO_DIST)
 /**
- * Apply a geographic sidecar (any form [`pio_geo_parse`] accepts) onto a NEW
- * distribution network handle; the input handle is unchanged and both are
- * released with [`pio_multiconductor_network_release`]. `name_hint` (a file name, nullable)
+ * Return the multiconductor network's coordinates as the canonical GeoJSON
+ * layer. This is the preferred in-memory conversion spelling. The released
+ * [`pio_multiconductor_network_geo_extract`] symbol remains as an ABI 6
+ * compatibility alias. Free the returned string with [`pio_string_release`].
+ */
+char *pio_multiconductor_network_to_geo_layer_json(const PioMulticonductorNetwork *net,
+                                                   PioError **error);
+#endif
+
+#if defined(PIO_DIST)
+/**
+ * Compatibility spelling for
+ * [`pio_multiconductor_network_apply_geo_layer`]. Apply a geographic sidecar
+ * (any form [`pio_geo_parse`] accepts) onto a NEW distribution network handle;
+ * the input handle is unchanged and both are released with
+ * [`pio_multiconductor_network_release`]. `name_hint` (a file name, nullable)
  * picks CSV against JSON as in [`pio_geo_parse`]. The returned handle drops
- * the retained source text, so a same-format write re-serializes the placed
+ * the retained source text, so a same format emission serializes the placed
  * case. The reader's notes and a one-line apply summary are appended to the
  * returned handle's findings. Returns `NULL` on error.
  */
@@ -766,6 +817,19 @@ PioMulticonductorNetwork *pio_multiconductor_network_geo_apply(const PioMulticon
                                                                const char *layer,
                                                                const char *name_hint,
                                                                PioError **error);
+#endif
+
+#if defined(PIO_DIST)
+/**
+ * Apply a geographic sidecar to a NEW multiconductor network handle. This is
+ * the preferred verb-led spelling of
+ * [`pio_multiconductor_network_geo_apply`]. The input handle, output handle,
+ * diagnostics, ownership, and errors are identical.
+ */
+PioMulticonductorNetwork *pio_multiconductor_network_apply_geo_layer(const PioMulticonductorNetwork *net,
+                                                                     const char *layer,
+                                                                     const char *name_hint,
+                                                                     PioError **error);
 #endif
 
 #if defined(PIO_DIST)
@@ -801,8 +865,8 @@ char *pio_multiconductor_network_summary_json(const PioMulticonductorNetwork *ne
  * `multiconductor_network`, without the surrounding document. This is the
  * bindings' data transport, not a case format: the
  * converter, CLI, and format inference do not know it; a distribution case
- * other tools read is BMOPF JSON, written through
- * `pio_module_write_str`.
+ * other tools read is BMOPF JSON, emitted through
+ * `pio_module_emit_string`.
  * Returns an owned C string (free with [`pio_string_release`]), `NULL` on error.
  */
 char *pio_multiconductor_network_to_json(const PioMulticonductorNetwork *net, PioError **error);
@@ -869,6 +933,9 @@ void pio_error_release(PioError *error);
 /**
  * Read stored `.pio.json` text: version 1, or a released 0.9 document
  * upgraded one way. Returns a new module handle, or NULL with `error` set.
+ * This remains as an ABI convenience for callers that already hold the
+ * document in memory. The ordinary path is [`pio_parse_file`], which also
+ * recognizes `.pio.json`.
  */
 PioModule *pio_module_read_json(const char *text, PioError **error);
 
@@ -883,6 +950,13 @@ PioModule *pio_parse_file(const char *path, const char *format, PioError **error
  * diagnostics and format detection; NULL uses `<memory>`.
  */
 PioModule *pio_parse_str(const char *name, const char *text, const char *format, PioError **error);
+
+/**
+ * Preferred spelling of [`pio_parse_str`]. Parse in-memory case text into a
+ * module. `name` labels the text for diagnostics and format detection; NULL
+ * uses `<memory>`.
+ */
+PioModule *pio_parse_text(const char *name, const char *text, const char *format, PioError **error);
 
 /**
  * Parse in-memory case bytes into a module: the only in-memory way to read
@@ -911,28 +985,49 @@ PioMulticonductorNetwork *pio_module_multiconductor_network(const PioModule *mod
 #endif
 
 /**
- * A module over one balanced network handle's value, sharing that handle's
- * records: the wrap for semantic writing of a network built in memory (for
- * example through `pio_balanced_network_from_json`).
+ * Compatibility spelling for [`pio_balanced_network_to_module`]. Return a
+ * module over one balanced network handle's value, sharing that handle's
+ * records so the value can use module transformations and emission.
  */
 PioModule *pio_module_of_balanced_network(const PioBalancedNetwork *network, PioError **error);
 
+/**
+ * Transform a balanced network handle into a module that shares its common
+ * records. This is the preferred receiver-first spelling of
+ * [`pio_module_of_balanced_network`]. The returned module is independently
+ * owned and the input network remains valid.
+ */
+PioModule *pio_balanced_network_to_module(const PioBalancedNetwork *network, PioError **error);
+
 #if defined(PIO_DIST)
 /**
- * A module over one multiconductor network handle's value, sharing that
- * handle's records: the wrap for semantic writing.
+ * Compatibility spelling for [`pio_multiconductor_network_to_module`].
+ * Return a module over one multiconductor network handle's value, sharing
+ * that handle's records so the value can use module transformations and
+ * emission.
  */
 PioModule *pio_module_of_multiconductor_network(const PioMulticonductorNetwork *network,
                                                 PioError **error);
 #endif
 
+#if defined(PIO_DIST)
 /**
- * Write the module as the named target format and return the text: the one
- * write operation over the C surface. Writing an unchanged parsed module
- * back to its source format returns the retained bytes exactly; any other
- * target serializes the typed value. The writer's findings cross through
- * `out_diagnostics` as a structured handle (NULL discards them). Free the
- * text with `pio_string_release`.
+ * Transform a multiconductor network handle into a module that shares its
+ * common records. This is the preferred receiver-first spelling of
+ * [`pio_module_of_multiconductor_network`]. The returned module is
+ * independently owned and the input network remains valid.
+ */
+PioModule *pio_multiconductor_network_to_module(const PioMulticonductorNetwork *network,
+                                                PioError **error);
+#endif
+
+/**
+ * Compatibility spelling for [`pio_module_emit_string`]. Emit the module as
+ * the named target format and return its text. An unchanged module emitted to
+ * its source format returns the retained bytes exactly; any other target
+ * serializes the typed value. Findings cross through `out_diagnostics` as a
+ * structured handle (NULL discards them). Free the text with
+ * `pio_string_release`.
  */
 char *pio_module_write_str(const PioModule *module,
                            const char *format,
@@ -940,9 +1035,10 @@ char *pio_module_write_str(const PioModule *module,
                            PioError **error);
 
 /**
- * Write the module as the named target format into `path`: the filesystem
- * form of [`pio_module_write_str`], covering the directory targets (PyPSA
- * CSV) a single text cannot state. The destination must not already exist.
+ * Compatibility spelling for [`pio_module_emit_file`]. Emit the module as the
+ * named target format into `path`, covering directory targets such as PyPSA
+ * CSV that a single text cannot state. The destination must not already
+ * exist.
  */
 int32_t pio_module_write_file(const PioModule *module,
                               const char *format,
@@ -972,7 +1068,10 @@ int32_t pio_module_emit_file(const PioModule *module,
                              PioError **error);
 
 /**
- * The stored version 1 document. Free with `pio_string_release`.
+ * Return the stored version 1 document. Free with `pio_string_release`.
+ * This remains as an ABI convenience for callers that need the document in
+ * memory. The ordinary output path is [`pio_module_emit_string`] or
+ * [`pio_module_emit_file`] with format `pio-json`.
  */
 char *pio_module_write_json(const PioModule *module, PioError **error);
 
@@ -990,15 +1089,28 @@ char *pio_module_diagnostics_json(const PioModule *module, PioError **error);
 const char *pio_module_kind(const PioModule *module);
 
 /**
- * Value inspection and supported operation discovery, as JSON. Free with
+ * Value inspection and supported operation discovery, as JSON. The released
+ * `operations` array is unchanged. `preferred_operations` identifies the
+ * concise 1.0 path, while `compatibility_operations` identifies released
+ * ABI 6 spellings retained for existing callers. Free with
  * `pio_string_release`.
  */
 char *pio_module_inspect_json(const PioModule *module, PioError **error);
 
 /**
- * The typed time or scenario inventory as JSON. Free with `pio_string_release`.
+ * Compatibility spelling for [`pio_module_list_states_json`]. Return the
+ * typed time point or scenario inventory as JSON. Free with
+ * `pio_string_release`.
  */
 char *pio_module_state_inventory_json(const PioModule *module, PioError **error);
+
+/**
+ * List the module's typed time points or scenarios as JSON. This is the
+ * preferred operation spelling. The released
+ * [`pio_module_state_inventory_json`] symbol remains as an ABI 6
+ * compatibility alias. Free the result with `pio_string_release`.
+ */
+char *pio_module_list_states_json(const PioModule *module, PioError **error);
 
 /**
  * Export one selected time point or scenario as an independent static
@@ -1026,8 +1138,9 @@ PioModule *pio_module_export_scenario(const PioModule *module,
                                       PioError **error);
 
 /**
- * Readiness of the multiconductor value for the balanced lowering, as JSON.
- * Free with `pio_string_release`.
+ * Compatibility spelling for [`pio_module_to_balanced_report_json`]. Return
+ * the multiconductor value's balanced transformation report as JSON. Free
+ * with `pio_string_release`.
  */
 char *pio_module_lowering_readiness_json(const PioModule *module,
                                          double base_mva,
@@ -1036,6 +1149,11 @@ char *pio_module_lowering_readiness_json(const PioModule *module,
 /**
  * Report whether the multiconductor value can be transformed to a balanced
  * network, as JSON. Free with `pio_string_release`.
+ *
+ * This previews the named [`pio_module_to_balanced`] transformation; it does
+ * not return a transformed module. The `to_balanced_report` spelling matches
+ * the Python and Julia APIs and is the report exception to the `to_*` value
+ * transformation rule.
  *
  * This is the power system terminology spelling of
  * `pio_module_lowering_readiness_json`.
@@ -1163,10 +1281,10 @@ size_t pio_diagnostic_n_related(const PioDiagnostics *diagnostics, size_t index)
 const char *pio_diagnostic_related(const PioDiagnostics *diagnostics, size_t index, size_t related);
 
 /**
- * Build the DC branch data of a module's balanced network value under the
- * named branch susceptance formula (`series_susceptance`,
- * `tap_adjusted_reactance`, or `reactance_only`). The result is an
- * independently owned handle: releasing the module never invalidates it.
+ * Build the ABI 6 `PioDcData` arrays for a module's balanced network under
+ * the named branch susceptance formula (`series_susceptance`,
+ * `tap_adjusted_reactance`, or `reactance_only`). The result is independently
+ * owned: releasing the module never invalidates it.
  */
 PioDcData *pio_dc_data_build(const PioModule *module, const char *formula, PioError **error);
 
@@ -1251,7 +1369,8 @@ const char *const *pio_dc_data_omitted_reasons(const PioDcData *data);
 const char *pio_dc_data_formula(const PioDcData *data);
 
 /**
- * Fill `out` with the complete affine branch flow
+ * Compatibility spelling for [`pio_dc_data_calc_branch_flow`]. Fill `out`
+ * with the complete affine branch flow
  * `p_branch = -b .* (va_from - va_to) + b .* shift`: given bus voltage
  * angles `va` (radians, length `n_buses`), writes
  * `-b[e] * (va[from] - va[to]) + b[e] * shift[e]` per included row into
@@ -1268,6 +1387,19 @@ bool pio_dc_data_fill_branch_flow_checked(const PioDcData *data,
                                           PioError **error);
 
 /**
+ * Calculate the complete affine DC branch flow into `out` from bus voltage
+ * angles `va`. This is the preferred calculation spelling of
+ * [`pio_dc_data_fill_branch_flow_checked`]. It has the same length rules,
+ * performs no allocation, and stores a structured error on failure.
+ */
+bool pio_dc_data_calc_branch_flow(const PioDcData *data,
+                                  const double *va,
+                                  size_t va_len,
+                                  double *out,
+                                  size_t out_len,
+                                  PioError **error);
+
+/**
  * Compatibility form of `pio_dc_data_fill_branch_flow_checked` without a
  * structured error channel. Returns false on a NULL argument or length
  * mismatch.
@@ -1279,12 +1411,12 @@ bool pio_dc_data_fill_branch_flow(const PioDcData *data,
                                   size_t out_len);
 
 /**
- * Mint an independent handle to the same DC data. NULL stays NULL.
+ * Mint an independent handle to the same PioDcData arrays. NULL stays NULL.
  */
 PioDcData *pio_dc_data_retain(const PioDcData *data);
 
 /**
- * Release one DC data handle. NULL is a no-op.
+ * Release one PioDcData handle. NULL is a no-op.
  */
 void pio_dc_data_release(PioDcData *data);
 

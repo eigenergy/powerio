@@ -9,7 +9,6 @@ use powerio_core::{FormatId, Source};
 use powerio_tx::BalancedNetwork;
 
 use powerio_tx::Diagnostic;
-pub use powerio_tx::write_network;
 
 /// The old parse output shape: the typed network plus the reader's findings.
 #[derive(Debug)]
@@ -19,7 +18,7 @@ pub struct Parsed {
 }
 
 impl Parsed {
-    pub fn rendered_diagnostics(&self) -> Vec<String> {
+    pub fn render_diagnostics(&self) -> Vec<String> {
         powerio_tx::diagnostics::render_diagnostics(&self.diagnostics)
     }
 }

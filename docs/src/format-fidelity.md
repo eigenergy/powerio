@@ -14,8 +14,8 @@ implementations and the matching powerio code:
 | --- | --- | --- | --- |
 | Bus type codes | \\(1 = \mathrm{PQ}\\), \\(2 = \mathrm{PV}\\), \\(3 = \mathrm{ref}\\), \\(4 = \mathrm{isolated}\\) | MATPOWER `idx_bus` | `network::BusType` |
 | Impedance, susceptance | per unit on `baseMVA`, never rescaled | MATPOWER `idx_brch` (`BR_B` already per unit) | `matpower` |
-| Branch terminal admittance | MATPOWER `BR_B` splits half to each end; richer sources use canonical `g_fr`/`b_fr`/`g_to`/`b_to`; one-value targets receive the total susceptance projection | PowerModels `matpower.jl`; MATPOWER `idx_brch` | `network::BranchCharging`, `Branch::terminal_charging` |
-| Tap ratio | `0` means a line (treated as `1`); nonzero is a transformer | MATPOWER `idx_brch` `TAP` | `Branch::effective_tap` |
+| Branch terminal admittance | MATPOWER `BR_B` splits half to each end; richer sources use canonical `g_fr`/`b_fr`/`g_to`/`b_to`; one-value targets receive the total susceptance projection | PowerModels `matpower.jl`; MATPOWER `idx_brch` | `network::BranchCharging`, `Branch::calc_terminal_charging` |
+| Tap ratio | `0` means a line (treated as `1`); nonzero is a transformer | MATPOWER `idx_brch` `TAP` | `Branch::calc_effective_tap` |
 | Phase shift, angle | degrees in the model; PowerModels JSON carries radians | PowerModels `make_per_unit!` | `powermodels-json` |
 | Angle limits | `angmin`/`angmax` default ±360 (unconstrained) | MATPOWER `idx_brch` `ANGMIN`/`ANGMAX` | `Branch::has_angle_limits` |
 | pandapower/PyPSA impedance | line `r/x` are converted between per unit and ohms with \\(Z_{\mathrm{base}} = V_{\mathrm{kV}}^2 / \mathrm{baseMVA}\\); pandapower line charging is capacitance per km (`c_nf_per_km`, converted via \\(2\pi f \ell Z_{\mathrm{base}}\\)); PyPSA line `b` is siemens | pandapower PPC conversion, PyPSA static components | `pandapower-json`, `pypsa-csv` |
@@ -105,9 +105,9 @@ is a setup failure.
 
 Every loss is a coded diagnostic. Readers itemize what they keep only in the
 retained source (naming the table and counting the affected rows), writers
-report what a target cannot represent, and `convert_file`/`convert_str`
-return the reader's findings followed by the writer's. Balanced reader
-findings carry `READ.TRANSMISSION.PARSE_WARNING`, GridFM reads
+report what a target cannot represent, and `emit` returns the writer's findings
+on the parsed module. Balanced reader findings carry
+`READ.TRANSMISSION.PARSE_WARNING`, GridFM parsing carries
 `READ.GRIDFM.FIDELITY_WARNING`, and distribution reads
 `READ.DIST.PARSE_WARNING`.
 
@@ -182,7 +182,7 @@ findings carry `READ.TRANSMISSION.PARSE_WARNING`, GridFM reads
   and warns about source sections that stay only in the retained document. The
   writer emits a canonical Surge network body for the supported power flow core;
   richer MATPOWER generator capability or ramp columns and unsupported cost
-  shapes are reported in `Conversion::diagnostics`. An HVDC link carries the
+  shapes are reported in the emission diagnostics. An HVDC link carries the
   terminal voltage setpoints, the reactive limits, and the loss model on its
   converter terminals; a Surge link states no terminal reactive flow, no cost
   curve, and no received power (the reader derives it from the setpoint and the

@@ -5,8 +5,9 @@
 //! renderer. [`GeoLayer`] is the container. Reading is tolerant (headerless
 //! buscoords CSV, aliased CSV/JSON records, GeoJSON Point/LineString); writing
 //! is canonical (a GeoJSON FeatureCollection with the `powerio_geo` foreign
-//! member). The reader takes bytes plus a name hint and touches no filesystem,
-//! so wasm consumers parse untrusted browser input through it directly.
+//! member). The reader takes UTF-8 text plus a name hint and touches no
+//! filesystem, so wasm consumers parse untrusted browser input through it
+//! directly.
 
 use std::collections::HashMap;
 
@@ -94,22 +95,17 @@ pub struct GeoParsed {
     pub layer: GeoLayer,
     /// The reader's notes as structured records.
     pub diagnostics: Vec<crate::diagnostics::Diagnostic>,
-    /// The same notes as `CODE: message` lines.
-    pub warnings: Vec<String>,
 }
 
 impl GeoParsed {
-    /// Record one note. Both channels move together: the line is rendered from
-    /// the record it is added with.
+    /// Record one note.
     fn note(
         &mut self,
         info: &'static crate::diagnostics::DiagnosticInfo,
         message: impl Into<String>,
     ) {
-        let diagnostic = crate::diagnostics::Diagnostic::of(info, message);
-        self.warnings
-            .push(crate::diagnostics::render_diagnostic(&diagnostic));
-        self.diagnostics.push(diagnostic);
+        self.diagnostics
+            .push(crate::diagnostics::Diagnostic::of(info, message));
     }
 }
 
@@ -147,16 +143,14 @@ impl GeoApplyReport {
 }
 
 impl GeoLayer {
-    /// Tolerant read of a geographic sidecar from bytes. `name_hint` (a file
+    /// Tolerant read of a geographic sidecar from UTF-8 text. `name_hint` (a file
     /// name) picks CSV against JSON when present; otherwise the content is
     /// sniffed. Accepts headerless buscoords CSV (`bus,x,y`), CSV and JSON
     /// records with aliased field names, and GeoJSON Point/LineString
     /// features. Rejects input carrying no usable coordinates.
-    pub fn parse_bytes(bytes: &[u8], name_hint: Option<&str>) -> Result<GeoParsed> {
+    pub fn parse_text(text: &str, name_hint: Option<&str>) -> Result<GeoParsed> {
         // Windows exports lead with a UTF-8 BOM; serde_json rejects it.
-        let bytes = bytes
-            .strip_prefix(b"\xef\xbb\xbf".as_slice())
-            .unwrap_or(bytes);
+        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         let mut parsed = GeoParsed {
             layer: GeoLayer {
                 space: CoordinateSpace::Unknown,
@@ -164,7 +158,6 @@ impl GeoLayer {
                 features: Vec::new(),
             },
             diagnostics: Vec::new(),
-            warnings: Vec::new(),
         };
         let mut declared_space = false;
         let hint_ext = name_hint
@@ -173,10 +166,10 @@ impl GeoLayer {
         let looks_json = match hint_ext.as_deref() {
             Some("csv") => false,
             Some("json" | "geojson") => true,
-            _ => sniff_json(bytes),
+            _ => sniff_json(text.as_bytes()),
         };
         if looks_json {
-            let value: Value = serde_json::from_slice(bytes)
+            let value: Value = serde_json::from_str(text)
                 .map_err(|error| bad(format!("invalid JSON: {error}")))?;
             if let Some(features) = feature_collection(&value) {
                 declared_space = read_powerio_geo_member(&value, &mut parsed.layer);
@@ -191,8 +184,7 @@ impl GeoLayer {
                 }
             }
         } else {
-            let text = String::from_utf8_lossy(bytes);
-            read_csv(&text, &mut parsed);
+            read_csv(text, &mut parsed);
         }
         if parsed.layer.features.is_empty() {
             return Err(bad("no bus coordinates or branch routes found"));
@@ -205,9 +197,9 @@ impl GeoLayer {
 
     /// [`to_geojson`](Self::to_geojson) behind the extraction surfaces' shared
     /// guard: an empty layer is refused because the written document would not
-    /// read back ([`parse_bytes`](Self::parse_bytes) rejects a document with
+    /// read back ([`parse_text`](Self::parse_text) rejects a document with
     /// no features).
-    pub fn extracted_geojson(&self) -> Result<String> {
+    pub fn to_geojson_checked(&self) -> Result<String> {
         if self.features.is_empty() {
             return Err(bad("the network carries no coordinates to extract"));
         }
@@ -820,11 +812,11 @@ fn push_once(parsed: &mut GeoParsed, warning: String) {
 // ---------------------------------------------------------------------------
 
 impl BalancedNetwork {
-    /// Extract this network's coordinates as a standalone [`GeoLayer`]:
+    /// Transform this network's coordinates to a standalone [`GeoLayer`]:
     /// one point per located bus, one route per routed branch. The layer
     /// carries the network's coordinate space and default origin.
     #[must_use]
-    pub fn geo_layer(&self) -> GeoLayer {
+    pub fn to_geo_layer(&self) -> GeoLayer {
         let mut features = Vec::new();
         for (row, bus) in self.buses().iter().enumerate() {
             let Some(location) = bus.location else {

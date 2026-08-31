@@ -1,6 +1,6 @@
 use powerio::{
-    BranchSusceptanceFormula, ConductorMatrix, DcConvention, Destination, PioValue, WrittenOutput,
-    emit, parse_file,
+    BranchSusceptanceFormula, ConductorMatrix, Destination, EmittedOutput, PioValue, emit,
+    parse_file,
 };
 use powerio_matrix::DcOperators;
 
@@ -59,8 +59,8 @@ fn assert_settled_calculation_names_are_exported() {
 #[test]
 fn facade_uses_power_system_names_and_universal_emission() {
     assert_settled_calculation_names_are_exported();
-    let formula: BranchSusceptanceFormula = DcConvention::SeriesSusceptance;
-    assert_eq!(formula, DcConvention::SeriesSusceptance);
+    let formula: BranchSusceptanceFormula = BranchSusceptanceFormula::SeriesSusceptance;
+    assert_eq!(formula, BranchSusceptanceFormula::SeriesSusceptance);
     let matrix: ConductorMatrix = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
     assert_eq!(matrix.len(), 2);
 
@@ -73,7 +73,7 @@ fn facade_uses_power_system_names_and_universal_emission() {
         Destination::memory("api_conformance.m").unwrap(),
     )
     .unwrap();
-    let WrittenOutput::Memory { artifacts } = written.output() else {
+    let EmittedOutput::Memory { artifacts } = written.output() else {
         panic!("memory destination returned a path output");
     };
     assert_eq!(artifacts.len(), 1);
@@ -95,9 +95,12 @@ fn shared_case_conforms_to_the_named_dc_operations() {
 
     let instance = powerio::DcPfInstance::from_network(network.clone())
         .unwrap()
-        .with_approximation(BranchSusceptanceFormula::SeriesSusceptance);
+        .with_branch_susceptance_formula(BranchSusceptanceFormula::SeriesSusceptance);
     let operators = DcOperators::build(&instance).unwrap();
-    assert_eq!(operators.approximation(), DcConvention::SeriesSusceptance);
+    assert_eq!(
+        operators.branch_susceptance_formula(),
+        BranchSusceptanceFormula::SeriesSusceptance
+    );
     assert_eq!(
         operators
             .bus_ids()

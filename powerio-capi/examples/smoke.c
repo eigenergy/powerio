@@ -162,21 +162,22 @@ int main(int argc, char **argv) {
         free(ids); free(from); free(to); free(x); free(pd); free(qd);
     }
 
-    /* Same format write echoes the source bytes; a cross format write reports
-     * its findings through the structured channel. */
+    /* Same format emission echoes the source bytes; cross format emission
+     * reports its findings through the structured channel. */
     {
-        char *echo = pio_module_write_str(module, "matpower", NULL, &error);
-        if (!echo) report_error("write_str matpower", error);
+        char *echo = pio_module_emit_string(module, "matpower", NULL, &error);
+        if (!echo) report_error("emit_string matpower", error);
         else pio_string_release(echo);
 
         PioDiagnostics *losses = NULL;
-        char *pm = pio_module_write_str(module, "powermodels-json", &losses, &error);
-        if (!pm) report_error("write_str powermodels-json", error);
+        char *pm =
+            pio_module_emit_string(module, "powermodels-json", &losses, &error);
+        if (!pm) report_error("emit_string powermodels-json", error);
         else pio_string_release(pm);
         pio_diagnostics_release(losses);
 
         /* An unknown format is a coded refusal. */
-        char *bad = pio_module_write_str(module, "not-a-format", NULL, &error);
+        char *bad = pio_module_emit_string(module, "not-a-format", NULL, &error);
         CHECK(bad == NULL && error != NULL, "unknown format refused");
         if (error) {
             CHECK(strstr(pio_error_code(error), "REQUEST.WRITE") != NULL,
@@ -186,8 +187,8 @@ int main(int argc, char **argv) {
         }
     }
 
-    /* The network JSON transport round trips, and a bare network wraps into a
-     * module for semantic writing. */
+    /* The network JSON transport round trips, and a bare network transforms
+     * into a module for semantic emission. */
     {
         char *json = pio_balanced_network_to_json(net, &error);
         if (!json) report_error("to_json", error);
@@ -196,11 +197,11 @@ int main(int argc, char **argv) {
             if (!rebuilt) report_error("from_json", error);
             else {
                 CHECK(pio_balanced_network_n_buses(rebuilt) == n, "round trip bus count");
-                PioModule *wrapped = pio_module_of_balanced_network(rebuilt, &error);
-                if (!wrapped) report_error("module_of_balanced_network", error);
+                PioModule *wrapped = pio_balanced_network_to_module(rebuilt, &error);
+                if (!wrapped) report_error("balanced_network_to_module", error);
                 else {
-                    char *text = pio_module_write_str(wrapped, "matpower", NULL, &error);
-                    if (!text) report_error("semantic write", error);
+                    char *text = pio_module_emit_string(wrapped, "matpower", NULL, &error);
+                    if (!text) report_error("semantic emission", error);
                     else pio_string_release(text);
                     pio_module_release(wrapped);
                 }
@@ -221,13 +222,14 @@ int main(int argc, char **argv) {
 #endif
     }
 
-    /* Stored module document: write and read back. */
+    /* Stored module document: emit and parse back through the universal path. */
     {
-        char *stored = pio_module_write_json(module, &error);
-        if (!stored) report_error("write_json", error);
+        char *stored = pio_module_emit_string(module, "pio-json", NULL, &error);
+        if (!stored) report_error("emit_string pio-json", error);
         else {
-            PioModule *reread = pio_module_read_json(stored, &error);
-            if (!reread) report_error("read_json", error);
+            PioModule *reread =
+                pio_parse_text("stored.pio.json", stored, "pio-json", &error);
+            if (!reread) report_error("parse_str pio-json", error);
             else {
                 CHECK(strcmp(pio_module_kind(reread), "balanced_network") == 0,
                       "stored round trip kind");
@@ -237,7 +239,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    /* One call conversion. */
+    /* Released compatibility convenience for one call conversion. */
     {
         char *raw = pio_convert_file(case_path, NULL, "psse", NULL, NULL, &error);
         if (!raw) report_error("convert_file", error);
@@ -245,21 +247,21 @@ int main(int argc, char **argv) {
     }
 
 #ifdef PIO_PROB
-    /* DC branch data: result owned spans valid past the module's release. */
+    /* PioDcData owns ABI 6 matrix input arrays past the module's release. */
     {
         PioDcData *dc = pio_dc_data_build(module, "series_susceptance", &error);
         if (!dc) report_error("dc_data_build", error);
         else {
             size_t rows = pio_dc_data_n_rows(dc);
             size_t buses = pio_dc_data_n_buses(dc);
-            CHECK(rows > 0 && buses == n, "dc data dimensions");
+            CHECK(rows > 0 && buses == n, "PioDcData dimensions");
             const double *b = pio_dc_data_susceptance(dc);
             const int64_t *fi = pio_dc_data_from_indices(dc);
-            CHECK(b != NULL && fi != NULL, "dc data spans");
+            CHECK(b != NULL && fi != NULL, "PioDcData spans");
             double *va = calloc(buses, sizeof *va);
             double *flow = malloc(rows * sizeof *flow);
-            CHECK(pio_dc_data_fill_branch_flow(dc, va, buses, flow, rows),
-                  "branch flow fill");
+            if (!pio_dc_data_calc_branch_flow(dc, va, buses, flow, rows, &error))
+                report_error("calc_branch_flow", error);
             free(va); free(flow);
             pio_dc_data_release(dc);
         }
@@ -299,7 +301,7 @@ int main(int argc, char **argv) {
             "new circuit.smoke basekv=12.47 bus1=src.1.2.3\n"
             "new line.l1 bus1=src.1.2.3 bus2=b2.1.2.3 length=1\n"
             "new load.d1 bus1=b2.1.2.3 kv=12.47 kw=100 model=1\n";
-        PioModule *feeder = pio_parse_str("smoke.dss", dss, "dss", &error);
+        PioModule *feeder = pio_parse_text("smoke.dss", dss, "dss", &error);
         if (!feeder) report_error("parse_str dss", error);
         else {
             CHECK(strcmp(pio_module_kind(feeder), "multiconductor_network") == 0,
@@ -325,8 +327,8 @@ int main(int argc, char **argv) {
         else {
             CHECK(strcmp(pio_module_kind(dataset), "balanced_network_scenario_set") == 0,
                   "gridfm kind");
-            char *inventory = pio_module_state_inventory_json(dataset, &error);
-            if (!inventory) report_error("state inventory", error);
+            char *inventory = pio_module_list_states_json(dataset, &error);
+            if (!inventory) report_error("list states", error);
             else pio_string_release(inventory);
             pio_module_release(dataset);
         }

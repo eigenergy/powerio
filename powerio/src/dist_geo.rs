@@ -14,11 +14,9 @@ use crate::geo::{GeoApplyTarget, apply_geo_features};
 use crate::{CoordinateSpace, ElementKey, GeoApplyReport, GeoFeature, GeoGeometry, GeoLayer};
 use powerio_dist::MulticonductorNetwork;
 
-/// Extract a multiconductor network's coordinates as a standalone
-/// [`GeoLayer`]: one point per located bus, one route per routed line, keyed
-/// by the string bus and line names plus the payload row uids.
+/// Transform a multiconductor network's coordinates to a geographic layer.
 #[must_use]
-pub fn dist_geo_layer(net: &MulticonductorNetwork) -> GeoLayer {
+pub fn to_dist_geo_layer(net: &MulticonductorNetwork) -> GeoLayer {
     let mut features = Vec::new();
     for (row, bus) in net.buses().iter().enumerate() {
         let Some(location) = bus.location else {

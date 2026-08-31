@@ -76,8 +76,8 @@ impl fmt::Display for PioValueKind {
 /// types a parse can produce, discovered at run time through
 /// [`PioValue::kind`]. `PioModule<PioValue>` is what [`crate::parse_file`]
 /// returns; ordinary callers inspect `module.value()` with enum matching.
-/// [`try_into_typed`] is the advanced owned conversion when generic code needs
-/// a concrete `PioModule<T>`. Application defined types stay typed Rust
+/// [`IntoTypedModule::into_typed`] is the advanced owned conversion when
+/// generic code needs a concrete `PioModule<T>`. Application defined types stay typed Rust
 /// (`PioModule<MyValue>`) and never enter this enum.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -145,7 +145,7 @@ impl PioValue {
     }
 }
 
-/// The recoverable failure of [`try_into_typed`]: the expectation did not
+/// The recoverable failure of [`IntoTypedModule::into_typed`]: the expectation did not
 /// match the parsed kind. The original dynamic module rides along untouched,
 /// so the caller can inspect the actual kind and take the other route.
 #[derive(Debug)]
@@ -202,27 +202,33 @@ pub trait FromPioValue: private::Sealed + Sized {
     fn try_from_pio_value(value: PioValue) -> Result<Self, PioValue>;
 }
 
-/// Move a dynamic module into one concrete `PioModule<T>` without cloning its
-/// value or records.
+/// Advanced owned narrowing for a dynamic PowerIO module.
 ///
-/// Ordinary code can match directly on `module.value()`. This helper is for
-/// generic code that requires an owned `PioModule<T>` after the match.
-///
-/// # Errors
-/// [`ValueKindMismatch`] when the module holds another kind; it owns the
-/// original dynamic module.
-// Boxing the failure would allocate and violate the recoverable no-copy
-// narrowing rule; the caller gets the original dynamic module back by value.
-#[allow(clippy::result_large_err)]
-pub fn try_into_typed<T: FromPioValue>(
-    module: PioModule<PioValue>,
-) -> Result<PioModule<T>, ValueKindMismatch> {
-    match module.__try_map_value(T::try_from_pio_value) {
-        Ok(module) => Ok(module),
-        Err(module) => Err(ValueKindMismatch {
-            expected: T::KIND,
-            module,
-        }),
+/// Ordinary code matches on `module.value()`. This trait supplies the
+/// method-like conversion for generic code that needs an owned
+/// `PioModule<T>` without cloning its value or records.
+pub trait IntoTypedModule {
+    /// Move this dynamic module into one concrete module.
+    ///
+    /// # Errors
+    /// [`ValueKindMismatch`] when the module holds another kind; the error
+    /// owns the unchanged dynamic module.
+    // Boxing the failure would allocate and violate the recoverable no-copy
+    // narrowing rule; the caller gets the original dynamic module by value.
+    #[allow(clippy::result_large_err)]
+    fn into_typed<T: FromPioValue>(self) -> Result<PioModule<T>, ValueKindMismatch>;
+}
+
+impl IntoTypedModule for PioModule<PioValue> {
+    #[allow(clippy::result_large_err)]
+    fn into_typed<T: FromPioValue>(self) -> Result<PioModule<T>, ValueKindMismatch> {
+        match self.__try_map_value(T::try_from_pio_value) {
+            Ok(module) => Ok(module),
+            Err(module) => Err(ValueKindMismatch {
+                expected: T::KIND,
+                module,
+            }),
+        }
     }
 }
 
@@ -307,7 +313,7 @@ mod tests {
         let network = small_balanced();
         let bus_ptr = network.buses().as_ptr();
         let module = PioModule::new(PioValue::from(network));
-        let typed: PioModule<BalancedNetwork> = try_into_typed(module).unwrap();
+        let typed: PioModule<BalancedNetwork> = module.into_typed().unwrap();
         assert_eq!(typed.value().buses().as_ptr(), bus_ptr);
     }
 
@@ -324,7 +330,7 @@ mod tests {
     #[test]
     fn a_mismatch_returns_the_dynamic_module() {
         let module = PioModule::new(PioValue::from(MulticonductorNetwork::new()));
-        let error = try_into_typed::<BalancedNetwork>(module).unwrap_err();
+        let error = module.into_typed::<BalancedNetwork>().unwrap_err();
         assert_eq!(error.expected(), PioValueKind::BalancedNetwork);
         assert_eq!(error.actual(), PioValueKind::MulticonductorNetwork);
         assert_eq!(

@@ -9,7 +9,8 @@ mod writer;
 #[cfg(test)]
 mod tests;
 
-pub use writer::write_matpower;
+#[cfg(test)]
+pub(crate) use writer::write_matpower;
 pub(crate) use writer::write_matpower_conversion;
 
 use crate::network::{BalancedNetwork, BalancedNetworkTables, Generator, Hvdc, SourceFormat};

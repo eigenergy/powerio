@@ -88,12 +88,12 @@ func main() {
 	C.pio_error_release(cerr)
 	cerr = nil
 
-	// DC data outlives the module that built it.
+	// The PioDcData arrays outlive the module that built them.
 	formula := C.CString("series_susceptance")
 	defer C.free(unsafe.Pointer(formula))
 	dc := C.pio_dc_data_build(reread, formula, &cerr)
 	if dc == nil {
-		fail("dc data", cerr)
+		fail("PioDcData build", cerr)
 	}
 	C.pio_module_release(reread)
 	C.pio_module_release(module)
@@ -101,7 +101,7 @@ func main() {
 	rows := int(C.pio_dc_data_n_rows(dc))
 	buses := int(C.pio_dc_data_n_buses(dc))
 	if rows == 0 || buses == 0 {
-		fail("dc data is empty", nil)
+		fail("PioDcData arrays are empty", nil)
 	}
 	if C.pio_dc_data_shift(dc) == nil {
 		fail("shift span is nil", nil)
@@ -126,7 +126,7 @@ func main() {
 	kept := C.pio_dc_data_retain(dc)
 	C.pio_dc_data_release(dc)
 	if int(C.pio_dc_data_n_rows(kept)) != rows {
-		fail("retained dc data lost rows", nil)
+		fail("retained PioDcData lost rows", nil)
 	}
 	C.pio_dc_data_release(kept)
 	C.pio_dc_data_release(nil)

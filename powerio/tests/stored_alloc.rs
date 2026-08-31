@@ -67,7 +67,7 @@ fn target_checks_reinflate_the_value_once() {
     let network = BalancedNetwork::in_memory("alloc-peak", 100.0, buses, Vec::new());
 
     let plain = PioModule::new(PioValue::BalancedNetwork(network.clone()));
-    let plain_text = powerio::stored::write_module(&plain).unwrap();
+    let plain_text = powerio::stored::emit_module(&plain).unwrap();
 
     let mut mapped = PioModule::new(PioValue::BalancedNetwork(network));
     mapped
@@ -80,7 +80,7 @@ fn target_checks_reinflate_the_value_once() {
             SourceMapEntry::new("/buses/0/vm", SourceRelation::Defaulted, Vec::new()).unwrap(),
         )
         .unwrap();
-    let mapped_text = powerio::stored::write_module(&mapped).unwrap();
+    let mapped_text = powerio::stored::emit_module(&mapped).unwrap();
 
     let plain_peak = measure_peak(&plain_text);
     let mapped_peak = measure_peak(&mapped_text);

@@ -34,12 +34,13 @@ mod names_resolve_through_the_facade {
 
 #[cfg(test)]
 mod tests {
+    use powerio::IntoTypedModule as _;
+
     #[test]
     fn the_readme_example_resolves_through_the_facade_alone() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../data/case9.m");
         let module = powerio::parse(powerio::Source::open(&path).unwrap()).unwrap();
-        let module: powerio::PioModule<powerio::BalancedNetwork> =
-            powerio::try_into_typed(module).unwrap();
+        let module: powerio::PioModule<powerio::BalancedNetwork> = module.into_typed().unwrap();
         assert!(!module.value().buses().is_empty());
     }
 

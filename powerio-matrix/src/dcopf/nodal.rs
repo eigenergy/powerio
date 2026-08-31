@@ -142,7 +142,7 @@ pub(crate) fn quadratic_terms(cost: &GenCost, gen_index: usize) -> Result<(f64, 
     // coefficient the artifact lives in, and a longer row whose leading
     // coefficients are artifacts errored here while the hub read it.
     let (q, c, c0) = cost
-        .quadratic_with_constant_tol(GenCost::LEADING_COEFF_TOL)
+        .calc_quadratic_with_constant_tol(GenCost::LEADING_COEFF_TOL)
         .ok_or(Error::UnsupportedCostModel {
             gen_index,
             model: cost.model,

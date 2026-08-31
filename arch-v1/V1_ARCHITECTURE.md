@@ -700,7 +700,7 @@ that expects one concrete result moves the module into that type:
 
 ```rust
 let module = parse(Source::open(path)?)?;
-let module: PioModule<BalancedNetwork> = powerio::try_into_typed(module)?;
+let module: PioModule<BalancedNetwork> = module.into_typed()?;
 ```
 
 The conversion moves the enum value and module fields; it does not copy the
@@ -710,7 +710,9 @@ There is no `parse_as` operation: selecting a concrete enum variant after a
 parse is a checked Rust conversion, while constructing a different calculation
 instance is a PowerIO lowering.
 
-The facade exposes `powerio::try_into_typed::<T>(module)`. Its sealed
+Ordinary Rust matches `module.value()`. The facade's advanced
+`IntoTypedModule::into_typed::<T>()` method serves generic code that needs an
+owned concrete module. Its sealed
 `FromPioValue` trait connects each built in concrete type to one enum variant
 and kind. The trait performs conversion; it is not a marker and does not bound
 `PioModule<T>`. Standard module-level `TryFrom` cannot be implemented across
@@ -1044,13 +1046,13 @@ pub struct MemoryArtifact {
     bytes: Vec<u8>,
 }
 
-pub enum WrittenOutput {
+pub enum EmittedOutput {
     Path { root: PathBuf, artifacts: Vec<PathBuf> },
     Memory { artifacts: Vec<MemoryArtifact> },
 }
 
-pub struct WriteResult {
-    output: WrittenOutput,
+pub struct EmitResult {
+    output: EmittedOutput,
     diagnostics: Vec<Diagnostic>,
 }
 
@@ -1809,9 +1811,10 @@ mutating operation on that owner.
 - `PioModule<T>` is the sole successful parse result and contains one typed
   value. `.pio.json` is one versioned serialization of it, not a preferred
   exchange format.
-- Rust exposes `parse(Source)`. `Source` provides named immutable byte buffers;
-  `powerio::try_into_typed::<T>` moves a dynamic `PioValue` module into a
-  concrete module without reparsing or cloning it.
+- Rust exposes `parse(Source)`. `Source` provides named immutable byte buffers.
+  Ordinary code matches `module.value()`; `module.into_typed::<T>()` moves a
+  dynamic `PioValue` module into a concrete module without reparsing or cloning
+  it when generic code needs ownership.
 - `Diagnostic` has `Error`, `Warning`, `Remark`, and `Note` severities. Failed
   operations return the common Rust `Error` containing diagnostics and any
   underlying cause.

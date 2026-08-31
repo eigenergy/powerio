@@ -111,7 +111,7 @@ impl Destination {
         directory: bool,
         mut artifacts: Vec<MemoryArtifact>,
         diagnostics: Vec<Diagnostic>,
-    ) -> Result<WriteResult, Error> {
+    ) -> Result<EmitResult, Error> {
         validate_inventory(directory, &mut artifacts)?;
         let output = match self.kind {
             DestinationKind::Memory { root } => {
@@ -122,17 +122,17 @@ impl Destination {
                 } else {
                     artifacts[0].name = root;
                 }
-                WrittenOutput::Memory { artifacts }
+                EmittedOutput::Memory { artifacts }
             }
             DestinationKind::Path(root) => {
                 let paths = commit_path_output(&root, directory, &artifacts)?;
-                WrittenOutput::Path {
+                EmittedOutput::Path {
                     root,
                     artifacts: paths,
                 }
             }
         };
-        Ok(WriteResult {
+        Ok(EmitResult {
             output,
             diagnostics,
         })
@@ -171,7 +171,7 @@ impl MemoryArtifact {
 /// Complete inventory of output owned by the caller.
 #[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum WrittenOutput {
+pub enum EmittedOutput {
     Path {
         root: PathBuf,
         artifacts: Vec<PathBuf>,
@@ -183,14 +183,14 @@ pub enum WrittenOutput {
 
 /// Successful write output plus diagnostics emitted by the writer.
 #[derive(Debug)]
-pub struct WriteResult {
-    output: WrittenOutput,
+pub struct EmitResult {
+    output: EmittedOutput,
     diagnostics: Vec<Diagnostic>,
 }
 
-impl WriteResult {
+impl EmitResult {
     #[must_use]
-    pub const fn output(&self) -> &WrittenOutput {
+    pub const fn output(&self) -> &EmittedOutput {
         &self.output
     }
 
@@ -200,7 +200,7 @@ impl WriteResult {
     }
 
     #[must_use]
-    pub fn into_output(self) -> WrittenOutput {
+    pub fn into_output(self) -> EmittedOutput {
         self.output
     }
 }
@@ -808,7 +808,7 @@ mod tests {
                 Vec::new(),
             )
             .unwrap();
-        let WrittenOutput::Memory { artifacts } = result.into_output() else {
+        let EmittedOutput::Memory { artifacts } = result.into_output() else {
             panic!("memory output")
         };
         assert_eq!(
@@ -910,7 +910,7 @@ mod tests {
                 Vec::new(),
             )
             .unwrap();
-        let WrittenOutput::Path { root, artifacts } = result.into_output() else {
+        let EmittedOutput::Path { root, artifacts } = result.into_output() else {
             panic!("path output")
         };
         assert_eq!(root, path);
@@ -1082,7 +1082,7 @@ mod tests {
             .unwrap()
             .__commit_artifacts(false, vec![artifact("case.m", b"x")], Vec::new())
             .unwrap();
-        let WrittenOutput::Memory { artifacts } = one.into_output() else {
+        let EmittedOutput::Memory { artifacts } = one.into_output() else {
             panic!("memory output")
         };
         assert_eq!(artifacts[0].name().as_str(), "case.m");
@@ -1090,7 +1090,7 @@ mod tests {
             .unwrap()
             .__commit_artifacts(true, vec![artifact("buses.csv", b"x")], Vec::new())
             .unwrap();
-        let WrittenOutput::Memory { artifacts } = directory.into_output() else {
+        let EmittedOutput::Memory { artifacts } = directory.into_output() else {
             panic!("memory output")
         };
         assert_eq!(artifacts[0].name().as_str(), "case/buses.csv");

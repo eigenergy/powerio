@@ -8,12 +8,10 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use powerio_dist::{
-    ConversionSidecar, DistLoadVoltageModel, DistTargetFormat, MulticonductorNetwork, Result,
-};
+use powerio_dist::{DistLoadVoltageModel, DistTargetFormat, MulticonductorNetwork, Result};
 
 mod helpers;
-use helpers::{Conv as Conversion, parse_bmopf_str, parse_dss_file, parse_pmd_str};
+use helpers::{Conv as Emission, Sidecar, parse_bmopf_str, parse_dss_file, parse_pmd_str};
 
 fn fixture(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -37,15 +35,11 @@ impl Fmt {
         }
     }
 
-    fn parse_conversion(self, conv: &Conversion) -> Result<helpers::Parsed> {
+    fn parse_emission(self, conv: &Emission) -> Result<helpers::Parsed> {
         self.parse_text_and_sidecars(&conv.text, &conv.sidecars)
     }
 
-    fn parse_text_and_sidecars(
-        self,
-        text: &str,
-        sidecars: &[ConversionSidecar],
-    ) -> Result<helpers::Parsed> {
+    fn parse_text_and_sidecars(self, text: &str, sidecars: &[Sidecar]) -> Result<helpers::Parsed> {
         match self {
             Fmt::Dss => {
                 // Unique path per call: the harness tests run in parallel
@@ -725,7 +719,7 @@ fn diagonal_byte_identity() {
     for case in CASES {
         let net = parse_case(case);
         let original = std::fs::read_to_string(fixture(case.rel)).unwrap();
-        let echoed = net.to_format(case.fmt.target());
+        let echoed = net.emit(case.fmt.target());
         assert_eq!(echoed.text, original, "{}: diagonal echo", case.label);
         assert!(echoed.warnings.is_empty(), "{}: echo warns", case.label);
     }
@@ -751,18 +745,18 @@ fn canonical_writers_are_idempotent() {
         let net = parse_case(case);
         for target in [Fmt::Dss, Fmt::Bmopf, Fmt::Pmd] {
             let first = match target {
-                Fmt::Dss => helpers::write_dss(&net),
-                Fmt::Bmopf => helpers::write_bmopf_json(&net),
-                Fmt::Pmd => helpers::write_pmd_json(&net),
+                Fmt::Dss => helpers::emit_dss(&net),
+                Fmt::Bmopf => helpers::emit_bmopf_json(&net),
+                Fmt::Pmd => helpers::emit_pmd_json(&net),
             };
-            let reparsed = match target.parse_conversion(&first) {
+            let reparsed = match target.parse_emission(&first) {
                 Ok(n) => n,
                 Err(e) => panic!("{} → {}: reparse failed: {e}", case.label, target.name()),
             };
             let second = match target {
-                Fmt::Dss => helpers::write_dss(&reparsed),
-                Fmt::Bmopf => helpers::write_bmopf_json(&reparsed),
-                Fmt::Pmd => helpers::write_pmd_json(&reparsed),
+                Fmt::Dss => helpers::emit_dss(&reparsed),
+                Fmt::Bmopf => helpers::emit_bmopf_json(&reparsed),
+                Fmt::Pmd => helpers::emit_pmd_json(&reparsed),
             };
             if first.text != second.text {
                 assert!(
@@ -778,13 +772,13 @@ fn canonical_writers_are_idempotent() {
                 // transformer with three phase terminal maps, which dss
                 // narrows to its actual phase count); the canonical form must
                 // then be a fixed point.
-                let reparsed2 = target.parse_conversion(&second).unwrap_or_else(|e| {
+                let reparsed2 = target.parse_emission(&second).unwrap_or_else(|e| {
                     panic!("{} → {}: reparse failed: {e}", case.label, target.name())
                 });
                 let third = match target {
-                    Fmt::Dss => helpers::write_dss(&reparsed2),
-                    Fmt::Bmopf => helpers::write_bmopf_json(&reparsed2),
-                    Fmt::Pmd => helpers::write_pmd_json(&reparsed2),
+                    Fmt::Dss => helpers::emit_dss(&reparsed2),
+                    Fmt::Bmopf => helpers::emit_bmopf_json(&reparsed2),
+                    Fmt::Pmd => helpers::emit_pmd_json(&reparsed2),
                 };
                 assert_eq!(
                     second.text,
@@ -807,9 +801,9 @@ fn off_diagonal_round_trips() {
                 continue;
             }
             let what = format!("{} → {} → back", case.label, target.name());
-            let out = net.to_format(target.target());
+            let out = net.emit(target.target());
             let back = target
-                .parse_conversion(&out)
+                .parse_emission(&out)
                 .unwrap_or_else(|e| panic!("{what}: {e}"));
             let transformers = !(target == Fmt::Bmopf && case.bmopf_restates_transformers);
             let (expected, actual) = match target {
@@ -862,8 +856,8 @@ fn write_conversion_matrix() {
                 cells.push("echo".to_string());
                 continue;
             }
-            let out = net.to_format(target.target());
-            match target.parse_conversion(&out) {
+            let out = net.emit(target.target());
+            match target.parse_emission(&out) {
                 Ok(_) => {
                     if out.warnings.is_empty() {
                         cells.push("ok".to_string());
@@ -905,20 +899,20 @@ fn emit_for_physics_check() {
             .replace(".dss", "")
             .replace(".json", "");
         // The canonical dss regeneration (echo bypassed on purpose).
-        let dss = helpers::write_dss(&net);
+        let dss = helpers::emit_dss(&net);
         std::fs::write(dir.join(format!("{stem}.canonical.dss")), &dss.text).unwrap();
         if case.fmt == Fmt::Dss {
             // Through each JSON format and back to dss.
             for (suffix, text) in [
-                ("via_bmopf", helpers::write_bmopf_json(&net).text),
-                ("via_pmd", helpers::write_pmd_json(&net).text),
+                ("via_bmopf", helpers::emit_bmopf_json(&net).text),
+                ("via_pmd", helpers::emit_pmd_json(&net).text),
             ] {
                 let mid = if suffix == "via_bmopf" {
                     parse_bmopf_str(&text).unwrap()
                 } else {
                     parse_pmd_str(&text).unwrap()
                 };
-                let out = helpers::write_dss(&mid);
+                let out = helpers::emit_dss(&mid);
                 std::fs::write(dir.join(format!("{stem}.{suffix}.dss")), &out.text).unwrap();
             }
         }
@@ -1011,12 +1005,12 @@ fn renumbering_legs_are_position_stable_bijections() {
         let before = terminal_maps(&net);
         for target in [Fmt::Dss, Fmt::Pmd] {
             let conv = match target {
-                Fmt::Dss => helpers::write_dss(&net),
-                Fmt::Pmd => helpers::write_pmd_json(&net),
+                Fmt::Dss => helpers::emit_dss(&net),
+                Fmt::Pmd => helpers::emit_pmd_json(&net),
                 Fmt::Bmopf => unreachable!("BMOPF keeps terminal names"),
             };
             let round_tripped = target
-                .parse_conversion(&conv)
+                .parse_emission(&conv)
                 .unwrap_or_else(|e| panic!("{} → {}: {e}", case.label, target.name()));
             let after = terminal_maps(&round_tripped);
             let what = format!("{} → {} → back", case.label, target.name());

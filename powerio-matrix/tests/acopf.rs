@@ -70,7 +70,8 @@ fn public_preparation_formulates_the_complete_ac_opf() {
     assert!((prep.generators.c[0] - 11.0 * 100.0).abs() < 1e-9);
     assert!((prep.generators.pg[0] - 0.9).abs() < 1e-12);
     assert!((prep.generators.qmin[0] + 1.0).abs() < 1e-12);
-    let vm = prep.vm_setpoints();
+    let vm = prep.calc_vm_setpoints();
+    assert_eq!(vm, prep.calc_vm_setpoints());
     assert!((vm[0] - 1.02).abs() < 1e-12, "generator vg wins at its bus");
     assert!(
         (vm[1] - 1.0).abs() < 1e-12,
@@ -83,7 +84,10 @@ fn public_preparation_formulates_the_complete_ac_opf() {
     );
 
     // Nodal aggregation exposes the bus level view a relaxation reads.
-    let nodal = prep.nodal_generator_data().expect("quadratic nodal costs");
+    let nodal = prep
+        .calc_nodal_generator_data()
+        .expect("quadratic nodal costs");
+    assert_eq!(prep.calc_nodal_generator_data().unwrap(), nodal);
     assert!(nodal.has_gen[0] && !nodal.has_gen[2]);
     assert!((nodal.pmax[0] - 2.0).abs() < 1e-12);
 }
@@ -160,7 +164,7 @@ fn ac_preparation_preserves_convex_piecewise_cost_breakpoints() {
     assert_eq!(cost.power, vec![0.0, 0.4, 1.0]);
     assert_eq!(cost.value, vec![5.0, 85.0, 265.0]);
     assert_eq!(prepared.generators.q, vec![0.0]);
-    assert!(prepared.nodal_generator_data().is_err());
+    assert!(prepared.calc_nodal_generator_data().is_err());
 }
 
 #[test]

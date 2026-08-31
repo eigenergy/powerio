@@ -144,7 +144,8 @@ pub fn ybus_change(
     let entries = |net: &BalancedNetwork| -> Option<BTreeMap<(usize, usize), (f64, f64)>> {
         let view = powerio_matrix::IndexedNetwork::new(net);
         let parts =
-            powerio_matrix::build_ybus(&view, &powerio_matrix::BuildOptions::default()).ok()?;
+            powerio_matrix::calc_admittance_matrix(&view, &powerio_matrix::BuildOptions::default())
+                .ok()?;
         let mut map = BTreeMap::new();
         for (value, (i, j)) in &parts.g {
             map.entry((view.bus_id(i).0, view.bus_id(j).0))
@@ -463,7 +464,7 @@ pub fn transmission_value(net: &BalancedNetwork) -> serde_json::Value {
     *net.name_mut() = String::new();
     *net.source_format_mut() = powerio_matrix::SourceFormat::Matpower;
     for br in net.branches_mut() {
-        br.charging = Some(br.terminal_charging());
+        br.charging = Some(br.calc_terminal_charging());
     }
     net.buses_mut().sort_by_key(|b| b.id);
     net.branches_mut().sort_by_key(|a| (a.from, a.to));

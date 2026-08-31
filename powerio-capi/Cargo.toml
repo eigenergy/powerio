@@ -42,6 +42,7 @@ prob = ["dep:powerio-prob"]
 [dependencies]
 powerio-core = { workspace = true }
 powerio.workspace = true
+powerio-tx.workspace = true
 powerio-dist = { workspace = true, optional = true }
 powerio-prob = { workspace = true, optional = true }
 # Only the C Data Interface (`ffi`) is needed; the heavy arrow defaults stay off.

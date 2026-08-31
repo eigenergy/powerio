@@ -8,7 +8,7 @@
 //! scenario-batch path (issue #14) has its on-disk format.
 //!
 //! The reverse — `powerio::gridfm::read_gridfm_dataset` /
-//! `read_gridfm_scenarios` / `gridfm_base_case`, with the pure
+//! `read_gridfm_scenarios` / `read_gridfm_base_case`, with the pure
 //! `read_gridfm_network` over in-memory batches — lives in the facade and
 //! rebuilds a [`BalancedNetwork`] from such a dataset (lossy but
 //! power flow complete), the ML→classical return leg
@@ -25,7 +25,7 @@
 //! solver would report to float tolerance; for an unsolved/flat start case they
 //! are the flows at the stored voltages, not a re-solved dispatch.
 //!
-//! A scenario batch ([`write_gridfm_batch`] / [`gridfm_record_batches`])
+//! A scenario batch ([`emit_gridfm_batch`] / [`to_gridfm_record_batches`])
 //! row-stacks many snapshots into the four tables, keyed by the `scenario`
 //! column. The snapshots share a base element set — the same bus/branch/gen
 //! counts and bus-id ordering, so the dense bus index means the same bus across
@@ -74,17 +74,17 @@ use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 
 use crate::indexed::IndexedNetwork;
-use crate::matrix::{BuildOptions, YbusFlags, branch_admittance, branch_flows, build_ybus};
-use crate::network::{BusId, BusType};
-use crate::{
-    BalancedNetwork, ElementCounts, Error, GenCost, GenCostPatch, MissingGenCostPolicy, Result,
-    ScenarioMismatch,
+use crate::matrix::{
+    BuildOptions, YbusFlags, branch_admittance, branch_flows, calc_admittance_matrix,
 };
+use crate::network::{BusId, BusType};
+use crate::{BalancedNetwork, ElementCounts, Error, GenCost, Result, ScenarioMismatch};
+use powerio_tx::{GenCostPatch, MissingGenCostPolicy};
 
 /// Options for the gridfm export — the batch-wide knobs. The scenario id is a
-/// per-snapshot property (set via [`GridfmSnapshot::new`] / [`numbered_snapshots`],
-/// or the explicit argument to the single-case [`write_gridfm_dataset`] /
-/// [`gridfm_record_batches_single`]), not an option here.
+/// per-snapshot property (set via [`GridfmSnapshot::new`] / [`number_snapshots`],
+/// or the explicit argument to the single-case [`emit_gridfm_dataset`] /
+/// [`to_gridfm_record_batches_single`]), not an option here.
 #[derive(Debug, Clone)]
 pub struct GridfmOptions {
     /// Also write `y_bus_data.parquet`. graphkit reconstructs admittances from
@@ -160,7 +160,7 @@ pub struct GridfmSnapshot<'a> {
 impl<'a> GridfmSnapshot<'a> {
     /// A snapshot pairing a network with the scenario id stamped into its rows.
     /// For the common "k-th input is `base + k`" numbering, prefer
-    /// [`numbered_snapshots`], which assigns ids with checked arithmetic.
+    /// [`number_snapshots`], which assigns ids with checked arithmetic.
     #[must_use]
     pub fn new(net: &'a BalancedNetwork, scenario: i64) -> Self {
         Self { net, scenario }
@@ -186,7 +186,7 @@ pub struct GridfmTables {
     pub y_bus: Option<RecordBatch>,
 }
 
-/// What [`write_gridfm_dataset`] wrote, plus the counts of columns it had to zero
+/// What [`emit_gridfm_dataset`] wrote, plus the counts of columns it had to zero
 /// (see the manifest) so a caller can surface them.
 #[derive(Debug, Clone)]
 pub struct GridfmOutputs {
@@ -248,19 +248,19 @@ struct GridfmMeta {
 }
 
 /// Build the four gridfm tables for one network, stamping `scenario` into the id
-/// columns. Pure (no I/O). A thin wrapper over [`gridfm_record_batches`]
+/// columns. Pure (no I/O). A thin wrapper over [`to_gridfm_record_batches`]
 /// for one snapshot.
 ///
 /// # Errors
-/// As [`gridfm_record_batches`], minus the batch-only shape errors a single
+/// As [`to_gridfm_record_batches`], minus the batch-only shape errors a single
 /// snapshot cannot trigger.
-pub fn gridfm_record_batches_single(
+pub fn to_gridfm_record_batches_single(
     net: &BalancedNetwork,
     scenario: i64,
     opts: &GridfmOptions,
 ) -> Result<GridfmTables> {
     let snap = GridfmSnapshot::new(net, scenario);
-    gridfm_record_batches(std::slice::from_ref(&snap), opts)
+    to_gridfm_record_batches(std::slice::from_ref(&snap), opts)
 }
 
 /// Build the four gridfm tables for a batch of scenarios, row stacked and keyed
@@ -278,7 +278,7 @@ pub fn gridfm_record_batches_single(
 /// Parquet, [`powerio_tx::Error::NonFiniteSusceptance`] if a finite branch impedance still
 /// yields a non-finite admittance, and [`powerio_tx::Error::UnknownBus`] if a generator or
 /// branch references a bus the network doesn't define.
-pub fn gridfm_record_batches(
+pub fn to_gridfm_record_batches(
     snapshots: &[GridfmSnapshot],
     opts: &GridfmOptions,
 ) -> Result<GridfmTables> {
@@ -299,7 +299,7 @@ pub fn gridfm_record_batches(
 
 /// The four tables from already-built, shape-checked snapshot views. The Y_bus
 /// table is built only when [`GridfmOptions::include_y_bus`] is set — otherwise
-/// it's `None` and the per-snapshot `build_ybus` is skipped entirely.
+/// it's `None` and the per-snapshot `calc_admittance_matrix` is skipped entirely.
 fn tables_from_views(views: &[SnapshotView], opts: &GridfmOptions) -> Result<GridfmTables> {
     Ok(GridfmTables {
         bus: bus_batch(views)?,
@@ -390,7 +390,7 @@ fn validate_snapshot_inputs(net: &BalancedNetwork, scenario: i64) -> Result<()> 
     for (row, br) in net.branches().iter().enumerate() {
         finite(scenario, "branch", row, "r", br.r)?;
         finite(scenario, "branch", row, "x", br.x)?;
-        finite(scenario, "branch", row, "b", br.total_charging_b())?;
+        finite(scenario, "branch", row, "b", br.calc_total_charging_b())?;
         finite(scenario, "branch", row, "tap", br.tap)?;
         finite(scenario, "branch", row, "shift", br.shift)?;
         not_nan(scenario, "branch", row, "angmin", br.angmin)?;
@@ -490,7 +490,7 @@ fn policy_adjusted_snapshots(
 /// one place the "k-th input is scenario `base + k`" rule lives, so the CLI and
 /// the Python binding can't drift. Checked: returns [`Error::ScenarioIdOverflow`]
 /// rather than wrapping or panicking if a scenario id exceeds `i64`.
-pub fn numbered_snapshots<'a>(
+pub fn number_snapshots<'a>(
     nets: &[&'a BalancedNetwork],
     base: i64,
 ) -> Result<Vec<GridfmSnapshot<'a>>> {
@@ -519,15 +519,15 @@ pub fn numbered_snapshots<'a>(
 /// product, whose fields would be mislabeled.
 ///
 /// # Errors
-/// Propagates [`gridfm_record_batches_single`] and any filesystem/Parquet error.
-pub fn write_gridfm_dataset(
+/// Propagates [`to_gridfm_record_batches_single`] and any filesystem/Parquet error.
+pub fn emit_gridfm_dataset(
     net: &BalancedNetwork,
     scenario: i64,
     out_dir: impl AsRef<Path>,
     opts: &GridfmOptions,
 ) -> Result<GridfmOutputs> {
     let snap = GridfmSnapshot::new(net, scenario);
-    write_gridfm_batch(std::slice::from_ref(&snap), out_dir, opts)
+    emit_gridfm_batch(std::slice::from_ref(&snap), out_dir, opts)
 }
 
 /// Write a batch of scenarios as one gridfm-datakit dataset under
@@ -541,14 +541,14 @@ pub fn write_gridfm_dataset(
 /// scenario, so the manifest documents them as scenario 0's).
 ///
 /// # Errors
-/// Propagates [`gridfm_record_batches`] and any filesystem/Parquet error.
-pub fn write_gridfm_batch(
+/// Propagates [`to_gridfm_record_batches`] and any filesystem/Parquet error.
+pub fn emit_gridfm_batch(
     snapshots: &[GridfmSnapshot],
     out_dir: impl AsRef<Path>,
     opts: &GridfmOptions,
 ) -> Result<GridfmOutputs> {
     if opts.cost_options_default() {
-        return write_gridfm_batch_inner(
+        return emit_gridfm_batch_inner(
             snapshots,
             out_dir.as_ref(),
             opts,
@@ -562,10 +562,10 @@ pub fn write_gridfm_batch(
         .zip(snapshots)
         .map(|(net, snap)| GridfmSnapshot::new(net, snap.scenario))
         .collect();
-    write_gridfm_batch_inner(&adjusted, out_dir.as_ref(), opts, cost_report)
+    emit_gridfm_batch_inner(&adjusted, out_dir.as_ref(), opts, cost_report)
 }
 
-fn write_gridfm_batch_inner(
+fn emit_gridfm_batch_inner(
     snapshots: &[GridfmSnapshot],
     out_dir: &Path,
     opts: &GridfmOptions,
@@ -656,7 +656,7 @@ fn write_gridfm_batch_inner(
         artifacts,
         Vec::new(),
     )?;
-    let powerio_core::WrittenOutput::Path { root, artifacts } = committed.into_output() else {
+    let powerio_core::EmittedOutput::Path { root, artifacts } = committed.into_output() else {
         unreachable!("a path destination returns a path output")
     };
 
@@ -880,7 +880,7 @@ fn branch_batch(snaps: &[SnapshotView], opts: &GridfmOptions) -> Result<RecordBa
             let shift_rad = if flags.zero_shifts {
                 0.0
             } else {
-                view.angle_radians(br.shift)
+                view.to_radians(br.shift)
             };
             let block = branch_admittance(br, flags, shift_rad, row)?;
             let [y_ff, y_ft, y_tf, y_tt] = block.unwrap_or([Complex64::new(0.0, 0.0); 4]);
@@ -905,8 +905,8 @@ fn branch_batch(snaps: &[SnapshotView], opts: &GridfmOptions) -> Result<RecordBa
 
             r_col.push(br.r);
             x_col.push(br.x);
-            b_col.push(br.total_charging_b());
-            tap.push(br.effective_tap());
+            b_col.push(br.calc_total_charging_b());
+            tap.push(br.calc_effective_tap());
             shift.push(br.shift);
             ang_min.push(br.angmin);
             ang_max.push(br.angmax);
@@ -961,7 +961,7 @@ fn y_bus_batch(snaps: &[SnapshotView], opts: &GridfmOptions) -> Result<RecordBat
     let mut b_vals = Vec::with_capacity(est);
 
     for s in snaps {
-        let parts = build_ybus(&s.view, &opts.build_options())?;
+        let parts = calc_admittance_matrix(&s.view, &opts.build_options())?;
         // G and B don't share a sparsity pattern: a lossless branch (r = 0) is a
         // pure reactance, so its G entries are structurally zero where B's aren't.
         // datakit keys y_bus rows on the complex value being nonzero, i.e. the
@@ -1081,7 +1081,7 @@ fn with_scenario_pair(
 // The inverse of the writer above: select one `scenario` out of the gridfm tables
 // and rebuild a `BalancedNetwork`. Lossy but power flow complete — original bus ids are
 // synthesized `1..n`, nodal load/shunt is folded to one synthetic element per
-// bus, and HVDC/storage/piecewise costs are gone (see [`GridfmRead::warnings`]).
+// bus, and HVDC/storage/piecewise costs are gone and reported as diagnostics.
 // `y_bus_data` is never read; branches carry raw `r/x/b`.
 #[cfg(test)]
 mod tests {
@@ -1165,7 +1165,7 @@ mod tests {
 
     fn case14() -> BalancedNetwork {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case14.m");
-        crate::parse(powerio_core::Source::open(path).unwrap())
+        powerio_tx::parse(powerio_core::Source::open(path).unwrap())
             .unwrap()
             .into_value()
     }
@@ -1207,7 +1207,7 @@ mod tests {
     #[test]
     fn schema_and_row_counts_match_case14() {
         let net = case14();
-        let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
+        let tables = to_gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
 
         assert_eq!(names(&tables.bus), BUS_COLS);
         assert_eq!(names(&tables.generator), GEN_COLS);
@@ -1231,7 +1231,7 @@ mod tests {
         br.charging = Some(BranchCharging::new(0.01, 0.02, 0.03, 0.05));
         net.branches_mut().push(br);
 
-        let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
+        let tables = to_gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
         let b = col_f64(&tables.branch, "b").value(0);
         assert!((b - 0.07).abs() < 1e-12);
 
@@ -1254,7 +1254,7 @@ mod tests {
         std::fs::create_dir_all(case_dir.join("raw")).unwrap();
         std::fs::write(case_dir.join("raw/bus_data.parquet"), b"precious").unwrap();
         let error =
-            write_gridfm_dataset(&net, 0, dir.path(), &GridfmOptions::default()).unwrap_err();
+            emit_gridfm_dataset(&net, 0, dir.path(), &GridfmOptions::default()).unwrap_err();
         assert!(matches!(error, crate::Error::Commit(_)), "{error:?}");
         assert_eq!(
             std::fs::read(case_dir.join("raw/bus_data.parquet")).unwrap(),
@@ -1269,8 +1269,8 @@ mod tests {
             let designated = tempfile::tempdir().unwrap();
             std::fs::write(designated.path().join("keep.txt"), b"kept").unwrap();
             std::os::unix::fs::symlink(designated.path(), linked.path().join("case14")).unwrap();
-            let error = write_gridfm_dataset(&net, 0, linked.path(), &GridfmOptions::default())
-                .unwrap_err();
+            let error =
+                emit_gridfm_dataset(&net, 0, linked.path(), &GridfmOptions::default()).unwrap_err();
             assert!(matches!(error, crate::Error::Commit(_)), "{error:?}");
             assert!(
                 std::fs::symlink_metadata(linked.path().join("case14"))
@@ -1293,7 +1293,7 @@ mod tests {
         // The same write into a fresh dataset root still produces the
         // complete inventory.
         let fresh = tempfile::tempdir().unwrap();
-        let out = write_gridfm_dataset(&net, 0, fresh.path(), &GridfmOptions::default()).unwrap();
+        let out = emit_gridfm_dataset(&net, 0, fresh.path(), &GridfmOptions::default()).unwrap();
         let raw = fresh.path().join("case14").join("raw");
         assert_eq!(out.dir, raw);
         for name in [
@@ -1311,7 +1311,7 @@ mod tests {
     fn parquet_round_trips_through_reader() {
         let net = case14();
         let dir = tempfile::tempdir().unwrap();
-        let out = write_gridfm_dataset(&net, 0, dir.path(), &GridfmOptions::default()).unwrap();
+        let out = emit_gridfm_dataset(&net, 0, dir.path(), &GridfmOptions::default()).unwrap();
 
         let raw = dir.path().join("case14").join("raw");
         assert_eq!(out.dir, raw);
@@ -1332,7 +1332,7 @@ mod tests {
     fn bus_table_values_are_consistent() {
         let net = case14();
         let view = IndexedNetwork::new(&net);
-        let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
+        let tables = to_gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
         let bus = &tables.bus;
 
         // Exactly one reference bus; PQ/PV/REF partition every bus.
@@ -1357,17 +1357,17 @@ mod tests {
     }
 
     #[test]
-    fn branch_admittance_columns_match_build_ybus() {
-        // The branch table's Y** columns are the same kernel build_ybus scatters,
+    fn branch_admittance_columns_match_calculated_admittance_matrix() {
+        // The branch table's Y** columns are the same kernel calc_admittance_matrix scatters,
         // so a known in-service branch's block must equal branch_admittance.
         let net = case14();
-        let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
+        let tables = to_gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
         let br = &tables.branch;
 
         let yff_r = col_f64(br, "Yff_r");
         let yff_i = col_f64(br, "Yff_i");
         for (row, branch) in net.branches().iter().enumerate() {
-            // Raw fixture, so the shift is in degrees — convert as build_ybus does.
+            // Raw fixture, so the shift is in degrees — convert as calc_admittance_matrix does.
             let shift_rad = branch.shift.to_radians();
             if let Some(block) =
                 branch_admittance(branch, YbusFlags::default(), shift_rad, row).unwrap()
@@ -1383,7 +1383,7 @@ mod tests {
         let net = case14();
         let view = IndexedNetwork::new(&net);
         let ref_bus = view.reference_bus_index().unwrap();
-        let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
+        let tables = to_gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
         let g = &tables.generator;
 
         let bus = col_i64(g, "bus");
@@ -1402,7 +1402,7 @@ mod tests {
         // wrong conj would break it). Every branch's real loss is also ≥ 0.
         let net = case14();
         let view = IndexedNetwork::new(&net);
-        let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
+        let tables = to_gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
         let br = &tables.branch;
         let (pf, pt, status) = (
             col_f64(br, "pf"),
@@ -1453,7 +1453,7 @@ mod tests {
             ],
             vec![branch(1, 2, 0.0, 0.0), branch(2, 3, 0.01, 0.1)],
         );
-        let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
+        let tables = to_gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
         let br = &tables.branch;
         for col in [
             "Yff_r", "Yff_i", "Yft_r", "Yft_i", "Ytf_r", "Ytf_i", "Ytt_r", "Ytt_i", "pf", "qf",
@@ -1467,7 +1467,7 @@ mod tests {
         }
 
         let dir = tempfile::tempdir().unwrap();
-        let out = write_gridfm_dataset(&net, 0, dir.path(), &GridfmOptions::default()).unwrap();
+        let out = emit_gridfm_dataset(&net, 0, dir.path(), &GridfmOptions::default()).unwrap();
         assert_eq!(out.dropped_zero_impedance, 1);
         let meta: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(out.dir.join("gridfm_meta.json")).unwrap(),
@@ -1509,18 +1509,18 @@ mod tests {
 
     #[test]
     fn missing_reference_bus_errors() {
-        // gridfm_record_batches_single' documented precondition: exactly one ref bus.
+        // `to_gridfm_record_batches_single` requires exactly one reference bus.
         let net = BalancedNetwork::in_memory(
             "noref",
             100.0,
             vec![bus(1, BusType::Pq), bus(2, BusType::Pq)],
             vec![branch(1, 2, 0.01, 0.1)],
         );
-        let err = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap_err();
+        let err = to_gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap_err();
         assert!(
             matches!(
                 err,
-                Error::Core(powerio_tx::Error::ReferenceBusCount { .. })
+                Error::Transmission(powerio_tx::Error::ReferenceBusCount { .. })
             ),
             "got {err:?}"
         );
@@ -1530,7 +1530,7 @@ mod tests {
     fn non_finite_bus_voltage_errors_before_parquet() {
         let mut net = case14();
         net.buses_mut()[0].vm = f64::NAN;
-        let err = gridfm_record_batches_single(&net, 7, &GridfmOptions::default()).unwrap_err();
+        let err = to_gridfm_record_batches_single(&net, 7, &GridfmOptions::default()).unwrap_err();
         match err {
             Error::NonFiniteGridfmValue {
                 scenario,
@@ -1557,7 +1557,7 @@ mod tests {
             include_y_bus: false,
             ..Default::default()
         };
-        let err = gridfm_record_batches_single(&net, 0, &opts).unwrap_err();
+        let err = to_gridfm_record_batches_single(&net, 0, &opts).unwrap_err();
         assert!(
             matches!(
                 err,
@@ -1575,7 +1575,7 @@ mod tests {
     #[test]
     fn normalized_snapshot_is_rejected_in_release_builds() {
         let net = case14().to_normalized().unwrap();
-        let err = gridfm_record_batches_single(&net, 3, &GridfmOptions::default()).unwrap_err();
+        let err = to_gridfm_record_batches_single(&net, 3, &GridfmOptions::default()).unwrap_err();
         assert!(
             matches!(err, Error::NormalizedGridfmSnapshot { scenario: 3 }),
             "got {err:?}"
@@ -1594,7 +1594,7 @@ mod tests {
             .push(gen_at(1, gencost(2, 3, vec![f64::NAN, 1.0, 0.0])));
 
         // coeffs are highest-order first, so the NaN lands in the cp2 column.
-        let err = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap_err();
+        let err = to_gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap_err();
         assert!(
             matches!(
                 err,
@@ -1622,7 +1622,7 @@ mod tests {
         net.branches_mut()[0].angmax = f64::INFINITY;
         net.branches_mut()[1].rate_a = f64::INFINITY;
         net.buses_mut()[0].vmax = f64::INFINITY;
-        let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
+        let tables = to_gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
         let qmax = col_f64(&tables.generator, "max_q_mvar");
         assert!(qmax.value(0).is_infinite() && qmax.value(0) > 0.0);
     }
@@ -1631,7 +1631,7 @@ mod tests {
     fn nan_limit_still_errors() {
         let mut net = case14();
         net.generators_mut()[0].qmax = f64::NAN;
-        let err = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap_err();
+        let err = to_gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap_err();
         assert!(
             matches!(
                 err,
@@ -1679,7 +1679,7 @@ mod tests {
                 scenario: 2,
             },
         ];
-        let tables = gridfm_record_batches(&snaps, &GridfmOptions::default()).unwrap();
+        let tables = to_gridfm_record_batches(&snaps, &GridfmOptions::default()).unwrap();
 
         // Schema is unchanged; rows are 3× the single-snapshot counts.
         assert_eq!(names(&tables.bus), BUS_COLS);
@@ -1707,7 +1707,7 @@ mod tests {
         // batching is a pure row-stack over the established single-snapshot path.
         // Compare every column bit-exactly (not just one), so a per-column offset
         // or ordering regression in the row-stack can't slip through.
-        let single = gridfm_record_batches_single(&base, 0, &GridfmOptions::default()).unwrap();
+        let single = to_gridfm_record_batches_single(&base, 0, &GridfmOptions::default()).unwrap();
         let bit_exact = |b: &RecordBatch, s: &RecordBatch, col: &str, rows: usize| {
             let (bb, ss) = (col_f64(b, col), col_f64(s, col));
             for i in 0..rows {
@@ -1743,7 +1743,7 @@ mod tests {
         let mut net = case14();
         *net.name_mut() = "../escape".to_string();
         let dir = tempfile::tempdir().unwrap();
-        let out = write_gridfm_dataset(&net, 0, dir.path(), &GridfmOptions::default()).unwrap();
+        let out = emit_gridfm_dataset(&net, 0, dir.path(), &GridfmOptions::default()).unwrap();
         assert!(
             out.dir.starts_with(dir.path()),
             "dataset dir {:?} escaped {:?}",
@@ -1768,7 +1768,7 @@ mod tests {
             },
         ];
         let dir = tempfile::tempdir().unwrap();
-        let out = write_gridfm_batch(&snaps, dir.path(), &GridfmOptions::default()).unwrap();
+        let out = emit_gridfm_batch(&snaps, dir.path(), &GridfmOptions::default()).unwrap();
 
         let bus = read(&out.dir.join("bus_data.parquet"));
         assert_eq!(bus.num_rows(), 2 * base.buses().len());
@@ -1786,7 +1786,7 @@ mod tests {
 
     #[test]
     fn empty_batch_errors() {
-        let err = gridfm_record_batches(&[], &GridfmOptions::default()).unwrap_err();
+        let err = to_gridfm_record_batches(&[], &GridfmOptions::default()).unwrap_err();
         assert!(matches!(err, Error::EmptyScenarioBatch), "got {err:?}");
     }
 
@@ -1809,7 +1809,7 @@ mod tests {
                 scenario: 1,
             },
         ];
-        let err = gridfm_record_batches(&snaps, &GridfmOptions::default()).unwrap_err();
+        let err = to_gridfm_record_batches(&snaps, &GridfmOptions::default()).unwrap_err();
         assert!(
             matches!(
                 err,
@@ -1840,7 +1840,7 @@ mod tests {
                 scenario: 1,
             },
         ];
-        let err = gridfm_record_batches(&snaps, &GridfmOptions::default()).unwrap_err();
+        let err = to_gridfm_record_batches(&snaps, &GridfmOptions::default()).unwrap_err();
         assert!(
             matches!(
                 err,
@@ -1874,7 +1874,7 @@ mod tests {
             },
         ];
         let dir = tempfile::tempdir().unwrap();
-        let out = write_gridfm_batch(&snaps, dir.path(), &GridfmOptions::default()).unwrap();
+        let out = emit_gridfm_batch(&snaps, dir.path(), &GridfmOptions::default()).unwrap();
         assert_eq!(out.dropped_zero_impedance, 1);
         let meta: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(out.dir.join("gridfm_meta.json")).unwrap(),
@@ -1890,11 +1890,11 @@ mod tests {
             include_y_bus: false,
             ..Default::default()
         };
-        let tables = gridfm_record_batches_single(&net, 0, &opts).unwrap();
+        let tables = to_gridfm_record_batches_single(&net, 0, &opts).unwrap();
         assert!(tables.y_bus.is_none(), "y_bus should not be built");
 
         let dir = tempfile::tempdir().unwrap();
-        let out = write_gridfm_dataset(&net, 0, dir.path(), &opts).unwrap();
+        let out = emit_gridfm_dataset(&net, 0, dir.path(), &opts).unwrap();
         assert!(
             !out.dir.join("y_bus_data.parquet").exists(),
             "y_bus_data.parquet should not be written"
@@ -1902,11 +1902,20 @@ mod tests {
     }
 
     #[test]
-    fn numbered_snapshots_stamps_base_plus_k_and_checks_overflow() {
+    fn number_snapshots_stamps_base_plus_k_and_checks_overflow() {
         // The shared builder both bindings use: the k-th network is scenario
         // `base + k`, in order.
         let net = case14();
-        let snaps = numbered_snapshots(&[&net, &net, &net], 5).unwrap();
+        let nets = [&net, &net, &net];
+        let snaps = number_snapshots(&nets, 5).unwrap();
+        let released = number_snapshots(&nets, 5).unwrap();
+        assert_eq!(
+            snaps.iter().map(|snap| snap.scenario).collect::<Vec<_>>(),
+            released
+                .iter()
+                .map(|snap| snap.scenario)
+                .collect::<Vec<_>>()
+        );
         assert_eq!(snaps.len(), 3);
         assert_eq!(snaps[0].scenario, 5);
         assert_eq!(snaps[1].scenario, 6);
@@ -1914,7 +1923,7 @@ mod tests {
 
         // Overflow is checked (not wrapped to a negative id, not a panic) and names
         // the offending index.
-        let err = numbered_snapshots(&[&net, &net], i64::MAX).unwrap_err();
+        let err = number_snapshots(&[&net, &net], i64::MAX).unwrap_err();
         assert!(
             matches!(err, Error::ScenarioIdOverflow { index: 1, .. }),
             "got {err:?}"
@@ -1941,7 +1950,7 @@ mod tests {
         net.generators_mut().push(g_on);
         net.generators_mut().push(g_off);
 
-        let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
+        let tables = to_gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
 
         // gen_data lists both gens in source order, flags the out-of-service one,
         // and keeps its setpoint.
@@ -1990,7 +1999,7 @@ mod tests {
         net.buses_mut()[2].va = -6.0;
         net.branches_mut()[0].in_service = false; // trip branch 0
 
-        let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
+        let tables = to_gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
         let br = &tables.branch;
         let status = col_i64(br, "br_status");
         assert_eq!(status.value(0), 0, "tripped branch reports br_status 0");
@@ -2054,7 +2063,7 @@ mod tests {
         net.generators_mut()
             .push(gen_at(2, gencost(2, 3, vec![0.01, 5.0, 0.0]))); // polynomial
 
-        let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
+        let tables = to_gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
         let g = &tables.generator;
         let (cp0, cp1, cp2) = (
             col_f64(g, "cp0_eur"),
@@ -2065,7 +2074,7 @@ mod tests {
         assert_eq!((cp0.value(1), cp1.value(1), cp2.value(1)), (0.0, 5.0, 0.01));
 
         let dir = tempfile::tempdir().unwrap();
-        let out = write_gridfm_dataset(&net, 0, dir.path(), &GridfmOptions::default()).unwrap();
+        let out = emit_gridfm_dataset(&net, 0, dir.path(), &GridfmOptions::default()).unwrap();
         assert_eq!(out.degenerate_cost_gens, 1);
         assert_eq!(out.missing_cost_gens, 0);
         assert_eq!(out.unsupported_cost_gens, 1);
@@ -2094,7 +2103,7 @@ mod tests {
             .push(gen_at(2, gencost(1, 2, vec![0.0, 0.0, 1.0, 1.0])));
 
         let dir = tempfile::tempdir().unwrap();
-        let out = write_gridfm_dataset(&net, 0, dir.path(), &GridfmOptions::default()).unwrap();
+        let out = emit_gridfm_dataset(&net, 0, dir.path(), &GridfmOptions::default()).unwrap();
         assert_eq!(out.degenerate_cost_gens, 2);
         assert_eq!(out.missing_cost_gens, 1);
         assert_eq!(out.unsupported_cost_gens, 1);
@@ -2104,7 +2113,7 @@ mod tests {
             ..Default::default()
         };
         let dir = tempfile::tempdir().unwrap();
-        let out = write_gridfm_dataset(&net, 0, dir.path(), &opts).unwrap();
+        let out = emit_gridfm_dataset(&net, 0, dir.path(), &opts).unwrap();
         assert_eq!(out.synthesized_gen_costs, 1);
         assert_eq!(out.missing_cost_gens, 0);
         assert_eq!(out.unsupported_cost_gens, 1);
@@ -2122,17 +2131,17 @@ mod tests {
         let net = case14();
 
         // The scenario id (an explicit argument now) reaches both id columns.
-        let bus = gridfm_record_batches_single(&net, 7, &GridfmOptions::default())
+        let bus = to_gridfm_record_batches_single(&net, 7, &GridfmOptions::default())
             .unwrap()
             .bus;
         assert_eq!(col_i64(&bus, "scenario").value(0), 7);
         assert_eq!(col_i64(&bus, "load_scenario_idx").value(0), 7);
 
         // Turning taps off changes a transformer's admittance columns.
-        let on = gridfm_record_batches_single(&net, 0, &GridfmOptions::default())
+        let on = to_gridfm_record_batches_single(&net, 0, &GridfmOptions::default())
             .unwrap()
             .branch;
-        let off = gridfm_record_batches_single(
+        let off = to_gridfm_record_batches_single(
             &net,
             0,
             &GridfmOptions {

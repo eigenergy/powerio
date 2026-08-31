@@ -62,12 +62,12 @@ pub enum AcBusSpecification {
 }
 
 /// The DC power flow instance: the shared network plus per bus boundary
-/// specifications and the selected DC branch approximation.
+/// specifications and the selected branch susceptance formula.
 #[derive(Clone, Debug)]
 pub struct DcPfInstance {
     network: BalancedNetwork,
     specifications: Vec<DcBusSpecification>,
-    approximation: BranchSusceptanceFormula,
+    branch_susceptance_formula: BranchSusceptanceFormula,
     initial_state: Option<OperatingPoint<BalancedNetwork>>,
 }
 
@@ -97,16 +97,16 @@ impl DcPfInstance {
         Ok(Self {
             network,
             specifications,
-            approximation: BranchSusceptanceFormula::default(),
+            branch_susceptance_formula: BranchSusceptanceFormula::default(),
             initial_state: None,
         })
     }
 
-    /// Select the DC branch approximation, consuming the instance. The
+    /// Select the branch susceptance formula, consuming the instance. The
     /// network handle moves; no table is copied.
     #[must_use]
-    pub fn with_approximation(mut self, approximation: BranchSusceptanceFormula) -> Self {
-        self.approximation = approximation;
+    pub fn with_branch_susceptance_formula(mut self, formula: BranchSusceptanceFormula) -> Self {
+        self.branch_susceptance_formula = formula;
         self
     }
 
@@ -129,10 +129,10 @@ impl DcPfInstance {
         &self.specifications
     }
 
-    /// The selected DC branch approximation.
+    /// The selected branch susceptance formula.
     #[must_use]
-    pub const fn approximation(&self) -> BranchSusceptanceFormula {
-        self.approximation
+    pub const fn branch_susceptance_formula(&self) -> BranchSusceptanceFormula {
+        self.branch_susceptance_formula
     }
 
     /// The optional solver initial state.
@@ -220,8 +220,8 @@ impl AcPfInstance {
     }
 
     /// The DC power flow instance this AC problem implies: reactive data and
-    /// voltage magnitudes are discarded, and the flat voltage assumption of
-    /// the DC approximation is recorded as a diagnostic.
+    /// voltage magnitudes are discarded, and the DC model's flat voltage
+    /// assumption is recorded as a diagnostic.
     #[must_use]
     pub fn to_dc_pf(&self) -> (DcPfInstance, Vec<powerio_core::Diagnostic>) {
         let instance = DcPfInstance {
@@ -239,13 +239,13 @@ impl AcPfInstance {
                     AcBusSpecification::Isolated => DcBusSpecification::Isolated,
                 })
                 .collect(),
-            approximation: BranchSusceptanceFormula::default(),
+            branch_susceptance_formula: BranchSusceptanceFormula::default(),
             initial_state: self.initial_state.clone(),
         };
         let diagnostics = vec![
             transform_discarded("reactive power and voltage magnitude specifications"),
             transform_assumption(
-                "the DC approximation holds every voltage magnitude at one per unit",
+                "the DC power flow model holds every voltage magnitude at one per unit",
             ),
         ];
         (instance, diagnostics)
@@ -254,13 +254,13 @@ impl AcPfInstance {
 
 /// The DC optimal power flow instance: the shared network, the typed
 /// objective, the active constraint selections, the selected DC branch
-/// approximation, and the reference conditions the network states.
+/// susceptance formula, and the reference conditions the network states.
 #[derive(Clone, Debug)]
 pub struct DcOpfInstance {
     network: BalancedNetwork,
     objective: Objective,
     constraints: ActiveConstraints,
-    approximation: BranchSusceptanceFormula,
+    branch_susceptance_formula: BranchSusceptanceFormula,
     initial_state: Option<OperatingPoint<BalancedNetwork>>,
 }
 
@@ -283,7 +283,7 @@ impl DcOpfInstance {
             network,
             objective,
             constraints: ActiveConstraints::default(),
-            approximation: BranchSusceptanceFormula::default(),
+            branch_susceptance_formula: BranchSusceptanceFormula::default(),
             initial_state: None,
         })
     }
@@ -310,10 +310,10 @@ impl DcOpfInstance {
         self
     }
 
-    /// Select the DC branch approximation, consuming the instance.
+    /// Select the branch susceptance formula, consuming the instance.
     #[must_use]
-    pub fn with_approximation(mut self, approximation: BranchSusceptanceFormula) -> Self {
-        self.approximation = approximation;
+    pub fn with_branch_susceptance_formula(mut self, formula: BranchSusceptanceFormula) -> Self {
+        self.branch_susceptance_formula = formula;
         self
     }
 
@@ -325,7 +325,7 @@ impl DcOpfInstance {
     }
 
     /// Replace the network while preserving this instance's objective,
-    /// constraint selections, approximation, and compatible initial state.
+    /// constraint selections, branch susceptance formula, and compatible initial state.
     /// This is the checked path for a parameter edit such as a branch rating
     /// change; callers do not have to reconstruct the problem and risk
     /// dropping its semantics.
@@ -361,10 +361,10 @@ impl DcOpfInstance {
         &self.constraints
     }
 
-    /// The selected DC branch approximation.
+    /// The selected branch susceptance formula.
     #[must_use]
-    pub const fn approximation(&self) -> BranchSusceptanceFormula {
-        self.approximation
+    pub const fn branch_susceptance_formula(&self) -> BranchSusceptanceFormula {
+        self.branch_susceptance_formula
     }
 
     /// The optional solver initial state.
@@ -381,7 +381,7 @@ impl DcOpfInstance {
     /// As [`DcPfInstance::from_network`].
     pub fn to_dc_pf(&self) -> Result<(DcPfInstance, Vec<powerio_core::Diagnostic>), Error> {
         let instance = DcPfInstance::from_network(self.network.clone())?
-            .with_approximation(self.approximation);
+            .with_branch_susceptance_formula(self.branch_susceptance_formula);
         Ok((
             instance,
             vec![transform_discarded(
@@ -526,13 +526,13 @@ impl AcOpfInstance {
             network: self.network.clone(),
             objective: self.objective.clone(),
             constraints,
-            approximation: BranchSusceptanceFormula::default(),
+            branch_susceptance_formula: BranchSusceptanceFormula::default(),
             initial_state: self.initial_state.clone(),
         };
         let diagnostics = vec![
             transform_discarded("the voltage bound constraint selection"),
             transform_assumption(
-                "the DC approximation holds every voltage magnitude at one per unit",
+                "the DC power flow model holds every voltage magnitude at one per unit",
             ),
         ];
         (instance, diagnostics)

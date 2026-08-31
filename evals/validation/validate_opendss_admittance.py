@@ -101,7 +101,7 @@ MCCHECK_BIN = _resolve_mccheck()
 
 def pio(deck: Path):
     """powerio's own admittance, node list, and bus/terminal resolution map,
-    dumped as JSON by the mccheck helper (build_multiconductor_admittance
+    dumped as JSON by the mccheck helper (calc_multiconductor_admittance_matrix
     has no Python binding)."""
     if not MCCHECK_BIN:
         raise RuntimeError(

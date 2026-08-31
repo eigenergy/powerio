@@ -23,16 +23,17 @@ use crate::Result;
 use crate::indexed::IndexedNetwork;
 
 use super::BuildOptions;
-use super::ybus::build_ybus;
+use super::ybus::calc_admittance_matrix;
 
-pub fn build_lacpf(case: &IndexedNetwork, opts: &BuildOptions) -> Result<CsMat<f64>> {
-    let parts = build_ybus(case, opts)?;
+/// Calculate the flat start linear AC power flow block matrix.
+pub fn calc_lacpf_matrix(case: &IndexedNetwork, opts: &BuildOptions) -> Result<CsMat<f64>> {
+    let parts = calc_admittance_matrix(case, opts)?;
     let n = case.n();
     let two_n = 2 * n;
 
     // Walk both G and B once and emit the 4 blocks: [+G, -B; -B, -G].
-    // `build_ybus` already returns CSR, so iterate the parts directly rather
-    // than deep-copying through `to_csr()`.
+    // `calc_admittance_matrix` already returns CSR, so iterate the parts
+    // directly rather than deep-copying through `to_csr()`.
     let mut tri = sprs::TriMat::with_capacity((two_n, two_n), 2 * (parts.g.nnz() + parts.b.nnz()));
 
     for (&v, (i, j)) in &parts.g {

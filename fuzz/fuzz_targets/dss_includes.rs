@@ -33,6 +33,9 @@ fuzz_target!(|data: &[u8]| {
     let Ok(module) = powerio_dist::parse(source.with_format(id)) else {
         return;
     };
-    let net = module.value();
-    let _ = powerio_dist::write_dss(net);
+    let module = module.sever_source();
+    let Ok(destination) = powerio_core::Destination::memory("fuzz") else {
+        return;
+    };
+    let _ = powerio_dist::emit(&module, powerio_dist::DistTargetFormat::Dss, destination);
 });

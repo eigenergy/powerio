@@ -1,7 +1,7 @@
 # PowerIO guide
 
-PowerIO 0.10 established the public beta of the 1.0 API. The 1.0 candidate
-applies the corrections found while building external solver consumers.
+PowerIO 1.0 incorporates the API corrections found while exercising the 0.10
+beta with external solver consumers.
 
 PowerIO parses power system data into typed values, transforms those values, emits supported formats, and builds sparse matrices and graph data for solvers and analysis code. One call reads any supported file or case directory:
 

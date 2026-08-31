@@ -117,16 +117,16 @@ pub type JsonFormat = SourceFormat;
 
 /// Resolve a source format name or common alias.
 pub fn classify_format_name(name: &str) -> Detection<SourceFormat> {
-    if let Some(format) = transmission_format_from_name(name) {
+    if let Some(format) = parse_transmission_format(name) {
         return Detection::Known(SourceFormat::Transmission(format));
     }
-    if let Some(format) = distribution_format_from_name(name) {
+    if let Some(format) = parse_distribution_format(name) {
         return Detection::Known(SourceFormat::Distribution(format));
     }
     Detection::Unknown
 }
 
-pub fn transmission_format_from_name(name: &str) -> Option<TransmissionFormat> {
+pub fn parse_transmission_format(name: &str) -> Option<TransmissionFormat> {
     let key = canonical_key(name);
     match key.as_str() {
         "matpower" | "m" => Some(TransmissionFormat::Matpower),
@@ -153,7 +153,7 @@ pub fn transmission_format_from_name(name: &str) -> Option<TransmissionFormat> {
     }
 }
 
-pub fn distribution_format_from_name(name: &str) -> Option<DistributionFormat> {
+pub fn parse_distribution_format(name: &str) -> Option<DistributionFormat> {
     let key = canonical_key(name);
     match key.as_str() {
         "dss" | "opendss" => Some(DistributionFormat::Dss),
@@ -690,7 +690,7 @@ mod tests {
     fn resolves_goc3_aliases() {
         for alias in ["goc3-json", "goc3", "go3", "go-challenge-3", "c3"] {
             assert_eq!(
-                super::transmission_format_from_name(alias),
+                super::parse_transmission_format(alias),
                 Some(TransmissionFormat::Goc3Json),
                 "{alias}"
             );
@@ -713,7 +713,7 @@ mod tests {
     fn resolves_surge_aliases() {
         for alias in ["surge-json", "surge", "surgejson"] {
             assert_eq!(
-                super::transmission_format_from_name(alias),
+                super::parse_transmission_format(alias),
                 Some(TransmissionFormat::SurgeJson),
                 "{alias}"
             );
@@ -752,7 +752,7 @@ mod tests {
             "gridopt",
         ] {
             assert_eq!(
-                super::transmission_format_from_name(alias),
+                super::parse_transmission_format(alias),
                 Some(TransmissionFormat::DeepMindOpfDataJson),
                 "{alias}"
             );

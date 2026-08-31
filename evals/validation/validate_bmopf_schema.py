@@ -12,7 +12,7 @@ from typing import Iterable
 
 from jsonschema import validators
 
-import powerio.dist as dist
+import powerio
 
 
 SCHEMA = Path("tests/data/dist/bmopf/draft_bmopf_schema.json")
@@ -50,8 +50,8 @@ def error_path(error) -> str:
 
 
 def validate_case(validator, case: Path) -> list[str]:
-    net = dist.parse_file(case)
-    out = net.to_canonical_format("bmopf-json")
+    module = powerio.parse_file(case)
+    out = module.emit("bmopf-json")
     if not out.text.strip():
         return ["writer returned an empty document"]
 

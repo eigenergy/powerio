@@ -24,7 +24,7 @@ documentation state the shipped API.
 - There is no one call facade `convert(source, format, destination)`: library callers compose `parse_file` with Destination based `emit`, while the CLI provides `powerio convert`.
 - Classifying an undeclared JSON source is one cheap typed pass, except that a document nesting its payload under a `network`, `grid`, `solution`, or `metadata` marker key (GO Challenge 3, Surge) still materializes that subtree once during classification; cost is linear in the nested payload and transient.
 - The parser allocation rules in the architecture record (`arch-v1/V1_ARCHITECTURE.md`) are implemented for MATPOWER, PSS/E, and PowerWorld AUX; PyPSA CSV, PSLF, and OpenDSS still tokenize through owned strings, and several JSON readers (Egret, GO Challenge 3, DeepMind OPFData, pandapower) decode through a `serde_json::Value` tree. Scheduled work, stated here so the architecture record is not read as already shipped.
-- Multiconductor admittance assembly (`powerio_matrix::build_multiconductor_admittance`) is Rust only in 1.0: no C entry point, and so no Python or Julia binding yet.
+- Multiconductor admittance assembly (`powerio_matrix::calc_multiconductor_admittance_matrix`) is Rust only in 1.0: no C entry point, and so no Python or Julia binding yet.
 - The sparse direct DC sensitivity factorization trades memory for speed against the previous conjugate gradient path: dense band peak memory is up about 3x at 2000 to 3000 buses for an 8 to 10x wall time win, measured against the committed allocation baseline in `evals/allocation`.
 
 ## Version boundaries

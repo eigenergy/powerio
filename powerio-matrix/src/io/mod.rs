@@ -9,11 +9,12 @@ pub mod sensitivity;
 
 #[cfg(feature = "gridfm")]
 pub use gridfm::{
-    GridfmOptions, GridfmOutputs, GridfmSnapshot, GridfmTables, gridfm_record_batches,
-    gridfm_record_batches_single, numbered_snapshots, write_gridfm_batch, write_gridfm_dataset,
+    GridfmOptions, GridfmOutputs, GridfmSnapshot, GridfmTables, emit_gridfm_batch,
+    emit_gridfm_dataset, number_snapshots, to_gridfm_record_batches,
+    to_gridfm_record_batches_single,
 };
-pub use meta::{CaseMetadata, MatrixMetadata, write_meta_json};
+pub use meta::{CaseMetadata, MatrixMetadata, emit_meta_json};
 pub use mtx::{
-    mtx_bytes, read_mtx, read_vector_mtx, vector_mtx_bytes, write_mtx, write_vector_mtx,
+    emit_mtx, emit_vector_mtx, read_mtx, read_vector_mtx, to_mtx_bytes, to_vector_mtx_bytes,
 };
-pub use sensitivity::write_sensitivity_mtx_with_options;
+pub use sensitivity::emit_sensitivity_mtx_with_options;

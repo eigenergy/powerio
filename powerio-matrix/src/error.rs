@@ -1,7 +1,7 @@
 //! Failures the matrix and dataset builders raise.
 //!
 //! [`Error`] carries what this crate constructs and wraps [`powerio_tx::Error`]
-//! for everything the hub raises underneath, so `?` moves a hub failure across
+//! for everything the transmission model raises underneath, so `?` moves that failure across
 //! the boundary without restating it. A caller that only wants the coarse
 //! split reads [`Error::category`], which is the same taxonomy the hub uses.
 
@@ -16,11 +16,11 @@ use crate::diagnostics::codes;
 pub enum Error {
     /// A failure from the balanced model, its readers, or its writers.
     #[error(transparent)]
-    Core(#[from] powerio_tx::Error),
+    Transmission(#[from] powerio_tx::Error),
 
     /// An underlying I/O failure this crate raised itself.
     ///
-    /// One the hub raised arrives as [`Error::Core`] wrapping
+    /// One the transmission model raised arrives as [`Error::Transmission`] wrapping
     /// `powerio_tx::Error::Io`, so a caller telling I/O apart from the rest reads
     /// [`Error::category`] rather than matching this variant.
     #[error(transparent)]
@@ -151,7 +151,7 @@ impl Error {
     #[must_use]
     pub fn code(&self) -> &'static DiagnosticInfo {
         match self {
-            Error::Core(inner) => inner.code(),
+            Error::Transmission(inner) => inner.code(),
             Error::Commit(inner) => inner.info().unwrap_or(&codes::EMIT_MTX_FAILED),
             Error::Io(_) => &codes::READ_MATRIX_IO_FAILED,
             Error::DimensionMismatch { .. } | Error::ShapeMismatch { .. } => {
@@ -196,7 +196,7 @@ impl Error {
     pub fn category(&self) -> powerio_tx::ErrorCategory {
         use powerio_tx::ErrorCategory as C;
         match self {
-            Error::Core(inner) => inner.category(),
+            Error::Transmission(inner) => inner.category(),
             Error::Commit(inner) => inner.category(),
             Error::Io(_) => C::Io,
             // A well-formed case that cannot satisfy a requested operation.

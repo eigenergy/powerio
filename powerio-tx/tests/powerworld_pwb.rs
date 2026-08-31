@@ -34,11 +34,11 @@ fn parse_bytes_reaches_the_binary_reader() {
     // than presenting every machine as running without comment.
     assert!(
         parsed
-            .rendered_diagnostics()
+            .render_diagnostics()
             .iter()
             .all(|w| w.contains("generator(s) read as in service")),
         "{:?}",
-        parsed.rendered_diagnostics()
+        parsed.render_diagnostics()
     );
     assert_eq!(parsed.network.buses().len(), 200);
     assert_eq!(parsed.network.branches().len(), 246);
@@ -208,10 +208,10 @@ fn activsg200_pwb_matches_its_aux_sibling() {
             a.rate_b
         );
         assert!(
-            (p.effective_tap() - a.effective_tap()).abs() < 1e-6,
+            (p.calc_effective_tap() - a.calc_effective_tap()).abs() < 1e-6,
             "{key:?} tap {} vs {}",
-            p.effective_tap(),
-            a.effective_tap()
+            p.calc_effective_tap(),
+            a.calc_effective_tap()
         );
         assert_eq!(p.is_transformer(), a.is_transformer(), "{key:?} kind");
         assert_eq!(
@@ -386,10 +386,10 @@ fn texas2000_june2016_pwb_matches_its_aux_sibling() {
             );
         }
         assert!(
-            (p.effective_tap() - a.effective_tap()).abs() < 1e-6,
+            (p.calc_effective_tap() - a.calc_effective_tap()).abs() < 1e-6,
             "{key:?} tap {} vs {}",
-            p.effective_tap(),
-            a.effective_tap()
+            p.calc_effective_tap(),
+            a.calc_effective_tap()
         );
         assert_eq!(p.is_transformer(), a.is_transformer(), "{key:?} kind");
         assert_eq!(
@@ -789,7 +789,7 @@ fn parse_file_dispatches_pwb_and_converts() {
         .network;
     assert_eq!(by_name.buses().len(), 200);
 
-    let conv = powerio_tx::write_network(&net, powerio_tx::TargetFormat::Matpower).unwrap();
+    let conv = emit_value(&net, powerio_tx::TargetFormat::Matpower).unwrap();
     let back = parse_str(&conv.text, "matpower").unwrap().network;
     assert_eq!(back.buses().len(), 200);
     assert_eq!(back.branches().len(), 246);
@@ -914,10 +914,10 @@ fn activsg2000_current_era_pwb_matches_its_aux_sibling() {
             a.rate_b
         );
         assert!(
-            (p.effective_tap() - a.effective_tap()).abs() < 1e-6,
+            (p.calc_effective_tap() - a.calc_effective_tap()).abs() < 1e-6,
             "{key:?} tap {} vs {}",
-            p.effective_tap(),
-            a.effective_tap()
+            p.calc_effective_tap(),
+            a.calc_effective_tap()
         );
         assert_eq!(p.is_transformer(), a.is_transformer(), "{key:?} kind");
     }
@@ -1041,10 +1041,10 @@ fn activsg500_pwb_matches_its_aux_sibling() {
             a.rate_b
         );
         assert!(
-            (p.effective_tap() - a.effective_tap()).abs() < 1e-6,
+            (p.calc_effective_tap() - a.calc_effective_tap()).abs() < 1e-6,
             "{key:?} tap {} vs {}",
-            p.effective_tap(),
-            a.effective_tap()
+            p.calc_effective_tap(),
+            a.calc_effective_tap()
         );
         assert_eq!(p.is_transformer(), a.is_transformer(), "{key:?} kind");
     }
@@ -1165,10 +1165,10 @@ fn hawaii40_pwb_matches_its_aux_sibling() {
             a.rate_b
         );
         assert!(
-            (p.effective_tap() - a.effective_tap()).abs() < 1e-6,
+            (p.calc_effective_tap() - a.calc_effective_tap()).abs() < 1e-6,
             "{key:?} tap {} vs {}",
-            p.effective_tap(),
-            a.effective_tap()
+            p.calc_effective_tap(),
+            a.calc_effective_tap()
         );
         assert_eq!(p.is_transformer(), a.is_transformer(), "{key:?} kind");
     }

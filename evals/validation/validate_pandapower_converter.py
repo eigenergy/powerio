@@ -25,8 +25,9 @@ YTOL_REL = 1e-7
 
 
 def check_case(path: Path) -> str:
-    case = powerio.parse(path, value_type=powerio.BalancedNetwork).value
-    conv = case.to_format("pandapower-json")
+    module = powerio.parse_file(path, value_type=powerio.BalancedNetwork)
+    case = module.value
+    conv = module.emit("pandapower-json")
     net = from_json_string(conv.text)
 
     problems = []
@@ -57,7 +58,7 @@ def check_case(path: Path) -> str:
         try:
             pp.runpp(net, init="flat", calculate_voltage_angles=True, numba=False)
             y_pp = net._ppc["internal"]["Ybus"]
-            y_pio = case.ybus().tocsr()
+            y_pio = case.calc_admittance_matrix().tocsr()
             y_pp = y_pp.tocsr()
             if y_pp.shape != y_pio.shape:
                 problems.append(f"ybus shape {y_pp.shape} != {y_pio.shape}")

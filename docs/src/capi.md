@@ -19,7 +19,7 @@ PioDiagnostics *findings = pio_module_diagnostics(module, &error);
 for (size_t i = 0; i < pio_diagnostics_len(findings); i++)
     puts(pio_diagnostic_code(findings, i));
 
-char *text = pio_module_write_str(module, "matpower", NULL, &error);
+char *text = pio_module_emit_string(module, "matpower", NULL, &error);
 pio_string_release(text);
 pio_diagnostics_release(findings);
 pio_balanced_network_release(net);
@@ -28,6 +28,29 @@ pio_module_release(module);
 
 Parse produces a module handle; typed accessors produce independently owned child handles; every handle type has a `retain`/`release` pair, `release(NULL)` is a no-op, and releasing a parent never invalidates a child. Every fallible entry point takes a `PioError **` out parameter and every entry point catches panics at the boundary. Borrowed strings and spans stay valid until their owner's last release; owned `char *` results release with `pio_string_release`.
 
+Value transformations use `to_*`: `pio_balanced_network_to_normalized`, the
+balanced and multiconductor `*_to_geo_layer_json` conversions, and the
+receiver-first `*_to_module` wrappers. Geographic sidecars use the verb-led
+`*_apply_geo_layer`. `pio_dc_data_calc_branch_flow` is the structured-error
+calculation spelling for the frozen C ABI array handle. The released
+`normalize`, `geo_extract`, `geo_apply`, `module_of_*`, and `fill_branch_flow`
+spellings remain ABI 6 compatibility aliases with the same ownership and
+error rules.
+
+`pio_module_inspect_json` preserves its released `operations` array and adds
+two classified views. `preferred_operations` lists the concise path above;
+`compatibility_operations` lists the ABI 6 spellings retained for existing
+callers. Collection modules list their time points or scenarios with
+`pio_module_list_states_json`; the released
+`pio_module_state_inventory_json` name remains callable.
+
+`pio_module_to_balanced_report_json` previews
+`pio_module_to_balanced`; it does not return a transformed module. Its name
+matches the Python and Julia report operation and is the one documented report
+exception to the C `to_*` value transformation rule. The report carries a
+`ready` boolean and current `Diagnostic` records; it has no separate validation
+status vocabulary.
+
 ## Versioning
 
 `PIO_ABI_VERSION` is one integer with one meaning: change an existing signature or an existing documented behavior and it increments. A consumer compares `pio_abi_version()` against the macro it was built against and refuses a mismatch before calling anything else. The comparison is equality, not a floor, so there is no partial compatibility to negotiate.
@@ -35,6 +58,11 @@ Parse produces a module handle; typed accessors produce independently owned chil
 Additive change does not bump it. New data arrives as a new symbol, a new Arrow table id, or a new key in a versioned JSON document. Arrow tables are append only: existing `PIO_ARROW_TABLE_*` ids and column order do not change, a new table takes the next id, new columns append at the end, and a consumer addresses columns by name.
 
 A JSON document reachable through the ABI counts as documented behavior. Reshaping one bumps the integer even though no signature moves, because the alternative is a binding that passes the handshake and then reads `null` for a key it mirrors.
+
+The ordinary stored document path uses `pio_parse_file` and
+`pio_module_emit_string` or `pio_module_emit_file` with format `pio-json`.
+`pio_module_read_json` and `pio_module_write_json` remain compatibility
+conveniences for callers that already hold the stored document in memory.
 
 The per-version history, the classified v5 to v6 delta, and the porting table live in the Developer Guides: [ABI history and symbol replacement](abi-v6.md).
 
@@ -48,6 +76,6 @@ Every optional entry point is behind a Cargo feature and is probed at runtime wi
 | `matrix` | none | the balanced matrix Arrow tables |
 | `gridfm` | none | GridFM Parquet dataset parsing through the one parse |
 | `dist` | `PIO_DIST` | the multiconductor value family and its network handle |
-| `prob` | none | the calculation families and the DC branch data (`pio_dc_data_*`) |
+| `prob` | none | the calculation families and the `PioDcData` ABI arrays (`pio_dc_data_*`) |
 
 Released binaries carry all five. `pio_build_info` reports which ones a given library was built with, alongside its version, ABI integer, foreign schema versions, and error category tokens.

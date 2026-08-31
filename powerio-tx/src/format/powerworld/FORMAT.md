@@ -426,7 +426,7 @@ case stores zero shunt MW and the reader sets G = 0.
 
 `.pwd` files are display artifacts, not network cases, so `parse_file`
 rejects them with a pointer to the display API. Use
-`parse_display_file(path, None)` / `parse_display_bytes(bytes, "pwd")` for
+`parse_display_file(path, None)` / `parse_display(bytes, "pwd")` for
 the generic surface, or the lower level PowerWorld helpers
 `parse_pwd_file`, `parse_pwd_display`, and `parse_pwd`. The display result
 is `DisplayData::PowerWorld(PwdDisplay { canvas_width, canvas_height,

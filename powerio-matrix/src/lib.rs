@@ -1,17 +1,20 @@
 //! Sparse matrix and graph projections from PowerIO networks.
 //!
 //! Outputs include signed incidence, weighted bus Laplacian, MATPOWER Bp/Bpp,
-//! Y bus, PTDF, LODF, adjacency, LACPF, and petgraph views. Builders take the
-//! dense [`IndexedNetwork`] view of a [`BalancedNetwork`]. The crate reexports
-//! [`powerio_tx`] types and functions.
+//! Y bus, PTDF, LODF, adjacency, LACPF, and petgraph views. Calculations take the
+//! dense [`IndexedNetwork`] view of a [`BalancedNetwork`]. Parsing and emitting
+//! belong to the top level `powerio` facade; this crate owns derived matrix and
+//! graph calculations.
 //!
 //! ```
-//! use powerio_matrix::{BuildOptions, IndexedNetwork, build_bprime, parse};
+//! use powerio_core::Source;
+//! use powerio_matrix::{BuildOptions, IndexedNetwork, calc_bprime_matrix};
+//! use powerio_tx::parse;
 //!
 //! # let case = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case14.m");
-//! let net = parse(powerio_core::Source::open(case)?)?.into_value();
+//! let net = parse(Source::open(case)?)?.into_value();
 //! let g = IndexedNetwork::new(&net);           // dense [0, n) analysis view
-//! let bprime = build_bprime(&g, &BuildOptions::default())?;
+//! let bprime = calc_bprime_matrix(&g, &BuildOptions::default())?;
 //! assert_eq!(bprime.rows(), g.n());            // Bp is n×n
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
@@ -25,38 +28,32 @@
 //! `A_s = A_pmᵀ` and uses `w = -b`, so the sparse factor is the positive
 //! M-matrix `L = A_s diag(w) A_sᵀ = -B`. Source bus IDs remain on the model;
 //! [`IndexedNetwork`] maps them to dense indices in `[0, n)`.
-//! `tap == 0` means `tap = 1`. `build_bprime` and `build_bdoubleprime` follow
-//! MATPOWER `makeB`; Y_bus keeps tap magnitudes and phase shifts. Branch
+//! `tap == 0` means `tap = 1`. `calc_bprime_matrix` and
+//! `calc_bdoubleprime_matrix` follow MATPOWER `makeB`; Y_bus keeps tap
+//! magnitudes and phase shifts. Branch
 //! terminal admittance is stored per unit. The default public DC formula is
 //! `b = -x/(r² + x²)`. [`BranchSusceptanceFormula::TapAdjustedReactance`] uses
 //! `b = -1/(x·τ)`; both carry phase shift injection. The full reference is in
 //! [the matrix guide](https://eigenergy.github.io/powerio/guide/matrices.html).
 
-// Re-export the powerio data layer so one import covers model and matrix types,
-// and so the matrix modules' `crate::network` / `crate::format` paths resolve
-// unchanged after the split. `Error` and `Result` are this crate's own: the
-// variants below are raised here and nowhere in the hub.
+// Re-export the balanced model types used by matrix signatures. Parsing,
+// emitting, conversion, and display operations stay on their owning crate and
+// the top level facade. `Error` and `Result` are this crate's own: the variants
+// below are raised here and nowhere in the hub.
 pub use powerio_tx::{
-    BalancedNetwork, Branch, Bus, BusId, BusType, ConnectivityReport, Conversion, DisplayData,
-    DisplayFormat, ErrorCategory, Extras, GenCost, GenCostPatch, GenCostPolicyReport, Generator,
-    Hvdc, IndexCore, IndexedNetwork, Load, MissingGenCostPolicy, NormalizeOptions,
-    POWER_MODELS_ANGLE_BOUND_PAD, PwdDisplay, PwdSubstation, PypsaCsvOutputs, Shunt, SourceFormat,
-    Storage, TargetFormat, WriteOptions, convert_file, convert_file_with_options, convert_str,
-    convert_str_with_options, display_format_from_name, format, gen_cost, geo, indexed, network,
-    parse, parse_display_bytes, parse_display_file, parse_gen_cost_csv, target_format_from_name,
-    write_as, write_as_with_options, write_dir, write_dir_with_options, write_egret_json,
-    write_matpower, write_network, write_pandapower_json, write_powermodels_json, write_powerworld,
-    write_psse, write_pypsa_csv_folder,
+    BalancedNetwork, Branch, Bus, BusId, BusType, ConnectivityReport, Extras, GenCost, Generator,
+    Hvdc, IndexCore, IndexedNetwork, Load, POWER_MODELS_ANGLE_BOUND_PAD, Shunt, SourceFormat,
+    Storage,
 };
+
+// Internal compatibility paths used throughout the matrix implementation.
+pub(crate) use powerio_tx::{indexed, network};
 
 pub mod diagnostics;
 pub mod error;
 pub use error::{ElementCounts, Error, PiecewiseCostInvalidity, Result, ScenarioMismatch};
 
-/// The hub's error, so a binding can map both through one taxonomy.
-pub use powerio_tx::Error as CoreError;
-
-/// Compressed sparse row matrix used by the projection builders.
+/// Compressed sparse row matrix used by the projection calculations.
 pub type SparseMatrix = sprs::CsMat<f64>;
 
 mod ac_jacobian;
@@ -76,32 +73,34 @@ pub use acopf::{
 };
 pub use dc_operators::{DcOperators, ReferenceConstrainedSystem};
 pub use dcopf::{
-    DcBranchData, DcGeneratorData, DcOpfAssemblyOptions, DcOpfBundleMetadata, DcOpfBundleOptions,
-    DcOpfMatrices, DcOpfOutputs, DcOpfPreparation, NodalGeneratorData, Units,
-    build_dc_opf_matrices, build_dc_opf_preparation, write_dcopf_bundle,
+    DcBranchParameters, DcGeneratorParameters, DcOpfAssemblyOptions, DcOpfBundleMetadata,
+    DcOpfBundleOptions, DcOpfMatrices, DcOpfOutputs, DcOpfPreparation, NodalGeneratorParameters,
+    Units, build_dc_opf_preparation, calc_dc_opf_matrices, emit_dcopf_bundle,
 };
 pub use opf::{PiecewiseLinearCost, PreparedObjective};
 
 pub use matrix::multiconductor::{
     AugmentedSystem, DistNode, MulticonductorAdmittance, MulticonductorNodeIndex, NodeRef,
-    build_multiconductor_admittance,
+    calc_multiconductor_admittance_matrix,
 };
 pub use matrix::{
-    BranchSusceptanceFormula, BuildOptions, DcConvention, GroundedIndexMap, IncidenceParts,
-    MatrixStats, Scheme, SensitivityMatrices, SensitivityMatrixMetadata, SensitivityMetadata,
-    SensitivityOptions, SensitivitySolver, SensitivitySolverPath, ZeroImpedanceRule,
-    ZeroImpedanceSkips, build_adjacency, build_bdoubleprime, build_bprime, build_flow_map,
-    build_incidence, build_lacpf, build_lodf, build_ptdf, build_ptdf_lodf,
-    build_ptdf_lodf_with_options, build_weighted_laplacian, build_ybus, ground_at, ground_at_each,
-    reference_indicator, sddm_check, skipped_zero_impedance, susceptance_diag, unit_vector,
+    BranchSusceptanceFormula, BuildOptions, GroundedIndexMap, MatrixStats, Scheme,
+    SensitivityMatrices, SensitivityMatrixMetadata, SensitivityMetadata, SensitivityOptions,
+    SensitivitySolver, SensitivitySolverPath, ZeroImpedanceRule, ZeroImpedanceSkips,
+    calc_adjacency_matrix, calc_admittance_matrix, calc_bdoubleprime_matrix, calc_bprime_matrix,
+    calc_branch_flow_matrix, calc_diagonal, calc_lacpf_matrix, calc_lodf, calc_ptdf,
+    calc_ptdf_lodf, calc_ptdf_lodf_with_options, calc_reference_indicator,
+    calc_susceptance_diagonal, calc_unit_vector, calc_weighted_laplacian,
+    calc_zero_impedance_skips, check_sddm, ground_at, ground_at_each,
 };
 pub use pipeline::{
-    MatrixKind, Pipeline, PipelineOutputs, RhsKind, build_kind, matrix_stats_for_kind,
-    sanitize_stem, zero_impedance_rule_for_kind, zero_impedance_skips_for_kind,
+    MatrixKind, Pipeline, PipelineOutputs, RhsKind, calc_matrix, calc_matrix_stats_for_kind,
+    calc_zero_impedance_skips_for_kind, sanitize_stem, select_zero_impedance_rule_for_kind,
 };
 
 #[cfg(feature = "gridfm")]
 pub use io::gridfm::{
-    GridfmOptions, GridfmOutputs, GridfmSnapshot, GridfmTables, gridfm_record_batches,
-    gridfm_record_batches_single, numbered_snapshots, write_gridfm_batch, write_gridfm_dataset,
+    GridfmOptions, GridfmOutputs, GridfmSnapshot, GridfmTables, emit_gridfm_batch,
+    emit_gridfm_dataset, number_snapshots, to_gridfm_record_batches,
+    to_gridfm_record_batches_single,
 };

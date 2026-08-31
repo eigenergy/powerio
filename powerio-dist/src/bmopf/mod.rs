@@ -2,11 +2,11 @@
 //!
 //! Everything is explicit SI: volts, watts, vars, ohms, siemens, meters,
 //! radians, string bus ids and terminal names. The schema sets
-//! `additionalProperties: false` on every element, so the strict writer
+//! `additionalProperties: false` on every element, so the strict emitter
 //! drops what the schema cannot carry and says so per field; the dropped
 //! data stays in the model's `extras`, never in the emitted JSON.
 //!
-//! # What the writer parks under `extras`
+//! # What the emitter parks under `extras`
 //!
 //! Some data has a physical meaning the schema cannot express in place but
 //! can carry in the free form `extras` object, and that data is relocated
@@ -38,8 +38,8 @@
 //! Schema 0.1.0 has no top level slot for these classes, so each emits at
 //! `extras.<class>.<name>` with the keying its top level table used:
 //!
-//! - `ibr` and `control_profile`, written from the typed model
-//! - `dc_bus`, `dc_line`, `dc_load`, `dc_source`, `time_series`, written from
+//! - `ibr` and `control_profile`, emitted from the typed model
+//! - `dc_bus`, `dc_line`, `dc_load`, `dc_source`, `time_series`, emitted from
 //!   untyped objects of that class
 //! - `capacitor`, only for a capacitor too malformed to type; a typed
 //!   capacitor goes to the strict top level `capacitor` table
@@ -51,7 +51,7 @@
 //!
 //! Schema 0.1.0 defines no regulator subtype; the BMOPF authors' BMOPFTools
 //! toolchain extends the schema with `single_phase_autotransformer` and
-//! `open_delta_regulator`, and this writer emits both as deliberate interop
+//! `open_delta_regulator`, and this emitter includes both for interoperation
 //! with that toolchain, the same standing as the `voltage_source.cost`
 //! passthrough, pending an upstream schema proposal. An OpenDSS transformer
 //! a RegControl targets emits as `transformer.single_phase_autotransformer`
@@ -76,7 +76,5 @@
 pub(crate) mod read;
 mod write;
 
-pub use write::{
-    BMOPF_SCHEMA_ID, BMOPF_SCHEMA_VERSION, BmopfWriteOptions, write_bmopf_json,
-    write_bmopf_json_with_options,
-};
+pub(crate) use write::emit_bmopf_json_text_with_options;
+pub use write::{BMOPF_SCHEMA_ID, BMOPF_SCHEMA_VERSION, BmopfEmitOptions};

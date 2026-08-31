@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 mod helpers;
-use helpers::{parse_dss_file, parse_dss_file_with_root, parse_dss_str, write_dss};
+use helpers::{emit_dss, parse_dss_file, parse_dss_file_with_root, parse_dss_str};
 use powerio_dist::{
     Configuration, CoordinateSpace, DistCoordsKind, DistWindingConn, IbrPrimeMover, IbrTopology,
     MulticonductorNetwork, ReactivePowerReference, ReactivePowerUnit,
@@ -81,7 +81,7 @@ Buscoords coords.csv
     assert!(!a.extras.contains_key("x"));
     assert!(!a.extras.contains_key("y"));
 
-    let out = write_dss(&net);
+    let out = emit_dss(&net);
     assert!(out.text.contains("Buscoords buscoords.csv"), "{}", out.text);
     assert_eq!(out.sidecars.len(), 1);
     assert_eq!(out.sidecars[0].path, "buscoords.csv");
@@ -585,7 +585,7 @@ fn default_phase_single_terminal_reactor_preserves_physical_neutral() {
     assert!((sh.g[0][0] - 1000.0).abs() < 1e-9, "{}", sh.g[0][0]);
     assert_eq!(sh.b[0][0], 0.0);
 
-    let out = write_dss(&net);
+    let out = emit_dss(&net);
     assert!(out.warnings.is_empty(), "{:?}", out.warnings);
     assert!(out.text.contains("New Line.l1 bus1=sourcebus.1.2.3.4"));
     assert!(
@@ -771,11 +771,8 @@ fn a_widened_include_root_admits_a_shared_sibling_include() {
         SHARED_LINECODES.trim_end(),
     ));
     assert_eq!(
-        net.to_canonical_format(powerio_dist::DistTargetFormat::Dss)
-            .text,
-        merged
-            .to_canonical_format(powerio_dist::DistTargetFormat::Dss)
-            .text
+        net.emit_value(powerio_dist::DistTargetFormat::Dss).text,
+        merged.emit_value(powerio_dist::DistTargetFormat::Dss).text
     );
 }
 

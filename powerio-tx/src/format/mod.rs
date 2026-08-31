@@ -1,31 +1,31 @@
-//! Readers and writers for supported case formats, all meeting at [`BalancedNetwork`].
+//! Parsing and emission for supported case formats, all meeting at [`BalancedNetwork`].
 //!
-//! Each format module owns its reader and/or writer: MATPOWER `.m`,
+//! Each format module owns its parser and/or serializer: MATPOWER `.m`,
 //! PowerModels JSON, PSS/E `.raw`, PowerWorld `.aux`, egret `ModelData` JSON,
 //! pandapower JSON, PyPSA CSV folders, PSLF `.epc`, GO Challenge 3 JSON, and
 //! Surge JSON, and DeepMind OPFData JSON. PowerWorld `.pwb` cases, GO Challenge
-//! 3 and OPFData JSON canonical output, and PowerWorld `.pwd` displays are read
+//! 3 and OPFData JSON canonical output, and PowerWorld `.pwd` displays are input
 //! only. Case input and
-//! output formats meet here, so adding a writable format is one module plus
+//! output formats meet here, so adding a format that supports emission is one module plus
 //! one hub registration.
-//! [`parse`] reads a retained source into a typed module, detecting the
-//! format from the source name and content; [`parse_display_file`] reads
-//! display artifacts such as PowerWorld `.pwd`. [`write_as`] writes a parsed
-//! module, echoing the retained source on a same format target, and
-//! [`write_network`] is the semantic write for bare typed networks.
+//! [`parse`] compiles a retained source into a typed module, detecting the
+//! format from the source name and content; [`parse_display_file`] parses
+//! display artifacts such as PowerWorld `.pwd`. [`emit`] emits a parsed
+//! module through a destination and echoes the retained source for a same
+//! format target.
 //! Non-finite numeric values, such as MATPOWER `Inf`/`NaN` angle limits, are
-//! written as JSON `null`.
+//! emitted as JSON `null`.
 //!
 //! # Fidelity behavior
 //!
-//! Conversion is two-tier:
+//! Emission has two fidelity tiers:
 //!
-//! - **Same format writes of an unchanged parsed module return the original
-//!   bytes.** The module retains its source, so [`write_as`] back to the same
+//! - **Same format emission of an unchanged parsed module returns the original
+//!   bytes.** The module retains its source, so [`emit`] back to the same
 //!   format returns every field, comment, and numeric token.
 //! - **Cross-format keeps maximal fidelity with itemized loss.** Whatever the
-//!   target format cannot represent is reported in the [`Conversion`]
-//!   findings, never dropped silently. On the read side, readers itemize what
+//!   target format cannot represent is reported in the [`TextEmission`]
+//!   findings, never dropped silently. During parsing, parsers itemize what
 //!   they ignore on the module's diagnostics.
 
 use std::collections::{BTreeSet, HashMap};
@@ -34,7 +34,7 @@ use std::str::FromStr;
 
 use serde_json::{Map, Value};
 
-use powerio_core::{PioModule, SourceDescriptor};
+use powerio_core::PioModule;
 
 use crate::diagnostics::{Diagnostic, DiagnosticInfo, Diagnostics, EmitFamily, codes};
 use crate::gen_cost::{GenCostPatch, MissingGenCostPolicy};
@@ -57,22 +57,21 @@ mod pypsa;
 pub mod routing;
 mod surge;
 
-pub use egret::{egret_declares_time_series, parse_egret_time_series, write_egret_json};
+pub use egret::{egret_declares_time_series, parse_egret_time_series};
 pub use goc3::parse_goc3_json;
-pub use matpower::write_matpower;
 pub use opfdata::{OpfDataSolution, parse_opfdata_json};
-pub use pandapower::write_pandapower_json;
-pub use powermodels::write_powermodels_json;
-pub use powerworld::{PwdDisplay, PwdSubstation, write_powerworld};
-pub use pslf::write_pslf;
-pub use psse::{write_psse, write_psse_rev};
-pub use pypsa::{
-    PypsaAxis, PypsaCsvOutputs, PypsaCsvSequence, parse_pypsa_csv_time_series, pypsa_axis,
-    write_pypsa_csv_folder,
-};
-pub use surge::write_surge_json;
+pub use powerworld::{PwdDisplay, PwdSubstation};
+pub use pypsa::{PypsaAxis, PypsaCsvSequence, parse_pypsa_csv_time_series, pypsa_axis};
 
-/// A target case format. See [`write_as`].
+pub(crate) use egret::write_egret_json;
+pub(crate) use pandapower::write_pandapower_json;
+pub(crate) use powermodels::write_powermodels_json;
+pub(crate) use powerworld::write_powerworld;
+pub(crate) use pslf::write_pslf;
+pub(crate) use psse::write_psse_rev;
+pub(crate) use surge::write_surge_json;
+
+/// A target case format. See [`emit`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TargetFormat {
@@ -81,8 +80,8 @@ pub enum TargetFormat {
     /// egret `ModelData` JSON.
     EgretJson,
     /// PSS/E `.raw` at the given revision. `rev` selects the record layout the
-    /// writer emits (33, 34, or 35); 33 is the historical default. The reader
-    /// takes the revision from the file header, so this only affects writes.
+    /// serializer emits (33, 34, or 35); 33 is the historical default. The parser
+    /// takes the revision from the file header, so this only affects emission.
     Psse { rev: u32 },
     /// PowerWorld auxiliary `.aux`.
     PowerWorld,
@@ -93,12 +92,12 @@ pub enum TargetFormat {
     /// GE PSLF `.epc` (round-trip; byte-exact when the case kept its source).
     Pslf,
     /// DOE GO Challenge 3 JSON input data. This is read only except for
-    /// same format source echo when the parsed network still carries its source.
+    /// same format source echo when the parsed module retains its source.
     Goc3Json,
     /// Surge native JSON network document.
     SurgeJson,
     /// One JSON document from a DeepMind OPFData release. Read only except for
-    /// an exact write back to the retained source format.
+    /// an exact emission back to the retained source format.
     DeepMindOpfDataJson,
 }
 
@@ -167,7 +166,7 @@ impl FromStr for TargetFormat {
     type Err = Error;
 
     fn from_str(name: &str) -> Result<Self> {
-        target_format_from_name(name).ok_or_else(|| Error::UnknownFormat(name.to_string()))
+        parse_target_format(name).ok_or_else(|| Error::UnknownFormat(name.to_string()))
     }
 }
 
@@ -223,7 +222,7 @@ impl FromStr for DisplayFormat {
     type Err = Error;
 
     fn from_str(name: &str) -> Result<Self> {
-        display_format_from_name(name).ok_or_else(|| Error::UnknownFormat(name.to_string()))
+        parse_display_format(name).ok_or_else(|| Error::UnknownFormat(name.to_string()))
     }
 }
 
@@ -231,7 +230,7 @@ impl FromStr for DisplayFormat {
 /// Accepts `pwd`, `powerworld-pwd`, and `powerworld-display`; `geojson`,
 /// `geo-json`, and `geo` name the geographic layer.
 #[must_use]
-pub fn display_format_from_name(name: &str) -> Option<DisplayFormat> {
+pub fn parse_display_format(name: &str) -> Option<DisplayFormat> {
     Some(match name.to_ascii_lowercase().as_str() {
         "pwd" | "powerworld-pwd" | "powerworld-display" => DisplayFormat::PowerWorld,
         "geojson" | "geo-json" | "geo" => DisplayFormat::GeoJson,
@@ -250,13 +249,14 @@ pub fn display_format_from_name(name: &str) -> Option<DisplayFormat> {
 /// text target; they are routed by [`crate::format::routing`].
 ///
 /// [`SourceFormat`]'s reported token is [`SourceFormat::name`], which resolves
-/// here directly, so `net.to_format(other.source_format)` works for every
-/// format. The `powermodelsjson`/`egretjson`/`pandapowerjson` aliases keep the
+/// here directly, so a module can emit to another module's source format
+/// token for every supported case format. The
+/// `powermodelsjson`/`egretjson`/`pandapowerjson` aliases keep the
 /// pre-0.9 camel-case spellings (`"PowerModelsJson"` lowercased) resolving for
 /// callers that stored them.
 #[must_use]
-pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
-    Some(match routing::transmission_format_from_name(name)? {
+pub fn parse_target_format(name: &str) -> Option<TargetFormat> {
+    Some(match routing::parse_transmission_format(name)? {
         TransmissionFormat::Matpower => TargetFormat::Matpower,
         TransmissionFormat::PowerModelsJson => TargetFormat::PowerModelsJson,
         TransmissionFormat::EgretJson => TargetFormat::EgretJson,
@@ -306,23 +306,28 @@ fn display_file_guidance() -> Error {
     )
 }
 
-/// Parse display bytes in the named display format `from`.
+/// Parse display data in the named display format `from`.
 ///
 /// # Errors
 /// [`Error::UnknownFormat`] if `from` is not a display format; otherwise the
-/// reader's own [`Error`] on malformed input.
-pub fn parse_display_bytes(bytes: &[u8], from: &str) -> Result<DisplayData> {
-    let fmt =
-        display_format_from_name(from).ok_or_else(|| Error::UnknownFormat(from.to_string()))?;
+/// parser's own [`Error`] on malformed input.
+pub fn parse_display(bytes: &[u8], from: &str) -> Result<DisplayData> {
+    let fmt = parse_display_format(from).ok_or_else(|| Error::UnknownFormat(from.to_string()))?;
     match fmt {
         DisplayFormat::PowerWorld => Ok(DisplayData::PowerWorld(powerworld::parse_pwd_display(
             bytes,
         )?)),
         // The tolerant reader's own notes are available through
-        // `GeoLayer::parse_bytes` for callers that want them.
-        DisplayFormat::GeoJson => Ok(DisplayData::Geo(
-            crate::geo::GeoLayer::parse_bytes(bytes, None)?.layer,
-        )),
+        // `GeoLayer::parse_text` for callers that want them.
+        DisplayFormat::GeoJson => {
+            let text = std::str::from_utf8(bytes).map_err(|error| Error::FormatRead {
+                format: "geo layer",
+                message: format!("not valid UTF-8: {error}"),
+            })?;
+            Ok(DisplayData::Geo(
+                crate::geo::GeoLayer::parse_text(text, None)?.layer,
+            ))
+        }
     }
 }
 
@@ -335,13 +340,13 @@ fn describe_extension(extension: Option<&str>) -> String {
     }
 }
 
-/// Parse the display file at `path`, choosing the reader from `from` or, when
+/// Parse the display file at `path`, choosing the parser from `from` or, when
 /// `None`, from the extension. A `.pwd` extension selects PowerWorld display
 /// data.
 ///
 /// # Errors
 /// [`Error::UnknownFormat`] if `from` is unrecognized or the extension cannot
-/// be mapped; [`Error::Io`] if the file cannot be read; the reader's own
+/// be mapped; [`Error::Io`] if the file cannot be read; the parser's own
 /// [`Error`] on malformed input.
 pub fn parse_display_file(
     path: impl AsRef<std::path::Path>,
@@ -349,9 +354,7 @@ pub fn parse_display_file(
 ) -> Result<DisplayData> {
     let path = path.as_ref();
     let fmt = match from {
-        Some(f) => {
-            display_format_from_name(f).ok_or_else(|| Error::UnknownFormat(f.to_string()))?
-        }
+        Some(f) => parse_display_format(f).ok_or_else(|| Error::UnknownFormat(f.to_string()))?,
         None => match path
             .extension()
             .and_then(|e| e.to_str())
@@ -387,10 +390,16 @@ pub fn parse_display_file(
         DisplayFormat::PowerWorld => Ok(DisplayData::PowerWorld(powerworld::parse_pwd_display(
             &bytes,
         )?)),
-        DisplayFormat::GeoJson => Ok(DisplayData::Geo(
-            crate::geo::GeoLayer::parse_bytes(&bytes, path.file_name().and_then(|n| n.to_str()))?
-                .layer,
-        )),
+        DisplayFormat::GeoJson => {
+            let text = std::str::from_utf8(&bytes).map_err(|error| Error::FormatRead {
+                format: "geo layer",
+                message: format!("not valid UTF-8: {error}"),
+            })?;
+            Ok(DisplayData::Geo(
+                crate::geo::GeoLayer::parse_text(text, path.file_name().and_then(|n| n.to_str()))?
+                    .layer,
+            ))
+        }
     }
 }
 
@@ -410,7 +419,7 @@ fn read_file_bytes(path: &std::path::Path) -> Result<Vec<u8>> {
 
 /// Whether a format name means a PyPSA CSV folder. PyPSA folders are directory
 /// inputs, not text targets, so they have no [`TargetFormat`] arm; this is the
-/// companion alias matcher to [`target_format_from_name`] and the one place the
+/// companion alias matcher to [`parse_target_format`] and the one place the
 /// PyPSA aliases live.
 pub fn is_pypsa_csv_name(name: &str) -> bool {
     matches!(
@@ -427,8 +436,8 @@ fn is_pslf_name(name: &str) -> bool {
     )
 }
 
-/// Parse the case file at `path`, choosing the reader from `from` (the
-/// [`target_format_from_name`] names plus `pypsa-csv`/`pypsa`, `pwb`, `pslf`,
+/// Parse the case file at `path`, choosing the parser from `from` (the
+/// [`parse_target_format`] names plus `pypsa-csv`/`pypsa`, `pwb`, `pslf`,
 /// and `epc`) or, when `None`, from the path: a directory containing
 /// `network.csv` parses as a PyPSA CSV folder (any other directory is refused
 /// as a directory with [`Error::UnknownFormat`], before extension inference),
@@ -442,8 +451,8 @@ fn is_pslf_name(name: &str) -> bool {
 /// model JSON markers (`buses` plus a network key), distribution markers,
 /// ambiguous markers, or no known markers returns [`Error::UnknownFormat`].
 /// Declare a format on the source to force a parser. PowerWorld `.pwb` is a
-/// binary read only format; PSLF `.epc` is text and has a writer. Returns the
-/// typed module: the network value, the reader's findings, and the retained
+/// binary input only format; PSLF `.epc` is text and supports emission. Returns
+/// the typed module: the network value, the parser's findings, and the retained
 /// source.
 ///
 /// The one parser the CLI and the Python/C/Julia bindings share, so adding a
@@ -451,7 +460,7 @@ fn is_pslf_name(name: &str) -> bool {
 ///
 /// # Errors
 /// A `Request` failure when the format cannot be determined or is refused, an
-/// `Io` failure when acquisition fails, and the reader's own failure on
+/// `Io` failure when acquisition fails, and the parser's own failure on
 /// malformed input. Findings collected before a failure ride the returned
 /// error.
 ///
@@ -480,42 +489,35 @@ pub fn parse_with_json_class(
     source: powerio_core::Source,
     json_class: Option<routing::JsonClass>,
 ) -> std::result::Result<PioModule<BalancedNetwork>, powerio_core::Error> {
+    // Resolve the physical JSON transport once. In particular, model JSON
+    // carries the network's semantic origin inside the serialized value, but
+    // those bytes are model JSON rather than that origin's case format.
+    let json_class = json_class.or_else(|| {
+        let buffer = source.primary_buffer().ok()?;
+        let text = std::str::from_utf8(buffer.content_bytes()).ok()?;
+        Some(routing::classify_json_text(text))
+    });
+    let is_model_json = matches!(json_class, Some(routing::JsonClass::ModelJson));
     let mut warnings = Diagnostics::new();
     match parse_to_network(&source, &mut warnings, json_class) {
         Ok(network) => {
-            let format = network.source_format();
-            let mut module = PioModule::new(network);
-            for buffer in source.acquired_buffers() {
-                // A stored descriptor is a display name, not a filesystem
-                // path; keep only the final component of a buffer name that
-                // came from Source::open.
-                let name = std::path::Path::new(buffer.name())
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or_else(|| buffer.name());
-                let descriptor = match SourceDescriptor::new(
-                    buffer.id().clone(),
-                    name,
-                    buffer.bytes().len() as u64,
-                ) {
-                    Ok(descriptor) => descriptor,
-                    Err(error) => return Err(error.with_source(source)),
+            // Record the detected format on the retained source before the
+            // common constructor builds descriptors and the coarse root
+            // source map. Keep an explicit caller declaration unchanged.
+            let source = if source.format().is_some() {
+                source
+            } else {
+                let format = if is_model_json {
+                    "model-json"
+                } else {
+                    network.source_format().name()
                 };
-                // SourceFormat::name is always a valid format id; skipping
-                // on the impossible error keeps this path panic free.
-                let descriptor = match powerio_core::FormatId::new(format.name()) {
-                    Ok(id) => descriptor.with_format(id),
-                    Err(_) => descriptor,
-                };
-                if let Err(error) = module.add_source_descriptor(descriptor) {
-                    return Err(error.with_source(source));
+                match powerio_core::FormatId::new(format) {
+                    Ok(format) => source.with_format(format),
+                    Err(_) => source,
                 }
-            }
-            let mut module = module.with_source(source);
-            for record in warnings.into_records() {
-                module.add_diagnostic(record)?;
-            }
-            Ok(module)
+            };
+            PioModule::parsed(network, source, warnings.into_records())
         }
         Err(error) => {
             let core = powerio_core::Error::new(error.code(), error.to_string());
@@ -532,6 +534,7 @@ pub fn parse_with_json_class(
 /// computed on this source's own text ([`parse_with_json_class`]); when it is
 /// `None`, this classifies inline at the point a `.json` source needs it,
 /// exactly as [`parse`] always has.
+#[allow(clippy::too_many_lines)]
 fn parse_to_network(
     source: &powerio_core::Source,
     warnings: &mut Diagnostics,
@@ -575,6 +578,10 @@ fn parse_to_network(
                 .into(),
         ));
     }
+    if from.is_some_and(|format| format == "model-json") {
+        let buffer = primary(source)?;
+        return BalancedNetwork::from_json(source_text(&buffer)?);
+    }
     // PowerWorld `.pwb` is binary and read only; dispatch it before the text
     // read. `from` accepts "pwb" for files with a different extension.
     let ext = path
@@ -596,7 +603,7 @@ fn parse_to_network(
         return Ok(network);
     }
     if from
-        .and_then(target_format_from_name)
+        .and_then(parse_target_format)
         .is_some_and(|format| format == TargetFormat::DeepMindOpfDataJson)
         && matches!(ext.as_deref(), Some("pt" | "gz"))
     {
@@ -615,10 +622,10 @@ fn parse_to_network(
     }
     let fmt_hint = match from {
         Some(f) => {
-            if display_format_from_name(f).is_some() {
+            if parse_display_format(f).is_some() {
                 return Err(display_file_guidance());
             }
-            Some(target_format_from_name(f).ok_or_else(|| unknown_source_format(f))?)
+            Some(parse_target_format(f).ok_or_else(|| unknown_source_format(f))?)
         }
         None => {
             // Everything but `.json` (sniffed below) resolves without the text.
@@ -790,7 +797,7 @@ pub(crate) fn reject_empty_case(net: &BalancedNetwork, format: &'static str) -> 
 
 /// The source format names [`parse`] accepts as a declared format, each with
 /// its aliases. The unknown format error prints this list, and a test walks
-/// every alias through [`routing::transmission_format_from_name`] so it
+/// every alias through [`routing::parse_transmission_format`] so it
 /// cannot drift from the matcher. `pypsa-csv` names a directory source and
 /// `pwb` a binary one; every other name reads file and memory sources alike.
 pub const SOURCE_FORMAT_NAMES: &str = "matpower/m, powermodels-json/powermodels/pm, \
@@ -813,7 +820,7 @@ fn unknown_source_format(name: &str) -> Error {
                 .into(),
         );
     }
-    if let Some(dist) = routing::distribution_format_from_name(name) {
+    if let Some(dist) = routing::parse_distribution_format(name) {
         return Error::UnknownFormat(format!(
             "`{}` is a distribution format, and this parser reads only balanced \
              transmission formats; parse it through the one module family \
@@ -840,8 +847,8 @@ fn json_target_from_class(class: JsonClass) -> Result<TargetFormat> {
     match class {
         JsonClass::Module => Err(Error::UnknownFormat(
             "JSON is a .pio.json stored module; read it with the module surface \
-             (powerio::parse in Rust, pio_parse_str in C, powerio.parse in \
-             Python, parse_bytes in Julia)"
+             (powerio::parse in Rust, pio_parse_text in C, powerio.parse_text in \
+             Python, parse_text in Julia)"
                 .into(),
         )),
         JsonClass::ModelJson => Err(Error::UnknownFormat(
@@ -883,26 +890,14 @@ fn transmission_json_target(format: TransmissionFormat) -> Result<TargetFormat> 
     }
 }
 
-/// Output of a conversion: the serialized text plus the fidelity findings:
-/// data the target can't represent, defaults synthesized, or blocks mapped
-/// best effort. Empty `diagnostics` means a faithful conversion. For
-/// [`convert_file`] and [`convert_str`], `diagnostics` carries the read side
-/// findings ahead of the write side. Warning is one diagnostic severity;
-/// rendered text lines come from [`crate::diagnostics::render_diagnostics`].
-///
-/// `#[non_exhaustive]`: a returns-only type, so downstream code reads it but
-/// never constructs it, leaving room to add fidelity metadata without a breaking
-/// change.
+/// One text serializer's internal output before it commits to a destination.
 #[derive(Debug, Clone)]
-#[non_exhaustive]
-pub struct Conversion {
-    pub text: String,
-    /// The findings as structured records: a stable code, a severity, and a
-    /// message.
-    pub diagnostics: Vec<Diagnostic>,
+pub(crate) struct TextEmission {
+    pub(crate) text: String,
+    pub(crate) diagnostics: Vec<Diagnostic>,
 }
 
-impl Conversion {
+impl TextEmission {
     pub(crate) fn new(text: String, diagnostics: Diagnostics) -> Self {
         Self {
             text,
@@ -910,24 +905,22 @@ impl Conversion {
         }
     }
 
-    /// A conversion that dropped nothing, e.g. a same-format echo.
+    /// An emission that dropped nothing, e.g. a same format echo.
     pub(crate) fn faithful(text: String) -> Self {
         Self::new(text, Diagnostics::new())
     }
 
-    /// The findings as `CODE: message` lines, rendered on request. Warning is
-    /// one diagnostic severity; there is no separately stored text channel.
-    #[must_use]
-    pub fn rendered_diagnostics(&self) -> Vec<String> {
+    #[cfg(test)]
+    pub(crate) fn render_diagnostics(&self) -> Vec<String> {
         crate::diagnostics::render_diagnostics(&self.diagnostics)
     }
 
-    /// Record one finding after the writer has run.
+    /// Record one finding after the serializer has run.
     pub(crate) fn push(&mut self, info: &'static DiagnosticInfo, message: impl Into<String>) {
         self.diagnostics.push(Diagnostic::of(info, message));
     }
 
-    /// Put the read side's findings ahead of the write side's.
+    /// Put parse diagnostics ahead of emission diagnostics.
     pub(crate) fn prepend(&mut self, read: Vec<Diagnostic>) {
         let mut records = read;
         records.append(&mut self.diagnostics);
@@ -935,39 +928,38 @@ impl Conversion {
     }
 }
 
-/// Optional write-time policies layered on top of the neutral [`BalancedNetwork`].
+/// Optional emission policies layered on top of the neutral [`BalancedNetwork`].
 ///
-/// The default is a no-op and preserves the old `write_as` / `convert_*`
-/// behavior. Non-default options work on a cloned network and never mutate the
-/// caller's case.
+/// The default preserves the module as stated. Other options work on a cloned
+/// network and never mutate the caller's case.
 #[derive(Debug, Clone, Default)]
-pub struct WriteOptions {
+pub struct EmitOptions {
     pub missing_gen_cost: MissingGenCostPolicy,
     pub gen_cost_patches: Vec<GenCostPatch>,
 }
 
-impl WriteOptions {
+impl EmitOptions {
     #[must_use]
     pub fn is_default(&self) -> bool {
         self.missing_gen_cost.is_preserve() && self.gen_cost_patches.is_empty()
     }
 }
 
-/// Write a parsed module to `format`. Writing back to the source format of an
+/// Prepare a parsed module for emission to `format`. Emitting to the source format of an
 /// unchanged parsed module returns the retained source bytes exactly,
 /// including a byte order mark; any other target serializes the typed value.
 ///
 /// # Errors
-/// [`Error::WriteUnsupported`] for a read only target, and the writer's own
+/// [`Error::WriteUnsupported`] for a read only target, and the serializer's own
 /// [`Error`] on a case it cannot state.
-pub fn write_as(
+fn emit_text(
     module: &PioModule<BalancedNetwork>,
     format: TargetFormat,
-) -> std::result::Result<Conversion, powerio_core::Error> {
+) -> std::result::Result<TextEmission, powerio_core::Error> {
     if let Some(text) = echo_text(module, format) {
-        return Ok(Conversion::faithful(text));
+        return Ok(TextEmission::faithful(text));
     }
-    let mut conv = write_conversion(module.value(), format).map_err(core_error)?;
+    let mut conv = emit_value_text(module.value(), format).map_err(core_error)?;
     warn_psse_downgrade(module, format, &mut conv);
     Ok(conv)
 }
@@ -978,13 +970,16 @@ pub(crate) fn core_error(error: Error) -> powerio_core::Error {
     powerio_core::Error::new(error.code(), message).with_cause(error)
 }
 
-/// The retained source text when writing `module` back to its source format:
-/// the echo that reproduces the input byte for byte. `None` sends the write
-/// down the semantic path.
+/// The retained source text when emitting `module` back to its source format:
+/// the echo that reproduces the input byte for byte. `None` sends the emission
+/// down the semantic serialization path.
 fn echo_text(module: &PioModule<BalancedNetwork>, target: TargetFormat) -> Option<String> {
     let source = module.source()?;
     let buffer = source.primary_buffer().ok()?;
-    if !same_format(target, module.value().source_format()) {
+    let source_format = source
+        .format()
+        .and_then(|format| parse_target_format(format.as_str()))?;
+    if !same_target_format(target, source_format) {
         return None;
     }
     let text = std::str::from_utf8(buffer.bytes()).ok()?;
@@ -999,19 +994,8 @@ fn echo_text(module: &PioModule<BalancedNetwork>, target: TargetFormat) -> Optio
     Some(text.to_owned())
 }
 
-/// Serialize a typed network to `format` with no source echo: the semantic
-/// write used for values constructed in memory or severed from their module.
-///
-/// # Errors
-/// As [`write_as`].
-pub fn write_network(
-    net: &BalancedNetwork,
-    format: TargetFormat,
-) -> std::result::Result<Conversion, powerio_core::Error> {
-    write_conversion(net, format).map_err(core_error)
-}
-
-pub(crate) fn write_conversion(net: &BalancedNetwork, format: TargetFormat) -> Result<Conversion> {
+/// Serialize a typed network to `format` with no source echo.
+pub(crate) fn emit_value_text(net: &BalancedNetwork, format: TargetFormat) -> Result<TextEmission> {
     let mut conv = match format {
         TargetFormat::PowerModelsJson => write_powermodels_json(net),
         TargetFormat::EgretJson => write_egret_json(net),
@@ -1043,40 +1027,40 @@ pub(crate) fn write_conversion(net: &BalancedNetwork, format: TargetFormat) -> R
     Ok(conv)
 }
 
-/// Write a parsed module to `format` through a destination: the one write
+/// Emit a parsed module to `format` through a destination: the one output
 /// operation over file, memory, and (for the directory formats) folder
 /// output. Every text target commits a single artifact — a path destination
 /// names the exact file, a memory destination names the artifact — staged
-/// and renamed into place so a failed write never exposes a partial target.
-/// The result carries the complete artifact inventory and the writer's
-/// findings. PyPSA CSV folders write through [`write_pypsa_csv`].
+/// and renamed into place so a failed emission never exposes a partial target.
+/// The result carries the complete artifact inventory and the serializer's
+/// findings.
 ///
 /// # Errors
-/// As [`write_as`], plus the destination's own collision and staging
+/// The format serializer or destination refused the operation.
 /// failures.
-pub fn write(
+pub fn emit(
     module: &PioModule<BalancedNetwork>,
     format: TargetFormat,
     destination: powerio_core::Destination,
-) -> std::result::Result<powerio_core::WriteResult, powerio_core::Error> {
-    write_with_options(module, format, &WriteOptions::default(), destination)
+) -> std::result::Result<powerio_core::EmitResult, powerio_core::Error> {
+    emit_with_options(module, format, &EmitOptions::default(), destination)
 }
 
-/// [`write()`] with write-time cost policies, as [`write_as_with_options`].
+/// [`emit()`] with generator cost policies.
 ///
 /// # Errors
-/// As [`write()`].
+/// As [`emit()`].
 ///
 /// # Panics
 /// Never on external input: the fixed artifact name is valid by
 /// construction.
-pub fn write_with_options(
+pub fn emit_with_options(
     module: &PioModule<BalancedNetwork>,
     format: TargetFormat,
-    options: &WriteOptions,
+    options: &EmitOptions,
     destination: powerio_core::Destination,
-) -> std::result::Result<powerio_core::WriteResult, powerio_core::Error> {
-    let conv = write_as_with_options(module, format, options)?;
+) -> std::result::Result<powerio_core::EmitResult, powerio_core::Error> {
+    let conv = emit_text_with_options(module, format, options)?;
     let artifact = powerio_core::MemoryArtifact::new(
         powerio_core::ArtifactPath::new("case").expect("static name is a valid artifact path"),
         conv.text.into_bytes(),
@@ -1084,8 +1068,8 @@ pub fn write_with_options(
     destination.__commit_artifacts(false, vec![artifact], conv.diagnostics)
 }
 
-/// Write a parsed module as a PyPSA CSV folder through a destination: the
-/// directory form of [`write()`]. Either destination names the output root and
+/// Emit a parsed module as a PyPSA CSV folder through a destination. Either
+/// destination names the output root and
 /// every returned artifact sits below it; the whole inventory commits
 /// atomically.
 ///
@@ -1093,13 +1077,33 @@ pub fn write_with_options(
 /// The destination's collision and staging failures.
 ///
 /// # Panics
-/// Never on external input: the writer's fixed artifact names are valid by
+/// Never on external input: the serializer's fixed artifact names are valid by
 /// construction.
-pub fn write_pypsa_csv(
+#[doc(hidden)]
+pub fn __emit_pypsa_csv(
     module: &PioModule<BalancedNetwork>,
     destination: powerio_core::Destination,
-) -> std::result::Result<powerio_core::WriteResult, powerio_core::Error> {
-    let (artifacts, diagnostics) = pypsa::pypsa_csv_artifacts(module.value());
+) -> std::result::Result<powerio_core::EmitResult, powerio_core::Error> {
+    __emit_pypsa_csv_with_options(module, &EmitOptions::default(), destination)
+}
+
+/// Internal bridge for the universal facade's PyPSA directory dispatch.
+#[doc(hidden)]
+pub fn __emit_pypsa_csv_with_options(
+    module: &PioModule<BalancedNetwork>,
+    options: &EmitOptions,
+    destination: powerio_core::Destination,
+) -> std::result::Result<powerio_core::EmitResult, powerio_core::Error> {
+    let (working, mut diagnostics) = if options.is_default() {
+        (None, Vec::new())
+    } else {
+        let (network, diagnostics) =
+            apply_emit_cost_policy(module.value(), options).map_err(core_error)?;
+        (Some(network), diagnostics)
+    };
+    let (artifacts, format_diagnostics) =
+        pypsa::pypsa_csv_artifacts(working.as_ref().unwrap_or_else(|| module.value()));
+    diagnostics.extend(format_diagnostics);
     let artifacts = artifacts
         .into_iter()
         .map(|(name, text)| {
@@ -1112,32 +1116,32 @@ pub fn write_pypsa_csv(
     destination.__commit_artifacts(true, artifacts, diagnostics)
 }
 
-/// Write a parsed module with write-time cost policies. The plain
-/// [`write_as`] behavior is preserved when `options` is default; a non-default
-/// policy edits a copy of the typed value, so its write never echoes source
+/// Prepare a parsed module with emission policies. The plain
+/// emission behavior is preserved when `options` is default; a non-default
+/// policy edits a copy of the typed value, so its emission never echoes source
 /// bytes the policy no longer matches.
-pub fn write_as_with_options(
+fn emit_text_with_options(
     module: &PioModule<BalancedNetwork>,
     format: TargetFormat,
-    options: &WriteOptions,
-) -> std::result::Result<Conversion, powerio_core::Error> {
+    options: &EmitOptions,
+) -> std::result::Result<TextEmission, powerio_core::Error> {
     if options.is_default() {
-        return write_as(module, format);
+        return emit_text(module, format);
     }
     let (working, policy_warnings) =
-        apply_write_cost_policy(module.value(), options).map_err(core_error)?;
-    let mut conv = write_conversion(&working, format).map_err(core_error)?;
+        apply_emit_cost_policy(module.value(), options).map_err(core_error)?;
+    let mut conv = emit_value_text(&working, format).map_err(core_error)?;
     conv.prepend(policy_warnings);
     Ok(conv)
 }
 
-/// Apply the write-time cost policy to a copy of `net` and report what it did.
+/// Apply the emission cost policy to a copy of `net` and report what it did.
 ///
 /// Shared by the text and directory writers so both surfaces run one policy and
 /// describe it with the same findings. The caller's network is never mutated.
-pub(crate) fn apply_write_cost_policy(
+pub(crate) fn apply_emit_cost_policy(
     net: &BalancedNetwork,
-    options: &WriteOptions,
+    options: &EmitOptions,
 ) -> Result<(BalancedNetwork, Vec<Diagnostic>)> {
     let mut working = net.clone();
     let report =
@@ -1200,9 +1204,9 @@ pub(super) fn allocate_circuit_id<K: Ord + Clone>(
     }
 }
 
-/// Warn when a PSS/E source is re-serialized at an older revision than its own.
-/// `parse_file` maps every `.raw` to revision 33 and the `psse`/`raw` aliases
-/// resolve to 33, so writing a v34/v35 source through the default target skips
+/// Warn when a PSS/E source is emitted at an older revision than its own.
+/// The `psse` and `raw` emission aliases resolve to revision 33, so emitting a
+/// v34/v35 source through the default target skips
 /// the echo path (revisions differ) and re-emits the v33 layout, dropping the
 /// modern records (12 named ratings, load DG/LOADTYPE columns, the system-wide
 /// block) and any unmodeled section the echo would have preserved. Name the
@@ -1210,7 +1214,7 @@ pub(super) fn allocate_circuit_id<K: Ord + Clone>(
 fn warn_psse_downgrade(
     module: &PioModule<BalancedNetwork>,
     format: TargetFormat,
-    conv: &mut Conversion,
+    conv: &mut TextEmission,
 ) {
     let source_text = module
         .source()
@@ -1226,19 +1230,19 @@ fn warn_psse_downgrade(
             conv.push(
                 &codes::EMIT_PSSE_DOWNGRADED,
                 format!(
-                    "PSS/E source is revision {src_rev} but the write target is revision {rev}; \
-                     the older layout drops fields the source carried (write to psse{src_rev} to keep them)"
+                    "PSS/E source is revision {src_rev} but the emission target is revision {rev}; \
+                     the older layout drops fields the source carried (emit as psse{src_rev} to keep them)"
                 ),
             );
         }
     }
 }
 
-/// Warn when a non-default system frequency writes to a format with no frequency
+/// Warn when a non-default system frequency is emitted to a format with no frequency
 /// field. PSS/E (`BASFRQ`) and pandapower (`f_hz`) carry it; MATPOWER,
 /// PowerModels, egret, and PowerWorld have nowhere to put it, so a 50 Hz case
-/// would silently read back as the 60 Hz default. Report the loss instead.
-fn warn_dropped_frequency(net: &BalancedNetwork, format: TargetFormat, conv: &mut Conversion) {
+/// would parse again as the 60 Hz default. Report the loss instead.
+fn warn_dropped_frequency(net: &BalancedNetwork, format: TargetFormat, conv: &mut TextEmission) {
     let carries_frequency = matches!(
         format,
         TargetFormat::Psse { .. } | TargetFormat::PandapowerJson
@@ -1261,11 +1265,11 @@ fn warn_dropped_frequency(net: &BalancedNetwork, format: TargetFormat, conv: &mu
 
 /// Warn when the case carries bus locations and the target has no geometry
 /// concept. PowerWorld aux (`Latitude:1`/`Longitude:1`) and pandapower
-/// (`geo`) carry them, and the PyPSA folder writer (`x`/`y`) has its own
+/// (`geo`) carry them, and PyPSA folder emission (`x`/`y`) has its own
 /// path; MATPOWER, PSS/E, PowerModels, egret, PSLF, and Surge have nowhere to
 /// put them, matching the `base_frequency` behavior. `powerio geo extract`
-/// writes the sidecar as the escape hatch.
-fn warn_dropped_locations(net: &BalancedNetwork, format: TargetFormat, conv: &mut Conversion) {
+/// emits the sidecar as the escape hatch.
+fn warn_dropped_locations(net: &BalancedNetwork, format: TargetFormat, conv: &mut TextEmission) {
     let carries_locations = matches!(
         format,
         TargetFormat::PowerWorld | TargetFormat::PandapowerJson
@@ -1280,7 +1284,7 @@ fn warn_dropped_locations(net: &BalancedNetwork, format: TargetFormat, conv: &mu
             &format.emit_family().field_dropped,
             format!(
                 "{n} bus location(s) and {routed} branch route(s) dropped: {} has no \
-                 coordinate field (write a .geo.json sidecar to keep them)",
+                 coordinate field (emit a .geo.json sidecar to keep them)",
                 format.label()
             ),
         );
@@ -1289,13 +1293,13 @@ fn warn_dropped_locations(net: &BalancedNetwork, format: TargetFormat, conv: &mu
 
 /// Warn when a transformer carries line charging and the target's
 /// transformer record has no susceptance column to hold it. The PSLF `.epc`
-/// transformer record is the one such target; PSS/E writes representable
-/// magnetizing admittance and the MATPOWER shaped writers keep the legacy total
+/// transformer record is the one such target; PSS/E emits representable
+/// magnetizing admittance and the MATPOWER serializers keep the legacy total
 /// projection on the branch row, so neither drops it.
 fn warn_dropped_transformer_charging(
     net: &BalancedNetwork,
     format: TargetFormat,
-    conv: &mut Conversion,
+    conv: &mut TextEmission,
 ) {
     if !matches!(format, TargetFormat::Pslf) {
         return;
@@ -1303,7 +1307,7 @@ fn warn_dropped_transformer_charging(
     let n = net
         .branches()
         .iter()
-        .filter(|b| b.is_transformer() && b.total_charging_b() != 0.0)
+        .filter(|b| b.is_transformer() && b.calc_total_charging_b() != 0.0)
         .count();
     if n > 0 {
         conv.push(
@@ -1409,150 +1413,10 @@ pub(super) fn warn_extra_branch_rating_sets(
 /// case insensitively and accept the historical underscore spelling of a
 /// hyphenated alias; the ID itself keeps the stable lower case hyphen
 /// grammar.
-pub fn format_id_for(
+pub fn parse_format_id(
     token: &str,
 ) -> std::result::Result<powerio_core::FormatId, powerio_core::Error> {
     powerio_core::FormatId::new(token.to_ascii_lowercase().replace('_', "-"))
-}
-
-/// Attach a caller-named source format to a source.
-fn with_declared_format(
-    source: powerio_core::Source,
-    from: Option<&str>,
-) -> std::result::Result<powerio_core::Source, powerio_core::Error> {
-    match from {
-        None => Ok(source),
-        Some(token) => Ok(source.with_format(format_id_for(token)?)),
-    }
-}
-
-/// Convert a case file to `to`, optionally forcing the source format with
-/// `from`.
-///
-/// This is the canonical file-conversion helper shared by the bindings. It
-/// parses `path` once, writes the parsed module to `to`, and returns the
-/// converted text plus any fidelity findings, read side first. An echo
-/// (writing back to the source format) returns the retained text with no
-/// findings.
-///
-/// # Errors
-/// As [`parse`].
-pub fn convert_file(
-    path: impl AsRef<std::path::Path>,
-    to: TargetFormat,
-    from: Option<&str>,
-) -> std::result::Result<Conversion, powerio_core::Error> {
-    let source = with_declared_format(powerio_core::Source::open(path.as_ref())?, from)?;
-    convert_source(source, to, &WriteOptions::default())
-}
-
-/// Convert a case file with write-time cost policies.
-pub fn convert_file_with_options(
-    path: impl AsRef<std::path::Path>,
-    to: TargetFormat,
-    from: Option<&str>,
-    options: &WriteOptions,
-) -> std::result::Result<Conversion, powerio_core::Error> {
-    let source = with_declared_format(powerio_core::Source::open(path.as_ref())?, from)?;
-    convert_source(source, to, options)
-}
-
-/// Convert in-memory case `text` of the named source format `from` (see
-/// [`target_format_from_name`]) to `to`.
-///
-/// Parses `text` once and writes the parsed module to `to` without a
-/// temporary file. Findings are ordered read side first, as in
-/// [`convert_file`].
-///
-/// # Errors
-/// As [`parse`].
-pub fn convert_str(
-    text: &str,
-    to: TargetFormat,
-    from: &str,
-) -> std::result::Result<Conversion, powerio_core::Error> {
-    convert_str_with_options(text, to, from, &WriteOptions::default())
-}
-
-/// Convert in-memory case text with write-time cost policies.
-pub fn convert_str_with_options(
-    text: &str,
-    to: TargetFormat,
-    from: &str,
-    options: &WriteOptions,
-) -> std::result::Result<Conversion, powerio_core::Error> {
-    let source = with_declared_format(
-        powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())?,
-        Some(from),
-    )?;
-    convert_source(source, to, options)
-}
-
-fn convert_source(
-    source: powerio_core::Source,
-    to: TargetFormat,
-    options: &WriteOptions,
-) -> std::result::Result<Conversion, powerio_core::Error> {
-    let module = parse(source)?;
-    let echoed = options.is_default() && echo_text(&module, to).is_some();
-    let mut conv = write_as_with_options(&module, to, options)?;
-    if !echoed {
-        conv.prepend(module.diagnostics().to_vec());
-    }
-    Ok(conv)
-}
-
-/// Write `net` into `out_dir` as the named directory format. This function
-/// dispatches directory format names for the bindings. PyPSA CSV
-/// (`pypsa-csv`/`pypsa`) is the one such
-/// format today; a text format name is rejected by name, pointing at
-/// [`write_as`]. Returns the write's findings as structured records; render
-/// them with `diagnostics::render_diagnostics` for a text channel.
-///
-/// # Errors
-/// [`Error::UnknownFormat`] for a non-directory format name; the writer's own
-/// [`Error`] otherwise.
-pub fn write_dir(
-    net: &BalancedNetwork,
-    to: &str,
-    out_dir: impl AsRef<std::path::Path>,
-) -> std::result::Result<Vec<Diagnostic>, powerio_core::Error> {
-    if is_pypsa_csv_name(to) {
-        return write_pypsa_csv_folder(net, out_dir.as_ref()).map(|o| o.diagnostics);
-    }
-    Err(core_error(unknown_directory_format(to)))
-}
-
-fn unknown_directory_format(to: &str) -> Error {
-    Error::UnknownFormat(format!(
-        "{to} is not a directory format (directory targets: pypsa-csv/pypsa); \
-         text formats serialize through write_as / to_format"
-    ))
-}
-
-/// Write `net` into `out_dir` with write-time cost policies: the directory twin
-/// of [`write_as_with_options`]. Default options are [`write_dir`] exactly.
-/// The policy's own findings come back ahead of the writer's.
-///
-/// # Errors
-/// As [`write_dir`], plus the cost policy's own [`Error`].
-pub fn write_dir_with_options(
-    net: &BalancedNetwork,
-    to: &str,
-    out_dir: impl AsRef<std::path::Path>,
-    options: &WriteOptions,
-) -> std::result::Result<Vec<Diagnostic>, powerio_core::Error> {
-    // Refuse an unknown target before the policy runs, so a bad format name is
-    // reported as one rather than as whatever the cost pass hits first.
-    if !is_pypsa_csv_name(to) {
-        return Err(core_error(unknown_directory_format(to)));
-    }
-    if options.is_default() {
-        return write_dir(net, to, out_dir);
-    }
-    let (working, mut diagnostics) = apply_write_cost_policy(net, options).map_err(core_error)?;
-    diagnostics.extend(write_dir(&working, to, out_dir)?);
-    Ok(diagnostics)
 }
 
 /// Warn when a network with no reference (slack) bus converts to a format
@@ -1560,7 +1424,7 @@ pub fn write_dir_with_options(
 /// systematically lacks the designation (the binary does not store it), so
 /// the silent case would be common; `to_normalized` synthesizes a slack at
 /// the largest pmax in service generator bus for consumers that need one.
-fn warn_missing_reference(net: &BalancedNetwork, format: TargetFormat, conv: &mut Conversion) {
+fn warn_missing_reference(net: &BalancedNetwork, format: TargetFormat, conv: &mut TextEmission) {
     let needs_ref = matches!(
         format,
         TargetFormat::Matpower
@@ -1577,9 +1441,7 @@ fn warn_missing_reference(net: &BalancedNetwork, format: TargetFormat, conv: &mu
     }
 }
 
-/// The slackless-network warning itself, shared with the PyPSA folder writer
-/// (which produces `PypsaCsvOutputs`, not a [`Conversion`], so it cannot go
-/// through [`warn_missing_reference`]).
+/// The slackless network warning itself, shared with the PyPSA folder emitter.
 pub(super) fn missing_reference_warning(net: &BalancedNetwork) -> Option<String> {
     (!net.buses().iter().any(|b| b.kind == BusType::Ref)).then(|| {
         "no reference (slack) bus in the source network; power flow tools \
@@ -1598,10 +1460,10 @@ pub(super) fn missing_reference_warning(net: &BalancedNetwork) -> Option<String>
 /// it silently. MATPOWER has no separate transformer representation (just a `TAP`
 /// column), so it is exempt.
 // `tap == 1.0` / `shift == 0.0` are exact by construction: normalization sets a
-// line's tap from `effective_tap()` (the literal `1.0`) and its shift from
+// line's tap from `calc_effective_tap()` (the literal `1.0`) and its shift from
 // `0.0 * DEG_TO_RAD` (exactly `0.0`), so an epsilon compare would be wrong here.
 #[allow(clippy::float_cmp)]
-fn warn_normalized_tap(net: &BalancedNetwork, format: TargetFormat, conv: &mut Conversion) {
+fn warn_normalized_tap(net: &BalancedNetwork, format: TargetFormat, conv: &mut TextEmission) {
     if matches!(format, TargetFormat::Matpower) {
         return;
     }
@@ -1709,24 +1571,15 @@ pub(crate) fn zbase(v_kv: f64, base_mva: f64) -> f64 {
     }
 }
 
-/// Whether a write target is the same format the network was read from.
-fn same_format(target: TargetFormat, source: SourceFormat) -> bool {
-    matches!(
-        (target, source),
-        (TargetFormat::Matpower, SourceFormat::Matpower)
-            | (TargetFormat::PowerModelsJson, SourceFormat::PowerModelsJson)
-            | (TargetFormat::EgretJson, SourceFormat::EgretJson)
-            | (TargetFormat::Psse { .. }, SourceFormat::Psse)
-            | (TargetFormat::PowerWorld, SourceFormat::PowerWorld)
-            | (TargetFormat::PandapowerJson, SourceFormat::PandapowerJson)
-            | (TargetFormat::Pslf, SourceFormat::Pslf)
-            | (TargetFormat::Goc3Json, SourceFormat::Goc3Json)
-            | (TargetFormat::SurgeJson, SourceFormat::SurgeJson)
-            | (
-                TargetFormat::DeepMindOpfDataJson,
-                SourceFormat::DeepMindOpfDataJson,
-            )
-    )
+/// Whether two case targets identify the same physical format. PSS/E revisions
+/// share a family here; the retained header check above decides whether the
+/// requested revision is byte exact.
+fn same_target_format(requested: TargetFormat, source: TargetFormat) -> bool {
+    requested == source
+        || matches!(
+            (requested, source),
+            (TargetFormat::Psse { .. }, TargetFormat::Psse { .. })
+        )
 }
 
 /// JSON number for a finite `f64`; `Value::Null` for `NaN`/`±Inf`.
@@ -1734,14 +1587,14 @@ pub(crate) fn jnum(x: f64) -> Value {
     serde_json::Number::from_f64(x).map_or(Value::Null, Value::Number)
 }
 
-/// Serialize a built JSON tree into a [`Conversion`], appending one warning that
+/// Serialize a built JSON tree into a [`TextEmission`], appending one warning that
 /// names every field where a non-finite `f64` was written as `null` (JSON has no
 /// `±Inf`/`NaN`). Shared by the JSON writers.
 pub(crate) fn finish(
     family: &'static EmitFamily,
     root: Map<String, Value>,
     mut warnings: Diagnostics,
-) -> Conversion {
+) -> TextEmission {
     let value = Value::Object(root);
     let mut nulls = BTreeSet::new();
     collect_null_keys(&value, &mut nulls);
@@ -1755,7 +1608,7 @@ pub(crate) fn finish(
         );
     }
     let text = serde_json::to_string_pretty(&value).expect("a serde_json::Value always serializes");
-    Conversion::new(text, warnings)
+    TextEmission::new(text, warnings)
 }
 
 /// Collect the names of object keys whose value is `null`, anywhere in the tree.
@@ -1788,7 +1641,7 @@ pub(crate) mod test_parse {
     }
 
     impl TestParsed {
-        pub(crate) fn rendered_diagnostics(&self) -> Vec<String> {
+        pub(crate) fn render_diagnostics(&self) -> Vec<String> {
             crate::diagnostics::render_diagnostics(&self.diagnostics)
         }
     }
@@ -1911,7 +1764,7 @@ mod tests {
         let mut canonical = Vec::new();
         for clause in SOURCE_FORMAT_NAMES.split(", ") {
             for (i, alias) in clause.split('/').enumerate() {
-                let resolved = routing::transmission_format_from_name(alias);
+                let resolved = routing::parse_transmission_format(alias);
                 assert!(
                     resolved.is_some(),
                     "listed alias `{alias}` does not resolve"
@@ -1969,9 +1822,9 @@ mpc.branch = [
         // solver-ready copy is where a zero objective becomes real.
         let parsed = parse_str(costless, "matpower").unwrap();
         assert!(
-            parsed.rendered_diagnostics().is_empty(),
+            parsed.render_diagnostics().is_empty(),
             "{:?}",
-            parsed.rendered_diagnostics()
+            parsed.render_diagnostics()
         );
         let normalized = parsed
             .network
@@ -2030,14 +1883,14 @@ mpc.branch = [
                     mpc.gen = [];\n\
                     mpc.branch = [];\n";
         let source = powerio_core::Source::from_bytes("case.m", case.as_bytes().to_vec()).unwrap();
-        let module = parse(source.with_format(format_id_for("matpower").unwrap())).unwrap();
+        let module = parse(source.with_format(parse_format_id("matpower").unwrap())).unwrap();
         assert_eq!(module.value().buses().len(), 1);
         assert!(
             module.diagnostics().is_empty(),
             "{:?}",
             module.diagnostics()
         );
-        let echo = write_as(&module, TargetFormat::Matpower).unwrap();
+        let echo = emit_text(&module, TargetFormat::Matpower).unwrap();
         assert_eq!(echo.text, case, "the echo reproduces the mark exactly");
     }
 
@@ -2054,12 +1907,12 @@ mpc.branch = [
         let module =
             parse(source.with_format(powerio_core::FormatId::new("matpower").unwrap())).unwrap();
         assert_eq!(
-            write_as(&module, TargetFormat::Matpower).unwrap().text,
+            emit_text(&module, TargetFormat::Matpower).unwrap().text,
             case
         );
 
         let net = module.into_value();
-        let canonical = net.to_canonical_format(TargetFormat::Matpower).unwrap();
+        let canonical = emit_value_text(&net, TargetFormat::Matpower).unwrap();
         assert_ne!(canonical.text, case);
         let reparsed = parse_str(&canonical.text, "matpower").unwrap();
         assert_eq!(reparsed.network.buses().len(), 1);
@@ -2074,7 +1927,7 @@ mpc.branch = [
     #[test]
     fn source_format_strings_round_trip_to_a_target() {
         // The bindings expose `source_format` as its `name()` token, and
-        // `to_format` routes that string back through `target_format_from_name`.
+        // `emit` routes that string back through `parse_target_format`.
         // Every writable source format must resolve; the legacy `{:?}` spelling
         // (the pre-0.9 property value, issue #75) must keep resolving for
         // callers that stored it.
@@ -2095,13 +1948,13 @@ mpc.branch = [
         ] {
             let token = sf.name();
             assert_eq!(
-                target_format_from_name(token),
+                parse_target_format(token),
                 Some(want),
                 "source_format {token:?} did not round-trip"
             );
             let legacy = format!("{sf:?}");
             assert_eq!(
-                target_format_from_name(&legacy),
+                parse_target_format(&legacy),
                 Some(want),
                 "legacy spelling {legacy:?} did not round-trip"
             );
@@ -2115,7 +1968,7 @@ mpc.branch = [
             SourceFormat::PypsaCsv,
             SourceFormat::PowerWorldBinary,
         ] {
-            assert_eq!(target_format_from_name(&format!("{sf:?}")), None);
+            assert_eq!(parse_target_format(&format!("{sf:?}")), None);
         }
     }
 }

@@ -19,19 +19,16 @@ use helpers::*;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use powerio_tx::{
-    BalancedNetwork, BusType, TargetFormat, write_egret_json, write_powermodels_json,
-    write_powerworld, write_pslf, write_psse, write_psse_rev,
-};
+use powerio_tx::{BalancedNetwork, BusType, TargetFormat};
 
 mod common;
 use common::json_approx_eq;
 
 fn write_psse34(n: &BalancedNetwork) -> String {
-    write_psse_rev(n, 34).text
+    emit_psse_rev(n, 34).text
 }
 fn write_psse35(n: &BalancedNetwork) -> String {
-    write_psse_rev(n, 35).text
+    emit_psse_rev(n, 35).text
 }
 
 fn data(name: &str) -> PathBuf {
@@ -222,7 +219,7 @@ fn branch_values(net: &BalancedNetwork, target: TargetFormat) -> Vec<BranchValue
                 r: round_value(branch.r),
                 x: round_value(branch.x),
                 b: (!(target == TargetFormat::Pslf && branch.is_transformer()))
-                    .then_some(round_value(branch.total_charging_b())),
+                    .then_some(round_value(branch.calc_total_charging_b())),
                 rate_a: round_value(branch.rate_a),
                 rate_b: round_value(branch.rate_b),
                 rate_c: round_value(branch.rate_c),
@@ -309,7 +306,7 @@ struct Roundtrippable {
 fn read_module(text: &str, token: &str) -> powerio_core::PioModule<BalancedNetwork> {
     let source = powerio_core::Source::from_bytes("case", text.as_bytes().to_vec())
         .unwrap()
-        .with_format(powerio_tx::format_id_for(token).unwrap());
+        .with_format(powerio_tx::parse_format_id(token).unwrap());
     powerio_tx::parse(source).unwrap()
 }
 
@@ -318,13 +315,13 @@ fn roundtrippable() -> Vec<Roundtrippable> {
         Roundtrippable {
             name: "PowerModels JSON",
             format: TargetFormat::PowerModelsJson,
-            write: |n| write_powermodels_json(n).text,
+            write: |n| emit_powermodels_json(n).text,
             token: "powermodels-json",
         },
         Roundtrippable {
             name: "PSS/E .raw",
             format: TargetFormat::Psse { rev: 33 },
-            write: |n| write_psse(n).text,
+            write: |n| emit_psse(n).text,
             token: "psse",
         },
         Roundtrippable {
@@ -342,19 +339,19 @@ fn roundtrippable() -> Vec<Roundtrippable> {
         Roundtrippable {
             name: "PowerWorld .aux",
             format: TargetFormat::PowerWorld,
-            write: |n| write_powerworld(n).text,
+            write: |n| emit_powerworld(n).text,
             token: "powerworld",
         },
         Roundtrippable {
             name: "egret JSON",
             format: TargetFormat::EgretJson,
-            write: |n| write_egret_json(n).text,
+            write: |n| emit_egret_json(n).text,
             token: "egret-json",
         },
         Roundtrippable {
             name: "PSLF .epc",
             format: TargetFormat::Pslf,
-            write: |n| write_pslf(n).text,
+            write: |n| emit_pslf(n).text,
             token: "pslf",
         },
     ]
@@ -429,7 +426,7 @@ fn same_format_round_trip_is_byte_exact() {
             let text = (fmt.write)(&net0);
             let module = read_module(&text, fmt.token);
             assert_eq!(
-                powerio_tx::write_as(&module, fmt.format).unwrap().text,
+                emit_module(&module, fmt.format).unwrap().text,
                 text,
                 "{case} {}: same-format write is not a byte-exact echo",
                 fmt.name
@@ -442,15 +439,15 @@ fn same_format_round_trip_is_byte_exact() {
 fn cross_format_powermodels_to_psse_and_powerworld() {
     // A non-MATPOWER source through the hub to two other formats, core preserved.
     let net0 = parse_matpower_file(data("case30.m")).unwrap();
-    let pm = write_powermodels_json(&net0).text;
+    let pm = emit_powermodels_json(&net0).text;
     let from_pm = parse_powermodels_json(&pm).unwrap();
     let fp = fingerprint(&net0);
     assert_eq!(
-        fingerprint(&parse_psse(&write_psse(&from_pm).text).unwrap()),
+        fingerprint(&parse_psse(&emit_psse(&from_pm).text).unwrap()),
         fp
     );
     assert_eq!(
-        fingerprint(&parse_powerworld(&write_powerworld(&from_pm).text).unwrap()),
+        fingerprint(&parse_powerworld(&emit_powerworld(&from_pm).text).unwrap()),
         fp
     );
 }
@@ -469,7 +466,7 @@ fn egret_fixtures_round_trip_byte_exact() {
         let text = std::fs::read_to_string(data(f)).unwrap();
         let parsed = parse_str(&text, "egret-json").unwrap();
         assert_eq!(
-            parsed.to_format(TargetFormat::EgretJson).unwrap().text,
+            parsed.emit(TargetFormat::EgretJson).unwrap().text,
             text,
             "{f}: egret same-format write is not a byte-exact echo"
         );
