@@ -1277,7 +1277,7 @@ impl PyBalancedNetwork {
 
     fn __repr__(&self) -> String {
         format!(
-            "BalancedNetwork(name={:?}, n_buses={}, n_branches={}, n_gens={})",
+            "BalancedNetwork(name={:?}, n_buses={}, n_branches={}, n_generators={})",
             self.inner().name(),
             self.inner().buses().len(),
             self.inner().branches().len(),

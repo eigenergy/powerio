@@ -170,8 +170,8 @@ def test_parse_metadata(case9):
 
 def test_preferred_balanced_names_and_complete_tables():
     net = load("api_conformance")
-    assert net.n_generators == net.n_generators == len(net.generators) == 2
-    assert net.n_islands == net.n_islands == 1
+    assert net.n_generators == len(net.generators) == 2
+    assert net.n_islands == 1
     assert net.base_frequency == 60.0
     for table, count in [
         ("storage", "n_storage"),
@@ -193,7 +193,10 @@ def test_public_type_is_balanced_network(case9):
     # The 0.8 bridge alias is gone at 1.0.0.
     assert not hasattr(powerio, "Network")
     assert "Network" not in powerio.__all__
-    assert repr(case9).startswith("BalancedNetwork(")
+    representation = repr(case9)
+    assert representation.startswith("BalancedNetwork(")
+    assert "n_generators=3" in representation
+    assert "n_gens" not in representation
 
 
 def test_features_reports_compiled_in_surface():

@@ -97,7 +97,7 @@ def bench_case(path: Path):
     case = powerio.parse_file(path, value_type=powerio.BalancedNetwork).value
     print(
         f"case {path.name}: {case.n_buses} buses, {case.n_branches} branches, "
-        f"{case.n_gens} gens"
+        f"{case.n_generators} generators"
     )
     n, warm = samples_for(case.n_buses)
 

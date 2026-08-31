@@ -35,8 +35,10 @@ def check_case(path: Path) -> str:
         problems.append(f"bus count {len(net.bus)} != {case.n_buses}")
     if len(net.line) + len(net.trafo) != case.n_branches:
         problems.append(f"branch count {len(net.line) + len(net.trafo)} != {case.n_branches}")
-    if len(net.gen) + len(net.ext_grid) != case.n_gens:
-        problems.append(f"generator count {len(net.gen) + len(net.ext_grid)} != {case.n_gens}")
+    if len(net.gen) + len(net.ext_grid) != case.n_generators:
+        problems.append(
+            f"generator count {len(net.gen) + len(net.ext_grid)} != {case.n_generators}"
+        )
     if len(net.load) != case.n_loads:
         problems.append(f"load count {len(net.load)} != {case.n_loads}")
     # The writer maps MATPOWER transformer line charging b onto one bus shunt
