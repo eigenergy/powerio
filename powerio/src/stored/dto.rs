@@ -423,7 +423,12 @@ pub struct AcPfInstanceV1 {
 pub enum ObjectiveTermV1 {
     NetworkGeneratorCost,
     NetworkPerPhaseCost,
-    DifferentiabilityRegularization { weight: StoredF64 },
+    /// Read only compatibility for 0.10 documents. The runtime removes this
+    /// term and records `READ.MODULE.OBJECTIVE_TERM_RETIRED` because the token
+    /// did not define a portable quantity or unit.
+    DifferentiabilityRegularization {
+        weight: StoredF64,
+    },
 }
 
 /// The complete typed objective, mirroring `powerio_prob::Objective`.
@@ -552,6 +557,22 @@ pub struct DcOpfSolutionV1 {
     pub branch_to_active_flow: Vec<StoredF64>,
     pub generator_active_power: Vec<StoredF64>,
     pub objective: StoredF64,
+    /// Read only 0.10 name for the active demand marginal.
+    #[serde(default, skip_serializing)]
+    pub bus_price: Option<Vec<StoredF64>>,
+    /// Optimal objective derivative per added MW of demand, by bus.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bus_active_power_marginal: Option<Vec<StoredF64>>,
+    /// Read only 0.10 signed thermal dual (`from - to`). The 1.x reader splits
+    /// it into the two directional multiplier columns.
+    #[serde(default, skip_serializing)]
+    pub branch_flow_dual: Option<Vec<StoredF64>>,
+    /// Nonnegative multiplier on the from-side thermal bound, by branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_from_limit_multiplier: Option<Vec<StoredF64>>,
+    /// Nonnegative multiplier on the to-side thermal bound, by branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_to_limit_multiplier: Option<Vec<StoredF64>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -574,6 +595,24 @@ pub struct AcOpfSolutionV1 {
     pub generator_active_power: Vec<StoredF64>,
     pub generator_reactive_power: Vec<StoredF64>,
     pub objective: StoredF64,
+    /// Read only 0.10 name for the active demand marginal.
+    #[serde(default, skip_serializing)]
+    pub bus_active_price: Option<Vec<StoredF64>>,
+    /// Optimal objective derivative per added MW of demand, by bus.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bus_active_power_marginal: Option<Vec<StoredF64>>,
+    /// Read only 0.10 name for the reactive demand marginal.
+    #[serde(default, skip_serializing)]
+    pub bus_reactive_price: Option<Vec<StoredF64>>,
+    /// Optimal objective derivative per added MVAr of demand, by bus.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bus_reactive_power_marginal: Option<Vec<StoredF64>>,
+    /// Nonnegative multiplier on the from-terminal apparent power bound.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_from_limit_multiplier: Option<Vec<StoredF64>>,
+    /// Nonnegative multiplier on the to-terminal apparent power bound.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_to_limit_multiplier: Option<Vec<StoredF64>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

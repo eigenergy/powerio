@@ -21,10 +21,6 @@ pub enum ObjectiveTerm {
     /// The per phase cost references a multiconductor calculation record
     /// states (the BMOPF objective).
     NetworkPerPhaseCost,
-    /// A differentiability regularization with its stated nonnegative weight,
-    /// the term Tellegen adds explicitly rather than a solver adding it
-    /// silently.
-    DifferentiabilityRegularization { weight: f64 },
 }
 
 /// The complete typed objective of one OPF instance: a sum of terms.
@@ -78,12 +74,11 @@ mod tests {
 
     #[test]
     fn an_objective_states_its_terms_in_order() {
-        let objective = Objective::network_generator_cost()
-            .with_term(ObjectiveTerm::DifferentiabilityRegularization { weight: 1e-6 });
+        let objective =
+            Objective::network_generator_cost().with_term(ObjectiveTerm::NetworkPerPhaseCost);
         assert_eq!(objective.terms().len(), 2);
         assert_eq!(objective.terms()[0], ObjectiveTerm::NetworkGeneratorCost);
         let wire = serde_json::to_value(&objective).unwrap();
-        assert_eq!(wire["terms"][1]["term"], "differentiability_regularization");
-        assert_eq!(wire["terms"][1]["weight"], 1e-6);
+        assert_eq!(wire["terms"][1]["term"], "network_per_phase_cost");
     }
 }

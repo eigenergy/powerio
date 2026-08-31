@@ -36,6 +36,12 @@ pub enum Termination {
     Converged,
     /// The iteration limit ended the calculation before convergence.
     IterationLimit,
+    /// The solver proved the constraints admit no solution. The optimization
+    /// outcome an OPF consumer acts on differently from a numerical failure:
+    /// the case is overconstrained, and no retry or setting change fixes it.
+    Infeasible,
+    /// The solver proved the objective unbounded over the feasible set.
+    Unbounded,
     /// The calculation failed.
     Failed,
     /// The source records a solved calculation without termination

@@ -442,11 +442,6 @@ fn encode_objective_term(term: &powerio_prob::ObjectiveTerm) -> Result<dto::Obje
         powerio_prob::ObjectiveTerm::NetworkPerPhaseCost => {
             dto::ObjectiveTermV1::NetworkPerPhaseCost
         }
-        powerio_prob::ObjectiveTerm::DifferentiabilityRegularization { weight } => {
-            dto::ObjectiveTermV1::DifferentiabilityRegularization {
-                weight: StoredF64(*weight),
-            }
-        }
         // The runtime enum is non_exhaustive for additive growth; a new term
         // must gain a stored spelling before it can be written.
         _ => return Err(invalid("unmapped objective term")),
@@ -456,22 +451,26 @@ fn encode_objective_term(term: &powerio_prob::ObjectiveTerm) -> Result<dto::Obje
 fn decode_objective(objective: dto::ObjectiveV1) -> powerio_prob::Objective {
     let mut decoded = powerio_prob::Objective::default();
     for term in objective.terms {
-        decoded = decoded.with_term(decode_objective_term(term));
+        if let Some(term) = decode_objective_term(term) {
+            decoded = decoded.with_term(term);
+        }
     }
     decoded
 }
 
-fn decode_objective_term(term: dto::ObjectiveTermV1) -> powerio_prob::ObjectiveTerm {
+fn decode_objective_term(term: dto::ObjectiveTermV1) -> Option<powerio_prob::ObjectiveTerm> {
     match term {
         dto::ObjectiveTermV1::NetworkGeneratorCost => {
-            powerio_prob::ObjectiveTerm::NetworkGeneratorCost
+            Some(powerio_prob::ObjectiveTerm::NetworkGeneratorCost)
         }
         dto::ObjectiveTermV1::NetworkPerPhaseCost => {
-            powerio_prob::ObjectiveTerm::NetworkPerPhaseCost
+            Some(powerio_prob::ObjectiveTerm::NetworkPerPhaseCost)
         }
-        dto::ObjectiveTermV1::DifferentiabilityRegularization { weight } => {
-            powerio_prob::ObjectiveTerm::DifferentiabilityRegularization { weight: weight.0 }
-        }
+        // PowerIO 0.10 admitted this solver setting as if it were a portable
+        // objective term. Keep the released wire token readable, remove it
+        // from the runtime objective, and attach a coded migration diagnostic
+        // to the returned module in `decode_stored`.
+        dto::ObjectiveTermV1::DifferentiabilityRegularization { .. } => None,
     }
 }
 
@@ -575,6 +574,11 @@ fn generator_column(
         .collect()
 }
 
+/// An optional solution column, already in the network's table order.
+fn optional_column(values: Option<&[f64]>) -> Option<Vec<StoredF64>> {
+    values.map(|column| column.iter().copied().map(StoredF64).collect())
+}
+
 fn encode_dispatch(
     dispatch: Option<&powerio_prob::GeneratorDispatch>,
 ) -> Option<dto::GeneratorDispatchV1> {
@@ -633,6 +637,11 @@ fn encode_dc_opf_solution(solution: &powerio_prob::DcOpfSolution) -> Result<dto:
         branch_to_active_flow: branch_column(network, |id| solution.branch_to_active_flow(id)),
         generator_active_power: generator_column(network, |id| solution.generator_active_power(id)),
         objective: StoredF64(solution.objective()),
+        bus_price: None,
+        bus_active_power_marginal: optional_column(solution.bus_active_power_marginals()),
+        branch_flow_dual: None,
+        branch_from_limit_multiplier: optional_column(solution.branch_from_limit_multipliers()),
+        branch_to_limit_multiplier: optional_column(solution.branch_to_limit_multipliers()),
     })
 }
 
@@ -658,6 +667,12 @@ fn encode_ac_opf_solution(solution: &powerio_prob::AcOpfSolution) -> Result<dto:
             solution.generator_reactive_power(id)
         }),
         objective: StoredF64(solution.objective()),
+        bus_active_price: None,
+        bus_active_power_marginal: optional_column(solution.bus_active_power_marginals()),
+        bus_reactive_price: None,
+        bus_reactive_power_marginal: optional_column(solution.bus_reactive_power_marginals()),
+        branch_from_limit_multiplier: optional_column(solution.branch_from_limit_multipliers()),
+        branch_to_limit_multiplier: optional_column(solution.branch_to_limit_multipliers()),
     })
 }
 
@@ -790,6 +805,8 @@ fn encode_ac_scuc_solution(solution: &powerio_prob::AcScucSolution) -> dto::AcSc
 // ---- value decoding ---------------------------------------------------------
 
 fn decode_stored(stored: StoredModuleV1) -> Result<PioModule<PioValue>> {
+    let retired_regularization = stored_value_has_retired_regularization(&stored.value);
+    let split_branch_dual = stored_value_has_legacy_branch_dual(&stored.value);
     let value = decode_value(stored.value)?;
     validate_decoded_networks(&value)?;
     let mut module = PioModule::new(value).with_producer(
@@ -811,6 +828,22 @@ fn decode_stored(stored: StoredModuleV1) -> Result<PioModule<PioValue>> {
             .add_diagnostic(decode_diagnostic(diagnostic)?)
             .map_err(|error| invalid(error.to_string()))?;
     }
+    if retired_regularization {
+        module
+            .add_diagnostic(Diagnostic::of(
+                &codes::READ_MODULE_OBJECTIVE_TERM_RETIRED,
+                "the stored objective contains retired `differentiability_regularization`; this reader removes that solver setting from the decoded objective",
+            ))
+            .map_err(|error| invalid(error.to_string()))?;
+    }
+    if split_branch_dual {
+        module
+            .add_diagnostic(Diagnostic::of(
+                &codes::READ_MODULE_BRANCH_DUAL_SPLIT,
+                "the retired `branch_flow_dual` field stores one signed branch dual; this reader maps positive values to the from bound and negative values to the to bound. At a zero or unlimited rating the original two multipliers are not uniquely recoverable",
+            ))
+            .map_err(|error| invalid(error.to_string()))?;
+    }
     for entry in stored.history {
         module
             .add_history_entry(decode_history(entry)?)
@@ -822,6 +855,46 @@ fn decode_stored(stored: StoredModuleV1) -> Result<PioModule<PioValue>> {
             .map_err(|error| invalid(error.to_string()))?;
     }
     Ok(module)
+}
+
+fn objective_has_retired_regularization(objective: &dto::ObjectiveV1) -> bool {
+    objective.terms.iter().any(|term| {
+        matches!(
+            term,
+            dto::ObjectiveTermV1::DifferentiabilityRegularization { .. }
+        )
+    })
+}
+
+fn stored_value_has_retired_regularization(value: &StoredValueV1) -> bool {
+    match value {
+        StoredValueV1::DcOpfInstance(instance) => {
+            objective_has_retired_regularization(&instance.objective)
+        }
+        StoredValueV1::AcOpfInstance(instance) => {
+            objective_has_retired_regularization(&instance.objective)
+        }
+        StoredValueV1::McAcOpfInstance(instance) => {
+            objective_has_retired_regularization(&instance.objective)
+        }
+        StoredValueV1::DcOpfSolution(solution) => {
+            objective_has_retired_regularization(&solution.instance.objective)
+        }
+        StoredValueV1::AcOpfSolution(solution) => {
+            objective_has_retired_regularization(&solution.instance.objective)
+        }
+        StoredValueV1::McAcOpfSolution(solution) => {
+            objective_has_retired_regularization(&solution.instance.objective)
+        }
+        _ => false,
+    }
+}
+
+fn stored_value_has_legacy_branch_dual(value: &StoredValueV1) -> bool {
+    matches!(
+        value,
+        StoredValueV1::DcOpfSolution(solution) if solution.branch_flow_dual.is_some()
+    )
 }
 
 // One arm per stored kind: the length is the enum's, and splitting the arms
@@ -1038,6 +1111,52 @@ fn decode_value(value: StoredValueV1) -> Result<PioValue> {
             if let Some(producer) = solution.producer.clone() {
                 value = value.with_producer(producer);
             }
+            match (&solution.bus_active_power_marginal, &solution.bus_price) {
+                (Some(marginals), None) | (None, Some(marginals)) => {
+                    value = value
+                        .with_bus_active_power_marginals(plain_row(marginals))
+                        .map_err(|error| invalid(error.to_string()))?;
+                }
+                (None, None) => {}
+                (Some(_), Some(_)) => {
+                    return Err(invalid(
+                        "both `bus_price` and `bus_active_power_marginal` are present",
+                    ));
+                }
+            }
+            match (
+                &solution.branch_from_limit_multiplier,
+                &solution.branch_to_limit_multiplier,
+            ) {
+                (Some(from), Some(to)) => {
+                    value = value
+                        .with_branch_thermal_limit_multipliers(plain_row(from), plain_row(to))
+                        .map_err(|error| invalid(error.to_string()))?;
+                }
+                (None, None) => {
+                    if let Some(signed) = &solution.branch_flow_dual {
+                        let mut from = Vec::with_capacity(signed.len());
+                        let mut to = Vec::with_capacity(signed.len());
+                        for value in plain_row(signed) {
+                            if value >= 0.0 {
+                                from.push(value);
+                                to.push(0.0);
+                            } else {
+                                from.push(0.0);
+                                to.push(-value);
+                            }
+                        }
+                        value = value
+                            .with_branch_thermal_limit_multipliers(from, to)
+                            .map_err(|error| invalid(error.to_string()))?;
+                    }
+                }
+                _ => {
+                    return Err(invalid(
+                        "branch from and to thermal limit multipliers must appear together",
+                    ));
+                }
+            }
             PioValue::DcOpfSolution(value)
         }
         StoredValueV1::AcOpfSolution(solution) => {
@@ -1061,6 +1180,54 @@ fn decode_value(value: StoredValueV1) -> Result<PioValue> {
             value = value.with_residuals(solution.residuals);
             if let Some(producer) = solution.producer.clone() {
                 value = value.with_producer(producer);
+            }
+            match (
+                &solution.bus_active_power_marginal,
+                &solution.bus_active_price,
+            ) {
+                (Some(marginals), None) | (None, Some(marginals)) => {
+                    value = value
+                        .with_bus_active_power_marginals(plain_row(marginals))
+                        .map_err(|error| invalid(error.to_string()))?;
+                }
+                (None, None) => {}
+                (Some(_), Some(_)) => {
+                    return Err(invalid(
+                        "both `bus_active_price` and `bus_active_power_marginal` are present",
+                    ));
+                }
+            }
+            match (
+                &solution.bus_reactive_power_marginal,
+                &solution.bus_reactive_price,
+            ) {
+                (Some(marginals), None) | (None, Some(marginals)) => {
+                    value = value
+                        .with_bus_reactive_power_marginals(plain_row(marginals))
+                        .map_err(|error| invalid(error.to_string()))?;
+                }
+                (None, None) => {}
+                (Some(_), Some(_)) => {
+                    return Err(invalid(
+                        "both `bus_reactive_price` and `bus_reactive_power_marginal` are present",
+                    ));
+                }
+            }
+            match (
+                &solution.branch_from_limit_multiplier,
+                &solution.branch_to_limit_multiplier,
+            ) {
+                (Some(from), Some(to)) => {
+                    value = value
+                        .with_branch_thermal_limit_multipliers(plain_row(from), plain_row(to))
+                        .map_err(|error| invalid(error.to_string()))?;
+                }
+                (None, None) => {}
+                _ => {
+                    return Err(invalid(
+                        "branch from and to thermal limit multipliers must appear together",
+                    ));
+                }
             }
             PioValue::AcOpfSolution(value)
         }

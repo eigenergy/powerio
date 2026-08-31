@@ -37,6 +37,8 @@ pub mod codes {
         BUILD_SOLUTION_SHAPE_MISMATCH = "BUILD.SOLUTION.SHAPE_MISMATCH", Error,
             "a solution column disagrees with the instance's element tables",
             category = Data;
+        BUILD_SOLUTION_MULTIPLIER_INVALID = "BUILD.SOLUTION.MULTIPLIER_INVALID", Error,
+            "a constraint multiplier is negative or non-finite", category = Data;
         TRANSFORM_INSTANCE_DATA_DISCARDED = "TRANSFORM.INSTANCE.DATA_DISCARDED", Warning,
             "the derived calculation does not carry part of the source instance";
         TRANSFORM_INSTANCE_ASSUMPTION = "TRANSFORM.INSTANCE.ASSUMPTION", Warning,
