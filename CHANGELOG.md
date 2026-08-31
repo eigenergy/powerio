@@ -75,9 +75,24 @@ preparation projections use
 `calc_nodal_generator_data`, and emit the legacy matrix bundle with
 `emit_dcopf_bundle`.
 
+**Format metadata comes from the facade.** `resolve_format` maps a token or
+common alias to its canonical token, conventional filename suffix, directory
+shape, and fresh universal emission capability. Rust, Python, and Julia return
+`FormatInfo`; C adds the ABI 6 symbol `pio_resolve_format_json`. Unknown and
+ambiguous names return no value. The capability is format level: a module can
+still reject a format whose `can_emit` is true. Rust applications that already
+own PowerWorld display bytes use `parse_display`, while path based callers keep
+`parse_display_file`. That facade function now reports `powerio::Error` rather
+than the component error. The facade replaces its unusable
+`to_geo_layer_from_aux_substations(&AuxFile)` export with
+`to_geo_layer_from_aux_text`; parser authors can still use the former from
+`powerio-tx`.
+
 Rust computed values now lead with an action across the component crates.
-Electrical and matrix results use `calc_*`; format lookup uses `parse_*`;
-grounded index conversion uses `map_*`; state and scenario discovery use
+Electrical and matrix results use `calc_*`. Component format names parse to
+typed enums through `parse_*`, while facade artifact metadata uses
+`resolve_format`. Grounded index conversion uses `map_*`; state and scenario
+discovery uses
 `list_*`; diagnostic text uses `render_*`; and in memory geographic, GridFM,
 and Matrix Market projections use `to_*`. `check_sddm`,
 `select_solver_for_shape`, and `number_snapshots` state their operations

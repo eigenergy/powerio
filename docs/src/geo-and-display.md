@@ -6,7 +6,9 @@ without a coordinate representation reports the loss.
 
 PowerWorld `.pwd` files are display data rather than network cases. Parse them
 with `parse_display_file` rather than the network parser. The parser acquires
-the binary display file from its path.
+the binary display file from its path. A Rust application that already owns
+the bytes calls `parse_display(bytes, "pwd")`; no `parse_bytes` spelling is
+introduced.
 
 ## Coordinate fields
 
@@ -137,21 +139,24 @@ The `.pwd` reader returns `DisplayData::PowerWorld` with a `PwdDisplay`: canvas
 dimensions, a timestamp, and substation symbols with number, name, and diagram
 coordinates.
 
-Four helpers connect it to the geo model. `to_geo_layer_from_pwd` lifts the
-substation symbols into a diagram space `GeoLayer` (also reachable as
-`powerio geo extract case.pwd`); `to_geo_layer_from_aux_substations` lifts the
-`Latitude` and `Longitude` columns of an aux `Substation` table into a
-geographic one; `apply_substation_points` joins either onto buses through the
-`SubNum` extras key; and `to_lonlat_from_pwd_mercator` is a documented,
+Four facade helpers connect it to the geo model. `to_geo_layer_from_pwd` lifts
+the substation symbols into a diagram space `GeoLayer` (also reachable as
+`powerio geo extract case.pwd`); `to_geo_layer_from_aux_text` parses the
+`Latitude` and `Longitude` columns of an AUX `Substation` table directly into
+a geographic layer; `apply_substation_points` joins either onto buses through
+the `SubNum` extras key; and `to_lonlat_from_pwd_mercator` is a documented,
 approximate inverse of the projection PowerWorld's auto generated layouts
-use, for consumers that want to place a diagram on a map.
+use, for consumers that want to place a diagram on a map. The component crate
+keeps `to_geo_layer_from_aux_substations(&AuxFile)` for parser authors; the
+facade does not expose its borrowed parser type.
 
 A bus row of a complete case export carries its own coordinates as well. The
 aux reader promotes the substation `Latitude:1`/`Longitude:1` pair, and the
 bus's own bare `Latitude`/`Longitude` pair, into `Bus.location`; a promoted
 pair leaves extras.
 
-Rust and Python use `parse_display_file` and return
+Rust and Python use `parse_display_file`; Rust also has `parse_display` for
+already acquired bytes. Python returns
 `DisplayData(kind="powerworld", data=PwdDisplay(...))`.
 Display files do not pass through `BalancedNetwork`, module emission, or `.pio.json`.
 

@@ -14,6 +14,7 @@ mod names_resolve_through_the_facade {
     type _PioModule = powerio::PioModule<powerio::BalancedNetwork>;
     type _Error = powerio::Error;
     type _Destination = powerio::Destination;
+    type _FormatInfo = powerio::FormatInfo;
     type _TimeSeries = powerio::TimeSeries<f64>;
     type _ScenarioSet = powerio::ScenarioSet<f64>;
     type _TimePoint = powerio::TimePoint;
@@ -51,5 +52,18 @@ mod tests {
     fn powerio_error_is_the_type_parse_returns() {
         let bad = powerio::Source::from_bytes("<memory>", b"not a case file".to_vec()).unwrap();
         let _: powerio::Error = powerio::parse(bad).unwrap_err();
+    }
+
+    #[test]
+    fn facade_metadata_and_display_operations_keep_facade_types() {
+        let info = powerio::resolve_format("pio-json").unwrap();
+        assert_eq!(info.token, "pio-json");
+        assert_eq!(info.extension, Some("pio.json"));
+
+        let _: powerio::Error = powerio::parse_display(b"not a display", "pwd").unwrap_err();
+        let _: powerio::Error = powerio::to_geo_layer_from_aux_text(
+            "DATA (Substation, [SubNum, Latitude, Longitude])\n{\n7 34 -80 99\n}\n",
+        )
+        .unwrap_err();
     }
 }

@@ -54,6 +54,22 @@ written = module.emit("psse", "case.raw")  # text is None after commit
 
 `module.emit(format)` selects the emitter from the value kind and returns `EmitResult(text, diagnostics)`. `module.emit(format, destination)` commits the complete artifact inventory to a file or directory and returns the same `EmitResult` shape with `text=None`. The explicit format keeps JSON destinations unambiguous. A parsed, unchanged module emitted to its source format reproduces the retained bytes.
 
+Use `resolve_format` when an application needs to name an emitted artifact:
+
+```python
+format = pio.resolve_format("raw34")
+assert format == pio.FormatInfo("psse34", "raw", False, True)
+download_name = f"case.{format.extension}"
+```
+
+The fields are `token`, `extension`, `is_directory`, and `can_emit`.
+`extension` is the conventional filename suffix without a leading dot; it can
+be compound and is `None` when a directory format has no primary case file.
+`can_emit` reports whether a fresh universal emitter exists for the format. It
+does not promise that every module value kind can emit the format and is not a
+feature probe. A false value neither promises nor forbids a same format
+retained source echo. Unknown and ambiguous names return `None`.
+
 ## Findings are records
 
 Every reader and converter reports what it could not represent as `Diagnostic` records: a stable dotted `code`, a `severity` (`error`, `warning`, `remark`, `note`), the rendered `message`, and, when stated, a `target`, a `suggested_action`, `spans` (byte ranges into the retained source, as `SourceSpan` records), `related` record ids, and an open `details` object. Branch on `code`, never on message text.
@@ -110,6 +126,8 @@ print(first.number, first.name, first.x, first.y)
 ```
 
 `display.data` is a `PwdDisplay` with `canvas_width`, `canvas_height`, `stamp`, and `substations`.
+Python intentionally exposes only the path operation for binary display data;
+the removed `parse_display_bytes` name does not return as a second parse API.
 
 ## Problem data
 

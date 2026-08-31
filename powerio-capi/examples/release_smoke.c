@@ -35,6 +35,16 @@ int main(int argc, char **argv) {
     }
     pio_string_release(build);
 
+    char *format = pio_resolve_format_json("raw34");
+    CHECK(format != NULL, "format descriptor missing");
+    CHECK(strstr(format, "\"token\":\"psse34\"") != NULL,
+          "format alias did not resolve to its canonical token");
+    CHECK(strstr(format, "\"extension\":\"raw\"") != NULL,
+          "format descriptor has the wrong extension");
+    pio_string_release(format);
+    CHECK(pio_resolve_format_json("not-a-format") == NULL,
+          "unknown format unexpectedly resolved");
+
     /* Exercise one representative entry point for each additive feature and
      * the module surface itself. */
     PioError *error = NULL;

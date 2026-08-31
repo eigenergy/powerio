@@ -45,8 +45,8 @@ pub use powerio_tx::{
     Location, PwdDisplay, PwdSubstation, Selector, Shunt, ShuntBlock, SolverParams, SourceFormat,
     Storage, Switch, SwitchedShuntControl, SwitchedShuntMode, Transformer3W, TransformerControl,
     TransformerControlMode, Winding, apply_substation_points, calc_series_admittance_of,
-    classify_json_bytes, classify_json_text, parse_display_file, repair_values,
-    to_geo_layer_from_aux_substations, to_geo_layer_from_pwd, to_lonlat_from_pwd_mercator,
+    classify_json_bytes, classify_json_text, repair_values, to_geo_layer_from_pwd,
+    to_lonlat_from_pwd_mercator,
 };
 /// Balanced network records and the public network and geographic submodules.
 /// Derived indexes, normalization data, solver tables, and component error
@@ -94,6 +94,8 @@ pub use powerio_matrix as matrix;
 #[path = "gridfm.rs"]
 pub mod __gridfm;
 pub mod codes;
+mod formats;
+pub use formats::{FormatInfo, resolve_format};
 #[cfg(feature = "gridfm")]
 mod collect;
 pub mod dist_geo;
@@ -104,6 +106,46 @@ pub mod stored;
 mod write;
 pub use write::emit;
 pub mod transform;
+
+/// Parse owned display bytes in the named display format.
+///
+/// Use this when an application has already acquired a binary PowerWorld
+/// `.pwd` display. Path based callers use [`parse_display_file`].
+///
+/// # Errors
+/// The format is unknown or the display data is malformed.
+pub fn parse_display(bytes: &[u8], format: &str) -> Result<DisplayData> {
+    powerio_tx::parse_display(bytes, format)
+        .map_err(|error| Error::new(error.code(), error.to_string()).with_cause(error))
+}
+
+/// Parse a display artifact from a path, inferring its format when `format`
+/// is `None`.
+///
+/// # Errors
+/// The format cannot be inferred, the file cannot be read, or the display
+/// data is malformed.
+pub fn parse_display_file(
+    path: impl AsRef<std::path::Path>,
+    format: Option<&str>,
+) -> Result<DisplayData> {
+    powerio_tx::parse_display_file(path, format)
+        .map_err(|error| Error::new(error.code(), error.to_string()).with_cause(error))
+}
+
+/// Transform the `Substation` table in PowerWorld AUX text into a geographic
+/// layer without exposing the component parser's borrowed `AuxFile` type.
+///
+/// Rows without a finite number, latitude, and longitude are skipped. A valid
+/// AUX document with no usable substation coordinates returns an empty layer.
+///
+/// # Errors
+/// The AUX section syntax is malformed.
+pub fn to_geo_layer_from_aux_text(text: &str) -> Result<GeoLayer> {
+    let aux = powerio_tx::format::powerworld::aux_sections(text)
+        .map_err(|error| Error::new(error.code(), error.to_string()).with_cause(error))?;
+    Ok(powerio_tx::to_geo_layer_from_aux_substations(&aux))
+}
 
 /// The replayable operating state, named at the crate root beside the other
 /// module types. From this layer up the 1.0 state type in powerio-prob is the

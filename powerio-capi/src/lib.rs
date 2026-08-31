@@ -526,6 +526,36 @@ pub unsafe extern "C" fn pio_classify_str(
     }
 }
 
+/// Resolve a case or stored module format token or alias to an owned compact
+/// JSON descriptor.
+///
+/// The document has `token`, `extension`, `is_directory`, and `can_emit`
+/// fields. `extension` is the conventional filename suffix without a leading
+/// dot, can be compound, and is `null` when a directory format has no primary
+/// case file. `can_emit` reports whether a fresh universal emitter exists for
+/// the format. It does not promise that every module value kind can emit that
+/// format, and it is not a feature probe. A false value neither promises nor
+/// forbids a same format retained source echo. Free the returned string with
+/// [`pio_string_release`]. Returns `NULL` for a NULL, non-UTF-8, ambiguous, or
+/// unknown name.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_resolve_format_json(name: *const c_char) -> *mut c_char {
+    unsafe {
+        guard(std::ptr::null_mut(), || {
+            let Some(name) = cstr(name) else {
+                return std::ptr::null_mut();
+            };
+            let Some(info) = powerio::resolve_format(name) else {
+                return std::ptr::null_mut();
+            };
+            let Ok(json) = serde_json::to_string(&info) else {
+                return std::ptr::null_mut();
+            };
+            into_cstring(json).unwrap_or(std::ptr::null_mut())
+        })
+    }
+}
+
 /// The label is the classification family, plus `:<format>` for the two
 /// classes that detect one. Both halves come from the classifier, so the C
 /// vocabulary cannot drift from the Rust one.
@@ -2995,6 +3025,7 @@ mod tests {
             "int32_t pio_has_feature(const char *feature);",
             "const char *pio_version(void);",
             "size_t pio_classify_str(const char *text, char *outbuf, size_t outlen);",
+            "char *pio_resolve_format_json(const char *name);",
             "char *pio_balanced_network_to_json(const PioBalancedNetwork *net, PioError **error);",
             "PioBalancedNetwork *pio_balanced_network_from_json(const char *text, PioError **error);",
             "PioBalancedNetwork *pio_balanced_network_retain(const PioBalancedNetwork *net);",
@@ -5618,6 +5649,43 @@ mpc.branch = [
                 "{label} is outside the closed set"
             );
         }
+    }
+
+    #[test]
+    fn resolve_format_json_reports_canonical_artifact_metadata() {
+        unsafe fn resolve(name: &str) -> Option<serde_json::Value> {
+            let name = CString::new(name).unwrap();
+            let raw = unsafe { pio_resolve_format_json(name.as_ptr()) };
+            if raw.is_null() {
+                return None;
+            }
+            let text = unsafe { CStr::from_ptr(raw) }.to_str().unwrap().to_owned();
+            unsafe { pio_string_release(raw) };
+            Some(serde_json::from_str(&text).unwrap())
+        }
+
+        let psse = unsafe { resolve("raw34") }.unwrap();
+        assert_eq!(psse["token"], "psse34");
+        assert_eq!(psse["extension"], "raw");
+        assert_eq!(psse["is_directory"], false);
+        assert_eq!(psse["can_emit"], true);
+
+        let pypsa = unsafe { resolve("pypsa") }.unwrap();
+        assert_eq!(pypsa["token"], "pypsa-csv");
+        assert!(pypsa["extension"].is_null());
+        assert_eq!(pypsa["is_directory"], true);
+
+        let pwb = unsafe { resolve("pwb") }.unwrap();
+        assert_eq!(pwb["can_emit"], false);
+        let stored = unsafe { resolve("pio-json") }.unwrap();
+        assert_eq!(stored["extension"], "pio.json");
+        assert!(unsafe { resolve("json") }.is_none());
+        assert!(unsafe { resolve("not-a-format") }.is_none());
+        assert!(unsafe { pio_resolve_format_json(std::ptr::null()) }.is_null());
+        let invalid_utf8 = [0xff_u8, 0];
+        assert!(
+            unsafe { pio_resolve_format_json(invalid_utf8.as_ptr().cast::<c_char>()) }.is_null()
+        );
     }
 
     #[test]

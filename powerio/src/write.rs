@@ -23,12 +23,12 @@ pub mod codes {
 
 /// True when `format` names the stored module document.
 fn is_pio_json(format: &str) -> bool {
-    format == "pio-json"
+    crate::resolve_format(format).is_some_and(|info| info.token == "pio-json")
 }
 
 /// True when `format` names the PyPSA CSV folder target.
 fn is_pypsa_dir(format: &str) -> bool {
-    powerio_tx::format::is_pypsa_csv_name(format)
+    crate::resolve_format(format).is_some_and(|info| info.token == "pypsa-csv")
 }
 
 /// True when two names identify the same supported directory format. The
@@ -285,10 +285,7 @@ pub fn emit(
 /// True when `format` is a name some family recognizes, used to tell "wrong
 /// kind for this format" apart from "no such format".
 fn known_format_name(format: &str) -> bool {
-    is_pio_json(format)
-        || is_pypsa_dir(format)
-        || powerio_tx::format::parse_target_format(format).is_some()
-        || powerio_dist::parse_dist_target_format(format).is_some()
+    crate::resolve_format(format).is_some()
 }
 
 #[cfg(test)]

@@ -37,6 +37,16 @@ calculation spelling for the frozen C ABI array handle. The released
 spellings remain ABI 6 compatibility aliases with the same ownership and
 error rules.
 
+`pio_resolve_format_json` resolves a case or stored module format alias without
+exposing a component enum. Display aliases are outside this query. It returns
+an owned descriptor with the canonical `token`, the conventional filename
+suffix as `extension` without a leading dot, `is_directory`, and `can_emit`.
+The suffix can be compound, as in `pio.json`.
+`can_emit` reports whether a fresh universal emitter exists for the format; it
+does not promise that every module value kind can emit it and is not a feature
+probe. A false value neither promises nor forbids a same format retained source
+echo. An unknown or ambiguous name returns `NULL`.
+
 `pio_module_inspect_json` preserves its released `operations` array and adds
 two classified views. `preferred_operations` lists the concise path above;
 `compatibility_operations` lists the ABI 6 spellings retained for existing

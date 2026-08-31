@@ -64,6 +64,7 @@ __all__ = [
     "Diagnostic",
     "DisplayData",
     "EmitResult",
+    "FormatInfo",
     "McAcOpfInstance",
     "McAcOpfSolution",
     "McAcPfInstance",
@@ -88,6 +89,7 @@ __all__ = [
     "parse_file",
     "parse_geo",
     "parse_text",
+    "resolve_format",
     "versions",
 ]
 
@@ -97,6 +99,18 @@ EmitResult.__doc__ = """Output of :meth:`PioModule.emit`.
 ``text`` is the emitted file contents when no destination was supplied and
 ``None`` after committing a file or directory. ``diagnostics`` lists the
 fields the target format could not represent (empty for a faithful emission).
+"""
+
+FormatInfo = namedtuple(
+    "FormatInfo", ["token", "extension", "is_directory", "can_emit"]
+)
+FormatInfo.__doc__ = """Canonical metadata returned by :func:`resolve_format`.
+
+``extension`` is the conventional filename suffix without a leading dot; it
+can be compound and is ``None`` when a directory format has no primary case
+file. ``can_emit`` reports whether a fresh universal emitter exists for the
+format. It is not a promise for every module value kind or a feature probe. A
+false value neither promises nor forbids a same format retained source echo.
 """
 
 DisplayData = namedtuple("DisplayData", ["kind", "data"])
@@ -634,6 +648,12 @@ class BalancedNetwork:
 def parse_display_file(path: Any, format: Optional[str] = None) -> DisplayData:
     """Parse a display artifact such as a PowerWorld ``.pwd`` file."""
     return _wrap_display(_powerio.parse_display_file(str(path), format))
+
+
+def resolve_format(name: str) -> Optional[FormatInfo]:
+    """Resolve a format token or common alias to its canonical metadata."""
+    resolved = _powerio.resolve_format(name)
+    return None if resolved is None else FormatInfo(*resolved)
 
 
 def parse_geo(text: str, name_hint: Optional[str] = None) -> dict[str, Any]:

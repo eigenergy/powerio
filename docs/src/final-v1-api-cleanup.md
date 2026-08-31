@@ -43,6 +43,7 @@ PyPSA, PowerSystems, ExaModelsPower, and BMOPFTools vocabulary:
 | In-memory transform | `to_*` | `to_*` | multiple-dispatch `to_*` | operation-specific `pio_*_to_*` |
 | Calculate derived data | `calc_*` | `calc_*` | multiple-dispatch `calc_*` | operation-specific `pio_*_calc_*` |
 | External representation | `emit(...)` | `module.emit(...)` | `emit(module, ...)` | `pio_module_emit_string/file(...)` |
+| Format metadata | `resolve_format(...)` | `resolve_format(...)` | `resolve_format(...)` | `pio_resolve_format_json(...)` |
 
 Language bindings keep their own idioms. Julia uses multiple dispatch over a
 small set of Julia structs. Python uses properties, keyword arguments, and
@@ -83,7 +84,7 @@ beta transition.
 
 Python removes `parse`, the native `PioModule.from_file`, `from_str`, and
 `from_bytes` constructor aliases, `to_format`,
-`write_file`, the public in-memory binary display parser, `dc_data`, callable
+`write_file`, the private native in-memory binary display parser, `dc_data`, callable
 `diagnostics()`, `conversion.warnings`, noun matrix methods, and duplicate
 count, graph, geography, selection, and GridFM spellings. PowerWorld `.pwd`
 display data remains available through `parse_display_file` because the format
@@ -113,7 +114,8 @@ The following Rust name groups use their final verb forms:
 
 - DC and matrix calculations: `calc_*`
 - validation: `check_*`
-- format name parsing: `parse_*`
+- component format name parsing: `parse_*`
+- facade artifact metadata: `resolve_format`
 - collection discovery: `list_*` or `find_*`
 - algorithm choice: `select_*`
 - in-memory projection: `to_*` or `map_*`
