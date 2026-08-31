@@ -23,9 +23,10 @@ use arrow::datatypes::{Field, Schema};
 use arrow::error::ArrowError;
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 use arrow::record_batch::RecordBatch;
-#[cfg(feature = "matrix")]
 use powerio::{BalancedNetwork, BusId};
-use powerio_tx::{IndexCore, IndexedNetwork};
+use powerio_tx::IndexCore;
+#[cfg(feature = "matrix")]
+use powerio_tx::IndexedNetwork;
 
 /// Table selectors for `pio_balanced_network_to_arrow`; the C
 /// header mirrors these as `PIO_ARROW_TABLE_*`.

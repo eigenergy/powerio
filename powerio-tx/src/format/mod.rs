@@ -24,8 +24,9 @@
 //!   bytes.** The module retains its source, so [`emit`] back to the same
 //!   format returns every field, comment, and numeric token.
 //! - **Cross-format keeps maximal fidelity with itemized loss.** Whatever the
-//!   target format cannot represent is reported in the [`TextEmission`]
-//!   findings, never dropped silently. During parsing, parsers itemize what
+//!   target format cannot represent is reported by
+//!   [`EmitResult::diagnostics`](powerio_core::EmitResult::diagnostics), never
+//!   dropped silently. During parsing, parsers itemize what
 //!   they ignore on the module's diagnostics.
 
 use std::collections::{BTreeSet, HashMap};
