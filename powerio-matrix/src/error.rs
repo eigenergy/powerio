@@ -42,6 +42,21 @@ pub enum Error {
         got: usize,
     },
 
+    #[error("unsupported OPF objective: {reason}")]
+    UnsupportedOpfObjective { reason: String },
+
+    #[error("{family} constraint selection names unknown identity `{identity}`")]
+    UnknownConstraintIdentity {
+        family: &'static str,
+        identity: String,
+    },
+
+    #[error("{family} has duplicate stable identity `{identity}`")]
+    DuplicateElementIdentity {
+        family: &'static str,
+        identity: String,
+    },
+
     #[error(
         "DC sensitivity solve failed: the reference-grounded Laplacian is singular even though every component is grounded"
     )]
@@ -61,6 +76,22 @@ pub enum Error {
         model: u8,
         ncost: usize,
     },
+
+    #[error("generator {gen_index} has an invalid piecewise linear cost: {reason}")]
+    InvalidPiecewiseCost {
+        gen_index: usize,
+        reason: PiecewiseCostInvalidity,
+    },
+
+    #[error(
+        "generator {gen_index} has a nonconvex piecewise linear cost: segment {segment} has a lower slope than the preceding segment"
+    )]
+    NonconvexPiecewiseCost { gen_index: usize, segment: usize },
+
+    #[error(
+        "generator {gen_index} has a piecewise linear cost that cannot be projected to one nodal quadratic cost"
+    )]
+    PiecewiseNodalCost { gen_index: usize },
 
     #[error(
         "generator {gen_index} has a concave cost row (c2 = {c2}); need a nonnegative quadratic coefficient"
@@ -126,6 +157,11 @@ impl Error {
             Error::DimensionMismatch { .. } | Error::ShapeMismatch { .. } => {
                 &codes::BUILD_MATRIX_SHAPE_MISMATCH
             }
+            Error::UnsupportedOpfObjective { .. } => &codes::BUILD_OPF_OBJECTIVE_UNSUPPORTED,
+            Error::UnknownConstraintIdentity { .. } => {
+                &codes::BUILD_OPF_CONSTRAINT_IDENTITY_UNKNOWN
+            }
+            Error::DuplicateElementIdentity { .. } => &codes::BUILD_OPF_ELEMENT_IDENTITY_DUPLICATE,
             Error::SingularNetwork => &codes::BUILD_SENSITIVITY_SINGULAR,
             Error::InvalidSensitivityOptions { .. } => &codes::BUILD_SENSITIVITY_INVALID_OPTION,
             Error::EmptyScenarioBatch => &codes::BUILD_GRIDFM_EMPTY_BATCH,
@@ -137,6 +173,13 @@ impl Error {
             Error::UnsupportedCostModel { .. } => {
                 &powerio_prob::diagnostics::codes::BUILD_INSTANCE_UNSUPPORTED_COST_MODEL
             }
+            Error::InvalidPiecewiseCost { .. } => {
+                &powerio_prob::diagnostics::codes::BUILD_INSTANCE_PIECEWISE_COST_INVALID
+            }
+            Error::NonconvexPiecewiseCost { .. } => {
+                &powerio_prob::diagnostics::codes::BUILD_INSTANCE_PIECEWISE_COST_NONCONVEX
+            }
+            Error::PiecewiseNodalCost { .. } => &codes::BUILD_OPF_NODAL_COST_UNSUPPORTED,
             Error::ConcaveCost { .. } => {
                 &powerio_prob::diagnostics::codes::BUILD_INSTANCE_CONCAVE_COST
             }
@@ -159,6 +202,9 @@ impl Error {
             // A well-formed case that cannot satisfy a requested operation.
             Error::DimensionMismatch { .. }
             | Error::ShapeMismatch { .. }
+            | Error::UnsupportedOpfObjective { .. }
+            | Error::UnknownConstraintIdentity { .. }
+            | Error::DuplicateElementIdentity { .. }
             | Error::SingularNetwork
             | Error::InvalidSensitivityOptions { .. }
             | Error::EmptyScenarioBatch
@@ -168,9 +214,46 @@ impl Error {
             | Error::ScenarioShapeMismatch { .. }
             | Error::NoGenerators
             | Error::UnsupportedCostModel { .. }
+            | Error::InvalidPiecewiseCost { .. }
+            | Error::NonconvexPiecewiseCost { .. }
             | Error::ConcaveCost { .. } => C::Data,
+            Error::PiecewiseNodalCost { .. } => C::Request,
             // Output-side serialization write failures.
             Error::Mtx(_) | Error::Parquet(_) => C::Output,
+        }
+    }
+}
+
+/// Why a MATPOWER model 1 generator cost row is unusable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PiecewiseCostInvalidity {
+    FewerThanTwoBreakpoints { declared: usize },
+    Truncated { expected_values: usize, got: usize },
+    NonFinitePoint { point: usize },
+    NonIncreasingPower { point: usize },
+}
+
+impl std::fmt::Display for PiecewiseCostInvalidity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::FewerThanTwoBreakpoints { declared } => {
+                write!(f, "need at least two breakpoints, got {declared}")
+            }
+            Self::Truncated {
+                expected_values,
+                got,
+            } => write!(
+                f,
+                "declared breakpoints require {expected_values} values, got {got}"
+            ),
+            Self::NonFinitePoint { point } => {
+                write!(f, "breakpoint {point} has a non-finite coordinate")
+            }
+            Self::NonIncreasingPower { point } => write!(
+                f,
+                "breakpoint {point} does not have greater power than its predecessor"
+            ),
         }
     }
 }
@@ -233,7 +316,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use powerio_tx::ErrorCategory::{Data, Output, Parse};
+    use powerio_tx::ErrorCategory::{Data, Output, Parse, Request};
 
     #[test]
     fn category_pins_the_intended_buckets() {
@@ -255,6 +338,17 @@ mod tests {
                 what: "p",
                 expected: 2,
                 got: 3,
+            },
+            Error::UnsupportedOpfObjective {
+                reason: "term".into(),
+            },
+            Error::UnknownConstraintIdentity {
+                family: "branches",
+                identity: "missing".into(),
+            },
+            Error::DuplicateElementIdentity {
+                family: "branches",
+                identity: "duplicate".into(),
             },
             Error::SingularNetwork,
             Error::InvalidSensitivityOptions {
@@ -280,6 +374,15 @@ mod tests {
                 model: 1,
                 ncost: 4,
             },
+            Error::InvalidPiecewiseCost {
+                gen_index: 0,
+                reason: PiecewiseCostInvalidity::FewerThanTwoBreakpoints { declared: 1 },
+            },
+            Error::NonconvexPiecewiseCost {
+                gen_index: 0,
+                segment: 1,
+            },
+            Error::PiecewiseNodalCost { gen_index: 0 },
             Error::ConcaveCost {
                 gen_index: 0,
                 c2: -0.5,
@@ -295,6 +398,35 @@ mod tests {
                 error.code().code
             );
         }
+    }
+
+    #[test]
+    fn piecewise_cost_failures_keep_distinct_diagnostic_meanings() {
+        let malformed = Error::InvalidPiecewiseCost {
+            gen_index: 2,
+            reason: PiecewiseCostInvalidity::FewerThanTwoBreakpoints { declared: 1 },
+        };
+        let nonconvex = Error::NonconvexPiecewiseCost {
+            gen_index: 2,
+            segment: 1,
+        };
+        let nodal_projection = Error::PiecewiseNodalCost { gen_index: 2 };
+
+        assert_eq!(
+            malformed.code().code,
+            "BUILD.INSTANCE.PIECEWISE_COST_INVALID"
+        );
+        assert_eq!(
+            nonconvex.code().code,
+            "BUILD.INSTANCE.PIECEWISE_COST_NONCONVEX"
+        );
+        assert_eq!(
+            nodal_projection.code().code,
+            "BUILD.OPF.NODAL_COST_UNSUPPORTED"
+        );
+        assert_eq!(malformed.category(), Data);
+        assert_eq!(nonconvex.category(), Data);
+        assert_eq!(nodal_projection.category(), Request);
     }
 
     #[test]

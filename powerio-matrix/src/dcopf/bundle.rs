@@ -137,7 +137,7 @@ pub fn write_dcopf_bundle(
     options: &DcOpfBundleOptions,
 ) -> Result<DcOpfOutputs> {
     write_prepared(
-        &super::prepare(instance, options.assembly)?,
+        &super::build_dc_opf_preparation(instance, &options.assembly)?,
         out_dir,
         options,
     )
@@ -151,7 +151,7 @@ fn write_prepared(
     options: &DcOpfBundleOptions,
 ) -> Result<DcOpfOutputs> {
     let matrices = matrices_from_preparation(instance);
-    let nodal = instance.nodal_generator_data();
+    let nodal = instance.nodal_generator_data()?;
     let fixed_withdrawal = instance.fixed_nodal_withdrawal();
     let flow_offset = instance.branch_flow_offset();
     // The case name comes from source file content, so it must not steer the

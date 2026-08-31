@@ -1,9 +1,9 @@
-//! DC OPF assembly: the private preparation arrays, sparse matrices, and
+//! DC OPF assembly: the numerical preparation arrays, sparse matrices, and
 //! bundle writer derived from a [`DcOpfInstance`].
 
 mod bundle;
-mod limits;
-mod nodal;
+pub(crate) mod limits;
+pub(crate) mod nodal;
 mod prep;
 #[cfg(test)]
 mod tests;
@@ -17,10 +17,10 @@ use crate::{
 
 use crate::Result;
 use powerio_prob::DcOpfInstance;
-use prep::{DcOpfOptions, DcOpfPreparation, build_dc_opf_preparation};
+use prep::{DcOpfOptions, apply_instance_semantics, preparation_from_view};
 
 pub use bundle::{DcOpfBundleMetadata, DcOpfBundleOptions, DcOpfOutputs, write_dcopf_bundle};
-pub use prep::Units;
+pub use prep::{DcBranchData, DcGeneratorData, DcOpfPreparation, NodalGeneratorData, Units};
 
 /// Assembly choices that select the numerical content derived from an
 /// instance without changing the instance itself.
@@ -40,6 +40,26 @@ pub struct DcOpfAssemblyOptions {
     pub synthesize_unrated_limits: bool,
 }
 
+impl DcOpfAssemblyOptions {
+    #[must_use]
+    pub const fn with_units(mut self, units: Units) -> Self {
+        self.units = units;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_skip_zero_impedance(mut self, skip: bool) -> Self {
+        self.skip_zero_impedance = skip;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_synthesize_unrated_limits(mut self, synthesize: bool) -> Self {
+        self.synthesize_unrated_limits = synthesize;
+        self
+    }
+}
+
 /// Sparse matrices for a DC OPF instance.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -55,7 +75,8 @@ pub struct DcOpfMatrices {
 }
 
 /// Derive the sparse DC OPF matrices from the instance. The instance keeps
-/// the typed network; the contiguous preparation arrays are private.
+/// the typed network; an external solver that needs the contiguous arrays
+/// behind these matrices calls [`build_dc_opf_preparation`] instead.
 ///
 /// # Errors
 /// A network the selected approximation cannot assemble: missing reference
@@ -64,24 +85,40 @@ pub fn build_dc_opf_matrices(
     instance: &DcOpfInstance,
     options: &DcOpfAssemblyOptions,
 ) -> Result<DcOpfMatrices> {
-    Ok(matrices_from_preparation(&prepare(instance, *options)?))
+    Ok(matrices_from_preparation(&build_dc_opf_preparation(
+        instance, options,
+    )?))
 }
 
-/// The private preparation arrays behind the matrix and bundle builders.
-pub(crate) fn prepare(
+/// Derive the complete matrix free DC OPF arrays from the instance: demand,
+/// shunt, and phase shift withdrawals, generator costs and bounds with their
+/// source row mapping, branch susceptances as positive solver edge weights,
+/// thermal limits, angle bounds, and the reference bus set. This is the one
+/// numerical assembly the matrix builders, the bundle writer, and the C,
+/// Python, and Julia DC data paths all read, published so an external solver
+/// formulates over the same arrays instead of re-deriving them from the
+/// network. [`DcOpfPreparation`] documents each field's unit and sign.
+///
+/// # Errors
+/// As [`build_dc_opf_matrices`].
+pub fn build_dc_opf_preparation(
     instance: &DcOpfInstance,
-    options: DcOpfAssemblyOptions,
+    options: &DcOpfAssemblyOptions,
 ) -> Result<DcOpfPreparation> {
     let view = IndexedNetwork::new(instance.network());
-    build_dc_opf_preparation(
+    let objective = crate::opf::compile_objective(instance.objective())?;
+    let mut preparation = preparation_from_view(
         &view,
         DcOpfOptions {
             convention: instance.approximation(),
             units: options.units,
             skip_zero_impedance: options.skip_zero_impedance,
             synthesize_unrated_limits: options.synthesize_unrated_limits,
+            objective,
         },
-    )
+    )?;
+    apply_instance_semantics(&mut preparation, instance.network(), instance.constraints())?;
+    Ok(preparation)
 }
 
 pub(crate) fn matrices_from_preparation(instance: &DcOpfPreparation) -> DcOpfMatrices {

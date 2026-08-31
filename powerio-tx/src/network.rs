@@ -2347,10 +2347,11 @@ impl BalancedNetwork {
             .unwrap_or(0)
             .checked_add(1)
             .expect("bus id space exhausted for star expansion");
-        for (k, t) in self
+        for (k, (source_row, t)) in self
             .transformers_3w()
             .iter()
-            .filter(|t| t.in_service)
+            .enumerate()
+            .filter(|(_, t)| t.in_service)
             .enumerate()
         {
             let star_id = BusId(
@@ -2358,7 +2359,14 @@ impl BalancedNetwork {
                     .checked_add(k)
                     .expect("bus id space exhausted for star expansion"),
             );
-            let (star, branches) = t.star_expansion(star_id);
+            let (star, mut branches) = t.star_expansion(star_id);
+            let transformer_identity = t
+                .uid
+                .clone()
+                .unwrap_or_else(|| format!("transformers_3w:{source_row}"));
+            for (winding, branch) in branches.iter_mut().enumerate() {
+                branch.uid = Some(format!("{transformer_identity}/winding:{}", winding + 1));
+            }
             net.buses_mut().push(star);
             net.branches_mut().extend(branches);
             if t.mag_g != 0.0 || t.mag_b != 0.0 {

@@ -18,7 +18,7 @@
 //! [`merge_zero_impedance_buses`](super::merge_zero_impedance_buses) is the
 //! explicit, checked resolution.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use powerio_core::Error;
 use powerio_tx::{BalancedNetwork, BusId, BusType, DcConvention};
@@ -265,18 +265,23 @@ pub struct DcOpfInstance {
 }
 
 impl DcOpfInstance {
-    /// Build the instance with the default objective (the network's
-    /// generator cost curves) and every stated limit active.
+    /// Build the instance with every stated limit active. The default
+    /// objective is the network's generator cost curves when at least one
+    /// dispatchable generator carries cost data. A network with no applicable
+    /// cost rows becomes an explicit feasibility problem instead of inventing
+    /// zero cost curves. Partially populated costs still select the network
+    /// objective so preparation reports the missing row.
     ///
     /// # Errors
-    /// A network with no reference bus or no in service generator to
-    /// dispatch.
+    /// A network with no reference bus or no in service generator attached to
+    /// a non-isolated bus.
     pub fn from_network(network: BalancedNetwork) -> Result<Self, Error> {
         require_reference(&network)?;
         require_dispatchable(&network)?;
+        let objective = default_opf_objective(&network);
         Ok(Self {
             network,
-            objective: Objective::network_generator_cost(),
+            objective,
             constraints: ActiveConstraints::default(),
             approximation: DcConvention::default(),
             initial_state: None,
@@ -317,6 +322,25 @@ impl DcOpfInstance {
     pub fn with_initial_state(mut self, state: OperatingPoint<BalancedNetwork>) -> Self {
         self.initial_state = Some(state);
         self
+    }
+
+    /// Replace the network while preserving this instance's objective,
+    /// constraint selections, approximation, and compatible initial state.
+    /// This is the checked path for a parameter edit such as a branch rating
+    /// change; callers do not have to reconstruct the problem and risk
+    /// dropping its semantics.
+    ///
+    /// # Errors
+    /// The replacement has no reference bus or dispatchable generator, or it
+    /// changes an identity layout used by the initial state.
+    pub fn with_network(mut self, network: BalancedNetwork) -> Result<Self, Error> {
+        require_reference(&network)?;
+        require_dispatchable(&network)?;
+        if let Some(initial) = self.initial_state.take() {
+            self.initial_state = Some(initial.rebind_network(network.clone())?);
+        }
+        self.network = network;
+        Ok(self)
     }
 
     /// The network this instance calculates on. Borrowed; never a copy.
@@ -379,18 +403,23 @@ pub struct AcOpfInstance {
 }
 
 impl AcOpfInstance {
-    /// Build the instance with the default objective (the network's
-    /// generator cost curves) and every stated limit active.
+    /// Build the instance with every stated limit active. The default
+    /// objective is the network's generator cost curves when at least one
+    /// dispatchable generator carries cost data. A network with no applicable
+    /// cost rows becomes an explicit feasibility problem instead of inventing
+    /// zero cost curves. Partially populated costs still select the network
+    /// objective so preparation reports the missing row.
     ///
     /// # Errors
-    /// A network with no reference bus or no in service generator to
-    /// dispatch.
+    /// A network with no reference bus or no in service generator attached to
+    /// a non-isolated bus.
     pub fn from_network(network: BalancedNetwork) -> Result<Self, Error> {
         require_reference(&network)?;
         require_dispatchable(&network)?;
+        let objective = default_opf_objective(&network);
         Ok(Self {
             network,
-            objective: Objective::network_generator_cost(),
+            objective,
             constraints: ActiveConstraints::default(),
             initial_state: None,
         })
@@ -423,6 +452,22 @@ impl AcOpfInstance {
     pub fn with_initial_state(mut self, state: OperatingPoint<BalancedNetwork>) -> Self {
         self.initial_state = Some(state);
         self
+    }
+
+    /// Replace the network while preserving this instance's objective,
+    /// constraint selections, and compatible initial state.
+    ///
+    /// # Errors
+    /// The replacement has no reference bus or dispatchable generator, or it
+    /// changes an identity layout used by the initial state.
+    pub fn with_network(mut self, network: BalancedNetwork) -> Result<Self, Error> {
+        require_reference(&network)?;
+        require_dispatchable(&network)?;
+        if let Some(initial) = self.initial_state.take() {
+            self.initial_state = Some(initial.rebind_network(network.clone())?);
+        }
+        self.network = network;
+        Ok(self)
     }
 
     /// The network this instance calculates on. Borrowed; never a copy.
@@ -584,10 +629,11 @@ fn require_reference(network: &BalancedNetwork) -> Result<(), Error> {
 }
 
 fn require_dispatchable(network: &BalancedNetwork) -> Result<(), Error> {
+    let active_buses = active_bus_ids(network);
     if network
         .generators()
         .iter()
-        .any(|generator| generator.in_service)
+        .any(|generator| generator.in_service && active_buses.contains(&generator.bus))
     {
         Ok(())
     } else {
@@ -596,6 +642,26 @@ fn require_dispatchable(network: &BalancedNetwork) -> Result<(), Error> {
             "the network has no in service generator for the problem to dispatch",
         ))
     }
+}
+
+fn default_opf_objective(network: &BalancedNetwork) -> Objective {
+    let active_buses = active_bus_ids(network);
+    if network.generators().iter().any(|generator| {
+        generator.in_service && active_buses.contains(&generator.bus) && generator.cost.is_some()
+    }) {
+        Objective::network_generator_cost()
+    } else {
+        Objective::none()
+    }
+}
+
+fn active_bus_ids(network: &BalancedNetwork) -> BTreeSet<BusId> {
+    network
+        .buses()
+        .iter()
+        .filter(|bus| bus.kind != BusType::Isolated)
+        .map(|bus| bus.id)
+        .collect()
 }
 
 pub(crate) fn transform_discarded(what: &str) -> powerio_core::Diagnostic {

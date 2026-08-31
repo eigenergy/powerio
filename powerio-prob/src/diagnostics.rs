@@ -50,6 +50,10 @@ pub mod codes {
             "merged buses stated different attributes; the surviving bus's values were kept";
         BUILD_INSTANCE_UNSUPPORTED_COST_MODEL = "BUILD.INSTANCE.UNSUPPORTED_COST_MODEL", Error,
             "a generator cost model the instance builder cannot state", category = Data;
+        BUILD_INSTANCE_PIECEWISE_COST_INVALID = "BUILD.INSTANCE.PIECEWISE_COST_INVALID", Error,
+            "a piecewise linear generator cost row is malformed", category = Data;
+        BUILD_INSTANCE_PIECEWISE_COST_NONCONVEX = "BUILD.INSTANCE.PIECEWISE_COST_NONCONVEX", Error,
+            "a piecewise linear generator cost row is nonconvex", category = Data;
         BUILD_INSTANCE_CONCAVE_COST = "BUILD.INSTANCE.CONCAVE_COST", Error,
             "a generator cost row states a concave curve", category = Data;
         READ_INSTANCE_IO_FAILED = "READ.INSTANCE.IO_FAILED", Error,

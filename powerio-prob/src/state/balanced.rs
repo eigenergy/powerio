@@ -51,6 +51,31 @@ pub const BALANCED_STATE_QUANTITIES: [&str; 14] = [
 ];
 
 impl OperatingPoint<BalancedNetwork> {
+    /// Rebind this state to an edited network with the same element identity
+    /// layout. Used when an instance changes parameters such as branch ratings
+    /// without changing which columns an initial state addresses.
+    pub(crate) fn rebind_network(mut self, network: BalancedNetwork) -> Result<Self, Error> {
+        let layout = BalancedStateBuilder::new(network.clone(), Vec::new());
+        for quantity in self.columns.quantities.keys() {
+            let expected = layout.identity_order(quantity)?;
+            let actual: Vec<&str> = self
+                .identity_order(quantity)
+                .expect("the quantity came from this point")
+                .collect();
+            if actual.len() != expected.len() || actual.iter().zip(&expected).any(|(a, b)| *a != b)
+            {
+                return Err(Error::new(
+                    &codes::BUILD_STATE_SHAPE_MISMATCH,
+                    format!(
+                        "{quantity}: edited network changes the initial state's element identity order"
+                    ),
+                ));
+            }
+        }
+        self.network = network;
+        Ok(self)
+    }
+
     /// Bus voltage magnitude in per unit, `None` when the series states no
     /// voltages or the bus is unknown.
     #[must_use]
