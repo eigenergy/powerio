@@ -1,6 +1,7 @@
 # PowerIO guide
 
-PowerIO 0.10 is the public beta of the 1.0 API. API corrections may land before 1.0.0 as downstream integrations exercise the new design.
+PowerIO 0.10 established the public beta of the 1.0 API. The 1.0 candidate
+applies the corrections found while building external solver consumers.
 
 PowerIO parses power system data into typed values, converts between supported formats, and builds sparse matrices and graph data for solvers and analysis code. One call reads any supported source:
 
@@ -30,4 +31,7 @@ Three rules hold everywhere:
 
 Supported sources: MATPOWER, PSS/E revisions 33 through 35, PowerWorld AUX and PWB, PSLF EPC, PowerModels JSON, Egret JSON, pandapower JSON, PyPSA CSV folders, Surge JSON, DOE GO Challenge 3 JSON, DeepMind OPFData JSON, GridFM Parquet datasets, OpenDSS, PowerModelsDistribution engineering JSON, BMOPF JSON, and the stored `.pio.json` document. [Formats and Fidelity](format-fidelity.md) states each format's supported profile and write support.
 
-The same operations run from Rust, Python, Julia, C, the `powerio` command line tool, and the MCP server, with the same value kinds, format names, diagnostic codes, and conventions. [Rust, Python, Julia, and C](languages.md) maps the operations across languages; [0.10 Beta Scope and Known Limits](beta-scope.md) states what this beta includes and what waits for 1.0.
+Operations exposed on more than one surface use the same value kinds, format
+names, diagnostic codes, signs, and units. [Rust, Python, Julia, and C](languages.md)
+maps actual coverage; [1.0 Scope and Known Limits](scope-v1.md) lists
+surface specific limits.

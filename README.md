@@ -8,9 +8,10 @@
   >
 </p>
 
-PowerIO 0.10 is the public beta of the 1.0 API. It parses power system data
-into typed values, converts supported formats, and builds sparse matrices and
-graph data.
+PowerIO 0.10 established the public beta of the 1.0 API. The 1.0 candidate
+applies the corrections found while building external solver consumers. It parses
+power system data into typed values, converts supported formats, and builds
+sparse matrices and graph data.
 
 A parse returns a `PioModule`: one typed value plus its sources, diagnostics,
 source map, and history. The value can be a network, calculation instance,

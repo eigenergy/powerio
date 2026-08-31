@@ -8,45 +8,49 @@ A Cargo workspace of Rust crates plus a Python package. Parses power network
 sources, converts between formats, and emits sparse matrices and graph data for
 downstream solvers. Feeds the GridFM ML pipeline.
 
-The 1.0 public design is recorded under `arch-v1/` in `V1_TERMINOLOGY.md`,
-`V1_ARCHITECTURE.md`, `V1_ONTOLOGY.md`, `V1_ISSUE_AUDIT.md`, and
-`V1_IMPLEMENTATION.md`. `V1_RATIONALE.md` explains why the settled choices won
-over the alternatives. Review them before changing a public name or meaning.
+The files under `arch-v1/` record the design work that led to the 0.10 beta.
+They are dated evidence, not current API authority. Read them for historical
+context when changing a public name or meaning, then check the current source,
+tests, release notes, and direct maintainer decisions.
 
-- **`powerio-core`**: the 1.0 shared foundation: `Source`, `FormatId`,
+- **`powerio-core`**: the shared foundation: `Source`, `FormatId`,
   `Diagnostic`, `Error`, `PioModule<T>`, common module records,
   `TimeSeries<T>`, `ScenarioSet<T>`, and output destination types. It has no
-  electrical network, matrix, or solver dependencies. The 0.x `powerio-diag`
-  and `powerio-pkg` packages retire at 1.0.
-- **`powerio`**: currently the parser, format neutral `BalancedNetwork`, writer,
-  and format converters. In 1.0 this implementation crate becomes
-  `powerio-tx`, while the short `powerio` name becomes the entry facade.
+  electrical network, matrix, or solver dependencies.
+- **`powerio-tx`**: the format neutral `BalancedNetwork`, balanced format
+  parsers and writers, normalization, and derived indexed views.
 - **`powerio-matrix`**: sparse matrices and graph data built on
-  `powerio-tx`, `powerio-dist`, and `powerio-prob`. In 1.0 it no longer
-  depends on or re-exports the top `powerio` facade, which would create a
+  `powerio-core`, `powerio-tx`, `powerio-dist`, and `powerio-prob`. It must not
+  depend on or re-export the top `powerio` facade, which would create a
   dependency cycle.
 - **`powerio-prob`**: operating points, problem instances, and solutions on
-  `powerio-tx` and `powerio-dist`.
-  The 1.0 public names are
-  defined in `arch-v1/V1_TERMINOLOGY.md`; the current ambiguous security constrained
-  type must not remain public.
-  It stays matrix free; sparse operators and the DC OPF bundle writer move to
-  `powerio-matrix` so dependencies continue upward without a feature cycle.
+  `powerio-tx` and `powerio-dist`. It stays matrix free; sparse operators and
+  the DC OPF bundle writer live in `powerio-matrix` so dependencies continue
+  upward without a feature cycle.
 - **`powerio-dist`**: the multiconductor distribution model (`MulticonductorNetwork`)
   with OpenDSS `.dss`, PMD JSON, and BMOPF JSON converters. Deliberately does
   **not** depend on the transmission network crate; it shares `powerio-core`.
   BMOPF network decoding lives here; construction of the
   resulting `McAcOpfInstance` lives in `powerio-prob`.
-- **1.0 `powerio` facade**: owns `PioValue`, `PioValueKind`, universal format dispatch, the
-  `.pio.json` schema and upgrade reader, and public re-exports. The current
-  `powerio-pkg` crate dissolves; do not recreate its package shaped API.
+- **`powerio`**: the 1.0 entry facade. It owns `PioValue`, `PioValueKind`,
+  universal format dispatch, the `.pio.json` schema and upgrade reader, and
+  public re-exports. The retired `powerio-pkg` and `powerio-diag` boundaries
+  must not be recreated.
 - **`powerio-cli`**: the `powerio` binary: the clap CLI and the ratatui TUI
   over the `powerio` facade and its component crates.
 - **`powerio-py`**: PyO3 extension behind the `powerio` Python package
   (`python/powerio/`); hands back COO triplets that scipy assembles.
-- **`powerio-capi`**: C ABI over `powerio` (`pio_*`, header `powerio.h`) for C, C++, Julia, and other FFI users. The current ABI v5 feature and function names for `.pio.json` are replaced consistently in ABI v6. `--features arrow` adds `pio_to_arrow`, an Arrow C Data Interface export; `--features gridfm` adds `pio_read_dir` / `pio_scenario_ids` (the gridfm-datakit Parquet parser, pulling in `powerio-matrix`); `--features prob` adds the current problem instance functions, which ABI v6 replaces with the 1.0 names. Those v5 feature additions were additive. The 1.0 type and ownership changes ship together as ABI v6. The matrix Arrow tables are COO tables plus row and column mapping tables `matrix_bus` and `matrix_branch`, versioned append only with no separate number: a removed table's id is burned, never reused, and the Arrow catalog report is stamped with the package version.
+- **`powerio-capi`**: ABI v6 over `powerio` (`pio_*`, header
+  `powerio.h`) for C, C++, Julia, and other FFI users. The one `pio_parse_*`
+  family returns module handles, and typed module accessors return balanced or
+  multiconductor network handles. `--features arrow` adds
+  `pio_balanced_network_to_arrow`; `--features gridfm` adds GridFM routing to
+  `pio_parse_file`; `--features prob` enables problem instance and solution
+  routing. The matrix Arrow tables are COO tables plus `matrix_bus` and
+  `matrix_branch` mapping tables. Removed table IDs are not reused, and the
+  Arrow catalog report carries the package version.
 
-`BalancedNetwork` and `MulticonductorNetwork` are the two reusable electrical network types. The normalized solver tables and dense row arrays are internal compiler data, hidden from the documented surface; `IndexedNetwork` stays a public derived index view in 0.10 because the matrix builders and downstream consumers take it directly.
+`BalancedNetwork` and `MulticonductorNetwork` are the two reusable electrical network types. The normalized solver tables and dense row arrays are internal compiler data, hidden from the documented surface; `IndexedNetwork` stays a public derived index view in 1.0 because the matrix builders and downstream consumers take it directly.
 
 Formats. MATPOWER `.m`, PowerModels JSON, PSS/E `.raw` (v33/34/35),
 PowerWorld `.aux`, PSLF `.epc`, Egret JSON, pandapower JSON, PyPSA CSV directories,
@@ -54,14 +58,14 @@ and Surge JSON all parse and write. DOE GO Challenge 3 JSON and DeepMind OPFData
 JSON are parse only inputs; PowerWorld `.pwb` is a parse only binary input with
 no writer. PowerWorld `.pwd` display files use the display API. GridFM Parquet
 directories parse and write through directory helpers. PowerIO network JSON
-moves through `Network::to_json`/`from_json`; it is a network serialization
+moves through `BalancedNetwork::to_json`/`from_json`; it is a network serialization
 rather than a case format, so 0.9 removed the last `powerio-json` token from
 every surface and a bare `.json` holding it classifies as `model-json`.
 OpenDSS `.dss` and PMD engineering JSON meet at `powerio-dist`'s
 `MulticonductorNetwork`. BMOPF JSON defines an optimization calculation and
 produces `McAcOpfInstance`; its electrical decoding reuses `powerio-dist`.
 Traditional balanced network formats map to `BalancedNetwork`, so a new format
-needs one parser and writer rather than pairwise converters. PyPSA 1.0
+needs one parser and writer rather than pairwise converters. Current PyPSA
 support is the documented CSV electrical profile and produces
 `BalancedNetwork`, `TimeSeries<BalancedNetwork>`, or, when only a complete
 electrical state varies, `TimeSeries<OperatingPoint<BalancedNetwork>>`.
@@ -89,7 +93,7 @@ Matrix outputs (powerio-matrix):
   diagnostics.
 - GridFM Parquet directory writing through `gridfm-datakit` compatible tables.
 - GridFM Parquet directory parsing reuses one balanced network identity set
-  across scenarios in 1.0 rather than cloning one network per scenario.
+  across scenarios rather than cloning one network per scenario.
 
 ## Commands
 
@@ -112,7 +116,7 @@ powerio gridfm tests/data/case14.m -o out      # GridFM Parquet directory
 
 # C ABI (cdylib + staticlib; header powerio-capi/include/powerio.h):
 cargo build -p powerio-capi
-cargo build -p powerio-capi --features arrow   # + pio_to_arrow (Arrow C Data Interface)
+cargo build -p powerio-capi --features arrow   # + pio_balanced_network_to_arrow
 
 # Python (PyO3 crate needs libpython, so it is NOT in default-members):
 cargo build -p powerio-py    # plain cargo build of the extension
@@ -127,12 +131,15 @@ PowerIO releases are tag driven.
 
 1. Wait for `main` CI to pass on the merge commit that should become the
    release.
-2. Merge the reviewed PowerIO.jl release intent for the same version before
+2. Obtain maintainer approval of the final cross repository diff and test
+   packet. Do not mark the PowerIO.jl release intent ready or create a tag
+   before this approval.
+3. Merge the reviewed PowerIO.jl release intent for the same version before
    tagging PowerIO. PowerIO.jl's `Project.toml`, top `CHANGELOG.md` section,
    and `.github/powerio-release.toml` must agree on the Julia version and
    `vX.Y.Z` PowerIO tag. The intent is marked ready only after its canonical
    source digest matches the reviewed PowerIO.jl tree.
-3. Check that the tag does not already exist, then create an annotated tag on
+4. Check that the tag does not already exist, then create an annotated tag on
    `origin/main` and push it:
 
    ```
@@ -142,17 +149,21 @@ PowerIO releases are tag driven.
    git push origin vX.Y.Z
    ```
 
-4. `.github/workflows/release-binaries.yml` runs on tag pushes. Its binding gate tests PowerIO.jl `main` against the tagged library before it builds the `powerio-capi` release tarballs for `aarch64-apple-darwin`, `aarch64-linux-gnu`, `x86_64-apple-darwin`, `x86_64-linux-gnu`, and `x86_64-w64-mingw32`, with the release features `arrow,matrix,gridfm,dist,prob`.
-5. That workflow creates or updates a **draft** GitHub release and attaches the
+5. `.github/workflows/release-binaries.yml` runs on tag pushes. Its binding gate tests PowerIO.jl `main` against the tagged library before it builds the `powerio-capi` release tarballs for `aarch64-apple-darwin`, `aarch64-linux-gnu`, `x86_64-apple-darwin`, `x86_64-linux-gnu`, and `x86_64-w64-mingw32`, with the release features `arrow,matrix,gridfm,dist,prob`.
+6. That workflow creates or updates a **draft** GitHub release and attaches the
    five binary assets. Do not expect a draft release to exist before the tag
    workflow runs.
-6. A human inspects and publishes the draft release. Publishing also fires the crates.io publish workflow; `powerio-core` and `powerio-tx` are first publishes there, and trusted publishing cannot bootstrap a crate that does not exist yet, so their first upload needs a one time token before the trusted publisher configuration takes over (the same bootstrap `powerio-dist`, `powerio-prob`, and `powerio-diag` needed).
-7. Publishing the release triggers `.github/workflows/notify-powerio-jl.yml`.
+7. A human inspects and publishes the draft release. Publishing also starts
+   the crates.io workflow, which verifies the workspace package set and
+   publishes `powerio-core`, `powerio-tx`, `powerio-dist`, `powerio-prob`,
+   `powerio-matrix`, `powerio`, and `powerio-cli` in dependency order. A rerun
+   skips versions already present on crates.io.
+8. Publishing the release triggers `.github/workflows/notify-powerio-jl.yml`.
    If `POWERIO_JL_DISPATCH_TOKEN` is configured, it sends a
    `powerio-release` repository dispatch to `eigenergy/PowerIO.jl`. If the
    token is absent, the PowerIO.jl daily schedule or manual dispatch is the
    fallback.
-8. PowerIO.jl's `.github/workflows/update-artifacts.yml` accepts only the tag
+9. PowerIO.jl's `.github/workflows/update-artifacts.yml` accepts only the tag
    named by the ready release intent. It verifies the published release and
    exact five assets, registry order, absence of an open `artifacts/*` PR, the
    ABI handshake, schema report, and full Julia tests. It may change only
@@ -165,18 +176,18 @@ PowerIO releases are tag driven.
 ## Layout
 
 ```
-powerio-tx/                   # 1.0 name of the current balanced parser crate
+powerio-tx/                   # balanced network model, parsers, and writers
 ├── src/lib.rs               # public re-exports
-├── src/network.rs           # Network, Bus, Load, Shunt, Branch, Generator,
+├── src/network.rs           # BalancedNetwork, Bus, Load, Shunt, Branch, Generator,
 │                            #   GenCost, Storage, Hvdc, BusType, SourceFormat;
 │                            #   to_json / from_json (the structured transport)
 ├── src/indexed.rs           # IndexCore, IndexedNetwork (dense indexed analysis
 │                            #   data), ConnectivityReport; petgraph data:
 │                            #   to_petgraph, is_radial, connectivity_report
-├── src/normalize.rs         # Network::to_normalized (per unit/radian/filtered/
+├── src/normalize.rs         # BalancedNetwork::to_normalized (per unit/radian/filtered/
 │                            #   reindexed derived view); shared per unit scaling
 │                            #   (cost_to_pu/cost_from_pu, DEG_TO_RAD, GEN_PU_KEYS)
-├── src/dc.rs                # current DC formula selection; rename for 1.0
+├── src/dc.rs                # DC network formulas and convention selection
 ├── src/gen_cost.rs          # GenCost model + quadratic projections
 ├── src/geo/                 # GeoLayer sidecar (layer.rs), .pwd harvest (pwd.rs)
 ├── src/operations.rs        # in place Network edit operations
@@ -196,7 +207,7 @@ powerio-tx/                   # 1.0 name of the current balanced parser crate
 │   └── egret.rs             # Egret JSON parser + writer
 └── tests/                   # convert, roundtrip, roundtrip_formats, ...
 
-powerio-matrix/               # matrices + graph data; 1.0 uses component crates
+powerio-matrix/               # matrices and graph data over component crates
 ├── src/lib.rs               # current re-exports plus matrix builders
 ├── src/matrix/
 │   ├── mod.rs               # BuildOptions, Scheme, MatrixStats, sddm_check
@@ -241,9 +252,9 @@ powerio-cli/                  # the `powerio` binary (CLI + TUI)
 powerio-py/src/lib.rs        # PyO3 extension → COO triplets (module `_powerio`)
 python/powerio/              # importable package (scipy/networkx assembly, lazy)
 python/tests/                # test_powerio.py, test_dist.py, test_geo.py,
-                             #   test_gridfm.py, test_mcp.py, test_package.py
+                             #   test_gridfm.py, test_mcp*.py, deprecation shims
 powerio-capi/                # C ABI (pio_*, include/powerio.h, examples/smoke.c)
-│                            #   src/arrow_export.rs: pio_to_arrow (feature = "arrow")
+│                            #   src/arrow_export.rs: pio_balanced_network_to_arrow
 tests/data/                  # shared fixtures (used by CLI examples)
 evals/                       # nonpublished evaluation workspace: validation harnesses, performance programs, allocation gates
 fuzz/                        # libFuzzer targets (detached workspace; see fuzz/README.md)
@@ -251,11 +262,10 @@ fuzz/                        # libFuzzer targets (detached workspace; see fuzz/R
 
 ## Things to know before editing
 
-- **Workspace split.** Current 0.9 `powerio-matrix` depends on and re-exports
-  `powerio`. The 1.0 restructure removes that edge: matrix depends on
-  `powerio-tx`, `powerio-dist`, `powerio-prob`, and `powerio-core`; the top
-  `powerio` facade re-exports matrix. Do not preserve
-  current `crate::network` paths by introducing a facade cycle.
+- **Workspace split.** `powerio-matrix` depends on `powerio-core`,
+  `powerio-tx`, `powerio-dist`, and `powerio-prob`; the top `powerio` facade
+  optionally re-exports matrix types. Do not introduce a facade cycle to
+  preserve old `crate::network` paths.
 - **Clippy must match CI.** Root `cargo clippy --all-targets` skips feature
   combinations and the PyO3 extension, so it misses failures that CI catches.
   Run `bash scripts/ci-clippy.sh` before pushing Rust, C ABI, Arrow, matrix,
@@ -273,8 +283,8 @@ fuzz/                        # libFuzzer targets (detached workspace; see fuzz/R
   `python/powerio/`. One package surfaces both halves: parse/convert and the
   matrices.
 - **Lossless writeback.** The MATPOWER parse retains the original source text
-  and the writer returns it, so `parse → write → parse` keeps the exact bytes.
-  In 1.0 the bytes belong to `PioModule.source`, not `BalancedNetwork`:
+  on `PioModule`, and the writer returns it, so `parse → write → parse` keeps
+  the exact bytes. The retained bytes do not belong to `BalancedNetwork`:
   every `mpc.*` field, in-matrix comments, and exact tokens like `7e-05`. Don't
   reformat through `f64` round-trips; don't drop fields the typed model ignores.
 - **Two-tier fidelity rules.** Same format round trip is byte exact.
@@ -289,18 +299,19 @@ fuzz/                        # libFuzzer targets (detached workspace; see fuzz/R
   meet at `BalancedNetwork`; conductor resolved formats meet at
   `MulticonductorNetwork`. Format enums are nonexhaustive and bindings use
   stable names rather than integer positions.
-- **JSON transport.** `Network::to_json`/`from_json` (serde) is the structured
-  transport; over the C ABI it is `pio_to_json`/`pio_from_json`. There is no
+- **JSON transport.** `BalancedNetwork::to_json`/`from_json` is the structured
+  network transport; over the C ABI it is
+  `pio_balanced_network_to_json`/`pio_balanced_network_from_json`. There is no
   format token for it: the `powerio-json` token was demoted in 0.7 and removed
-  in 0.9, and the JSON classifier answers `model-json` for such a source. The
-  current retained text is `#[serde(skip)]`, so JSON carries the tables, not the
-  byte exact echo. The 1.0 parse API moves retained input to
-  `PioModule.source`.
-- **Distribution bindings stay lazy.** `pio_dist_parse_file` and
-  `pio_dist_parse_str` return a live multiconductor handle. Julia display and
-  scalar access use `pio_dist_summary_json`; `pio_dist_to_json` is the full
-  element data and should only run when a caller asks for `net.data` or an
-  element table.
+  in 0.9, and the JSON classifier answers `model-json` for such a source.
+  Stored module JSON moves through `powerio::stored` and the
+  `pio_module_read_json`/`pio_module_write_json` ABI calls. Runtime retained
+  source bytes on `PioModule` are not serialized.
+- **Distribution bindings stay lazy.** `pio_parse_file`, `pio_parse_str`, and
+  `pio_parse_bytes` return a module. Use `pio_module_kind` before requesting a
+  typed handle with `pio_module_multiconductor_network`. Summary and element
+  access should not serialize the full network unless the caller requests the
+  structured model JSON.
 - **`PioModule`.** `.pio.json` serializes one `PioModule<PioValue>`. The
   generic `PioModule<T>` has no marker trait bound and can hold application
   types outside the built in dynamic enum. It contains one typed `value` plus

@@ -1,97 +1,91 @@
-# Migrating from 0.9
+# Migrating from 0.10
 
-PowerIO 0.10 is the public beta of the 1.0 API. API corrections may land before 1.0.0 as downstream integrations exercise the new design.
+PowerIO 1.0 corrects OPF preparation and solution contracts found during the
+0.10 consumer integration. The `.pio.json` schema remains `powerio.module/1`,
+but the stored OPF result fields and the Rust API changed.
 
-0.10 makes `PioModule` the one runtime unit and `.pio.json`
-version 1 its stored form. Everything a released 0.9 package carried either
-upgrades one way on read or is refused with a directed instruction.
+## OPF preparation follows the instance
 
-## The stored document
+`build_dc_opf_preparation` and `build_ac_opf_preparation` compile the objective
+and active constraints declared on the instance. The supported balanced
+objectives are an empty objective, which produces a feasibility problem with
+zero cost coefficients, and one `network_generator_cost` term. Other terms
+return `BUILD.OPF.OBJECTIVE_UNSUPPORTED` instead of silently using network
+costs.
 
-- The header is `"schema": "powerio.module"`, `"version": 1`. The reader
-  dispatches on it before exact typed decoding; unknown semantic fields and
-  unknown versions are refused with their stated identity.
-- One typed `value` per document: the network kinds (`balanced_network`,
-  `multiconductor_network`), the collections (`balanced_network_time_series`,
-  `balanced_operating_point_time_series`,
-  `multiconductor_operating_point_time_series`,
-  `balanced_network_scenario_set`), and the seven problem instances and
-  seven solutions (`dc_pf_instance` through `ac_scuc_solution`). There is no
-  per value version.
-- The common records are `producer`, `sources`, `source_map`, `diagnostics`,
-  `history`, and namespaced `extensions`, omitted when empty. Nonfinite
-  floats spell `"Infinity"`, `"-Infinity"`, `"NaN"`; `null` is refused.
-- A released 0.9 package reads through the same entry point and upgrades one
-  way: legacy operating points become the primary typed operating point time
-  series, legacy element paths translate into the value's own pointer
-  grammar, and the upgrade is recorded as history plus a
-  `READ.MODULE.UPGRADED` diagnostic. A nonempty legacy `study` is refused
-  with the materialize instruction (`powerio package --materialize` in a 0.9 install).
-  The pre 0.9 lineage is refused and must be regenerated.
+Generator space preparation preserves a convex MATPOWER model 1 cost in
+`generators.piecewise_linear`, aligned with the generator identities and dense
+columns. Its breakpoint powers use the preparation power unit; objective
+values are unchanged. The polynomial `q`, `c`, and `c0` entries for that
+generator are zero. Malformed and nonconvex curves return typed errors instead
+of being fitted or silently convexified.
 
-## Typed state selection
+`nodal_generator_data` now returns `Result`. It rejects a piecewise curve
+because one nodal quadratic cannot represent it. `write_dcopf_bundle` uses that
+projection and returns the same error; use the generator space preparation for
+an exact piecewise objective.
 
-`state_inventory`, `select_state`, and `export_state` replace the JSON
-materialization path: selection returns the existing typed item with no
-clone and no serialization, and export is the separate explicit operation
-that produces an independent static module with the selection in its
-history. Refusals are coded `REQUEST.STATE.*` diagnostics.
+Each preparation carries stable identities, analysis rows, and source rows
+beside its dense bus, generator, and branch arrays. Source rows use
+`Vec<Option<usize>>`: an original row is `Some(row)`, while a bus or branch
+created by three winding transformer lowering is `None`. Synthetic winding
+identities use `{transformer identity}/winding:{1|2|3}`. A bus explicitly
+typed isolated states no OPF equation; it and every incident element are
+absent from the dense arrays, while the source module remains unchanged.
+Active constraint masks use the same dense order. An unknown identity in
+`ConstraintSelection::Only` returns
+`BUILD.OPF.CONSTRAINT_IDENTITY_UNKNOWN`.
 
-## The explicit balanced lowering
+## Economic result fields state derivatives
 
-`lower_module_to_balanced` accepts a multiconductor module and returns a
-balanced module with the records carried over and the pass's findings and
-assumptions appended. The pass now lowers a supported three phase two
-winding `wye_delta`/`delta_wye` transformer and merges an unrated identity
-closed switch (recording `merged_buses` and `removed_switches`); a rated
-closed switch, a cross phase switch, and a merge conflict refuse with their
-own codes, and nothing ever invents an epsilon impedance.
+The 0.10 price fields and signed branch dual are replaced in 1.0.
+Use these builders and accessors:
 
-## The removed 0.9 surfaces
+- `with_bus_active_power_marginals` records the optimal objective derivative
+  per added MW of demand.
+- AC `with_bus_reactive_power_marginals` records the derivative per added MVAr.
+- `with_branch_thermal_limit_multipliers(from, to)` records the two
+  nonnegative thermal constraint multipliers separately.
 
-- Rust: `powerio::package` is gone; the lowering lives at
-  `powerio::transform`, the geo layer at `powerio::dist_geo`, and the code
-  registry at `powerio::codes`. The `Network` alias and the SCOPF projection
-  (`parse_scopf_str`, its `IndexBase`, and the solver JSON document) are
-  gone; GO Challenge 3 parses to a typed `AcScucInstance`.
-- Python: `powerio.parse(source, from_, include_root=..., value_type=...)`
-  replaces `parse_file`, `parse_str`, `parse_bytes`, and
-  `read_pypsa_csv_folder` (`include_root`, omitted by default, widens the
-  include acquisition boundary from the file's containing directory to the
-  named ancestor, widening what the parse may read). `powerio.PioModule`
-  replaces the `Package` class, `value_type` asserts the kind without
-  changing the returned module, and `module.value` reads the typed value.
-  `parse_scopf`, `to_dense` solver rows, the `Dense*` rows, and the 0.8
-  renamed alias hooks are gone.
-- C: the whole 0.9 surface is replaced, not extended. `pio_package_*`,
-  `pio_scopf_*`, the network returning parse family with caller error
-  buffers, the separate distribution parse pair, and the solver row Arrow
-  tables (ids 6 to 14, 21, 22; the ids stay burned) are gone. One parse
-  family returns module handles, typed accessors return network handles,
-  and every failure is a structured `PioError`. The complete classified
-  delta and porting table: [ABI history](abi-v6.md).
-- CLI: `powerio module` writes the stored module (`--scenario` exports one
-  scenario of a set), and every single case command reads a stored
-  `.pio.json` directly.
+The bus value has objective units per selected power unit. Call it an LMP only
+when the instance objective supports that interpretation. For a shared branch
+rating, the local derivative of the optimal objective is the negative sum of
+the from and to multipliers.
 
-## Julia
+Stored solution fields use
+`bus_active_power_marginal`, `bus_reactive_power_marginal`,
+`branch_from_limit_multiplier`, and `branch_to_limit_multiplier`.
 
-`parse_file(path)` is the ordinary call after `using PowerIO` and returns
-`PioModule{T}` for the detected kind; `parse_bytes` covers memory and
-stream input. The `value_type` keyword, the type marker parse forms, the
-public `StoredModule`, and the `read_module`/`parse_module` family are
-gone: read the typed value from `case.value`, assert a kind with an
-ordinary `::PioModule{MulticonductorNetwork}` annotation, and read
-findings as native `Diagnostic` records from `diagnostics(case)`.
+The 0.10 names still read. `bus_price`, `bus_active_price`, and
+`bus_reactive_price` were documented as locational marginal prices: the
+optimal objective change per added demand under the same positive sign, so
+they map directly to the corresponding demand marginal. The signed DC
+`branch_flow_dual` used `from - to`; 1.0 maps a positive value to the from
+bound and the magnitude of a negative value to the to bound, then records
+`READ.MODULE.BRANCH_DUAL_SPLIT`. If a branch had a zero or unlimited rating,
+the original pair is not uniquely recoverable; the deterministic split keeps
+the signed value without claiming otherwise.
 
-## The C ABI
+## Differentiability regularization moved to the solver
 
-ABI 6: owned handles with `retain`/`release`, structured `PioError`
-handles, one module surface, structured diagnostics, and the DC branch
-data. See [ABI history and symbol replacement](abi-v6.md).
+`ObjectiveTerm::DifferentiabilityRegularization` is removed. It did not name a
+portable mathematical quantity or unit. Put numerical regularization in solver
+formulation settings and report the declared PowerIO objective separately.
 
-The 0.9 `pio_dist_capabilities_json` fidelity flags reported which optional
-BMOPF tables that build's writer could express. The 0.10 writer expresses
-all of them, and the report is gone: gate on the release version from
-`pio_version` or `pio_build_info`, and on the BMOPF schema vintage from
-`pio_schema_versions_json`, when behavior must be pinned per release.
+A 0.10 module containing the retired token still decodes. PowerIO removes that
+term and adds the warning `READ.MODULE.OBJECTIVE_TERM_RETIRED`; it does not fail
+with an opaque unknown enum variant.
+
+## Replacing the network on an instance
+
+Use `DcOpfInstance::with_network` or `AcOpfInstance::with_network` when a
+counterfactual changes network parameters. The checked consuming method keeps
+the objective, constraints, DC approximation, and any compatible initial
+state. This prevents a solution for an amended network from being attached to
+an instance rebuilt from defaults.
+
+## DC sign conventions
+
+The public DC susceptance remains negative for an inductive branch. OPF
+preparation exposes the distinct positive solver edge weight. The formulas and
+matrix shapes are listed in [Matrices and Graphs](matrices.md).

@@ -244,7 +244,10 @@ mod tests {
 
     #[test]
     fn nothing_else_crosses_a_major_boundary() {
-        assert!(!reads((1, 0), (0, 8)), "only the public beta lineage crosses");
+        assert!(
+            !reads((1, 0), (0, 8)),
+            "only the public beta lineage crosses"
+        );
         assert!(!reads((2, 0), PUBLIC_BETA_LINEAGE));
         assert!(!reads((0, 9), (1, 0)), "0.9 cannot read the future");
         assert!(!reads((0, 9), (0, 8)), "a 0.x minor is its own lineage");

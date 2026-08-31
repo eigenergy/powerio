@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the frozen producer receipt at evals/integration/powerio-candidate.json.
+"""Reproduce the historical PowerIO 0.10 producer receipt.
 
 The receipt names the exact tested PowerIO subject commit and the observed
 PowerIO.jl release-pair commit, the version identities that apply at that
@@ -70,13 +70,18 @@ def main() -> int:
     ap.add_argument("--subject-commit", default=None,
                     help="the tested PowerIO commit (default: HEAD)")
     ap.add_argument("--out", default="evals/integration/powerio-candidate.json")
-    ap.add_argument("--boundary-doc-digest", default=None,
-                    help="SHA-256 of tellegen docs/POWERIO_INTEGRATION.md, read from an isolated clone")
     args = ap.parse_args()
 
     version = workspace_version()
+    if version != "0.10.0":
+        raise SystemExit(
+            "this historical receipt must be generated from a PowerIO 0.10.0 checkout"
+        )
     receipt = {
         "receipt": "powerio-producer/1",
+        "status": "historical",
+        "note": "Frozen PowerIO 0.10 producer receipt. It is not evidence for "
+                "PowerIO 1.0 or current Tellegen integration.",
         "subject_commit": args.subject_commit or git("rev-parse", "HEAD"),
         "powerio_jl_commit": args.julia_commit,
         "versions": {
@@ -121,9 +126,6 @@ def main() -> int:
             "stored .pio.json is the version 1 module document; released 0.9 packages upgrade one way",
         ],
     }
-    if args.boundary_doc_digest:
-        receipt["tellegen_boundary_doc_sha256"] = args.boundary_doc_digest
-
     out = ROOT / args.out
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(receipt, indent=2, sort_keys=False) + "\n")

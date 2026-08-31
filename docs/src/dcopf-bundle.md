@@ -66,6 +66,11 @@ Branch-indexed (length \\(m\\)): `b` (susceptances), `shift` (radians),
 Generator space data
 (length \\(n_{\mathrm{gen}}\\)): `q_gen`, `c_gen`, `c0_gen`, `pmax_gen`, and `pmin_gen`.
 
+The bundle schema represents polynomial generator costs only. A preparation
+with a piecewise linear generator cost returns a typed error instead of writing
+zero polynomial coefficients. The in-memory generator space preparation
+retains those breakpoints exactly.
+
 The constant cost terms `c0`/`c0_gen` do not move the argmin; they exist so a
 consumer reporting objective values reconstructs the full cost.
 

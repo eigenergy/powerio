@@ -324,6 +324,10 @@ def test_gridfm_routes_through_generic_verbs(tmp_path):
         to_format="matpower", path=str(out_dir), from_format="gridfm"
     )
     assert "mpc.bus" in converted["text"]
+    # convert and save carry the same response header as every other tool
+    # (cli-mcp.md's promise); a client branches on schema before shape.
+    assert converted["schema"] == "powerio.convert"
+    assert converted["powerio_version"] == powerio.__version__
 
 
 def test_matrix_kinds_aliases_and_errors():
@@ -397,6 +401,8 @@ def test_save_text_folder_and_overwrite(tmp_path):
     r = server.save(
         to_format="powermodels-json", out_path=str(out), path=str(DATA / "case9.m")
     )
+    assert r["schema"] == "powerio.save"
+    assert r["powerio_version"] == powerio.__version__
     assert r["path"] == str(out)
     assert r["bytes_written"] == out.stat().st_size
     with pytest.raises(ValueError):

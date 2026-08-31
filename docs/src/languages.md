@@ -1,6 +1,9 @@
 # Rust, Python, Julia, and C
 
-One set of operations, one set of stable strings, four idioms. The table maps each concept to its spelling per surface; semantics, kinds, format names, diagnostic codes, signs, and units are identical everywhere, and each surface follows its own language's conventions for errors, ownership, and dispatch.
+The shared operations use one set of stable strings. The table maps each
+concept to its spelling on four language surfaces; surface specific operations
+and limits are listed in [1.0 Scope and Known Limits](scope-v1.md).
+Each language follows its own conventions for errors, ownership, and dispatch.
 
 | Concept | Rust | Python | Julia | C ABI |
 |---|---|---|---|---|
@@ -25,4 +28,4 @@ The differences are deliberate, and small:
 - Errors follow the language: `Result` in Rust, exceptions in Python and Julia, status plus `PioError` handles in C. All four carry the same coded records, except Python's `FileNotFoundError` for a missing file, which carries none (the deliberate Python idiom for a bad path).
 - Borrowed numerical views (`C` spans, Julia `BorrowedVector`, Python buffer views) stay valid until their owner releases; `copy` produces an ordinary mutable array.
 
-The C page ([C ABI](capi.md)) and the Python page ([Python API](python.md)) carry each surface's full story; PowerIO.jl documents Julia at [eigenergy.github.io/PowerIO.jl](https://eigenergy.github.io/PowerIO.jl). The CLI and MCP server expose the same operations over their own boundaries: [CLI and MCP](cli-mcp.md).
+The C page ([C ABI](capi.md)) and the Python page ([Python API](python.md)) carry each surface's full story; PowerIO.jl documents Julia at [eigenergy.github.io/PowerIO.jl](https://eigenergy.github.io/PowerIO.jl). The CLI and MCP server expose overlapping subsets over their own boundaries: [CLI and MCP](cli-mcp.md).

@@ -87,7 +87,7 @@ member, suggested extension `.geo.json`:
 ```json
 {
   "type": "FeatureCollection",
-  "powerio_geo": { "powerio_version": "0.10.0", "space": "geographic", "kind": "source" },
+  "powerio_geo": { "powerio_version": "1.0.0", "space": "geographic", "kind": "source" },
   "features": [
     { "type": "Feature",
       "geometry": { "type": "Point", "coordinates": [-80.05, 34.20] },

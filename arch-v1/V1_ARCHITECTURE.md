@@ -1,8 +1,7 @@
 # PowerIO 1.0 architecture
 
-Status: audited implementation baseline for 1.0. Decisions are stated as
-decisions. The bounded API prototype is under `prototype/`. This document
-describes the intended 1.0 public shape, not the current implementation.
+Status: historical 1.0 design baseline from 2026-08-25. It records the intended
+shape that informed PowerIO 0.10, not the current implementation or API.
 
 The companion [PowerIO 1.0 ontology](V1_ONTOLOGY.md) records the public types,
 source formats, and allowed transformations as a knowledge graph.
@@ -1604,7 +1603,7 @@ conversion from the accepted PowerIO network or instance into one simulator's
 API. A backend that only accepts a file can ask PowerIO to write a temporary
 artifact after state selection.
 
-The lightweight PowerIO network JSON transport remains available for existing
+The structured PowerIO network JSON transport remains available for existing
 network only bridges. `.pio.json` is the transport for diagnostics, history,
 operating points, edits, and problem instances. Neither transport authorizes an
 implicit multiconductor to balanced transformation.
@@ -1859,15 +1858,14 @@ compiling crate under `prototype/`:
    directory path output, complete artifact inventories, collision refusal,
    and traversal rejection.
 
-No further broad ontology interview is required. Implementation starts with
-the shared ownership and module foundations proven by the prototype, then
-ports source profiles and calculation types. Public fields can still be added
-to nonexhaustive semantic records when format implementation uncovers source
-evidence; that does not reopen the module model.
+The prototype fixed the shared ownership and module foundations recorded here.
+Implementation then proceeded through source profiles and calculation types.
+Public fields could still be added to nonexhaustive semantic records when
+format work produced source evidence; that did not change the module model.
 
-The DC linear system name, parser profile audit, Tellegen request enum, and
-evaluation thresholds are implementation design work. They do not block the
-PowerIO ontology interview.
+The DC linear system name, parser profile details, solver request enums, and
+evaluation thresholds remained implementation decisions outside this
+architecture record.
 
 Deferred until after 1.0:
 

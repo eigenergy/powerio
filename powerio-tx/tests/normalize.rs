@@ -499,7 +499,7 @@ mpc.branch = [
 #[test]
 fn piecewise_cost_per_unit_through_to_normalized() {
     // Model-1 (piecewise) gen cost end to end: the MW breakpoints (even positions)
-    // divide by base, the dollar costs (odd positions) stay — verified through
+    // divide by base, the cost ordinates (odd positions) stay — verified through
     // to_normalized, not just the standalone helper.
     let src = "\
 function mpc = pw

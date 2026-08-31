@@ -1,8 +1,8 @@
 # PowerIO 1.0 terminology
 
-Status: controlled vocabulary for the 1.0 public API, documentation, bindings,
-and issue tracker. The other 1.0 design documents use these words with these
-meanings.
+Status: historical vocabulary from the design work that informed PowerIO 0.10.
+It records the meanings used by the other files in this directory and is not
+current API authority.
 
 `PioModule<T>` is the accepted top level PowerIO compiler type. Every successful
 parse returns a module. `.pio.json` is one versioned serialization of a module,

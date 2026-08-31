@@ -1,8 +1,8 @@
 # PowerIO 1.0 ontology
 
-Status: audited knowledge graph for the 1.0 implementation baseline. The graph records
-public concepts and allowed operations. It is not a crate dependency diagram or
-a list of current implementation types.
+Status: historical knowledge graph from the design work that informed PowerIO
+0.10. It is not current API authority, a crate dependency diagram, or a list of
+current implementation types.
 
 The companion [PowerIO 1.0 issue audit](V1_ISSUE_AUDIT.md) maps these concepts
 to the GitHub tracker.

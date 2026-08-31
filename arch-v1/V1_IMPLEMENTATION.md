@@ -1,16 +1,9 @@
 # PowerIO 1.0 implementation
 
-Status: execution guide for the work defined by
-[V1_ARCHITECTURE.md](V1_ARCHITECTURE.md),
-[V1_ONTOLOGY.md](V1_ONTOLOGY.md),
-[V1_TERMINOLOGY.md](V1_TERMINOLOGY.md), and
-[V1_ISSUE_AUDIT.md](V1_ISSUE_AUDIT.md). Those documents define semantics. This
-file defines dependency order, PR stacks, agent ownership, and completion
-evidence. [V1_RATIONALE.md](V1_RATIONALE.md) records why the selected API won
-over the alternatives.
-
-The release is PowerIO 1.0.0 with C ABI v6. Do not ship an intermediate public
-API under 0.10.
+Status: historical implementation plan from 2026-08-25. It records the
+technical order and validation gates that led to the PowerIO 0.10 beta and
+informed later 1.0 corrections. It is not current API authority or an
+execution guide.
 
 `PioModule<T>` is the accepted top level compiler type. Every successful parse
 returns one. `.pio.json` is its versioned dynamic serialization, not a case
@@ -18,7 +11,7 @@ format or a direct dump of Rust memory.
 
 ## Release outcome
 
-PowerIO 1.0 is complete when:
+The plan defined completion as:
 
 - the public networks, problem instances, solutions, modules, diagnostics,
   sources, and matrix data match the
@@ -35,14 +28,15 @@ PowerIO 1.0 is complete when:
   network fields;
 - GridFM preserves its scenarios without allocating an independent network
   for every scenario;
-- Rust, C, Python, Julia, and MCP expose the same public meanings;
+- operations exposed on more than one of Rust, C, Python, Julia, CLI, and MCP
+  use the same public meanings;
 - Tellegen and the independent Julia tools consume PowerIO instances without a
   second public network model;
 - every issue in the 1.0 milestone is closed by verified code or an explanatory
   scope correction;
 - correctness, allocation, memory safety, fuzz, and release gates pass.
 
-## Preimplementation audit complete
+## Preimplementation evidence
 
 The source profile review, adversarial API audit, and `arch-v1/prototype/`
 closed the product decisions. The one crate and multi-crate prototypes compile
@@ -51,111 +45,26 @@ free-function narrowing, immutable cheap to clone network handles, private share
 `TimeSeries<OperatingPoint<MulticonductorNetwork>>`, one stored document
 version, and owned path and named memory destinations. Public traits for memory representation,
 `BalancedNetworkData`, per value schema versions, `powerio-pkg`, and a separate
-`powerio-diag` leaf were rejected. Do not run another broad architecture interview or infer a
-competing design from the current 0.9 code.
+`powerio-diag` leaf were rejected in that design.
 
-The GitHub execution trackers listed in `V1_ISSUE_AUDIT.md` were created on
-2026-08-25. Every branch
-below must name the issues it closes. Rewrite issue titles that still use names
-removed from the 1.0 API.
+The GitHub trackers listed in `V1_ISSUE_AUDIT.md` were created on 2026-08-25.
+They preserve the issue scope used by this plan.
 
-## Multiagent rules
-
-The coordinating agent owns dependency order, branch state, issue updates, and
-final integration. Other agents receive bounded implementation or audit tasks.
-
-- Never let two agents edit the same checkout.
-- Give each writing agent an isolated git worktree and one named branch.
-- A shared checkout is safe only for nonwriting audits.
-- One agent owns a branch until its commits and validation notes are handed
-  back to the coordinator.
-- The coordinator runs `gh stack`, rebases dependent branches, updates PR text,
-  and submits stacks.
-- An implementation agent does not change a lower stack layer from an upper
-  branch. The coordinator moves the fix to the owning branch and rebases the
-  branches above it.
-- Each PR gets an independent semantic review. Unsafe Rust, the C ABI, binary
-  parsing, directory traversal, and borrowed buffers also get a memory safety
-  review.
-- Audit agents report concrete file and line evidence. They do not make broad
-  cleanup edits on an implementation branch.
-
-Parallel work is limited by real dependencies. Parser baselines, independent
-reference calculations, fuzz cases, and post 1.0 issue review can run while the
-foundation stack is being implemented. Bindings cannot stabilize before the
-Rust API does.
-
-## `gh stack` setup
-
-PowerIO and PowerIO.jl are separate repositories, so GitHub represents them as
-separate stacks. Cross repository dependency is recorded in PR bodies and
-validation notes.
-
-The local PowerIO checkout is still associated with a completed stack containing
-PRs 343 through 346. Remove only that local association before creating the 1.0
-stacks. PowerIO.jl `main` is not currently associated with a stack.
-
-All commands must be noninteractive:
-
-```bash
-git config rerere.enabled true
-git config remote.pushDefault origin
-gh stack unstack --local
-
-gh stack init --base main agent/v1-architecture-baseline
-gh stack submit --auto
-gh stack view --json
-```
-
-Use `gh stack submit --auto --open` only after the branch tests pass and the PR
-is ready for review. After a lower branch changes, run
-`gh stack rebase --upstack`. Routine synchronization uses
-`gh stack sync --remote origin`. Never run `gh stack view` without `--json`.
-
-Do not create every branch at once. Add each of the other three foundation
-branches when work on that Wave 1 layer begins. A later stack can temporarily
-target the top branch of an unmerged prerequisite stack when its PR body states
-that dependency and the exact merge order. After the prerequisite merges
-externally, rebase the later stack onto updated `main`.
-
-## Execution order
-
-### Optional maintenance release before the 1.0 cut
-
-Do this only if the 0.9.1 release is wanted. It does not block 1.0 design work.
-
-1. Rebuild PowerIO.jl #116 from `main` as
-   `agent/v091-powerdata-finiteness`, adding the raw path finiteness, ownership,
-   allocation, and tests salvaged from #118.
-2. Cut PowerIO 0.9.1 only if there is a backward compatible Rust patch to
-   release. Do not include PowerIO #387 or #401 because their public
-   `Iterative` to `Sparse` rename is not patch compatible.
-3. PowerIO.jl's reviewed release intent fixes the Julia version, matching Rust
-   tag, changelog, and canonical source digest before the PowerIO tag is
-   published. The artifact updater may change only `Artifacts.toml` and then
-   dispatches registration for the exact resulting SHA. If there is no Rust
-   patch, defer both; the current workflow has no Julia only 0.9.1 path.
-4. Do not merge any current Rust stack branch before the tag.
-
-After the maintenance decision, retain #387's sparse factorization, #401's
-routing and checked CSC work, and the sensitivity allocation fixes from #405
-on `agent/v1-sensitivities` in the later matrix stack. Rebuild that work after
-its prerequisite matrix branches. #402 and later obsolete public API branches
-are not ancestors.
+## Historical implementation sequence
 
 ### Wave 0: baseline and issue coverage
 
 1. Inspect status in PowerIO, PowerIO.jl, Tellegen, Egret, PyPSA, PowerModels,
    PowerModelsDistribution, BMOPFTools, ExaModelsPower, and bmopf-report. Fetch
    current remote refs without changing checked out files. Run tests in clean
-   worktrees or at recorded current commits when a checkout contains user work.
+   worktrees or at recorded revisions.
 2. Record exact revisions used by evaluation adapters.
 3. Run the current Rust, C, Python, Julia, documentation, and conversion suites.
 4. Record parser allocation counts, allocated bytes, peak resident memory, and
    wall time on the small and large evaluation cases.
 5. Record current sparse matrix allocations for DC incidence, PTDF, LODF, and
    multiconductor admittance construction.
-6. Build an issue to branch table covering every 1.0 issue and every missing
+6. Build an issue coverage table covering every 1.0 issue and every missing
    tracker.
 7. Confirm each post 1.0 issue still belongs outside the release.
 8. Apply `V1_TERMINOLOGY.md` to every public Rust item, C header, Python and
@@ -170,9 +79,9 @@ are not ancestors.
 No performance claim is accepted without before and after measurements on the
 same input and build profile.
 
-### Wave 1: foundation stack
+### Wave 1: foundation
 
-#### `agent/v1-module-diagnostics-source`
+#### Modules, diagnostics, and sources
 
 - Apply the accepted crate layout first: create one `powerio-core` foundation
   for `Source`, diagnostics, `Error`, `PioModule<T>`, common records, repeated
@@ -241,7 +150,7 @@ same input and build profile.
 
 Issue coverage: #375 and #377, plus the new public parse and diagnostic tracker.
 
-#### `agent/v1-state-data`
+#### Repeated state data
 
 - Port the audited prototype. Implement generic `TimePoint`, `TimeSeries<T>`,
   and `ScenarioSet<T>` in `powerio-core`. Implement `OperatingPoint<N>` and type
@@ -279,7 +188,7 @@ Issue coverage: #375 and #377, plus the new public parse and diagnostic tracker.
 
 Issue coverage: #196 and the new time and scenario representation tracker.
 
-#### `agent/v1-instances-solutions`
+#### Instances and solutions
 
 - Implement `DcPfInstance`, `AcPfInstance`, `DcOpfInstance`, `AcOpfInstance`,
   `McAcPfInstance`, `McAcOpfInstance`, and `AcScucInstance`.
@@ -324,26 +233,14 @@ Foundation completion gate:
 - no public type exposes solver row arrays;
 - an independent API review finds no remaining ambiguous 0.9 names.
 
-### Wave 2: parallel Rust stacks
+### Wave 2: matrices, formats, and parser hardening
 
-These stacks start after the foundation stack is ready. While the foundation
-remains unmerged, they can temporarily target its top branch when every
-affected PR states the cross stack dependency and exact merge order. Rebase
-each stack onto updated `main` after the foundation merges externally. They can
-run in separate worktrees.
+These areas followed the foundation because they consumed the settled module,
+network, identity, and instance types.
 
-#### Matrix stack
+#### Matrices
 
-Stack order:
-
-```text
-agent/v1-dc-matrices
-agent/v1-acpf-jacobians
-agent/v1-multiconductor-matrices
-agent/v1-sensitivities
-```
-
-`agent/v1-dc-matrices` implements the PowerModels incidence orientation,
+The DC matrix work implements the PowerModels incidence orientation,
 branch susceptance formulas, bus susceptance matrix, branch susceptance matrix,
 phase shift injection, and stable row mappings. Public values use PowerModels
 signs. Internal positive factor weights use a name that describes their solver
@@ -354,7 +251,7 @@ It keeps `DcPfInstance` matrix free. Separate matrix operations return `A`,
 constrained linear system. An operating point update does not reconstruct the
 network dependent matrices.
 
-`agent/v1-acpf-jacobians` implements one sparse `calc_power_flow_jacobian`
+The AC Jacobian work implements one sparse `calc_power_flow_jacobian`
 operation with polar and Cartesian coordinates. It returns the full physical
 derivatives of active and reactive bus injections with respect to voltage
 coordinates. The result agrees with MATPOWER `dSbus_dV` and the full form of
@@ -365,34 +262,25 @@ differentiation implementation check every derivative block. Sparse structure
 is reused and numerical values update in place across operating points with
 unchanged topology.
 
-`agent/v1-multiconductor-matrices` implements direct passive nodal admittance
+The multiconductor matrix work implements direct passive nodal admittance
 and the augmented system for ideal equipment. It follows BMOPF and BMOPFTools
 terminal ordering, units, and equations. It preserves conductor mappings,
 merges exact unity connections, and never inserts arbitrary small impedances.
 
-`agent/v1-sensitivities` factors once, reuses scratch buffers, changes dense
+The sensitivity work factors once, reuses scratch buffers, changes dense
 loop order for cache locality, and removes avoidable quadratic buffers.
 
 Issue coverage: #232, #291, #294, #324, and #407.
 Issue #400 closes later when the C surface exposes the completed DC data.
 
-#### Format stack
+#### Formats
 
-Stack order:
-
-```text
-agent/v1-problem-formats
-agent/v1-pypsa-egret
-agent/v1-gridfm-scenarios
-agent/v1-format-fidelity
-```
-
-`agent/v1-problem-formats` maps DOE GO Challenge 3 JSON to `AcScucInstance`, BMOPF JSON to
+The problem format work maps DOE GO Challenge 3 JSON to `AcScucInstance`, BMOPF JSON to
 `McAcOpfInstance`, and DeepMind OPFData to `AcOpfSolution`. BMOPF
 per terminal and per phase arrays remain exact. Regulator and general
 transformer rows become typed data.
 
-`agent/v1-pypsa-egret` implements the exact PyPSA CSV electrical profile as
+The PyPSA and Egret work implements the exact PyPSA CSV electrical profile as
 `BalancedNetwork`, `TimeSeries<BalancedNetwork>`, or
 `TimeSeries<OperatingPoint<BalancedNetwork>>` according to what varies. It
 types the accepted snapshot-local columns and rejects or diagnoses
@@ -401,7 +289,7 @@ periods, and stochastic data rather than silently reducing them. Retained source
 cross-format writes report every retained section the target drops. Tests
 compare the profile against the current PyPSA main branch. Complete PyPSA and
 NetCDF support waits for source neutral multi-carrier, multi-period, capacity
-expansion, stochastic calculation, and result types. The same branch
+expansion, stochastic calculation, and result types. The same phase
 implements Egret `system.time_keys` and `TimeSeries<BalancedNetwork>` when
 every varying attribute belongs to the supported scalar network profile,
 without cloning static tables for each time point.
@@ -409,41 +297,34 @@ PyPSA component classes outside the profile and Egret optimization fields
 outside the accepted instances produce diagnostics and remain source
 preserving.
 
-The distribution format branch states and enforces the static OpenDSS circuit
+The distribution format work states and enforces the static OpenDSS circuit
 profile. Schedules, calculation instructions, and output requests outside that
-profile remain source preserving and produce diagnostics. The branch supports
+profile remain source preserving and produce diagnostics. It supports
 `TimeSeries<OperatingPoint<MulticonductorNetwork>>` at the dynamic boundary and
 tests shared network ownership with QSTS shaped data from the official OpenDSS
 semantics. It does not claim a QSTS solution merely by parsing a `.dss` script.
 
-`agent/v1-gridfm-scenarios` maps the current profile to
+The GridFM work maps the current profile to
 `ScenarioSet<BalancedNetwork>`, replaces independent repeated tables with shared
 element identities and typed changes, preserves topology and parameter changes,
 and reuses sparse structure only when valid. A solution profile uses a scenario
 set of a solution type only when the source identifies the calculation and
 supplies the required solution data.
 
-`agent/v1-format-fidelity` completes the remaining distribution and cost
+The format fidelity work completes the remaining distribution and cost
 conversion issues and verifies every advertised profile.
 
 Issue coverage: #307, #360, #376, and #383, plus the new BMOPF, DOE GO Challenge 3,
 DeepMind, PyPSA, Egret, and GridFM trackers.
 
-#### Parser memory and hardening stack
+#### Parser memory and hardening
 
-Stack order:
-
-```text
-agent/v1-parser-memory
-agent/v1-binary-and-directory-hardening
-```
-
-The first branch removes duplicated JSON trees, cloned keys and matrices, and
+The parser memory work removes duplicated JSON trees, cloned keys and matrices, and
 owned token strings. Typed Serde decoding replaces generic JSON trees for known
 fields. Format specific scanners borrow source ranges and parse numeric bytes
 directly.
 
-The second branch bounds PowerWorld binary and display searches, exercises
+The binary and directory hardening work bounds PowerWorld binary and display searches, exercises
 OpenDSS include containment and nesting, and adds malformed input allocation
 limits.
 
@@ -459,18 +340,10 @@ Wave 2 completion gate:
 - fuzz and malformed input tests stay within byte, allocation, and recursion
   limits.
 
-### Wave 3: `PioModule` and MCP stack
-
-Stack order:
-
-```text
-agent/v1-pio-module
-agent/v1-pio-state-selection
-agent/v1-mcp-surface
-```
+### Wave 3: `PioModule` and MCP
 
 - Complete the `NetworkPackage` to `PioModule` rename across every language
-  and command. The crate restructure landed with the foundation stack; this
+  and command. The crate restructure landed with the foundation work; this
   wave finishes generic module records in `powerio-core` and dynamic and
   stored behavior in the `powerio` facade.
 - Define a versioned `.pio.json` schema separately from the Rust memory layout,
@@ -508,15 +381,7 @@ agent/v1-mcp-surface
 
 Issue coverage: #261, #397, and #398, plus the new `.pio.json` tracker.
 
-### Wave 4: ABI v6 and language stacks
-
-PowerIO stack order:
-
-```text
-agent/v1-abi6
-agent/v1-python-api
-agent/v1-mcp-release-api
-```
+### Wave 4: ABI v6 and language bindings
 
 - Use opaque owned handles for modules, values, networks, instances, solutions,
   matrices, numerical arrays, and errors. Give every handle type `retain` and
@@ -539,16 +404,7 @@ agent/v1-mcp-release-api
 
 Issue coverage: #399 and #400.
 
-PowerIO.jl is a separate formal stack:
-
-```text
-agent/v1-julia-abi6
-agent/v1-julia-types
-agent/v1-julia-matrices-and-solutions
-agent/v1-julia-docs-evals
-```
-
-The Julia wrapper keeps owner handles alive for every borrowed array or nested
+The Julia binding work keeps owner handles alive for every borrowed array or nested
 network. Public DC equations and signs match PowerModels directly. Wrapper
 constructors and property access do not serialize whole networks or create
 temporary sign converted vectors.
@@ -562,18 +418,9 @@ Wave 4 completion gate:
 - the Go client parses, extracts, retains, and releases every handle type;
 - header, Rust, Python, and Julia names agree.
 
-### Wave 5: evaluation, audit, and release stack
+### Wave 5: evaluation, audit, and release
 
-Stack order:
-
-```text
-agent/v1-evals-workspace
-agent/v1-adversarial-audits
-agent/v1-documentation
-agent/v1-release
-```
-
-`agent/v1-evals-workspace` moves cross tool cases and performance programs into
+The evaluation workspace moves cross tool cases and performance programs into
 one nonpublished `evals/` workspace. Minimal fixtures remain beside ordinary
 tests. Every case records source software revision, calculation settings,
 identity mapping, tolerances, and expected diagnostics.
@@ -589,13 +436,10 @@ The evaluation matrix covers:
   islands, multiple reference buses, missing costs, malformed rows, long
   identifiers, truncated binary input, and deep include trees.
 
-`agent/v1-adversarial-audits` contains cross stack audit and evaluation fixes
-whose natural owner is that branch. A finding in a lower layer is fixed on its
-owning lower branch and rebased upward. The audit branch must not become a
-miscellaneous refactor branch. Every edit links to a reproduced failure or
-measured result.
+The audit phase records each correction with a reproduced failure or measured
+result.
 
-`agent/v1-documentation` rewrites the mdBook, README files, Rust docs, C
+The documentation phase rewrites the mdBook, README files, Rust docs, C
 header, Python docs, Julia docs, CLI help, schema descriptions, examples, and
 release migration notes against the final terminology and equations. It removes
 obsolete names instead of explaining two APIs that never shipped. It includes
@@ -615,9 +459,9 @@ Documentation completion requires:
 - strict Rust doc, mdBook build and test, Python pdoc, Julia documentation,
   C example, link, and terminology checks to pass.
 
-`agent/v1-release` installs and imports every wheel, builds every C archive,
+The release phase installs and imports every wheel, builds every C archive,
 reruns the documentation checks, verifies schema and ABI versions, and prepares
-the 1.0.0 release notes. The corresponding PowerIO.jl top branch prepares the
+the 1.0.0 release notes. The corresponding PowerIO.jl work prepares the
 reviewed 1.0.0 release intent after its version and changelog are final. Its
 intent names `v1.0.0` and the canonical digest of the complete reviewed Julia
 tree. The PowerIO binding gate must pass against that tree before a release tag
@@ -628,9 +472,9 @@ claims.
 Issue coverage: #325. Any residual fix retains the issue number of the behavior
 it corrects.
 
-## Current 1.0 issue ownership
+## Historical issue coverage
 
-| Issues | Owning stack |
+| Issues | Area |
 |---|---|
 | #375, #377 | foundation |
 | #196 | foundation repeated typed values |
@@ -658,7 +502,7 @@ or serialized meanings. Exercise a synthetic file and directory.
 This is the compatibility gate for the later RAWX, DGS, IIDM, UCTE,
 MG-RAVENS, CIM, and CGMES parsers.
 
-## Required commands before each Rust stack submission
+## Historical validation commands
 
 ```bash
 cargo fmt --all --check
@@ -668,50 +512,5 @@ bash scripts/ci-clippy.sh
 ```
 
 Feature specific, Python, Julia, documentation, sanitizer, fuzz, and evaluation
-commands are added by the owning branch and run before it becomes ready for
-review. A branch is not complete because the default workspace tests pass.
-
-Submit and inspect with:
-
-```bash
-gh stack submit --auto
-gh stack view --json
-```
-
-## Fresh session goal
-
-Implement PowerIO 1.0 from `AGENTS.md` and the complete audited baseline under
-`arch-v1/`. Read the five normative V1 documents plus `V1_RATIONALE.md`, and run the prototype tests before
-editing production code. Do not conduct another broad architecture interview
-or restore public shapes from the 0.9 implementation. Treat the documented
-unconstrained `PioModule<T>`, flat dynamic `PioValue` variants and
-`PioValueKind` strings, facade-local `try_into_typed`, immutable cheap to clone network handles, private temporal
-data sharing, one document schema version for `.pio.json`, instances, solutions,
-multiconductor results, `Destination`, and crate ownership as settled. Do not
-add public traits for memory representation, `BalancedNetworkData`, per value schema versions, or
-restore `powerio-pkg`.
-
-First inspect live issue, PR, branch, release, and CI state. If a 0.9.1 release
-is wanted, make only the reduced maintenance patch described here and tag it
-before any breaking Rust merge. Preserve current PR work through the recorded
-salvage plan; do not merge obsolete solver row, incidence parts, or
-`DcPowerFlowData` APIs. Rebuild the retained work as formal `gh stack` stacks
-rooted at `main`, with PowerIO and PowerIO.jl in separate stacks.
-
-Then start at Wave 0 and continue through the implementation waves. Use the
-existing execution trackers, establish baselines, and implement each dependency
-layer in an isolated worktree. Use focused nonwriting audits and bounded
-implementation agents where work is independent. Reconcile source evidence
-against MATPOWER, PowerModels, PowerModelsDistribution, BMOPF, DOE GO Challenge 3,
-DeepMind OPFData, PyPSA, Egret, and GridFM; do not reopen product decisions that
-those profiles already settle. Ask the user only if implementation uncovers a
-genuine public product choice not answered by the audited documents or source
-definitions.
-
-Run the complete Rust, feature, C ABI, Python, Julia, documentation, numerical
-compatibility, memory safety, allocation, fuzz, and release validation required
-by the owning wave. Correct every DC branch flow test and document to include
-`p_branch = -Bf * va + b .* shift`. Submit and independently review each stack
-layer in dependency order. Continue until both repositories have clean formal
-stacks ready to merge and every 1.0 completion gate has evidence, or report one
-exact external or technical blocker that prevents further progress.
+commands supplemented this gate for the affected surface. Default workspace
+tests alone did not establish completion.

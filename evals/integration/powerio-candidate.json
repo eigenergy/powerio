@@ -1,5 +1,7 @@
 {
   "receipt": "powerio-producer/1",
+  "status": "historical",
+  "note": "Frozen PowerIO 0.10 producer receipt. It is not evidence for PowerIO 1.0 or current Tellegen integration.",
   "subject_commit": "20e55ab0d0159ae33a466ac05ab53cbbeec38ffc",
   "powerio_jl_commit": "8d935d690bbd5f8dbfccd4c82820d6d080dd93af",
   "versions": {
@@ -72,6 +74,5 @@
     "pio_dist_* parse/convert family folded into the one parse and convert family",
     "structured PioDiagnostics accessors added (len, code, severity, message, id, target, suggested_action, details_json, spans, related)",
     "stored .pio.json is the version 1 module document; released 0.9 packages upgrade one way"
-  ],
-  "tellegen_boundary_doc_sha256": "cecf96ff40669062d381a78a29eb3848776601f27a9f970fa6cda497b2a4f99a"
+  ]
 }

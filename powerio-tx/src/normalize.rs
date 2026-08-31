@@ -162,7 +162,7 @@ impl From<u8> for CostModel {
 ///
 /// Polynomial (model 2): coeff `i` is the term `p^(k-1-i)`, so per unit scales it
 /// by `base^(k-1-i)`. Piecewise (model 1): the MW breakpoints (even positions) are
-/// divided by `base`; the dollar costs (odd positions) stay. Any other model has
+/// divided by `base`; the cost ordinates (odd positions) stay. Any other model has
 /// unknown coefficient semantics, so it passes through untouched — the exact
 /// inverse of [`cost_from_pu`]'s own passthrough.
 pub(crate) fn cost_to_pu(cost: &GenCost, base: f64) -> Vec<f64> {
@@ -1068,7 +1068,7 @@ mod tests {
 
     #[test]
     fn cost_to_pu_piecewise_scales_mw_only_and_trims() {
-        // Model 1: MW breakpoints (even positions) ÷ base; dollar costs (odd) raw.
+        // Model 1: MW breakpoints (even positions) ÷ base; cost ordinates (odd) raw.
         let cost = GenCost {
             model: 1,
             startup: 0.0,
@@ -1136,7 +1136,7 @@ mod tests {
     #[test]
     fn cost_rescale_round_trips_piecewise() {
         // Model 1: cost_from_pu multiplies the MW breakpoints back by base and
-        // leaves the dollar costs, the exact inverse of cost_to_pu's even/odd
+        // leaves the cost ordinates, the exact inverse of cost_to_pu's even/odd
         // split. (cost_to_pu trims, cost_from_pu doesn't, so feed a trimmed row.)
         let cost = GenCost {
             model: 1,

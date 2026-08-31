@@ -900,7 +900,14 @@ def _infer_to_format_from_out_path(out_path: str) -> str:
     )
 
 
-def _convert_impl(
+def _convert_impl(*args, **kwargs) -> dict:
+    # The header rides here so every route — the MCP tool, the compatibility
+    # callable, and each internal return path (text, staged directory,
+    # gridfm) — carries it, as cli-mcp.md promises.
+    return {**_header("powerio.convert"), **_convert_payload(*args, **kwargs)}
+
+
+def _convert_payload(
     to_format: str,
     path: Optional[str] = None,
     content: Optional[str] = None,
@@ -940,7 +947,11 @@ def _convert_impl(
     return {"text": conv.text, "warnings": warnings}
 
 
-def _save_impl(
+def _save_impl(*args, **kwargs) -> dict:
+    return {**_header("powerio.save"), **_save_payload(*args, **kwargs)}
+
+
+def _save_payload(
     out_path: str,
     path: Optional[str] = None,
     content: Optional[str] = None,

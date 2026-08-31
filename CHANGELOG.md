@@ -1,18 +1,80 @@
 # Changelog
 
+## 1.0.0 (unreleased)
+
+**OPF preparation now represents the instance it receives.**
+`build_dc_opf_preparation` and `build_ac_opf_preparation` compile either the
+empty feasibility objective or the network generator cost objective. They
+preserve convex piecewise linear generator costs as breakpoints instead of
+fitting a polynomial. Malformed and nonconvex rows, and unsupported objective
+terms, return typed errors. Active constraint
+selections become masks aligned with the dense arrays, and an unknown identity
+in `ConstraintSelection::Only` is an error. Bus, generator, and branch
+identities now accompany their analysis and source row mappings. Synthetic
+three winding transformer branches use identities derived from the transformer
+identity and winding number; they have analysis rows but no source branch row.
+The nodal quadratic projection and DC OPF bundle return an error when the
+objective contains a piecewise cost they cannot represent.
+
+**OPF solution economics no longer assume a currency or collapse two
+constraints into one signed value.** DC and AC solutions can store the
+derivative of the declared optimal objective with respect to added active or
+reactive demand. The unit is objective units per MW or MVAr. The value is an
+LMP only when the declared objective gives it that interpretation. Thermal
+limits retain separate nonnegative multipliers for the two branch directions
+or AC terminals. The derivative with respect to a shared rating is the negative
+sum of those multipliers. Stored 0.10 price columns map to the demand marginal
+columns. A signed 0.10 DC branch dual splits by sign into the two directional
+columns and records `READ.MODULE.BRANCH_DUAL_SPLIT`.
+
+**Differentiability regularization is not a portable objective term.** It did
+not state a mathematical quantity or unit. A 0.10 stored module containing the
+retired token still reads: the term is removed and the module gains the coded
+warning `READ.MODULE.OBJECTIVE_TERM_RETIRED`. Numerical regularization belongs
+to a solver's formulation settings.
+
+**A balanced OPF instance can replace its network without losing problem
+semantics.** `DcOpfInstance::with_network` and `AcOpfInstance::with_network`
+preserve the objective, constraints, approximation, and compatible initial
+state while validating the replacement. This supports exact solutions of
+amended cases without reconstructing an instance from defaults.
+
+**AC and DC assembly now agree on synthesized thermal limits.** Both public
+option types expose fluent setters for units, zero impedance handling, and
+rating synthesis, and both preparations record whether synthesis was used.
+
+**`Termination` gains `Infeasible` and `Unbounded`.** An optimization solver
+that proves the constraints empty or the objective unbounded no longer reports
+the catch-all `Failed`.
+
+**The migration guide states the DC susceptance sign reversal.** 0.9's
+`branch_susceptance` returned the positive Laplacian edge weight; 0.10 and 1.0
+return the PowerModels value, negative for an inductive branch. OPF preparation
+exposes the separate positive solver weight.
+
+**The facade exports complete construction vocabulary.** The DC OPF instance
+and solution pair join the AC pair at the crate root. `HistoryEntry`,
+`HistoryId`, `HistoryKind`, and `Producer` are also available through the main
+facade.
+
 ## 0.10.0
 
 PowerIO 0.10 is the public beta of the 1.0 API. API corrections may land before 1.0.0 as downstream integrations exercise the new design.
 
 `powerio::parse(source)` returns `PioModule<PioValue>`. The value is a balanced network, multiconductor network, time series, scenario set, problem instance, or solution. DOE GO Challenge 3 JSON produces `AcScucInstance`, BMOPF JSON produces `McAcOpfInstance`, and DeepMind OPFData JSON produces `AcOpfSolution`. PyPSA snapshot axes, Egret time keys, and GridFM scenarios remain typed.
 
-`.pio.json` stores one module with schema `powerio.module/1`. The document contains the typed value, source descriptions, source map, diagnostics, history, and extensions. The complete list of 20 value kinds is in the [0.10 release notes](docs/release-notes/0.10.0-draft.md). The one way 0.9 reader and all retired names are documented in the [migration guide](https://powerio.dev/guide/migration-v1.html).
+`.pio.json` stores one module with schema `powerio.module/1`. The document contains the typed value, source descriptions, source map, diagnostics, history, and extensions. The complete list of 20 value kinds is in the [0.10 release notes](docs/release-notes/0.10.0-draft.md). The one way 0.9 reader and all retired names are documented in the [migration guide](https://powerio.dev/guide/migration-v0.10.html).
 
 `powerio-core` defines sources, diagnostics, and modules. `powerio-tx` and `powerio-dist` define the two network families. `powerio-prob` defines problem instances and solutions. `powerio-matrix` builds sparse matrices and graph data. The `powerio` crate provides format dispatch and the combined public API.
 
 C ABI 6 replaces ABI 5. The measured change removes 70 symbols, changes 7 signatures, adds 91 symbols, and leaves 6 unchanged. The new surface uses retained handles, structured errors, `pio_module_*` functions, and `pio_dc_data_*` functions. The removed `pio_package_*`, `pio_scopf_*`, and solver row tables are described in the Developer Guides.
 
-DC branch susceptance now follows the PowerModels sign convention. The public matrices satisfy `B = A' Diagonal(b) A`, `Bf = Diagonal(b) A`, `p_shift = A' (b .* shift)`, and `p_branch = -Bf va + b .* shift`. PTDF and LODF calculations use a sparse direct factorization and retain a dense path for smaller systems.
+DC branch susceptance now follows the PowerModels sign convention. With the
+public bus by branch incidence matrix `A`, the matrices satisfy
+`B = A Diagonal(b) A'`, `Bf = Diagonal(b) A'`,
+`p_shift = A (b .* shift)`, and
+`p_branch = -Bf va + b .* shift`. PTDF and LODF calculations use a sparse
+direct factorization and retain a dense path for smaller systems.
 
 Python uses `powerio.parse(source)`. Format and value kind detection are automatic; `value_type` is an optional assertion. Julia uses `parse_file(source)` after `using PowerIO`. The CLI reads `.pio.json` anywhere it accepts a source and writes stored modules with `powerio module`.
 
@@ -76,7 +138,7 @@ The API and C ABI that 1.0.0 ships. Everything here exists so a later change can
 
 **One version number in every document powerio authors.** powerio stamped fifteen; nine were invented for its own artifacts, six of those were write only, and two claimed 1.x stability inside a 0.x library. Every document powerio authors now states `powerio_version`, the release that wrote it, and `powerio::version` holds the acceptance rule: a document loads when it shares this build's lineage, the major once it reaches 1 and the major and minor pair while the major is 0. `.pio.json`, the SCOPF document, the DC OPF bundle manifest, the geo layer sidecar, the Arrow catalog and table metadata, and every summary document change their version field — **regenerate stored artifacts**. A `.pio.json` from 0.8.x or earlier states no version at all; it deserializes to the empty string rather than defaulting, so the gate stays closed and the reader names the release that wrote it. A foreign format keeps its own version: powerio implements case formats and authors none, so pandapower's `3.0.0` and the BMOPF `$schema` are reproduced, never set. The served JSON Schema path follows the same lineage the reader accepts, so `pio-package/0.9` is the current document and the retired identifiers stay published.
 
-**A regret review swept the surfaces one last time before they freeze.** Five sonnet reviewers hunted the simple things 1.0 would regret, and the confirmed findings landed: powerio-dist's six unprefixed model types gained their `Dist` prefix (`DistWinding`, `DistWindingConn`, `DistLocation`, `DistCoordsKind`, `DistGeoMeta`, `DistCanvas`), which also deletes the meaningless numbered names schemars had baked into the published schema beside them. The source format parameter is `from` (`from_` in Python) across every string and bytes entry point instead of half `from` and half `format`, and `powerio.parse_str` loses the one silent default in the reader family — naming the format is now required, matching every sibling. `BalancedNetwork::to_canonical_format` is the balanced twin of the dist bypass, a regenerated write when the byte exact echo is not wanted. `gridfm_record_batches` names the batch function and the one network wrapper carries the suffix, instead of the reverse. The study edit's rating field is `delta_mva` — it patches `rate_a`/`rate_b`/`rate_c`, which are apparent power, and the old `delta_mw` suffix stated the unit wrong. And the schema `$id` carries its real filename, so constructing it from the docs resolves.
+**The 1.0 API uses one spelling for each supported operation across surfaces.** The distribution model types use the `Dist` prefix (`DistWinding`, `DistWindingConn`, `DistLocation`, `DistCoordsKind`, `DistGeoMeta`, `DistCanvas`), which also removes the numbered names schemars had generated beside them. The source format parameter is `from` (`from_` in Python) across every string and bytes entry point instead of half `from` and half `format`, and `powerio.parse_str` requires the format like its siblings. `BalancedNetwork::to_canonical_format` is the balanced counterpart to the distribution operation, producing a regenerated write when byte exact echo is not wanted. `gridfm_record_batches` names the batch function and the one network wrapper carries the suffix. The study edit's rating field is `delta_mva` because it patches the apparent power fields `rate_a`, `rate_b`, and `rate_c`. The schema `$id` carries its filename so references constructed from the documentation resolve.
 
 **0.9 is the bridge: the 0.8 names live for exactly one release behind warnings that work.** The 0.8.x deprecation aliases never actually deprecated anything — `powerio/src/lib.rs` re-exported only the new names, so `use powerio::Network;` got a compile error rather than the promised warning. 0.9.0 fixes the bridge instead of abandoning it: `Network` is `BalancedNetwork`, `DistNetwork` is `MulticonductorNetwork`, `build_scopf_instance_from_str` is `parse_scopf_str`, `Branch::legacy_total_charging_b` is `total_charging_b`, and `DcConvention::PaperPure` is an associated constant equal to `ReactanceOnly` that works in expression and pattern position — each reachable where 0.8 code looks for it, each warning naming its successor and the 1.0.0 removal. Python bridges the same way: `powerio.Network` and `powerio.dist.DistNetwork` resolve with a `DeprecationWarning`. `scripts/deprecated-inventory.sh` lists the whole set, and its `--assert-empty` run is the 1.0.0 gate that deletes it. The retired `powerio-json` token is the one name with no alias, since model JSON stopped being a conversion target; passing it now gets guidance naming `to_json`, the MCP `json_format` channel, and the `model-json` classification family. [Coming from 0.8.x](https://powerio.dev/guide/abi-v5.html).
 

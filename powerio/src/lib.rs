@@ -31,7 +31,8 @@ pub use powerio_tx::*;
 /// `Diagnostic` already arrives through [`powerio_tx`]'s own re-export, since
 /// that one is itself `powerio_core::Diagnostic`.
 pub use powerio_core::{
-    Destination, PioModule, ScenarioSet, Source, SourceSpan, TimePoint, TimeSeries,
+    Destination, HistoryEntry, HistoryId, HistoryKind, PioModule, Producer, ScenarioSet, Source,
+    SourceSpan, TimePoint, TimeSeries,
 };
 
 /// `powerio_tx::*` above already re-exports an `Error`/`Result` pair, but
@@ -46,9 +47,12 @@ pub type Result<T> = std::result::Result<T, powerio_core::Error>;
 /// The distribution network type; [`powerio_dist::parse`] routes to it.
 pub use powerio_dist::MulticonductorNetwork;
 
-/// The headline problem instance and solution types. The full families live
-/// in [`powerio_prob`]; these two anchor the ontology at the crate root.
-pub use powerio_prob::{AcOpfInstance, AcOpfSolution};
+/// The balanced calculation types used by solver consumers. The full problem
+/// vocabulary lives in [`powerio_prob`]; these types sit at the facade root so
+/// a consumer does not need a second PowerIO dependency to name its boundary.
+pub use powerio_prob::{
+    AcOpfInstance, AcOpfSolution, AcPfInstance, AcPfSolution, DcOpfInstance, DcOpfSolution,
+};
 
 /// Matrix and graph data, re-exported from `powerio-matrix` under the
 /// `matrix` feature. Matrix construction is never a parse result, so the

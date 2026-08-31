@@ -1,6 +1,9 @@
-# Tellegen migration inventory for PowerIO 0.10
+# Historical Tellegen migration inventory: PowerIO 0.9 to 0.10
 
-The consumed 0.9 surface below was measured from an isolated read only clone of eigenergy/tellegen at `01bfee8` (`Merge pull request #82`). Counts are call sites in `crates/`. The shared boundary document `docs/POWERIO_INTEGRATION.md` (untracked working copy) digests to SHA-256 `cecf96ff40669062d381a78a29eb3848776601f27a9f970fa6cda497b2a4f99a`. Tellegen itself is out of scope for this release candidate; this inventory states what its upgrade to 0.10 will touch.
+The consumed 0.9 surface below was measured at Tellegen commit `01bfee8`
+(`Merge pull request #82`). Counts are call sites in `crates/`. This record
+preserves the inventory used for the 0.10 migration. It is not a 1.0 migration
+guide or evidence for the current Tellegen integration.
 
 ## Dependency set
 
@@ -33,7 +36,7 @@ The consumed 0.9 surface below was measured from an isolated read only clone of 
 | `powerio_dist::parse_str`, `MulticonductorNetwork::default`, `DistGraph`, `dist_target_from_name` (4) | `parse_str` goes through the one `powerio::parse` family; the rest unchanged |
 | `powerio_prob::{DcOpfInstance, AcOpfInstance}` (2) | unchanged |
 
-## Behavior notes for the upgrade
+## Historical behavior notes
 
 - Diagnostics arrive as structured records everywhere; code strings are stable; never match on message text.
 - A `.pio.json` written by 0.9 (`NetworkPackage`) loads through the one way upgrade; 0.10 writes the version 1 module document, which 0.9 cannot read.

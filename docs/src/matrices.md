@@ -102,25 +102,34 @@ cubic costs, HVDC, or storage. These losses are returned as warnings.
   every in-service island has a reference bus.
 - **Susceptance conventions for the DC approximation.** `DcConvention` selects
   the branch susceptance vector \\(b\\) and, for conventions that carry shifts,
-  the phase shift injection. The signed incidence matrix \\(A\\) combines with
-  \\(b\\) to form the DC bus susceptance matrix
-  \\(L = A \operatorname{diag}(b) A^\mathsf{T}\\), which feeds PTDF/LODF and the
-  DC OPF matrix projection. \\(b\\) is positive for an inductive branch, the DC
-  model convention MATPOWER `makeBdc` uses; the AC series susceptance
-  \\(\operatorname{Im}\\left(1/(r + jx)\right)\\) is its negation.
+  the phase shift injection. In this crate \\(A\\) is the \\(n \times m\\)
+  bus by branch incidence matrix: a column has \\(+1\\) at the from bus and
+  \\(-1\\) at the to bus. Public values carry PowerModels signs: \\(b\\) is
+  negative for an inductive branch, the imaginary part of the series
+  admittance the selected formula models. Therefore
+  \\(B = A \operatorname{diag}(b) A^\mathsf{T}\\),
+  \\(B_f = \operatorname{diag}(b) A^\mathsf{T}\\),
+  \\(p_{shift} = A(b \circ shift)\\), and
+  \\(p_{bus} = -B\,v_a + p_{shift}\\). The positive factor weight a sparse
+  solver assembles is the separate `DcConvention::solver_edge_weight`, the
+  elementwise negation of public \\(b\\); sign conversion happens while
+  filling public output buffers, never inside them. This reverses 0.9, whose
+  `branch_susceptance` returned the positive weight — the
+  [migration guide](migration-v1.md) states the consumer action.
 
-  The default `SeriesSusceptance` uses \\(b = x/(r^2 + x^2)\\), so it reads the
-  whole series impedance, plus the phase shift
-  injection vector `p_shift`. A tap does not scale it. It reduces to
-  \\(b = 1/x\\) when the branch has no resistance.
+  The default `SeriesSusceptance` uses \\(b = -x/(r^2 + x^2)\\), so it reads
+  the whole series impedance, plus the phase shift injection vector
+  `p_shift`. A tap does not scale it. It reduces to \\(b = -1/x\\) when the
+  branch has no resistance.
 
-  `TapAdjustedReactance` reproduces MATPOWER's `makeBdc`:
-  \\(b = 1/(x\tau)\\) for a transformer with tap ratio \\(\tau\\), plus `p_shift`.
+  `TapAdjustedReactance` matches MATPOWER's `makeBdc` up to MATPOWER's own
+  sign spelling: \\(b = -1/(x\tau)\\) for a transformer with tap ratio
+  \\(\tau\\), plus `p_shift`.
 
-  `ReactanceOnly` is the textbook \\(b = 1/x\\) with resistance, taps, and
-  shifts ignored. The resulting \\(L\\) matches MATPOWER `Bp` under
-  `Scheme::Xb` when phase shifts are zero. Reproducing a published result needs
-  it exactly as written, so it stays.
+  `ReactanceOnly` is the textbook \\(b = -1/x\\) with resistance, taps, and
+  shifts ignored. The resulting grounded system matches MATPOWER `Bp` under
+  `Scheme::Xb` when phase shifts are zero. Reproducing a published result
+  needs it exactly as written, so it stays.
 
 ## Output
 

@@ -1,20 +1,17 @@
 # PowerIO 1.0 issue audit
 
-`PioModule<T>` is the accepted universal top level parse and compiler type.
-Issue titles and bodies that still propose `NetworkPackage`, `PioRecord`, or a
-separate parsed wrapper must be updated before implementation.
+`PioModule<T>` was the accepted universal top level parse and compiler type.
+The audit marked issue titles and bodies that still proposed `NetworkPackage`,
+`PioRecord`, or a separate parsed wrapper for revision.
 
-Status: final preimplementation reconciliation of the GitHub tracker, current
-PR stacks, and the audited 1.0 design. On 2026-08-25 every previously open
-PowerIO and PowerIO.jl 1.0 issue body was reconciled with this design and the
-missing execution issues below were created. This file records scope; GitHub
-remains the execution tracker.
+Status: historical tracker snapshot from 2026-08-25. It records the scope used
+for the 0.10 implementation and is not current API or issue authority.
 
-The audit covers every open issue currently assigned to the `v1.0.0` milestone,
-the post 1.0 issues that the interview moved into 1.0, and closed 1.0 issues
-whose shipped API now needs another breaking change.
+The audit covered every issue then assigned to the `v1.0.0` milestone, issues
+later added to the 1.0 scope, and closed 1.0 issues whose shipped API needed
+another breaking change.
 
-## Current 1.0 milestone
+## Then current 1.0 milestone
 
 | Issue | 1.0 decision | Required correction |
 |---|---|---|
@@ -47,7 +44,7 @@ now contain the exact 1.0 completion requirements.
 |---|---|
 | [#232](https://github.com/eigenergy/powerio/issues/232) | Direct multiconductor passive and augmented admittance data is an accepted 1.0 requirement. BMOPFTools supplies the compatibility tests. |
 | [#293](https://github.com/eigenergy/powerio/issues/293) | The fixes include breaking representations for extras and conductor matrices. The 1.0 window is the time to remove the documented peak memory and allocation costs. |
-| [#294](https://github.com/eigenergy/powerio/issues/294) | Dense PTDF and LODF construction retains several quadratic buffers and uses cache hostile assembly. The user explicitly requires the allocation review before 1.0. |
+| [#294](https://github.com/eigenergy/powerio/issues/294) | Dense PTDF and LODF construction retains several quadratic buffers and uses cache hostile assembly. Allocation review was a 1.0 release requirement. |
 
 ## Remain after 1.0
 
@@ -68,16 +65,15 @@ now contain the exact 1.0 completion requirements.
 - [#236](https://github.com/eigenergy/powerio/issues/236) exposed construction
   of the current operating point wire data. The binding API must move to the
   typed update representation without losing bulk construction.
-- [#49](https://github.com/eigenergy/powerio/issues/49) prepared the current
-  public structures. The ontology interview removes several of those public
-  structures and adds explicit problem instance types, so constructor coverage
-  must be audited again.
+- [#49](https://github.com/eigenergy/powerio/issues/49) prepared the then public
+  structures. This architecture removed several of them and added explicit
+  problem instance types, so constructor coverage required another audit.
 - [#194](https://github.com/eigenergy/powerio/issues/194) correctly separated
-  PowerIO network JSON from `.pio.json`. PowerIO network JSON remains a lightweight
+  PowerIO network JSON from `.pio.json`. PowerIO network JSON remains a structured
   network transport; `PioModule` gains one typed value that can also be a
   problem instance.
 
-## Created execution trackers
+## Created tracker issues
 
 | Issue | Scope |
 |---|---|
@@ -109,7 +105,7 @@ Both issue bodies now include
 [#114](https://github.com/eigenergy/PowerIO.jl/issues/114) were also reconciled
 with the Rust design.
 
-## Verified current implementation gaps
+## Verified implementation gaps at the time
 
 The discarded instance draft contained these useful audit findings. They stay
 here as implementation evidence, not proposed public API:
@@ -130,7 +126,7 @@ here as implementation evidence, not proposed public API:
   with module scoped `ElementId { kind, id }`; keep source rows in source
   maps and private caches.
 
-## Open PR disposition
+## Recorded PR disposition
 
 The existing stacks are evidence and salvage branches, not the 1.0 dependency
 graph. On 2026-08-25 every open PR description in both repositories received

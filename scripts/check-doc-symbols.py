@@ -18,7 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs" / "src"
 HISTORY_PAGES = {
-    "abi-v5.md", "abi-v6.md", "capi-arrow.md", "migration.md", "migration-v1.md",
+    "abi-v5.md", "abi-v6.md", "capi-arrow.md", "migration.md", "migration-v0.10.md", "migration-v1.md",
     "migration-v0.9.md", "migration-v0.7.md", "retired-names.md", "developer.md",
 }
 # Pages whose lower half narrates retired surfaces: everything above the
