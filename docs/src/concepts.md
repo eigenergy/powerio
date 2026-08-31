@@ -37,7 +37,15 @@ A successful parse keeps its findings on the module. A failed operation raises t
 
 ## Sources and formats
 
-A parse reads a source: one or more named immutable byte buffers, acquired from a file, a directory, or memory. The format is detected from the name and content; passing a format name overrides detection for ambiguous or mislabeled input without changing anything else about the parse. Format names are stable lowercase strings (`matpower`, `psse`, `opendss`, `pypsa-csv`), the same in every language, the CLI, and MCP.
+A parse reads a source: one or more named immutable byte buffers, acquired from a file, a directory, or memory. The format is detected from the name and content; passing a format name overrides detection for ambiguous or mislabeled input without changing anything else about the parse. Canonical format names are stable lowercase strings (`matpower`, `psse`, `dss`, `pypsa-csv`), the same in every language, the CLI, and MCP. Common names such as `opendss` remain accepted aliases.
+
+`resolve_format` maps a common alias such as `raw34` or `opendss` to the
+canonical token and reports the conventional filename suffix, whether a
+destination is a directory, and whether a fresh universal emitter exists for
+the format. The suffix has no leading dot and can be compound. The capability
+is not a promise for every module value kind or a build feature probe.
+Applications use that answer for file pickers and downloads instead of copying
+a format table or depending on a component enum.
 
 ## Format profiles
 

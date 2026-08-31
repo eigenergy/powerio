@@ -5,6 +5,7 @@ tests need the optional extras: `pip install '.[all]'`.
 """
 
 import ast
+import importlib
 import json
 import math
 import subprocess
@@ -212,7 +213,27 @@ def test_features_reports_compiled_in_surface():
     assert "features" in powerio.__all__
 
 
+def test_resolve_format_reports_canonical_artifact_metadata():
+    psse = powerio.resolve_format("raw34")
+    assert psse == powerio.FormatInfo("psse34", "raw", False, True)
+    assert powerio.resolve_format("AUX").token == "powerworld"
+
+    pypsa = powerio.resolve_format("pypsa")
+    assert pypsa == powerio.FormatInfo("pypsa-csv", None, True, True)
+
+    pwb = powerio.resolve_format("pwb")
+    assert pwb.can_emit is False
+    assert powerio.resolve_format("pio-json").extension == "pio.json"
+    assert powerio.resolve_format("json") is None
+    assert powerio.resolve_format("not-a-format") is None
+    assert "FormatInfo" in powerio.__all__
+    assert "resolve_format" in powerio.__all__
+
+
 def test_private_extension_stub_hides_legacy_boundary_helpers():
+    native = importlib.import_module("powerio._powerio")
+    assert not hasattr(native, "parse_display_bytes")
+
     stub_path = Path(powerio.__file__).with_name("_powerio.pyi")
     tree = ast.parse(stub_path.read_text())
     exports = next(

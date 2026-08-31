@@ -30,6 +30,7 @@ Surface specific operations and limits are listed in
 | DC bus injection | `DcOperators::calc_bus_injection_dc(va)` | `net.calc_bus_injection_dc(va)` | `calc_bus_injection_dc(module, va)` | assemble `-B * va + p_shift` from the frozen `PioDcData` arrays |
 | emit text | `emit(&module, format, Destination::memory(name)?)` | `module.emit(format)` | `emit(module, format)` | `pio_module_emit_string` |
 | emit files | `emit(&module, format, Destination::path(path))` | `module.emit(format, path)` | `emit(module, format, path)` | `pio_module_emit_file` |
+| resolve a format | `resolve_format(name)` | `powerio.resolve_format(name)` | `resolve_format(name)` | `pio_resolve_format_json` |
 | feature probe | Cargo features | `powerio.features()` | `has_feature`, `features()` | `pio_has_feature`, `pio_build_info` |
 
 Rust narrows the dynamic value with ordinary enum matching:
@@ -47,6 +48,13 @@ match module.value() {
 Python and Julia keep the module and typed value over the same native data.
 The C typed accessors mint retained handles. Releasing the module does not
 invalidate a retained child.
+
+`resolve_format` maps aliases to one canonical token and reports the
+conventional filename suffix, whether a destination is a directory, and
+whether a fresh universal emitter exists for the format. The capability is not
+a promise for every module value kind or a build feature probe. It returns no
+value for an unknown or ambiguous name. The C result is owned compact JSON
+released with `pio_string_release`.
 
 The `calc_*` prefix marks an operation that computes a new matrix or vector.
 Noun spellings are reserved for stored fields and accessors. The fixed ABI 6

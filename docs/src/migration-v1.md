@@ -122,11 +122,23 @@ Matrix helpers now lead with their operation: `calc_diagonal`,
 `to_vector_mtx_bytes`, and `to_gridfm_record_batches*`; `number_snapshots`
 stamps the scenario identifiers.
 
-Format name lookup uses `parse_*`. Geographic projections use
-`to_geo_layer_from_pwd`, `to_geo_layer_from_aux_substations`, and
+Component format names parse to typed enums through `parse_*`; facade artifact
+metadata uses `resolve_format`. Geographic projections use
+`to_geo_layer_from_pwd`, the facade owned `to_geo_layer_from_aux_text`, and
 `to_lonlat_from_pwd_mercator`. GridFM discovery uses `list_*` and the base case
 uses universal `parse_file` plus `export_state` when the parsed value is a
 scenario set. Diagnostic projections use `render_*` or `to_*`.
 The released noun and adjective spellings do not remain as 1.0 aliases. The
 [1.0 API surface](final-v1-api-cleanup.md) lists every removed source name and
 its replacement. C ABI 6 keeps all released symbols.
+
+Applications that need a canonical file name after selecting an output format
+use `resolve_format`. It resolves aliases without exposing the component
+`TargetFormat` enum and reports `token`, `extension`, `is_directory`, and
+`can_emit` in Rust, Python, Julia, and C.
+
+At the Rust facade root, `parse_display_file` now returns `powerio::Error`
+rather than `powerio_tx::Error`. The facade no longer exports
+`to_geo_layer_from_aux_substations(&AuxFile)`, whose argument type was not
+available there. Use `to_geo_layer_from_aux_text`; parser authors that already
+hold an `AuxFile` can import the original operation from `powerio-tx`.

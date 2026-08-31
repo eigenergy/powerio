@@ -1300,19 +1300,6 @@ fn parse_display_file<'py>(
     display_data_to_py(py, display)
 }
 
-/// Parse display bytes in the named display format `from_`. Returns
-/// `(kind, payload)`.
-#[pyfunction]
-#[pyo3(signature = (data, from_))]
-fn parse_display_bytes<'py>(
-    py: Python<'py>,
-    data: &[u8],
-    from_: &str,
-) -> PyResult<Bound<'py, PyAny>> {
-    let display = powerio_tx::parse_display(data, from_).map_err(core_pyerr)?;
-    display_data_to_py(py, display)
-}
-
 /// Rebuild a case from JSON produced by `BalancedNetwork.to_json()`.
 #[pyfunction]
 fn from_json(text: &str) -> PyResult<PyBalancedNetwork> {
@@ -2687,6 +2674,19 @@ fn json_classes() -> Vec<String> {
         .collect()
 }
 
+/// Resolve a format alias to `(token, extension, is_directory, can_emit)`.
+#[pyfunction]
+fn resolve_format(name: &str) -> Option<(String, Option<String>, bool, bool)> {
+    powerio::resolve_format(name).map(|info| {
+        (
+            info.token.to_owned(),
+            info.extension.map(str::to_owned),
+            info.is_directory,
+            info.can_emit,
+        )
+    })
+}
+
 /// Tolerant read of a geographic sidecar (headerless buscoords CSV, aliased
 /// CSV/JSON records, GeoJSON): returns `{"geojson": <canonical form>,
 /// "diagnostics": [...]}`. `name_hint` (a file name) picks CSV against JSON;
@@ -2807,7 +2807,6 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("PowerIODataError", m.py().get_type::<PowerIODataError>())?;
     m.add_class::<PyBalancedNetwork>()?;
     m.add_function(wrap_pyfunction!(parse_display_file, m)?)?;
-    m.add_function(wrap_pyfunction!(parse_display_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(from_json, m)?)?;
     m.add_function(wrap_pyfunction!(convert_file, m)?)?;
     m.add_function(wrap_pyfunction!(convert_str, m)?)?;
@@ -2822,6 +2821,7 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(versions_json, m)?)?;
     m.add_function(wrap_pyfunction!(classify_json_text, m)?)?;
     m.add_function(wrap_pyfunction!(json_classes, m)?)?;
+    m.add_function(wrap_pyfunction!(resolve_format, m)?)?;
     m.add_function(wrap_pyfunction!(parse_geo, m)?)?;
     // Whether the gridfm Parquet surface (arrow/parquet) was compiled in, so the
     // pure-Python layer can raise an ImportError instead of an AttributeError.

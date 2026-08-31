@@ -390,6 +390,22 @@ const char *pio_version(void);
 size_t pio_classify_str(const char *text, char *outbuf, size_t outlen);
 
 /**
+ * Resolve a case or stored module format token or alias to an owned compact
+ * JSON descriptor.
+ *
+ * The document has `token`, `extension`, `is_directory`, and `can_emit`
+ * fields. `extension` is the conventional filename suffix without a leading
+ * dot, can be compound, and is `null` when a directory format has no primary
+ * case file. `can_emit` reports whether a fresh universal emitter exists for
+ * the format. It does not promise that every module value kind can emit that
+ * format, and it is not a feature probe. A false value neither promises nor
+ * forbids a same format retained source echo. Free the returned string with
+ * [`pio_string_release`]. Returns `NULL` for a NULL, non-UTF-8, ambiguous, or
+ * unknown name.
+ */
+char *pio_resolve_format_json(const char *name);
+
+/**
  * Serialize `net` to its model JSON: the network serialization a `.pio.json`
  * document carries as `value.data` when its `value.kind` is
  * `balanced_network`, without the surrounding document. This is the

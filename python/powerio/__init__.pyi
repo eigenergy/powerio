@@ -29,6 +29,7 @@ __all__ = [
     "Diagnostic",
     "DisplayData",
     "EmitResult",
+    "FormatInfo",
     "McAcOpfInstance",
     "McAcOpfSolution",
     "McAcPfInstance",
@@ -53,6 +54,7 @@ __all__ = [
     "parse_file",
     "parse_geo",
     "parse_text",
+    "resolve_format",
     "versions",
 ]
 
@@ -336,6 +338,12 @@ class EmitResult(NamedTuple):
     text: Optional[str]
     diagnostics: List[Diagnostic]
 
+class FormatInfo(NamedTuple):
+    token: str
+    extension: Optional[str]
+    is_directory: bool
+    can_emit: bool
+
 # Any format name or alias the Rust hub accepts (e.g. "matpower"/"m",
 # "psse"/"raw"). Kept as `str` so aliases type-check; the binding validates it.
 Format = str
@@ -343,6 +351,7 @@ Format = str
 from . import dist as dist
 
 def parse_display_file(path: Any, format: Optional[Format] = ...) -> DisplayData: ...
+def resolve_format(name: str) -> Optional[FormatInfo]: ...
 def versions() -> Any: ...
 def from_json(text: str) -> BalancedNetwork: ...
 def from_ppc(ppc: Dict[str, Any]) -> BalancedNetwork: ...
