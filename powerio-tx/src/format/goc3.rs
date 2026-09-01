@@ -1080,7 +1080,7 @@ mod tests {
         )
         .unwrap();
         let generator = read_producer(&object, None, BusId(1), 100.0, Some("producer-1".into()));
-        assert_eq!(generator.mbase, 250.0);
-        assert_eq!(generator.vg, 1.03);
+        assert!((generator.mbase - 250.0).abs() < f64::EPSILON);
+        assert!((generator.vg - 1.03).abs() < f64::EPSILON);
     }
 }

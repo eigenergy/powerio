@@ -168,7 +168,7 @@ fn goc3_reports_official_optional_fields_without_typed_slots() {
             diagnostic.code()
                 == powerio_tx::diagnostics::codes::READ_GOC3_OPTIONAL_FIELD_UNTYPED.code
         })
-        .map(|diagnostic| diagnostic.message())
+        .map(powerio_core::Diagnostic::message)
         .collect();
     assert_eq!(untyped.len(), 6, "{untyped:?}");
     assert!(untyped.iter().any(|message| {
@@ -201,7 +201,7 @@ fn goc3_reports_official_optional_fields_without_typed_slots() {
         .filter(|diagnostic| {
             diagnostic.code() == powerio_tx::diagnostics::codes::READ_GOC3_RETAINED_SOURCE_ONLY.code
         })
-        .map(|diagnostic| diagnostic.message())
+        .map(powerio_core::Diagnostic::message)
         .collect();
     assert_eq!(source_only.len(), 1, "{source_only:?}");
     assert!(source_only[0].contains("description` on a producer"));

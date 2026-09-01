@@ -395,6 +395,7 @@ impl CgmesVersion {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
     use std::io::{Cursor, Write};
     use std::sync::Arc;
 
@@ -440,6 +441,53 @@ mod tests {
             .push(Branch::new(BusId(1), BusId(2), 0.01, 0.1));
         network.assign_missing_component_ids();
         network
+    }
+
+    fn append_vs_converter_records(
+        records: &mut String,
+        id_prefix: &str,
+        dc_unit_id: &str,
+        rated_voltages_kv: &[f64],
+    ) {
+        for (index, value) in rated_voltages_kv.iter().enumerate() {
+            let _ = write!(
+                records,
+                r##"  <cim:VsConverter rdf:ID="_{id_prefix}converter-{index}">
+    <cim:Equipment.EquipmentContainer rdf:resource="#{dc_unit_id}"/>
+    <cim:ACDCConverter.ratedUdc>{value}</cim:ACDCConverter.ratedUdc>
+  </cim:VsConverter>
+"##
+            );
+        }
+    }
+
+    fn insert_profile_records(
+        documents: Vec<(String, String)>,
+        equipment: &str,
+        topology: Option<&str>,
+        steady_state_hypothesis: Option<&str>,
+    ) -> Vec<(String, String)> {
+        documents
+            .into_iter()
+            .map(|(name, text)| {
+                let records = if name.ends_with("_EQ.xml") {
+                    Some(equipment)
+                } else if name.ends_with("_TP.xml") {
+                    topology
+                } else if name.ends_with("_SSH.xml") {
+                    steady_state_hypothesis
+                } else {
+                    None
+                };
+                match records {
+                    Some(records) => (
+                        name,
+                        text.replace("</rdf:RDF>", &format!("{records}</rdf:RDF>")),
+                    ),
+                    None => (name, text),
+                }
+            })
+            .collect()
     }
 
     #[allow(clippy::too_many_lines)] // the fixture names every linked topology table explicitly
@@ -590,19 +638,8 @@ mod tests {
             CgmesVersion::V2_4_15 => "http://iec.ch/TC57/2013/CIM-schema-cim16#",
             CgmesVersion::V3_0 => "http://iec.ch/TC57/CIM100#",
         };
-        let converters = converter_rated_voltages_kv
-            .iter()
-            .enumerate()
-            .map(|(index, value)| {
-                format!(
-                    r##"  <cim:VsConverter rdf:ID="_converter-{index}">
-    <cim:Equipment.EquipmentContainer rdf:resource="#_dc-unit"/>
-    <cim:ACDCConverter.ratedUdc>{value}</cim:ACDCConverter.ratedUdc>
-  </cim:VsConverter>
-"##
-                )
-            })
-            .collect::<String>();
+        let mut converters = String::new();
+        append_vs_converter_records(&mut converters, "", "_dc-unit", converter_rated_voltages_kv);
         let ground_voltage = ground_rated_voltage_kv.map_or_else(String::new, |value| {
             format!(
                 "    <cim:DCConductingEquipment.ratedUdc>{value}</cim:DCConductingEquipment.ratedUdc>\n"
@@ -625,21 +662,8 @@ mod tests {
   </cim:DCTerminal>
 {converters}"##
         );
-        write::write_cgmes(&network(), version)
-            .unwrap()
-            .files
-            .into_iter()
-            .map(|(name, text)| {
-                if name.ends_with("_EQ.xml") {
-                    (
-                        name,
-                        text.replace("</rdf:RDF>", &format!("{records}</rdf:RDF>")),
-                    )
-                } else {
-                    (name, text)
-                }
-            })
-            .collect()
+        let documents = write::write_cgmes(&network(), version).unwrap().files;
+        insert_profile_records(documents, &records, None, None)
     }
 
     fn dc_line_documents(
@@ -652,23 +676,19 @@ mod tests {
             CgmesVersion::V2_4_15 => "http://iec.ch/TC57/2013/CIM-schema-cim16#",
             CgmesVersion::V3_0 => "http://iec.ch/TC57/CIM100#",
         };
-        let converters = [
-            ("first", first_unit_converter_voltages_kv),
-            ("second", second_unit_converter_voltages_kv),
-        ]
-        .into_iter()
-        .flat_map(|(unit, values)| {
-            values.iter().enumerate().map(move |(index, value)| {
-                format!(
-                    r##"  <cim:VsConverter rdf:ID="_{unit}-converter-{index}">
-    <cim:Equipment.EquipmentContainer rdf:resource="#_{unit}-dc-unit"/>
-    <cim:ACDCConverter.ratedUdc>{value}</cim:ACDCConverter.ratedUdc>
-  </cim:VsConverter>
-"##
-                )
-            })
-        })
-        .collect::<String>();
+        let mut converters = String::new();
+        append_vs_converter_records(
+            &mut converters,
+            "first-",
+            "_first-dc-unit",
+            first_unit_converter_voltages_kv,
+        );
+        append_vs_converter_records(
+            &mut converters,
+            "second-",
+            "_second-dc-unit",
+            second_unit_converter_voltages_kv,
+        );
         let line_voltage = line_rated_voltage_kv.map_or_else(String::new, |value| {
             format!(
                 "    <cim:DCConductingEquipment.ratedUdc>{value}</cim:DCConductingEquipment.ratedUdc>\n"
@@ -734,31 +754,13 @@ mod tests {
     <cim:ACDCTerminal.connected>true</cim:ACDCTerminal.connected>
   </cim:DCTerminal>
 "##;
-        write::write_cgmes(&network(), version)
-            .unwrap()
-            .files
-            .into_iter()
-            .map(|(name, text)| {
-                if name.ends_with("_EQ.xml") {
-                    (
-                        name,
-                        text.replace("</rdf:RDF>", &format!("{records}</rdf:RDF>")),
-                    )
-                } else if name.ends_with("_TP.xml") {
-                    (
-                        name,
-                        text.replace("</rdf:RDF>", &format!("{topology_records}</rdf:RDF>")),
-                    )
-                } else if name.ends_with("_SSH.xml") {
-                    (
-                        name,
-                        text.replace("</rdf:RDF>", &format!("{steady_state_records}</rdf:RDF>")),
-                    )
-                } else {
-                    (name, text)
-                }
-            })
-            .collect()
+        let documents = write::write_cgmes(&network(), version).unwrap().files;
+        insert_profile_records(
+            documents,
+            &records,
+            Some(topology_records),
+            Some(steady_state_records),
+        )
     }
 
     #[test]
@@ -2283,7 +2285,7 @@ mod tests {
                 equipment: branch,
                 terminal: 1,
                 id: "5600bceb-a97b-5060-80d4-d546bbc85741".into(),
-                properties: Default::default(),
+                properties: std::collections::BTreeMap::new(),
                 selected: false,
                 current_limits: Some(LoadingLimits {
                     permanent_limit: Some(1000.0),

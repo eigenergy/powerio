@@ -11582,24 +11582,16 @@ pub unsafe extern "C" fn pio_ac_scuc_solution_get_values_at(
                 "bus_voltage_magnitude" => row!(&network.bus_vm, |value| value),
                 "bus_voltage_angle" => row!(&network.bus_va, |value| value),
                 "shunt_step" => row!(&network.shunt_step, |value| value as f64),
-                "ac_line_on_status" => {
-                    row!(&network.ac_line_on_status, |value| f64::from(value))
-                }
+                "ac_line_on_status" => row!(&network.ac_line_on_status, f64::from),
                 "transformer_tap_ratio" => row!(&network.transformer_tm, |value| value),
                 "transformer_phase_shift" => row!(&network.transformer_ta, |value| value),
-                "transformer_on_status" => {
-                    row!(&network.transformer_on_status, |value| f64::from(value))
-                }
+                "transformer_on_status" => row!(&network.transformer_on_status, f64::from),
                 "dc_line_from_active_power" => row!(&network.dc_line_pdc_fr, |value| value),
                 "dc_line_from_reactive_power" => row!(&network.dc_line_qdc_fr, |value| value),
                 "dc_line_to_reactive_power" => row!(&network.dc_line_qdc_to, |value| value),
-                "device_on_status" => row!(&device.on_status, |value| f64::from(value)),
-                "device_startup_status" => {
-                    row!(&device.startup_status, |value| f64::from(value))
-                }
-                "device_shutdown_status" => {
-                    row!(&device.shutdown_status, |value| f64::from(value))
-                }
+                "device_on_status" => row!(&device.on_status, f64::from),
+                "device_startup_status" => row!(&device.startup_status, f64::from),
+                "device_shutdown_status" => row!(&device.shutdown_status, f64::from),
                 "device_active_power" => row!(&device.p_on, |value| value),
                 "device_reactive_power" => row!(&device.q, |value| value),
                 "regulation_reserve_up" => row!(&device.p_reg_res_up, |value| value),
