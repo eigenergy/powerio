@@ -19,7 +19,7 @@ use std::fmt::Write as _;
 
 use powerio_core::ComponentId;
 
-use super::CgmesVersion;
+use super::{CGMES_CLASS_PROPERTY, CgmesVersion};
 use crate::network::{
     AcDcConverterControlMode, ActivePowerControl, BalancedNetwork, BusId, BusType,
     ComponentMetadata, CurveStyle, DcConverterOperatingMode, DcPolarity, DcSwitchKind, DcTerminal,
@@ -3719,17 +3719,77 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 branch.to
             ));
         }
+        let source_metadata = detailed.and_then(|detailed| {
+            detailed.component_metadata.iter().find(|metadata| {
+                metadata.component.component_type() == "branch"
+                    && metadata.component.local_id() == local_id
+            })
+        });
+        let source_is_series_compensator = source_metadata.is_some_and(|metadata| {
+            metadata
+                .properties
+                .get(CGMES_CLASS_PROPERTY)
+                .map(String::as_str)
+                == Some("SeriesCompensator")
+        });
+        let series_compensator_has_charging = source_is_series_compensator
+            && [charging.g_fr, charging.b_fr, charging.g_to, charging.b_to]
+                .into_iter()
+                .any(|value| value.abs() > f64::EPSILON);
+        if series_compensator_has_charging {
+            let unrepresented = [
+                "SeriesCompensator.r0",
+                "SeriesCompensator.x0",
+                "SeriesCompensator.varistorPresent",
+                "SeriesCompensator.varistorRatedCurrent",
+                "SeriesCompensator.varistorVoltageThreshold",
+            ]
+            .into_iter()
+            .filter(|property| {
+                source_metadata.is_some_and(|metadata| metadata.properties.contains_key(*property))
+            })
+            .collect::<Vec<_>>();
+            let fields = if unrepresented.is_empty() {
+                "no r0, x0, or varistor fields were present".to_owned()
+            } else {
+                format!("unrepresented source fields: {}", unrepresented.join(", "))
+            };
+            w.warnings.push(format!(
+                "SeriesCompensator `{local_id}` has nonzero shunt charging and is written as ACLineSegment: positive-sequence r/x, charging, terminal connectivity, service status, and limits are preserved; the equipment class is projected; {fields}"
+            ));
+        }
         if !branch.is_transformer() {
-            eq.named("ACLineSegment", &id, &format!("line{}", i + 1));
-            eq.text("ACLineSegment.r", branch.r * z_base);
-            eq.text("ACLineSegment.x", branch.x * z_base);
-            eq.text("ACLineSegment.bch", branch.calc_total_charging_b() * y_base);
-            let g_total = charging.calc_total_g();
-            if g_total != 0.0 {
-                eq.text("ACLineSegment.gch", g_total * y_base);
+            if source_is_series_compensator && !series_compensator_has_charging {
+                eq.named("SeriesCompensator", &id, &format!("line{}", i + 1));
+                eq.text("SeriesCompensator.r", branch.r * z_base);
+                eq.text("SeriesCompensator.x", branch.x * z_base);
+                for property in [
+                    "SeriesCompensator.r0",
+                    "SeriesCompensator.x0",
+                    "SeriesCompensator.varistorPresent",
+                    "SeriesCompensator.varistorRatedCurrent",
+                    "SeriesCompensator.varistorVoltageThreshold",
+                ] {
+                    if let Some(value) =
+                        source_metadata.and_then(|metadata| metadata.properties.get(property))
+                    {
+                        eq.text(property, value);
+                    }
+                }
+                eq.reference("ConductingEquipment.BaseVoltage", &base_of(kv));
+                eq.close("SeriesCompensator");
+            } else {
+                eq.named("ACLineSegment", &id, &format!("line{}", i + 1));
+                eq.text("ACLineSegment.r", branch.r * z_base);
+                eq.text("ACLineSegment.x", branch.x * z_base);
+                eq.text("ACLineSegment.bch", branch.calc_total_charging_b() * y_base);
+                let g_total = charging.calc_total_g();
+                if g_total != 0.0 {
+                    eq.text("ACLineSegment.gch", g_total * y_base);
+                }
+                eq.reference("ConductingEquipment.BaseVoltage", &base_of(kv));
+                eq.close("ACLineSegment");
             }
-            eq.reference("ConductingEquipment.BaseVoltage", &base_of(kv));
-            eq.close("ACLineSegment");
         } else {
             // Two-winding transformer: the MATPOWER tap folds into the end-1
             // rated voltage (reader ratio = (u1/kv1)/(u2/kv2)); the phase
@@ -3852,6 +3912,8 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         if v3 {
             let class = if branch.is_transformer() {
                 "PowerTransformer"
+            } else if source_is_series_compensator && !series_compensator_has_charging {
+                "SeriesCompensator"
             } else {
                 "ACLineSegment"
             };
