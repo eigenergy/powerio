@@ -1118,6 +1118,8 @@ fn read_gen(row: &GenRow) -> Result<Generator> {
         in_service: bool_cell(row.in_service.as_ref(), "in_service", true)?,
         cost,
         caps: Default::default(),
+        voltage_regulation_on: true,
+        regulating_terminal: None,
         regulated_bus: None,
         active_power_control: None,
         uid: None,

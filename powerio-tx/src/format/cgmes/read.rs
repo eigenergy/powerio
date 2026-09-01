@@ -2494,7 +2494,7 @@ fn read_machines(mapper: &mut Mapper<'_>) -> Result<(Vec<Generator>, Option<BusI
                 generator.active_power_control = Some(control);
             }
         }
-        apply_regulation(mapper, id, &mut generator);
+        apply_regulation(mapper, id, &mut generator)?;
         if let Some(priority) = mapper.store.f(id, "SynchronousMachine.referencePriority") {
             if priority > 0.0 && best.is_none_or(|(p0, _)| priority < p0) {
                 best = Some((priority, bus));
@@ -2520,7 +2520,7 @@ fn read_machines(mapper: &mut Mapper<'_>) -> Result<(Vec<Generator>, Option<BusI
         generator.qmin = store.f(id, "ExternalNetworkInjection.minQ").unwrap_or(0.0);
         generator.in_service = mapper.in_service(id);
         generator.uid = Some(id.to_string());
-        apply_regulation(mapper, id, &mut generator);
+        apply_regulation(mapper, id, &mut generator)?;
         if external.is_none() {
             external = Some(bus);
         }
@@ -2535,31 +2535,42 @@ fn read_machines(mapper: &mut Mapper<'_>) -> Result<(Vec<Generator>, Option<BusI
 
 /// Voltage-mode `RegulatingControl` → `vg` (target over the regulated node's
 /// base) and the remote regulated bus when it is not the machine's own.
-fn apply_regulation(mapper: &mut Mapper<'_>, machine: &str, generator: &mut Generator) {
+fn apply_regulation(
+    mapper: &mut Mapper<'_>,
+    machine: &str,
+    generator: &mut Generator,
+) -> Result<()> {
     let store = mapper.store;
+    generator.voltage_regulation_on = false;
     let Some(control) = store.refv(machine, "RegulatingCondEq.RegulatingControl") else {
-        return;
+        return Ok(());
     };
     if mapper.store.enum_value(control, "RegulatingControl.mode") != Some("voltage") {
-        return;
+        return Ok(());
     }
-    let Some(target) = store.f(control, "RegulatingControl.targetValue") else {
-        return;
-    };
-    let regulated = store
-        .refv(control, "RegulatingControl.Terminal")
+    generator.voltage_regulation_on = store
+        .boolean(control, "RegulatingControl.enabled")
+        .unwrap_or(false);
+    let terminal = store.refv(control, "RegulatingControl.Terminal");
+    generator.regulating_terminal = terminal
+        .map(|terminal| terminal_reference(store, terminal))
+        .transpose()?
+        .flatten();
+    let regulated = terminal
         .and_then(|t| mapper.wiring.node(t))
         .and_then(|tn| mapper.bus_of_tn.get(tn))
         .copied();
     if let Some(bus) = regulated {
-        let kv = mapper.kv(bus);
-        if target > 0.0 {
-            generator.vg = target / kv;
+        if let Some(target) = store.f(control, "RegulatingControl.targetValue")
+            && target > 0.0
+        {
+            generator.vg = target / mapper.kv(bus);
         }
         if bus != generator.bus {
             generator.regulated_bus = Some(bus);
         }
     }
+    Ok(())
 }
 
 fn read_shunts(mapper: &mut Mapper<'_>) -> Vec<Shunt> {

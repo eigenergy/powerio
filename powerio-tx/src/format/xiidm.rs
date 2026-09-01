@@ -2360,8 +2360,33 @@ fn build_network(parsed: &ParsedXiidm, diagnostics: &mut Diagnostics) -> Result<
                 };
                 generator.qmin = qmin;
                 generator.qmax = qmax;
-                let nominal =
-                    voltage_levels[terminal_records[0].1.voltage_level.local_id()].nominal_v;
+                generator.voltage_regulation_on =
+                    required_bool(&equipment.attrs, "voltageRegulatorOn")?;
+                generator.regulating_terminal = equipment
+                    .regulating_terminal
+                    .as_ref()
+                    .map(|reference| resolve_terminal_reference(parsed, reference))
+                    .transpose()?;
+                let regulated_bus = equipment
+                    .regulating_terminal
+                    .as_ref()
+                    .map(|reference| {
+                        resolve_regulating_bus(parsed, reference, &bus_builder, &voltage_levels)
+                    })
+                    .transpose()?
+                    .flatten();
+                generator.regulated_bus = regulated_bus.filter(|bus| *bus != generator.bus);
+                let nominal = regulated_bus
+                    .and_then(|bus| {
+                        bus_builder
+                            .buses
+                            .iter()
+                            .find(|candidate| candidate.id == bus)
+                            .map(|candidate| candidate.base_kv)
+                    })
+                    .unwrap_or(
+                        voltage_levels[terminal_records[0].1.voltage_level.local_id()].nominal_v,
+                    );
                 generator.vg = optional_f64(&equipment.attrs, "targetV")?
                     .map_or(1.0, |target| target / nominal);
                 generator.mbase =
@@ -7684,12 +7709,35 @@ fn write_generator(
     let component = component_id("generator", id).expect("valid stored identity");
     let terminal = terminal_attributes(index, &component, 1, false, generator.in_service);
     let metadata = index.metadata(&component);
+    let target_base_kv = generator
+        .regulated_bus
+        .and_then(|bus| index.buses.get(&bus).map(|bus| bus.base_kv))
+        .unwrap_or(level.nominal_kv);
     output.push_str(&format!(
-        "      <iidm:generator id=\"{}\"{} energySource=\"OTHER\" minP=\"{}\" maxP=\"{}\" voltageRegulatorOn=\"true\" targetP=\"{}\" targetQ=\"{}\" targetV=\"{}\"{terminal}>\n",
-        xml(id), identifiable_attributes(metadata), number(generator.pmin), number(generator.pmax), number(generator.pg),
-        number(generator.qg), number(generator.vg * level.nominal_kv),
+        "      <iidm:generator id=\"{}\"{} energySource=\"OTHER\" minP=\"{}\" maxP=\"{}\" voltageRegulatorOn=\"{}\" targetP=\"{}\" targetQ=\"{}\" targetV=\"{}\"{terminal}>\n",
+        xml(id), identifiable_attributes(metadata), number(generator.pmin), number(generator.pmax),
+        generator.voltage_regulation_on, number(generator.pg), number(generator.qg),
+        number(generator.vg * target_base_kv),
     ));
     write_identifiable_children(metadata, output);
+    if let Some(reference) = &generator.regulating_terminal {
+        output.push_str(&write_terminal_reference(
+            "regulatingTerminal",
+            reference,
+            8,
+        ));
+    } else if generator
+        .regulated_bus
+        .is_some_and(|bus| bus != generator.bus)
+    {
+        diagnostics.push(
+            &codes::EMIT_XIIDM.field_dropped,
+            format!(
+                "generator `{id}` names remote regulated bus {} without an exact regulating terminal; XIIDM output uses the generator terminal",
+                generator.regulated_bus.expect("checked present")
+            ),
+        );
+    }
     if let Some(record) = index.reactive_limits.get(&component).copied() {
         write_reactive_limits(&record.limits, output);
     } else {
@@ -9122,6 +9170,23 @@ mod tests {
   <iidm:line id="LINE" r="2" x="20" g1="0" b1="0.0001" g2="0" b2="0.0001" bus1="B1" connectableBus1="B1" voltageLevelId1="VL1" bus2="B2" connectableBus2="B2" voltageLevelId2="VL2"/>
 </iidm:network>"#;
 
+    const REMOTE_GENERATOR_VOLTAGE_CONTROL: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<iidm:network xmlns:iidm="http://www.powsybl.org/schema/iidm/1_17" id="remote-generator-control" caseDate="2026-01-01T00:00:00Z" forecastDistance="0" sourceFormat="test" minimumValidationLevel="STEADY_STATE_HYPOTHESIS">
+  <iidm:substation id="S">
+    <iidm:voltageLevel id="VL1" nominalV="230" topologyKind="BUS_BREAKER">
+      <iidm:busBreakerTopology><iidm:bus id="B1"/></iidm:busBreakerTopology>
+      <iidm:generator id="G" energySource="OTHER" minP="0" maxP="200" voltageRegulatorOn="false" targetP="100" targetQ="10" targetV="119.6" bus="B1" connectableBus="B1">
+        <iidm:regulatingTerminal id="L"/>
+        <iidm:minMaxReactiveLimits minQ="-50" maxQ="50"/>
+      </iidm:generator>
+    </iidm:voltageLevel>
+    <iidm:voltageLevel id="VL2" nominalV="115" topologyKind="BUS_BREAKER">
+      <iidm:busBreakerTopology><iidm:bus id="B2"/></iidm:busBreakerTopology>
+      <iidm:load id="L" loadType="UNDEFINED" p0="90" q0="30" bus="B2" connectableBus="B2"/>
+    </iidm:voltageLevel>
+  </iidm:substation>
+</iidm:network>"#;
+
     // Reduced from PowSybl's MPL-2.0
     // `V1_17/activePowerControlRoundTripRef.xml` fixture.
     const POWSYBL_ACTIVE_POWER_CONTROL: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -9204,6 +9269,41 @@ mod tests {
         assert_eq!(detailed.substations.len(), 1);
         assert_eq!(detailed.voltage_levels.len(), 2);
         assert_eq!(detailed.terminals.len(), 4);
+    }
+
+    #[test]
+    fn generator_voltage_control_round_trips_with_exact_remote_terminal() {
+        let network =
+            parse_xiidm_source(REMOTE_GENERATOR_VOLTAGE_CONTROL, &mut Diagnostics::new()).unwrap();
+        let generator = &network.generators()[0];
+        assert!(!generator.voltage_regulation_on);
+        assert_eq!(generator.regulated_bus, Some(BusId(2)));
+        assert_eq!(
+            generator.regulating_terminal,
+            Some(TerminalReference {
+                equipment: component_id("load", "L").unwrap(),
+                terminal: 1,
+            })
+        );
+        assert_f64_close(generator.vg, 1.04);
+
+        let emission = write_xiidm(&network).unwrap();
+        assert!(emission.text.contains("voltageRegulatorOn=\"false\""));
+        assert!(emission.text.contains("targetV="));
+        assert!(
+            emission
+                .text
+                .contains("<iidm:regulatingTerminal id=\"L\"/>")
+        );
+
+        let reparsed = parse_xiidm_source(&emission.text, &mut Diagnostics::new()).unwrap();
+        assert_eq!(
+            reparsed.generators()[0].regulating_terminal,
+            generator.regulating_terminal
+        );
+        assert_eq!(reparsed.generators()[0].regulated_bus, Some(BusId(2)));
+        assert!(!reparsed.generators()[0].voltage_regulation_on);
+        assert_f64_close(reparsed.generators()[0].vg, generator.vg);
     }
 
     #[test]

@@ -3357,6 +3357,19 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             machine.bus,
             machine.in_service,
         );
+        let regulating_terminal = machine
+            .regulating_terminal
+            .as_ref()
+            .map(|reference| {
+                terminal_reference_mrid(net, detailed, reference).ok_or_else(|| {
+                    emission_error(format!(
+                        "generator `{local_id}` references terminal {} number {}, which cannot be identified in CGMES output",
+                        reference.equipment, reference.terminal
+                    ))
+                })
+            })
+            .transpose()?
+            .unwrap_or_else(|| term.clone());
         eq.named(
             "RegulatingControl",
             &control,
@@ -3367,7 +3380,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             w.p.cim_ns,
             "RegulatingControlModeKind.voltage",
         );
-        eq.reference("RegulatingControl.Terminal", &term);
+        eq.reference("RegulatingControl.Terminal", &regulating_terminal);
         eq.close("RegulatingControl");
         ssh.open("SynchronousMachine", &id, true);
         ssh.text("RotatingMachine.p", -machine.pg);
@@ -3384,17 +3397,18 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         }
         ssh.close("SynchronousMachine");
         ssh.open("RegulatingControl", &control, true);
-        ssh.text("RegulatingControl.enabled", true);
+        ssh.text("RegulatingControl.enabled", machine.voltage_regulation_on);
         ssh.text(
             "RegulatingControl.targetValue",
-            machine.vg * w.kv(machine.bus)?,
+            machine.vg * w.kv(machine.regulated_bus.unwrap_or(machine.bus))?,
         );
         ssh.close("RegulatingControl");
-        if machine.regulated_bus.is_some_and(|b| b != machine.bus) {
+        if machine.regulating_terminal.is_none()
+            && machine.regulated_bus.is_some_and(|b| b != machine.bus)
+        {
             w.warnings.push(format!(
-                "generator at bus {}: remote regulated bus is written as local \
-                 regulation (the control terminal is the machine's own)",
-                machine.bus
+                "generator `{local_id}` names remote regulated bus {} without an exact regulating terminal; CGMES output uses the generator terminal",
+                machine.regulated_bus.expect("checked present")
             ));
         }
         if machine.cost.is_some() {

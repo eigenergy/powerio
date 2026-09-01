@@ -323,6 +323,9 @@ pub struct PioBalancedGeneratorView {
     pub capability_count: usize,
     pub active_power_control: PioActivePowerControlView,
     pub has_active_power_control: bool,
+    pub voltage_regulation_on: bool,
+    pub regulating_terminal: PioTerminalReferenceView,
+    pub has_regulating_terminal: bool,
 }
 
 /// One balanced storage element.
@@ -9360,6 +9363,8 @@ pub unsafe extern "C" fn pio_balanced_network_generator_at(
             let cost = generator.cost.as_ref();
             let (active_power_control, has_active_power_control) =
                 active_power_control_view(generator.active_power_control.as_ref());
+            let (regulating_terminal, has_regulating_terminal) =
+                terminal_reference_view(generator.regulating_terminal.as_ref());
             *output = PioBalancedGeneratorView {
                 component_id,
                 has_component_id,
@@ -9395,6 +9400,9 @@ pub unsafe extern "C" fn pio_balanced_network_generator_at(
                 capability_count: GENERATOR_CAPABILITY_NAMES.len(),
                 active_power_control,
                 has_active_power_control,
+                voltage_regulation_on: generator.voltage_regulation_on,
+                regulating_terminal,
+                has_regulating_terminal,
             };
             Ok(true)
         })
@@ -12533,6 +12541,8 @@ mod tests {
             assert_eq!(generator.bus_id, 1);
             assert_eq!(generator.active_power_mw, 72.3);
             assert!(generator.has_cost);
+            assert!(generator.voltage_regulation_on);
+            assert!(!generator.has_regulating_terminal);
             assert!(!generator.has_active_power_control);
             assert!(!generator.active_power_control.has_droop_percent);
             assert_eq!(generator.cost.model, 2);
@@ -12630,6 +12640,17 @@ mod tests {
             let mut generator = powerio_tx::Generator::new(powerio_tx::BusId(1));
             generator.cost = Some(powerio_tx::GenCost::new(2, 10.0, 20.0, vec![1.0, 2.0]));
             generator.caps[8] = Some(25.0);
+            generator.voltage_regulation_on = false;
+            generator.regulating_terminal = Some(
+                serde_json::from_value(serde_json::json!({
+                    "equipment": {
+                        "component_type": "load",
+                        "local_id": "regulated-load"
+                    },
+                    "terminal": 1
+                }))
+                .unwrap(),
+            );
             generator.regulated_bus = Some(powerio_tx::BusId(2));
             let mut generator_control = powerio_tx::ActivePowerControl::new(true);
             generator_control.droop_percent = Some(4.0);
@@ -12730,6 +12751,17 @@ mod tests {
             let generator = generator.assume_init();
             assert!(generator.has_regulated_bus);
             assert_eq!(generator.regulated_bus_id, 2);
+            assert!(!generator.voltage_regulation_on);
+            assert!(generator.has_regulating_terminal);
+            assert_eq!(
+                view_text(generator.regulating_terminal.equipment.component_type),
+                "load"
+            );
+            assert_eq!(
+                view_text(generator.regulating_terminal.equipment.local_id),
+                "regulated-load"
+            );
+            assert_eq!(generator.regulating_terminal.terminal, 1);
             assert!(generator.has_active_power_control);
             assert!(generator.active_power_control.participate);
             assert!(generator.active_power_control.has_droop_percent);

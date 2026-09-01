@@ -184,6 +184,14 @@ class ActivePowerControl(TypedDict, total=False):
     minimum_target_active_power_mw: Optional[float]
     maximum_target_active_power_mw: Optional[float]
 
+class ComponentIdentity(TypedDict):
+    component_type: str
+    local_id: str
+
+class TerminalReference(TypedDict):
+    equipment: ComponentIdentity
+    terminal: int
+
 class Bus(TypedDict):
     id: int
     kind: Literal["PQ", "PV", "REF", "ISOLATED"]
@@ -281,6 +289,9 @@ class Gen(TypedDict):
     vg: float
     mbase: float
     in_service: bool
+    voltage_regulation_on: bool
+    regulated_bus: Optional[int]
+    regulating_terminal: Optional[TerminalReference]
     # MATPOWER gen columns past PMIN, in column order: pc1, pc2, qc1min,
     # qc1max, qc2min, qc2max, ramp_agc, ramp_10, ramp_30, ramp_q, apf.
     caps: List[Optional[float]]
@@ -310,10 +321,6 @@ class Storage(TypedDict, total=False):
     active_power_control: Optional[ActivePowerControl]
     uid: Optional[str]
     extras: Dict[str, Any]
-
-class ComponentIdentity(TypedDict):
-    component_type: str
-    local_id: str
 
 class CaseMetadata(TypedDict, total=False):
     case_date: str

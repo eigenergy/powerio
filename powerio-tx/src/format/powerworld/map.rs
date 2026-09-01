@@ -610,6 +610,8 @@ fn read_gen(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Generator> {
         in_service: on_alias(r, &["GenStatus", "Status"])?,
         cost: None,
         caps: Default::default(),
+        voltage_regulation_on: true,
+        regulating_terminal: None,
         regulated_bus: None,
         active_power_control: None,
         uid: None,

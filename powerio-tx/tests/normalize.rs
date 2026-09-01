@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use powerio_tx::{
     BusId, BusType, Error, Generator, IndexedNetwork, NormalizeOptions, Shunt, SourceFormat,
-    Storage, TargetFormat,
+    Storage, TargetFormat, TerminalReference,
 };
 
 const DEG_TO_RAD: f64 = std::f64::consts::PI / 180.0;
@@ -65,6 +65,28 @@ fn per_unit_and_radians_on_case9() {
             }
         }
     }
+}
+
+#[test]
+fn normalization_preserves_generator_voltage_control_identity() {
+    let mut raw = parse_matpower_file(data("case9.m")).unwrap();
+    let reference: TerminalReference = serde_json::from_value(serde_json::json!({
+        "equipment": {
+            "component_type": "load",
+            "local_id": "remote-load"
+        },
+        "terminal": 1
+    }))
+    .unwrap();
+    raw.generators_mut()[0].voltage_regulation_on = false;
+    raw.generators_mut()[0].regulating_terminal = Some(reference.clone());
+    raw.generators_mut()[0].regulated_bus = Some(BusId(5));
+
+    let normalized = raw.to_normalized().unwrap();
+    let generator = &normalized.generators()[0];
+    assert!(!generator.voltage_regulation_on);
+    assert_eq!(generator.regulating_terminal, Some(reference));
+    assert_eq!(generator.regulated_bus, Some(BusId(5)));
 }
 
 #[test]

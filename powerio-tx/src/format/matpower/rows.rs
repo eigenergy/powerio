@@ -251,6 +251,8 @@ pub(super) fn gen_row(row: &[f64], i: usize) -> Result<Generator> {
         in_service: is_in_service(row[gen_col::GEN_STATUS]),
         cost: None,
         caps,
+        voltage_regulation_on: true,
+        regulating_terminal: None,
         regulated_bus: None,
         active_power_control: None,
         uid: None,

@@ -170,7 +170,7 @@ def test_xiidm_balanced_equipment_is_available(tmp_path):
   <iidm:substation id="S">
     <iidm:voltageLevel id="VL" nominalV="225" topologyKind="BUS_BREAKER">
       <iidm:busBreakerTopology><iidm:bus id="B" v="225" angle="0"/></iidm:busBreakerTopology>
-      <iidm:generator id="GEN" energySource="OTHER" minP="0" maxP="200" voltageRegulatorOn="false" targetP="50" targetQ="0" bus="B" connectableBus="B"><iidm:minMaxReactiveLimits minQ="-100" maxQ="100"/></iidm:generator>
+      <iidm:generator id="GEN" energySource="OTHER" minP="0" maxP="200" voltageRegulatorOn="false" targetP="50" targetQ="0" bus="B" connectableBus="B"><iidm:regulatingTerminal id="BAT"/><iidm:minMaxReactiveLimits minQ="-100" maxQ="100"/></iidm:generator>
       <iidm:battery id="BAT" targetP="20" targetQ="0" minP="-100" maxP="100" bus="B" connectableBus="B"><iidm:minMaxReactiveLimits minQ="-25" maxQ="25"/></iidm:battery>
       <iidm:staticVarCompensator id="SVC" bMin="-0.02" bMax="0.03" voltageSetpoint="225" reactivePowerSetpoint="12" regulationMode="REACTIVE_POWER" regulating="true" bus="B" connectableBus="B" p="1" q="2"/>
       <iidm:shuntCompensator id="SH" sectionCount="2" voltageRegulatorOn="false" bus="B" connectableBus="B"><iidm:shuntLinearModel gPerSection="0" bPerSection="0.001" maximumSectionCount="4"/></iidm:shuntCompensator>
@@ -199,6 +199,12 @@ def test_xiidm_balanced_equipment_is_available(tmp_path):
         "participation_factor": 1.0,
         "minimum_target_active_power_mw": None,
         "maximum_target_active_power_mw": 180.0,
+    }
+    assert network.generators[0]["voltage_regulation_on"] is False
+    assert network.generators[0]["regulated_bus"] is None
+    assert network.generators[0]["regulating_terminal"] == {
+        "equipment": {"component_type": "storage", "local_id": "BAT"},
+        "terminal": 1,
     }
     storage_control = network.storage[0]["active_power_control"]
     assert storage_control == {
@@ -795,6 +801,9 @@ def test_case_tables(case9):
     gen = case9.generators[0]
     assert gen["cost"]["model"] == 2
     assert gen["cost"]["coeffs"] == [0.11, 5.0, 150.0]
+    assert gen["voltage_regulation_on"] is True
+    assert gen["regulated_bus"] is None
+    assert gen["regulating_terminal"] is None
 
 
 def test_branch_table_b_is_terminal_projection():

@@ -515,6 +515,8 @@ fn read_producer(
         in_service: initial_status_flag(obj, true),
         cost: cost_at(obj, ts, 0, base_mva),
         caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
+        voltage_regulation_on: true,
+        regulating_terminal: None,
         regulated_bus: None,
         active_power_control: None,
         uid,
