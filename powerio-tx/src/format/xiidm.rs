@@ -9097,6 +9097,14 @@ fn xml(value: &str) -> String {
 mod tests {
     use super::*;
 
+    fn assert_f64_close(actual: f64, expected: f64) {
+        let tolerance = f64::EPSILON * expected.abs().max(1.0);
+        assert!(
+            (actual - expected).abs() <= tolerance,
+            "expected {expected}, got {actual}"
+        );
+    }
+
     const BUS_BREAKER: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <iidm:network xmlns:iidm="http://www.powsybl.org/schema/iidm/1_17" id="case" caseDate="2025-01-01T00:00:00Z" forecastDistance="0" sourceFormat="test" minimumValidationLevel="STEADY_STATE_HYPOTHESIS">
   <iidm:substation id="S" country="US" tso="MISO" geographicalTags="east">
@@ -9371,10 +9379,10 @@ mod tests {
         let mut diagnostics = Diagnostics::new();
         let network = parse_xiidm_source(source, &mut diagnostics).unwrap();
         assert_eq!(network.generators().len(), 1);
-        assert_eq!(network.generators()[0].pg, 0.0);
+        assert_f64_close(network.generators()[0].pg, 0.0);
         assert_eq!(network.shunts().len(), 1);
         assert_eq!(network.shunts()[0].section_count, None);
-        assert_eq!(network.shunts()[0].b, 0.0);
+        assert_f64_close(network.shunts()[0].b, 0.0);
         assert!(
             diagnostics
                 .records()
@@ -9607,7 +9615,7 @@ mod tests {
             .chars()
             .map(|value| u8::try_from(u32::from(value)).expect("fixture is ISO-8859-1"))
             .collect();
-        assert!(!std::str::from_utf8(&bytes).is_ok());
+        assert!(std::str::from_utf8(&bytes).is_err());
 
         let source = powerio_core::Source::from_memory("case.xiidm", bytes.clone())
             .unwrap()
@@ -9943,22 +9951,22 @@ mod tests {
         assert_eq!(network.hvdc().len(), 1);
 
         let branch = &network.branches()[0];
-        assert_eq!(branch.rate_a, 110.0);
-        assert_eq!(branch.rate_b, 140.0);
-        assert_eq!(branch.rate_c, 160.0);
-        assert_eq!(branch.current_ratings.unwrap().c_rating_a, 450.0);
+        assert_f64_close(branch.rate_a, 110.0);
+        assert_f64_close(branch.rate_b, 140.0);
+        assert_f64_close(branch.rate_c, 160.0);
+        assert_f64_close(branch.current_ratings.unwrap().c_rating_a, 450.0);
         assert_eq!(branch.rating_sets.len(), 1);
         assert_eq!(branch.rating_sets[0].name, "summer");
-        assert_eq!(branch.rating_sets[0].rate_mva, 100.0);
+        assert_f64_close(branch.rating_sets[0].rate_mva, 100.0);
 
         let transformer = &network.transformers_3w()[0];
         assert!((transformer.z[0].r - 0.11).abs() < 1e-12);
         assert!((transformer.windings[1].tap - 1.05).abs() < 1e-12);
-        assert_eq!(transformer.windings[0].rate_a, 90.0);
+        assert_f64_close(transformer.windings[0].rate_a, 90.0);
 
         let hvdc = &network.hvdc()[0];
-        assert_eq!(hvdc.pf, 100.0);
-        assert_eq!(hvdc.pmax, 150.0);
+        assert_f64_close(hvdc.pf, 100.0);
+        assert_f64_close(hvdc.pmax, 150.0);
         assert!((hvdc.loss1 - 0.02).abs() < 1e-12);
         assert!(hvdc.pt < hvdc.pf);
 
@@ -9987,7 +9995,7 @@ mod tests {
         let reparsed = parse_xiidm_source(&emission.text, &mut Diagnostics::new()).unwrap();
         assert_eq!(reparsed.transformers_3w().len(), 1);
         assert_eq!(reparsed.hvdc().len(), 1);
-        assert_eq!(reparsed.branches()[0].rate_a, 110.0);
+        assert_f64_close(reparsed.branches()[0].rate_a, 110.0);
         assert_eq!(reparsed.branches()[0].rating_sets, branch.rating_sets);
 
         let mut without_hierarchy = network.clone();
@@ -10084,7 +10092,7 @@ mod tests {
             "",
         );
         let network = parse_xiidm_source(&source, &mut Diagnostics::new()).unwrap();
-        assert_eq!(network.branches()[0].rate_a, 0.0);
+        assert_f64_close(network.branches()[0].rate_a, 0.0);
         let groups = &network
             .detailed_connectivity()
             .as_ref()
@@ -10320,7 +10328,7 @@ mod tests {
         assert_eq!(network.areas()[0].number, 7);
         assert_eq!(network.areas()[0].uid.as_deref(), Some("A7"));
         assert_eq!(network.areas()[0].area_type.as_deref(), Some("ControlArea"));
-        assert_eq!(network.areas()[0].net_interchange, 12.5);
+        assert_f64_close(network.areas()[0].net_interchange, 12.5);
         assert_eq!(network.buses()[0].area, 7);
         let control = network.shunts()[0].control.as_ref().unwrap();
         assert_eq!(control.blocks.len(), 2);
@@ -10379,8 +10387,8 @@ mod tests {
         assert_eq!(network.loads().len(), 1);
         assert_eq!(network.generators().len(), 1);
         assert_eq!(network.branches().len(), 1);
-        assert_eq!(network.generators()[0].qmin, 10.0);
-        assert_eq!(network.generators()[0].qmax, 10.0);
+        assert_f64_close(network.generators()[0].qmin, 10.0);
+        assert_f64_close(network.generators()[0].qmax, 10.0);
         assert_eq!(
             detailed.operational_limit_groups[0].properties["owner"],
             "RTE"

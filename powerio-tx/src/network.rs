@@ -4209,25 +4209,29 @@ mod tests {
         )
     }
 
+    fn assert_invalid(network: &BalancedNetwork, expected: &str) {
+        let error = network.validate().unwrap_err().to_string();
+        assert!(
+            error.contains(expected),
+            "expected `{expected}` in `{error}`"
+        );
+    }
+
+    fn assert_duplicate_dc_converter_unit_rejected(valid: &BalancedNetwork) {
+        let mut network = valid.clone();
+        let unit = reference_test_detailed_mut(&mut network).dc_converter_units[0].clone();
+        reference_test_detailed_mut(&mut network)
+            .dc_converter_units
+            .push(unit);
+        assert_invalid(&network, "duplicate DCConverterUnit");
+    }
+
     #[test]
     fn detailed_dc_references_are_complete_and_checked() {
         let valid = detailed_dc_reference_test_network();
         valid.validate().unwrap();
 
-        let assert_invalid = |network: &BalancedNetwork, expected: &str| {
-            let error = network.validate().unwrap_err().to_string();
-            assert!(
-                error.contains(expected),
-                "expected `{expected}` in `{error}`"
-            );
-        };
-
-        let mut duplicate_unit = valid.clone();
-        let unit = reference_test_detailed_mut(&mut duplicate_unit).dc_converter_units[0].clone();
-        reference_test_detailed_mut(&mut duplicate_unit)
-            .dc_converter_units
-            .push(unit);
-        assert_invalid(&duplicate_unit, "duplicate DCConverterUnit");
+        assert_duplicate_dc_converter_unit_rejected(&valid);
 
         let mut missing_substation = valid.clone();
         reference_test_detailed_mut(&mut missing_substation).dc_converter_units[0].substation =

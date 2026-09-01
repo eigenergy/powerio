@@ -1026,8 +1026,8 @@ mod tests {
             c.control_bus, None,
             "a control bus pointing at a filtered-out isolated bus is dropped, not left dangling"
         );
-        assert_eq!(c.blocks[0].g, 0.04);
-        assert_eq!(c.blocks[0].b, 0.2);
+        assert!(approx(c.blocks[0].g, 0.04));
+        assert!(approx(c.blocks[0].b, 0.2));
     }
 
     #[test]
