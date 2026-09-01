@@ -419,6 +419,29 @@ impl Diagnostic {
         Ok(self)
     }
 
+    pub(crate) fn prefix_target(&mut self, prefix: &str) -> Result<(), Error> {
+        let Some(target) = self.target.take() else {
+            return Ok(());
+        };
+        self.set_target(format!("{prefix}{target}"))
+    }
+
+    pub(crate) fn remap_span_sources(
+        &mut self,
+        mut remap: impl FnMut(&crate::SourceId) -> crate::SourceId,
+    ) -> Result<(), Error> {
+        let mut spans = Vec::with_capacity(self.spans.len());
+        for span in &self.spans {
+            spans.push(SourceSpan::new(
+                remap(span.source()),
+                span.byte_start(),
+                span.byte_end(),
+            )?);
+        }
+        self.spans = spans;
+        Ok(())
+    }
+
     pub fn with_related(mut self, related: DiagnosticId) -> Result<Self, Error> {
         if self.related.len() >= crate::validation::MAX_DIAGNOSTIC_RELATED {
             return Err(record_too_large(

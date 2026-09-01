@@ -109,6 +109,12 @@ pub enum Error {
         message: String,
     },
 
+    #[error("{format} emission failed: {message}")]
+    Emit {
+        format: &'static str,
+        message: String,
+    },
+
     #[error("unknown or unsupported case format: {0}")]
     UnknownFormat(String),
 
@@ -143,6 +149,7 @@ impl Error {
             | Error::BadId { .. }
             | Error::UnbalancedBrackets(_) => &codes::PARSE_MATPOWER_MALFORMED,
             Error::FormatRead { .. } => &codes::PARSE_SOURCE_MALFORMED,
+            Error::Emit { .. } => &codes::EMIT_FORMAT_REQUIRED_VALUE_MISSING,
             Error::Io(_) => &codes::READ_IO_FAILED,
             Error::UnknownBus { .. } => &codes::BUILD_INDEX_UNKNOWN_BUS,
             Error::ZeroImpedance { .. } => &codes::BUILD_BRANCH_ZERO_IMPEDANCE,
@@ -175,6 +182,7 @@ impl Error {
             // surface it the same way (a ValueError, not a data error): the
             // request named a format the writer can't produce.
             Error::UnknownFormat(_) | Error::WriteUnsupported { .. } => C::Request,
+            Error::Emit { .. } => C::Output,
             // Malformed or unparseable input. Only the parser/format readers
             // raise these.
             Error::MissingField(_)
@@ -237,6 +245,10 @@ mod tests {
             Error::FormatRead {
                 format: "psse",
                 message: "bad record".into(),
+            },
+            Error::Emit {
+                format: "xiidm",
+                message: "missing nominalV".into(),
             },
             Error::Io(std::io::Error::from(std::io::ErrorKind::NotFound)),
             Error::UnknownBus {
@@ -308,7 +320,7 @@ mod tests {
 
     #[test]
     fn category_pins_the_intended_buckets() {
-        use ErrorCategory::{Data, Io, Parse, Request};
+        use ErrorCategory::{Data, Io, Output, Parse, Request};
         // The parser/format readers raise these.
         assert_eq!(Error::MissingField("bus").category(), Parse);
         assert_eq!(
@@ -335,10 +347,17 @@ mod tests {
             .category(),
             Data
         );
-        // Format selection and underlying I/O. Output-side serialization
-        // failures belong to the crate that writes, so `Output` has no hub
-        // variant; `powerio_matrix::Error` carries it.
+        // Format selection, output requirements, and underlying I/O remain
+        // distinct for bindings and exit statuses.
         assert_eq!(Error::UnknownFormat("xyz".into()).category(), Request);
+        assert_eq!(
+            Error::Emit {
+                format: "xiidm",
+                message: "missing nominalV".into()
+            }
+            .category(),
+            Output
+        );
         assert_eq!(
             Error::Io(std::io::Error::from(std::io::ErrorKind::NotFound)).category(),
             Io

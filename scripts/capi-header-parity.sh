@@ -10,9 +10,22 @@ cd "$(dirname "$0")/.."
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-grep -ohE 'extern "C" fn pio_[a-z0-9_]+' powerio-capi/src/lib.rs powerio-capi/src/v6.rs \
-    | grep -oE 'pio_[a-z0-9_]+' \
-    | sort -u >"$tmp/rs_syms"
+{
+    grep -ohE 'extern "C" fn pio_[a-z0-9_]+' powerio-capi/src/lib.rs \
+        | grep -oE 'pio_[a-z0-9_]+'
+    awk '
+        /^(scuc_transformer_control_accessors|scuc_membership_accessors)!\(/ {
+            generated = 1
+            next
+        }
+        generated && /^    pio_[a-z0-9_]+,/ {
+            name = $1
+            sub(/,$/, "", name)
+            print name
+        }
+        generated && /^\);/ { generated = 0 }
+    ' powerio-capi/src/lib.rs
+} | sort -u >"$tmp/rs_syms"
 
 grep -oE 'pio_[a-z0-9_]+ *\(' powerio-capi/include/powerio.h \
     | grep -oE 'pio_[a-z0-9_]+' \

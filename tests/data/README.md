@@ -30,7 +30,7 @@ retrieval date.
 
 One solved case-14 example from DeepMind's OPFData `dataset_release_1`
 (CC BY 4.0, (c) 2024 DeepMind Technologies Limited). See
-`opfdataset/README.md` for the format contract, source archive, and hash.
+`opfdataset/README.md` for the format specification, source archive, and hash.
 
 ## `dist/`
 

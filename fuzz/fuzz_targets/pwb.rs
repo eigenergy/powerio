@@ -5,5 +5,5 @@
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
-    let _ = powerio_tx::format::powerworld::parse_pwb(data, None);
+    let _ = powerio_tx::format::powerworld::__parse_pwb(data, None);
 });

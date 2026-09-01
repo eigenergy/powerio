@@ -10,7 +10,7 @@
 
 use std::path::Path;
 
-use powerio_tx::format::powerworld::parse_pwb;
+use powerio_tx::format::powerworld::__parse_pwb;
 
 mod common;
 use common::{activsg2000_fetched, powerworld_vendored, rts_gmlc_fetched};
@@ -28,7 +28,7 @@ enum Expect {
 
 fn check(label: &str, path: &Path, expect: &Expect) {
     let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("{label}: {e}"));
-    let outcome = parse_pwb(&bytes, None);
+    let outcome = __parse_pwb(&bytes, None);
     match expect {
         Expect::Decoded {
             buses,

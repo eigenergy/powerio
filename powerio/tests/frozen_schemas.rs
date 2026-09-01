@@ -1,29 +1,48 @@
-//! The retired schema documents under `docs/schema/` are frozen. Old
-//! `.pio.json` files declare their URLs, and the docs promise each URL
-//! stays served. The `rust.yml` schemas job regenerates only the current
-//! document, so it cannot catch a deletion here. This test pins the frozen
-//! documents byte for byte. To retire one, change the pins and
-//! `docs/schema/README.md` together.
+//! The committed PowerIO 1.0 IR schema matches the implementation.
 
-/// FNV-1a 64. Implemented inline so the pin does not depend on a hasher whose
-/// output could change across Rust or dependency versions.
-fn fnv1a(bytes: &[u8]) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for &b in bytes {
-        hash ^= u64::from(b);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
+mod helpers;
+use helpers::serialize_module_text;
+
+fn current_ir_version() -> u64 {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case9.m");
+    let module = powerio::parse(powerio::Source::open(path).unwrap(), Some("matpower")).unwrap();
+    let text = serialize_module_text(&module).unwrap();
+    let document: serde_json::Value = serde_json::from_str(&text).unwrap();
+    document["version"].as_u64().unwrap()
 }
 
-/// The document for this build's stored module version has to be committed,
-/// not merely generatable. The CI gate regenerates it and diffs
-/// `docs/schema`, and a version bump writes a NEW directory, which a diff of
-/// tracked files does not see. This fails under plain `cargo test` the moment
-/// the version moves without the document following it.
+/// PowerIO 1.0 publishes one IR schema. Extra schema directories are stale
+/// prerelease artifacts, not supported document generations.
+#[test]
+fn the_schema_directory_contains_only_powerio_1() {
+    fn collect_files(root: &std::path::Path, path: &std::path::Path, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(path).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.is_dir() {
+                collect_files(root, &path, out);
+            } else {
+                out.push(
+                    path.strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                );
+            }
+        }
+    }
+
+    let root = std::path::Path::new("../docs/schema");
+    let mut files = Vec::new();
+    collect_files(root, root, &mut files);
+    files.sort();
+    assert_eq!(files, ["README.md", "pio-module/1/schema.json"]);
+}
+
+/// The document for this build's PowerIO IR version is committed.
 #[test]
 fn the_current_module_document_is_committed() {
-    let version = powerio::stored::SCHEMA_VERSION;
+    let version = current_ir_version();
     let path = format!("../docs/schema/pio-module/{version}/schema.json");
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
         panic!(
@@ -39,53 +58,6 @@ fn the_current_module_document_is_committed() {
     );
 }
 
-#[test]
-fn retired_schema_documents_stay_published_byte_for_byte() {
-    let frozen: [(&str, usize, u64); 5] = [
-        (
-            "../docs/schema/pio-package/0.9/schema.json",
-            187_720,
-            0x0635_616a_e88c_cfbe,
-        ),
-        (
-            "../docs/schema/pio-package/0.1/schema.json",
-            125_750,
-            0xe5af_9f64_b26e_edc2,
-        ),
-        (
-            "../docs/schema/pio-package/0.2/schema.json",
-            130_344,
-            0x944c_3d7a_721d_1da9,
-        ),
-        (
-            "../docs/schema/pio-payload-balanced/1/schema.json",
-            51_415,
-            0xe790_d6e1_ba75_a74f,
-        ),
-        (
-            "../docs/schema/pio-payload-multiconductor/1/schema.json",
-            35_414,
-            0xabfe_0107_29fa_2afa,
-        ),
-    ];
-    for (path, len, hash) in frozen {
-        let bytes = std::fs::read(path).unwrap_or_else(|e| {
-            panic!(
-                "{path} is a frozen schema document that pre-v0.8.0 .pio.json files \
-                 reference by URL; it must stay published (see docs/schema/README.md). \
-                 Could not read it: {e}"
-            )
-        });
-        assert_eq!(
-            (bytes.len(), fnv1a(&bytes)),
-            (len, hash),
-            "{path} changed, but it is frozen at the bytes its release published: documents in the wild \
-             validate against it by URL, so edits belong in a NEW identifier path, not here \
-             (see docs/schema/README.md)"
-        );
-    }
-}
-
 /// Every property of every value kind in the current module document carries
 /// a type, a `$ref`, or a composed schema. A field serialized through an
 /// opaque `serde_json::Value` leaves a property whose only key is its
@@ -96,7 +68,9 @@ fn every_module_document_property_is_typed() {
     fn walk(node: &serde_json::Value, path: &str, bad: &mut Vec<String>) {
         match node {
             serde_json::Value::Object(map) => {
-                if let Some(serde_json::Value::Object(props)) = map.get("properties") {
+                if map.get("type") == Some(&serde_json::Value::String("object".into()))
+                    && let Some(serde_json::Value::Object(props)) = map.get("properties")
+                {
                     for (name, prop) in props {
                         if let serde_json::Value::Object(keys) = prop {
                             if keys.keys().all(|k| k == "description") {
@@ -118,7 +92,11 @@ fn every_module_document_property_is_typed() {
         }
     }
 
-    let text = std::fs::read_to_string("../docs/schema/pio-module/1/schema.json").unwrap();
+    let path = format!(
+        "../docs/schema/pio-module/{}/schema.json",
+        current_ir_version()
+    );
+    let text = std::fs::read_to_string(path).unwrap();
     let schema: serde_json::Value = serde_json::from_str(&text).unwrap();
     let mut bad = Vec::new();
     walk(&schema, "$", &mut bad);

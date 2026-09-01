@@ -63,10 +63,11 @@ def append_result(case: Path, mark: str) -> None:
 
 def validate_case(case: Path) -> list[str]:
     expected = solve_voltage_magnitudes(case)
-    module = powerio.parse_file(case, "dss")
-    generated = module.emit("dss")
+    module = powerio.parse(case, format="dss")
+    generated = powerio.emit(module, "dss")
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / case.name
+        assert generated.text is not None
         path.write_text(generated.text, encoding="utf-8")
         actual = solve_voltage_magnitudes(path)
 

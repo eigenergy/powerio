@@ -13,17 +13,9 @@
 //! Formats represent different data. Cross format writers report unsupported
 //! fields rather than claiming an exact conversion.
 
-// `crate::nonfinite` is text, not a link: the adapters moved into
-// powerio-core's hidden implementation module, and schemars copies these doc
-// comments verbatim into the frozen 0.9 document schema, so the wording cannot
-// change to match.
-#![expect(
-    rustdoc::broken_intra_doc_links,
-    reason = "the frozen 0.9 schema records these doc strings byte for byte"
-)]
+use std::collections::{BTreeMap, HashMap, HashSet};
 
-use std::collections::BTreeMap;
-
+use powerio_core::ComponentId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -33,6 +25,975 @@ use crate::{Error, Result};
 /// Source format fields the neutral model does not name, kept for round trips
 /// and cross format conversion. Keys are field names; values are JSON scalars.
 pub type Extras = BTreeMap<String, Value>;
+
+/// An alternate name for a component, with the optional source supplied alias type.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct ComponentAlias {
+    pub value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias_type: Option<String>,
+}
+
+/// An identifier assigned by another data system or authority.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct ExternalIdentifier {
+    pub value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authority: Option<String>,
+}
+
+/// Source neutral metadata attached to one stable PowerIO component identity.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct ComponentMetadata {
+    pub component: ComponentId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub aliases: Vec<ComponentAlias>,
+    #[serde(default)]
+    pub external_identifiers: Vec<ExternalIdentifier>,
+    #[serde(default)]
+    pub properties: BTreeMap<String, String>,
+    #[serde(default)]
+    pub fictitious: bool,
+}
+
+/// A substation containing one or more voltage levels.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct Substation {
+    pub component: ComponentId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator: Option<String>,
+    #[serde(default)]
+    pub geographical_tags: Vec<String>,
+}
+
+/// The connectivity representation used inside a voltage level.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum TopologyKind {
+    BusBreaker,
+    NodeBreaker,
+}
+
+/// A voltage level and its voltage limits in kV.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct VoltageLevel {
+    pub component: ComponentId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub substation: Option<ComponentId>,
+    pub nominal_kv: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub low_voltage_limit_kv: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub high_voltage_limit_kv: Option<f64>,
+    pub topology_kind: TopologyKind,
+    /// Buses in the balanced calculation view that belong to this voltage level.
+    #[serde(default)]
+    pub buses: Vec<BusId>,
+}
+
+/// One connectivity node in a node breaker voltage level.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct ConnectivityNode {
+    pub component: ComponentId,
+    pub voltage_level: ComponentId,
+    /// Integer node number when the source uses node breaker numbering, as in
+    /// XIIDM and RAWX. Identity based sources such as CGMES leave this unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_number: Option<i32>,
+    /// The energized bus in the balanced calculation view, when one is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calculated_bus: Option<BusId>,
+}
+
+/// One configured bus in a bus breaker voltage level and the energized bus
+/// it contributes to in the balanced calculation view.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct BusBreakerBus {
+    pub component: ComponentId,
+    pub voltage_level: ComponentId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calculated_bus: Option<BusId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voltage_kv: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub angle_degrees: Option<f64>,
+}
+
+/// One calculated bus explicitly recorded in node breaker topology.
+///
+/// XIIDM calls this record `CalculatedBus`. Its node list distinguishes a bus
+/// present in the source from a connected component PowerIO calculated when
+/// the source omitted the record.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct CalculatedBus {
+    pub voltage_level: ComponentId,
+    pub calculated_bus: BusId,
+    pub nodes: Vec<ComponentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voltage_kv: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub angle_degrees: Option<f64>,
+}
+
+/// A busbar section attached to a node breaker connectivity node.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct BusbarSection {
+    pub component: ComponentId,
+    pub voltage_level: ComponentId,
+    pub node: ComponentId,
+}
+
+/// One equipment terminal and its bus breaker or node breaker connection.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct Terminal {
+    pub equipment: ComponentId,
+    /// One for single terminal equipment, or the branch/transformer side number.
+    pub terminal: u8,
+    pub voltage_level: ComponentId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bus: Option<ComponentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connectable_bus: Option<ComponentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node: Option<ComponentId>,
+    pub connected: bool,
+    /// Active power injected at this AC terminal, in MW.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_power_mw: Option<f64>,
+    /// Reactive power injected at this AC terminal, in MVAr.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reactive_power_mvar: Option<f64>,
+}
+
+/// Physical kind of a breaker topology switch.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum SwitchKind {
+    Breaker,
+    Disconnector,
+    LoadBreakSwitch,
+}
+
+/// One endpoint of a detailed topology switch.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(tag = "kind", content = "component", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum TopologyEndpoint {
+    Bus(ComponentId),
+    Node(ComponentId),
+}
+
+/// A switch in the authoritative bus breaker or node breaker topology.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct TopologySwitch {
+    pub component: ComponentId,
+    pub voltage_level: ComponentId,
+    pub kind: SwitchKind,
+    pub endpoint1: TopologyEndpoint,
+    pub endpoint2: TopologyEndpoint,
+    pub open: bool,
+    #[serde(default)]
+    pub retained: bool,
+}
+
+/// A permanent connection between two node breaker connectivity nodes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct InternalConnection {
+    pub voltage_level: ComponentId,
+    pub node1: ComponentId,
+    pub node2: ComponentId,
+}
+
+/// A reference to one numbered terminal of an equipment record.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct TerminalReference {
+    pub equipment: ComponentId,
+    pub terminal: u8,
+}
+
+/// The operating arrangement of one CGMES DC converter unit.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum DcConverterOperatingMode {
+    Bipolar,
+    MonopolarGroundReturn,
+    MonopolarMetallicReturn,
+}
+
+/// A CGMES DC converter unit and its substation containment.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct DcConverterUnit {
+    pub component: ComponentId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub substation: Option<ComponentId>,
+    pub operation_mode: DcConverterOperatingMode,
+}
+
+/// An energized connectivity node in a CGMES DC network.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct DcTopologicalNode {
+    pub component: ComponentId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dc_converter_unit: Option<ComponentId>,
+}
+
+/// Polarity assigned to an AC/DC converter DC terminal.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum DcPolarity {
+    Positive,
+    Middle,
+    Negative,
+}
+
+/// One terminal of DC conducting equipment.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct DcTerminal {
+    /// The terminal's own identity when the source assigns one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component: Option<ComponentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sequence_number: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dc_node: Option<ComponentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dc_topological_node: Option<ComponentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub polarity: Option<DcPolarity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connected: Option<bool>,
+    /// Active power injected at this terminal, in MW.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_power_mw: Option<f64>,
+    /// Current injected at this terminal, in A.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_a: Option<f64>,
+}
+
+/// A physical node in a DC network.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct DcNode {
+    pub component: ComponentId,
+    /// XIIDM nominal voltage. CGMES DC nodes do not carry this quantity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nominal_voltage_kv: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dc_converter_unit: Option<ComponentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dc_topological_node: Option<ComponentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voltage_kv: Option<f64>,
+}
+
+/// A connection from one DC node to ground.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct DcGround {
+    pub component: ComponentId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equipment_container: Option<ComponentId>,
+    pub dc_terminal: DcTerminal,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rated_dc_voltage_kv: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resistance_ohm: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inductance_h: Option<f64>,
+}
+
+/// A CGMES DC busbar.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct DcBusbar {
+    pub component: ComponentId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equipment_container: Option<ComponentId>,
+    pub dc_terminal: DcTerminal,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rated_dc_voltage_kv: Option<f64>,
+}
+
+/// A line segment between two DC nodes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct DcLine {
+    pub component: ComponentId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equipment_container: Option<ComponentId>,
+    pub dc_terminal1: DcTerminal,
+    pub dc_terminal2: DcTerminal,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rated_dc_voltage_kv: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resistance_ohm: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inductance_h: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacitance_f: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length_km: Option<f64>,
+}
+
+/// A CGMES DC series device.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct DcSeriesDevice {
+    pub component: ComponentId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equipment_container: Option<ComponentId>,
+    pub dc_terminal1: DcTerminal,
+    pub dc_terminal2: DcTerminal,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rated_dc_voltage_kv: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resistance_ohm: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inductance_h: Option<f64>,
+}
+
+/// Physical kind of a DC switch.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum DcSwitchKind {
+    Switch,
+    Breaker,
+    Disconnector,
+}
+
+/// A switch between two DC nodes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct DcSwitch {
+    pub component: ComponentId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equipment_container: Option<ComponentId>,
+    pub dc_terminal1: DcTerminal,
+    pub dc_terminal2: DcTerminal,
+    pub kind: DcSwitchKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rated_dc_voltage_kv: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resistance_ohm: Option<f64>,
+}
+
+/// Control quantity assigned to an AC/DC converter.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum AcDcConverterControlMode {
+    /// Maintain active power at the point of common coupling.
+    ActivePowerAtPcc,
+    /// Maintain DC voltage.
+    DcVoltage,
+    /// Maintain DC current.
+    DcCurrent,
+    /// XIIDM `P_PCC_DROOP`: active power at the point of common coupling
+    /// follows a piecewise droop curve over DC voltage.
+    ActivePowerAtPccAndDcVoltageDroopCurve,
+    /// CGMES `VsPpccControlKind.pPccAndUdcDroop`.
+    ActivePowerAtPccAndDcVoltageDroop,
+    /// CGMES `VsPpccControlKind.pPccAndUdcDroopWithCompensation`.
+    ActivePowerAtPccAndDcVoltageDroopWithCompensation,
+    /// CGMES `VsPpccControlKind.pPccAndUdcDroopPilot`.
+    ActivePowerAtPccAndDcVoltageDroopPilot,
+}
+
+/// One segment of an AC/DC converter's DC voltage droop curve.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct DroopCurveSegment {
+    pub minimum_voltage_kv: f64,
+    pub maximum_voltage_kv: f64,
+    pub k: f64,
+}
+
+/// DC voltage droop segments for an AC/DC converter.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct DroopCurve {
+    pub segments: Vec<DroopCurveSegment>,
+}
+
+/// One point of a reactive capability curve.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct ReactiveCapabilityCurvePoint {
+    pub active_power_mw: f64,
+    pub minimum_reactive_power_mvar: f64,
+    pub maximum_reactive_power_mvar: f64,
+    #[serde(default)]
+    pub properties: BTreeMap<String, String>,
+}
+
+/// CIM `CurveStyle` for a reactive capability curve.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum CurveStyle {
+    /// CIM `CurveStyle.constantYValue`.
+    ConstantYValue,
+    /// CIM `CurveStyle.straightLineYValues`.
+    StraightLineYValues,
+}
+
+/// Reactive power limits that vary with active power.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct ReactiveCapabilityCurve {
+    pub curve_style: CurveStyle,
+    #[serde(default)]
+    pub properties: BTreeMap<String, String>,
+    pub points: Vec<ReactiveCapabilityCurvePoint>,
+}
+
+/// Reactive power limits that do not vary with active power.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct MinMaxReactiveLimits {
+    pub minimum_reactive_power_mvar: f64,
+    pub maximum_reactive_power_mvar: f64,
+    #[serde(default)]
+    pub properties: BTreeMap<String, String>,
+}
+
+/// The two reactive limit forms carried by XIIDM equipment.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(tag = "kind", content = "limits", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ReactiveLimits {
+    MinMax(MinMaxReactiveLimits),
+    CapabilityCurve(ReactiveCapabilityCurve),
+}
+
+/// Reactive limits retained for equipment whose balanced calculation row
+/// carries only the limits evaluated at its current active power assignment.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct EquipmentReactiveLimits {
+    pub equipment: ComponentId,
+    pub limits: ReactiveLimits,
+}
+
+/// Optional generation attached to a PowSybl boundary line.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct BoundaryLineGeneration {
+    pub voltage_regulation_on: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_active_power_mw: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_active_power_mw: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_active_power_mw: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_reactive_power_mvar: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_voltage_kv: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reactive_limits: Option<ReactiveLimits>,
+}
+
+/// One PowSybl boundary line retained beside the balanced calculation view.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct BoundaryLine {
+    pub component: ComponentId,
+    pub voltage_level: ComponentId,
+    pub active_power_setpoint_mw: f64,
+    pub reactive_power_setpoint_mvar: f64,
+    pub resistance_ohm: f64,
+    pub reactance_ohm: f64,
+    pub conductance_siemens: f64,
+    pub susceptance_siemens: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pairing_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<BoundaryLineGeneration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calculation_load: Option<ComponentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calculation_generator: Option<ComponentId>,
+}
+
+/// A PowSybl tie line and the two boundary lines that define it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct TieLine {
+    pub component: ComponentId,
+    pub boundary_line1: ComponentId,
+    pub boundary_line2: ComponentId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calculation_branch: Option<ComponentId>,
+}
+
+/// A voltage source converter connected to an AC voltage level and two DC nodes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct VoltageSourceConverter {
+    pub component: ComponentId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dc_converter_unit: Option<ComponentId>,
+    pub dc_terminal1: DcTerminal,
+    pub dc_terminal2: DcTerminal,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_apparent_power_mva: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_active_power_mw: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_active_power_mw: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_dc_voltage_kv: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_dc_voltage_kv: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rated_dc_voltage_kv: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valve_u0_kv: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number_of_valves: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_loss_mw: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub switching_loss_mw_per_ampere: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resistive_loss_ohm: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_mode: Option<AcDcConverterControlMode>,
+    /// Active power at the point of common coupling, using load sign convention.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_power_at_pcc_mw: Option<f64>,
+    /// Reactive power at the point of common coupling, using load sign convention.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reactive_power_at_pcc_mvar: Option<f64>,
+    /// Active power target at the point of common coupling, using load sign convention.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_active_power_mw: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_dc_voltage_kv: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pcc_terminal: Option<TerminalReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub droop_curve: Option<DroopCurve>,
+    /// CGMES scalar droop. This is not the XIIDM piecewise [`DroopCurve`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub droop: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub droop_compensation: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub q_share: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_modulation_index: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_valve_current_a: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voltage_regulator_on: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voltage_setpoint_kv: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reactive_power_setpoint_mvar: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reactive_limits: Option<ReactiveLimits>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pole_loss_active_power_mw: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dc_current_a: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ac_voltage_kv: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dc_voltage_kv: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delta_degrees: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uf_kv: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uv_kv: Option<f64>,
+}
+
+/// Reactive power model used by a line commutated converter.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum LineCommutatedConverterReactiveModel {
+    FixedPowerFactor,
+    CalculatedPowerFactor,
+}
+
+/// Rectifier or inverter operation assigned to a line commutated converter.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum LineCommutatedConverterOperatingMode {
+    Rectifier,
+    Inverter,
+}
+
+/// A line commutated converter connected to an AC voltage level and two DC nodes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct LineCommutatedConverter {
+    pub component: ComponentId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dc_converter_unit: Option<ComponentId>,
+    pub dc_terminal1: DcTerminal,
+    pub dc_terminal2: DcTerminal,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_apparent_power_mva: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_active_power_mw: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_active_power_mw: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_dc_voltage_kv: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_dc_voltage_kv: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rated_dc_voltage_kv: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valve_u0_kv: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number_of_valves: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_loss_mw: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub switching_loss_mw_per_ampere: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resistive_loss_ohm: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_mode: Option<AcDcConverterControlMode>,
+    /// Active power at the point of common coupling, using load sign convention.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_power_at_pcc_mw: Option<f64>,
+    /// Reactive power at the point of common coupling, using load sign convention.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reactive_power_at_pcc_mvar: Option<f64>,
+    /// Active power target at the point of common coupling, using load sign convention.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_active_power_mw: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_dc_voltage_kv: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pcc_terminal: Option<TerminalReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub droop_curve: Option<DroopCurve>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reactive_model: Option<LineCommutatedConverterReactiveModel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub power_factor: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operating_mode: Option<LineCommutatedConverterOperatingMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rated_dc_current_a: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_alpha_degrees: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_alpha_degrees: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_gamma_degrees: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_gamma_degrees: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_alpha_degrees: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_gamma_degrees: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_dc_current_a: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pole_loss_active_power_mw: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dc_current_a: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ac_voltage_kv: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dc_voltage_kv: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alpha_degrees: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gamma_degrees: Option<f64>,
+}
+
+/// One temporary loading limit inside an [`OperationalLimitGroup`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct TemporaryLimit {
+    pub name: String,
+    pub value: f64,
+    pub acceptable_duration_seconds: u64,
+    #[serde(default)]
+    pub fictitious: bool,
+}
+
+/// A permanent loading limit and its named temporary limits.
+///
+/// The unit is selected by the field that contains this record: amperes for
+/// `current_limits`, MW for `active_power_limits`, and MVA for
+/// `apparent_power_limits`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct LoadingLimits {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permanent_limit: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permanent_limit_name: Option<String>,
+    #[serde(default)]
+    pub temporary_limits: Vec<TemporaryLimit>,
+}
+
+/// One named set of loading limits at an equipment terminal.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct OperationalLimitGroup {
+    pub equipment: ComponentId,
+    pub terminal: u8,
+    pub id: String,
+    #[serde(default)]
+    pub properties: BTreeMap<String, String>,
+    #[serde(default)]
+    pub selected: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_limits: Option<LoadingLimits>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_power_limits: Option<LoadingLimits>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub apparent_power_limits: Option<LoadingLimits>,
+}
+
+/// Whether a transformer tap changer controls voltage ratio or phase angle.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum TapChangerKind {
+    Ratio,
+    Phase,
+}
+
+/// The electrical quantity regulated by a transformer tap changer.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum TapChangerRegulationMode {
+    Voltage,
+    ReactivePower,
+    ActivePower,
+    Current,
+}
+
+/// One transformer tap changer step.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct TapChangerStep {
+    pub position: i32,
+    /// Voltage ratio in per unit.
+    pub rho: f64,
+    /// Phase angle difference in degrees.
+    pub alpha_degrees: f64,
+    /// Resistance deviation from the transformer's nominal value, in percent.
+    pub resistance_deviation_percent: f64,
+    /// Reactance deviation from the transformer's nominal value, in percent.
+    pub reactance_deviation_percent: f64,
+    /// Conductance deviation from the transformer's nominal value, in percent.
+    pub conductance_deviation_percent: f64,
+    /// Susceptance deviation from the transformer's nominal value, in percent.
+    pub susceptance_deviation_percent: f64,
+}
+
+/// A ratio or phase tap changer attached to one transformer winding.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct TapChanger {
+    pub transformer: ComponentId,
+    /// One for a two winding transformer, or one through three for a three
+    /// winding transformer.
+    pub winding: u8,
+    pub kind: TapChangerKind,
+    /// Assigned tap position. XIIDM permits this to be absent for cases whose
+    /// minimum validation level is `EQUIPMENT`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tap_position: Option<i32>,
+    /// Solved tap position when a source records it separately from the
+    /// assigned tap position.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solved_tap_position: Option<i32>,
+    pub low_tap_position: i32,
+    pub load_tap_changing_capabilities: bool,
+    pub regulating: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regulation_mode: Option<TapChangerRegulationMode>,
+    /// kV, MVAr, MW, or A according to `regulation_mode`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regulation_value: Option<f64>,
+    /// Deadband in the same unit as `regulation_value`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_deadband: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regulation_terminal: Option<TerminalReference>,
+    pub steps: Vec<TapChangerStep>,
+}
+
+/// Source neutral case metadata recorded by a grid exchange format.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct CaseMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub case_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forecast_distance: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_model_format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_validation_level: Option<String>,
+}
+
+/// One PowSybl subnetwork contained directly by a balanced network.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct Subnetwork {
+    pub component: ComponentId,
+    pub parent: ComponentId,
+    pub case_metadata: CaseMetadata,
+    #[serde(default)]
+    pub components: Vec<ComponentId>,
+}
+
+/// Source neutral hierarchy and detailed connectivity retained beside the
+/// balanced calculation view.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct DetailedConnectivity {
+    #[serde(default)]
+    pub component_metadata: Vec<ComponentMetadata>,
+    #[serde(default)]
+    pub subnetworks: Vec<Subnetwork>,
+    #[serde(default)]
+    pub substations: Vec<Substation>,
+    #[serde(default)]
+    pub voltage_levels: Vec<VoltageLevel>,
+    #[serde(default)]
+    pub bus_breaker_buses: Vec<BusBreakerBus>,
+    #[serde(default)]
+    pub calculated_buses: Vec<CalculatedBus>,
+    #[serde(default)]
+    pub connectivity_nodes: Vec<ConnectivityNode>,
+    #[serde(default)]
+    pub busbar_sections: Vec<BusbarSection>,
+    #[serde(default)]
+    pub terminals: Vec<Terminal>,
+    #[serde(default)]
+    pub switches: Vec<TopologySwitch>,
+    #[serde(default)]
+    pub internal_connections: Vec<InternalConnection>,
+    #[serde(default)]
+    pub operational_limit_groups: Vec<OperationalLimitGroup>,
+    #[serde(default)]
+    pub tap_changers: Vec<TapChanger>,
+    #[serde(default)]
+    pub equipment_reactive_limits: Vec<EquipmentReactiveLimits>,
+    #[serde(default)]
+    pub boundary_lines: Vec<BoundaryLine>,
+    #[serde(default)]
+    pub tie_lines: Vec<TieLine>,
+    #[serde(default)]
+    pub dc_converter_units: Vec<DcConverterUnit>,
+    #[serde(default)]
+    pub dc_topological_nodes: Vec<DcTopologicalNode>,
+    #[serde(default)]
+    pub dc_nodes: Vec<DcNode>,
+    #[serde(default)]
+    pub dc_grounds: Vec<DcGround>,
+    #[serde(default)]
+    pub dc_busbars: Vec<DcBusbar>,
+    #[serde(default)]
+    pub dc_lines: Vec<DcLine>,
+    #[serde(default)]
+    pub dc_series_devices: Vec<DcSeriesDevice>,
+    #[serde(default)]
+    pub dc_switches: Vec<DcSwitch>,
+    #[serde(default)]
+    pub voltage_source_converters: Vec<VoltageSourceConverter>,
+    #[serde(default)]
+    pub line_commutated_converters: Vec<LineCommutatedConverter>,
+}
 
 /// System base frequency in hertz when a format records none. Power networks run
 /// at 50 or 60 Hz; 60 is the default for the formats (MATPOWER, PowerModels,
@@ -241,77 +1202,84 @@ impl GenCost {
 /// echo on write.
 ///
 /// Serializes as the same lowercase token [`name`](SourceFormat::name) reports
-/// and every string entry point accepts, so the value a document carries is
-/// valid input to `from`. Documents written before 0.9.0 spelled the bare
-/// variant name ("Matpower"); the read side still accepts those spellings.
+/// and every string entry point accepts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum SourceFormat {
-    #[serde(rename = "matpower", alias = "Matpower")]
+    #[serde(rename = "matpower")]
     Matpower,
-    #[serde(rename = "powermodels-json", alias = "PowerModelsJson")]
+    #[serde(rename = "powermodels-json")]
     PowerModelsJson,
-    #[serde(rename = "egret-json", alias = "EgretJson")]
+    #[serde(rename = "egret-json")]
     EgretJson,
-    #[serde(rename = "psse", alias = "Psse")]
+    #[serde(rename = "psse")]
     Psse,
-    #[serde(rename = "powerworld", alias = "PowerWorld")]
+    /// Read from the PSS/E revision 35 JSON grid exchange format.
+    #[serde(rename = "psse-rawx")]
+    PsseRawx,
+    #[serde(rename = "powerworld")]
     PowerWorld,
-    #[serde(rename = "pandapower-json", alias = "PandapowerJson")]
+    #[serde(rename = "pandapower-json")]
     PandapowerJson,
     /// Read from a GE PSLF `.epc` case. Same source text is retained, so a
     /// same-format write echoes it byte-for-byte; a cross-format or
     /// source-dropped write goes through the `.epc` serializer
     /// ([`write_pslf`](crate::write_pslf)).
-    #[serde(rename = "pslf", alias = "Pslf")]
+    #[serde(rename = "pslf")]
     Pslf,
     /// Read from a PowerWorld `.pwb` binary case. Read only: there is no
     /// `.pwb` writer and no retained source text, so writing goes through
     /// another format's writer.
-    #[serde(rename = "powerworld-pwb", alias = "PowerWorldBinary")]
+    #[serde(rename = "powerworld-pwb")]
     PowerWorldBinary,
     /// Built in memory, for example from synth or an edited case; no source text.
-    #[serde(rename = "in-memory", alias = "InMemory")]
+    #[serde(rename = "in-memory")]
     InMemory,
     /// A normalized derived form ([`BalancedNetwork::to_normalized`]): per unit, radians,
     /// filtered, source bus ids preserved. Distinct from
     /// [`InMemory`](SourceFormat::InMemory) so consumers can tell a per unit
     /// product from a raw in memory network; it has no source text and a different
     /// unit basis than a parsed network.
-    #[serde(rename = "normalized", alias = "Normalized")]
+    #[serde(rename = "normalized")]
     Normalized,
     /// Read back from a gridfm-datakit Parquet dataset (the ML→classical bridge,
     /// `powerio-matrix`'s `read_gridfm_dataset`). A lossy, power flow complete
     /// reconstruction with no retained source text: original bus ids are
     /// synthesized `1..n`, per element load/shunt granularity is folded to one
     /// synthetic element per bus, and HVDC/storage/piecewise costs are absent.
-    #[serde(rename = "gridfm", alias = "Gridfm")]
+    #[serde(rename = "gridfm")]
     Gridfm,
     /// Read from a PyPSA CSV folder. This is a folder format rather than a
     /// single retained text document, so same-format writes are canonicalized.
-    #[serde(rename = "pypsa-csv", alias = "PypsaCsv")]
+    #[serde(rename = "pypsa-csv")]
     PypsaCsv,
     /// Read from a DOE GO Challenge 3 JSON input document. The source is a
     /// unit commitment data set; the neutral transmission model keeps a static
     /// first interval network and retains the source text for the full data.
-    #[serde(rename = "goc3-json", alias = "Goc3Json")]
+    #[serde(rename = "goc3-json")]
     Goc3Json,
     /// Read from a Surge native JSON document.
-    #[serde(rename = "surge-json", alias = "SurgeJson")]
+    #[serde(rename = "surge-json")]
     SurgeJson,
     /// Read from one raw JSON document in a DeepMind OPFData release. The
     /// source carries both solver initial values and a solution. The balanced
     /// model represents the solved snapshot and retains the source for an
     /// exact write back to the same format.
-    #[serde(rename = "opfdata-json", alias = "DeepMindOpfDataJson")]
+    #[serde(rename = "opfdata-json")]
     DeepMindOpfDataJson,
+    /// Read from PowSybl's XIIDM XML grid exchange format, version 1.17.
+    #[serde(rename = "xiidm")]
+    Xiidm,
+    /// Read from a CGMES profile set (2.4.15/CIM16 or 3.0/CIM100).
+    #[serde(rename = "cgmes")]
+    Cgmes,
 }
 
 impl SourceFormat {
     /// Stable lowercase token for the source format in module records, CLI
     /// summaries, and language bindings. The match is exhaustive here so a new
-    /// variant fails compilation at the one mapping instead of silently
+    /// enum case fails compilation at the one mapping instead of silently
     /// reporting "unknown" from a downstream wildcard copy.
     #[must_use]
     pub fn name(self) -> &'static str {
@@ -320,6 +1288,7 @@ impl SourceFormat {
             SourceFormat::PowerModelsJson => "powermodels-json",
             SourceFormat::EgretJson => "egret-json",
             SourceFormat::Psse => "psse",
+            SourceFormat::PsseRawx => "psse-rawx",
             SourceFormat::PowerWorld => "powerworld",
             SourceFormat::PandapowerJson => "pandapower-json",
             SourceFormat::Pslf => "pslf",
@@ -331,6 +1300,8 @@ impl SourceFormat {
             SourceFormat::Goc3Json => "goc3-json",
             SourceFormat::SurgeJson => "surge-json",
             SourceFormat::DeepMindOpfDataJson => "opfdata-json",
+            SourceFormat::Xiidm => "xiidm",
+            SourceFormat::Cgmes => "cgmes",
         }
     }
 }
@@ -366,12 +1337,9 @@ impl BalancedNetwork {
 /// A balanced network with stable source bus IDs and separate element tables.
 ///
 /// `remote = "Self"` turns the derived serde impls into inherent functions;
-/// the trait impls beneath the struct route them through [`crate::nonfinite`],
-/// so a nonfinite float spells as a string on every JSON route.
-// The one owned table store behind the `BalancedNetwork` handle. The doc
-// string above is frozen into the generated 0.9 schema description, so the
-// handle split leaves it as it was; the schema also keeps the handle's name
-// through the schemars rename below.
+/// the trait impls beneath the struct route them through PowerIO's shared
+/// nonfinite JSON spelling.
+// The one owned table store behind the `BalancedNetwork` handle.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(rename = "BalancedNetwork"))]
@@ -389,9 +1357,18 @@ pub(crate) struct BalancedNetworkTables {
     pub base_frequency: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geo: Option<GeoMeta>,
+    /// Source neutral case metadata such as the case date and forecast horizon.
+    #[serde(default)]
+    pub case_metadata: CaseMetadata,
+    /// Authoritative hierarchy and bus breaker or node breaker connectivity,
+    /// when the source states more than the balanced calculation view.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detailed_connectivity: Option<std::sync::Arc<DetailedConnectivity>>,
     pub buses: std::sync::Arc<Vec<Bus>>,
     pub loads: std::sync::Arc<Vec<Load>>,
     pub shunts: std::sync::Arc<Vec<Shunt>>,
+    #[serde(default)]
+    pub static_var_compensators: std::sync::Arc<Vec<StaticVarCompensator>>,
     pub branches: std::sync::Arc<Vec<Branch>>,
     #[serde(default)]
     pub switches: std::sync::Arc<Vec<Switch>>,
@@ -486,6 +1463,10 @@ table_accessors! {
     name, name_mut: String;
     /// The geographic metadata when the source carries any.
     geo, geo_mut: Option<GeoMeta>;
+    /// Source neutral case metadata when the source records it.
+    case_metadata, case_metadata_mut: CaseMetadata;
+    /// Authoritative hierarchy and detailed connectivity when present.
+    detailed_connectivity, detailed_connectivity_mut: Option<std::sync::Arc<DetailedConnectivity>>;
     /// Solver / solution-control metadata when the source carries it.
     solver, solver_mut: Option<SolverParams>;
 }
@@ -539,6 +1520,7 @@ impl BalancedNetwork {
             buses,
             loads,
             shunts,
+            static_var_compensators,
             branches,
             switches,
             generators,
@@ -554,6 +1536,7 @@ shared_table_accessors! {
     buses, buses_mut: Vec<Bus>;
     loads, loads_mut: Vec<Load>;
     shunts, shunts_mut: Vec<Shunt>;
+    static_var_compensators, static_var_compensators_mut: Vec<StaticVarCompensator>;
     branches, branches_mut: Vec<Branch>;
     switches, switches_mut: Vec<Switch>;
     generators, generators_mut: Vec<Generator>;
@@ -597,6 +1580,129 @@ impl BalancedNetwork {
     #[must_use]
     pub fn source_format_mut(&mut self) -> &mut SourceFormat {
         &mut self.tables_mut().source_format
+    }
+
+    /// Assign persistent identities to records whose source format supplied
+    /// none.
+    ///
+    /// Source supplied identities are preserved. Generated identities use
+    /// electrical identifiers such as a bus number or branch terminals and
+    /// are stored on the record, so later table reordering does not change
+    /// them. A suffix distinguishes several records attached to the same bus
+    /// or terminal pair.
+    ///
+    /// Callers that assemble a network by pushing records can call this once
+    /// after construction. PowerIO parsers call it before returning a module.
+    pub fn assign_missing_component_ids(&mut self) {
+        macro_rules! assign {
+            ($table:ident, $table_mut:ident, $set_uid:expr, $stem:expr) => {
+                if self.$table().iter().any(|value| value.uid.is_none()) {
+                    assign_missing_ids(
+                        self.$table_mut(),
+                        |value| value.uid.as_deref(),
+                        $set_uid,
+                        $stem,
+                    );
+                }
+            };
+        }
+
+        assign!(
+            buses,
+            buses_mut,
+            |bus: &mut Bus, uid| bus.uid = Some(uid),
+            |bus: &Bus| bus.id.to_string()
+        );
+        assign!(
+            loads,
+            loads_mut,
+            |load: &mut Load, uid| load.uid = Some(uid),
+            |load: &Load| format!("bus-{}", load.bus)
+        );
+        assign!(
+            shunts,
+            shunts_mut,
+            |shunt: &mut Shunt, uid| shunt.uid = Some(uid),
+            |shunt: &Shunt| format!("bus-{}", shunt.bus)
+        );
+        assign!(
+            static_var_compensators,
+            static_var_compensators_mut,
+            |svc: &mut StaticVarCompensator, uid| svc.uid = Some(uid),
+            |svc: &StaticVarCompensator| format!("bus-{}", svc.bus)
+        );
+        assign!(
+            branches,
+            branches_mut,
+            |branch: &mut Branch, uid| branch.uid = Some(uid),
+            |branch: &Branch| format!("{}-{}", branch.from, branch.to)
+        );
+        assign!(
+            switches,
+            switches_mut,
+            |switch: &mut Switch, uid| switch.uid = Some(uid),
+            |switch: &Switch| format!("{}-{}", switch.from, switch.to)
+        );
+        assign!(
+            generators,
+            generators_mut,
+            |generator: &mut Generator, uid| generator.uid = Some(uid),
+            |generator: &Generator| format!("bus-{}", generator.bus)
+        );
+        assign!(
+            storage,
+            storage_mut,
+            |storage: &mut Storage, uid| storage.uid = Some(uid),
+            |storage: &Storage| format!("bus-{}", storage.bus)
+        );
+        assign!(
+            hvdc,
+            hvdc_mut,
+            |line: &mut Hvdc, uid| line.uid = Some(uid),
+            |line: &Hvdc| format!("{}-{}", line.from, line.to)
+        );
+        assign!(
+            transformers_3w,
+            transformers_3w_mut,
+            |transformer: &mut Transformer3W, uid| transformer.uid = Some(uid),
+            |transformer: &Transformer3W| {
+                let [first, second, third] = &transformer.windings;
+                format!("{}-{}-{}", first.bus, second.bus, third.bus)
+            }
+        );
+    }
+}
+
+fn assign_missing_ids<T>(
+    values: &mut [T],
+    uid: impl for<'a> Fn(&'a T) -> Option<&'a str>,
+    mut set_uid: impl FnMut(&mut T, String),
+    stem: impl Fn(&T) -> String,
+) {
+    let mut used: HashSet<String> = values
+        .iter()
+        .filter_map(|value| uid(value).map(str::to_owned))
+        .collect();
+    let mut next_suffix = HashMap::<String, usize>::new();
+
+    for value in values {
+        if uid(value).is_some() {
+            continue;
+        }
+        let stem = stem(value);
+        let suffix = next_suffix.entry(stem.clone()).or_insert(1);
+        loop {
+            let candidate = if *suffix == 1 {
+                stem.clone()
+            } else {
+                format!("{stem}-{suffix}")
+            };
+            *suffix += 1;
+            if used.insert(candidate.clone()) {
+                set_uid(value, candidate);
+                break;
+            }
+        }
     }
 }
 
@@ -770,9 +1876,13 @@ pub struct Shunt {
     /// Shunt conductance (MW at V = 1 p.u.).
     pub g: f64,
     /// Shunt susceptance (MVAr at V = 1 p.u.). For a switched shunt this is the
-    /// initial (steady-state) value within the [`control`](Shunt::control) blocks.
+    /// initial steady state value within the [`control`](Shunt::control) blocks.
     pub b: f64,
     pub in_service: bool,
+    /// Number of shunt sections assigned in service. `None` records that the
+    /// source left the assignment unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_count: Option<u32>,
     /// Switching-control data when this is a switched (adjustable) shunt; `None`
     /// for a fixed shunt. `#[serde(default)]` so JSON written before the field
     /// existed still deserializes.
@@ -792,6 +1902,7 @@ impl Shunt {
             g,
             b,
             in_service: true,
+            section_count: None,
             control: None,
             uid: None,
             extras: Extras::new(),
@@ -813,12 +1924,14 @@ pub enum SwitchedShuntMode {
     Discrete,
 }
 
-/// One block of a switched shunt: `steps` equal increments of susceptance `b`.
+/// One block of a switched shunt: `steps` equal admittance increments.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ShuntBlock {
     pub steps: u32,
+    /// Conductance increment per step (MW at V = 1 p.u.).
+    pub g: f64,
     /// Susceptance increment per step (MVAr at V = 1 p.u.).
     pub b: f64,
 }
@@ -826,7 +1939,12 @@ pub struct ShuntBlock {
 impl ShuntBlock {
     #[must_use]
     pub const fn new(steps: u32, b: f64) -> Self {
-        Self { steps, b }
+        Self { steps, g: 0.0, b }
+    }
+
+    #[must_use]
+    pub const fn with_admittance(steps: u32, g: f64, b: f64) -> Self {
+        Self { steps, g, b }
     }
 }
 
@@ -844,6 +1962,9 @@ pub struct SwitchedShuntControl {
     pub vlow: f64,
     /// The regulated bus; `None` means the shunt regulates its own bus.
     pub control_bus: Option<BusId>,
+    /// The exact regulated equipment terminal when the source identifies one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regulating_terminal: Option<TerminalReference>,
     /// Percent of the controlled device's reactive range to apply (PSS/E `RMPCT`).
     pub rmpct: f64,
     pub blocks: Vec<ShuntBlock>,
@@ -857,8 +1978,64 @@ impl SwitchedShuntControl {
             vhigh,
             vlow,
             control_bus: None,
+            regulating_terminal: None,
             rmpct: 100.0,
             blocks,
+        }
+    }
+}
+
+/// The controlled quantity of a static VAR compensator.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum StaticVarCompensatorRegulationMode {
+    Voltage,
+    ReactivePower,
+}
+
+/// A static VAR compensator connected to one balanced network bus.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct StaticVarCompensator {
+    pub bus: BusId,
+    /// Minimum and maximum susceptance in siemens.
+    pub b_min_siemens: f64,
+    pub b_max_siemens: f64,
+    pub voltage_setpoint_kv: f64,
+    pub reactive_power_setpoint_mvar: f64,
+    pub regulation_mode: StaticVarCompensatorRegulationMode,
+    pub regulating: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regulating_terminal: Option<TerminalReference>,
+    /// Assigned active and reactive terminal power in MW and MVAr.
+    pub p: f64,
+    pub q: f64,
+    pub in_service: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<String>,
+    pub extras: Extras,
+}
+
+impl StaticVarCompensator {
+    #[must_use]
+    pub fn new(bus: BusId, b_min_siemens: f64, b_max_siemens: f64) -> Self {
+        Self {
+            bus,
+            b_min_siemens,
+            b_max_siemens,
+            voltage_setpoint_kv: 0.0,
+            reactive_power_setpoint_mvar: 0.0,
+            regulation_mode: StaticVarCompensatorRegulationMode::Voltage,
+            regulating: false,
+            regulating_terminal: None,
+            p: 0.0,
+            q: 0.0,
+            in_service: true,
+            uid: None,
+            extras: Extras::new(),
         }
     }
 }
@@ -1325,6 +2502,43 @@ impl TransformerControl {
     }
 }
 
+/// Active power control settings for a generator or storage device.
+///
+/// `droop_percent` is the governor speed changer droop: the negated change in
+/// active power divided by the change in frequency, normalized by nominal
+/// power and nominal frequency, and expressed as a percentage.
+/// `participation_factor` is the nonnegative distributed slack participation
+/// factor. The target limits, when present, override the equipment active power
+/// limits for active power control operations only.
+/// It is distinct from MATPOWER's area participation factor (`APF`) in [`Generator::caps`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct ActivePowerControl {
+    pub participate: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub droop_percent: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub participation_factor: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_target_active_power_mw: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_target_active_power_mw: Option<f64>,
+}
+
+impl ActivePowerControl {
+    #[must_use]
+    pub fn new(participate: bool) -> Self {
+        Self {
+            participate,
+            droop_percent: None,
+            participation_factor: None,
+            minimum_target_active_power_mw: None,
+            maximum_target_active_power_mw: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
@@ -1362,6 +2576,9 @@ pub struct Generator {
     /// JSON written before the field existed still deserializes.
     #[serde(default)]
     pub regulated_bus: Option<BusId>,
+    /// Governor and distributed slack settings, when supplied by the source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_power_control: Option<ActivePowerControl>,
     /// Stable row identity; see [`Bus::uid`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uid: Option<String>,
@@ -1384,6 +2601,7 @@ impl Generator {
             cost: None,
             caps: default_caps(),
             regulated_bus: None,
+            active_power_control: None,
             uid: None,
         }
     }
@@ -1468,6 +2686,9 @@ pub struct Storage {
     pub p_loss: f64,
     pub q_loss: f64,
     pub in_service: bool,
+    /// Governor and distributed slack settings, when supplied by the source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_power_control: Option<ActivePowerControl>,
     /// Stable row identity; see [`Bus::uid`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uid: Option<String>,
@@ -1496,6 +2717,7 @@ impl Storage {
             p_loss: 0.0,
             q_loss: 0.0,
             in_service: true,
+            active_power_control: None,
             uid: None,
             extras: Extras::new(),
         }
@@ -1509,6 +2731,46 @@ impl Storage {
 /// PowerModels writer re-flips them on the way out (PowerModels.jl uses the
 /// opposite sign). The flip is a format-boundary translation, so a derived view
 /// like `to_normalized` keeps the MATPOWER convention and only scales to per unit.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum HvdcConvertersMode {
+    Side1RectifierSide2Inverter,
+    Side1InverterSide2Rectifier,
+}
+
+/// Converter technology used at both ends of one HVDC line.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum HvdcConverterKind {
+    Vsc,
+    Lcc,
+}
+
+/// One AC terminal converter station of an HVDC line.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct HvdcConverter {
+    pub component: ComponentId,
+    pub kind: HvdcConverterKind,
+    /// Converter losses as a percentage of active power.
+    pub loss_factor_percent: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voltage_regulator_on: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voltage_setpoint_kv: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reactive_power_setpoint_mvar: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub power_factor: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regulating_terminal: Option<TerminalReference>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
@@ -1530,6 +2792,18 @@ pub struct Hvdc {
     pub qmaxt: f64,
     pub loss0: f64,
     pub loss1: f64,
+    /// Physical line resistance and nominal DC voltage when the source states
+    /// an explicit converter station model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resistance_ohm: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nominal_voltage_kv: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub converters_mode: Option<HvdcConvertersMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub converter1: Option<HvdcConverter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub converter2: Option<HvdcConverter>,
     #[serde(default)]
     pub cost: Option<GenCost>,
     /// Stable row identity; see [`Bus::uid`].
@@ -1580,6 +2854,11 @@ impl Hvdc {
             qmaxt: 0.0,
             loss0: 0.0,
             loss1: 0.0,
+            resistance_ohm: None,
+            nominal_voltage_kv: None,
+            converters_mode: None,
+            converter1: None,
+            converter2: None,
             cost: None,
             uid: None,
             extras: Extras::new(),
@@ -1605,6 +2884,14 @@ pub struct Area {
     /// Interchange tolerance bandwidth (MW).
     pub tolerance: f64,
     pub name: Option<String>,
+    /// Stable source identity when the source uses a named area rather than a
+    /// numeric area table.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<String>,
+    /// Area classification used by formats that distinguish control areas,
+    /// bidding zones, and other area kinds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area_type: Option<String>,
 }
 
 impl Area {
@@ -1616,6 +2903,8 @@ impl Area {
             net_interchange: 0.0,
             tolerance: 0.0,
             name: None,
+            uid: None,
+            area_type: None,
         }
     }
 }
@@ -2002,9 +3291,12 @@ impl BalancedNetwork {
             base_mva,
             base_frequency: DEFAULT_BASE_FREQUENCY,
             geo: None,
+            case_metadata: CaseMetadata::default(),
+            detailed_connectivity: None,
             buses: Vec::new().into(),
             loads: Vec::new().into(),
             shunts: Vec::new().into(),
+            static_var_compensators: Vec::new().into(),
             branches: Vec::new().into(),
             switches: Vec::new().into(),
             generators: Vec::new().into(),
@@ -2032,6 +3324,7 @@ impl BalancedNetwork {
         let mut net = Self::new(name, base_mva);
         *net.buses_mut() = buses;
         *net.branches_mut() = branches;
+        net.assign_missing_component_ids();
         net
     }
 
@@ -2042,17 +3335,15 @@ impl BalancedNetwork {
     /// round-trip reproduces every field except `source`, which returns `None`.
     ///
     /// JSON has no `Inf`/`NaN` literal: a nonfinite field is written as
-    /// `"Infinity"`, `"-Infinity"`, or `"NaN"` (see [`crate::nonfinite`]) and
-    /// [`from_json`](BalancedNetwork::from_json) reads either a number or one
-    /// of those spellings back, so every network round trips — readers
-    /// legitimately produce `Inf` limits, and a document written before
-    /// 0.9.0 spelled them `null`, which still refuses with a message naming
-    /// the change.
+    /// `"Infinity"`, `"-Infinity"`, or `"NaN"`. The reader accepts a number or
+    /// one of those spellings at every floating point position.
     ///
     /// # Errors
     /// A `serde_json` serialization failure (none arise from this model today).
     pub fn to_json(&self) -> crate::Result<String> {
-        serde_json::to_string(self).map_err(|e| Error::FormatRead {
+        let mut network = self.clone();
+        network.assign_missing_component_ids();
+        serde_json::to_string(&network).map_err(|e| Error::FormatRead {
             format: "JSON",
             message: e.to_string(),
         })
@@ -2076,24 +3367,36 @@ impl BalancedNetwork {
     /// Rebuild a `BalancedNetwork` from JSON produced by [`to_json`](BalancedNetwork::to_json).
     ///
     /// A float position accepts a number or the nonfinite spellings
-    /// `"Infinity"`, `"-Infinity"`, `"NaN"` (see [`crate::nonfinite`]).
+    /// `"Infinity"`, `"-Infinity"`, or `"NaN"`.
     ///
-    /// Validates the result (no buses, unique bus ids, no dangling references)
+    /// Validates the result (AC buses or physical DC equipment, unique bus ids,
+    /// and no dangling AC references)
     /// before returning, so the JSON transport (the C ABI and Julia bridge ride
     /// on it) can't hand back a network the file readers would have rejected
     /// (the same no-buses guard `read_source` applies to every parse path).
     pub fn from_json(text: &str) -> crate::Result<BalancedNetwork> {
         // Tolerate a leading UTF-8 byte order mark, as the format readers do.
         let text = text.trim_start_matches('\u{feff}');
-        let net: BalancedNetwork = serde_json::from_str(text).map_err(|e| Error::FormatRead {
-            format: "JSON",
-            message: e.to_string(),
-        })?;
+        let mut net: BalancedNetwork =
+            serde_json::from_str(text).map_err(|e| Error::FormatRead {
+                format: "JSON",
+                message: e.to_string(),
+            })?;
+        net.assign_missing_component_ids();
         net.check_references("JSON")?;
-        if net.buses().is_empty() {
+        let has_dc_equipment = net
+            .detailed_connectivity()
+            .as_ref()
+            .is_some_and(|detailed| {
+                !detailed.dc_nodes.is_empty()
+                    || !detailed.dc_grounds.is_empty()
+                    || !detailed.dc_lines.is_empty()
+                    || !detailed.dc_switches.is_empty()
+            });
+        if net.buses().is_empty() && !has_dc_equipment {
             return Err(Error::FormatRead {
                 format: "JSON",
-                message: "case has no buses".into(),
+                message: "case has no buses or DC equipment".into(),
             });
         }
         Ok(net)
@@ -2308,6 +3611,7 @@ impl BalancedNetwork {
                     g: t.mag_g * scale,
                     b: t.mag_b * scale,
                     in_service: true,
+                    section_count: None,
                     control: None,
                     uid: None,
                     extras: Extras::new(),
@@ -2331,6 +3635,7 @@ impl BalancedNetwork {
     /// doesn't exist. Readers call this after parsing so a missing/garbled id
     /// (which would otherwise default to a placeholder and silently re-wire the
     /// network) fails loudly instead.
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn check_references(&self, format: &'static str) -> crate::Result<()> {
         // HashSet, not BTreeSet: building the id set and probing it once per branch
         // endpoint / load / shunt / gen is the dominant cost of a large parse, and
@@ -2398,6 +3703,9 @@ impl BalancedNetwork {
                 check(bus, "switched-shunt control")?;
             }
         }
+        for svc in self.static_var_compensators() {
+            check(svc.bus, "static VAR compensator")?;
+        }
         for g in self.generators() {
             check(g.bus, "generator")?;
             if let Some(bus) = g.regulated_bus {
@@ -2421,7 +3729,309 @@ impl BalancedNetwork {
                 check(w.bus, "3-winding transformer")?;
             }
         }
+        if let Some(detailed) = self.detailed_connectivity().as_ref() {
+            let nodes = detailed
+                .connectivity_nodes
+                .iter()
+                .map(|node| &node.component)
+                .collect::<std::collections::HashSet<_>>();
+            for calculated in &detailed.calculated_buses {
+                check(calculated.calculated_bus, "calculated bus")?;
+                if calculated.nodes.is_empty() {
+                    return Err(Error::FormatRead {
+                        format,
+                        message: "calculated bus has no connectivity nodes".into(),
+                    });
+                }
+                for node in &calculated.nodes {
+                    if !nodes.contains(node) {
+                        return Err(Error::FormatRead {
+                            format,
+                            message: format!(
+                                "calculated bus references unknown connectivity node `{}`",
+                                node.local_id()
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+        self.check_detailed_dc_references(format)?;
         self.check_star_expansion_headroom(format)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn check_detailed_dc_references(&self, format: &'static str) -> crate::Result<()> {
+        let Some(detailed) = self.detailed_connectivity().as_ref() else {
+            return Ok(());
+        };
+
+        let substations = detailed
+            .substations
+            .iter()
+            .map(|substation| &substation.component)
+            .collect::<std::collections::HashSet<_>>();
+        let mut converter_units =
+            std::collections::HashSet::with_capacity(detailed.dc_converter_units.len());
+        for unit in &detailed.dc_converter_units {
+            if !converter_units.insert(&unit.component) {
+                return Err(Error::FormatRead {
+                    format,
+                    message: format!("duplicate DCConverterUnit `{}`", unit.component.local_id()),
+                });
+            }
+            if let Some(substation) = unit.substation.as_ref()
+                && !substations.contains(substation)
+            {
+                return Err(Error::FormatRead {
+                    format,
+                    message: format!(
+                        "DCConverterUnit `{}` references unknown Substation `{}`",
+                        unit.component.local_id(),
+                        substation.local_id()
+                    ),
+                });
+            }
+        }
+        let known_components = detailed
+            .component_metadata
+            .iter()
+            .map(|metadata| &metadata.component)
+            .chain(converter_units.iter().copied())
+            .collect::<std::collections::HashSet<_>>();
+
+        let mut nodes = std::collections::HashSet::with_capacity(detailed.dc_nodes.len());
+        for node in &detailed.dc_nodes {
+            if !nodes.insert(&node.component) {
+                return Err(Error::FormatRead {
+                    format,
+                    message: format!("duplicate DCNode `{}`", node.component.local_id()),
+                });
+            }
+        }
+        let mut topological_nodes =
+            std::collections::HashSet::with_capacity(detailed.dc_topological_nodes.len());
+        for node in &detailed.dc_topological_nodes {
+            if !topological_nodes.insert(&node.component) {
+                return Err(Error::FormatRead {
+                    format,
+                    message: format!(
+                        "duplicate DCTopologicalNode `{}`",
+                        node.component.local_id()
+                    ),
+                });
+            }
+        }
+
+        let check_unit = |class: &str,
+                          component: &ComponentId,
+                          unit: Option<&ComponentId>|
+         -> crate::Result<()> {
+            if let Some(unit) = unit
+                && !converter_units.contains(unit)
+            {
+                return Err(Error::FormatRead {
+                    format,
+                    message: format!(
+                        "{class} `{}` references unknown DCConverterUnit `{}`",
+                        component.local_id(),
+                        unit.local_id()
+                    ),
+                });
+            }
+            Ok(())
+        };
+        let check_container = |class: &str,
+                               component: &ComponentId,
+                               container: Option<&ComponentId>|
+         -> crate::Result<()> {
+            if let Some(container) = container
+                && !known_components.contains(container)
+            {
+                return Err(Error::FormatRead {
+                    format,
+                    message: format!(
+                        "{class} `{}` references unknown equipment container `{}`",
+                        component.local_id(),
+                        container.local_id()
+                    ),
+                });
+            }
+            Ok(())
+        };
+        for node in &detailed.dc_topological_nodes {
+            check_unit(
+                "DCTopologicalNode",
+                &node.component,
+                node.dc_converter_unit.as_ref(),
+            )?;
+        }
+        for node in &detailed.dc_nodes {
+            check_unit("DCNode", &node.component, node.dc_converter_unit.as_ref())?;
+            if let Some(topological_node) = node.dc_topological_node.as_ref()
+                && !topological_nodes.contains(topological_node)
+            {
+                return Err(Error::FormatRead {
+                    format,
+                    message: format!(
+                        "DCNode `{}` references unknown DCTopologicalNode `{}`",
+                        node.component.local_id(),
+                        topological_node.local_id()
+                    ),
+                });
+            }
+        }
+
+        let mut terminal_ids = std::collections::HashSet::<ComponentId>::new();
+        let mut check_terminal = |class: &str,
+                                  equipment: &ComponentId,
+                                  terminal: &DcTerminal|
+         -> crate::Result<()> {
+            if let Some(terminal_id) = terminal.component.as_ref()
+                && !terminal_ids.insert(terminal_id.clone())
+            {
+                return Err(Error::FormatRead {
+                    format,
+                    message: format!("duplicate DCTerminal `{}`", terminal_id.local_id()),
+                });
+            }
+            if terminal.dc_node.is_none() && terminal.dc_topological_node.is_none() {
+                return Err(Error::FormatRead {
+                    format,
+                    message: format!(
+                        "DCTerminal on {class} `{}` references neither a DCNode nor a DCTopologicalNode",
+                        equipment.local_id()
+                    ),
+                });
+            }
+            if let Some(node) = terminal.dc_node.as_ref()
+                && !nodes.contains(node)
+            {
+                return Err(Error::FormatRead {
+                    format,
+                    message: format!(
+                        "DCTerminal on {class} `{}` references unknown DCNode `{}`",
+                        equipment.local_id(),
+                        node.local_id()
+                    ),
+                });
+            }
+            if let Some(node) = terminal.dc_topological_node.as_ref()
+                && !topological_nodes.contains(node)
+            {
+                return Err(Error::FormatRead {
+                    format,
+                    message: format!(
+                        "DCTerminal on {class} `{}` references unknown DCTopologicalNode `{}`",
+                        equipment.local_id(),
+                        node.local_id()
+                    ),
+                });
+            }
+            Ok(())
+        };
+
+        for ground in &detailed.dc_grounds {
+            check_container(
+                "DCGround",
+                &ground.component,
+                ground.equipment_container.as_ref(),
+            )?;
+            check_terminal("DCGround", &ground.component, &ground.dc_terminal)?;
+        }
+        for busbar in &detailed.dc_busbars {
+            check_container(
+                "DCBusbar",
+                &busbar.component,
+                busbar.equipment_container.as_ref(),
+            )?;
+            check_terminal("DCBusbar", &busbar.component, &busbar.dc_terminal)?;
+        }
+        for line in &detailed.dc_lines {
+            check_container(
+                "DCLineSegment",
+                &line.component,
+                line.equipment_container.as_ref(),
+            )?;
+            check_terminal("DCLineSegment", &line.component, &line.dc_terminal1)?;
+            check_terminal("DCLineSegment", &line.component, &line.dc_terminal2)?;
+        }
+        for device in &detailed.dc_series_devices {
+            check_container(
+                "DCSeriesDevice",
+                &device.component,
+                device.equipment_container.as_ref(),
+            )?;
+            check_terminal("DCSeriesDevice", &device.component, &device.dc_terminal1)?;
+            check_terminal("DCSeriesDevice", &device.component, &device.dc_terminal2)?;
+        }
+        for switch in &detailed.dc_switches {
+            check_container(
+                "DCSwitch",
+                &switch.component,
+                switch.equipment_container.as_ref(),
+            )?;
+            check_terminal("DCSwitch", &switch.component, &switch.dc_terminal1)?;
+            check_terminal("DCSwitch", &switch.component, &switch.dc_terminal2)?;
+        }
+        for converter in &detailed.voltage_source_converters {
+            check_unit(
+                "VsConverter",
+                &converter.component,
+                converter.dc_converter_unit.as_ref(),
+            )?;
+            check_terminal("VsConverter", &converter.component, &converter.dc_terminal1)?;
+            check_terminal("VsConverter", &converter.component, &converter.dc_terminal2)?;
+        }
+        for converter in &detailed.line_commutated_converters {
+            check_unit(
+                "CsConverter",
+                &converter.component,
+                converter.dc_converter_unit.as_ref(),
+            )?;
+            check_terminal("CsConverter", &converter.component, &converter.dc_terminal1)?;
+            check_terminal("CsConverter", &converter.component, &converter.dc_terminal2)?;
+        }
+
+        let ac_terminals = detailed
+            .terminals
+            .iter()
+            .map(|terminal| (&terminal.equipment, terminal.terminal))
+            .collect::<std::collections::HashSet<_>>();
+        let check_pcc_terminal = |class: &str,
+                                  component: &ComponentId,
+                                  pcc: Option<&TerminalReference>|
+         -> crate::Result<()> {
+            if let Some(pcc) = pcc
+                && !ac_terminals.contains(&(&pcc.equipment, pcc.terminal))
+            {
+                return Err(Error::FormatRead {
+                    format,
+                    message: format!(
+                        "{class} `{}` references undeclared PCC Terminal `{}` number {}",
+                        component.local_id(),
+                        pcc.equipment.local_id(),
+                        pcc.terminal
+                    ),
+                });
+            }
+            Ok(())
+        };
+        for converter in &detailed.voltage_source_converters {
+            check_pcc_terminal(
+                "VoltageSourceConverter",
+                &converter.component,
+                converter.pcc_terminal.as_ref(),
+            )?;
+        }
+        for converter in &detailed.line_commutated_converters {
+            check_pcc_terminal(
+                "LineCommutatedConverter",
+                &converter.component,
+                converter.pcc_terminal.as_ref(),
+            )?;
+        }
+        Ok(())
     }
 
     /// Star expansion allocates synthetic bus ids `max_bus_id + 1 + k`, one per
@@ -2468,15 +4078,563 @@ mod tests {
         assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
     }
 
+    fn component(component_type: &str, local_id: &str) -> ComponentId {
+        ComponentId::new(component_type, local_id).unwrap()
+    }
+
+    fn reference_test_dc_terminal(local_id: &str, node: &ComponentId) -> DcTerminal {
+        DcTerminal {
+            component: Some(component("dc_terminal", local_id)),
+            sequence_number: None,
+            dc_node: Some(node.clone()),
+            dc_topological_node: None,
+            polarity: None,
+            connected: None,
+            active_power_mw: None,
+            current_a: None,
+        }
+    }
+
+    fn detailed_dc_reference_test_network() -> BalancedNetwork {
+        let substation = component("substation", "S");
+        let converter_unit = component("dc_converter_unit", "U");
+        let topological_node = component("dc_topological_node", "T");
+        let node = component("dc_node", "N");
+        let pcc_equipment = component("ac_equipment", "PCC");
+        let voltage_level = component("voltage_level", "VL");
+
+        let voltage_source_converter: VoltageSourceConverter =
+            serde_json::from_value(serde_json::json!({
+                "component": component("voltage_source_converter", "VSC"),
+                "dc_converter_unit": converter_unit.clone(),
+                "dc_terminal1": reference_test_dc_terminal("VSC-1", &node),
+                "dc_terminal2": reference_test_dc_terminal("VSC-2", &node),
+                "pcc_terminal": {
+                    "equipment": pcc_equipment.clone(),
+                    "terminal": 1
+                }
+            }))
+            .unwrap();
+        let line_commutated_converter: LineCommutatedConverter =
+            serde_json::from_value(serde_json::json!({
+                "component": component("line_commutated_converter", "LCC"),
+                "dc_converter_unit": converter_unit.clone(),
+                "dc_terminal1": reference_test_dc_terminal("LCC-1", &node),
+                "dc_terminal2": reference_test_dc_terminal("LCC-2", &node),
+                "pcc_terminal": {
+                    "equipment": pcc_equipment.clone(),
+                    "terminal": 1
+                }
+            }))
+            .unwrap();
+
+        let detailed = DetailedConnectivity {
+            substations: vec![Substation {
+                component: substation.clone(),
+                country: None,
+                operator: None,
+                geographical_tags: Vec::new(),
+            }],
+            terminals: vec![Terminal {
+                equipment: pcc_equipment,
+                terminal: 1,
+                voltage_level,
+                bus: None,
+                connectable_bus: None,
+                node: None,
+                connected: true,
+                active_power_mw: None,
+                reactive_power_mvar: None,
+            }],
+            dc_converter_units: vec![DcConverterUnit {
+                component: converter_unit.clone(),
+                substation: Some(substation),
+                operation_mode: DcConverterOperatingMode::Bipolar,
+            }],
+            dc_topological_nodes: vec![DcTopologicalNode {
+                component: topological_node.clone(),
+                dc_converter_unit: Some(converter_unit.clone()),
+            }],
+            dc_nodes: vec![DcNode {
+                component: node.clone(),
+                nominal_voltage_kv: None,
+                dc_converter_unit: Some(converter_unit.clone()),
+                dc_topological_node: Some(topological_node),
+                voltage_kv: None,
+            }],
+            dc_grounds: vec![DcGround {
+                component: component("dc_ground", "G"),
+                equipment_container: Some(converter_unit.clone()),
+                dc_terminal: reference_test_dc_terminal("G-1", &node),
+                rated_dc_voltage_kv: None,
+                resistance_ohm: None,
+                inductance_h: None,
+            }],
+            dc_lines: vec![DcLine {
+                component: component("dc_line", "L"),
+                equipment_container: Some(converter_unit.clone()),
+                dc_terminal1: reference_test_dc_terminal("L-1", &node),
+                dc_terminal2: reference_test_dc_terminal("L-2", &node),
+                rated_dc_voltage_kv: None,
+                resistance_ohm: None,
+                inductance_h: None,
+                capacitance_f: None,
+                length_km: None,
+            }],
+            dc_switches: vec![DcSwitch {
+                component: component("dc_switch", "SW"),
+                equipment_container: Some(converter_unit),
+                dc_terminal1: reference_test_dc_terminal("SW-1", &node),
+                dc_terminal2: reference_test_dc_terminal("SW-2", &node),
+                kind: DcSwitchKind::Switch,
+                rated_dc_voltage_kv: None,
+                open: None,
+                resistance_ohm: None,
+            }],
+            voltage_source_converters: vec![voltage_source_converter],
+            line_commutated_converters: vec![line_commutated_converter],
+            ..DetailedConnectivity::default()
+        };
+        let mut network = BalancedNetwork::new("dc-reference-test", 100.0);
+        *network.detailed_connectivity_mut() = Some(std::sync::Arc::new(detailed));
+        network
+    }
+
+    fn reference_test_detailed_mut(network: &mut BalancedNetwork) -> &mut DetailedConnectivity {
+        std::sync::Arc::make_mut(
+            network
+                .detailed_connectivity_mut()
+                .as_mut()
+                .expect("reference test has detailed connectivity"),
+        )
+    }
+
     #[test]
-    fn source_format_serializes_as_its_name_token_and_reads_the_legacy_spelling() {
-        // The exhaustive match keeps a new variant from shipping with a serde
+    fn detailed_dc_references_are_complete_and_checked() {
+        let valid = detailed_dc_reference_test_network();
+        valid.validate().unwrap();
+
+        let assert_invalid = |network: &BalancedNetwork, expected: &str| {
+            let error = network.validate().unwrap_err().to_string();
+            assert!(
+                error.contains(expected),
+                "expected `{expected}` in `{error}`"
+            );
+        };
+
+        let mut duplicate_unit = valid.clone();
+        let unit = reference_test_detailed_mut(&mut duplicate_unit).dc_converter_units[0].clone();
+        reference_test_detailed_mut(&mut duplicate_unit)
+            .dc_converter_units
+            .push(unit);
+        assert_invalid(&duplicate_unit, "duplicate DCConverterUnit");
+
+        let mut missing_substation = valid.clone();
+        reference_test_detailed_mut(&mut missing_substation).dc_converter_units[0].substation =
+            Some(component("substation", "missing"));
+        assert_invalid(&missing_substation, "references unknown Substation");
+
+        let mut duplicate_topological_node = valid.clone();
+        let node = reference_test_detailed_mut(&mut duplicate_topological_node)
+            .dc_topological_nodes[0]
+            .clone();
+        reference_test_detailed_mut(&mut duplicate_topological_node)
+            .dc_topological_nodes
+            .push(node);
+        assert_invalid(&duplicate_topological_node, "duplicate DCTopologicalNode");
+
+        let mut missing_topological_unit = valid.clone();
+        reference_test_detailed_mut(&mut missing_topological_unit).dc_topological_nodes[0]
+            .dc_converter_unit = Some(component("dc_converter_unit", "missing"));
+        assert_invalid(
+            &missing_topological_unit,
+            "DCTopologicalNode `T` references unknown DCConverterUnit",
+        );
+
+        let mut missing_node_unit = valid.clone();
+        reference_test_detailed_mut(&mut missing_node_unit).dc_nodes[0].dc_converter_unit =
+            Some(component("dc_converter_unit", "missing"));
+        assert_invalid(
+            &missing_node_unit,
+            "DCNode `N` references unknown DCConverterUnit",
+        );
+
+        let mut missing_node_topology = valid.clone();
+        reference_test_detailed_mut(&mut missing_node_topology).dc_nodes[0].dc_topological_node =
+            Some(component("dc_topological_node", "missing"));
+        assert_invalid(
+            &missing_node_topology,
+            "DCNode `N` references unknown DCTopologicalNode",
+        );
+
+        let mut missing_container = valid.clone();
+        reference_test_detailed_mut(&mut missing_container).dc_lines[0].equipment_container =
+            Some(component("dc_converter_unit", "missing"));
+        assert_invalid(
+            &missing_container,
+            "DCLineSegment `L` references unknown equipment container",
+        );
+
+        let mut missing_converter_unit = valid.clone();
+        reference_test_detailed_mut(&mut missing_converter_unit).voltage_source_converters[0]
+            .dc_converter_unit = Some(component("dc_converter_unit", "missing"));
+        assert_invalid(
+            &missing_converter_unit,
+            "VsConverter `VSC` references unknown DCConverterUnit",
+        );
+
+        let mut terminal_without_node = valid.clone();
+        let terminal =
+            &mut reference_test_detailed_mut(&mut terminal_without_node).dc_grounds[0].dc_terminal;
+        terminal.dc_node = None;
+        terminal.dc_topological_node = None;
+        assert_invalid(
+            &terminal_without_node,
+            "references neither a DCNode nor a DCTopologicalNode",
+        );
+
+        let mut missing_physical_node = valid.clone();
+        reference_test_detailed_mut(&mut missing_physical_node).dc_grounds[0]
+            .dc_terminal
+            .dc_node = Some(component("dc_node", "missing"));
+        assert_invalid(&missing_physical_node, "references unknown DCNode");
+
+        let mut missing_terminal_topology = valid.clone();
+        let terminal = &mut reference_test_detailed_mut(&mut missing_terminal_topology).dc_grounds
+            [0]
+        .dc_terminal;
+        terminal.dc_node = None;
+        terminal.dc_topological_node = Some(component("dc_topological_node", "missing"));
+        assert_invalid(
+            &missing_terminal_topology,
+            "references unknown DCTopologicalNode",
+        );
+
+        let mut duplicate_terminal = valid.clone();
+        let terminal_id = reference_test_detailed_mut(&mut duplicate_terminal).dc_grounds[0]
+            .dc_terminal
+            .component
+            .clone();
+        reference_test_detailed_mut(&mut duplicate_terminal).dc_lines[0]
+            .dc_terminal1
+            .component = terminal_id;
+        assert_invalid(&duplicate_terminal, "duplicate DCTerminal");
+
+        let mut missing_pcc_terminal = valid;
+        reference_test_detailed_mut(&mut missing_pcc_terminal).voltage_source_converters[0]
+            .pcc_terminal
+            .as_mut()
+            .unwrap()
+            .terminal = 2;
+        assert_invalid(&missing_pcc_terminal, "references undeclared PCC Terminal");
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // the fixture names every physical DC equipment record
+    fn detailed_connectivity_dc_equipment_round_trips_and_defaults() {
+        let empty: DetailedConnectivity = serde_json::from_str("{}").unwrap();
+        assert_eq!(empty, DetailedConnectivity::default());
+
+        let node1 = component("dc_node", "dc-1");
+        let node2 = component("dc_node", "dc-2");
+        let terminal = |dc_node: ComponentId, connected: bool, power| DcTerminal {
+            component: None,
+            sequence_number: None,
+            dc_node: Some(dc_node),
+            dc_topological_node: None,
+            polarity: None,
+            connected: Some(connected),
+            active_power_mw: power,
+            current_a: power.map(|value| value / 320.0),
+        };
+        let unit = component("dc_converter_unit", "unit");
+        let topological_node = component("dc_topological_node", "dc-topology");
+        let pcc_terminal = TerminalReference {
+            equipment: component("branch", "pcc"),
+            terminal: 2,
+        };
+        let droop_curve = DroopCurve {
+            segments: vec![DroopCurveSegment {
+                minimum_voltage_kv: 300.0,
+                maximum_voltage_kv: 340.0,
+                k: 0.4,
+            }],
+        };
+        let mut curve_properties = BTreeMap::new();
+        curve_properties.insert("source".into(), "test".into());
+        let reactive_limits = ReactiveLimits::CapabilityCurve(ReactiveCapabilityCurve {
+            curve_style: CurveStyle::StraightLineYValues,
+            properties: curve_properties,
+            points: vec![
+                ReactiveCapabilityCurvePoint {
+                    active_power_mw: -100.0,
+                    minimum_reactive_power_mvar: -50.0,
+                    maximum_reactive_power_mvar: 40.0,
+                    properties: BTreeMap::new(),
+                },
+                ReactiveCapabilityCurvePoint {
+                    active_power_mw: 100.0,
+                    minimum_reactive_power_mvar: -40.0,
+                    maximum_reactive_power_mvar: 50.0,
+                    properties: BTreeMap::new(),
+                },
+            ],
+        });
+        let detailed = DetailedConnectivity {
+            terminals: vec![Terminal {
+                equipment: component("voltage_source_converter", "vsc"),
+                terminal: 1,
+                voltage_level: component("voltage_level", "vl"),
+                bus: None,
+                connectable_bus: None,
+                node: Some(component("connectivity_node", "n1")),
+                connected: true,
+                active_power_mw: Some(-95.0),
+                reactive_power_mvar: Some(12.0),
+            }],
+            dc_converter_units: vec![DcConverterUnit {
+                component: unit.clone(),
+                substation: Some(component("substation", "station")),
+                operation_mode: DcConverterOperatingMode::Bipolar,
+            }],
+            dc_topological_nodes: vec![DcTopologicalNode {
+                component: topological_node.clone(),
+                dc_converter_unit: Some(unit.clone()),
+            }],
+            dc_nodes: vec![
+                DcNode {
+                    component: node1.clone(),
+                    nominal_voltage_kv: Some(320.0),
+                    dc_converter_unit: Some(unit.clone()),
+                    dc_topological_node: Some(topological_node.clone()),
+                    voltage_kv: Some(318.0),
+                },
+                DcNode {
+                    component: node2.clone(),
+                    nominal_voltage_kv: Some(320.0),
+                    dc_converter_unit: Some(unit.clone()),
+                    dc_topological_node: Some(topological_node),
+                    voltage_kv: None,
+                },
+            ],
+            dc_grounds: vec![DcGround {
+                component: component("dc_ground", "ground"),
+                equipment_container: Some(unit.clone()),
+                dc_terminal: terminal(node1.clone(), true, Some(0.5)),
+                rated_dc_voltage_kv: Some(320.0),
+                resistance_ohm: Some(2.0),
+                inductance_h: Some(0.01),
+            }],
+            dc_lines: vec![DcLine {
+                component: component("dc_line", "line"),
+                equipment_container: Some(unit.clone()),
+                dc_terminal1: terminal(node1.clone(), true, Some(100.0)),
+                dc_terminal2: terminal(node2.clone(), false, Some(-99.0)),
+                rated_dc_voltage_kv: Some(320.0),
+                resistance_ohm: Some(1.5),
+                inductance_h: Some(0.02),
+                capacitance_f: Some(0.001),
+                length_km: Some(20.0),
+            }],
+            dc_switches: vec![DcSwitch {
+                component: component("dc_switch", "breaker"),
+                equipment_container: Some(unit.clone()),
+                dc_terminal1: terminal(node1.clone(), true, None),
+                dc_terminal2: terminal(node2.clone(), true, None),
+                kind: DcSwitchKind::Breaker,
+                rated_dc_voltage_kv: Some(320.0),
+                open: Some(false),
+                resistance_ohm: Some(0.01),
+            }],
+            voltage_source_converters: vec![VoltageSourceConverter {
+                component: component("voltage_source_converter", "vsc"),
+                dc_converter_unit: Some(unit.clone()),
+                dc_terminal1: terminal(node1.clone(), true, Some(-100.0)),
+                dc_terminal2: terminal(node2.clone(), true, Some(100.0)),
+                base_apparent_power_mva: Some(200.0),
+                minimum_active_power_mw: Some(-150.0),
+                maximum_active_power_mw: Some(150.0),
+                minimum_dc_voltage_kv: Some(300.0),
+                maximum_dc_voltage_kv: Some(340.0),
+                rated_dc_voltage_kv: Some(320.0),
+                valve_u0_kv: Some(0.1),
+                number_of_valves: Some(4),
+                idle_loss_mw: Some(1.0),
+                switching_loss_mw_per_ampere: Some(0.002),
+                resistive_loss_ohm: Some(0.1),
+                control_mode: Some(
+                    AcDcConverterControlMode::ActivePowerAtPccAndDcVoltageDroopCurve,
+                ),
+                active_power_at_pcc_mw: Some(95.0),
+                reactive_power_at_pcc_mvar: Some(12.0),
+                target_active_power_mw: Some(95.0),
+                target_dc_voltage_kv: Some(320.0),
+                pcc_terminal: Some(pcc_terminal.clone()),
+                droop_curve: Some(droop_curve.clone()),
+                droop: Some(2.0),
+                droop_compensation: Some(0.1),
+                q_share: Some(0.5),
+                maximum_modulation_index: Some(0.9),
+                maximum_valve_current_a: Some(800.0),
+                voltage_regulator_on: Some(true),
+                voltage_setpoint_kv: Some(230.0),
+                reactive_power_setpoint_mvar: None,
+                reactive_limits: Some(reactive_limits),
+                pole_loss_active_power_mw: Some(1.2),
+                dc_current_a: Some(300.0),
+                ac_voltage_kv: Some(230.0),
+                dc_voltage_kv: Some(318.0),
+                delta_degrees: Some(1.0),
+                uf_kv: Some(229.0),
+                uv_kv: Some(231.0),
+            }],
+            line_commutated_converters: vec![LineCommutatedConverter {
+                component: component("line_commutated_converter", "lcc"),
+                dc_converter_unit: Some(unit),
+                dc_terminal1: terminal(node1, true, Some(-75.0)),
+                dc_terminal2: terminal(node2, true, Some(75.0)),
+                base_apparent_power_mva: Some(160.0),
+                minimum_active_power_mw: Some(-120.0),
+                maximum_active_power_mw: Some(120.0),
+                minimum_dc_voltage_kv: Some(300.0),
+                maximum_dc_voltage_kv: Some(340.0),
+                rated_dc_voltage_kv: Some(320.0),
+                valve_u0_kv: Some(0.2),
+                number_of_valves: Some(6),
+                idle_loss_mw: Some(0.5),
+                switching_loss_mw_per_ampere: Some(0.001),
+                resistive_loss_ohm: Some(0.2),
+                control_mode: Some(AcDcConverterControlMode::DcVoltage),
+                active_power_at_pcc_mw: Some(-75.0),
+                reactive_power_at_pcc_mvar: Some(-20.0),
+                target_active_power_mw: None,
+                target_dc_voltage_kv: Some(320.0),
+                pcc_terminal: Some(pcc_terminal),
+                droop_curve: Some(droop_curve),
+                reactive_model: Some(LineCommutatedConverterReactiveModel::FixedPowerFactor),
+                power_factor: Some(0.95),
+                operating_mode: Some(LineCommutatedConverterOperatingMode::Rectifier),
+                rated_dc_current_a: Some(500.0),
+                minimum_alpha_degrees: Some(5.0),
+                maximum_alpha_degrees: Some(30.0),
+                minimum_gamma_degrees: Some(10.0),
+                maximum_gamma_degrees: Some(35.0),
+                target_alpha_degrees: Some(15.0),
+                target_gamma_degrees: Some(20.0),
+                target_dc_current_a: Some(250.0),
+                pole_loss_active_power_mw: Some(0.8),
+                dc_current_a: Some(250.0),
+                ac_voltage_kv: Some(230.0),
+                dc_voltage_kv: Some(319.0),
+                alpha_degrees: Some(14.0),
+                gamma_degrees: Some(19.0),
+            }],
+            ..DetailedConnectivity::default()
+        };
+
+        let json = serde_json::to_string(&detailed).unwrap();
+        let restored: DetailedConnectivity = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, detailed);
+
+        let mut older_terminal = serde_json::to_value(&detailed.terminals[0]).unwrap();
+        let older_terminal = older_terminal.as_object_mut().unwrap();
+        older_terminal.remove("active_power_mw");
+        older_terminal.remove("reactive_power_mvar");
+        let older_terminal: Terminal =
+            serde_json::from_value(serde_json::Value::Object(older_terminal.clone())).unwrap();
+        assert_eq!(older_terminal.active_power_mw, None);
+        assert_eq!(older_terminal.reactive_power_mvar, None);
+
+        let min_max = ReactiveLimits::MinMax(MinMaxReactiveLimits {
+            minimum_reactive_power_mvar: -25.0,
+            maximum_reactive_power_mvar: 30.0,
+            properties: BTreeMap::new(),
+        });
+        let json = serde_json::to_string(&min_max).unwrap();
+        assert_eq!(
+            serde_json::from_str::<ReactiveLimits>(&json).unwrap(),
+            min_max
+        );
+    }
+
+    #[test]
+    fn converter_droop_control_modes_have_distinct_serialized_names() {
+        for (mode, name) in [
+            (
+                AcDcConverterControlMode::ActivePowerAtPccAndDcVoltageDroopCurve,
+                "active_power_at_pcc_and_dc_voltage_droop_curve",
+            ),
+            (
+                AcDcConverterControlMode::ActivePowerAtPccAndDcVoltageDroop,
+                "active_power_at_pcc_and_dc_voltage_droop",
+            ),
+            (
+                AcDcConverterControlMode::ActivePowerAtPccAndDcVoltageDroopWithCompensation,
+                "active_power_at_pcc_and_dc_voltage_droop_with_compensation",
+            ),
+            (
+                AcDcConverterControlMode::ActivePowerAtPccAndDcVoltageDroopPilot,
+                "active_power_at_pcc_and_dc_voltage_droop_pilot",
+            ),
+        ] {
+            let value = serde_json::to_value(mode).unwrap();
+            assert_eq!(value, serde_json::Value::String(name.to_owned()));
+            assert_eq!(
+                serde_json::from_value::<AcDcConverterControlMode>(value).unwrap(),
+                mode
+            );
+        }
+    }
+
+    #[test]
+    fn assigned_component_ids_follow_records_after_reordering() {
+        let mut network = BalancedNetwork::in_memory(
+            "ids",
+            100.0,
+            vec![
+                Bus::new(BusId(10), BusType::Ref, 230.0),
+                Bus::new(BusId(20), BusType::Pq, 230.0),
+            ],
+            vec![
+                Branch::new(BusId(10), BusId(20), 0.0, 0.1),
+                Branch::new(BusId(10), BusId(20), 0.0, 0.2),
+            ],
+        );
+        network.loads_mut().extend([
+            Load::new(BusId(20), 10.0, 1.0),
+            Load::new(BusId(20), 20.0, 2.0),
+        ]);
+        network.assign_missing_component_ids();
+
+        assert_eq!(network.buses()[0].uid.as_deref(), Some("10"));
+        assert_eq!(network.branches()[0].uid.as_deref(), Some("10-20"));
+        assert_eq!(network.branches()[1].uid.as_deref(), Some("10-20-2"));
+        assert_eq!(network.loads()[0].uid.as_deref(), Some("bus-20"));
+        assert_eq!(network.loads()[1].uid.as_deref(), Some("bus-20-2"));
+
+        network.loads_mut().swap(0, 1);
+        network.branches_mut().swap(0, 1);
+        network.assign_missing_component_ids();
+        assert_eq!(network.loads()[0].uid.as_deref(), Some("bus-20-2"));
+        assert_eq!(network.loads()[1].uid.as_deref(), Some("bus-20"));
+        assert_eq!(network.branches()[0].uid.as_deref(), Some("10-20-2"));
+        assert_eq!(network.branches()[1].uid.as_deref(), Some("10-20"));
+
+        let restored = BalancedNetwork::from_json(&network.to_json().unwrap()).unwrap();
+        assert_eq!(restored.loads()[0].uid, network.loads()[0].uid);
+        assert_eq!(restored.branches()[0].uid, network.branches()[0].uid);
+    }
+
+    #[test]
+    fn source_format_serializes_as_its_name_token() {
+        // The exhaustive match keeps a new enum case from shipping with a serde
         // spelling that differs from name().
         let all = [
             SourceFormat::Matpower,
             SourceFormat::PowerModelsJson,
             SourceFormat::EgretJson,
             SourceFormat::Psse,
+            SourceFormat::PsseRawx,
             SourceFormat::PowerWorld,
             SourceFormat::PandapowerJson,
             SourceFormat::Pslf,
@@ -2488,6 +4646,8 @@ mod tests {
             SourceFormat::Goc3Json,
             SourceFormat::SurgeJson,
             SourceFormat::DeepMindOpfDataJson,
+            SourceFormat::Xiidm,
+            SourceFormat::Cgmes,
         ];
         for f in all {
             match f {
@@ -2495,6 +4655,7 @@ mod tests {
                 | SourceFormat::PowerModelsJson
                 | SourceFormat::EgretJson
                 | SourceFormat::Psse
+                | SourceFormat::PsseRawx
                 | SourceFormat::PowerWorld
                 | SourceFormat::PandapowerJson
                 | SourceFormat::Pslf
@@ -2505,15 +4666,14 @@ mod tests {
                 | SourceFormat::PypsaCsv
                 | SourceFormat::Goc3Json
                 | SourceFormat::SurgeJson
-                | SourceFormat::DeepMindOpfDataJson => {}
+                | SourceFormat::DeepMindOpfDataJson
+                | SourceFormat::Xiidm
+                | SourceFormat::Cgmes => {}
             }
             let token = serde_json::to_value(f).unwrap();
             assert_eq!(token, serde_json::Value::String(f.name().to_owned()));
             let back: SourceFormat = serde_json::from_value(token).unwrap();
             assert_eq!(back, f);
-            let legacy = serde_json::Value::String(format!("{f:?}"));
-            let from_legacy: SourceFormat = serde_json::from_value(legacy).unwrap();
-            assert_eq!(from_legacy, f);
         }
     }
 
@@ -2957,6 +5117,7 @@ mod tests {
             cost: None,
             caps,
             regulated_bus: None,
+            active_power_control: None,
             uid: None,
         };
 
@@ -3047,6 +5208,7 @@ mod tests {
             cost: None,
             caps: GenCaps::default(),
             regulated_bus: None,
+            active_power_control: None,
             uid: None,
         };
         g.caps[8] = Some(f64::INFINITY); // ramp_30
@@ -3079,7 +5241,7 @@ mod tests {
     }
 
     #[test]
-    fn a_null_at_a_float_position_names_the_pre_090_spelling() {
+    fn a_null_at_a_float_position_is_rejected() {
         let net = BalancedNetwork::in_memory("nf", 100.0, vec![bus(1), bus(2)], Vec::new());
         let text = net
             .to_json()
@@ -3087,7 +5249,7 @@ mod tests {
             .replacen("\"vm\":1.0", "\"vm\":null", 1);
         assert!(text.contains("\"vm\":null"), "fixture edit failed: {text}");
         let err = BalancedNetwork::from_json(&text).unwrap_err().to_string();
-        assert!(err.contains("before 0.9.0"), "{err}");
+        assert!(err.contains("cannot be null"), "{err}");
     }
 
     #[test]
@@ -3108,16 +5270,15 @@ mod tests {
             g: 0.0,
             b: 19.0,
             in_service: true,
+            section_count: None,
             control: Some(SwitchedShuntControl {
                 mode: SwitchedShuntMode::Discrete,
                 vhigh: 1.05,
                 vlow: 0.95,
                 control_bus: Some(BusId(reg)),
+                regulating_terminal: None,
                 rmpct: 100.0,
-                blocks: vec![
-                    ShuntBlock { steps: 2, b: 25.0 },
-                    ShuntBlock { steps: 1, b: 50.0 },
-                ],
+                blocks: vec![ShuntBlock::new(2, 25.0), ShuntBlock::new(1, 50.0)],
             }),
             uid: None,
             extras: Extras::new(),
@@ -3169,6 +5330,7 @@ mod tests {
             cost: None,
             caps: Default::default(),
             regulated_bus: None,
+            active_power_control: None,
             uid: None,
         });
 
@@ -3196,7 +5358,7 @@ mod tests {
         // The recorded path: repair the module, read the history entry.
         let module = powerio_core::PioModule::new(net);
         let module = repair_values(module).unwrap();
-        let net = module.value();
+        let net = &module.value;
         close(net.buses()[0].vm, 1.0);
         close(net.buses()[1].va, 0.0);
         close(net.generators()[0].mbase, 100.0); // → base_mva
@@ -3211,7 +5373,7 @@ mod tests {
             entries[0].parameters()["repairs"].as_array().unwrap().len(),
             diags.len()
         );
-        assert_eq!(module.diagnostics().len(), diags.len());
+        assert_eq!(module.diagnostics.len(), diags.len());
         let module = repair_values(module).unwrap();
         assert_eq!(module.history().len(), 1);
     }

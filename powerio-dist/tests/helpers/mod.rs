@@ -159,10 +159,10 @@ fn from_module(module: powerio_core::PioModule<MulticonductorNetwork>) -> Parsed
         Some(Arc::new(text.to_owned()))
     });
     Parsed {
-        warnings: powerio_dist::diagnostics::render_diagnostics(module.diagnostics()),
-        diagnostics: module.diagnostics().to_vec(),
+        warnings: powerio_dist::diagnostics::render_diagnostics(&module.diagnostics),
+        diagnostics: module.diagnostics.clone(),
         source,
-        network: module.value().clone(),
+        network: module.value.clone(),
         module,
     }
 }
@@ -195,7 +195,7 @@ fn core_to_dist(error: &powerio_core::Error) -> Error {
 
 pub fn parse_str(text: &str, from: &str) -> Result<Parsed, Error> {
     let source = declared(
-        powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())
+        powerio_core::Source::from_memory("<memory>", text.as_bytes().to_vec())
             .map_err(|error| core_to_dist(&error))?,
         Some(from),
     )?;
@@ -206,7 +206,7 @@ pub fn parse_str(text: &str, from: &str) -> Result<Parsed, Error> {
 
 pub fn parse_bytes(bytes: &[u8], from: &str) -> Result<Parsed, Error> {
     let source = declared(
-        powerio_core::Source::from_bytes("<memory>", bytes.to_vec())
+        powerio_core::Source::from_memory("<memory>", bytes.to_vec())
             .map_err(|error| core_to_dist(&error))?,
         Some(from),
     )?;
@@ -276,14 +276,14 @@ pub fn parse_pmd_file(path: impl AsRef<Path>) -> Result<Parsed, Error> {
 /// writer's.
 pub fn convert_str(text: &str, to: DistTargetFormat, from: &str) -> Result<Conv, Error> {
     let source = declared(
-        powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())
+        powerio_core::Source::from_memory("<memory>", text.as_bytes().to_vec())
             .map_err(|error| core_to_dist(&error))?,
         Some(from),
     )?;
     let module = powerio_dist::parse(source).map_err(|error| core_to_dist(&error))?;
     let mut conv = emit_module_with_options(&module, to, &powerio_dist::EmitOptions::default())
         .map_err(|error| core_to_dist(&error))?;
-    let mut diagnostics = module.diagnostics().to_vec();
+    let mut diagnostics = module.diagnostics.clone();
     diagnostics.append(&mut conv.diagnostics);
     conv.warnings = powerio_dist::diagnostics::render_diagnostics(&diagnostics);
     conv.diagnostics = diagnostics;

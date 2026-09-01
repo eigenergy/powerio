@@ -1,6 +1,7 @@
 """The multiconductor value surface and canonical parse/emit path."""
 
 import json
+import io
 from pathlib import Path
 
 import pytest
@@ -20,33 +21,32 @@ Set VoltageBases=[12.47, 0.416]
 
 
 def _parse_file_value(path, format=None, *, include_root=None):
-    return powerio.parse_file(
-        path,
-        format,
-        include_root=include_root,
-        value_type=dist.MulticonductorNetwork,
-    ).value
+    assert include_root is None
+    value = powerio.parse(path, format=format).value
+    assert isinstance(value, dist.MulticonductorNetwork)
+    return value
 
 
 def _parse_text_value(text, format):
-    return powerio.parse_text(
-        text,
+    value = powerio.parse(
+        io.StringIO(text),
         name="fixture",
         format=format,
-        value_type=dist.MulticonductorNetwork,
     ).value
+    assert isinstance(value, dist.MulticonductorNetwork)
+    return value
 
 
 def _emit_value(value, format, destination=None):
-    return powerio.PioModule.from_value(value).emit(format, destination)
+    return powerio.emit(powerio.PioModule.from_value(value), format, destination)
 
 
 def _emit_module(module):
-    return module.emit("pio-json").text
+    return powerio.serialize(module).text
 
 
 def _parse_module(text):
-    return powerio.parse_text(text, name="module.pio.json")
+    return powerio.deserialize(io.StringIO(text))
 
 
 def test_parse_file_counts_and_source_format():
@@ -89,10 +89,10 @@ def test_complete_read_only_tables_and_power_system_counts():
 def test_multiconductor_is_the_only_model_name():
     case = _parse_file_value(FOURWIRE)
     assert isinstance(case, dist.MulticonductorNetwork)
+    assert powerio.MulticonductorNetwork is dist.MulticonductorNetwork
     assert "MulticonductorNetwork" in dist.__all__
     assert "DistCase" not in dist.__all__
-    # DistNetwork is the 0.8 bridge alias: same object, DeprecationWarning,
-    # gone at 1.0.0. DistCase stays removed.
+    # The final surface has one multiconductor model name.
     assert not hasattr(dist, "DistNetwork")
     assert "DistNetwork" not in dist.__all__
     assert not hasattr(dist, "DistCase")
@@ -102,7 +102,7 @@ def test_same_format_write_echoes_source():
     case = _parse_file_value(FOURWIRE)
     conv = _emit_value(case, "dss")
     assert conv.text == FOURWIRE.read_text()
-    assert conv.diagnostics == []
+    assert conv.diagnostics == ()
 
 
 def test_cross_format_writes():
@@ -132,12 +132,12 @@ def test_json_sniffing_round_trip(tmp_path):
         text = _emit_value(case, fmt).text
         p = tmp_path / f"case_{fmt}.json"
         p.write_text(text)
-        module = powerio.parse_file(p)
+        module = powerio.parse(p)
         if fmt == "pmd-json":
             assert module.value.source_format == fmt
             assert module.value.n_buses == case.n_buses
         else:
-            assert module.kind == "mc_ac_opf_instance"
+            assert isinstance(module.value, powerio.MulticonductorNetwork)
 
 
 def test_parse_text_and_parse_file_emit_the_same_result():
@@ -156,20 +156,23 @@ def test_network_diagnostics_belong_only_to_the_module():
 
 def test_top_level_parse_routes_distribution_inputs():
     text = FOURWIRE.read_text()
-    via_str = powerio.parse_text(text, name="feeder.dss", format="dss").emit("pmd-json")
-    via_file = powerio.parse_file(FOURWIRE).emit("pmd-json")
+    via_str = powerio.emit(
+        powerio.parse(io.StringIO(text), name="feeder.dss", format="dss"),
+        "pmd-json",
+    )
+    via_file = powerio.emit(powerio.parse(FOURWIRE), "pmd-json")
     assert json.loads(via_str.text)["data_model"] == "ENGINEERING"
     assert via_str.text == via_file.text
     assert via_str.diagnostics == via_file.diagnostics
 
 
 def test_pio_module_distribution_writer_infers_source_format(tmp_path):
-    module = powerio.parse_file(FOURWIRE)
-    assert json.loads(module.emit("pmd-json").text)["data_model"] == "ENGINEERING"
+    module = powerio.parse(FOURWIRE)
+    assert json.loads(powerio.emit(module, "pmd-json").text)["data_model"] == "ENGINEERING"
     out = tmp_path / "echo"
-    result = module.emit("dss", out)
+    result = powerio.emit(module, "dss", out)
     assert result.text is None
-    assert result.diagnostics == []
+    assert result.diagnostics == ()
     assert (out / "case.dss").read_bytes() == FOURWIRE.read_bytes()
 
 
@@ -184,8 +187,9 @@ def test_dist_emit_destination_writes_sidecars_beside_the_case(tmp_path):
     layer = source.to_geo_layer()
     assert not hasattr(source, "geo_layer")
     placed, _ = source.apply_geo_layer(json.dumps(layer))
-    with pytest.raises(powerio.PowerIOError, match="provide a destination path"):
-        _emit_value(placed, "dss")
+    memory = _emit_value(placed, "dss")
+    assert memory.layout == "directory"
+    assert any(artifact.name.endswith("/case.dss") for artifact in memory.artifacts)
     out = tmp_path / "ieee13"
     _emit_value(placed, "dss", out)
     text = (out / "case.dss").read_text()
@@ -238,7 +242,7 @@ def test_lower_to_balanced_refusal_carries_code_and_diagnostics():
     # IEEE13Nodeckt is an unbalanced feeder (single- and two-phase laterals,
     # single-phase regulators, a wye-wye substation transformer): the
     # positive sequence projection refuses it outright rather than guess.
-    module = powerio.parse_file(DATA / "opendss" / "ieee13" / "IEEE13Nodeckt.dss")
+    module = powerio.parse(DATA / "opendss" / "ieee13" / "IEEE13Nodeckt.dss")
     report = module.to_balanced_report(base_mva=100.0)
     assert report["ready"] is False
     assert not hasattr(module, "to_balanced_inspect")
@@ -251,25 +255,23 @@ def test_lower_to_balanced_refusal_carries_code_and_diagnostics():
     for diagnostic in error.diagnostics:
         assert diagnostic.keys() == {"code", "severity", "message", "target"}
         assert diagnostic["code"].startswith("TRANSFORM.")
-        # The lowering records are 1.0 diagnostics from the branch below;
-        # legacy severities never reach this surface any more.
         assert diagnostic["severity"] in ("error", "warning", "remark", "note")
         assert diagnostic["message"]
     # The refusal leaves the handle usable, still carrying its module.
-    assert module.kind == "multiconductor_network"
+    assert isinstance(module.value, dist.MulticonductorNetwork)
 
 
 def test_pio_module_from_multiconductor_value_keeps_source_echo():
     source = DATA / "micro" / "xfmr_single_phase.dss"
-    parsed = powerio.parse_file(source)
+    parsed = powerio.parse(source)
     wrapped = powerio.PioModule.from_value(parsed.value)
-    assert wrapped.kind == "multiconductor_network"
+    assert isinstance(wrapped.value, dist.MulticonductorNetwork)
     assert wrapped.diagnostics == parsed.diagnostics
-    assert wrapped.emit("dss").text.encode() == source.read_bytes()
+    assert powerio.emit(wrapped, "dss").text.encode() == source.read_bytes()
 
 
 def test_successful_lowering_leaves_the_source_module_usable_and_records_intact():
-    module = powerio.parse_text(LOWERABLE_DSS, name="lowerable.dss", format="dss")
+    module = powerio.parse(io.StringIO(LOWERABLE_DSS), name="lowerable.dss", format="dss")
     doc = json.loads(_emit_module(module))
     doc["producer"] = {"name": "python-binding-test", "version": "1"}
     doc["history"] = [{"id": "before-lowering", "kind": "parse", "name": "test_parse"}]
@@ -280,12 +282,12 @@ def test_successful_lowering_leaves_the_source_module_usable_and_records_intact(
     lowered = module.to_balanced()
 
     # The native transform owns a record-complete sibling, not this handle.
-    assert module.kind == "multiconductor_network"
+    assert isinstance(module.value, dist.MulticonductorNetwork)
     assert json.loads(_emit_module(module)) == before
     assert module.value.n_buses > 0
 
     lowered_doc = json.loads(_emit_module(lowered))
-    assert lowered.kind == "balanced_network"
+    assert isinstance(lowered.value, powerio.BalancedNetwork)
     assert lowered_doc["producer"] == before["producer"]
     assert lowered_doc["extensions"] == before["extensions"]
     assert lowered_doc["history"][0] == before["history"][0]
@@ -300,15 +302,17 @@ def test_module_emit_echoes_distribution_bytes(tmp_path):
     out = tmp_path / "echo"
     result = _emit_value(case, "dss", out)
     assert result.text is None
-    assert result.diagnostics == []
+    assert result.diagnostics == ()
     assert (out / "case.dss").read_bytes() == FOURWIRE.read_bytes()
 
 
 def test_parse_diagnostics_surface_on_module():
-    module = powerio.parse_text(
-        "clear\n"
-        "new circuit.w basekv=12.47 bus1=src\n"
-        "new line.l1 bus1=src bus2=b2 length=1 units=furlong\n",
+    module = powerio.parse(
+        io.StringIO(
+            "clear\n"
+            "new circuit.w basekv=12.47 bus1=src\n"
+            "new line.l1 bus1=src bus2=b2 length=1 units=furlong\n"
+        ),
         name="warning.dss",
         format="dss",
     )
@@ -338,10 +342,12 @@ def test_missing_file_raises_precise_oserror():
 
 
 def test_emit_carries_parse_diagnostics():
-    module = powerio.parse_text(
-        "clear\n"
-        "new circuit.w basekv=12.47 bus1=src\n"
-        "new line.l1 bus1=src bus2=b2 length=1 units=furlong\n",
+    module = powerio.parse(
+        io.StringIO(
+            "clear\n"
+            "new circuit.w basekv=12.47 bus1=src\n"
+            "new line.l1 bus1=src bus2=b2 length=1 units=furlong\n"
+        ),
         name="warning.dss",
         format="dss",
     )
@@ -357,7 +363,7 @@ def test_bmopf_containing_data_model_string_routes_to_bmopf(tmp_path):
     doc["bus"]["data_model"] = doc["bus"][next(iter(doc["bus"]))]
     p = tmp_path / "nested_marker.json"
     p.write_text(json.dumps(doc))
-    assert powerio.parse_file(p).kind == "mc_ac_opf_instance"
+    assert isinstance(powerio.parse(p).value, powerio.MulticonductorNetwork)
 
 
 def _split_case(tmp_path):
@@ -377,39 +383,13 @@ def _split_case(tmp_path):
     return root
 
 
-def test_include_root_admits_a_shared_sibling_include(tmp_path):
+def test_parse_confines_includes_to_the_case_directory(tmp_path):
     root = _split_case(tmp_path)
     deck = root / "feeder" / "f.dss"
-    confined = powerio.parse_file(deck)
+    confined = powerio.parse(deck)
     assert any(
         "escapes the case directory" in diagnostic.message
         for diagnostic in confined.diagnostics
     )
-    widened = powerio.parse_file(deck, include_root=root)
-    assert widened.diagnostics == []
-    assert widened.value.n_lines == 1
-
-
-def test_include_root_still_refuses_escapes_past_it(tmp_path):
-    root = _split_case(tmp_path)
-    (tmp_path / "secret.dss").write_text("New Line.leaked bus1=x bus2=y\n")
-    deck = root / "feeder" / "f.dss"
-    deck.write_text(
-        deck.read_text().replace("../shared/linecodes.dss", "../../secret.dss")
-    )
-    module = powerio.parse_file(deck, include_root=root)
-    assert any(
-        "escapes the include root" in diagnostic.message
-        for diagnostic in module.diagnostics
-    )
-
-
-def test_case_file_outside_the_include_root_is_refused(tmp_path):
-    root = _split_case(tmp_path)
-    elsewhere = tmp_path / "elsewhere"
-    elsewhere.mkdir()
-    (elsewhere / "f.dss").write_text("New Circuit.out\n")
-    with pytest.raises(
-        powerio.PowerIOError, match="outside the requested acquisition root"
-    ):
-        _parse_file_value(elsewhere / "f.dss", include_root=root)
+    with pytest.raises(TypeError, match="unexpected keyword"):
+        powerio.parse(deck, include_root=root)

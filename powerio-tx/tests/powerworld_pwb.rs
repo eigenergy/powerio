@@ -9,7 +9,7 @@ use helpers::*;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use powerio_tx::format::powerworld::parse_pwb;
+use powerio_tx::format::powerworld::__parse_pwb;
 use powerio_tx::network::BalancedNetwork;
 
 mod common;
@@ -17,7 +17,7 @@ use common::{activsg2000_fetched as fetched, branch_keys, powerworld_vendored as
 
 fn read_pwb(path: &Path) -> BalancedNetwork {
     let bytes = std::fs::read(path).unwrap();
-    parse_pwb(&bytes, path.file_stem().and_then(|s| s.to_str())).unwrap()
+    __parse_pwb(&bytes, path.file_stem().and_then(|s| s.to_str())).unwrap()
 }
 
 /// `parse_bytes` is the in-memory door to this reader. `parse_str` cannot be:
@@ -600,7 +600,7 @@ fn activsg2000_v19_pwb_matches_the_published_case() {
 /// Loud rejection of files that are not the validated layout.
 #[test]
 fn rejects_unrecognized_binaries() {
-    let err = parse_pwb(b"not a pwb at all", None).unwrap_err();
+    let err = __parse_pwb(b"not a pwb at all", None).unwrap_err();
     assert!(err.to_string().contains("header magic mismatch"), "{err}");
 
     // Right magic, garbage body.
@@ -609,7 +609,7 @@ fn rejects_unrecognized_binaries() {
     fake.extend_from_slice(&425u64.to_le_bytes());
     fake.extend_from_slice(&20u64.to_le_bytes());
     fake.extend_from_slice(&[0u8; 4096]);
-    let err = parse_pwb(&fake, None).unwrap_err();
+    let err = __parse_pwb(&fake, None).unwrap_err();
     // All-zero body: no bus record run, so the vintage gate turns it away.
     assert!(
         err.to_string()
@@ -626,7 +626,7 @@ fn rejects_unrecognized_binaries() {
         garbage.extend_from_slice(&v.to_le_bytes());
         garbage.extend_from_slice(&20u64.to_le_bytes());
         garbage.extend_from_slice(&[0u8; 4096]);
-        let err = parse_pwb(&garbage, None).unwrap_err();
+        let err = __parse_pwb(&garbage, None).unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("unsupported PowerWorld .pwb vintage")
@@ -653,7 +653,7 @@ fn truncations_do_not_panic() {
         bytes.len() / 2,
         bytes.len() - 1,
     ] {
-        let outcome = std::panic::catch_unwind(|| parse_pwb(&bytes[..len], Some("truncated")));
+        let outcome = std::panic::catch_unwind(|| __parse_pwb(&bytes[..len], Some("truncated")));
         assert!(outcome.is_ok(), "truncation at {len} bytes panicked");
     }
 }

@@ -23,7 +23,7 @@ use crate::matrix::laplacian::{Grounding, calc_weighted_laplacian, ground_with};
 use crate::matrix::triplet::CooBuilder;
 use crate::matrix::{
     BranchSusceptanceFormula, BuildOptions, IncidenceParts, build_incidence,
-    calc_branch_flow_matrix,
+    calc_solver_branch_flow_matrix,
 };
 use crate::{Error, Result};
 
@@ -518,7 +518,7 @@ fn ptdf_dense_with_path(
     // up front names exactly which Minv rows the scatter reads, so the
     // factored path below produces each of those rows once by a back-solve
     // instead of materializing the whole inverse.
-    let flow = calc_branch_flow_matrix(&inc.a, &inc.b); // m × n
+    let flow = calc_solver_branch_flow_matrix(&inc.a, &inc.b); // m × n
     let mut rows_used: Vec<Vec<(usize, f64)>> = vec![Vec::new(); nr];
     for (&w, (l, c)) in flow.iter() {
         // Minv row at a slack is 0.

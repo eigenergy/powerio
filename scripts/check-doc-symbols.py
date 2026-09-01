@@ -3,8 +3,8 @@
 exist on the surfaces that ship. A rendered page with a dead symbol fails.
 
 Checked shapes:
-- C symbols (`pio_*`) in active pages exist in the installed header; history
-  pages (the ABI and migration set) may name removed ones.
+- C symbols (`pio_*`) in active pages exist in the installed header; the
+  1.0 beta migration inventory may name removed ones.
 - CLI invocations in shell fences use real subcommands.
 - Julia identifiers in julia fences that PowerIO.jl exports; needs POWERIO_JL
   naming a checkout, else skipped.
@@ -17,15 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs" / "src"
-HISTORY_PAGES = {
-    "abi-v5.md", "abi-v6.md", "capi-arrow.md", "migration.md", "migration-v0.10.md", "migration-v1.md",
-    "migration-v0.9.md", "migration-v0.7.md", "retired-names.md", "developer.md",
-}
-# Pages whose lower half narrates retired surfaces: everything above the
-# heading is live prose, checked like any other page.
-HISTORY_BELOW = {
-    "pio-json-schema.md": "## The 0.9 package",
-}
+HISTORY_PAGES = {"migration-v1.md"}
 
 def fail(page: Path, message: str) -> None:
     print(f"{page.relative_to(ROOT)}: {message}", file=sys.stderr)
@@ -80,8 +72,6 @@ PAGES = sorted(DOCS.glob("*.md")) + [ROOT / "README.md"]
 
 for page in PAGES:
     text = page.read_text()
-    if page.name in HISTORY_BELOW:
-        text = text.split(HISTORY_BELOW[page.name])[0]
     is_history = page.name in HISTORY_PAGES
     # C symbols anywhere in the page's prose or code. A family shorthand
     # (`pio_dc_data_*`) is prose, not a symbol; the star and the trailing

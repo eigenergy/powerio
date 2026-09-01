@@ -171,6 +171,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> TextEmission {
     // v34+ wraps the global parameters in a system-wide data section, names
     // branches and carries 12 ratings, and adds load DG / load-type columns.
     let modern = rev >= 34;
+    let transformer_zcod = if rev >= 35 { ", 0" } else { "" };
     let mut warnings = Diagnostics::new();
     let mut nonfinite = false;
     let mut sanitized_quoted = 0usize;
@@ -367,7 +368,13 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> TextEmission {
 
     let mut gen_ids: BTreeMap<BusId, u32> = BTreeMap::new();
     for g in net.generators() {
-        let id = positional_id(g.bus, &mut gen_ids);
+        let positional = positional_id(g.bus, &mut gen_ids);
+        let raw_id =
+            detailed_source_id(net, "generator", g.uid.as_deref()).unwrap_or(positional.as_str());
+        let id = sanitize_quoted(raw_id, NAME_FORBIDDEN, ' ');
+        if matches!(id, std::borrow::Cow::Owned(_)) {
+            sanitized_quoted += 1;
+        }
         // IREG (field 7): the remote regulated bus, or 0 for own-terminal control.
         let ireg = g.regulated_bus.map_or(0, |b| b.0);
         // v35 inserts NREG after IREG and BASLOD after PB; v34 keeps the v33 layout.
@@ -394,6 +401,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> TextEmission {
     // Parallel branches between the same bus pair get distinct circuit ids (PSS/E
     // keys a branch on (I, J, CKT)); a captured source CKT wins.
     let mut branch_ids: BTreeMap<(BusId, BusId), BTreeSet<String>> = BTreeMap::new();
+    let mut transformer_ids: BTreeMap<(BusId, BusId), BTreeSet<String>> = BTreeMap::new();
     for (branch_index, br) in net
         .branches()
         .iter()
@@ -463,7 +471,21 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> TextEmission {
             );
         }
     }
-    let _ = writeln!(s, "0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA");
+    if rev >= 35 {
+        // Revision 35 inserts system switching device data between branch and
+        // transformer data. The neutral model does not yet expose those
+        // records, so emit the required empty section.
+        let _ = writeln!(
+            s,
+            "0 / END OF BRANCH DATA, BEGIN SYSTEM SWITCHING DEVICE DATA"
+        );
+        let _ = writeln!(
+            s,
+            "0 / END OF SYSTEM SWITCHING DEVICE DATA, BEGIN TRANSFORMER DATA"
+        );
+    } else {
+        let _ = writeln!(s, "0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA");
+    }
 
     for (branch_index, br) in net
         .branches()
@@ -471,6 +493,17 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> TextEmission {
         .enumerate()
         .filter(|(_, b)| b.is_transformer())
     {
+        let source_id = br
+            .extras
+            .get("id")
+            .and_then(Value::as_str)
+            .or_else(|| detailed_source_id(net, "transformer", br.uid.as_deref()));
+        let transformer_id = quoted_circuit_id(
+            source_id,
+            (br.from, br.to),
+            &mut transformer_ids,
+            &mut sanitized_quoted,
+        );
         // 2-winding, 4-line record. CW=1 (turns ratio p.u.), CZ=1 (Z on system
         // base). Record 1 carries the full owner block (O1..O4,F1..F4) and the
         // VECGRP string: PSS/E v33 readers count a 2-winding transformer as a
@@ -481,7 +514,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> TextEmission {
         let charging = br.calc_terminal_charging();
         let _ = writeln!(
             s,
-            "{}, {}, 0, '1', 1, 1, 1, {}, {}, 2, '            ', {}, 1, 1, 0, 1, 0, 1, 0, 1, '            '",
+            "{}, {}, 0, '{transformer_id}', 1, 1, 1, {}, {}, 2, '            ', {}, 1, 1, 0, 1, 0, 1, 0, 1, '            '{transformer_zcod}",
             br.from,
             br.to,
             num(charging.calc_total_g()),
@@ -549,7 +582,22 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> TextEmission {
     // 3-winding transformers: a 5-line record. CW=1, CZ=1, CM=1 (same conventions
     // as the 2-winding record); line 2 carries the three pairwise impedances and
     // the star-point voltage, lines 3-5 the per-winding tap/angle/ratings.
+    let mut transformer_3w_ids: BTreeMap<(BusId, BusId, BusId), u32> = BTreeMap::new();
     for t in net.transformers_3w() {
+        let buses = (t.windings[0].bus, t.windings[1].bus, t.windings[2].bus);
+        let next_id = transformer_3w_ids.entry(buses).or_default();
+        *next_id += 1;
+        let positional = next_id.to_string();
+        let raw_id = t
+            .extras
+            .get("id")
+            .and_then(Value::as_str)
+            .or_else(|| detailed_source_id(net, "transformer", t.uid.as_deref()))
+            .unwrap_or(positional.as_str());
+        let transformer_id = sanitize_quoted(raw_id, NAME_FORBIDDEN, ' ');
+        if matches!(transformer_id, std::borrow::Cow::Owned(_)) {
+            sanitized_quoted += 1;
+        }
         let raw_name = t.name.as_deref().unwrap_or("");
         let name = sanitize_quoted(raw_name, NAME_FORBIDDEN, ' ');
         if matches!(name, std::borrow::Cow::Owned(_)) {
@@ -557,7 +605,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> TextEmission {
         }
         let _ = writeln!(
             s,
-            "{}, {}, {}, '1', 1, 1, 1, {}, {}, 2, '{:<12}', {}, 1, 1, 0, 1, 0, 1, 0, 1, '            '",
+            "{}, {}, {}, '{transformer_id}', 1, 1, 1, {}, {}, 2, '{:<12}', {}, 1, 1, 0, 1, 0, 1, 0, 1, '            '{transformer_zcod}",
             t.windings[0].bus,
             t.windings[1].bus,
             t.windings[2].bus,
@@ -698,6 +746,9 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> TextEmission {
         let Some(c) = sh.control.as_ref() else {
             continue;
         };
+        let modsw = extra_i64(&sh.extras, "psse_modsw")
+            .filter(|raw| modsw_to_mode(*raw) == c.mode)
+            .unwrap_or_else(|| mode_to_modsw(c.mode));
         let swrem = c.control_bus.map_or(0, |b| b.0);
         let mut blocks = String::new();
         for blk in &c.blocks {
@@ -715,7 +766,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> TextEmission {
                 s,
                 "{}, '{id}', {}, 0, {}, {}, {}, {swrem}, 0, {}, '', {}{blocks}",
                 sh.bus,
-                mode_to_modsw(c.mode),
+                modsw,
                 i32::from(sh.in_service),
                 num(c.vhigh),
                 num(c.vlow),
@@ -727,7 +778,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> TextEmission {
                 s,
                 "{}, {}, 0, {}, {}, {}, {swrem}, {}, '', {}{blocks}",
                 sh.bus,
-                mode_to_modsw(c.mode),
+                modsw,
                 i32::from(sh.in_service),
                 num(c.vhigh),
                 num(c.vlow),
@@ -736,8 +787,25 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> TextEmission {
             );
         }
     }
-    for line in &EMPTY_SECTIONS[10..] {
+    for line in &EMPTY_SECTIONS[10..12] {
         let _ = writeln!(s, "{line}");
+    }
+    if rev >= 35 {
+        let _ = writeln!(
+            s,
+            "0 / END OF INDUCTION MACHINE DATA, BEGIN SUBSTATION DATA"
+        );
+        match super::rawx::write_raw_substation_data(net) {
+            Ok(Some(records)) => s.push_str(&records),
+            Ok(None) => {}
+            Err(error) => warnings.push(
+                &F.field_dropped,
+                format!("detailed connectivity dropped from PSS/E revision 35 output: {error}"),
+            ),
+        }
+        let _ = writeln!(s, "0 / END OF SUBSTATION DATA");
+    } else {
+        let _ = writeln!(s, "{}", EMPTY_SECTIONS[12]);
     }
     let _ = writeln!(s, "Q");
 
@@ -943,6 +1011,25 @@ fn dc_states_beyond_record(d: &Hvdc) -> bool {
         || d.loss1 != 0.0
 }
 
+fn detailed_source_id<'a>(
+    net: &'a BalancedNetwork,
+    component_type: &str,
+    uid: Option<&str>,
+) -> Option<&'a str> {
+    let uid = uid?;
+    net.detailed_connectivity()
+        .as_deref()?
+        .component_metadata
+        .iter()
+        .find(|metadata| {
+            metadata.component.component_type() == component_type
+                && metadata.component.local_id() == uid
+        })?
+        .properties
+        .get("psse_eqid")
+        .map(String::as_str)
+}
+
 /// The next positional circuit id for `bus` (for elements with no extras to carry
 /// a captured id, such as generators).
 fn positional_id(bus: BusId, counters: &mut BTreeMap<BusId, u32>) -> String {
@@ -1092,7 +1179,7 @@ pub(crate) fn parse_psse_source(
             // SWITCHED SHUNT DATA"); read that rather than counting, so the many
             // unmodeled sections between transformers and switched shunts don't
             // throw off the position.
-            let next_section = section_after_marker(line);
+            let next_section = section_after_marker(line, raw_rev);
             skipped_section_name =
                 introduced_section_name(line).filter(|_| matches!(next_section, Section::Skip));
             section = next_section;
@@ -1131,20 +1218,6 @@ pub(crate) fn parse_psse_source(
                 let l3 = next_continuation_line(&mut lines, "transformer", "winding data line 1")?;
                 let l4 = next_continuation_line(&mut lines, "transformer", "winding data line 2")?;
                 if two_winding {
-                    // MAG2 maps to the branch charging b only at CM = 1; a CM != 1
-                    // record states magnetizing data in units this reader does not
-                    // convert, so read_transformer drops it. Name the loss.
-                    if int_at(&f, 6, 1)? != 1 && num_at(&f, 8, 0.0)? != 0.0 {
-                        warnings.push(
-                            &codes::READ_PSSE_FIELD_DROPPED,
-                            format!(
-                                "transformer {}-{}: magnetizing data with CM != 1 dropped \
-                             (only CM = 1 p.u. susceptance is read as branch charging)",
-                                f.first().map_or("?", Cow::as_ref),
-                                f.get(1).map_or("?", Cow::as_ref),
-                            ),
-                        );
-                    }
                     branches.push(read_transformer(
                         &f,
                         &fields(l2),
@@ -1195,6 +1268,9 @@ pub(crate) fn parse_psse_source(
         }
     }
 
+    if raw_rev >= 35 {
+        unmodeled_sections.retain(|name, _| !name.starts_with("SUBSTATION"));
+    }
     warn_unmodeled_sections(unmodeled_sections, warnings);
 
     let mut net = BalancedNetwork::from_tables(BalancedNetworkTables {
@@ -1202,9 +1278,12 @@ pub(crate) fn parse_psse_source(
         base_mva,
         base_frequency,
         geo: None,
+        case_metadata: crate::network::CaseMetadata::default(),
+        detailed_connectivity: None,
         buses: buses.into(),
         loads: loads.into(),
         shunts: shunts.into(),
+        static_var_compensators: Vec::new().into(),
         branches: branches.into(),
         switches: Vec::new().into(),
         generators: generators.into(),
@@ -1215,6 +1294,9 @@ pub(crate) fn parse_psse_source(
         solver: (!solver.is_empty()).then_some(solver),
         source_format: SourceFormat::Psse,
     });
+    if raw_rev >= 35 {
+        super::rawx::read_raw_detailed_connectivity(source, &mut net, warnings)?;
+    }
     drop_stale_control_pointers(&mut net, warnings);
     net.check_references(FMT)?;
     Ok(net)
@@ -1238,19 +1320,47 @@ enum Section {
 /// The section a terminator introduces. Sections we don't model map to
 /// [`Section::Skip`]. Case-insensitive on the marker text, so the number of
 /// skipped sections between the modeled ones doesn't matter.
-fn section_after_marker(line: &str) -> Section {
-    match introduced_section_name(line).as_deref() {
-        Some("BUS") => Section::Bus,
-        Some("LOAD") => Section::Load,
-        Some("FIXED SHUNT") => Section::FixedShunt,
-        Some("SWITCHED SHUNT") => Section::SwitchedShunt,
-        Some("GENERATOR" | "GEN") => Section::Generator,
-        Some("BRANCH") => Section::Branch,
-        Some("TRANSFORMER") => Section::Transformer,
-        Some("TWO-TERMINAL DC" | "TWO TERMINAL DC" | "2-TERMINAL DC" | "2 TERMINAL DC") => {
+fn section_after_marker(line: &str, rev: u32) -> Section {
+    if let Some(name) = introduced_section_name(line) {
+        return section_from_name(&name);
+    }
+
+    // Older RAW writers commonly label only the section that ended. Follow
+    // the published record order instead of discarding every later section.
+    match ended_section_name(line).as_deref() {
+        Some("SYSTEM-WIDE") => Section::Bus,
+        Some("BUS") => Section::Load,
+        Some("LOAD") => Section::FixedShunt,
+        Some("FIXED SHUNT" | "FIXED BUS SHUNT") => Section::Generator,
+        Some("GENERATOR" | "GEN") => Section::Branch,
+        Some("BRANCH" | "NON TRANSFORMER BRANCH" | "NON-TRANSFORMER BRANCH") => {
+            if rev >= 35 {
+                Section::Skip
+            } else {
+                Section::Transformer
+            }
+        }
+        Some("SYSTEM SWITCHING DEVICE") => Section::Transformer,
+        Some("TRANSFORMER" | "TRANSFORMER BRANCH") => Section::Area,
+        Some("AREA" | "AREA INTERCHANGE") => Section::TwoTerminalDc,
+        Some("FACTS DEVICE" | "FACTS CONTROL DEVICE") => Section::SwitchedShunt,
+        _ => Section::Skip,
+    }
+}
+
+fn section_from_name(name: &str) -> Section {
+    match name {
+        "BUS" => Section::Bus,
+        "LOAD" => Section::Load,
+        "FIXED SHUNT" => Section::FixedShunt,
+        "SWITCHED SHUNT" => Section::SwitchedShunt,
+        "GENERATOR" | "GEN" => Section::Generator,
+        "BRANCH" => Section::Branch,
+        "TRANSFORMER" => Section::Transformer,
+        "TWO-TERMINAL DC" | "TWO TERMINAL DC" | "2-TERMINAL DC" | "2 TERMINAL DC" => {
             Section::TwoTerminalDc
         }
-        Some("AREA" | "AREA INTERCHANGE") => Section::Area,
+        "AREA" | "AREA INTERCHANGE" => Section::Area,
         _ => Section::Skip,
     }
 }
@@ -1361,6 +1471,64 @@ fn convert_transformer_impedance(
     }
 }
 
+#[expect(clippy::too_many_arguments)]
+fn convert_transformer_magnetizing_admittance(
+    mag_g: f64,
+    mag_b: f64,
+    system_base: f64,
+    winding_base: f64,
+    bus_base_kv: f64,
+    nominal_kv: f64,
+    cm: i64,
+    label: &str,
+    warnings: &mut Diagnostics,
+) -> (f64, f64) {
+    match cm {
+        // MAG1 and MAG2 are conductance and susceptance in p.u. on the system
+        // MVA base and winding-1 bus voltage base.
+        1 => (mag_g, mag_b),
+        // MAG1 is no-load loss in watts and MAG2 is exciting current in p.u.
+        // on the winding MVA base. Convert both to the system base, referred to
+        // the winding-1 bus voltage base. This matches PSS/E and PowSybl's
+        // TransformerConverter.
+        2 => {
+            let system_base_ok = system_base.is_finite() && system_base > 0.0;
+            let winding_base_ok = winding_base.is_finite() && winding_base > 0.0;
+            let bus_base_ok = bus_base_kv.is_finite() && bus_base_kv > 0.0;
+            let nominal = if nominal_kv.is_finite() && nominal_kv > 0.0 {
+                nominal_kv
+            } else {
+                bus_base_kv
+            };
+            if !(system_base_ok && winding_base_ok && bus_base_ok && nominal > 0.0) {
+                warnings.push(&codes::READ_PSSE_VALUE_SUBSTITUTED, format!(
+                    "PSS/E transformer {label}: CM=2 magnetizing data needs positive system, winding, bus-voltage, and nominal-voltage bases; read MAG1/MAG2 as p.u. admittance"
+                ));
+                return (mag_g, mag_b);
+            }
+
+            let voltage_scale = (bus_base_kv / nominal).powi(2);
+            let g = mag_g / (1_000_000.0 * system_base) * voltage_scale;
+            let y = mag_b * (winding_base / system_base) * voltage_scale;
+            let b_squared = y.mul_add(y, -(g * g));
+            if b_squared >= 0.0 {
+                (g, -b_squared.sqrt())
+            } else {
+                warnings.push(&codes::READ_PSSE_VALUE_SUBSTITUTED, format!(
+                    "PSS/E transformer {label}: CM=2 exciting current magnitude {y} is below conductance {g}; set magnetizing susceptance to 0"
+                ));
+                (g, 0.0)
+            }
+        }
+        other => {
+            warnings.push(&codes::READ_PSSE_VALUE_UNSUPPORTED, format!(
+                "PSS/E transformer {label}: unsupported CM={other}; read MAG1/MAG2 as p.u. admittance"
+            ));
+            (mag_g, mag_b)
+        }
+    }
+}
+
 fn default_windv(cw: i64, bus: BusId, bus_base_kv: &BTreeMap<BusId, f64>) -> f64 {
     if cw == 2 {
         bus_base_kv
@@ -1455,6 +1623,15 @@ fn introduced_section_name(line: &str) -> Option<String> {
         .map(|idx| (idx, "BEGIN ".len()))
         .or_else(|| u.find("START OF ").map(|idx| (idx, "START OF ".len())))?;
     let start = start + prefix_len;
+    let rest = &u[start..];
+    let end = rest.find(" DATA")?;
+    Some(rest[..end].trim().to_string())
+}
+
+/// The upper-cased section name in an `END OF <name> DATA` marker.
+fn ended_section_name(line: &str) -> Option<String> {
+    let u = line.to_ascii_uppercase();
+    let start = u.find("END OF ")? + "END OF ".len();
     let rest = &u[start..];
     let end = rest.find(" DATA")?;
     Some(rest[..end].trim().to_string())
@@ -1602,15 +1779,16 @@ fn strip_inline_comment(line: &str) -> &str {
 }
 
 /// Split a PSS/E record into trimmed, unquoted fields, dropping a trailing
-/// `/comment`. Comma-delimited records keep empty fields (column position is
-/// significant — a blank quoted name must not shift later columns); records with
-/// no commas fall back to whitespace splitting.
+/// `/comment`. Commas keep empty fields (column position is significant — a
+/// blank quoted name must not shift later columns), while whitespace also
+/// separates fields outside quotes. PSS/E readers accept both delimiters in one
+/// record, so `1 2, 3` is the same three fields as `1, 2, 3`.
 ///
 /// Both paths trim after unquoting: PSS/E string columns are fixed width and
 /// blank padded, so `' 1'` and `'1 '` name one device and `'BUS A       '` is
 /// the name `BUS A`. The two delimiter styles used to disagree here, and the
 /// same record body tokenized differently depending on which a producer chose.
-fn fields(line: &str) -> Vec<Cow<'_, str>> {
+pub(super) fn fields(line: &str) -> Vec<Cow<'_, str>> {
     let code = strip_inline_comment(line);
     let comma_delimited = code.contains(',');
     let mut out = Vec::with_capacity(if comma_delimited {
@@ -1628,6 +1806,7 @@ fn fields(line: &str) -> Vec<Cow<'_, str>> {
     // A quoted span opened this field, so `''` holds its column instead of
     // vanishing and shifting every later one, as it does under commas.
     let mut was_quoted = false;
+    let mut after_comma = false;
     for (i, c) in code.char_indices() {
         match c {
             '\'' => {
@@ -1638,16 +1817,23 @@ fn fields(line: &str) -> Vec<Cow<'_, str>> {
                 quoted = !quoted;
                 was_quoted = true;
             }
-            ',' if !quoted && comma_delimited => {
-                push_field(&mut out, owned.take(), &code[segment_start..i]);
-                field_start = i + 1;
-                segment_start = field_start;
-                was_quoted = false;
-            }
-            c if c.is_whitespace() && !quoted && !comma_delimited => {
+            ',' if !quoted => {
                 let content = owned.is_some() || !code[field_start..i].trim().is_empty();
                 if content || was_quoted {
                     push_field(&mut out, owned.take(), &code[segment_start..i]);
+                } else if after_comma {
+                    out.push(Cow::Borrowed(""));
+                }
+                field_start = i + 1;
+                segment_start = field_start;
+                was_quoted = false;
+                after_comma = true;
+            }
+            c if c.is_whitespace() && !quoted => {
+                let content = owned.is_some() || !code[field_start..i].trim().is_empty();
+                if content || was_quoted {
+                    push_field(&mut out, owned.take(), &code[segment_start..i]);
+                    after_comma = false;
                 }
                 field_start = i + c.len_utf8();
                 segment_start = field_start;
@@ -1657,8 +1843,10 @@ fn fields(line: &str) -> Vec<Cow<'_, str>> {
         }
     }
     let content = owned.is_some() || !code[field_start..].trim().is_empty();
-    if comma_delimited || was_quoted || content {
+    if was_quoted || content {
         push_field(&mut out, owned.take(), &code[segment_start..]);
+    } else if after_comma {
+        out.push(Cow::Borrowed(""));
     }
     out
 }
@@ -1906,6 +2094,7 @@ fn read_shunt(f: &[Cow<'_, str>]) -> Result<Shunt> {
         g: num_at(f, 3, 0.0)?,
         b: num_at(f, 4, 0.0)?,
         in_service: on_at(f, 2, true)?,
+        section_count: None,
         control: None,
         uid: None,
         extras: device_extras(f, 1),
@@ -1922,6 +2111,7 @@ fn read_switched_shunt(f: &[Cow<'_, str>], rev: u32) -> Result<Shunt> {
     let o = usize::from(rev >= 35);
     let o2 = 2 * o;
     let bus = id_at(f, 0, 0)?;
+    let modsw = int_at(f, 1 + o, 1)?;
     let swrem = id_at(f, 6 + o, 0)?;
     // Step blocks follow BINIT; stop at the first empty (padding) block or the
     // end of the record. The v35 per-block status Si leads each triple; the
@@ -1937,31 +2127,42 @@ fn read_switched_shunt(f: &[Cow<'_, str>], rev: u32) -> Result<Shunt> {
         }
         blocks.push(ShuntBlock {
             steps: steps.clamp(0, i64::from(u32::MAX)) as u32,
+            g: 0.0,
             b,
         });
         i += stride;
     }
+    let mode = modsw_to_mode(modsw);
     let control = SwitchedShuntControl {
-        mode: modsw_to_mode(int_at(f, 1 + o, 1)?),
+        mode,
         vhigh: num_at(f, 4 + o, 0.0)?,
         vlow: num_at(f, 5 + o, 0.0)?,
         control_bus: (swrem != 0 && swrem != bus).then_some(BusId(swrem)),
+        regulating_terminal: None,
         rmpct: num_at(f, 7 + o2, 100.0)?,
         blocks,
     };
+    let mut extras = if rev >= 35 {
+        device_extras(f, 1)
+    } else {
+        Extras::new()
+    };
+    // PSS/E defines additional discrete control codes beyond the neutral
+    // Discrete mode. Keep the source code when the typed mode is unchanged so
+    // its validation rules survive fresh PSS/E emission.
+    if modsw != mode_to_modsw(mode) {
+        extras.insert("psse_modsw".into(), Value::from(modsw));
+    }
     Ok(Shunt {
         bus: BusId(bus),
         g: 0.0,
         b: num_at(f, 9 + o2, 0.0)?,
         in_service: on_at(f, 3 + o, true)?,
+        section_count: None,
         control: Some(control),
         uid: None,
         // Keep the v35 shunt ID so it survives a round trip.
-        extras: if rev >= 35 {
-            device_extras(f, 1)
-        } else {
-            Extras::new()
-        },
+        extras,
     })
 }
 
@@ -1996,6 +2197,8 @@ fn read_area(f: &[Cow<'_, str>]) -> Result<Area> {
             .get(4)
             .filter(|n| !n.trim().is_empty())
             .map(|n| n.trim().to_string()),
+        uid: None,
+        area_type: Some("ControlArea".to_owned()),
     })
 }
 
@@ -2022,6 +2225,7 @@ fn read_gen(f: &[Cow<'_, str>], raw_rev: u32) -> Result<Generator> {
         cost: None,
         caps: Default::default(),
         regulated_bus: (ireg != 0 && ireg != bus).then_some(BusId(ireg)),
+        active_power_control: None,
         uid: None,
     })
 }
@@ -2127,16 +2331,18 @@ fn read_transformer(
             })
         })
         .transpose()?;
-    let mag_g = if int_at(l1, 6, 1)? == 1 {
-        num_at(l1, 7, 0.0)?
-    } else {
-        0.0
-    };
-    let mag_b = if int_at(l1, 6, 1)? == 1 {
-        num_at(l1, 8, 0.0)?
-    } else {
-        0.0
-    };
+    let bus_kv = bus_base_kv.get(&from).copied().unwrap_or(0.0);
+    let (mag_g, mag_b) = convert_transformer_magnetizing_admittance(
+        num_at(l1, 7, 0.0)?,
+        num_at(l1, 8, 0.0)?,
+        system_base,
+        sbase,
+        bus_kv,
+        num_at(l3, 1, bus_kv)?,
+        int_at(l1, 6, 1)?,
+        &label,
+        warnings,
+    );
     Ok(Branch {
         from,
         to,
@@ -2163,7 +2369,7 @@ fn read_transformer(
         solution: None,
         uid: None,
         route: None,
-        extras: Extras::new(),
+        extras: device_extras(l1, 3),
     })
 }
 
@@ -2264,13 +2470,26 @@ fn read_transformer_3w(
         };
         [winding(0, l3)?, winding(1, l4)?, winding(2, l5)?]
     };
+    let winding_base = num_at(l2, 2, system_base)?;
+    let bus_kv = bus_base_kv.get(&buses[0]).copied().unwrap_or(0.0);
+    let (mag_g, mag_b) = convert_transformer_magnetizing_admittance(
+        num_at(l1, 7, 0.0)?,
+        num_at(l1, 8, 0.0)?,
+        system_base,
+        winding_base,
+        bus_kv,
+        num_at(l3, 1, bus_kv)?,
+        int_at(l1, 6, 1)?,
+        &label,
+        warnings,
+    );
     Ok(Transformer3W {
         windings,
         z,
         star_vm: num_at(l2, 9, 1.0)?,
         star_va: num_at(l2, 10, 0.0)?,
-        mag_g: num_at(l1, 7, 0.0)?,
-        mag_b: num_at(l1, 8, 0.0)?,
+        mag_g,
+        mag_b,
         // STAT 0 = out of service; 1-4 mark which windings are in service. Treat
         // any nonzero status as the transformer being in service.
         in_service: int_at(l1, 11, 1)? != 0,
@@ -2279,7 +2498,7 @@ fn read_transformer_3w(
             .filter(|n| !n.is_empty())
             .map(|n| n.trim().to_string()),
         uid: None,
-        extras: Extras::new(),
+        extras: device_extras(l1, 3),
     })
 }
 
@@ -2438,6 +2657,11 @@ fn read_dc_line(
         qmaxt: 0.0,
         loss0: 0.0,
         loss1: 0.0,
+        resistance_ohm: None,
+        nominal_voltage_kv: None,
+        converters_mode: None,
+        converter1: None,
+        converter2: None,
         cost: None,
         uid: None,
         extras,
@@ -2663,6 +2887,12 @@ mod tests {
             vec!["1", "1", "BUS A", "2.5"]
         );
         assert_eq!(fields("1, 'O/H LINE', 2"), vec!["1", "O/H LINE", "2"]);
+        assert_eq!(fields("1 2, 3"), vec!["1", "2", "3"]);
+        let generator = fields(
+            "30,'1 ',250,83.211,800,-500,1.0475,0,100,0,1.00000    0.00000,0,1,1,100,9999.9,0,1,1",
+        );
+        assert_eq!(generator[16], "9999.9");
+        assert_eq!(generator[17], "0");
         assert_eq!(
             fields("1, '', 3"),
             vec!["1", "", "3"],
@@ -2848,6 +3078,19 @@ Q
         close(charging.g_to, 0.0);
         close(charging.b_to, 0.0);
         close(back.branches()[0].b, 0.02);
+
+        let rev35 = write_psse_rev(&net, 35).text;
+        assert!(rev35.contains(
+            "0 / END OF BRANCH DATA, BEGIN SYSTEM SWITCHING DEVICE DATA\n\
+             0 / END OF SYSTEM SWITCHING DEVICE DATA, BEGIN TRANSFORMER DATA"
+        ));
+        let main = rev35
+            .lines()
+            .find(|line| line.starts_with("1, 2, 0, '1'"))
+            .unwrap();
+        let main_fields = fields(main);
+        assert_eq!(main_fields.len(), 22, "rev35 transformer row: {main:?}");
+        assert_eq!(main_fields[21], "0", "ZCOD must be an integer");
     }
 
     #[test]
@@ -3458,6 +3701,33 @@ Q
     }
 
     #[test]
+    fn reads_whitespace_records_with_end_only_section_markers() {
+        let raw = r"0 100.00 33 0 0 60.00 / whitespace-delimited export
+CASE
+COMMENT
+1 'BUS 1' 230.0 3 1 1 1 1.0 0.0 1.1 0.9 1.1 0.9
+2 'BUS 2' 230.0 1 1 1 1 1.0 0.0 1.1 0.9 1.1 0.9
+0 / END OF BUS DATA
+2 'L1' 1 1 1 10.0 5.0 0 0 0 0 1 1 0
+0 / END OF LOAD DATA
+0 / END OF FIXED BUS SHUNT DATA
+1 'G1' 50.0 5.0 20.0 -10.0 1.0 0 100.0 0.0 1.0 0.0 0.0 1.0 1 100.0 80.0 10.0
+0 / END OF GENERATOR DATA
+1 2 '1' 0.01 0.05 0.001 100.0 90.0 80.0 0.0 0.0 0.0 0.0 1 1 0.0 1 1
+0 / END OF NON TRANSFORMER BRANCH DATA
+0 / END OF TRANSFORMER BRANCH DATA
+Q
+";
+
+        let net = parse_psse(raw).unwrap();
+
+        assert_eq!(net.buses().len(), 2);
+        assert_eq!(net.loads().len(), 1);
+        assert_eq!(net.generators().len(), 1);
+        assert_eq!(net.branches().len(), 1);
+    }
+
+    #[test]
     fn v33_long_branch_with_blank_ratea_keeps_v33_columns() {
         let raw = r"0, 100.00, 33, 0, 0, 60.00 / synthetic v33 export
 CASE
@@ -3608,6 +3878,42 @@ Q
     }
 
     #[test]
+    fn cm2_transformer_magnetizing_data_is_converted_and_round_trips() {
+        let raw = r"0, 100.00, 35, 0, 1, 60.00 / synthetic
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,'B1          ', 230.0,3,1,1,1,1.00000,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 138.0,1,1,1,1,1.00000,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+1, 2, 0, '1', 1, 1, 2, 100000, 0.2, 2, 'XF          ', 1, 1, 1, 0, 1, 0, 1, 0, 1, '            '
+0.01, 0.10, 50.0
+1.025, 230.0, 0.0, 100.0, 90.0, 80.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0
+1.0, 138.0
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+        let net = parse_psse(raw).unwrap();
+        let branch = &net.branches()[0];
+        let expected_g: f64 = 0.001;
+        let expected_b = -f64::sqrt(0.1_f64.powi(2) - expected_g.powi(2));
+        let charging = branch.calc_terminal_charging();
+        close(charging.g_fr, expected_g);
+        close(charging.b_fr, expected_b);
+
+        // The writer emits neutral p.u. admittance as CM=1, so conversion is
+        // not applied a second time on the next read.
+        let back = parse_psse(&write_psse_rev(&net, 35).text).unwrap();
+        let back_charging = back.branches()[0].calc_terminal_charging();
+        close(back_charging.g_fr, expected_g);
+        close(back_charging.b_fr, expected_b);
+    }
+
+    #[test]
     fn parallel_branches_round_trip_and_stay_distinct() {
         // Two circuits between buses 1 and 2: each keeps a distinct CKT so the
         // output is valid PSS/E rather than two colliding (I, J, '1') records.
@@ -3650,6 +3956,50 @@ Q
         assert_eq!(net2.branches().len(), 2);
         assert_eq!(ckt(&net2.branches()[0]).as_deref(), None);
         assert_eq!(ckt(&net2.branches()[1]).as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn parallel_transformers_preserve_distinct_circuit_ids() {
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / synthetic
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 138.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+1,2,0,'1 ',1,1,1,0,0,2,'XF1         ',1,1,1,0,1,0,1,0,1,'            '
+0.01,0.10,100.0
+1.0,0,0,100,90,80,0,0,1.1,0.9,1.1,0.9,33,0,0,0,0
+1.0,0
+1,2,0,'2 ',1,1,1,0,0,2,'XF2         ',1,1,1,0,1,0,1,0,1,'            '
+0.02,0.20,100.0
+1.0,0,0,100,90,80,0,0,1.1,0.9,1.1,0.9,33,0,0,0,0
+1.0,0
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+        let circuit_id = |branch: &Branch| {
+            branch
+                .extras
+                .get("id")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
+        };
+        let network = parse_psse(raw).unwrap();
+        assert_eq!(network.branches().len(), 2);
+        assert_eq!(circuit_id(&network.branches()[0]).as_deref(), None);
+        assert_eq!(circuit_id(&network.branches()[1]).as_deref(), Some("2"));
+
+        let output = write_psse(&network).text;
+        assert!(output.lines().any(|line| line.starts_with("1, 2, 0, '1',")));
+        assert!(output.lines().any(|line| line.starts_with("1, 2, 0, '2',")));
+        let reparsed = parse_psse(&output).unwrap();
+        assert_eq!(reparsed.branches().len(), 2);
+        assert_eq!(circuit_id(&reparsed.branches()[0]).as_deref(), None);
+        assert_eq!(circuit_id(&reparsed.branches()[1]).as_deref(), Some("2"));
     }
 
     #[test]
@@ -3773,6 +4123,49 @@ Q
         assert_eq!(c2.blocks.len(), 2);
         close(c2.blocks[0].b, 25.0);
         close(net2.shunts()[0].b, 19.0);
+    }
+
+    #[test]
+    fn fresh_emission_preserves_the_psse_switched_shunt_control_code() {
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+3,'B3          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+0 / END OF AREA DATA, BEGIN SWITCHED SHUNT DATA
+3, 3, 0, 1, 1.0, 0.0, 0, 100.0, '', 0.0, 1, 10.0
+0 / END OF SWITCHED SHUNT DATA, BEGIN GNE DEVICE DATA
+Q
+";
+        let net = parse_psse(raw).unwrap();
+        let shunt = &net.shunts()[0];
+        assert_eq!(
+            shunt.control.as_ref().unwrap().mode,
+            SwitchedShuntMode::Discrete
+        );
+        assert_eq!(extra_i64(&shunt.extras, "psse_modsw"), Some(3));
+
+        let text = write_psse(&net).text;
+        assert!(text.lines().any(|line| line.starts_with("3, 3, 0, 1,")));
+        let reparsed = parse_psse(&text).unwrap();
+        assert_eq!(
+            extra_i64(&reparsed.shunts()[0].extras, "psse_modsw"),
+            Some(3)
+        );
+
+        let mut changed = net;
+        changed.shunts_mut()[0].control.as_mut().unwrap().mode = SwitchedShuntMode::Continuous;
+        let changed_text = write_psse(&changed).text;
+        assert!(
+            changed_text
+                .lines()
+                .any(|line| line.starts_with("3, 1, 0, 1,"))
+        );
     }
 
     #[test]
@@ -4426,6 +4819,15 @@ Q
         close(t2.windings[2].tap, 0.95);
         close(t2.star_va, -1.5);
         assert_eq!(t2.name.as_deref(), Some("T3W"));
+
+        let rev35 = write_psse_rev(&net, 35).text;
+        let main = rev35
+            .lines()
+            .find(|line| line.starts_with("1, 2, 3, '1'"))
+            .unwrap();
+        let main_fields = fields(main);
+        assert_eq!(main_fields.len(), 22, "rev35 transformer row: {main:?}");
+        assert_eq!(main_fields[21], "0", "ZCOD must be an integer");
     }
 
     #[test]
@@ -4492,7 +4894,8 @@ COMMENT
 0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
 Q
 ";
-        let source = powerio_core::Source::from_bytes("case.raw", raw.as_bytes().to_vec()).unwrap();
+        let source =
+            powerio_core::Source::from_memory("case.raw", raw.as_bytes().to_vec()).unwrap();
         let module =
             crate::format::parse(source.with_format(powerio_core::FormatId::new("psse").unwrap()))
                 .unwrap();
@@ -4536,6 +4939,56 @@ Q
             "an unmodeled substation section must be reported, got {:?}",
             parsed.render_diagnostics()
         );
+    }
+
+    #[test]
+    fn revision_35_substation_connectivity_survives_fresh_emission() {
+        let raw = "0, 100.00, 35, 0, 1, 60.00 / x
+CASE
+COMMENT
+1,'B1',230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'B2',230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+1,'G1',10,0,10,-10,1,0,0,100,0,1,0,0,1,1,100,20,0,0,1,1
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+1,2,'L1',0.01,0.1,0.0,100,100,100,0,0,0,0,1
+0 / END OF BRANCH DATA, BEGIN SYSTEM SWITCHING DEVICE DATA
+0 / END OF SYSTEM SWITCHING DEVICE DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+0 / END OF AREA DATA, BEGIN SWITCHED SHUNT DATA
+0 / END OF SWITCHED SHUNT DATA, BEGIN INDUCTION MACHINE DATA
+0 / END OF INDUCTION MACHINE DATA, BEGIN SUBSTATION DATA
+1,'SUB',0,0,0.1
+1,'GEN',1,1,1,0
+2,'LINE',1,1,1,0
+3,'BUSBAR',1,1,1,0
+0 / END OF SUBSTATION NODE DATA, BEGIN SUBSTATION SWITCHING DEVICE DATA
+1,3,'S1','BREAKER',2,1,1,0,0,0,0
+0 / END OF SUBSTATION SWITCHING DEVICE DATA, BEGIN SUBSTATION EQUIPMENT TERMINAL DATA
+1,1,'M','G1'
+1,2,'B',2,'L1'
+0 / END OF SUBSTATION EQUIPMENT TERMINAL DATA
+0 / END OF SUBSTATION DATA
+Q
+";
+        let parsed = parse_psse(raw).unwrap();
+        let detailed = parsed.detailed_connectivity().as_deref().unwrap();
+        assert_eq!(detailed.substations.len(), 1);
+        assert_eq!(detailed.connectivity_nodes.len(), 3);
+        assert_eq!(detailed.switches.len(), 1);
+        assert_eq!(detailed.busbar_sections.len(), 1);
+
+        let emitted = write_psse_rev(&parsed, 35).text;
+        assert!(emitted.contains("1, 'G1',"));
+        assert!(emitted.contains("1, 2, 'L1',"));
+        let reparsed = parse_psse(&emitted).unwrap();
+        let detailed = reparsed.detailed_connectivity().as_deref().unwrap();
+        assert_eq!(detailed.substations.len(), 1);
+        assert_eq!(detailed.connectivity_nodes.len(), 3);
+        assert_eq!(detailed.switches.len(), 1);
+        assert_eq!(detailed.busbar_sections.len(), 1);
     }
 
     #[test]

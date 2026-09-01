@@ -155,6 +155,13 @@ impl BalancedNetwork {
             .filter(|s| in_scope.contains(&s.bus))
             .cloned()
             .collect();
+        let static_var_compensators = self
+            .static_var_compensators()
+            .iter()
+            .filter(|svc| in_scope.contains(&svc.bus))
+            .cloned()
+            .collect::<Vec<_>>()
+            .into();
         let mut generators: Vec<Generator> = self
             .generators()
             .iter()
@@ -241,9 +248,12 @@ impl BalancedNetwork {
             base_mva: self.base_mva(),
             base_frequency: self.base_frequency(),
             geo: self.geo().clone(),
+            case_metadata: self.case_metadata().clone(),
+            detailed_connectivity: self.detailed_connectivity().clone(),
             buses: buses.into(),
             loads,
             shunts: shunts.into(),
+            static_var_compensators,
             branches: branches.into(),
             switches,
             generators: generators.into(),
@@ -287,6 +297,9 @@ impl BalancedNetwork {
             if let Some(cb) = s.control.as_mut().and_then(|c| c.control_bus.as_mut()) {
                 remap(cb);
             }
+        }
+        for svc in self.static_var_compensators_mut() {
+            remap(&mut svc.bus);
         }
         for g in self.generators_mut() {
             remap(&mut g.bus);
@@ -419,6 +432,10 @@ impl BalancedNetwork {
         if self.loads().iter().any(|l| l.bus == m)
             || self.generators().iter().any(|g| g.bus == m)
             || self.shunts().iter().any(|s| s.bus == m)
+            || self
+                .static_var_compensators()
+                .iter()
+                .any(|svc| svc.bus == m)
             || self.storage().iter().any(|s| s.bus == m)
             || self.hvdc().iter().any(|d| d.from == m || d.to == m)
         {
@@ -674,6 +691,7 @@ mod tests {
             cost: None,
             caps: Default::default(),
             regulated_bus: Some(BusId(regulated)),
+            active_power_control: None,
             uid: None,
         }
     }
@@ -707,6 +725,8 @@ mod tests {
             net_interchange: 0.0,
             tolerance: 0.0,
             name: None,
+            uid: None,
+            area_type: None,
         });
         net.merge_bus(BusId(2), BusId(3)); // bus 3 merges into bus 2
         assert_eq!(

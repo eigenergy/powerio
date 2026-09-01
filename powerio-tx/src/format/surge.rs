@@ -564,6 +564,8 @@ pub(crate) fn parse_surge_source(
         base_mva: f_map_or(network, "base_mva", 100.0)?,
         base_frequency: f_map_or(network, "freq_hz", crate::network::DEFAULT_BASE_FREQUENCY)?,
         geo: None,
+        case_metadata: crate::network::CaseMetadata::default(),
+        detailed_connectivity: None,
         buses: buses.into(),
         loads: array_field(network, "loads", false)?
             .into_iter()
@@ -571,6 +573,7 @@ pub(crate) fn parse_surge_source(
             .collect::<Result<Vec<_>>>()?
             .into(),
         shunts: shunts.into(),
+        static_var_compensators: Vec::new().into(),
         branches: array_field(network, "branches", false)?
             .into_iter()
             .map(read_branch)
@@ -634,6 +637,7 @@ fn read_bus(value: &Value) -> Result<(Bus, Option<Shunt>)> {
             g,
             b,
             in_service: true,
+            section_count: None,
             control: None,
             uid: None,
             extras: Extras::new(),
@@ -729,6 +733,7 @@ fn read_fixed_shunt(value: &Value) -> Result<Shunt> {
         g: f_map_alias_or(obj, &["g_mw", "conductance_mw"], 0.0)?,
         b: f_map_alias_or(obj, &["b_mvar", "susceptance_mvar"], 0.0)?,
         in_service: bool_map_or(obj, "in_service", true)?,
+        section_count: None,
         control: None,
         uid: None,
         extras: Extras::new(),
@@ -869,6 +874,7 @@ fn read_generator(value: &Value) -> Result<(Option<Generator>, Option<Storage>)>
         },
         caps,
         regulated_bus: optional_usize(obj, "reg_bus")?.map(BusId),
+        active_power_control: None,
         uid: None,
     };
 
@@ -976,6 +982,7 @@ fn read_storage(
         p_loss: 0.0,
         q_loss: 0.0,
         in_service,
+        active_power_control: None,
         uid: None,
         extras: Extras::new(),
     };
@@ -1057,6 +1064,11 @@ fn read_hvdc_link(value: &Value) -> Result<Hvdc> {
         qmaxt: f_map_or(to_terminal, "q_max_mvar", 0.0)?,
         loss0,
         loss1,
+        resistance_ohm: None,
+        nominal_voltage_kv: None,
+        converters_mode: None,
+        converter1: None,
+        converter2: None,
         cost: None,
         uid: None,
         extras: Extras::new(),

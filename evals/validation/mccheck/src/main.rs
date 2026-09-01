@@ -21,7 +21,7 @@ fn main() {
         .nth(1)
         .expect("usage: powerio-eval-mccheck <deck.dss>");
     let module = powerio_dist::parse(Source::open(&path).unwrap()).unwrap();
-    let net = module.value();
+    let net = &module.value;
     let y = calc_multiconductor_admittance_matrix(net).unwrap();
     let idx = y.index();
     let nodes: Vec<String> = idx

@@ -50,8 +50,8 @@ def error_path(error) -> str:
 
 
 def validate_case(validator, case: Path) -> list[str]:
-    module = powerio.parse_file(case)
-    out = module.emit("bmopf-json")
+    module = powerio.parse(case)
+    out = powerio.emit(module, "bmopf-json")
     if not out.text.strip():
         return ["writer returned an empty document"]
 

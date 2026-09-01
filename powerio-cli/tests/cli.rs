@@ -107,6 +107,54 @@ fn convert_refuses_an_existing_text_output() {
 }
 
 #[test]
+fn convert_writes_a_cgmes_profile_directory() {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let output = std::env::temp_dir().join(format!("powerio-cli-cgmes-{stamp}"));
+    let case = repo_file("tests/data/case9.m");
+    let out = run(&[
+        "convert",
+        case.to_str().unwrap(),
+        "--to",
+        "cgmes",
+        "-o",
+        output.to_str().unwrap(),
+    ]);
+    assert_success(&out);
+    let names: Vec<_> = std::fs::read_dir(&output)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names.len(), 4, "{names:?}");
+    assert!(names.iter().any(|name| name.ends_with("_EQ.xml")));
+    assert!(names.iter().any(|name| name.ends_with("_TP.xml")));
+    assert!(names.iter().any(|name| name.ends_with("_SSH.xml")));
+    assert!(names.iter().any(|name| name.ends_with("_SV.xml")));
+    std::fs::remove_dir_all(output).unwrap();
+}
+
+#[test]
+fn convert_reserves_iidm_and_rawx_for_input() {
+    let case = repo_file("tests/data/case9.m");
+    for (input_spelling, canonical) in [("iidm", "xiidm"), ("rawx", "psse-rawx")] {
+        let out = run(&[
+            "convert",
+            case.to_str().unwrap(),
+            "--to",
+            input_spelling,
+            "-o",
+            "-",
+        ]);
+        assert_failure(&out);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains("accepted for input only"), "{stderr}");
+        assert!(stderr.contains(canonical), "{stderr}");
+    }
+}
+
+#[test]
 fn summary_outputs_machine_readable_json() {
     let case = repo_file("tests/data/case9.m");
     let out = run(&["summary", case.to_str().unwrap()]);
@@ -155,7 +203,7 @@ fn summary_routes_json_inputs_through_the_classifier() {
 }
 
 #[test]
-fn package_refuses_an_existing_output_file() {
+fn serialize_refuses_an_existing_output_file() {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -167,7 +215,7 @@ fn package_refuses_an_existing_output_file() {
     // An existing entry at the output is refused and keeps its bytes; a
     // fresh path commits.
     let out = run(&[
-        "module",
+        "serialize",
         case.to_str().unwrap(),
         "-o",
         out_path.to_str().unwrap(),
@@ -179,7 +227,7 @@ fn package_refuses_an_existing_output_file() {
 
     let fresh = std::env::temp_dir().join(format!("powerio-cli-package-fresh-{stamp}.pio.json"));
     let out = run(&[
-        "module",
+        "serialize",
         case.to_str().unwrap(),
         "-o",
         fresh.to_str().unwrap(),
@@ -582,10 +630,10 @@ fn convert_exits_nonzero_on_an_include_refused_through_a_symbolic_link() {
 }
 
 #[test]
-fn package_exits_nonzero_on_a_refused_include() {
-    // The package carries the same `Error` finding convert fails on,
+fn serialize_exits_nonzero_on_a_refused_include() {
+    // PowerIO IR carries the same `Error` finding convert fails on,
     // so the module subcommand has to fail with it too — otherwise a script
-    // gating on the exit code accepts a package built from a truncated network.
+    // gating on the exit code accepts IR built from a truncated network.
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     let case_dir = dir.join("case");
@@ -604,7 +652,7 @@ fn package_exits_nonzero_on_a_refused_include() {
     let out_path = dir.join("out.pio.json");
 
     let out = run(&[
-        "module",
+        "serialize",
         master.to_str().unwrap(),
         "-o",
         out_path.to_str().unwrap(),
@@ -617,7 +665,7 @@ fn package_exits_nonzero_on_a_refused_include() {
     );
     assert!(
         out_path.is_file(),
-        "the package must still be written for inspection"
+        "the PowerIO IR must still be serialized for inspection"
     );
 }
 

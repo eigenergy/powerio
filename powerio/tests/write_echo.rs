@@ -5,13 +5,13 @@
 
 use std::collections::BTreeMap;
 
-use powerio::{PioValue, emit};
+use powerio::{PioValue, deserialize, emit, serialize};
 use powerio_core::{Destination, EmittedOutput, Source};
 
 /// A minimal Egret `ModelData` document with `system.time_keys`, so
 /// `powerio::parse` routes it to the time series reader instead of the
 /// balanced hub. No declared format: the common case for a bare `.json`
-/// source (`Source::open`/`Source::from_bytes` with no `.with_format`),
+/// source (`Source::open`/`Source::from_memory` with no `.with_format`),
 /// which is also the reclassify-by-content branch of the echo check.
 const EGRET_TIME_SERIES: &str = r#"{
     "elements": {
@@ -33,11 +33,15 @@ const EGRET_TIME_SERIES: &str = r#"{
 #[test]
 fn a_time_series_kind_echoes_its_retained_source_on_a_same_format_write() {
     let source =
-        powerio_core::Source::from_bytes("case.json", EGRET_TIME_SERIES.as_bytes().to_vec())
+        powerio_core::Source::from_memory("case.json", EGRET_TIME_SERIES.as_bytes().to_vec())
             .unwrap();
-    let module = powerio::parse(source).unwrap();
+    let module = powerio::parse(source, None).unwrap();
     assert!(
-        matches!(module.value(), PioValue::BalancedNetworkTimeSeries(_)),
+        matches!(
+            &module.value,
+            PioValue::TimeSeries(series)
+                if series.element_type() == "powerio.BalancedNetwork"
+        ),
         "the time_keys document should route to the time series kind"
     );
 
@@ -62,12 +66,15 @@ fn a_time_series_kind_echoes_its_retained_source_on_a_same_format_write() {
 #[test]
 fn a_time_series_kind_still_refuses_a_format_its_retained_source_is_not() {
     let source =
-        powerio_core::Source::from_bytes("case.json", EGRET_TIME_SERIES.as_bytes().to_vec())
+        powerio_core::Source::from_memory("case.json", EGRET_TIME_SERIES.as_bytes().to_vec())
             .unwrap();
-    let module = powerio::parse(source).unwrap();
+    let module = powerio::parse(source, None).unwrap();
 
     let error = emit(&module, "matpower", Destination::memory("case.m").unwrap()).unwrap_err();
-    assert!(error.to_string().contains("no matpower writer"), "{error}");
+    assert_eq!(
+        error.info().map(|info| info.code),
+        Some("REQUEST.EMIT.UNSUPPORTED_VALUE_TYPE")
+    );
 }
 
 fn memory_directory(result: &powerio_core::EmitResult) -> BTreeMap<String, Vec<u8>> {
@@ -96,13 +103,13 @@ fn memory_text(result: &powerio_core::EmitResult) -> &str {
 #[test]
 fn model_json_emits_matpower_semantically_instead_of_echoing_json() {
     let case = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case9.m");
-    let original = powerio::parse_file(case).expect("case9 parses");
-    let PioValue::BalancedNetwork(network) = original.value() else {
+    let original = powerio::parse(Source::open(case).unwrap(), None).expect("case9 parses");
+    let PioValue::BalancedNetwork(network) = &original.value else {
         panic!("case9 must produce a balanced network");
     };
     let model_json = network.to_json().expect("model JSON serializes");
-    let module = powerio::parse_text("network.json", &model_json, Some("model-json"))
-        .expect("declared model JSON parses");
+    let source = Source::from_memory("network.json", model_json.as_bytes().to_vec()).unwrap();
+    let module = powerio::parse(source, Some("model-json")).expect("declared model JSON parses");
     assert_eq!(
         module
             .source()
@@ -116,30 +123,22 @@ fn model_json_emits_matpower_semantically_instead_of_echoing_json() {
     let matpower = memory_text(&result);
     assert!(matpower.contains("mpc.baseMVA"), "{matpower}");
     assert_ne!(matpower, model_json);
-    powerio::parse_text("roundtrip.m", matpower, Some("matpower"))
-        .expect("emitted MATPOWER parses");
+    let source = Source::from_memory("roundtrip.m", matpower.as_bytes().to_vec()).unwrap();
+    powerio::parse(source, Some("matpower")).expect("emitted MATPOWER parses");
 }
 
 #[test]
-fn stored_module_emits_matpower_semantically_and_echoes_pio_json_exactly() {
+fn serialized_module_emits_matpower_semantically_and_reserializes_exactly() {
     let case = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case9.m");
-    let original = powerio::parse_file(case).expect("case9 parses");
-    let stored = emit(
-        &original,
-        "pio-json",
-        Destination::memory("case.pio.json").unwrap(),
-    )
-    .expect("module serializes");
+    let original = powerio::parse(Source::open(case).unwrap(), None).expect("case9 parses");
+    let stored = serialize(&original, Destination::memory("case.pio.json").unwrap())
+        .expect("module serializes");
     let stored_text = memory_text(&stored).to_owned();
-    let module = powerio::parse_text("case.pio.json", &stored_text, Some("pio-json"))
-        .expect("stored module parses");
+    let source = Source::from_memory("case.pio.json", stored_text.as_bytes().to_vec()).unwrap();
+    let module = deserialize(source).expect("PowerIO IR deserializes");
 
-    let exact = emit(
-        &module,
-        "pio-json",
-        Destination::memory("copy.pio.json").unwrap(),
-    )
-    .expect("stored module echoes");
+    let exact = serialize(&module, Destination::memory("copy.pio.json").unwrap())
+        .expect("module reserializes");
     assert_eq!(memory_text(&exact), stored_text);
 
     let result = emit(&module, "matpower", Destination::memory("case.m").unwrap())
@@ -147,34 +146,8 @@ fn stored_module_emits_matpower_semantically_and_echoes_pio_json_exactly() {
     let matpower = memory_text(&result);
     assert!(matpower.contains("mpc.baseMVA"), "{matpower}");
     assert_ne!(matpower, stored_text);
-    powerio::parse_text("roundtrip.m", matpower, Some("matpower"))
-        .expect("emitted MATPOWER parses");
-}
-
-#[test]
-fn legacy_package_emits_the_upgraded_version_one_module() {
-    let legacy = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../tests/data/package/frozen-0.9-balanced.pio.json"
-    ));
-    let module = powerio::parse_text("legacy.pio.json", legacy, Some("pio-json"))
-        .expect("the released 0.9 package upgrades");
-    let result = emit(
-        &module,
-        "pio-json",
-        Destination::memory("upgraded.pio.json").unwrap(),
-    )
-    .expect("the upgraded module emits");
-    let upgraded = memory_text(&result);
-    assert_ne!(
-        upgraded, legacy,
-        "legacy bytes must not bypass the 1.0 writer"
-    );
-    let document: serde_json::Value = serde_json::from_str(upgraded).unwrap();
-    assert_eq!(document["schema"], "powerio.module");
-    assert_eq!(document["version"], 1);
-    assert!(document.get("powerio_version").is_none());
-    assert!(document.get("model_kind").is_none());
+    let source = Source::from_memory("roundtrip.m", matpower.as_bytes().to_vec()).unwrap();
+    powerio::parse(source, Some("matpower")).expect("emitted MATPOWER parses");
 }
 
 #[test]
@@ -202,10 +175,12 @@ fn a_pypsa_network_time_series_emits_its_complete_directory_byte_exactly() {
         std::fs::write(source_dir.join(name), bytes).unwrap();
     }
 
-    let module = powerio::parse_file(&source_dir).expect("the PyPSA series parses");
+    let module = powerio::parse(Source::open(&source_dir).unwrap(), Some("pypsa-csv"))
+        .expect("the PyPSA series parses");
     assert!(matches!(
-        module.value(),
-        PioValue::BalancedNetworkTimeSeries(_)
+        &module.value,
+        PioValue::TimeSeries(series)
+            if series.element_type() == "powerio.BalancedNetwork"
     ));
     assert_eq!(
         module
@@ -248,10 +223,12 @@ fn a_gridfm_scenario_set_emits_its_complete_directory_byte_exactly() {
     )
     .expect("the GridFM fixture writes");
 
-    let module = powerio::parse_file(source_root.path()).expect("the GridFM dataset parses");
+    let module = powerio::parse(Source::open(source_root.path()).unwrap(), Some("gridfm"))
+        .expect("the GridFM dataset parses");
     assert!(matches!(
-        module.value(),
-        PioValue::BalancedNetworkScenarioSet(_)
+        &module.value,
+        PioValue::ScenarioSet(set)
+            if set.element_type() == "powerio.BalancedNetwork"
     ));
     let retained = module
         .source()

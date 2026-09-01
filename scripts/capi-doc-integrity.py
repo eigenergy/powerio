@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Check that C ABI doc comments agree with the code they describe.
 
-Four checks, each born from a shipped defect:
+Three checks, plus one conditional check for the retired Arrow bridge:
 
-1. Arrow table id consistency: the PIO_ARROW_TABLE_* selector macros, the
-   to_arrow dispatch arms, and the catalog rows must name the same id set.
+1. If an Arrow bridge exists, its PIO_ARROW_TABLE_* selector macros,
+   dispatch arms, and catalog rows must name the same id set. If it does not,
+   the header must not retain orphaned selector macros.
 2. `out_*` names in a function's doc comment must be parameters of that
    function (catches a doc naming a parameter that was renamed away).
 3. A doc that says to release something with pio_string_release must sit on
@@ -36,6 +37,13 @@ def check_arrow_table_ids() -> None:
         int(m.group(2))
         for m in re.finditer(r"#define PIO_ARROW_TABLE_([A-Z0-9_]+) (\d+)", header)
     }
+    if not ARROW.exists():
+        if macro_ids:
+            errors.append(
+                f"the header retains Arrow selector macros {sorted(macro_ids)} "
+                "without an Arrow bridge"
+            )
+        return
     src = ARROW.read_text()
     const_ids = {
         m.group(1): int(m.group(2))

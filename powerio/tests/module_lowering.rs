@@ -2,12 +2,14 @@
 //! change, the visible note cap, repeated lowering, and the winding rating
 //! base conversion.
 
-use powerio::stored::{emit_module, read_module};
 use powerio::transform::{
     MulticonductorToBalancedOptions, MulticonductorToBalancedReport, to_balanced,
     to_balanced_network, to_balanced_network_report, to_balanced_report,
 };
 use powerio::{PioValue, VERSION};
+
+mod helpers;
+use helpers::{deserialize_module_text, serialize_module_text};
 
 const TWO_WINDING_DSS: &str = r"Clear
 Set DefaultBaseFrequency=60
@@ -18,10 +20,8 @@ Set VoltageBases=[12.47, 0.416]
 ";
 
 fn parse_mc_module(text: &str) -> powerio_core::PioModule<PioValue> {
-    let source = powerio_core::Source::from_bytes("feeder.dss", text.as_bytes().to_vec())
-        .unwrap()
-        .with_format(powerio_core::FormatId::new("dss").unwrap());
-    powerio::parse(source).unwrap()
+    let source = powerio::Source::from_memory("feeder.dss", text.as_bytes().to_vec()).unwrap();
+    powerio::parse(source, Some("dss")).unwrap()
 }
 
 #[test]
@@ -31,7 +31,7 @@ fn transformation_names_share_one_report_and_sever_the_source_echo() {
     let options = MulticonductorToBalancedOptions::default();
 
     let report: MulticonductorToBalancedReport = to_balanced_report(&module, options).unwrap();
-    let PioValue::MulticonductorNetwork(network) = module.value() else {
+    let PioValue::MulticonductorNetwork(network) = &module.value else {
         panic!("wrong kind");
     };
     assert_eq!(report, to_balanced_network_report(network, options));
@@ -40,7 +40,7 @@ fn transformation_names_share_one_report_and_sever_the_source_echo() {
     assert!(!direct.network.buses().is_empty());
 
     let transformed = to_balanced(module, options).unwrap();
-    assert!(matches!(transformed.value(), PioValue::BalancedNetwork(_)));
+    assert!(matches!(transformed.value, PioValue::BalancedNetwork(_)));
     assert!(
         transformed.source().is_none(),
         "a changed value must not retain bytes for same format echo"
@@ -53,7 +53,8 @@ fn transformation_names_share_one_report_and_sever_the_source_echo() {
 #[test]
 fn stale_targets_are_severed_and_every_diagnostic_survives() {
     let module = parse_mc_module(TWO_WINDING_DSS).sever_source();
-    let mut raw: serde_json::Value = serde_json::from_str(&emit_module(&module).unwrap()).unwrap();
+    let mut raw: serde_json::Value =
+        serde_json::from_str(&serialize_module_text(&module).unwrap()).unwrap();
     raw["diagnostics"] = serde_json::json!([
         {"id": "keep-1", "severity": "note", "code": "READ.TEST.FIRST", "message": "kept"},
         {
@@ -62,26 +63,26 @@ fn stale_targets_are_severed_and_every_diagnostic_survives() {
         },
         {"id": "keep-3", "severity": "error", "code": "READ.TEST.LAST", "message": "kept"}
     ]);
-    let module = read_module(&raw.to_string()).unwrap();
-    assert_eq!(module.diagnostics().len(), 3);
-    let input_count = module.diagnostics().len();
+    let module = deserialize_module_text(&raw.to_string()).unwrap();
+    assert_eq!(module.diagnostics.len(), 3);
+    let input_count = module.diagnostics.len();
 
     let lowered = to_balanced(module, MulticonductorToBalancedOptions::default()).unwrap();
-    assert!(matches!(lowered.value(), PioValue::BalancedNetwork(_)));
+    assert!(matches!(lowered.value, PioValue::BalancedNetwork(_)));
     // Every input diagnostic survives, plus the pass's own findings.
-    assert!(lowered.diagnostics().len() >= input_count);
+    assert!(lowered.diagnostics.len() >= input_count);
     for id in ["keep-1", "keep-2", "keep-3"] {
         assert!(
             lowered
-                .diagnostics()
+                .diagnostics
                 .iter()
                 .any(|d| d.id().is_some_and(|i| i.as_str() == id)),
             "diagnostic {id} was dropped"
         );
     }
     // The stale target is severed, so the lowered module still writes.
-    assert!(lowered.diagnostics().iter().all(|d| d.target().is_none()));
-    let text = emit_module(&lowered).unwrap();
+    assert!(lowered.diagnostics.iter().all(|d| d.target().is_none()));
+    let text = serialize_module_text(&lowered).unwrap();
     assert!(text.contains("READ.TEST.TARGETED"));
 }
 
@@ -90,14 +91,15 @@ fn stale_targets_are_severed_and_every_diagnostic_survives() {
 #[test]
 fn repeated_lowering_records_every_pass() {
     let module = parse_mc_module(TWO_WINDING_DSS).sever_source();
-    let mut raw: serde_json::Value = serde_json::from_str(&emit_module(&module).unwrap()).unwrap();
+    let mut raw: serde_json::Value =
+        serde_json::from_str(&serialize_module_text(&module).unwrap()).unwrap();
     raw["history"] = serde_json::json!([
         {
             "id": "multiconductor-to-balanced", "kind": "transform",
             "name": "to_balanced"
         }
     ]);
-    let module = read_module(&raw.to_string()).unwrap();
+    let module = deserialize_module_text(&raw.to_string()).unwrap();
     let lowered = to_balanced(module, MulticonductorToBalancedOptions::default()).unwrap();
     let ids: Vec<&str> = lowered
         .history()
@@ -117,7 +119,8 @@ fn repeated_lowering_records_every_pass() {
 #[test]
 fn hostile_element_names_normalize_into_the_history_notes() {
     let module = parse_mc_module(TWO_WINDING_DSS).sever_source();
-    let mut raw: serde_json::Value = serde_json::from_str(&emit_module(&module).unwrap()).unwrap();
+    let mut raw: serde_json::Value =
+        serde_json::from_str(&serialize_module_text(&module).unwrap()).unwrap();
     let network = &mut raw["value"]["data"];
     // A NUL bearing name and an overlong name on elements the lowering
     // names in its notes.
@@ -126,7 +129,7 @@ fn hostile_element_names_normalize_into_the_history_notes() {
         "x".repeat(powerio_core::limits::MAX_IDENTIFIER_BYTES + 40)
     );
     network["transformers"][0]["name"] = serde_json::json!(hostile);
-    let module = read_module(&raw.to_string()).unwrap();
+    let module = deserialize_module_text(&raw.to_string()).unwrap();
     let lowered = to_balanced(module, MulticonductorToBalancedOptions::default()).unwrap();
     let entry = lowered
         .history()
@@ -157,7 +160,7 @@ fn hostile_element_names_normalize_into_the_history_notes() {
 fn mismatched_winding_ratings_convert_the_resistance_base() {
     let module = parse_mc_module(TWO_WINDING_DSS);
     let lowered = to_balanced(module, MulticonductorToBalancedOptions::default()).unwrap();
-    let PioValue::BalancedNetwork(network) = lowered.value() else {
+    let PioValue::BalancedNetwork(network) = &lowered.value else {
         panic!("wrong kind");
     };
     let branch = network
@@ -197,7 +200,7 @@ fn a_module_at_a_record_cap_is_refused_intact() {
     // back unchanged, whichever cap binds.
     let full_diagnostics = {
         let mut module = parse_mc_module(TWO_WINDING_DSS);
-        let room = powerio_core::limits::MAX_MODULE_DIAGNOSTICS - module.diagnostics().len();
+        let room = powerio_core::limits::MAX_MODULE_DIAGNOSTICS - module.diagnostics.len();
         let filler = powerio_core::Diagnostic::new(
             powerio_core::DiagnosticCode::new("READ.CASE.FILLER").unwrap(),
             powerio_core::DiagnosticSeverity::Note,
@@ -208,7 +211,7 @@ fn a_module_at_a_record_cap_is_refused_intact() {
         }
         module
     };
-    let before = full_diagnostics.diagnostics().len();
+    let before = full_diagnostics.diagnostics.len();
     let (returned, error) =
         to_balanced(full_diagnostics, MulticonductorToBalancedOptions::default()).unwrap_err();
     assert!(
@@ -218,11 +221,8 @@ fn a_module_at_a_record_cap_is_refused_intact() {
             .any(|d| d.code() == "TRANSFORM.MULTI_TO_BALANCED.RECORD_CAP"),
         "{error:?}"
     );
-    assert_eq!(returned.diagnostics().len(), before, "module unchanged");
-    assert!(matches!(
-        returned.value(),
-        PioValue::MulticonductorNetwork(_)
-    ));
+    assert_eq!(returned.diagnostics.len(), before, "module unchanged");
+    assert!(matches!(returned.value, PioValue::MulticonductorNetwork(_)));
 
     // The history cap binds the same way.
     let full_history = {

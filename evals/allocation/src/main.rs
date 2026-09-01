@@ -296,7 +296,7 @@ fn main() {
             let len = text.len() as u64;
             let bytes = text.into_bytes();
             let (r, s) = measure(move || {
-                powerio_core::Source::from_bytes("case2869", bytes)
+                powerio_core::Source::from_memory("case2869", bytes)
                     .map_err(|e| e.to_string())
                     .and_then(|source| {
                         let source = source.with_format(

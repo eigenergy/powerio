@@ -19,7 +19,7 @@ categories = ["science", "parsing"]
 all-features = true
 
 [features]
-schema = ["dep:schemars"]
+schema = ["dep:schemars", "powerio-core/schema"]
 
 [dependencies]
 powerio-core = { workspace = true }
@@ -32,6 +32,9 @@ petgraph = "0.8"
 serde.workspace = true
 # Format converters (PowerModels / egret JSON) serialize the typed model.
 serde_json.workspace = true
+quick-xml.workspace = true
+zip.workspace = true
+uuid.workspace = true
 schemars = { workspace = true, optional = true }
 
 [dev-dependencies]

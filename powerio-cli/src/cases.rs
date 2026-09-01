@@ -55,10 +55,10 @@ impl ClassifiedCase {
     }
 }
 
-/// The stored `.pio.json` document text when `input` is one, `Ok(None)` for
-/// anything else. The single file commands load these through the universal
-/// parse instead of the case classifier.
-pub fn stored_json(input: &Path) -> anyhow::Result<Option<String>> {
+/// The PowerIO IR document text when `input` is one, `Ok(None)` for anything
+/// else. Single file commands send these to `deserialize` instead of the grid
+/// exchange format classifier.
+pub fn powerio_ir_text(input: &Path) -> anyhow::Result<Option<String>> {
     let ext = input
         .extension()
         .and_then(|e| e.to_str())
@@ -213,16 +213,17 @@ pub fn load_network(path: &Path) -> anyhow::Result<LoadedCase> {
                 .with_context(|| format!("reading {}", path.display()))?;
             match classify_case_json(&text, path)? {
                 DetectedFormat::Distribution(format) => {
-                    let parsed = crate::compat::dist_parse_str(&text, format.name())
+                    let parsed = crate::module_io::load_multiconductor_memory(&text, format.name())
                         .with_context(|| format!("parse {}", path.display()))?;
                     lower_to_balanced(parsed, stem, path)
                 }
                 DetectedFormat::Transmission(format) => {
-                    let parsed = crate::compat::parse_str_with_name(&text, format.name(), stem)
-                        .with_context(|| format!("parse {}", path.display()))?;
+                    let parsed =
+                        crate::module_io::load_balanced_memory_named(&text, format.name(), stem)
+                            .with_context(|| format!("parse {}", path.display()))?;
                     Ok(LoadedCase {
-                        warnings: parsed.render_diagnostics(),
-                        network: parsed.network,
+                        warnings: powerio_core::render_diagnostics(&parsed.diagnostics),
+                        network: parsed.into_value(),
                     })
                 }
                 other => anyhow::bail!(
@@ -233,16 +234,16 @@ pub fn load_network(path: &Path) -> anyhow::Result<LoadedCase> {
             }
         }
         Some(ext) if DISTRIBUTION_EXTENSIONS.contains(&ext) => {
-            let parsed = crate::compat::dist_parse_file(path, None)
+            let parsed = crate::module_io::load_multiconductor_module(path, None)
                 .with_context(|| format!("parse {}", path.display()))?;
             lower_to_balanced(parsed, stem, path)
         }
         Some(ext) if TRANSMISSION_EXTENSIONS.contains(&ext) => {
-            let parsed = crate::compat::parse_file(path, None)
+            let parsed = crate::module_io::load_balanced_module(path, None)
                 .with_context(|| format!("parse {}", path.display()))?;
             Ok(LoadedCase {
-                warnings: parsed.render_diagnostics(),
-                network: parsed.network,
+                warnings: powerio_core::render_diagnostics(&parsed.diagnostics),
+                network: parsed.into_value(),
             })
         }
         _ => anyhow::bail!("cannot infer a case format for {}", path.display()),
@@ -255,11 +256,12 @@ pub fn load_network(path: &Path) -> anyhow::Result<LoadedCase> {
 /// lowers to the same `lowered-multiconductor` fallback and the exports
 /// overwrite each other.
 fn lower_to_balanced(
-    parsed: crate::compat::ParsedDist,
+    parsed: powerio_core::PioModule<powerio_dist::MulticonductorNetwork>,
     stem: Option<&str>,
     path: &Path,
 ) -> anyhow::Result<LoadedCase> {
-    let mut net = parsed.network;
+    let mut warnings = powerio_core::render_diagnostics(&parsed.diagnostics);
+    let mut net = parsed.into_value();
     if net.name().is_none() {
         *net.name_mut() = stem.map(str::to_owned);
     }
@@ -279,7 +281,6 @@ fn lower_to_balanced(
                 anyhow::anyhow!("lower {} to balanced: {diagnostics}", path.display())
             }
         })?;
-    let mut warnings = parsed.warnings;
     warnings.extend(powerio_core::render_diagnostics(&lowered.diagnostics));
     Ok(LoadedCase {
         network: lowered.network,
@@ -364,9 +365,11 @@ mod tests {
         );
         let source = powerio_core::Source::open(dss).unwrap();
         let module = powerio_dist::parse(source).unwrap();
-        let emission =
-            crate::compat::emit_dist_module(&module, powerio_dist::DistTargetFormat::BmopfJson)
-                .unwrap();
+        let emission = crate::module_io::emit_multiconductor_module(
+            &module,
+            powerio_dist::DistTargetFormat::BmopfJson,
+        )
+        .unwrap();
         let mut doc: serde_json::Value = serde_json::from_str(&emission.text).unwrap();
         doc.as_object_mut().unwrap().remove("name");
         let tmp = tempfile::tempdir().unwrap();

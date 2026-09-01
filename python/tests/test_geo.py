@@ -1,5 +1,6 @@
 """Tests for the geographic layer surface and the AC OPF instance."""
 
+import io
 from pathlib import Path
 
 import pytest
@@ -32,7 +33,7 @@ def test_parse_geo_rejects_input_without_coordinates():
 
 
 def test_network_apply_and_extract_round_trip():
-    net = pio.parse_file(DATA / "case9.m", value_type=pio.BalancedNetwork).value
+    net = pio.parse(DATA / "case9.m").value
     assert net.to_geo_layer()["features"] == []
 
     placed, report = net.apply_geo_layer(BUSCOORDS)
@@ -49,8 +50,8 @@ def test_network_apply_and_extract_round_trip():
 
 
 def test_dist_apply_returns_a_placed_copy():
-    net = pio.parse_text(
-        DSS_MASTER,
+    net = pio.parse(
+        io.StringIO(DSS_MASTER),
         name="master.dss",
         format="dss",
     ).value

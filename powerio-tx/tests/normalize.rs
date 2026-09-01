@@ -766,11 +766,6 @@ fn source_rows_cover_the_magnetizing_shunt_the_lowering_appends() {
     assert_eq!(rows.shunts, [Some(0), None]);
     assert_eq!(rows.buses.len(), view.n());
     assert_eq!(rows.branches.len(), view.branches().len());
-
-    // The tables read provenance by position across the lowered view, so the
-    // padding has to hold for them too.
-    let tables = raw.to_normalized_solver_tables().unwrap();
-    assert_eq!(tables.index.shunt_source_rows, [Some(0), None]);
 }
 
 const EPC_3W: &str = r#"title

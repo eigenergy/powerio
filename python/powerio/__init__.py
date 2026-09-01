@@ -1,17 +1,15 @@
 """Parse, transform, and emit power system data.
 
-``parse_file`` returns a module whose ``value`` is the typed power system
-object and whose ``diagnostics`` record what the parser found. ``emit`` produces
-the module to another format while preserving its source and diagnostic
-records::
+``parse`` returns a module whose ``value`` is the typed power system object
+and whose ``diagnostics`` record what the parser found::
 
     import powerio as pio
 
-    module = pio.parse_file("case9.m", value_type=pio.BalancedNetwork)
+    module = pio.parse("case9.m")
     net = module.value
     print(net.n_buses, net.base_mva)         # 9 100.0
-    matpower = module.emit("matpower")       # EmitResult(text, diagnostics)
-    emitted = module.emit("psse", "case9.raw")
+    matpower = pio.emit(module, "matpower")
+    emitted = pio.emit(module, "psse", "case9.raw")
 
     B = net.calc_bprime_matrix()             # scipy.sparse, MATPOWER Bp
     Y = net.calc_admittance_matrix()         # complex csr, G + jB
@@ -21,8 +19,7 @@ PyPSA CSV folders carry static network topology. NetCDF and HDF5 time series
 are tracked in https://github.com/eigenergy/powerio/issues/107.
 
 A source that defines a calculation parses to that calculation's typed value.
-:func:`parse_file` always returns a :class:`PioModule`; ``module.kind`` names
-the value and ``module.value`` reads it.
+Use ``isinstance(module.value, ...)`` to branch on the result type.
 
 ``import powerio`` and the base parse and emit paths require no
 third party Python package. Matrix methods require SciPy and NumPy. Graph
@@ -33,19 +30,53 @@ methods require NetworkX. Install them with ``powerio[matrix]``,
 from __future__ import annotations
 
 import importlib
+import io as _io
 import json as _json
 import operator as _operator
 import os as _os
 from collections import namedtuple
-from typing import Any, Optional
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any, Iterable, Optional, Union
 
 from . import _powerio
 from ._powerio import (
+    ActivePower,
+    ApparentPower,
+    CalculationUpdate,
+    ComponentId,
     Diagnostic,
+    NetworkUpdate,
+    OperatingPointUpdate,
     PowerIODataError,
     PowerIOError,
     PowerIOParseError,
+    ReactivePower,
+    Residuals,
+    ScucActiveReserveZone,
+    ScucBranchSwitchingCost,
+    ScucContingency,
+    ScucDevice,
+    ScucDeviceOutputs,
+    ScucDevicePeriod,
+    ScucEnergyCostBlock,
+    ScucEnergyRequirement,
+    ScucInitialCommitment,
+    ScucInputs,
+    ScucNetworkOutputs,
+    ScucRampLimits,
+    ScucReactiveCapability,
+    ScucReactiveReserveZone,
+    ScucReserveCosts,
+    ScucReserveLimits,
+    ScucShunt,
+    ScucStartupCostAdjustment,
+    ScucStartupLimit,
+    ScucTransformerControl,
+    ScucViolationCosts,
     SourceSpan,
+    UpdateChange,
+    UpdateReport,
     __version__,
 )
 
@@ -56,7 +87,12 @@ __all__ = [
     "AcPfSolution",
     "AcScucInstance",
     "AcScucSolution",
+    "ActivePower",
+    "ApparentPower",
+    "Artifact",
     "BalancedNetwork",
+    "CalculationUpdate",
+    "ComponentId",
     "DcOpfInstance",
     "DcOpfSolution",
     "DcPfInstance",
@@ -69,37 +105,98 @@ __all__ = [
     "McAcOpfSolution",
     "McAcPfInstance",
     "McAcPfSolution",
+    "MulticonductorNetwork",
+    "NetworkUpdate",
+    "OperatingPoint",
+    "OperatingPointUpdate",
     "PioModule",
     "PowerIODataError",
     "PowerIOError",
     "PowerIOParseError",
     "PwdDisplay",
     "PwdSubstation",
+    "ReactivePower",
+    "Residuals",
     "ScenarioSet",
+    "Scenario",
+    "ScucActiveReserveZone",
+    "ScucBranchSwitchingCost",
+    "ScucContingency",
+    "ScucDevice",
+    "ScucDeviceOutputs",
+    "ScucDevicePeriod",
+    "ScucEnergyCostBlock",
+    "ScucEnergyRequirement",
+    "ScucInitialCommitment",
+    "ScucInputs",
+    "ScucNetworkOutputs",
+    "ScucRampLimits",
+    "ScucReactiveCapability",
+    "ScucReactiveReserveZone",
+    "ScucReserveCosts",
+    "ScucReserveLimits",
+    "ScucShunt",
+    "ScucStartupCostAdjustment",
+    "ScucStartupLimit",
+    "ScucTransformerControl",
+    "ScucViolationCosts",
+    "SocwrOpfSolution",
     "SourceSpan",
     "TimeSeries",
-    "UnknownValue",
+    "TimePoint",
+    "UpdateChange",
+    "UpdateReport",
     "__version__",
+    "deserialize",
     "dist",
-    "emit_gridfm_batch",
+    "emit",
+    "apply_bus_load_active_power",
+    "apply_updates",
     "features",
-    "from_json",
     "from_ppc",
-    "parse_display_file",
-    "parse_file",
+    "parse",
+    "parse_display",
     "parse_geo",
-    "parse_text",
     "resolve_format",
+    "serialize",
     "versions",
 ]
 
-EmitResult = namedtuple("EmitResult", ["text", "diagnostics"])
-EmitResult.__doc__ = """Output of :meth:`PioModule.emit`.
+@dataclass(frozen=True)
+class Artifact:
+    """One artifact produced by :func:`emit` or :func:`serialize`.
 
-``text`` is the emitted file contents when no destination was supplied and
-``None`` after committing a file or directory. ``diagnostics`` lists the
-fields the target format could not represent (empty for a faithful emission).
-"""
+    ``data`` is set for an in-memory result. ``path`` is set after committing
+    to a filesystem destination.
+    """
+
+    name: str
+    data: Optional[bytes]
+    path: Optional[str]
+
+    @property
+    def text(self) -> str:
+        """Decode an in-memory UTF-8 artifact."""
+        if self.data is None:
+            raise ValueError("this artifact was committed to a destination")
+        return self.data.decode("utf-8")
+
+
+@dataclass(frozen=True)
+class EmitResult:
+    """Artifact inventory and diagnostics from an emission or serialization."""
+
+    artifacts: tuple[Artifact, ...]
+    layout: str
+    fidelity: str
+    diagnostics: tuple[Diagnostic, ...]
+
+    @property
+    def text(self) -> Optional[str]:
+        """The sole UTF-8 memory artifact, or ``None`` for other inventories."""
+        if len(self.artifacts) != 1 or self.artifacts[0].data is None:
+            return None
+        return self.artifacts[0].text
 
 FormatInfo = namedtuple(
     "FormatInfo", ["token", "extension", "is_directory", "can_emit"]
@@ -109,12 +206,12 @@ FormatInfo.__doc__ = """Canonical metadata returned by :func:`resolve_format`.
 ``extension`` is the conventional filename suffix without a leading dot; it
 can be compound and is ``None`` when a directory format has no primary case
 file. ``can_emit`` reports whether a fresh universal emitter exists for the
-format. It is not a promise for every module value kind or a feature probe. A
+format. It is not a promise for every concrete module value or a feature probe. A
 false value neither promises nor forbids a same format retained source echo.
 """
 
 DisplayData = namedtuple("DisplayData", ["kind", "data"])
-DisplayData.__doc__ = """Output of :func:`parse_display_file`.
+DisplayData.__doc__ = """Output of :func:`parse_display`.
 
 ``kind`` names the display format. For PowerWorld PWD data,
 ``kind == "powerworld"`` and
@@ -145,11 +242,6 @@ def _require(module: str, extra: str):
         ) from exc
 
 
-def _native_attr(owner: Any, name: str) -> Any:
-    """Read a private extension entry omitted from the public native stub."""
-    return getattr(owner, name)
-
-
 def _to_csr(coo):
     """Assemble a ``(data, row, col, shape)`` COO tuple into a csr_matrix."""
     sparse = _require("scipy.sparse", "matrix")
@@ -165,21 +257,6 @@ def _dc_angles(n_buses: int, voltage_angles):
             f"voltage_angles must be a one dimensional array of length {n_buses}"
         )
     return np, angles
-
-
-def _require_gridfm() -> None:
-    """Raise a clear ImportError if the extension lacks the gridfm Parquet surface.
-
-    Published wheels include this surface. A custom source build can omit the
-    Rust feature, in which case the method names still raise a direct error
-    instead of failing with ``AttributeError``.
-    """
-    if not getattr(_powerio, "_has_gridfm", False):
-        raise ImportError(
-            "powerio was built without the gridfm Parquet surface; reinstall a "
-            "wheel built with gridfm support or rebuild from source with "
-            "`maturin develop --features gridfm`."
-        )
 
 
 def _wrap_display(raw) -> DisplayData:
@@ -210,6 +287,7 @@ _BALANCED_DELEGATED_NAMES = frozenset(
         "base_mva",
         "branches",
         "buses",
+        "detailed_connectivity",
         "generators",
         "hvdc",
         "is_radial",
@@ -222,6 +300,7 @@ _BALANCED_DELEGATED_NAMES = frozenset(
         "n_islands",
         "n_loads",
         "n_shunts",
+        "n_static_var_compensators",
         "n_storage",
         "n_switches",
         "n_transformers_3w",
@@ -229,6 +308,7 @@ _BALANCED_DELEGATED_NAMES = frozenset(
         "reference_bus_index",
         "reference_bus_indices",
         "shunts",
+        "static_var_compensators",
         "source_format",
         "storage",
         "switches",
@@ -276,10 +356,6 @@ class BalancedNetwork:
         # form, so this is a straight delegate.
         return repr(self._inner)
 
-    def to_json(self) -> str:
-        """Serialize to the JSON transport."""
-        return self._inner.to_json()
-
     def calc_connectivity_report(self) -> dict[str, Any]:
         """Calculate the in-service topology summary."""
         return self._inner.calc_connectivity_report()
@@ -325,18 +401,34 @@ class BalancedNetwork:
         """Return PowerModels incidence ``A`` (branches by buses)."""
         return _to_csr(self._inner.calc_incidence_matrix(formula))
 
-    def calc_branch_susceptance_matrix(self, formula: str = "series_susceptance"):
+    def calc_branch_susceptances(self, formula: str = "series_susceptance"):
+        """Return per branch susceptances in active branch order."""
+        np = _require("numpy", "matrix")
+        return np.asarray(self._inner.calc_branch_susceptances(formula), dtype=float)
+
+    def calc_branch_flow_matrix(self, formula: str = "series_susceptance"):
         """Return ``Bf = diag(b) A`` as a CSR matrix."""
-        return _to_csr(self._inner.calc_branch_susceptance_matrix(formula))
+        return _to_csr(self._inner.calc_branch_flow_matrix(formula))
 
     def calc_bus_susceptance_matrix(self, formula: str = "series_susceptance"):
         """Return ``B = A.T diag(b) A`` as a CSR matrix."""
         return _to_csr(self._inner.calc_bus_susceptance_matrix(formula))
 
-    def calc_phase_shift_injection(self, formula: str = "series_susceptance"):
+    def calc_branch_phase_shift_injection(
+        self, formula: str = "series_susceptance"
+    ):
+        """Return ``b * shift`` in active branch order."""
+        np = _require("numpy", "matrix")
+        return np.asarray(
+            self._inner.calc_branch_phase_shift_injection(formula), dtype=float
+        )
+
+    def calc_bus_phase_shift_injection(self, formula: str = "series_susceptance"):
         """Return ``A.T @ (b * shift)`` in bus order."""
         np = _require("numpy", "matrix")
-        return np.asarray(self._inner.calc_phase_shift_injection(formula), dtype=float)
+        return np.asarray(
+            self._inner.calc_bus_phase_shift_injection(formula), dtype=float
+        )
 
     def calc_branch_flow_dc(self, voltage_angles, formula: str = "series_susceptance"):
         """Compute ``-Bf @ va + b * shift`` in active branch order."""
@@ -423,58 +515,6 @@ class BalancedNetwork:
         """Weighted Laplacian ``L = -B``. ``formula`` as in :meth:`calc_ptdf`."""
         return _to_csr(self._inner.weighted_laplacian(formula))
 
-    def emit_gridfm(
-        self,
-        out_dir: Any,
-        *,
-        scenario: int = 0,
-        include_y_bus: bool = True,
-        include_taps: bool = True,
-        include_shifts: bool = True,
-        missing_gen_cost: Optional[str] = None,
-        default_gen_cost: Optional[str] = None,
-        gen_cost_csv: Optional[Any] = None,
-    ) -> dict:
-        """Emit the gridfm-datakit Parquet dataset for this case under
-        ``<out_dir>/<case>/raw/``.
-
-        Returns a dict with ``dir``, ``files``, ``dropped_zero_impedance``, and
-        ``degenerate_cost_gens``. Published wheels include the native emitter;
-        custom source builds without the Rust ``gridfm`` feature raise
-        ``ImportError``. For many perturbed snapshots in one dataset, see
-        :func:`emit_gridfm_batch`.
-        """
-        _require_gridfm()
-        return self._inner.write_gridfm(
-            str(out_dir),
-            scenario=scenario,
-            include_y_bus=include_y_bus,
-            include_taps=include_taps,
-            include_shifts=include_shifts,
-            missing_gen_cost=missing_gen_cost,
-            default_gen_cost=default_gen_cost,
-            gen_cost_csv=None if gen_cost_csv is None else str(gen_cost_csv),
-        )
-
-    def emit_dcopf_bundle(
-        self,
-        out_dir: Any,
-        formula: str = "series_susceptance",
-        units: str = "perunit",
-        missing_gen_cost: Optional[str] = None,
-        default_gen_cost: Optional[str] = None,
-        gen_cost_csv: Optional[Any] = None,
-    ) -> dict[str, Any]:
-        """Emit the DC OPF matrix bundle under ``out_dir``."""
-        return self._inner.write_dcopf_bundle(
-            str(out_dir),
-            formula,
-            units,
-            missing_gen_cost,
-            default_gen_cost,
-            None if gen_cost_csv is None else str(gen_cost_csv),
-        )
-
     def to_normalized(
         self,
         *,
@@ -485,7 +525,8 @@ class BalancedNetwork:
 
         The result removes out of service elements, preserves source bus IDs,
         and normalizes bus types. It carries no retained source, so
-        :meth:`PioModule.emit` serializes the derived model. Raises
+        :func:`powerio.emit` produces a grid exchange representation from the
+        derived module. Raises
         :class:`PowerIODataError` if the network cannot be
         normalized (no reference bus can be chosen, or a non-positive base MVA).
 
@@ -645,9 +686,9 @@ class BalancedNetwork:
         return g
 
 
-def parse_display_file(path: Any, format: Optional[str] = None) -> DisplayData:
+def parse_display(path: Any, format: Optional[str] = None) -> DisplayData:
     """Parse a display artifact such as a PowerWorld ``.pwd`` file."""
-    return _wrap_display(_powerio.parse_display_file(str(path), format))
+    return _wrap_display(_powerio.parse_display(str(path), format))
 
 
 def resolve_format(name: str) -> Optional[FormatInfo]:
@@ -668,11 +709,6 @@ def parse_geo(text: str, name_hint: Optional[str] = None) -> dict[str, Any]:
     parsed = _powerio.parse_geo(text, name_hint)
     parsed["geojson"] = _json.loads(parsed["geojson"])
     return parsed
-
-
-def from_json(text: str) -> BalancedNetwork:
-    """Rebuild a case from JSON produced by :meth:`BalancedNetwork.to_json`."""
-    return BalancedNetwork(_powerio.from_json(text))
 
 
 # powerio bus kind -> MATPOWER/PYPOWER BUS_TYPE code.
@@ -773,123 +809,166 @@ def from_ppc(ppc) -> BalancedNetwork:
     is not a sequence of numbers, or when a cell is not numeric; the message
     names the table and the row.
     """
-    module = PioModule(
-        _native_attr(_powerio._PioModule, "from_str")(
-            _ppc_to_matpower_text(ppc), "matpower"
-        )
-    )
-    return module.as_balanced_network()
-
-
-def emit_gridfm_batch(
-    networks: "list[BalancedNetwork]",
-    out_dir: Any,
-    *,
-    base_scenario: int = 0,
-    include_y_bus: bool = True,
-    include_taps: bool = True,
-    include_shifts: bool = True,
-    missing_gen_cost: Optional[str] = None,
-    default_gen_cost: Optional[str] = None,
-    gen_cost_csv: Optional[Any] = None,
-) -> dict:
-    """Emit several networks as one gridfm-datakit dataset, row stacked and
-    keyed by the ``scenario`` column.
-
-    Each network is one snapshot; the k-th is stamped ``base_scenario + k``. The
-    networks must share a base element set: the same bus/branch/gen counts and
-    bus id order (otherwise :class:`PowerIODataError` is raised). Load, dispatch,
-    branch status, and costs may vary per scenario. Returns the same dict as
-    :meth:`BalancedNetwork.emit_gridfm`. Published wheels include the native
-    emitter; custom source builds without the Rust ``gridfm`` feature raise
-    ``ImportError``.
-    """
-    _require_gridfm()
-    inners = [c._inner for c in networks]
-    return _native_attr(_powerio, "write_gridfm_batch")(
-        inners,
-        str(out_dir),
-        base_scenario=base_scenario,
-        include_y_bus=include_y_bus,
-        include_taps=include_taps,
-        include_shifts=include_shifts,
-        missing_gen_cost=missing_gen_cost,
-        default_gen_cost=default_gen_cost,
-        gen_cost_csv=None if gen_cost_csv is None else str(gen_cost_csv),
-    )
+    value = parse(
+        _io.StringIO(_ppc_to_matpower_text(ppc)),
+        format="matpower",
+        name="from_ppc.m",
+    ).value
+    assert isinstance(value, BalancedNetwork)
+    return value
 
 
 from . import dist  # noqa: E402  (needs EmitResult defined above)
 
+MulticonductorNetwork = dist.MulticonductorNetwork
+
 
 def versions() -> Any:
-    """Version and schema identity of this build.
-
-    The release API discovery document: the powerio release, the stored
-    module schema name and version, and the BMOPF schema this build speaks.
-    Keys agree with the C ``pio_schema_versions_json`` report where both
-    apply.
-    """
+    """Return the PowerIO release, sole IR identity, and BMOPF schema."""
     return _json.loads(_powerio.versions_json())
 
 
 class _TypedValue:
-    """Base for a thin typed wrapper around a :class:`PioModule` value that
-    has no dedicated handle type of its own.
+    """Typed view rooted in its owning :class:`PioModule`."""
 
-    Holds the owning module and its kind; this release exposes no per field
-    accessors for these kinds, so read a value back from ``module`` (its
-    ``to_json``, ``inspect``, or — for a series or scenario set —
-    ``list_states``/``inspect_state``/``export_state``).
-    """
+    __slots__ = ("module", "_collection_entry")
 
-    __slots__ = ("module", "kind")
-
-    def __init__(self, module: "PioModule", kind: str) -> None:
+    def __init__(self, module: "PioModule") -> None:
         self.module = module
-        self.kind = kind
+        self._collection_entry = None
 
     def __repr__(self) -> str:
-        return f"{type(self).__name__}(kind={self.kind!r})"
+        return f"{type(self).__name__}()"
+
+
+@dataclass(frozen=True)
+class TimePoint:
+    label: str
+    duration_seconds: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class Scenario:
+    id: str
+    probability: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class _CollectionEntry:
+    root: "PioModule"
+    time_index: Optional[int] = None
+    scenario_id: Optional[str] = None
+
+
+def _bind_collection_entry(
+    value: Any,
+    location: _CollectionEntry,
+) -> Any:
+    setattr(value, "_collection_entry", location)
+    return value
 
 
 class TimeSeries(_TypedValue):
-    """A typed time series whose items are independently usable modules."""
+    """Values of one type ordered in time."""
 
-    def _points(self):
-        return self.module.list_states().get("time_points", [])
+    def __init__(
+        self,
+        values: Sequence[Any],
+        *,
+        time_points: Sequence[TimePoint],
+    ) -> None:
+        if isinstance(values, (str, bytes, bytearray)) or not isinstance(
+            values, Sequence
+        ):
+            raise TypeError("TimeSeries values must be a sequence of PowerIO values")
+        if not isinstance(time_points, Sequence):
+            raise TypeError("time_points must be a sequence of TimePoint values")
+        points = tuple(time_points)
+        if not all(isinstance(point, TimePoint) for point in points):
+            raise TypeError("time_points must contain only TimePoint values")
+        modules = [PioModule.from_value(value)._inner for value in values]
+        inner = _powerio._PioModule._from_time_series(
+            modules,
+            [(point.label, point.duration_seconds) for point in points],
+        )
+        super().__init__(PioModule(inner))
+
+    @classmethod
+    def _from_module(cls, module: "PioModule") -> "TimeSeries":
+        value = object.__new__(cls)
+        _TypedValue.__init__(value, module)
+        return value
+
+    @property
+    def time_points(self) -> tuple[TimePoint, ...]:
+        return tuple(TimePoint(*point) for point in self.module._inner._time_series_points())
 
     def __len__(self) -> int:
-        return len(self._points())
+        return self.module._inner._time_series_len()
 
-    def __getitem__(self, index: int) -> "PioModule":
+    def __getitem__(self, index: int) -> Any:
         try:
             position = _operator.index(index)
         except TypeError:
             raise TypeError("time series indices must be integers") from None
-        length = len(self)
         if position < 0:
-            position += length
-        if position < 0 or position >= length:
+            position += len(self)
+        if position < 0 or position >= len(self):
             raise IndexError("time series index out of range")
-        return self.module.export_state(time_position=position)
+        current = self._collection_entry or _CollectionEntry(self.module)
+        if current.time_index is not None:
+            raise TypeError("nested TimeSeries values are not supported")
+        value = PioModule(self.module._inner._time_series_get(position)).value
+        return _bind_collection_entry(
+            value,
+            _CollectionEntry(
+                root=current.root,
+                time_index=position,
+                scenario_id=current.scenario_id,
+            ),
+        )
 
     def __iter__(self):
-        for position in range(len(self)):
-            yield self[position]
+        return (self[position] for position in range(len(self)))
 
 
 class ScenarioSet(_TypedValue):
-    """A typed scenario mapping whose values are independently usable modules."""
+    """Named alternatives of one type, with optional probabilities."""
 
-    def keys(self) -> "tuple[str, ...]":
-        return tuple(
-            scenario["id"]
-            for scenario in self.module.list_states().get("scenarios", [])
+    def __init__(
+        self,
+        values: Mapping[str, Any],
+        *,
+        probabilities: Optional[Mapping[str, float]] = None,
+    ) -> None:
+        if not isinstance(values, Mapping):
+            raise TypeError("ScenarioSet values must be a mapping from IDs to values")
+        if probabilities is not None and not isinstance(probabilities, Mapping):
+            raise TypeError("probabilities must be a mapping from scenario IDs to numbers")
+        ids = list(values)
+        modules = [PioModule.from_value(values[id])._inner for id in ids]
+        inner = _powerio._PioModule._from_scenario_set(
+            modules,
+            ids,
+            None if probabilities is None else dict(probabilities),
         )
+        super().__init__(PioModule(inner))
+
+    @classmethod
+    def _from_module(cls, module: "PioModule") -> "ScenarioSet":
+        value = object.__new__(cls)
+        _TypedValue.__init__(value, module)
+        return value
+
+    @property
+    def scenarios(self) -> tuple[Scenario, ...]:
+        return tuple(Scenario(*entry) for entry in self.module._inner._scenario_entries())
+
+    def keys(self) -> tuple[str, ...]:
+        return tuple(scenario.id for scenario in self.scenarios)
 
     def __len__(self) -> int:
-        return len(self.keys())
+        return len(self.scenarios)
 
     def __iter__(self):
         return iter(self.keys())
@@ -897,139 +976,177 @@ class ScenarioSet(_TypedValue):
     def __contains__(self, scenario: object) -> bool:
         return isinstance(scenario, str) and scenario in self.keys()
 
-    def __getitem__(self, scenario: str) -> "PioModule":
+    def __getitem__(self, scenario: str) -> Any:
         if not isinstance(scenario, str):
             raise TypeError("scenario keys must be strings")
         if scenario not in self:
             raise KeyError(scenario)
-        return self.module.export_state(scenario=scenario)
+        current = self._collection_entry or _CollectionEntry(self.module)
+        if current.scenario_id is not None:
+            raise TypeError("nested ScenarioSet values are not supported")
+        value = PioModule(self.module._inner._scenario_get(scenario)).value
+        return _bind_collection_entry(
+            value,
+            _CollectionEntry(
+                root=current.root,
+                time_index=current.time_index,
+                scenario_id=scenario,
+            ),
+        )
 
 
-class DcPfInstance(_TypedValue):
-    """A DC power flow problem instance."""
+class OperatingPoint(_TypedValue):
+    """A possibly partial assignment over fixed equipment identities."""
 
 
-class AcPfInstance(_TypedValue):
-    """An AC power flow problem instance."""
+class _BalancedCalculation(_TypedValue):
+    """A calculation over one shared balanced network."""
+
+    @property
+    def network(self) -> BalancedNetwork:
+        """The balanced network used by this calculation."""
+        return BalancedNetwork(self.module._inner._balanced_calculation_network())
 
 
-class DcOpfInstance(_TypedValue):
-    """A DC OPF problem instance."""
+class _MulticonductorCalculation(_TypedValue):
+    """A calculation over one shared multiconductor network."""
+
+    @property
+    def network(self) -> MulticonductorNetwork:
+        """The multiconductor network used by this calculation."""
+        return MulticonductorNetwork(
+            self.module._inner._multiconductor_calculation_network()
+        )
 
 
-class AcOpfInstance(_TypedValue):
-    """An AC OPF problem instance."""
+class _CalculationSolution(_TypedValue):
+    """A solution that retains the exact typed instance it solves."""
+
+    @property
+    def instance(self) -> _TypedValue:
+        """The calculation instance solved by this result."""
+        return PioModule(self.module._inner._calculation_solution_instance()).value
 
 
-class McAcPfInstance(_TypedValue):
-    """A multiconductor AC power flow problem instance."""
+class DcPfInstance(_BalancedCalculation):
+    """A DC power flow calculation instance."""
 
 
-class McAcOpfInstance(_TypedValue):
-    """A multiconductor AC OPF problem instance."""
+class AcPfInstance(_BalancedCalculation):
+    """An AC power flow calculation instance."""
 
 
-class AcScucInstance(_TypedValue):
-    """An AC security constrained unit commitment problem instance."""
+class DcOpfInstance(_BalancedCalculation):
+    """A DC optimal power flow calculation instance."""
 
 
-class DcPfSolution(_TypedValue):
+class AcOpfInstance(_BalancedCalculation):
+    """An AC optimal power flow calculation instance."""
+
+
+class McAcPfInstance(_MulticonductorCalculation):
+    """A multiconductor AC power flow calculation instance."""
+
+
+class McAcOpfInstance(_MulticonductorCalculation):
+    """A multiconductor AC optimal power flow calculation instance."""
+
+
+class AcScucInstance(_BalancedCalculation):
+    """An AC security constrained unit commitment calculation instance."""
+
+    @property
+    def inputs(self) -> ScucInputs:
+        """Scheduling, reserve, and contingency inputs."""
+        return self.module._inner._ac_scuc_inputs()
+
+
+class DcPfSolution(_BalancedCalculation, _CalculationSolution):
     """A DC power flow solution."""
 
 
-class AcPfSolution(_TypedValue):
+class AcPfSolution(_BalancedCalculation, _CalculationSolution):
     """An AC power flow solution."""
 
 
-class DcOpfSolution(_TypedValue):
-    """A DC OPF solution."""
+class DcOpfSolution(_BalancedCalculation, _CalculationSolution):
+    """A DC optimal power flow solution."""
 
 
-class AcOpfSolution(_TypedValue):
-    """An AC OPF solution."""
+class AcOpfSolution(_BalancedCalculation, _CalculationSolution):
+    """An AC optimal power flow solution."""
 
 
-class McAcPfSolution(_TypedValue):
+class SocwrOpfSolution(_BalancedCalculation, _CalculationSolution):
+    """A PowerModels SOCWR relaxation solution and objective lower bound."""
+
+
+class McAcPfSolution(_MulticonductorCalculation, _CalculationSolution):
     """A multiconductor AC power flow solution."""
 
 
-class McAcOpfSolution(_TypedValue):
-    """A multiconductor AC OPF solution."""
+class McAcOpfSolution(_MulticonductorCalculation, _CalculationSolution):
+    """A multiconductor AC optimal power flow solution."""
 
 
-class AcScucSolution(_TypedValue):
+class AcScucSolution(_BalancedCalculation, _CalculationSolution):
     """An AC security constrained unit commitment solution."""
 
+    @property
+    def termination(self) -> str:
+        """How the calculation ended."""
+        return self.module._inner._ac_scuc_solution_termination()
 
-class UnknownValue(_TypedValue):
-    """A module kind this release does not expose as a typed Python value.
+    @property
+    def residuals(self) -> Residuals:
+        """Reported active and reactive power balance residuals."""
+        return self.module._inner._ac_scuc_solution_residuals()
 
-    This covers a kind newer than this release and a known value whose state
-    cannot yet be exported without inventing semantics, such as a
-    multiconductor operating point series. ``module`` and ``kind`` still work,
-    so a caller can inspect, store, or emit the module unchanged.
-    """
+    @property
+    def producer(self) -> Optional[str]:
+        """Producer or solver identity, when recorded."""
+        return self.module._inner._ac_scuc_solution_producer()
+
+    @property
+    def network_outputs(self) -> ScucNetworkOutputs:
+        """Per interval network outputs."""
+        return self.module._inner._ac_scuc_solution_network_outputs()
+
+    @property
+    def device_outputs(self) -> ScucDeviceOutputs:
+        """Per interval dispatchable device outputs."""
+        return self.module._inner._ac_scuc_solution_device_outputs()
+
+    @property
+    def objective(self) -> Optional[float]:
+        """Reported objective value, when present."""
+        return self.module._inner._ac_scuc_solution_objective()
 
 
-# kind string (PioModule.kind) -> the .value wrapper it reads back as. The two
-# network kinds ("balanced_network", "multiconductor_network") are not here:
-# PioModule.value special-cases them to the real network handle instead of one
-# of these thin wrappers.
-_VALUE_CLASSES: "dict[str, type]" = {
-    "balanced_network_time_series": TimeSeries,
-    "balanced_operating_point_time_series": TimeSeries,
-    "multiconductor_operating_point_time_series": UnknownValue,
-    "balanced_network_scenario_set": ScenarioSet,
-    "dc_pf_instance": DcPfInstance,
-    "ac_pf_instance": AcPfInstance,
-    "dc_opf_instance": DcOpfInstance,
-    "ac_opf_instance": AcOpfInstance,
-    "mc_ac_pf_instance": McAcPfInstance,
-    "mc_ac_opf_instance": McAcOpfInstance,
-    "ac_scuc_instance": AcScucInstance,
-    "dc_pf_solution": DcPfSolution,
-    "ac_pf_solution": AcPfSolution,
-    "dc_opf_solution": DcOpfSolution,
-    "ac_opf_solution": AcOpfSolution,
-    "mc_ac_pf_solution": McAcPfSolution,
-    "mc_ac_opf_solution": McAcOpfSolution,
-    "ac_scuc_solution": AcScucSolution,
-}
-
-# The inverse is not one-to-one because TimeSeries covers two stable value
-# kinds. These sets make ``value_type`` an assertion for every typed value the
-# runtime already returns through ``PioModule.value``.
-_VALUE_TYPE_KINDS = {
-    TimeSeries: frozenset(
-        {
-            "balanced_network_time_series",
-            "balanced_operating_point_time_series",
-        }
-    ),
-    ScenarioSet: frozenset({"balanced_network_scenario_set"}),
-    DcPfInstance: frozenset({"dc_pf_instance"}),
-    AcPfInstance: frozenset({"ac_pf_instance"}),
-    DcOpfInstance: frozenset({"dc_opf_instance"}),
-    AcOpfInstance: frozenset({"ac_opf_instance"}),
-    McAcPfInstance: frozenset({"mc_ac_pf_instance"}),
-    McAcOpfInstance: frozenset({"mc_ac_opf_instance"}),
-    AcScucInstance: frozenset({"ac_scuc_instance"}),
-    DcPfSolution: frozenset({"dc_pf_solution"}),
-    AcPfSolution: frozenset({"ac_pf_solution"}),
-    DcOpfSolution: frozenset({"dc_opf_solution"}),
-    AcOpfSolution: frozenset({"ac_opf_solution"}),
-    McAcPfSolution: frozenset({"mc_ac_pf_solution"}),
-    McAcOpfSolution: frozenset({"mc_ac_opf_solution"}),
-    AcScucSolution: frozenset({"ac_scuc_solution"}),
+_VALUE_CLASSES: dict[str, type[_TypedValue]] = {
+    "powerio.OperatingPoint<powerio.BalancedNetwork>": OperatingPoint,
+    "powerio.OperatingPoint<powerio.MulticonductorNetwork>": OperatingPoint,
+    "powerio.DcPfInstance": DcPfInstance,
+    "powerio.AcPfInstance": AcPfInstance,
+    "powerio.DcOpfInstance": DcOpfInstance,
+    "powerio.AcOpfInstance": AcOpfInstance,
+    "powerio.McAcPfInstance": McAcPfInstance,
+    "powerio.McAcOpfInstance": McAcOpfInstance,
+    "powerio.AcScucInstance": AcScucInstance,
+    "powerio.DcPfSolution": DcPfSolution,
+    "powerio.AcPfSolution": AcPfSolution,
+    "powerio.DcOpfSolution": DcOpfSolution,
+    "powerio.AcOpfSolution": AcOpfSolution,
+    "powerio.SocwrOpfSolution": SocwrOpfSolution,
+    "powerio.McAcPfSolution": McAcPfSolution,
+    "powerio.McAcOpfSolution": McAcOpfSolution,
+    "powerio.AcScucSolution": AcScucSolution,
 }
 
 
 class PioModule:
-    """A runtime module handle: one typed value with its common records.
-
-    The stored form is ``.pio.json`` version 1; released 0.9 packages upgrade
-    one way on read. Selection returns the existing typed item; export is the
-    separate explicit materialization.
+    """One typed value with diagnostics, producer, sources, source mappings,
+    history, and extensions.
     """
 
     def __init__(self, inner: "_powerio._PioModule"):
@@ -1037,215 +1154,298 @@ class PioModule:
 
     @classmethod
     def from_value(cls, value: Any) -> "PioModule":
-        """Wrap an existing network value without serializing or reparsing it.
-
-        Common records and retained source remain attached, so a parsed value
-        still emits a byte exact same format echo. A generated value gains the
-        ordinary module ``emit`` path.
-        """
+        """Wrap an existing typed value without serializing it."""
         if isinstance(value, BalancedNetwork):
             return cls(_powerio._PioModule.from_balanced_network(value._inner))
         if isinstance(value, dist.MulticonductorNetwork):
             return cls(_powerio._PioModule.from_multiconductor_network(value._inner))
-        raise TypeError(
-            "PioModule.from_value expects a BalancedNetwork or MulticonductorNetwork"
-        )
+        if isinstance(value, _TypedValue):
+            location = value._collection_entry
+            inner = value.module._inner
+            if location is not None:
+                inner = location.root._inner
+                if location.scenario_id is not None:
+                    inner = inner._scenario_get(location.scenario_id)
+                if location.time_index is not None:
+                    inner = inner._time_series_get(location.time_index)
+            return cls(inner._copy())
+        raise TypeError("PioModule.from_value expects a typed PowerIO value")
 
     @property
     def value(self) -> Any:
-        """The typed value ``kind`` names, as the ordinary Python object for it.
-
-        ``balanced_network`` and ``multiconductor_network`` read back as the
-        network handle (:class:`BalancedNetwork` /
-        :class:`dist.MulticonductorNetwork`). Every other kind reads back as
-        a thin wrapper — :class:`TimeSeries`, :class:`ScenarioSet`, or one of
-        the calculation instance/solution classes (:class:`DcPfInstance`,
-        :class:`AcOpfSolution`, and so on) — holding this module; a kind this
-        release cannot expose without loss reads back as
-        :class:`UnknownValue`. This is the ordinary way to read the value
-        :func:`parse_file` narrowed to with ``value_type``.
-        """
-        kind = self.kind
-        if kind == "balanced_network":
-            return self.as_balanced_network()
-        if kind == "multiconductor_network":
-            return self.as_multiconductor_network()
-        return _VALUE_CLASSES.get(kind, UnknownValue)(self, kind)
-
-    def as_balanced_network(self) -> "BalancedNetwork":
-        """The balanced network value as a network handle (cheap table
-        share). Raises when the module carries another kind. ``.value`` is
-        the ordinary spelling; call this directly only when the static
-        ``BalancedNetwork`` return type (rather than ``Any``) matters."""
-        return BalancedNetwork(self._inner.as_balanced_network())
-
-    def as_multiconductor_network(self) -> "dist.MulticonductorNetwork":
-        """The multiconductor network value as a network handle. Raises when
-        the module carries another kind. ``.value`` is the ordinary
-        spelling; call this directly only when the static
-        ``MulticonductorNetwork`` return type (rather than ``Any``) matters."""
-        return dist.MulticonductorNetwork(self._inner.as_multiconductor_network())
-
-    def emit(self, format: str, destination: Optional[Any] = None):
-        """Emit the module in a target format.
-
-        With no ``destination``, the result contains emitted text and
-        diagnostics. With a path destination, the complete artifact inventory
-        is committed there and ``text`` is ``None``. The return type is always
-        :class:`EmitResult`. For a directory format such as ``dss`` or
-        ``pypsa-csv``, ``destination`` names the output directory; ``dss``
-        stores its primary case as ``case.dss`` beside any companion files.
-
-        """
-        if destination is None:
-            text, diagnostics = _native_attr(self._inner, "to_format")(format)
-            return EmitResult(text, diagnostics)
-        diagnostics = _native_attr(self._inner, "write_file")(str(destination), format)
-        return EmitResult(None, diagnostics)
+        """The contained typed value."""
+        type_name = self._inner._type_name
+        if type_name == "powerio.BalancedNetwork":
+            return BalancedNetwork(self._inner.as_balanced_network())
+        if type_name == "powerio.MulticonductorNetwork":
+            return dist.MulticonductorNetwork(self._inner.as_multiconductor_network())
+        if type_name.startswith("powerio.TimeSeries<"):
+            return TimeSeries._from_module(self)
+        if type_name.startswith("powerio.ScenarioSet<"):
+            return ScenarioSet._from_module(self)
+        value_class = _VALUE_CLASSES.get(type_name)
+        if value_class is None:
+            raise RuntimeError(f"this binding has no Python class for {type_name}")
+        return value_class(self)
 
     @property
-    def kind(self) -> str:
-        """The value's permanent kind identifier."""
-        return self._inner.kind()
-
-    def inspect(self) -> Any:
-        """Value inspection and supported operation discovery."""
-        return _json.loads(self._inner.inspect_json())
-
-    @property
-    def diagnostics(self) -> "list[_powerio.Diagnostic]":
+    def diagnostics(self) -> list[Diagnostic]:
         """The diagnostics stored on this module, in encounter order."""
-        return _native_attr(self._inner, "diagnostics")()
-
-    def list_states(self) -> Any:
-        """List the typed time points or scenarios stored by this module."""
-        return _json.loads(self._inner.list_states_json())
-
-    def inspect_state(
-        self,
-        time_position: Optional[int] = None,
-        scenario: Optional[str] = None,
-    ) -> Any:
-        """Describe the selected existing typed item without materializing.
-
-        ``time_position`` is zero based, the C convention: the first point in
-        the series or scenario set is position ``0``.
-        """
-        return _json.loads(self._inner.inspect_state_json(time_position, scenario))
-
-    def export_state(
-        self,
-        time_position: Optional[int] = None,
-        scenario: Optional[str] = None,
-    ) -> "PioModule":
-        """Export the selected item as an independent static module.
-
-        ``time_position`` is zero based, the C convention: the first point in
-        the series or scenario set is position ``0``.
-        """
-        return PioModule(self._inner.export_state(time_position, scenario))
+        return list(self._inner.diagnostics)
 
     def to_balanced_report(self, base_mva: float = 100.0) -> Any:
-        """Report whether a multiconductor value can become balanced."""
+        """Report whether a multiconductor network can become balanced."""
         return _json.loads(self._inner.lowering_readiness_json(base_mva))
 
     def to_balanced(self, base_mva: float = 100.0) -> "PioModule":
-        """Transform the multiconductor value to a balanced module.
-
-        On refusal, raises :class:`PowerIODataError` with the refusal's
-        diagnostic code as ``.code`` and its structured findings as
-        ``.diagnostics`` (a list of dicts with ``code``, ``severity``,
-        ``message``, and ``target``).
-        """
+        """Transform a multiconductor network to a balanced module."""
         return PioModule(self._inner.lower_to_balanced(base_mva))
+
+    def to_dc_pf_instance(self) -> "PioModule":
+        """Build a DC power flow instance from a balanced network module."""
+        return PioModule(self._inner._to_dc_pf_instance())
+
+    def to_ac_pf_instance(self) -> "PioModule":
+        """Build an AC power flow instance from a balanced network module."""
+        return PioModule(self._inner._to_ac_pf_instance())
+
+    def to_dc_opf_instance(self) -> "PioModule":
+        """Build a DC optimal power flow instance from a balanced network module."""
+        return PioModule(self._inner._to_dc_opf_instance())
+
+    def to_ac_opf_instance(self) -> "PioModule":
+        """Build an AC optimal power flow instance from a balanced network module."""
+        return PioModule(self._inner._to_ac_opf_instance())
+
+    def to_mc_ac_pf_instance(self) -> "PioModule":
+        """Build a multiconductor AC power flow instance from a network module."""
+        return PioModule(self._inner._to_mc_ac_pf_instance())
+
+    def to_mc_ac_opf_instance(self) -> "PioModule":
+        """Build a multiconductor AC optimal power flow instance from a network module."""
+        return PioModule(self._inner._to_mc_ac_opf_instance())
 
     def __repr__(self) -> str:
         return repr(self._inner)
 
 
-def _assert_value_type(module: "PioModule", value_type: Optional[type]) -> "PioModule":
-    """Apply the optional typed-value assertion shared by parse entries."""
-    if value_type is None or value_type is PioModule:
-        return module
-    if value_type is BalancedNetwork:
-        expected = frozenset({"balanced_network"})
-    elif value_type is dist.MulticonductorNetwork:
-        expected = frozenset({"multiconductor_network"})
-    elif value_type in _VALUE_TYPE_KINDS:
-        expected = _VALUE_TYPE_KINDS[value_type]
+def _selected_collection_value(location: _CollectionEntry) -> Any:
+    value = location.root.value
+    time_index = location.time_index
+    scenario_id = location.scenario_id
+    while time_index is not None or scenario_id is not None:
+        if isinstance(value, TimeSeries) and time_index is not None:
+            value = value[time_index]
+            time_index = None
+        elif isinstance(value, ScenarioSet) and scenario_id is not None:
+            value = value[scenario_id]
+            scenario_id = None
+        elif time_index is not None:
+            raise TypeError("the selected value is not a TimeSeries")
+        else:
+            raise TypeError("the selected value is not a ScenarioSet")
+    return value
+
+
+def _refresh_collection_entry(target: Any, location: _CollectionEntry) -> None:
+    refreshed = _selected_collection_value(location)
+    if type(refreshed) is not type(target):
+        raise RuntimeError("a collection update changed the entry type")
+    if isinstance(target, BalancedNetwork):
+        target._inner = refreshed._inner
+    elif isinstance(target, dist.MulticonductorNetwork):
+        target._inner = refreshed._inner
+    elif isinstance(target, _TypedValue):
+        target.module = refreshed.module
+        target._collection_entry = refreshed._collection_entry
     else:
-        raise TypeError(
-            "value_type must be powerio.PioModule or a public powerio value class"
-        )
-    if module.kind not in expected:
-        expected_text = (
-            repr(next(iter(expected)))
-            if len(expected) == 1
-            else "one of " + repr(tuple(sorted(expected)))
-        )
-        raise ValueError(
-            f"parsed value has kind {module.kind!r}; value_type="
-            f"{value_type.__name__} asserts {expected_text}"
-        )
-    return module
+        raise TypeError("the selected value does not support typed updates")
 
 
-def parse_file(
-    path: Any,
-    format: Optional[str] = None,
-    *,
-    include_root: Optional[Any] = None,
-    value_type: Optional[type] = None,
-) -> "PioModule":
-    """Parse a file into a :class:`PioModule`.
+def apply_updates(
+    target: Any,
+    updates: Union[
+        Iterable[OperatingPointUpdate],
+        Iterable[NetworkUpdate],
+        Iterable[CalculationUpdate],
+    ],
+) -> UpdateReport:
+    """Validate and apply one batch of typed updates atomically.
 
-    ``format`` overrides format detection. ``include_root`` widens the
-    acquisition root for formats whose includes reference sibling files.
+    ``updates`` contains one update class: :class:`OperatingPointUpdate`,
+    :class:`NetworkUpdate`, or :class:`CalculationUpdate`. Values are absolute
+    replacements and power quantities carry their units in the typed value.
+    ``target`` is a module or a value obtained by indexing a :class:`TimeSeries`
+    or :class:`ScenarioSet`. If validation fails, the module is unchanged.
     """
+    batch = list(updates)
+    if isinstance(target, PioModule):
+        return target._inner._apply_updates(batch)
+    location = getattr(target, "_collection_entry", None)
+    if not isinstance(location, _CollectionEntry):
+        raise TypeError(
+            "target must be a PioModule or a TimeSeries/ScenarioSet entry"
+        )
+    report = location.root._inner._apply_collection_updates(
+        batch,
+        time_index=location.time_index,
+        scenario_id=location.scenario_id,
+    )
+    _refresh_collection_entry(target, location)
+    return report
+
+
+def apply_bus_load_active_power(
+    module: PioModule,
+    bus_id: int,
+    total: ActivePower,
+    *,
+    allocation: str = "proportional_to_current_active_power",
+) -> UpdateReport:
+    """Replace aggregate bus demand through an explicit PowerIO allocation rule.
+
+    ``"proportional_to_current_active_power"`` preserves each participating
+    load's current share. ``"equal"`` gives every participating load the same
+    share, including when their current aggregate demand is zero. PowerIO
+    requires stable load IDs and reports each load changed.
+    """
+    if not isinstance(module, PioModule):
+        raise TypeError("module must be a PioModule")
+    if not isinstance(total, ActivePower):
+        raise TypeError("total must be an ActivePower")
+    return module._inner._apply_bus_load_active_power(
+        bus_id,
+        total,
+        allocation=allocation,
+    )
+
+
+def _path_from_source(source: Any) -> Optional[str]:
+    if isinstance(source, str):
+        return source
+    if isinstance(source, (bytes, bytearray, memoryview)):
+        return None
     try:
-        path = _os.fspath(path)
-    except TypeError as error:
-        raise TypeError(
-            "parse_file path must be a string or path-like object"
-        ) from error
+        path = _os.fspath(source)
+    except TypeError:
+        return None
     if isinstance(path, bytes):
-        raise TypeError("parse_file path must be text, not bytes")
-    root = None if include_root is None else str(include_root)
-    module = PioModule(
-        _native_attr(_powerio._PioModule, "from_file")(path, format, root)
-    )
-    return _assert_value_type(module, value_type)
+        raise TypeError("a path-like source must return str, not bytes")
+    return path
 
 
-def parse_text(
-    text: str,
-    *,
-    name: str,
-    format: Optional[str] = None,
-    include_root: Optional[Any] = None,
-    value_type: Optional[type] = None,
-) -> "PioModule":
-    """Parse text held in memory into a :class:`PioModule`.
-
-    ``name`` identifies the source in diagnostics and enables extension based
-    format detection. In-memory sources never acquire referenced files, so a
-    non-``None`` ``include_root`` is refused; use :func:`parse_file` for a case
-    that reads includes from disk.
-    """
-    if not isinstance(text, str):
-        raise TypeError("parse_text text must be a string")
+def _memory_from_source(source: Any, name: Optional[str]) -> tuple[bytes, str]:
+    if isinstance(source, (bytes, bytearray, memoryview)):
+        data = bytes(source)
+    else:
+        read = getattr(source, "read", None)
+        if read is None:
+            raise TypeError(
+                "source must be a path, file object, or bytes-like object"
+            )
+        data = read()
+        if isinstance(data, str):
+            data = data.encode("utf-8")
+        elif isinstance(data, (bytes, bytearray, memoryview)):
+            data = bytes(data)
+        else:
+            raise TypeError("source.read() must return str or bytes-like data")
+    if name is None:
+        candidate = getattr(source, "name", None)
+        try:
+            candidate = _os.fspath(candidate) if candidate is not None else None
+        except TypeError:
+            candidate = None
+        name = candidate if isinstance(candidate, str) else "<memory>"
     if not isinstance(name, str):
-        raise TypeError("parse_text name must be a string")
-    if include_root is not None:
-        raise ValueError(
-            "parse_text cannot acquire files from include_root; use parse_file"
-        )
-    module = PioModule(
-        _native_attr(_powerio._PioModule, "from_bytes")(
-            text.encode("utf-8"), format, name
-        )
+        raise TypeError("name must be a string")
+    return data, name
+
+
+def parse(
+    source: Any,
+    *,
+    format: Optional[str] = None,
+    name: Optional[str] = None,
+) -> PioModule:
+    """Parse a path, file object, or bytes-like source.
+
+    A string is always a path. Pass raw text through ``io.StringIO`` or
+    another file object.
+    """
+    path = _path_from_source(source)
+    if path is not None:
+        if name is not None:
+            raise ValueError("name is only valid for memory and file object sources")
+        return PioModule(_powerio._PioModule._parse_path(path, format))
+    data, source_name = _memory_from_source(source, name)
+    return PioModule(_powerio._PioModule._parse_memory(data, source_name, format))
+
+
+def _result_from_native(result: dict[str, Any]) -> EmitResult:
+    return EmitResult(
+        artifacts=tuple(Artifact(**artifact) for artifact in result["artifacts"]),
+        layout=result["layout"],
+        fidelity=result["fidelity"],
+        diagnostics=tuple(result["diagnostics"]),
     )
-    return _assert_value_type(module, value_type)
+
+
+def _emit_to_destination(
+    module: PioModule,
+    destination: Optional[Any],
+    memory_call: Any,
+    path_call: Any,
+) -> EmitResult:
+    if not isinstance(module, PioModule):
+        raise TypeError("module must be a PioModule")
+    if destination is None:
+        return _result_from_native(memory_call())
+    path = _path_from_source(destination)
+    if path is not None:
+        return _result_from_native(path_call(path))
+    write = getattr(destination, "write", None)
+    if write is None:
+        raise TypeError("destination must be a path or writable file object")
+    result = _result_from_native(memory_call())
+    if result.layout != "file" or len(result.artifacts) != 1:
+        raise ValueError("a directory emission requires a path destination")
+    data = result.artifacts[0].data
+    assert data is not None
+    try:
+        write(data)
+    except TypeError:
+        write(data.decode("utf-8"))
+    return result
+
+
+def emit(module: PioModule, format: str, destination: Optional[Any] = None) -> EmitResult:
+    """Emit a module as one grid exchange format."""
+    return _emit_to_destination(
+        module,
+        destination,
+        lambda: module._inner._emit_memory(format),
+        lambda path: module._inner._emit_path(format, path),
+    )
+
+
+def serialize(module: PioModule, destination: Optional[Any] = None) -> EmitResult:
+    """Serialize a module as PowerIO IR."""
+    return _emit_to_destination(
+        module,
+        destination,
+        module._inner._serialize_memory,
+        module._inner._serialize_path,
+    )
+
+
+def deserialize(source: Any) -> PioModule:
+    """Deserialize PowerIO IR from a path, file object, or bytes-like source."""
+    path = _path_from_source(source)
+    if path is not None:
+        return PioModule(_powerio._PioModule._deserialize_path(path))
+    data, _ = _memory_from_source(source, None)
+    return PioModule(_powerio._PioModule._deserialize_memory(data))
 
 
 def features() -> dict[str, bool]:
@@ -1253,9 +1453,8 @@ def features() -> dict[str, bool]:
 
     ``matrix``, ``dist``, and ``prob`` are unconditional dependencies of the
     extension and are always ``True``. ``gridfm`` reflects whether the
-    GridFM Parquet parser and emitter (``BalancedNetwork.emit_gridfm`` and
-    ``emit_gridfm_batch``) were compiled in; the published wheel always includes them,
-    but a custom source build can omit it (see :func:`emit_gridfm_batch`).
+    GridFM Parquet parsing and emission were compiled in; the published wheel
+    always includes them, while a custom source build can omit them.
     ``arrow`` is always ``False``: unlike the C ABI and the Julia binding,
     this binding calls into the Rust core directly and does not expose the
     Arrow C Data Interface.

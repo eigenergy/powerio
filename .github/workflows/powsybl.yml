@@ -1,0 +1,46 @@
+name: PowSyBl import
+
+on:
+  pull_request:
+    paths:
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "powerio/**"
+      - "powerio-cli/**"
+      - "powerio-core/**"
+      - "powerio-prob/**"
+      - "powerio-tx/**"
+      - "evals/powsybl/**"
+      - "tests/data/case9.m"
+      - ".github/workflows/powsybl.yml"
+  push:
+    branches: ["main"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+    - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+    - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      with:
+        python-version: "3.12"
+        cache: pip
+        cache-dependency-path: evals/powsybl/requirements.txt
+    - name: Install PyPowSyBl
+      run: python -m pip install -r evals/powsybl/requirements.txt
+    - name: Build PowerIO
+      run: cargo build -p powerio-cli
+    - name: Load fresh PowerIO output with PowSyBl
+      run: bash evals/powsybl/run.sh target/debug/powerio python

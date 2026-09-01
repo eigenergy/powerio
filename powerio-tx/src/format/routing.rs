@@ -39,6 +39,7 @@ pub enum TransmissionFormat {
     Psse,
     Psse34,
     Psse35,
+    PsseRawx,
     PowerWorld,
     PandapowerJson,
     PypsaCsv,
@@ -48,6 +49,8 @@ pub enum TransmissionFormat {
     Goc3Json,
     SurgeJson,
     DeepMindOpfDataJson,
+    Xiidm,
+    Cgmes,
 }
 
 impl TransmissionFormat {
@@ -59,6 +62,7 @@ impl TransmissionFormat {
             Self::Psse => "psse",
             Self::Psse34 => "psse34",
             Self::Psse35 => "psse35",
+            Self::PsseRawx => "psse-rawx",
             Self::PowerWorld => "powerworld",
             Self::PandapowerJson => "pandapower-json",
             Self::PypsaCsv => "pypsa-csv",
@@ -68,6 +72,8 @@ impl TransmissionFormat {
             Self::Goc3Json => "goc3-json",
             Self::SurgeJson => "surge-json",
             Self::DeepMindOpfDataJson => "opfdata-json",
+            Self::Xiidm => "xiidm",
+            Self::Cgmes => "cgmes",
         }
     }
 }
@@ -135,6 +141,7 @@ pub fn parse_transmission_format(name: &str) -> Option<TransmissionFormat> {
         "psse" | "psse33" | "raw" | "raw33" => Some(TransmissionFormat::Psse),
         "psse34" | "raw34" => Some(TransmissionFormat::Psse34),
         "psse35" | "raw35" => Some(TransmissionFormat::Psse35),
+        "psserawx" | "rawx" => Some(TransmissionFormat::PsseRawx),
         "powerworld" | "aux" => Some(TransmissionFormat::PowerWorld),
         "pandapowerjson" | "pandapower" | "pp" => Some(TransmissionFormat::PandapowerJson),
         "pypsacsv" | "pypsa" => Some(TransmissionFormat::PypsaCsv),
@@ -143,6 +150,8 @@ pub fn parse_transmission_format(name: &str) -> Option<TransmissionFormat> {
         "gridfm" => Some(TransmissionFormat::Gridfm),
         "goc3" | "goc3json" | "go3" | "gochallenge3" | "c3" => Some(TransmissionFormat::Goc3Json),
         "surge" | "surgejson" => Some(TransmissionFormat::SurgeJson),
+        "xiidm" | "iidm" => Some(TransmissionFormat::Xiidm),
+        "cgmes" => Some(TransmissionFormat::Cgmes),
         "opfdata"
         | "opfdatajson"
         | "deepmindopfdata"
@@ -221,11 +230,7 @@ impl JsonClass {
 /// Classify a JSON document: a `.pio.json` stored module, bare model JSON, or a case
 /// document across the transmission and distribution domains.
 ///
-/// A package is recognized by a top level `model_kind` of `"balanced"` or
-/// `"multiconductor"` plus a `model` key (the released 0.9 shape), or by the
-/// version 1 stored module's own `schema: "powerio.module"` header; the value
-/// check keeps a case document that happens to carry those key names from
-/// being misrouted.
+/// PowerIO IR is recognized by its `schema: "powerio.module"` header.
 /// Model JSON is recognized by `buses` beside another network key, which the
 /// case formats spell differently (PowerModels writes `bus`, not `buses`).
 /// For a case, Unknown means there is no recognized top level marker, and
@@ -237,14 +242,7 @@ pub fn classify_json_text(text: &str) -> JsonClass {
     let Ok(header) = serde_json::from_str::<JsonHeader>(text.trim_start_matches('\u{feff}')) else {
         return JsonClass::Case(Detection::Unknown);
     };
-    if matches!(
-        header.model_kind.as_deref(),
-        Some("balanced" | "multiconductor")
-    ) && header.model
-    {
-        return JsonClass::Module;
-    }
-    // The version 1 stored module names itself in its header.
+    // PowerIO IR names itself in its header.
     if header.schema.as_deref() == Some("powerio.module") {
         return JsonClass::Module;
     }
@@ -347,7 +345,10 @@ impl<'de> Deserialize<'de> for NetworkField {
 }
 
 #[derive(Default, Deserialize)]
+#[expect(clippy::struct_excessive_bools)]
 struct NetworkHeader {
+    #[serde(default, deserialize_with = "present")]
+    caseid: bool,
     #[serde(default, deserialize_with = "present")]
     simple_dispatchable_device: bool,
     #[serde(default, deserialize_with = "present")]
@@ -390,10 +391,6 @@ struct MetadataHeader {
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Default, Deserialize)]
 struct JsonHeader {
-    #[serde(default, deserialize_with = "maybe_str")]
-    model_kind: Option<String>,
-    #[serde(default, deserialize_with = "present")]
-    model: bool,
     #[serde(default, deserialize_with = "maybe_str")]
     schema: Option<String>,
     #[serde(default, deserialize_with = "maybe_str", rename = "_class")]
@@ -466,6 +463,7 @@ impl JsonHeader {
             && (self.network.header.simple_dispatchable_device
                 || self.network.header.ac_line
                 || self.network.header.two_winding_transformer);
+        let is_rawx = self.network.header.caseid;
         let is_surge = self.format.as_deref() == Some("surge-json")
             && self.schema_version
             && self.network.present;
@@ -487,6 +485,7 @@ impl JsonHeader {
         let transmission = is_pandapower
             || is_egret
             || is_goc3
+            || is_rawx
             || is_surge
             || is_opfdata
             || is_model_json
@@ -517,6 +516,8 @@ impl JsonHeader {
                     TransmissionFormat::PandapowerJson
                 } else if is_egret {
                     TransmissionFormat::EgretJson
+                } else if is_rawx {
+                    TransmissionFormat::PsseRawx
                 } else if is_goc3 {
                     TransmissionFormat::Goc3Json
                 } else if is_surge {
@@ -547,19 +548,11 @@ mod tests {
     };
 
     #[test]
-    fn classifies_package() {
+    fn classifies_powerio_ir() {
         assert_eq!(
-            classify_json_text(
-                r#"{"model_kind":"multiconductor","model":{"kind":"multiconductor"}}"#
-            ),
+            classify_json_text(r#"{"schema":"powerio.module","version":1}"#),
             JsonClass::Module
         );
-        assert_eq!(
-            classify_json_text(r#"{"model_kind":"balanced","model":{}}"#),
-            JsonClass::Module
-        );
-        // A payload alone is not a package, and neither is a case document,
-        // even one that carries the package key names with case-file values.
         assert_eq!(
             classify_json_text(r#"{"buses":[],"linecodes":[]}"#),
             JsonClass::Case(Detection::Unknown)
@@ -687,6 +680,25 @@ mod tests {
     }
 
     #[test]
+    fn classifies_rawx_and_normalizes_its_alias() {
+        assert_eq!(
+            classify_json_text(
+                r#"{"network":{"caseid":{"fields":["rev"],"data":[35]},"bus":{"fields":[],"data":[]}}}"#
+            ),
+            JsonClass::Case(Detection::Known(SourceFormat::Transmission(
+                TransmissionFormat::PsseRawx
+            )))
+        );
+        for alias in ["psse-rawx", "rawx", "PSSERAWX"] {
+            assert_eq!(
+                super::parse_transmission_format(alias),
+                Some(TransmissionFormat::PsseRawx)
+            );
+        }
+        assert_eq!(TransmissionFormat::PsseRawx.name(), "psse-rawx");
+    }
+
+    #[test]
     fn resolves_goc3_aliases() {
         for alias in ["goc3-json", "goc3", "go3", "go-challenge-3", "c3"] {
             assert_eq!(
@@ -805,17 +817,7 @@ mod tests {
 
     /// A key's presence check is true even when its value is JSON `null`;
     /// only a genuinely absent key is absent. Pins the header deserializer
-    /// against the shortcut that would otherwise treat a `null` value the
-    /// same as a missing key.
-    #[test]
-    fn a_null_valued_marker_key_still_counts_as_present() {
-        assert_eq!(
-            classify_json_text(r#"{"model_kind":"balanced","model":null}"#),
-            JsonClass::Module
-        );
-    }
-
-    /// A string marker (`schema`, `model_kind`, `_class`, `format`) whose
+    /// A string marker (`schema`, `_class`, `format`) whose
     /// value is not a string carries no marker from that key, matching
     /// `serde_json::Value::as_str`'s permissive read; classification still
     /// proceeds over the document's other markers instead of erroring.

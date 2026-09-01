@@ -1,8 +1,8 @@
 //! PyO3 extension behind the `powerio` Python package.
 //!
-//! The extension exposes parsing, writing, conversion, matrices, packages, and
-//! problem instances. Parse and emission values cross as Python dictionaries
-//! and strings, so the base package does not import NumPy or SciPy.
+//! The extension exposes parsing, emission, serialization, transformations,
+//! matrices, modules, and calculation values. Base operations do not import
+//! NumPy or SciPy.
 //!
 //! The matrix methods hand back COO triplets as plain Python lists
 //! (`data`, `row`, `col`, `shape`); there is no NumPy at this layer. The
@@ -12,11 +12,13 @@
 //! Indices narrow to `i32` to match SciPy's default index width.
 //! `coo_triplets` checks the bound before conversion.
 
+use std::collections::HashMap;
 use std::path::Path;
+use std::time::Duration;
 
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
 use sprs::CsMat;
 
 use powerio::{BalancedNetwork, BranchSusceptanceFormula, DisplayData, PwdDisplay};
@@ -26,20 +28,9 @@ use powerio_matrix::matrix::{
     calc_admittance_matrix, calc_bdoubleprime_matrix, calc_bprime_matrix, calc_lacpf_matrix,
     calc_ptdf_lodf_with_options,
 };
-use powerio_matrix::{
-    DcOpfAssemblyOptions, DcOpfBundleMetadata, DcOpfBundleOptions, Units,
-    emit_dcopf_bundle as write_bundle,
-};
 use powerio_tx::{
-    Detection, EmitOptions, IndexCore, IndexedNetwork, JsonClass, MissingGenCostPolicy,
-    NormalizeOptions, POWER_MODELS_ANGLE_BOUND_PAD, TargetFormat,
-    classify_json_text as classify_balanced_json_text, parse_gen_cost_csv, parse_target_format,
-};
-
-#[cfg(feature = "gridfm")]
-use powerio_matrix::io::gridfm::{
-    GridfmOptions, GridfmOutputs, emit_gridfm_batch as gridfm_write_batch,
-    emit_gridfm_dataset as gridfm_write_dataset, number_snapshots as numbered_snapshots,
+    Detection, IndexCore, IndexedNetwork, JsonClass, NormalizeOptions,
+    POWER_MODELS_ANGLE_BOUND_PAD, classify_json_text as classify_balanced_json_text,
 };
 
 pyo3::create_exception!(
@@ -48,8 +39,7 @@ pyo3::create_exception!(
     pyo3::exceptions::PyValueError,
     "Base error raised by the powerio parser, emitter, or matrix calculations.\n\n\
      Subclasses `ValueError`: every failure it covers is a statement about a \
-     value the caller supplied, and `except ValueError` was what callers wrote \
-     before the hierarchy existed. I/O failures do not reach it; they raise the \
+     value the caller supplied. I/O failures do not reach it; they raise the \
      matching `OSError` subclass by value. Failures mapped from the Rust core \
      carry the diagnostic code string as a `.code` attribute."
 );
@@ -194,139 +184,76 @@ fn sensitivity_options(
     })
 }
 
-/// Accepts `perunit`/`pu`/`per-unit` and `native`.
-fn parse_units(s: &str) -> PyResult<Units> {
-    // The alias table is `Units: FromStr` in powerio-prob, shared with the
-    // C ABI binding.
-    s.parse::<Units>().map_err(PyValueError::new_err)
-}
-
-fn parse_missing_gen_cost(
-    s: Option<&str>,
-    default_gen_cost: Option<&str>,
-    default_policy: MissingGenCostPolicy,
-) -> PyResult<MissingGenCostPolicy> {
-    let Some(s) = s else {
-        if default_gen_cost.is_some() {
-            return Err(PyValueError::new_err(
-                "default_gen_cost is only valid with missing_gen_cost='quadratic'",
-            ));
-        }
-        return Ok(default_policy);
-    };
-    match normalize(s).as_str() {
-        "preserve" => {
-            if default_gen_cost.is_some() {
-                return Err(PyValueError::new_err(
-                    "default_gen_cost is only valid with missing_gen_cost='quadratic'",
-                ));
-            }
-            Ok(MissingGenCostPolicy::Preserve)
-        }
-        "require" => {
-            if default_gen_cost.is_some() {
-                return Err(PyValueError::new_err(
-                    "default_gen_cost is only valid with missing_gen_cost='quadratic'",
-                ));
-            }
-            Ok(MissingGenCostPolicy::Require)
-        }
-        "zero" => {
-            if default_gen_cost.is_some() {
-                return Err(PyValueError::new_err(
-                    "default_gen_cost is only valid with missing_gen_cost='quadratic'",
-                ));
-            }
-            Ok(MissingGenCostPolicy::zero())
-        }
-        "quadratic" => {
-            let value = default_gen_cost.ok_or_else(|| {
-                PyValueError::new_err(
-                    "missing_gen_cost='quadratic' requires default_gen_cost='c2,c1,c0'",
-                )
-            })?;
-            let [c2, c1, c0] = parse_cost_triple(value)?;
-            Ok(MissingGenCostPolicy::calc_quadratic(c2, c1, c0))
-        }
-        other => Err(PyValueError::new_err(format!(
-            "unknown missing_gen_cost {other:?}; expected 'preserve', 'require', 'zero', or 'quadratic'"
-        ))),
-    }
-}
-
-fn parse_cost_triple(value: &str) -> PyResult<[f64; 3]> {
-    let parts: Vec<_> = value.split(',').map(str::trim).collect();
-    if parts.len() != 3 {
-        return Err(PyValueError::new_err(
-            "default_gen_cost expects exactly three comma-separated values: c2,c1,c0",
-        ));
-    }
-    let mut out = [0.0; 3];
-    for (slot, part) in out.iter_mut().zip(parts) {
-        *slot = part.parse::<f64>().map_err(|_| {
-            PyValueError::new_err(format!("could not parse default_gen_cost value {part:?}"))
-        })?;
-        if !slot.is_finite() {
-            return Err(PyValueError::new_err(
-                "default_gen_cost values must be finite",
-            ));
-        }
-    }
-    Ok(out)
-}
-
-fn emit_options(
-    missing_gen_cost: Option<&str>,
-    default_gen_cost: Option<&str>,
-    gen_cost_csv: Option<&str>,
-    default_policy: MissingGenCostPolicy,
-) -> PyResult<EmitOptions> {
-    let missing_gen_cost =
-        parse_missing_gen_cost(missing_gen_cost, default_gen_cost, default_policy)?;
-    let gen_cost_patches = match gen_cost_csv {
-        Some(path) => {
-            let text = std::fs::read_to_string(path).map_err(|e| {
-                PyValueError::new_err(format!("reading gen_cost_csv {path:?}: {e}"))
-            })?;
-            parse_gen_cost_csv(&text).map_err(core_pyerr)?
-        }
-        None => Vec::new(),
-    };
-    Ok(EmitOptions {
-        missing_gen_cost,
-        gen_cost_patches,
-    })
-}
-
-/// Extract the single UTF-8 artifact produced for an in-memory file target.
-/// Directory formats must name a destination when they produce companions;
-/// returning only their primary text would silently discard the inventory.
-fn emitted_text(
+/// Convert one core emission result to the private dictionary consumed by the
+/// Python wrapper. Memory artifacts carry bytes; committed artifacts carry
+/// their filesystem path. The public wrapper turns these records into
+/// `Artifact` and `EmitResult` values.
+fn emit_result_to_py<'py>(
+    py: Python<'py>,
     result: powerio_core::EmitResult,
-    format: &str,
-) -> PyResult<(String, Vec<powerio_core::Diagnostic>)> {
-    let diagnostics = result.diagnostics().to_vec();
-    let powerio_core::EmittedOutput::Memory { mut artifacts } = result.into_output() else {
-        unreachable!("a memory destination always returns memory artifacts")
+) -> PyResult<Bound<'py, PyDict>> {
+    let layout = match result.layout() {
+        powerio_core::OutputLayout::File => "file",
+        powerio_core::OutputLayout::Directory => "directory",
     };
-    if artifacts.len() != 1 {
-        return Err(PowerIOError::new_err(format!(
-            "{format} emits {} artifacts; provide a destination path",
-            artifacts.len()
-        )));
-    }
-    let text = String::from_utf8(artifacts.remove(0).into_bytes()).map_err(|_| {
-        PowerIOError::new_err(format!("{format} emitted bytes that are not UTF-8 text"))
-    })?;
-    Ok((text, diagnostics))
-}
-
-fn py_diagnostics(result: &powerio_core::EmitResult) -> Vec<PyDiagnostic> {
-    result
+    let fidelity = match result.fidelity() {
+        powerio_core::Fidelity::ExactSameFormat => "exact_same_format",
+        powerio_core::Fidelity::Canonical => "canonical",
+    };
+    let diagnostics: Vec<_> = result
         .diagnostics()
         .iter()
         .map(PyDiagnostic::from)
-        .collect()
+        .collect();
+    let artifacts = PyList::empty(py);
+    match result.into_output() {
+        powerio_core::EmittedOutput::Memory {
+            artifacts: memory_artifacts,
+        } => {
+            for artifact in memory_artifacts {
+                let record = PyDict::new(py);
+                record.set_item("name", artifact.name().as_str())?;
+                record.set_item("data", PyBytes::new(py, artifact.bytes()))?;
+                record.set_item("path", py.None())?;
+                artifacts.append(record)?;
+            }
+        }
+        powerio_core::EmittedOutput::Path {
+            root,
+            artifacts: paths,
+        } => {
+            for path in paths {
+                let name = if layout == "directory" {
+                    path.strip_prefix(&root)
+                        .ok()
+                        .and_then(std::path::Path::to_str)
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| path.to_string_lossy().into_owned())
+                } else {
+                    path.file_name()
+                        .and_then(std::ffi::OsStr::to_str)
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| path.to_string_lossy().into_owned())
+                };
+                let record = PyDict::new(py);
+                record.set_item("name", name)?;
+                record.set_item("data", py.None())?;
+                record.set_item("path", path_to_str(&path)?)?;
+                artifacts.append(record)?;
+            }
+        }
+        _ => {
+            return Err(PowerIOError::new_err(
+                "this powerio build returned an unsupported output type",
+            ));
+        }
+    }
+    let output = PyDict::new(py);
+    output.set_item("artifacts", artifacts)?;
+    output.set_item("layout", layout)?;
+    output.set_item("fidelity", fidelity)?;
+    output.set_item("diagnostics", diagnostics)?;
+    Ok(output)
 }
 
 /// A JSON serialization failure in this binding's own writer, raised on the
@@ -358,13 +285,12 @@ fn diagnostics_json_array(diagnostics: &[powerio_core::Diagnostic]) -> Vec<serde
         .collect()
 }
 
-/// Package a GO Challenge 3 document: the balanced snapshot plus the operating
-/// point series the document carries.
+/// Normalize an API spelling for case insensitive matching.
 fn normalize(s: &str) -> String {
     s.to_ascii_lowercase().replace(['-', '_'], "")
 }
 
-/// Materialize a sparse matrix as a `(data, row, col, (nrows, ncols))` tuple of
+/// Return a sparse matrix as a `(data, row, col, (nrows, ncols))` tuple of
 /// plain Python lists. A CSR input is walked borrowed; any other storage is
 /// converted to CSR once so `outer_iterator()` yields rows. Indices narrow to
 /// `i32`. The narrowing is guarded: a dimension past `i32::MAX` raises rather
@@ -432,11 +358,11 @@ pub struct PyBalancedNetwork {
 
 impl PyBalancedNetwork {
     fn inner(&self) -> &BalancedNetwork {
-        self.module.value()
+        &self.module.value
     }
 
     fn diagnostics(&self) -> &[powerio_core::Diagnostic] {
-        self.module.diagnostics()
+        &self.module.diagnostics
     }
 
     fn dc_operators(&self, formula: &str) -> PyResult<DcOperators> {
@@ -449,10 +375,8 @@ impl PyBalancedNetwork {
 }
 
 fn core_error_pyerr(error: &powerio_core::Error) -> PyErr {
-    // Parse and Data map onto their subclasses so a caller branching on
-    // `except powerio.PowerIODataError` sees one taxonomy whichever layer
-    // raised the failure; the other categories keep the base class the 0.9
-    // entries raised (a request refusal is a PowerIOError, never ValueError).
+    // Parse and Data map onto their subclasses so callers see one error
+    // taxonomy whichever Rust layer raised the failure.
     let err = match error.category() {
         powerio_core::ErrorCategory::Parse => PowerIOParseError::new_err(error.to_string()),
         powerio_core::ErrorCategory::Data => PowerIODataError::new_err(error.to_string()),
@@ -467,8 +391,7 @@ fn core_error_pyerr(error: &powerio_core::Error) -> PyErr {
 }
 
 /// Projects a source acquisition failure with an operating system cause onto
-/// the precise `OSError` subclass with the path attached, matching what the
-/// old path entries raised; anything else falls back to the coded error.
+/// the precise `OSError` subclass with the path attached.
 fn core_open_pyerr(path: &std::path::Path, error: &powerio_core::Error) -> PyErr {
     let mut cause = std::error::Error::source(error);
     while let Some(inner) = cause {
@@ -489,7 +412,7 @@ fn core_open_pyerr(path: &std::path::Path, error: &powerio_core::Error) -> PyErr
 /// Wrap a parsed module as a `PyBalancedNetwork`, building the index core once
 /// and keeping the reader's findings on the handle.
 fn case_from_module(module: powerio_core::PioModule<BalancedNetwork>) -> PyBalancedNetwork {
-    let core = IndexCore::build(module.value());
+    let core = IndexCore::build(&module.value);
     PyBalancedNetwork { core, module }
 }
 
@@ -536,6 +459,28 @@ fn display_data_to_py<'py>(py: Python<'py>, display: DisplayData) -> PyResult<Bo
     }
 }
 
+fn active_power_control_to_py<'py>(
+    py: Python<'py>,
+    control: Option<&powerio_tx::ActivePowerControl>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let Some(control) = control else {
+        return Ok(py.None().into_bound(py));
+    };
+    let value = PyDict::new(py);
+    value.set_item("participate", control.participate)?;
+    value.set_item("droop_percent", control.droop_percent)?;
+    value.set_item("participation_factor", control.participation_factor)?;
+    value.set_item(
+        "minimum_target_active_power_mw",
+        control.minimum_target_active_power_mw,
+    )?;
+    value.set_item(
+        "maximum_target_active_power_mw",
+        control.maximum_target_active_power_mw,
+    )?;
+    Ok(value.into_any())
+}
+
 #[pymethods]
 impl PyBalancedNetwork {
     // --- metadata -------------------------------------------------------
@@ -571,12 +516,6 @@ impl PyBalancedNetwork {
     }
 
     #[getter]
-    fn n_gens(&self) -> usize {
-        self.inner().generators().len()
-    }
-
-    /// Preferred spelling; `n_gens` remains for 0.10 compatibility.
-    #[getter]
     fn n_generators(&self) -> usize {
         self.inner().generators().len()
     }
@@ -589,6 +528,11 @@ impl PyBalancedNetwork {
     #[getter]
     fn n_shunts(&self) -> usize {
         self.inner().shunts().len()
+    }
+
+    #[getter]
+    fn n_static_var_compensators(&self) -> usize {
+        self.inner().static_var_compensators().len()
     }
 
     #[getter]
@@ -614,6 +558,19 @@ impl PyBalancedNetwork {
     #[getter]
     fn n_areas(&self) -> usize {
         self.inner().areas().len()
+    }
+
+    /// The exact source neutral hierarchy and connectivity records, or
+    /// `None` when the source supplied only the balanced calculation tables.
+    /// Python's network tables are immutable dictionary copies, so this uses
+    /// the same representation as `hvdc`, `transformers_3w`, and `areas`.
+    #[getter]
+    fn detailed_connectivity<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let Some(details) = self.inner().detailed_connectivity().as_deref() else {
+            return Ok(py.None().into_bound(py));
+        };
+        let value = serde_json::to_value(details).map_err(serialize_pyerr)?;
+        json_value_to_py(py, &value)
     }
 
     #[getter]
@@ -708,10 +665,16 @@ impl PyBalancedNetwork {
             d.set_item("g", s.g)?;
             d.set_item("b", s.b)?;
             d.set_item("in_service", s.in_service)?;
+            d.set_item("section_count", s.section_count)?;
             d.set_item("uid", s.uid.as_deref())?;
             rows.push(d);
         }
         PyList::new(py, rows)
+    }
+
+    #[getter]
+    fn static_var_compensators<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        balanced_field_to_py(py, self.inner(), "static_var_compensators")
     }
 
     #[getter]
@@ -811,6 +774,10 @@ impl PyBalancedNetwork {
                 }
                 None => d.set_item("cost", py.None())?,
             }
+            d.set_item(
+                "active_power_control",
+                active_power_control_to_py(py, g.active_power_control.as_ref())?,
+            )?;
             d.set_item("uid", g.uid.as_deref())?;
             rows.push(d);
         }
@@ -857,90 +824,6 @@ impl PyBalancedNetwork {
         d.set_item("n_components", r.n_components)?;
         d.set_item("isolated_buses", r.isolated_buses)?;
         Ok(d)
-    }
-
-    /// Serialize this case to MATPOWER `.m` text. For a MATPOWER-parsed case this
-    /// is the byte-exact source echo, written through the module.
-    fn to_matpower(&self) -> PyResult<String> {
-        let destination =
-            powerio_core::Destination::memory("case").map_err(|error| core_error_pyerr(&error))?;
-        let result = powerio_tx::emit(&self.module, TargetFormat::Matpower, destination)
-            .map_err(|error| core_error_pyerr(&error))?;
-        emitted_text(result, "matpower").map(|(text, _)| text)
-    }
-
-    /// Serialize this case to the JSON transport.
-    fn to_json(&self) -> PyResult<String> {
-        self.inner().to_json().map_err(core_pyerr)
-    }
-
-    /// Serialize this case to another format. Returns `(text, warnings)`.
-    #[pyo3(signature = (to, missing_gen_cost=None, default_gen_cost=None, gen_cost_csv=None))]
-    fn to_format(
-        &self,
-        to: &str,
-        missing_gen_cost: Option<&str>,
-        default_gen_cost: Option<&str>,
-        gen_cost_csv: Option<&str>,
-    ) -> PyResult<(String, Vec<PyDiagnostic>)> {
-        let target = to.parse::<TargetFormat>().map_err(core_pyerr)?;
-        let opts = emit_options(
-            missing_gen_cost,
-            default_gen_cost,
-            gen_cost_csv,
-            MissingGenCostPolicy::Preserve,
-        )?;
-        let destination =
-            powerio_core::Destination::memory("case").map_err(|error| core_error_pyerr(&error))?;
-        let result = powerio_tx::emit_with_options(&self.module, target, &opts, destination)
-            .map_err(|error| core_error_pyerr(&error))?;
-        let (text, diagnostics) = emitted_text(result, to)?;
-        Ok((text, diagnostics.iter().map(PyDiagnostic::from).collect()))
-    }
-
-    /// Serialize this case to `to`, bypassing source echo for the same
-    /// format. Returns `(text, warnings)`.
-    fn to_canonical_format(&self, to: &str) -> PyResult<(String, Vec<PyDiagnostic>)> {
-        let target = to.parse::<TargetFormat>().map_err(core_pyerr)?;
-        let module = powerio_core::PioModule::new(self.inner().clone());
-        let destination =
-            powerio_core::Destination::memory("case").map_err(|error| core_error_pyerr(&error))?;
-        let result = powerio_tx::emit(&module, target, destination)
-            .map_err(|error| core_error_pyerr(&error))?;
-        let (text, diagnostics) = emitted_text(result, to)?;
-        Ok((text, diagnostics.iter().map(PyDiagnostic::from).collect()))
-    }
-
-    /// Serialize this case to `to` and write it to `path` exactly as
-    /// produced. Returns the fidelity warnings. Prefer this over writing
-    /// `to_format` text through `open(path, "w")`: Python's text mode
-    /// translates newlines on Windows, and a case whose retained source has
-    /// CRLF endings comes out with doubled carriage returns, which PSS/E
-    /// family tools reject.
-    #[pyo3(signature = (path, to, missing_gen_cost=None, default_gen_cost=None, gen_cost_csv=None))]
-    fn write_file(
-        &self,
-        path: &str,
-        to: &str,
-        missing_gen_cost: Option<&str>,
-        default_gen_cost: Option<&str>,
-        gen_cost_csv: Option<&str>,
-    ) -> PyResult<Vec<PyDiagnostic>> {
-        let target = to.parse::<TargetFormat>().map_err(core_pyerr)?;
-        let options = emit_options(
-            missing_gen_cost,
-            default_gen_cost,
-            gen_cost_csv,
-            MissingGenCostPolicy::Preserve,
-        )?;
-        let result = powerio_tx::emit_with_options(
-            &self.module,
-            target,
-            &options,
-            powerio_core::Destination::path(path),
-        )
-        .map_err(|error| core_error_pyerr(&error))?;
-        Ok(py_diagnostics(&result))
     }
 
     /// A normalized, computation-ready copy of this case: per unit, radians,
@@ -1003,17 +886,23 @@ impl PyBalancedNetwork {
         coo_triplets(py, &self.dc_operators(formula)?.calc_incidence_matrix())
     }
 
+    /// Calculate the per branch susceptances.
+    #[pyo3(signature = (formula="series_susceptance"))]
+    fn calc_branch_susceptances(&self, formula: &str) -> PyResult<Vec<f64>> {
+        Ok(self
+            .dc_operators(formula)?
+            .calc_branch_susceptances()
+            .to_vec())
+    }
+
     /// Calculate `Bf = diag(b) A`, branches by buses.
     #[pyo3(signature = (formula="series_susceptance"))]
-    fn calc_branch_susceptance_matrix<'py>(
+    fn calc_branch_flow_matrix<'py>(
         &self,
         py: Python<'py>,
         formula: &str,
     ) -> PyResult<Bound<'py, PyAny>> {
-        coo_triplets(
-            py,
-            &self.dc_operators(formula)?.calc_branch_susceptance_matrix(),
-        )
+        coo_triplets(py, &self.dc_operators(formula)?.calc_branch_flow_matrix())
     }
 
     /// Calculate `B = A' diag(b) A`, buses by buses.
@@ -1029,10 +918,18 @@ impl PyBalancedNetwork {
         )
     }
 
+    /// Calculate `b .* shift` in branch order.
+    #[pyo3(signature = (formula="series_susceptance"))]
+    fn calc_branch_phase_shift_injection(&self, formula: &str) -> PyResult<Vec<f64>> {
+        Ok(self
+            .dc_operators(formula)?
+            .calc_branch_phase_shift_injection())
+    }
+
     /// Calculate `A' (b .* shift)` in bus order.
     #[pyo3(signature = (formula="series_susceptance"))]
-    fn calc_phase_shift_injection(&self, formula: &str) -> PyResult<Vec<f64>> {
-        Ok(self.dc_operators(formula)?.calc_phase_shift_injection())
+    fn calc_bus_phase_shift_injection(&self, formula: &str) -> PyResult<Vec<f64>> {
+        Ok(self.dc_operators(formula)?.calc_bus_phase_shift_injection())
     }
 
     /// Calculate `-Bf * va + b .* shift` in active branch order.
@@ -1196,85 +1093,6 @@ impl PyBalancedNetwork {
         ))
     }
 
-    /// Write the DC OPF bundle into `out_dir/<case>_dcopf/`. Returns
-    /// `{"dir": str, "files": [str, ...]}`.
-    #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (out_dir, formula=None, units=None, missing_gen_cost=None, default_gen_cost=None, gen_cost_csv=None))]
-    fn write_dcopf_bundle<'py>(
-        &self,
-        py: Python<'py>,
-        out_dir: &str,
-        formula: Option<&str>,
-        units: Option<&str>,
-        missing_gen_cost: Option<&str>,
-        default_gen_cost: Option<&str>,
-        gen_cost_csv: Option<&str>,
-    ) -> PyResult<Bound<'py, PyDict>> {
-        let cost_opts = emit_options(
-            missing_gen_cost,
-            default_gen_cost,
-            gen_cost_csv,
-            MissingGenCostPolicy::Require,
-        )?;
-        let mut policy_network = self.inner().clone();
-        let cost_report = policy_network
-            .apply_gen_cost_policy(&cost_opts.gen_cost_patches, cost_opts.missing_gen_cost)
-            .map_err(core_pyerr)?;
-        let instance = powerio_prob::DcOpfInstance::from_network(policy_network)
-            .map_err(|error| core_error_pyerr(&error))?
-            .with_branch_susceptance_formula(parse_formula(
-                formula.unwrap_or("series_susceptance"),
-            )?);
-        let mut assembly = DcOpfAssemblyOptions::default();
-        assembly.units = parse_units(units.unwrap_or("perunit"))?;
-        let options = DcOpfBundleOptions {
-            assembly,
-            metadata: DcOpfBundleMetadata {
-                cost_policy: cost_opts.missing_gen_cost,
-                cost_report,
-            },
-        };
-        let outputs = write_bundle(&instance, out_dir, &options).map_err(to_pyerr)?;
-        dir_files_dict(py, &outputs.dir, &outputs.files)
-    }
-
-    /// Write the gridfm-datakit Parquet dataset for this case under
-    /// `out_dir/<case>/raw/`. Returns
-    /// `{"dir", "files", "dropped_zero_impedance", "degenerate_cost_gens"}`.
-    /// Available when the extension is built with the Rust `gridfm` feature.
-    #[cfg(feature = "gridfm")]
-    #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (out_dir, *, scenario=0, include_y_bus=true, include_taps=true, include_shifts=true, missing_gen_cost=None, default_gen_cost=None, gen_cost_csv=None))]
-    fn write_gridfm<'py>(
-        &self,
-        py: Python<'py>,
-        out_dir: &str,
-        scenario: i64,
-        include_y_bus: bool,
-        include_taps: bool,
-        include_shifts: bool,
-        missing_gen_cost: Option<&str>,
-        default_gen_cost: Option<&str>,
-        gen_cost_csv: Option<&str>,
-    ) -> PyResult<Bound<'py, PyDict>> {
-        let cost_opts = emit_options(
-            missing_gen_cost,
-            default_gen_cost,
-            gen_cost_csv,
-            MissingGenCostPolicy::Preserve,
-        )?;
-        let opts = GridfmOptions {
-            include_y_bus,
-            include_taps,
-            include_shifts,
-            missing_gen_cost: cost_opts.missing_gen_cost,
-            gen_cost_patches: cost_opts.gen_cost_patches,
-        };
-        let outputs =
-            gridfm_write_dataset(self.inner(), scenario, out_dir, &opts).map_err(to_pyerr)?;
-        gridfm_outputs_to_dict(py, &outputs)
-    }
-
     fn __repr__(&self) -> String {
         format!(
             "BalancedNetwork(name={:?}, n_buses={}, n_branches={}, n_generators={})",
@@ -1290,156 +1108,15 @@ impl PyBalancedNetwork {
 /// unless `from_` is given. Returns `(kind, payload)`.
 #[pyfunction]
 #[pyo3(signature = (path, from_=None))]
-fn parse_display_file<'py>(
+fn parse_display<'py>(
     py: Python<'py>,
     path: &str,
     from_: Option<&str>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let display =
-        powerio_tx::parse_display_file(std::path::Path::new(path), from_).map_err(core_pyerr)?;
-    display_data_to_py(py, display)
-}
-
-/// Rebuild a case from JSON produced by `BalancedNetwork.to_json()`.
-#[pyfunction]
-fn from_json(text: &str) -> PyResult<PyBalancedNetwork> {
-    let inner = powerio::BalancedNetwork::from_json(text).map_err(core_pyerr)?;
-    Ok(case_from_parts(inner, Vec::new()))
-}
-
-/// Universal one-file conversion over the dynamic module dispatcher. Parse
-/// findings precede writer findings unless the writer returned the exact
-/// retained source bytes, which is the faithful echo tier.
-fn emit_dynamic(
-    module: &powerio_core::PioModule<powerio::PioValue>,
-    to: &str,
-    options: &EmitOptions,
-    destination: powerio_core::Destination,
-) -> PyResult<powerio_core::EmitResult> {
-    if let powerio::PioValue::BalancedNetwork(network) = module.value()
-        && let Ok(target) = to.parse::<TargetFormat>()
-    {
-        let typed = module_with_records(module, network.clone())?;
-        return powerio_tx::emit_with_options(&typed, target, options, destination)
-            .map_err(|error| core_error_pyerr(&error));
-    }
-    powerio::emit(module, to, destination).map_err(|error| core_error_pyerr(&error))
-}
-
-fn convert_module_text(
-    module: &powerio_core::PioModule<powerio::PioValue>,
-    to: &str,
-    options: &EmitOptions,
-) -> PyResult<(String, Vec<powerio_core::Diagnostic>)> {
-    let destination =
-        powerio_core::Destination::memory("case").map_err(|error| core_error_pyerr(&error))?;
-    let result = emit_dynamic(module, to, options, destination)?;
-    let (text, writer_diagnostics) = emitted_text(result, to)?;
-    let echoed = module.source().is_some_and(|source| {
-        source
-            .primary_buffer()
-            .is_ok_and(|buffer| buffer.bytes() == text.as_bytes())
-    });
-    if echoed {
-        return Ok((text, writer_diagnostics));
-    }
-    let mut diagnostics = module.diagnostics().to_vec();
-    diagnostics.extend(writer_diagnostics);
-    Ok((text, diagnostics))
-}
-
-/// Convert a case file through the universal module model. Returns
-/// `(text, warnings)`: the converted file text and the list of fidelity warnings
-/// (fields the target couldn't represent). The input format is the file
-/// extension unless `from` overrides it. `out` writes the text to a file
-/// exactly as produced — prefer it over `open(out, "w").write(text)`, whose
-/// text mode newline translation on Windows doubles the carriage returns of
-/// a CRLF source echo into `\r\r\n`, which PSS/E family tools reject.
-#[pyfunction]
-#[pyo3(signature = (path, to, from_=None, missing_gen_cost=None, default_gen_cost=None, gen_cost_csv=None, out=None))]
-fn convert_file(
-    path: &str,
-    to: &str,
-    from_: Option<&str>,
-    missing_gen_cost: Option<&str>,
-    default_gen_cost: Option<&str>,
-    gen_cost_csv: Option<&str>,
-    out: Option<&str>,
-) -> PyResult<(String, Vec<PyDiagnostic>)> {
-    let opts = emit_options(
-        missing_gen_cost,
-        default_gen_cost,
-        gen_cost_csv,
-        MissingGenCostPolicy::Preserve,
-    )?;
     let path = std::path::Path::new(path);
-    let mut source =
-        powerio_core::Source::open(path).map_err(|error| core_open_pyerr(path, &error))?;
-    if let Some(from) = from_ {
-        let format = powerio_core::FormatId::new(from.to_ascii_lowercase().replace('_', "-"))
-            .map_err(|error| core_error_pyerr(&error))?;
-        source = source.with_format(format);
-    }
-    let module = powerio::parse(source).map_err(|error| core_open_pyerr(path, &error))?;
-    let (text, diagnostics) = convert_module_text(&module, to, &opts)?;
-    if let Some(out) = out {
-        emit_dynamic(&module, to, &opts, powerio_core::Destination::path(out))?;
-    }
-    let rendered = diagnostics.iter().map(PyDiagnostic::from).collect();
-    Ok((text, rendered))
-}
-
-/// Convert in-memory case `text` through the universal module model,
-/// with no file staging. Returns `(text, warnings)` like `convert_file`.
-/// `from_` names the input format (default `matpower`).
-#[pyfunction]
-#[pyo3(signature = (text, to, from_=None, missing_gen_cost=None, default_gen_cost=None, gen_cost_csv=None))]
-fn convert_str(
-    text: &str,
-    to: &str,
-    from_: Option<&str>,
-    missing_gen_cost: Option<&str>,
-    default_gen_cost: Option<&str>,
-    gen_cost_csv: Option<&str>,
-) -> PyResult<(String, Vec<PyDiagnostic>)> {
-    let opts = emit_options(
-        missing_gen_cost,
-        default_gen_cost,
-        gen_cost_csv,
-        MissingGenCostPolicy::Preserve,
-    )?;
-    let format = powerio_core::FormatId::new(
-        from_
-            .unwrap_or("matpower")
-            .to_ascii_lowercase()
-            .replace('_', "-"),
-    )
-    .map_err(|error| core_error_pyerr(&error))?;
-    let source = powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())
-        .map_err(|error| core_error_pyerr(&error))?
-        .with_format(format);
-    let module = powerio::parse(source).map_err(|error| core_error_pyerr(&error))?;
-    let (text, diagnostics) = convert_module_text(&module, to, &opts)?;
-    let rendered = diagnostics.iter().map(PyDiagnostic::from).collect();
-    Ok((text, rendered))
-}
-
-fn dist_to_pyerr(e: powerio_dist::Error) -> PyErr {
-    use powerio_dist::Error as E;
-    let msg = e.to_string();
-    let code = e.code().code;
-    match e {
-        // OSError(errno, strerror, filename) lets CPython pick the precise
-        // subclass (FileNotFoundError etc.) while keeping the path on
-        // e.filename, which a bare io::Error conversion would drop.
-        E::Io { path, source } => match source.raw_os_error() {
-            Some(errno) => pyo3::exceptions::PyOSError::new_err((errno, source.to_string(), path)),
-            None => with_code(PowerIOError::new_err(msg), code),
-        },
-        E::UnknownFormat(_) => PyValueError::new_err(msg),
-        E::Json { .. } => with_code(PowerIOParseError::new_err(msg), code),
-        _ => with_code(PowerIOError::new_err(msg), code),
-    }
+    let source = powerio_core::Source::open(path).map_err(|error| core_open_pyerr(path, &error))?;
+    let display = powerio_tx::parse_display(source, from_).map_err(core_pyerr)?;
+    display_data_to_py(py, display)
 }
 
 /// Low-level handle around a parsed multiconductor distribution network in
@@ -1455,7 +1132,7 @@ struct PyMulticonductorNetwork {
 
 impl PyMulticonductorNetwork {
     fn inner(&self) -> &powerio_dist::MulticonductorNetwork {
-        self.module.value()
+        &self.module.value
     }
 
     fn from_module(module: powerio_core::PioModule<powerio_dist::MulticonductorNetwork>) -> Self {
@@ -1468,37 +1145,6 @@ impl PyMulticonductorNetwork {
             module: powerio_core::PioModule::new(net),
         }
     }
-}
-
-/// A distribution source of the declared `from_` format (when given).
-fn dist_source_from_path(
-    path: &std::path::Path,
-    from: Option<&str>,
-    include_root: Option<&str>,
-) -> PyResult<powerio_core::Source> {
-    let mut source =
-        powerio_core::Source::open(path).map_err(|error| core_open_pyerr(path, &error))?;
-    if let Some(root) = include_root {
-        source = source
-            .with_acquisition_root(root)
-            .map_err(|error| core_error_pyerr(&error))?;
-    }
-    if let Some(token) = from {
-        source = source.with_format(
-            powerio_core::FormatId::new(token.to_ascii_lowercase().replace('_', "-"))
-                .map_err(|error| core_error_pyerr(&error))?,
-        );
-    }
-    Ok(source)
-}
-
-fn dist_source_from_bytes(bytes: &[u8], from: &str) -> PyResult<powerio_core::Source> {
-    Ok(powerio_core::Source::from_bytes("<memory>", bytes.to_vec())
-        .map_err(|error| core_error_pyerr(&error))?
-        .with_format(
-            powerio_core::FormatId::new(from.to_ascii_lowercase().replace('_', "-"))
-                .map_err(|error| core_error_pyerr(&error))?,
-        ))
 }
 
 #[pymethods]
@@ -1593,11 +1239,6 @@ impl PyMulticonductorNetwork {
         self.inner().capacitors().len()
     }
 
-    fn n_sources(&self) -> usize {
-        self.inner().sources().len()
-    }
-
-    /// Preferred power system spelling; `n_sources` remains compatible.
     fn n_voltage_sources(&self) -> usize {
         self.inner().sources().len()
     }
@@ -1660,48 +1301,6 @@ impl PyMulticonductorNetwork {
         dist_field_to_py(py, self.inner(), "untyped")
     }
 
-    /// Serialize to `to` (`dss`, `pmd-json`, `bmopf-json`). Returns
-    /// `(text, warnings)`. Writing back to the source format echoes the
-    /// retained source byte for byte.
-    fn to_format(&self, to: &str) -> PyResult<(String, Vec<PyDiagnostic>)> {
-        let target = to
-            .parse::<powerio_dist::DistTargetFormat>()
-            .map_err(dist_to_pyerr)?;
-        let destination =
-            powerio_core::Destination::memory("case").map_err(|error| core_error_pyerr(&error))?;
-        let result = powerio_dist::emit(&self.module, target, destination)
-            .map_err(|error| core_error_pyerr(&error))?;
-        let (text, diagnostics) = emitted_text(result, to)?;
-        Ok((text, diagnostics.iter().map(PyDiagnostic::from).collect()))
-    }
-
-    /// Serialize to `to`, bypassing source echo for the same format.
-    fn to_canonical_format(&self, to: &str) -> PyResult<(String, Vec<PyDiagnostic>)> {
-        let target = to
-            .parse::<powerio_dist::DistTargetFormat>()
-            .map_err(dist_to_pyerr)?;
-        let module = powerio_core::PioModule::new(self.inner().clone());
-        let destination =
-            powerio_core::Destination::memory("case").map_err(|error| core_error_pyerr(&error))?;
-        let result = powerio_dist::emit(&module, target, destination)
-            .map_err(|error| core_error_pyerr(&error))?;
-        let (text, diagnostics) = emitted_text(result, to)?;
-        Ok((text, diagnostics.iter().map(PyDiagnostic::from).collect()))
-    }
-
-    /// Serialize to `to` and write it to `path` exactly as produced (no
-    /// newline translation; see `BalancedNetwork.write_file`). Returns the fidelity
-    /// warnings.
-    fn write_file(&self, path: &str, to: &str) -> PyResult<Vec<PyDiagnostic>> {
-        let target = to
-            .parse::<powerio_dist::DistTargetFormat>()
-            .map_err(dist_to_pyerr)?;
-        let result =
-            powerio_dist::emit(&self.module, target, powerio_core::Destination::path(path))
-                .map_err(|error| core_error_pyerr(&error))?;
-        Ok(py_diagnostics(&result))
-    }
-
     /// The collapsed bus and terminal graph projection as JSON.
     fn graph_json(&self) -> PyResult<String> {
         serde_json::to_string(&self.inner().to_graph())
@@ -1717,90 +1316,6 @@ impl PyMulticonductorNetwork {
             self.inner().loads().len()
         )
     }
-}
-
-/// Parse a distribution case file. The format comes from `from_` when given,
-/// else from the file itself (`.dss`, or `.json` sniffed for the PMD
-/// ENGINEERING `data_model` key against the BMOPF layout). `include_root`
-/// widens dss include confinement from the case directory to the given
-/// directory; the case file must sit under it.
-#[pyfunction]
-#[pyo3(signature = (path, from_=None, include_root=None))]
-fn dist_parse_file(
-    path: &str,
-    from_: Option<&str>,
-    include_root: Option<&str>,
-) -> PyResult<PyMulticonductorNetwork> {
-    let source = dist_source_from_path(std::path::Path::new(path), from_, include_root)?;
-    powerio_dist::parse(source)
-        .map(PyMulticonductorNetwork::from_module)
-        .map_err(|error| core_error_pyerr(&error))
-}
-
-/// Parse an in-memory distribution case of the named source format `from_`
-/// (`dss`, `pmd-json`, `bmopf-json`).
-#[pyfunction]
-#[pyo3(signature = (text, from_))]
-fn dist_parse_str(text: &str, from_: &str) -> PyResult<PyMulticonductorNetwork> {
-    let source = dist_source_from_bytes(text.as_bytes(), from_)?;
-    powerio_dist::parse(source)
-        .map(PyMulticonductorNetwork::from_module)
-        .map_err(|error| core_error_pyerr(&error))
-}
-
-fn convert_dist_module_text(
-    module: &powerio_core::PioModule<powerio_dist::MulticonductorNetwork>,
-    target: powerio_dist::DistTargetFormat,
-) -> PyResult<(String, Vec<powerio_core::Diagnostic>)> {
-    let destination =
-        powerio_core::Destination::memory("case").map_err(|error| core_error_pyerr(&error))?;
-    let result = powerio_dist::emit(module, target, destination)
-        .map_err(|error| core_error_pyerr(&error))?;
-    let (text, writer_diagnostics) = emitted_text(result, target.name())?;
-    let echoed = module.source().is_some_and(|source| {
-        source
-            .primary_buffer()
-            .is_ok_and(|buffer| buffer.bytes() == text.as_bytes())
-    });
-    if echoed {
-        return Ok((text, writer_diagnostics));
-    }
-    let mut diagnostics = module.diagnostics().to_vec();
-    diagnostics.extend(writer_diagnostics);
-    Ok((text, diagnostics))
-}
-
-/// Convert a distribution case file to `to`. Returns `(text, warnings)`; the
-/// warnings carry both the parse warnings and the writer's fidelity losses.
-#[pyfunction]
-#[pyo3(signature = (path, to, from_=None))]
-fn dist_convert_file(
-    path: &str,
-    to: &str,
-    from_: Option<&str>,
-) -> PyResult<(String, Vec<PyDiagnostic>)> {
-    let to = to
-        .parse::<powerio_dist::DistTargetFormat>()
-        .map_err(dist_to_pyerr)?;
-    let source = dist_source_from_path(std::path::Path::new(path), from_, None)?;
-    let module = powerio_dist::parse(source).map_err(|error| core_error_pyerr(&error))?;
-    let (text, diagnostics) = convert_dist_module_text(&module, to)?;
-    Ok((text, diagnostics.iter().map(PyDiagnostic::from).collect()))
-}
-
-/// Convert an in-memory distribution case of the named source format `from_`
-/// to `to`. Returns `(text, warnings)`; the warnings carry both the parse
-/// warnings and the writer's fidelity losses.
-#[pyfunction]
-#[pyo3(signature = (text, to, from_))]
-fn dist_convert_str(text: &str, to: &str, from_: &str) -> PyResult<(String, Vec<PyDiagnostic>)> {
-    let to = to
-        .parse::<powerio_dist::DistTargetFormat>()
-        .map_err(dist_to_pyerr)?;
-    let source = dist_source_from_bytes(text.as_bytes(), from_)?;
-    let module = powerio_dist::parse(source).map_err(|error| core_error_pyerr(&error))?;
-    let (text, diagnostics) = convert_dist_module_text(&module, to)?;
-    Ok((text, diagnostics.iter().map(PyDiagnostic::from).collect()))
 }
 
 /// Convert a `serde_json::Value` to the equivalent Python object: an object
@@ -1947,7 +1462,7 @@ impl From<&powerio_core::SourceSpan> for PySourceSpan {
 
 /// One coded, user facing finding from a parse, read, transform, or write
 /// pass: the Python mirror of `powerio_core::Diagnostic`. Every module
-/// carries a list of these; `PioModule.diagnostics()` returns them natively
+/// carries a list of these; `PioModule.diagnostics` returns them natively
 /// instead of the `diagnostics_json` string form.
 #[pyclass(name = "Diagnostic", module = "powerio._powerio", frozen, eq)]
 #[derive(PartialEq)]
@@ -2052,18 +1567,17 @@ impl From<&powerio_core::Diagnostic> for PyDiagnostic {
     }
 }
 
-/// Version and schema identity of this build: the release API discovery
-/// document. Keys agree with the C `pio_schema_versions_json` report where
-/// both apply; the wheel embeds the Rust core directly, so there is no C ABI
-/// integer here.
+/// Release and schema identity for this build.
+///
+/// The wheel embeds the Rust core directly, so there is no C ABI integer.
 #[pyfunction]
 fn versions_json() -> PyResult<String> {
     let doc = serde_json::json!({
         powerio::version::VERSION_KEY: powerio::VERSION,
         "bmopf_schema": powerio_dist_bmopf_schema(),
         "module_schema": {
-            "name": powerio::stored::SCHEMA_NAME,
-            "version": powerio::stored::SCHEMA_VERSION,
+            "name": "powerio.module",
+            "version": 1,
         },
     });
     serde_json::to_string(&doc).map_err(serialize_pyerr)
@@ -2071,6 +1585,1504 @@ fn versions_json() -> PyResult<String> {
 
 fn powerio_dist_bmopf_schema() -> &'static str {
     powerio_dist::BMOPF_SCHEMA_VERSION
+}
+
+#[pyclass(
+    name = "ComponentId",
+    module = "powerio._powerio",
+    frozen,
+    eq,
+    hash,
+    skip_from_py_object
+)]
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct PyComponentId {
+    inner: powerio_core::ComponentId,
+}
+
+#[pymethods]
+impl PyComponentId {
+    #[new]
+    fn new(component_type: &str, local_id: &str) -> PyResult<Self> {
+        powerio_core::ComponentId::new(component_type, local_id)
+            .map(|inner| Self { inner })
+            .map_err(|error| core_error_pyerr(&error))
+    }
+
+    #[getter]
+    fn component_type(&self) -> &str {
+        self.inner.component_type()
+    }
+
+    #[getter]
+    fn local_id(&self) -> &str {
+        self.inner.local_id()
+    }
+
+    fn __str__(&self) -> String {
+        self.inner.to_string()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "ComponentId(component_type={:?}, local_id={:?})",
+            self.inner.component_type(),
+            self.inner.local_id()
+        )
+    }
+}
+
+macro_rules! scuc_scalar_record {
+    ($py_type:ident, $python_name:literal, $rust_type:path, { $($field:ident: $field_type:ty),+ $(,)? }) => {
+        #[pyclass(
+            name = $python_name,
+            module = "powerio._powerio",
+            frozen,
+            skip_from_py_object
+        )]
+        #[derive(Clone)]
+        struct $py_type {
+            inner: $rust_type,
+        }
+
+        #[pymethods]
+        impl $py_type {
+            $(
+                #[getter]
+                fn $field(&self) -> $field_type {
+                    self.inner.$field
+                }
+            )+
+        }
+
+        impl From<&$rust_type> for $py_type {
+            fn from(value: &$rust_type) -> Self {
+                Self { inner: value.clone() }
+            }
+        }
+    };
+}
+
+scuc_scalar_record!(
+    PyScucStartupCostAdjustment,
+    "ScucStartupCostAdjustment",
+    powerio_prob::ScucStartupCostAdjustment,
+    { cost: f64, maximum_down_time: f64 }
+);
+scuc_scalar_record!(
+    PyScucStartupLimit,
+    "ScucStartupLimit",
+    powerio_prob::ScucStartupLimit,
+    { start_time: f64, end_time: f64, maximum_startups: u64 }
+);
+scuc_scalar_record!(
+    PyScucEnergyRequirement,
+    "ScucEnergyRequirement",
+    powerio_prob::ScucEnergyRequirement,
+    { start_time: f64, end_time: f64, energy: f64 }
+);
+scuc_scalar_record!(
+    PyScucInitialCommitment,
+    "ScucInitialCommitment",
+    powerio_prob::ScucInitialCommitment,
+    { accumulated_up_time: f64, accumulated_down_time: f64 }
+);
+scuc_scalar_record!(
+    PyScucRampLimits,
+    "ScucRampLimits",
+    powerio_prob::ScucRampLimits,
+    { up: f64, down: f64, startup: f64, shutdown: f64 }
+);
+scuc_scalar_record!(
+    PyScucReserveLimits,
+    "ScucReserveLimits",
+    powerio_prob::ScucReserveLimits,
+    {
+        regulation_up: f64,
+        regulation_down: f64,
+        synchronized: f64,
+        nonsynchronized: f64,
+        ramping_up_online: f64,
+        ramping_down_online: f64,
+        ramping_up_offline: f64,
+        ramping_down_offline: f64
+    }
+);
+scuc_scalar_record!(
+    PyScucEnergyCostBlock,
+    "ScucEnergyCostBlock",
+    powerio_prob::ScucEnergyCostBlock,
+    { marginal_cost: f64, block_size: f64 }
+);
+scuc_scalar_record!(
+    PyScucReserveCosts,
+    "ScucReserveCosts",
+    powerio_prob::ScucReserveCosts,
+    {
+        regulation_up: f64,
+        regulation_down: f64,
+        synchronized: f64,
+        nonsynchronized: f64,
+        ramping_up_online: f64,
+        ramping_down_online: f64,
+        ramping_up_offline: f64,
+        ramping_down_offline: f64,
+        reactive_up: f64,
+        reactive_down: f64
+    }
+);
+scuc_scalar_record!(
+    PyScucViolationCosts,
+    "ScucViolationCosts",
+    powerio_prob::ScucViolationCosts,
+    {
+        active_power_balance: f64,
+        reactive_power_balance: f64,
+        branch_thermal_limit: f64,
+        energy_requirement: f64
+    }
+);
+
+#[pyclass(
+    name = "ScucReactiveCapability",
+    module = "powerio._powerio",
+    frozen,
+    skip_from_py_object
+)]
+#[derive(Clone)]
+struct PyScucReactiveCapability {
+    kind: &'static str,
+    reactive_power_at_zero_active_power: Option<f64>,
+    reactive_power_at_zero_active_power_min: Option<f64>,
+    reactive_power_at_zero_active_power_max: Option<f64>,
+    slope: Option<f64>,
+    slope_min: Option<f64>,
+    slope_max: Option<f64>,
+}
+
+#[pymethods]
+impl PyScucReactiveCapability {
+    #[getter]
+    fn kind(&self) -> &'static str {
+        self.kind
+    }
+
+    #[getter]
+    fn reactive_power_at_zero_active_power(&self) -> Option<f64> {
+        self.reactive_power_at_zero_active_power
+    }
+
+    #[getter]
+    fn reactive_power_at_zero_active_power_min(&self) -> Option<f64> {
+        self.reactive_power_at_zero_active_power_min
+    }
+
+    #[getter]
+    fn reactive_power_at_zero_active_power_max(&self) -> Option<f64> {
+        self.reactive_power_at_zero_active_power_max
+    }
+
+    #[getter]
+    fn slope(&self) -> Option<f64> {
+        self.slope
+    }
+
+    #[getter]
+    fn slope_min(&self) -> Option<f64> {
+        self.slope_min
+    }
+
+    #[getter]
+    fn slope_max(&self) -> Option<f64> {
+        self.slope_max
+    }
+}
+
+impl From<&powerio_prob::ScucReactiveCapability> for PyScucReactiveCapability {
+    fn from(value: &powerio_prob::ScucReactiveCapability) -> Self {
+        use powerio_prob::ScucReactiveCapability::{Bounded, Linear, None};
+        match value {
+            None => Self {
+                kind: "none",
+                reactive_power_at_zero_active_power: std::option::Option::None,
+                reactive_power_at_zero_active_power_min: std::option::Option::None,
+                reactive_power_at_zero_active_power_max: std::option::Option::None,
+                slope: std::option::Option::None,
+                slope_min: std::option::Option::None,
+                slope_max: std::option::Option::None,
+            },
+            Linear {
+                reactive_power_at_zero_active_power,
+                slope,
+            } => Self {
+                kind: "linear",
+                reactive_power_at_zero_active_power: Some(*reactive_power_at_zero_active_power),
+                reactive_power_at_zero_active_power_min: std::option::Option::None,
+                reactive_power_at_zero_active_power_max: std::option::Option::None,
+                slope: Some(*slope),
+                slope_min: std::option::Option::None,
+                slope_max: std::option::Option::None,
+            },
+            Bounded {
+                reactive_power_at_zero_active_power_min,
+                reactive_power_at_zero_active_power_max,
+                slope_min,
+                slope_max,
+            } => Self {
+                kind: "bounded",
+                reactive_power_at_zero_active_power: std::option::Option::None,
+                reactive_power_at_zero_active_power_min: Some(
+                    *reactive_power_at_zero_active_power_min,
+                ),
+                reactive_power_at_zero_active_power_max: Some(
+                    *reactive_power_at_zero_active_power_max,
+                ),
+                slope: std::option::Option::None,
+                slope_min: Some(*slope_min),
+                slope_max: Some(*slope_max),
+            },
+            _ => unreachable!("unrecognized ScucReactiveCapability value"),
+        }
+    }
+}
+
+#[pyclass(
+    name = "ScucDevicePeriod",
+    module = "powerio._powerio",
+    frozen,
+    skip_from_py_object
+)]
+#[derive(Clone)]
+struct PyScucDevicePeriod {
+    inner: powerio_prob::ScucDevicePeriod,
+}
+
+#[pymethods]
+impl PyScucDevicePeriod {
+    #[getter]
+    fn on_status_min(&self) -> bool {
+        self.inner.on_status_min
+    }
+
+    #[getter]
+    fn on_status_max(&self) -> bool {
+        self.inner.on_status_max
+    }
+
+    #[getter]
+    fn active_power_min(&self) -> f64 {
+        self.inner.active_power_min
+    }
+
+    #[getter]
+    fn active_power_max(&self) -> f64 {
+        self.inner.active_power_max
+    }
+
+    #[getter]
+    fn reactive_power_min(&self) -> f64 {
+        self.inner.reactive_power_min
+    }
+
+    #[getter]
+    fn reactive_power_max(&self) -> f64 {
+        self.inner.reactive_power_max
+    }
+
+    #[getter]
+    fn energy_cost_blocks<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(
+            py,
+            self.inner
+                .energy_cost_blocks
+                .iter()
+                .map(PyScucEnergyCostBlock::from),
+        )
+    }
+
+    #[getter]
+    fn reserve_costs(&self) -> PyScucReserveCosts {
+        PyScucReserveCosts::from(&self.inner.reserve_costs)
+    }
+}
+
+impl From<&powerio_prob::ScucDevicePeriod> for PyScucDevicePeriod {
+    fn from(value: &powerio_prob::ScucDevicePeriod) -> Self {
+        Self {
+            inner: value.clone(),
+        }
+    }
+}
+
+#[pyclass(
+    name = "ScucDevice",
+    module = "powerio._powerio",
+    frozen,
+    skip_from_py_object
+)]
+#[derive(Clone)]
+struct PyScucDevice {
+    inner: powerio_prob::ScucDevice,
+}
+
+#[pymethods]
+impl PyScucDevice {
+    #[getter]
+    fn id(&self) -> PyComponentId {
+        PyComponentId {
+            inner: self.inner.id.clone(),
+        }
+    }
+
+    #[getter]
+    fn kind(&self) -> &'static str {
+        match self.inner.kind {
+            powerio_prob::ScucDeviceKind::Producer => "producer",
+            powerio_prob::ScucDeviceKind::Consumer => "consumer",
+            _ => unreachable!("unrecognized ScucDeviceKind value"),
+        }
+    }
+
+    #[getter]
+    fn on_cost(&self) -> f64 {
+        self.inner.on_cost
+    }
+
+    #[getter]
+    fn startup_cost(&self) -> f64 {
+        self.inner.startup_cost
+    }
+
+    #[getter]
+    fn startup_cost_adjustments<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(
+            py,
+            self.inner
+                .startup_cost_adjustments
+                .iter()
+                .map(PyScucStartupCostAdjustment::from),
+        )
+    }
+
+    #[getter]
+    fn shutdown_cost(&self) -> f64 {
+        self.inner.shutdown_cost
+    }
+
+    #[getter]
+    fn startup_limits<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(
+            py,
+            self.inner
+                .startup_limits
+                .iter()
+                .map(PyScucStartupLimit::from),
+        )
+    }
+
+    #[getter]
+    fn energy_upper_bounds<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(
+            py,
+            self.inner
+                .energy_upper_bounds
+                .iter()
+                .map(PyScucEnergyRequirement::from),
+        )
+    }
+
+    #[getter]
+    fn energy_lower_bounds<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(
+            py,
+            self.inner
+                .energy_lower_bounds
+                .iter()
+                .map(PyScucEnergyRequirement::from),
+        )
+    }
+
+    #[getter]
+    fn minimum_up_time(&self) -> f64 {
+        self.inner.minimum_up_time
+    }
+
+    #[getter]
+    fn minimum_down_time(&self) -> f64 {
+        self.inner.minimum_down_time
+    }
+
+    #[getter]
+    fn ramp_limits(&self) -> PyScucRampLimits {
+        PyScucRampLimits::from(&self.inner.ramp_limits)
+    }
+
+    #[getter]
+    fn reserve_limits(&self) -> PyScucReserveLimits {
+        PyScucReserveLimits::from(&self.inner.reserve_limits)
+    }
+
+    #[getter]
+    fn initial_on_status(&self) -> bool {
+        self.inner.initial_on_status
+    }
+
+    #[getter]
+    fn initial_commitment(&self) -> PyScucInitialCommitment {
+        PyScucInitialCommitment::from(&self.inner.initial_commitment)
+    }
+
+    #[getter]
+    fn reactive_capability(&self) -> PyScucReactiveCapability {
+        PyScucReactiveCapability::from(&self.inner.reactive_capability)
+    }
+
+    #[getter]
+    fn periods<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, self.inner.periods.iter().map(PyScucDevicePeriod::from))
+    }
+}
+
+impl From<&powerio_prob::ScucDevice> for PyScucDevice {
+    fn from(value: &powerio_prob::ScucDevice) -> Self {
+        Self {
+            inner: value.clone(),
+        }
+    }
+}
+
+#[pyclass(
+    name = "ScucShunt",
+    module = "powerio._powerio",
+    frozen,
+    skip_from_py_object
+)]
+#[derive(Clone)]
+struct PyScucShunt {
+    inner: powerio_prob::ScucShunt,
+}
+
+#[pymethods]
+impl PyScucShunt {
+    #[getter]
+    fn id(&self) -> PyComponentId {
+        PyComponentId {
+            inner: self.inner.id.clone(),
+        }
+    }
+
+    #[getter]
+    fn conductance_per_step(&self) -> f64 {
+        self.inner.conductance_per_step
+    }
+
+    #[getter]
+    fn susceptance_per_step(&self) -> f64 {
+        self.inner.susceptance_per_step
+    }
+
+    #[getter]
+    fn step_min(&self) -> i64 {
+        self.inner.step_min
+    }
+
+    #[getter]
+    fn step_max(&self) -> i64 {
+        self.inner.step_max
+    }
+
+    #[getter]
+    fn initial_step(&self) -> i64 {
+        self.inner.initial_step
+    }
+}
+
+impl From<&powerio_prob::ScucShunt> for PyScucShunt {
+    fn from(value: &powerio_prob::ScucShunt) -> Self {
+        Self {
+            inner: value.clone(),
+        }
+    }
+}
+
+#[pyclass(
+    name = "ScucBranchSwitchingCost",
+    module = "powerio._powerio",
+    frozen,
+    skip_from_py_object
+)]
+#[derive(Clone)]
+struct PyScucBranchSwitchingCost {
+    inner: powerio_prob::ScucBranchSwitchingCost,
+}
+
+#[pymethods]
+impl PyScucBranchSwitchingCost {
+    #[getter]
+    fn id(&self) -> PyComponentId {
+        PyComponentId {
+            inner: self.inner.id.clone(),
+        }
+    }
+
+    #[getter]
+    fn connection_cost(&self) -> f64 {
+        self.inner.connection_cost
+    }
+
+    #[getter]
+    fn disconnection_cost(&self) -> f64 {
+        self.inner.disconnection_cost
+    }
+}
+
+impl From<&powerio_prob::ScucBranchSwitchingCost> for PyScucBranchSwitchingCost {
+    fn from(value: &powerio_prob::ScucBranchSwitchingCost) -> Self {
+        Self {
+            inner: value.clone(),
+        }
+    }
+}
+
+#[pyclass(
+    name = "ScucTransformerControl",
+    module = "powerio._powerio",
+    frozen,
+    skip_from_py_object
+)]
+#[derive(Clone)]
+struct PyScucTransformerControl {
+    inner: powerio_prob::ScucTransformerControl,
+}
+
+#[pymethods]
+impl PyScucTransformerControl {
+    #[getter]
+    fn id(&self) -> PyComponentId {
+        PyComponentId {
+            inner: self.inner.id.clone(),
+        }
+    }
+
+    #[getter]
+    fn tap_ratio_min(&self) -> f64 {
+        self.inner.tap_ratio_min
+    }
+
+    #[getter]
+    fn tap_ratio_max(&self) -> f64 {
+        self.inner.tap_ratio_max
+    }
+
+    #[getter]
+    fn phase_shift_min(&self) -> f64 {
+        self.inner.phase_shift_min
+    }
+
+    #[getter]
+    fn phase_shift_max(&self) -> f64 {
+        self.inner.phase_shift_max
+    }
+}
+
+impl From<&powerio_prob::ScucTransformerControl> for PyScucTransformerControl {
+    fn from(value: &powerio_prob::ScucTransformerControl) -> Self {
+        Self {
+            inner: value.clone(),
+        }
+    }
+}
+
+fn component_id_tuple<'py>(
+    py: Python<'py>,
+    ids: &[powerio_core::ComponentId],
+) -> PyResult<Bound<'py, PyTuple>> {
+    PyTuple::new(py, ids.iter().map(|id| PyComponentId { inner: id.clone() }))
+}
+
+fn f64_tuple<'py>(py: Python<'py>, values: &[f64]) -> PyResult<Bound<'py, PyTuple>> {
+    PyTuple::new(py, values.iter().copied())
+}
+
+fn nested_f64_tuple<'py>(py: Python<'py>, values: &[Vec<f64>]) -> PyResult<Bound<'py, PyTuple>> {
+    let rows = values
+        .iter()
+        .map(|row| f64_tuple(py, row).map(Bound::unbind))
+        .collect::<PyResult<Vec<_>>>()?;
+    PyTuple::new(py, rows)
+}
+
+fn nested_i64_tuple<'py>(py: Python<'py>, values: &[Vec<i64>]) -> PyResult<Bound<'py, PyTuple>> {
+    let rows = values
+        .iter()
+        .map(|row| PyTuple::new(py, row.iter().copied()).map(Bound::unbind))
+        .collect::<PyResult<Vec<_>>>()?;
+    PyTuple::new(py, rows)
+}
+
+fn nested_bool_tuple<'py>(py: Python<'py>, values: &[Vec<bool>]) -> PyResult<Bound<'py, PyTuple>> {
+    let rows = values
+        .iter()
+        .map(|row| PyTuple::new(py, row.iter().copied()).map(Bound::unbind))
+        .collect::<PyResult<Vec<_>>>()?;
+    PyTuple::new(py, rows)
+}
+
+#[pyclass(
+    name = "ScucActiveReserveZone",
+    module = "powerio._powerio",
+    frozen,
+    skip_from_py_object
+)]
+#[derive(Clone)]
+struct PyScucActiveReserveZone {
+    inner: powerio_prob::ScucActiveReserveZone,
+}
+
+#[pymethods]
+impl PyScucActiveReserveZone {
+    #[getter]
+    fn id(&self) -> PyComponentId {
+        PyComponentId {
+            inner: self.inner.id.clone(),
+        }
+    }
+
+    #[getter]
+    fn buses<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        component_id_tuple(py, &self.inner.buses)
+    }
+
+    #[getter]
+    fn regulation_up_requirement_fraction(&self) -> f64 {
+        self.inner.regulation_up_requirement_fraction
+    }
+
+    #[getter]
+    fn regulation_down_requirement_fraction(&self) -> f64 {
+        self.inner.regulation_down_requirement_fraction
+    }
+
+    #[getter]
+    fn synchronized_requirement_fraction(&self) -> f64 {
+        self.inner.synchronized_requirement_fraction
+    }
+
+    #[getter]
+    fn nonsynchronized_requirement_fraction(&self) -> f64 {
+        self.inner.nonsynchronized_requirement_fraction
+    }
+
+    #[getter]
+    fn ramping_up_requirement<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        f64_tuple(py, &self.inner.ramping_up_requirement)
+    }
+
+    #[getter]
+    fn ramping_down_requirement<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        f64_tuple(py, &self.inner.ramping_down_requirement)
+    }
+
+    #[getter]
+    fn regulation_up_violation_cost(&self) -> f64 {
+        self.inner.regulation_up_violation_cost
+    }
+
+    #[getter]
+    fn regulation_down_violation_cost(&self) -> f64 {
+        self.inner.regulation_down_violation_cost
+    }
+
+    #[getter]
+    fn synchronized_violation_cost(&self) -> f64 {
+        self.inner.synchronized_violation_cost
+    }
+
+    #[getter]
+    fn nonsynchronized_violation_cost(&self) -> f64 {
+        self.inner.nonsynchronized_violation_cost
+    }
+
+    #[getter]
+    fn ramping_up_violation_cost(&self) -> f64 {
+        self.inner.ramping_up_violation_cost
+    }
+
+    #[getter]
+    fn ramping_down_violation_cost(&self) -> f64 {
+        self.inner.ramping_down_violation_cost
+    }
+}
+
+impl From<&powerio_prob::ScucActiveReserveZone> for PyScucActiveReserveZone {
+    fn from(value: &powerio_prob::ScucActiveReserveZone) -> Self {
+        Self {
+            inner: value.clone(),
+        }
+    }
+}
+
+#[pyclass(
+    name = "ScucReactiveReserveZone",
+    module = "powerio._powerio",
+    frozen,
+    skip_from_py_object
+)]
+#[derive(Clone)]
+struct PyScucReactiveReserveZone {
+    inner: powerio_prob::ScucReactiveReserveZone,
+}
+
+#[pymethods]
+impl PyScucReactiveReserveZone {
+    #[getter]
+    fn id(&self) -> PyComponentId {
+        PyComponentId {
+            inner: self.inner.id.clone(),
+        }
+    }
+
+    #[getter]
+    fn buses<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        component_id_tuple(py, &self.inner.buses)
+    }
+
+    #[getter]
+    fn reactive_up_requirement<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        f64_tuple(py, &self.inner.reactive_up_requirement)
+    }
+
+    #[getter]
+    fn reactive_down_requirement<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        f64_tuple(py, &self.inner.reactive_down_requirement)
+    }
+
+    #[getter]
+    fn reactive_up_violation_cost(&self) -> f64 {
+        self.inner.reactive_up_violation_cost
+    }
+
+    #[getter]
+    fn reactive_down_violation_cost(&self) -> f64 {
+        self.inner.reactive_down_violation_cost
+    }
+}
+
+impl From<&powerio_prob::ScucReactiveReserveZone> for PyScucReactiveReserveZone {
+    fn from(value: &powerio_prob::ScucReactiveReserveZone) -> Self {
+        Self {
+            inner: value.clone(),
+        }
+    }
+}
+
+#[pyclass(
+    name = "ScucContingency",
+    module = "powerio._powerio",
+    frozen,
+    skip_from_py_object
+)]
+#[derive(Clone)]
+struct PyScucContingency {
+    inner: powerio_prob::ScucContingency,
+}
+
+#[pymethods]
+impl PyScucContingency {
+    #[getter]
+    fn id(&self) -> PyComponentId {
+        PyComponentId {
+            inner: self.inner.id.clone(),
+        }
+    }
+
+    #[getter]
+    fn components<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        component_id_tuple(py, &self.inner.components)
+    }
+}
+
+impl From<&powerio_prob::ScucContingency> for PyScucContingency {
+    fn from(value: &powerio_prob::ScucContingency) -> Self {
+        Self {
+            inner: value.clone(),
+        }
+    }
+}
+
+#[pyclass(
+    name = "ScucInputs",
+    module = "powerio._powerio",
+    frozen,
+    skip_from_py_object
+)]
+#[derive(Clone)]
+struct PyScucInputs {
+    inner: powerio_prob::ScucInputs,
+}
+
+#[pymethods]
+impl PyScucInputs {
+    #[getter]
+    fn interval_durations<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        f64_tuple(py, &self.inner.interval_durations)
+    }
+
+    #[getter]
+    fn devices<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, self.inner.devices.iter().map(PyScucDevice::from))
+    }
+
+    #[getter]
+    fn shunts<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, self.inner.shunts.iter().map(PyScucShunt::from))
+    }
+
+    #[getter]
+    fn branch_switching_costs<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(
+            py,
+            self.inner
+                .branch_switching_costs
+                .iter()
+                .map(PyScucBranchSwitchingCost::from),
+        )
+    }
+
+    #[getter]
+    fn transformer_controls<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(
+            py,
+            self.inner
+                .transformer_controls
+                .iter()
+                .map(PyScucTransformerControl::from),
+        )
+    }
+
+    #[getter]
+    fn active_reserve_zones<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(
+            py,
+            self.inner
+                .active_reserve_zones
+                .iter()
+                .map(PyScucActiveReserveZone::from),
+        )
+    }
+
+    #[getter]
+    fn reactive_reserve_zones<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(
+            py,
+            self.inner
+                .reactive_reserve_zones
+                .iter()
+                .map(PyScucReactiveReserveZone::from),
+        )
+    }
+
+    #[getter]
+    fn contingencies<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(
+            py,
+            self.inner.contingencies.iter().map(PyScucContingency::from),
+        )
+    }
+
+    #[getter]
+    fn violation_costs(&self) -> PyScucViolationCosts {
+        PyScucViolationCosts::from(&self.inner.violation_costs)
+    }
+}
+
+#[pyclass(
+    name = "Residuals",
+    module = "powerio._powerio",
+    frozen,
+    skip_from_py_object
+)]
+#[derive(Clone, Copy)]
+struct PyResiduals {
+    inner: powerio_prob::Residuals,
+}
+
+#[pymethods]
+impl PyResiduals {
+    #[getter]
+    fn max_active_power_mismatch(&self) -> Option<f64> {
+        self.inner.max_active_power_mismatch
+    }
+
+    #[getter]
+    fn max_reactive_power_mismatch(&self) -> Option<f64> {
+        self.inner.max_reactive_power_mismatch
+    }
+}
+
+#[pyclass(
+    name = "ScucNetworkOutputs",
+    module = "powerio._powerio",
+    frozen,
+    skip_from_py_object
+)]
+#[derive(Clone)]
+struct PyScucNetworkOutputs {
+    inner: powerio_prob::ScucNetworkOutputs,
+}
+
+macro_rules! nested_output_methods {
+    ($py_type:ident, $($field:ident => $convert:ident),+ $(,)?) => {
+        #[pymethods]
+        impl $py_type {
+            $(
+                #[getter]
+                fn $field<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+                    $convert(py, &self.inner.$field)
+                }
+            )+
+        }
+    };
+}
+
+nested_output_methods!(
+    PyScucNetworkOutputs,
+    bus_vm => nested_f64_tuple,
+    bus_va => nested_f64_tuple,
+    shunt_step => nested_i64_tuple,
+    ac_line_on_status => nested_bool_tuple,
+    transformer_tm => nested_f64_tuple,
+    transformer_ta => nested_f64_tuple,
+    transformer_on_status => nested_bool_tuple,
+    dc_line_pdc_fr => nested_f64_tuple,
+    dc_line_qdc_fr => nested_f64_tuple,
+    dc_line_qdc_to => nested_f64_tuple,
+);
+
+#[pyclass(
+    name = "ScucDeviceOutputs",
+    module = "powerio._powerio",
+    frozen,
+    skip_from_py_object
+)]
+#[derive(Clone)]
+struct PyScucDeviceOutputs {
+    inner: powerio_prob::ScucDeviceOutputs,
+}
+
+nested_output_methods!(
+    PyScucDeviceOutputs,
+    on_status => nested_bool_tuple,
+    startup_status => nested_bool_tuple,
+    shutdown_status => nested_bool_tuple,
+    p_on => nested_f64_tuple,
+    q => nested_f64_tuple,
+    p_reg_res_up => nested_f64_tuple,
+    p_reg_res_down => nested_f64_tuple,
+    p_syn_res => nested_f64_tuple,
+    p_nsyn_res => nested_f64_tuple,
+    p_ramp_res_up_online => nested_f64_tuple,
+    p_ramp_res_up_offline => nested_f64_tuple,
+    p_ramp_res_down_online => nested_f64_tuple,
+    p_ramp_res_down_offline => nested_f64_tuple,
+    q_res_up => nested_f64_tuple,
+    q_res_down => nested_f64_tuple,
+);
+
+#[pyclass(
+    name = "ActivePower",
+    module = "powerio._powerio",
+    frozen,
+    skip_from_py_object
+)]
+#[derive(Clone, Copy)]
+struct PyActivePower {
+    inner: powerio_prob::ActivePower,
+}
+
+#[pymethods]
+impl PyActivePower {
+    #[staticmethod]
+    fn watts(value: f64) -> Self {
+        Self {
+            inner: powerio_prob::ActivePower::from_watts(value),
+        }
+    }
+
+    #[staticmethod]
+    fn megawatts(value: f64) -> Self {
+        Self {
+            inner: powerio_prob::ActivePower::from_megawatts(value),
+        }
+    }
+
+    #[getter]
+    fn value(&self) -> f64 {
+        self.inner.value()
+    }
+
+    #[getter]
+    fn unit(&self) -> &'static str {
+        match self.inner.unit() {
+            powerio_prob::ActivePowerUnit::Watts => "watts",
+            powerio_prob::ActivePowerUnit::Megawatts => "megawatts",
+            _ => unreachable!("all active power units have Python spellings"),
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("ActivePower.{}({:?})", self.unit(), self.value())
+    }
+}
+
+#[pyclass(
+    name = "ReactivePower",
+    module = "powerio._powerio",
+    frozen,
+    skip_from_py_object
+)]
+#[derive(Clone, Copy)]
+struct PyReactivePower {
+    inner: powerio_prob::ReactivePower,
+}
+
+#[pymethods]
+impl PyReactivePower {
+    #[staticmethod]
+    fn vars(value: f64) -> Self {
+        Self {
+            inner: powerio_prob::ReactivePower::from_vars(value),
+        }
+    }
+
+    #[staticmethod]
+    fn megavars(value: f64) -> Self {
+        Self {
+            inner: powerio_prob::ReactivePower::from_megavars(value),
+        }
+    }
+
+    #[getter]
+    fn value(&self) -> f64 {
+        self.inner.value()
+    }
+
+    #[getter]
+    fn unit(&self) -> &'static str {
+        match self.inner.unit() {
+            powerio_prob::ReactivePowerUnit::Vars => "vars",
+            powerio_prob::ReactivePowerUnit::Megavars => "megavars",
+            _ => unreachable!("all reactive power units have Python spellings"),
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("ReactivePower.{}({:?})", self.unit(), self.value())
+    }
+}
+
+#[pyclass(
+    name = "ApparentPower",
+    module = "powerio._powerio",
+    frozen,
+    skip_from_py_object
+)]
+#[derive(Clone, Copy)]
+struct PyApparentPower {
+    inner: powerio_prob::ApparentPower,
+}
+
+#[pymethods]
+impl PyApparentPower {
+    #[staticmethod]
+    fn volt_amperes(value: f64) -> Self {
+        Self {
+            inner: powerio_prob::ApparentPower::from_volt_amperes(value),
+        }
+    }
+
+    #[staticmethod]
+    fn megavolt_amperes(value: f64) -> Self {
+        Self {
+            inner: powerio_prob::ApparentPower::from_megavolt_amperes(value),
+        }
+    }
+
+    #[getter]
+    fn value(&self) -> f64 {
+        self.inner.value()
+    }
+
+    #[getter]
+    fn unit(&self) -> &'static str {
+        match self.inner.unit() {
+            powerio_prob::ApparentPowerUnit::VoltAmperes => "volt_amperes",
+            powerio_prob::ApparentPowerUnit::MegavoltAmperes => "megavolt_amperes",
+            _ => unreachable!("all apparent power units have Python spellings"),
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("ApparentPower.{}({:?})", self.unit(), self.value())
+    }
+}
+
+fn operating_update_field(update: &powerio_prob::OperatingPointUpdate) -> &'static str {
+    use powerio_prob::OperatingPointUpdate as U;
+    match update {
+        U::LoadActivePower { .. } => "load_active_power",
+        U::LoadReactivePower { .. } => "load_reactive_power",
+        U::GeneratorActivePower { .. } => "generator_active_power",
+        U::GeneratorReactivePower { .. } => "generator_reactive_power",
+        U::GeneratorVoltageMagnitude { .. } => "generator_voltage_magnitude",
+        U::GeneratorInService { .. } => "generator_in_service",
+        U::BranchInService { .. } => "branch_in_service",
+        U::TransformerTapRatio { .. } => "transformer_tap_ratio",
+        U::TransformerPhaseShift { .. } => "transformer_phase_shift",
+        U::SwitchClosed { .. } => "switch_closed",
+        _ => unreachable!("all operating point updates have Python spellings"),
+    }
+}
+
+#[pyclass(
+    name = "OperatingPointUpdate",
+    module = "powerio._powerio",
+    frozen,
+    skip_from_py_object
+)]
+#[derive(Clone)]
+struct PyOperatingPointUpdate {
+    inner: powerio_prob::OperatingPointUpdate,
+}
+
+#[pymethods]
+impl PyOperatingPointUpdate {
+    #[staticmethod]
+    #[pyo3(signature = (load, p, *, terminal=None))]
+    fn set_load_active_power(
+        load: &PyComponentId,
+        p: &PyActivePower,
+        terminal: Option<String>,
+    ) -> Self {
+        Self {
+            inner: powerio_prob::OperatingPointUpdate::LoadActivePower {
+                load: load.inner.clone(),
+                terminal,
+                p: p.inner,
+            },
+        }
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (load, q, *, terminal=None))]
+    fn set_load_reactive_power(
+        load: &PyComponentId,
+        q: &PyReactivePower,
+        terminal: Option<String>,
+    ) -> Self {
+        Self {
+            inner: powerio_prob::OperatingPointUpdate::LoadReactivePower {
+                load: load.inner.clone(),
+                terminal,
+                q: q.inner,
+            },
+        }
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (generator, p, *, terminal=None))]
+    fn set_generator_active_power(
+        generator: &PyComponentId,
+        p: &PyActivePower,
+        terminal: Option<String>,
+    ) -> Self {
+        Self {
+            inner: powerio_prob::OperatingPointUpdate::GeneratorActivePower {
+                generator: generator.inner.clone(),
+                terminal,
+                p: p.inner,
+            },
+        }
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (generator, q, *, terminal=None))]
+    fn set_generator_reactive_power(
+        generator: &PyComponentId,
+        q: &PyReactivePower,
+        terminal: Option<String>,
+    ) -> Self {
+        Self {
+            inner: powerio_prob::OperatingPointUpdate::GeneratorReactivePower {
+                generator: generator.inner.clone(),
+                terminal,
+                q: q.inner,
+            },
+        }
+    }
+
+    #[staticmethod]
+    fn set_generator_voltage_magnitude(generator: &PyComponentId, vm_pu: f64) -> Self {
+        Self {
+            inner: powerio_prob::OperatingPointUpdate::GeneratorVoltageMagnitude {
+                generator: generator.inner.clone(),
+                vm_pu,
+            },
+        }
+    }
+
+    #[staticmethod]
+    fn set_generator_in_service(generator: &PyComponentId, in_service: bool) -> Self {
+        Self {
+            inner: powerio_prob::OperatingPointUpdate::GeneratorInService {
+                generator: generator.inner.clone(),
+                in_service,
+            },
+        }
+    }
+
+    #[staticmethod]
+    fn set_branch_in_service(branch: &PyComponentId, in_service: bool) -> Self {
+        Self {
+            inner: powerio_prob::OperatingPointUpdate::BranchInService {
+                branch: branch.inner.clone(),
+                in_service,
+            },
+        }
+    }
+
+    #[staticmethod]
+    fn set_transformer_tap_ratio(transformer: &PyComponentId, tap_ratio: f64) -> Self {
+        Self {
+            inner: powerio_prob::OperatingPointUpdate::TransformerTapRatio {
+                transformer: transformer.inner.clone(),
+                tap_ratio,
+            },
+        }
+    }
+
+    #[staticmethod]
+    fn set_transformer_phase_shift(transformer: &PyComponentId, shift_degrees: f64) -> Self {
+        Self {
+            inner: powerio_prob::OperatingPointUpdate::TransformerPhaseShift {
+                transformer: transformer.inner.clone(),
+                shift_degrees,
+            },
+        }
+    }
+
+    #[staticmethod]
+    fn set_switch_closed(switch: &PyComponentId, closed: bool) -> Self {
+        Self {
+            inner: powerio_prob::OperatingPointUpdate::SwitchClosed {
+                switch: switch.inner.clone(),
+                closed,
+            },
+        }
+    }
+
+    #[getter]
+    fn field(&self) -> &'static str {
+        operating_update_field(&self.inner)
+    }
+
+    fn __repr__(&self) -> String {
+        format!("OperatingPointUpdate(field={:?})", self.field())
+    }
+}
+
+#[pyclass(
+    name = "NetworkUpdate",
+    module = "powerio._powerio",
+    frozen,
+    skip_from_py_object
+)]
+#[derive(Clone)]
+struct PyNetworkUpdate {
+    inner: powerio_prob::NetworkUpdate,
+}
+
+#[pymethods]
+impl PyNetworkUpdate {
+    #[staticmethod]
+    #[pyo3(signature = (branch, rating, *, terminal=None))]
+    fn set_branch_thermal_rating(
+        branch: &PyComponentId,
+        rating: &PyApparentPower,
+        terminal: Option<String>,
+    ) -> Self {
+        Self {
+            inner: powerio_prob::NetworkUpdate::BranchThermalRating {
+                branch: branch.inner.clone(),
+                terminal,
+                rating: rating.inner,
+            },
+        }
+    }
+
+    #[getter]
+    fn field(&self) -> &'static str {
+        match self.inner {
+            powerio_prob::NetworkUpdate::BranchThermalRating { .. } => "branch_thermal_rating",
+            _ => unreachable!("all network updates have Python spellings"),
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("NetworkUpdate(field={:?})", self.field())
+    }
+}
+
+#[pyclass(
+    name = "CalculationUpdate",
+    module = "powerio._powerio",
+    frozen,
+    skip_from_py_object
+)]
+#[derive(Clone)]
+struct PyCalculationUpdate {
+    inner: powerio_prob::CalculationUpdate,
+}
+
+#[pymethods]
+impl PyCalculationUpdate {
+    #[new]
+    fn new(update: &Bound<'_, PyAny>) -> PyResult<Self> {
+        if let Ok(update) = update.extract::<PyRef<'_, PyOperatingPointUpdate>>() {
+            Ok(Self {
+                inner: powerio_prob::CalculationUpdate::OperatingPoint(update.inner.clone()),
+            })
+        } else if let Ok(update) = update.extract::<PyRef<'_, PyNetworkUpdate>>() {
+            Ok(Self {
+                inner: powerio_prob::CalculationUpdate::Network(update.inner.clone()),
+            })
+        } else {
+            Err(PyTypeError::new_err(
+                "CalculationUpdate takes an OperatingPointUpdate or NetworkUpdate",
+            ))
+        }
+    }
+
+    #[getter]
+    fn data_role(&self) -> &'static str {
+        match self.inner {
+            powerio_prob::CalculationUpdate::OperatingPoint(_) => "operating_point",
+            powerio_prob::CalculationUpdate::Network(_) => "network",
+            _ => unreachable!("all calculation updates have Python spellings"),
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("CalculationUpdate(data_role={:?})", self.data_role())
+    }
+}
+
+fn updated_field_name(field: powerio_prob::UpdatedField) -> &'static str {
+    use powerio_prob::UpdatedField as F;
+    match field {
+        F::LoadActivePower => "load_active_power",
+        F::LoadReactivePower => "load_reactive_power",
+        F::GeneratorActivePower => "generator_active_power",
+        F::GeneratorReactivePower => "generator_reactive_power",
+        F::GeneratorVoltageMagnitude => "generator_voltage_magnitude",
+        F::GeneratorInService => "generator_in_service",
+        F::BranchThermalRating => "branch_thermal_rating",
+        F::BranchInService => "branch_in_service",
+        F::TransformerTapRatio => "transformer_tap_ratio",
+        F::TransformerPhaseShift => "transformer_phase_shift",
+        F::SwitchClosed => "switch_closed",
+        _ => unreachable!("all updated fields have Python spellings"),
+    }
+}
+
+#[pyclass(
+    name = "UpdateChange",
+    module = "powerio._powerio",
+    frozen,
+    skip_from_py_object
+)]
+#[derive(Clone)]
+struct PyUpdateChange {
+    component_id: powerio_core::ComponentId,
+    field: powerio_prob::UpdatedField,
+    terminal: Option<String>,
+}
+
+impl From<&powerio_prob::UpdateChange> for PyUpdateChange {
+    fn from(change: &powerio_prob::UpdateChange) -> Self {
+        Self {
+            component_id: change.component_id().clone(),
+            field: change.field(),
+            terminal: change.terminal().map(str::to_owned),
+        }
+    }
+}
+
+#[pymethods]
+impl PyUpdateChange {
+    #[getter]
+    fn component_id(&self) -> PyComponentId {
+        PyComponentId {
+            inner: self.component_id.clone(),
+        }
+    }
+
+    #[getter]
+    fn field(&self) -> &'static str {
+        updated_field_name(self.field)
+    }
+
+    #[getter]
+    fn terminal(&self) -> Option<&str> {
+        self.terminal.as_deref()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "UpdateChange(component_id={:?}, field={:?}, terminal={:?})",
+            self.component_id.to_string(),
+            self.field(),
+            self.terminal
+        )
+    }
+}
+
+#[pyclass(name = "UpdateReport", module = "powerio._powerio", frozen)]
+struct PyUpdateReport {
+    inner: powerio_prob::UpdateReport,
+}
+
+#[pymethods]
+impl PyUpdateReport {
+    #[getter]
+    fn changes(&self) -> Vec<PyUpdateChange> {
+        self.inner
+            .changes()
+            .iter()
+            .map(PyUpdateChange::from)
+            .collect()
+    }
+
+    #[getter]
+    fn connectivity_changed(&self) -> bool {
+        self.inner.connectivity_changed()
+    }
+
+    fn __len__(&self) -> usize {
+        self.inner.changes().len()
+    }
+
+    fn __bool__(&self) -> bool {
+        !self.inner.is_empty()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "UpdateReport(changes={}, connectivity_changed={})",
+            self.inner.changes().len(),
+            self.inner.connectivity_changed()
+        )
+    }
 }
 
 #[pyclass(name = "_PioModule", module = "powerio._powerio")]
@@ -2094,7 +3106,7 @@ fn module_with_records<S, T>(
         out.add_source_map_entry(entry.clone())
             .map_err(|error| core_error_pyerr(&error))?;
     }
-    for diagnostic in module.diagnostics() {
+    for diagnostic in &module.diagnostics {
         out.add_diagnostic(diagnostic.clone())
             .map_err(|error| core_error_pyerr(&error))?;
     }
@@ -2119,128 +3131,455 @@ impl PyPioModule {
             .ok_or_else(|| PyValueError::new_err("the module handle was consumed"))
     }
 
-    fn selector<'a>(
-        time_position: Option<usize>,
-        scenario: Option<&'a str>,
-    ) -> PyResult<powerio::select::StateSelector<'a>> {
-        match (time_position, scenario) {
-            (Some(position), None) => Ok(powerio::select::StateSelector::TimePosition(position)),
-            (None, Some(id)) => Ok(powerio::select::StateSelector::Scenario(id)),
-            _ => Err(PyValueError::new_err(
-                "pass exactly one of time_position and scenario",
-            )),
-        }
-    }
-
-    fn value_summary(value: &powerio::PioValue) -> serde_json::Value {
-        use powerio::PioValue as V;
-        match value {
-            V::BalancedNetwork(network) => serde_json::json!({
-                "buses": network.buses().len(),
-                "branches": network.branches().len(),
-                "generators": network.generators().len(),
-                "loads": network.loads().len(),
-            }),
-            V::MulticonductorNetwork(network) => serde_json::json!({
-                "buses": network.buses().len(),
-                "lines": network.lines().len(),
-                "transformers": network.transformers().len(),
-                "switches": network.switches().len(),
-                "loads": network.loads().len(),
-            }),
-            V::BalancedNetworkTimeSeries(series) => serde_json::json!({
-                "points": series.len(),
-            }),
-            V::BalancedOperatingPointTimeSeries(series) => serde_json::json!({
-                "points": series.len(),
-            }),
-            V::BalancedNetworkScenarioSet(set) => serde_json::json!({
-                "scenarios": set.len(),
-            }),
-            _ => serde_json::json!({}),
-        }
-    }
-
-    fn operations(value: &powerio::PioValue) -> Vec<&'static str> {
-        use powerio::PioValue as V;
-        match value {
-            V::BalancedNetwork(_) => vec!["inspect", "diagnostics", "emit"],
-            V::MulticonductorNetwork(_) => vec![
-                "inspect",
-                "diagnostics",
-                "emit",
-                "to_balanced_report",
-                "to_balanced",
-            ],
-            V::BalancedNetworkTimeSeries(_)
-            | V::BalancedOperatingPointTimeSeries(_)
-            | V::BalancedNetworkScenarioSet(_) => vec![
-                "inspect",
-                "diagnostics",
-                "emit",
-                "list_states",
-                "inspect_state",
-                "export_state",
-            ],
-            _ => vec!["inspect", "diagnostics", "emit"],
-        }
-    }
-
-    /// Infer the no-argument write target without guessing between JSON
-    /// families. Prefer an explicit `.pio.json` destination, then the durable
-    /// source descriptor recorded by the parser, then a network's source
-    /// format, and finally an unambiguous destination extension.
-    fn inferred_write_format(&self, path: &Path) -> PyResult<String> {
-        let path_text = path.to_string_lossy().to_ascii_lowercase();
-        if path_text.ends_with(".pio.json") {
-            return Ok("pio-json".to_owned());
-        }
-
-        let module = self.module()?;
-        if let Some(format) = module.sources().iter().find_map(|source| source.format()) {
-            return Ok(format.as_str().to_owned());
-        }
-
-        match module.value() {
-            powerio::PioValue::BalancedNetwork(network) => {
-                let format = network.source_format().name();
-                if parse_target_format(format).is_some() || format == "pypsa-csv" {
-                    return Ok(format.to_owned());
-                }
-            }
-            powerio::PioValue::MulticonductorNetwork(network) => {
-                if let Some(format) = network.source_format().map(|format| format.name())
-                    && powerio_dist::parse_dist_target_format(format).is_some()
-                {
-                    return Ok(format.to_owned());
-                }
-            }
-            _ => {}
-        }
-
-        let inferred = match path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .map(str::to_ascii_lowercase)
-            .as_deref()
-        {
-            Some("m") => Some("matpower"),
-            Some("raw") => Some("psse"),
-            Some("aux") => Some("powerworld"),
-            Some("epc") => Some("pslf"),
-            Some("dss") => Some("dss"),
-            _ => None,
-        };
-        inferred.map(str::to_owned).ok_or_else(|| {
-            PyValueError::new_err(
-                "could not infer a write format; pass format= explicitly (JSON case formats are ambiguous)",
-            )
+    fn child(&self, value: powerio::PioValue) -> PyResult<Self> {
+        module_with_records(self.module()?, value).map(|module| Self {
+            module: Some(module),
         })
     }
+
+    fn ac_scuc_instance(&self) -> PyResult<&powerio::AcScucInstance> {
+        match &self.module()?.value {
+            powerio::PioValue::AcScucInstance(instance) => Ok(instance),
+            other => Err(PyTypeError::new_err(format!(
+                "{} is not an AC security constrained unit commitment instance",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn ac_scuc_solution(&self) -> PyResult<&powerio::AcScucSolution> {
+        match &self.module()?.value {
+            powerio::PioValue::AcScucSolution(solution) => Ok(solution),
+            other => Err(PyTypeError::new_err(format!(
+                "{} is not an AC security constrained unit commitment solution",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn balanced_calculation_network(&self) -> PyResult<&powerio::BalancedNetwork> {
+        let value = &self.module()?.value;
+        match value {
+            powerio::PioValue::DcPfInstance(instance) => Ok(instance.network()),
+            powerio::PioValue::AcPfInstance(instance) => Ok(instance.network()),
+            powerio::PioValue::DcOpfInstance(instance) => Ok(instance.network()),
+            powerio::PioValue::AcOpfInstance(instance) => Ok(instance.network()),
+            powerio::PioValue::AcScucInstance(instance) => Ok(instance.network()),
+            powerio::PioValue::DcPfSolution(solution) => Ok(solution.network()),
+            powerio::PioValue::AcPfSolution(solution) => Ok(solution.network()),
+            powerio::PioValue::DcOpfSolution(solution) => Ok(solution.network()),
+            powerio::PioValue::AcOpfSolution(solution) => Ok(solution.network()),
+            powerio::PioValue::SocwrOpfSolution(solution) => Ok(solution.network()),
+            powerio::PioValue::AcScucSolution(solution) => Ok(solution.instance().network()),
+            other => Err(PyTypeError::new_err(format!(
+                "{} does not contain a balanced calculation",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn multiconductor_calculation_network(&self) -> PyResult<&powerio::MulticonductorNetwork> {
+        let value = &self.module()?.value;
+        match value {
+            powerio::PioValue::McAcPfInstance(instance) => Ok(instance.network()),
+            powerio::PioValue::McAcOpfInstance(instance) => Ok(instance.network()),
+            powerio::PioValue::McAcPfSolution(solution) => Ok(solution.network()),
+            powerio::PioValue::McAcOpfSolution(solution) => Ok(solution.network()),
+            other => Err(PyTypeError::new_err(format!(
+                "{} does not contain a multiconductor calculation",
+                other.type_name()
+            ))),
+        }
+    }
+}
+
+fn collection_values(values: &Bound<'_, PyList>) -> PyResult<Vec<powerio::PioValue>> {
+    values
+        .iter()
+        .map(|value| {
+            let module = value.extract::<PyRef<'_, PyPioModule>>()?;
+            Ok(module.module()?.value.clone())
+        })
+        .collect()
+}
+
+enum PyUpdateBatch {
+    Empty,
+    OperatingPoint(Vec<powerio_prob::OperatingPointUpdate>),
+    Network(Vec<powerio_prob::NetworkUpdate>),
+    Calculation(Vec<powerio_prob::CalculationUpdate>),
+}
+
+fn extract_update_batch(updates: &Bound<'_, PyAny>) -> PyResult<PyUpdateBatch> {
+    let mut operating = Vec::new();
+    let mut network = Vec::new();
+    let mut calculation = Vec::new();
+    let iterator = updates
+        .try_iter()
+        .map_err(|_| PyTypeError::new_err("updates must be an iterable of typed updates"))?;
+    for item in iterator {
+        let item = item?;
+        if let Ok(update) = item.extract::<PyRef<'_, PyOperatingPointUpdate>>() {
+            if !network.is_empty() || !calculation.is_empty() {
+                return Err(PyTypeError::new_err(
+                    "one update batch cannot mix update classes",
+                ));
+            }
+            operating.push(update.inner.clone());
+        } else if let Ok(update) = item.extract::<PyRef<'_, PyNetworkUpdate>>() {
+            if !operating.is_empty() || !calculation.is_empty() {
+                return Err(PyTypeError::new_err(
+                    "one update batch cannot mix update classes",
+                ));
+            }
+            network.push(update.inner.clone());
+        } else if let Ok(update) = item.extract::<PyRef<'_, PyCalculationUpdate>>() {
+            if !operating.is_empty() || !network.is_empty() {
+                return Err(PyTypeError::new_err(
+                    "one update batch cannot mix update classes",
+                ));
+            }
+            calculation.push(update.inner.clone());
+        } else {
+            return Err(PyTypeError::new_err(
+                "typed updates must be OperatingPointUpdate, NetworkUpdate, or CalculationUpdate values",
+            ));
+        }
+    }
+    if !operating.is_empty() {
+        Ok(PyUpdateBatch::OperatingPoint(operating))
+    } else if !network.is_empty() {
+        Ok(PyUpdateBatch::Network(network))
+    } else if !calculation.is_empty() {
+        Ok(PyUpdateBatch::Calculation(calculation))
+    } else {
+        Ok(PyUpdateBatch::Empty)
+    }
+}
+
+macro_rules! apply_typed_updates {
+    ($source:expr, $value:expr, $updates:expr, $wrap:path $(,)?) => {{
+        let mut typed = module_with_records($source, $value.clone())?;
+        let report = powerio_prob::apply_updates(&mut typed, $updates)
+            .map_err(|error| core_error_pyerr(&error))?;
+        let updated_value = $wrap(typed.value.clone());
+        let updated = module_with_records(&typed, updated_value)?;
+        Ok((updated, report))
+    }};
+}
+
+fn apply_operating_point_updates(
+    source: &powerio_core::PioModule<powerio::PioValue>,
+    updates: &[powerio_prob::OperatingPointUpdate],
+) -> PyResult<(
+    powerio_core::PioModule<powerio::PioValue>,
+    powerio_prob::UpdateReport,
+)> {
+    match &source.value {
+        powerio::PioValue::BalancedNetwork(value) => {
+            apply_typed_updates!(source, value, updates, powerio::PioValue::BalancedNetwork)
+        }
+        powerio::PioValue::MulticonductorNetwork(value) => apply_typed_updates!(
+            source,
+            value,
+            updates,
+            powerio::PioValue::MulticonductorNetwork,
+        ),
+        powerio::PioValue::BalancedOperatingPoint(value) => apply_typed_updates!(
+            source,
+            value,
+            updates,
+            powerio::PioValue::BalancedOperatingPoint,
+        ),
+        powerio::PioValue::MulticonductorOperatingPoint(value) => apply_typed_updates!(
+            source,
+            value,
+            updates,
+            powerio::PioValue::MulticonductorOperatingPoint,
+        ),
+        value => Err(PyTypeError::new_err(format!(
+            "OperatingPointUpdate cannot be applied to {}",
+            value.type_name()
+        ))),
+    }
+}
+
+fn apply_network_updates(
+    source: &powerio_core::PioModule<powerio::PioValue>,
+    updates: &[powerio_prob::NetworkUpdate],
+) -> PyResult<(
+    powerio_core::PioModule<powerio::PioValue>,
+    powerio_prob::UpdateReport,
+)> {
+    match &source.value {
+        powerio::PioValue::BalancedNetwork(value) => {
+            apply_typed_updates!(source, value, updates, powerio::PioValue::BalancedNetwork)
+        }
+        powerio::PioValue::MulticonductorNetwork(value) => apply_typed_updates!(
+            source,
+            value,
+            updates,
+            powerio::PioValue::MulticonductorNetwork,
+        ),
+        value => Err(PyTypeError::new_err(format!(
+            "NetworkUpdate cannot be applied to {}",
+            value.type_name()
+        ))),
+    }
+}
+
+fn apply_calculation_updates(
+    source: &powerio_core::PioModule<powerio::PioValue>,
+    updates: &[powerio_prob::CalculationUpdate],
+) -> PyResult<(
+    powerio_core::PioModule<powerio::PioValue>,
+    powerio_prob::UpdateReport,
+)> {
+    match &source.value {
+        powerio::PioValue::DcPfInstance(value) => {
+            apply_typed_updates!(source, value, updates, powerio::PioValue::DcPfInstance)
+        }
+        powerio::PioValue::AcPfInstance(value) => {
+            apply_typed_updates!(source, value, updates, powerio::PioValue::AcPfInstance)
+        }
+        powerio::PioValue::DcOpfInstance(value) => {
+            apply_typed_updates!(source, value, updates, powerio::PioValue::DcOpfInstance)
+        }
+        powerio::PioValue::AcOpfInstance(value) => {
+            apply_typed_updates!(source, value, updates, powerio::PioValue::AcOpfInstance)
+        }
+        powerio::PioValue::McAcPfInstance(value) => {
+            apply_typed_updates!(source, value, updates, powerio::PioValue::McAcPfInstance)
+        }
+        powerio::PioValue::McAcOpfInstance(value) => {
+            apply_typed_updates!(source, value, updates, powerio::PioValue::McAcOpfInstance)
+        }
+        value => Err(PyTypeError::new_err(format!(
+            "CalculationUpdate cannot be applied to {}",
+            value.type_name()
+        ))),
+    }
+}
+
+fn apply_bus_load_active_power_to_module(
+    source: &powerio_core::PioModule<powerio::PioValue>,
+    bus_id: usize,
+    total: powerio_prob::ActivePower,
+    allocation: &str,
+) -> PyResult<(
+    powerio_core::PioModule<powerio::PioValue>,
+    powerio_prob::UpdateReport,
+)> {
+    let allocation = match allocation {
+        "equal" => powerio_prob::LoadAllocation::Equal,
+        "proportional_to_current_active_power" => {
+            powerio_prob::LoadAllocation::ProportionalToCurrentActivePower
+        }
+        _ => {
+            return Err(PyValueError::new_err(
+                "allocation must be 'equal' or 'proportional_to_current_active_power'",
+            ));
+        }
+    };
+
+    macro_rules! apply_to {
+        ($value:expr, $wrap:path) => {{
+            let mut typed = module_with_records(source, $value.clone())?;
+            let report = powerio_prob::apply_bus_load_active_power(
+                &mut typed,
+                powerio_tx::BusId(bus_id),
+                total,
+                allocation,
+            )
+            .map_err(|error| core_error_pyerr(&error))?;
+            let updated = module_with_records(&typed, $wrap(typed.value.clone()))?;
+            Ok((updated, report))
+        }};
+    }
+
+    match &source.value {
+        powerio::PioValue::DcPfInstance(value) => {
+            apply_to!(value, powerio::PioValue::DcPfInstance)
+        }
+        powerio::PioValue::AcPfInstance(value) => {
+            apply_to!(value, powerio::PioValue::AcPfInstance)
+        }
+        powerio::PioValue::DcOpfInstance(value) => {
+            apply_to!(value, powerio::PioValue::DcOpfInstance)
+        }
+        powerio::PioValue::AcOpfInstance(value) => {
+            apply_to!(value, powerio::PioValue::AcOpfInstance)
+        }
+        value => Err(PyTypeError::new_err(format!(
+            "a bus load allocation requires a balanced power flow or optimal power flow instance; received {}",
+            value.type_name()
+        ))),
+    }
+}
+
+fn apply_update_batch(
+    source: &powerio_core::PioModule<powerio::PioValue>,
+    batch: &PyUpdateBatch,
+) -> PyResult<(
+    powerio_core::PioModule<powerio::PioValue>,
+    powerio_prob::UpdateReport,
+)> {
+    match batch {
+        PyUpdateBatch::Empty => Ok((
+            module_with_records(source, source.value.clone())?,
+            powerio_prob::UpdateReport::default(),
+        )),
+        PyUpdateBatch::OperatingPoint(updates) => apply_operating_point_updates(source, updates),
+        PyUpdateBatch::Network(updates) => apply_network_updates(source, updates),
+        PyUpdateBatch::Calculation(updates) => apply_calculation_updates(source, updates),
+    }
+}
+
+fn collection_update_target_mut<'a>(
+    value: &'a mut powerio::PioValue,
+    time_index: Option<usize>,
+    scenario_id: Option<&str>,
+) -> PyResult<&'a mut powerio::PioValue> {
+    match value {
+        powerio::PioValue::TimeSeries(series) => {
+            let Some(index) = time_index else {
+                return Err(PyTypeError::new_err(
+                    "a TimeSeries entry update requires a time index",
+                ));
+            };
+            let target = series
+                .get_mut(index)
+                .ok_or_else(|| PyValueError::new_err("time series index out of range"))?;
+            collection_update_target_mut(target, None, scenario_id)
+        }
+        powerio::PioValue::ScenarioSet(scenarios) => {
+            let Some(id) = scenario_id else {
+                return Err(PyTypeError::new_err(
+                    "a ScenarioSet entry update requires a scenario ID",
+                ));
+            };
+            let target = scenarios
+                .get_mut(id)
+                .ok_or_else(|| PyValueError::new_err(format!("unknown scenario ID {id:?}")))?;
+            collection_update_target_mut(target, time_index, None)
+        }
+        _ if time_index.is_none() && scenario_id.is_none() => Ok(value),
+        _ if time_index.is_some() => Err(PyTypeError::new_err(
+            "the selected value is not a TimeSeries",
+        )),
+        _ => Err(PyTypeError::new_err(
+            "the selected value is not a ScenarioSet",
+        )),
+    }
+}
+
+fn apply_collection_entry_updates(
+    source: &powerio_core::PioModule<powerio::PioValue>,
+    time_index: Option<usize>,
+    scenario_id: Option<&str>,
+    batch: &PyUpdateBatch,
+) -> PyResult<(
+    powerio_core::PioModule<powerio::PioValue>,
+    powerio_prob::UpdateReport,
+)> {
+    let mut parent_value = source.value.clone();
+    let entry_value =
+        collection_update_target_mut(&mut parent_value, time_index, scenario_id)?.clone();
+    let entry_module = module_with_records(source, entry_value)?;
+    let (updated_entry, report) = apply_update_batch(&entry_module, batch)?;
+    *collection_update_target_mut(&mut parent_value, time_index, scenario_id)? =
+        updated_entry.value.clone();
+    let updated_parent = module_with_records(&updated_entry, parent_value)?;
+    Ok((updated_parent, report))
 }
 
 #[pymethods]
 impl PyPioModule {
+    /// Clone this owner rooted module without serializing its value.
+    fn _copy(&self) -> PyResult<Self> {
+        Ok(Self {
+            module: Some(self.module()?.clone()),
+        })
+    }
+
+    /// Construct one typed time series from owner rooted PowerIO values.
+    #[staticmethod]
+    fn _from_time_series(
+        values: &Bound<'_, PyList>,
+        time_points: Vec<(String, Option<f64>)>,
+    ) -> PyResult<Self> {
+        let values = collection_values(values)?;
+        let time_points = time_points
+            .into_iter()
+            .map(|(label, duration_seconds)| {
+                let duration = duration_seconds
+                    .map(|seconds| {
+                        Duration::try_from_secs_f64(seconds).map_err(|_| {
+                            PyValueError::new_err(format!(
+                                "time point {label:?} duration must be finite and nonnegative"
+                            ))
+                        })
+                    })
+                    .transpose()?;
+                powerio_core::TimePoint::new(label, duration)
+                    .map_err(|error| core_error_pyerr(&error))
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        let series = powerio::PioTimeSeries::from_values(time_points, values)
+            .map_err(|error| core_error_pyerr(&error))?;
+        Ok(Self {
+            module: Some(powerio_core::PioModule::new(powerio::PioValue::TimeSeries(
+                series,
+            ))),
+        })
+    }
+
+    /// Construct one typed scenario set from owner rooted PowerIO values.
+    #[staticmethod]
+    #[pyo3(signature = (values, ids, probabilities=None))]
+    fn _from_scenario_set(
+        values: &Bound<'_, PyList>,
+        ids: Vec<String>,
+        probabilities: Option<HashMap<String, f64>>,
+    ) -> PyResult<Self> {
+        let values = collection_values(values)?;
+        if values.len() != ids.len() {
+            return Err(PyValueError::new_err(format!(
+                "scenario set has {} values for {} IDs",
+                values.len(),
+                ids.len()
+            )));
+        }
+        if let Some(probabilities) = &probabilities
+            && (probabilities.len() != ids.len()
+                || ids.iter().any(|id| !probabilities.contains_key(id)))
+        {
+            return Err(PyValueError::new_err(
+                "scenario probabilities must name every scenario ID exactly once",
+            ));
+        }
+        let scenarios = ids
+            .into_iter()
+            .zip(values)
+            .map(|(id, value)| {
+                let probability = probabilities
+                    .as_ref()
+                    .and_then(|probabilities| probabilities.get(&id))
+                    .copied();
+                let id =
+                    powerio_core::ScenarioId::new(id).map_err(|error| core_error_pyerr(&error))?;
+                Ok(powerio_core::Scenario::new(id, probability, value))
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        let scenarios = powerio::PioScenarioSet::from_scenarios(scenarios)
+            .map_err(|error| core_error_pyerr(&error))?;
+        Ok(Self {
+            module: Some(powerio_core::PioModule::new(
+                powerio::PioValue::ScenarioSet(scenarios),
+            )),
+        })
+    }
+
     /// Wrap an existing balanced network value in a module without serializing
     /// or reparsing it. Common records and retained source remain attached.
     #[staticmethod]
@@ -2268,244 +3607,388 @@ impl PyPioModule {
         })
     }
 
-    /// Parse a case file into a module of whichever family claims it.
-    /// `include_root` widens the acquisition root for formats whose includes
-    /// reference sibling files.
+    /// Private path acquisition used by the public `parse` function.
     #[staticmethod]
-    #[pyo3(signature = (path, from_=None, include_root=None))]
-    fn from_file(path: &str, from_: Option<&str>, include_root: Option<&str>) -> PyResult<Self> {
-        let mut source = powerio_core::Source::open(Path::new(path))
+    #[pyo3(signature = (path, format=None))]
+    fn _parse_path(path: &str, format: Option<&str>) -> PyResult<Self> {
+        let source = powerio_core::Source::open(Path::new(path))
             .map_err(|error| core_open_pyerr(Path::new(path), &error))?;
-        if let Some(root) = include_root {
-            source = source
-                .with_acquisition_root(root)
-                .map_err(|error| core_error_pyerr(&error))?;
-        }
-        if let Some(name) = from_ {
-            let format =
-                powerio_core::FormatId::new(name).map_err(|error| core_error_pyerr(&error))?;
-            source = source.with_format(format);
-        }
-        powerio::parse(source)
+        powerio::parse(source, format)
             .map(|module| Self {
                 module: Some(module),
             })
             .map_err(|error| core_error_pyerr(&error))
     }
 
-    /// Parse in-memory case text into a module.
+    /// Private memory acquisition used for bytes-like and file-like sources.
     #[staticmethod]
-    #[pyo3(signature = (text, from_=None))]
-    fn from_str(text: &str, from_: Option<&str>) -> PyResult<Self> {
-        let mut source = powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())
+    #[pyo3(signature = (data, name, format=None))]
+    fn _parse_memory(data: &[u8], name: &str, format: Option<&str>) -> PyResult<Self> {
+        let source = powerio_core::Source::from_memory(name, data.to_vec())
             .map_err(|error| core_error_pyerr(&error))?;
-        if let Some(name) = from_ {
-            let format =
-                powerio_core::FormatId::new(name).map_err(|error| core_error_pyerr(&error))?;
-            source = source.with_format(format);
-        }
-        powerio::parse(source)
+        powerio::parse(source, format)
             .map(|module| Self {
                 module: Some(module),
             })
             .map_err(|error| core_error_pyerr(&error))
     }
 
-    /// Parse in-memory case bytes into a module. The only in-memory way to
-    /// read a binary format; text formats must be UTF-8. `name` identifies
-    /// the buffer for diagnostics and extension-based format detection;
-    /// defaults to `<memory>` when not given.
     #[staticmethod]
-    #[pyo3(signature = (data, from_=None, name=None))]
-    fn from_bytes(data: &[u8], from_: Option<&str>, name: Option<&str>) -> PyResult<Self> {
-        let mut source =
-            powerio_core::Source::from_bytes(name.unwrap_or("<memory>"), data.to_vec())
-                .map_err(|error| core_error_pyerr(&error))?;
-        if let Some(format_name) = from_ {
-            let format = powerio_core::FormatId::new(format_name)
-                .map_err(|error| core_error_pyerr(&error))?;
-            source = source.with_format(format);
-        }
-        powerio::parse(source)
+    fn _deserialize_path(path: &str) -> PyResult<Self> {
+        let source = powerio_core::Source::open(Path::new(path))
+            .map_err(|error| core_open_pyerr(Path::new(path), &error))?;
+        powerio::deserialize(source)
             .map(|module| Self {
                 module: Some(module),
             })
             .map_err(|error| core_error_pyerr(&error))
     }
 
-    /// Serialize this module's typed value to `to`. The dynamic writer routes
-    /// to the balanced, multiconductor, or stored module family. Returns
-    /// `(text, diagnostics)`.
-    #[pyo3(signature = (to, missing_gen_cost=None, default_gen_cost=None, gen_cost_csv=None))]
-    fn to_format(
-        &self,
-        to: &str,
-        missing_gen_cost: Option<&str>,
-        default_gen_cost: Option<&str>,
-        gen_cost_csv: Option<&str>,
-    ) -> PyResult<(String, Vec<PyDiagnostic>)> {
-        let options = emit_options(
-            missing_gen_cost,
-            default_gen_cost,
-            gen_cost_csv,
-            MissingGenCostPolicy::Preserve,
-        )?;
+    #[staticmethod]
+    fn _deserialize_memory(data: &[u8]) -> PyResult<Self> {
+        let source = powerio_core::Source::from_memory("<memory>.pio.json", data.to_vec())
+            .map_err(|error| core_error_pyerr(&error))?;
+        powerio::deserialize(source)
+            .map(|module| Self {
+                module: Some(module),
+            })
+            .map_err(|error| core_error_pyerr(&error))
+    }
+
+    fn _emit_memory<'py>(&self, py: Python<'py>, format: &str) -> PyResult<Bound<'py, PyDict>> {
         let destination =
             powerio_core::Destination::memory("case").map_err(|error| core_error_pyerr(&error))?;
-        let result = emit_dynamic(self.module()?, to, &options, destination)?;
-        let (text, diagnostics) = emitted_text(result, to)?;
-        Ok((text, diagnostics.iter().map(PyDiagnostic::from).collect()))
+        let result = powerio::emit(self.module()?, format, destination)
+            .map_err(|error| core_error_pyerr(&error))?;
+        emit_result_to_py(py, result)
     }
 
-    /// Write the complete artifact inventory to `path`. With no `format`,
-    /// retain the module's recorded source format when possible, or infer an
-    /// unambiguous format from `path`.
-    #[pyo3(signature = (path, format=None))]
-    fn write_file(&self, path: &str, format: Option<&str>) -> PyResult<Vec<PyDiagnostic>> {
-        let path = Path::new(path);
-        let inferred;
-        let format = match format {
-            Some(format) => format,
-            None => {
-                inferred = self.inferred_write_format(path)?;
-                &inferred
-            }
-        };
+    fn _emit_path<'py>(
+        &self,
+        py: Python<'py>,
+        format: &str,
+        path: &str,
+    ) -> PyResult<Bound<'py, PyDict>> {
         let result = powerio::emit(
             self.module()?,
             format,
             powerio_core::Destination::path(path),
         )
         .map_err(|error| core_error_pyerr(&error))?;
-        Ok(result
-            .diagnostics()
-            .iter()
-            .map(PyDiagnostic::from)
-            .collect())
+        emit_result_to_py(py, result)
     }
 
-    /// The value's permanent kind identifier.
-    fn kind(&self) -> PyResult<String> {
-        Ok(self.module()?.value().kind().as_str().to_owned())
+    fn _serialize_memory<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let destination = powerio_core::Destination::memory("module.pio.json")
+            .map_err(|error| core_error_pyerr(&error))?;
+        let result = powerio::serialize(self.module()?, destination)
+            .map_err(|error| core_error_pyerr(&error))?;
+        emit_result_to_py(py, result)
     }
 
-    /// Value inspection and supported operation discovery, as JSON.
-    fn inspect_json(&self) -> PyResult<String> {
+    fn _serialize_path<'py>(&self, py: Python<'py>, path: &str) -> PyResult<Bound<'py, PyDict>> {
+        let result = powerio::serialize(self.module()?, powerio_core::Destination::path(path))
+            .map_err(|error| core_error_pyerr(&error))?;
+        emit_result_to_py(py, result)
+    }
+
+    fn _to_dc_pf_instance(&self) -> PyResult<Self> {
+        let module = powerio::transform::to_dc_pf_instance(self.module()?)
+            .map_err(|error| core_error_pyerr(&error))?
+            .map_value(powerio::PioValue::DcPfInstance);
+        Ok(Self {
+            module: Some(module),
+        })
+    }
+
+    fn _to_ac_pf_instance(&self) -> PyResult<Self> {
+        let module = powerio::transform::to_ac_pf_instance(self.module()?)
+            .map_err(|error| core_error_pyerr(&error))?
+            .map_value(powerio::PioValue::AcPfInstance);
+        Ok(Self {
+            module: Some(module),
+        })
+    }
+
+    fn _to_dc_opf_instance(&self) -> PyResult<Self> {
+        let module = powerio::transform::to_dc_opf_instance(self.module()?)
+            .map_err(|error| core_error_pyerr(&error))?
+            .map_value(powerio::PioValue::DcOpfInstance);
+        Ok(Self {
+            module: Some(module),
+        })
+    }
+
+    fn _to_ac_opf_instance(&self) -> PyResult<Self> {
+        let module = powerio::transform::to_ac_opf_instance(self.module()?)
+            .map_err(|error| core_error_pyerr(&error))?
+            .map_value(powerio::PioValue::AcOpfInstance);
+        Ok(Self {
+            module: Some(module),
+        })
+    }
+
+    fn _to_mc_ac_pf_instance(&self) -> PyResult<Self> {
+        let module = powerio::transform::to_mc_ac_pf_instance(self.module()?)
+            .map_err(|error| core_error_pyerr(&error))?
+            .map_value(powerio::PioValue::McAcPfInstance);
+        Ok(Self {
+            module: Some(module),
+        })
+    }
+
+    fn _to_mc_ac_opf_instance(&self) -> PyResult<Self> {
+        let module = powerio::transform::to_mc_ac_opf_instance(self.module()?)
+            .map_err(|error| core_error_pyerr(&error))?
+            .map_value(powerio::PioValue::McAcOpfInstance);
+        Ok(Self {
+            module: Some(module),
+        })
+    }
+
+    /// The balanced network shared by a balanced calculation instance or
+    /// solution. `BalancedNetwork::clone` only retains its copy on write
+    /// tables; it does not copy them.
+    fn _balanced_calculation_network(&self) -> PyResult<PyBalancedNetwork> {
         let module = self.module()?;
-        let value = module.value();
-        let payload = serde_json::json!({
-            "kind": value.kind().as_str(),
-            "value": Self::value_summary(value),
-            "records": {
-                "sources": module.sources().len(),
-                "source_map": module.source_map().len(),
-                "diagnostics": module.diagnostics().len(),
-                "history": module.history().len(),
-                "extensions": module.extensions().len(),
-            },
-            "operations": Self::operations(value),
-        });
-        serde_json::to_string(&payload).map_err(serialize_pyerr)
+        let network = self.balanced_calculation_network()?.clone();
+        Ok(case_from_module(module_with_records(module, network)?))
     }
 
-    /// The module's diagnostics as a JSON array.
-    fn diagnostics_json(&self) -> PyResult<String> {
-        let diagnostics = diagnostics_json_array(self.module()?.diagnostics());
-        serde_json::to_string(&diagnostics).map_err(serialize_pyerr)
+    /// The multiconductor network shared by a multiconductor calculation
+    /// instance or solution.
+    fn _multiconductor_calculation_network(&self) -> PyResult<PyMulticonductorNetwork> {
+        let module = self.module()?;
+        let network = self.multiconductor_calculation_network()?.clone();
+        Ok(PyMulticonductorNetwork::from_module(module_with_records(
+            module, network,
+        )?))
     }
 
-    /// The module's diagnostics as native `Diagnostic` objects, in encounter
-    /// order. `diagnostics_json` above stays as the explicit serialization
-    /// helper for a caller that wants the wire form directly.
+    /// The exact typed instance solved by a calculation solution.
+    fn _calculation_solution_instance(&self) -> PyResult<Self> {
+        let value = match &self.module()?.value {
+            powerio::PioValue::DcPfSolution(solution) => {
+                powerio::PioValue::DcPfInstance(solution.instance().clone())
+            }
+            powerio::PioValue::AcPfSolution(solution) => {
+                powerio::PioValue::AcPfInstance(solution.instance().clone())
+            }
+            powerio::PioValue::DcOpfSolution(solution) => {
+                powerio::PioValue::DcOpfInstance(solution.instance().clone())
+            }
+            powerio::PioValue::AcOpfSolution(solution) => {
+                powerio::PioValue::AcOpfInstance(solution.instance().clone())
+            }
+            powerio::PioValue::SocwrOpfSolution(solution) => {
+                powerio::PioValue::AcOpfInstance(solution.instance().clone())
+            }
+            powerio::PioValue::McAcPfSolution(solution) => {
+                powerio::PioValue::McAcPfInstance(solution.instance().clone())
+            }
+            powerio::PioValue::McAcOpfSolution(solution) => {
+                powerio::PioValue::McAcOpfInstance(solution.instance().clone())
+            }
+            powerio::PioValue::AcScucSolution(solution) => {
+                powerio::PioValue::AcScucInstance(solution.instance().clone())
+            }
+            other => {
+                return Err(PyTypeError::new_err(format!(
+                    "{} is not a calculation solution",
+                    other.type_name()
+                )));
+            }
+        };
+        self.child(value)
+    }
+
+    /// The source neutral scheduling, reserve, and contingency inputs of an
+    /// AC security constrained unit commitment instance.
+    fn _ac_scuc_inputs(&self) -> PyResult<PyScucInputs> {
+        Ok(PyScucInputs {
+            inner: self.ac_scuc_instance()?.inputs().clone(),
+        })
+    }
+
+    /// How an AC security constrained unit commitment calculation ended.
+    fn _ac_scuc_solution_termination(&self) -> PyResult<&'static str> {
+        match self.ac_scuc_solution()?.termination() {
+            powerio_prob::Termination::Converged => Ok("converged"),
+            powerio_prob::Termination::IterationLimit => Ok("iteration_limit"),
+            powerio_prob::Termination::Infeasible => Ok("infeasible"),
+            powerio_prob::Termination::Unbounded => Ok("unbounded"),
+            powerio_prob::Termination::Failed => Ok("failed"),
+            powerio_prob::Termination::NotReported => Ok("not_reported"),
+            _ => Err(PyValueError::new_err(
+                "this powerio build returned an unsupported termination value",
+            )),
+        }
+    }
+
+    /// Numerical residuals reported with an AC SCUC solution.
+    fn _ac_scuc_solution_residuals(&self) -> PyResult<PyResiduals> {
+        Ok(PyResiduals {
+            inner: *self.ac_scuc_solution()?.residuals(),
+        })
+    }
+
+    /// Producer or solver identity recorded with an AC SCUC solution.
+    fn _ac_scuc_solution_producer(&self) -> PyResult<Option<String>> {
+        Ok(self.ac_scuc_solution()?.producer().map(str::to_owned))
+    }
+
+    /// Per interval network outputs from an AC SCUC solution.
+    fn _ac_scuc_solution_network_outputs(&self) -> PyResult<PyScucNetworkOutputs> {
+        Ok(PyScucNetworkOutputs {
+            inner: self.ac_scuc_solution()?.network_outputs().clone(),
+        })
+    }
+
+    /// Per interval dispatchable device outputs from an AC SCUC solution.
+    fn _ac_scuc_solution_device_outputs(&self) -> PyResult<PyScucDeviceOutputs> {
+        Ok(PyScucDeviceOutputs {
+            inner: self.ac_scuc_solution()?.device_outputs().clone(),
+        })
+    }
+
+    /// Objective value reported with an AC SCUC solution.
+    fn _ac_scuc_solution_objective(&self) -> PyResult<Option<f64>> {
+        Ok(self.ac_scuc_solution()?.objective())
+    }
+
+    /// Canonical structural type name. This stays private to the wrapper;
+    /// callers use `isinstance(module.value, ...)`.
+    #[getter]
+    fn _type_name(&self) -> PyResult<String> {
+        Ok(self.module()?.value.type_name().to_owned())
+    }
+
+    /// The module's diagnostics, in encounter order.
+    #[getter]
     fn diagnostics(&self) -> PyResult<Vec<PyDiagnostic>> {
         Ok(self
             .module()?
-            .diagnostics()
+            .diagnostics
             .iter()
             .map(PyDiagnostic::from)
             .collect())
     }
 
-    /// The typed time or scenario inventory, as JSON.
-    fn list_states_json(&self) -> PyResult<String> {
-        let inventory = powerio::select::list_states(self.module()?.value())
-            .map_err(|error| core_error_pyerr(&error))?;
-        let payload = match inventory {
-            powerio::select::StateInventory::TimePoints(points) => serde_json::json!({
-                "keyed_by": "time_position",
-                "time_points": points
-                    .iter()
-                    .map(|point| {
-                        serde_json::json!({
-                            "position": point.position,
-                            "label": point.label,
-                            "duration_seconds": point.duration.map(|d| d.as_secs_f64()),
-                        })
-                    })
-                    .collect::<Vec<_>>(),
-            }),
-            powerio::select::StateInventory::Scenarios(scenarios) => serde_json::json!({
-                "keyed_by": "scenario",
-                "scenarios": scenarios
-                    .iter()
-                    .map(|scenario| {
-                        serde_json::json!({
-                            "id": scenario.id,
-                            "probability": scenario.probability,
-                        })
-                    })
-                    .collect::<Vec<_>>(),
-            }),
-            _ => serde_json::json!({}),
-        };
-        serde_json::to_string(&payload).map_err(serialize_pyerr)
+    /// Validate and apply one homogeneous batch of typed updates atomically.
+    fn _apply_updates(&mut self, updates: &Bound<'_, PyAny>) -> PyResult<PyUpdateReport> {
+        let batch = extract_update_batch(updates)?;
+        if matches!(batch, PyUpdateBatch::Empty) {
+            return Ok(PyUpdateReport {
+                inner: powerio_prob::UpdateReport::default(),
+            });
+        }
+        let source = self.module()?;
+        let (updated, report) = apply_update_batch(source, &batch)?;
+        self.module = Some(updated);
+        Ok(PyUpdateReport { inner: report })
     }
 
-    /// Select the existing typed item and describe it, as JSON. No clone, no
-    /// materialization: the export operation is separate.
-    #[pyo3(signature = (time_position=None, scenario=None))]
-    fn inspect_state_json(
-        &self,
-        time_position: Option<usize>,
-        scenario: Option<&str>,
-    ) -> PyResult<String> {
-        let selector = Self::selector(time_position, scenario)?;
-        let selected = powerio::select::select_state(self.module()?.value(), selector)
-            .map_err(|error| core_error_pyerr(&error))?;
-        let payload = match selected {
-            powerio::select::SelectedState::BalancedNetwork(network) => serde_json::json!({
-                "item": "balanced_network",
-                "buses": network.buses().len(),
-                "branches": network.branches().len(),
-                "generators": network.generators().len(),
-                "loads": network.loads().len(),
-            }),
-            powerio::select::SelectedState::BalancedOperatingPoint(point) => {
-                let stated: Vec<&str> = powerio_prob::BALANCED_STATE_QUANTITIES
-                    .iter()
-                    .copied()
-                    .filter(|quantity| point.states(quantity))
-                    .collect();
-                serde_json::json!({
-                    "item": "balanced_operating_point",
-                    "stated_quantities": stated,
-                    "network_buses": point.network().buses().len(),
-                })
-            }
-            _ => serde_json::json!({}),
-        };
-        serde_json::to_string(&payload).map_err(serialize_pyerr)
+    /// Replace one bus's aggregate active demand through a named allocation
+    /// rule owned by PowerIO.
+    #[pyo3(signature = (bus_id, total, *, allocation="proportional_to_current_active_power"))]
+    fn _apply_bus_load_active_power(
+        &mut self,
+        bus_id: usize,
+        total: &PyActivePower,
+        allocation: &str,
+    ) -> PyResult<PyUpdateReport> {
+        let (updated, report) =
+            apply_bus_load_active_power_to_module(self.module()?, bus_id, total.inner, allocation)?;
+        self.module = Some(updated);
+        Ok(PyUpdateReport { inner: report })
     }
 
-    /// Export the selected item as an independent static module handle.
-    #[pyo3(signature = (time_position=None, scenario=None))]
-    fn export_state(&self, time_position: Option<usize>, scenario: Option<&str>) -> PyResult<Self> {
-        let selector = Self::selector(time_position, scenario)?;
-        powerio::select::export_module_state(self.module()?, selector)
-            .map(|module| Self {
-                module: Some(module),
+    /// Apply updates to one collection entry while retaining the collection.
+    #[pyo3(signature = (updates, *, time_index=None, scenario_id=None))]
+    fn _apply_collection_updates(
+        &mut self,
+        updates: &Bound<'_, PyAny>,
+        time_index: Option<usize>,
+        scenario_id: Option<&str>,
+    ) -> PyResult<PyUpdateReport> {
+        if time_index.is_none() && scenario_id.is_none() {
+            return Err(PyTypeError::new_err(
+                "a collection entry update requires a time index or scenario ID",
+            ));
+        }
+        let batch = extract_update_batch(updates)?;
+        if matches!(batch, PyUpdateBatch::Empty) {
+            return Ok(PyUpdateReport {
+                inner: powerio_prob::UpdateReport::default(),
+            });
+        }
+        let (updated, report) =
+            apply_collection_entry_updates(self.module()?, time_index, scenario_id, &batch)?;
+        self.module = Some(updated);
+        Ok(PyUpdateReport { inner: report })
+    }
+
+    fn _time_series_len(&self) -> PyResult<usize> {
+        let powerio::PioValue::TimeSeries(series) = &self.module()?.value else {
+            return Err(PowerIODataError::new_err(
+                "the module value is not a TimeSeries",
+            ));
+        };
+        Ok(series.len())
+    }
+
+    fn _time_series_points(&self) -> PyResult<Vec<(String, Option<f64>)>> {
+        let powerio::PioValue::TimeSeries(series) = &self.module()?.value else {
+            return Err(PowerIODataError::new_err(
+                "the module value is not a TimeSeries",
+            ));
+        };
+        Ok(series
+            .time_points()
+            .iter()
+            .map(|point| {
+                (
+                    point.label().to_owned(),
+                    point.duration().map(|duration| duration.as_secs_f64()),
+                )
             })
-            .map_err(|error| core_error_pyerr(&error))
+            .collect())
+    }
+
+    fn _time_series_get(&self, index: usize) -> PyResult<Self> {
+        let powerio::PioValue::TimeSeries(series) = &self.module()?.value else {
+            return Err(PowerIODataError::new_err(
+                "the module value is not a TimeSeries",
+            ));
+        };
+        let value = series
+            .get(index)
+            .ok_or_else(|| PyValueError::new_err("time series index out of range"))?;
+        self.child(value.clone())
+    }
+
+    fn _scenario_entries(&self) -> PyResult<Vec<(String, Option<f64>)>> {
+        let powerio::PioValue::ScenarioSet(scenarios) = &self.module()?.value else {
+            return Err(PowerIODataError::new_err(
+                "the module value is not a ScenarioSet",
+            ));
+        };
+        Ok(scenarios
+            .iter()
+            .map(|scenario| (scenario.id().as_str().to_owned(), scenario.probability()))
+            .collect())
+    }
+
+    fn _scenario_get(&self, id: &str) -> PyResult<Self> {
+        let powerio::PioValue::ScenarioSet(scenarios) = &self.module()?.value else {
+            return Err(PowerIODataError::new_err(
+                "the module value is not a ScenarioSet",
+            ));
+        };
+        let value = scenarios
+            .get(id)
+            .ok_or_else(|| PyValueError::new_err(format!("unknown scenario ID {id:?}")))?;
+        self.child(value.clone())
     }
 
     /// Readiness of the multiconductor value for the balanced lowering, as
@@ -2542,7 +4025,7 @@ impl PyPioModule {
     #[pyo3(signature = (base_mva=100.0))]
     fn lower_to_balanced(&self, base_mva: f64) -> PyResult<Self> {
         let source = self.module()?;
-        let powerio::PioValue::MulticonductorNetwork(network) = source.value() else {
+        let powerio::PioValue::MulticonductorNetwork(network) = &source.value else {
             let Err(error) = powerio::transform::to_balanced_report(
                 source,
                 powerio::transform::MulticonductorToBalancedOptions {
@@ -2550,7 +4033,7 @@ impl PyPioModule {
                     ..Default::default()
                 },
             ) else {
-                unreachable!("a non-multiconductor value cannot pass the kind check")
+                unreachable!("a non-multiconductor value cannot pass the type check")
             };
             return Err(core_error_pyerr(&error));
         };
@@ -2601,10 +4084,10 @@ impl PyPioModule {
     /// The balanced network value as a network handle (cheap table share).
     fn as_balanced_network(&self) -> PyResult<PyBalancedNetwork> {
         let module = self.module()?;
-        let powerio::PioValue::BalancedNetwork(network) = module.value() else {
+        let powerio::PioValue::BalancedNetwork(network) = &module.value else {
             return Err(PowerIODataError::new_err(format!(
                 "the module carries a {} value; as_balanced_network takes a balanced network",
-                module.value().kind().as_str()
+                module.value.type_name()
             )));
         };
         Ok(case_from_module(module_with_records(
@@ -2616,11 +4099,11 @@ impl PyPioModule {
     /// The multiconductor network value as a network handle.
     fn as_multiconductor_network(&self) -> PyResult<PyMulticonductorNetwork> {
         let module = self.module()?;
-        let powerio::PioValue::MulticonductorNetwork(network) = module.value() else {
+        let powerio::PioValue::MulticonductorNetwork(network) = &module.value else {
             return Err(PowerIODataError::new_err(format!(
                 "the module carries a {} value; as_multiconductor_network takes a \
                  multiconductor network",
-                module.value().kind().as_str()
+                module.value.type_name()
             )));
         };
         Ok(PyMulticonductorNetwork::from_module(module_with_records(
@@ -2632,9 +4115,9 @@ impl PyPioModule {
     fn __repr__(&self) -> String {
         match &self.module {
             Some(module) => format!(
-                "PioModule(kind={}, diagnostics={}, history={})",
-                module.value().kind().as_str(),
-                module.diagnostics().len(),
+                "PioModule(value={}, diagnostics={}, history={})",
+                module.value.type_name(),
+                module.diagnostics.len(),
                 module.history().len()
             ),
             None => "PioModule(<consumed>)".to_owned(),
@@ -2645,8 +4128,8 @@ impl PyPioModule {
 /// Classify top level JSON markers. Returns `(status, domain, format)`.
 ///
 /// `status` is `known` for a case document, or the classification family
-/// itself for the outcomes that are not one: `package` (a `.pio.json`
-/// package), `model-json` (bare balanced model JSON, read with
+/// itself for the outcomes that are not one: `module` (PowerIO IR),
+/// `model-json` (bare balanced model JSON, read with
 /// `powerio.from_json`), `ambiguous`, or `unknown`. `domain` is
 /// `transmission` or `distribution`, and both it and `format` are set only
 /// when `status` is `known`. `json_classes()` returns the closed set of
@@ -2723,82 +4206,6 @@ fn geo_report_dict<'py>(
     Ok(out)
 }
 
-/// Build a `{dir, files}` dict from an outputs directory and its written files.
-/// Shared by the DC OPF and gridfm write paths. Paths go through [`path_to_str`]
-/// (so a non-UTF8 path raises instead of being mangled).
-fn dir_files_dict<'py>(
-    py: Python<'py>,
-    dir: &std::path::Path,
-    files: &[std::path::PathBuf],
-) -> PyResult<Bound<'py, PyDict>> {
-    let d = PyDict::new(py);
-    d.set_item("dir", path_to_str(dir)?)?;
-    let files: Vec<String> = files
-        .iter()
-        .map(|p| path_to_str(p))
-        .collect::<PyResult<_>>()?;
-    d.set_item("files", files)?;
-    Ok(d)
-}
-
-/// Build the `{dir, files, dropped_zero_impedance, degenerate_cost_gens}` dict a
-/// gridfm write returns.
-#[cfg(feature = "gridfm")]
-fn gridfm_outputs_to_dict<'py>(
-    py: Python<'py>,
-    outputs: &GridfmOutputs,
-) -> PyResult<Bound<'py, PyDict>> {
-    let d = dir_files_dict(py, &outputs.dir, &outputs.files)?;
-    d.set_item("dropped_zero_impedance", outputs.dropped_zero_impedance)?;
-    d.set_item("degenerate_cost_gens", outputs.degenerate_cost_gens)?;
-    d.set_item("missing_cost_gens", outputs.missing_cost_gens)?;
-    d.set_item("unsupported_cost_gens", outputs.unsupported_cost_gens)?;
-    d.set_item("synthesized_gen_costs", outputs.synthesized_gen_costs)?;
-    d.set_item("patched_gen_costs", outputs.patched_gen_costs)?;
-    Ok(d)
-}
-
-/// Write a batch of cases as one gridfm-datakit dataset, row stacked and keyed by
-/// the `scenario` column. The k-th case is stamped `base_scenario + k`; all cases
-/// must share one base element set (same bus/branch/gen counts and bus-id order).
-/// Available when the extension is built with the Rust `gridfm` feature.
-#[cfg(feature = "gridfm")]
-#[allow(clippy::too_many_arguments)]
-#[pyfunction]
-#[pyo3(signature = (cases, out_dir, *, base_scenario=0, include_y_bus=true, include_taps=true, include_shifts=true, missing_gen_cost=None, default_gen_cost=None, gen_cost_csv=None))]
-fn write_gridfm_batch<'py>(
-    py: Python<'py>,
-    cases: Vec<PyRef<'py, PyBalancedNetwork>>,
-    out_dir: &str,
-    base_scenario: i64,
-    include_y_bus: bool,
-    include_taps: bool,
-    include_shifts: bool,
-    missing_gen_cost: Option<&str>,
-    default_gen_cost: Option<&str>,
-    gen_cost_csv: Option<&str>,
-) -> PyResult<Bound<'py, PyDict>> {
-    let cost_opts = emit_options(
-        missing_gen_cost,
-        default_gen_cost,
-        gen_cost_csv,
-        MissingGenCostPolicy::Preserve,
-    )?;
-    let opts = GridfmOptions {
-        include_y_bus,
-        include_taps,
-        include_shifts,
-        missing_gen_cost: cost_opts.missing_gen_cost,
-        gen_cost_patches: cost_opts.gen_cost_patches,
-    };
-    // The shared numbering builder stamps the k-th case `base_scenario + k`, the
-    // same rule (and checked arithmetic) the CLI uses.
-    let net_refs: Vec<_> = cases.iter().map(|c| c.inner()).collect();
-    let snapshots = numbered_snapshots(&net_refs, base_scenario).map_err(to_pyerr)?;
-    let outputs = gridfm_write_batch(&snapshots, out_dir, &opts).map_err(to_pyerr)?;
-    gridfm_outputs_to_dict(py, &outputs)
-}
-
 #[pymodule]
 fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
@@ -2806,16 +4213,40 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("PowerIOParseError", m.py().get_type::<PowerIOParseError>())?;
     m.add("PowerIODataError", m.py().get_type::<PowerIODataError>())?;
     m.add_class::<PyBalancedNetwork>()?;
-    m.add_function(wrap_pyfunction!(parse_display_file, m)?)?;
-    m.add_function(wrap_pyfunction!(from_json, m)?)?;
-    m.add_function(wrap_pyfunction!(convert_file, m)?)?;
-    m.add_function(wrap_pyfunction!(convert_str, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_display, m)?)?;
     m.add_class::<PyMulticonductorNetwork>()?;
-    m.add_function(wrap_pyfunction!(dist_parse_file, m)?)?;
-    m.add_function(wrap_pyfunction!(dist_parse_str, m)?)?;
-    m.add_function(wrap_pyfunction!(dist_convert_file, m)?)?;
-    m.add_function(wrap_pyfunction!(dist_convert_str, m)?)?;
     m.add_class::<PyPioModule>()?;
+    m.add_class::<PyComponentId>()?;
+    m.add_class::<PyScucStartupCostAdjustment>()?;
+    m.add_class::<PyScucStartupLimit>()?;
+    m.add_class::<PyScucEnergyRequirement>()?;
+    m.add_class::<PyScucInitialCommitment>()?;
+    m.add_class::<PyScucRampLimits>()?;
+    m.add_class::<PyScucReserveLimits>()?;
+    m.add_class::<PyScucReactiveCapability>()?;
+    m.add_class::<PyScucEnergyCostBlock>()?;
+    m.add_class::<PyScucReserveCosts>()?;
+    m.add_class::<PyScucDevicePeriod>()?;
+    m.add_class::<PyScucDevice>()?;
+    m.add_class::<PyScucShunt>()?;
+    m.add_class::<PyScucBranchSwitchingCost>()?;
+    m.add_class::<PyScucTransformerControl>()?;
+    m.add_class::<PyScucActiveReserveZone>()?;
+    m.add_class::<PyScucReactiveReserveZone>()?;
+    m.add_class::<PyScucContingency>()?;
+    m.add_class::<PyScucViolationCosts>()?;
+    m.add_class::<PyScucInputs>()?;
+    m.add_class::<PyResiduals>()?;
+    m.add_class::<PyScucNetworkOutputs>()?;
+    m.add_class::<PyScucDeviceOutputs>()?;
+    m.add_class::<PyActivePower>()?;
+    m.add_class::<PyReactivePower>()?;
+    m.add_class::<PyApparentPower>()?;
+    m.add_class::<PyOperatingPointUpdate>()?;
+    m.add_class::<PyNetworkUpdate>()?;
+    m.add_class::<PyCalculationUpdate>()?;
+    m.add_class::<PyUpdateChange>()?;
+    m.add_class::<PyUpdateReport>()?;
     m.add_class::<PyDiagnostic>()?;
     m.add_class::<PySourceSpan>()?;
     m.add_function(wrap_pyfunction!(versions_json, m)?)?;
@@ -2826,8 +4257,6 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Whether the gridfm Parquet surface (arrow/parquet) was compiled in, so the
     // pure-Python layer can raise an ImportError instead of an AttributeError.
     m.add("_has_gridfm", cfg!(feature = "gridfm"))?;
-    #[cfg(feature = "gridfm")]
-    m.add_function(wrap_pyfunction!(write_gridfm_batch, m)?)?;
     Ok(())
 }
 
@@ -2844,7 +4273,7 @@ mod tests {
         };
 
         let network = powerio::BalancedNetwork::new("copy-test", 100.0);
-        let retained = Source::from_bytes("case.m", b"test".to_vec()).unwrap();
+        let retained = Source::from_memory("case.m", b"test".to_vec()).unwrap();
         let source_id = SourceId::new("input").unwrap();
         let span = SourceSpan::new(source_id.clone(), 0, 4).unwrap();
         let mut source = PioModule::new(powerio::PioValue::BalancedNetwork(network.clone()))
@@ -2883,11 +4312,8 @@ mod tests {
         assert_eq!(copied.producer(), source.producer());
         assert_eq!(copied.sources(), source.sources());
         assert_eq!(copied.source_map(), source.source_map());
-        assert_eq!(copied.diagnostics().len(), source.diagnostics().len());
-        assert_eq!(
-            copied.diagnostics()[0].code(),
-            source.diagnostics()[0].code()
-        );
+        assert_eq!(copied.diagnostics.len(), source.diagnostics.len());
+        assert_eq!(copied.diagnostics[0].code(), source.diagnostics[0].code());
         assert_eq!(copied.history(), source.history());
         assert_eq!(copied.extensions(), source.extensions());
         assert_eq!(

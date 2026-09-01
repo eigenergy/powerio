@@ -15,9 +15,10 @@ use serde_json::{Map, Value};
 use crate::diagnostics::codes as C;
 use crate::error::{Error, Result};
 use crate::model::{
-    Configuration, DistBus, DistGenerator, DistLine, DistLineCode, DistLoad, DistLoadVoltageModel,
-    DistShunt, DistSourceFormat, DistSwitch, DistTransformer, DistWinding, DistWindingConn, Extras,
-    Mat, MulticonductorNetwork, MulticonductorNetworkTables, UntypedObject, VoltageSource,
+    ConductorMatrix, Configuration, DistBus, DistGenerator, DistLine, DistLineCode, DistLoad,
+    DistLoadVoltageModel, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, DistWinding,
+    DistWindingConn, Extras, MulticonductorNetwork, MulticonductorNetworkTables, UntypedObject,
+    VoltageSource,
 };
 
 pub(crate) fn parse_pmd_collecting(
@@ -111,7 +112,7 @@ fn matrix(
     v: Option<&Value>,
     what: &str,
     diagnostics: &mut crate::diagnostics::Diagnostics,
-) -> Option<Mat> {
+) -> Option<ConductorMatrix> {
     let v = v?;
     let Some(cols) = v.as_array() else {
         diagnostics.push(
@@ -167,7 +168,7 @@ fn string(v: Option<&Value>) -> String {
 }
 
 /// Grows `m` to `n` by `n`, preserving the existing entries.
-fn pad_to(m: Mat, n: usize) -> Mat {
+fn pad_to(m: ConductorMatrix, n: usize) -> ConductorMatrix {
     if m.len() >= n {
         return m;
     }
@@ -246,7 +247,7 @@ fn linecode_from(
     // b_fr/b_to numbers are cmatrix halves in nF per meter; the model
     // holds siemens per meter.
     let omega = std::f64::consts::TAU * base_frequency * 1e-9;
-    let to_b = |m: Mat| -> Mat {
+    let to_b = |m: ConductorMatrix| -> ConductorMatrix {
         m.into_iter()
             .map(|row| row.into_iter().map(|v| v * omega).collect())
             .collect()

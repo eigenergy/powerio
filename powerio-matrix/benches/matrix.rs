@@ -10,15 +10,15 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use powerio_matrix::matrix::{
     BranchSusceptanceFormula, BuildOptions, calc_adjacency_matrix, calc_admittance_matrix,
-    calc_bdoubleprime_matrix, calc_bprime_matrix, calc_branch_flow_matrix, calc_lacpf_matrix,
-    calc_ptdf_lodf, calc_weighted_laplacian, ground_at_each,
+    calc_bdoubleprime_matrix, calc_bprime_matrix, calc_lacpf_matrix, calc_ptdf_lodf,
+    calc_weighted_laplacian, ground_at_each,
 };
 use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
 use powerio_matrix::{BalancedNetwork, DcOperators, IndexedNetwork};
 use powerio_prob::DcPfInstance;
 
 fn parse_matpower(text: &str) -> Result<BalancedNetwork, powerio_core::Error> {
-    let source = powerio_core::Source::from_bytes("case.m", text.as_bytes().to_vec())?
+    let source = powerio_core::Source::from_memory("case.m", text.as_bytes().to_vec())?
         .with_format(powerio_core::FormatId::new("matpower")?);
     powerio_tx::parse(source).map(powerio_core::PioModule::into_value)
 }
@@ -80,7 +80,7 @@ fn bench_dcopf_parts(c: &mut Criterion) {
 
     let incidence = operators.calc_incidence_matrix().transpose_view().to_csr();
     let weights = operators
-        .branch_susceptances()
+        .calc_branch_susceptances()
         .iter()
         .map(|value| -*value)
         .collect::<Vec<_>>();
@@ -95,7 +95,7 @@ fn bench_dcopf_parts(c: &mut Criterion) {
         });
     });
     c.bench_function("dcopf_branch_flow_matrix_case118", |b| {
-        b.iter(|| calc_branch_flow_matrix(black_box(&incidence), black_box(&weights)));
+        b.iter(|| black_box(&operators).calc_branch_flow_matrix());
     });
 }
 

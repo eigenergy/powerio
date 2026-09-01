@@ -28,14 +28,14 @@ RTOL = 1e-6
 
 
 def check_case(path: Path) -> str:
-    module = powerio.parse_file(path, value_type=powerio.BalancedNetwork)
+    module = powerio.parse(path)
     case = module.value
     # The folder writer refuses an existing target, so the output is a fresh
     # child of the temporary directory.
     tmp = Path(tempfile.mkdtemp(prefix=f"powerio-pypsa-{path.stem}-")) / "pypsa"
     problems = []
     try:
-        module.emit("pypsa-csv", tmp)
+        powerio.emit(module, "pypsa-csv", tmp)
         net = pypsa.Network()
         net.import_from_csv_folder(tmp)
 

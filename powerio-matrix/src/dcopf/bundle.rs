@@ -278,7 +278,12 @@ fn emit_prepared(
         .collect::<std::result::Result<Vec<_>, powerio_core::Error>>()
         .map_err(crate::Error::from)?;
     let committed = powerio_core::Destination::path(&bundle_root)
-        .__commit_artifacts(true, artifacts, Vec::new())
+        .__commit_artifacts(
+            true,
+            powerio_core::Fidelity::Canonical,
+            artifacts,
+            Vec::new(),
+        )
         .map_err(crate::Error::from)?;
     let powerio_core::EmittedOutput::Path { root, artifacts } = committed.into_output() else {
         unreachable!("a path destination returns a path output")

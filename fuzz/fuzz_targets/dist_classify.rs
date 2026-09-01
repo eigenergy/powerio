@@ -14,7 +14,7 @@ fuzz_target!(|data: &[u8]| {
     let Ok(format) = powerio_dist::classify_distribution_json(text) else {
         return;
     };
-    let Ok(source) = powerio_core::Source::from_bytes("<fuzz>", data.to_vec()) else {
+    let Ok(source) = powerio_core::Source::from_memory("<fuzz>", data.to_vec()) else {
         return;
     };
     let Ok(id) = powerio_core::FormatId::new(format.name()) else {

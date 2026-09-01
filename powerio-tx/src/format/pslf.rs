@@ -30,8 +30,8 @@ const NAME_FORBIDDEN: &[char] = &['"'];
 /// Parse a PSLF `.epc` case into a [`BalancedNetwork`].
 ///
 /// Parse diagnostics are available on the module returned by the `powerio`
-/// facade's `parse_file` or `parse_text` entry. This direct helper returns
-/// only the typed network.
+/// facade's `parse` operation. This direct helper returns only the typed
+/// network.
 /// Parse retained source from the format hub.
 pub(crate) fn parse_pslf_source(
     source: &str,
@@ -120,9 +120,12 @@ pub(crate) fn parse_pslf_source(
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
         geo: None,
+        case_metadata: crate::network::CaseMetadata::default(),
+        detailed_connectivity: None,
         buses: buses.into(),
         loads: loads.into(),
         shunts: shunts.into(),
+        static_var_compensators: Vec::new().into(),
         branches: branches.into(),
         switches: Vec::new().into(),
         generators: generators.into(),
@@ -736,6 +739,7 @@ fn read_generator(
         cost: None,
         caps: Default::default(),
         regulated_bus: None,
+        active_power_control: None,
         uid: None,
     })
 }
@@ -817,6 +821,7 @@ fn read_shunt(rec: &Record, base_mva: f64) -> Result<Shunt> {
         g: g_pu * base_mva,
         b: b_pu * base_mva,
         in_service: on_at(&rec.rhs, 0, true, "shunt status", rec)?,
+        section_count: None,
         control: None,
         uid: None,
         extras,
@@ -851,6 +856,7 @@ fn read_svd(
         g: g_pu * base_mva,
         b: b_pu * base_mva,
         in_service: on_at(&rec.rhs, 0, true, "svd status", rec)?,
+        section_count: None,
         control: None,
         uid: None,
         extras,
@@ -1001,6 +1007,11 @@ fn read_dc_lines(
                     qmaxt: to.q.max(0.0),
                     loss0: 0.0,
                     loss1: 0.0,
+                    resistance_ohm: None,
+                    nominal_voltage_kv: None,
+                    converters_mode: None,
+                    converter1: None,
+                    converter2: None,
                     cost: None,
                     uid: None,
                     extras,

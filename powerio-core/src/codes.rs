@@ -25,6 +25,9 @@ crate::diagnostic_codes! {
     REQUEST_FORMAT_INVALID_ID = "REQUEST.FORMAT.INVALID_ID", Error,
         "a format identifier does not match the stable format grammar", category = Request;
 
+    VALIDATE_COMPONENT_INVALID_ID = "VALIDATE.COMPONENT.INVALID_ID", Error,
+        "a component identity has an empty, NUL containing, or oversized part", category = Data;
+
     REQUEST_SOURCE_INVALID_NAME = "REQUEST.SOURCE.INVALID_NAME", Error,
         "an in-memory source name is empty, contains NUL, or exceeds its bound", category = Request;
     REQUEST_SOURCE_INVALID_PATH = "REQUEST.SOURCE.INVALID_PATH", Error,

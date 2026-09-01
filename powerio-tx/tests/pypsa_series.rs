@@ -1,7 +1,7 @@
 //! PyPSA CSV folders with snapshot-local time series siblings read as a
 //! balanced network time series with shared static tables.
 
-use powerio_tx::parse_pypsa_csv_time_series;
+use powerio_tx::__parse_pypsa_csv_time_series;
 
 fn write_folder(dir: &std::path::Path, files: &[(&str, &str)]) {
     std::fs::create_dir_all(dir).unwrap();
@@ -30,7 +30,7 @@ fn parse(
     powerio_tx::Error,
 > {
     let source = powerio_core::Source::open(dir).unwrap();
-    let sequence = parse_pypsa_csv_time_series(&source)?;
+    let sequence = __parse_pypsa_csv_time_series(&source)?;
     Ok((sequence.series, sequence.diagnostics))
 }
 

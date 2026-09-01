@@ -29,9 +29,12 @@ unsafe impl GlobalAlloc for PeakTracking {
 #[global_allocator]
 static ALLOCATOR: PeakTracking = PeakTracking;
 
+mod helpers;
+use helpers::{deserialize_module_text, serialize_module_text};
+
 fn measure_peak(text: &str) -> usize {
     PEAK.store(LIVE.load(Ordering::Relaxed), Ordering::Relaxed);
-    let module = powerio::stored::read_module(text).unwrap();
+    let module = deserialize_module_text(text).unwrap();
     let peak = PEAK.load(Ordering::Relaxed);
     drop(module);
     peak
@@ -67,7 +70,7 @@ fn target_checks_reinflate_the_value_once() {
     let network = BalancedNetwork::in_memory("alloc-peak", 100.0, buses, Vec::new());
 
     let plain = PioModule::new(PioValue::BalancedNetwork(network.clone()));
-    let plain_text = powerio::stored::emit_module(&plain).unwrap();
+    let plain_text = serialize_module_text(&plain).unwrap();
 
     let mut mapped = PioModule::new(PioValue::BalancedNetwork(network));
     mapped
@@ -80,7 +83,7 @@ fn target_checks_reinflate_the_value_once() {
             SourceMapEntry::new("/buses/0/vm", SourceRelation::Defaulted, Vec::new()).unwrap(),
         )
         .unwrap();
-    let mapped_text = powerio::stored::emit_module(&mapped).unwrap();
+    let mapped_text = serialize_module_text(&mapped).unwrap();
 
     let plain_peak = measure_peak(&plain_text);
     let mapped_peak = measure_peak(&mapped_text);

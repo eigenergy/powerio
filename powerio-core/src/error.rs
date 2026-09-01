@@ -171,7 +171,7 @@ mod tests {
 
     #[test]
     fn cause_and_shared_source_are_retained() {
-        let source = Source::from_bytes("input.bin", vec![0, 255]).unwrap();
+        let source = Source::from_memory("input.bin", vec![0, 255]).unwrap();
         let byte_pointer = source.primary_buffer().unwrap().bytes().as_ptr();
         let error = Error::new(&crate::codes::READ_IO_READ, "read failed")
             .with_cause(std::io::Error::other("cause"))

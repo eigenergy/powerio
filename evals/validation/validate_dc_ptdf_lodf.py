@@ -131,7 +131,7 @@ def compare(path: str) -> list[str]:
     failures: list[str] = []
     print(f"\n===== {path}")
     cf = CaseFrames(path)
-    module = powerio.parse_file(path, value_type=powerio.BalancedNetwork)
+    module = powerio.parse(path)
     net = module.value
     pio_bus_ids = np.array([int(bus["id"]) for bus in net.buses])
     expected_bus_ids = cf.bus["BUS_I"].astype(np.int64).to_numpy()

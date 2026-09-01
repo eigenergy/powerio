@@ -34,4 +34,10 @@ pub use multiconductor::{
 };
 pub use objective::{Objective, ObjectiveTerm};
 pub use scuc::AcScucInstance;
-pub use scuc_inputs::ScucInputs;
+pub use scuc_inputs::{
+    ScucActiveReserveZone, ScucBranchSwitchingCost, ScucContingency, ScucDevice, ScucDeviceKind,
+    ScucDevicePeriod, ScucEnergyCostBlock, ScucEnergyRequirement, ScucInitialCommitment,
+    ScucInputs, ScucRampLimits, ScucReactiveCapability, ScucReactiveReserveZone, ScucReserveCosts,
+    ScucReserveLimits, ScucShunt, ScucStartupCostAdjustment, ScucStartupLimit,
+    ScucTransformerControl, ScucViolationCosts,
+};

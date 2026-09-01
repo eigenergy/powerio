@@ -1,34 +1,54 @@
 //! The module emission dispatcher. One dynamic module emits a named target
-//! format; the kind routes to the
-//! family writer that owns it, and `pio-json` serializes any kind through the
-//! stored document.
+//! format; the concrete value routes to the family emitter that owns it.
 //!
 //! Same format emission keeps the family writers' echo tier: an unchanged
 //! parsed module emits its retained source bytes exactly. Cross format
 //! emission serializes the typed value and reports what the target cannot
 //! represent through the returned diagnostics.
 
-use powerio_core::{Destination, EmitResult, Error, PioModule};
+use powerio_core::{Destination, Diagnostic, EmitResult, Error, PioModule};
+use powerio_prob::{
+    BalancedOperatingPointFlag, BalancedOperatingPointQuantity, MulticonductorOperatingPointFlag,
+    MulticonductorOperatingPointQuantity, OperatingPoint,
+};
+use powerio_tx::{BalancedNetwork, BranchSolution};
 
 use crate::PioValue;
 
 pub mod codes {
     powerio_core::diagnostic_codes! {
-        REQUEST_WRITE_UNKNOWN_FORMAT = "REQUEST.WRITE.UNKNOWN_FORMAT", Error,
+        REQUEST_EMIT_UNKNOWN_FORMAT = "REQUEST.EMIT.UNKNOWN_FORMAT", Error,
             "the requested target format name is not recognized", category = Request;
-        REQUEST_WRITE_UNSUPPORTED_VALUE_KIND = "REQUEST.WRITE.UNSUPPORTED_VALUE_KIND", Error,
-            "the module's value kind has no writer for the requested format", category = Request;
+        REQUEST_EMIT_UNSUPPORTED_VALUE_TYPE = "REQUEST.EMIT.UNSUPPORTED_VALUE_TYPE", Error,
+            "the module's value type cannot be emitted in the requested format", category = Request;
+        EMIT_CALCULATION_DATA_OMITTED = "EMIT.CALCULATION.DATA_OMITTED", Warning,
+            "the target grid exchange format does not represent the complete calculation definition", category = Output;
+        EMIT_SOLUTION_DATA_OMITTED = "EMIT.SOLUTION.DATA_OMITTED", Warning,
+            "the target grid exchange format does not represent every solution result", category = Output;
+        EMIT_RELAXATION_DATA_OMITTED = "EMIT.RELAXATION.DATA_OMITTED", Warning,
+            "the target grid exchange format does not represent an SOCWR relaxation result", category = Output;
+        EMIT_OPERATING_POINT_DATA_OMITTED = "EMIT.OPERATING_POINT.DATA_OMITTED", Warning,
+            "the target grid exchange format does not represent every operating point quantity", category = Output;
     }
-}
-
-/// True when `format` names the stored module document.
-fn is_pio_json(format: &str) -> bool {
-    crate::resolve_format(format).is_some_and(|info| info.token == "pio-json")
 }
 
 /// True when `format` names the PyPSA CSV folder target.
 fn is_pypsa_dir(format: &str) -> bool {
     crate::resolve_format(format).is_some_and(|info| info.token == "pypsa-csv")
+}
+
+fn is_cgmes_dir(format: &str) -> bool {
+    crate::resolve_format(format).is_some_and(|info| info.token == "cgmes")
+}
+
+fn is_goc3(format: &str) -> bool {
+    crate::resolve_format(format).is_some_and(|info| info.token == "goc3-json")
+}
+
+/// True when `format` names the GridFM directory target.
+#[cfg(feature = "gridfm")]
+fn is_gridfm_dir(format: &str) -> bool {
+    crate::resolve_format(format).is_some_and(|info| info.token == "gridfm")
 }
 
 /// True when two names identify the same supported directory format. The
@@ -37,6 +57,9 @@ fn is_pypsa_dir(format: &str) -> bool {
 /// declared directory token as an echoable format.
 fn same_directory_format(source: &str, requested: &str) -> bool {
     if is_pypsa_dir(source) && is_pypsa_dir(requested) {
+        return true;
+    }
+    if is_cgmes_dir(source) && is_cgmes_dir(requested) {
         return true;
     }
     #[cfg(feature = "gridfm")]
@@ -87,7 +110,7 @@ fn typed_sibling<T>(module: &PioModule<PioValue>, value: T) -> Result<PioModule<
     for entry in module.source_map() {
         out.add_source_map_entry(entry.clone())?;
     }
-    for diagnostic in module.diagnostics() {
+    for diagnostic in &module.diagnostics {
         out.add_diagnostic(diagnostic.clone())?;
     }
     for entry in module.history() {
@@ -102,7 +125,7 @@ fn typed_sibling<T>(module: &PioModule<PioValue>, value: T) -> Result<PioModule<
     })
 }
 
-/// The module's retained source's exact original text, when that source's
+/// The module's retained source's exact original bytes, when that source's
 /// content is already `format`: the byte exact echo tier every kind should
 /// get, not just [`PioValue::BalancedNetwork`] and
 /// [`PioValue::MulticonductorNetwork`] (whose family emitters already carry
@@ -122,6 +145,12 @@ fn retained_source_matches_case_format(module: &PioModule<PioValue>, format: &st
     let Some(source) = module.source() else {
         return false;
     };
+    // A one file representation can echo its primary buffer. A source set
+    // cannot: its primary file is only one input to the typed value (for
+    // example, the problem file beside a GO Challenge 3 solution).
+    if source.acquired_buffers().len() != 1 {
+        return false;
+    }
     let Some(requested) = classify_format_name(format).known() else {
         return false;
     };
@@ -145,136 +174,699 @@ fn retained_source_matches_case_format(module: &PioModule<PioValue>, format: &st
     requested == actual
 }
 
-fn echo_retained_source(module: &PioModule<PioValue>, format: &str) -> Option<String> {
+fn echo_retained_source(module: &PioModule<PioValue>, format: &str) -> Option<Vec<u8>> {
     if !retained_source_matches_case_format(module, format) {
         return None;
     }
     let source = module.source()?;
     let buffer = source.primary_buffer().ok()?;
-    // The raw bytes, not the decoded/BOM stripped `content_bytes` used only
-    // to reclassify above: an echo must reproduce the source exactly.
-    std::str::from_utf8(buffer.bytes()).ok().map(str::to_owned)
+    Some(buffer.bytes().to_vec())
 }
 
-fn echo_retained_pio_json(module: &PioModule<PioValue>) -> Option<String> {
-    let source = module.source()?;
-    let buffer = source.primary_buffer().ok()?;
-    let content = std::str::from_utf8(buffer.content_bytes()).ok()?;
-    let is_stored = match source.format() {
-        Some(format) => format.as_str() == "pio-json",
-        None => {
-            matches!(
-                powerio_tx::format::routing::classify_json_text(content),
-                powerio_tx::format::routing::JsonClass::Module
-            )
-        }
-    };
-    if !is_stored {
-        return None;
-    }
-    // A released 0.9 NetworkPackage is an upgrade input, not a version 1
-    // document eligible for exact echo. Retain it for provenance, but emit
-    // the decoded module through the current one-way writer.
-    let header: serde_json::Value = serde_json::from_str(content).ok()?;
-    if header.get("schema").and_then(serde_json::Value::as_str) != Some(crate::stored::SCHEMA_NAME)
-        || header.get("version").and_then(serde_json::Value::as_u64)
-            != Some(u64::from(crate::stored::SCHEMA_VERSION))
-    {
-        return None;
-    }
-    std::str::from_utf8(buffer.bytes()).ok().map(str::to_owned)
-}
-
-fn unsupported_kind(module: &PioModule<PioValue>, format: &str) -> Error {
+fn unsupported_type(module: &PioModule<PioValue>, format: &str) -> Error {
     Error::new(
-        &codes::REQUEST_WRITE_UNSUPPORTED_VALUE_KIND,
+        &codes::REQUEST_EMIT_UNSUPPORTED_VALUE_TYPE,
         format!(
-            "a {} module has no {format} writer; pio-json stores any kind, and the \
-             network kinds write their family's case formats",
-            module.value().kind().as_str()
+            "a {} module cannot be emitted as {format}; serialize writes PowerIO IR",
+            module.value.type_name()
         ),
     )
 }
 
 fn unknown_format(format: &str) -> Error {
     Error::new(
-        &codes::REQUEST_WRITE_UNKNOWN_FORMAT,
+        &codes::REQUEST_EMIT_UNKNOWN_FORMAT,
         format!("{format} is not a recognized target format name"),
     )
 }
 
-/// Emit one dynamic module as `format` into `destination`. The kind routes
-/// to its family writer; `pio-json` serializes any kind as the stored module
-/// document. The result carries the complete artifact inventory and the
-/// writer's findings.
+/// Emit one dynamic module as `format` into `destination`. The concrete value
+/// routes to its grid exchange format implementation. PowerIO IR uses
+/// [`crate::serialize`] instead.
 ///
 /// # Errors
-/// `REQUEST.WRITE.UNKNOWN_FORMAT` for a format name nothing recognizes,
-/// `REQUEST.WRITE.UNSUPPORTED_VALUE_KIND` for a kind the
+/// `REQUEST.EMIT.UNKNOWN_FORMAT` for a format name nothing recognizes,
+/// `REQUEST.EMIT.UNSUPPORTED_VALUE_TYPE` for a value the
 /// named format cannot state, and the family writer's own failure otherwise.
 ///
 /// # Panics
 /// Never on external input: the stored document's fixed artifact name is
 /// valid by construction.
-pub fn emit(
+pub fn emit<T>(
+    module: &PioModule<T>,
+    format: &str,
+    destination: Destination,
+) -> Result<EmitResult, Error>
+where
+    T: Clone + Into<PioValue>,
+{
+    let module = module.clone().map_value(Into::into);
+    emit_dynamic(&module, format, destination)
+}
+
+fn calculation_data_omitted(value_type: &str, format: &str) -> Diagnostic {
+    Diagnostic::of(
+        &codes::EMIT_CALCULATION_DATA_OMITTED,
+        format!(
+            "{format} represents a grid case, not the complete {value_type}; emitted its electrical network"
+        ),
+    )
+}
+
+fn solution_data_omitted(value_type: &str, format: &str) -> Diagnostic {
+    Diagnostic::of(
+        &codes::EMIT_SOLUTION_DATA_OMITTED,
+        format!(
+            "{format} cannot represent every {value_type} result; emitted the network values it supports, while PowerIO IR retains the complete solution"
+        ),
+    )
+}
+
+fn relaxation_data_omitted(format: &str) -> Diagnostic {
+    Diagnostic::of(
+        &codes::EMIT_RELAXATION_DATA_OMITTED,
+        format!(
+            "{format} cannot represent SOCWR W-space values or the objective lower bound; emitted the instance network without treating the relaxation as an AC power flow solution"
+        ),
+    )
+}
+
+fn operating_point_data_omitted(format: &str) -> Diagnostic {
+    Diagnostic::of(
+        &codes::EMIT_OPERATING_POINT_DATA_OMITTED,
+        format!(
+            "{format} has no source-neutral field for net bus injection columns; emitted the other operating point quantities"
+        ),
+    )
+}
+
+fn network_with_balanced_operating_point(
+    point: &OperatingPoint<BalancedNetwork>,
+    format: &str,
+) -> (BalancedNetwork, Vec<Diagnostic>) {
+    let mut network = point.network().clone();
+
+    if let Some(values) = point.values(BalancedOperatingPointQuantity::BusVoltageMagnitude) {
+        for (bus, (_, value)) in network.buses_mut().iter_mut().zip(values) {
+            bus.vm = value;
+        }
+    }
+    if let Some(values) = point.values(BalancedOperatingPointQuantity::BusVoltageAngle) {
+        for (bus, (_, value)) in network.buses_mut().iter_mut().zip(values) {
+            bus.va = value.to_degrees();
+        }
+    }
+    if let Some(values) = point.values(BalancedOperatingPointQuantity::GeneratorActivePower) {
+        for (generator, (_, value)) in network.generators_mut().iter_mut().zip(values) {
+            generator.pg = value;
+        }
+    }
+    if let Some(values) = point.values(BalancedOperatingPointQuantity::GeneratorReactivePower) {
+        for (generator, (_, value)) in network.generators_mut().iter_mut().zip(values) {
+            generator.qg = value;
+        }
+    }
+    if let Some(values) = point.values(BalancedOperatingPointQuantity::GeneratorVoltageSetpoint) {
+        for (generator, (_, value)) in network.generators_mut().iter_mut().zip(values) {
+            generator.vg = value;
+        }
+    }
+    if let Some(flags) = point.flags(BalancedOperatingPointFlag::GeneratorInService) {
+        for (generator, (_, value)) in network.generators_mut().iter_mut().zip(flags) {
+            generator.in_service = value;
+        }
+    }
+    if let Some(values) = point.values(BalancedOperatingPointQuantity::LoadActivePower) {
+        for (load, (_, value)) in network.loads_mut().iter_mut().zip(values) {
+            load.p = value;
+        }
+    }
+    if let Some(values) = point.values(BalancedOperatingPointQuantity::LoadReactivePower) {
+        for (load, (_, value)) in network.loads_mut().iter_mut().zip(values) {
+            load.q = value;
+        }
+    }
+    if let Some(flags) = point.flags(BalancedOperatingPointFlag::BranchInService) {
+        for (branch, (_, value)) in network.branches_mut().iter_mut().zip(flags) {
+            branch.in_service = value;
+        }
+    }
+    if let Some(values) = point.values(BalancedOperatingPointQuantity::BranchTapRatio) {
+        for (branch, (_, value)) in network.branches_mut().iter_mut().zip(values) {
+            branch.tap = value;
+        }
+    }
+    if let Some(values) = point.values(BalancedOperatingPointQuantity::BranchPhaseShift) {
+        for (branch, (_, value)) in network.branches_mut().iter_mut().zip(values) {
+            branch.shift = value;
+        }
+    }
+    if let Some(flags) = point.flags(BalancedOperatingPointFlag::SwitchClosed) {
+        for (switch, (_, value)) in network.switches_mut().iter_mut().zip(flags) {
+            switch.closed = value;
+        }
+    }
+
+    let has_unrepresented_injections = point
+        .values(BalancedOperatingPointQuantity::BusActiveInjection)
+        .is_some()
+        || point
+            .values(BalancedOperatingPointQuantity::BusReactiveInjection)
+            .is_some();
+    let diagnostics = has_unrepresented_injections
+        .then(|| operating_point_data_omitted(format))
+        .into_iter()
+        .collect();
+    (network, diagnostics)
+}
+
+fn network_with_multiconductor_operating_point(
+    point: &OperatingPoint<powerio_dist::MulticonductorNetwork>,
+    format: &str,
+) -> (powerio_dist::MulticonductorNetwork, Vec<Diagnostic>) {
+    let mut network = point.network().clone();
+
+    if let Some(values) = point.values(MulticonductorOperatingPointQuantity::LoadActivePower) {
+        let mut values = values.map(|(_, value)| value);
+        for load in network.loads_mut() {
+            for value in &mut load.p_nom {
+                *value = values
+                    .next()
+                    .expect("an operating point has one value per load terminal");
+            }
+        }
+        debug_assert!(values.next().is_none());
+    }
+    if let Some(values) = point.values(MulticonductorOperatingPointQuantity::LoadReactivePower) {
+        let mut values = values.map(|(_, value)| value);
+        for load in network.loads_mut() {
+            for value in &mut load.q_nom {
+                *value = values
+                    .next()
+                    .expect("an operating point has one value per load terminal");
+            }
+        }
+        debug_assert!(values.next().is_none());
+    }
+    if let Some(values) = point.values(MulticonductorOperatingPointQuantity::GeneratorActivePower) {
+        let mut values = values.map(|(_, value)| value);
+        for generator in network.generators_mut() {
+            for value in &mut generator.p_nom {
+                *value = values
+                    .next()
+                    .expect("an operating point has one value per generator terminal");
+            }
+        }
+        debug_assert!(values.next().is_none());
+    }
+    if let Some(values) = point.values(MulticonductorOperatingPointQuantity::GeneratorReactivePower)
+    {
+        let mut values = values.map(|(_, value)| value);
+        for generator in network.generators_mut() {
+            for value in &mut generator.q_nom {
+                *value = values
+                    .next()
+                    .expect("an operating point has one value per generator terminal");
+            }
+        }
+        debug_assert!(values.next().is_none());
+    }
+    if let Some(flags) = point.flags(MulticonductorOperatingPointFlag::SwitchClosed) {
+        for (switch, (_, closed)) in network.switches_mut().iter_mut().zip(flags) {
+            switch.open = !closed;
+        }
+    }
+
+    let mut omitted = Vec::new();
+    if point
+        .values(MulticonductorOperatingPointQuantity::TerminalVoltageMagnitude)
+        .is_some()
+    {
+        omitted.push("terminal voltage magnitude");
+    }
+    if point
+        .values(MulticonductorOperatingPointQuantity::TerminalVoltageAngle)
+        .is_some()
+    {
+        omitted.push("terminal voltage angle");
+    }
+    if point
+        .values(MulticonductorOperatingPointQuantity::TransformerTap)
+        .is_some()
+    {
+        omitted.push("transformer tap");
+    }
+    if point
+        .values(MulticonductorOperatingPointQuantity::CapacitorSteps)
+        .is_some()
+    {
+        omitted.push("capacitor steps");
+    }
+    let diagnostics = if omitted.is_empty() {
+        Vec::new()
+    } else {
+        vec![Diagnostic::of(
+            &codes::EMIT_OPERATING_POINT_DATA_OMITTED,
+            format!(
+                "{format} cannot represent these operating point quantities in the source-neutral network model: {}; emitted the other quantities",
+                omitted.join(", ")
+            ),
+        )]
+    };
+    (network, diagnostics)
+}
+
+fn network_with_dc_pf_solution(solution: &powerio_prob::DcPfSolution) -> BalancedNetwork {
+    let mut network = solution.network().clone();
+    for bus in network.buses_mut() {
+        bus.va = solution
+            .bus_voltage_angle(bus.id)
+            .expect("a solution contains one angle per network bus");
+    }
+    if let Some(dispatch) = solution.generator_dispatch() {
+        for (generator, active_power) in network.generators_mut().iter_mut().zip(&dispatch.p_mw) {
+            generator.pg = *active_power;
+        }
+        if !dispatch.q_mvar.is_empty() {
+            for (generator, reactive_power) in
+                network.generators_mut().iter_mut().zip(&dispatch.q_mvar)
+            {
+                generator.qg = *reactive_power;
+            }
+        }
+    }
+    network
+}
+
+fn network_with_ac_pf_solution(solution: &powerio_prob::AcPfSolution) -> BalancedNetwork {
+    let mut network = solution.network().clone();
+    for bus in network.buses_mut() {
+        bus.vm = solution
+            .bus_voltage_magnitude(bus.id)
+            .expect("a solution contains one magnitude per network bus");
+        bus.va = solution
+            .bus_voltage_angle(bus.id)
+            .expect("a solution contains one angle per network bus");
+    }
+    for (branch, identity) in network
+        .branches_mut()
+        .iter_mut()
+        .zip(solution.branch_order())
+    {
+        branch.solution = Some(BranchSolution::new(
+            solution
+                .branch_from_active_flow(&identity)
+                .expect("a solution contains one from active flow per branch"),
+            solution
+                .branch_from_reactive_flow(&identity)
+                .expect("a solution contains one from reactive flow per branch"),
+            solution
+                .branch_to_active_flow(&identity)
+                .expect("a solution contains one to active flow per branch"),
+            solution
+                .branch_to_reactive_flow(&identity)
+                .expect("a solution contains one to reactive flow per branch"),
+        ));
+    }
+    if let Some(dispatch) = solution.generator_dispatch() {
+        for (generator, active_power) in network.generators_mut().iter_mut().zip(&dispatch.p_mw) {
+            generator.pg = *active_power;
+        }
+        if !dispatch.q_mvar.is_empty() {
+            for (generator, reactive_power) in
+                network.generators_mut().iter_mut().zip(&dispatch.q_mvar)
+            {
+                generator.qg = *reactive_power;
+            }
+        }
+    }
+    network
+}
+
+fn network_with_dc_opf_solution(solution: &powerio_prob::DcOpfSolution) -> BalancedNetwork {
+    let mut network = solution.network().clone();
+    for bus in network.buses_mut() {
+        bus.va = solution
+            .bus_voltage_angle(bus.id)
+            .expect("a solution contains one angle per network bus");
+    }
+    for (generator, identity) in network
+        .generators_mut()
+        .iter_mut()
+        .zip(solution.generator_order())
+    {
+        generator.pg = solution
+            .generator_active_power(&identity)
+            .expect("a solution contains one active power per generator");
+    }
+    network
+}
+
+fn network_with_ac_opf_solution(solution: &powerio_prob::AcOpfSolution) -> BalancedNetwork {
+    let mut network = solution.network().clone();
+    for bus in network.buses_mut() {
+        bus.vm = solution
+            .bus_voltage_magnitude(bus.id)
+            .expect("a solution contains one magnitude per network bus");
+        bus.va = solution
+            .bus_voltage_angle(bus.id)
+            .expect("a solution contains one angle per network bus");
+    }
+    for (branch, identity) in network
+        .branches_mut()
+        .iter_mut()
+        .zip(solution.branch_order())
+    {
+        branch.solution = Some(BranchSolution::new(
+            solution
+                .branch_from_active_flow(&identity)
+                .expect("a solution contains one from active flow per branch"),
+            solution
+                .branch_from_reactive_flow(&identity)
+                .expect("a solution contains one from reactive flow per branch"),
+            solution
+                .branch_to_active_flow(&identity)
+                .expect("a solution contains one to active flow per branch"),
+            solution
+                .branch_to_reactive_flow(&identity)
+                .expect("a solution contains one to reactive flow per branch"),
+        ));
+    }
+    for (generator, identity) in network
+        .generators_mut()
+        .iter_mut()
+        .zip(solution.generator_order())
+    {
+        generator.pg = solution
+            .generator_active_power(&identity)
+            .expect("a solution contains one active power per generator");
+        generator.qg = solution
+            .generator_reactive_power(&identity)
+            .expect("a solution contains one reactive power per generator");
+    }
+    network
+}
+
+fn emit_balanced_network(
+    module: &PioModule<PioValue>,
+    network: &BalancedNetwork,
+    format: &str,
+    destination: Destination,
+    preserve_retained_source: bool,
+    diagnostics: Vec<Diagnostic>,
+) -> Result<EmitResult, Error> {
+    let typed = typed_sibling(module, network.clone())?;
+    let typed = if preserve_retained_source && retained_source_matches_case_format(module, format) {
+        typed
+    } else {
+        typed.sever_source()
+    };
+    let result = if is_pypsa_dir(format) {
+        powerio_tx::__emit_pypsa_csv(&typed, destination)
+    } else {
+        #[cfg(feature = "gridfm")]
+        if is_gridfm_dir(format) {
+            let dataset = powerio_matrix::build_gridfm_dataset(
+                network,
+                0,
+                &powerio_matrix::GridfmOptions::default(),
+            )
+            .map_err(|error| Error::new(error.code(), error.to_string()).with_cause(error))?;
+            return destination
+                .__commit_artifacts(
+                    true,
+                    powerio_core::Fidelity::Canonical,
+                    dataset.artifacts,
+                    Vec::new(),
+                )
+                .map(|result| result.__with_diagnostics(diagnostics));
+        }
+        let Some(target) = powerio_tx::format::parse_target_format(format) else {
+            return Err(unknown_format(format));
+        };
+        powerio_tx::emit(&typed, target, destination)
+    }?;
+    Ok(result.__with_diagnostics(diagnostics))
+}
+
+fn emit_multiconductor_network(
+    module: &PioModule<PioValue>,
+    network: powerio_dist::MulticonductorNetwork,
+    format: &str,
+    destination: Destination,
+    preserve_retained_source: bool,
+    diagnostics: Vec<Diagnostic>,
+) -> Result<EmitResult, Error> {
+    let Some(target) = powerio_dist::parse_dist_target_format(format) else {
+        return Err(unknown_format(format));
+    };
+    let typed = typed_sibling(module, network)?;
+    let typed = if preserve_retained_source && retained_source_matches_case_format(module, format) {
+        typed
+    } else {
+        typed.sever_source()
+    };
+    powerio_dist::emit(&typed, target, destination)
+        .map(|result| result.__with_diagnostics(diagnostics))
+}
+
+fn emit_goc3_solution(
+    solution: &powerio_prob::AcScucSolution,
+    destination: Destination,
+) -> Result<EmitResult, Error> {
+    let text = powerio_prob::__emit_goc3_output(solution)?;
+    let artifact = powerio_core::MemoryArtifact::new(
+        powerio_core::ArtifactPath::new("solution.json")
+            .expect("static name is a valid artifact path"),
+        text.into_bytes(),
+    );
+    destination.__commit_artifacts(
+        false,
+        powerio_core::Fidelity::Canonical,
+        vec![artifact],
+        Vec::new(),
+    )
+}
+
+fn balanced_calculation_network(value: &PioValue) -> Option<&BalancedNetwork> {
+    match value {
+        PioValue::DcPfInstance(instance) => Some(instance.network()),
+        PioValue::AcPfInstance(instance) => Some(instance.network()),
+        PioValue::DcOpfInstance(instance) => Some(instance.network()),
+        PioValue::AcOpfInstance(instance) => Some(instance.network()),
+        PioValue::AcScucInstance(instance) => Some(instance.network()),
+        _ => None,
+    }
+}
+
+fn multiconductor_calculation_network(
+    value: &PioValue,
+) -> Option<&powerio_dist::MulticonductorNetwork> {
+    match value {
+        PioValue::McAcPfInstance(instance) => Some(instance.network()),
+        PioValue::McAcOpfInstance(instance) => Some(instance.network()),
+        _ => None,
+    }
+}
+
+fn emit_network_or_calculation(
     module: &PioModule<PioValue>,
     format: &str,
     destination: Destination,
 ) -> Result<EmitResult, Error> {
-    if is_pio_json(format) {
-        let (text, exact) = match echo_retained_pio_json(module) {
-            Some(text) => (text, true),
-            None => (crate::stored::emit_module(module)?, false),
-        };
-        let artifact = powerio_core::MemoryArtifact::new(
-            powerio_core::ArtifactPath::new("case.pio.json")
-                .expect("static name is a valid artifact path"),
-            text.into_bytes(),
+    if matches!(module.value, PioValue::AcScucInstance(_)) && is_goc3(format) {
+        return Err(unsupported_type(module, format));
+    }
+    if let Some(network) = balanced_calculation_network(&module.value) {
+        return emit_balanced_network(
+            module,
+            network,
+            format,
+            destination,
+            false,
+            vec![calculation_data_omitted(module.value.type_name(), format)],
         );
-        return destination.__commit_artifacts(exact, vec![artifact], Vec::new());
     }
+    if let Some(network) = multiconductor_calculation_network(&module.value) {
+        return emit_multiconductor_network(
+            module,
+            network.clone(),
+            format,
+            destination,
+            false,
+            vec![calculation_data_omitted(module.value.type_name(), format)],
+        );
+    }
+    match &module.value {
+        PioValue::BalancedNetwork(network) => {
+            emit_balanced_network(module, network, format, destination, true, Vec::new())
+        }
+        PioValue::MulticonductorNetwork(network) => emit_multiconductor_network(
+            module,
+            network.clone(),
+            format,
+            destination,
+            true,
+            Vec::new(),
+        ),
+        PioValue::BalancedOperatingPoint(point) => {
+            let (network, diagnostics) = network_with_balanced_operating_point(point, format);
+            emit_balanced_network(module, &network, format, destination, false, diagnostics)
+        }
+        PioValue::MulticonductorOperatingPoint(point) => {
+            let (network, diagnostics) = network_with_multiconductor_operating_point(point, format);
+            emit_multiconductor_network(module, network, format, destination, false, diagnostics)
+        }
+        _ => unreachable!("caller selected a value that is not a network or calculation"),
+    }
+}
+
+fn emit_balanced_solution_network(
+    module: &PioModule<PioValue>,
+    network: &BalancedNetwork,
+    format: &str,
+    destination: Destination,
+) -> Result<EmitResult, Error> {
+    emit_balanced_network(
+        module,
+        network,
+        format,
+        destination,
+        false,
+        vec![solution_data_omitted(module.value.type_name(), format)],
+    )
+}
+
+fn emit_multiconductor_solution_network(
+    module: &PioModule<PioValue>,
+    network: &powerio_dist::MulticonductorNetwork,
+    format: &str,
+    destination: Destination,
+) -> Result<EmitResult, Error> {
+    emit_multiconductor_network(
+        module,
+        network.clone(),
+        format,
+        destination,
+        false,
+        vec![solution_data_omitted(module.value.type_name(), format)],
+    )
+}
+
+fn emit_solution(
+    module: &PioModule<PioValue>,
+    format: &str,
+    destination: Destination,
+) -> Result<EmitResult, Error> {
+    match &module.value {
+        PioValue::DcPfSolution(solution) => emit_balanced_solution_network(
+            module,
+            &network_with_dc_pf_solution(solution),
+            format,
+            destination,
+        ),
+        PioValue::AcPfSolution(solution) => emit_balanced_solution_network(
+            module,
+            &network_with_ac_pf_solution(solution),
+            format,
+            destination,
+        ),
+        PioValue::DcOpfSolution(solution) => emit_balanced_solution_network(
+            module,
+            &network_with_dc_opf_solution(solution),
+            format,
+            destination,
+        ),
+        PioValue::AcOpfSolution(solution) => emit_balanced_solution_network(
+            module,
+            &network_with_ac_opf_solution(solution),
+            format,
+            destination,
+        ),
+        PioValue::SocwrOpfSolution(solution) => emit_balanced_network(
+            module,
+            solution.network(),
+            format,
+            destination,
+            false,
+            vec![relaxation_data_omitted(format)],
+        ),
+        PioValue::McAcPfSolution(solution) => {
+            emit_multiconductor_solution_network(module, solution.network(), format, destination)
+        }
+        PioValue::McAcOpfSolution(solution) => {
+            emit_multiconductor_solution_network(module, solution.network(), format, destination)
+        }
+        PioValue::AcScucSolution(solution) if is_goc3(format) => {
+            emit_goc3_solution(solution, destination)
+        }
+        PioValue::AcScucSolution(solution) => emit_balanced_solution_network(
+            module,
+            solution.instance().network(),
+            format,
+            destination,
+        ),
+        _ => unreachable!("caller selected a value that is not a solution"),
+    }
+}
+
+fn emit_dynamic(
+    module: &PioModule<PioValue>,
+    format: &str,
+    destination: Destination,
+) -> Result<EmitResult, Error> {
     if let Some(artifacts) = echo_retained_directory(module, format)? {
-        return destination.__commit_artifacts(true, artifacts, Vec::new());
+        return destination.__commit_artifacts(
+            true,
+            powerio_core::Fidelity::ExactSameFormat,
+            artifacts,
+            Vec::new(),
+        );
     }
-    match module.value() {
-        PioValue::BalancedNetwork(net) => {
-            let typed = typed_sibling(module, net.clone())?;
-            let typed = if retained_source_matches_case_format(module, format) {
-                typed
-            } else {
-                typed.sever_source()
-            };
-            if is_pypsa_dir(format) {
-                return powerio_tx::__emit_pypsa_csv(&typed, destination);
-            }
-            let Some(target) = powerio_tx::format::parse_target_format(format) else {
-                return Err(unknown_format(format));
-            };
-            powerio_tx::emit(&typed, target, destination)
-        }
-        PioValue::MulticonductorNetwork(net) => {
-            let Some(target) = powerio_dist::parse_dist_target_format(format) else {
-                return Err(unknown_format(format));
-            };
-            let typed = typed_sibling(module, net.clone())?;
-            let typed = if retained_source_matches_case_format(module, format) {
-                typed
-            } else {
-                typed.sever_source()
-            };
-            powerio_dist::emit(&typed, target, destination)
-        }
+
+    // A parse-only calculation format can still reproduce an unchanged
+    // retained source exactly. A derived module has no retained source, so a
+    // solved result never falls through to stale input bytes here.
+    if !matches!(
+        &module.value,
+        PioValue::BalancedNetwork(_) | PioValue::MulticonductorNetwork(_)
+    ) && let Some(bytes) = echo_retained_source(module, format)
+    {
+        let artifact = powerio_core::MemoryArtifact::new(
+            powerio_core::ArtifactPath::new("case").expect("static name is a valid artifact path"),
+            bytes,
+        );
+        return destination.__commit_artifacts(
+            false,
+            powerio_core::Fidelity::ExactSameFormat,
+            vec![artifact],
+            Vec::new(),
+        );
+    }
+
+    match &module.value {
+        PioValue::BalancedNetwork(_)
+        | PioValue::MulticonductorNetwork(_)
+        | PioValue::BalancedOperatingPoint(_)
+        | PioValue::MulticonductorOperatingPoint(_)
+        | PioValue::DcPfInstance(_)
+        | PioValue::AcPfInstance(_)
+        | PioValue::DcOpfInstance(_)
+        | PioValue::AcOpfInstance(_)
+        | PioValue::McAcPfInstance(_)
+        | PioValue::McAcOpfInstance(_)
+        | PioValue::AcScucInstance(_) => emit_network_or_calculation(module, format, destination),
+        PioValue::DcPfSolution(_)
+        | PioValue::AcPfSolution(_)
+        | PioValue::DcOpfSolution(_)
+        | PioValue::AcOpfSolution(_)
+        | PioValue::SocwrOpfSolution(_)
+        | PioValue::McAcPfSolution(_)
+        | PioValue::McAcOpfSolution(_)
+        | PioValue::AcScucSolution(_) => emit_solution(module, format, destination),
         _ => {
-            if let Some(text) = echo_retained_source(module, format) {
-                let artifact = powerio_core::MemoryArtifact::new(
-                    powerio_core::ArtifactPath::new("case")
-                        .expect("static name is a valid artifact path"),
-                    text.into_bytes(),
-                );
-                return destination.__commit_artifacts(false, vec![artifact], Vec::new());
-            }
             if known_format_name(format) {
-                Err(unsupported_kind(module, format))
+                Err(unsupported_type(module, format))
             } else {
                 Err(unknown_format(format))
             }
@@ -305,7 +897,7 @@ mod tests {
             vec![Bus::new(BusId(1), BusType::Ref, 230.0)],
             vec![],
         );
-        let source = powerio_core::Source::from_bytes("case.m", b"case bytes".to_vec())
+        let source = powerio_core::Source::from_memory("case.m", b"case bytes".to_vec())
             .unwrap()
             .with_format(powerio_core::FormatId::new("matpower").unwrap());
         let source_id = SourceId::new("source-1").unwrap();
@@ -337,7 +929,7 @@ mod tests {
                 HistoryEntry::new(
                     HistoryId::new("history-1").unwrap(),
                     HistoryKind::Parse,
-                    "parse_file",
+                    "parse",
                 )
                 .unwrap(),
             )
@@ -350,7 +942,7 @@ mod tests {
         assert_eq!(sibling.producer(), module.producer());
         assert_eq!(sibling.sources(), module.sources());
         assert_eq!(sibling.source_map(), module.source_map());
-        assert_eq!(sibling.diagnostics(), module.diagnostics());
+        assert_eq!(sibling.diagnostics, module.diagnostics);
         assert_eq!(sibling.history(), module.history());
         assert_eq!(sibling.extensions(), module.extensions());
         let sibling_source = sibling.source().unwrap();

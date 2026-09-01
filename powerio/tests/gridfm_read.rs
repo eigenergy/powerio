@@ -129,9 +129,11 @@ fn read_round_trips_power_flow_fingerprint() {
     read.network.validate().unwrap();
 
     // The facade route stamps the format on the stored source descriptor.
-    let module =
-        powerio::parse(powerio_core::Source::open(dir.path().join("case14").join("raw")).unwrap())
-            .unwrap();
+    let module = powerio::parse(
+        powerio_core::Source::open(dir.path().join("case14").join("raw")).unwrap(),
+        None,
+    )
+    .unwrap();
     assert_eq!(
         module
             .sources()
@@ -517,8 +519,8 @@ fn scenario_set_shares_unchanged_tables() {
 
     let (set, _diagnostics) = read_gridfm_scenario_set(dir.path()).unwrap();
     assert_eq!(set.len(), 2);
-    let first = set.get("0").unwrap().value();
-    let second = set.get("1").unwrap().value();
+    let first = set.get("0").unwrap();
+    let second = set.get("1").unwrap();
     // The unchanged topology is one allocation across the set; only the
     // varied generator table is held per scenario.
     assert!(std::ptr::eq(

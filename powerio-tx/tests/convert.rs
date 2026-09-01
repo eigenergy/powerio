@@ -1750,7 +1750,7 @@ fn parse_file_dispatch_precedes_the_text_read() {
     let err = parse_file(&pwd, None).unwrap_err();
     let _ = std::fs::remove_file(&pwd);
     assert_eq!(err.category(), powerio_core::ErrorCategory::Request);
-    assert!(err.to_string().contains("parse_display_file"), "{err}");
+    assert!(err.to_string().contains("parse_display"), "{err}");
 
     // Source acquisition precedes format detection: a missing file fails as
     // an Io error before the unmapped extension is consulted, and an existing
@@ -2026,7 +2026,7 @@ fn parse_and_emit_diagnostics_stay_in_their_own_channels() {
     );
     assert!(
         module
-            .diagnostics()
+            .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.message().contains("`switch`"))
     );
@@ -2360,11 +2360,9 @@ fn model_json_carries_non_finite_values_as_string_spellings() {
     assert_eq!(back.branches()[2].angmax, f64::INFINITY);
     assert!(back.buses()[0].vm.is_nan());
 
-    // A document from a pre-0.9 writer spelled these null; the refusal names
-    // the change rather than reporting a bare type error.
-    let legacy = text.replace(r#""angmax":"Infinity""#, r#""angmax":null"#);
-    let err = BalancedNetwork::from_json(&legacy).expect_err("null must still refuse");
-    assert!(err.to_string().contains("before 0.9.0"), "got: {err}");
+    let invalid = text.replace(r#""angmax":"Infinity""#, r#""angmax":null"#);
+    let err = BalancedNetwork::from_json(&invalid).expect_err("null must be refused");
+    assert!(err.to_string().contains("cannot be null"), "got: {err}");
 }
 
 #[test]
@@ -2532,8 +2530,8 @@ fn model_json_file_parses_to_the_network_it_serializes() {
 fn the_retired_powerio_json_token_gets_guidance() {
     let err = parse_str("x", "powerio-json").unwrap_err();
     let msg = err.to_string();
-    assert!(msg.contains("retired in 0.9.0"), "{msg}");
-    assert!(msg.contains("model-json"), "{msg}");
+    assert!(msg.contains("unknown or unsupported case format"), "{msg}");
+    assert!(!msg.contains("model-json"), "{msg}");
 }
 
 #[test]
@@ -2544,9 +2542,9 @@ fn nameless_json_text_sniffs_like_a_json_file() {
     let net = parse_matpower_file(data("case14.m")).unwrap();
 
     let model = net.to_json().unwrap();
-    let source = powerio_core::Source::from_bytes("<memory>", model.into_bytes()).unwrap();
+    let source = powerio_core::Source::from_memory("<memory>", model.into_bytes()).unwrap();
     let parsed = powerio_tx::parse(source).expect("nameless model JSON parses");
-    assert_eq!(parsed.value().buses().len(), 14);
+    assert_eq!(parsed.value.buses().len(), 14);
 
     let pm = emit_module(
         &powerio_core::PioModule::new(net),
@@ -2554,15 +2552,12 @@ fn nameless_json_text_sniffs_like_a_json_file() {
     )
     .unwrap()
     .text;
-    let source = powerio_core::Source::from_bytes("<memory>", pm.into_bytes()).unwrap();
+    let source = powerio_core::Source::from_memory("<memory>", pm.into_bytes()).unwrap();
     let parsed = powerio_tx::parse(source).expect("nameless PowerModels JSON parses");
-    assert_eq!(parsed.value().buses().len(), 14);
-    assert_eq!(
-        parsed.value().source_format(),
-        SourceFormat::PowerModelsJson
-    );
+    assert_eq!(parsed.value.buses().len(), 14);
+    assert_eq!(parsed.value.source_format(), SourceFormat::PowerModelsJson);
 
-    let source = powerio_core::Source::from_bytes("<memory>", b"not a case".to_vec()).unwrap();
+    let source = powerio_core::Source::from_memory("<memory>", b"not a case".to_vec()).unwrap();
     let error = powerio_tx::parse(source).unwrap_err();
     assert!(
         error.to_string().contains("cannot infer"),
@@ -2586,8 +2581,9 @@ fn parses_goc3_json_static_network() {
     assert_eq!(net.branches().len(), 2);
     assert_eq!(net.branches()[0].from, BusId(1));
     assert_eq!(net.branches()[0].to, BusId(2));
-    assert_close(net.branches()[0].rate_a, 2.0);
-    assert_close(net.branches()[0].rate_b, 2.5);
+    assert_close(net.branches()[0].rate_a, 200.0);
+    assert_close(net.branches()[0].rate_b, 200.0);
+    assert_close(net.branches()[0].rate_c, 250.0);
     // additional_shunt=1: b/2 per terminal is added to the extra shunts
     // (b_fr = 0.04/2 + 0.002, b_to = 0.04/2 + 0.004).
     assert_eq!(
@@ -2663,6 +2659,18 @@ fn parses_goc3_json_static_network() {
     assert_eq!(echo.text, GOC3_TINY);
     let matpower = emit_value(&net, TargetFormat::Matpower).unwrap();
     assert!(matpower.text.contains("mpc.bus"));
+}
+
+#[test]
+fn goc3_requires_the_declared_system_base() {
+    let without_base = GOC3_TINY.replacen(r#""base_norm_mva": 100.0"#, "", 1);
+    let error = parse_str(&without_base, "goc3-json").unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("missing required number `network.general.base_norm_mva`"),
+        "{error}"
+    );
 }
 
 #[test]

@@ -1068,7 +1068,7 @@ fn distribution_payloads(format: DistributionFormat) -> Result<Vec<DistributionP
     DISTRIBUTION_CASES
         .iter()
         .map(|(label, rel, native_format)| {
-            let mut base = dist_parse_file(data(rel), native_format.token)
+            let mut base = load_distribution_case(data(rel), native_format.token)
                 .map_err(|err| format!("parse {rel}: {err}"))?;
             *base.network.source_format_mut() = None;
             let rendered = emit_distribution_value(&base.network, format.target)?;
@@ -1135,13 +1135,13 @@ struct DistParsed {
 
 fn dist_module_to_parsed(module: powerio_core::PioModule<MulticonductorNetwork>) -> DistParsed {
     DistParsed {
-        warnings: powerio_dist::diagnostics::render_diagnostics(module.diagnostics()),
-        network: module.value().clone(),
+        warnings: powerio_dist::diagnostics::render_diagnostics(&module.diagnostics),
+        network: module.value.clone(),
         module,
     }
 }
 
-fn dist_parse_file(
+fn load_distribution_case(
     path: impl AsRef<std::path::Path>,
     from: &str,
 ) -> Result<DistParsed, powerio_core::Error> {
@@ -1156,7 +1156,7 @@ fn parse_distribution_text(
     format: DistributionFormat,
 ) -> Result<DistParsed, powerio_core::Error> {
     if format.target != DistTargetFormat::Dss {
-        let source = powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())?
+        let source = powerio_core::Source::from_memory("<memory>", text.as_bytes().to_vec())?
             .with_format(powerio_core::FormatId::new(
                 format.token.to_ascii_lowercase().replace('_', "-"),
             )?);
@@ -1170,7 +1170,7 @@ fn parse_distribution_text(
         DSS_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
     std::fs::write(&path, text).unwrap();
-    let parsed = dist_parse_file(&path, format.token);
+    let parsed = load_distribution_case(&path, format.token);
     let _ = std::fs::remove_file(path);
     parsed
 }
@@ -1199,7 +1199,7 @@ fn core_survives(
         && after.load_q == before.load_q
 }
 
-/// Every corpus fixture, written to a stored `.pio.json` module and read back, per
+/// Every corpus fixture, serialized as PowerIO IR and deserialized, per
 /// source format.
 ///
 /// The matrix above measures what survives a case format hop; this measures
@@ -1210,7 +1210,7 @@ fn core_survives(
 /// it. The model JSON leg is checked alongside, since the module carries the
 /// same payload under `model.balanced_network`.
 #[test]
-fn every_fixture_echoes_through_a_package() {
+fn every_fixture_round_trips_through_ir() {
     let mut failures: Vec<String> = Vec::new();
 
     for format in TRANSMISSION_FORMATS {
@@ -1226,7 +1226,7 @@ fn every_fixture_echoes_through_a_package() {
             if let Err(err) = model_json_echoes(&payload.network) {
                 failures.push(format!("{where_}: {err}"));
             }
-            if let Err(err) = package_echoes(payload.network) {
+            if let Err(err) = ir_preserves_network(payload.network) {
                 failures.push(format!("{where_}: {err}"));
             }
         }
@@ -1244,7 +1244,7 @@ fn every_fixture_echoes_through_a_package() {
             let module = powerio_core::PioModule::new(powerio::PioValue::MulticonductorNetwork(
                 payload.network,
             ));
-            if let Err(err) = module_json_echoes(&module) {
+            if let Err(err) = ir_round_trip(&module) {
                 failures.push(format!("{} as {}: {err}", payload.label, format.name));
             }
         }
@@ -1266,37 +1266,55 @@ fn model_json_echoes(net: &BalancedNetwork) -> Result<(), String> {
     Ok(())
 }
 
-/// A balanced network survives a stored `.pio.json` write and readback
+/// A balanced network survives PowerIO IR serialization and deserialization
 /// unchanged.
-fn package_echoes(net: BalancedNetwork) -> Result<(), String> {
+fn ir_preserves_network(net: BalancedNetwork) -> Result<(), String> {
     let before = transmission_value(&net);
     let module = powerio_core::PioModule::new(powerio::PioValue::BalancedNetwork(net));
-    let back = module_json_echoes(&module)?;
-    let powerio::PioValue::BalancedNetwork(net_back) = back.value() else {
+    let back = ir_round_trip(&module)?;
+    let powerio::PioValue::BalancedNetwork(net_back) = &back.value else {
         return Err("the module came back with a different value kind".to_owned());
     };
     let after = transmission_value(net_back);
     if before != after {
         return Err(format!(
-            "the stored round trip changed the model: {:?}",
+            "the PowerIO IR round trip changed the model: {:?}",
             model_diffs(&before, &after)
         ));
     }
     Ok(())
 }
 
-/// The document itself is round-trip stable: write, read, write again, and the
-/// two texts agree byte for byte.
-fn module_json_echoes(
+/// The document itself is stable: serialize, deserialize, serialize again,
+/// and the two texts agree byte for byte.
+fn ir_round_trip(
     module: &powerio_core::PioModule<powerio::PioValue>,
 ) -> Result<powerio_core::PioModule<powerio::PioValue>, String> {
-    let first = powerio::stored::emit_module(module).map_err(|err| format!("write: {err}"))?;
-    let back = powerio::stored::read_module(&first).map_err(|err| format!("read: {err}"))?;
-    let second = powerio::stored::emit_module(&back).map_err(|err| format!("rewrite: {err}"))?;
+    let first = serialize_ir(module)?;
+    let source = powerio::Source::from_memory("module.pio.json", first.as_bytes().to_vec())
+        .map_err(|err| format!("create IR source: {err}"))?;
+    let back = powerio::deserialize(source).map_err(|err| format!("deserialize: {err}"))?;
+    let second = serialize_ir(&back)?;
     if first != second {
-        return Err("the .pio.json document is not round-trip stable".to_owned());
+        return Err("the PowerIO IR document is not serialization stable".to_owned());
     }
     Ok(back)
+}
+
+fn serialize_ir(module: &powerio_core::PioModule<powerio::PioValue>) -> Result<String, String> {
+    let destination = powerio::Destination::memory("module.pio.json")
+        .map_err(|err| format!("create IR destination: {err}"))?;
+    let result =
+        powerio::serialize(module, destination).map_err(|err| format!("serialize: {err}"))?;
+    let powerio::EmittedOutput::Memory { mut artifacts } = result.into_output() else {
+        return Err("PowerIO IR memory destination returned path output".to_owned());
+    };
+    let artifact = artifacts
+        .pop()
+        .filter(|_| artifacts.is_empty())
+        .ok_or_else(|| "PowerIO IR serialization returned more than one artifact".to_owned())?;
+    String::from_utf8(artifact.into_bytes())
+        .map_err(|err| format!("PowerIO IR is not valid UTF-8: {err}"))
 }
 
 fn parse_matpower_file(
@@ -1317,7 +1335,7 @@ fn parse_module_from(
 ) -> Result<ParsedTransmission, powerio_core::Error> {
     let module = powerio_tx::format::parse(source)?;
     let warnings = module
-        .diagnostics()
+        .diagnostics
         .iter()
         .map(|d| format!("{}: {}", d.code(), d.message()))
         .collect();
@@ -1344,7 +1362,7 @@ fn parse_transmission_str(
     text: &str,
     from: &str,
 ) -> Result<ParsedTransmission, powerio_core::Error> {
-    let source = powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())?
+    let source = powerio_core::Source::from_memory("<memory>", text.as_bytes().to_vec())?
         .with_format(powerio_core::FormatId::new(
             from.to_ascii_lowercase().replace('_', "-"),
         )?);

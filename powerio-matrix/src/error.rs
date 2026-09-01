@@ -45,6 +45,9 @@ pub enum Error {
     #[error("unsupported OPF objective: {reason}")]
     UnsupportedOpfObjective { reason: String },
 
+    #[error("unsupported AC power flow bus specification")]
+    UnsupportedAcPfSpecification,
+
     #[error("{family} constraint selection names unknown identity `{identity}`")]
     UnknownConstraintIdentity {
         family: &'static str,
@@ -158,6 +161,7 @@ impl Error {
                 &codes::BUILD_MATRIX_SHAPE_MISMATCH
             }
             Error::UnsupportedOpfObjective { .. } => &codes::BUILD_OPF_OBJECTIVE_UNSUPPORTED,
+            Error::UnsupportedAcPfSpecification => &codes::BUILD_AC_PF_SPECIFICATION_UNSUPPORTED,
             Error::UnknownConstraintIdentity { .. } => {
                 &codes::BUILD_OPF_CONSTRAINT_IDENTITY_UNKNOWN
             }
@@ -203,6 +207,7 @@ impl Error {
             Error::DimensionMismatch { .. }
             | Error::ShapeMismatch { .. }
             | Error::UnsupportedOpfObjective { .. }
+            | Error::UnsupportedAcPfSpecification
             | Error::UnknownConstraintIdentity { .. }
             | Error::DuplicateElementIdentity { .. }
             | Error::SingularNetwork

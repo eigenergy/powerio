@@ -16,9 +16,9 @@ use crate::diagnostics::codes as C;
 use crate::diagnostics::{Diagnostic, DiagnosticInfo};
 use crate::geo::CoordinateSpace;
 use crate::model::{
-    ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference,
+    ActivePowerReference, ActivePowerUnit, ConductorMatrix, Configuration, ControlVoltageReference,
     DistControlProfile, DistGenerator, DistIbr, DistLoadVoltageModel, DistTransformer, DistWinding,
-    DistWindingConn, Extras, Mat, MulticonductorNetwork, ReactivePowerReference, ReactivePowerUnit,
+    DistWindingConn, Extras, MulticonductorNetwork, ReactivePowerReference, ReactivePowerUnit,
     VoltVarControl, VoltWattControl, VoltageSource, n_winding_impedance_base,
     open_delta_connection, open_delta_pairable, pair_keys, winding_phase_pair,
 };
@@ -41,7 +41,7 @@ const RAW_BMOPF_EXTRAS_TABLES: &[&str] = &[
     "ibr",
     "control_profile",
     "dc_bus",
-    "dc_line",
+    "dc_branch",
     "dc_load",
     "dc_source",
     "time_series",
@@ -2445,7 +2445,7 @@ impl Writer {
         &mut self,
         o: &mut Map<String, Value>,
         prefix: &str,
-        m: &Mat,
+        m: &ConductorMatrix,
         dim: usize,
         name: &str,
     ) {
@@ -2468,7 +2468,13 @@ impl Writer {
         }
     }
 
-    fn flat_matrix(&mut self, o: &mut Map<String, Value>, prefix: &str, m: &Mat, name: &str) {
+    fn flat_matrix(
+        &mut self,
+        o: &mut Map<String, Value>,
+        prefix: &str,
+        m: &ConductorMatrix,
+        name: &str,
+    ) {
         for (i, row) in m.iter().enumerate() {
             for (j, &v) in row.iter().enumerate() {
                 o.insert(

@@ -1331,10 +1331,11 @@ fn collect_props_for(
 /// passes a filesystem-backed loader lets `Redirect`/`Compile`/`Buscoords`
 /// read any path the loader accepts. For untrusted input use
 /// [`crate::convert::parse`] on a [`powerio_core::Source`] (acquisition
-/// confined to the source's root) or [`parse_raw_file`] (includes confined
+/// confined to the source's root) or [`__parse_raw_file`] (includes confined
 /// to the case directory), or enforce your own containment inside the
 /// loader.
-pub fn parse_raw_with(text: &str, path: &str, loader: &mut impl Loader) -> RawDss {
+#[doc(hidden)]
+pub fn __parse_raw_with(text: &str, path: &str, loader: &mut impl Loader) -> RawDss {
     run_executor(text, path, None, IncludeBoundary::CaseDirectory, loader)
 }
 
@@ -1479,7 +1480,7 @@ impl std::fmt::Display for Containment {
 
 impl std::error::Error for Containment {}
 
-/// Like [`parse_raw_with`], but confines `Redirect`/`Compile`/`Buscoords`
+/// Like [`__parse_raw_with`], but confines `Redirect`/`Compile`/`Buscoords`
 /// includes to the directory of `path`: an include that is absolute or climbs
 /// out of that directory with `..` is refused with a warning and read nothing.
 /// Used by the file entry point so an untrusted case file on disk cannot read
@@ -1546,9 +1547,10 @@ fn run_executor(
 /// source's acquisition walk. `Redirect`/`Compile`/`Buscoords` includes are
 /// confined to the case directory, lexically and with symbolic links refused
 /// at read time, exactly like [`crate::convert::parse`] on a file source; an
-/// include that escapes is refused with a warning. Use [`parse_raw_with`]
+/// include that escapes is refused with a warning. Use [`__parse_raw_with`]
 /// with your own loader for unconfined resolution.
-pub fn parse_raw_file(path: impl AsRef<Path>) -> Result<RawDss> {
+#[doc(hidden)]
+pub fn __parse_raw_file(path: impl AsRef<Path>) -> Result<RawDss> {
     let path = path.as_ref();
     let source = powerio_core::Source::open(path).map_err(|error| Error::Io {
         path: path.display().to_string(),
@@ -1566,7 +1568,7 @@ mod tests {
     }
 
     fn parse(text: &str) -> RawDss {
-        parse_raw_with(text, "test.dss", &mut no_files)
+        __parse_raw_with(text, "test.dss", &mut no_files)
     }
 
     #[test]
@@ -1697,7 +1699,7 @@ mod tests {
         for index in 0..512 {
             let _ = writeln!(script, "Redirect inc{index}.dss");
         }
-        let raw = parse_raw_with(&script, "test.dss", &mut Repeat);
+        let raw = __parse_raw_with(&script, "test.dss", &mut Repeat);
         assert!(raw.commands.len() <= MAX_TOTAL_PRESERVED);
         assert!(raw.diagnostics.len() <= MAX_TOTAL_DIAGNOSTICS + 1);
         let refusals = raw
@@ -1759,7 +1761,7 @@ mod tests {
                 let _ = writeln!(script, "Redirect winc{index}.dss");
             }
         }
-        let raw = parse_raw_with(&script, "test.dss", &mut Warny);
+        let raw = __parse_raw_with(&script, "test.dss", &mut Warny);
         assert!(raw.commands.len() <= MAX_TOTAL_PRESERVED);
         assert!(raw.diagnostics.len() <= MAX_TOTAL_DIAGNOSTICS + 1);
         assert_eq!(count(&raw), (1, 1), "findings-first order");
@@ -1773,7 +1775,7 @@ mod tests {
                 let _ = writeln!(script, "Redirect qinc{index}.dss");
             }
         }
-        let raw = parse_raw_with(&script, "test.dss", &mut Quiet);
+        let raw = __parse_raw_with(&script, "test.dss", &mut Quiet);
         assert!(raw.commands.len() <= MAX_TOTAL_PRESERVED);
         assert!(raw.diagnostics.len() <= MAX_TOTAL_DIAGNOSTICS + 1);
         assert_eq!(count(&raw), (1, 1), "preserved-first order");
@@ -1801,7 +1803,7 @@ mod tests {
         std::fs::write(root.join("coords.csv"), coords).unwrap();
         std::fs::write(root.join("master.dss"), "Buscoords coords.csv\n").unwrap();
 
-        let raw = parse_raw_file(root.join("master.dss")).unwrap();
+        let raw = __parse_raw_file(root.join("master.dss")).unwrap();
         std::fs::remove_dir_all(&root).unwrap();
 
         let warned = raw
@@ -1987,7 +1989,7 @@ mod tests {
                 .remove(p)
                 .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "missing"))
         };
-        let raw = parse_raw_with(
+        let raw = __parse_raw_with(
             "Redirect sub/codes.dss\nNew Line.l1 linecode=lc1",
             "test.dss",
             &mut loader,
@@ -2010,7 +2012,7 @@ mod tests {
                     Ok(text.to_string())
                 }
             };
-            parse_raw_with(script, "test.dss", &mut loader)
+            __parse_raw_with(script, "test.dss", &mut loader)
         };
         (raw, loads)
     }
@@ -2112,11 +2114,11 @@ mod tests {
         )
         .unwrap();
 
-        let compiled = parse_raw_file(root.join("compile.dss")).unwrap();
+        let compiled = __parse_raw_file(root.join("compile.dss")).unwrap();
         assert_eq!(compiled.warnings, Vec::<String>::new());
         assert!(compiled.find("line", "fromsub").is_some());
 
-        let redirected = parse_raw_file(root.join("redirect.dss")).unwrap();
+        let redirected = __parse_raw_file(root.join("redirect.dss")).unwrap();
         assert_eq!(redirected.warnings, Vec::<String>::new());
         assert!(redirected.find("line", "fromroot").is_some());
 
@@ -2146,7 +2148,7 @@ mod tests {
         std::fs::write(sub.join("probe.dss"), "New Line.fromsub bus1=a").unwrap();
         std::fs::write(inner.join("probe.dss"), "New Line.frominner bus1=a").unwrap();
 
-        let raw = parse_raw_file(root.join("main.dss")).unwrap();
+        let raw = __parse_raw_file(root.join("main.dss")).unwrap();
         assert_eq!(raw.warnings, Vec::<String>::new());
         assert!(raw.find("linecode", "lc1").is_some());
         assert!(raw.find("line", "fromsub").is_some());
@@ -2197,7 +2199,7 @@ mod tests {
                 Err(std::io::Error::new(std::io::ErrorKind::NotFound, "missing"))
             }
         };
-        let raw = parse_raw_with(
+        let raw = __parse_raw_with(
             "var @kv=12.47\nRedirect inc.dss\nNew Load.outer kW=@kw",
             "test.dss",
             &mut loader,
@@ -2409,7 +2411,7 @@ mod tests {
         std::fs::write(case.join("master.dss"), "Redirect linked.dss").unwrap();
         std::os::unix::fs::symlink(root.join("secret.dss"), case.join("linked.dss")).unwrap();
 
-        let raw = parse_raw_file(case.join("master.dss")).unwrap();
+        let raw = __parse_raw_file(case.join("master.dss")).unwrap();
         assert!(raw.find("line", "leaked").is_none());
         assert_eq!(
             raw.warnings
@@ -2436,7 +2438,7 @@ mod tests {
         )
         .unwrap();
 
-        let raw = parse_raw_file(root.join("case").join("master.dss")).unwrap();
+        let raw = __parse_raw_file(root.join("case").join("master.dss")).unwrap();
         assert!(raw.find("line", "leaked").is_none());
         assert_eq!(
             raw.warnings

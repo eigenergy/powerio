@@ -6,13 +6,13 @@ use powerio_core::{Diagnostic, Error, PioModule, Source, TimePoint};
 
 use super::source_text;
 use crate::instance::AcOpfInstance;
+use crate::operating::BalancedOperatingPointBuilder;
 use crate::solution::{AcOpfSolution, Residuals, Termination};
-use crate::state::BalancedStateBuilder;
 
-/// Parse one OPFData document into the AC OPF solution it explicitly
+/// Decode one OPFData document into the AC OPF solution it explicitly
 /// represents. The instance is built from the document's network, with the
 /// source supplied solver initial `pg`, `qg`, and `vg` recorded as its
-/// initial state; the solution carries the solved columns and the stated
+/// initial point; the solution carries the solved columns and the stated
 /// objective with termination [`Termination::NotReported`] (the source claims
 /// a solution and reports nothing about how it was reached), and residuals
 /// computed here from the solved voltages, flows, and injections.
@@ -20,7 +20,8 @@ use crate::state::BalancedStateBuilder;
 /// # Errors
 /// An invalid document, or solved columns whose shapes disagree with the
 /// network's tables; every failure retains the source.
-pub fn parse_opfdata_solution(source: Source) -> Result<PioModule<AcOpfSolution>, Error> {
+#[doc(hidden)]
+pub fn __decode_opfdata_solution(source: Source) -> Result<PioModule<AcOpfSolution>, Error> {
     let source = match source.format() {
         Some(_) => source,
         None => source.with_format(powerio_core::FormatId::new("opfdata-json")?),
@@ -34,10 +35,10 @@ pub fn parse_opfdata_solution(source: Source) -> Result<PioModule<AcOpfSolution>
 fn parse_opfdata_text(source: &Source) -> Result<(AcOpfSolution, Vec<Diagnostic>), Error> {
     let buffer = source.primary_buffer()?;
     let content = source_text(&buffer)?;
-    let (network, solved, diagnostics) = powerio_tx::parse_opfdata_json(content)
+    let (network, solved, diagnostics) = powerio_tx::__parse_opfdata_json(content)
         .map_err(|error| Error::new(error.code(), error.to_string()))?;
 
-    let initial = BalancedStateBuilder::new(
+    let initial = BalancedOperatingPointBuilder::new(
         network.clone(),
         vec![TimePoint::new("solver initial", None)?],
     )
@@ -51,7 +52,7 @@ fn parse_opfdata_text(source: &Source) -> Result<(AcOpfSolution, Vec<Diagnostic>
     let residuals = power_balance_residuals(&network, &solved);
     let (bus_active_injection, bus_reactive_injection) = bus_injections(&network);
 
-    let instance = Arc::new(AcOpfInstance::from_network(network)?.with_initial_state(initial));
+    let instance = Arc::new(AcOpfInstance::from_network(network)?.with_initial_point(initial));
     let solution = AcOpfSolution::new(
         instance,
         Termination::NotReported,
@@ -66,6 +67,7 @@ fn parse_opfdata_text(source: &Source) -> Result<(AcOpfSolution, Vec<Diagnostic>
         solved.generator_active_power,
         solved.generator_reactive_power,
         solved.objective,
+        Vec::new(),
     )?
     .with_residuals(residuals);
 
@@ -105,7 +107,7 @@ fn bus_injections(network: &powerio_tx::BalancedNetwork) -> (Vec<f64>, Vec<f64>)
 /// voltage, minus the solved flows leaving the bus.
 fn power_balance_residuals(
     network: &powerio_tx::BalancedNetwork,
-    solved: &powerio_tx::OpfDataSolution,
+    solved: &powerio_tx::format::OpfDataSolution,
 ) -> Residuals {
     let position: std::collections::HashMap<_, _> = network
         .buses()

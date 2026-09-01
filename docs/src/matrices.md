@@ -103,14 +103,14 @@ cubic costs, HVDC, or storage. These losses are returned as diagnostics.
   value. Matrix builders use `Branch::calc_terminal_charging()`, so terminal values
   feed \\(Y_{\mathrm{bus}}\\) even when the legacy total is zero or stale.
 - **FDPF scheme.** `Scheme` selects between the two MATPOWER fast decoupled
-  variants. `Xb` clears resistance for `Bp`; `Bx` clears resistance for `Bpp`.
+  forms. `Xb` clears resistance for `Bp`; `Bx` clears resistance for `Bpp`.
   The default is `Bx`.
 - **Zero impedance branches.** `BuildOptions::skip_zero_impedance` controls the
   builders whose branch denominator can be zero. The default `false` returns
   `Error::ZeroImpedance`; `true` skips the branch and records the skipped
   source branch rows in `MatrixStats` as `skipped_zero_impedance` and
   `skipped_zero_impedance_branches`. Full AC admittance builders use
-  \\(r^2 + x^2\\); DC incidence and reactance only FDPF variants use \\(x\\).
+  \\(r^2 + x^2\\); DC incidence and reactance only FDPF forms use \\(x\\).
   The gridfm export still zeros its admittance and flow columns for these rows
   and records `dropped_zero_impedance` in `gridfm_meta.json`.
 - **Reference coverage.** `IndexedNetwork::check_reference_coverage` verifies that

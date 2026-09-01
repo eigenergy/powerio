@@ -15,10 +15,10 @@ use crate::diagnostics::codes as C;
 use crate::error::{Error, Result};
 use crate::geo::{CoordinateSpace, DistCoordsKind, DistGeoMeta, DistLocation};
 use crate::model::{
-    ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference, DistBus,
-    DistCapacitor, DistControlProfile, DistGenerator, DistIbr, DistLine, DistLineCode, DistLoad,
-    DistLoadVoltageModel, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, DistWinding,
-    DistWindingConn, Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation, Mat,
+    ActivePowerReference, ActivePowerUnit, ConductorMatrix, Configuration, ControlVoltageReference,
+    DistBus, DistCapacitor, DistControlProfile, DistGenerator, DistIbr, DistLine, DistLineCode,
+    DistLoad, DistLoadVoltageModel, DistShunt, DistSourceFormat, DistSwitch, DistTransformer,
+    DistWinding, DistWindingConn, Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation,
     MulticonductorNetwork, MulticonductorNetworkTables, PowerFactorControl, ReactivePowerReference,
     ReactivePowerUnit, UntypedObject, VoltVarControl, VoltWattControl, VoltageSource,
     n_winding_impedance_base, n_winding_phase_count, pair_keys,
@@ -365,7 +365,7 @@ fn matrix_indices(key: &str, prefix: &str) -> Option<(usize, usize)> {
 /// transpose is not spelled is mirrored: these matrices are symmetric, and
 /// BMOPFTools' reader accepts the same one-triangle shorthand (a spelled
 /// cell always wins; both writers emit full matrices in practice).
-fn flat_matrix(o: &Map<String, Value>, prefix: &str) -> Option<Mat> {
+fn flat_matrix(o: &Map<String, Value>, prefix: &str) -> Option<ConductorMatrix> {
     let mut entries: Vec<(usize, usize, f64)> = Vec::new();
     let mut n = 0;
     for (k, v) in o {
@@ -396,7 +396,7 @@ fn flat_matrix(o: &Map<String, Value>, prefix: &str) -> Option<Mat> {
 
 /// The six linecode-shaped matrices of `o`, padded square to the widest one
 /// present; `ragged` reports a genuine size disagreement between them.
-fn linecode_matrices(o: &Map<String, Value>) -> ([Mat; 6], usize, bool) {
+fn linecode_matrices(o: &Map<String, Value>) -> ([ConductorMatrix; 6], usize, bool) {
     let mats = [
         flat_matrix(o, "R_series"),
         flat_matrix(o, "X_series"),
@@ -411,7 +411,7 @@ fn linecode_matrices(o: &Map<String, Value>) -> ([Mat; 6], usize, bool) {
 }
 
 /// Grows `m` to `n` by `n`, preserving the existing entries.
-fn pad_to(m: Mat, n: usize) -> Mat {
+fn pad_to(m: ConductorMatrix, n: usize) -> ConductorMatrix {
     if m.len() >= n {
         return m;
     }

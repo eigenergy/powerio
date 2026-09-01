@@ -431,7 +431,7 @@ Individual generator outputs remain optional on power flow solutions unless
 the instance determines them uniquely or the source records an explicit
 allocation. Duals remain an additive post 1.0 result because none of the
 required source profiles needs them. Derived flows and objective components
-not present in an input profile are verifier results, not fabricated source
+not present in an input file are verifier results, not fabricated source
 fields.
 
 GridFM snapshots are not automatically called solutions. A snapshot with only
@@ -1446,7 +1446,7 @@ The exact 1.0 top level object is:
   "schema": "powerio.module",
   "version": 1,
   "producer": { "name": "powerio", "version": "1.0.0" },
-  "value": { "kind": "balanced_network", "data": {} }
+  "value": { "type": "powerio.BalancedNetwork", "data": {} }
 }
 ```
 
@@ -1463,18 +1463,16 @@ retained-extra entries require at least one span. Defaulted, synthetic, and
 transformed entries can have no span; a transformed entry keeps spans when the
 source relation remains meaningful. Every span end is at most its source's
 declared byte length. `diagnostics` is the durable finding list. `history` is a
-structured description of parse, upgrade, transformation, edit, and repair
+structured description of parse, transformation, edit, repair, and solve
 operations that produced the current value; it is not replayable. Replayable
 revisions require their own typed value. `extensions` is one map whose keys
 must be namespaced; extension data cannot affect PowerIO calculations.
 
-There is one document version and no per-value version. Versions are immutable.
-A semantic field or value kind that version 1 cannot represent starts in
-version 2; future writers continue to emit version 1 for values that remain
-version 1 representable. The reader first dispatches on `schema` and `version`,
-then decodes the selected exact typed DTO. Current version DTOs reject unknown
-semantic fields outside `extensions`. `value.data` is a tagged typed record,
-never an untyped `serde_json::Value` used for electrical or calculation data.
+There is exactly one PowerIO 1.0 IR: schema `powerio.module`, version 1. This
+design does not define another IR version or a per-value version. The reader
+checks that exact header and decodes the exact typed DTO. The DTOs reject
+unknown semantic fields outside `extensions`. `value.data` is a tagged typed
+record, never an untyped `serde_json::Value` used for electrical or calculation data.
 Every floating field accepts a JSON number or the existing exact strings
 `"Infinity"`, `"-Infinity"`, and `"NaN"`; `null` is not a number. Generated
 JSON Schema states this union. The compiling DTOs in `prototype/src/schema.rs`
@@ -1497,8 +1495,8 @@ The current public type name `NetworkPackage` becomes `PioModule` before 1.0.
 The `powerio-pkg` and `powerio-diag` crates retire at 1.0. `powerio-core` owns
 the dependency neutral module, source and diagnostic types, repeated value
 containers, common records, and output destinations below both network crates.
-The short `powerio` facade owns `PioValue`, universal format dispatch, the
-stored schema, and the legacy upgrade reader.
+The short `powerio` facade owns `PioValue`, universal format dispatch, and the
+stored schema.
 
 `PioModule<T>` is both the compiler unit in memory and the result of a
 successful parse. Parsing `.pio.json` loads the stored module, appends findings
@@ -1510,31 +1508,9 @@ The JSON schema is separate from the Rust memory layout. Runtime
 serialize retained source bytes, row caches, matrices, derived summaries,
 validation counts, or platform specific handles.
 
-The 1.0 reader upgrades released 0.9.x `NetworkPackage` files and rejects the
-pre 0.9 `schema_version` lineage, which 0.9 already required users to
-regenerate. The upgrade is executable and one way:
-
-1. identify the legacy shape by `powerio_version` in `>=0.9.0,<0.10.0`;
-2. map `model_kind` and `model` to the value type and payload;
-3. turn nonempty `operating_points` into the primary
-   `TimeSeries<OperatingPoint<N>>` value instead of keeping a parallel static
-   value and series;
-4. reject a nonempty literal legacy `study` field with a directed migration
-   error. Its unapplied cumulative commits and selectable base state cannot be
-   turned into history without choosing a revision. The 0.9 migration command
-   materializes an explicitly selected commit to a static package first;
-5. map `lowering_history`, source descriptors, source maps, diagnostics,
-   repairs, and known
-   transformations to the new common records and history;
-6. recompute summaries, counts, and derived caches and emit one upgrade
-   diagnostic that those legacy fields were nonauthoritative;
-7. never reconstruct runtime `Source` ownership from a serialized path or
-   retained flag.
-
-Missing `schema_version` is accepted only for that positively identified 0.9
-shape. Unknown current fields or value identifiers return a `Request` error
-rather than being ignored. Each accepted 0.9 release shape has a frozen upgrade
-fixture.
+The 0.10 beta documents are not PowerIO 1.0 IR inputs. PowerIO 1.0 contains no
+prerelease document reader, mapper, fixture, or alias. Unknown fields, schema
+names, versions, or value type names are refused.
 
 A time series or scenario set can store changes against shared typed data.
 Selecting an entry must not serialize a network to generic JSON, deserialize a
@@ -1670,14 +1646,13 @@ name is the facade crate users add; internals stay in separate crates.
 - `powerio-matrix`: matrix data and graph data derived from both
   `BalancedNetwork` and `MulticonductorNetwork`. It depends on the model and
   problem crates, never on or through the facade.
-- `powerio`: the entry facade. It owns `PioValue`, `PioValueKind`, universal
-  format dispatch, `.pio.json`, and its upgrade reader. It re-exports
+- `powerio`: the entry facade. It owns `PioValue`, universal format dispatch,
+  and the sole `.pio.json` representation: `powerio.module`, version 1. It re-exports
   `powerio-core` and the
   public network, instance, and solution types, plus matrix types when the
   matrix feature is selected, so `cargo add powerio`
   is the complete compiler and
-  Tellegen's existing `use powerio::network::Network` imports keep working
-  through re-exports.
+  the public types used by Tellegen.
 - language bindings: the same public semantics without binding specific model
   types in the Rust core.
 

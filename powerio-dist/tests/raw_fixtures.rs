@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use powerio_dist::dss::{RawDss, parse_raw_file};
+use powerio_dist::dss::{__parse_raw_file, RawDss};
 
 fn fixture(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -12,7 +12,7 @@ fn fixture(rel: &str) -> PathBuf {
 }
 
 fn parse(rel: &str) -> RawDss {
-    parse_raw_file(fixture(rel)).expect("fixture readable")
+    __parse_raw_file(fixture(rel)).expect("fixture readable")
 }
 
 fn count(raw: &RawDss, class: &str) -> usize {

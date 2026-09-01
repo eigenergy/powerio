@@ -36,34 +36,34 @@ Julia:
 
 ```julia
 using PowerIO
-case = parse_file("case9.m")
-case isa PioModule{BalancedNetwork}   # true: the kind was detected
+case = parse("case9.m")
+case isa PioModule{BalancedNetwork}
 n_buses(case.value)                   # 9
 case.diagnostics                      # the reader's findings, usually empty here
 emit(case, "matpower", "copy.m")     # same format: byte exact echo
-text, findings = emit(case, "psse")  # another format: text + reported losses
+result = emit(case, "psse")         # another format: artifacts + diagnostics
 ```
 
 Python:
 
 ```python
 import powerio
-case = powerio.parse_file("case9.m")
-case.kind                       # "balanced_network"
+case = powerio.parse("case9.m")
 net = case.value                # BalancedNetwork
 case.diagnostics                # native records: code, severity, message, spans
-case.emit("matpower", "copy.m")
+powerio.emit(case, "matpower", "copy.m")
 ```
 
 Rust:
 
 ```rust,ignore
-let module = powerio::parse_file("case9.m")?;
-match module.value() {
+let source = powerio::Source::open("case9.m")?;
+let module = powerio::parse(source, None)?;
+match &module.value {
     powerio::PioValue::BalancedNetwork(network) => {
         println!("{} buses", network.buses().len());
     }
-    other => println!("value kind: {}", other.kind().as_str()),
+    other => println!("value type: {}", other.type_name()),
 }
 let result = powerio::emit(
     &module,

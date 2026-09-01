@@ -15,7 +15,7 @@ use std::sync::Arc;
 use num_complex::Complex64;
 use powerio_core::Source;
 use powerio_matrix::{VoltageCoordinates, calc_power_flow_jacobian};
-use powerio_prob::{AcPfInstance, BalancedStateBuilder};
+use powerio_prob::{AcPfInstance, BalancedOperatingPointBuilder};
 use powerio_tx::{BalancedNetwork, BusType};
 
 fn case(name: &str) -> BalancedNetwork {
@@ -32,12 +32,12 @@ fn operating_point(net: &BalancedNetwork) -> powerio_prob::OperatingPoint<Balanc
     let vm: Vec<f64> = (0..n)
         .map(|k| 1.0 + 0.01 * (k as f64) / (n as f64))
         .collect();
-    // Radians, per the state accessor's unit; off flat so every block fills,
+    // Radians, per the operating point accessor's unit; off flat so every block fills,
     // spelled exactly as the tests' independent references spell it.
     let va: Vec<f64> = (0..n)
         .map(|k| (2.0 * (k as f64) / (n as f64)).to_radians())
         .collect();
-    let series = BalancedStateBuilder::new(
+    let series = BalancedOperatingPointBuilder::new(
         net.clone(),
         vec![powerio_core::TimePoint::new("0", None).unwrap()],
     )
@@ -45,7 +45,7 @@ fn operating_point(net: &BalancedNetwork) -> powerio_prob::OperatingPoint<Balanc
     .bus_voltage_angles(va)
     .build()
     .unwrap();
-    let (_, point) = series.get(0).unwrap();
+    let point = series.get(0).unwrap();
     point.clone()
 }
 
@@ -441,7 +441,7 @@ fn values_update_in_place_over_one_structure() {
 
     // A different operating point: flat voltages.
     let n = net.buses().len();
-    let series = BalancedStateBuilder::new(
+    let series = BalancedOperatingPointBuilder::new(
         net.clone(),
         vec![powerio_core::TimePoint::new("1", None).unwrap()],
     )
@@ -449,7 +449,7 @@ fn values_update_in_place_over_one_structure() {
     .bus_voltage_angles(vec![0.0; n])
     .build()
     .unwrap();
-    let (_, flat) = series.get(0).unwrap();
+    let flat = series.get(0).unwrap();
     jacobian.update(&instance, flat).unwrap();
 
     assert_ne!(
@@ -476,14 +476,14 @@ fn mismatched_identities_and_incomplete_points_are_refused() {
 
     // A point stating only magnitudes is not a complete complex voltage.
     let n = net.buses().len();
-    let series = BalancedStateBuilder::new(
+    let series = BalancedOperatingPointBuilder::new(
         net.clone(),
         vec![powerio_core::TimePoint::new("0", None).unwrap()],
     )
     .bus_voltage_magnitudes(vec![1.0; n])
     .build()
     .unwrap();
-    let (_, partial) = series.get(0).unwrap();
+    let partial = series.get(0).unwrap();
     let error =
         calc_power_flow_jacobian(&instance, partial, VoltageCoordinates::Polar).unwrap_err();
     assert!(error.to_string().contains("complete"), "{error}");

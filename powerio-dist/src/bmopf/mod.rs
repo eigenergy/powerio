@@ -39,7 +39,7 @@
 //! `extras.<class>.<name>` with the keying its top level table used:
 //!
 //! - `ibr` and `control_profile`, emitted from the typed model
-//! - `dc_bus`, `dc_line`, `dc_load`, `dc_source`, `time_series`, emitted from
+//! - `dc_bus`, `dc_branch`, `dc_load`, `dc_source`, `time_series`, emitted from
 //!   untyped objects of that class
 //! - `capacitor`, only for a capacitor too malformed to type; a typed
 //!   capacitor goes to the strict top level `capacitor` table

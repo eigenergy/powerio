@@ -13,7 +13,7 @@ fuzz_target!(|data: &[u8]| {
     };
     let _ = text;
     for format in ["pmd-json", "bmopf-json"] {
-        let Ok(source) = powerio_core::Source::from_bytes("<fuzz>", data.to_vec()) else {
+        let Ok(source) = powerio_core::Source::from_memory("<fuzz>", data.to_vec()) else {
             continue;
         };
         let Ok(id) = powerio_core::FormatId::new(format) else {
@@ -23,7 +23,7 @@ fuzz_target!(|data: &[u8]| {
             continue;
         };
         let module = module.sever_source();
-        let _ = module.value().to_graph();
+        let _ = module.value.to_graph();
         for target in [
             powerio_dist::DistTargetFormat::PmdJson,
             powerio_dist::DistTargetFormat::BmopfJson,

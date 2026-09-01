@@ -23,6 +23,8 @@ pub mod codes {
             "an OPF element family does not have unique stable identities", category = Data;
         BUILD_OPF_NODAL_COST_UNSUPPORTED = "BUILD.OPF.NODAL_COST_UNSUPPORTED", Error,
             "a nodal quadratic projection cannot carry the prepared generator cost", category = Request;
+        BUILD_AC_PF_SPECIFICATION_UNSUPPORTED = "BUILD.AC_PF.SPECIFICATION_UNSUPPORTED", Error,
+            "the AC power flow preparation does not support a bus specification", category = Data;
         BUILD_MULTI_UNSUPPORTED_STAMP = "BUILD.MULTI.UNSUPPORTED_STAMP", Warning,
             "an element has no exact multiconductor admittance or ideal stamp and was omitted loudly";
         BUILD_SENSITIVITY_SINGULAR = "BUILD.SENSITIVITY.SINGULAR", Error,

@@ -60,35 +60,11 @@ fn bmopf_fixtures_classify_as_bmopf() {
 }
 
 #[test]
-fn stored_module_v1_fixtures_classify_as_module() {
-    for name in [
-        "ac-opf-instance.pio.json",
-        "ac-pf-instance.pio.json",
-        "dc-opf-instance.pio.json",
-        "mc-ac-opf-instance.pio.json",
-        "ac-scuc-instance.pio.json",
-    ] {
-        assert_eq!(
-            classify_json_text(&read(&format!("module-v1/{name}"))),
-            JsonClass::Module,
-            "{name}"
-        );
-    }
-}
-
-#[test]
-fn frozen_0_9_packages_classify_as_module() {
-    for name in [
-        "frozen-0.9-balanced.pio.json",
-        "frozen-0.9-multiconductor.pio.json",
-        "frozen-0.9-series.pio.json",
-    ] {
-        assert_eq!(
-            classify_json_text(&read(&format!("package/{name}"))),
-            JsonClass::Module,
-            "{name}"
-        );
-    }
+fn powerio_ir_classifies_as_module() {
+    assert_eq!(
+        classify_json_text(r#"{"schema":"powerio.module","version":1}"#),
+        JsonClass::Module
+    );
 }
 
 /// PowerModels JSON has no vendored fixture file (its markers are `baseMVA`,

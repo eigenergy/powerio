@@ -1,0 +1,82 @@
+{
+  "time_series_output": {
+    "bus": [
+      {
+        "uid": "bus_00",
+        "vm": [1.0, 1.01],
+        "va": [0.0, 0.0]
+      },
+      {
+        "uid": "bus_01",
+        "vm": [0.99, 0.98],
+        "va": [-0.1, -0.2]
+      }
+    ],
+    "shunt": [
+      {
+        "uid": "sh_00",
+        "step": [1, 2]
+      }
+    ],
+    "simple_dispatchable_device": [
+      {
+        "uid": "sd_00",
+        "on_status": [1, 1],
+        "p_on": [0.1, 0.2],
+        "q": [0.0, 0.0],
+        "p_reg_res_up": [0.0, 0.0],
+        "p_reg_res_down": [0.0, 0.0],
+        "p_syn_res": [0.0, 0.0],
+        "p_nsyn_res": [0.0, 0.0],
+        "p_ramp_res_up_online": [0.0, 0.0],
+        "p_ramp_res_down_online": [0.0, 0.0],
+        "p_ramp_res_up_offline": [0.0, 0.0],
+        "p_ramp_res_down_offline": [0.0, 0.0],
+        "q_res_up": [0.0, 0.0],
+        "q_res_down": [0.0, 0.0]
+      },
+      {
+        "uid": "sd_01",
+        "on_status": [1, 0],
+        "p_on": [0.04, 0.0],
+        "q": [0.0, 0.0],
+        "p_reg_res_up": [0.0, 0.0],
+        "p_reg_res_down": [0.0, 0.0],
+        "p_syn_res": [0.0, 0.0],
+        "p_nsyn_res": [0.0, 0.0],
+        "p_ramp_res_up_online": [0.0, 0.0],
+        "p_ramp_res_down_online": [0.0, 0.0],
+        "p_ramp_res_up_offline": [0.0, 0.0],
+        "p_ramp_res_down_offline": [0.0, 0.0],
+        "q_res_up": [0.0, 0.0],
+        "q_res_down": [0.0, 0.0]
+      }
+    ],
+    "ac_line": [
+      {
+        "uid": "acl_00",
+        "on_status": [1, 1]
+      },
+      {
+        "uid": "acl_01",
+        "on_status": [1, 0]
+      }
+    ],
+    "two_winding_transformer": [
+      {
+        "uid": "xf_00",
+        "tm": [1.0, 1.01],
+        "ta": [0.0, 0.01],
+        "on_status": [1, 1]
+      }
+    ],
+    "dc_line": [
+      {
+        "uid": "dc_00",
+        "pdc_fr": [0.0, 0.1],
+        "qdc_fr": [0.0, 0.0],
+        "qdc_to": [0.0, 0.0]
+      }
+    ]
+  }
+}

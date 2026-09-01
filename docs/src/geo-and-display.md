@@ -5,10 +5,9 @@ are optional; parsers do not invent them, and emission to a network format
 without a coordinate representation reports the loss.
 
 PowerWorld `.pwd` files are display data rather than network cases. Parse them
-with `parse_display_file` rather than the network parser. The parser acquires
-the binary display file from its path. A Rust application that already owns
-the bytes calls `parse_display(bytes, "pwd")`; no `parse_bytes` spelling is
-introduced.
+with `parse_display` rather than the network parser. Paths use `Source::open`.
+A Rust application that already owns the bytes uses `Source::from_memory` and
+passes that source to the same `parse_display` operation.
 
 ## Coordinate fields
 
@@ -68,10 +67,11 @@ removes the raw keys from `extras`. Emission uses `location`.
 | PowerWorld aux | `Latitude:1`/`Longitude:1` bus columns, else the bare `Latitude`/`Longitude` pair (`SubNum` stays in extras: it is identity rather than geometry) | geographic |
 | pandapower | bus `geo` GeoJSON Point strings | geographic |
 | PyPSA | `buses.csv` `x`/`y` | geographic |
+| DOE GO Challenge 3 | bus `longitude`/`latitude` | geographic |
 | OpenDSS | `Buscoords` | unknown; a diagnostic identifies values within longitude and latitude bounds |
 | BMOPF JSON | `longitude`/`latitude` (the BMOPFTools sideload convention; emission is opt in via `BmopfEmitOptions::sideload_coordinates`) | geographic |
 
-MATPOWER, PSS/E, PowerModels, egret, GOC3, PSLF, and Surge carry no geometry.
+MATPOWER, PSS/E, PowerModels, egret, PSLF, and Surge carry no geometry.
 Emitting a located case to one of them reports the dropped locations, the same
 behavior `base_frequency` has; `powerio geo extract` writes the sidecar as the
 escape hatch.
@@ -155,32 +155,20 @@ aux reader promotes the substation `Latitude:1`/`Longitude:1` pair, and the
 bus's own bare `Latitude`/`Longitude` pair, into `Bus.location`; a promoted
 pair leaves extras.
 
-Rust and Python use `parse_display_file`; Rust also has `parse_display` for
-already acquired bytes. Python returns
+Rust and Python use `parse_display`. Python returns
 `DisplayData(kind="powerworld", data=PwdDisplay(...))`.
 Display files do not pass through `BalancedNetwork`, module emission, or `.pio.json`.
 
 ## Distribution graph projection
 
-`MulticonductorNetwork::to_graph()` returns a bus and terminal graph without requiring
-coordinates. Python exposes `dist_net.to_graph()`, and the C `dist` feature
-exposes `pio_multiconductor_network_to_graph_json`. Graph topology and
-geographic placement remain separate data.
+`MulticonductorNetwork::to_graph()` returns a bus and terminal graph without
+requiring coordinates. Python exposes `dist_net.to_graph()`. Graph topology
+and geographic placement remain separate data.
 
 PowerIO stores and transports coordinates; it does not compute them. Synthetic
 layout of a coordinate free case is renderer math and stays in the consumer,
 which can store the result with `kind = synthetic` so the coordinate origin
 survives.
 
-The C ABI exposes the document as strings: `pio_geo_parse` normalizes a
-tolerant sidecar to the canonical form and returns the parser's diagnostics through
-its `PioDiagnostics **out_diagnostics` out parameter,
-`pio_balanced_network_to_geo_layer_json` and
-`pio_balanced_network_apply_geo_layer` work on a parsed network handle (apply
-returns a new handle whose diagnostics carry the match report), and
-`pio_multiconductor_network_to_geo_layer_json`/
-`pio_multiconductor_network_apply_geo_layer` are the multiconductor
-equivalents. The C `*_geo_extract` and `*_geo_apply` symbols remain frozen ABI
-6 compatibility names.
-Python mirrors the surface with `parse_geo` and
+Python exposes `parse_geo` and
 `to_geo_layer()`/`apply_geo_layer()` on both network types.

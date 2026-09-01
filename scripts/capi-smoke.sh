@@ -8,7 +8,6 @@ mkdir -p "$tmp"
 trap 'rm -rf "$tmp"' EXIT
 
 cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,prob
-cargo run -p powerio-cli -- gridfm tests/data/case9.m -o "$tmp/gridfm" >/dev/null
 cp tests/data/case9.m "$tmp/case9.m"
 
 case "$(uname -s)" in
@@ -25,8 +24,7 @@ fi
 cc -DPIO_ARROW -DPIO_MATRIX -DPIO_GRIDFM -DPIO_DIST -DPIO_PROB \
    -I powerio-capi/include powerio-capi/examples/smoke.c \
    -L target/release -lpowerio_capi -o "$tmp/pio_smoke"
-env "$lib_env=$lib_path" "$tmp/pio_smoke" \
-   "$tmp/case9.m" "$tmp/gridfm/case9/raw"
+env "$lib_env=$lib_path" "$tmp/pio_smoke" "$tmp/case9.m"
 
 c++ -std=c++17 -DPIO_ARROW -DPIO_MATRIX -DPIO_GRIDFM -DPIO_DIST -DPIO_PROB \
     -I powerio-capi/include powerio-capi/examples/header_cpp.cpp \

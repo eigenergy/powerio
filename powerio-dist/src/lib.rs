@@ -12,7 +12,7 @@
 //! ```no_run
 //! let source = powerio_core::Source::open("feeder.dss")?;
 //! let module = powerio_dist::parse(source)?;
-//! for line in powerio_dist::diagnostics::render_diagnostics(module.diagnostics()) {
+//! for line in powerio_dist::diagnostics::render_diagnostics(&module.diagnostics) {
 //!     eprintln!("parse: {line}");
 //! }
 //! let emitted = powerio_dist::emit(
@@ -56,7 +56,6 @@ pub mod error;
 pub mod geo;
 pub mod graph;
 pub mod model;
-pub(crate) mod nonfinite;
 pub mod pmd;
 #[cfg(test)]
 pub(crate) mod testkit;
@@ -78,7 +77,7 @@ pub use model::{
     ActivePowerReference, ActivePowerUnit, ConductorMatrix, Configuration, ControlVoltageReference,
     DistBus, DistCapacitor, DistControlProfile, DistGenerator, DistIbr, DistLine, DistLineCode,
     DistLoad, DistLoadVoltageModel, DistShunt, DistSourceFormat, DistSwitch, DistTransformer,
-    DistWinding, DistWindingConn, Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation, Mat,
+    DistWinding, DistWindingConn, Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation,
     MulticonductorNetwork, PowerFactorControl, ReactivePowerReference, ReactivePowerUnit,
     UntypedObject, VoltVarControl, VoltWattControl, VoltageSource, find_unresolved_references,
 };

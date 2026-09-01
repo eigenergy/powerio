@@ -6,13 +6,13 @@ over the component crates (`powerio-tx`, `powerio-dist`, `powerio-prob`);
 the `powerio` facade re-exports it behind the `matrix` feature.
 
 ```rust
-use powerio::IntoTypedModule;
 use powerio_matrix::{BuildOptions, IndexedNetwork, calc_bprime_matrix};
 
 let module = powerio::parse(powerio_core::Source::open("case14.m")?)?;
-let module: powerio_core::PioModule<powerio::BalancedNetwork> =
-    module.into_typed()?;
-let view = IndexedNetwork::new(module.value());
+let powerio::PioValue::BalancedNetwork(network) = &module.value else {
+    panic!("expected a balanced network");
+};
+let view = IndexedNetwork::new(network);
 let bprime = calc_bprime_matrix(&view, &BuildOptions::default())?;
 ```
 

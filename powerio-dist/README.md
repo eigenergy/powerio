@@ -28,9 +28,8 @@ for line in powerio_dist::diagnostics::render_diagnostics(emitted.diagnostics())
 
 The same surface is available from the `powerio` CLI
 (`powerio convert feeder.dss --to pmd-json`), the Python package
-(`powerio.parse_file` and `PioModule.emit`), and the C ABI
-(`pio_parse_file`, `pio_module_multiconductor_network`,
-`pio_module_emit_string`, and `pio_module_emit_file`).
+(`powerio.parse` and `powerio.emit`), and the C ABI (`pio_source_open`,
+`pio_parse`, typed value access, and `pio_emit`).
 
 Fixtures live in `tests/data/dist/` at the workspace root with provenance
 recorded in its README. The oracle harnesses under `tools/` re-solve emitted

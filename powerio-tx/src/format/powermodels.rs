@@ -4,9 +4,9 @@
 //! PowerModels itself exports: powers are divided by `baseMVA`, angles are in
 //! radians, and gen cost coefficients are rescaled to the per-unit basis (a
 //! polynomial term `p^j` by `baseMVA^j`, a piecewise curve's MW breakpoints by
-//! `1/baseMVA`). Because the data already declares per unit, `parse_file(out.json)`
-//! reads it with PowerModels' default `validate = true` without rerunning
-//! `make_per_unit!`, so it lands on the same network as `parse_file(case.m)`.
+//! `1/baseMVA`). Because the data already declares per unit, PowerModels reads
+//! it with its default `validate = true` without rerunning `make_per_unit!`, so
+//! it lands on the same network as the original MATPOWER case.
 //! Loads and shunts are first-class on the `BalancedNetwork`; branch terminal admittance
 //! writes as PowerModels' `g_fr`/`b_fr`/`g_to`/`b_to` fields, with MATPOWER
 //! `BR_B` expanded only when no richer terminal model is present. `transformer`
@@ -492,6 +492,8 @@ pub(crate) fn parse_powermodels_json_source(
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
         geo: None,
+        case_metadata: crate::network::CaseMetadata::default(),
+        detailed_connectivity: None,
         buses: sorted_rows(document.bus, |row| row.index)
             .into_iter()
             .map(|(_, row)| read_bus(row, ascale))
@@ -507,6 +509,7 @@ pub(crate) fn parse_powermodels_json_source(
             .map(|(_, row)| read_shunt(row, pscale))
             .collect::<Vec<_>>()
             .into(),
+        static_var_compensators: Vec::new().into(),
         branches: read_branches(document.branch, pscale, ascale, warnings).into(),
         switches: sorted_rows(document.switch, |row| row.index)
             .into_iter()
@@ -688,6 +691,7 @@ fn read_shunt(row: ShuntRow, pscale: f64) -> Shunt {
         g: row.gs.unwrap_or(0.0) * pscale,
         b: row.bs.unwrap_or(0.0) * pscale,
         in_service: row.status.unwrap_or(true),
+        section_count: None,
         control: None,
         uid: None,
         extras: row.extras,
@@ -975,6 +979,7 @@ fn read_gen(row: &GenRow, pscale: f64, base_mva: f64, per_unit: bool) -> Generat
         cost,
         caps,
         regulated_bus: None,
+        active_power_control: None,
         uid: None,
     }
 }
@@ -1143,6 +1148,11 @@ fn read_hvdc(row: DclineRow, pscale: f64, base_mva: f64, per_unit: bool) -> Hvdc
         qmaxt: row.qmaxt.unwrap_or(f64::INFINITY) * pscale,
         loss0: row.loss0.unwrap_or(0.0) * pscale,
         loss1: row.loss1.unwrap_or(0.0),
+        resistance_ohm: None,
+        nominal_voltage_kv: None,
+        converters_mode: None,
+        converter1: None,
+        converter2: None,
         cost,
         uid: None,
         extras: row.extras,
@@ -1216,6 +1226,7 @@ fn read_storage(row: StorageRow, pscale: f64) -> Storage {
         p_loss: row.p_loss.unwrap_or(0.0) * pscale,
         q_loss: row.q_loss.unwrap_or(0.0) * pscale,
         in_service: row.status.unwrap_or(true),
+        active_power_control: None,
         uid: None,
         extras: row.extras,
     }

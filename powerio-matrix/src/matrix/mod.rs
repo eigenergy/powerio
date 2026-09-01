@@ -24,8 +24,8 @@ mod tests;
 pub use adjacency::calc_adjacency_matrix;
 pub use bdoubleprime::calc_bdoubleprime_matrix;
 pub use bprime::calc_bprime_matrix;
-pub(crate) use incidence::{IncidenceParts, build_incidence};
-pub use incidence::{calc_branch_flow_matrix, calc_diagonal, calc_susceptance_diagonal};
+pub(crate) use incidence::{IncidenceParts, build_incidence, calc_solver_branch_flow_matrix};
+pub use incidence::{calc_diagonal, calc_susceptance_diagonal};
 pub use lacpf::calc_lacpf_matrix;
 pub use laplacian::{
     GroundedIndexMap, calc_reference_indicator, calc_unit_vector, calc_weighted_laplacian,

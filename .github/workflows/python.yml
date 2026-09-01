@@ -184,7 +184,8 @@ jobs:
           /tmp/zerodep/bin/python - <<'PY'
           import tempfile
           import sys, powerio
-          m = powerio.parse_file("tests/data/case14.m", value_type=powerio.BalancedNetwork)
+          m = powerio.parse("tests/data/case14.m")
+          assert isinstance(m.value, powerio.BalancedNetwork)
           c = m.value
           assert m.emit("matpower").text == open("tests/data/case14.m").read()
           assert "numpy" not in sys.modules and "scipy" not in sys.modules
@@ -196,6 +197,86 @@ jobs:
           else:
               raise SystemExit("expected ImportError without the gridfm feature")
           PY
+
+  goc3-reference:
+    name: GOC3 reference data
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.SOURCE_REF }}
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: Smart-DS/GO-3-data-model
+          ref: 5472a2373f456cc7e9923cdd31be1d4345d9830f
+          path: external/go3-data-model
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: GOCompetition/C3DataUtilities
+          ref: bb5df337553b21ab8be89ae5f9106958541730d4
+          path: external/c3-data-utilities
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: lanl-ansi/GOC3Benchmark.jl
+          ref: 588f3566ab29df240622a9a98c758af1bfc66bb1
+          path: external/goc3-benchmark
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Install the pinned reference readers
+        run: |
+          pip install \
+            'numpy==1.26.4' \
+            'scipy==1.11.4' \
+            'pandas==2.1.4' \
+            'pydantic==1.10.26' \
+            'networkx==3.2.1' \
+            'psutil==5.9.8'
+          pip install --no-deps ./external/go3-data-model ./external/c3-data-utilities
+      - name: Validate with the GO-3 data model
+        run: |
+          python evals/validation/validate_goc3_reference.py \
+            --benchmark-data external/goc3-benchmark/test/data \
+            --powerio-problem tests/data/goc3/goc3_small.json \
+            --powerio-solution tests/data/goc3/goc3_small_solution.json
+      - name: Parse the D1, D2, and D3 benchmark files
+        env:
+          POWERIO_GOC3_REFERENCE_DATA: ${{ github.workspace }}/external/goc3-benchmark/test/data
+        run: cargo test -p powerio --test goc3_reference -- --nocapture
+      - name: Run the Challenge 3 data checks on D1, D2, and D3
+        run: |
+          for problem in external/goc3-benchmark/test/data/*.json; do
+            case_name="${problem##*/}"
+            python external/c3-data-utilities/check_data.py \
+              --problem "$problem" \
+              --parameters '{"do_opt_solves": false}' \
+              --summary_csv "$RUNNER_TEMP/$case_name-summary.csv" \
+              --summary_json "$RUNNER_TEMP/$case_name-summary.json" \
+              --data_errors "$RUNNER_TEMP/$case_name-data-errors.txt" \
+              --ignored_errors "$RUNNER_TEMP/$case_name-ignored-errors.txt" \
+              --solution_errors "$RUNNER_TEMP/$case_name-solution-errors.txt" \
+              > "$RUNNER_TEMP/$case_name-check.log"
+            test ! -s "$RUNNER_TEMP/$case_name-data-errors.txt"
+            test ! -s "$RUNNER_TEMP/$case_name-ignored-errors.txt"
+            test ! -s "$RUNNER_TEMP/$case_name-solution-errors.txt"
+          done
+      - name: Check PowerIO's emitted solution with C3DataUtilities
+        run: |
+          python external/c3-data-utilities/check_data.py \
+            --problem tests/data/goc3/goc3_small.json \
+            --solution tests/data/goc3/goc3_small_solution.json \
+            --parameters '{"do_opt_solves": false}' \
+            --summary_csv "$RUNNER_TEMP/powerio-goc3-summary.csv" \
+            --summary_json "$RUNNER_TEMP/powerio-goc3-summary.json" \
+            --data_errors "$RUNNER_TEMP/powerio-goc3-data-errors.txt" \
+            --ignored_errors "$RUNNER_TEMP/powerio-goc3-ignored-errors.txt" \
+            --solution_errors "$RUNNER_TEMP/powerio-goc3-solution-errors.txt" \
+            > "$RUNNER_TEMP/powerio-goc3-check.log"
+          test ! -s "$RUNNER_TEMP/powerio-goc3-data-errors.txt"
+          test ! -s "$RUNNER_TEMP/powerio-goc3-ignored-errors.txt"
+          test ! -s "$RUNNER_TEMP/powerio-goc3-solution-errors.txt"
 
   # Build the same wheel users get, install the GridFM and pandas compatibility
   # extras, and run the Parquet read/write tests before merge and on main.

@@ -16,8 +16,8 @@ use powerio_tx::{BalancedNetwork, BusId};
 
 use crate::diagnostics::codes;
 use crate::instance::{AcOpfInstance, AcPfInstance, DcOpfInstance, DcPfInstance};
+use crate::operating::row_identity;
 use crate::solution::{Producer, Residuals, Termination};
-use crate::state::row_identity;
 
 /// Optional per generator dispatch, in generator table order.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -27,6 +27,39 @@ pub struct GeneratorDispatch {
     pub p_mw: Vec<f64>,
     /// Reactive power per generator, MVAr; empty for a DC result.
     pub q_mvar: Vec<f64>,
+}
+
+/// Active and reactive power at the three terminals of one three winding
+/// transformer, in the transformer's declared winding order. Positive values
+/// enter the transformer.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct ThreeWindingTransformerTerminalPower {
+    pub p_mw: [f64; 3],
+    pub q_mvar: [f64; 3],
+}
+
+impl ThreeWindingTransformerTerminalPower {
+    #[must_use]
+    pub const fn new(p_mw: [f64; 3], q_mvar: [f64; 3]) -> Self {
+        Self { p_mw, q_mvar }
+    }
+}
+
+/// Active power at the three terminals of one three winding transformer, in
+/// the transformer's declared winding order. Positive values enter the
+/// transformer.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct ThreeWindingTransformerTerminalActivePower {
+    pub p_mw: [f64; 3],
+}
+
+impl ThreeWindingTransformerTerminalActivePower {
+    #[must_use]
+    pub const fn new(p_mw: [f64; 3]) -> Self {
+        Self { p_mw }
+    }
 }
 
 fn check_length(what: &'static str, got: usize, expected: usize) -> Result<(), Error> {
@@ -126,7 +159,7 @@ impl NetworkCarrier for AcOpfInstance {
 
 fn duplicate_identity(kind: &str, identity: &str) -> Error {
     Error::new(
-        &codes::BUILD_STATE_IDENTITY_UNKNOWN,
+        &codes::BUILD_OPERATING_POINT_IDENTITY_UNKNOWN,
         format!("{kind}: duplicate element identity `{identity}`"),
     )
 }
@@ -287,6 +320,8 @@ pub struct DcPfSolution {
     bus_active_injection: Vec<f64>,
     branch_from_active_flow: Vec<f64>,
     branch_to_active_flow: Vec<f64>,
+    three_winding_transformer_terminal_active_power:
+        Vec<ThreeWindingTransformerTerminalActivePower>,
     generator_dispatch: Option<GeneratorDispatch>,
     index: SolutionIndex,
 }
@@ -306,6 +341,9 @@ impl DcPfSolution {
         bus_active_injection: Vec<f64>,
         branch_from_active_flow: Vec<f64>,
         branch_to_active_flow: Vec<f64>,
+        three_winding_transformer_terminal_active_power: Vec<
+            ThreeWindingTransformerTerminalActivePower,
+        >,
     ) -> Result<Self, Error> {
         let buses = instance.network().buses().len();
         let branches = instance.network().branches().len();
@@ -321,6 +359,11 @@ impl DcPfSolution {
             branch_to_active_flow.len(),
             branches,
         )?;
+        check_length(
+            "three winding transformer terminal active powers",
+            three_winding_transformer_terminal_active_power.len(),
+            instance.network().transformers_3w().len(),
+        )?;
         let index = solution_index(&instance)?;
         Ok(Self {
             instance,
@@ -331,6 +374,7 @@ impl DcPfSolution {
             bus_active_injection,
             branch_from_active_flow,
             branch_to_active_flow,
+            three_winding_transformer_terminal_active_power,
             generator_dispatch: None,
             index,
         })
@@ -362,6 +406,15 @@ impl DcPfSolution {
     #[must_use]
     pub fn branch_to_active_flow(&self, identity: &str) -> Option<f64> {
         Some(self.branch_to_active_flow[branch_position(self.row_index(), identity)?])
+    }
+
+    /// Three winding transformer terminal active powers in transformer table
+    /// order.
+    #[must_use]
+    pub fn three_winding_transformer_terminal_active_powers(
+        &self,
+    ) -> &[ThreeWindingTransformerTerminalActivePower] {
+        &self.three_winding_transformer_terminal_active_power
     }
 
     /// The complete `bus_voltage_angle` column, in `bus_order`.
@@ -402,6 +455,7 @@ pub struct AcPfSolution {
     branch_from_reactive_flow: Vec<f64>,
     branch_to_active_flow: Vec<f64>,
     branch_to_reactive_flow: Vec<f64>,
+    three_winding_transformer_terminal_power: Vec<ThreeWindingTransformerTerminalPower>,
     generator_dispatch: Option<GeneratorDispatch>,
     index: SolutionIndex,
 }
@@ -426,6 +480,7 @@ impl AcPfSolution {
         branch_from_reactive_flow: Vec<f64>,
         branch_to_active_flow: Vec<f64>,
         branch_to_reactive_flow: Vec<f64>,
+        three_winding_transformer_terminal_power: Vec<ThreeWindingTransformerTerminalPower>,
     ) -> Result<Self, Error> {
         let buses = instance.network().buses().len();
         let branches = instance.network().branches().len();
@@ -457,6 +512,11 @@ impl AcPfSolution {
             branch_to_reactive_flow.len(),
             branches,
         )?;
+        check_length(
+            "three winding transformer terminal powers",
+            three_winding_transformer_terminal_power.len(),
+            instance.network().transformers_3w().len(),
+        )?;
         let index = solution_index(&instance)?;
         Ok(Self {
             instance,
@@ -471,6 +531,7 @@ impl AcPfSolution {
             branch_from_reactive_flow,
             branch_to_active_flow,
             branch_to_reactive_flow,
+            three_winding_transformer_terminal_power,
             generator_dispatch: None,
             index,
         })
@@ -527,6 +588,14 @@ impl AcPfSolution {
     pub fn branch_to_reactive_flow(&self, identity: &str) -> Option<f64> {
         Some(self.branch_to_reactive_flow[branch_position(self.row_index(), identity)?])
     }
+
+    /// Three winding transformer terminal powers in transformer table order.
+    #[must_use]
+    pub fn three_winding_transformer_terminal_powers(
+        &self,
+    ) -> &[ThreeWindingTransformerTerminalPower] {
+        &self.three_winding_transformer_terminal_power
+    }
 }
 
 /// The DC optimal power flow solution: the DC power flow results plus the
@@ -543,6 +612,8 @@ pub struct DcOpfSolution {
     branch_from_active_flow: Vec<f64>,
     branch_to_active_flow: Vec<f64>,
     generator_active_power: Vec<f64>,
+    three_winding_transformer_terminal_active_power:
+        Vec<ThreeWindingTransformerTerminalActivePower>,
     objective: f64,
     bus_active_power_marginal: Option<Vec<f64>>,
     branch_from_limit_multiplier: Option<Vec<f64>>,
@@ -567,6 +638,9 @@ impl DcOpfSolution {
         branch_to_active_flow: Vec<f64>,
         generator_active_power: Vec<f64>,
         objective: f64,
+        three_winding_transformer_terminal_active_power: Vec<
+            ThreeWindingTransformerTerminalActivePower,
+        >,
     ) -> Result<Self, Error> {
         let buses = instance.network().buses().len();
         let branches = instance.network().branches().len();
@@ -587,6 +661,11 @@ impl DcOpfSolution {
             generator_active_power.len(),
             instance.network().generators().len(),
         )?;
+        check_length(
+            "three winding transformer terminal active powers",
+            three_winding_transformer_terminal_active_power.len(),
+            instance.network().transformers_3w().len(),
+        )?;
         let index = solution_index(&instance)?;
         Ok(Self {
             instance,
@@ -598,6 +677,7 @@ impl DcOpfSolution {
             branch_from_active_flow,
             branch_to_active_flow,
             generator_active_power,
+            three_winding_transformer_terminal_active_power,
             objective,
             bus_active_power_marginal: None,
             branch_from_limit_multiplier: None,
@@ -732,6 +812,15 @@ impl DcOpfSolution {
     pub fn branch_to_active_flow(&self, identity: &str) -> Option<f64> {
         Some(self.branch_to_active_flow[branch_position(self.row_index(), identity)?])
     }
+
+    /// Three winding transformer terminal active powers in transformer table
+    /// order.
+    #[must_use]
+    pub fn three_winding_transformer_terminal_active_powers(
+        &self,
+    ) -> &[ThreeWindingTransformerTerminalActivePower] {
+        &self.three_winding_transformer_terminal_active_power
+    }
 }
 
 /// The AC optimal power flow solution: the AC power flow results plus the
@@ -752,6 +841,7 @@ pub struct AcOpfSolution {
     branch_to_reactive_flow: Vec<f64>,
     generator_active_power: Vec<f64>,
     generator_reactive_power: Vec<f64>,
+    three_winding_transformer_terminal_power: Vec<ThreeWindingTransformerTerminalPower>,
     objective: f64,
     bus_active_power_marginal: Option<Vec<f64>>,
     bus_reactive_power_marginal: Option<Vec<f64>>,
@@ -782,6 +872,7 @@ impl AcOpfSolution {
         generator_active_power: Vec<f64>,
         generator_reactive_power: Vec<f64>,
         objective: f64,
+        three_winding_transformer_terminal_power: Vec<ThreeWindingTransformerTerminalPower>,
     ) -> Result<Self, Error> {
         let buses = instance.network().buses().len();
         let branches = instance.network().branches().len();
@@ -824,6 +915,11 @@ impl AcOpfSolution {
             generator_reactive_power.len(),
             generators,
         )?;
+        check_length(
+            "three winding transformer terminal powers",
+            three_winding_transformer_terminal_power.len(),
+            instance.network().transformers_3w().len(),
+        )?;
         let index = solution_index(&instance)?;
         Ok(Self {
             instance,
@@ -840,6 +936,7 @@ impl AcOpfSolution {
             branch_to_reactive_flow,
             generator_active_power,
             generator_reactive_power,
+            three_winding_transformer_terminal_power,
             objective,
             bus_active_power_marginal: None,
             bus_reactive_power_marginal: None,
@@ -1024,6 +1121,14 @@ impl AcOpfSolution {
     #[must_use]
     pub fn branch_to_reactive_flow(&self, identity: &str) -> Option<f64> {
         Some(self.branch_to_reactive_flow[branch_position(self.row_index(), identity)?])
+    }
+
+    /// Three winding transformer terminal powers in transformer table order.
+    #[must_use]
+    pub fn three_winding_transformer_terminal_powers(
+        &self,
+    ) -> &[ThreeWindingTransformerTerminalPower] {
+        &self.three_winding_transformer_terminal_power
     }
 
     /// The complete `bus_voltage_magnitude` column, in `bus_order`.

@@ -2,14 +2,17 @@
 //!
 //! Each format module owns its parser and/or serializer: MATPOWER `.m`,
 //! PowerModels JSON, PSS/E `.raw`, PowerWorld `.aux`, egret `ModelData` JSON,
-//! pandapower JSON, PyPSA CSV folders, PSLF `.epc`, GO Challenge 3 JSON, and
-//! Surge JSON, and DeepMind OPFData JSON. PowerWorld `.pwb` cases, GO Challenge
-//! 3 and OPFData JSON canonical output, and PowerWorld `.pwd` displays are input
-//! only. Case input and
+//! pandapower JSON, PyPSA CSV folders, PSLF `.epc`, PSS/E RAWX 35, PowSybl
+//! XIIDM 1.17, CIM CGMES 2.4.15 and 3.0, GO Challenge 3 JSON, Surge JSON, and
+//! DeepMind OPFData JSON. PowerWorld `.pwb` cases and OPFData JSON are input
+//! only. Direct GO Challenge 3 parsing here is the deliberate network only
+//! projection; the `powerio` facade returns its typed calculation instance or
+//! solution. PowerWorld `.pwd` displays
+//! use the display API. Case input and
 //! output formats meet here, so adding a format that supports emission is one module plus
 //! one hub registration.
 //! [`parse`] compiles a retained source into a typed module, detecting the
-//! format from the source name and content; [`parse_display_file`] parses
+//! format from the source name and content; [`parse_display`] parses
 //! display artifacts such as PowerWorld `.pwd`. [`emit`] emits a parsed
 //! module through a destination and echoes the retained source for a same
 //! format target.
@@ -43,6 +46,7 @@ use crate::network::{BalancedNetwork, Branch, BranchRatingSet, Bus, BusId, BusTy
 use crate::{Error, Result};
 use routing::{Detection, JsonClass, SourceFormat as DetectedFormat, TransmissionFormat};
 
+mod cgmes;
 mod decode;
 mod egret;
 #[doc(hidden)]
@@ -55,22 +59,36 @@ pub mod powerworld;
 mod pslf;
 mod psse;
 mod pypsa;
+mod rawx;
 pub mod routing;
 mod surge;
+mod xiidm;
 
-pub use egret::{egret_declares_time_series, parse_egret_time_series};
-pub use goc3::parse_goc3_json;
-pub use opfdata::{OpfDataSolution, parse_opfdata_json};
 pub use powerworld::{PwdDisplay, PwdSubstation};
-pub use pypsa::{PypsaAxis, PypsaCsvSequence, parse_pypsa_csv_time_series, pypsa_axis};
 
+#[doc(hidden)]
+pub use egret::{
+    egret_declares_time_series as __egret_declares_time_series,
+    parse_egret_time_series as __parse_egret_time_series,
+};
+#[doc(hidden)]
+pub use opfdata::{OpfDataSolution, parse_opfdata_json as __parse_opfdata_json};
+#[doc(hidden)]
+pub use pypsa::{
+    PypsaAxis, PypsaCsvSequence, parse_pypsa_csv_time_series as __parse_pypsa_csv_time_series,
+    pypsa_axis as __pypsa_axis,
+};
+
+pub use cgmes::CgmesVersion;
 pub(crate) use egret::write_egret_json;
 pub(crate) use pandapower::write_pandapower_json;
 pub(crate) use powermodels::write_powermodels_json;
 pub(crate) use powerworld::write_powerworld;
 pub(crate) use pslf::write_pslf;
 pub(crate) use psse::write_psse_rev;
+pub(crate) use rawx::write_rawx;
 pub(crate) use surge::write_surge_json;
+pub(crate) use xiidm::write_xiidm;
 
 /// A target case format. See [`emit`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +102,8 @@ pub enum TargetFormat {
     /// serializer emits (33, 34, or 35); 33 is the historical default. The parser
     /// takes the revision from the file header, so this only affects emission.
     Psse { rev: u32 },
+    /// PSS/E Extensible Power Flow Data File, revision 35 JSON.
+    PsseRawx,
     /// PowerWorld auxiliary `.aux`.
     PowerWorld,
     /// pandapower `pandapowerNet` JSON.
@@ -92,14 +112,19 @@ pub enum TargetFormat {
     Matpower,
     /// GE PSLF `.epc` (round-trip; byte-exact when the case kept its source).
     Pslf,
-    /// DOE GO Challenge 3 JSON input data. This is read only except for
-    /// same format source echo when the parsed module retains its source.
+    /// DOE GO Challenge 3 JSON problem data. This transmission crate reads the
+    /// problem network and can echo retained source; the `powerio` facade owns
+    /// typed problem and solution handling.
     Goc3Json,
     /// Surge native JSON network document.
     SurgeJson,
     /// One JSON document from a DeepMind OPFData release. Read only except for
     /// an exact emission back to the retained source format.
     DeepMindOpfDataJson,
+    /// PowSybl XIIDM XML, version 1.17.
+    Xiidm,
+    /// IEC CIM Common Grid Model Exchange Specification profile set.
+    Cgmes,
 }
 
 impl TargetFormat {
@@ -114,9 +139,12 @@ impl TargetFormat {
             | TargetFormat::SurgeJson
             | TargetFormat::DeepMindOpfDataJson => "json",
             TargetFormat::Psse { .. } => "raw",
+            TargetFormat::PsseRawx => "rawx",
             TargetFormat::PowerWorld => "aux",
             TargetFormat::Matpower => "m",
             TargetFormat::Pslf => "epc",
+            TargetFormat::Xiidm => "xiidm",
+            TargetFormat::Cgmes => "xml",
         }
     }
 
@@ -127,6 +155,7 @@ impl TargetFormat {
             TargetFormat::PowerModelsJson => "PowerModels JSON",
             TargetFormat::EgretJson => "egret JSON",
             TargetFormat::Psse { .. } => "PSS/E .raw",
+            TargetFormat::PsseRawx => "PSS/E RAWX 35",
             TargetFormat::PowerWorld => "PowerWorld .aux",
             TargetFormat::PandapowerJson => "pandapower JSON",
             TargetFormat::Matpower => "MATPOWER .m",
@@ -134,6 +163,8 @@ impl TargetFormat {
             TargetFormat::Goc3Json => "GO Challenge 3 JSON",
             TargetFormat::SurgeJson => "Surge JSON",
             TargetFormat::DeepMindOpfDataJson => "DeepMind OPFData JSON",
+            TargetFormat::Xiidm => "XIIDM 1.17 XML",
+            TargetFormat::Cgmes => "CGMES 3.0 profile set",
         }
     }
 
@@ -146,6 +177,7 @@ impl TargetFormat {
             TargetFormat::Psse { rev: 34 } => "psse34",
             TargetFormat::Psse { rev: 35 } => "psse35",
             TargetFormat::Psse { .. } => "psse",
+            TargetFormat::PsseRawx => "psse-rawx",
             TargetFormat::PowerWorld => "powerworld",
             TargetFormat::PandapowerJson => "pandapower-json",
             TargetFormat::Matpower => "matpower",
@@ -153,6 +185,8 @@ impl TargetFormat {
             TargetFormat::Goc3Json => "goc3-json",
             TargetFormat::SurgeJson => "surge-json",
             TargetFormat::DeepMindOpfDataJson => "opfdata-json",
+            TargetFormat::Xiidm => "xiidm",
+            TargetFormat::Cgmes => "cgmes",
         }
     }
 }
@@ -243,20 +277,24 @@ pub fn parse_display_format(name: &str) -> Option<DisplayFormat> {
 /// if unrecognized. Accepts `matpower`/`m`, `powermodels-json`/`powermodels`/`pm`,
 /// `egret-json`/`egret`, `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`,
 /// `powerworld`/`aux`, `pslf`/`epc`, `goc3-json`/`goc3`, and
-/// `surge-json`/`surge`, and `opfdata-json`/`opfdata`/`gridopt`.
+/// `surge-json`/`surge`, `opfdata-json`/`opfdata`/`gridopt`, `xiidm`, and
+/// `cgmes`.
 /// Case-insensitive. The one place the bindings (Python, C ABI) share, so a new
-/// text format means one new arm here, not three. PyPSA CSV folders, GridFM
-/// datasets, and PowerWorld `.pwb` are directory or read only inputs with no
-/// text target; they are routed by [`crate::format::routing`].
+/// format means one new arm here, not three. CGMES emits a profile directory;
+/// PyPSA CSV folders, GridFM datasets, and PowerWorld `.pwb` are routed by
+/// [`crate::format::routing`].
 ///
 /// [`SourceFormat`]'s reported token is [`SourceFormat::name`], which resolves
 /// here directly, so a module can emit to another module's source format
-/// token for every supported case format. The
-/// `powermodelsjson`/`egretjson`/`pandapowerjson` aliases keep the
-/// pre-0.9 camel-case spellings (`"PowerModelsJson"` lowercased) resolving for
-/// callers that stored them.
+/// token for every supported case format. Compact spellings such as
+/// `powermodelsjson` are accepted as format name aliases.
 #[must_use]
 pub fn parse_target_format(name: &str) -> Option<TargetFormat> {
+    // `iidm` and `rawx` are accepted input spellings. Output metadata and
+    // requests use the unambiguous grid exchange format names.
+    if name.eq_ignore_ascii_case("iidm") || name.eq_ignore_ascii_case("rawx") {
+        return None;
+    }
     Some(match routing::parse_transmission_format(name)? {
         TransmissionFormat::Matpower => TargetFormat::Matpower,
         TransmissionFormat::PowerModelsJson => TargetFormat::PowerModelsJson,
@@ -264,16 +302,30 @@ pub fn parse_target_format(name: &str) -> Option<TargetFormat> {
         TransmissionFormat::Psse => TargetFormat::Psse { rev: 33 },
         TransmissionFormat::Psse34 => TargetFormat::Psse { rev: 34 },
         TransmissionFormat::Psse35 => TargetFormat::Psse { rev: 35 },
+        TransmissionFormat::PsseRawx => TargetFormat::PsseRawx,
         TransmissionFormat::PowerWorld => TargetFormat::PowerWorld,
         TransmissionFormat::PandapowerJson => TargetFormat::PandapowerJson,
         TransmissionFormat::Pslf => TargetFormat::Pslf,
         TransmissionFormat::Goc3Json => TargetFormat::Goc3Json,
         TransmissionFormat::SurgeJson => TargetFormat::SurgeJson,
         TransmissionFormat::DeepMindOpfDataJson => TargetFormat::DeepMindOpfDataJson,
+        TransmissionFormat::Xiidm => TargetFormat::Xiidm,
+        TransmissionFormat::Cgmes => TargetFormat::Cgmes,
         TransmissionFormat::PypsaCsv | TransmissionFormat::Pwb | TransmissionFormat::Gridfm => {
             return None;
         }
     })
+}
+
+/// Parse a declared input format. `iidm` and `rawx` are accepted here only and
+/// normalized to the canonical `xiidm` and `psse-rawx` tokens on the resulting
+/// module.
+fn parse_source_target_format(name: &str) -> Option<TargetFormat> {
+    match routing::parse_transmission_format(name) {
+        Some(TransmissionFormat::Xiidm) => Some(TargetFormat::Xiidm),
+        Some(TransmissionFormat::PsseRawx) => Some(TargetFormat::PsseRawx),
+        _ => parse_target_format(name),
+    }
 }
 
 /// Output of a display parse. PowerWorld `.pwd` produces
@@ -302,34 +354,9 @@ impl DisplayData {
 fn display_file_guidance() -> Error {
     Error::UnknownFormat(
         "a PowerWorld .pwd is display data, not a BalancedNetwork case; \
-         use parse_display_file(path, None)"
+         use parse_display(Source::open(path)?, None)"
             .into(),
     )
-}
-
-/// Parse display data in the named display format `from`.
-///
-/// # Errors
-/// [`Error::UnknownFormat`] if `from` is not a display format; otherwise the
-/// parser's own [`Error`] on malformed input.
-pub fn parse_display(bytes: &[u8], from: &str) -> Result<DisplayData> {
-    let fmt = parse_display_format(from).ok_or_else(|| Error::UnknownFormat(from.to_string()))?;
-    match fmt {
-        DisplayFormat::PowerWorld => Ok(DisplayData::PowerWorld(powerworld::parse_pwd_display(
-            bytes,
-        )?)),
-        // The tolerant reader's own notes are available through
-        // `GeoLayer::parse_text` for callers that want them.
-        DisplayFormat::GeoJson => {
-            let text = std::str::from_utf8(bytes).map_err(|error| Error::FormatRead {
-                format: "geo layer",
-                message: format!("not valid UTF-8: {error}"),
-            })?;
-            Ok(DisplayData::Geo(
-                crate::geo::GeoLayer::parse_text(text, None)?.layer,
-            ))
-        }
-    }
 }
 
 /// Render a file extension for a user-facing message: `` extension `xyz` ``
@@ -341,20 +368,22 @@ fn describe_extension(extension: Option<&str>) -> String {
     }
 }
 
-/// Parse the display file at `path`, choosing the parser from `from` or, when
-/// `None`, from the extension. A `.pwd` extension selects PowerWorld display
-/// data.
+/// Parse display data from one [`powerio_core::Source`], choosing the parser
+/// from `from`, the source's declared format, or its name. A `.pwd` extension
+/// selects PowerWorld display data.
 ///
 /// # Errors
 /// [`Error::UnknownFormat`] if `from` is unrecognized or the extension cannot
 /// be mapped; [`Error::Io`] if the file cannot be read; the parser's own
 /// [`Error`] on malformed input.
-pub fn parse_display_file(
-    path: impl AsRef<std::path::Path>,
-    from: Option<&str>,
-) -> Result<DisplayData> {
-    let path = path.as_ref();
-    let fmt = match from {
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "display parsing takes ownership of Source like the main parse operation"
+)]
+pub fn parse_display(source: powerio_core::Source, from: Option<&str>) -> Result<DisplayData> {
+    let path = std::path::Path::new(source.name());
+    let declared = from.or_else(|| source.format().map(powerio_core::FormatId::as_str));
+    let fmt = match declared {
         Some(f) => parse_display_format(f).ok_or_else(|| Error::UnknownFormat(f.to_string()))?,
         None => match path
             .extension()
@@ -386,13 +415,16 @@ pub fn parse_display_file(
             }
         },
     };
-    let bytes = read_file_bytes(path)?;
+    let buffer = source
+        .primary_buffer()
+        .map_err(|error| Error::Io(std::io::Error::other(error)))?;
+    let bytes = buffer.content_bytes();
     match fmt {
-        DisplayFormat::PowerWorld => Ok(DisplayData::PowerWorld(powerworld::parse_pwd_display(
-            &bytes,
+        DisplayFormat::PowerWorld => Ok(DisplayData::PowerWorld(powerworld::__parse_pwd_display(
+            bytes,
         )?)),
         DisplayFormat::GeoJson => {
-            let text = std::str::from_utf8(&bytes).map_err(|error| Error::FormatRead {
+            let text = std::str::from_utf8(bytes).map_err(|error| Error::FormatRead {
                 format: "geo layer",
                 message: format!("not valid UTF-8: {error}"),
             })?;
@@ -402,20 +434,6 @@ pub fn parse_display_file(
             ))
         }
     }
-}
-
-/// An I/O failure naming the path it happened on. The bare OS message ("No
-/// such file or directory") reaches callers who cannot see which path the
-/// library resolved, so every read here names the file.
-pub(crate) fn named_io_error(path: &std::path::Path, e: &std::io::Error) -> Error {
-    Error::Io(std::io::Error::new(
-        e.kind(),
-        format!("cannot read {}: {e}", path.display()),
-    ))
-}
-
-fn read_file_bytes(path: &std::path::Path) -> Result<Vec<u8>> {
-    std::fs::read(path).map_err(|e| named_io_error(path, &e))
 }
 
 /// Whether a format name means a PyPSA CSV folder. PyPSA folders are directory
@@ -499,13 +517,55 @@ pub fn parse_with_json_class(
         Some(routing::classify_json_text(text))
     });
     let is_model_json = matches!(json_class, Some(routing::JsonClass::ModelJson));
+    let is_rawx = source
+        .format()
+        .and_then(|format| parse_target_format(format.as_str()))
+        == Some(TargetFormat::PsseRawx)
+        || std::path::Path::new(source.name())
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("rawx"))
+        || matches!(
+            json_class,
+            Some(routing::JsonClass::Case(routing::Detection::Known(
+                routing::SourceFormat::Transmission(TransmissionFormat::PsseRawx)
+            )))
+        );
+    let is_xiidm = source.format().is_some_and(|format| {
+        routing::parse_transmission_format(format.as_str()) == Some(TransmissionFormat::Xiidm)
+    }) || std::path::Path::new(source.name())
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("xiidm"))
+        || source
+            .primary_buffer()
+            .is_ok_and(|buffer| xiidm::looks_like_xiidm(buffer.content_bytes()));
+    let is_cgmes = source.format().is_some_and(|format| {
+        routing::parse_transmission_format(format.as_str()) == Some(TransmissionFormat::Cgmes)
+    }) || cgmes::looks_like_profile_set(&source);
     let mut warnings = Diagnostics::new();
     match parse_to_network(&source, &mut warnings, json_class) {
-        Ok(network) => {
+        Ok(mut network) => {
+            network.assign_missing_component_ids();
             // Record the detected format on the retained source before the
             // common constructor builds descriptors and the coarse root
-            // source map. Keep an explicit caller declaration unchanged.
-            let source = if source.format().is_some() {
+            // source map. RAWX aliases normalize to the one public token.
+            let source = if is_rawx {
+                source.with_format(
+                    powerio_core::FormatId::new("psse-rawx")
+                        .expect("the canonical RAWX token is valid"),
+                )
+            } else if is_xiidm {
+                source.with_format(
+                    powerio_core::FormatId::new("xiidm")
+                        .expect("the canonical XIIDM token is valid"),
+                )
+            } else if is_cgmes {
+                source.with_format(
+                    powerio_core::FormatId::new("cgmes")
+                        .expect("the canonical CGMES token is valid"),
+                )
+            } else if source.format().is_some() {
                 source
             } else {
                 let format = if is_model_json {
@@ -565,6 +625,12 @@ fn parse_to_network(
         {
             return pypsa::read_pypsa_csv_source(source, warnings);
         }
+        if from.is_some_and(|format| {
+            routing::parse_transmission_format(format) == Some(TransmissionFormat::Cgmes)
+        }) || (from.is_none() && cgmes::looks_like_profile_set(source))
+        {
+            return cgmes::parse_source(source, warnings);
+        }
         // Any other directory has no reader; refuse it as a directory before
         // the extension logic reads ".07" off a name like `pglib-opf-23.07`.
         return Err(Error::UnknownFormat(format!(
@@ -579,6 +645,12 @@ fn parse_to_network(
                 .into(),
         ));
     }
+    if from.is_some_and(|format| {
+        routing::parse_transmission_format(format) == Some(TransmissionFormat::Cgmes)
+    }) || (from.is_none() && cgmes::looks_like_profile_set(source))
+    {
+        return cgmes::parse_source(source, warnings);
+    }
     if from.is_some_and(|format| format == "model-json") {
         let buffer = primary(source)?;
         return BalancedNetwork::from_json(source_text(&buffer)?);
@@ -589,6 +661,9 @@ fn parse_to_network(
         .extension()
         .and_then(|e| e.to_str())
         .map(str::to_ascii_lowercase);
+    let looks_like_xiidm = source
+        .primary_buffer()
+        .is_ok_and(|buffer| xiidm::looks_like_xiidm(buffer.content_bytes()));
     if from.is_some_and(|f| f.eq_ignore_ascii_case("pwb"))
         || (from.is_none() && ext.as_deref() == Some("pwb"))
     {
@@ -604,7 +679,7 @@ fn parse_to_network(
         return Ok(network);
     }
     if from
-        .and_then(parse_target_format)
+        .and_then(parse_source_target_format)
         .is_some_and(|format| format == TargetFormat::DeepMindOpfDataJson)
         && matches!(ext.as_deref(), Some("pt" | "gz"))
     {
@@ -626,14 +701,18 @@ fn parse_to_network(
             if parse_display_format(f).is_some() {
                 return Err(display_file_guidance());
             }
-            Some(parse_target_format(f).ok_or_else(|| unknown_source_format(f))?)
+            Some(parse_source_target_format(f).ok_or_else(|| unknown_source_format(f))?)
         }
         None => {
             // Everything but `.json` (sniffed below) resolves without the text.
             match ext.as_deref() {
                 Some("m") => Some(TargetFormat::Matpower),
                 Some("raw") => Some(TargetFormat::Psse { rev: 33 }),
+                Some("rawx") => Some(TargetFormat::PsseRawx),
                 Some("aux") => Some(TargetFormat::PowerWorld),
+                Some("xiidm") => Some(TargetFormat::Xiidm),
+                Some("xml") if looks_like_xiidm => Some(TargetFormat::Xiidm),
+                Some("xml" | "zip") => Some(TargetFormat::Cgmes),
                 Some("json") => None,
                 Some("dss") => return Err(unknown_source_format("dss")),
                 other => {
@@ -662,6 +741,11 @@ fn parse_to_network(
     // buffer; the module keeps the exact original bytes for same format
     // writing. Sniffing a `.json` borrows the same slice.
     let buffer = primary(source)?;
+    if fmt_hint == Some(TargetFormat::Xiidm) {
+        let network = xiidm::parse_xiidm_bytes(buffer.content_bytes(), warnings)?;
+        reject_empty_case(&network, TargetFormat::Xiidm.label())?;
+        return Ok(network);
+    }
     let text = source_text(&buffer)?;
     let fmt = match fmt_hint {
         Some(fmt) => fmt,
@@ -714,6 +798,7 @@ fn read_source(
             powermodels::parse_powermodels_json_source(text, name_hint, warnings)
         }
         TargetFormat::Psse { .. } => psse::parse_psse_source(text, name_hint, warnings),
+        TargetFormat::PsseRawx => rawx::parse_rawx_source(text, name_hint, warnings),
         TargetFormat::PowerWorld => {
             powerworld::map::parse_powerworld_source(text, name_hint, warnings)
         }
@@ -728,11 +813,15 @@ fn read_source(
         // document; the calculation instance this source declares arrives
         // with the instance types.
         TargetFormat::Goc3Json => {
-            goc3::parse_goc3_source(text, name_hint, warnings).map(|(net, _goc3)| net)
+            goc3::parse_goc3_source(text, name_hint, warnings, true).map(|(net, _goc3)| net)
         }
         TargetFormat::SurgeJson => surge::parse_surge_source(text, name_hint, warnings),
         TargetFormat::DeepMindOpfDataJson => {
             opfdata::parse_opfdata_source(text, name_hint, warnings)
+        }
+        TargetFormat::Xiidm => xiidm::parse_xiidm_source(text, warnings),
+        TargetFormat::Cgmes => {
+            cgmes::parse_text(name_hint.unwrap_or("profile.xml"), text, warnings)
         }
     }?;
     reject_empty_case(&net, fmt.label())?;
@@ -781,16 +870,25 @@ pub(crate) fn id_from_f64(
     }
 }
 
-/// A case with no buses is content-free for every consumer. Most readers
-/// already reject it on a missing required table, but a JSON carrying only
-/// `baseMVA` would otherwise parse to a hollow network; reject it in the
-/// [`read_source`] funnel so every parse path (file and in-memory) is guarded,
-/// and in the PyPSA folder reader, which bypasses the funnel.
+/// Reject a case with neither an AC calculation view nor physical DC equipment.
+/// XIIDM 1.17 permits a network containing only DC nodes and equipment, while
+/// the other balanced formats still need at least one bus.
 pub(crate) fn reject_empty_case(net: &BalancedNetwork, format: &'static str) -> Result<()> {
-    if net.buses().is_empty() {
+    let detailed = net.detailed_connectivity();
+    let has_dc_equipment = detailed.as_ref().is_some_and(|detailed| {
+        !detailed.dc_nodes.is_empty()
+            || !detailed.dc_grounds.is_empty()
+            || !detailed.dc_lines.is_empty()
+            || !detailed.dc_switches.is_empty()
+    });
+    let has_empty_xiidm_voltage_level = net.source_format() == SourceFormat::Xiidm
+        && detailed
+            .as_ref()
+            .is_some_and(|detailed| !detailed.voltage_levels.is_empty());
+    if net.buses().is_empty() && !has_dc_equipment && !has_empty_xiidm_voltage_level {
         return Err(Error::FormatRead {
             format,
-            message: "case has no buses".into(),
+            message: "case has no buses or DC equipment".into(),
         });
     }
     Ok(())
@@ -802,43 +900,25 @@ pub(crate) fn reject_empty_case(net: &BalancedNetwork, format: &'static str) -> 
 /// cannot drift from the matcher. `pypsa-csv` names a directory source and
 /// `pwb` a binary one; every other name reads file and memory sources alike.
 pub const SOURCE_FORMAT_NAMES: &str = "matpower/m, powermodels-json/powermodels/pm, \
-     egret-json/egret, psse/raw, psse34, psse35, powerworld/aux, \
+     egret-json/egret, psse/raw, psse34, psse35, psse-rawx/rawx, powerworld/aux, \
      pandapower-json/pandapower/pp, pslf/epc, pypsa-csv/pypsa, pwb, goc3-json/goc3, \
-     surge-json/surge, opfdata-json/opfdata/gridopt";
+     surge-json/surge, opfdata-json/opfdata/gridopt, xiidm/iidm, cgmes";
 
 /// An unrecognized source format token. When the token names a distribution
 /// format (`dss`, `pmd`, `bmopf`), the error points at the distribution
 /// surface instead of echoing the token: this parser reads only balanced
 /// transmission formats. Otherwise the refusal enumerates the accepted names.
 fn unknown_source_format(name: &str) -> Error {
-    if name.eq_ignore_ascii_case("powerio-json") {
-        return Error::UnknownFormat(
-            "the `powerio-json` token was retired in 0.9.0: model JSON is not a case \
-             format or a conversion target; write it with `to_json` \
-             (`pio_balanced_network_to_json` in C, `json_format model-json` on the MCP \
-             server), store the case as `.pio.json`, and classify a JSON document with \
-             `classify_json_text` (family `model-json`)"
-                .into(),
-        );
-    }
     if let Some(dist) = routing::parse_distribution_format(name) {
         return Error::UnknownFormat(format!(
             "`{}` is a distribution format, and this parser reads only balanced \
              transmission formats; parse it through the one module family \
-             (powerio::parse in Rust, pio_parse_file in C, powerio.parse in Python, \
-             parse_file in Julia), which routes distribution formats",
+             (`powerio::parse` in Rust and `parse` in the language bindings), \
+             which routes distribution formats",
             dist.name()
         ));
     }
     Error::UnknownFormat(format!("{name}; accepted names: {SOURCE_FORMAT_NAMES}"))
-}
-
-/// The JSON formats share the `.json` extension, so an explicit source format
-/// isn't always given. Classification lives here so the CLI and bindings use
-/// the same top level markers as the Rust parsers.
-#[cfg(test)]
-fn sniff_json(text: &str) -> Result<TargetFormat> {
-    json_target_from_class(routing::classify_json_text(text))
 }
 
 /// The case format a JSON classification selects; the shapes that are not
@@ -847,15 +927,13 @@ fn sniff_json(text: &str) -> Result<TargetFormat> {
 fn json_target_from_class(class: JsonClass) -> Result<TargetFormat> {
     match class {
         JsonClass::Module => Err(Error::UnknownFormat(
-            "JSON is a .pio.json stored module; read it with the module surface \
-             (powerio::parse in Rust, pio_parse_text in C, powerio.parse_text in \
-             Python, parse_text in Julia)"
+            "JSON is PowerIO IR; decode it with `deserialize` rather than the \
+             grid exchange format parser"
                 .into(),
         )),
         JsonClass::ModelJson => Err(Error::UnknownFormat(
             "JSON is bare powerio model JSON, which is not a case format; read it with \
-             BalancedNetwork::from_json (pio_balanced_network_from_json in C, \
-             powerio.from_json in Python, from_json in Julia)"
+             `BalancedNetwork::from_json` in Rust or serialize a complete PowerIO module"
                 .into(),
         )),
         JsonClass::Case(Detection::Known(DetectedFormat::Transmission(format))) => {
@@ -884,6 +962,7 @@ fn transmission_json_target(format: TransmissionFormat) -> Result<TargetFormat> 
         TransmissionFormat::Goc3Json => Ok(TargetFormat::Goc3Json),
         TransmissionFormat::SurgeJson => Ok(TargetFormat::SurgeJson),
         TransmissionFormat::DeepMindOpfDataJson => Ok(TargetFormat::DeepMindOpfDataJson),
+        TransmissionFormat::PsseRawx => Ok(TargetFormat::PsseRawx),
         other => Err(Error::UnknownFormat(format!(
             "JSON classifier returned non-JSON transmission format `{}`",
             other.name()
@@ -896,6 +975,7 @@ fn transmission_json_target(format: TransmissionFormat) -> Result<TargetFormat> 
 pub(crate) struct TextEmission {
     pub(crate) text: String,
     pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) fidelity: powerio_core::Fidelity,
 }
 
 impl TextEmission {
@@ -903,12 +983,15 @@ impl TextEmission {
         Self {
             text,
             diagnostics: diagnostics.into_records(),
+            fidelity: powerio_core::Fidelity::Canonical,
         }
     }
 
     /// An emission that dropped nothing, e.g. a same format echo.
     pub(crate) fn faithful(text: String) -> Self {
-        Self::new(text, Diagnostics::new())
+        let mut emission = Self::new(text, Diagnostics::new());
+        emission.fidelity = powerio_core::Fidelity::ExactSameFormat;
+        emission
     }
 
     #[cfg(test)]
@@ -960,7 +1043,7 @@ fn emit_text(
     if let Some(text) = echo_text(module, format) {
         return Ok(TextEmission::faithful(text));
     }
-    let mut conv = emit_value_text(module.value(), format).map_err(core_error)?;
+    let mut conv = emit_value_text(&module.value, format).map_err(core_error)?;
     warn_psse_downgrade(module, format, &mut conv);
     Ok(conv)
 }
@@ -1001,6 +1084,7 @@ pub(crate) fn emit_value_text(net: &BalancedNetwork, format: TargetFormat) -> Re
         TargetFormat::PowerModelsJson => write_powermodels_json(net),
         TargetFormat::EgretJson => write_egret_json(net),
         TargetFormat::Psse { rev } => write_psse_rev(net, rev),
+        TargetFormat::PsseRawx => write_rawx(net),
         TargetFormat::PowerWorld => write_powerworld(net),
         TargetFormat::PandapowerJson => write_pandapower_json(net),
         // From another source (or no retained source): canonical MATPOWER from
@@ -1018,6 +1102,10 @@ pub(crate) fn emit_value_text(net: &BalancedNetwork, format: TargetFormat) -> Re
             return Err(Error::WriteUnsupported {
                 format: "opfdata-json",
             });
+        }
+        TargetFormat::Xiidm => write_xiidm(net)?,
+        TargetFormat::Cgmes => {
+            return Err(Error::WriteUnsupported { format: "cgmes" });
         }
     };
     warn_normalized_tap(net, format, &mut conv);
@@ -1061,12 +1149,91 @@ pub fn emit_with_options(
     options: &EmitOptions,
     destination: powerio_core::Destination,
 ) -> std::result::Result<powerio_core::EmitResult, powerio_core::Error> {
+    if format == TargetFormat::Cgmes
+        && options.is_default()
+        && let Some(source) = module.source()
+        && source
+            .format()
+            .is_some_and(|value| value.as_str() == "cgmes")
+    {
+        if source.is_directory() {
+            let mut artifacts = Vec::new();
+            for name in source.entry_names()? {
+                let buffer = source.buffer(&name)?;
+                artifacts.push(powerio_core::MemoryArtifact::new(
+                    name,
+                    buffer.bytes().to_vec(),
+                ));
+            }
+            return destination.__commit_artifacts(
+                true,
+                powerio_core::Fidelity::ExactSameFormat,
+                artifacts,
+                Vec::new(),
+            );
+        }
+        if source.acquired_buffers().len() == 1 {
+            let buffer = source.primary_buffer()?;
+            let file_name = std::path::Path::new(buffer.name())
+                .file_name()
+                .and_then(|name| name.to_str())
+                .and_then(|name| powerio_core::ArtifactPath::new(name).ok())
+                .unwrap_or_else(|| {
+                    powerio_core::ArtifactPath::new("case.zip")
+                        .expect("static name is a valid artifact path")
+                });
+            let artifact = powerio_core::MemoryArtifact::new(file_name, buffer.bytes().to_vec());
+            return destination.__commit_artifacts(
+                false,
+                powerio_core::Fidelity::ExactSameFormat,
+                vec![artifact],
+                Vec::new(),
+            );
+        }
+    }
+    if format == TargetFormat::Xiidm
+        && options.is_default()
+        && let Some(source) = module.source()
+        && source
+            .format()
+            .and_then(|value| parse_target_format(value.as_str()))
+            == Some(TargetFormat::Xiidm)
+        && source.acquired_buffers().len() == 1
+    {
+        let buffer = source.primary_buffer()?;
+        let artifact = powerio_core::MemoryArtifact::new(
+            powerio_core::ArtifactPath::new("case.xiidm")
+                .expect("static name is a valid artifact path"),
+            buffer.bytes().to_vec(),
+        );
+        return destination.__commit_artifacts(
+            false,
+            powerio_core::Fidelity::ExactSameFormat,
+            vec![artifact],
+            Vec::new(),
+        );
+    }
+    if format == TargetFormat::Cgmes {
+        let (working, mut diagnostics) = if options.is_default() {
+            (module.value.clone(), Vec::new())
+        } else {
+            apply_emit_cost_policy(&module.value, options).map_err(core_error)?
+        };
+        let (artifacts, format_diagnostics) = cgmes::artifacts(&working).map_err(core_error)?;
+        diagnostics.extend(format_diagnostics.into_records());
+        return destination.__commit_artifacts(
+            true,
+            powerio_core::Fidelity::Canonical,
+            artifacts,
+            diagnostics,
+        );
+    }
     let conv = emit_text_with_options(module, format, options)?;
     let artifact = powerio_core::MemoryArtifact::new(
         powerio_core::ArtifactPath::new("case").expect("static name is a valid artifact path"),
         conv.text.into_bytes(),
     );
-    destination.__commit_artifacts(false, vec![artifact], conv.diagnostics)
+    destination.__commit_artifacts(false, conv.fidelity, vec![artifact], conv.diagnostics)
 }
 
 /// Emit a parsed module as a PyPSA CSV folder through a destination. Either
@@ -1099,11 +1266,11 @@ pub fn __emit_pypsa_csv_with_options(
         (None, Vec::new())
     } else {
         let (network, diagnostics) =
-            apply_emit_cost_policy(module.value(), options).map_err(core_error)?;
+            apply_emit_cost_policy(&module.value, options).map_err(core_error)?;
         (Some(network), diagnostics)
     };
     let (artifacts, format_diagnostics) =
-        pypsa::pypsa_csv_artifacts(working.as_ref().unwrap_or_else(|| module.value()));
+        pypsa::pypsa_csv_artifacts(working.as_ref().unwrap_or(&module.value));
     diagnostics.extend(format_diagnostics);
     let artifacts = artifacts
         .into_iter()
@@ -1114,7 +1281,12 @@ pub fn __emit_pypsa_csv_with_options(
             )
         })
         .collect();
-    destination.__commit_artifacts(true, artifacts, diagnostics)
+    destination.__commit_artifacts(
+        true,
+        powerio_core::Fidelity::Canonical,
+        artifacts,
+        diagnostics,
+    )
 }
 
 /// Prepare a parsed module with emission policies. The plain
@@ -1130,7 +1302,7 @@ fn emit_text_with_options(
         return emit_text(module, format);
     }
     let (working, policy_warnings) =
-        apply_emit_cost_policy(module.value(), options).map_err(core_error)?;
+        apply_emit_cost_policy(&module.value, options).map_err(core_error)?;
     let mut conv = emit_value_text(&working, format).map_err(core_error)?;
     conv.prepend(policy_warnings);
     Ok(conv)
@@ -1221,11 +1393,9 @@ fn warn_psse_downgrade(
         .source()
         .and_then(|source| source.primary_buffer().ok())
         .and_then(|buffer| String::from_utf8(buffer.content_bytes().to_vec()).ok());
-    if let (TargetFormat::Psse { rev }, SourceFormat::Psse, Some(src)) = (
-        format,
-        module.value().source_format(),
-        source_text.as_deref(),
-    ) {
+    if let (TargetFormat::Psse { rev }, SourceFormat::Psse, Some(src)) =
+        (format, module.value.source_format(), source_text.as_deref())
+    {
         let src_rev = psse::header_rev(src);
         if src_rev > rev {
             conv.push(
@@ -1246,7 +1416,7 @@ fn warn_psse_downgrade(
 fn warn_dropped_frequency(net: &BalancedNetwork, format: TargetFormat, conv: &mut TextEmission) {
     let carries_frequency = matches!(
         format,
-        TargetFormat::Psse { .. } | TargetFormat::PandapowerJson
+        TargetFormat::Psse { .. } | TargetFormat::PsseRawx | TargetFormat::PandapowerJson
     );
     if carries_frequency {
         return;
@@ -1430,6 +1600,7 @@ fn warn_missing_reference(net: &BalancedNetwork, format: TargetFormat, conv: &mu
         format,
         TargetFormat::Matpower
             | TargetFormat::Psse { .. }
+            | TargetFormat::PsseRawx
             | TargetFormat::PowerModelsJson
             | TargetFormat::PandapowerJson
             | TargetFormat::Pslf
@@ -1629,8 +1800,7 @@ fn collect_null_keys(value: &Value, out: &mut BTreeSet<String>) {
     }
 }
 
-/// Test-only compatibility parse shapes; production code goes through
-/// [`parse`] and the module type.
+/// Test harness for parser and emitter fixtures.
 #[cfg(test)]
 pub(crate) mod test_parse {
     use super::*;
@@ -1665,7 +1835,7 @@ pub(crate) mod test_parse {
     ) -> std::result::Result<TestParsed, powerio_core::Error> {
         let source = declared(powerio_core::Source::open(path.as_ref())?, from)?;
         parse(source).map(|module| TestParsed {
-            diagnostics: module.diagnostics().to_vec(),
+            diagnostics: module.diagnostics.clone(),
             network: module.into_value(),
         })
     }
@@ -1675,11 +1845,11 @@ pub(crate) mod test_parse {
         from: &str,
     ) -> std::result::Result<TestParsed, powerio_core::Error> {
         let source = declared(
-            powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())?,
+            powerio_core::Source::from_memory("<memory>", text.as_bytes().to_vec())?,
             Some(from),
         )?;
         parse(source).map(|module| TestParsed {
-            diagnostics: module.diagnostics().to_vec(),
+            diagnostics: module.diagnostics.clone(),
             network: module.into_value(),
         })
     }
@@ -1883,14 +2053,10 @@ mpc.branch = [
                     mpc.bus = [1 3 0 0 0 0 1 1.0 0 345 1 1.1 0.9;];\n\
                     mpc.gen = [];\n\
                     mpc.branch = [];\n";
-        let source = powerio_core::Source::from_bytes("case.m", case.as_bytes().to_vec()).unwrap();
+        let source = powerio_core::Source::from_memory("case.m", case.as_bytes().to_vec()).unwrap();
         let module = parse(source.with_format(parse_format_id("matpower").unwrap())).unwrap();
-        assert_eq!(module.value().buses().len(), 1);
-        assert!(
-            module.diagnostics().is_empty(),
-            "{:?}",
-            module.diagnostics()
-        );
+        assert_eq!(module.value.buses().len(), 1);
+        assert!(module.diagnostics.is_empty(), "{:?}", module.diagnostics);
         let echo = emit_text(&module, TargetFormat::Matpower).unwrap();
         assert_eq!(echo.text, case, "the echo reproduces the mark exactly");
     }
@@ -1904,7 +2070,7 @@ mpc.branch = [
                     mpc.bus = [1 3 0 0 0 0 1 1.0 0 345 1 1.1 0.9;];\n\
                     mpc.gen = [];\n\
                     mpc.branch = [];\n";
-        let source = powerio_core::Source::from_bytes("case.m", case.as_bytes().to_vec()).unwrap();
+        let source = powerio_core::Source::from_memory("case.m", case.as_bytes().to_vec()).unwrap();
         let module =
             parse(source.with_format(powerio_core::FormatId::new("matpower").unwrap())).unwrap();
         assert_eq!(
@@ -1920,18 +2086,10 @@ mpc.branch = [
     }
 
     #[test]
-    fn package_json_error_names_the_package_reader() {
-        let err = sniff_json(r#"{"model_kind":"balanced","model":{}}"#).unwrap_err();
-        assert!(err.to_string().contains(".pio.json"), "got: {err}");
-    }
-
-    #[test]
     fn source_format_strings_round_trip_to_a_target() {
         // The bindings expose `source_format` as its `name()` token, and
         // `emit` routes that string back through `parse_target_format`.
-        // Every writable source format must resolve; the legacy `{:?}` spelling
-        // (the pre-0.9 property value, issue #75) must keep resolving for
-        // callers that stored it.
+        // Every writable source format must resolve.
         for (sf, want) in [
             (SourceFormat::Matpower, TargetFormat::Matpower),
             (SourceFormat::PowerModelsJson, TargetFormat::PowerModelsJson),
@@ -1952,12 +2110,6 @@ mpc.branch = [
                 parse_target_format(token),
                 Some(want),
                 "source_format {token:?} did not round-trip"
-            );
-            let legacy = format!("{sf:?}");
-            assert_eq!(
-                parse_target_format(&legacy),
-                Some(want),
-                "legacy spelling {legacy:?} did not round-trip"
             );
         }
         // The derived/in-memory source formats have no writer target, and

@@ -40,10 +40,6 @@ pub mod codes {
             "nodal totals were folded into synthetic per bus elements";
         READ_GRIDFM_ELEMENT_RELABELED = "READ.GRIDFM.ELEMENT_RELABELED", Warning,
             "a unity ratio transformer is indistinguishable from a line and reads as one";
-        /// Retired in 0.9.0: every gridfm read finding now carries its own
-        /// code, so the package no longer wraps them under one catch-all.
-        READ_GRIDFM_FIDELITY_WARNING = "READ.GRIDFM.FIDELITY_WARNING", Warning,
-            "a gridfm read finding with no identity of its own", retired = "0.9.0";
     }
 }
 /// One rebuilt scenario of a gridfm dataset.

@@ -23,7 +23,7 @@ implementations and the matching powerio code:
 | Generator cost | \\(c_2 p^2 + c_1 p\\) maps to \\(q = 2c_2\\), \\(c = c_1\\); coefficients high order first | MATPOWER `idx_cost`, egret `matpower_parser` | `GenCost::quadratic` |
 | `source_id` | `["bus", id]` for bus-tied elements | PowerModels `matpower.jl` | `powermodels-json` |
 | PSLF shunts | EPC `pu_mw`/`pu_mvar` are per unit on `sbase`; `Shunt` stores MW/MVAr at \\(V = 1\\) | paired EPC/RAW case checks | `pslf` |
-| DOE GO Challenge 3 | parses to `AcScucInstance`: the complete scheduling horizon (time points, commitment, reserves, contingencies) beside the balanced network it shares | Rust GOC3 instance tests | `powerio_prob::parse_goc3_instance` |
+| DOE GO Challenge 3 | an input/problem data file parses to `AcScucInstance`; one `Source` containing that file and its matching output/solution data file parses to `AcScucSolution`; `instance.network()` returns the shared `BalancedNetwork` | pinned GO-3 data model, C3DataUtilities, and GOC3Benchmark.jl D1/D2/D3 files | `powerio::parse`, `powerio::emit` |
 | Surge angles | Surge JSON carries voltage angles, phase shifts, and angle limits in radians; `BalancedNetwork` stores degrees | Rust Surge round trip tests | `surge-json` |
 | DeepMind OPFData JSON | DeepMind OPFData carries p.u. powers and radian angles; `BalancedNetwork` stores the solved snapshot in MW/MVAr and degrees, with zero based links mapped to one based bus IDs | Paper Appendix A, the PyG loader, the smallest complete official fixture, and size independent FullTop and N-1 property tests | `opfdata-json` |
 
@@ -42,9 +42,9 @@ and the PMread leg covers the PowerModels JSON read side. pandapower JSON and
 PyPSA CSV folders have dedicated import validators because pandapower has its
 own JSON schema and PyPSA is a directory format; both validate the write
 direction only — the pandapower JSON and PyPSA readers have no external oracle.
-They, DOE GO Challenge 3 JSON, Surge JSON, and the remaining source/target pairs
-(PowerModels JSON and PowerWorld sources into the non-PowerModels targets) rest
-on the Rust round trip suite.
+DOE GO Challenge 3 has a separate pinned reference job described below. Surge
+JSON and the remaining source/target pairs (PowerModels JSON and PowerWorld
+sources into the non-PowerModels targets) rest on the Rust round trip suite.
 
 - **PowerModels.jl** (`validate_powermodels.jl`, `validate_psse.jl`,
   `core_json.jl`). Reads MATPOWER, PowerModels JSON, and PSS/E. The MATPOWER to
@@ -111,7 +111,36 @@ on the parsed module. Balanced reader findings carry
 `READ.GRIDFM.FIDELITY_WARNING`, and distribution reads
 `READ.DIST.PARSE_WARNING`.
 
-- **PSS/E** reads revisions 33, 34, and 35. 3-winding transformers are kept as
+- **XIIDM** reads PowSybl XIIDM 1.12 through 1.17 and writes 1.17. It maps
+  substations, voltage levels, bus breaker and node breaker topology, busbar
+  sections, switches, lines, tie and boundary lines, loads, generators,
+  batteries, shunts, static VAR compensators, two- and three-winding
+  transformers, tap changers and controls, operational limits, reactive
+  limits, HVDC converters, aliases, properties, and PowSybl active power
+  control. Unknown extension subtrees remain available for byte exact same
+  format emission and produce a diagnostic; they do not become unnamed fields
+  on the network. Fresh emission preserves detailed connectivity when present
+  and allocates missing local node numbers without changing stable PowerIO
+  identities. XIIDM states no system MVA base, so the balanced calculation view
+  uses 100 MVA and reports that assumption.
+- **CGMES** reads 2.4.15 on CIM16 and 3.0 on CIM100. EQ and TP are required;
+  SSH, SV, and boundary profile data are used when present. A source can be an
+  XML profile directory, a directory containing profile ZIP files, or one ZIP
+  containing the profiles. The mapping covers hierarchy, AC and DC equipment,
+  detailed connectivity, operating limits, tap changers and controls, reactive
+  limits, and the operating and solution values in SSH and SV. Diagram,
+  geography, dynamics, and unrecognized CIM classes are counted in
+  diagnostics. Fresh output is a deterministic CGMES 3.0 EQ, TP, SSH, and SV
+  profile set. Imported UUID mRIDs survive; missing mRIDs use UUIDv5 derived
+  from the component type and stable identity. CGMES states physical units but
+  no system MVA base, so PowerIO uses and reports 100 MVA.
+- **PSS/E** reads RAW revisions 33, 34, and 35 and RAWX revision 35. RAW and
+  RAWX share one electrical mapping. RAWX also preserves revision 35
+  substations, nodes, switches, and terminal references. Unsupported RAWX
+  tables, including multi-terminal DC, FACTS, GNE, induction machine,
+  multi-section line, zone, owner, and interarea transfer records, remain only
+  in byte exact same format emission and produce counted diagnostics.
+  3-winding transformers are kept as
   typed records and star-lowered into \\(Y_{\mathrm{bus}}\\)/connectivity by the indexed view;
   two-terminal DC lines map to the neutral HVDC model. A switched shunt keeps its
   steady-state susceptance `BINIT` as the shunt `b` and carries its mode, voltage
@@ -169,13 +198,31 @@ on the parsed module. Balanced reader findings carry
   isolated buses, non-finite p limits, and slackless or normalized networks.
   Nonnumeric bus names read back as dense synthetic ids with the originals on
   `Bus.name`.
-- **DOE GO Challenge 3 JSON** parses to `AcScucInstance`: the complete
-  declared scheduling horizon (time points and durations, initial states,
-  time varying bounds, costs and reserves, energy windows, contingencies)
-  beside the balanced network it shares. Asking for only the network is an
-  explicit step that reports the calculation data it discards. The format is
-  parse only; writing back to the source format is the byte exact echo of an
-  unchanged module.
+- **DOE GO Challenge 3 JSON** is a grid exchange format “for Challenge 3 and
+  beyond,” not the name of one calculation type. PowerIO recognizes its
+  Challenge 3 input/problem data file and returns `AcScucInstance`. The
+  instance holds the declared time points and durations, initial commitment
+  and dispatch, time varying bounds, costs and reserves, energy windows,
+  contingencies, and one shared `BalancedNetwork`. Call `instance.network()`
+  to access that network. One directory or memory `Source` containing both the
+  input/problem data file and its matching output/solution data file returns
+  `AcScucSolution`; an output/solution data file alone is rejected because it
+  has neither component definitions nor the time axis. Problem data is parse
+  only. A complete `AcScucSolution` emits the official output/solution data
+  file, including bus voltage, shunt step, device commitment, dispatch and
+  reserves, AC line status, transformer tap, phase shift and status, and DC
+  line terminal power fields. The pinned GO-3 model validates PowerIO's small
+  problem and output documents and all D1/D2/D3 input/problem data files.
+  C3DataUtilities reports no data, ignored, or solution errors for those
+  documents. The older pinned GO-3 model and D1/D2/D3 files still carry
+  `network.bus.con_loss_factor`; version 1.1.1 of the data format removed that
+  field. PowerIO keeps the original source and reports one bounded diagnostic
+  instead of treating it as an electrical network or AC SCUC field. Optional
+  bus location labels and incomplete coordinate pairs remain in `Bus.extras`;
+  optional consumer descriptions, voltage setpoints, and nameplate capacities
+  remain in `Load.extras`. Each reports
+  `READ.GOC3.OPTIONAL_FIELD_UNTYPED`. A producer description has no generator
+  metadata field and reports `READ.GOC3.RETAINED_SOURCE_ONLY`.
 - **Surge JSON** reads and writes the versioned `surge-json` network document.
   The reader maps buses, loads, fixed shunts, branches, generators, storage, and
   HVDC links into `BalancedNetwork`, retains the original source for same format echo,

@@ -2,14 +2,13 @@
 //!
 //! Subcommands: `batch` (matrix families), `gen` (synthetic cases), `verify`,
 //! `dcopf` (DC OPF bundle), `sensitivities` (PTDF/LODF), `gridfm` (gridfm-datakit
-//! Parquet), `module` (`.pio.json`), and `convert`. With no subcommand it launches the TUI. Run
+//! Parquet), `serialize` (PowerIO IR), and `convert`. With no subcommand it launches the TUI. Run
 //! `powerio --help` for the full surface.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
-use powerio::IntoTypedModule;
 use powerio_matrix::io::gridfm::{GridfmOptions, emit_gridfm_batch, number_snapshots};
 use powerio_matrix::matrix::{BranchSusceptanceFormula, BuildOptions, Scheme, check_sddm};
 use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
@@ -21,7 +20,7 @@ use powerio_matrix::{SensitivityOptions, SensitivitySolver};
 use powerio_tx::{EmitOptions, MissingGenCostPolicy};
 use serde_json::json;
 mod cases;
-mod compat;
+mod module_io;
 mod tui;
 
 use cases::infer_input_family;
@@ -84,7 +83,7 @@ enum Command {
     },
     /// Print matrix stats and the SDDM check for one case.
     Verify {
-        /// Transmission case file (any readable format, or a stored `.pio.json`).
+        /// Transmission case file or serialized PowerIO IR (`.pio.json`).
         input: PathBuf,
         /// Override the inferred input format.
         #[arg(long, value_enum)]
@@ -97,7 +96,7 @@ enum Command {
     /// Emit the static DC OPF matrix/vector bundle for one case.
     #[command(name = "dcopf", visible_alias = "dc-opf")]
     DcOpf {
-        /// Transmission case file (any readable format, or a stored `.pio.json`).
+        /// Transmission case file or serialized PowerIO IR (`.pio.json`).
         input: PathBuf,
         /// Override the inferred input format.
         #[arg(long, value_enum)]
@@ -123,7 +122,7 @@ enum Command {
     },
     /// Emit DC sensitivity matrices (PTDF, LODF) for one case.
     Sensitivities {
-        /// Transmission case file (any readable format, or a stored `.pio.json`).
+        /// Transmission case file or serialized PowerIO IR (`.pio.json`).
         input: PathBuf,
         /// Override the inferred input format.
         #[arg(long, value_enum)]
@@ -152,8 +151,8 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         scenario: i64,
     },
-    /// Emit the stored `.pio.json` module for one input.
-    Module {
+    /// Serialize one input as PowerIO IR (`.pio.json`).
+    Serialize {
         /// Input case file, PyPSA CSV folder, or gridfm dataset directory.
         input: PathBuf,
         /// Output file; `-` or omitted writes to stdout.
@@ -162,10 +161,6 @@ enum Command {
         /// Override the inferred input format.
         #[arg(long, value_enum)]
         from: Option<FormatArg>,
-        /// Export one scenario of a scenario set input (a gridfm dataset)
-        /// as a static module; omitted, the module stores the whole set.
-        #[arg(long)]
-        scenario: Option<i64>,
     },
     /// Run the conversion invariants over a corpus of case files.
     ///
@@ -400,10 +395,11 @@ impl<'a> GenCostCliOptions<'a> {
     }
 }
 
-/// A case format, for `--to` / `--from`. `gridfm`, `goc3-json`, `opfdata-json`,
-/// and `pwb` are read-only here: `convert --from gridfm` reads a Parquet dataset,
-/// but writing a gridfm dataset is the dedicated `gridfm` subcommand, GO Challenge
-/// 3 and OPFData JSON are source documents, and PowerWorld `.pwb` has no writer.
+/// A grid exchange format for `--to` / `--from`. `gridfm`, `goc3-json`,
+/// `opfdata-json`, and `pwb` are parse only here: `convert --from gridfm`
+/// parses a Parquet dataset, while the dedicated `gridfm` subcommand emits a
+/// dataset. GO Challenge 3 and OPFData JSON are source documents, and
+/// PowerWorld `.pwb` has no emitter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum FormatArg {
     #[value(name = "matpower", alias = "m")]
@@ -414,28 +410,43 @@ enum FormatArg {
     EgretJson,
     #[value(name = "psse", alias = "raw")]
     Psse,
-    /// Write PSS/E `.raw` at revision 34.
+    /// Emit PSS/E `.raw` at revision 34.
     #[value(name = "psse34")]
     Psse34,
-    /// Write PSS/E `.raw` at revision 35.
+    /// Emit PSS/E `.raw` at revision 35.
     #[value(name = "psse35")]
     Psse35,
+    /// Emit PSS/E RAWX revision 35 JSON.
+    #[value(name = "psse-rawx")]
+    PsseRawx,
+    /// Accepted as an input spelling for `psse-rawx`.
+    #[value(name = "rawx")]
+    RawxInput,
+    /// PowSybl XIIDM 1.17 XML.
+    #[value(name = "xiidm")]
+    Xiidm,
+    /// Accepted as an input spelling for `xiidm`.
+    #[value(name = "iidm")]
+    IidmInput,
+    /// IEC CIM CGMES profile set.
+    #[value(name = "cgmes")]
+    Cgmes,
     #[value(name = "powerworld", alias = "aux")]
     PowerWorld,
     #[value(name = "pandapower-json", alias = "pandapower", alias = "pp")]
     PandapowerJson,
     #[value(name = "pypsa-csv", alias = "pypsa")]
     PypsaCsv,
-    /// GE PSLF .epc case (read and write).
+    /// GE PSLF `.epc` case (parse and emit).
     #[value(name = "pslf", alias = "epc")]
     Pslf,
-    /// DOE GO Challenge 3 JSON input data (read only).
+    /// DOE GO Challenge 3 JSON problem or solution data.
     #[value(name = "goc3-json", alias = "goc3", alias = "go3", alias = "c3")]
     Goc3Json,
     /// Surge native JSON network document.
     #[value(name = "surge-json", alias = "surge")]
     SurgeJson,
-    /// JSON document from a DeepMind OPFData release (read only).
+    /// JSON document from a DeepMind OPFData release (parse only).
     #[value(
         name = "opfdata-json",
         alias = "opfdata",
@@ -445,19 +456,19 @@ enum FormatArg {
         alias = "gridopt"
     )]
     DeepMindOpfDataJson,
-    /// Read a gridfm-datakit Parquet dataset directory (read only).
+    /// Parse a gridfm-datakit Parquet dataset directory (parse only).
     #[value(name = "gridfm")]
     Gridfm,
-    /// Read a PowerWorld .pwb binary case (read only).
+    /// Parse a PowerWorld `.pwb` binary case (parse only).
     #[value(name = "pwb")]
     Pwb,
-    /// OpenDSS `.dss` distribution case (read and write).
+    /// OpenDSS `.dss` distribution case (parse and emit).
     #[value(name = "dss", alias = "opendss")]
     Dss,
-    /// PowerModelsDistribution ENGINEERING JSON (read and write).
+    /// PowerModelsDistribution ENGINEERING JSON (parse and emit).
     #[value(name = "pmd-json", alias = "pmd", alias = "engineering")]
     PmdJson,
-    /// IEEE BMOPF JSON distribution case (read and write).
+    /// IEEE BMOPF JSON distribution case (parse and emit).
     #[value(name = "bmopf-json", alias = "bmopf")]
     BmopfJson,
 }
@@ -475,6 +486,11 @@ impl FormatArg {
             FormatArg::Psse => TargetFormat::Psse { rev: 33 },
             FormatArg::Psse34 => TargetFormat::Psse { rev: 34 },
             FormatArg::Psse35 => TargetFormat::Psse { rev: 35 },
+            FormatArg::PsseRawx => TargetFormat::PsseRawx,
+            FormatArg::RawxInput => TargetFormat::PsseRawx,
+            FormatArg::Xiidm => TargetFormat::Xiidm,
+            FormatArg::IidmInput => TargetFormat::Xiidm,
+            FormatArg::Cgmes => TargetFormat::Cgmes,
             FormatArg::PowerWorld => TargetFormat::PowerWorld,
             FormatArg::PandapowerJson => TargetFormat::PandapowerJson,
             FormatArg::Pslf => TargetFormat::Pslf,
@@ -510,6 +526,11 @@ impl FormatArg {
             | FormatArg::Psse
             | FormatArg::Psse34
             | FormatArg::Psse35
+            | FormatArg::PsseRawx
+            | FormatArg::RawxInput
+            | FormatArg::Xiidm
+            | FormatArg::IidmInput
+            | FormatArg::Cgmes
             | FormatArg::PowerWorld
             | FormatArg::PandapowerJson
             | FormatArg::PypsaCsv
@@ -522,7 +543,7 @@ impl FormatArg {
         }
     }
 
-    /// The canonical name the format dispatchers accept, for forcing a reader.
+    /// The canonical name the format dispatcher accepts for forcing a parser.
     fn name(self) -> &'static str {
         match self {
             FormatArg::Matpower => "matpower",
@@ -531,6 +552,11 @@ impl FormatArg {
             FormatArg::Psse => "psse",
             FormatArg::Psse34 => "psse34",
             FormatArg::Psse35 => "psse35",
+            FormatArg::PsseRawx => "psse-rawx",
+            FormatArg::RawxInput => "rawx",
+            FormatArg::Xiidm => "xiidm",
+            FormatArg::IidmInput => "iidm",
+            FormatArg::Cgmes => "cgmes",
             FormatArg::PowerWorld => "powerworld",
             FormatArg::PandapowerJson => "pandapower-json",
             FormatArg::PypsaCsv => "pypsa-csv",
@@ -544,6 +570,10 @@ impl FormatArg {
             FormatArg::PmdJson => "pmd-json",
             FormatArg::BmopfJson => "bmopf-json",
         }
+    }
+
+    fn is_input_spelling(self) -> bool {
+        matches!(self, Self::RawxInput | Self::IidmInput)
     }
 }
 
@@ -746,12 +776,11 @@ fn main() -> std::process::ExitCode {
             scenario,
         } => run_summary(&input, from, scenario),
         Command::Corpus { action } => run_corpus(action),
-        Command::Module {
+        Command::Serialize {
             input,
             output,
             from,
-            scenario,
-        } => run_module(&input, output.as_deref(), from, scenario),
+        } => run_serialize(&input, output.as_deref(), from),
         Command::Gridfm {
             inputs,
             output,
@@ -1274,101 +1303,125 @@ fn run_corpus(action: CorpusCommand) -> anyhow::Result<()> {
 }
 
 /// Parse one GridFM scenario through the universal module path. The dataset
-/// parser owns diagnostics and shared scenario data; exporting one scenario
-/// is the same explicit operation exposed by the language bindings.
+/// parser owns diagnostics and the scenario collection; the CLI reads the
+/// requested entry directly.
 fn parse_gridfm_scenario(
     input: &Path,
     scenario: i64,
 ) -> anyhow::Result<(powerio_matrix::BalancedNetwork, Vec<String>)> {
     let source = powerio_core::Source::open(input)
-        .with_context(|| format!("opening gridfm dataset {}", input.display()))?
-        .with_format(powerio_core::FormatId::new("gridfm").context("declaring gridfm format")?);
-    let module = powerio::parse(source)
+        .with_context(|| format!("opening gridfm dataset {}", input.display()))?;
+    let module = powerio::parse(source, Some("gridfm"))
         .with_context(|| format!("parsing gridfm dataset {}", input.display()))?;
     let scenario_id = scenario.to_string();
-    let selected = powerio::select::export_module_state(
-        &module,
-        powerio::select::StateSelector::Scenario(&scenario_id),
-    )
-    .with_context(|| format!("exporting gridfm scenario {scenario}"))?;
-    let diagnostics = powerio_core::render_diagnostics(selected.diagnostics());
-    let powerio::PioValue::BalancedNetwork(network) = selected.into_value() else {
-        anyhow::bail!("gridfm scenario export did not produce a balanced network");
+    let powerio::PioValue::ScenarioSet(scenarios) = &module.value else {
+        anyhow::bail!(
+            "gridfm produced {}; expected powerio.ScenarioSet<powerio.BalancedNetwork>",
+            module.value.type_name()
+        );
     };
-    Ok((network, diagnostics))
+    let value = scenarios
+        .get(&scenario_id)
+        .with_context(|| format!("gridfm scenario {scenario} does not exist"))?;
+    let powerio::PioValue::BalancedNetwork(network) = value else {
+        anyhow::bail!(
+            "gridfm scenario {scenario} contains {}; expected powerio.BalancedNetwork",
+            value.type_name()
+        );
+    };
+    let diagnostics = powerio_core::render_diagnostics(&module.diagnostics);
+    Ok((network.clone(), diagnostics))
 }
 
 fn run_summary(input: &Path, from: Option<FormatArg>, scenario: i64) -> anyhow::Result<()> {
-    let value = if from == Some(FormatArg::Gridfm)
-        || (from.is_none() && looks_like_gridfm_dir(input))
-    {
-        let (network, diagnostics) = parse_gridfm_scenario(input, scenario)?;
-        transmission_summary_json(&network, &diagnostics)
-    } else {
-        match parse_family_case(input, from)? {
-            FamilyCase::Distribution(net) => distribution_summary_json(&net.network, &net.warnings),
-            FamilyCase::Transmission(parsed) => {
-                transmission_summary_json(&parsed.network, &parsed.render_diagnostics())
+    let value =
+        if from == Some(FormatArg::Gridfm) || (from.is_none() && looks_like_gridfm_dir(input)) {
+            let (network, diagnostics) = parse_gridfm_scenario(input, scenario)?;
+            transmission_summary_json(&network, &diagnostics)
+        } else {
+            match parse_family_case(input, from)? {
+                FamilyCase::Distribution(module) => {
+                    let diagnostics = powerio_core::render_diagnostics(&module.diagnostics);
+                    distribution_summary_json(&module.value, &diagnostics)
+                }
+                FamilyCase::Transmission(module) => {
+                    let diagnostics = powerio_core::render_diagnostics(&module.diagnostics);
+                    transmission_summary_json(&module.value, &diagnostics)
+                }
             }
-        }
-    };
+        };
     println!("{}", serde_json::to_string_pretty(&value)?);
     Ok(())
 }
 
-fn run_module(
+fn run_serialize(
     input: &Path,
     output: Option<&Path>,
     from: Option<FormatArg>,
-    scenario: Option<i64>,
 ) -> anyhow::Result<()> {
-    let (text, parse_errors) = module_text(input, from, scenario)?;
+    let module = load_module(input, from)?;
+    let parse_errors = module_error_lines(&module);
     match output {
         Some(p) if p.as_os_str() != "-" => {
-            commit_output_file(p, text.clone().into_bytes())
-                .with_context(|| format!("writing {}", p.display()))?;
+            powerio::serialize(&module, powerio::Destination::path(p))
+                .with_context(|| format!("serializing PowerIO IR to {}", p.display()))?;
             eprintln!("wrote {}", p.display());
         }
-        _ => print!("{text}"),
+        _ => print!("{}", serialize_module_text(&module)?),
     }
-    // The module is written either way — it is the record of what the reader
+    // The module is serialized either way — it is the record of what the reader
     // saw — but a refused include is an `Error` finding in its own document,
     // so the exit code has to say so, as `convert` does.
     fail_on_parse_errors(&parse_errors)
 }
 
-/// The stored module JSON and the `Error`-or-worse findings it carries.
-fn module_text(
+fn load_module(
     input: &Path,
     from: Option<FormatArg>,
-    scenario: Option<i64>,
-) -> anyhow::Result<(String, Vec<String>)> {
-    let mut source = powerio_core::Source::open(input)
+) -> anyhow::Result<powerio_core::PioModule<powerio::PioValue>> {
+    let source = powerio_core::Source::open(input)
         .with_context(|| format!("opening {}", input.display()))?;
-    if let Some(format) = from {
-        source = source
-            .with_format(powerio_core::FormatId::new(format.name()).context("declared format")?);
-    }
-    let module = powerio::parse(source).with_context(|| format!("parsing {}", input.display()))?;
-    let module = match scenario {
-        None => module,
-        Some(id) => powerio::select::export_module_state(
-            &module,
-            powerio::select::StateSelector::Scenario(&id.to_string()),
-        )
-        .with_context(|| format!("exporting scenario {id}"))?,
+    powerio::parse(source, from.map(FormatArg::name))
+        .with_context(|| format!("parsing {}", input.display()))
+}
+
+fn serialize_module_text(
+    module: &powerio_core::PioModule<powerio::PioValue>,
+) -> anyhow::Result<String> {
+    let result = powerio::serialize(
+        module,
+        powerio::Destination::memory("module.pio.json")
+            .context("creating the PowerIO IR memory destination")?,
+    )
+    .context("serializing PowerIO IR")?;
+    let powerio::EmittedOutput::Memory { mut artifacts } = result.into_output() else {
+        anyhow::bail!("a PowerIO IR memory destination returned path output")
     };
+    let artifact = artifacts
+        .pop()
+        .filter(|_| artifacts.is_empty())
+        .context("PowerIO IR serialization did not return exactly one artifact")?;
+    String::from_utf8(artifact.into_bytes()).context("PowerIO IR is not valid UTF-8")
+}
+
+/// Serialized PowerIO IR and the `Error`-or-worse findings it carries.
+#[cfg(test)]
+fn serialize_input(input: &Path, from: Option<FormatArg>) -> anyhow::Result<(String, Vec<String>)> {
+    let module = load_module(input, from)?;
     let errors = module_error_lines(&module);
-    let text =
-        powerio::stored::emit_module(&module).context("serializing the stored .pio.json module")?;
-    powerio::stored::read_module(&text).context("validating .pio.json module readback")?;
+    let text = serialize_module_text(&module)?;
+    powerio::deserialize(
+        powerio::Source::from_memory("module.pio.json", text.as_bytes().to_vec())
+            .context("creating the PowerIO IR validation source")?,
+    )
+    .context("validating PowerIO IR deserialization")?;
     Ok((text, errors))
 }
 
 /// [`parse_error_lines`] for a compiled module's own findings.
 fn module_error_lines(module: &powerio_core::PioModule<powerio::PioValue>) -> Vec<String> {
     module
-        .diagnostics()
+        .diagnostics
         .iter()
         .filter(|d| d.severity() >= powerio_core::DiagnosticSeverity::Error)
         .map(|d| format!("{}: {}", d.code(), d.message()))
@@ -1466,6 +1519,17 @@ fn run_convert(
     scenario: i64,
     gen_cost_options: GenCostCliOptions<'_>,
 ) -> anyhow::Result<()> {
+    if to.is_input_spelling() {
+        anyhow::bail!(
+            "`{}` is accepted for input only; use `--to {}`",
+            to.name(),
+            if to == FormatArg::RawxInput {
+                "psse-rawx"
+            } else {
+                "xiidm"
+            }
+        );
+    }
     // gridfm has no convert writer; the dataset writer is the `gridfm`
     // subcommand.
     if matches!(to, FormatArg::Gridfm) {
@@ -1476,16 +1540,20 @@ fn run_convert(
             "`convert` cannot write PowerWorld .pwb binary cases; use `--to powerworld` for AUX text"
         );
     }
-    // goc3-json is read only, but the library still echoes a goc3 source to a
-    // goc3 target byte for byte; every other case gets its precise
-    // WriteUnsupported error, so no CLI-level bail here.
+    // GO Challenge 3 problem data has no canonical writer, but the library
+    // echoes an unchanged source byte for byte and emits complete solutions.
+    // Every unsupported value gets its precise error, so no CLI-level bail is
+    // needed here.
     // PyPSA CSV is a transmission format that writes a directory, not a text
     // target, so it takes the folder path and returns early.
     if to == FormatArg::PypsaCsv {
         return convert_to_pypsa_folder(input, output, from, scenario, gen_cost_options);
     }
-    if from.is_none() && cases::stored_json(input)?.is_some() {
-        return convert_stored(input, to, output, &gen_cost_options);
+    if to == FormatArg::Cgmes {
+        return convert_to_cgmes(input, output, from, scenario, gen_cost_options);
+    }
+    if from.is_none() && cases::powerio_ir_text(input)?.is_some() {
+        return convert_ir(input, to, output, &gen_cost_options);
     }
     // A `.json` with no --from is read and DOM-classified once here; the
     // family check below uses the verdict and the typed parse reuses the text.
@@ -1518,37 +1586,39 @@ fn run_convert(
     }
     let (text, sidecars, warnings, parse_errors) = if let Some(target) = to.transmission() {
         let options = gen_cost_options.emit_options()?;
-        // gridfm reads a Parquet dataset directory (the parquet-free
-        // `parse_file` can't), so it routes through powerio-matrix's reader,
-        // surfacing its fidelity notes.
+        // GridFM reads a Parquet dataset directory through the universal
+        // source path and surfaces its fidelity notes.
         let (emission, mut diagnostics) = if matches!(from, Some(FormatArg::Gridfm)) {
             let (network, diagnostics) = parse_gridfm_scenario(input, scenario)?;
             for w in &diagnostics {
                 eprintln!("{w}");
             }
-            let emission =
-                compat::emit_tx_module(&powerio_core::PioModule::new(network), target, &options)
-                    .with_context(|| format!("emitting {target}"))?;
+            let emission = module_io::emit_balanced_module(
+                &powerio_core::PioModule::new(network),
+                target,
+                &options,
+            )
+            .with_context(|| format!("emitting {target}"))?;
             (emission, Vec::new())
         } else if let Some(case) = &classified {
             // Keep the module so a same format target can echo its retained
             // source bytes exactly.
-            let module = compat::parse_text_module(
+            let module = module_io::load_balanced_memory_named(
                 &case.text,
                 case.format.name(),
                 input.file_stem().and_then(|s| s.to_str()),
             )
             .with_context(|| format!("parsing {}", input.display()))?;
-            let diagnostics = module.diagnostics().to_vec();
-            let emission = compat::emit_tx_module(&module, target, &options)
+            let diagnostics = module.diagnostics.clone();
+            let emission = module_io::emit_balanced_module(&module, target, &options)
                 .with_context(|| format!("emitting {target}"))?;
             (emission, diagnostics)
         } else {
             reject_nontransmission_from(from)?;
-            let module = compat::parse_module(input, from.map(FormatArg::name))
+            let module = module_io::load_balanced_module(input, from.map(FormatArg::name))
                 .with_context(|| format!("parsing {}", input.display()))?;
-            let diagnostics = module.diagnostics().to_vec();
-            let emission = compat::emit_tx_module(&module, target, &options)
+            let diagnostics = module.diagnostics.clone();
+            let emission = module_io::emit_balanced_module(&module, target, &options)
                 .with_context(|| format!("emitting {target}"))?;
             (emission, diagnostics)
         };
@@ -1565,14 +1635,13 @@ fn run_convert(
                 }
             }
         } else {
-            compat::dist_parse_file(input, from.map(FormatArg::name))
+            module_io::load_multiconductor_module(input, from.map(FormatArg::name))
                 .with_context(|| format!("reading {}", input.display()))?
         };
         let target = to
             .distribution()
             .expect("the family check routed a transmission target here");
-        let emission = net
-            .emit(target)
+        let emission = module_io::emit_multiconductor_module(&net, target)
             .with_context(|| format!("emitting {}", target.name()))?;
         let mut diagnostics = net.diagnostics.clone();
         diagnostics.extend(emission.diagnostics.iter().cloned());
@@ -1625,7 +1694,12 @@ fn commit_output_file(path: &std::path::Path, bytes: Vec<u8>) -> anyhow::Result<
         bytes,
     );
     powerio_core::Destination::path(path)
-        .__commit_artifacts(false, vec![artifact], Vec::new())
+        .__commit_artifacts(
+            false,
+            powerio_core::Fidelity::Canonical,
+            vec![artifact],
+            Vec::new(),
+        )
         .map(|_| ())
         .map_err(|error| anyhow::anyhow!("{error}"))
 }
@@ -1635,7 +1709,7 @@ fn commit_output_file(path: &std::path::Path, bytes: Vec<u8>) -> anyhow::Result<
 /// reported instead.
 fn write_conversion_output(
     text: &str,
-    sidecars: &[compat::MemorySidecar],
+    sidecars: &[module_io::MemorySidecar],
     output: Option<&std::path::Path>,
 ) -> anyhow::Result<()> {
     match output {
@@ -1713,7 +1787,9 @@ fn run_geo_extract(
             .and_then(|e| e.to_str())
             .is_some_and(|e| e.eq_ignore_ascii_case("pwd"))
     {
-        let display = powerio_tx::format::parse_display_file(input, None)
+        let source = powerio_core::Source::open(input)
+            .with_context(|| format!("reading {}", input.display()))?;
+        let display = powerio_tx::format::parse_display(source, None)
             .with_context(|| format!("reading {}", input.display()))?;
         let powerio::DisplayData::PowerWorld(display) = display else {
             anyhow::bail!("{} did not parse as a .pwd display", input.display());
@@ -1725,17 +1801,17 @@ fn run_geo_extract(
         return write_conversion_output(&layer.to_geojson(), &[], output);
     }
     let layer = match parse_family_case(input, from)? {
-        FamilyCase::Distribution(net) => {
-            for w in &net.warnings {
+        FamilyCase::Distribution(module) => {
+            for w in powerio_core::render_diagnostics(&module.diagnostics) {
                 eprintln!("{w}");
             }
-            powerio::dist_geo::to_dist_geo_layer(&net.network)
+            powerio::dist_geo::to_dist_geo_layer(&module.value)
         }
-        FamilyCase::Transmission(parsed) => {
-            for w in &parsed.render_diagnostics() {
+        FamilyCase::Transmission(module) => {
+            for w in powerio_core::render_diagnostics(&module.diagnostics) {
                 eprintln!("{w}");
             }
-            parsed.network.to_geo_layer()
+            module.value.to_geo_layer()
         }
     };
     if layer.features.is_empty() {
@@ -1755,6 +1831,17 @@ fn run_geo_apply(
     to: Option<FormatArg>,
     from: Option<FormatArg>,
 ) -> anyhow::Result<()> {
+    if let Some(format) = to.filter(|format| format.is_input_spelling()) {
+        anyhow::bail!(
+            "`{}` is accepted for input only; use `--to {}`",
+            format.name(),
+            if format == FormatArg::RawxInput {
+                "psse-rawx"
+            } else {
+                "xiidm"
+            }
+        );
+    }
     let text = std::fs::read_to_string(layer_path)
         .with_context(|| format!("reading layer {}", layer_path.display()))?;
     let parsed =
@@ -1764,15 +1851,17 @@ fn run_geo_apply(
         eprintln!("{}", powerio_core::render_diagnostic(diagnostic));
     }
     let (text, sidecars, warnings) = match parse_family_case(input, from)? {
-        FamilyCase::Distribution(net) => {
-            for w in &net.warnings {
+        FamilyCase::Distribution(module) => {
+            for w in powerio_core::render_diagnostics(&module.diagnostics) {
                 eprintln!("{w}");
             }
-            let mut network = net.network;
-            report_geo_apply(&powerio::dist_geo::apply_dist_geo_layer(
-                &mut network,
-                &parsed.layer,
-            ));
+            let dynamic = module.map_value(powerio::PioValue::from);
+            let (placed, report) = powerio::apply_geo_layer(&dynamic, &parsed.layer)?;
+            report_geo_apply(&report);
+            let placed = placed.map_value(|value| match value {
+                powerio::PioValue::MulticonductorNetwork(network) => network,
+                _ => unreachable!("apply_geo_layer preserves the network type"),
+            });
             let target = match to {
                 Some(f) => f.distribution().ok_or_else(|| {
                     anyhow::anyhow!(
@@ -1781,7 +1870,8 @@ fn run_geo_apply(
                         f.name()
                     )
                 })?,
-                None => network
+                None => placed
+                    .value
                     .source_format()
                     .map(|f| f.name().parse())
                     .transpose()?
@@ -1789,18 +1879,21 @@ fn run_geo_apply(
                         anyhow::anyhow!("the input carries no source format; pass --to")
                     })?,
             };
-            // The layer edited the typed value; emit from it, never the
-            // retained source echo.
-            let emission = compat::emit_dist_value(&network, target)?;
+            let emission = module_io::emit_multiconductor_module(&placed, target)?;
             let rendered = emission.render_diagnostics();
             (emission.text, emission.sidecars, rendered)
         }
-        FamilyCase::Transmission(case) => {
-            for w in &case.render_diagnostics() {
+        FamilyCase::Transmission(module) => {
+            for w in powerio_core::render_diagnostics(&module.diagnostics) {
                 eprintln!("{w}");
             }
-            let mut net = case.network;
-            report_geo_apply(&net.apply_geo_layer(&parsed.layer));
+            let dynamic = module.map_value(powerio::PioValue::from);
+            let (placed, report) = powerio::apply_geo_layer(&dynamic, &parsed.layer)?;
+            report_geo_apply(&report);
+            let placed = placed.map_value(|value| match value {
+                powerio::PioValue::BalancedNetwork(network) => network,
+                _ => unreachable!("apply_geo_layer preserves the network type"),
+            });
             let target = match to {
                 Some(f) => f.transmission().ok_or_else(|| {
                     anyhow::anyhow!(
@@ -1809,18 +1902,23 @@ fn run_geo_apply(
                         f.name()
                     )
                 })?,
-                None => {
-                    powerio_tx::format::parse_target_format(&format!("{:?}", net.source_format()))
-                        .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "`{:?}` has no write target; pass --to to choose one",
-                            net.source_format()
-                        )
-                    })?
-                }
+                None => powerio_tx::format::parse_target_format(&format!(
+                    "{:?}",
+                    placed.value.source_format()
+                ))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "`{:?}` has no write target; pass --to to choose one",
+                        placed.value.source_format()
+                    )
+                })?,
             };
-            let emission = compat::emit_tx_value(&net, target)
-                .with_context(|| format!("emitting {target}"))?;
+            let emission = module_io::emit_balanced_module(
+                &placed,
+                target,
+                &powerio_tx::EmitOptions::default(),
+            )
+            .with_context(|| format!("emitting {target}"))?;
             let rendered = emission.render_diagnostics();
             (emission.text, emission.sidecars, rendered)
         }
@@ -1912,10 +2010,60 @@ fn convert_to_pypsa_folder(
     Ok(())
 }
 
+/// Write `input` as a CGMES profile set. Fresh output is a directory. An
+/// unchanged CGMES ZIP remains the same ZIP, so its output path names a file.
+fn convert_to_cgmes(
+    input: &std::path::Path,
+    output: Option<&std::path::Path>,
+    from: Option<FormatArg>,
+    scenario: i64,
+    gen_cost_options: GenCostCliOptions<'_>,
+) -> anyhow::Result<()> {
+    let Some(output) = output else {
+        anyhow::bail!("`--to cgmes` requires `-o <output-path>`");
+    };
+    if output.as_os_str() == "-" {
+        anyhow::bail!("`--to cgmes` cannot write a profile set to stdout");
+    }
+
+    let module = if from == Some(FormatArg::Gridfm) {
+        let (network, diagnostics) = parse_gridfm_scenario(input, scenario)?;
+        for diagnostic in &diagnostics {
+            eprintln!("{diagnostic}");
+        }
+        powerio_core::PioModule::new(network)
+    } else {
+        match parse_family_case(input, from)? {
+            FamilyCase::Transmission(module) => *module,
+            FamilyCase::Distribution(_) => anyhow::bail!(
+                "{} is a distribution case; CGMES represents a balanced transmission network",
+                input.display()
+            ),
+        }
+    };
+    let parse_errors = parse_error_lines(&module.diagnostics);
+    for diagnostic in powerio_core::render_diagnostics(&module.diagnostics) {
+        eprintln!("{diagnostic}");
+    }
+    let options = gen_cost_options.emit_options()?;
+    let result = powerio_tx::emit_with_options(
+        &module,
+        powerio_tx::TargetFormat::Cgmes,
+        &options,
+        powerio_core::Destination::path(output),
+    )
+    .with_context(|| format!("emitting CGMES to {}", output.display()))?;
+    for diagnostic in powerio_core::render_diagnostics(result.diagnostics()) {
+        eprintln!("{diagnostic}");
+    }
+    eprintln!("wrote {}", output.display());
+    fail_on_parse_errors(&parse_errors)
+}
+
 /// A single-file case input parsed to its own family model.
 enum FamilyCase {
-    Transmission(Box<compat::ParsedCase>),
-    Distribution(Box<compat::ParsedDist>),
+    Transmission(Box<powerio_core::PioModule<powerio::BalancedNetwork>>),
+    Distribution(Box<powerio_core::PioModule<powerio::MulticonductorNetwork>>),
 }
 
 /// Parse a single-file case to whichever family model it belongs to. With no
@@ -1924,15 +2072,15 @@ enum FamilyCase {
 /// TUI, extended here to the single-file routes. Warnings stay on the returned
 /// value: the callers differ in where they surface them (summary JSON, module
 /// diagnostics, stderr).
-/// One balanced network from any single case input (a stored `.pio.json`
-/// included), for the matrix commands. A distribution input is refused with
+/// One balanced network from any single case input (including PowerIO IR),
+/// for the matrix commands. A distribution input is refused with
 /// the family named.
 fn balanced_case(
     input: &Path,
     from: Option<FormatArg>,
 ) -> anyhow::Result<powerio_matrix::BalancedNetwork> {
     match parse_family_case(input, from)? {
-        FamilyCase::Transmission(parsed) => Ok(parsed.network),
+        FamilyCase::Transmission(module) => Ok(module.into_value()),
         FamilyCase::Distribution(_) => anyhow::bail!(
             "{} is a distribution case; this command needs a transmission network",
             input.display()
@@ -1940,25 +2088,21 @@ fn balanced_case(
     }
 }
 
-/// Convert a stored `.pio.json` module's static network to `to`. The write
-/// is canonical: the stored document is not a case format, so there is no
-/// same format echo to preserve.
-fn convert_stored(
+/// Convert a PowerIO IR module's static network to `to`. Emission is
+/// canonical: IR is not a grid exchange format, so there is no same format
+/// echo to preserve.
+fn convert_ir(
     input: &Path,
     to: FormatArg,
     output: Option<&Path>,
     gen_cost_options: &GenCostCliOptions,
 ) -> anyhow::Result<()> {
-    let case = stored_family_case(input)?;
+    let case = ir_family_case(input)?;
     match (case, to.transmission(), to.distribution()) {
         (FamilyCase::Transmission(parsed), Some(target), _) => {
             let options = gen_cost_options.emit_options()?;
-            let emission = compat::emit_tx_module(
-                &powerio_core::PioModule::new(parsed.network),
-                target,
-                &options,
-            )
-            .with_context(|| format!("emitting {target}"))?;
+            let emission = module_io::emit_balanced_module(&parsed, target, &options)
+                .with_context(|| format!("emitting {target}"))?;
             for w in emission.render_diagnostics() {
                 eprintln!("{w}");
             }
@@ -1966,10 +2110,10 @@ fn convert_stored(
             Ok(())
         }
         (FamilyCase::Distribution(parsed), _, Some(target)) => {
-            for w in &parsed.warnings {
+            for w in powerio_core::render_diagnostics(&parsed.diagnostics) {
                 eprintln!("{w}");
             }
-            let emission = parsed.emit(target)?;
+            let emission = module_io::emit_multiconductor_module(&parsed, target)?;
             let mut diagnostics = parsed.diagnostics.clone();
             diagnostics.extend(emission.diagnostics.iter().cloned());
             for w in emission.render_diagnostics() {
@@ -1989,34 +2133,33 @@ fn convert_stored(
     }
 }
 
-/// Load a stored `.pio.json` module and adapt its static value to the CLI's
-/// family case. A module storing anything but a static network names the
-/// export step instead of guessing a projection.
-fn stored_family_case(input: &Path) -> anyhow::Result<FamilyCase> {
+/// Deserialize PowerIO IR and adapt a static network to the CLI's family case.
+/// Other values are rejected instead of guessing a projection.
+fn ir_family_case(input: &Path) -> anyhow::Result<FamilyCase> {
     let source = powerio_core::Source::open(input)
         .with_context(|| format!("reading {}", input.display()))?;
-    let module = powerio::parse(source).with_context(|| format!("reading {}", input.display()))?;
-    match module.value().kind() {
-        powerio::PioValueKind::BalancedNetwork => {
-            let module: powerio_core::PioModule<powerio_matrix::BalancedNetwork> =
-                module.into_typed().expect("the kind was checked");
-            Ok(FamilyCase::Transmission(Box::new(
-                compat::module_to_parsed(module),
-            )))
+    let module = powerio::deserialize(source)
+        .with_context(|| format!("deserializing PowerIO IR from {}", input.display()))?;
+    match &module.value {
+        powerio::PioValue::BalancedNetwork(_) => {
+            let module = module.map_value(|value| match value {
+                powerio::PioValue::BalancedNetwork(network) => network,
+                _ => unreachable!("the value variant was checked"),
+            });
+            Ok(FamilyCase::Transmission(Box::new(module)))
         }
-        powerio::PioValueKind::MulticonductorNetwork => {
-            let module: powerio_core::PioModule<powerio_dist::MulticonductorNetwork> =
-                module.into_typed().expect("the kind was checked");
-            Ok(FamilyCase::Distribution(Box::new(
-                compat::dist_module_to_parsed(module),
-            )))
+        powerio::PioValue::MulticonductorNetwork(_) => {
+            let module = module.map_value(|value| match value {
+                powerio::PioValue::MulticonductorNetwork(network) => network,
+                _ => unreachable!("the value variant was checked"),
+            });
+            Ok(FamilyCase::Distribution(Box::new(module)))
         }
         other => anyhow::bail!(
-            "{} stores a {} value; export one static item first (`powerio module` with \
-             --scenario writes one from a scenario set, and the bindings' export_state \
-             selects by time position or scenario)",
+            "{} stores {}; this command requires powerio.BalancedNetwork or \
+             powerio.MulticonductorNetwork",
             input.display(),
-            other.as_str()
+            other.type_name()
         ),
     }
 }
@@ -2030,33 +2173,33 @@ fn parse_family_case(input: &Path, from: Option<FormatArg>) -> anyhow::Result<Fa
             );
         }
         return if f.distribution().is_some() {
-            let net = compat::dist_parse_file(input, Some(f.name()))
+            let net = module_io::load_multiconductor_module(input, Some(f.name()))
                 .with_context(|| format!("reading {}", input.display()))?;
             Ok(FamilyCase::Distribution(Box::new(net)))
         } else {
-            let parsed = compat::parse_file(input, Some(f.name()))
+            let parsed = module_io::load_balanced_module(input, Some(f.name()))
                 .with_context(|| format!("reading {}", input.display()))?;
             Ok(FamilyCase::Transmission(Box::new(parsed)))
         };
     }
-    if cases::stored_json(input)?.is_some() {
-        return stored_family_case(input);
+    if cases::powerio_ir_text(input)?.is_some() {
+        return ir_family_case(input);
     }
     if let Some(case) = cases::classified_json(input)? {
         return parse_classified_case(&case, input);
     }
     if cases::looks_like_distribution_input(input)? {
-        let net = compat::dist_parse_file(input, None)
+        let net = module_io::load_multiconductor_module(input, None)
             .with_context(|| format!("reading {}", input.display()))?;
         Ok(FamilyCase::Distribution(Box::new(net)))
     } else {
-        let parsed = compat::parse_file(input, None)
+        let parsed = module_io::load_balanced_module(input, None)
             .with_context(|| format!("reading {}", input.display()))?;
         Ok(FamilyCase::Transmission(Box::new(parsed)))
     }
 }
 
-/// Parse already-classified `.json` text through its family's string parser,
+/// Parse already classified `.json` text through its family's memory source,
 /// keeping the file stem as the name hint the path-based parsers would use.
 fn parse_classified_case(case: &cases::ClassifiedCase, input: &Path) -> anyhow::Result<FamilyCase> {
     match case.format {
@@ -2064,16 +2207,16 @@ fn parse_classified_case(case: &cases::ClassifiedCase, input: &Path) -> anyhow::
             // The shared classifier routes the family; the dist crate owns
             // which documents are cases at all, and its rule is stricter
             // (a BMOPF document needs a `bus` table). Apply it to the text
-            // already read, as `powerio_dist::parse_file` does.
+            // already read, as the path source does.
             let format = powerio_dist::classify_distribution_json(&case.text)
                 .with_context(|| format!("reading {}", input.display()))?;
-            let net = compat::dist_parse_str(&case.text, format.name())
+            let net = module_io::load_multiconductor_memory(&case.text, format.name())
                 .with_context(|| format!("reading {}", input.display()))?;
             Ok(FamilyCase::Distribution(Box::new(net)))
         }
         DetectedFormat::Transmission(format) => {
             let stem = input.file_stem().and_then(|s| s.to_str());
-            let parsed = compat::parse_str_with_name(&case.text, format.name(), stem)
+            let parsed = module_io::load_balanced_memory_named(&case.text, format.name(), stem)
                 .with_context(|| format!("reading {}", input.display()))?;
             Ok(FamilyCase::Transmission(Box::new(parsed)))
         }
@@ -2111,23 +2254,21 @@ fn read_network(
     from: Option<FormatArg>,
 ) -> anyhow::Result<powerio_matrix::BalancedNetwork> {
     reject_nontransmission_from(from)?;
-    let parsed = compat::parse_file(input, from.map(FormatArg::name))
+    let parsed = module_io::load_balanced_module(input, from.map(FormatArg::name))
         .with_context(|| format!("reading {}", input.display()))?;
-    for w in &parsed.render_diagnostics() {
+    for w in powerio_core::render_diagnostics(&parsed.diagnostics) {
         eprintln!("{w}");
     }
-    Ok(parsed.network)
+    Ok(parsed.into_value())
 }
 
 #[cfg(test)]
 mod tests {
-    use powerio::IntoTypedModule;
-
     use super::cases::looks_like_distribution_input;
     use super::{
         BranchSusceptanceFormulaArg, Cli, Command, FamilyCase, FormatArg, GenCostCliOptions,
-        distribution_summary_json, infer_input_family, module_text, parse_family_case, run_convert,
-        run_module, transmission_summary_json,
+        distribution_summary_json, infer_input_family, parse_family_case, run_convert,
+        run_serialize, serialize_input, transmission_summary_json,
     };
     use clap::Parser;
     use std::path::Path;
@@ -2141,10 +2282,17 @@ mod tests {
             .join(path)
     }
 
+    fn deserialize_module(text: &str) -> powerio::PioModule<powerio::PioValue> {
+        let source =
+            powerio::Source::from_memory("module.pio.json", text.as_bytes().to_vec()).unwrap();
+        powerio::deserialize(source).unwrap()
+    }
+
     #[test]
     fn summary_json_matches_canonical_transmission_shape() {
-        let parsed = crate::compat::parse_file(data("case9.m"), None).unwrap();
-        let value = transmission_summary_json(&parsed.network, &parsed.render_diagnostics());
+        let parsed = crate::module_io::load_balanced_module(data("case9.m"), None).unwrap();
+        let diagnostics = powerio_core::render_diagnostics(&parsed.diagnostics);
+        let value = transmission_summary_json(&parsed.value, &diagnostics);
         assert_eq!(value["schema"], "powerio.summary");
         assert_eq!(value[powerio::version::VERSION_KEY], powerio::VERSION);
         assert_eq!(value["domain"], "transmission");
@@ -2174,18 +2322,24 @@ mod tests {
             other => panic!("unexpected command: {other:?}"),
         }
 
-        let parsed = crate::compat::parse_file(data("opfdataset/example_0.json"), None).unwrap();
+        let parsed =
+            crate::module_io::load_balanced_module(data("opfdataset/example_0.json"), None)
+                .unwrap();
         assert_eq!(
-            parsed.network.source_format(),
+            parsed.value.source_format(),
             powerio_matrix::SourceFormat::DeepMindOpfDataJson
         );
     }
 
     #[test]
     fn summary_json_matches_canonical_distribution_shape() {
-        let net = crate::compat::dist_parse_file(&data("dist/micro/xfmr_single_phase.dss"), None)
-            .unwrap();
-        let value = distribution_summary_json(&net.network, &net.warnings);
+        let net = crate::module_io::load_multiconductor_module(
+            &data("dist/micro/xfmr_single_phase.dss"),
+            None,
+        )
+        .unwrap();
+        let diagnostics = powerio_core::render_diagnostics(&net.diagnostics);
+        let value = distribution_summary_json(&net.value, &diagnostics);
         assert_eq!(value["schema"], "powerio.summary");
         assert_eq!(value[powerio::version::VERSION_KEY], powerio::VERSION);
         assert_eq!(value["domain"], "distribution");
@@ -2229,8 +2383,8 @@ mod tests {
         .unwrap();
         match parse_family_case(&egret, None).unwrap() {
             FamilyCase::Transmission(parsed) => {
-                assert_eq!(parsed.network.buses().len(), 9);
-                assert_eq!(parsed.network.name(), "myegret");
+                assert_eq!(parsed.value.buses().len(), 9);
+                assert_eq!(parsed.value.name(), "myegret");
             }
             FamilyCase::Distribution(_) => panic!("egret JSON classified as distribution"),
         }
@@ -2238,11 +2392,20 @@ mod tests {
         let dist = dir.join("feeder.json");
         std::fs::write(
             &dist,
-            r#"{"bus":{"a":{"terminal_names":["1"]}},"meta":{"version":"0.1.0"}}"#,
+            r#"{
+                "bus":{"a":{"terminal_names":["1"]}},
+                "voltage_source":{"source":{
+                    "bus":"a",
+                    "terminal_map":["1"],
+                    "v_magnitude":[1.0],
+                    "v_angle":[0.0]
+                }},
+                "meta":{"version":"0.1.0"}
+            }"#,
         )
         .unwrap();
         match parse_family_case(&dist, None).unwrap() {
-            FamilyCase::Distribution(net) => assert_eq!(net.network.buses().len(), 1),
+            FamilyCase::Distribution(net) => assert_eq!(net.value.buses().len(), 1),
             FamilyCase::Transmission(_) => panic!("BMOPF JSON classified as transmission"),
         }
     }
@@ -2267,18 +2430,18 @@ mod tests {
     }
 
     #[test]
-    fn stored_module_reads_back_as_a_family_case() {
+    fn serialized_module_reads_back_as_a_family_case() {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!("powerio-cli-stored-{stamp}.pio.json"));
-        let (text, _) = module_text(&data("case9.m"), None, None).unwrap();
+        let (text, _) = serialize_input(&data("case9.m"), None).unwrap();
         std::fs::write(&path, text).unwrap();
 
-        match super::stored_family_case(&path).unwrap() {
+        match super::ir_family_case(&path).unwrap() {
             super::FamilyCase::Transmission(parsed) => {
-                assert_eq!(parsed.network.buses().len(), 9);
+                assert_eq!(parsed.value.buses().len(), 9);
             }
             super::FamilyCase::Distribution(_) => panic!("case9 is transmission"),
         }
@@ -2288,22 +2451,22 @@ mod tests {
     }
 
     #[test]
-    fn module_command_parses() {
-        let cli = Cli::try_parse_from(["powerio", "module", "case9.m"]).unwrap();
+    fn serialize_command_parses() {
+        let cli = Cli::try_parse_from(["powerio", "serialize", "case9.m"]).unwrap();
         match cli.command.unwrap() {
-            Command::Module { input, .. } => assert_eq!(input, Path::new("case9.m")),
-            other => panic!("expected module command, got {other:?}"),
+            Command::Serialize { input, .. } => assert_eq!(input, Path::new("case9.m")),
+            other => panic!("expected serialize command, got {other:?}"),
         }
     }
 
     #[test]
-    fn package_text_matches_module_shape_and_provenance() {
+    fn ir_text_matches_module_shape_and_provenance() {
         let input = data("case9.m");
-        let (text, _) = module_text(&input, None, None).unwrap();
+        let (text, _) = serialize_input(&input, None).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(doc["schema"], "powerio.module");
         assert_eq!(doc["version"], 1);
-        assert_eq!(doc["value"]["kind"], "balanced_network");
+        assert_eq!(doc["value"]["type"], "powerio.BalancedNetwork");
         assert_eq!(doc["value"]["data"]["buses"].as_array().unwrap().len(), 9);
         let sources = doc["sources"].as_array().unwrap();
         assert!(
@@ -2314,54 +2477,57 @@ mod tests {
             }),
             "expected the case file among the module sources: {sources:?}"
         );
-        let module = powerio::stored::read_module(&text).unwrap();
-        assert_eq!(
-            module.value().kind(),
-            powerio::PioValueKind::BalancedNetwork
-        );
+        let module = deserialize_module(&text);
+        assert!(matches!(
+            &module.value,
+            powerio::PioValue::BalancedNetwork(_)
+        ));
     }
 
     #[test]
-    fn package_command_writes_output_file() {
+    fn serialize_command_writes_output_file() {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         let output = std::env::temp_dir().join(format!("powerio-package-{stamp}.pio.json"));
 
-        run_module(&data("case9.m"), Some(&output), None, None).unwrap();
+        run_serialize(&data("case9.m"), Some(&output), None).unwrap();
         let text = std::fs::read_to_string(&output).unwrap();
-        let module = powerio::stored::read_module(&text).unwrap();
-        assert_eq!(
-            module.value().kind(),
-            powerio::PioValueKind::BalancedNetwork
-        );
+        let module = deserialize_module(&text);
+        assert!(matches!(
+            &module.value,
+            powerio::PioValue::BalancedNetwork(_)
+        ));
 
         let _ = std::fs::remove_file(output);
     }
 
     #[test]
-    fn package_helper_returns_stdout_text() {
-        let (text, _) = module_text(&data("case9.m"), None, None).unwrap();
+    fn module_helper_returns_stdout_text() {
+        let (text, _) = serialize_input(&data("case9.m"), None).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(doc["producer"]["name"], "powerio");
         assert_eq!(doc["value"]["data"]["buses"].as_array().unwrap().len(), 9);
     }
 
     #[test]
-    fn package_text_round_trips_through_the_stored_reader() {
-        let (text, _) = module_text(&data("case9.m"), None, None).unwrap();
-        let module = powerio::stored::read_module(&text).unwrap();
-        let again = powerio::stored::emit_module(&module).unwrap();
-        assert_eq!(text, again, "the stored document is write stable");
+    fn ir_text_round_trips_through_deserialize() {
+        let (text, _) = serialize_input(&data("case9.m"), None).unwrap();
+        let module = deserialize_module(&text);
+        let again = super::serialize_module_text(&module).unwrap();
+        assert_eq!(
+            text, again,
+            "the PowerIO IR document is serialization stable"
+        );
     }
 
     #[test]
-    fn package_distribution_fixture_stores_the_multiconductor_value() {
+    fn ir_distribution_fixture_stores_the_multiconductor_value() {
         let input = data("dist/micro/xfmr_single_phase.dss");
-        let (text, _) = module_text(&input, None, None).unwrap();
+        let (text, _) = serialize_input(&input, None).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(doc["value"]["kind"], "multiconductor_network");
+        assert_eq!(doc["value"]["type"], "powerio.MulticonductorNetwork");
         let sources = doc["sources"].as_array().unwrap();
         assert!(
             sources.iter().any(|s| {
@@ -2375,7 +2541,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::float_cmp)]
-    fn package_carries_a_nonfinite_payload_as_string_spellings() {
+    fn ir_carries_a_nonfinite_payload_as_string_spellings() {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -2399,15 +2565,19 @@ mpc.branch = [
         )
         .unwrap();
 
-        run_module(&input, Some(&output), None, None).unwrap();
+        run_serialize(&input, Some(&output), None).unwrap();
         let text = std::fs::read_to_string(&output).unwrap();
         assert!(text.contains("\"angmin\": \"NaN\""), "{text}");
         assert!(text.contains("\"angmax\": \"Infinity\""), "{text}");
-        let module = powerio::stored::read_module(&text).unwrap();
-        let module: powerio_core::PioModule<powerio::BalancedNetwork> =
-            module.into_typed().unwrap();
-        assert!(module.value().branches()[0].angmin.is_nan());
-        assert_eq!(module.value().branches()[0].angmax, f64::INFINITY);
+        let module = deserialize_module(&text);
+        let powerio::PioValue::BalancedNetwork(network) = &module.value else {
+            panic!(
+                "expected a balanced network, found {}",
+                module.value.type_name()
+            );
+        };
+        assert!(network.branches()[0].angmin.is_nan());
+        assert_eq!(network.branches()[0].angmax, f64::INFINITY);
 
         let _ = std::fs::remove_file(input);
         let _ = std::fs::remove_file(output);
@@ -2421,10 +2591,11 @@ mpc.branch = [
             .as_nanos();
         let input = std::env::temp_dir().join(format!("powerio-convert-pm-{stamp}.json"));
         let output = std::env::temp_dir().join(format!("powerio-convert-pm-{stamp}.dss"));
-        let parsed = crate::compat::parse_file(data("case9.m"), None).unwrap();
-        let emission = crate::compat::emit_tx_value(
-            &parsed.network,
+        let parsed = crate::module_io::load_balanced_module(data("case9.m"), None).unwrap();
+        let emission = crate::module_io::emit_balanced_module(
+            &parsed,
             powerio_tx::TargetFormat::PowerModelsJson,
+            &powerio_tx::EmitOptions::default(),
         )
         .unwrap();
         std::fs::write(&input, emission.text).unwrap();
@@ -2454,12 +2625,8 @@ mpc.branch = [
             .as_nanos();
         let input = std::env::temp_dir().join(format!("powerio-convert-pypsa-{stamp}"));
         let output = std::env::temp_dir().join(format!("powerio-convert-pypsa-{stamp}.m"));
-        let parsed = crate::compat::parse_file(data("case9.m"), None).unwrap();
-        powerio_tx::__emit_pypsa_csv(
-            &powerio_core::PioModule::new(parsed.network),
-            powerio_core::Destination::path(&input),
-        )
-        .unwrap();
+        let parsed = crate::module_io::load_balanced_module(data("case9.m"), None).unwrap();
+        powerio_tx::__emit_pypsa_csv(&parsed, powerio_core::Destination::path(&input)).unwrap();
 
         run_convert(
             &input,
@@ -2510,8 +2677,9 @@ mpc.branch = [
         ));
         let mut options = powerio_dist::EmitOptions::default();
         options.bmopf.sideload_coordinates = true;
-        let bmopf = crate::compat::emit_dist_value_with_options(
-            &net,
+        let module = powerio_core::PioModule::new(net);
+        let bmopf = crate::module_io::emit_multiconductor_module_with_options(
+            &module,
             powerio_dist::DistTargetFormat::BmopfJson,
             &options,
         )

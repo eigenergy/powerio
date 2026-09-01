@@ -49,74 +49,15 @@ pub mod codes {
         REQUEST_CAPI_UNKNOWN_FORMULA = "REQUEST.CAPI.UNKNOWN_FORMULA", Error,
             "the caller named a branch susceptance formula this surface does not have",
             category = Request;
-        REQUEST_CAPI_SELECTOR_CONFLICT = "REQUEST.CAPI.SELECTOR_CONFLICT", Error,
-            "the state selection keys conflict; pass exactly one of time position or scenario",
+        REQUEST_CAPI_TYPE_MISMATCH = "REQUEST.CAPI.TYPE_MISMATCH", Error,
+            "the value does not have the structural type required by the operation",
             category = Request;
-        REQUEST_CAPI_NOT_A_BALANCED_NETWORK = "REQUEST.CAPI.NOT_A_BALANCED_NETWORK", Error,
-            "the module value kind does not support this operation; it takes a balanced network",
+        REQUEST_CAPI_QUANTITY_UNKNOWN = "REQUEST.CAPI.QUANTITY_UNKNOWN", Error,
+            "the requested operating point quantity is not defined",
             category = Request;
-    }
-}
-
-/// One errbuf message: `CODE: message`, the code from a registered entry.
-///
-/// Every failure this boundary reports is built here, so the token a consumer
-/// branches on is always present and appears exactly once.
-pub(crate) fn coded(info: &'static DiagnosticInfo, message: impl std::fmt::Display) -> String {
-    format!("{}: {message}", info.code)
-}
-
-/// A library error that knows its own registry entry. The five error types are
-/// the only ones with a code of their own; a failure raised at the boundary
-/// itself takes a `BIND.CAPI.*` entry through [`coded`].
-pub(crate) trait CodedError: std::fmt::Display {
-    /// The stable code string. Errors from different crates carry entries from
-    /// different registries, so the code is what they agree on.
-    fn code_str(&self) -> &'static str;
-}
-
-/// A library error as its errbuf line.
-pub(crate) fn err_line<E: CodedError>(e: E) -> String {
-    format!("{}: {e}", e.code_str())
-}
-
-impl CodedError for powerio::Error {
-    fn code_str(&self) -> &'static str {
-        // Unlike powerio_tx::Error, powerio_core::Error can carry no
-        // registered finding (a cause wrapped with `with_cause` alone); the
-        // boundary's own uncoded entry covers that case.
-        self.info()
-            .map_or(codes::BIND_CAPI_UNCODED_FAILURE.code, |info| info.code)
-    }
-}
-
-/// `powerio::Error` above is `powerio_core::Error`, the type `powerio::parse`
-/// and the source layer return; balanced network operations raise their own
-/// component error.
-impl CodedError for powerio_tx::Error {
-    fn code_str(&self) -> &'static str {
-        self.code().code
-    }
-}
-
-#[cfg(feature = "matrix")]
-impl CodedError for powerio_matrix::Error {
-    fn code_str(&self) -> &'static str {
-        self.code().code
-    }
-}
-
-#[cfg(feature = "dist")]
-impl CodedError for powerio_dist::Error {
-    fn code_str(&self) -> &'static str {
-        self.code().code
-    }
-}
-
-#[cfg(feature = "prob")]
-impl CodedError for powerio_prob::Error {
-    fn code_str(&self) -> &'static str {
-        self.code().code
+        REQUEST_CAPI_ALLOCATION_UNKNOWN = "REQUEST.CAPI.ALLOCATION_UNKNOWN", Error,
+            "the requested load allocation rule is not defined",
+            category = Request;
     }
 }
 
@@ -170,13 +111,13 @@ mod workspace {
         assert!(problems.is_empty(), "{problems:#?}");
     }
 
-    /// Every stable code string the v6 module spells inline resolves to a
+    /// Every stable code string the ABI implementation spells inline resolves to a
     /// registered entry in some workspace registry, so a bare unregistered
     /// literal cannot reach a `PioError`. The module's own test block may
     /// fabricate codes and is excluded.
     #[test]
-    fn every_code_string_v6_emits_is_registered() {
-        let source = include_str!("v6.rs")
+    fn every_code_string_the_abi_emits_is_registered() {
+        let source = include_str!("lib.rs")
             .split("#[cfg(test)]")
             .next()
             .expect("split yields the leading source");

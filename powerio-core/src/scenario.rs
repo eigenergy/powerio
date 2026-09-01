@@ -69,15 +69,32 @@ impl<T> Scenario<T> {
         &self.value
     }
 
+    /// Mutably borrow the scenario value. Identity and probability stay
+    /// immutable so a set's validated index and probability sum remain valid.
+    pub const fn value_mut(&mut self) -> &mut T {
+        &mut self.value
+    }
+
     #[must_use]
     pub fn into_value(self) -> T {
         self.value
+    }
+
+    /// Consume the entry and map its value while retaining its identity and
+    /// probability.
+    #[must_use]
+    pub fn map_value<U>(self, map: impl FnOnce(T) -> U) -> Scenario<U> {
+        Scenario {
+            id: self.id,
+            probability: self.probability,
+            value: map(self.value),
+        }
     }
 }
 
 /// Named alternatives with no implied time order.
 pub struct ScenarioSet<T> {
-    scenarios: Arc<[Scenario<T>]>,
+    scenarios: Arc<Vec<Scenario<T>>>,
     /// ID to position. Built once, so `get` does not scan the set.
     index: Arc<HashMap<Box<str>, usize>>,
 }
@@ -148,16 +165,34 @@ impl<T> ScenarioSet<T> {
         }
 
         Ok(Self {
-            scenarios: scenarios.into(),
+            scenarios: Arc::new(scenarios),
             index: Arc::new(ids),
         })
     }
 
     #[must_use]
-    /// Look one scenario up by its stable ID. Constant time: IDs are case
-    /// sensitive and never normalized, and the index is built once.
-    pub fn get(&self, id: &str) -> Option<&Scenario<T>> {
-        self.scenarios.get(*self.index.get(id)?)
+    /// Look one scenario value up by its stable ID. Constant time: IDs are
+    /// case sensitive and never normalized, and the index is built once.
+    pub fn get(&self, id: &str) -> Option<&T> {
+        self.entry(id).map(Scenario::value)
+    }
+
+    /// Look up the complete scenario entry by its stable ID.
+    #[must_use]
+    pub fn entry(&self, id: &str) -> Option<&Scenario<T>> {
+        self.entry_at(*self.index.get(id)?)
+    }
+
+    /// Look up one scenario value by its insertion position.
+    #[must_use]
+    pub fn get_at(&self, position: usize) -> Option<&T> {
+        self.entry_at(position).map(Scenario::value)
+    }
+
+    /// Look up one complete scenario entry by its insertion position.
+    #[must_use]
+    pub fn entry_at(&self, position: usize) -> Option<&Scenario<T>> {
+        self.scenarios.get(position)
     }
 
     pub fn iter(&self) -> impl ExactSizeIterator<Item = &Scenario<T>> {
@@ -172,6 +207,53 @@ impl<T> ScenarioSet<T> {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.scenarios.is_empty()
+    }
+}
+
+impl<T: Clone> ScenarioSet<T> {
+    /// Mutably borrow one scenario value by ID through copy on write.
+    pub fn get_mut(&mut self, id: &str) -> Option<&mut T> {
+        self.entry_mut(id).map(Scenario::value_mut)
+    }
+
+    /// Mutably borrow one complete scenario entry by ID through copy on
+    /// write. Its public mutable surface exposes only the value, preserving
+    /// the validated ID index and probability sum.
+    pub fn entry_mut(&mut self, id: &str) -> Option<&mut Scenario<T>> {
+        let position = *self.index.get(id)?;
+        self.entry_at_mut(position)
+    }
+
+    /// Mutably borrow one scenario value by insertion position.
+    pub fn get_at_mut(&mut self, position: usize) -> Option<&mut T> {
+        self.entry_at_mut(position).map(Scenario::value_mut)
+    }
+
+    /// Mutably borrow one complete scenario entry by insertion position.
+    pub fn entry_at_mut(&mut self, position: usize) -> Option<&mut Scenario<T>> {
+        Arc::make_mut(&mut self.scenarios).get_mut(position)
+    }
+
+    /// Iterate over mutable scenario entries through one copy on write
+    /// detachment. Entry identities and probabilities remain immutable.
+    pub fn iter_mut(&mut self) -> impl ExactSizeIterator<Item = &mut Scenario<T>> {
+        Arc::make_mut(&mut self.scenarios).iter_mut()
+    }
+
+    /// Consume the set and map each scenario value while retaining identities,
+    /// probabilities, order, and the already validated identity index. A
+    /// uniquely owned set moves its values without cloning them; a shared set
+    /// first performs the copy on write split.
+    #[must_use]
+    pub fn map_values<U>(self, mut map: impl FnMut(T) -> U) -> ScenarioSet<U> {
+        let scenarios = Arc::unwrap_or_clone(self.scenarios)
+            .into_iter()
+            .map(|scenario| scenario.map_value(&mut map))
+            .collect();
+        ScenarioSet {
+            scenarios: Arc::new(scenarios),
+            index: self.index,
+        }
     }
 }
 
@@ -223,15 +305,12 @@ mod tests {
             .map(|index| Scenario::new(ScenarioId::new(format!("s{index}")).unwrap(), None, index))
             .collect();
         let set = ScenarioSet::new(scenarios).unwrap();
-        assert_eq!(set.get("s19999").map(Scenario::value), Some(&19_999));
-        assert_eq!(set.get("s0").map(Scenario::value), Some(&0));
+        assert_eq!(set.get("s19999"), Some(&19_999));
+        assert_eq!(set.get("s0"), Some(&0));
         assert!(set.get("S0").is_none(), "IDs are case sensitive");
         assert!(set.get("missing").is_none());
         // Cloning shares the index rather than rebuilding it.
-        assert_eq!(
-            set.clone().get("s12345").map(Scenario::value),
-            Some(&12_345)
-        );
+        assert_eq!(set.clone().get("s12345"), Some(&12_345),);
     }
     use super::*;
 
@@ -278,5 +357,64 @@ mod tests {
     fn an_empty_set_is_valid() {
         let set = ScenarioSet::<u8>::new(Vec::new()).unwrap();
         assert!(set.is_empty());
+    }
+
+    #[test]
+    fn entry_and_mutable_value_access_preserve_validated_metadata() {
+        let mut edited = ScenarioSet::new(vec![
+            Scenario::new(ScenarioId::new("base").unwrap(), Some(0.25), 1_u8),
+            Scenario::new(ScenarioId::new("high").unwrap(), Some(0.75), 2_u8),
+        ])
+        .unwrap();
+        let original = edited.clone();
+        assert!(Arc::ptr_eq(&edited.scenarios, &original.scenarios));
+        assert!(Arc::ptr_eq(&edited.index, &original.index));
+
+        *edited.get_mut("high").unwrap() = 9;
+        assert_eq!(edited.get("high"), Some(&9));
+        assert_eq!(original.get("high"), Some(&2));
+        assert_eq!(edited.entry("high").unwrap().probability(), Some(0.75));
+        assert_eq!(edited.entry_at(0).unwrap().id().as_str(), "base");
+        assert_eq!(edited.get_at(0), Some(&1));
+        assert!(Arc::ptr_eq(&edited.index, &original.index));
+        assert!(!Arc::ptr_eq(&edited.scenarios, &original.scenarios));
+
+        *edited.entry_at_mut(0).unwrap().value_mut() = 7;
+        for scenario in edited.iter_mut() {
+            *scenario.value_mut() += 1;
+        }
+        assert_eq!(edited.get("base"), Some(&8));
+        assert_eq!(edited.get("high"), Some(&10));
+    }
+
+    #[test]
+    fn consuming_map_moves_unique_values_and_reuses_the_index() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static CLONES: AtomicUsize = AtomicUsize::new(0);
+
+        #[derive(Debug)]
+        struct Counted(u8);
+
+        impl Clone for Counted {
+            fn clone(&self) -> Self {
+                CLONES.fetch_add(1, Ordering::Relaxed);
+                Self(self.0)
+            }
+        }
+
+        CLONES.store(0, Ordering::Relaxed);
+        let set = ScenarioSet::new(vec![Scenario::new(
+            ScenarioId::new("base").unwrap(),
+            Some(1.0),
+            Counted(3),
+        )])
+        .unwrap();
+        let index = Arc::clone(&set.index);
+        let mapped = set.map_values(|value| usize::from(value.0));
+        assert_eq!(mapped.get("base"), Some(&3));
+        assert_eq!(mapped.entry("base").unwrap().probability(), Some(1.0));
+        assert!(Arc::ptr_eq(&mapped.index, &index));
+        assert_eq!(CLONES.load(Ordering::Relaxed), 0);
     }
 }

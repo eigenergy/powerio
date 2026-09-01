@@ -3,17 +3,19 @@
 The `powerio` command converts formats, exports matrices and GridFM Parquet
 datasets, writes DC OPF bundles, generates synthetic cases, writes `.pio.json`
 documents, verifies matrices, and opens a ratatui interface.
-Transmission conversion covers MATPOWER, PSS/E, PowerWorld AUX, PSLF, PowerModels
-JSON, egret JSON, pandapower JSON, PyPSA CSV folders, GOC3 JSON input, Surge
-JSON, and GridFM reads. Distribution conversion covers OpenDSS, PMD JSON, and
-BMOPF JSON.
+Transmission conversion covers MATPOWER, PSS/E RAW 33 through 35, PSS/E RAWX
+35, PowSybl XIIDM 1.17, CIM CGMES 2.4.15 and 3.0, PowerWorld AUX, PSLF,
+PowerModels JSON, egret JSON, pandapower JSON, PyPSA CSV folders, GOC3 JSON,
+Surge JSON, and GridFM reads. Distribution conversion covers OpenDSS, PMD JSON,
+and BMOPF JSON.
 
 ```
 powerio convert tests/data/case14.m --to psse -o case14.raw
 powerio convert case.surge.json --from surge-json --to matpower -o case.m
 powerio convert goc3_case.json --from goc3-json --to matpower -o case.m
-powerio module tests/data/case14.m -o case14.pio.json
-powerio module goc3_case.json --from goc3-json -o goc3_case.pio.json
+powerio convert case.xiidm --to cgmes -o case-cgmes
+powerio serialize tests/data/case14.m -o case14.pio.json
+powerio serialize goc3_case.json --from goc3-json -o goc3_case.pio.json
 powerio verify tests/data/case30.m --kind bdoubleprime
 powerio dcopf tests/data/case30.m -o out
 powerio sensitivities tests/data/case30.m -o out --solver auto --drop-tolerance 1e-10
