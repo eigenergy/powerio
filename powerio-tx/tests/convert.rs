@@ -8,7 +8,6 @@ use helpers::*;
 
 use std::path::{Path, PathBuf};
 
-use powerio_tx::TransformerControlMode;
 use powerio_tx::{
     BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, BranchRatingSet, BranchSolution,
     Bus, BusId, BusType, EmitOptions, Load, LoadVoltageModel, MissingGenCostPolicy, SourceFormat,
@@ -2595,14 +2594,11 @@ fn parses_goc3_json_static_network() {
     assert_close(net.branches()[0].angmax, 360.0);
     assert_close(net.branches()[1].tap, 1.03);
     assert!((net.branches()[1].shift - 0.05 * 180.0 / std::f64::consts::PI).abs() < 1e-12);
-    // ta_lb/ta_ub are the phase shift control range, not an angle difference
-    // limit: they land on an ActiveFlow control, and angmin/angmax stay open.
+    // ta_lb/ta_ub are SCUC phase shift decision bounds, not automatic branch
+    // control settings or bus angle difference limits.
     assert_close(net.branches()[1].angmin, -360.0);
     assert_close(net.branches()[1].angmax, 360.0);
-    let control = net.branches()[1].control.as_ref().unwrap();
-    assert_eq!(control.mode, TransformerControlMode::ActiveFlow);
-    assert!((control.tap_min - (-0.1 * 180.0 / std::f64::consts::PI)).abs() < 1e-12);
-    assert!((control.tap_max - (0.1 * 180.0 / std::f64::consts::PI)).abs() < 1e-12);
+    assert!(net.branches()[1].control.is_none());
 
     assert_eq!(net.shunts().len(), 1);
     assert_eq!(net.shunts()[0].bus, BusId(2));

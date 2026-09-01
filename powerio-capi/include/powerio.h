@@ -407,9 +407,7 @@ typedef struct {
     size_t contingency_count;
 } PioScucDimensionsView;
 
-/**
- * Required SCUC violation costs.
- */
+/** Required SCUC violation costs, in $/(p.u. h). */
 typedef struct {
     double active_power_balance;
     double reactive_power_balance;
@@ -431,8 +429,8 @@ typedef struct {
 typedef struct {
     double up_pu_per_hour;
     double down_pu_per_hour;
-    double startup_pu;
-    double shutdown_pu;
+    double startup_pu_per_hour;
+    double shutdown_pu_per_hour;
 } PioScucRampLimitsView;
 
 /**
@@ -471,7 +469,8 @@ typedef struct {
 } PioScucReactiveCapabilityView;
 
 /**
- * One SCUC producer or consumer.
+ * One SCUC producer or consumer. On, startup, and shutdown costs are in
+ * dollars. Time fields are in hours.
  */
 typedef struct {
     PioComponentIdView id;
@@ -516,12 +515,10 @@ typedef struct {
 typedef struct {
     double start_time_hours;
     double end_time_hours;
-    double energy_pu_hours;
+    double energy_pu;
 } PioScucEnergyRequirementView;
 
-/**
- * Reserve costs for one device and one interval.
- */
+/** Reserve costs for one device and one interval, in $/(p.u. h). */
 typedef struct {
     double regulation_up;
     double regulation_down;
@@ -3091,6 +3088,31 @@ size_t pio_ac_scuc_solution_time_count(const PioCalculationSolution *solution);
 
 /**
  * Copy one AC SCUC output row for one time position into an owned vector.
+ *
+ * Network quantities use the instance's bus, shunt, AC line, transformer, or
+ * DC line order. Device quantities use the instance's dispatchable device
+ * order. Status and shunt step values are represented as doubles.
+ *
+ * Accepted network quantities are:
+ * - `bus_voltage_magnitude` (p.u.)
+ * - `bus_voltage_angle` (radians)
+ * - `shunt_step` (integer step count)
+ * - `ac_line_on_status` (0 or 1)
+ * - `transformer_tap_ratio` (p.u.)
+ * - `transformer_phase_shift` (radians)
+ * - `transformer_on_status` (0 or 1)
+ * - `dc_line_from_active_power` (p.u.)
+ * - `dc_line_from_reactive_power` (p.u.)
+ * - `dc_line_to_reactive_power` (p.u.)
+ *
+ * Accepted device quantities are `device_on_status`,
+ * `device_startup_status`, and `device_shutdown_status` (0 or 1), plus these
+ * per unit power quantities: `device_active_power`, `device_reactive_power`,
+ * `regulation_reserve_up`, `regulation_reserve_down`,
+ * `synchronized_reserve`, `nonsynchronized_reserve`,
+ * `ramping_reserve_up_online`, `ramping_reserve_up_offline`,
+ * `ramping_reserve_down_online`, `ramping_reserve_down_offline`,
+ * `reactive_reserve_up`, and `reactive_reserve_down`.
  */
 PioVector *pio_ac_scuc_solution_get_values_at(const PioCalculationSolution *solution,
                                               const char *quantity,

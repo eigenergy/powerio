@@ -15,8 +15,7 @@ use serde_json::{Map, Value};
 use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
     BalancedNetwork, BalancedNetworkTables, Branch, BranchCharging, BranchRatingSet, Bus, BusId,
-    BusType, Extras, GenCost, Generator, Hvdc, Load, Shunt, SourceFormat, TransformerControl,
-    TransformerControlMode,
+    BusType, Extras, GenCost, Generator, Hvdc, Load, Shunt, SourceFormat,
 };
 use crate::normalize;
 use crate::{CoordinateSpace, CoordsKind, GeoMeta, Location};
@@ -24,11 +23,9 @@ use crate::{Error, Result};
 
 const FMT: &str = "GO Challenge 3 JSON";
 
-/// GOC3 source document: the file parsed once and shared by the format's
-/// adapters (the balanced network reader here, the operating point extractor
-/// in `powerio`'s stored layer, and the AC SCUC instance builder in
-/// `powerio-prob`), so
-/// section order, uid, bus ID, and device row rules have one owner.
+/// GOC3 source document shared by the balanced network reader and the AC SCUC
+/// instance builder, so section order, uid, bus ID, and device row rules have
+/// one owner.
 #[derive(Clone, Debug)]
 pub struct Goc3Document {
     root: Map<String, Value>,
@@ -64,13 +61,6 @@ impl Goc3Document {
     }
 
     #[must_use]
-    pub fn time_series_output(&self) -> Option<&Map<String, Value>> {
-        self.root
-            .get("time_series_output")
-            .and_then(Value::as_object)
-    }
-
-    #[must_use]
     pub fn reliability(&self) -> Option<&Map<String, Value>> {
         self.root.get("reliability").and_then(Value::as_object)
     }
@@ -83,12 +73,6 @@ impl Goc3Document {
     /// Read a time series input section in source document order.
     pub fn time_series_input_records(&self, name: &'static str) -> Result<Vec<Goc3Record<'_>>> {
         records(self.time_series_input()?, name)
-    }
-
-    /// Read a time series output section in source document order.
-    pub fn time_series_output_records(&self, name: &'static str) -> Result<Vec<Goc3Record<'_>>> {
-        self.time_series_output()
-            .map_or_else(|| Ok(Vec::new()), |output| records(output, name))
     }
 
     /// Enumerate dispatchable devices with the balanced model row assignment.
@@ -104,18 +88,6 @@ impl Goc3Document {
     /// such guarantee.
     pub fn bus_ids(&self) -> Result<HashMap<String, BusId>> {
         bus_id_by_uid(&section(self.network()?, "bus")?)
-    }
-
-    /// Build the period cost curve used by the balanced reader.
-    #[must_use]
-    pub fn dispatchable_device_cost_at(
-        &self,
-        device: &Map<String, Value>,
-        time_series: Option<&Value>,
-        period: usize,
-        base_mva: f64,
-    ) -> Option<GenCost> {
-        cost_at(device, time_series, period, base_mva)
     }
 }
 
@@ -449,7 +421,10 @@ fn read_branches(
                 in_service: initial_status_flag(obj, true),
                 angmin: -360.0,
                 angmax: 360.0,
-                control: shifter_control(obj, transformer),
+                // GOC3 `ta_lb`/`ta_ub` bound the SCUC phase shift decision.
+                // They are not automatic active power flow control settings
+                // on the reusable electrical network.
+                control: None,
                 solution: None,
                 uid: item_uid(item, obj),
                 route: None,
@@ -480,25 +455,6 @@ fn read_branches(
             })
         })
         .collect()
-}
-
-/// GOC3 `ta_lb`/`ta_ub` bound the phase shift decision variable: a device
-/// control range, not a bus angle difference limit, so they map to an
-/// `ActiveFlow` control block (whose tap limits carry the phase angle in
-/// degrees), never to `angmin`/`angmax`.
-fn shifter_control(obj: &Map<String, Value>, transformer: bool) -> Option<TransformerControl> {
-    if !transformer {
-        return None;
-    }
-    let lb = number(obj, "ta_lb");
-    let ub = number(obj, "ta_ub");
-    if lb.is_none() && ub.is_none() {
-        return None;
-    }
-    let mut control = TransformerControl::new(TransformerControlMode::ActiveFlow);
-    control.tap_min = lb.unwrap_or(-std::f64::consts::TAU) * normalize::RAD_TO_DEG;
-    control.tap_max = ub.unwrap_or(std::f64::consts::TAU) * normalize::RAD_TO_DEG;
-    Some(control)
 }
 
 fn read_shunts(
@@ -702,10 +658,8 @@ pub struct Goc3DeviceRecord<'a> {
 }
 
 /// Enumerate simple dispatchable devices with their generator/load row
-/// indices. Row assignment lives here and nowhere else: a consumer that
-/// addresses payload rows by index (the stored operating point extractor in
-/// `powerio`) must enumerate devices through this function so its indices
-/// match the parsed network, uid or no uid.
+/// indices. Row assignment lives here and nowhere else so the balanced network
+/// reader and SCUC instance builder agree, uid or no uid.
 fn device_rows(network: &Map<String, Value>) -> Result<Vec<Goc3DeviceRecord<'_>>> {
     let mut rows = Vec::new();
     let mut generators = 0usize;
@@ -752,9 +706,8 @@ fn device_rows(network: &Map<String, Value>) -> Result<Vec<Goc3DeviceRecord<'_>>
 }
 
 /// Piecewise marginal cost blocks for period `index`, integrated into a
-/// cumulative MATPOWER piecewise linear curve. Shared with the operating point
-/// extractor so a materialized period matches what this parser builds for the
-/// static payload.
+/// cumulative MATPOWER piecewise linear curve for the balanced network's
+/// source assignment.
 fn cost_at(
     obj: &Map<String, Value>,
     ts: Option<&Value>,

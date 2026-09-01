@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use powerio_core::{Diagnostic, Error, SourceBuffer};
+use powerio_core::{ComponentId, Diagnostic, Error, SourceBuffer};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
 use super::source_text;
@@ -451,6 +451,7 @@ pub fn __emit_goc3_output(solution: &AcScucSolution) -> Result<String, Error> {
     let instance = solution.instance();
     let inputs = instance.inputs();
     let network = instance.network();
+    require_goc3_output_component_tables(instance)?;
     let periods = inputs.interval_durations.len();
     let buses = network.buses().len();
     let shunts = inputs.shunts.len();
@@ -727,6 +728,103 @@ fn require_complete_finite_grid(
 
 fn invalid_output(message: impl Into<String>) -> Error {
     Error::new(&codes::BUILD_SOLUTION_SHAPE_MISMATCH, message)
+}
+
+fn require_goc3_output_component_tables(instance: &AcScucInstance) -> Result<(), Error> {
+    let network = instance.network();
+    let inputs = instance.inputs();
+    require_exact_component_table(
+        "simple_dispatchable_device",
+        inputs.devices.iter().map(|row| &row.id),
+        network
+            .generators()
+            .iter()
+            .map(|row| ("generator", row.uid.as_deref()))
+            .chain(
+                network
+                    .loads()
+                    .iter()
+                    .map(|row| ("load", row.uid.as_deref())),
+            ),
+    )?;
+    require_exact_component_table(
+        "shunt",
+        inputs.shunts.iter().map(|row| &row.id),
+        network
+            .shunts()
+            .iter()
+            .map(|row| ("shunt", row.uid.as_deref())),
+    )?;
+    require_exact_component_table(
+        "AC line and transformer switching cost",
+        inputs.branch_switching_costs.iter().map(|row| &row.id),
+        network.branches().iter().map(|row| {
+            let component_type = if row.is_transformer() {
+                "transformer"
+            } else {
+                "branch"
+            };
+            (component_type, row.uid.as_deref())
+        }),
+    )?;
+    require_exact_component_table(
+        "two_winding_transformer control",
+        inputs.transformer_controls.iter().map(|row| &row.id),
+        network
+            .branches()
+            .iter()
+            .filter(|row| row.is_transformer())
+            .map(|row| ("transformer", row.uid.as_deref())),
+    )?;
+    Ok(())
+}
+
+fn require_exact_component_table<'a>(
+    section: &str,
+    actual: impl Iterator<Item = &'a ComponentId>,
+    expected: impl Iterator<Item = (&'static str, Option<&'a str>)>,
+) -> Result<(), Error> {
+    let mut actual_ids = HashSet::new();
+    for id in actual {
+        let key = (id.component_type().to_owned(), id.local_id().to_owned());
+        if !actual_ids.insert(key) {
+            return Err(invalid_output(format!(
+                "GOC3 output {section} table repeats component {id}"
+            )));
+        }
+    }
+
+    let mut expected_ids = HashSet::new();
+    for (component_type, uid) in expected {
+        let uid = uid.ok_or_else(|| {
+            invalid_output(format!(
+                "GOC3 output {section} table requires every {component_type} to have a uid"
+            ))
+        })?;
+        let key = (component_type.to_owned(), uid.to_owned());
+        if !expected_ids.insert(key) {
+            return Err(invalid_output(format!(
+                "the instance network repeats {component_type}/{uid}"
+            )));
+        }
+    }
+
+    let missing = expected_ids.difference(&actual_ids).min();
+    let unexpected = actual_ids.difference(&expected_ids).min();
+    match (missing, unexpected) {
+        (None, None) => Ok(()),
+        (Some((kind, uid)), None) => Err(invalid_output(format!(
+            "GOC3 output {section} table is missing {kind}/{uid}"
+        ))),
+        (None, Some((kind, uid))) => Err(invalid_output(format!(
+            "GOC3 output {section} table contains unexpected {kind}/{uid}"
+        ))),
+        (Some((missing_kind, missing_uid)), Some((extra_kind, extra_uid))) => {
+            Err(invalid_output(format!(
+                "GOC3 output {section} table is missing {missing_kind}/{missing_uid} and contains unexpected {extra_kind}/{extra_uid}"
+            )))
+        }
+    }
 }
 
 fn repeated_output_uid(sections: &[(&str, &[&str])]) -> Option<String> {
