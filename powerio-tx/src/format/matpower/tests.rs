@@ -483,22 +483,25 @@ fn areas_survive_the_canonical_round_trip() {
 }
 
 #[test]
-fn an_area_name_or_interchange_is_a_declared_drop() {
+fn area_metadata_matpower_cannot_hold_is_a_declared_drop() {
     let mut net = parse_mpc(CASE_TINY).unwrap();
     *net.source_format_mut() = SourceFormat::InMemory;
     net.areas_mut().push(crate::network::Area {
         name: Some("west".into()),
         net_interchange: 12.5,
+        uid: Some("area-west".into()),
+        area_type: Some("ControlArea".into()),
         ..crate::network::Area::new(1)
     });
 
     let conversion =
         crate::format::emit_value_text(&net, crate::format::TargetFormat::Matpower).unwrap();
     assert!(
-        conversion
-            .render_diagnostics()
-            .iter()
-            .any(|w| w.contains("area record(s) carry a name or interchange data")),
+        conversion.render_diagnostics().iter().any(|w| {
+            w.contains(
+                "area record(s) carry a name, source identity, classification, or interchange data",
+            )
+        }),
         "the fields mpc.areas cannot hold must be declared: {:?}",
         conversion.render_diagnostics()
     );

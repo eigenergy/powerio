@@ -4062,6 +4062,7 @@ Q
         close(a.net_interchange, 100.0);
         close(a.tolerance, 10.0);
         assert_eq!(a.name.as_deref(), Some("AREA-ONE"));
+        assert_eq!(a.area_type.as_deref(), Some("ControlArea"));
 
         // Round trip: write and re-read keeps the interchange and swing bus.
         let net2 = parse_psse(&write_psse(&net).text).unwrap();
@@ -4071,6 +4072,7 @@ Q
         assert_eq!(a2.slack_bus, Some(BusId(5)));
         close(a2.net_interchange, 100.0);
         assert_eq!(a2.name.as_deref(), Some("AREA-ONE"));
+        assert_eq!(a2.area_type.as_deref(), Some("ControlArea"));
     }
 
     #[test]
