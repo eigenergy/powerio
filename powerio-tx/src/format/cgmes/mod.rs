@@ -40,6 +40,7 @@ use crate::{Error, Result};
 const MAX_FILES: usize = 4_096;
 const MAX_BYTES: u64 = 64 << 20;
 const MAX_COMPRESSION_RATIO: u64 = 200;
+const CGMES_CLASS_PROPERTY: &str = "cgmes_class";
 
 pub(crate) fn looks_like_profile_set(source: &Source) -> bool {
     if source.is_directory() {
@@ -1400,6 +1401,89 @@ mod tests {
                 .iter()
                 .any(|metadata| { metadata.name.as_deref() == Some("North substation") })
         );
+    }
+
+    #[test]
+    fn series_compensator_terminals_survive_fresh_emission() {
+        let documents = write::write_cgmes(&detailed_network(), CgmesVersion::V3_0)
+            .unwrap()
+            .files
+            .into_iter()
+            .map(|(name, text)| {
+                let mut text = text
+                    .replace("ACLineSegment", "SeriesCompensator")
+                    .replace(
+                        "    <cim:SeriesCompensator.bch>0</cim:SeriesCompensator.bch>\n",
+                        "",
+                    );
+                if name.ends_with("_EQ.xml") {
+                    text = text.replace(
+                        "</cim:SeriesCompensator>",
+                        "    <cim:SeriesCompensator.r0>0.2</cim:SeriesCompensator.r0>\n\
+                         <cim:SeriesCompensator.x0>0.3</cim:SeriesCompensator.x0>\n\
+                         <cim:SeriesCompensator.varistorPresent>true</cim:SeriesCompensator.varistorPresent>\n\
+                         <cim:SeriesCompensator.varistorRatedCurrent>500</cim:SeriesCompensator.varistorRatedCurrent>\n\
+                         <cim:SeriesCompensator.varistorVoltageThreshold>250</cim:SeriesCompensator.varistorVoltageThreshold>\n\
+                         </cim:SeriesCompensator>",
+                    );
+                }
+                (name, text)
+            })
+            .collect();
+
+        let parsed = read::read_cgmes_documents(documents, Some("series-compensator")).unwrap();
+        assert!(
+            parsed
+                .warnings
+                .iter()
+                .all(|warning| !warning.contains("SeriesCompensator")),
+            "SeriesCompensator is mapped electrical equipment"
+        );
+        let branch_terminal_nodes = |network: &BalancedNetwork| {
+            let branch = network.branches().first().unwrap();
+            let branch = component("branch", branch.uid.as_deref().unwrap());
+            let detailed = network.detailed_connectivity().as_deref().unwrap();
+            let terminals = detailed
+                .terminals
+                .iter()
+                .filter(|terminal| terminal.equipment == branch)
+                .collect::<Vec<_>>();
+            assert_eq!(terminals.len(), 2);
+            [
+                terminals[0].node.clone().unwrap(),
+                terminals[1].node.clone().unwrap(),
+            ]
+        };
+        let source_nodes = branch_terminal_nodes(&parsed.network);
+        assert_ne!(source_nodes[0], source_nodes[1]);
+
+        let fresh = write::write_cgmes(&parsed.network, CgmesVersion::V3_0).unwrap();
+        assert!(
+            fresh
+                .warnings
+                .iter()
+                .all(|warning| !warning.contains("SeriesCompensator")),
+            "a retained SeriesCompensator should emit without projection"
+        );
+        let eq = fresh
+            .files
+            .iter()
+            .find(|(name, _)| name.ends_with("_EQ.xml"))
+            .map(|(_, text)| text)
+            .unwrap();
+        assert!(eq.contains("<cim:SeriesCompensator "));
+        assert!(!eq.contains("<cim:ACLineSegment "));
+        for field in [
+            "SeriesCompensator.r0",
+            "SeriesCompensator.x0",
+            "SeriesCompensator.varistorPresent",
+            "SeriesCompensator.varistorRatedCurrent",
+            "SeriesCompensator.varistorVoltageThreshold",
+        ] {
+            assert!(eq.contains(&format!("<cim:{field}>")), "missing `{field}`");
+        }
+        let reparsed = read::read_cgmes_documents(fresh.files, Some("fresh")).unwrap();
+        assert_eq!(branch_terminal_nodes(&reparsed.network), source_nodes);
     }
 
     #[test]

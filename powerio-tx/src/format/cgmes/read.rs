@@ -16,8 +16,8 @@ use std::collections::{BTreeMap, HashMap};
 
 use powerio_core::ComponentId;
 
-use super::CgmesVersion;
 use super::xml::{CimDocument, CimObject, ModelHeader, PropValue, parse_cimxml};
+use super::{CGMES_CLASS_PROPERTY, CgmesVersion};
 use crate::network::{
     AcDcConverterControlMode, ActivePowerControl, BalancedNetwork, Branch, BranchCharging, Bus,
     BusBreakerBus, BusId, BusType, BusbarSection, CalculatedBus, ComponentAlias, ComponentMetadata,
@@ -512,6 +512,7 @@ const CONSUMED: &[&str] = &[
     "SvShuntCompensatorSections",
     "TopologicalIsland",
     "ACLineSegment",
+    "SeriesCompensator",
     "PowerTransformer",
     "PowerTransformerEnd",
     "RatioTapChanger",
@@ -737,7 +738,7 @@ fn component_type(class: &str) -> &'static str {
         | "Jumper"
         | "GroundDisconnector"
         | "DisconnectingCircuitBreaker" => "switch",
-        "ACLineSegment" | "PowerTransformer" => "branch",
+        "ACLineSegment" | "SeriesCompensator" | "PowerTransformer" => "branch",
         "Line" => "line",
         "Terminal" => "terminal",
         "DCConverterUnit" => "dc_converter_unit",
@@ -1042,6 +1043,27 @@ fn build_detailed_connectivity(
         .objects
         .iter()
         .map(|object| {
+            let mut properties = BTreeMap::new();
+            if object.class == "SeriesCompensator" {
+                properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.clone());
+                for property in [
+                    "SeriesCompensator.r0",
+                    "SeriesCompensator.x0",
+                    "SeriesCompensator.varistorRatedCurrent",
+                    "SeriesCompensator.varistorVoltageThreshold",
+                ] {
+                    if let Some(value) = store.f(&object.id, property) {
+                        properties.insert(property.into(), value.to_string());
+                    }
+                }
+                if let Some(value) = store.boolean(&object.id, "SeriesCompensator.varistorPresent")
+                {
+                    properties.insert(
+                        "SeriesCompensator.varistorPresent".into(),
+                        value.to_string(),
+                    );
+                }
+            }
             Ok(ComponentMetadata {
                 component: component_id(component_type(&object.class), &object.id)?,
                 name: store
@@ -1060,7 +1082,7 @@ fn build_detailed_connectivity(
                     value: object.id.clone(),
                     authority: Some("CGMES".into()),
                 }],
-                properties: BTreeMap::default(),
+                properties,
                 fictitious: store
                     .boolean(&object.id, "IdentifiedObject.isFictitious")
                     .unwrap_or(false),
