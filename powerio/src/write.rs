@@ -634,7 +634,7 @@ fn emit_goc3_solution(
     solution: &powerio_prob::AcScucSolution,
     destination: Destination,
 ) -> Result<EmitResult, Error> {
-    let text = powerio_prob::__emit_goc3_output(solution)?;
+    let text = powerio_prob::__internal::__emit_goc3_output(solution)?;
     let artifact = powerio_core::MemoryArtifact::new(
         powerio_core::ArtifactPath::new("solution.json")
             .expect("static name is a valid artifact path"),

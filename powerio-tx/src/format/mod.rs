@@ -5,9 +5,9 @@
 //! pandapower JSON, PyPSA CSV folders, PSLF `.epc`, PSS/E RAWX 35, PowSybl
 //! XIIDM 1.17, CIM CGMES 2.4.15 and 3.0, GO Challenge 3 JSON, Surge JSON, and
 //! DeepMind OPFData JSON. PowerWorld `.pwb` cases and OPFData JSON are input
-//! only. Direct GO Challenge 3 parsing here is the deliberate network only
-//! projection; the `powerio` facade returns its typed calculation instance or
-//! solution. PowerWorld `.pwd` displays
+//! only. GO Challenge 3 defines a calculation rather than a bare network, so
+//! its implementation is private to the `powerio` facade's typed parser.
+//! PowerWorld `.pwd` displays
 //! use the display API. Case input and
 //! output formats meet here, so adding a format that supports emission is one module plus
 //! one hub registration.
@@ -49,8 +49,7 @@ use routing::{Detection, JsonClass, SourceFormat as DetectedFormat, Transmission
 mod cgmes;
 mod decode;
 mod egret;
-#[doc(hidden)]
-pub mod goc3;
+pub(crate) mod goc3;
 mod matpower;
 mod opfdata;
 mod pandapower;
@@ -112,9 +111,9 @@ pub enum TargetFormat {
     Matpower,
     /// GE PSLF `.epc` (round-trip; byte-exact when the case kept its source).
     Pslf,
-    /// DOE GO Challenge 3 JSON problem data. This transmission crate reads the
-    /// problem network and can echo retained source; the `powerio` facade owns
-    /// typed problem and solution handling.
+    /// DOE GO Challenge 3 JSON problem or solution data. The `powerio` facade
+    /// owns its typed problem and solution handling; direct `powerio-tx`
+    /// parsing refuses this calculation format.
     Goc3Json,
     /// Surge native JSON network document.
     SurgeJson,
@@ -464,7 +463,8 @@ fn is_pslf_name(name: &str) -> bool {
 /// case insensitively (issue #97: `.RAW` is as common as `.raw` in the wild). A
 /// `.json` file is classified by top level shape markers: pandapower
 /// (`"_class": "pandapowerNet"`), egret (`elements` and `system`), GO Challenge
-/// 3 (`network` plus `time_series_input`/`reliability`), Surge JSON
+/// 3 (`network` plus `time_series_input`/`reliability`, refused here with
+/// guidance to the typed facade parser), Surge JSON
 /// (`format: "surge-json"`), OPFData (`grid`, `solution`, and `metadata`), and
 /// PowerModels JSON (`baseMVA`, `branch`, `gen`, or `gencost`). JSON matching
 /// model JSON markers (`buses` plus a network key), distribution markers,
@@ -474,8 +474,9 @@ fn is_pslf_name(name: &str) -> bool {
 /// the typed module: the network value, the parser's findings, and the retained
 /// source.
 ///
-/// The one parser the CLI and the Python/C/Julia bindings share, so adding a
-/// source format is one edit here, not one per binding.
+/// The balanced network parser used by the top level facade. The CLI and
+/// language bindings call that facade so calculation formats such as GO
+/// Challenge 3 keep their typed values.
 ///
 /// # Errors
 /// A `Request` failure when the format cannot be determined or is refused, an
@@ -809,11 +810,11 @@ fn read_source(
         // PSLF read normally enters through the `is_pslf_name`/`.epc` fast
         // path in the dispatch; this arm keeps the funnel total.
         TargetFormat::Pslf => pslf::parse_pslf_source(text, name_hint, warnings),
-        // The general parse takes the network and drops the typed problem
-        // document; the calculation instance this source declares arrives
-        // with the instance types.
         TargetFormat::Goc3Json => {
-            goc3::parse_goc3_source(text, name_hint, warnings, true).map(|(net, _goc3)| net)
+            return Err(Error::UnknownFormat(
+                "goc3-json defines a GO Challenge 3 calculation; use powerio::parse to obtain AcScucInstance or AcScucSolution"
+                    .into(),
+            ));
         }
         TargetFormat::SurgeJson => surge::parse_surge_source(text, name_hint, warnings),
         TargetFormat::DeepMindOpfDataJson => {
@@ -894,8 +895,9 @@ pub(crate) fn reject_empty_case(net: &BalancedNetwork, format: &'static str) -> 
     Ok(())
 }
 
-/// The source format names [`parse`] accepts as a declared format, each with
-/// its aliases. The unknown format error prints this list, and a test walks
+/// The source format names this crate recognizes, each with its aliases. A
+/// recognized calculation format can still be refused with guidance to the
+/// top level facade. The unknown format error prints this list, and a test walks
 /// every alias through [`routing::parse_transmission_format`] so it
 /// cannot drift from the matcher. `pypsa-csv` names a directory source and
 /// `pwb` a binary one; every other name reads file and memory sources alike.

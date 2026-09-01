@@ -1,10 +1,10 @@
-//! Read DOE GO Challenge 3 JSON input data into the transmission `BalancedNetwork`.
+//! Decode DOE GO Challenge 3 problem data for the typed calculation parser.
 //!
 //! The GO Challenge 3 data format covers static electrical data, time varying
 //! data, contingencies, and solution data for Challenge 3 and later uses.
-//! `BalancedNetwork` is a static electrical model, so this reader maps the
-//! first time interval into generator and load bounds, retains the original
-//! JSON source, and reports the scheduling data it leaves in the source document.
+//! The top level parser combines the decoded electrical network with the
+//! scheduling and contingency data. This module is not a public network
+//! parser.
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -73,21 +73,6 @@ impl Goc3Document {
     /// Read a time series input section in source document order.
     pub fn time_series_input_records(&self, name: &'static str) -> Result<Vec<Goc3Record<'_>>> {
         records(self.time_series_input()?, name)
-    }
-
-    /// Enumerate dispatchable devices with the balanced model row assignment.
-    pub fn dispatchable_devices(&self) -> Result<Vec<Goc3DeviceRecord<'_>>> {
-        device_rows(self.network()?)
-    }
-
-    /// Map bus UIDs to the external bus IDs assigned by the balanced reader.
-    ///
-    /// Uid uniqueness is validated by the parse that produced this document
-    /// (`read_buses` rejects a duplicate bus uid), so the map here cannot
-    /// silently collapse entries; a document constructed another way has no
-    /// such guarantee.
-    pub fn bus_ids(&self) -> Result<HashMap<String, BusId>> {
-        bus_id_by_uid(&section(self.network()?, "bus")?)
     }
 }
 
@@ -645,18 +630,17 @@ fn assign_bus_types(
 
 /// Which payload table a simple dispatchable device row lands in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Goc3DeviceKind {
+enum Goc3DeviceKind {
     Generators,
     Loads,
 }
 
 /// One simple dispatchable device with the payload row index the parser
 /// assigns it.
-pub struct Goc3DeviceRecord<'a> {
-    pub kind: Goc3DeviceKind,
-    pub row: usize,
-    pub uid: Option<String>,
-    pub obj: &'a Map<String, Value>,
+struct Goc3DeviceRecord<'a> {
+    kind: Goc3DeviceKind,
+    uid: Option<String>,
+    obj: &'a Map<String, Value>,
 }
 
 /// Enumerate simple dispatchable devices with their generator/load row
@@ -664,8 +648,6 @@ pub struct Goc3DeviceRecord<'a> {
 /// reader and SCUC instance builder agree, uid or no uid.
 fn device_rows(network: &Map<String, Value>) -> Result<Vec<Goc3DeviceRecord<'_>>> {
     let mut rows = Vec::new();
-    let mut generators = 0usize;
-    let mut loads = 0usize;
     // Time-series bounds and costs are joined back onto devices by uid
     // (`device_time_series` is last-write-wins on its map), so a repeated uid
     // would silently hand one device the other's series; reject it the way
@@ -681,15 +663,9 @@ fn device_rows(network: &Map<String, Value>) -> Result<Vec<Goc3DeviceRecord<'_>>
                 )));
             }
         }
-        let (table, row) = match string(obj, "device_type").unwrap_or("producer") {
-            "producer" => {
-                generators += 1;
-                (Goc3DeviceKind::Generators, generators - 1)
-            }
-            "consumer" => {
-                loads += 1;
-                (Goc3DeviceKind::Loads, loads - 1)
-            }
+        let kind = match string(obj, "device_type").unwrap_or("producer") {
+            "producer" => Goc3DeviceKind::Generators,
+            "consumer" => Goc3DeviceKind::Loads,
             other => {
                 return Err(bad(format!(
                     "simple_dispatchable_device `{}` has unsupported `device_type` `{other}`",
@@ -697,12 +673,7 @@ fn device_rows(network: &Map<String, Value>) -> Result<Vec<Goc3DeviceRecord<'_>>
                 )));
             }
         };
-        rows.push(Goc3DeviceRecord {
-            kind: table,
-            row,
-            uid,
-            obj,
-        });
+        rows.push(Goc3DeviceRecord { kind, uid, obj });
     }
     Ok(rows)
 }

@@ -2565,9 +2565,9 @@ fn nameless_json_text_sniffs_like_a_json_file() {
 }
 
 #[test]
-fn parses_goc3_json_static_network() {
-    let parsed = parse_str(GOC3_TINY, "goc3-json").unwrap();
-    let net = parsed.network.clone();
+fn the_internal_goc3_decoder_builds_the_instance_network() {
+    let (net, _diagnostics, _document) =
+        powerio_tx::__internal::parse_goc3_instance_network(GOC3_TINY).unwrap();
 
     assert_eq!(net.source_format(), SourceFormat::Goc3Json);
     assert_close(net.base_mva(), 100.0);
@@ -2634,25 +2634,6 @@ fn parses_goc3_json_static_network() {
     assert_close(net.hvdc()[0].qmaxf, 20.0);
     assert_close(net.hvdc()[0].qmaxt, 25.0);
 
-    assert!(
-        parsed
-            .render_diagnostics()
-            .iter()
-            .any(|w| w.contains("time_series_input reduced")),
-        "{:?}",
-        parsed.render_diagnostics()
-    );
-    assert!(
-        parsed
-            .render_diagnostics()
-            .iter()
-            .any(|w| w.contains("reliability contingencies")),
-        "{:?}",
-        parsed.render_diagnostics()
-    );
-
-    let echo = parsed.emit(TargetFormat::Goc3Json).unwrap();
-    assert_eq!(echo.text, GOC3_TINY);
     let matpower = emit_value(&net, TargetFormat::Matpower).unwrap();
     assert!(matpower.text.contains("mpc.bus"));
 }
@@ -2660,7 +2641,7 @@ fn parses_goc3_json_static_network() {
 #[test]
 fn goc3_requires_the_declared_system_base() {
     let without_base = GOC3_TINY.replacen(r#""base_norm_mva": 100.0"#, "", 1);
-    let error = parse_str(&without_base, "goc3-json").unwrap_err();
+    let error = powerio_tx::__internal::parse_goc3_instance_network(&without_base).unwrap_err();
     assert!(
         error
             .to_string()
@@ -2671,8 +2652,7 @@ fn goc3_requires_the_declared_system_base() {
 
 #[test]
 fn goc3_write_without_retained_source_is_write_unsupported() {
-    // A goc3 source echoes byte for byte (asserted above); any other network
-    // refuses with the read only error, not "unknown format".
+    // A bare network cannot produce a GO Challenge 3 calculation file.
     let net = rich_audit_network();
     let err = emit_value(&net, TargetFormat::Goc3Json).unwrap_err();
     assert_eq!(err.category(), powerio_core::ErrorCategory::Request);
@@ -2686,7 +2666,7 @@ fn goc3_write_without_retained_source_is_write_unsupported() {
 #[test]
 fn goc3_rejects_unknown_bus_ref_even_when_digits_match() {
     let bad = GOC3_TINY.replacen(r#""to_bus": "bus_01""#, r#""to_bus": "missing_bus_01""#, 1);
-    let err = parse_str(&bad, "goc3-json").unwrap_err();
+    let err = powerio_tx::__internal::parse_goc3_instance_network(&bad).unwrap_err();
     assert!(
         err.to_string().contains("unknown bus uid `missing_bus_01`"),
         "{err}"
@@ -2718,7 +2698,8 @@ fn goc3_accepts_nonnumeric_bus_uids_by_exact_reference() {
         ]
       }
     }"#;
-    let net = parse_str(src, "goc3-json").unwrap().network;
+    let (net, _diagnostics, _document) =
+        powerio_tx::__internal::parse_goc3_instance_network(src).unwrap();
     assert_eq!(net.buses()[0].id, BusId(1));
     assert_eq!(net.buses()[1].id, BusId(2));
     assert_eq!(net.branches()[0].from, BusId(1));
@@ -2726,7 +2707,7 @@ fn goc3_accepts_nonnumeric_bus_uids_by_exact_reference() {
 }
 
 #[test]
-fn infers_goc3_json_file() {
+fn powerio_tx_refuses_a_goc3_calculation_source() {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -2734,10 +2715,14 @@ fn infers_goc3_json_file() {
     let path = std::env::temp_dir().join(format!("powerio-goc3-{stamp}.json"));
     std::fs::write(&path, GOC3_TINY).unwrap();
 
-    let parsed = parse_file(&path, None).unwrap();
-    assert_eq!(parsed.network.source_format(), SourceFormat::Goc3Json);
-    let conv = parse_file_and_emit(&path, TargetFormat::Matpower, None).unwrap();
-    assert!(conv.text.contains("mpc.branch"));
+    let error = parse_file(&path, None).unwrap_err();
+    assert_eq!(error.category(), powerio_core::ErrorCategory::Request);
+    assert!(
+        error
+            .to_string()
+            .contains("use powerio::parse to obtain AcScucInstance or AcScucSolution"),
+        "{error}"
+    );
 
     let _ = std::fs::remove_file(path);
 }

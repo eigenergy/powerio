@@ -855,7 +855,7 @@ pub fn __parse_goc3_problem_buffer(
 ) -> Result<(AcScucInstance, Vec<Diagnostic>), Error> {
     let content = source_text(buffer)?;
     let (network, mut diagnostics, document) =
-        powerio_tx::format::goc3::parse_goc3_instance_network(content)
+        powerio_tx::__internal::parse_goc3_instance_network(content)
             .map_err(|error| Error::new(error.code(), format!("{}: {error}", buffer.name())))?;
     let inputs = parse_goc3_document(&document).map_err(|error| goc3_error(&error))?;
     diagnostics.extend(goc3_optional_field_diagnostics(&document));
@@ -865,7 +865,7 @@ pub fn __parse_goc3_problem_buffer(
 }
 
 fn goc3_optional_field_diagnostics(
-    document: &powerio_tx::format::goc3::Goc3Document,
+    document: &powerio_tx::__internal::Goc3Document,
 ) -> Vec<powerio_core::Diagnostic> {
     let mut diagnostics = Vec::new();
     push_goc3_general_optional_diagnostics(document, &mut diagnostics);
@@ -876,7 +876,7 @@ fn goc3_optional_field_diagnostics(
 }
 
 fn push_goc3_general_optional_diagnostics(
-    document: &powerio_tx::format::goc3::Goc3Document,
+    document: &powerio_tx::__internal::Goc3Document,
     diagnostics: &mut Vec<powerio_core::Diagnostic>,
 ) {
     const GENERAL_OPTIONAL: &[&str] = &[
@@ -916,7 +916,7 @@ fn push_goc3_general_optional_diagnostics(
 }
 
 fn push_goc3_bus_optional_diagnostics(
-    document: &powerio_tx::format::goc3::Goc3Document,
+    document: &powerio_tx::__internal::Goc3Document,
     diagnostics: &mut Vec<powerio_core::Diagnostic>,
 ) {
     if let Some(buses) = document
@@ -980,7 +980,7 @@ fn push_goc3_bus_optional_diagnostics(
 }
 
 fn push_goc3_development_diagnostics(
-    document: &powerio_tx::format::goc3::Goc3Document,
+    document: &powerio_tx::__internal::Goc3Document,
     diagnostics: &mut Vec<powerio_core::Diagnostic>,
 ) {
     for parent in ["network", "time_series_input"] {
@@ -999,7 +999,7 @@ fn push_goc3_development_diagnostics(
 }
 
 fn push_goc3_device_optional_diagnostics(
-    document: &powerio_tx::format::goc3::Goc3Document,
+    document: &powerio_tx::__internal::Goc3Document,
     diagnostics: &mut Vec<powerio_core::Diagnostic>,
 ) {
     if let Some(devices) = document

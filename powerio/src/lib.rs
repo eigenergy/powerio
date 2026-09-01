@@ -322,7 +322,7 @@ pub fn parse(
     }
     match routed_family(&source)? {
         RoutedFamily::Goc3 => parse_goc3(source),
-        RoutedFamily::OpfData => powerio_prob::__decode_opfdata_solution(source)
+        RoutedFamily::OpfData => powerio_prob::__internal::__decode_opfdata_solution(source)
             .map(|module| module.map_value(PioValue::from)),
         RoutedFamily::Distribution(detected) => {
             let source = match (source.format(), detected) {
@@ -364,13 +364,14 @@ fn parse_goc3(
         return Err(Error::new(&codes::READ_GOC3_PROBLEM_REQUIRED, message).with_source(source));
     };
 
-    let (instance, diagnostics) = match powerio_prob::__parse_goc3_problem_buffer(&problem) {
-        Ok(parsed) => parsed,
-        Err(error) => return Err(error.with_source(source)),
-    };
+    let (instance, diagnostics) =
+        match powerio_prob::__internal::__parse_goc3_problem_buffer(&problem) {
+            Ok(parsed) => parsed,
+            Err(error) => return Err(error.with_source(source)),
+        };
     let value = match files.solution {
         Some(solution) => {
-            let solution = match powerio_prob::__parse_goc3_output_buffer(
+            let solution = match powerio_prob::__internal::__parse_goc3_output_buffer(
                 std::sync::Arc::new(instance),
                 &solution,
             ) {
@@ -413,16 +414,22 @@ fn parse_pypsa(
         format::PypsaAxis::SingleSnapshot => {
             format::parse(source).map(|module| module.map_value(PioValue::from))
         }
-        format::PypsaAxis::Series => match powerio_prob::__decode_pypsa_sequence(&source) {
-            Ok((sequence, diagnostics)) => {
-                let value = match sequence {
-                    powerio_prob::PypsaSequence::Networks(series) => PioValue::from(series),
-                    powerio_prob::PypsaSequence::OperatingPoints(points) => PioValue::from(points),
-                };
-                powerio_core::PioModule::parsed(value, source, diagnostics)
+        format::PypsaAxis::Series => {
+            match powerio_prob::__internal::__decode_pypsa_sequence(&source) {
+                Ok((sequence, diagnostics)) => {
+                    let value = match sequence {
+                        powerio_prob::__internal::PypsaSequence::Networks(series) => {
+                            PioValue::from(series)
+                        }
+                        powerio_prob::__internal::PypsaSequence::OperatingPoints(points) => {
+                            PioValue::from(points)
+                        }
+                    };
+                    powerio_core::PioModule::parsed(value, source, diagnostics)
+                }
+                Err(error) => Err(error.with_source(source)),
             }
-            Err(error) => Err(error.with_source(source)),
-        },
+        }
     }
 }
 

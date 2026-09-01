@@ -6,7 +6,7 @@
 //! operators and the DC OPF bundle writer derived from these instances live
 //! in `powerio-matrix`, which depends on this crate.
 
-pub mod formats;
+mod formats;
 pub(crate) mod goc3;
 pub mod instance;
 pub mod operating;
@@ -19,11 +19,20 @@ pub use powerio_tx::BranchSusceptanceFormula;
 pub mod diagnostics;
 pub mod error;
 pub use error::{Error, Result};
+/// Unsupported implementation details shared with the top level PowerIO
+/// facade.
+///
+/// These items can change without notice and are not part of the
+/// `powerio-prob` API. Applications should call `powerio::parse` and
+/// `powerio::emit`.
 #[doc(hidden)]
-pub use formats::{
-    __decode_opfdata_solution, __decode_pypsa_sequence, __emit_goc3_output,
-    __parse_goc3_output_buffer, __parse_goc3_problem_buffer, PypsaSequence,
-};
+pub mod __internal {
+    #[doc(hidden)]
+    pub use crate::formats::{
+        __decode_opfdata_solution, __decode_pypsa_sequence, __emit_goc3_output,
+        __parse_goc3_output_buffer, __parse_goc3_problem_buffer, PypsaSequence,
+    };
+}
 pub use instance::{
     AcBusSpecification, AcOpfInstance, AcPfInstance, AcScucInstance, ActiveConstraints,
     ActiveControlMode, ConstraintSelection, DcBusSpecification, DcOpfInstance, DcPfInstance,
