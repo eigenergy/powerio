@@ -769,6 +769,18 @@ pub fn __parse_goc3_problem_buffer(
 fn goc3_optional_field_diagnostics(
     document: &powerio_tx::format::goc3::Goc3Document,
 ) -> Vec<powerio_core::Diagnostic> {
+    let mut diagnostics = Vec::new();
+    push_goc3_general_optional_diagnostics(document, &mut diagnostics);
+    push_goc3_bus_optional_diagnostics(document, &mut diagnostics);
+    push_goc3_development_diagnostics(document, &mut diagnostics);
+    push_goc3_device_optional_diagnostics(document, &mut diagnostics);
+    diagnostics
+}
+
+fn push_goc3_general_optional_diagnostics(
+    document: &powerio_tx::format::goc3::Goc3Document,
+    diagnostics: &mut Vec<powerio_core::Diagnostic>,
+) {
     const GENERAL_OPTIONAL: &[&str] = &[
         "timestamp_start",
         "timestamp_stop",
@@ -781,7 +793,6 @@ fn goc3_optional_field_diagnostics(
         "day_type",
         "net_load",
     ];
-    let mut diagnostics = Vec::new();
     if let Some(general) = document
         .root()
         .get("network")
@@ -804,6 +815,12 @@ fn goc3_optional_field_diagnostics(
             ));
         }
     }
+}
+
+fn push_goc3_bus_optional_diagnostics(
+    document: &powerio_tx::format::goc3::Goc3Document,
+    diagnostics: &mut Vec<powerio_core::Diagnostic>,
+) {
     if let Some(buses) = document
         .root()
         .get("network")
@@ -813,7 +830,7 @@ fn goc3_optional_field_diagnostics(
     {
         for field in ["area", "zone", "city", "county", "state", "country"] {
             push_source_field_diagnostic(
-                &mut diagnostics,
+                diagnostics,
                 &powerio_tx::diagnostics::codes::READ_GOC3_OPTIONAL_FIELD_UNTYPED,
                 buses,
                 |bus| bus.contains_key(field),
@@ -823,7 +840,7 @@ fn goc3_optional_field_diagnostics(
             );
         }
         push_source_field_diagnostic(
-            &mut diagnostics,
+            diagnostics,
             &powerio_tx::diagnostics::codes::READ_GOC3_OPTIONAL_FIELD_UNTYPED,
             buses,
             |bus| bus.contains_key("longitude") && !bus.contains_key("latitude"),
@@ -832,7 +849,7 @@ fn goc3_optional_field_diagnostics(
             "bus",
         );
         push_source_field_diagnostic(
-            &mut diagnostics,
+            diagnostics,
             &powerio_tx::diagnostics::codes::READ_GOC3_OPTIONAL_FIELD_UNTYPED,
             buses,
             |bus| bus.contains_key("latitude") && !bus.contains_key("longitude"),
@@ -862,6 +879,12 @@ fn goc3_optional_field_diagnostics(
             ));
         }
     }
+}
+
+fn push_goc3_development_diagnostics(
+    document: &powerio_tx::format::goc3::Goc3Document,
+    diagnostics: &mut Vec<powerio_core::Diagnostic>,
+) {
     for parent in ["network", "time_series_input"] {
         if document
             .root()
@@ -875,6 +898,12 @@ fn goc3_optional_field_diagnostics(
             ));
         }
     }
+}
+
+fn push_goc3_device_optional_diagnostics(
+    document: &powerio_tx::format::goc3::Goc3Document,
+    diagnostics: &mut Vec<powerio_core::Diagnostic>,
+) {
     if let Some(devices) = document
         .root()
         .get("network")
@@ -883,7 +912,7 @@ fn goc3_optional_field_diagnostics(
         .and_then(serde_json::Value::as_array)
     {
         push_source_field_diagnostic(
-            &mut diagnostics,
+            diagnostics,
             &powerio_tx::diagnostics::codes::READ_GOC3_RETAINED_SOURCE_ONLY,
             devices,
             |device| {
@@ -898,7 +927,7 @@ fn goc3_optional_field_diagnostics(
             "device",
         );
         push_source_field_diagnostic(
-            &mut diagnostics,
+            diagnostics,
             &powerio_tx::diagnostics::codes::READ_GOC3_OPTIONAL_FIELD_UNTYPED,
             devices,
             |device| {
@@ -914,7 +943,7 @@ fn goc3_optional_field_diagnostics(
         );
         for field in ["vm_setpoint", "nameplate_capacity"] {
             push_source_field_diagnostic(
-                &mut diagnostics,
+                diagnostics,
                 &powerio_tx::diagnostics::codes::READ_GOC3_OPTIONAL_FIELD_UNTYPED,
                 devices,
                 |device| {
@@ -932,7 +961,6 @@ fn goc3_optional_field_diagnostics(
             );
         }
     }
-    diagnostics
 }
 
 fn push_source_field_diagnostic(
