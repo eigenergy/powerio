@@ -192,11 +192,17 @@ fn canonical_warnings(net: &BalancedNetwork) -> Diagnostics {
     let lossy_areas = net
         .areas()
         .iter()
-        .filter(|a| a.name.is_some() || a.net_interchange != 0.0 || a.tolerance != 0.0)
+        .filter(|a| {
+            a.name.is_some()
+                || a.net_interchange != 0.0
+                || a.tolerance != 0.0
+                || a.uid.is_some()
+                || a.area_type.is_some()
+        })
         .count();
     if lossy_areas > 0 {
         warnings.push(&F.field_dropped, format!(
-            "{lossy_areas} of {} area record(s) carry a name or interchange data: `mpc.areas` holds only the area number and reference bus",
+            "{lossy_areas} of {} area record(s) carry a name, source identity, classification, or interchange data: `mpc.areas` holds only the area number and reference bus",
             net.areas().len()
         ));
     }

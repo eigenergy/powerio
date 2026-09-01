@@ -705,10 +705,15 @@ const TRANSMISSION_FORMATS: [TransmissionFormat; 8] = [
 // MATPOWER and PSS/E source rows' PowerModels, PowerWorld, egret, pandapower,
 // Surge, and PSLF cells. The PowerModels row does not move: its reader reads
 // no areas, so its payloads carry none.
+//
+// A PSS/E area is an interchange control area. The neutral area record now
+// carries that classification so XIIDM can preserve it. MATPOWER's legacy
+// `mpc.areas` table has only the area number and reference bus, so the PSS/E
+// source row's MATPOWER cell adds one declared field drop.
 const TRANSMISSION_WARNING_BASELINE: [[usize; 8]; 8] = [
     [0, 1, 15, 15, 7, 15, 23, 14],
     [0, 0, 15, 14, 6, 14, 22, 13],
-    [0, 1, 0, 2, 1, 3, 1, 2],
+    [1, 1, 0, 2, 1, 3, 1, 2],
     [0, 0, 0, 0, 0, 2, 0, 0],
     [0, 0, 9, 9, 0, 8, 1, 7],
     [1, 1, 8, 8, 1, 2, 1, 8],
