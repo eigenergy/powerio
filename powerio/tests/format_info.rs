@@ -41,7 +41,6 @@ fn common_aliases_resolve_without_exposing_component_enums() {
         ("m", "matpower"),
         ("pm", "powermodels-json"),
         ("raw34", "psse34"),
-        ("rawx", "psse-rawx"),
         ("AUX", "powerworld"),
         ("pp", "pandapower-json"),
         ("pypsa", "pypsa-csv"),
@@ -54,7 +53,15 @@ fn common_aliases_resolve_without_exposing_component_enums() {
         assert_eq!(resolve_format(alias).map(|info| info.token), Some(token));
     }
 
-    for name in ["", "json", "model-json", "geojson", "iidm", "not-a-format"] {
+    for name in [
+        "",
+        "json",
+        "model-json",
+        "geojson",
+        "rawx",
+        "iidm",
+        "not-a-format",
+    ] {
         assert_eq!(resolve_format(name), None, "{name}");
     }
 }
