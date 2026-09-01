@@ -287,9 +287,12 @@ pub use value::{PioScenarioSet, PioTimeSeries, PioValue};
 /// [`PioValue::BalancedNetwork`]; network only distribution formats (OpenDSS
 /// `.dss`, PMD ENGINEERING JSON, and BMOPF JSON) produce
 /// [`PioValue::MulticonductorNetwork`]. A source that defines a particular
-/// calculation produces that calculation's value: DOE GO Challenge 3 JSON
-/// produces [`PioValue::AcScucInstance`], and DeepMind OPFData JSON, which
-/// explicitly represents a solved AC OPF, produces
+/// calculation produces that calculation's value. One DOE GO Challenge 3
+/// problem data file produces [`PioValue::AcScucInstance`]. One source that
+/// contains a problem data file and its matching solution data file produces
+/// [`PioValue::AcScucSolution`]; a solution data file alone is rejected because
+/// its row identities and time axis come from the problem. DeepMind OPFData
+/// JSON, which explicitly represents a solved AC OPF, produces
 /// [`PioValue::AcOpfSolution`]. The parser's findings are the module's
 /// diagnostics and the source is retained for the byte exact same format tier
 /// of [`emit`].

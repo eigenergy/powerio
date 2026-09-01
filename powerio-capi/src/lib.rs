@@ -1331,14 +1331,14 @@ pub struct PioComponentIdView {
     pub local_id: PioStringView,
 }
 
-/// Active power ramp limits for one SCUC device.
+/// Active power ramp limits for one SCUC device, in per unit per hour.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct PioScucRampLimitsView {
     pub up_pu_per_hour: f64,
     pub down_pu_per_hour: f64,
-    pub startup_pu: f64,
-    pub shutdown_pu: f64,
+    pub startup_pu_per_hour: f64,
+    pub shutdown_pu_per_hour: f64,
 }
 
 /// Reserve quantity limits for one SCUC device.
@@ -1430,13 +1430,13 @@ pub struct PioScucStartupLimitView {
     pub maximum_startups: u64,
 }
 
-/// One energy requirement over a time window.
+/// One energy requirement over a time window, in per unit as defined by GOC3.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct PioScucEnergyRequirementView {
     pub start_time_hours: f64,
     pub end_time_hours: f64,
-    pub energy_pu_hours: f64,
+    pub energy_pu: f64,
 }
 
 /// One piecewise linear active energy cost block.
@@ -1447,7 +1447,7 @@ pub struct PioScucEnergyCostBlockView {
     pub block_size_pu: f64,
 }
 
-/// Reserve costs for one device and one interval.
+/// Reserve costs for one device and one interval, in $/(p.u. h).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct PioScucReserveCostsView {
@@ -5342,8 +5342,8 @@ fn scuc_device_view(device: &powerio_prob::ScucDevice) -> PioScucDeviceView {
         ramp_limits: PioScucRampLimitsView {
             up_pu_per_hour: device.ramp_limits.up,
             down_pu_per_hour: device.ramp_limits.down,
-            startup_pu: device.ramp_limits.startup,
-            shutdown_pu: device.ramp_limits.shutdown,
+            startup_pu_per_hour: device.ramp_limits.startup,
+            shutdown_pu_per_hour: device.ramp_limits.shutdown,
         },
         reserve_limits: PioScucReserveLimitsView {
             regulation_up_pu: device.reserve_limits.regulation_up,
@@ -5622,7 +5622,7 @@ unsafe fn scuc_energy_requirement_at(
             *require_output(output, "output")? = PioScucEnergyRequirementView {
                 start_time_hours: requirement.start_time,
                 end_time_hours: requirement.end_time,
-                energy_pu_hours: requirement.energy,
+                energy_pu: requirement.energy,
             };
             Ok(true)
         })
@@ -11596,14 +11596,16 @@ pub unsafe extern "C" fn pio_ac_scuc_solution_get_values_at(
                 "device_reactive_power" => row!(&device.q, |value| value),
                 "regulation_reserve_up" => row!(&device.p_reg_res_up, |value| value),
                 "regulation_reserve_down" => row!(&device.p_reg_res_down, |value| value),
-                "synchronous_reserve" => row!(&device.p_syn_res, |value| value),
-                "nonsynchronous_reserve" => row!(&device.p_nsyn_res, |value| value),
-                "ramping_reserve_up" => row!(&device.p_ramp_res_up_online, |value| value),
-                "offline_ramping_reserve_up" => {
+                "synchronized_reserve" => row!(&device.p_syn_res, |value| value),
+                "nonsynchronized_reserve" => row!(&device.p_nsyn_res, |value| value),
+                "ramping_reserve_up_online" => row!(&device.p_ramp_res_up_online, |value| value),
+                "ramping_reserve_up_offline" => {
                     row!(&device.p_ramp_res_up_offline, |value| value)
                 }
-                "ramping_reserve_down" => row!(&device.p_ramp_res_down_online, |value| value),
-                "offline_ramping_reserve_down" => {
+                "ramping_reserve_down_online" => {
+                    row!(&device.p_ramp_res_down_online, |value| value)
+                }
+                "ramping_reserve_down_offline" => {
                     row!(&device.p_ramp_res_down_offline, |value| value)
                 }
                 "reactive_reserve_up" => row!(&device.q_res_up, |value| value),
@@ -14216,7 +14218,7 @@ mod tests {
                 energy.as_mut_ptr(),
                 &mut error,
             ));
-            assert_eq!(energy.assume_init().energy_pu_hours, 9.0);
+            assert_eq!(energy.assume_init().energy_pu, 9.0);
             assert!(pio_ac_scuc_instance_device_energy_lower_bound_at(
                 instance,
                 0,
@@ -14224,7 +14226,7 @@ mod tests {
                 energy.as_mut_ptr(),
                 &mut error,
             ));
-            assert_eq!(energy.assume_init().energy_pu_hours, 1.0);
+            assert_eq!(energy.assume_init().energy_pu, 1.0);
 
             let mut period = std::mem::MaybeUninit::<PioScucDevicePeriodView>::uninit();
             assert!(pio_ac_scuc_instance_device_period_at(
@@ -14455,12 +14457,12 @@ mod tests {
                 "device_reactive_power",
                 "regulation_reserve_up",
                 "regulation_reserve_down",
-                "synchronous_reserve",
-                "nonsynchronous_reserve",
-                "ramping_reserve_up",
-                "offline_ramping_reserve_up",
-                "ramping_reserve_down",
-                "offline_ramping_reserve_down",
+                "synchronized_reserve",
+                "nonsynchronized_reserve",
+                "ramping_reserve_up_online",
+                "ramping_reserve_up_offline",
+                "ramping_reserve_down_online",
+                "ramping_reserve_down_offline",
                 "reactive_reserve_up",
                 "reactive_reserve_down",
             ] {
@@ -14558,8 +14560,8 @@ mod tests {
             for (quantity, expected) in [
                 ("device_startup_status", [0.0, 1.0]),
                 ("device_shutdown_status", [1.0, 0.0]),
-                ("offline_ramping_reserve_up", [1.25, 1.75]),
-                ("offline_ramping_reserve_down", [2.25, 2.75]),
+                ("ramping_reserve_up_offline", [1.25, 1.75]),
+                ("ramping_reserve_down_offline", [2.25, 2.75]),
             ] {
                 let vector = pio_ac_scuc_solution_get_values_at(
                     solution,

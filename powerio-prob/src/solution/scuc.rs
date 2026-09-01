@@ -51,25 +51,25 @@ pub struct ScucDeviceOutputs {
     pub p_on: Vec<Vec<f64>>,
     /// Dispatched reactive power, per unit power.
     pub q: Vec<Vec<f64>>,
-    /// Regulation reserve.
+    /// Regulation up reserve, per unit power.
     pub p_reg_res_up: Vec<Vec<f64>>,
-    /// Regulation down reserve.
+    /// Regulation down reserve, per unit power.
     pub p_reg_res_down: Vec<Vec<f64>>,
-    /// Synchronous reserve.
+    /// Synchronized reserve, per unit power.
     pub p_syn_res: Vec<Vec<f64>>,
-    /// Nonsynchronous reserve.
+    /// Non-synchronized reserve, per unit power.
     pub p_nsyn_res: Vec<Vec<f64>>,
-    /// Ramping reserve up.
+    /// Ramp up reserve when online, per unit power.
     pub p_ramp_res_up_online: Vec<Vec<f64>>,
-    /// Offline ramping reserve up.
+    /// Ramp up reserve when offline, per unit power.
     pub p_ramp_res_up_offline: Vec<Vec<f64>>,
-    /// Ramping reserve down.
+    /// Ramp down reserve when online, per unit power.
     pub p_ramp_res_down_online: Vec<Vec<f64>>,
-    /// Offline ramping reserve down.
+    /// Ramp down reserve when offline, per unit power.
     pub p_ramp_res_down_offline: Vec<Vec<f64>>,
-    /// Reactive reserve up.
+    /// Reactive reserve up, per unit power.
     pub q_res_up: Vec<Vec<f64>>,
-    /// Reactive reserve down.
+    /// Reactive reserve down, per unit power.
     pub q_res_down: Vec<Vec<f64>>,
 }
 

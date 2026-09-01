@@ -5,6 +5,7 @@ use powerio_prob::solution::Termination;
 use powerio_prob::{__emit_goc3_output, __parse_goc3_output_buffer, __parse_goc3_problem_buffer};
 
 type JsonMutation = fn(&mut serde_json::Value);
+type ScucInputMutation = fn(&mut powerio_prob::ScucInputs);
 
 fn fixture(path: &str) -> String {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -431,6 +432,71 @@ fn goc3_output_emission_uses_the_official_fields_and_round_trips() {
 }
 
 #[test]
+fn goc3_output_emission_requires_complete_matching_instance_tables() {
+    let base = decode_goc3_problem(memory(
+        "goc3_small.json",
+        &fixture("tests/data/goc3_small.json"),
+    ))
+    .unwrap()
+    .value;
+    let cases: [(&str, ScucInputMutation, &str); 5] = [
+        (
+            "missing-device",
+            |inputs| {
+                inputs.devices.pop();
+            },
+            "simple_dispatchable_device table is missing",
+        ),
+        (
+            "missing-shunt",
+            |inputs| {
+                inputs.shunts.pop();
+            },
+            "shunt table is missing",
+        ),
+        (
+            "missing-branch",
+            |inputs| {
+                inputs.branch_switching_costs.pop();
+            },
+            "switching cost table is missing",
+        ),
+        (
+            "missing-transformer-control",
+            |inputs| {
+                inputs.transformer_controls.pop();
+            },
+            "two_winding_transformer control table is missing",
+        ),
+        (
+            "wrong-branch-kind",
+            |inputs| {
+                let uid = inputs.branch_switching_costs[0].id.local_id().to_owned();
+                inputs.branch_switching_costs[0].id =
+                    powerio_core::ComponentId::new("transformer", uid).unwrap();
+            },
+            "switching cost table is missing branch/",
+        ),
+    ];
+
+    for (name, mutate, expected) in cases {
+        let mut inputs = base.inputs().clone();
+        mutate(&mut inputs);
+        let instance = powerio_prob::AcScucInstance::new(base.network().clone(), inputs).unwrap();
+        let solution = powerio_prob::AcScucSolution::new(
+            std::sync::Arc::new(instance),
+            Termination::NotReported,
+            powerio_prob::ScucNetworkOutputs::default(),
+            powerio_prob::ScucDeviceOutputs::default(),
+            None,
+        )
+        .unwrap();
+        let error = __emit_goc3_output(&solution).unwrap_err();
+        assert!(error.to_string().contains(expected), "{name}: {error}");
+    }
+}
+
+#[test]
 fn scuc_solution_rejects_wrong_row_widths_and_nonfinite_values() {
     let instance = decode_goc3_problem(memory(
         "goc3_small.json",
@@ -466,8 +532,8 @@ fn scuc_solution_rejects_wrong_row_widths_and_nonfinite_values() {
 }
 
 /// The problem format readers declare their format on the source record, so
-/// a stored module's descriptor carries the token and a same format write
-/// can default to it.
+/// a stored module's descriptor carries the token and same format emission can
+/// default to it.
 #[test]
 fn goc3_problem_sources_declare_their_format() {
     let goc3 = std::fs::read_to_string(concat!(
