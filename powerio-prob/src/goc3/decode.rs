@@ -1,6 +1,6 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use powerio_tx::format::goc3::{Goc3Document, Goc3Record};
+use powerio_tx::__internal::{Goc3Document, Goc3Record};
 use serde_json::{Map, Value};
 
 use super::error::{Goc3Error, Goc3Result};

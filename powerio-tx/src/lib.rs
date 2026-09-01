@@ -2,13 +2,12 @@
 //!
 //! Readers and writers cover MATPOWER `.m`, PowerModels JSON, PSS/E `.raw`,
 //! PowerWorld `.aux`, pandapower JSON, PyPSA CSV, egret JSON, PSLF `.epc`,
-//! PSS/E RAWX 35, PowSybl XIIDM 1.17, CIM CGMES 2.4.15 and 3.0, GO Challenge 3
-//! JSON, Surge JSON, and DeepMind OPFData JSON. PowerWorld `.pwb` and OPFData
-//! files are read only. Direct GOC3 parsing in this component crate returns
-//! the balanced network projection for Rust consumers that omit
-//! `powerio-prob`; its diagnostics name the omitted calculation data. The top
-//! level `powerio::parse` returns the declared `AcScucInstance` or
-//! `AcScucSolution`. `.pwd` display files parse through [`parse_display`].
+//! PSS/E RAWX 35, PowSybl XIIDM 1.17, CIM CGMES 2.4.15 and 3.0, Surge JSON,
+//! and DeepMind OPFData JSON. PowerWorld `.pwb` and OPFData files are read
+//! only. GO Challenge 3 defines a calculation and therefore parses only
+//! through the top level `powerio::parse`, which returns its declared
+//! `AcScucInstance` or `AcScucSolution`. `.pwd` display files parse through
+//! [`parse_display`].
 //! Each reader produces a [`BalancedNetwork`]. The top level `powerio` facade
 //! owns universal parsing and `emit`; this component crate supplies the typed
 //! transmission implementation.
@@ -56,6 +55,16 @@ mod normalize;
 mod operations;
 #[doc(hidden)]
 pub mod version;
+
+/// Unsupported implementation details shared with other PowerIO crates.
+///
+/// These items can change without notice and are not part of the
+/// `powerio-tx` API. Applications should use the top level `powerio` facade.
+#[doc(hidden)]
+pub mod __internal {
+    #[doc(hidden)]
+    pub use crate::format::goc3::{Goc3Document, Goc3Record, parse_goc3_instance_network};
+}
 
 pub use dc::BranchSusceptanceFormula;
 pub use diagnostics::{Diagnostic, DiagnosticCode, DiagnosticSeverity, EmitFamily};

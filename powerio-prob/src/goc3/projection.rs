@@ -1,5 +1,5 @@
 use powerio_core::ComponentId;
-use powerio_tx::format::goc3::Goc3Document;
+use powerio_tx::__internal::Goc3Document;
 use serde_json::{Map, Value};
 
 use super::decode::{

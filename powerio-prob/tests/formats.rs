@@ -1,8 +1,10 @@
 //! GO Challenge 3 decoder and emitter details below the universal parser.
 
 use powerio_core::{Error, FormatId, PioModule, Source};
+use powerio_prob::__internal::{
+    __emit_goc3_output, __parse_goc3_output_buffer, __parse_goc3_problem_buffer,
+};
 use powerio_prob::solution::Termination;
-use powerio_prob::{__emit_goc3_output, __parse_goc3_output_buffer, __parse_goc3_problem_buffer};
 
 type JsonMutation = fn(&mut serde_json::Value);
 type ScucInputMutation = fn(&mut powerio_prob::ScucInputs);
