@@ -2677,7 +2677,7 @@ fn reader_is_liberal_where_the_writer_is_strict() {
 /// of a few hundred bytes, through parse and write back.
 #[test]
 fn source_extras_value_that_is_not_a_table_does_not_panic() {
-    for class in ["time_series", "dc_bus", "dc_line", "dc_load", "dc_source"] {
+    for class in ["time_series", "dc_bus", "dc_branch", "dc_load", "dc_source"] {
         let text = doc_with(&format!(
             r#", "extras": {{"{class}": 1}}, "{class}": {{"t1": {{"values": [1.0]}}}}"#
         ));

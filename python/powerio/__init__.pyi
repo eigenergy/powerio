@@ -1,15 +1,20 @@
+from dataclasses import dataclass
 from typing import (
     Any,
     Dict,
     Generic,
+    Iterable,
     Iterator,
     List,
     Literal,
+    Mapping,
     NamedTuple,
     Optional,
+    Sequence,
     Tuple,
     TypedDict,
     TypeVar,
+    Union,
     overload,
 )
 
@@ -21,7 +26,12 @@ __all__ = [
     "AcPfSolution",
     "AcScucInstance",
     "AcScucSolution",
+    "ActivePower",
+    "ApparentPower",
+    "Artifact",
     "BalancedNetwork",
+    "CalculationUpdate",
+    "ComponentId",
     "DcOpfInstance",
     "DcOpfSolution",
     "DcPfInstance",
@@ -34,27 +44,60 @@ __all__ = [
     "McAcOpfSolution",
     "McAcPfInstance",
     "McAcPfSolution",
+    "MulticonductorNetwork",
+    "NetworkUpdate",
+    "OperatingPoint",
+    "OperatingPointUpdate",
     "PioModule",
     "PowerIODataError",
     "PowerIOError",
     "PowerIOParseError",
     "PwdDisplay",
     "PwdSubstation",
+    "ReactivePower",
+    "Residuals",
+    "Scenario",
     "ScenarioSet",
+    "ScucActiveReserveZone",
+    "ScucBranchSwitchingCost",
+    "ScucContingency",
+    "ScucDevice",
+    "ScucDeviceOutputs",
+    "ScucDevicePeriod",
+    "ScucEnergyCostBlock",
+    "ScucEnergyRequirement",
+    "ScucInitialCommitment",
+    "ScucInputs",
+    "ScucNetworkOutputs",
+    "ScucRampLimits",
+    "ScucReactiveCapability",
+    "ScucReactiveReserveZone",
+    "ScucReserveCosts",
+    "ScucReserveLimits",
+    "ScucShunt",
+    "ScucStartupCostAdjustment",
+    "ScucStartupLimit",
+    "ScucTransformerControl",
+    "ScucViolationCosts",
+    "SocwrOpfSolution",
     "SourceSpan",
+    "TimePoint",
     "TimeSeries",
-    "UnknownValue",
+    "UpdateChange",
+    "UpdateReport",
     "__version__",
+    "apply_bus_load_active_power",
+    "apply_updates",
+    "deserialize",
     "dist",
-    "emit_gridfm_batch",
+    "emit",
     "features",
-    "from_json",
     "from_ppc",
-    "parse_display_file",
-    "parse_file",
+    "parse",
+    "parse_display",
     "parse_geo",
-    "parse_text",
     "resolve_format",
+    "serialize",
     "versions",
 ]
 
@@ -67,8 +110,6 @@ BranchSusceptanceFormula = Literal[
     "reactance_only",
 ]
 SensitivitySolver = Literal["auto", "dense", "sparse"]
-Units = Literal["perunit", "native"]
-GridfmOutputs = Dict[str, Any]
 
 class PowerIOError(ValueError):
     """Base error from the powerio parser, emitter, or matrix calculations.
@@ -95,8 +136,39 @@ class PowerIODataError(PowerIOError):
 
 # The runtime re-exports the native record classes; the stub does the same so
 # a `_powerio.Diagnostic` and a `powerio.Diagnostic` are one type to a checker.
+from ._powerio import ActivePower as ActivePower
+from ._powerio import ApparentPower as ApparentPower
+from ._powerio import CalculationUpdate as CalculationUpdate
+from ._powerio import ComponentId as ComponentId
 from ._powerio import Diagnostic as Diagnostic
+from ._powerio import NetworkUpdate as NetworkUpdate
+from ._powerio import OperatingPointUpdate as OperatingPointUpdate
+from ._powerio import ReactivePower as ReactivePower
+from ._powerio import Residuals as Residuals
+from ._powerio import ScucActiveReserveZone as ScucActiveReserveZone
+from ._powerio import ScucBranchSwitchingCost as ScucBranchSwitchingCost
+from ._powerio import ScucContingency as ScucContingency
+from ._powerio import ScucDevice as ScucDevice
+from ._powerio import ScucDeviceOutputs as ScucDeviceOutputs
+from ._powerio import ScucDevicePeriod as ScucDevicePeriod
+from ._powerio import ScucEnergyCostBlock as ScucEnergyCostBlock
+from ._powerio import ScucEnergyRequirement as ScucEnergyRequirement
+from ._powerio import ScucInitialCommitment as ScucInitialCommitment
+from ._powerio import ScucInputs as ScucInputs
+from ._powerio import ScucNetworkOutputs as ScucNetworkOutputs
+from ._powerio import ScucRampLimits as ScucRampLimits
+from ._powerio import ScucReactiveCapability as ScucReactiveCapability
+from ._powerio import ScucReactiveReserveZone as ScucReactiveReserveZone
+from ._powerio import ScucReserveCosts as ScucReserveCosts
+from ._powerio import ScucReserveLimits as ScucReserveLimits
+from ._powerio import ScucShunt as ScucShunt
+from ._powerio import ScucStartupCostAdjustment as ScucStartupCostAdjustment
+from ._powerio import ScucStartupLimit as ScucStartupLimit
+from ._powerio import ScucTransformerControl as ScucTransformerControl
+from ._powerio import ScucViolationCosts as ScucViolationCosts
 from ._powerio import SourceSpan as SourceSpan
+from ._powerio import UpdateChange as UpdateChange
+from ._powerio import UpdateReport as UpdateReport
 
 class GenCost(TypedDict):
     model: int
@@ -104,6 +176,13 @@ class GenCost(TypedDict):
     shutdown: float
     ncost: int
     coeffs: List[float]
+
+class ActivePowerControl(TypedDict, total=False):
+    participate: bool
+    droop_percent: Optional[float]
+    participation_factor: Optional[float]
+    minimum_target_active_power_mw: Optional[float]
+    maximum_target_active_power_mw: Optional[float]
 
 class Bus(TypedDict):
     id: int
@@ -129,7 +208,23 @@ class Shunt(TypedDict):
     g: float
     b: float
     in_service: bool
+    section_count: Optional[int]
     uid: Optional[str]
+
+class StaticVarCompensator(TypedDict):
+    bus: int
+    b_min_siemens: float
+    b_max_siemens: float
+    voltage_setpoint_kv: float
+    reactive_power_setpoint_mvar: float
+    regulation_mode: Literal["voltage", "reactive_power"]
+    regulating: bool
+    regulating_terminal: Optional[Dict[str, Any]]
+    p: float
+    q: float
+    in_service: bool
+    uid: Optional[str]
+    extras: Dict[str, Any]
 
 class BranchRatingSet(TypedDict):
     name: str
@@ -190,7 +285,114 @@ class Gen(TypedDict):
     # qc1max, qc2min, qc2max, ramp_agc, ramp_10, ramp_30, ramp_q, apf.
     caps: List[Optional[float]]
     cost: Optional[GenCost]
+    active_power_control: Optional[ActivePowerControl]
     uid: Optional[str]
+
+class Storage(TypedDict, total=False):
+    bus: int
+    ps: float
+    qs: float
+    energy: float
+    energy_rating: float
+    charge_rating: float
+    discharge_rating: float
+    charge_efficiency: float
+    discharge_efficiency: float
+    thermal_rating: float
+    current_rating: Optional[float]
+    qmin: float
+    qmax: float
+    r: float
+    x: float
+    p_loss: float
+    q_loss: float
+    in_service: bool
+    active_power_control: Optional[ActivePowerControl]
+    uid: Optional[str]
+    extras: Dict[str, Any]
+
+class ComponentIdentity(TypedDict):
+    component_type: str
+    local_id: str
+
+class CaseMetadata(TypedDict, total=False):
+    case_date: str
+    forecast_distance: int
+    source_model_format: str
+    minimum_validation_level: str
+
+class Subnetwork(TypedDict):
+    component: ComponentIdentity
+    parent: ComponentIdentity
+    case_metadata: CaseMetadata
+    components: List[ComponentIdentity]
+
+class ReactiveCapabilityCurvePoint(TypedDict):
+    active_power_mw: float
+    minimum_reactive_power_mvar: float
+    maximum_reactive_power_mvar: float
+    properties: Dict[str, str]
+
+class ReactiveLimits(TypedDict, total=False):
+    kind: Literal["min_max", "capability_curve"]
+    limits: Dict[str, Any]
+
+class BoundaryLineGeneration(TypedDict, total=False):
+    voltage_regulation_on: bool
+    minimum_active_power_mw: float
+    maximum_active_power_mw: float
+    target_active_power_mw: float
+    target_reactive_power_mvar: float
+    target_voltage_kv: float
+    reactive_limits: ReactiveLimits
+
+class BoundaryLine(TypedDict, total=False):
+    component: ComponentIdentity
+    voltage_level: ComponentIdentity
+    active_power_setpoint_mw: float
+    reactive_power_setpoint_mvar: float
+    resistance_ohm: float
+    reactance_ohm: float
+    conductance_siemens: float
+    susceptance_siemens: float
+    pairing_key: str
+    generation: BoundaryLineGeneration
+    calculation_load: ComponentIdentity
+    calculation_generator: ComponentIdentity
+
+class TieLine(TypedDict, total=False):
+    component: ComponentIdentity
+    boundary_line1: ComponentIdentity
+    boundary_line2: ComponentIdentity
+    calculation_branch: ComponentIdentity
+
+class TapChanger(TypedDict, total=False):
+    transformer: ComponentIdentity
+    winding: int
+    kind: Literal["ratio", "phase"]
+    tap_position: int
+    solved_tap_position: int
+    low_tap_position: int
+    load_tap_changing_capabilities: bool
+    regulating: bool
+    regulation_mode: str
+    regulation_value: float
+    target_deadband: float
+    regulation_terminal: Dict[str, Any]
+    steps: List[Dict[str, Any]]
+
+class ConnectivityNode(TypedDict, total=False):
+    component: ComponentIdentity
+    voltage_level: ComponentIdentity
+    node_number: Optional[int]
+    calculated_bus: Optional[int]
+
+class DetailedConnectivity(TypedDict, total=False):
+    subnetworks: List[Subnetwork]
+    connectivity_nodes: List[ConnectivityNode]
+    boundary_lines: List[BoundaryLine]
+    tie_lines: List[TieLine]
+    tap_changers: List[TapChanger]
 
 class PwdSubstation(NamedTuple):
     number: int
@@ -222,6 +424,7 @@ class BalancedNetwork:
         "opfdata-json",
         "egret-json",
         "psse",
+        "psse-rawx",
         "powerworld",
         "pandapower-json",
         "pslf",
@@ -232,12 +435,15 @@ class BalancedNetwork:
         "pypsa-csv",
         "goc3-json",
         "surge-json",
+        "xiidm",
+        "cgmes",
     ]
     n_buses: int
     n_branches: int
     n_generators: int
     n_loads: int
     n_shunts: int
+    n_static_var_compensators: int
     n_switches: int
     n_storage: int
     n_hvdc: int
@@ -248,17 +454,18 @@ class BalancedNetwork:
     buses: List[Bus]
     loads: List[Load]
     shunts: List[Shunt]
+    static_var_compensators: List[StaticVarCompensator]
     branches: List[Branch]
     switches: List[Switch]
     generators: List[Gen]
-    storage: List[Dict[str, Any]]
+    storage: List[Storage]
     hvdc: List[Dict[str, Any]]
     transformers_3w: List[Dict[str, Any]]
     areas: List[Dict[str, Any]]
+    detailed_connectivity: Optional[DetailedConnectivity]
     def reference_bus_index(self) -> int: ...
     def reference_bus_indices(self) -> List[int]: ...
     def calc_connectivity_report(self) -> Dict[str, Any]: ...
-    def to_json(self) -> str: ...
     def to_geo_layer(self) -> Dict[str, Any]: ...
     def apply_geo_layer(
         self, text: str, name_hint: Optional[str] = ...
@@ -268,8 +475,10 @@ class BalancedNetwork:
     ) -> Any: ...
     def calc_incidence_matrix(self, formula: str = ...) -> Any: ...
     def calc_bus_susceptance_matrix(self, formula: str = ...) -> Any: ...
-    def calc_branch_susceptance_matrix(self, formula: str = ...) -> Any: ...
-    def calc_phase_shift_injection(self, formula: str = ...) -> Any: ...
+    def calc_branch_susceptances(self, formula: str = ...) -> Any: ...
+    def calc_branch_flow_matrix(self, formula: str = ...) -> Any: ...
+    def calc_branch_phase_shift_injection(self, formula: str = ...) -> Any: ...
+    def calc_bus_phase_shift_injection(self, formula: str = ...) -> Any: ...
     def calc_branch_flow_dc(self, voltage_angles: Any, formula: str = ...) -> Any: ...
     def calc_bus_injection_dc(self, voltage_angles: Any, formula: str = ...) -> Any: ...
     def calc_bdoubleprime_matrix(
@@ -304,18 +513,6 @@ class BalancedNetwork:
         self,
         formula: BranchSusceptanceFormula = ...,
     ) -> Any: ...
-    def emit_gridfm(
-        self,
-        out_dir: Any,
-        *,
-        scenario: int = ...,
-        include_y_bus: bool = ...,
-        include_taps: bool = ...,
-        include_shifts: bool = ...,
-        missing_gen_cost: Optional[str] = ...,
-        default_gen_cost: Optional[str] = ...,
-        gen_cost_csv: Optional[Any] = ...,
-    ) -> GridfmOutputs: ...
     def to_normalized(
         self,
         *,
@@ -324,19 +521,23 @@ class BalancedNetwork:
     ) -> "BalancedNetwork": ...
     def to_ppc(self) -> Dict[str, Any]: ...
     def to_networkx(self) -> Any: ...
-    def emit_dcopf_bundle(
-        self,
-        out_dir: str,
-        formula: BranchSusceptanceFormula = ...,
-        units: Units = ...,
-        missing_gen_cost: Optional[str] = ...,
-        default_gen_cost: Optional[str] = ...,
-        gen_cost_csv: Optional[Any] = ...,
-    ) -> Dict[str, Any]: ...
 
-class EmitResult(NamedTuple):
-    text: Optional[str]
-    diagnostics: List[Diagnostic]
+@dataclass(frozen=True)
+class Artifact:
+    name: str
+    data: Optional[bytes]
+    path: Optional[str]
+    @property
+    def text(self) -> str: ...
+
+@dataclass(frozen=True)
+class EmitResult:
+    artifacts: Tuple[Artifact, ...]
+    layout: Literal["file", "directory"]
+    fidelity: Literal["exact_same_format", "canonical"]
+    diagnostics: Tuple[Diagnostic, ...]
+    @property
+    def text(self) -> Optional[str]: ...
 
 class FormatInfo(NamedTuple):
     token: str
@@ -349,46 +550,123 @@ class FormatInfo(NamedTuple):
 Format = str
 
 from . import dist as dist
+from .dist import MulticonductorNetwork as MulticonductorNetwork
 
-def parse_display_file(path: Any, format: Optional[Format] = ...) -> DisplayData: ...
+def parse_display(path: Any, format: Optional[Format] = ...) -> DisplayData: ...
 def resolve_format(name: str) -> Optional[FormatInfo]: ...
 def versions() -> Any: ...
-def from_json(text: str) -> BalancedNetwork: ...
 def from_ppc(ppc: Dict[str, Any]) -> BalancedNetwork: ...
 def parse_geo(text: str, name_hint: Optional[str] = ...) -> Dict[str, Any]: ...
 
 class _TypedValue:
     module: PioModule[Any]
-    kind: str
-    def __init__(self, module: PioModule[Any], kind: str) -> None: ...
+    def __init__(self, module: PioModule[Any]) -> None: ...
 
-class TimeSeries(_TypedValue):
+_TypedT = TypeVar("_TypedT", bound=_TypedValue)
+
+@dataclass(frozen=True)
+class TimePoint:
+    label: str
+    duration_seconds: Optional[float] = ...
+
+@dataclass(frozen=True)
+class Scenario:
+    id: str
+    probability: Optional[float] = ...
+
+class TimeSeries(_TypedValue, Generic[_T]):
+    def __init__(
+        self, values: Sequence[_T], *, time_points: Sequence[TimePoint]
+    ) -> None: ...
+    @property
+    def time_points(self) -> Tuple[TimePoint, ...]: ...
     def __len__(self) -> int: ...
-    def __getitem__(self, index: int) -> PioModule[Any]: ...
-    def __iter__(self) -> Iterator[PioModule[Any]]: ...
+    def __getitem__(self, index: int) -> _T: ...
+    def __iter__(self) -> Iterator[_T]: ...
 
-class ScenarioSet(_TypedValue):
+class ScenarioSet(_TypedValue, Generic[_T]):
+    def __init__(
+        self,
+        values: Mapping[str, _T],
+        *,
+        probabilities: Optional[Mapping[str, float]] = ...,
+    ) -> None: ...
+    @property
+    def scenarios(self) -> Tuple[Scenario, ...]: ...
     def keys(self) -> Tuple[str, ...]: ...
     def __len__(self) -> int: ...
     def __iter__(self) -> Iterator[str]: ...
     def __contains__(self, scenario: object) -> bool: ...
-    def __getitem__(self, scenario: str) -> PioModule[Any]: ...
+    def __getitem__(self, scenario: str) -> _T: ...
 
-class DcPfInstance(_TypedValue): ...
-class AcPfInstance(_TypedValue): ...
-class DcOpfInstance(_TypedValue): ...
-class AcOpfInstance(_TypedValue): ...
-class McAcPfInstance(_TypedValue): ...
-class McAcOpfInstance(_TypedValue): ...
-class AcScucInstance(_TypedValue): ...
-class DcPfSolution(_TypedValue): ...
-class AcPfSolution(_TypedValue): ...
-class DcOpfSolution(_TypedValue): ...
-class AcOpfSolution(_TypedValue): ...
-class McAcPfSolution(_TypedValue): ...
-class McAcOpfSolution(_TypedValue): ...
-class AcScucSolution(_TypedValue): ...
-class UnknownValue(_TypedValue): ...
+class OperatingPoint(_TypedValue): ...
+
+class _BalancedCalculation(_TypedValue):
+    @property
+    def network(self) -> BalancedNetwork: ...
+
+class _MulticonductorCalculation(_TypedValue):
+    @property
+    def network(self) -> MulticonductorNetwork: ...
+
+class _CalculationSolution(_TypedValue):
+    @property
+    def instance(self) -> _TypedValue: ...
+
+class DcPfInstance(_BalancedCalculation): ...
+class AcPfInstance(_BalancedCalculation): ...
+class DcOpfInstance(_BalancedCalculation): ...
+class AcOpfInstance(_BalancedCalculation): ...
+class McAcPfInstance(_MulticonductorCalculation): ...
+class McAcOpfInstance(_MulticonductorCalculation): ...
+class AcScucInstance(_BalancedCalculation):
+    @property
+    def inputs(self) -> ScucInputs: ...
+class DcPfSolution(_BalancedCalculation, _CalculationSolution):
+    @property
+    def instance(self) -> DcPfInstance: ...
+class AcPfSolution(_BalancedCalculation, _CalculationSolution):
+    @property
+    def instance(self) -> AcPfInstance: ...
+class DcOpfSolution(_BalancedCalculation, _CalculationSolution):
+    @property
+    def instance(self) -> DcOpfInstance: ...
+class AcOpfSolution(_BalancedCalculation, _CalculationSolution):
+    @property
+    def instance(self) -> AcOpfInstance: ...
+class SocwrOpfSolution(_BalancedCalculation, _CalculationSolution):
+    @property
+    def instance(self) -> AcOpfInstance: ...
+class McAcPfSolution(_MulticonductorCalculation, _CalculationSolution):
+    @property
+    def instance(self) -> McAcPfInstance: ...
+class McAcOpfSolution(_MulticonductorCalculation, _CalculationSolution):
+    @property
+    def instance(self) -> McAcOpfInstance: ...
+class AcScucSolution(_BalancedCalculation, _CalculationSolution):
+    @property
+    def instance(self) -> AcScucInstance: ...
+    @property
+    def termination(
+        self,
+    ) -> Literal[
+        "converged",
+        "iteration_limit",
+        "infeasible",
+        "unbounded",
+        "failed",
+        "not_reported",
+    ]: ...
+    @property
+    def residuals(self) -> Residuals: ...
+    @property
+    def producer(self) -> Optional[str]: ...
+    @property
+    def network_outputs(self) -> ScucNetworkOutputs: ...
+    @property
+    def device_outputs(self) -> ScucDeviceOutputs: ...
+    @property
+    def objective(self) -> Optional[float]: ...
 
 class PioModule(Generic[_T]):
     _inner: Any
@@ -401,87 +679,50 @@ class PioModule(Generic[_T]):
     def from_value(
         cls, value: dist.MulticonductorNetwork
     ) -> PioModule[dist.MulticonductorNetwork]: ...
+    @classmethod
+    @overload
+    def from_value(cls, value: _TypedT) -> PioModule[_TypedT]: ...
     @property
     def value(self) -> _T: ...
-    def as_balanced_network(self) -> BalancedNetwork: ...
-    def as_multiconductor_network(self) -> dist.MulticonductorNetwork: ...
-    def emit(self, format: Format, destination: Optional[Any] = ...) -> EmitResult: ...
-    @property
-    def kind(self) -> str: ...
-    def inspect(self) -> Any: ...
     @property
     def diagnostics(self) -> List[Diagnostic]: ...
-    def list_states(self) -> Any: ...
-    def inspect_state(
-        self, time_position: Optional[int] = ..., scenario: Optional[str] = ...
-    ) -> Any: ...
-    def export_state(
-        self, time_position: Optional[int] = ..., scenario: Optional[str] = ...
-    ) -> PioModule[Any]: ...
     def to_balanced_report(self, base_mva: float = ...) -> Any: ...
     def to_balanced(self, base_mva: float = ...) -> PioModule[BalancedNetwork]: ...
+    def to_dc_pf_instance(self) -> PioModule[DcPfInstance]: ...
+    def to_ac_pf_instance(self) -> PioModule[AcPfInstance]: ...
+    def to_dc_opf_instance(self) -> PioModule[DcOpfInstance]: ...
+    def to_ac_opf_instance(self) -> PioModule[AcOpfInstance]: ...
+    def to_mc_ac_pf_instance(self) -> PioModule[McAcPfInstance]: ...
+    def to_mc_ac_opf_instance(self) -> PioModule[McAcOpfInstance]: ...
 
-@overload
-def parse_file(
-    path: Any,
-    format: Optional[Format] = ...,
+def apply_updates(
+    target: Union[
+        PioModule[Any],
+        BalancedNetwork,
+        dist.MulticonductorNetwork,
+        _TypedValue,
+    ],
+    updates: Union[
+        Iterable[OperatingPointUpdate],
+        Iterable[NetworkUpdate],
+        Iterable[CalculationUpdate],
+    ],
+) -> UpdateReport: ...
+
+def apply_bus_load_active_power(
+    module: PioModule[Any],
+    bus_id: int,
+    total: ActivePower,
     *,
-    include_root: Optional[Any] = ...,
-    value_type: type[PioModule[Any]],
+    allocation: Literal["equal", "proportional_to_current_active_power"] = ...,
+) -> UpdateReport: ...
+
+def parse(
+    source: Any, *, format: Optional[Format] = ..., name: Optional[str] = ...
 ) -> PioModule[Any]: ...
-@overload
-def parse_file(
-    path: Any,
-    format: Optional[Format] = ...,
-    *,
-    include_root: Optional[Any] = ...,
-    value_type: type[_T],
-) -> PioModule[_T]: ...
-@overload
-def parse_file(
-    path: Any,
-    format: Optional[Format] = ...,
-    *,
-    include_root: Optional[Any] = ...,
-    value_type: None = ...,
-) -> PioModule[Any]: ...
-@overload
-def parse_text(
-    text: str,
-    *,
-    name: str,
-    format: Optional[Format] = ...,
-    include_root: Optional[Any] = ...,
-    value_type: type[PioModule[Any]],
-) -> PioModule[Any]: ...
-@overload
-def parse_text(
-    text: str,
-    *,
-    name: str,
-    format: Optional[Format] = ...,
-    include_root: Optional[Any] = ...,
-    value_type: type[_T],
-) -> PioModule[_T]: ...
-@overload
-def parse_text(
-    text: str,
-    *,
-    name: str,
-    format: Optional[Format] = ...,
-    include_root: Optional[Any] = ...,
-    value_type: None = ...,
-) -> PioModule[Any]: ...
-def emit_gridfm_batch(
-    networks: List[BalancedNetwork],
-    out_dir: Any,
-    *,
-    base_scenario: int = ...,
-    include_y_bus: bool = ...,
-    include_taps: bool = ...,
-    include_shifts: bool = ...,
-    missing_gen_cost: Optional[str] = ...,
-    default_gen_cost: Optional[str] = ...,
-    gen_cost_csv: Optional[Any] = ...,
-) -> GridfmOutputs: ...
+def emit(
+    module: PioModule[Any], format: Format, destination: Optional[Any] = ...
+) -> EmitResult: ...
+def serialize(module: PioModule[Any], destination: Optional[Any] = ...) -> EmitResult: ...
+def deserialize(source: Any) -> PioModule[Any]: ...
 def features() -> Dict[str, bool]: ...

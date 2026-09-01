@@ -30,7 +30,7 @@ fn src(case: &str) -> String {
 }
 
 fn parse_named(text: &str, from: &str) -> powerio_tx::network::BalancedNetwork {
-    let source = powerio_core::Source::from_bytes("case", text.as_bytes().to_vec())
+    let source = powerio_core::Source::from_memory("case", text.as_bytes().to_vec())
         .unwrap()
         .with_format(powerio_core::FormatId::new(from).unwrap());
     powerio_tx::parse(source).unwrap().into_value()
@@ -39,7 +39,7 @@ fn parse_named(text: &str, from: &str) -> powerio_tx::network::BalancedNetwork {
 /// Parse with no declared format: a `.json` name, routed by the content
 /// classifier rather than a stated token.
 fn parse_sniffed(text: &str) -> powerio_tx::network::BalancedNetwork {
-    let source = powerio_core::Source::from_bytes("case.json", text.as_bytes().to_vec()).unwrap();
+    let source = powerio_core::Source::from_memory("case.json", text.as_bytes().to_vec()).unwrap();
     powerio_tx::parse(source).unwrap().into_value()
 }
 
@@ -174,7 +174,7 @@ fn bench_powerworld_pwb(c: &mut Criterion) {
     }
     for (name, bytes) in &pwb_jobs {
         c.bench_function(name, |b| {
-            b.iter(|| powerio_tx::format::powerworld::parse_pwb(black_box(bytes), None).unwrap());
+            b.iter(|| powerio_tx::format::powerworld::__parse_pwb(black_box(bytes), None).unwrap());
         });
     }
 }
@@ -187,7 +187,7 @@ fn bench_powerworld_pwd(c: &mut Criterion) {
         return;
     };
     c.bench_function("parse_pwd_activsg200", |b| {
-        b.iter(|| powerio_tx::format::powerworld::parse_pwd(black_box(&bytes)).unwrap());
+        b.iter(|| powerio_tx::format::powerworld::__parse_pwd(black_box(&bytes)).unwrap());
     });
 }
 

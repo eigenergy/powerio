@@ -1,8 +1,9 @@
 //! Read and write PyPSA CSV folders.
 //!
 //! PyPSA's CSV folder is a directory format, so it does not fit the
-//! `TextEmission { text }` API used by single-file formats. The reader and writer
-//! are exposed as path-based helpers and through `parse_file(..., "pypsa-csv")`.
+//! `TextEmission { text }` API used by single-file formats. The universal
+//! facade acquires the directory through `Source` and routes it through
+//! `parse(..., Some("pypsa-csv"))`.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
@@ -214,6 +215,7 @@ fn read_pypsa_csv_static(
                 g: row.f("g").unwrap_or(0.0) * zb * base_mva,
                 b: row.f("b").unwrap_or(0.0) * zb * base_mva,
                 in_service: row.bool("active").unwrap_or(true),
+                section_count: None,
                 control: None,
                 uid: None,
                 extras: Extras::default(),
@@ -271,6 +273,7 @@ fn read_pypsa_csv_static(
                 },
                 caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
                 regulated_bus: None,
+                active_power_control: None,
                 uid: None,
             });
         }
@@ -388,6 +391,7 @@ fn read_pypsa_csv_static(
                 p_loss: 0.0,
                 q_loss: 0.0,
                 in_service: row.bool("active").unwrap_or(true),
+                active_power_control: None,
                 uid: None,
                 extras: Extras::default(),
             });
@@ -420,6 +424,11 @@ fn read_pypsa_csv_static(
                 qmaxt: 0.0,
                 loss0: 0.0,
                 loss1: 1.0 - efficiency,
+                resistance_ohm: None,
+                nominal_voltage_kv: None,
+                converters_mode: None,
+                converter1: None,
+                converter2: None,
                 cost: None,
                 uid: None,
                 extras: Extras::default(),
@@ -487,9 +496,12 @@ fn read_pypsa_csv_static(
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
         geo: super::geographic_meta(&buses),
+        case_metadata: crate::network::CaseMetadata::default(),
+        detailed_connectivity: None,
         buses: buses.into(),
         loads: loads.into(),
         shunts: shunts.into(),
+        static_var_compensators: Vec::new().into(),
         branches: branches.into(),
         switches: Vec::new().into(),
         generators: generators.into(),
@@ -533,6 +545,7 @@ fn write_pypsa_csv_folder(
         .collect();
     let result = powerio_core::Destination::path(out_dir.as_ref()).__commit_artifacts(
         true,
+        powerio_core::Fidelity::Canonical,
         inventory,
         Vec::new(),
     )?;
@@ -1143,14 +1156,15 @@ enum SeriesField {
     BusVa,
 }
 
-/// A parsed PyPSA sequence: the per snapshot networks, whether any problem
-/// input varied (else only solved state did), and the reader's findings.
+/// A parsed PyPSA sequence: the per snapshot networks, whether any calculation
+/// input varied (otherwise only solution quantities varied), and the reader's
+/// findings.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct PypsaCsvSequence {
     pub series: powerio_core::TimeSeries<BalancedNetwork>,
-    /// False when every varying column is solved electrical state, so the
-    /// sequence is one fixed network under changing state.
+    /// False when every varying column is a solution quantity, so the
+    /// sequence is one fixed network with changing operating points.
     pub inputs_vary: bool,
     /// Whether any recognized series column varied at all. A declared
     /// snapshot axis with no series siblings preserves the axis as networks
@@ -1205,13 +1219,13 @@ pub fn pypsa_axis(source: &powerio_core::Source) -> Result<PypsaAxis> {
 }
 
 /// The snapshot-local series files the sequence reader interprets: input
-/// setpoints and bounds, and complete electrical state output. Everything
+/// setpoints and bounds, and complete voltage and dispatch output. Everything
 /// else stays reported rather than silently reduced.
 /// The field plus whether the column is problem input (a setpoint or bound,
-/// the `*_set`/`*_pu` spellings) rather than solved electrical state output
+/// the `*_set`/`*_pu` spellings) rather than voltage or dispatch output
 /// (the bare `p`/`q`/voltage spellings). The distinction picks the
 /// sequence's value type: input changes produce a network per point, while a
-/// fixed network with only state output varying is an operating point
+/// fixed network with only solution quantities varying is an operating point
 /// series.
 fn series_field(component: &str, attribute: &str) -> Option<(SeriesField, bool)> {
     match (component, attribute) {
@@ -1236,7 +1250,7 @@ fn series_field(component: &str, attribute: &str) -> Option<(SeriesField, bool)>
 /// value per snapshot.
 struct SeriesColumn {
     field: SeriesField,
-    /// Problem input rather than solved state output.
+    /// Calculation input rather than a solution quantity.
     input: bool,
     row: usize,
     values: Vec<f64>,
@@ -1244,9 +1258,9 @@ struct SeriesColumn {
 
 /// Read a PyPSA CSV folder with time series siblings into a balanced network
 /// time series: one network handle per snapshot, static tables shared across
-/// the whole series, and the supported snapshot-local columns patched typed
-/// per point — load and generator setpoints, per unit dispatch bounds scaled
-/// by `p_nom`, voltage setpoints, and the solved bus voltage state. A series
+/// the whole series, and the supported snapshot-local columns patched per
+/// point: load and generator setpoints, per unit dispatch bounds scaled by
+/// `p_nom`, voltage setpoints, and solved bus voltages. A series
 /// file outside that profile is reported and retained rather than silently
 /// reduced; a series column naming an unknown element, a non-numeric value,
 /// or a row axis that disagrees with `snapshots.csv` is refused.
@@ -1649,6 +1663,7 @@ mod tests {
             cost,
             caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
             regulated_bus: None,
+            active_power_control: None,
             uid: None,
         }
     }
@@ -1673,6 +1688,7 @@ mod tests {
             p_loss: 0.0,
             q_loss: 0.0,
             in_service: true,
+            active_power_control: None,
             uid: None,
             extras: Extras::default(),
         }

@@ -142,15 +142,16 @@ pub fn calc_susceptance_diagonal(b: &[f64]) -> CsMat<f64> {
     calc_diagonal(b)
 }
 
-/// The angle dependent branch flow matrix `B Aᵀ`, shape `m × n`, over the
-/// internal positive factor weights.
+/// Calculate the branch flow matrix used by solver preparations,
+/// `Diagonal(w) * Aᵀ`, shape `m × n`, where `w` contains positive factor
+/// weights.
 ///
 /// A complete affine branch flow also adds `-b * shift`; problem
 /// preparations expose that term through
 /// `DcOpfPreparation::calc_branch_flow_offset`. In the public PowerModels sign
 /// spelling the same flow is `p_branch = -Bf va + b .* shift` with negated
 /// susceptances.
-pub fn calc_branch_flow_matrix(
+pub(crate) fn calc_solver_branch_flow_matrix(
     bus_branch_incidence: &CsMat<f64>,
     susceptance_magnitude: &[f64],
 ) -> CsMat<f64> {

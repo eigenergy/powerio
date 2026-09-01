@@ -22,7 +22,7 @@ New Load.lc bus1=loadbus.3.4 phases=1 conn=wye kv=0.24 kw=10 pf=0.95 model=1 vmi
 
 #[test]
 fn lowered_multiconductor_balanced_model_builds_matrices() {
-    let source = powerio_core::Source::from_bytes("<memory>", FOUR_WIRE_DSS.as_bytes().to_vec())
+    let source = powerio_core::Source::from_memory("<memory>", FOUR_WIRE_DSS.as_bytes().to_vec())
         .expect("memory source")
         .with_format(powerio_core::FormatId::new("dss").expect("format id"));
     let net = powerio_dist::parse(source)

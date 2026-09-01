@@ -1,10 +1,10 @@
 # Distribution Networks
 
-A multiconductor network is the conductor level distribution model. OpenDSS and PowerModelsDistribution engineering JSON parse to it; BMOPF JSON, which also defines an optimization calculation, parses to the calculation input that shares one ([Problem Instances and Solutions](instances.md)).
+A multiconductor network is the conductor level distribution model. OpenDSS, PowerModelsDistribution engineering JSON, and BMOPF JSON parse to it. Construct `McAcPfInstance` or `McAcOpfInstance` explicitly when a calculation is required ([Problem Instances and Solutions](instances.md)).
 
 ```julia
 using PowerIO
-feeder = parse_file("IEEE13Nodeckt.dss")   # PioModule{MulticonductorNetwork}
+feeder = parse("IEEE13Nodeckt.dss")        # PioModule{MulticonductorNetwork}
 net = feeder.value
 net.data.lines[1]                   # terminal maps, linecode reference
 net.data.linecodes[1]               # per length impedance matrices, SI units

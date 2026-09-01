@@ -13,7 +13,7 @@ SetBusXY bus=a x=-80 y=35\n\
 SetBusXY b -80.5 35.25\n";
 
 fn module(text: &str) -> powerio_core::PioModule<powerio_dist::MulticonductorNetwork> {
-    let source = powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())
+    let source = powerio_core::Source::from_memory("<memory>", text.as_bytes().to_vec())
         .unwrap()
         .with_format(powerio_core::FormatId::new("dss").unwrap());
     powerio_dist::parse(source).expect("dss parses")

@@ -94,7 +94,7 @@ impl CooBuilder {
         }
     }
 
-    /// Materialize as a `CsMat<f64>` (CSR) with explicit zeros pruned.
+    /// Finish as a `CsMat<f64>` (CSR) with explicit zeros pruned.
     pub fn finish_csr(self) -> CsMat<f64> {
         let mut tri = TriMat::with_capacity((self.rows, self.cols), self.entries.len());
         for (key, v) in self.entries {
@@ -107,7 +107,7 @@ impl CooBuilder {
         tri.to_csr()
     }
 
-    /// Materialize as a CSC matrix.
+    /// Finish as a CSC matrix.
     pub fn finish_csc(self) -> CsMat<f64> {
         self.finish_csr().to_csc()
     }

@@ -19,9 +19,9 @@ use std::fmt::Write as _;
 use crate::convert::{TextEmission, TextSidecar};
 use crate::diagnostics::codes as C;
 use crate::model::{
-    ActivePowerReference, Configuration, ControlVoltageReference, DistBus, DistControlProfile,
-    DistIbr, DistLineCode, DistLoad, DistLoadVoltageModel, DistTransformer, DistWinding,
-    DistWindingConn, Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation, Mat,
+    ActivePowerReference, ConductorMatrix, Configuration, ControlVoltageReference, DistBus,
+    DistControlProfile, DistIbr, DistLineCode, DistLoad, DistLoadVoltageModel, DistTransformer,
+    DistWinding, DistWindingConn, Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation,
     MulticonductorNetwork, ReactivePowerReference, VoltVarControl, VoltWattControl,
 };
 
@@ -721,7 +721,7 @@ impl DssWriter {
 
     /// Lower triangle matrix text. Rows shorter than the triangle pad
     /// with 0 instead of panicking, and the padding is reported.
-    fn matrix_arg(&mut self, m: &Mat, what: &str) -> String {
+    fn matrix_arg(&mut self, m: &ConductorMatrix, what: &str) -> String {
         let mut short = false;
         let rows: Vec<String> = m
             .iter()
@@ -1166,7 +1166,7 @@ impl DssWriter {
             let _ = write!(s, " xmatrix={xm}");
             // cmatrix in nF per meter: each half is omega C / 2, so
             // C_nF = 2 b / (omega 1e-9).
-            let c_nf: Mat = c
+            let c_nf: ConductorMatrix = c
                 .b_from
                 .iter()
                 .map(|row| row.iter().map(|b| 2.0 * b / omega_nf).collect())
@@ -2739,11 +2739,11 @@ fn active_reference(reference: ActivePowerReference) -> &'static str {
     }
 }
 
-fn has_nonzero(m: &Mat) -> bool {
+fn has_nonzero(m: &ConductorMatrix) -> bool {
     m.iter().flatten().any(|&v| v != 0.0)
 }
 
-fn has_off_diagonal(m: &Mat) -> bool {
+fn has_off_diagonal(m: &ConductorMatrix) -> bool {
     m.iter()
         .enumerate()
         .any(|(i, row)| row.iter().enumerate().any(|(j, &v)| i != j && v != 0.0))
@@ -2757,7 +2757,7 @@ fn return_permutation(k: usize, n: usize) -> Vec<usize> {
 /// Symmetric densified read of a possibly lower triangular matrix, permuted:
 /// entry `(i, j)` of the result is the stated `(perm[i], perm[j])` value,
 /// read from either triangle.
-fn permute_symmetric(m: &Mat, perm: &[usize]) -> Mat {
+fn permute_symmetric(m: &ConductorMatrix, perm: &[usize]) -> ConductorMatrix {
     let at = |i: usize, j: usize| {
         m.get(i)
             .and_then(|row| row.get(j))
@@ -2782,11 +2782,11 @@ fn permute_padded(v: &[f64], perm: &[usize]) -> Vec<f64> {
         .collect()
 }
 
-fn diag_at(m: &Mat, i: usize) -> f64 {
+fn diag_at(m: &ConductorMatrix, i: usize) -> f64 {
     m.get(i).and_then(|row| row.get(i)).copied().unwrap_or(0.0)
 }
 
-fn matrix_scale(m: &Mat) -> f64 {
+fn matrix_scale(m: &ConductorMatrix) -> f64 {
     m.iter().flatten().fold(0.0_f64, |acc, &v| acc.max(v.abs()))
 }
 
@@ -2794,7 +2794,11 @@ fn close(a: f64, b: f64, scale: f64) -> bool {
     (a - b).abs() <= 1e-12_f64.max(scale * 1e-9)
 }
 
-fn first_diag_admittance(g: &Mat, b: &Mat, phases: usize) -> Option<(f64, f64)> {
+fn first_diag_admittance(
+    g: &ConductorMatrix,
+    b: &ConductorMatrix,
+    phases: usize,
+) -> Option<(f64, f64)> {
     (0..phases.max(1)).find_map(|i| {
         let gi = diag_at(g, i);
         let bi = diag_at(b, i);
@@ -2802,7 +2806,13 @@ fn first_diag_admittance(g: &Mat, b: &Mat, phases: usize) -> Option<(f64, f64)> 
     })
 }
 
-fn uniform_diag_admittance(g: &Mat, b: &Mat, phases: usize, g0: f64, b0: f64) -> bool {
+fn uniform_diag_admittance(
+    g: &ConductorMatrix,
+    b: &ConductorMatrix,
+    phases: usize,
+    g0: f64,
+    b0: f64,
+) -> bool {
     let scale = matrix_scale(g)
         .max(matrix_scale(b))
         .max(g0.abs())
@@ -2817,11 +2827,11 @@ fn shunt_stashed_delta(sh: &crate::model::DistShunt) -> bool {
         .is_some_and(|t| t.to_ascii_lowercase().starts_with('d') || t.eq_ignore_ascii_case("ll"))
 }
 
-fn mat_at(m: &Mat, i: usize, j: usize) -> f64 {
+fn mat_at(m: &ConductorMatrix, i: usize, j: usize) -> f64 {
     m.get(i).and_then(|row| row.get(j)).copied().unwrap_or(0.0)
 }
 
-fn looks_like_delta_shunt(b: &Mat, terminals: usize, phases: usize) -> bool {
+fn looks_like_delta_shunt(b: &ConductorMatrix, terminals: usize, phases: usize) -> bool {
     if terminals < 2 || !has_off_diagonal(b) {
         return false;
     }
@@ -2829,7 +2839,7 @@ fn looks_like_delta_shunt(b: &Mat, terminals: usize, phases: usize) -> bool {
     delta_branch_susceptance(b, &edges, terminals).is_some()
 }
 
-fn delta_branch_abs(b: &Mat, edges: &[(usize, usize)]) -> Option<f64> {
+fn delta_branch_abs(b: &ConductorMatrix, edges: &[(usize, usize)]) -> Option<f64> {
     if edges.is_empty() {
         return None;
     }
@@ -2850,7 +2860,11 @@ fn delta_branch_abs(b: &Mat, edges: &[(usize, usize)]) -> Option<f64> {
     Some(total / edges.len() as f64)
 }
 
-fn delta_branch_susceptance(b: &Mat, edges: &[(usize, usize)], terminals: usize) -> Option<f64> {
+fn delta_branch_susceptance(
+    b: &ConductorMatrix,
+    edges: &[(usize, usize)],
+    terminals: usize,
+) -> Option<f64> {
     if terminals < 2 || edges.is_empty() {
         return None;
     }

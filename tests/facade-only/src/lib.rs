@@ -35,14 +35,31 @@ mod names_resolve_through_the_facade {
 
 #[cfg(test)]
 mod tests {
-    use powerio::IntoTypedModule as _;
-
     #[test]
     fn the_readme_example_resolves_through_the_facade_alone() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../data/case9.m");
-        let module = powerio::parse(powerio::Source::open(&path).unwrap()).unwrap();
-        let module: powerio::PioModule<powerio::BalancedNetwork> = module.into_typed().unwrap();
-        assert!(!module.value().buses().is_empty());
+        let module = powerio::parse(powerio::Source::open(&path).unwrap(), None).unwrap();
+        let powerio::PioValue::BalancedNetwork(network) = &module.value else {
+            panic!(
+                "expected a balanced network, found {}",
+                module.value.type_name()
+            );
+        };
+        assert!(!network.buses().is_empty());
+
+        let serialized =
+            powerio::serialize(&module, powerio::Destination::memory("module").unwrap()).unwrap();
+        let powerio::EmittedOutput::Memory { artifacts } = serialized.into_output() else {
+            panic!("a memory destination returned path output");
+        };
+        let bytes = artifacts.into_iter().next().unwrap().into_bytes();
+        let decoded =
+            powerio::deserialize(powerio::Source::from_memory("module.pio.json", bytes).unwrap())
+                .unwrap();
+        assert!(matches!(
+            &decoded.value,
+            powerio::PioValue::BalancedNetwork(_)
+        ));
     }
 
     /// `powerio::Error` must name the type `powerio::parse` actually
@@ -50,17 +67,20 @@ mod tests {
     /// glob re-exports under the same name.
     #[test]
     fn powerio_error_is_the_type_parse_returns() {
-        let bad = powerio::Source::from_bytes("<memory>", b"not a case file".to_vec()).unwrap();
-        let _: powerio::Error = powerio::parse(bad).unwrap_err();
+        let bad = powerio::Source::from_memory("<memory>", b"not a case file".to_vec()).unwrap();
+        let _: powerio::Error = powerio::parse(bad, None).unwrap_err();
     }
 
     #[test]
     fn facade_metadata_and_display_operations_keep_facade_types() {
-        let info = powerio::resolve_format("pio-json").unwrap();
-        assert_eq!(info.token, "pio-json");
-        assert_eq!(info.extension, Some("pio.json"));
+        assert!(
+            powerio::resolve_format("pio-json").is_none(),
+            "PowerIO IR is serialized, not a grid exchange format"
+        );
 
-        let _: powerio::Error = powerio::parse_display(b"not a display", "pwd").unwrap_err();
+        let source =
+            powerio::Source::from_memory("display.pwd", b"not a display".to_vec()).unwrap();
+        let _: powerio::Error = powerio::parse_display(source, None).unwrap_err();
         let _: powerio::Error = powerio::to_geo_layer_from_aux_text(
             "DATA (Substation, [SubNum, Latitude, Longitude])\n{\n7 34 -80 99\n}\n",
         )

@@ -7,11 +7,11 @@ format emissions report unsupported fields as diagnostics.
 
     import powerio
 
-    module = powerio.parse_file("feeder.dss")
+    module = powerio.parse("feeder.dss")
     net = module.value
     for diagnostic in module.diagnostics:
         print("parse:", diagnostic)
-    conv = module.emit("pmd-json")
+    conv = powerio.emit(module, "pmd-json")
 """
 
 from __future__ import annotations

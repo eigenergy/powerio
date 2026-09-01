@@ -17,6 +17,7 @@ pub(crate) struct TextEmission {
     pub(crate) text: String,
     pub(crate) sidecars: Vec<TextSidecar>,
     pub(crate) diagnostics: Vec<crate::diagnostics::Diagnostic>,
+    pub(crate) fidelity: powerio_core::Fidelity,
 }
 
 impl TextEmission {
@@ -29,12 +30,15 @@ impl TextEmission {
             text,
             sidecars,
             diagnostics: diagnostics.into_records(),
+            fidelity: powerio_core::Fidelity::Canonical,
         }
     }
 
     /// An emission that dropped nothing, e.g. a same format echo.
     pub(crate) fn faithful(text: String) -> Self {
-        Self::new(text, Vec::new(), crate::diagnostics::Diagnostics::new())
+        let mut emission = Self::new(text, Vec::new(), crate::diagnostics::Diagnostics::new());
+        emission.fidelity = powerio_core::Fidelity::ExactSameFormat;
+        emission
     }
 
     /// Record one finding after the writer has run.
@@ -465,7 +469,7 @@ pub(crate) fn emit_text_with_options(
     {
         return TextEmission::faithful(text);
     }
-    emit_value_text_with_options(module.value(), format, options)
+    emit_value_text_with_options(&module.value, format, options)
 }
 
 /// The retained source text when emitting `module` back to its source format:
@@ -477,7 +481,7 @@ fn echo_text(
 ) -> Option<String> {
     let source = module.source()?;
     let buffer = source.primary_buffer().ok()?;
-    if !target.matches(*module.value().source_format()) {
+    if !target.matches(*module.value.source_format()) {
         return None;
     }
     let text = std::str::from_utf8(buffer.bytes()).ok()?;
@@ -575,7 +579,7 @@ pub fn emit_with_options(
                     sidecar.text.into_bytes(),
                 ));
             }
-            destination.__commit_artifacts(true, artifacts, conv.diagnostics)
+            destination.__commit_artifacts(true, conv.fidelity, artifacts, conv.diagnostics)
         }
         DistTargetFormat::BmopfJson | DistTargetFormat::PmdJson => {
             let artifact = powerio_core::MemoryArtifact::new(
@@ -583,7 +587,7 @@ pub fn emit_with_options(
                     .expect("static name is a valid artifact path"),
                 conv.text.into_bytes(),
             );
-            destination.__commit_artifacts(false, vec![artifact], conv.diagnostics)
+            destination.__commit_artifacts(false, conv.fidelity, vec![artifact], conv.diagnostics)
         }
     }
 }
@@ -857,7 +861,7 @@ mod tests {
     fn non_utf8_bytes_are_refused_and_name_the_encoding() {
         // 0xE9 is CP1252 é, the classic single byte a Windows editor leaves.
         let bytes: &[u8] = b"clear\nnew circuit.caf\xE9 basekv=12.47 bus1=src\n";
-        let source = powerio_core::Source::from_bytes("<memory>", bytes.to_vec())
+        let source = powerio_core::Source::from_memory("<memory>", bytes.to_vec())
             .unwrap()
             .with_format(powerio_core::FormatId::new("dss").unwrap());
         let err = parse(source).unwrap_err();
@@ -905,11 +909,11 @@ mod tests {
     fn parse_diagnostics_remain_on_the_module_when_it_is_emitted() {
         let dss = "clear\nnew circuit.w basekv=12.47 bus1=src\n\
                    new line.l1 bus1=src bus2=b2 length=1 units=furlong\n";
-        let source = powerio_core::Source::from_bytes("<memory>", dss.as_bytes().to_vec())
+        let source = powerio_core::Source::from_memory("<memory>", dss.as_bytes().to_vec())
             .unwrap()
             .with_format(powerio_core::FormatId::new("dss").unwrap());
         let module = parse(source).unwrap();
-        let lines = crate::diagnostics::render_diagnostics(module.diagnostics());
+        let lines = crate::diagnostics::render_diagnostics(&module.diagnostics);
         assert!(
             lines.iter().any(|w| w.contains("furlong")),
             "parse diagnostics stay on PioModule: {lines:?}"

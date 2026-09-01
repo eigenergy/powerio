@@ -218,7 +218,7 @@ fn name_pair(a: &str, b: &str) -> (String, String) {
     if b < a { (b, a) } else { (a, b) }
 }
 
-/// Direct variant maps between the mirrored provenance enums; both are
+/// Direct maps between the mirrored source relation enums; both are
 /// `#[non_exhaustive]`, so a variant added on one side first goes through the
 /// shared JSON shape instead of being dropped silently.
 fn kind_to_balanced(kind: powerio_dist::DistCoordsKind) -> Option<crate::CoordsKind> {

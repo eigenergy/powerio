@@ -233,6 +233,7 @@ pub(crate) fn parse_pandapower_source(
                 g: row.f_or("p_mw", 0.0) * step * v_ratio,
                 b: -row.f_or("q_mvar", 0.0) * step * v_ratio,
                 in_service: row.bool_or("in_service", true),
+                section_count: None,
                 control: None,
                 uid: None,
                 extras: row.extras_excluding(&[
@@ -296,6 +297,7 @@ pub(crate) fn parse_pandapower_source(
                 cost: costs.get(&(CostElement::Gen, idx)).cloned(),
                 caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
                 regulated_bus: None,
+                active_power_control: None,
                 uid: None,
             });
         }
@@ -320,6 +322,7 @@ pub(crate) fn parse_pandapower_source(
                 cost: costs.get(&(CostElement::ExtGrid, idx)).cloned(),
                 caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
                 regulated_bus: None,
+                active_power_control: None,
                 uid: None,
             });
         }
@@ -346,6 +349,7 @@ pub(crate) fn parse_pandapower_source(
                 cost: costs.get(&(CostElement::Sgen, idx)).cloned(),
                 caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
                 regulated_bus: None,
+                active_power_control: None,
                 uid: None,
             });
         }
@@ -632,6 +636,7 @@ pub(crate) fn parse_pandapower_source(
                 p_loss: 0.0,
                 q_loss: 0.0,
                 in_service: row.bool_or("in_service", true),
+                active_power_control: None,
                 uid: None,
                 extras: row.extras_excluding(&[
                     "bus",
@@ -678,6 +683,11 @@ pub(crate) fn parse_pandapower_source(
                 qmaxt: row.f_or("max_q_to_mvar", f64::INFINITY),
                 loss0: loss_mw,
                 loss1: loss_percent / 100.0,
+                resistance_ohm: None,
+                nominal_voltage_kv: None,
+                converters_mode: None,
+                converter1: None,
+                converter2: None,
                 cost: None,
                 uid: None,
                 extras: row.extras_excluding(&[
@@ -759,9 +769,12 @@ pub(crate) fn parse_pandapower_source(
         base_mva,
         base_frequency: f_hz,
         geo: super::geographic_meta(&buses),
+        case_metadata: crate::network::CaseMetadata::default(),
+        detailed_connectivity: None,
         buses: buses.into(),
         loads: loads.into(),
         shunts: shunts.into(),
+        static_var_compensators: Vec::new().into(),
         branches: branches.into(),
         switches: Vec::new().into(),
         generators: generators.into(),
@@ -3521,9 +3534,12 @@ mod tests {
             base_mva: 100.0,
             base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
             geo: None,
+            case_metadata: crate::network::CaseMetadata::default(),
+            detailed_connectivity: None,
             buses: buses.into(),
             loads: Vec::new().into(),
             shunts: Vec::new().into(),
+            static_var_compensators: Vec::new().into(),
             branches: Vec::new().into(),
             switches: Vec::new().into(),
             generators: Vec::new().into(),
@@ -3551,6 +3567,7 @@ mod tests {
             cost,
             caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
             regulated_bus: None,
+            active_power_control: None,
             uid: None,
         }
     }

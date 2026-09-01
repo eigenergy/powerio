@@ -50,10 +50,6 @@ pub enum BranchSusceptanceFormula {
     ReactanceOnly,
     /// `b = -1/(x tau)` with phase shift injections, matching MATPOWER
     /// `makeBdc` up to MATPOWER's own sign spelling.
-    ///
-    /// Serialized under its own name; `Matpower`, the stored 0.9 spelling,
-    /// is still read.
-    #[serde(alias = "Matpower")]
     TapAdjustedReactance,
     /// `b = imag(inv(r + jx)) = -x/(r² + x²)` with phase shift injections.
     ///
@@ -61,11 +57,7 @@ pub enum BranchSusceptanceFormula {
     /// r/x ratio. A transformer tap does not scale it, and it reduces to
     /// `-1/x` when the resistance is zero. This is PowerModels' DC branch
     /// susceptance exactly.
-    ///
-    /// Serialized under its own name; `SeriesImpedance`, the stored 0.9
-    /// spelling, is still read.
     #[default]
-    #[serde(alias = "SeriesImpedance")]
     SeriesSusceptance,
 }
 
@@ -180,18 +172,6 @@ mod tests {
         assert_eq!(
             BranchSusceptanceFormula::from_formula_name("matpower"),
             None
-        );
-    }
-
-    #[test]
-    fn stored_enum_aliases_remain_readable() {
-        assert_eq!(
-            serde_json::from_str::<BranchSusceptanceFormula>(r#""SeriesImpedance""#).unwrap(),
-            BranchSusceptanceFormula::SeriesSusceptance
-        );
-        assert_eq!(
-            serde_json::from_str::<BranchSusceptanceFormula>(r#""Matpower""#).unwrap(),
-            BranchSusceptanceFormula::TapAdjustedReactance
         );
     }
 

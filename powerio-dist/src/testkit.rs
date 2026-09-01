@@ -1,5 +1,4 @@
-//! Test-only compatibility wrappers keeping the unit suites on the old call
-//! shapes while they exercise the module parse surface underneath.
+//! Test harness for parser and emitter fixtures.
 #![allow(dead_code)]
 
 use std::sync::Arc;
@@ -7,11 +6,7 @@ use std::sync::Arc;
 use crate::convert::{DistTargetFormat, TextEmission};
 use crate::model::MulticonductorNetwork;
 
-/// The old parse output shape: the typed network with the reader's findings
-/// riding along. Dereferences to the network so field access keeps its old
-/// spelling; `warnings` and `source` shadow the fields the network lost.
-/// Mutation through `DerefMut` edits a copy of the module's value, so the
-/// module's echo tier stays byte exact.
+/// A typed network and the reader findings used by the unit tests.
 #[derive(Debug)]
 pub(crate) struct Parsed {
     pub warnings: Vec<String>,
@@ -58,10 +53,10 @@ fn from_module(module: powerio_core::PioModule<MulticonductorNetwork>) -> Parsed
         Some(Arc::new(text.to_owned()))
     });
     Parsed {
-        warnings: crate::diagnostics::render_diagnostics(module.diagnostics()),
-        diagnostics: module.diagnostics().to_vec(),
+        warnings: crate::diagnostics::render_diagnostics(&module.diagnostics),
+        diagnostics: module.diagnostics.clone(),
         source,
-        network: module.value().clone(),
+        network: module.value.clone(),
         module,
     }
 }
@@ -94,7 +89,7 @@ fn core_to_dist(error: &powerio_core::Error) -> crate::Error {
 
 pub(crate) fn parse_str(text: &str, from: &str) -> crate::Result<Parsed> {
     let source = declared(
-        powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())
+        powerio_core::Source::from_memory("<memory>", text.as_bytes().to_vec())
             .map_err(|error| core_to_dist(&error))?,
         Some(from),
     )?;

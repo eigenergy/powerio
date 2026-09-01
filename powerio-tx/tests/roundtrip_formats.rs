@@ -304,7 +304,7 @@ struct Roundtrippable {
 }
 
 fn read_module(text: &str, token: &str) -> powerio_core::PioModule<BalancedNetwork> {
-    let source = powerio_core::Source::from_bytes("case", text.as_bytes().to_vec())
+    let source = powerio_core::Source::from_memory("case", text.as_bytes().to_vec())
         .unwrap()
         .with_format(powerio_tx::parse_format_id(token).unwrap());
     powerio_tx::parse(source).unwrap()

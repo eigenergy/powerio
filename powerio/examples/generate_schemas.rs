@@ -16,7 +16,6 @@ mod generate {
         path::{Path, PathBuf},
     };
 
-    use schemars::{JsonSchema, schema_for};
     use serde_json::json;
 
     pub(super) fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -24,29 +23,25 @@ mod generate {
             .nth(1)
             .map_or_else(|| PathBuf::from("docs/schema"), PathBuf::from);
 
-        // The stored module document: one integer version, its own lineage.
-        // The retired `pio-package` lineage stays committed and frozen under
-        // `docs/schema/`; its writer is gone, so nothing regenerates it.
-        write_schema::<powerio::stored::StoredModuleV1>(
+        // PowerIO 1.0 IR has one schema and one integer version.
+        write_schema(
+            serde_json::to_value(powerio::generate_ir_schema())?,
             &out,
-            &format!("pio-module/{}", powerio::stored::SCHEMA_VERSION),
-            &format!(
-                "https://powerio.dev/schema/pio-module/{}/schema.json",
-                powerio::stored::SCHEMA_VERSION
-            ),
+            "pio-module/1",
+            "https://powerio.dev/schema/pio-module/1/schema.json",
             &[],
         )?;
 
         Ok(())
     }
 
-    fn write_schema<T: JsonSchema>(
+    fn write_schema(
+        mut schema: serde_json::Value,
         out: &Path,
         rel: &str,
         id: &str,
         also_required: &[&str],
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut schema = serde_json::to_value(schema_for!(T))?;
         spell_nonfinite_floats(&mut schema)?;
         let root = schema
             .as_object_mut()
@@ -84,12 +79,9 @@ mod generate {
         Ok(())
     }
 
-    /// Every document powerio authors spells a nonfinite float as
-    /// `"Infinity"`, `"-Infinity"`, or `"NaN"` (`crate::legacy_diag::nonfinite`),
-    /// so every float position in the schema accepts a string spelling
-    /// beside the number. Fields whose number arm already admits `null`
-    /// (the multiconductor bounds) keep it: that is the read side leniency
-    /// for documents a pre-0.9 writer emitted.
+    /// Every PowerIO IR document spells a nonfinite float as `"Infinity"`,
+    /// `"-Infinity"`, or `"NaN"`, so each float position in the schema accepts
+    /// one of those strings beside a number.
     fn spell_nonfinite_floats(
         schema: &mut serde_json::Value,
     ) -> Result<(), Box<dyn std::error::Error>> {

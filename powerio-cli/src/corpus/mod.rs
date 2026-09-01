@@ -424,19 +424,22 @@ fn read_case(path: &Path) -> std::result::Result<Case, Unreadable> {
         error,
         panicked,
     };
-    let balanced_error = match catch_panic(|| crate::compat::parse_file(path, None)) {
+    let balanced_error = match catch_panic(|| crate::module_io::load_balanced_module(path, None)) {
         Ok(Ok(parsed)) => {
-            let rendered = parsed.render_diagnostics();
-            return Ok(Case::Balanced(Box::new(parsed.network), rendered));
+            let rendered = powerio_core::render_diagnostics(&parsed.diagnostics);
+            return Ok(Case::Balanced(Box::new(parsed.into_value()), rendered));
         }
         Err(message) => return Err(unreadable(message, true)),
         Ok(Err(err)) => err.to_string(),
     };
-    match catch_panic(|| crate::compat::dist_parse_file(path, None)) {
-        Ok(Ok(parsed)) => Ok(Case::Multiconductor(
-            Box::new(parsed.network),
-            parsed.warnings,
-        )),
+    match catch_panic(|| crate::module_io::load_multiconductor_module(path, None)) {
+        Ok(Ok(parsed)) => {
+            let warnings = powerio_core::render_diagnostics(&parsed.diagnostics);
+            Ok(Case::Multiconductor(
+                Box::new(parsed.into_value()),
+                warnings,
+            ))
+        }
         // A `.m` that failed the MATPOWER parse used to report "unknown
         // distribution format `m`": the fallback reader's refusal displaced
         // the diagnosis. When the distribution reader does not even claim the
@@ -675,7 +678,10 @@ fn dist_convert_leg(
             to_ordinal: to.ordinal,
         },
     );
-    let emission = match catch_panic(|| crate::compat::emit_dist_value(source, target)) {
+    let source_module = powerio_core::PioModule::new(source.clone());
+    let emission = match catch_panic(|| {
+        crate::module_io::emit_multiconductor_module(&source_module, target)
+    }) {
         Ok(Ok(emission)) => emission,
         Ok(Err(error)) => {
             out.failure = Some(format!("emit: {error}"));
@@ -699,7 +705,7 @@ fn dist_convert_leg(
         out.unresolved_include = true;
         return out;
     }
-    let parsed = match catch_panic(|| crate::compat::dist_parse_str(&text, &token)) {
+    let parsed = match catch_panic(|| crate::module_io::load_multiconductor_memory(&text, &token)) {
         Ok(Ok(parsed)) => parsed,
         Ok(Err(err)) => {
             out.failure = Some(format!("readback: {err}"));
@@ -713,13 +719,14 @@ fn dist_convert_leg(
     // The readback's own declarations count toward warning parity, exactly as
     // the transmission leg counts them; without this a loss the reader states
     // on re-parse was graded undeclared.
-    out.warnings.extend(parsed.warnings.iter().cloned());
+    out.warnings
+        .extend(powerio_core::render_diagnostics(&parsed.diagnostics));
     let before = invariants::distribution_core(source);
-    let after = invariants::distribution_core(&parsed.network);
+    let after = invariants::distribution_core(&parsed.value);
     if before != after {
         out.core_changed = Some(dist_core_delta(&before, &after));
     }
-    let clean = parsed.network;
+    let clean = parsed.into_value();
     let diffs = invariants::model_diffs(
         &invariants::distribution_value(source),
         &invariants::distribution_value(&clean),
@@ -809,7 +816,14 @@ fn convert_leg(
             to_ordinal: to.ordinal,
         },
     );
-    let emission = match catch_panic(|| crate::compat::emit_tx_value(source, target)) {
+    let source_module = powerio_core::PioModule::new(source.clone());
+    let emission = match catch_panic(|| {
+        crate::module_io::emit_balanced_module(
+            &source_module,
+            target,
+            &powerio_tx::EmitOptions::default(),
+        )
+    }) {
         Ok(Ok(emission)) => emission,
         Ok(Err(err)) => {
             out.failure = Some(format!("emit: {err}"));
@@ -823,7 +837,7 @@ fn convert_leg(
     out.warnings.extend(emission.render_diagnostics());
     let token = to.format.clone();
     let text = emission.text;
-    let parsed = match catch_panic(|| crate::compat::parse_str(&text, &token)) {
+    let parsed = match catch_panic(|| crate::module_io::load_balanced_memory(&text, &token)) {
         Ok(Ok(parsed)) => parsed,
         Ok(Err(err)) => {
             out.failure = Some(format!("readback: {err}"));
@@ -834,8 +848,9 @@ fn convert_leg(
             return out;
         }
     };
-    out.warnings.extend(parsed.render_diagnostics());
-    fill_invariants(&mut out, source, &parsed.network);
+    out.warnings
+        .extend(powerio_core::render_diagnostics(&parsed.diagnostics));
+    fill_invariants(&mut out, source, &parsed.value);
     out
 }
 

@@ -4,13 +4,13 @@ A balanced network is the positive sequence transmission model. MATPOWER, PSS/E,
 
 ```julia
 using PowerIO
-case = parse_file("case118.m")     # PioModule{BalancedNetwork}
+case = parse("case118.m")          # PioModule{BalancedNetwork}
 net = case.value
 n_buses(net)                       # 118
 net.data.branches[1]               # element tables: buses, branches, generators, …
 ```
 
-The network keeps what the source states: element inventory, terminal connections, impedances, ratings, generator capability bounds and cost curves, and the stored operating state. Ratings and costs stay on the network as reusable data; selecting which bounds a calculation enforces happens when an instance is constructed, so one parsed case serves power flow, DC OPF, and AC OPF without reparsing ([Problem Instances and Solutions](instances.md)).
+The network keeps what the source states: element inventory, terminal connections, impedances, ratings, generator capability bounds and cost curves, and the source/default operating assignment. Ratings and costs stay on the network as reusable data; selecting which bounds a calculation enforces happens when an instance is constructed, so one parsed case serves power flow, DC OPF, and AC OPF without reparsing ([Problem Instances and Solutions](instances.md)).
 
 Conventions the accessors hold to:
 
@@ -22,13 +22,13 @@ Writing an unchanged parsed module back to its own format is byte exact, comment
 
 ```julia
 emit(case, "matpower", "copy.m")               # byte exact echo
-text, findings = emit(case, "psse")             # conversion + reported losses
-for finding in findings
+result = emit(case, "psse")                     # conversion + reported losses
+for finding in result.diagnostics
     println(finding.code, ": ", finding.message)
 end
 ```
 
-Library callers compose `parse_file` and `emit`, keeping the module and its
+Library callers compose `parse` and `emit`, keeping the module and its
 diagnostics available between the operations. The command line keeps the one
 call `powerio convert` form.
 

@@ -5,7 +5,7 @@ This submodule is never imported by ``powerio/__init__.py``, so ``import
 powerio`` stays zero-dep; the MCP SDK is pulled in only here.
 
 ``powerio.mcp.sandbox`` is the exception: it carries the filesystem
-containment policy the server applies to ``path`` and ``out_path``, imports
+containment policy the server applies to ``path`` and ``destination``, imports
 only the standard library, and is importable on every version the wheel
 supports. ``main`` is resolved on attribute access so reaching the sandbox
 does not drag in the SDK.

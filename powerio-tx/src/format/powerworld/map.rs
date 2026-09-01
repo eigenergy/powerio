@@ -154,9 +154,12 @@ pub(in crate::format) fn parse_powerworld_source(
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
         geo: super::super::geographic_meta(&buses),
+        case_metadata: crate::network::CaseMetadata::default(),
+        detailed_connectivity: None,
         buses: buses.into(),
         loads: loads.into(),
         shunts: shunts.into(),
+        static_var_compensators: Vec::new().into(),
         branches: branches.into(),
         switches: Vec::new().into(),
         generators: generators.into(),
@@ -580,6 +583,7 @@ fn read_shunt(r: &Row, bus_labels: &HashMap<&str, BusId>, index: usize) -> Resul
         g: f_alias(r, &["ShuntMW", "SSNMW", "MWNom"], 0.0)?,
         b: f_alias(r, &["ShuntMVR", "SSNMVR", "MvarNom"], 0.0)?,
         in_service: on_alias(r, &["ShuntStatus", "SSStatus", "Status"])?,
+        section_count: None,
         control: None,
         uid: None,
         extras,
@@ -607,6 +611,7 @@ fn read_gen(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Generator> {
         cost: None,
         caps: Default::default(),
         regulated_bus: None,
+        active_power_control: None,
         uid: None,
     })
 }

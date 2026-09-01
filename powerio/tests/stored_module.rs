@@ -1,7 +1,5 @@
-//! The `.pio.json` version 1 wire: round trips, refusals, and the one way
-//! 0.9 upgrade.
+//! PowerIO IR round trips and refusals.
 
-use powerio::stored::{emit_module, read_module};
 use powerio::{BalancedNetwork, PioValue};
 use powerio_core::{
     Diagnostic, DiagnosticCode, DiagnosticId, DiagnosticSeverity, HistoryEntry, HistoryId,
@@ -9,6 +7,9 @@ use powerio_core::{
     SourceSpan, TimePoint,
 };
 use powerio_tx::{Bus, BusId, BusType, Generator, Load, repair_values};
+
+mod helpers;
+use helpers::{deserialize_module_text, serialize_module_text};
 
 fn small_network() -> BalancedNetwork {
     let mut bus1 = Bus::new(BusId(1), BusType::Ref, 345.0);
@@ -69,31 +70,31 @@ fn module_with_records() -> PioModule<PioValue> {
 }
 
 #[test]
-fn version_one_round_trips_with_records_and_nonfinite_bounds() {
+fn current_ir_round_trips_with_records_and_nonfinite_bounds() {
     let module = module_with_records();
-    let text = emit_module(&module).unwrap();
+    let text = serialize_module_text(&module).unwrap();
 
     // The exact top level identity and the stored nonfinite spelling.
     let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(raw["schema"], "powerio.module");
     assert_eq!(raw["version"], 1);
-    assert_eq!(raw["value"]["kind"], "balanced_network");
+    assert_eq!(raw["value"]["type"], "powerio.BalancedNetwork");
     assert_eq!(raw["value"]["data"]["buses"][1]["vmax"], "Infinity");
 
-    let back = read_module(&text).unwrap();
-    let PioValue::BalancedNetwork(network) = back.value() else {
+    let back = deserialize_module_text(&text).unwrap();
+    let PioValue::BalancedNetwork(network) = &back.value else {
         panic!("wrong kind");
     };
     assert_eq!(network.buses().len(), 2);
     assert!(network.buses()[1].vmax.is_infinite());
     assert_eq!(back.sources().len(), 1);
     assert_eq!(back.source_map().len(), 1);
-    assert_eq!(back.diagnostics().len(), 1);
+    assert_eq!(back.diagnostics.len(), 1);
     assert_eq!(back.history().len(), 1);
     assert!(back.extensions().contains_key("org.example.note"));
 
     // Writing again reproduces the document byte for byte.
-    assert_eq!(emit_module(&back).unwrap(), text);
+    assert_eq!(serialize_module_text(&back).unwrap(), text);
 }
 
 /// A repair finding's target is an RFC 6901 pointer into `value.data`, not
@@ -110,8 +111,8 @@ fn a_repair_finding_target_is_a_pointer_the_writer_accepts() {
     network.buses_mut()[1].vm = 0.0; // outside [0, 2] p.u.: triggers a repair
     let module = PioModule::new(network);
     let module = repair_values(module).unwrap();
-    assert_eq!(module.diagnostics().len(), 1);
-    let diagnostic = &module.diagnostics()[0];
+    assert_eq!(module.diagnostics.len(), 1);
+    let diagnostic = &module.diagnostics[0];
     assert!(
         diagnostic.target_is_pointer(),
         "not an RFC 6901 pointer: {:?}",
@@ -120,7 +121,7 @@ fn a_repair_finding_target_is_a_pointer_the_writer_accepts() {
     let target = diagnostic.target().unwrap().to_owned();
 
     let module = module.map_value(PioValue::BalancedNetwork);
-    let text = emit_module(&module).unwrap();
+    let text = serialize_module_text(&module).unwrap();
 
     let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(
@@ -129,9 +130,9 @@ fn a_repair_finding_target_is_a_pointer_the_writer_accepts() {
         "target `{target}` does not resolve to the repaired bus's stored vm"
     );
 
-    // read_module runs the same target validation the write did; a round
-    // trip through the reader is one more proof the target is accepted.
-    read_module(&text).unwrap();
+    // `deserialize` runs the same target validation as `serialize`; a round
+    // trip is one more proof the target is accepted.
+    deserialize_module_text(&text).unwrap();
 }
 
 /// Build a module carrying the diagnostics `d0` and `d1` (`d1` referencing
@@ -166,13 +167,13 @@ fn module_with_d0_and_d1(order: [&str; 2]) -> PioModule<PioValue> {
 /// (not some other record that ended up sharing the id).
 fn assert_d1_still_resolves_to_d0(module: &PioModule<PioValue>) {
     let d1 = module
-        .diagnostics()
+        .diagnostics
         .iter()
         .find(|d| d.id().is_some_and(|id| id.as_str() == "d1"))
         .expect("d1 present");
     assert_eq!(d1.related().first().map(DiagnosticId::as_str), Some("d0"));
     let d0 = module
-        .diagnostics()
+        .diagnostics
         .iter()
         .find(|d| d.id().is_some_and(|id| id.as_str() == "d0"))
         .expect("d0 present");
@@ -190,8 +191,8 @@ fn an_id_synthesized_for_an_unlabeled_diagnostic_never_collides_with_an_explicit
     for order in [["d0", "d1"], ["d1", "d0"]] {
         // "a .pio.json ... reads": round trip through real stored text first,
         // the same as any external document would arrive.
-        let starting_text = emit_module(&module_with_d0_and_d1(order)).unwrap();
-        let mut module = read_module(&starting_text).unwrap();
+        let starting_text = serialize_module_text(&module_with_d0_and_d1(order)).unwrap();
+        let mut module = deserialize_module_text(&starting_text).unwrap();
 
         // Appended with no id of its own, matching the repair pass shape.
         module
@@ -202,12 +203,12 @@ fn an_id_synthesized_for_an_unlabeled_diagnostic_never_collides_with_an_explicit
             ))
             .unwrap();
 
-        let text = emit_module(&module).unwrap();
-        let back = read_module(&text).unwrap();
+        let text = serialize_module_text(&module).unwrap();
+        let back = deserialize_module_text(&text).unwrap();
 
-        assert_eq!(back.diagnostics().len(), 3, "order {order:?}");
+        assert_eq!(back.diagnostics.len(), 3, "order {order:?}");
         let ids: std::collections::HashSet<&str> = back
-            .diagnostics()
+            .diagnostics
             .iter()
             .map(|d| d.id().unwrap().as_str())
             .collect();
@@ -248,10 +249,10 @@ fn every_source_relation_and_history_kind_round_trips() {
     }
     for (index, kind) in [
         HistoryKind::Parse,
-        HistoryKind::Upgrade,
         HistoryKind::Transform,
         HistoryKind::Edit,
         HistoryKind::Repair,
+        HistoryKind::Solve,
     ]
     .into_iter()
     .enumerate()
@@ -264,8 +265,8 @@ fn every_source_relation_and_history_kind_round_trips() {
             .unwrap();
     }
 
-    let text = emit_module(&module).unwrap();
-    let back = read_module(&text).unwrap();
+    let text = serialize_module_text(&module).unwrap();
+    let back = deserialize_module_text(&text).unwrap();
     assert_eq!(
         back.source_map()
             .iter()
@@ -280,10 +281,10 @@ fn every_source_relation_and_history_kind_round_trips() {
             .collect::<Vec<_>>(),
         [
             HistoryKind::Parse,
-            HistoryKind::Upgrade,
             HistoryKind::Transform,
             HistoryKind::Edit,
             HistoryKind::Repair,
+            HistoryKind::Solve,
         ]
     );
 }
@@ -295,23 +296,25 @@ fn operating_point_series_round_trips_typed() {
         TimePoint::new("h0", Some(std::time::Duration::from_secs(3600))).unwrap(),
         TimePoint::new("h1", Some(std::time::Duration::from_secs(3600))).unwrap(),
     ];
-    let series = powerio_prob::BalancedStateBuilder::new(network, time_points)
+    let series = powerio_prob::BalancedOperatingPointBuilder::new(network, time_points)
         .load_active_powers(vec![40.0, 55.0])
         .generator_active_powers(vec![42.0, 61.5])
         .build()
         .unwrap();
-    let module = PioModule::new(PioValue::BalancedOperatingPointTimeSeries(series));
-    let text = emit_module(&module).unwrap();
-    let back = read_module(&text).unwrap();
-    let PioValue::BalancedOperatingPointTimeSeries(series) = back.value() else {
+    let module = PioModule::new(PioValue::from(series));
+    let text = serialize_module_text(&module).unwrap();
+    let back = deserialize_module_text(&text).unwrap();
+    let PioValue::TimeSeries(series) = &back.value else {
         panic!("wrong kind");
     };
     assert_eq!(series.len(), 2);
-    assert_eq!(series.values()[1].load_active_power("loads:0"), Some(55.0));
-    assert_eq!(
-        series.values()[1].generator_active_power("generators:0"),
-        Some(61.5)
-    );
+    let PioValue::BalancedOperatingPoint(point) = series.get(1).unwrap() else {
+        panic!("wrong element type");
+    };
+    let load_id = point.network().loads()[0].uid.as_deref().unwrap();
+    let generator_id = point.network().generators()[0].uid.as_deref().unwrap();
+    assert_eq!(point.load_active_power(load_id), Some(55.0));
+    assert_eq!(point.generator_active_power(generator_id), Some(61.5));
     assert_eq!(
         series.time_points()[0].duration(),
         Some(std::time::Duration::from_secs(3600))
@@ -321,72 +324,26 @@ fn operating_point_series_round_trips_typed() {
 #[test]
 fn unknown_semantic_fields_are_refused() {
     let module = module_with_records();
-    let text = emit_module(&module).unwrap();
+    let text = serialize_module_text(&module).unwrap();
     let mut raw: serde_json::Value = serde_json::from_str(&text).unwrap();
     raw["surprise"] = serde_json::json!(true);
-    let error = read_module(&raw.to_string()).unwrap_err().to_string();
+    let error = deserialize_module_text(&raw.to_string())
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("surprise"), "{error}");
 }
 
 #[test]
-fn unsupported_versions_are_refused_with_their_identity() {
-    let error = read_module(r#"{"schema": "powerio.module", "version": 2}"#)
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("version 2"), "{error}");
-    let error = read_module(r#"{"schema": "someone.else", "version": 1}"#)
+fn only_powerio_module_version_one_is_accepted() {
+    for version in [0, 2, 3] {
+        let text = format!(r#"{{"schema": "powerio.module", "version": {version}}}"#);
+        let error = deserialize_module_text(&text).unwrap_err().to_string();
+        assert!(error.contains(&format!("version {version}")), "{error}");
+    }
+    let error = deserialize_module_text(r#"{"schema": "someone.else", "version": 1}"#)
         .unwrap_err()
         .to_string();
     assert!(error.contains("someone.else"), "{error}");
-}
-
-#[test]
-fn pre_09_lineage_is_refused() {
-    let error = read_module(r#"{"schema_version": "0.2.0", "model": {}}"#)
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("regenerated"), "{error}");
-}
-
-/// The frozen 0.9 upgrade fixture: a released-shape package committed as a
-/// file, upgrading forever. Regenerating it requires a deliberate decision,
-/// never a drive-by.
-#[test]
-fn the_frozen_09_fixture_upgrades() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../tests/data/package/frozen-0.9-series.pio.json"
-    );
-    let text = std::fs::read_to_string(path).unwrap();
-    let module = read_module(&text).unwrap();
-    let PioValue::BalancedOperatingPointTimeSeries(series) = module.value() else {
-        panic!("expected the series value");
-    };
-    assert_eq!(series.len(), 2);
-    assert_eq!(series.values()[1].load_active_power("loads:0"), Some(75.0));
-    let updated = series.values()[1].bus_voltage_angle(BusId(2)).unwrap();
-    assert!((updated - 30.0_f64.to_radians()).abs() < 1e-12, "{updated}");
-}
-
-/// The other released 0.9 shapes, frozen as files: a static balanced package
-/// and a static multiconductor package.
-#[test]
-fn the_frozen_09_static_fixtures_upgrade() {
-    let base = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/package");
-    let text = std::fs::read_to_string(format!("{base}/frozen-0.9-balanced.pio.json")).unwrap();
-    let module = read_module(&text).unwrap();
-    let PioValue::BalancedNetwork(network) = module.value() else {
-        panic!("expected the balanced value");
-    };
-    assert_eq!(network.buses().len(), 2);
-
-    let text =
-        std::fs::read_to_string(format!("{base}/frozen-0.9-multiconductor.pio.json")).unwrap();
-    let module = read_module(&text).unwrap();
-    let PioValue::MulticonductorNetwork(network) = module.value() else {
-        panic!("expected the multiconductor value");
-    };
-    assert_eq!(network.buses().len(), 1);
 }
 
 // ---- the remaining promoted kinds round trip ---------------------------------
@@ -399,15 +356,15 @@ fn multiconductor_network_round_trips() {
         vec!["1".into(), "2".into()],
     ));
     let module = PioModule::new(PioValue::MulticonductorNetwork(network));
-    let text = emit_module(&module).unwrap();
+    let text = serialize_module_text(&module).unwrap();
     let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(raw["value"]["kind"], "multiconductor_network");
-    let back = read_module(&text).unwrap();
-    let PioValue::MulticonductorNetwork(network) = back.value() else {
+    assert_eq!(raw["value"]["type"], "powerio.MulticonductorNetwork");
+    let back = deserialize_module_text(&text).unwrap();
+    let PioValue::MulticonductorNetwork(network) = &back.value else {
         panic!("wrong kind");
     };
     assert_eq!(network.buses().len(), 1);
-    assert_eq!(emit_module(&back).unwrap(), text);
+    assert_eq!(serialize_module_text(&back).unwrap(), text);
 }
 
 #[test]
@@ -422,17 +379,23 @@ fn balanced_network_time_series_round_trips() {
         vec![small_network(), second],
     )
     .unwrap();
-    let module = PioModule::new(PioValue::BalancedNetworkTimeSeries(series));
-    let text = emit_module(&module).unwrap();
+    let module = PioModule::new(PioValue::from(series));
+    let text = serialize_module_text(&module).unwrap();
     let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(raw["value"]["kind"], "balanced_network_time_series");
-    let back = read_module(&text).unwrap();
-    let PioValue::BalancedNetworkTimeSeries(series) = back.value() else {
+    assert_eq!(
+        raw["value"]["type"],
+        "powerio.TimeSeries<powerio.BalancedNetwork>"
+    );
+    let back = deserialize_module_text(&text).unwrap();
+    let PioValue::TimeSeries(series) = &back.value else {
         panic!("wrong kind");
     };
     assert_eq!(series.len(), 2);
-    assert!((series.values()[1].loads()[0].p - 55.0).abs() < 1e-12);
-    assert_eq!(emit_module(&back).unwrap(), text);
+    let PioValue::BalancedNetwork(network) = series.get(1).unwrap() else {
+        panic!("wrong element type");
+    };
+    assert!((network.loads()[0].p - 55.0).abs() < 1e-12);
+    assert_eq!(serialize_module_text(&back).unwrap(), text);
 }
 
 #[test]
@@ -443,17 +406,24 @@ fn balanced_network_scenario_set_round_trips() {
         Scenario::new(ScenarioId::new("peak").unwrap(), Some(0.4), small_network()),
     ])
     .unwrap();
-    let module = PioModule::new(PioValue::BalancedNetworkScenarioSet(set));
-    let text = emit_module(&module).unwrap();
+    let module = PioModule::new(PioValue::from(set));
+    let text = serialize_module_text(&module).unwrap();
     let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(raw["value"]["kind"], "balanced_network_scenario_set");
-    let back = read_module(&text).unwrap();
-    let PioValue::BalancedNetworkScenarioSet(set) = back.value() else {
+    assert_eq!(
+        raw["value"]["type"],
+        "powerio.ScenarioSet<powerio.BalancedNetwork>"
+    );
+    let back = deserialize_module_text(&text).unwrap();
+    let PioValue::ScenarioSet(set) = &back.value else {
         panic!("wrong kind");
     };
     assert_eq!(set.len(), 2);
-    assert_eq!(set.get("peak").unwrap().probability(), Some(0.4));
-    assert_eq!(emit_module(&back).unwrap(), text);
+    let peak = set
+        .iter()
+        .find(|scenario| scenario.id().as_str() == "peak")
+        .unwrap();
+    assert_eq!(peak.probability(), Some(0.4));
+    assert_eq!(serialize_module_text(&back).unwrap(), text);
 }
 
 // ---- reference validation ----------------------------------------------------
@@ -461,20 +431,24 @@ fn balanced_network_scenario_set_round_trips() {
 #[test]
 fn a_span_past_its_source_is_refused() {
     let module = module_with_records();
-    let text = emit_module(&module).unwrap();
+    let text = serialize_module_text(&module).unwrap();
     let mut raw: serde_json::Value = serde_json::from_str(&text).unwrap();
     raw["source_map"][0]["spans"][0]["byte_end"] = serde_json::json!(999);
-    let error = read_module(&raw.to_string()).unwrap_err().to_string();
+    let error = deserialize_module_text(&raw.to_string())
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("exceeds source length"), "{error}");
 }
 
 #[test]
 fn an_unnamespaced_extension_is_refused() {
     let module = module_with_records();
-    let text = emit_module(&module).unwrap();
+    let text = serialize_module_text(&module).unwrap();
     let mut raw: serde_json::Value = serde_json::from_str(&text).unwrap();
     raw["extensions"] = serde_json::json!({"note": 1});
-    let error = read_module(&raw.to_string()).unwrap_err().to_string();
+    let error = deserialize_module_text(&raw.to_string())
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("not namespaced"), "{error}");
 }
 
@@ -482,21 +456,21 @@ fn an_unnamespaced_extension_is_refused() {
 fn suggested_action_survives_the_stored_round_trip() {
     let mut module = powerio_core::PioModule::new(PioValue::BalancedNetwork(small_network()));
     let diagnostic = powerio_core::Diagnostic::of(
-        &powerio::codes::READ_MODULE_UPGRADED,
+        &powerio::codes::READ_MODULE_INVALID,
         "a finding with an action",
     )
     .with_suggested_action("rerun with --strict");
     module
         .add_diagnostic(diagnostic)
         .expect("diagnostic attaches");
-    let text = powerio::stored::emit_module(&module).expect("writes");
+    let text = serialize_module_text(&module).expect("serializes");
     assert!(
         text.contains("\"suggested_action\"") && text.contains("rerun with --strict"),
         "the stored document carries the action: {text}"
     );
-    let reread = powerio::stored::read_module(&text).expect("reads back");
+    let reread = deserialize_module_text(&text).expect("deserializes");
     assert_eq!(
-        reread.diagnostics()[0].suggested_action(),
+        reread.diagnostics[0].suggested_action(),
         Some("rerun with --strict"),
         "the action survives the round trip"
     );

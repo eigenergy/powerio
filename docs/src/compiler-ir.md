@@ -12,7 +12,7 @@ PowerIO's design borrows from LLVM and MLIR where their problems genuinely overl
 
 **Typed representations at more than one abstraction level.** The value families span reusable networks, calculation instances, and solutions the way a compiler holds IR at several levels; nothing forces the richer levels through the poorer ones.
 
-**Explicit transformations with testable boundaries.** Every transformation names its input and output types, returns diagnostics, and refuses what it cannot state (the balanced lowering's readiness report is the preflight MLIR's dialect conversion legality check suggests). Nothing rewrites as a side effect. A writer has no matching legality preflight yet; a format's losses surface in the write result itself rather than in a check a caller can run beforehand.
+**Explicit transformations with testable boundaries.** Every transformation names its input and output types, returns diagnostics, and refuses what it cannot represent. Balanced lowering exposes `to_balanced_report` so callers can inspect its assumptions and refusals before transforming a value. Nothing rewrites as a side effect. Format loss diagnostics belong to the `EmitResult` returned by `emit`.
 
 **Verification at representation boundaries.** Parsers and transformations verify what they produce and report findings rather than repairing silently; repairs are explicit operations that leave history records.
 
@@ -20,11 +20,11 @@ PowerIO's design borrows from LLVM and MLIR where their problems genuinely overl
 
 **Analysis caches.** Factorizations and prepared solver arrays are derived data behind the public results, invalidated when their inputs change, the way pass manager analyses are; `IndexedNetwork`, the derived index view, stays public in 1.0 because downstream consumers build matrices through it directly.
 
-**Registries checked mechanically where tables drift.** The twenty kind strings, the format tokens, the diagnostic codes, and the drawn architecture edges are each held to one source by a CI gate, which is the maintainable slice of MLIR's declarative dialect definitions.
+**Registries checked mechanically where tables drift.** Structural type names, format tokens, diagnostic codes, and drawn architecture edges are each held to one source by a CI gate, which is the maintainable slice of MLIR's declarative dialect definitions.
 
-**Serialization versioned apart from memory.** `.pio.json` version 1 is a schema with its own upgrade rules, in the spirit of MLIR bytecode versioning; the Rust structs never derive the wire layout.
+**Serialization specified apart from memory.** `.pio.json` version 1 has an explicit schema and validation rules; the Rust structs never derive the public document layout. PowerIO 1.0 reads and writes only that final shape.
 
-**Scrutiny proportional to permanence.** A new core concept (a value family, a common module record) needs the promotion checklist: variant, stable string, stored DTO, and binding coverage. A new format adapter needs none of that.
+**Scrutiny proportional to permanence.** A new core concept (a value family or common module record) needs a registered structural type name, an exact IR representation, and binding coverage. A new format adapter needs none of that.
 
 ## Not adopted
 

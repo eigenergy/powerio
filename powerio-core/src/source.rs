@@ -226,7 +226,7 @@ pub const PRIMARY_SOURCE_ID: &str = "/input";
 /// [`Source::open`] on a file retains the primary bytes and permits
 /// constrained acquisition of referenced files beneath the file's canonical
 /// containing directory; [`Source::with_acquisition_root`] widens that root at
-/// construction, and never from a parser. [`Source::from_bytes`] grants no
+/// construction, and never from a parser. [`Source::from_memory`] grants no
 /// filesystem access; referenced content reaches an in-memory source only
 /// through [`Source::with_named_buffer`].
 #[derive(Clone)]
@@ -313,7 +313,10 @@ impl Source {
     /// Retain a caller-owned binary or text buffer. An `Arc<[u8]>` argument
     /// is retained without copying; a `Vec<u8>` is copied once into the
     /// shared buffer, since `Arc<[u8]>` needs its own allocation.
-    pub fn from_bytes(name: impl Into<String>, bytes: impl Into<Arc<[u8]>>) -> Result<Self, Error> {
+    pub fn from_memory(
+        name: impl Into<String>,
+        bytes: impl Into<Arc<[u8]>>,
+    ) -> Result<Self, Error> {
         let name = name.into();
         if !valid_nonempty_text(&name) {
             return Err(Error::new(
@@ -339,7 +342,7 @@ impl Source {
 
     /// Supply one referenced buffer to an in-memory source under the relative
     /// name a format uses to refer to it. This is the only way referenced
-    /// content reaches a source built by [`Source::from_bytes`]; such a source
+    /// content reaches a source built by [`Source::from_memory`]; such a source
     /// never touches the filesystem.
     pub fn with_named_buffer(
         self,
@@ -1690,21 +1693,21 @@ mod tests {
     fn memory_sources_retain_arbitrary_binary_bytes_without_copying() {
         let bytes: Arc<[u8]> = vec![0, 255, 0, 128].into();
         let pointer = bytes.as_ptr();
-        let source = Source::from_bytes("input.bin", Arc::clone(&bytes))
+        let source = Source::from_memory("input.bin", Arc::clone(&bytes))
             .unwrap()
             .with_format(FormatId::new("pwb").unwrap());
         let buffer = source.primary_buffer().unwrap();
         assert_eq!(buffer.bytes(), [0, 255, 0, 128]);
         assert_eq!(buffer.bytes().as_ptr(), pointer);
         assert_eq!(source.format().unwrap().as_str(), "pwb");
-        assert!(Source::from_bytes("", Vec::new()).is_err());
-        assert!(Source::from_bytes("x\0y", Vec::new()).is_err());
+        assert!(Source::from_memory("", Vec::new()).is_err());
+        assert!(Source::from_memory("x\0y", Vec::new()).is_err());
     }
 
     #[test]
     fn a_bom_is_retained_and_skipped_for_the_parser_without_a_second_buffer() {
         let bytes: Vec<u8> = [0xEF, 0xBB, 0xBF, b'm', b'p', b'c'].to_vec();
-        let source = Source::from_bytes("case.m", bytes).unwrap();
+        let source = Source::from_memory("case.m", bytes).unwrap();
         let buffer = source.primary_buffer().unwrap();
         assert!(buffer.has_utf8_bom());
         assert_eq!(buffer.bytes().len(), 6);
@@ -1715,7 +1718,7 @@ mod tests {
             buffer.bytes()[3..].as_ptr()
         );
 
-        let plain = Source::from_bytes("case.m", b"mpc".to_vec()).unwrap();
+        let plain = Source::from_memory("case.m", b"mpc".to_vec()).unwrap();
         let plain = plain.primary_buffer().unwrap();
         assert!(!plain.has_utf8_bom());
         assert_eq!(plain.content_bytes(), plain.bytes());
@@ -1723,7 +1726,7 @@ mod tests {
 
     #[test]
     fn a_memory_source_resolves_named_buffers_and_never_the_filesystem() {
-        let source = Source::from_bytes("master.dss", b"redirect sub/feeder.dss".to_vec())
+        let source = Source::from_memory("master.dss", b"redirect sub/feeder.dss".to_vec())
             .unwrap()
             .with_named_buffer("sub/feeder.dss", b"feeder".to_vec())
             .unwrap();

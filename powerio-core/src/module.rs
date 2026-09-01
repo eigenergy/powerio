@@ -9,12 +9,11 @@ use crate::{
     SourceId, SourceMapEntry, SourceRelation, SourceSpan,
 };
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct ModuleRecords {
     producer: Producer,
     sources: Vec<SourceDescriptor>,
     source_map: Vec<SourceMapEntry>,
-    diagnostics: Vec<Diagnostic>,
     history: Vec<HistoryEntry>,
     extensions: BTreeMap<String, Value>,
     retained_source: Option<Source>,
@@ -33,7 +32,6 @@ impl Default for ModuleRecords {
             producer: Producer::powerio(),
             sources: Vec::new(),
             source_map: Vec::new(),
-            diagnostics: Vec::new(),
             history: Vec::new(),
             extensions: BTreeMap::new(),
             retained_source: None,
@@ -57,8 +55,22 @@ fn allocation_refused(cause: TryReserveError) -> Error {
 /// `T` has no PowerIO marker bound. Dynamic parsing and stored JSON register a
 /// finite set elsewhere, while Rust applications can use any value here.
 pub struct PioModule<T> {
-    value: T,
+    /// The typed value carried by this module.
+    pub value: T,
+    /// Diagnostics produced while acquiring, validating, or deriving the
+    /// value.
+    pub diagnostics: Vec<Diagnostic>,
     records: ModuleRecords,
+}
+
+impl<T: Clone> Clone for PioModule<T> {
+    fn clone(&self) -> Self {
+        Self {
+            value: self.value.clone(),
+            diagnostics: self.diagnostics.clone(),
+            records: self.records.clone(),
+        }
+    }
 }
 
 impl<T> PioModule<T> {
@@ -66,13 +78,9 @@ impl<T> PioModule<T> {
     pub fn new(value: T) -> Self {
         Self {
             value,
+            diagnostics: Vec::new(),
             records: ModuleRecords::default(),
         }
-    }
-
-    #[must_use]
-    pub const fn value(&self) -> &T {
-        &self.value
     }
 
     #[must_use]
@@ -93,11 +101,6 @@ impl<T> PioModule<T> {
     #[must_use]
     pub fn source_map(&self) -> &[SourceMapEntry] {
         &self.records.source_map
-    }
-
-    #[must_use]
-    pub fn diagnostics(&self) -> &[Diagnostic] {
-        &self.records.diagnostics
     }
 
     #[must_use]
@@ -181,7 +184,7 @@ impl<T> PioModule<T> {
     }
 
     pub fn add_diagnostic(&mut self, diagnostic: Diagnostic) -> Result<(), Error> {
-        if self.records.diagnostics.len() >= crate::validation::MAX_MODULE_DIAGNOSTICS {
+        if self.diagnostics.len() >= crate::validation::MAX_MODULE_DIAGNOSTICS {
             return Err(record_cap(
                 "diagnostics",
                 crate::validation::MAX_MODULE_DIAGNOSTICS,
@@ -205,7 +208,7 @@ impl<T> PioModule<T> {
                 .map_err(allocation_refused)?;
             self.records.diagnostic_ids.insert(id.clone());
         }
-        self.records.diagnostics.push(diagnostic);
+        self.diagnostics.push(diagnostic);
         Ok(())
     }
 
@@ -277,15 +280,10 @@ impl<T> PioModule<T> {
             }
         }
 
-        let diagnostic_ids: BTreeSet<&DiagnosticId> = self
-            .records
-            .diagnostics
-            .iter()
-            .filter_map(Diagnostic::id)
-            .collect();
+        let diagnostic_ids: BTreeSet<&DiagnosticId> =
+            self.diagnostics.iter().filter_map(Diagnostic::id).collect();
         if diagnostic_ids.len()
             != self
-                .records
                 .diagnostics
                 .iter()
                 .filter(|diagnostic| diagnostic.id().is_some())
@@ -296,7 +294,7 @@ impl<T> PioModule<T> {
                 "module contains duplicate diagnostic IDs",
             ));
         }
-        for diagnostic in &self.records.diagnostics {
+        for diagnostic in &self.diagnostics {
             for span in diagnostic.spans() {
                 validate_span(span, &self.records.sources, &self.records.source_positions)?;
             }
@@ -339,10 +337,161 @@ impl<T> PioModule<T> {
     /// cleared. Pair this with [`PioModule::map_value`] in a kind changing
     /// transform so the module still serializes.
     pub fn sever_value_targets(&mut self) {
-        for diagnostic in &mut self.records.diagnostics {
+        for diagnostic in &mut self.diagnostics {
             diagnostic.clear_target();
         }
         self.records.source_map.clear();
+    }
+
+    /// Derive a semantically new value and record the operation that produced
+    /// it. Source descriptors, diagnostics, prior history, and extensions stay
+    /// with the module. Locators into the replaced value and retained bytes
+    /// that no longer encode the result are invalidated.
+    pub fn derive_value<U>(
+        self,
+        producer: Producer,
+        history: HistoryEntry,
+        derive: impl FnOnce(T) -> U,
+    ) -> Result<PioModule<U>, Error> {
+        self.try_derive_value(producer, history, |value| Ok(derive(value)))
+    }
+
+    /// Fallible form of [`PioModule::derive_value`].
+    pub fn try_derive_value<U>(
+        self,
+        producer: Producer,
+        history: HistoryEntry,
+        derive: impl FnOnce(T) -> Result<U, Error>,
+    ) -> Result<PioModule<U>, Error> {
+        let Self {
+            value,
+            mut diagnostics,
+            mut records,
+        } = self;
+        let value = derive(value)?;
+        records.producer = producer;
+        records.retained_source = None;
+        records.source_map.clear();
+        for diagnostic in &mut diagnostics {
+            diagnostic.clear_target();
+        }
+
+        let mut derived = PioModule {
+            value,
+            diagnostics,
+            records,
+        };
+        derived.add_history_entry(history)?;
+        derived.verify_records()?;
+        Ok(derived)
+    }
+
+    /// Parse a value that depends on this module and one additional source.
+    ///
+    /// Records that describe the input value are retargeted below
+    /// `input_target`. The additional source receives distinct source IDs,
+    /// becomes the retained source, and is mapped to the new value's root.
+    /// This is the shared module operation for readers whose document is not
+    /// self contained, such as a solution file that must be interpreted
+    /// against its calculation instance.
+    ///
+    /// # Errors
+    /// The derived value cannot be built, a target is not an RFC 6901
+    /// pointer, or the combined records exceed a module bound.
+    pub fn try_derive_from_source<U>(
+        self,
+        input_target: &str,
+        source: Source,
+        producer: Producer,
+        history: HistoryEntry,
+        derive: impl FnOnce(T, &Source) -> Result<(U, Vec<Diagnostic>), Error>,
+    ) -> Result<PioModule<U>, Error> {
+        // Validate the prefix before consuming the input value.
+        SourceMapEntry::new(input_target, SourceRelation::Transformed, Vec::new())?;
+
+        let Self {
+            value,
+            mut diagnostics,
+            mut records,
+        } = self;
+        let (value, mut source_diagnostics) = derive(value, &source)?;
+
+        for diagnostic in &mut diagnostics {
+            diagnostic.prefix_target(input_target)?;
+        }
+        let old_source_map = std::mem::take(&mut records.source_map);
+        for entry in old_source_map {
+            records.source_map.push(SourceMapEntry::new(
+                format!("{input_target}{}", entry.target()),
+                entry.relation(),
+                entry.spans().to_vec(),
+            )?);
+        }
+
+        let mut source_ids = HashMap::new();
+        let mut root_spans = Vec::new();
+        for (index, buffer) in source.acquired_buffers().into_iter().enumerate() {
+            let mut suffix = index + 1;
+            let id = loop {
+                let candidate = SourceId::new(format!("solution-source-{suffix}"))?;
+                if !records.source_positions.contains_key(&candidate)
+                    && !source_ids.values().any(|existing| existing == &candidate)
+                {
+                    break candidate;
+                }
+                suffix += 1;
+            };
+            source_ids.insert(buffer.id().clone(), id.clone());
+
+            let name = std::path::Path::new(buffer.name())
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_else(|| buffer.name());
+            let mut descriptor =
+                SourceDescriptor::new(id.clone(), name, buffer.bytes().len() as u64)?;
+            if let Some(format) = source.format() {
+                descriptor = descriptor.with_format(format.clone());
+            }
+            if records.sources.len() >= crate::validation::MAX_MODULE_SOURCES {
+                return Err(record_cap("sources", crate::validation::MAX_MODULE_SOURCES));
+            }
+            records
+                .source_positions
+                .try_reserve(1)
+                .map_err(allocation_refused)?;
+            records
+                .source_positions
+                .insert(id.clone(), records.sources.len());
+            records.sources.push(descriptor);
+            root_spans.push(SourceSpan::new(id, 0, buffer.bytes().len() as u64)?);
+        }
+
+        for diagnostic in &mut source_diagnostics {
+            diagnostic.remap_span_sources(|id| {
+                source_ids.get(id).cloned().unwrap_or_else(|| id.clone())
+            })?;
+        }
+        records.producer = producer;
+        records.retained_source = Some(source);
+
+        let mut derived = PioModule {
+            value,
+            diagnostics,
+            records,
+        };
+        for spans in root_spans.chunks(crate::validation::MAX_SOURCE_MAP_SPANS) {
+            derived.add_source_map_entry(SourceMapEntry::new(
+                "",
+                SourceRelation::Aggregated,
+                spans.to_vec(),
+            )?)?;
+        }
+        for diagnostic in source_diagnostics {
+            derived.add_diagnostic(diagnostic)?;
+        }
+        derived.add_history_entry(history)?;
+        derived.verify_records()?;
+        Ok(derived)
     }
 
     /// Move the value and every module record into another typed module.
@@ -350,6 +499,7 @@ impl<T> PioModule<T> {
     pub fn map_value<U>(self, convert: impl FnOnce(T) -> U) -> PioModule<U> {
         PioModule {
             value: convert(self.value),
+            diagnostics: self.diagnostics,
             records: self.records,
         }
     }
@@ -358,14 +508,20 @@ impl<T> PioModule<T> {
     /// record on success. On failure the conversion's error is returned and
     /// the records are dropped with the consumed value; a caller that must
     /// keep the source or findings on the failure route takes them off the
-    /// module first ([`PioModule::take_source`], [`PioModule::diagnostics`]).
+    /// module first with [`PioModule::take_source`] and the public
+    /// `diagnostics` field.
     pub fn try_map_value<U, E>(
         self,
         convert: impl FnOnce(T) -> Result<U, E>,
     ) -> Result<PioModule<U>, E> {
-        let Self { value, records } = self;
+        let Self {
+            value,
+            diagnostics,
+            records,
+        } = self;
         Ok(PioModule {
             value: convert(value)?,
+            diagnostics,
             records,
         })
     }
@@ -437,11 +593,88 @@ impl<T> PioModule<T> {
         self,
         convert: impl FnOnce(T) -> Result<U, T>,
     ) -> Result<PioModule<U>, PioModule<T>> {
-        let Self { value, records } = self;
+        let Self {
+            value,
+            diagnostics,
+            records,
+        } = self;
         match convert(value) {
-            Ok(value) => Ok(PioModule { value, records }),
-            Err(value) => Err(PioModule { value, records }),
+            Ok(value) => Ok(PioModule {
+                value,
+                diagnostics,
+                records,
+            }),
+            Err(value) => Err(PioModule {
+                value,
+                diagnostics,
+                records,
+            }),
         }
+    }
+}
+
+impl<T: Clone> PioModule<T> {
+    /// Begin an atomic edit of this module's value and findings.
+    ///
+    /// The candidate uses `T::clone`; values backed by shared tables retain
+    /// those tables until [`StagedEdit::value_mut`] performs their own copy on
+    /// write detachment. Dropping the staged edit, or any failed operation on
+    /// it, leaves this module untouched.
+    pub fn stage_edit(&mut self) -> StagedEdit<'_, T> {
+        let candidate = PioModule {
+            value: self.value.clone(),
+            diagnostics: self.diagnostics.clone(),
+            records: self.records.clone(),
+        };
+        StagedEdit {
+            module: self,
+            candidate,
+        }
+    }
+}
+
+/// An isolated candidate for one atomic module edit.
+pub struct StagedEdit<'a, T: Clone> {
+    module: &'a mut PioModule<T>,
+    candidate: PioModule<T>,
+}
+
+impl<T: Clone> StagedEdit<'_, T> {
+    #[must_use]
+    pub const fn value(&self) -> &T {
+        &self.candidate.value
+    }
+
+    pub const fn value_mut(&mut self) -> &mut T {
+        &mut self.candidate.value
+    }
+
+    #[must_use]
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        &self.candidate.diagnostics
+    }
+
+    /// Add a finding to the candidate under the normal module record checks.
+    pub fn add_diagnostic(&mut self, diagnostic: Diagnostic) -> Result<(), Error> {
+        self.candidate.add_diagnostic(diagnostic)
+    }
+
+    /// Validate and atomically replace the original module with this
+    /// candidate. A committed edit keeps source descriptors and prior records,
+    /// but invalidates retained bytes and source mappings that describe the
+    /// pre-edit value.
+    pub fn commit(self, producer: Producer, history: HistoryEntry) -> Result<(), Error> {
+        let Self {
+            module,
+            mut candidate,
+        } = self;
+        candidate.records.producer = producer;
+        candidate.records.retained_source = None;
+        candidate.records.source_map.clear();
+        candidate.add_history_entry(history)?;
+        candidate.verify_records()?;
+        *module = candidate;
+        Ok(())
     }
 }
 
@@ -450,6 +683,7 @@ impl<T: fmt::Debug> fmt::Debug for PioModule<T> {
         formatter
             .debug_struct("PioModule")
             .field("value", &self.value)
+            .field("diagnostics", &self.diagnostics)
             .field("records", &self.records)
             .finish()
     }
@@ -511,19 +745,19 @@ mod tests {
     fn modules_accept_unregistered_application_values() {
         struct ApplicationValue(Rc<()>);
         let module = PioModule::new(ApplicationValue(Rc::new(())));
-        assert_eq!(Rc::strong_count(&module.value().0), 1);
+        assert_eq!(Rc::strong_count(&module.value.0), 1);
     }
 
     #[test]
     fn map_value_moves_records_and_retained_source_without_allocation() {
         let bytes: Arc<[u8]> = b"source".as_slice().into();
-        let source = Source::from_bytes("case.m", Arc::clone(&bytes)).unwrap();
+        let source = Source::from_memory("case.m", Arc::clone(&bytes)).unwrap();
         let diagnostic = Diagnostic::of(&crate::codes::VALIDATE_TIME_SERIES_SHAPE, "kept");
         let module = PioModule::new(String::from("value"))
             .with_source(source)
             .with_diagnostic(diagnostic)
             .unwrap();
-        let diagnostics_pointer = module.diagnostics().as_ptr();
+        let diagnostics_pointer = module.diagnostics.as_ptr();
         let source_pointer = module
             .source()
             .unwrap()
@@ -532,8 +766,8 @@ mod tests {
             .bytes()
             .as_ptr();
         let mapped = module.map_value(String::into_bytes);
-        assert_eq!(mapped.value(), b"value");
-        assert_eq!(mapped.diagnostics().as_ptr(), diagnostics_pointer);
+        assert_eq!(mapped.value, b"value");
+        assert_eq!(mapped.diagnostics.as_ptr(), diagnostics_pointer);
         assert_eq!(
             mapped
                 .source()
@@ -554,17 +788,17 @@ mod tests {
                 "kept",
             ))
             .unwrap();
-        let diagnostics_pointer = module.diagnostics().as_ptr();
+        let diagnostics_pointer = module.diagnostics.as_ptr();
         let recovered = module
             .__try_map_value::<usize>(Err)
             .expect_err("conversion fails");
-        assert_eq!(recovered.value(), "value");
-        assert_eq!(recovered.diagnostics().as_ptr(), diagnostics_pointer);
+        assert_eq!(recovered.value, "value");
+        assert_eq!(recovered.diagnostics.as_ptr(), diagnostics_pointer);
     }
 
     #[test]
     fn parsed_module_maps_the_value_to_its_source() {
-        let source = Source::from_bytes("case.m", b"source".as_slice()).unwrap();
+        let source = Source::from_memory("case.m", b"source".as_slice()).unwrap();
         let module = PioModule::parsed(1_u8, source, Vec::new()).unwrap();
         assert_eq!(module.source_map().len(), 1);
         let entry = &module.source_map()[0];
@@ -624,5 +858,135 @@ mod tests {
                 )
                 .is_err()
         );
+    }
+
+    #[test]
+    fn semantic_derivation_records_provenance_and_invalidates_old_value_locators() {
+        let source = Source::from_memory("case.m", b"source".as_slice()).unwrap();
+        let span = SourceSpan::new(
+            source.primary_buffer().unwrap().id().clone(),
+            0,
+            b"source".len() as u64,
+        )
+        .unwrap();
+        let diagnostic = Diagnostic::new(
+            crate::DiagnosticCode::new("PARTNER.TEST.DERIVE").unwrap(),
+            DiagnosticSeverity::Note,
+            "kept",
+        )
+        .with_id(DiagnosticId::new("d1").unwrap())
+        .with_target("/old/value")
+        .unwrap()
+        .with_span(span)
+        .unwrap();
+        let mut module = PioModule::parsed(3_u8, source, vec![diagnostic]).unwrap();
+        module
+            .add_history_entry(
+                HistoryEntry::new(HistoryId::new("h1").unwrap(), HistoryKind::Parse, "parse")
+                    .unwrap(),
+            )
+            .unwrap();
+        module
+            .insert_extension("org.example", Value::Bool(true))
+            .unwrap();
+
+        let derived = module
+            .derive_value(
+                Producer::new("tellegen", "1.0.0").unwrap(),
+                HistoryEntry::new(
+                    HistoryId::new("h2").unwrap(),
+                    HistoryKind::Transform,
+                    "build instance",
+                )
+                .unwrap(),
+                |value| usize::from(value) * 2,
+            )
+            .unwrap();
+
+        assert_eq!(derived.value, 6);
+        assert_eq!(derived.producer().name(), "tellegen");
+        assert_eq!(derived.sources().len(), 1);
+        assert!(derived.source().is_none());
+        assert!(derived.source_map().is_empty());
+        assert_eq!(derived.diagnostics.len(), 1);
+        assert!(derived.diagnostics[0].target().is_none());
+        assert_eq!(derived.diagnostics[0].spans().len(), 1);
+        assert_eq!(derived.history().len(), 2);
+        assert_eq!(
+            derived.extensions().get("org.example"),
+            Some(&Value::Bool(true))
+        );
+    }
+
+    #[test]
+    fn staged_edits_commit_atomically_or_leave_the_module_untouched() {
+        let source = Source::from_memory("case.m", b"source".as_slice()).unwrap();
+        let diagnostic = Diagnostic::new(
+            crate::DiagnosticCode::new("PARTNER.TEST.EDIT").unwrap(),
+            DiagnosticSeverity::Note,
+            "existing",
+        )
+        .with_id(DiagnosticId::new("d1").unwrap())
+        .with_target("/0")
+        .unwrap();
+        let mut module = PioModule::parsed([1_u8, 2], source, vec![diagnostic]).unwrap();
+        module
+            .add_history_entry(
+                HistoryEntry::new(HistoryId::new("h1").unwrap(), HistoryKind::Parse, "parse")
+                    .unwrap(),
+            )
+            .unwrap();
+
+        {
+            let mut staged = module.stage_edit();
+            staged.value_mut()[0] = 8;
+        }
+        assert_eq!(module.value, [1, 2]);
+        assert!(module.source().is_some());
+
+        let mut staged = module.stage_edit();
+        staged.value_mut()[0] = 9;
+        let error = staged
+            .commit(
+                Producer::new("editor", "1.0.0").unwrap(),
+                HistoryEntry::new(HistoryId::new("h1").unwrap(), HistoryKind::Edit, "edit")
+                    .unwrap(),
+            )
+            .expect_err("duplicate history makes the staged commit fail");
+        assert_eq!(error.category(), crate::ErrorCategory::Request);
+        assert_eq!(module.value, [1, 2]);
+        assert!(module.source().is_some());
+        assert_eq!(module.history().len(), 1);
+
+        let mut staged = module.stage_edit();
+        staged.value_mut()[0] = 7;
+        staged
+            .add_diagnostic(
+                Diagnostic::new(
+                    crate::DiagnosticCode::new("PARTNER.TEST.EDITED").unwrap(),
+                    DiagnosticSeverity::Note,
+                    "changed",
+                )
+                .with_id(DiagnosticId::new("d2").unwrap())
+                .with_target("/0")
+                .unwrap(),
+            )
+            .unwrap();
+        staged
+            .commit(
+                Producer::new("editor", "1.0.0").unwrap(),
+                HistoryEntry::new(HistoryId::new("h2").unwrap(), HistoryKind::Edit, "edit")
+                    .unwrap(),
+            )
+            .unwrap();
+
+        assert_eq!(module.value, [7, 2]);
+        assert_eq!(module.producer().name(), "editor");
+        assert!(module.source().is_none());
+        assert!(module.source_map().is_empty());
+        assert_eq!(module.sources().len(), 1);
+        assert_eq!(module.diagnostics.len(), 2);
+        assert_eq!(module.diagnostics[0].target(), Some("/0"));
+        assert_eq!(module.history().len(), 2);
     }
 }

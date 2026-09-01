@@ -43,7 +43,7 @@ fn echo_matpower_file(path: &std::path::Path) -> String {
 }
 
 fn echo_matpower_str(text: &str) -> String {
-    let source = powerio_core::Source::from_bytes("case.m", text.as_bytes().to_vec())
+    let source = powerio_core::Source::from_memory("case.m", text.as_bytes().to_vec())
         .unwrap()
         .with_format(powerio_core::FormatId::new("matpower").unwrap());
     let module = powerio_tx::parse(source).unwrap();

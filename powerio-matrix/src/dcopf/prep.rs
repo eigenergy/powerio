@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use powerio_tx::{BalancedNetwork, BranchSusceptanceFormula, BusId, IndexedNetwork};
 
-use crate::{Error, Result};
+use crate::{AnalysisBranchSource, Error, Result};
 use powerio_prob::ReferenceBuses;
 
 use super::{limits, nodal};
@@ -57,7 +57,7 @@ impl Units {
 }
 
 /// Options for DC OPF instance assembly.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DcOpfOptions {
     /// Formula used to calculate each branch susceptance.
     pub formula: BranchSusceptanceFormula,
@@ -75,8 +75,29 @@ pub struct DcOpfOptions {
     /// existed deserialize to the default (off), the pre-field behavior.
     #[serde(default)]
     pub synthesize_unrated_limits: bool,
+    /// Apply PowerModels' ±60 degree correction to unconstrained or unusable
+    /// branch angle difference intervals in the prepared arrays.
+    #[serde(default = "default_true")]
+    pub correct_angle_difference_bounds: bool,
     /// The already validated instance objective to compile into the arrays.
     pub objective: PreparedObjective,
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+impl Default for DcOpfOptions {
+    fn default() -> Self {
+        Self {
+            formula: BranchSusceptanceFormula::default(),
+            units: Units::default(),
+            skip_zero_impedance: false,
+            synthesize_unrated_limits: false,
+            correct_angle_difference_bounds: true,
+            objective: PreparedObjective::default(),
+        }
+    }
 }
 
 /// Generator parameters in generator column order.
@@ -122,7 +143,6 @@ pub struct DcBranchParameters {
     pub to_bus: Vec<usize>,
     /// Branch susceptance in the selected power unit per radian, positive for
     /// an inductive branch.
-    #[serde(alias = "b")]
     pub susceptance_magnitude: Vec<f64>,
     /// Phase shift in radians. Zero unless the formula carries phase shift
     /// injections.
@@ -134,9 +154,9 @@ pub struct DcBranchParameters {
     pub angle_max: Vec<f64>,
     /// Branch column to row in the star-lowered analysis network.
     pub analysis_rows: Vec<usize>,
-    /// Branch column to source branch row. Synthetic winding branches have no
-    /// source row.
-    pub source_rows: Vec<Option<usize>>,
+    /// Source component for each analysis branch column. Lowered transformer
+    /// windings remain mapped to their typed transformer row and winding.
+    pub analysis_sources: Vec<AnalysisBranchSource>,
     /// Analysis branch rows omitted because their reactance was zero.
     pub skipped_zero_impedance: Vec<usize>,
     /// Whether the instance activates each thermal limit.
@@ -186,6 +206,8 @@ pub struct DcOpfPreparation {
     /// their limits retain the old unsynthesized meaning.
     #[serde(default)]
     pub synthesize_unrated_limits: bool,
+    /// Whether PowerModels' angle difference correction was applied.
+    pub correct_angle_difference_bounds: bool,
     /// Dense bus index to external bus ID.
     pub bus_ids: Vec<BusId>,
     /// Dense bus index to row in the star-lowered analysis network.
@@ -429,8 +451,13 @@ pub(crate) fn preparation_from_view(
             p_shift[from] -= branch_b * shift_rad;
             p_shift[to] += branch_b * shift_rad;
         }
-        let amin = case.to_radians(branch.angmin);
-        let amax = case.to_radians(branch.angmax);
+        let source_amin = case.to_radians(branch.angmin);
+        let source_amax = case.to_radians(branch.angmax);
+        let (amin, amax) = if options.correct_angle_difference_bounds {
+            powerio_tx::correct_angle_difference_bounds(source_amin, source_amax)
+        } else {
+            (source_amin, source_amax)
+        };
         from_bus.push(from);
         branch_identities.push(crate::opf::row_identity(
             branch.uid.as_deref(),
@@ -442,8 +469,8 @@ pub(crate) fn preparation_from_view(
         shift.push(shift_rad);
         f_max.push(thermal.of(
             branch,
-            amin,
-            amax,
+            source_amin,
+            source_amax,
             &buses[from_analysis],
             &buses[to_analysis],
         ));
@@ -475,6 +502,7 @@ pub(crate) fn preparation_from_view(
         objective: options.objective,
         skip_zero_impedance: options.skip_zero_impedance,
         synthesize_unrated_limits: options.synthesize_unrated_limits,
+        correct_angle_difference_bounds: options.correct_angle_difference_bounds,
         bus_ids: active_buses.bus_ids,
         bus_analysis_rows,
         bus_source_rows,
@@ -505,7 +533,11 @@ pub(crate) fn preparation_from_view(
             angle_min,
             angle_max,
             analysis_rows: branch_rows.clone(),
-            source_rows: branch_rows.into_iter().map(Some).collect(),
+            analysis_sources: branch_rows
+                .iter()
+                .copied()
+                .map(|row| AnalysisBranchSource::Branch { row })
+                .collect(),
             skipped_zero_impedance,
             thermal_limit_active: vec![true; n_active_branches],
             angle_bound_active: vec![true; n_active_branches],
@@ -604,11 +636,12 @@ pub(crate) fn apply_instance_semantics(
         .iter()
         .map(|&row| (row < source.generators().len()).then_some(row))
         .collect();
-    preparation.branches.source_rows = preparation
+    let analysis_sources = crate::opf::analysis_branch_sources(source);
+    preparation.branches.analysis_sources = preparation
         .branches
         .analysis_rows
         .iter()
-        .map(|&row| (row < source.branches().len()).then_some(row))
+        .map(|&row| analysis_sources[row])
         .collect();
     Ok(())
 }

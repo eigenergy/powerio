@@ -7,6 +7,7 @@ document writes deterministically.
 """
 
 import json
+import io
 
 import powerio
 
@@ -24,29 +25,28 @@ def main() -> None:
     assert powerio.__version__ == versions["powerio_version"], versions
     assert versions["module_schema"] == {"name": "powerio.module", "version": 1}, versions
 
-    module = powerio.parse_text(
-        CASE,
+    module = powerio.parse(
+        io.StringIO(CASE),
         name="smoke.m",
         format="matpower",
-        value_type=powerio.BalancedNetwork,
     )
-    assert module.kind == "balanced_network", module.kind
+    assert isinstance(module.value, powerio.BalancedNetwork), type(module.value)
     net = module.value
     assert net.n_buses == 3 and net.n_branches == 3, (net.n_buses, net.n_branches)
 
-    document = module.emit("pio-json").text
+    document = powerio.serialize(module).text
+    assert document is not None
     decoded = json.loads(document)
     assert decoded["schema"] == "powerio.module" and decoded["version"] == 1
     # Deterministic release: the stored document is byte stable.
     assert (
-        powerio.parse_text(document, name="smoke.pio.json").emit("pio-json").text
-        == document
+        powerio.serialize(powerio.deserialize(document.encode())).text == document
     )
 
     incidence = net.calc_incidence_matrix()
-    branch_susceptance = net.calc_branch_susceptance_matrix()
+    bus_susceptance = net.calc_bus_susceptance_matrix()
     assert incidence.shape == (3, 3), incidence.shape
-    assert branch_susceptance.shape == (3, 3), branch_susceptance.shape
+    assert bus_susceptance.shape == (3, 3), bus_susceptance.shape
 
     # The matrix path, with the `all` extra installed.
     bprime = net.calc_bprime_matrix()

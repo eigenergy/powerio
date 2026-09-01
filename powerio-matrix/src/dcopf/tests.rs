@@ -2,7 +2,7 @@
 //! matrix and bundle builders derive from an instance.
 
 use super::prep::Units;
-use super::prep::{DcOpfOptions, DcOpfPreparation, preparation_from_view};
+use super::prep::{DcOpfOptions, preparation_from_view};
 use crate::Error;
 use powerio_tx::{
     BalancedNetwork, Branch, BranchSusceptanceFormula, Bus, BusId, BusType, GenCost, Generator,
@@ -244,6 +244,61 @@ fn an_unrated_branch_takes_a_synthesized_limit_on_request() {
 }
 
 #[test]
+fn angle_difference_correction_matches_powermodels_and_can_be_disabled() {
+    use powerio_tx::{POWER_MODELS_ANGLE_BOUND_PAD, correct_angle_difference_bounds};
+
+    let network = small_network();
+    let raw = IndexedNetwork::new(&network);
+    let corrected = preparation_from_view(&raw, DcOpfOptions::default()).unwrap();
+    assert!(corrected.correct_angle_difference_bounds);
+    assert_close(
+        corrected.branches.angle_min[0],
+        -POWER_MODELS_ANGLE_BOUND_PAD,
+    );
+    assert_close(
+        corrected.branches.angle_max[0],
+        POWER_MODELS_ANGLE_BOUND_PAD,
+    );
+
+    let exact = preparation_from_view(
+        &raw,
+        DcOpfOptions {
+            correct_angle_difference_bounds: false,
+            ..DcOpfOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(!exact.correct_angle_difference_bounds);
+    assert_close(exact.branches.angle_min[0], -2.0 * std::f64::consts::PI);
+    assert_close(exact.branches.angle_max[0], 2.0 * std::f64::consts::PI);
+
+    let normalized = network.to_normalized().unwrap();
+    let normalized = IndexedNetwork::new(&normalized);
+    let normalized_corrected = preparation_from_view(&normalized, DcOpfOptions::default()).unwrap();
+    assert_close(
+        normalized_corrected.branches.angle_min[0],
+        corrected.branches.angle_min[0],
+    );
+    assert_close(
+        normalized_corrected.branches.angle_max[0],
+        corrected.branches.angle_max[0],
+    );
+
+    assert_eq!(
+        correct_angle_difference_bounds(0.0, 0.0),
+        (-POWER_MODELS_ANGLE_BOUND_PAD, POWER_MODELS_ANGLE_BOUND_PAD)
+    );
+    assert_eq!(
+        correct_angle_difference_bounds(-45.0_f64.to_radians(), 30.0_f64.to_radians()),
+        (-45.0_f64.to_radians(), 30.0_f64.to_radians())
+    );
+    assert_eq!(
+        correct_angle_difference_bounds(80.0_f64.to_radians(), 100.0_f64.to_radians()),
+        (-POWER_MODELS_ANGLE_BOUND_PAD, POWER_MODELS_ANGLE_BOUND_PAD)
+    );
+}
+
+#[test]
 fn a_network_of_two_islands_grounds_a_bus_in_each() {
     let net = two_island_network();
     let problem =
@@ -263,23 +318,10 @@ fn a_network_of_two_islands_grounds_a_bus_in_each() {
     ));
 
     // The set serializes as a plain array of dense bus indices.
-    let mut json = serde_json::to_value(&problem).expect("serialize");
+    let json = serde_json::to_value(&problem).expect("serialize");
     assert_eq!(json["reference_buses"], serde_json::json!([0, 2]));
     assert!(json["branches"].get("susceptance_magnitude").is_some());
     assert!(json["branches"].get("b").is_none());
-
-    // The 0.10 field remains readable even though 1.0 emits the explicit
-    // positive solver quantity name.
-    let branches = json["branches"].as_object_mut().expect("branch parameters");
-    let old_b = branches
-        .remove("susceptance_magnitude")
-        .expect("susceptance magnitudes");
-    branches.insert("b".to_owned(), old_b);
-    let decoded: DcOpfPreparation = serde_json::from_value(json).expect("read 0.10 field");
-    assert_eq!(
-        decoded.branches.susceptance_magnitude,
-        problem.branches.susceptance_magnitude
-    );
 
     let one_island = preparation_from_view(
         &IndexedNetwork::new(&small_network()),
@@ -506,7 +548,12 @@ fn source_maps_exclude_out_of_service_elements() {
 
     assert_eq!(problem.n_generators(), 2);
     assert!(!problem.generators.source_rows.contains(&Some(1)));
-    assert!(!problem.branches.source_rows.contains(&Some(2)));
+    assert!(
+        !problem
+            .branches
+            .analysis_sources
+            .contains(&crate::AnalysisBranchSource::Branch { row: 2 })
+    );
     assert_eq!(problem.branches.angle_min.len(), problem.n_branches());
     assert_eq!(problem.branches.angle_max.len(), problem.n_branches());
     assert_eq!(problem.bus_ids[0], view.bus_id(0));
@@ -616,7 +663,10 @@ fn zero_reactance_can_be_skipped_or_rejected() {
     )
     .expect("skip");
     assert_eq!(skipped.branches.skipped_zero_impedance, vec![0]);
-    assert_eq!(skipped.branches.source_rows, vec![Some(1)]);
+    assert_eq!(
+        skipped.branches.analysis_sources,
+        vec![crate::AnalysisBranchSource::Branch { row: 1 }]
+    );
 
     let error = preparation_from_view(&view, DcOpfOptions::default()).expect_err("reject");
     assert!(matches!(

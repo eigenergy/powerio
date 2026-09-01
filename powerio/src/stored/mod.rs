@@ -1,14 +1,12 @@
-//! The `.pio.json` stored module: one versioned wire for `PioModule<PioValue>`.
+//! PowerIO IR for one `PioModule<PioValue>`.
 //!
 //! `.pio.json` is not a case format. The reader dispatches on the `schema`
-//! and `version` header, then decodes the selected exact typed DTO; released
-//! 0.9.x `NetworkPackage` documents upgrade one way, and the pre 0.9 lineage
-//! is refused. There is one document version and no per value version.
+//! and `version` header, then decodes the exact typed representation. There is
+//! one document version and no per value version.
 
 mod convert;
 mod dto;
-pub(crate) mod legacy09;
-mod upgrade;
 
-pub use convert::{emit_module, read_module};
-pub use dto::{SCHEMA_NAME, SCHEMA_VERSION, StoredModuleV1, StoredValueV1};
+pub(crate) use convert::{emit_module, read_module};
+#[cfg(feature = "schema")]
+pub(crate) use dto::StoredModule;

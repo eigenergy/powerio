@@ -4,11 +4,12 @@ mod helpers;
 #[allow(unused_imports)]
 use helpers::*;
 
-use powerio_tx::format::powerworld::parse_aux;
+use powerio_core::Source;
+use powerio_tx::format::powerworld::__parse_aux;
 use powerio_tx::{
     BalancedNetwork, Bus, BusId, BusType, CoordinateSpace, CoordsKind, GeoGeometry, GeoLayer,
-    GeoTarget, Location, apply_substation_points, parse_display_file,
-    to_geo_layer_from_aux_substations, to_geo_layer_from_pwd, to_lonlat_from_pwd_mercator,
+    GeoTarget, Location, apply_substation_points, parse_display, to_geo_layer_from_aux_substations,
+    to_geo_layer_from_pwd, to_lonlat_from_pwd_mercator,
 };
 
 fn parse(text: &str, hint: Option<&str>) -> powerio_tx::GeoParsed {
@@ -192,7 +193,7 @@ fn positional_branch_id_is_a_read_only_row_alias() {
     assert_eq!(report.matched_branches, 1);
     assert!(net.branches()[0].route.is_some());
 
-    // Never written: the canonical form carries the payload uid instead.
+    // Never written: the canonical form carries the branch's stable identity.
     let round = parse(&net.to_geo_layer().to_geojson(), None);
     let branch = round
         .layer
@@ -201,7 +202,7 @@ fn positional_branch_id_is_a_read_only_row_alias() {
         .find(|f| f.target == GeoTarget::Branch)
         .expect("branch feature");
     assert_eq!(branch.key.index, None);
-    assert_eq!(branch.key.uid.as_deref(), Some("branches:0"));
+    assert_eq!(branch.key.uid.as_deref(), Some("1-2"));
 }
 
 // ---------------------------------------------------------------------------
@@ -363,8 +364,8 @@ fn a_layer_that_matches_nothing_still_counts_the_unlocated_model() {
 
 #[test]
 fn pwd_promotes_to_a_diagram_layer_and_joins_on_subnum() {
-    let display = parse_display_file("../tests/data/powerworld/ACTIVSg200.pwd", None)
-        .expect("parse .pwd display");
+    let source = Source::open("../tests/data/powerworld/ACTIVSg200.pwd").unwrap();
+    let display = parse_display(source, None).expect("parse .pwd display");
     let powerio_tx::DisplayData::PowerWorld(display) = display else {
         panic!("expected PowerWorld display data");
     };
@@ -414,7 +415,7 @@ fn pwd_promotes_to_a_diagram_layer_and_joins_on_subnum() {
 fn aux_substations_lift_into_a_geographic_layer_that_joins_on_subnum() {
     let text =
         std::fs::read_to_string("../tests/data/powerworld/ACTIVSg200.aux").expect("read aux");
-    let layer = to_geo_layer_from_aux_substations(&parse_aux(&text).expect("parse aux"));
+    let layer = to_geo_layer_from_aux_substations(&__parse_aux(&text).expect("parse aux"));
     assert!(matches!(
         layer.space,
         CoordinateSpace::Geographic { crs: None }
@@ -443,7 +444,7 @@ fn aux_substations_lift_into_a_geographic_layer_that_joins_on_subnum() {
 
 #[test]
 fn aux_substation_rows_skip_unusable_fields_and_keep_file_order() {
-    let aux = parse_aux(
+    let aux = __parse_aux(
         "DATA (Substation, [SubNum, Latitude, Longitude])\n{\n\
          12.0 34.2 -80.05\n\
          13 nan -80.10\n\
@@ -480,8 +481,9 @@ fn aux_substation_rows_skip_unusable_fields_and_keep_file_order() {
 
 #[test]
 fn a_substation_join_counts_the_buses_it_leaves_unplaced() {
-    let aux = parse_aux("DATA (Substation, [SubNum, Latitude, Longitude])\n{\n7 34.2 -80.05\n}\n")
-        .expect("parse aux");
+    let aux =
+        __parse_aux("DATA (Substation, [SubNum, Latitude, Longitude])\n{\n7 34.2 -80.05\n}\n")
+            .expect("parse aux");
     let mut net = small_network();
     net.buses_mut()[0]
         .extras
@@ -496,8 +498,8 @@ fn a_substation_join_counts_the_buses_it_leaves_unplaced() {
 
 #[test]
 fn pwd_mercator_inverse_lands_near_the_aux_coordinates() {
-    let display = parse_display_file("../tests/data/powerworld/ACTIVSg200.pwd", None)
-        .expect("parse .pwd display");
+    let source = Source::open("../tests/data/powerworld/ACTIVSg200.pwd").unwrap();
+    let display = parse_display(source, None).expect("parse .pwd display");
     let powerio_tx::DisplayData::PowerWorld(display) = display else {
         panic!("expected PowerWorld display data");
     };

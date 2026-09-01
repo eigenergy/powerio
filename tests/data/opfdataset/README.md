@@ -5,7 +5,7 @@
 generators, loads, shunts, AC lines, transformers, their link indices, and the
 solved node/edge fields.
 
-The format contract comes from Appendix A of the
+The format specification comes from Appendix A of the
 [OPFData paper](https://arxiv.org/pdf/2406.07234), which gives the JSON object
 layout and the ordered columns, units, and meanings for every feature matrix.
 The [PyTorch Geometric loader](https://github.com/pyg-team/pytorch_geometric/blob/2.6.1/torch_geometric/datasets/opf.py)

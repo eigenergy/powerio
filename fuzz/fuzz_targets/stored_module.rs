@@ -1,9 +1,7 @@
-//! Malformed-input fuzzing of the stored module reader: header dispatch,
-//! exact typed DTO decode, reference validation, and the one way 0.9 package
-//! upgrade — the whole surface `pio_module_read_json` exposes to untrusted
-//! input. A read that succeeds must also write, and the rewritten document
-//! must read back: a reader accepting a document its own writer refuses is a
-//! validation hole.
+//! Malformed input fuzzing of the sole PowerIO 1.0 IR reader: exact header and
+//! typed DTO decoding plus reference validation. A read that succeeds must
+//! also write, and the rewritten document must read back: a reader accepting a
+//! document its own writer refuses is a validation hole.
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;

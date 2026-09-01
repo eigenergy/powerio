@@ -69,7 +69,9 @@ pub mod synth;
 pub use ac_jacobian::{PowerFlowJacobian, VoltageCoordinates, calc_power_flow_jacobian};
 pub use acopf::{
     AcBranchData, AcBusData, AcGeneratorData, AcOpfAssemblyOptions, AcOpfPreparation,
-    NodalAcGeneratorData, build_ac_opf_preparation,
+    AcPfAssemblyOptions, AcPfBusData, AcPfGeneratorData, AcPfPreparation, AcStorageData,
+    NodalAcGeneratorData, PreparedAcBusSpecification, build_ac_opf_preparation,
+    build_ac_pf_preparation,
 };
 pub use dc_operators::{DcOperators, ReferenceConstrainedSystem};
 pub use dcopf::{
@@ -77,7 +79,7 @@ pub use dcopf::{
     DcOpfBundleOptions, DcOpfMatrices, DcOpfOutputs, DcOpfPreparation, NodalGeneratorParameters,
     Units, build_dc_opf_preparation, calc_dc_opf_matrices, emit_dcopf_bundle,
 };
-pub use opf::{PiecewiseLinearCost, PreparedObjective};
+pub use opf::{AnalysisBranchSource, PiecewiseLinearCost, PreparedObjective};
 
 pub use matrix::multiconductor::{
     AugmentedSystem, DistNode, MulticonductorAdmittance, MulticonductorNodeIndex, NodeRef,
@@ -88,10 +90,10 @@ pub use matrix::{
     SensitivityMatrices, SensitivityMatrixMetadata, SensitivityMetadata, SensitivityOptions,
     SensitivitySolver, SensitivitySolverPath, ZeroImpedanceRule, ZeroImpedanceSkips,
     calc_adjacency_matrix, calc_admittance_matrix, calc_bdoubleprime_matrix, calc_bprime_matrix,
-    calc_branch_flow_matrix, calc_diagonal, calc_lacpf_matrix, calc_lodf, calc_ptdf,
-    calc_ptdf_lodf, calc_ptdf_lodf_with_options, calc_reference_indicator,
-    calc_susceptance_diagonal, calc_unit_vector, calc_weighted_laplacian,
-    calc_zero_impedance_skips, check_sddm, ground_at, ground_at_each,
+    calc_diagonal, calc_lacpf_matrix, calc_lodf, calc_ptdf, calc_ptdf_lodf,
+    calc_ptdf_lodf_with_options, calc_reference_indicator, calc_susceptance_diagonal,
+    calc_unit_vector, calc_weighted_laplacian, calc_zero_impedance_skips, check_sddm, ground_at,
+    ground_at_each,
 };
 pub use pipeline::{
     MatrixKind, Pipeline, PipelineOutputs, RhsKind, calc_matrix, calc_matrix_stats_for_kind,
@@ -100,7 +102,7 @@ pub use pipeline::{
 
 #[cfg(feature = "gridfm")]
 pub use io::gridfm::{
-    GridfmOptions, GridfmOutputs, GridfmSnapshot, GridfmTables, emit_gridfm_batch,
-    emit_gridfm_dataset, number_snapshots, to_gridfm_record_batches,
-    to_gridfm_record_batches_single,
+    GridfmDataset, GridfmOptions, GridfmOutputs, GridfmSnapshot, GridfmTables, build_gridfm_batch,
+    build_gridfm_dataset, emit_gridfm_batch, emit_gridfm_dataset, number_snapshots,
+    to_gridfm_record_batches, to_gridfm_record_batches_single,
 };

@@ -39,7 +39,12 @@ pub(crate) fn commit_one_file(path: &Path, bytes: Vec<u8>) -> Result<()> {
         powerio_core::ArtifactPath::new("case").expect("static placeholder name"),
         bytes,
     );
-    powerio_core::Destination::path(path).__commit_artifacts(false, vec![artifact], Vec::new())?;
+    powerio_core::Destination::path(path).__commit_artifacts(
+        false,
+        powerio_core::Fidelity::Canonical,
+        vec![artifact],
+        Vec::new(),
+    )?;
     Ok(())
 }
 

@@ -6,6 +6,7 @@
 
 mod bounded;
 mod codes;
+mod component_id;
 mod diagnostic;
 mod error;
 mod module;
@@ -18,14 +19,17 @@ mod time_series;
 mod validation;
 
 pub use codes::CORE_DIAGNOSTIC_CODES;
+pub use component_id::ComponentId;
 pub use diagnostic::{
     CodeStatus, Diagnostic, DiagnosticCode, DiagnosticInfo, DiagnosticSeverity, DiagnosticStage,
     ErrorCategory, check_registry, check_scope_ownership, code_is_well_formed, render_diagnostic,
     render_diagnostics,
 };
 pub use error::Error;
-pub use module::PioModule;
-pub use output::{ArtifactPath, Destination, EmitResult, EmittedOutput, MemoryArtifact};
+pub use module::{PioModule, StagedEdit};
+pub use output::{
+    ArtifactPath, Destination, EmitResult, EmittedOutput, Fidelity, MemoryArtifact, OutputLayout,
+};
 pub use records::{
     DiagnosticId, Digest, DigestAlgorithm, HistoryEntry, HistoryId, HistoryKind, Producer,
     SourceDescriptor, SourceId, SourceMapEntry, SourceRelation, SourceSpan,

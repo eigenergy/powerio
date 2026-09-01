@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use powerio_prob::{ConstraintSelection, Objective, ObjectiveTerm, ReferenceBuses};
-use powerio_tx::{BusId, BusType, IndexedNetwork};
+use powerio_tx::{BalancedNetwork, BusId, BusType, IndexedNetwork};
 
 use crate::{Error, Result};
 
@@ -35,12 +35,51 @@ pub struct PiecewiseLinearCost {
     pub value: Vec<f64>,
 }
 
+/// The source component represented by one branch row in a lowered analysis
+/// network.
+///
+/// Ordinary branches map to their row in `BalancedNetwork::branches()`. Each
+/// in service three winding transformer contributes three analysis branches,
+/// one for each winding in the transformer's declared terminal order. Those
+/// rows stay distinct from the source branch table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+#[non_exhaustive]
+pub enum AnalysisBranchSource {
+    Branch {
+        row: usize,
+    },
+    ThreeWindingTransformerWinding {
+        transformer_row: usize,
+        /// Winding position in `0..3`.
+        winding: usize,
+    },
+}
+
+pub(crate) fn analysis_branch_sources(source: &BalancedNetwork) -> Vec<AnalysisBranchSource> {
+    let mut sources = (0..source.branches().len())
+        .map(|row| AnalysisBranchSource::Branch { row })
+        .collect::<Vec<_>>();
+    for (transformer_row, transformer) in source.transformers_3w().iter().enumerate() {
+        if !transformer.in_service {
+            continue;
+        }
+        sources.extend((0..3).map(|winding| {
+            AnalysisBranchSource::ThreeWindingTransformerWinding {
+                transformer_row,
+                winding,
+            }
+        }));
+    }
+    sources
+}
+
 pub(crate) fn compile_objective(objective: &Objective) -> Result<PreparedObjective> {
     match objective.terms() {
         [] => Ok(PreparedObjective::Feasibility),
         [ObjectiveTerm::NetworkGeneratorCost] => Ok(PreparedObjective::NetworkGeneratorCost),
-        [ObjectiveTerm::NetworkPerPhaseCost] => Err(Error::UnsupportedOpfObjective {
-            reason: "`network_per_phase_cost` belongs to multiconductor OPF".to_owned(),
+        [ObjectiveTerm::ActivePowerDispatchCost] => Err(Error::UnsupportedOpfObjective {
+            reason: "`active_power_dispatch_cost` belongs to multiconductor OPF".to_owned(),
         }),
         _ => Err(Error::UnsupportedOpfObjective {
             reason: "balanced OPF preparation supports either an empty objective or exactly one `network_generator_cost` term".to_owned(),

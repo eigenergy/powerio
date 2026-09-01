@@ -1,6 +1,6 @@
 use powerio::{
-    BranchSusceptanceFormula, ConductorMatrix, Destination, EmittedOutput, PioValue, emit,
-    parse_file,
+    BranchSusceptanceFormula, ConductorMatrix, Destination, EmittedOutput, PioModule, PioValue,
+    Source, deserialize, emit, parse, serialize,
 };
 use powerio_matrix::DcOperators;
 
@@ -38,6 +38,13 @@ fn conformance_path() -> &'static str {
     )
 }
 
+fn bmopf_path() -> &'static str {
+    concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../tests/data/dist/bmopf/example_ieee13.json"
+    )
+}
+
 fn assert_settled_calculation_names_are_exported() {
     fn names<T>() {}
     names::<powerio::DcPfInstance>();
@@ -64,8 +71,8 @@ fn facade_uses_power_system_names_and_universal_emission() {
     let matrix: ConductorMatrix = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
     assert_eq!(matrix.len(), 2);
 
-    let module = parse_file(conformance_path()).unwrap();
-    assert!(matches!(module.value(), PioValue::BalancedNetwork(_)));
+    let module = parse(Source::open(conformance_path()).unwrap(), None).unwrap();
+    assert!(matches!(&module.value, PioValue::BalancedNetwork(_)));
 
     let written = emit(
         &module,
@@ -86,9 +93,64 @@ fn facade_uses_power_system_names_and_universal_emission() {
 }
 
 #[test]
+fn typed_modules_emit_and_serialize_directly() {
+    let parsed = parse(Source::open(conformance_path()).unwrap(), None).unwrap();
+    let PioValue::BalancedNetwork(network) = parsed.value else {
+        panic!("MATPOWER input did not produce a balanced network");
+    };
+
+    let network_module = PioModule::new(network.clone());
+    let emitted = emit(
+        &network_module,
+        "matpower",
+        Destination::memory("typed.m").unwrap(),
+    )
+    .unwrap();
+    let EmittedOutput::Memory { artifacts } = emitted.output() else {
+        panic!("memory destination returned a path output");
+    };
+    assert!(artifacts[0].bytes().starts_with(b"function mpc"));
+
+    let instance = powerio::DcPfInstance::from_network(network).unwrap();
+    let instance_module = PioModule::new(instance);
+    let stored = serialize(
+        &instance_module,
+        Destination::memory("typed.pio.json").unwrap(),
+    )
+    .unwrap();
+    let EmittedOutput::Memory { artifacts } = stored.output() else {
+        panic!("memory destination returned a path output");
+    };
+    let source = Source::from_memory("typed.pio.json", artifacts[0].bytes().to_vec()).unwrap();
+    let decoded = deserialize(source).unwrap();
+    assert!(matches!(decoded.value, PioValue::DcPfInstance(_)));
+}
+
+#[test]
+fn bmopf_parses_to_a_network_and_calculation_construction_is_explicit() {
+    let module = parse(Source::open(bmopf_path()).unwrap(), None).unwrap();
+    let PioValue::MulticonductorNetwork(network) = &module.value else {
+        panic!("BMOPF input did not produce a multiconductor network");
+    };
+    assert!(!network.buses().is_empty());
+    assert!(!network.sources().is_empty());
+
+    let instance = powerio::to_mc_ac_opf_instance(&module).unwrap();
+    assert_eq!(
+        instance.value.network().buses().len(),
+        network.buses().len()
+    );
+    assert!(instance.source().is_none());
+    assert_eq!(
+        instance.history().last().map(powerio::HistoryEntry::name),
+        Some("to_mc_ac_opf_instance")
+    );
+}
+
+#[test]
 fn shared_case_conforms_to_the_named_dc_operations() {
-    let module = parse_file(conformance_path()).unwrap();
-    let PioValue::BalancedNetwork(network) = module.value() else {
+    let module = parse(Source::open(conformance_path()).unwrap(), None).unwrap();
+    let PioValue::BalancedNetwork(network) = &module.value else {
         panic!("MATPOWER input did not produce a balanced network");
     };
     assert_eq!(network.generators().len(), 2);
@@ -109,7 +171,7 @@ fn shared_case_conforms_to_the_named_dc_operations() {
             .collect::<Vec<_>>(),
         ["1", "2", "3"]
     );
-    assert_eq!(operators.branch_identities(), ["branches:0", "branches:1"]);
+    assert_eq!(operators.branch_identities(), ["1-2", "1-3"]);
 
     let n_branches = operators.branch_identities().len();
     let n_buses = operators.bus_ids().len();
@@ -120,13 +182,13 @@ fn shared_case_conforms_to_the_named_dc_operations() {
         -0.1 / (0.01 * 0.01 + 0.1 * 0.1),
         -0.2 / (0.02 * 0.02 + 0.2 * 0.2),
     ];
-    for (&actual, &expected) in operators.branch_susceptances().iter().zip(&expected_b) {
+    for (&actual, &expected) in operators.calc_branch_susceptances().iter().zip(&expected_b) {
         assert_close(actual, expected);
     }
 
     // B = A' * Diagonal(b) * A and Bf = Diagonal(b) * A.
     let b_matrix = dense(&operators.calc_bus_susceptance_matrix());
-    let bf = dense(&operators.calc_branch_susceptance_matrix());
+    let bf = dense(&operators.calc_branch_flow_matrix());
     let expected_b_matrix = [
         vec![
             expected_b[0] + expected_b[1],
@@ -144,7 +206,7 @@ fn shared_case_conforms_to_the_named_dc_operations() {
     assert_matrix_close(&bf, &expected_bf);
 
     // p_shift = A' * (b .* shift).
-    let shift_injection = operators.calc_phase_shift_injection();
+    let shift_injection = operators.calc_bus_phase_shift_injection();
     let shift = 10.0_f64.to_radians();
     assert_close(shift_injection[0], expected_b[1] * shift);
     assert_close(shift_injection[1], 0.0);

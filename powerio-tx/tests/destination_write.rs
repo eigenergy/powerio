@@ -83,7 +83,7 @@ fn a_pypsa_folder_write_commits_the_whole_inventory() {
     }
     // The folder inventory matches the streaming writer's, file for file.
     let stream_dir = dir.path().join("streamed");
-    let streamed = emit_pypsa_csv_folder(module.value(), &stream_dir).expect("streaming write");
+    let streamed = emit_pypsa_csv_folder(&module.value, &stream_dir).expect("streaming write");
     let mut committed: Vec<_> = artifacts
         .iter()
         .map(|p| p.file_name().unwrap().to_owned())

@@ -347,14 +347,11 @@ Wave 2 completion gate:
   and command. The crate restructure landed with the foundation work; this
   wave finishes generic module records in `powerio-core` and dynamic and
   stored behavior in the `powerio` facade.
-- Define a versioned `.pio.json` schema separately from the Rust memory layout,
-  with `schema: "powerio.module"`, one integer document `version`, the exact
-  flat identifiers in `V1_ARCHITECTURE.md`, and frozen one way upgrade fixtures
-  for every released 0.9.x shape. Dispatch on the header before exact typed DTO
-  decoding. Reject the pre 0.9 lineage and unknown current fields or
-  identifiers. Reject nonempty legacy `study` with a directed instruction to
-  materialize one selected revision using the 0.9 migration command. Do not add
-  per value versions.
+- Define the `.pio.json` schema separately from the Rust memory layout, with
+  `schema: "powerio.module"`, `version: 1`, and the exact flat identifiers in
+  `V1_ARCHITECTURE.md`. Decode that representation directly. Reject every
+  other schema name or version and unknown fields or identifiers. Do not add
+  per value versions or readers for beta documents.
 - Implement only the common records fixed in the architecture: `producer`,
   `sources`, `source_map`, `diagnostics`, `history`, and namespaced
   `extensions`. History is structured and descriptive, not replayable. Source
@@ -368,8 +365,7 @@ Wave 2 completion gate:
   solution value.
 - Stable element identities belong to the typed value. Do not add parallel operating
   point, time series, scenario, investment period, matrix, graph, `derived`,
-  or `solutions` fields. The literal legacy 0.9 `study` field is handled only
-  by the upgrade reader.
+  or `solutions` fields.
 - Treat a solution as the primary value only when a source explicitly
   represents a solved calculation. Treat stored
   voltages and setpoints without a named solved calculation as operating point

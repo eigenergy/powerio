@@ -7,26 +7,27 @@ PowerIO parses power system data into typed values, transforms those values, emi
 
 ```julia
 using PowerIO
-case = parse_file("case9.m")               # PioModule{BalancedNetwork}
-feeder = parse_file("IEEE13Nodeckt.dss")   # PioModule{MulticonductorNetwork}
+case = parse("case9.m")               # PioModule{BalancedNetwork}
+feeder = parse("IEEE13Nodeckt.dss")   # PioModule{MulticonductorNetwork}
 ```
 
 ```rust,ignore
-let module = powerio::parse_file("case9.m")?;   // PioModule<PioValue>
-match module.value() {
+let source = powerio::Source::open("case9.m")?;
+let module = powerio::parse(source, None)?;   // PioModule<PioValue>
+match &module.value {
     powerio::PioValue::BalancedNetwork(network) => {
         println!("{} buses", network.buses().len());
     }
-    other => println!("{}", other.kind().as_str()),
+    other => println!("{}", other.type_name()),
 }
 ```
 
 ```python
 import powerio
-case = powerio.parse_file("case9.m")    # PioModule, kind "balanced_network"
+case = powerio.parse("case9.m")
 ```
 
-The result is a module: one typed value plus source descriptions, a source map, diagnostics, history, and retained source bytes. What the value is depends on what the source declares. A MATPOWER case is a balanced network. An OpenDSS feeder is a multiconductor network. A DOE GO Challenge 3 file defines a unit commitment calculation, so it parses to that calculation's input. A DeepMind OPFData file records a solved AC OPF, so it parses to a solution. A PyPSA folder with a snapshot axis parses to a time series, and a GridFM Parquet dataset to a scenario set. [Core Concepts](concepts.md) defines the families.
+The result is a module: one typed value plus source descriptions, a source map, diagnostics, history, and retained source bytes. What the value is depends on what the source declares. A MATPOWER, XIIDM, or CGMES case is a balanced network. An OpenDSS feeder is a multiconductor network. A DOE GO Challenge 3 problem data file parses to `AcScucInstance`; the problem together with its matching solution data parses to `AcScucSolution`. A DeepMind OPFData file records a solved AC OPF, so it parses to a solution. A PyPSA folder with a snapshot axis parses to a time series, and a GridFM Parquet dataset to a scenario set. [Core Concepts](concepts.md) defines the families.
 
 Three rules hold everywhere:
 
@@ -34,9 +35,9 @@ Three rules hold everywhere:
 - emitting another format keeps everything the target can represent and reports each loss as a coded diagnostic;
 - moving between value families is an explicit, recorded operation, never a side effect.
 
-Supported sources: MATPOWER, PSS/E revisions 33 through 35, PowerWorld AUX and PWB, PSLF EPC, PowerModels JSON, Egret JSON, pandapower JSON, PyPSA CSV folders, Surge JSON, DOE GO Challenge 3 JSON, DeepMind OPFData JSON, GridFM Parquet datasets, OpenDSS, PowerModelsDistribution engineering JSON, BMOPF JSON, and the stored `.pio.json` document. [Formats and Fidelity](format-fidelity.md) states each format's supported profile and write support.
+Supported sources: MATPOWER, PSS/E RAW revisions 33 through 35, PSS/E RAWX 35, PowSybl XIIDM 1.17, CIM CGMES 2.4.15 and 3.0, PowerWorld AUX and PWB, PSLF EPC, PowerModels JSON, Egret JSON, pandapower JSON, PyPSA CSV folders, Surge JSON, DOE GO Challenge 3 JSON, DeepMind OPFData JSON, GridFM Parquet datasets, OpenDSS, PowerModelsDistribution engineering JSON, and BMOPF JSON. PowerIO IR enters through `deserialize`, not `parse`. [Formats and Fidelity](format-fidelity.md) states each format's supported profile and write support.
 
-Operations exposed on more than one surface use the same value kinds, format
+Operations exposed on more than one surface use the same value types, format
 names, diagnostic codes, signs, and units. [Rust, Python, Julia, and C](languages.md)
 maps actual coverage; [1.0 Scope and Known Limits](scope-v1.md) lists
 surface specific limits.

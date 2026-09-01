@@ -9,7 +9,7 @@ use crate::diagnostics::codes;
 use crate::instance::AcScucInstance;
 use crate::solution::{Producer, Residuals, Termination};
 
-/// Per time point network state outputs: `values[t][row]` over the stated
+/// Per time point network outputs: `values[t][row]` over the stated
 /// element table order.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
@@ -19,15 +19,15 @@ pub struct ScucNetworkOutputs {
     /// Bus voltage angle, radians.
     pub bus_va: Vec<Vec<f64>>,
     /// Shunt step counts.
-    pub shunt_step: Vec<Vec<f64>>,
+    pub shunt_step: Vec<Vec<i64>>,
     /// AC line on status.
-    pub ac_line_on_status: Vec<Vec<f64>>,
+    pub ac_line_on_status: Vec<Vec<bool>>,
     /// Two winding transformer winding ratio.
     pub transformer_tm: Vec<Vec<f64>>,
     /// Two winding transformer phase shift, radians.
     pub transformer_ta: Vec<Vec<f64>>,
     /// Two winding transformer on status.
-    pub transformer_on_status: Vec<Vec<f64>>,
+    pub transformer_on_status: Vec<Vec<bool>>,
     /// DC line from-side active flow, per unit power.
     pub dc_line_pdc_fr: Vec<Vec<f64>>,
     /// DC line from-side reactive flow, per unit power.
@@ -42,7 +42,11 @@ pub struct ScucNetworkOutputs {
 #[non_exhaustive]
 pub struct ScucDeviceOutputs {
     /// Commitment.
-    pub on_status: Vec<Vec<f64>>,
+    pub on_status: Vec<Vec<bool>>,
+    /// Startup status.
+    pub startup_status: Vec<Vec<bool>>,
+    /// Shutdown status.
+    pub shutdown_status: Vec<Vec<bool>>,
     /// Dispatched active power while on, per unit power.
     pub p_on: Vec<Vec<f64>>,
     /// Dispatched reactive power, per unit power.
@@ -57,8 +61,12 @@ pub struct ScucDeviceOutputs {
     pub p_nsyn_res: Vec<Vec<f64>>,
     /// Ramping reserve up.
     pub p_ramp_res_up_online: Vec<Vec<f64>>,
+    /// Offline ramping reserve up.
+    pub p_ramp_res_up_offline: Vec<Vec<f64>>,
     /// Ramping reserve down.
     pub p_ramp_res_down_online: Vec<Vec<f64>>,
+    /// Offline ramping reserve down.
+    pub p_ramp_res_down_offline: Vec<Vec<f64>>,
     /// Reactive reserve up.
     pub q_res_up: Vec<Vec<f64>>,
     /// Reactive reserve down.
@@ -84,8 +92,10 @@ pub const SCUC_NETWORK_OUTPUT_SERIES: [&str; 10] = [
 
 /// Every stored series of [`ScucDeviceOutputs`], as
 /// [`SCUC_NETWORK_OUTPUT_SERIES`].
-pub const SCUC_DEVICE_OUTPUT_SERIES: [&str; 11] = [
+pub const SCUC_DEVICE_OUTPUT_SERIES: [&str; 15] = [
     "on_status",
+    "startup_status",
+    "shutdown_status",
     "p_on",
     "q",
     "p_reg_res_up",
@@ -93,7 +103,9 @@ pub const SCUC_DEVICE_OUTPUT_SERIES: [&str; 11] = [
     "p_syn_res",
     "p_nsyn_res",
     "p_ramp_res_up_online",
+    "p_ramp_res_up_offline",
     "p_ramp_res_down_online",
+    "p_ramp_res_down_offline",
     "q_res_up",
     "q_res_down",
 ];
@@ -113,11 +125,14 @@ pub struct AcScucSolution {
 
 impl AcScucSolution {
     /// Assemble the solution. Every stated output series must carry one row
-    /// per time point of the instance's time axis; an empty series states
-    /// that the producer omitted the category.
+    /// per time point of the instance's time axis and one value per component
+    /// in the corresponding instance table. Empty series remain permitted for
+    /// producers that do not supply a category; GO Challenge 3 output requires
+    /// every category and its writer checks that stronger requirement.
     ///
     /// # Errors
     /// An output series whose time axis disagrees with the instance.
+    #[allow(clippy::too_many_lines)]
     pub fn new(
         instance: Arc<AcScucInstance>,
         termination: Termination,
@@ -125,50 +140,149 @@ impl AcScucSolution {
         device_outputs: ScucDeviceOutputs,
         objective: Option<f64>,
     ) -> Result<Self, Error> {
-        let periods = instance.inputs().dt.len();
-        let check = |what: &'static str, series: &Vec<Vec<f64>>| -> Result<(), Error> {
-            if series.is_empty() || series.len() == periods {
-                Ok(())
-            } else {
-                Err(Error::new(
-                    &codes::BUILD_SOLUTION_SHAPE_MISMATCH,
-                    format!(
-                        "{what} carries {} time rows; the instance states {periods} intervals",
-                        series.len()
-                    ),
-                ))
-            }
-        };
-        check("bus vm", &network_outputs.bus_vm)?;
-        check("bus va", &network_outputs.bus_va)?;
-        check("shunt step", &network_outputs.shunt_step)?;
-        check("ac line on status", &network_outputs.ac_line_on_status)?;
-        check("transformer tm", &network_outputs.transformer_tm)?;
-        check("transformer ta", &network_outputs.transformer_ta)?;
-        check(
+        let periods = instance.inputs().interval_durations.len();
+        let inputs = instance.inputs();
+        let network = instance.network();
+        let buses = network.buses().len();
+        let shunts = inputs.shunts.len();
+        let ac_lines = inputs
+            .branch_switching_costs
+            .iter()
+            .filter(|row| row.id.component_type() == "branch")
+            .count();
+        let transformers = inputs
+            .branch_switching_costs
+            .iter()
+            .filter(|row| row.id.component_type() == "transformer")
+            .count();
+        let dc_lines = network.hvdc().len();
+        let devices = inputs.devices.len();
+
+        check_finite_grid("bus vm", &network_outputs.bus_vm, periods, buses)?;
+        check_finite_grid("bus va", &network_outputs.bus_va, periods, buses)?;
+        check_grid("shunt step", &network_outputs.shunt_step, periods, shunts)?;
+        check_grid(
+            "ac line on status",
+            &network_outputs.ac_line_on_status,
+            periods,
+            ac_lines,
+        )?;
+        check_finite_grid(
+            "transformer tm",
+            &network_outputs.transformer_tm,
+            periods,
+            transformers,
+        )?;
+        check_finite_grid(
+            "transformer ta",
+            &network_outputs.transformer_ta,
+            periods,
+            transformers,
+        )?;
+        check_grid(
             "transformer on status",
             &network_outputs.transformer_on_status,
+            periods,
+            transformers,
         )?;
-        check("dc line pdc_fr", &network_outputs.dc_line_pdc_fr)?;
-        check("dc line qdc_fr", &network_outputs.dc_line_qdc_fr)?;
-        check("dc line qdc_to", &network_outputs.dc_line_qdc_to)?;
-        check("device on status", &device_outputs.on_status)?;
-        check("device p_on", &device_outputs.p_on)?;
-        check("device q", &device_outputs.q)?;
-        check("device p_reg_res_up", &device_outputs.p_reg_res_up)?;
-        check("device p_reg_res_down", &device_outputs.p_reg_res_down)?;
-        check("device p_syn_res", &device_outputs.p_syn_res)?;
-        check("device p_nsyn_res", &device_outputs.p_nsyn_res)?;
-        check(
+        check_finite_grid(
+            "dc line pdc_fr",
+            &network_outputs.dc_line_pdc_fr,
+            periods,
+            dc_lines,
+        )?;
+        check_finite_grid(
+            "dc line qdc_fr",
+            &network_outputs.dc_line_qdc_fr,
+            periods,
+            dc_lines,
+        )?;
+        check_finite_grid(
+            "dc line qdc_to",
+            &network_outputs.dc_line_qdc_to,
+            periods,
+            dc_lines,
+        )?;
+        check_grid(
+            "device on status",
+            &device_outputs.on_status,
+            periods,
+            devices,
+        )?;
+        check_grid(
+            "device startup status",
+            &device_outputs.startup_status,
+            periods,
+            devices,
+        )?;
+        check_grid(
+            "device shutdown status",
+            &device_outputs.shutdown_status,
+            periods,
+            devices,
+        )?;
+        check_finite_grid("device p_on", &device_outputs.p_on, periods, devices)?;
+        check_finite_grid("device q", &device_outputs.q, periods, devices)?;
+        check_finite_grid(
+            "device p_reg_res_up",
+            &device_outputs.p_reg_res_up,
+            periods,
+            devices,
+        )?;
+        check_finite_grid(
+            "device p_reg_res_down",
+            &device_outputs.p_reg_res_down,
+            periods,
+            devices,
+        )?;
+        check_finite_grid(
+            "device p_syn_res",
+            &device_outputs.p_syn_res,
+            periods,
+            devices,
+        )?;
+        check_finite_grid(
+            "device p_nsyn_res",
+            &device_outputs.p_nsyn_res,
+            periods,
+            devices,
+        )?;
+        check_finite_grid(
             "device p_ramp_res_up_online",
             &device_outputs.p_ramp_res_up_online,
+            periods,
+            devices,
         )?;
-        check(
+        check_finite_grid(
+            "device p_ramp_res_up_offline",
+            &device_outputs.p_ramp_res_up_offline,
+            periods,
+            devices,
+        )?;
+        check_finite_grid(
             "device p_ramp_res_down_online",
             &device_outputs.p_ramp_res_down_online,
+            periods,
+            devices,
         )?;
-        check("device q_res_up", &device_outputs.q_res_up)?;
-        check("device q_res_down", &device_outputs.q_res_down)?;
+        check_finite_grid(
+            "device p_ramp_res_down_offline",
+            &device_outputs.p_ramp_res_down_offline,
+            periods,
+            devices,
+        )?;
+        check_finite_grid(
+            "device q_res_up",
+            &device_outputs.q_res_up,
+            periods,
+            devices,
+        )?;
+        check_finite_grid(
+            "device q_res_down",
+            &device_outputs.q_res_down,
+            periods,
+            devices,
+        )?;
         Ok(Self {
             instance,
             termination,
@@ -224,7 +338,7 @@ impl AcScucSolution {
         self
     }
 
-    /// The per time point network state outputs.
+    /// The per time point network outputs.
     #[must_use]
     pub const fn network_outputs(&self) -> &ScucNetworkOutputs {
         &self.network_outputs
@@ -241,6 +355,57 @@ impl AcScucSolution {
     pub const fn objective(&self) -> Option<f64> {
         self.objective
     }
+}
+
+fn check_grid<T>(what: &str, series: &[Vec<T>], periods: usize, width: usize) -> Result<(), Error> {
+    if series.is_empty() {
+        return Ok(());
+    }
+    if series.len() != periods {
+        return Err(Error::new(
+            &codes::BUILD_SOLUTION_SHAPE_MISMATCH,
+            format!(
+                "{what} carries {} time rows; the instance states {periods} intervals",
+                series.len()
+            ),
+        ));
+    }
+    if let Some((time, row)) = series
+        .iter()
+        .enumerate()
+        .find(|(_, row)| row.len() != width)
+    {
+        return Err(Error::new(
+            &codes::BUILD_SOLUTION_SHAPE_MISMATCH,
+            format!(
+                "{what} time row {time} carries {} values; the instance states {width} components",
+                row.len()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn check_finite_grid(
+    what: &str,
+    series: &[Vec<f64>],
+    periods: usize,
+    width: usize,
+) -> Result<(), Error> {
+    check_grid(what, series, periods, width)?;
+    if let Some((time, column, value)) = series.iter().enumerate().find_map(|(time, row)| {
+        row.iter()
+            .copied()
+            .enumerate()
+            .find(|(_, value)| !value.is_finite())
+            .map(|(column, value)| (time, column, value))
+    }) {
+        return Err(Error::new(
+            &codes::BUILD_SOLUTION_SHAPE_MISMATCH,
+            format!("{what}[{time}][{column}] is not finite: {value}"),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -267,6 +432,8 @@ mod series_vocabulary_tests {
 
         let ScucDeviceOutputs {
             on_status: _,
+            startup_status: _,
+            shutdown_status: _,
             p_on: _,
             q: _,
             p_reg_res_up: _,
@@ -274,10 +441,12 @@ mod series_vocabulary_tests {
             p_syn_res: _,
             p_nsyn_res: _,
             p_ramp_res_up_online: _,
+            p_ramp_res_up_offline: _,
             p_ramp_res_down_online: _,
+            p_ramp_res_down_offline: _,
             q_res_up: _,
             q_res_down: _,
         } = ScucDeviceOutputs::default();
-        assert_eq!(SCUC_DEVICE_OUTPUT_SERIES.len(), 11);
+        assert_eq!(SCUC_DEVICE_OUTPUT_SERIES.len(), 15);
     }
 }

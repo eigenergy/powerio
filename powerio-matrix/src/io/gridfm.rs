@@ -31,7 +31,7 @@
 //! counts and bus-id ordering, so the dense bus index means the same bus across
 //! scenarios — enforced by the shape check ([`Error::ScenarioShapeMismatch`]).
 //! Within that, load, dispatch, voltages, branch status, bus type, and costs may
-//! all differ per snapshot. This matches datakit, whose topology variants (N-K,
+//! all differ per snapshot. This matches datakit, whose topology scenarios (N-K,
 //! random component drop) toggle `BR_STATUS`/`GEN_STATUS` on a fixed element set,
 //! and graphkit's `HeteroGridDatasetDisk`, which groups by `scenario` and
 //! rebuilds the graph independently for each one. powerio doesn't generate the
@@ -146,7 +146,7 @@ impl GridfmOptions {
 /// schema-consistent. The builders enforce that and otherwise return
 /// [`Error::ScenarioShapeMismatch`]. Within that, load, dispatch, voltages,
 /// branch status, bus type, and costs may all vary per snapshot — this mirrors
-/// gridfm-datakit, whose topology variants (N-K, random component drop) toggle
+/// gridfm-datakit, whose topology scenarios (N-K, random component drop) toggle
 /// `BR_STATUS`/`GEN_STATUS` on a fixed element set, and gridfm-graphkit, which
 /// rebuilds the graph independently for every scenario.
 #[derive(Debug, Clone, Copy)]
@@ -204,6 +204,23 @@ pub struct GridfmOutputs {
     /// Generators whose missing cost was filled by the export policy.
     pub synthesized_gen_costs: usize,
     /// Generator costs replaced by explicit user patches.
+    pub patched_gen_costs: usize,
+}
+
+/// A complete GridFM directory ready for one [`powerio_core::Destination`].
+///
+/// Artifact names are relative to the requested output directory and begin
+/// with `raw/`. The counts state every field the GridFM profile could not
+/// carry without replacing it with a default.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct GridfmDataset {
+    pub artifacts: Vec<powerio_core::MemoryArtifact>,
+    pub dropped_zero_impedance: usize,
+    pub degenerate_cost_gens: usize,
+    pub missing_cost_gens: usize,
+    pub unsupported_cost_gens: usize,
+    pub synthesized_gen_costs: usize,
     pub patched_gen_costs: usize,
 }
 
@@ -547,13 +564,64 @@ pub fn emit_gridfm_batch(
     out_dir: impl AsRef<Path>,
     opts: &GridfmOptions,
 ) -> Result<GridfmOutputs> {
+    let case_name = snapshots
+        .first()
+        .ok_or(Error::EmptyScenarioBatch)?
+        .net
+        .name();
+    let case_root = out_dir.as_ref().join(crate::sanitize_stem(case_name));
+    let dataset = build_gridfm_batch(snapshots, opts)?;
+    let GridfmDataset {
+        artifacts,
+        dropped_zero_impedance,
+        degenerate_cost_gens,
+        missing_cost_gens,
+        unsupported_cost_gens,
+        synthesized_gen_costs,
+        patched_gen_costs,
+    } = dataset;
+    let committed = powerio_core::Destination::path(&case_root).__commit_artifacts(
+        true,
+        powerio_core::Fidelity::Canonical,
+        artifacts,
+        Vec::new(),
+    )?;
+    let powerio_core::EmittedOutput::Path { root, artifacts } = committed.into_output() else {
+        unreachable!("a path destination returns a path output")
+    };
+
+    Ok(GridfmOutputs {
+        dir: root.join("raw"),
+        files: artifacts,
+        dropped_zero_impedance,
+        degenerate_cost_gens,
+        missing_cost_gens,
+        unsupported_cost_gens,
+        synthesized_gen_costs,
+        patched_gen_costs,
+    })
+}
+
+/// Build the GridFM artifacts for one balanced network without writing them.
+///
+/// The returned inventory can be committed through the same PowerIO
+/// destination operation used by every other directory format.
+pub fn build_gridfm_dataset(
+    net: &BalancedNetwork,
+    scenario: i64,
+    opts: &GridfmOptions,
+) -> Result<GridfmDataset> {
+    let snapshot = GridfmSnapshot::new(net, scenario);
+    build_gridfm_batch(std::slice::from_ref(&snapshot), opts)
+}
+
+/// Build one GridFM artifact inventory for a batch of numbered snapshots.
+pub fn build_gridfm_batch(
+    snapshots: &[GridfmSnapshot],
+    opts: &GridfmOptions,
+) -> Result<GridfmDataset> {
     if opts.cost_options_default() {
-        return emit_gridfm_batch_inner(
-            snapshots,
-            out_dir.as_ref(),
-            opts,
-            CostPolicyBatchReport::default(),
-        );
+        return build_gridfm_batch_inner(snapshots, opts, CostPolicyBatchReport::default());
     }
 
     let (nets, cost_report) = policy_adjusted_snapshots(snapshots, opts)?;
@@ -562,29 +630,20 @@ pub fn emit_gridfm_batch(
         .zip(snapshots)
         .map(|(net, snap)| GridfmSnapshot::new(net, snap.scenario))
         .collect();
-    emit_gridfm_batch_inner(&adjusted, out_dir.as_ref(), opts, cost_report)
+    build_gridfm_batch_inner(&adjusted, opts, cost_report)
 }
 
-fn emit_gridfm_batch_inner(
+fn build_gridfm_batch_inner(
     snapshots: &[GridfmSnapshot],
-    out_dir: &Path,
     opts: &GridfmOptions,
     cost_report: CostPolicyBatchReport,
-) -> Result<GridfmOutputs> {
+) -> Result<GridfmDataset> {
     let views = snapshot_views(snapshots)?;
     let tables = tables_from_views(&views, opts)?;
 
     // The shape check guarantees every snapshot shares the base element set, so
     // the name and structural counts come from the first.
     let net = views[0].view.network();
-    // The network name comes from input content, so it must not steer the
-    // output path: unsanitized, a name like `../../x` would write outside
-    // `out_dir`. The manifest keeps the original name.
-    // The case's own subdirectory is the commit target, so a dataset root
-    // aggregating several cases stays writable while an existing case
-    // directory is refused rather than replaced.
-    let case_root = out_dir.join(crate::sanitize_stem(net.name()));
-
     let mut inventory: Vec<(&'static str, Vec<u8>)> = Vec::new();
     inventory.push(("bus_data.parquet", parquet_bytes(&tables.bus)?));
     inventory.push(("gen_data.parquet", parquet_bytes(&tables.generator)?));
@@ -651,18 +710,8 @@ fn emit_gridfm_batch_inner(
             ))
         })
         .collect::<std::result::Result<Vec<_>, powerio_core::Error>>()?;
-    let committed = powerio_core::Destination::path(&case_root).__commit_artifacts(
-        true,
+    Ok(GridfmDataset {
         artifacts,
-        Vec::new(),
-    )?;
-    let powerio_core::EmittedOutput::Path { root, artifacts } = committed.into_output() else {
-        unreachable!("a path destination returns a path output")
-    };
-
-    Ok(GridfmOutputs {
-        dir: root.join("raw"),
-        files: artifacts,
         dropped_zero_impedance,
         degenerate_cost_gens,
         missing_cost_gens,
@@ -1981,7 +2030,7 @@ mod tests {
     #[test]
     fn out_of_service_branch_zeros_flows_but_keeps_admittance() {
         // An out-of-service branch keeps its physical Y** admittances but carries
-        // zero flows and `br_status = 0` — the path datakit's topology variants
+        // zero flows and `br_status = 0` — the path datakit's topology scenarios
         // exercise. Use non-flat voltages so an *in-service* branch carries real
         // flow, which makes the zero on the tripped branch meaningful (not just an
         // artifact of a flat start).

@@ -8,7 +8,7 @@ use helpers::*;
 use std::path::{Path, PathBuf};
 
 use powerio_tx::TargetFormat;
-use powerio_tx::format::powerworld::{AuxSection, emit_aux, parse_aux};
+use powerio_tx::format::powerworld::{__emit_aux, __parse_aux, AuxSection};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -26,7 +26,7 @@ fn activsg200() -> String {
 #[test]
 fn activsg200_inventory_is_complete() {
     let text = activsg200();
-    let aux = parse_aux(&text).unwrap();
+    let aux = __parse_aux(&text).unwrap();
 
     // (object type, row count, field count), in file order.
     let expected: &[(&str, usize, usize)] = &[
@@ -84,7 +84,7 @@ fn activsg200_inventory_is_complete() {
 #[test]
 fn activsg200_values_survive_tokenizing() {
     let text = activsg200();
-    let aux = parse_aux(&text).unwrap();
+    let aux = __parse_aux(&text).unwrap();
     let sub = aux.data_of("Substation").next().unwrap();
     let lat = sub.field_index("Latitude").unwrap();
     let name = sub.field_index("SubName").unwrap();
@@ -107,8 +107,8 @@ fn activsg200_echo_is_byte_exact() {
 /// Canonical generic serialization is idempotent on the real export.
 #[test]
 fn activsg200_canonical_emission_is_idempotent() {
-    let first = emit_aux(&parse_aux(&activsg200()).unwrap());
-    let again = emit_aux(&parse_aux(&first).unwrap());
+    let first = __emit_aux(&__parse_aux(&activsg200()).unwrap());
+    let again = __emit_aux(&__parse_aux(&first).unwrap());
     assert_eq!(first, again);
 }
 

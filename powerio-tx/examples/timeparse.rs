@@ -22,7 +22,7 @@ fn main() {
     let src = std::fs::read_to_string(&path).unwrap();
 
     let parse_case = |text: &str| {
-        let source = powerio_core::Source::from_bytes("case.m", text.as_bytes().to_vec())
+        let source = powerio_core::Source::from_memory("case.m", text.as_bytes().to_vec())
             .unwrap()
             .with_format(powerio_core::FormatId::new("matpower").unwrap());
         powerio_tx::parse(source).unwrap().into_value()

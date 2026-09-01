@@ -120,7 +120,7 @@ def compare(path: str, want_ptdf: bool = True) -> list[str]:
     print(f"\n===== {path}")
     cf = CaseFrames(path)
     mp = matpower_dc(cf)
-    module = powerio.parse_file(path, value_type=powerio.BalancedNetwork)
+    module = powerio.parse(path)
     net = module.value
 
     pio_bus_ids = np.array([int(bus["id"]) for bus in net.buses])

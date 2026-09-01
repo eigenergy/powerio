@@ -4,9 +4,9 @@
 //! public values carry PowerModels signs — the branch susceptance is
 //! `imag(inv(series impedance))` under the selected formula, negative
 //! for an inductive branch — and every axis carries stable element mappings:
-//! bus rows by [`BusId`] in bus table order, branch columns by payload
-//! identity in branch table order. With voltage angles `va` in radians, the
-//! branch flow identity is
+//! bus axes use [`BusId`] in analysis row order, and branch axes map each
+//! column to its source branch or three winding transformer winding. With
+//! voltage angles `va` in radians, the branch flow identity is
 //!
 //! ```text
 //! p_branch = -Bf * va + b .* shift
@@ -22,9 +22,9 @@
 //! dependent matrices are built once and an operating point update never
 //! reconstructs them.
 
-use crate::SparseMatrix;
+use crate::{AnalysisBranchSource, SparseMatrix};
 use powerio_core::Error;
-use powerio_tx::{BranchSusceptanceFormula, BusId};
+use powerio_tx::{BranchSusceptanceFormula, BusId, IndexedNetwork};
 
 use powerio_prob::diagnostics::codes;
 use powerio_prob::{DcBusSpecification, DcPfInstance};
@@ -33,6 +33,15 @@ use powerio_prob::{DcBusSpecification, DcPfInstance};
 /// exists, else `table:row`.
 fn row_identity(uid: Option<&str>, table: &str, row: usize) -> String {
     uid.map_or_else(|| format!("{table}:{row}"), str::to_owned)
+}
+
+fn calc_incidence(bus_count: usize, endpoints: &[(usize, usize)]) -> SparseMatrix {
+    let mut incidence = crate::matrix::triplet::CooBuilder::new_rect(bus_count, endpoints.len());
+    for (column, &(from, to)) in endpoints.iter().enumerate() {
+        incidence.add(from, column, 1.0);
+        incidence.add(to, column, -1.0);
+    }
+    incidence.finish_csr()
 }
 
 /// The reference constrained linear system: the positive definite matrix a
@@ -57,6 +66,7 @@ pub struct ReferenceConstrainedSystem {
 pub struct DcOperators {
     bus_ids: Vec<BusId>,
     branch_identities: Vec<String>,
+    analysis_sources: Vec<AnalysisBranchSource>,
     /// `n × m`, `+1` at the from bus and `-1` at the to bus of each branch.
     incidence: SparseMatrix,
     /// Public per branch susceptance, PowerModels signs.
@@ -89,7 +99,9 @@ impl DcOperators {
     /// A zero impedance branch, a non-finite branch value, or a branch naming
     /// an undeclared bus.
     pub fn build(instance: &DcPfInstance) -> Result<Self, Error> {
-        let network = instance.network();
+        let source = instance.network();
+        let view = IndexedNetwork::new(source);
+        let network = view.network();
         let formula = instance.branch_susceptance_formula();
         let base = network.base_mva();
         let bus_ids: Vec<BusId> = network.buses().iter().map(|bus| bus.id).collect();
@@ -101,9 +113,11 @@ impl DcOperators {
         let position_of = |bus: BusId| row_of.get(&bus).copied();
 
         let mut branch_identities = Vec::new();
+        let mut active_analysis_sources = Vec::new();
         let mut branch_susceptance = Vec::new();
         let mut shift_radians = Vec::new();
         let mut endpoints = Vec::new();
+        let analysis_sources = crate::opf::analysis_branch_sources(source);
         for (row, branch) in network.branches().iter().enumerate() {
             if !branch.in_service || branch.from == branch.to {
                 continue;
@@ -166,22 +180,18 @@ impl DcOperators {
                 ));
             }
             branch_identities.push(identity);
+            active_analysis_sources.push(analysis_sources[row]);
             branch_susceptance.push(susceptance);
             shift_radians.push(shift);
             endpoints.push((from, to));
         }
 
-        let mut incidence =
-            crate::matrix::triplet::CooBuilder::new_rect(bus_ids.len(), endpoints.len());
-        for (column, &(from, to)) in endpoints.iter().enumerate() {
-            incidence.add(from, column, 1.0);
-            incidence.add(to, column, -1.0);
-        }
-
+        let incidence = calc_incidence(bus_ids.len(), &endpoints);
         let mut operators = Self {
             bus_ids,
             branch_identities,
-            incidence: incidence.finish_csr(),
+            analysis_sources: active_analysis_sources,
+            incidence,
             branch_susceptance,
             shift_radians,
             endpoints,
@@ -206,12 +216,16 @@ impl DcOperators {
     }
 
     fn refresh_injections(&mut self, instance: &DcPfInstance, base: f64) -> Result<(), Error> {
-        if instance.specifications().len() != self.bus_ids.len() {
+        let source_bus_count = instance.network().buses().len();
+        if instance.specifications().len() != source_bus_count
+            || source_bus_count > self.bus_ids.len()
+        {
             return Err(Error::new(
                 &codes::BUILD_INSTANCE_SHAPE_MISMATCH,
                 format!(
-                    "the instance states {} bus specifications; the operators were built over {} buses",
+                    "the instance states {} bus specifications for {} source buses; the operators were built over {} analysis buses",
                     instance.specifications().len(),
+                    source_bus_count,
                     self.bus_ids.len()
                 ),
             ));
@@ -249,11 +263,17 @@ impl DcOperators {
         &self.bus_ids
     }
 
-    /// Operator column to stable branch identity, the column mapping of every
-    /// branch axis.
+    /// Operator column to stable analysis branch identity.
     #[must_use]
     pub fn branch_identities(&self) -> &[String] {
         &self.branch_identities
+    }
+
+    /// Operator column to the source branch or three winding transformer
+    /// winding represented by that column.
+    #[must_use]
+    pub fn analysis_sources(&self) -> &[AnalysisBranchSource] {
+        &self.analysis_sources
     }
 
     /// The PowerModels incidence matrix `A`, `m × n`: each branch row has
@@ -263,23 +283,23 @@ impl DcOperators {
         self.incidence.transpose_view().to_csr()
     }
 
-    /// The public per branch susceptances `b`, PowerModels signs.
+    /// Calculate the per branch susceptances `b`, with PowerModels signs.
     #[must_use]
-    pub fn branch_susceptances(&self) -> &[f64] {
+    pub fn calc_branch_susceptances(&self) -> &[f64] {
         &self.branch_susceptance
     }
 
-    /// Calculate the branch susceptance matrix `Bf = diag(b) A`, `m × n`.
+    /// Calculate the branch flow matrix `Bf = Diagonal(b) * A`, `m × n`.
     #[must_use]
-    pub fn calc_branch_susceptance_matrix(&self) -> SparseMatrix {
+    pub fn calc_branch_flow_matrix(&self) -> SparseMatrix {
         let transpose = self.incidence.transpose_view().to_csr();
         scale_rows(&transpose, &self.branch_susceptance)
     }
 
-    /// Calculate the bus susceptance matrix `B = Aᵀ diag(b) A`, `n × n`.
+    /// Calculate the bus susceptance matrix `B = Aᵀ * Diagonal(b) * A`, `n × n`.
     #[must_use]
     pub fn calc_bus_susceptance_matrix(&self) -> SparseMatrix {
-        let bf = self.calc_branch_susceptance_matrix();
+        let bf = self.calc_branch_flow_matrix();
         &self.incidence * &bf
     }
 
@@ -290,20 +310,30 @@ impl DcOperators {
         &self.net_injection
     }
 
-    /// Calculate `p_shift = Aᵀ (b .* shift)` in bus order.
+    /// Calculate the branch phase shift injection `b .* shift` in branch
+    /// order.
     #[must_use]
-    pub fn calc_phase_shift_injection(&self) -> Vec<f64> {
-        let mut injection = vec![0.0; self.bus_ids.len()];
-        for (column, (&susceptance, &shift)) in self
-            .branch_susceptance
+    pub fn calc_branch_phase_shift_injection(&self) -> Vec<f64> {
+        self.branch_susceptance
             .iter()
             .zip(self.shift_radians.iter())
+            .map(|(&susceptance, &shift)| susceptance * shift)
+            .collect()
+    }
+
+    /// Calculate the bus phase shift injection
+    /// `p_shift = Aᵀ * (b .* shift)` in bus order.
+    #[must_use]
+    pub fn calc_bus_phase_shift_injection(&self) -> Vec<f64> {
+        let mut injection = vec![0.0; self.bus_ids.len()];
+        for (column, value) in self
+            .calc_branch_phase_shift_injection()
+            .into_iter()
             .enumerate()
         {
-            if shift == 0.0 {
+            if value == 0.0 {
                 continue;
             }
-            let value = susceptance * shift;
             // Column `column` of A is `e_from - e_to`.
             let (from, to) = self.endpoints(column);
             injection[from] += value;
@@ -415,7 +445,7 @@ impl DcOperators {
                 (false, false) => {}
             }
         }
-        let shift_injection = self.calc_phase_shift_injection();
+        let shift_injection = self.calc_bus_phase_shift_injection();
         let rhs = retained_rows
             .iter()
             .zip(reference_coupling.iter())

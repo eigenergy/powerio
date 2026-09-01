@@ -10,16 +10,16 @@ use powerio_tx::format::routing::TransmissionFormat;
 /// The canonical identity and destination shape of a PowerIO format.
 ///
 /// `extension` is the conventional filename suffix without a leading dot; it
-/// can be compound, as in `pio.json`. It is `None` for directory formats with
-/// no primary case file. `can_emit` reports whether a fresh universal emitter
-/// exists for the format. It does not promise that every module value kind can
+/// may be compound. It is `None` for directory formats with no primary case
+/// file. `can_emit` reports whether a fresh universal emitter
+/// exists for the format. It does not promise that every concrete module value can
 /// emit that format, and it is not a build feature probe. A false value neither
 /// promises nor forbids a same format retained source echo.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 #[non_exhaustive]
 pub struct FormatInfo {
     /// Canonical stable token used by parse and emit operations when the
-    /// current build and value kind support the format.
+    /// current build and concrete value support the format.
     pub token: &'static str,
     /// Conventional filename suffix without a leading dot.
     pub extension: Option<&'static str>,
@@ -46,30 +46,19 @@ const fn info(
 
 /// Resolve a format token or common alias to facade owned metadata.
 ///
-/// This includes the stored module format and the transmission and
-/// distribution case formats. Bare model JSON and display artifacts are not
-/// case formats and therefore are not returned here.
+/// This includes transmission and distribution grid exchange formats.
+/// PowerIO IR, bare model JSON, and display artifacts are not grid exchange
+/// formats and therefore are not returned here.
 ///
 #[must_use]
 pub fn resolve_format(name: &str) -> Option<FormatInfo> {
-    let key = name
-        .to_ascii_lowercase()
-        .chars()
-        .filter(|character| !matches!(character, '-' | '_'))
-        .collect::<String>();
-    if key == "piojson" {
-        return Some(info("pio-json", Some("pio.json"), false, true));
-    }
-
     if let Some(format) = powerio_tx::format::parse_target_format(name) {
+        let is_cgmes = format == powerio_tx::TargetFormat::Cgmes;
         return Some(info(
             format.token(),
-            Some(format.extension()),
-            false,
-            !matches!(
-                format,
-                powerio_tx::TargetFormat::Goc3Json | powerio_tx::TargetFormat::DeepMindOpfDataJson
-            ),
+            (!is_cgmes).then_some(format.extension()),
+            is_cgmes,
+            !matches!(format, powerio_tx::TargetFormat::DeepMindOpfDataJson),
         ));
     }
 
@@ -85,9 +74,7 @@ pub fn resolve_format(name: &str) -> Option<FormatInfo> {
     match powerio_tx::format::routing::parse_transmission_format(name) {
         Some(TransmissionFormat::PypsaCsv) => Some(info("pypsa-csv", None, true, true)),
         Some(TransmissionFormat::Pwb) => Some(info("pwb", Some("pwb"), false, false)),
-        // GridFM output is produced by its batch operation rather than the
-        // universal module emitter. A retained GridFM source can still echo.
-        Some(TransmissionFormat::Gridfm) => Some(info("gridfm", None, true, false)),
+        Some(TransmissionFormat::Gridfm) => Some(info("gridfm", None, true, true)),
         _ => None,
     }
 }
@@ -101,10 +88,11 @@ mod tests {
         assert_eq!(resolve_format("m"), resolve_format("MATPOWER"));
         assert_eq!(resolve_format("pm").unwrap().token, "powermodels-json");
         assert_eq!(resolve_format("engineering").unwrap().token, "pmd-json");
-        assert_eq!(
-            resolve_format("piojson").unwrap().extension,
-            Some("pio.json")
-        );
+        assert_eq!(resolve_format("xiidm").unwrap().token, "xiidm");
+        assert!(resolve_format("cgmes").unwrap().is_directory);
+        assert_eq!(resolve_format("iidm"), None);
+        assert_eq!(resolve_format("rawx"), None);
+        assert_eq!(resolve_format("psse-rawx").unwrap().token, "psse-rawx");
     }
 
     #[test]
@@ -128,6 +116,7 @@ mod tests {
     fn nonformats_do_not_resolve() {
         assert_eq!(resolve_format("not-a-format"), None);
         assert_eq!(resolve_format("json"), None);
+        assert_eq!(resolve_format("pio-json"), None);
         assert_eq!(resolve_format("model-json"), None);
     }
 }

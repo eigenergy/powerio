@@ -13,14 +13,14 @@ use crate::pipeline::{MatrixKind, calc_matrix_stats_for_kind};
 
 #[allow(dead_code)]
 fn parse_named(text: &str, from: &str) -> BalancedNetwork {
-    let source = powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())
+    let source = powerio_core::Source::from_memory("<memory>", text.as_bytes().to_vec())
         .unwrap()
         .with_format(powerio_core::FormatId::new(from).unwrap());
     powerio_tx::parse(source).unwrap().into_value()
 }
 
 fn parse_psse(text: &str) -> Result<BalancedNetwork, powerio_core::Error> {
-    let source = powerio_core::Source::from_bytes("case.raw", text.as_bytes().to_vec())?
+    let source = powerio_core::Source::from_memory("case.raw", text.as_bytes().to_vec())?
         .with_format(powerio_core::FormatId::new("psse")?);
     powerio_tx::parse(source).map(powerio_core::PioModule::into_value)
 }

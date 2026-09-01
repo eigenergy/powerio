@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Diagnostic record parity: the field set and the severity ladder must agree
-# across the core record, the stored version 1 DTO, the C row accessors, the
+# across the core record, the stored DTO, the C row accessors, the
 # Python class, and (when POWERIO_JL names a checkout) the Julia struct. The
 # details map stays an open JSON object on every surface; everything else is
 # a named field.
@@ -23,7 +23,7 @@ done
 # The stored DTO.
 for field in $fields; do
     grep -q "pub $field:" powerio/src/stored/dto.rs \
-        || { echo "stored DiagnosticV1 has no field $field" >&2; exit 1; }
+        || { echo "stored Diagnostic has no field $field" >&2; exit 1; }
 done
 
 # The C row accessors (details crosses as JSON by design).

@@ -56,13 +56,14 @@ fn aux_text_preserves_empty_and_malformed_results() {
 }
 
 #[test]
-fn facade_parses_display_bytes_without_a_parse_bytes_name() {
+fn facade_parses_a_display_memory_source() {
     let bytes = std::fs::read(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../tests/data/powerworld/ACTIVSg200.pwd"
     ))
     .unwrap();
-    let DisplayData::PowerWorld(display) = powerio::parse_display(&bytes, "pwd").unwrap() else {
+    let source = powerio::Source::from_memory("display.pwd", bytes).unwrap();
+    let DisplayData::PowerWorld(display) = powerio::parse_display(source, None).unwrap() else {
         panic!("PWD bytes did not produce a PowerWorld display");
     };
     assert!(!display.substations.is_empty());

@@ -166,7 +166,7 @@ fn incidence_structure() {
         let incidence = operators.calc_incidence_matrix();
         let (m, n) = (incidence.rows(), incidence.cols());
         assert_eq!(incidence.nnz(), 2 * m, "{path}: two nonzeros per row");
-        assert_eq!(operators.branch_susceptances().len(), m);
+        assert_eq!(operators.calc_branch_susceptances().len(), m);
 
         // Each branch row sums to 0 with one +1 and one −1.
         let mut row_sum = vec![0.0_f64; m];
@@ -226,12 +226,12 @@ fn grounded_laplacian_is_spd() {
 }
 
 #[test]
-fn branch_susceptance_matrix_reconstructs_bus_susceptance_matrix() {
+fn branch_flow_matrix_reconstructs_bus_susceptance_matrix() {
     for path in CASES {
         let case = load(path);
         let operators = dc_operators(&case, BranchSusceptanceFormula::ReactanceOnly);
         let incidence = operators.calc_incidence_matrix();
-        let branch = operators.calc_branch_susceptance_matrix();
+        let branch = operators.calc_branch_flow_matrix();
         assert_eq!(branch.rows(), incidence.rows());
         assert_eq!(branch.cols(), incidence.cols());
         // Aᵀ · Bf == B.
@@ -728,9 +728,9 @@ fn tap_adjusted_reactance_applies_tap_and_shift() {
 
     // ReactanceOnly ignores tap and shift: b = 1/x, no phase injection.
     let pp = dc_operators(&case, BranchSusceptanceFormula::ReactanceOnly);
-    assert!((pp.branch_susceptances()[0] + 1.0 / x).abs() < 1e-12);
+    assert!((pp.calc_branch_susceptances()[0] + 1.0 / x).abs() < 1e-12);
     assert!(
-        pp.calc_phase_shift_injection()
+        pp.calc_bus_phase_shift_injection()
             .iter()
             .all(|&value| value == 0.0)
     );
@@ -740,11 +740,11 @@ fn tap_adjusted_reactance_applies_tap_and_shift() {
     let b_e = 1.0 / (x * tap);
     let shift_rad = shift_deg.to_radians();
     assert!(
-        (mp.branch_susceptances()[0] + b_e).abs() < 1e-12,
+        (mp.calc_branch_susceptances()[0] + b_e).abs() < 1e-12,
         "b {} != -{b_e}",
-        mp.branch_susceptances()[0]
+        mp.calc_branch_susceptances()[0]
     );
-    let p_shift = mp.calc_phase_shift_injection();
+    let p_shift = mp.calc_bus_phase_shift_injection();
     assert!((p_shift[0] - (-b_e * shift_rad)).abs() < 1e-12);
     assert!((p_shift[1] - (b_e * shift_rad)).abs() < 1e-12);
 }
@@ -994,9 +994,9 @@ fn incidence_matpower_pshift_invariant_to_normalization() {
     );
     let norm = raw.to_normalized().unwrap();
     let raw_shift = dc_operators(&raw, BranchSusceptanceFormula::TapAdjustedReactance)
-        .calc_phase_shift_injection();
+        .calc_bus_phase_shift_injection();
     let normalized_shift = dc_operators(&norm, BranchSusceptanceFormula::TapAdjustedReactance)
-        .calc_phase_shift_injection();
+        .calc_bus_phase_shift_injection();
     assert_eq!(raw_shift.len(), normalized_shift.len());
     for (a, b) in raw_shift.iter().zip(&normalized_shift) {
         assert!((a - b).abs() < 1e-12, "p_shift differs: {a} vs {b}");
@@ -1030,12 +1030,12 @@ fn gencost_quadratic_branches() {
     assert_eq!(mk(2, 3, vec![1.0]).calc_quadratic(), None);
 }
 
-/// The consumer contract of the public preparation: an external solver
+/// The solver facing requirements of the public preparation: an external solver
 /// formulates the complete DC OPF from `build_dc_opf_preparation` alone —
 /// demand, generator costs and bounds with source rows, thermal limits, and
 /// the reference set — and its positive solver edge weights are exactly the
 /// negation of the PowerModels signed susceptances from [`DcOperators`], term
-/// for term, with an identical phase shift injection.
+/// for term, with an identical bus phase shift injection.
 #[test]
 fn public_preparation_formulates_the_complete_dc_opf() {
     use powerio_matrix::{
@@ -1088,7 +1088,7 @@ fn public_preparation_formulates_the_complete_dc_opf() {
         .branches
         .susceptance_magnitude
         .iter()
-        .zip(operators.branch_susceptances())
+        .zip(operators.calc_branch_susceptances())
         .enumerate()
     {
         assert!(weight > 0.0, "row {row}: solver weight must be positive");
@@ -1102,7 +1102,7 @@ fn public_preparation_formulates_the_complete_dc_opf() {
         );
     }
     // One shared phase shift injection, entry for entry.
-    let shift_injection = operators.calc_phase_shift_injection();
+    let shift_injection = operators.calc_bus_phase_shift_injection();
     assert_eq!(prep.p_shift.len(), shift_injection.len());
     for (bus, (&prepared, &public)) in prep.p_shift.iter().zip(&shift_injection).enumerate() {
         assert!(
@@ -1211,7 +1211,10 @@ fn public_preparation_excludes_explicitly_isolated_rows() {
     assert_eq!(prepared.bus_source_rows, vec![Some(0), Some(1)]);
     assert_eq!(prepared.p_d, vec![0.0, 0.4]);
     assert_eq!(prepared.branches.analysis_rows, vec![0]);
-    assert_eq!(prepared.branches.source_rows, vec![Some(0)]);
+    assert_eq!(
+        prepared.branches.analysis_sources,
+        vec![powerio_matrix::AnalysisBranchSource::Branch { row: 0 }]
+    );
     assert_eq!(prepared.generators.analysis_rows, vec![0]);
     assert_eq!(prepared.generators.source_rows, vec![Some(0)]);
     assert_eq!(prepared.n_source_branches, 2);
@@ -1234,7 +1237,7 @@ fn public_preparation_refuses_unsupported_objectives_and_unknown_constraints() {
     );
     let unsupported = DcOpfInstance::from_network(network.clone())
         .unwrap()
-        .with_objective(Objective::network_per_phase_cost());
+        .with_objective(Objective::active_power_dispatch_cost());
     assert!(matches!(
         build_dc_opf_preparation(&unsupported, &DcOpfAssemblyOptions::default()),
         Err(Error::UnsupportedOpfObjective { .. })
@@ -1269,7 +1272,7 @@ fn public_preparation_refuses_unsupported_objectives_and_unknown_constraints() {
 }
 
 #[test]
-fn three_winding_lowering_has_explicit_analysis_identities_and_no_source_rows() {
+fn three_winding_lowering_maps_each_analysis_branch_to_its_source_winding() {
     use powerio_matrix::{DcOpfAssemblyOptions, build_dc_opf_preparation};
     use powerio_prob::{ActiveConstraints, ConstraintSelection, DcOpfInstance};
     use powerio_tx::{Impedance, Transformer3W, Winding};
@@ -1319,7 +1322,23 @@ fn three_winding_lowering_has_explicit_analysis_identities_and_no_source_rows() 
         ]
     );
     assert_eq!(prepared.branches.analysis_rows, vec![0, 1, 2]);
-    assert_eq!(prepared.branches.source_rows, vec![None, None, None]);
+    assert_eq!(
+        prepared.branches.analysis_sources,
+        vec![
+            powerio_matrix::AnalysisBranchSource::ThreeWindingTransformerWinding {
+                transformer_row: 0,
+                winding: 0,
+            },
+            powerio_matrix::AnalysisBranchSource::ThreeWindingTransformerWinding {
+                transformer_row: 0,
+                winding: 1,
+            },
+            powerio_matrix::AnalysisBranchSource::ThreeWindingTransformerWinding {
+                transformer_row: 0,
+                winding: 2,
+            },
+        ]
+    );
     assert_eq!(
         prepared.branches.thermal_limit_active,
         vec![false, true, false]
@@ -1357,6 +1376,10 @@ fn economic_output_signs_match_optimal_value_derivatives() {
         vec![poly_gen(1, 200.0, 0.0, 10.0), poly_gen(2, 200.0, 0.0, 30.0)],
     );
     let instance = Arc::new(DcOpfInstance::from_network(network).unwrap());
+    let branch_id = instance.network().branches()[0]
+        .uid
+        .clone()
+        .expect("instance construction assigns a stable branch identity");
 
     let costs = [10.0, 30.0];
     let demand = [0.0, 100.0];
@@ -1381,6 +1404,7 @@ fn economic_output_signs_match_optimal_value_derivatives() {
         vec![-40.0],
         vec![40.0, 60.0],
         two_bus_dispatch_value(costs, demand, rating),
+        Vec::new(),
     )
     .unwrap()
     .with_bus_active_power_marginals(vec![10.0, 30.0])
@@ -1395,8 +1419,8 @@ fn economic_output_signs_match_optimal_value_derivatives() {
     assert!(
         (solution.bus_active_power_marginal(BusId(2)).unwrap() - demand_to_derivative).abs() < 1e-8
     );
-    let multiplier_sum = solution.branch_from_limit_multiplier("branches:0").unwrap()
-        + solution.branch_to_limit_multiplier("branches:0").unwrap();
+    let multiplier_sum = solution.branch_from_limit_multiplier(&branch_id).unwrap()
+        + solution.branch_to_limit_multiplier(&branch_id).unwrap();
     assert!((rating_derivative + multiplier_sum).abs() < 1e-8);
 
     // Reverse the merit order and demand direction. The negative flow bound

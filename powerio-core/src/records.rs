@@ -345,10 +345,10 @@ impl SourceMapEntry {
 #[non_exhaustive]
 pub enum HistoryKind {
     Parse,
-    Upgrade,
     Transform,
     Edit,
     Repair,
+    Solve,
 }
 
 /// Structured description of an operation that produced the current value.
@@ -357,8 +357,8 @@ pub struct HistoryEntry {
     id: HistoryId,
     kind: HistoryKind,
     name: Box<str>,
-    input_kind: Option<Box<str>>,
-    output_kind: Option<Box<str>>,
+    input_type: Option<Box<str>>,
+    output_type: Option<Box<str>>,
     parameters: BTreeMap<String, Value>,
     assumptions: Vec<String>,
     losses: Vec<String>,
@@ -377,8 +377,8 @@ impl HistoryEntry {
             id,
             kind,
             name: name.into_boxed_str(),
-            input_kind: None,
-            output_kind: None,
+            input_type: None,
+            output_type: None,
             parameters: BTreeMap::new(),
             assumptions: Vec::new(),
             losses: Vec::new(),
@@ -401,13 +401,13 @@ impl HistoryEntry {
     }
 
     #[must_use]
-    pub fn input_kind(&self) -> Option<&str> {
-        self.input_kind.as_deref()
+    pub fn input_type(&self) -> Option<&str> {
+        self.input_type.as_deref()
     }
 
     #[must_use]
-    pub fn output_kind(&self) -> Option<&str> {
-        self.output_kind.as_deref()
+    pub fn output_type(&self) -> Option<&str> {
+        self.output_type.as_deref()
     }
 
     #[must_use]
@@ -425,13 +425,13 @@ impl HistoryEntry {
         &self.losses
     }
 
-    pub fn with_input_kind(mut self, kind: impl Into<String>) -> Result<Self, Error> {
-        self.input_kind = Some(validated_kind(kind.into())?);
+    pub fn with_input_type(mut self, type_name: impl Into<String>) -> Result<Self, Error> {
+        self.input_type = Some(validated_type_name(type_name.into())?);
         Ok(self)
     }
 
-    pub fn with_output_kind(mut self, kind: impl Into<String>) -> Result<Self, Error> {
-        self.output_kind = Some(validated_kind(kind.into())?);
+    pub fn with_output_type(mut self, type_name: impl Into<String>) -> Result<Self, Error> {
+        self.output_type = Some(validated_type_name(type_name.into())?);
         Ok(self)
     }
 
@@ -491,14 +491,14 @@ fn push_history_note(
     Ok(notes)
 }
 
-fn validated_kind(kind: String) -> Result<Box<str>, Error> {
-    if !valid_nonempty_text(&kind) {
+fn validated_type_name(type_name: String) -> Result<Box<str>, Error> {
+    if !valid_nonempty_text(&type_name) {
         return Err(Error::new(
             &crate::codes::REQUEST_RECORD_INVALID_IDENTIFIER,
-            "a history value kind must be nonempty and bounded",
+            "a history value type must be nonempty and bounded",
         ));
     }
-    Ok(kind.into_boxed_str())
+    Ok(type_name.into_boxed_str())
 }
 
 impl<'de> serde::Deserialize<'de> for SourceSpan {
@@ -536,5 +536,22 @@ mod tests {
         assert!(SourceMapEntry::new("/bus/0", SourceRelation::Exact, Vec::new()).is_err());
         assert!(SourceMapEntry::new("/bus/0", SourceRelation::Defaulted, Vec::new()).is_ok());
         assert!(SourceMapEntry::new("bad", SourceRelation::Synthetic, Vec::new()).is_err());
+    }
+
+    #[test]
+    fn history_records_name_structural_input_and_output_types() {
+        let entry = HistoryEntry::new(
+            HistoryId::new("parse-1").unwrap(),
+            HistoryKind::Parse,
+            "parse",
+        )
+        .unwrap()
+        .with_input_type("powerio.Source")
+        .unwrap()
+        .with_output_type("powerio.BalancedNetwork")
+        .unwrap();
+
+        assert_eq!(entry.input_type(), Some("powerio.Source"));
+        assert_eq!(entry.output_type(), Some("powerio.BalancedNetwork"));
     }
 }

@@ -334,7 +334,7 @@ fn a_parsed_micro_feeder_assembles_end_to_end() {
     let dss = "New Circuit.c basekv=12.47 pu=1 phases=3 bus1=a\n\
                New Line.l1 bus1=a.1.2.3 bus2=b.1.2.3 phases=3 r1=0.1 x1=0.2 length=1 units=km\n\
                New Load.ld bus1=b.1.2.3 phases=3 conn=wye kv=7.2 kw=30 kvar=9\n";
-    let source = powerio_core::Source::from_bytes("<memory>", dss.as_bytes().to_vec())
+    let source = powerio_core::Source::from_memory("<memory>", dss.as_bytes().to_vec())
         .unwrap()
         .with_format(powerio_core::FormatId::new("dss").unwrap());
     let net = powerio_dist::parse(source).unwrap().into_value();

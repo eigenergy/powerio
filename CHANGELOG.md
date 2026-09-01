@@ -2,114 +2,58 @@
 
 ## 1.0.0 (unreleased)
 
-**OPF preparation now represents the instance it receives.**
-`build_dc_opf_preparation` and `build_ac_opf_preparation` compile either the
-empty feasibility objective or the network generator cost objective. They
-preserve convex piecewise linear generator costs as breakpoints instead of
-fitting a polynomial. Malformed and nonconvex rows, and unsupported objective
-terms, return typed errors. Active constraint
-selections become masks aligned with the dense arrays, and an unknown identity
-in `ConstraintSelection::Only` is an error. Bus, generator, and branch
-identities now accompany their analysis and source row mappings. Synthetic
-three winding transformer branches use identities derived from the transformer
-identity and winding number; they have analysis rows but no source branch row.
-The nodal quadratic projection and DC OPF bundle return an error when the
-objective contains a piecewise cost they cannot represent.
+PowerIO 1.0 has four representation operations: `parse`, `emit`, `serialize`,
+and `deserialize`. Paths, streams, and memory enter through `Source`; separate
+file, text, and byte parsing functions are gone. `PioModule<T>` stores the
+value, diagnostics, sources, provenance, and history. Rust matches `PioValue`,
+Python uses `isinstance`, Julia uses multiple dispatch, and C uses structural
+type names and typed borrowed accessors.
 
-**OPF solution economics no longer assume a currency or collapse two
-constraints into one signed value.** DC and AC solutions can store the
-derivative of the declared optimal objective with respect to added active or
-reactive demand. The unit is objective units per MW or MVAr. The value is an
-LMP only when the declared objective gives it that interpretation. Thermal
-limits retain separate nonnegative multipliers for the two branch directions
-or AC terminals. The derivative with respect to a shared rating is the negative
-sum of those multipliers. Stored 0.10 price columns map to the demand marginal
-columns. A signed 0.10 DC branch dual splits by sign into the two directional
-columns and records `READ.MODULE.BRANCH_DUAL_SPLIT`.
+PowerIO IR has one document shape: `"schema": "powerio.module"` and
+`"version": 1`. The 0.10 beta document readers and upgrade code are removed.
+C ABI 7 is the only C ABI and contains no aliases for earlier ABI generations.
 
-**Differentiability regularization is not a portable objective term.** It did
-not state a mathematical quantity or unit. A 0.10 stored module containing the
-retired token still reads: the term is removed and the module gains the coded
-warning `READ.MODULE.OBJECTIVE_TERM_RETIRED`. Numerical regularization belongs
-to a solver's formulation settings.
+`BalancedNetwork` and `MulticonductorNetwork` are the two electrical network
+types. `OperatingPoint<T>`, `TimeSeries<T>`, and `ScenarioSet<T>` compose over
+both. Calculation data uses explicit PF, OPF, and SCUC instance and solution
+types. `SocwrOpfSolution` records the PowerModels SOCWR relaxation and its
+objective lower bound without claiming an AC feasible solution.
+Multiconductor matrices use the descriptive Rust name `ConductorMatrix`; the
+beta abbreviation `Mat` is removed.
 
-**A balanced OPF instance can replace its network without losing problem
-semantics.** `DcOpfInstance::with_network` and `AcOpfInstance::with_network`
-preserve the objective, constraints, approximation, and compatible initial
-state while validating the replacement. This supports exact solutions of
-amended cases without reconstructing an instance from defaults.
+`OperatingPointUpdate`, `NetworkUpdate`, and `CalculationUpdate` target stable
+component identities and absolute values with units. `apply_updates` validates
+the full batch before changing a value. `UpdateReport` lists the changed fields
+and reports whether energized connectivity changed.
 
-**AC and DC assembly now agree on synthesized thermal limits.** Both public
-option types expose fluent setters for units, zero impedance handling, and
-rating synthesis, and both preparations record whether synthesis was used.
+The public DC bundle and “DC branch coefficient” vocabulary are removed.
+Callers use `calc_incidence_matrix`, `calc_branch_susceptances`,
+`calc_bus_susceptance_matrix`, `calc_branch_flow_matrix`,
+`calc_branch_phase_shift_injection`, `calc_bus_phase_shift_injection`,
+`calc_branch_flow_dc`, and `calc_bus_injection_dc`. Incidence is branches by
+buses, with `+1` at the from bus and `-1` at the to bus, matching PowerModels
+and MATPOWER signs.
 
-**`Termination` gains `Infeasible` and `Unbounded`.** An optimization solver
-that proves the constraints empty or the objective unbounded no longer reports
-the catch-all `Failed`.
+OPF preparation preserves the instance objective, active constraints, source
+identities, and source row mappings. Convex piecewise linear costs remain
+piecewise linear. AC and DC solutions store separate nonnegative terminal
+thermal limit multipliers and objective derivatives without assuming a
+currency. `Termination` distinguishes convergence, iteration limit,
+infeasibility, unboundedness, failure, and an unreported result.
 
-**The migration guide states the DC susceptance sign reversal.** 0.9's
-`branch_susceptance` returned the positive Laplacian edge weight; 0.10 and 1.0
-return the PowerModels value, negative for an inductive branch. OPF preparation
-exposes the separate positive solver weight.
+Python and Julia expose `.value` and `.diagnostics`, the same four
+representation operations, ordinary collection indexing, typed updates, and
+the named `calc_*` functions. PowerIO.jl uses ABI 7 and owner rooted views;
+Julia does not encode and reparse values to inspect them.
 
-**The facade exports complete construction vocabulary.** The DC OPF instance
-and solution pair join the AC pair at the crate root. `HistoryEntry`,
-`HistoryId`, `HistoryKind`, and `Producer` are also available through the main
-facade.
-
-**The four language surfaces use one ordinary path.** Rust, Python, Julia, and
-C now document `parse_file`, a `PioModule` containing its value and
-diagnostics, explicit `to_*` transformations, and `emit`. Computed matrices and
-vectors use `calc_*`; the direct PowerModels incidence operation is
-`calc_incidence_matrix` and returns branches by buses. Python exposes `value`
-and `diagnostics` as properties. Julia dispatches `parse_file` over paths and
-`IO`. Rust narrows through `PioValue` enum matching and `module.value()`.
-Rust, Python, and Julia expose DC work through the direct named
-`calc_incidence_matrix`, `calc_bus_susceptance_matrix`,
-`calc_branch_susceptance_matrix`, `calc_phase_shift_injection`, and
-`calc_branch_flow_dc` operations. Rust `DcNetworkData` and `dc_network_data`,
-Python `dc_data`, and Julia `DcData` are removed without a renamed container
-replacement. The ABI 6 C `PioDcData` type and functions remain callable. Rust
-preparation projections use
-`calc_fixed_nodal_withdrawal`, `calc_branch_flow_offset`, and
-`calc_nodal_generator_data`, and emit the legacy matrix bundle with
-`emit_dcopf_bundle`.
-
-**Format metadata comes from the facade.** `resolve_format` maps a token or
-common alias to its canonical token, conventional filename suffix, directory
-shape, and fresh universal emission capability. Rust, Python, and Julia return
-`FormatInfo`; C adds the ABI 6 symbol `pio_resolve_format_json`. Unknown and
-ambiguous names return no value. The capability is format level: a module can
-still reject a format whose `can_emit` is true. Rust applications that already
-own PowerWorld display bytes use `parse_display`, while path based callers keep
-`parse_display_file`. That facade function now reports `powerio::Error` rather
-than the component error. The facade replaces its unusable
-`to_geo_layer_from_aux_substations(&AuxFile)` export with
-`to_geo_layer_from_aux_text`; parser authors can still use the former from
-`powerio-tx`.
-
-Rust computed values now lead with an action across the component crates.
-Electrical and matrix results use `calc_*`. Component format names parse to
-typed enums through `parse_*`, while facade artifact metadata uses
-`resolve_format`. Grounded index conversion uses `map_*`; state and scenario
-discovery uses
-`list_*`; diagnostic text uses `render_*`; and in memory geographic, GridFM,
-and Matrix Market projections use `to_*`. `check_sddm`,
-`select_solver_for_shape`, and `number_snapshots` state their operations
-directly.
-
-The released 0.10 source aliases are removed at the 1.0 boundary; the migration
-guide inventories each replacement. ABI 6 is unchanged and the new C names are
-additive. The preferred C transformations are
-`pio_balanced_network_to_normalized` and the balanced and multiconductor
-`*_to_geo_layer_json`, `*_apply_geo_layer`, and `*_to_module` functions.
-`pio_dc_data_calc_branch_flow` is the structured low level calculation name.
-`pio_module_list_states_json` lists a collection's states; the released
-`pio_module_state_inventory_json` spelling remains available.
-Module inspection preserves its released `operations` array and adds
-`preferred_operations` and `compatibility_operations`. Same format directory
-emission and typed module transformations now preserve source, diagnostic,
-history, producer, descriptor, and extension records.
+DOE GO Challenge 3 problem and solution files use the one public `parse`
+operation. A source containing the problem returns
+`PioModule<AcScucInstance>`; a directory or named memory source containing the
+problem and matching solution returns `PioModule<AcScucSolution>` and retains
+both files. A solution file alone is rejected because it contains neither the
+component definitions nor the time axis. `emit` writes a complete
+`AcScucSolution` as the official GO Challenge 3 output file; unchanged problem
+data still uses exact same format echo.
 
 ## 0.10.0
 
@@ -117,7 +61,9 @@ PowerIO 0.10 is the public beta of the 1.0 API. API corrections may land before 
 
 `powerio::parse(source)` returns `PioModule<PioValue>`. The value is a balanced network, multiconductor network, time series, scenario set, problem instance, or solution. DOE GO Challenge 3 JSON produces `AcScucInstance`, BMOPF JSON produces `McAcOpfInstance`, and DeepMind OPFData JSON produces `AcOpfSolution`. PyPSA snapshot axes, Egret time keys, and GridFM scenarios remain typed.
 
-`.pio.json` stores one module with schema `powerio.module/1`. The document contains the typed value, source descriptions, source map, diagnostics, history, and extensions. The complete list of 20 value kinds is in the [0.10 release notes](docs/release-notes/0.10.0-draft.md). The one way 0.9 reader and all retired names are documented in the [migration guide](https://powerio.dev/guide/migration-v0.10.html).
+`.pio.json` stores one module with schema `powerio.module/1`. The beta document
+contains the typed value, source descriptions, source map, diagnostics,
+history, and extensions. Its reader and API are not part of PowerIO 1.0.
 
 `powerio-core` defines sources, diagnostics, and modules. `powerio-tx` and `powerio-dist` define the two network families. `powerio-prob` defines problem instances and solutions. `powerio-matrix` builds sparse matrices and graph data. The `powerio` crate provides format dispatch and the combined public API.
 
@@ -162,7 +108,7 @@ The API and C ABI that 1.0.0 ships. Everything here exists so a later change can
 
 **Seven ABI-visible JSON documents changed shape while their symbols kept their signatures.** `pio_schema_versions_json` dropped four keys. `pio_dist_capabilities_json`, `pio_arrow_catalog_json`, `pio_scopf_to_json`, `pio_package_to_json` and `pio_dist_summary_json` renamed `schema_version` to `powerio_version`, and `pio_arrow_catalog_json` also dropped the per-table `schema_version`. `pio_summary_json` gained `topology.n_buses` and `topology.n_branches`; its `counts` block stays the case file's own inventory, so a 3-winding transformer is one row there rather than the bus and three branches it lowers to. The Arrow metadata key `powerio.schema_version` is `powerio.version`. A binding built against ABI 4 passes the handshake and then reads `null` for keys it mirrors, which is why the integer moved.
 
-**A nonfinite float spells itself as a string in every document powerio authors.** JSON has no `Inf`/`NaN` literal, and through 0.8.x serde wrote a nonfinite field as `null`, which the reader refused on the way back — `powerio package` refused stock case9241pegase over seven generators whose absent reactive limit legitimately reads as `Inf`, and every consumer moving a parsed network as JSON hit the same wall. A float position now writes `"Infinity"`, `"-Infinity"`, or `"NaN"` and reads back either a number or one of those spellings, one convention across model JSON, the multiconductor payload, and the `.pio.json` envelope, so every document powerio writes reads back. The multiconductor bound fields keep accepting the `null` a pre-0.9 writer emitted, restored by field role as before; everywhere else a `null` is refused with a message naming this change. The published schema states the string arm on every float position, and `to_json_with_diagnostics` returns an empty record list — nothing degrades anymore, and the channel stays for whatever write-side finding comes next.
+**A nonfinite float spells itself as a string in every document powerio authors.** JSON has no `Inf`/`NaN` literal, and through 0.8.x serde wrote a nonfinite field as `null`, which the reader refused on the way back — `powerio package` refused stock case9241pegase over seven generators whose absent reactive limit legitimately reads as `Inf`, and every consumer moving a parsed network as JSON hit the same wall. A float position now writes `"Infinity"`, `"-Infinity"`, or `"NaN"` and reads back either a number or one of those spellings, one convention across model JSON, the multiconductor payload, and the `.pio.json` document, so every document powerio writes reads back. The multiconductor bound fields keep accepting the `null` a pre-0.9 writer emitted, restored by field role as before; everywhere else a `null` is refused with a message naming this change. The published schema states the string arm on every float position, and `to_json_with_diagnostics` returns an empty record list — nothing degrades anymore, and the channel stays for whatever write-side finding comes next.
 
 **The MCP server works over a real transport.** The mcp 2.0 SDK rewrites a string argument into a parsed object whenever its annotation is not exactly `str`, so every JSON-carrying argument (`json`, `content`, `package_json`) arrived as a dict and failed validation — a model could parse a case and could do nothing multi step with the result, and no test saw it because every test called the tool functions in process. The three arguments are bare `str = ""` now (empty means unset), a regression suite drives the server over stdio through the client SDK, and the closed argument sets advertise themselves: `json_format` and matrix `kind` carry `enum` in the tool schema, and the accepted case format names are in the tool descriptions. Errors lead with their diagnostic code instead of a prose prefix, and the Python exceptions carry the same code as a `.code` attribute. The directory writers (`pypsa-csv`, `gridfm`) fill a fresh staging directory and install it through the same containment resolution as a single file write, per target, with `overwrite=false` refusing before anything moves — they previously created children the containment policy never saw. `powerio.mcp.sandbox` exports `PathNotAllowed` so a consumer catches a containment refusal by type, and `python -m powerio.mcp` and the `powerio-mcp` console script are stated consumer entry points that do not move without a version bump.
 
@@ -786,28 +732,28 @@ several gaps in that model.
   distribution JSON exchanged with other tools.
 - C ABI: `pio_classify_str` classifies in-memory JSON by the same top level
   markers the transmission parser's `.json` sniffing uses, and recognizes
-  `.pio.json` envelopes: `transmission:<format>`, `distribution:<format>`,
+  `.pio.json` documents: `transmission:<format>`, `distribution:<format>`,
   `package`, `ambiguous`, or `unknown`, size-then-fill. Bindings can route a
   bare `.json` before choosing a parser instead of matching error text.
-- The JSON classifier reports a `.pio.json` envelope as its own outcome
+- The JSON classifier reports a `.pio.json` document as its own outcome
   (`routing::JsonClass`), so every consumer handles it: the CLI, the Python
   readers, and the Python `classify_json_text` now name the package surface
-  for an envelope instead of a generic cannot-infer error (or, for the Python
-  string reader, a MATPOWER syntax error). Envelope detection requires
+  for a document instead of a generic cannot-infer error (or, for the Python
+  string reader, a MATPOWER syntax error). Document detection requires
   `model_kind` to be `balanced` or `multiconductor`, so a case document
   carrying those key names with other values still classifies as a case, and
   classification parses the document once.
 - Directed errors at the transmission boundary: a `.dss` path, a distribution
-  `from` token (`dss`/`pmd`/`bmopf`), and a `.pio.json` envelope handed to the
+  `from` token (`dss`/`pmd`/`bmopf`), and a `.pio.json` document handed to the
   balanced parser now name the surface that reads them instead of a generic
   unknown-format message.
 
 ## 0.5.1
 
-- `.pio.json` payload schema declared (#173): new optional envelope fields
+- `.pio.json` payload schema declared (#173): new optional document fields
   `payload_schema` and `payload_schema_version` name and version the IR payload
   schema id per model kind (`pio-payload-balanced/1`,
-  `pio-payload-multiconductor/1`, both `1.0.0`), independent of the envelope
+  `pio-payload-multiconductor/1`, both `1.0.0`), independent of the document
   `schema_version` (now `0.1.1`). A reader rejects a foreign payload major;
   packages without the fields (0.5.0 and earlier) read unchanged. The JSON
   shape of `model` is untouched.
@@ -836,7 +782,7 @@ several gaps in that model.
   is gone); the Julia binding already leads with `NetworkPackage`. The `.pio.json`
   format is unchanged.
 - Python API: the seven module level `package_*` functions are replaced by the
-  `powerio.Package` handle class, which parses the envelope once and exposes
+  `powerio.Package` handle class, which parses the document once and exposes
   `model_kind`, `operating_points()`, `materialize_operating_point()`,
   `as_balanced()`/`as_multiconductor()`, `validate()`, `validation()`,
   `diagnostics()`, and the multiconductor to balanced preflight and lowering.
@@ -885,7 +831,7 @@ several gaps in that model.
 
 ## 0.4.0
 
-- `powerio-pkg`: `.pio.json` reads now enforce the envelope compatibility rule:
+- `powerio-pkg`: `.pio.json` reads now enforce the document version rule:
   same major `schema_version` values load, while incompatible major versions
   fail before payload use. The mdBook schema page documents the rule.
 - `powerio-pkg`: balanced package output now emits source maps for stable bus,

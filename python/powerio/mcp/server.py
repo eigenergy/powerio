@@ -1,33 +1,19 @@
-"""MCP server for powerio.
+"""MCP tools backed directly by the public :mod:`powerio` Python API.
 
-The advertised MCP surface is semantic and format neutral:
-
-``emit``, ``summarize``, ``parse``, ``to_normalized``, ``calc_matrix``,
-``diagnostics``, ``display``, ``inspect``, ``list_states``,
-``inspect_state``, ``export_state``, ``to_balanced_report``, ``to_balanced``,
-and ``about``.
-
-The tools route balanced transmission models, multiconductor distribution
-models, PyPSA CSV folders, and gridfm datasets through the lower level powerio
-APIs. Transmission parses serialize through the ``model-json`` transport.
-Distribution parses serialize through canonical ``bmopf-json``. The stored
-module transport serializes either family through `.pio.json`.
-
-The filesystem containment policy for ``path`` and ``destination`` lives in
-``powerio.mcp.sandbox``, which imports no MCP SDK; the private helpers here
-are wrappers over it. A dss parse passes the allowed root that admitted the
-path as the reader's include root, so includes may span sibling directories
-under that root; with no roots configured the reader's case directory default
-applies.
+Every input becomes a :class:`powerio.PioModule`. ``powerio_ir`` is serialized
+PowerIO IR; external grid exchange data enters through ``path`` or ``content``.
+Collections remain collections. Tools that inspect a collection use its normal
+time index or scenario ID and never turn an operating point into a network.
 """
 
 from __future__ import annotations
 
-import json as jsonlib
+import base64
+import io
+import json
 import os
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Any, Dict, Optional, TypeAlias
+from typing import Annotated, Any, Dict, Literal, Optional, cast
 
 from mcp.server.mcpserver import MCPServer
 from pydantic import Field
@@ -38,357 +24,107 @@ from powerio.mcp import sandbox
 
 mcp = MCPServer("powerio")
 
-_DIST_FORMATS = frozenset(
+_DIRECTORY_FORMATS = frozenset({"dss", "gridfm", "opendss", "pypsa", "pypsa-csv"})
+_MATRIX_NAMES = frozenset(
     {
-        "dss",
-        "opendss",
-        "pmd",
-        "pmd-json",
-        "pmd_json",
-        "engineering",
-        "bmopf",
-        "bmopf-json",
-        "bmopf_json",
+        "bprime",
+        "bdoubleprime",
+        "admittance_real",
+        "admittance_imag",
+        "adjacency",
+        "ptdf",
+        "lodf",
+        "weighted_laplacian",
+        "lacpf",
     }
 )
-_GRIDFM_FORMATS = frozenset({"gridfm"})
-_PYPSA_FORMATS = frozenset({"pypsa", "pypsa-csv"})
-_MODEL_JSON_FORMATS = frozenset({"model-json"})
-_BMOPF_JSON_FORMATS = frozenset({"bmopf-json"})
-# The stored `.pio.json` transport: a version 1 module, or a released 0.9
-# package (the stored reader upgrades the latter on read). Named apart from
-# `_MODEL_JSON_FORMATS` above, which is the balanced network case JSON
-# transport, an unrelated concept one letter away in spelling.
-_STORED_FORMATS = frozenset({"module"})
-_VERSION_KEY = "powerio_version"
-
-_MATRIX_KIND_ALIASES = {
-    "b": "bprime",
-    "b1": "bprime",
-    "bprime": "bprime",
-    "b2": "bdoubleprime",
-    "bpp": "bdoubleprime",
-    "bdoubleprime": "bdoubleprime",
-    "g": "ybus_real",
-    "ybus_real": "ybus_real",
-    "negb": "ybus_imag",
-    "b_lap": "ybus_imag",
-    "ybus_imag": "ybus_imag",
-    "adj": "adjacency",
-    "adjacency": "adjacency",
-    "ptdf": "ptdf",
-    "lodf": "lodf",
-    "laplacian": "laplacian",
-    "lacpf": "lacpf",
-}
-
-_MATRIX_HELP = (
-    "bprime/b/b1 (MATPOWER Bp), bdoubleprime/b2/bpp (MATPOWER Bpp), "
-    "ybus_real/g, ybus_imag/negB/b_lap, adjacency/adj, ptdf, lodf, "
-    "laplacian, lacpf"
+_MATRIX_HELP = ", ".join(sorted(_MATRIX_NAMES))
+_MATRIX_KIND_FIELD = Field(
+    json_schema_extra=cast(Any, {"enum": sorted(_MATRIX_NAMES)})
 )
-
-# JSON schema `enum` entries the tool surface advertises. `_transport_kind`
-# also validates this closed set at run time.
-_JsonFormatArg: TypeAlias = Optional[
-    Annotated[
-        str,
-        Field(json_schema_extra={"enum": ["module", "model-json", "bmopf-json"]}),
-    ]
+_Scheme = Literal["bx", "xb"]
+_BranchSusceptanceFormula = Literal[
+    "series_susceptance", "tap_adjusted_reactance", "reactance_only"
 ]
-# A FieldInfo constant rather than an `Annotated[str, ...]` alias: stubtest
-# probes a str-aliased Annotated differently across python versions. The
-# enum list is Any-typed for pydantic's invariant JsonValue list.
-_MATRIX_KIND_ENUM: "list[Any]" = sorted(_MATRIX_KIND_ALIASES)
-_MATRIX_KIND_FIELD = Field(json_schema_extra={"enum": _MATRIX_KIND_ENUM})
 
-# Tool description prose for the open ended format name sets.
 _SOURCE_FORMAT_HELP = (
-    "Accepted `from_format` names — transmission: matpower, powermodels-json, "
-    "egret-json, pandapower-json, psse, powerworld, pslf, goc3-json, "
-    "surge-json, opfdata-json, pypsa-csv, gridfm; distribution: dss, pmd-json, "
-    "bmopf-json. Omit it to infer from the file extension or JSON markers."
+    "Use `format` for an explicit grid exchange format; omit it to let "
+    "PowerIO inspect a path, extension, or content markers. Raw text belongs "
+    "in `content`; serialized PowerIO IR belongs in `powerio_ir`."
 )
-_TARGET_FORMAT_HELP = (
-    "Accepted output format names — transmission: matpower, psse, "
-    "powermodels-json, egret-json, pandapower-json, powerworld, pslf; "
-    "distribution: dss, pmd-json, bmopf-json. The folder targets pypsa-csv "
-    "and gridfm require an `emit` destination."
-)
-
-
-@dataclass
-class _Loaded:
-    """One network loaded through any transport. `diagnostics` is always a list
-    of dicts (`_diagnostic_records`'s shape: `code`, `severity`, `message`,
-    `target`, the last two `None` when the finding carries none), whichever
-    transport produced it: `parse`, `summarize`, `emit`, `to_normalized`,
-    `calc_matrix`, and `diagnostics` all publish this same shape."""
-
-    domain: str
-    network: Any
-    diagnostics: list[Dict[str, Any]]
-    json_format: str
-    scenario: Optional[int] = None
 
 
 def _fmt(value: Optional[str]) -> Optional[str]:
     return value.strip().lower().replace("_", "-") if value is not None else None
 
 
-def _private_native(name: str) -> Any:
-    """Read an extension helper that is intentionally absent from its public stub."""
-    return getattr(powerio._powerio, name)
-
-
-def _opts(options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    return dict(options or {})
-
-
-def _one_input(path: Optional[str], content: Optional[str]) -> None:
-    if (path is None) == (content is None):
-        raise ValueError("provide exactly one of `path` or `content`")
-
-
 def _coded_error(prefix: str, exc: Exception) -> ValueError:
-    """Lead with the diagnostic code when the failure carries one, so a
-    consumer that splits on the first colon reads a code, never prose.
-
-    The Rust-side message already renders as `CODE: message`, so `str(exc)`
-    starting with `code` means it is already there; prefixing again would
-    double it. A refusal's structured findings (currently only a refused
-    balanced lowering sets `.diagnostics`) ride along as trailing JSON,
-    since an MCP tool has no attribute channel back to its caller."""
     code = getattr(exc, "code", None)
     text = str(exc)
-    if code:
-        message = text if text.startswith(f"{code}: ") else f"{code}: {text}"
-    else:
-        message = f"{prefix}: {text}"
+    if code and not text.startswith(f"{code}: "):
+        text = f"{code}: {text}"
+    elif not code:
+        text = f"{prefix}: {text}"
     diagnostics = getattr(exc, "diagnostics", None)
     if diagnostics:
-        message = f"{message} | {jsonlib.dumps(diagnostics)}"
-    return ValueError(message)
+        text = f"{text} | {json.dumps(diagnostics)}"
+    return ValueError(text)
 
 
-def _required(value: Optional[str], name: str) -> str:
-    """Narrow an argument an earlier check already settled.
-
-    The input guards run at the top of each entry point, so a call site
-    reaches this with the value set. The raise states the invariant for a
-    type checker, which cannot see across the guard.
-    """
-    if value is None:
-        raise ValueError(f"`{name}` is not set")
-    return value
+def _checked_source_path(value: str) -> str:
+    path = sandbox.checked_path(value, purpose="path")
+    if Path(path).is_dir():
+        sandbox.check_allowed_read_tree(Path(path), purpose="path")
+    return path
 
 
-def _one_network_input(
-    path: Optional[str],
-    content: Optional[str],
-    transport: Optional[str],
-    module_json: Optional[str],
-) -> None:
-    if sum(v is not None for v in (path, content, transport, module_json)) != 1:
-        raise ValueError(
-            "provide exactly one of `path`, `content`, `json`, or `module_json`"
-        )
+def _one_module_input(
+    path: Optional[str], content: Optional[str], powerio_ir: Optional[str]
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    content = content or None
+    powerio_ir = powerio_ir or None
+    if sum(item is not None for item in (path, content, powerio_ir)) != 1:
+        raise ValueError("provide exactly one of `path`, `content`, or `powerio_ir`")
+    return path, content, powerio_ir
 
 
-def _is_dist_format(format: Optional[str]) -> bool:
-    return _fmt(format) in _DIST_FORMATS
-
-
-def _is_gridfm_format(format: Optional[str]) -> bool:
-    return _fmt(format) in _GRIDFM_FORMATS
-
-
-def _is_pypsa_format(format: Optional[str]) -> bool:
-    return _fmt(format) in _PYPSA_FORMATS
-
-
-def _looks_like_gridfm_dir(path: str) -> bool:
-    p = Path(path)
-    return (
-        p.joinpath("bus_data.parquet").is_file()
-        or p.joinpath("raw", "bus_data.parquet").is_file()
-        or len(list(p.glob("*/raw/bus_data.parquet"))) == 1
-    )
-
-
-def _decode_local_path(value: str, *, purpose: str) -> Path:
-    return sandbox.decode_local_path(value, purpose=purpose)
-
-
-def _local_path(value: str, *, purpose: str, for_write: bool = False) -> str:
-    return sandbox.checked_path(value, purpose=purpose, for_write=for_write)
-
-
-def _jsonish(text: str) -> bool:
-    return text.lstrip().startswith(("{", "["))
-
-
-def _json_object(text: str, *, purpose: str) -> Dict[str, Any]:
-    try:
-        value = jsonlib.loads(text)
-    except jsonlib.JSONDecodeError as exc:
-        raise ValueError(f"{purpose} is not valid JSON: {exc}") from exc
-    if not isinstance(value, dict):
-        raise ValueError(f"{purpose} must be a JSON object")
-    return value
-
-
-def _package_value(text: str) -> Optional[Dict[str, Any]]:
-    """Recognize a `.pio.json` package by the same markers the Rust classifier uses.
-
-    Deliberately does not test `powerio_version`: a package written before
-    0.9.0 states none, and it has to be recognized before it can be rejected
-    with a message that says so. The universal stored module parser owns the
-    version gate.
-    """
-    try:
-        value = jsonlib.loads(text)
-    except jsonlib.JSONDecodeError:
-        return None
-    if not isinstance(value, dict):
-        return None
-    model = value.get("model")
-    if not isinstance(model, dict):
-        return None
-    if value.get("model_kind") not in ("balanced", "multiconductor"):
-        return None
-    if not isinstance(model.get("kind"), str):
-        return None
-    return value
-
-
-def _looks_like_stored_json(text: str) -> bool:
-    """Both stored generations: the version 1 module and the legacy 0.9 package."""
-    return _module_header(text) or _package_value(text) is not None
-
-
-def _package_model_kind(value: Dict[str, Any]) -> str:
-    kind = value.get("model_kind")
-    model = value.get("model")
-    payload_kind = model.get("kind") if isinstance(model, dict) else None
-    if kind not in ("balanced", "multiconductor"):
-        raise ValueError("package `model_kind` must be `balanced` or `multiconductor`")
-    if payload_kind != kind:
-        raise ValueError("package `model_kind` does not match `model.kind`")
-    return kind
-
-
-def _json_class(text: str) -> tuple[str, Optional[str], Optional[str]]:
-    return powerio._powerio.classify_json_text(text)
-
-
-def _json_path_class(path: str) -> tuple[str, Optional[str], Optional[str]]:
-    path = _local_path(path, purpose="path")
-    try:
-        text = Path(path).read_text(encoding="utf-8")
-    except OSError as exc:
-        raise ValueError(f"cannot read input: {exc}") from exc
-    return _json_class(text)
-
-
-def _format_from_json_class(
-    status: str,
-    domain: Optional[str],
-    format: Optional[str],
+def _load_module(
     *,
     path: Optional[str] = None,
-) -> tuple[str, str]:
-    where = f" in {path}" if path is not None else ""
-    if status == "known" and domain is not None and format is not None:
-        return domain, format
-    if status == "module":
-        raise ValueError(
-            f"JSON{where} is a stored .pio.json module; pass it as "
-            '`json_format="module"` or read it with the module tools'
+    content: Optional[str] = None,
+    powerio_ir: Optional[str] = None,
+    format: Optional[str] = None,
+) -> "powerio.PioModule":
+    path, content, powerio_ir = _one_module_input(path, content, powerio_ir)
+    try:
+        if powerio_ir is not None:
+            return powerio.deserialize(io.StringIO(powerio_ir))
+        if path is not None:
+            return powerio.parse(_checked_source_path(path), format=_fmt(format))
+        return powerio.parse(
+            io.StringIO(content or ""), format=_fmt(format), name="mcp-input"
         )
-    if status == "model-json":
-        return "transmission", "model-json"
-    if status == "ambiguous":
-        raise ValueError(
-            f"ambiguous JSON markers{where}; pass `from_format` or `json_format`"
-        )
-    raise ValueError(
-        f"cannot infer JSON format{where}; pass `from_format` or `json_format`"
-    )
+    except powerio.PowerIOError as exc:
+        raise _coded_error("PowerIO input", exc) from exc
+    except sandbox.PathNotAllowed:
+        raise
+    except (OSError, ValueError, TypeError) as exc:
+        raise _coded_error("PowerIO input", exc) from exc
 
 
-def _transport_kind(text: str, json_format: Optional[str]) -> str:
-    fmt = json_format
-    if fmt in _STORED_FORMATS:
-        return "module"
-    if fmt in _MODEL_JSON_FORMATS:
-        return "model-json"
-    if fmt in _BMOPF_JSON_FORMATS:
-        return "bmopf-json"
-    if fmt is not None:
-        raise ValueError(
-            "`json_format` must be `module`, `model-json`, or `bmopf-json`, "
-            f"got {json_format!r}"
-        )
-    if _looks_like_stored_json(text):
-        return "module"
-    domain, format = _format_from_json_class(*_json_class(text))
-    if domain == "distribution":
-        return format
-    if format == "model-json":
-        return "model-json"
-    raise ValueError(
-        "`json` transport must be `model-json` or `bmopf-json`; "
-        "pass case JSON as `content` with `from_format`"
-    )
+def _serialize_module_text(module: "powerio.PioModule") -> str:
+    result = powerio.serialize(module)
+    if result.text is None:
+        raise RuntimeError("PowerIO serialization returned no text")
+    return result.text
 
 
-def _header(schema: str) -> Dict[str, Any]:
-    """The two keys every tool response opens with: what it is, and which
-    powerio release wrote it."""
-    return {"schema": schema, _VERSION_KEY: powerio.__version__}
+def _canonical_type(module: "powerio.PioModule") -> str:
+    return str(module._inner._type_name)
 
 
-# The module record severities. A legacy stored document's own validation
-# counts pass through unaltered, extra keys and all.
-_SEVERITY_KEYS = ("error", "warning", "remark", "note")
-
-
-def _severity_counts(diagnostics: list[Dict[str, Any]]) -> Dict[str, int]:
-    counts = {key: 0 for key in _SEVERITY_KEYS}
-    for item in diagnostics:
-        severity = item.get("severity")
-        if severity in counts:
-            counts[severity] += 1
-    return counts
-
-
-# A `DiagnosticV1` severity is `error`, `warning`, `remark`, or `note`; only
-# the first two are surfaced in `_Loaded.diagnostics` (the `diagnostics` tool is
-# the unfiltered view of every severity).
-_WARNING_SEVERITIES = frozenset({"warning", "error"})
-
-
-def _diagnostic_record(item: Dict[str, Any]) -> Dict[str, Any]:
-    """One diagnostic dict normalized to the published shape: `code`,
-    `severity`, `message`, `target` always (the last `None` when the finding
-    carries none), plus `id` and `spans` passed through when the native
-    record has them."""
-    out = {key: item.get(key) for key in ("code", "severity", "message", "target")}
-    for extra in ("id", "spans"):
-        value = item.get(extra)
-        if value:
-            out[extra] = value
-    return out
-
-
-def _as_diagnostic_dict(item: Any) -> Dict[str, Any]:
-    """One diagnostic as a plain dict. The network wrappers already return
-    dicts; the module channel returns native `Diagnostic` objects, which
-    read the same fields through attributes."""
-    if isinstance(item, dict):
-        return item
-    out: Dict[str, Any] = {
+def _diagnostic_record(item: Any) -> Dict[str, Any]:
+    record: Dict[str, Any] = {
         "code": item.code,
         "severity": item.severity,
         "message": item.message,
@@ -396,10 +132,10 @@ def _as_diagnostic_dict(item: Any) -> Dict[str, Any]:
     }
     identity = getattr(item, "id", None)
     if identity:
-        out["id"] = identity
+        record["id"] = identity
     spans = getattr(item, "spans", None)
     if spans:
-        out["spans"] = [
+        record["spans"] = [
             {
                 "source": span.source,
                 "byte_start": span.byte_start,
@@ -407,374 +143,77 @@ def _as_diagnostic_dict(item: Any) -> Dict[str, Any]:
             }
             for span in spans
         ]
-    return out
-
-
-def _diagnostic_records(
-    diagnostics: list[Any], keep_severities: frozenset[str]
-) -> list[Dict[str, Any]]:
-    """Every diagnostic (dict or native record) at or above the kept
-    severities, normalized to one shape."""
-    records = [_as_diagnostic_dict(item) for item in diagnostics]
-    return [
-        _diagnostic_record(item)
-        for item in records
-        if item.get("severity") in keep_severities
-    ]
-
-
-def _v1_diagnostic_record(item: Dict[str, Any]) -> Dict[str, Any]:
-    """One stored version 1 `DiagnosticV1` row narrowed to the record shape:
-    the three required fields, plus every optional field the row carries."""
-    record = {
-        "code": item.get("code"),
-        "severity": item.get("severity"),
-        "message": item.get("message"),
-        "target": item.get("target"),
-    }
-    for key in ("id", "suggested_action", "related", "spans", "details"):
-        if key in item:
-            record[key] = item[key]
     return record
 
 
-def _legacy_diagnostic_record(item: Dict[str, Any]) -> Dict[str, Any]:
-    """One legacy 0.9 `StructuredDiagnostic` row narrowed to the same record
-    shape a version 1 module uses: `element_path` becomes `target`, and the
-    legacy-only `stage`, `source_ref`, `details`, and `suggested_action`
-    fields do not carry over."""
-    record = {
-        "code": item.get("code"),
-        "severity": item.get("severity"),
-        "message": item.get("message"),
-    }
-    if "element_path" in item:
-        record["target"] = item["element_path"]
-    return record
+def _diagnostic_records(items: Any) -> list[Dict[str, Any]]:
+    return [_diagnostic_record(item) for item in items]
 
 
-def _diagnostics_payload(module_json: str, verbose: bool = False) -> Dict[str, Any]:
-    value = _json_object(module_json, purpose="module_json")
-    is_v1 = _module_header(module_json)
-    if is_v1:
-        raw_value = value.get("value")
-        payload_kind = raw_value.get("kind") if isinstance(raw_value, dict) else None
-        if not isinstance(payload_kind, str):
-            raise ValueError("the stored module document has no `value.kind`")
-        kind = {
-            "balanced_network": "balanced",
-            "multiconductor_network": "multiconductor",
-        }.get(payload_kind, payload_kind)
-    elif _package_value(module_json) is not None:
-        kind = _package_model_kind(value)
+def _diagnostics_summary(records: list[Dict[str, Any]]) -> Dict[str, Any]:
+    counts = {name: 0 for name in ("error", "warning", "remark", "note")}
+    for record in records:
+        severity = record.get("severity")
+        if severity in counts:
+            counts[severity] += 1
+    if counts["error"]:
+        status = "error"
+    elif counts["warning"]:
+        status = "warning"
+    elif counts["remark"] or counts["note"]:
+        status = "info"
     else:
-        raise ValueError("module_json is not a stored .pio.json document")
-    # Validate with the stored reader (which upgrades a released 0.9
-    # package) so schema version and consistency checks stay in one place.
-    powerio.parse_text(module_json, name="module.pio.json")
-    raw = value.get("diagnostics", [])
-    rows = [item for item in raw if isinstance(item, dict)]
-    if verbose:
-        # The stored rows exactly as written, whichever generation they came from.
-        diagnostics = rows
-    elif is_v1:
-        diagnostics = [_v1_diagnostic_record(item) for item in rows]
-    else:
-        diagnostics = [_legacy_diagnostic_record(item) for item in rows]
-    raw_validation = value.get("validation")
-    validation = raw_validation if isinstance(raw_validation, dict) else {}
-    raw_counts = validation.get("counts")
-    counts = (
-        dict(raw_counts) if isinstance(raw_counts, dict) else _severity_counts(rows)
-    )
-    status = validation.get("status") or (
-        "fatal"
-        if counts.get("fatal", 0)
-        else "error"
-        if counts.get("error", 0)
-        else "warning"
-        if counts.get("warning", 0)
-        else "info"
-        if counts.get("info", 0)
-        else "ok"
-    )
-    tallies = {
-        key: int(value)
-        for key, value in counts.items()
-        if isinstance(value, (int, float))
-    }
-    if sum(tallies.values()) == 0:
-        text = "ok: no diagnostics"
-    else:
-        parts = [f"{key}={value}" for key, value in tallies.items() if value]
-        text = f"{status}: " + ", ".join(parts)
+        status = "ok"
+    nonzero = [f"{name}={count}" for name, count in counts.items() if count]
+    text = "ok: no diagnostics" if not nonzero else f"{status}: " + ", ".join(nonzero)
+    return {"status": status, "counts": counts, "text": text}
+
+
+def _diagnostics_payload(powerio_ir: str) -> Dict[str, Any]:
+    try:
+        module = powerio.deserialize(io.StringIO(powerio_ir))
+    except (powerio.PowerIOError, ValueError, TypeError) as exc:
+        raise _coded_error("PowerIO IR", exc) from exc
+    records = _diagnostic_records(module.diagnostics)
     return {
-        **_header("powerio.diagnostics"),
-        "model_kind": kind,
-        "summary": {
-            "status": status,
-            "counts": counts,
-            "text": text,
-        },
-        "diagnostics": diagnostics,
+        "value_type": _canonical_type(module),
+        "summary": _diagnostics_summary(records),
+        "diagnostics": records,
     }
 
 
-def _module_header(text: str) -> bool:
-    """Whether the text is a stored version 1 module document."""
-    if not _jsonish(text):
-        return False
-    try:
-        value = jsonlib.loads(text)
-    except ValueError:
-        return False
-    return isinstance(value, dict) and value.get("schema") == "powerio.module"
+def _select_value(
+    value: Any,
+    *,
+    time_index: Optional[int] = None,
+    scenario_id: Optional[str] = None,
+) -> tuple[Any, Dict[str, Any]]:
+    remaining_time = time_index
+    remaining_scenario = scenario_id
+    selection: Dict[str, Any] = {}
+    while remaining_time is not None or remaining_scenario is not None:
+        if isinstance(value, powerio.TimeSeries) and remaining_time is not None:
+            selection["time_index"] = remaining_time
+            value = value[remaining_time]
+            remaining_time = None
+            continue
+        if isinstance(value, powerio.ScenarioSet) and remaining_scenario is not None:
+            selection["scenario_id"] = remaining_scenario
+            value = value[remaining_scenario]
+            remaining_scenario = None
+            continue
+        if remaining_time is not None:
+            raise ValueError("`time_index` requires a TimeSeries at that position")
+        raise ValueError("`scenario_id` requires a ScenarioSet at that position")
+    return value, selection
 
 
-def _load_module(module_json: str) -> _Loaded:
-    """Load a stored module's static network value as a network handle."""
-    try:
-        module = powerio.parse_text(module_json, name="module.pio.json")
-    except ValueError as exc:
-        raise _coded_error("module input", exc) from exc
-    kind = module.kind
-    diagnostics = _diagnostic_records(module.diagnostics, _WARNING_SEVERITIES)
-    if kind == "balanced_network":
-        return _Loaded(
-            domain="transmission",
-            network=module.as_balanced_network(),
-            diagnostics=diagnostics,
-            json_format="module",
-        )
-    if kind == "multiconductor_network":
-        return _Loaded(
-            domain="distribution",
-            network=module.as_multiconductor_network(),
-            diagnostics=diagnostics,
-            json_format="module",
-        )
-    raise ValueError(
-        f"the module carries a {kind} value; select and export one static item "
-        "with export_state first"
-    )
-
-
-def _parse_transmission(
-    path: Optional[str],
-    content: Optional[str],
-    format: Optional[str],
-    options: Optional[Dict[str, Any]] = None,
-) -> _Loaded:
-    opts = _opts(options)
-    try:
-        if _is_gridfm_format(format):
-            if path is None:
-                raise ValueError("gridfm input is a dataset directory; provide `path`")
-            module = powerio.parse_file(path, "gridfm")
-            scenario = int(opts.get("scenario", 0))
-            selected = module.export_state(scenario=str(scenario))
-            return _Loaded(
-                "transmission",
-                selected.value,
-                _diagnostic_records(module.diagnostics, _WARNING_SEVERITIES),
-                "model-json",
-                scenario,
-            )
-        if path is not None:
-            module = powerio.parse_file(
-                path, format, value_type=powerio.BalancedNetwork
-            )
-        else:
-            module = powerio.parse_text(
-                _required(content, "content"),
-                name="mcp-input",
-                format=format or "matpower",
-                value_type=powerio.BalancedNetwork,
-            )
-        net = module.value
-    except powerio.PowerIOError as exc:
-        raise _coded_error("parse failed", exc) from exc
-    except FileNotFoundError as exc:
-        raise ValueError(f"file not found: {exc}") from exc
-    except ImportError as exc:
-        raise ValueError(str(exc)) from exc
-    except OSError as exc:
-        raise ValueError(f"cannot read input: {exc}") from exc
-    return _Loaded(
-        "transmission",
-        net,
-        _diagnostic_records(module.diagnostics, _WARNING_SEVERITIES),
-        "model-json",
-    )
-
-
-def _parse_distribution(
-    path: Optional[str],
-    content: Optional[str],
-    format: Optional[str],
-    include_root: Optional[str] = None,
-) -> _Loaded:
-    if content is not None and not format:
-        status, domain, inferred = _json_class(content)
-        if status == "known" and domain == "distribution":
-            format = inferred
-        elif status == "ambiguous":
-            raise ValueError("ambiguous JSON markers; pass `from_format`")
-        else:
-            raise ValueError(
-                "`from_format` is required for inline distribution content"
-            )
-    try:
-        # BMOPF is a calculation source in the universal parser, so it
-        # correctly produces McAcOpfInstance there. The MCP JSON transport is
-        # explicitly the reusable multiconductor network projection; use the
-        # private distribution reader, then restore its records on a module.
-        if path is not None:
-            native = _private_native("dist_parse_file")(path, format, include_root)
-        else:
-            # The block above settles `format` whenever `content` is set.
-            native = _private_native("dist_parse_str")(
-                _required(content, "content"),
-                _required(format, "from_format"),
-            )
-        net = dist.MulticonductorNetwork(native)
-        module = powerio.PioModule.from_value(net)
-    except powerio.PowerIOError as exc:
-        raise _coded_error("parse failed", exc) from exc
-    except FileNotFoundError as exc:
-        raise ValueError(f"file not found: {exc}") from exc
-    except OSError as exc:
-        raise ValueError(f"cannot read input: {exc}") from exc
-    return _Loaded(
-        "distribution",
-        net,
-        _diagnostic_records(module.diagnostics, _WARNING_SEVERITIES),
-        "bmopf-json",
-    )
-
-
-def _parse_any(
-    path: Optional[str],
-    content: Optional[str],
-    format: Optional[str],
-    options: Optional[Dict[str, Any]] = None,
-) -> _Loaded:
-    _one_input(path, content)
-    include_root: Optional[str] = None
-    if path is not None:
-        path = _local_path(path, purpose="path")
-        if Path(path).is_dir():
-            sandbox.check_allowed_read_tree(Path(path), purpose="path")
-        # A dss parse widens include confinement to the root that admitted the
-        # path, so the operator's configured containment is the one policy in
-        # force. Unconfined, the case directory default stands.
-        root = sandbox.admitting_root(Path(path))
-        include_root = str(root) if root is not None else None
-    if _fmt(format) in _STORED_FORMATS:
-        if path is not None:
-            try:
-                text = Path(path).read_text(encoding="utf-8")
-            except OSError as exc:
-                raise ValueError(f"cannot read input: {exc}") from exc
-            return _load_module(text)
-        return _load_module(_required(content, "content"))
-    if _is_gridfm_format(format):
-        return _parse_transmission(path, content, format, options)
-    if _is_dist_format(format):
-        return _parse_distribution(path, content, format, include_root)
-    if path is not None:
-        p = Path(path)
-        suffix = p.suffix.lower()
-        if format is None and p.is_dir() and _looks_like_gridfm_dir(path):
-            return _parse_transmission(path, content, "gridfm", options)
-        if format is None and suffix == ".dss":
-            return _parse_distribution(path, content, format, include_root)
-        if format is None and suffix == ".json":
-            try:
-                text = Path(path).read_text(encoding="utf-8")
-            except OSError as exc:
-                raise ValueError(f"cannot read input: {exc}") from exc
-            if _looks_like_stored_json(text):
-                return _load_module(text)
-            domain, inferred = _format_from_json_class(
-                *_json_path_class(path), path=path
-            )
-            if domain == "distribution":
-                return _parse_distribution(path, content, inferred, include_root)
-            return _parse_transmission(path, content, inferred, options)
-    else:
-        text = _required(content, "content")
-        if format is None and _jsonish(text):
-            if _looks_like_stored_json(text):
-                return _load_module(text)
-            domain, inferred = _format_from_json_class(*_json_class(text))
-            if domain == "distribution":
-                return _parse_distribution(path, text, inferred)
-            return _parse_transmission(path, text, inferred, options)
-    return _parse_transmission(path, content, format, options)
-
-
-def _load_transport(text: str, json_format: Optional[str]) -> _Loaded:
-    kind = _transport_kind(text, json_format)
-    if kind == "module":
-        return _load_module(text)
-    if kind in _BMOPF_JSON_FORMATS or kind in {
-        "pmd-json",
-        "pmd_json",
-        "pmd",
-        "engineering",
-    }:
-        return _parse_distribution(None, text, kind)
-    try:
-        net = powerio.from_json(text)
-    except powerio.PowerIOError as exc:
-        raise _coded_error("parse failed", exc) from exc
-    except (ValueError, KeyError, TypeError) as exc:
-        raise ValueError(f"parse failed: {exc}") from exc
-    return _Loaded(
-        "transmission",
-        net,
-        [],
-        "model-json",
-    )
-
-
-def _load_any(
-    path: Optional[str],
-    content: Optional[str],
-    transport: Optional[str],
-    module_json: Optional[str],
-    format: Optional[str],
-    json_format: Optional[str],
-    options: Optional[Dict[str, Any]] = None,
-) -> _Loaded:
-    # The tools spell an unset text argument as "" (a bare `str` annotation
-    # keeps the SDK from re-parsing JSON text before validation); empty
-    # transport text is invalid anyway, so "" means absent here.
-    content, transport, module_json = (
-        content or None,
-        transport or None,
-        module_json or None,
-    )
-    _one_network_input(path, content, transport, module_json)
-    if module_json is not None:
-        # The stored reader upgrades a released 0.9 package one way, so both
-        # document generations load through the module path.
-        return _load_module(module_json)
-    if transport is not None:
-        return _load_transport(transport, json_format)
-    return _parse_any(path, content, format, options)
-
-
-def _transmission_summary(net: "powerio.BalancedNetwork") -> Dict[str, Any]:
-    refs = net.reference_bus_indices()
+def _balanced_summary(net: "powerio.BalancedNetwork") -> Dict[str, Any]:
     return {
-        **_header("powerio.summarize"),
         "domain": "transmission",
-        "model": "balanced",
+        "electrical_model": "balanced",
         "name": net.name,
         "source_format": net.source_format,
-        "json_format": "model-json",
         "base_mva": net.base_mva,
         "elements": {
             "buses": net.n_buses,
@@ -782,809 +221,486 @@ def _transmission_summary(net: "powerio.BalancedNetwork") -> Dict[str, Any]:
             "generators": net.n_generators,
             "loads": net.n_loads,
             "shunts": net.n_shunts,
-            "lines": None,
-            "transformers": None,
-            "sources": None,
         },
         "topology": {
             "connected_components": net.n_islands,
             "is_radial": net.is_radial,
-            "reference_buses": refs,
+            "reference_buses": net.reference_bus_indices(),
             "connectivity_report": net.calc_connectivity_report(),
         },
-        "diagnostics": [],
     }
 
 
-def _distribution_summary(net: "dist.MulticonductorNetwork") -> Dict[str, Any]:
+def _multiconductor_summary(net: "dist.MulticonductorNetwork") -> Dict[str, Any]:
     return {
-        **_header("powerio.summarize"),
         "domain": "distribution",
-        "model": "multiconductor",
+        "electrical_model": "multiconductor",
         "name": net.name,
         "source_format": net.source_format,
-        "json_format": "bmopf-json",
-        "base_mva": None,
         "elements": {
             "buses": net.n_buses,
-            "branches": None,
-            "generators": net.n_generators,
-            "loads": net.n_loads,
-            "shunts": None,
             "lines": net.n_lines,
             "transformers": net.n_transformers,
-            "sources": net.n_voltage_sources,
+            "generators": net.n_generators,
+            "loads": net.n_loads,
+            "voltage_sources": net.n_voltage_sources,
         },
-        "topology": {
-            "connected_components": None,
-            "is_radial": None,
-            "reference_buses": None,
-            "connectivity_report": None,
-        },
-        "diagnostics": [],
     }
 
 
-def _summary(loaded: _Loaded) -> Dict[str, Any]:
-    if loaded.domain == "distribution":
-        summary = _distribution_summary(loaded.network)
+def _value_summary(value: Any) -> Dict[str, Any]:
+    if isinstance(value, powerio.BalancedNetwork):
+        summary = _balanced_summary(value)
+    elif isinstance(value, dist.MulticonductorNetwork):
+        summary = _multiconductor_summary(value)
+    elif isinstance(value, powerio.TimeSeries):
+        summary = {
+            "collection": "TimeSeries",
+            "length": len(value),
+            "time_points": [
+                {
+                    "index": index,
+                    "label": point.label,
+                    "duration_seconds": point.duration_seconds,
+                }
+                for index, point in enumerate(value.time_points)
+            ],
+        }
+    elif isinstance(value, powerio.ScenarioSet):
+        summary = {
+            "collection": "ScenarioSet",
+            "length": len(value),
+            "scenarios": [
+                {"id": scenario.id, "probability": scenario.probability}
+                for scenario in value.scenarios
+            ],
+        }
     else:
-        summary = _transmission_summary(loaded.network)
-    summary["diagnostics"] = list(loaded.diagnostics)
-    return summary
+        summary = {"calculation": type(value).__name__}
+    return {"value_type": type(value).__name__, **summary}
 
 
-def _emitted_text(result: powerio.EmitResult) -> str:
-    """Return text from an in-memory emission and enforce that invariant."""
-    if result.text is None:
-        raise RuntimeError("an in-memory emission returned no text")
-    return result.text
-
-
-def _dist_json(
-    net: "dist.MulticonductorNetwork", diagnostics: list[Dict[str, Any]]
-) -> tuple[str, list[Dict[str, Any]]]:
-    """Emit bmopf-json and append the emission diagnostics."""
-    conv = powerio.PioModule.from_value(net).emit("bmopf-json")
-    return _emitted_text(conv), diagnostics + _diagnostic_records(
-        conv.diagnostics, _WARNING_SEVERITIES
-    )
-
-
-def _write_text(
-    destination: str, text: str, diagnostics: list[Dict[str, Any]], overwrite: bool
+def _summary_payload(
+    module: "powerio.PioModule",
+    *,
+    time_index: Optional[int] = None,
+    scenario_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    try:
-        mode = "w" if overwrite else "x"
-        with open(destination, mode, encoding="utf-8", newline="") as fh:
-            fh.write(text)
-    except FileExistsError:
-        raise ValueError(
-            f"refusing to overwrite existing file: {destination}; pass overwrite=true"
-        ) from None
-    except OSError as exc:
-        raise ValueError(f"emission failed: {exc}") from exc
-    return {
-        "path": os.path.abspath(destination),
-        "bytes_written": len(text.encode("utf-8")),
-        "diagnostics": diagnostics,
+    value, selection = _select_value(
+        module.value, time_index=time_index, scenario_id=scenario_id
+    )
+    payload = {
+        "module_value_type": _canonical_type(module),
+        **_value_summary(value),
+        "diagnostics": _diagnostic_records(module.diagnostics),
     }
+    if selection:
+        payload["selection"] = selection
+    return payload
 
 
-def _infer_format_from_destination(destination: str) -> str:
-    suffix = Path(destination).suffix.lower()
-    inferred = {
-        ".m": "matpower",
-        ".raw": "psse",
-        ".aux": "powerworld",
-        ".epc": "pslf",
-        ".dss": "dss",
-    }.get(suffix)
-    if inferred is not None:
-        return inferred
-    raise ValueError(
-        "cannot infer `format` from `destination`; pass `format` explicitly"
-    )
+def _artifact_payload(artifact: "powerio.Artifact") -> Dict[str, Any]:
+    item: Dict[str, Any] = {
+        "name": artifact.name,
+        "path": artifact.path,
+        "size": len(artifact.data) if artifact.data is not None else None,
+    }
+    if artifact.data is not None:
+        try:
+            item["text"] = artifact.data.decode("utf-8")
+        except UnicodeDecodeError:
+            item["data_base64"] = base64.b64encode(artifact.data).decode("ascii")
+    return item
 
 
-def _emit_conversion(
-    loaded: _Loaded, target: str
-) -> tuple[powerio.EmitResult, list[Dict[str, Any]]]:
-    target_is_distribution = _is_dist_format(_fmt(target))
-    if target_is_distribution and loaded.domain != "distribution":
-        raise ValueError(
-            "no conversion path between transmission and distribution formats"
-        )
-    if not target_is_distribution and loaded.domain != "transmission":
-        raise ValueError(
-            "no conversion path between distribution and transmission formats"
-        )
-    try:
-        conversion = powerio.PioModule.from_value(loaded.network).emit(target)
-    except powerio.PowerIOError as exc:
-        raise _coded_error("emission failed", exc) from exc
-    diagnostics = loaded.diagnostics + _diagnostic_records(
-        conversion.diagnostics, _WARNING_SEVERITIES
-    )
-    return conversion, diagnostics
+def _emit_result_payload(result: "powerio.EmitResult") -> Dict[str, Any]:
+    artifacts = [_artifact_payload(artifact) for artifact in result.artifacts]
+    payload: Dict[str, Any] = {
+        "layout": result.layout,
+        "fidelity": result.fidelity,
+        "artifacts": artifacts,
+        "diagnostics": _diagnostic_records(result.diagnostics),
+    }
+    if len(artifacts) == 1 and "text" in artifacts[0]:
+        payload["text"] = artifacts[0]["text"]
+    return payload
 
 
-def _emit_text_payload(
+def _emit_module(
+    module: "powerio.PioModule",
     format: str,
-    path: Optional[str] = None,
-    content: Optional[str] = None,
-    json: Optional[str] = None,
-    module_json: Optional[str] = None,
-    from_format: Optional[str] = None,
-    json_format: Optional[str] = None,
-    options: Optional[Dict[str, Any]] = None,
-) -> dict:
+    destination: Optional[str],
+    overwrite: bool,
+) -> Dict[str, Any]:
     if not format:
         raise ValueError("`format` is required")
-    to_l = _fmt(format)
-    if _is_pypsa_format(to_l):
-        raise ValueError("`pypsa-csv` emits a folder; pass an `emit` destination")
-    if _is_gridfm_format(to_l):
-        raise ValueError("`gridfm` emits a dataset; pass an `emit` destination")
-    loaded = _load_any(
-        path, content, json, module_json, from_format, json_format, options
-    )
-    conv, diagnostics = _emit_conversion(loaded, format)
-    return {"text": _emitted_text(conv), "diagnostics": diagnostics}
+    try:
+        if destination is None:
+            return _emit_result_payload(powerio.emit(module, format))
+        checked = sandbox.checked_path(
+            destination, purpose="destination", for_write=True
+        )
+        target = Path(checked)
+        if _fmt(format) in _DIRECTORY_FORMATS:
 
-
-def _emit_destination_payload(
-    destination: str,
-    path: Optional[str] = None,
-    content: Optional[str] = None,
-    json: Optional[str] = None,
-    module_json: Optional[str] = None,
-    format: Optional[str] = None,
-    from_format: Optional[str] = None,
-    json_format: Optional[str] = None,
-    options: Optional[Dict[str, Any]] = None,
-    overwrite: bool = False,
-) -> dict:
-    opts = _opts(options)
-    destination = _local_path(destination, purpose="destination", for_write=True)
-    target = format or _infer_format_from_destination(destination)
-    loaded = _load_any(
-        path, content, json, module_json, from_format, json_format, options
-    )
-    to_l = _fmt(target)
-
-    if _is_gridfm_format(to_l):
-        if loaded.domain != "transmission":
-            raise ValueError("gridfm export needs a transmission network")
-
-        def emit_gridfm(staging: str) -> Dict[str, Any]:
-            return dict(
-                loaded.network.emit_gridfm(
-                    staging,
-                    scenario=int(opts.get("scenario", 0)),
-                    include_y_bus=bool(opts.get("include_y_bus", True)),
-                    include_taps=bool(opts.get("include_taps", True)),
-                    include_shifts=bool(opts.get("include_shifts", True)),
+            def write_directory(staging: str) -> Dict[str, Any]:
+                result = powerio.emit(module, format, staging)
+                files = sorted(
+                    str(path) for path in Path(staging).rglob("*") if path.is_file()
                 )
-            )
+                return {
+                    "dir": staging,
+                    "files": files,
+                    **_emit_result_payload(result),
+                }
 
-        try:
-            return sandbox.staged_directory_write(destination, overwrite, emit_gridfm)
-        except ImportError as exc:
-            raise ValueError(str(exc)) from exc
-        except powerio.PowerIOError as exc:
-            raise _coded_error("emission failed", exc) from exc
-        except OSError as exc:
-            raise ValueError(f"emission failed: {exc}") from exc
-
-    if _is_pypsa_format(to_l):
-        if loaded.domain != "transmission":
-            raise ValueError("pypsa-csv export needs a transmission network")
-
-        def emit_pypsa(staging: str) -> Dict[str, Any]:
-            try:
-                result = powerio.PioModule.from_value(loaded.network).emit(
-                    target, staging
-                )
-            except powerio.PowerIOError as exc:
-                raise _coded_error("emission failed", exc) from exc
-            files = sorted(
-                str(path) for path in Path(staging).rglob("*") if path.is_file()
-            )
+            return sandbox.staged_directory_write(checked, overwrite, write_directory)
+        def write_file(staging: str) -> Dict[str, Any]:
+            result = powerio.emit(module, format, staging)
             return {
-                "dir": staging,
-                "files": files,
-                "diagnostics": loaded.diagnostics
-                + _diagnostic_records(result.diagnostics, _WARNING_SEVERITIES),
+                "path": staging,
+                **_emit_result_payload(result),
             }
 
-        try:
-            result = sandbox.staged_directory_write(
-                destination,
-                overwrite,
-                emit_pypsa,
-            )
-        except OSError as exc:
-            raise ValueError(f"emission failed: {exc}") from exc
-        return result
-
-    conv, diagnostics = _emit_conversion(loaded, target)
-    return _write_text(destination, _emitted_text(conv), diagnostics, overwrite)
-
-
-def _summary_impl(
-    path: Optional[str] = None,
-    content: Optional[str] = None,
-    json: Optional[str] = None,
-    module_json: Optional[str] = None,
-    from_format: Optional[str] = None,
-    json_format: Optional[str] = None,
-    options: Optional[Dict[str, Any]] = None,
-) -> dict:
-    return _summary(
-        _load_any(path, content, json, module_json, from_format, json_format, options)
-    )
+        return sandbox.staged_file_write(checked, overwrite, write_file)
+    except powerio.PowerIOError as exc:
+        raise _coded_error("emission failed", exc) from exc
+    except OSError as exc:
+        raise _coded_error("emission failed", exc) from exc
 
 
 def _parse_impl(
     path: Optional[str] = None,
     content: Optional[str] = None,
-    from_format: Optional[str] = None,
-    options: Optional[Dict[str, Any]] = None,
-    transport: str = "json",
-) -> dict:
-    # "" means absent, as in `_load_any`.
-    content = content or None
-    transport_l = _fmt(transport or "json")
-    if transport_l in _STORED_FORMATS:
-        module = _stored_module(path=path, content=content, from_format=from_format)
-        module_json = _emitted_text(module.emit("pio-json"))
-        loaded = _load_module(module_json)
-        summary = _summary(loaded)
-        diag = _diagnostics_payload(module_json)
-        return {
-            **_header("powerio.parse"),
-            "transport": "module",
-            "domain": loaded.domain,
-            "model": summary["model"],
-            "source_format": summary["source_format"],
-            "json_format": "module",
-            "module_json": module_json,
-            "summary": summary,
-            "diagnostics": diag["diagnostics"],
-            "diagnostics_summary": diag["summary"],
-        }
-    if transport_l != "json":
-        raise ValueError("`transport` must be `json` or `module`")
-    loaded = _parse_any(path, content, from_format, options)
-    if loaded.domain == "distribution":
-        text, diagnostics = _dist_json(loaded.network, loaded.diagnostics)
-    else:
-        text, diagnostics = loaded.network.to_json(), loaded.diagnostics
-    summary = _summary(loaded)
+    format: Optional[str] = None,
+) -> Dict[str, Any]:
+    module = _load_module(path=path, content=content, format=format)
+    records = _diagnostic_records(module.diagnostics)
     return {
-        **_header("powerio.parse"),
-        "domain": loaded.domain,
-        "model": summary["model"],
-        "source_format": summary["source_format"],
-        "json_format": loaded.json_format,
-        "json": text,
-        "summary": summary,
-        "diagnostics": diagnostics,
+        "value_type": _canonical_type(module),
+        "powerio_ir": _serialize_module_text(module),
+        "summary": _summary_payload(module),
+        "diagnostics": records,
+        "diagnostics_summary": _diagnostics_summary(records),
     }
 
 
-def _normalize_impl(
+def _summarize_impl(
+    *,
     path: Optional[str] = None,
     content: Optional[str] = None,
-    json: Optional[str] = None,
-    module_json: Optional[str] = None,
-    from_format: Optional[str] = None,
-    json_format: Optional[str] = None,
-    options: Optional[Dict[str, Any]] = None,
-    *,
-    response_schema: str = "powerio.to_normalized",
-) -> dict:
-    loaded = _load_any(
-        path, content, json, module_json, from_format, json_format, options
+    powerio_ir: Optional[str] = None,
+    format: Optional[str] = None,
+    time_index: Optional[int] = None,
+    scenario_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    module = _load_module(
+        path=path, content=content, powerio_ir=powerio_ir, format=format
     )
-    if loaded.domain != "transmission":
-        raise ValueError("normalization is not defined for distribution networks")
+    return _summary_payload(module, time_index=time_index, scenario_id=scenario_id)
+
+
+def _normalize_impl(
+    *,
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    powerio_ir: Optional[str] = None,
+    format: Optional[str] = None,
+) -> Dict[str, Any]:
+    module = _load_module(
+        path=path, content=content, powerio_ir=powerio_ir, format=format
+    )
+    value = module.value
+    if not isinstance(value, powerio.BalancedNetwork):
+        raise ValueError("to_normalized requires a BalancedNetwork")
     try:
-        norm = loaded.network.to_normalized()
+        normalized = powerio.PioModule.from_value(value.to_normalized())
     except powerio.PowerIOError as exc:
         raise _coded_error("normalization failed", exc) from exc
-    norm_module = powerio.PioModule.from_value(norm)
-    norm_diagnostics = _diagnostic_records(norm_module.diagnostics, _WARNING_SEVERITIES)
-    normalized = _Loaded("transmission", norm, norm_diagnostics, "model-json")
-    summary = _summary(normalized)
     return {
-        **_header(response_schema),
-        "domain": "transmission",
-        "model": "balanced",
-        "source_format": summary["source_format"],
-        "json_format": "model-json",
-        "json": norm.to_json(),
-        "summary": summary,
-        "diagnostics": norm_diagnostics,
+        "value_type": _canonical_type(normalized),
+        "powerio_ir": _serialize_module_text(normalized),
+        "summary": _summary_payload(normalized),
     }
 
 
 def _matrix_impl(
-    kind: str,
+    matrix: str,
+    *,
     path: Optional[str] = None,
     content: Optional[str] = None,
-    json: Optional[str] = None,
-    module_json: Optional[str] = None,
-    from_format: Optional[str] = None,
-    json_format: Optional[str] = None,
-    options: Optional[Dict[str, Any]] = None,
-    scheme: str = "bx",
-    formula: str = "series_susceptance",
-    *,
-    response_schema: str = "powerio.calc_matrix",
-) -> dict:
-    canonical = _MATRIX_KIND_ALIASES.get(kind.lower())
-    if canonical is None:
-        raise ValueError(
-            f"unknown matrix kind {kind!r}; expected one of: {_MATRIX_HELP}"
-        )
-    loaded = _load_any(
-        path, content, json, module_json, from_format, json_format, options
+    powerio_ir: Optional[str] = None,
+    format: Optional[str] = None,
+    time_index: Optional[int] = None,
+    scenario_id: Optional[str] = None,
+    scheme: _Scheme = "bx",
+    formula: _BranchSusceptanceFormula = "series_susceptance",
+) -> Dict[str, Any]:
+    canonical = matrix.lower()
+    if canonical not in _MATRIX_NAMES:
+        raise ValueError(f"unknown matrix {matrix!r}; expected one of: {_MATRIX_HELP}")
+    module = _load_module(
+        path=path, content=content, powerio_ir=powerio_ir, format=format
     )
-    if loaded.domain != "transmission":
-        raise ValueError("matrix outputs need a transmission network")
-    net = loaded.network
+    value, selection = _select_value(
+        module.value, time_index=time_index, scenario_id=scenario_id
+    )
+    if not isinstance(value, powerio.BalancedNetwork):
+        raise ValueError("matrix calculations require a BalancedNetwork")
     try:
         if canonical == "bprime":
-            mat = net.calc_bprime_matrix(scheme)
+            result = value.calc_bprime_matrix(scheme)
         elif canonical == "bdoubleprime":
-            mat = net.calc_bdoubleprime_matrix(scheme)
-        elif canonical in ("ybus_real", "ybus_imag"):
-            ybus = net.calc_admittance_matrix()
-            mat = ybus.real if canonical == "ybus_real" else ybus.imag
+            result = value.calc_bdoubleprime_matrix(scheme)
+        elif canonical in ("admittance_real", "admittance_imag"):
+            admittance = value.calc_admittance_matrix()
+            result = (
+                admittance.real
+                if canonical == "admittance_real"
+                else admittance.imag
+            )
         elif canonical == "adjacency":
-            mat = net.calc_adjacency_matrix()
+            result = value.calc_adjacency_matrix()
         elif canonical == "ptdf":
-            mat = net.calc_ptdf(formula)
+            result = value.calc_ptdf(formula)
         elif canonical == "lodf":
-            mat = net.calc_lodf(formula)
+            result = value.calc_lodf(formula)
         elif canonical == "lacpf":
-            mat = net.calc_lacpf_matrix()
-        elif canonical == "laplacian":
-            mat = net.calc_weighted_laplacian(formula)
-        else:  # pragma: no cover
-            raise ValueError(f"unhandled matrix kind {canonical!r}")
+            result = value.calc_lacpf_matrix()
+        elif canonical == "weighted_laplacian":
+            result = value.calc_weighted_laplacian(formula)
+        else:
+            raise AssertionError(f"unhandled matrix name: {canonical}")
     except ImportError as exc:
         raise ValueError(str(exc)) from exc
     except powerio.PowerIOError as exc:
         raise _coded_error("matrix calculation failed", exc) from exc
-    coo = mat.tocoo()
-    return {
-        **_header(response_schema),
-        "domain": "transmission",
-        "model": "balanced",
-        "source_format": net.source_format,
-        "json_format": loaded.json_format,
-        "diagnostics": loaded.diagnostics,
+    coo = result.tocoo()
+    payload: Dict[str, Any] = {
+        "value_type": type(value).__name__,
+        "matrix": canonical,
         "format": "coo",
-        "kind": canonical,
         "shape": [int(coo.shape[0]), int(coo.shape[1])],
         "nnz": int(coo.nnz),
         "data": coo.data.tolist(),
         "row": coo.row.tolist(),
         "col": coo.col.tolist(),
+        "diagnostics": _diagnostic_records(module.diagnostics),
     }
+    if selection:
+        payload["selection"] = selection
+    return payload
 
 
-def _display_impl(path: str, from_format: Optional[str] = None) -> dict:
-    path = _local_path(path, purpose="path")
+def _display_impl(path: str, format: Optional[str] = None) -> Dict[str, Any]:
+    checked = sandbox.checked_path(path, purpose="path")
     try:
-        data = powerio.parse_display_file(path, from_format)
-    except powerio.PowerIOError as exc:
-        raise _coded_error("parse failed", exc) from exc
-    except FileNotFoundError as exc:
-        raise ValueError(f"file not found: {exc}") from exc
-    except OSError as exc:
-        raise ValueError(f"cannot read file: {exc}") from exc
+        data = powerio.parse_display(checked, format)
+    except (powerio.PowerIOError, OSError, ValueError) as exc:
+        raise _coded_error("display parse failed", exc) from exc
     if data.kind != "powerworld":
         raise ValueError(f"unsupported display format: {data.kind!r}")
-    pwd = data.data
+    display = data.data
     return {
-        **_header("powerio.display"),
-        "domain": "display",
-        "model": "display",
-        "source_format": "powerworld-pwd",
-        "canvas": {
-            "width": pwd.canvas_width,
-            "height": pwd.canvas_height,
-        },
-        "stamp": pwd.stamp,
+        "format": "powerworld-pwd",
+        "canvas": {"width": display.canvas_width, "height": display.canvas_height},
+        "stamp": display.stamp,
         "substations": [
-            {"number": s.number, "name": s.name, "x": s.x, "y": s.y}
-            for s in pwd.substations
+            {"number": row.number, "name": row.name, "x": row.x, "y": row.y}
+            for row in display.substations
         ],
     }
 
 
-# The tool text arguments that can carry JSON (`content`, `json`,
-# `module_json`) are annotated bare `str`: under any other annotation the
-# SDK re-parses a string that reads as JSON, destroying the text. "" means
-# unset.
+_MODULE_INPUT_HELP = (
+    "Provide one of `powerio_ir`, `path`, or `content`. `powerio_ir` is "
+    "serialized PowerIO IR; `path` and `content` are grid exchange data."
+)
+
+
+@mcp.tool(
+    name="parse",
+    description="Parse grid exchange data and return serialized PowerIO IR. "
+    + _SOURCE_FORMAT_HELP,
+)
+def _parse_tool(
+    path: Optional[str] = None,
+    content: str = "",
+    format: Optional[str] = None,
+) -> dict:
+    return _parse_impl(path, content, format)
+
+
 @mcp.tool(
     name="emit",
-    description="Emit a network in one external format. Omit `destination` "
-    "to return text; provide it to emit a file or directory. "
-    + _TARGET_FORMAT_HELP
-    + " "
-    + _SOURCE_FORMAT_HELP,
+    description="Emit a PowerIO module in one grid exchange format. "
+    + _MODULE_INPUT_HELP,
 )
 def _emit_tool(
     format: str,
     destination: Optional[str] = None,
     path: Optional[str] = None,
     content: str = "",
-    json: str = "",
-    module_json: str = "",
-    from_format: Optional[str] = None,
-    json_format: _JsonFormatArg = None,
-    options: Optional[Dict[str, Any]] = None,
+    powerio_ir: str = "",
+    source_format: Optional[str] = None,
     overwrite: bool = False,
 ) -> dict:
-    if destination is None:
-        payload = _emit_text_payload(
-            format,
-            path=path,
-            content=content,
-            json=json,
-            module_json=module_json,
-            from_format=from_format,
-            json_format=json_format,
-            options=options,
-        )
-    else:
-        payload = _emit_destination_payload(
-            destination,
-            path=path,
-            content=content,
-            json=json,
-            module_json=module_json,
-            format=format,
-            from_format=from_format,
-            json_format=json_format,
-            options=options,
-            overwrite=overwrite,
-        )
-    return {**_header("powerio.emit"), **payload}
+    module = _load_module(
+        path=path, content=content, powerio_ir=powerio_ir, format=source_format
+    )
+    return {
+        **_emit_module(module, format, destination, overwrite),
+    }
 
 
 @mcp.tool(
     name="summarize",
-    description="Return canonical summary JSON for a balanced or "
-    "multiconductor model. " + _SOURCE_FORMAT_HELP,
+    description="Summarize a typed PowerIO value. Collection entries use a "
+    "normal time index or scenario ID. "
+    + _MODULE_INPUT_HELP,
 )
 def _summarize_tool(
     path: Optional[str] = None,
     content: str = "",
-    json: str = "",
-    module_json: str = "",
-    from_format: Optional[str] = None,
-    json_format: _JsonFormatArg = None,
-    options: Optional[Dict[str, Any]] = None,
+    powerio_ir: str = "",
+    format: Optional[str] = None,
+    time_index: Optional[int] = None,
+    scenario_id: Optional[str] = None,
 ) -> dict:
-    return _summary_impl(
-        path, content, json, module_json, from_format, json_format, options
+    return _summarize_impl(
+        path=path,
+        content=content,
+        powerio_ir=powerio_ir,
+        format=format,
+        time_index=time_index,
+        scenario_id=scenario_id,
     )
 
 
-@mcp.tool(
-    name="parse",
-    description="Parse a model and return legacy JSON or a stored "
-    "`.pio.json` module. " + _SOURCE_FORMAT_HELP,
-)
-def _parse_tool(
-    path: Optional[str] = None,
-    content: str = "",
-    from_format: Optional[str] = None,
-    options: Optional[Dict[str, Any]] = None,
-    transport: str = "json",
-) -> dict:
-    return _parse_impl(path, content, from_format, options, transport)
+@mcp.tool(name="diagnostics")
+def _diagnostics_tool(powerio_ir: str) -> dict:
+    """Return the diagnostics stored on a serialized PowerIO module."""
+    return _diagnostics_payload(powerio_ir)
 
 
 @mcp.tool(
     name="to_normalized",
-    description="Return a normalized transmission network in the powerio "
-    "JSON transport. " + _SOURCE_FORMAT_HELP,
+    description="Normalize a BalancedNetwork and return serialized PowerIO IR. "
+    + _MODULE_INPUT_HELP,
 )
 def _to_normalized_tool(
     path: Optional[str] = None,
     content: str = "",
-    json: str = "",
-    module_json: str = "",
-    from_format: Optional[str] = None,
-    json_format: _JsonFormatArg = None,
-    options: Optional[Dict[str, Any]] = None,
+    powerio_ir: str = "",
+    format: Optional[str] = None,
 ) -> dict:
     return _normalize_impl(
-        path,
-        content,
-        json,
-        module_json,
-        from_format,
-        json_format,
-        options,
-        response_schema="powerio.to_normalized",
+        path=path, content=content, powerio_ir=powerio_ir, format=format
     )
 
 
 @mcp.tool(
     name="calc_matrix",
-    description="Calculate a transmission matrix in COO form. " + _SOURCE_FORMAT_HELP,
+    description="Calculate a BalancedNetwork matrix in COO form. "
+    + _MODULE_INPUT_HELP,
 )
 def _calc_matrix_tool(
-    kind: Annotated[str, _MATRIX_KIND_FIELD],
+    matrix: Annotated[str, _MATRIX_KIND_FIELD],
     path: Optional[str] = None,
     content: str = "",
-    json: str = "",
-    module_json: str = "",
-    from_format: Optional[str] = None,
-    json_format: _JsonFormatArg = None,
-    options: Optional[Dict[str, Any]] = None,
-    scheme: str = "bx",
-    formula: str = "series_susceptance",
+    powerio_ir: str = "",
+    format: Optional[str] = None,
+    time_index: Optional[int] = None,
+    scenario_id: Optional[str] = None,
+    scheme: _Scheme = "bx",
+    formula: _BranchSusceptanceFormula = "series_susceptance",
 ) -> dict:
     return _matrix_impl(
-        kind,
+        matrix,
         path=path,
         content=content,
-        json=json,
-        module_json=module_json,
-        from_format=from_format,
-        json_format=json_format,
-        options=options,
+        powerio_ir=powerio_ir,
+        format=format,
+        time_index=time_index,
+        scenario_id=scenario_id,
         scheme=scheme,
         formula=formula,
-        response_schema="powerio.calc_matrix",
     )
 
 
-@mcp.tool(name="diagnostics")
-def _diagnostics_tool(module_json: str, verbose: bool = False) -> dict:
-    """Return module diagnostics as structured JSON plus a concise summary."""
-    return _diagnostics_payload(module_json, verbose)
-
-
 @mcp.tool(name="display")
-def _display_tool(path: str, from_format: Optional[str] = None) -> dict:
-    """Parse a display artifact and return canonical display JSON."""
-    return _display_impl(path, from_format)
-
-
-def _stored_module(
-    module_json: Optional[str] = None,
-    path: Optional[str] = None,
-    content: Optional[str] = None,
-    from_format: Optional[str] = None,
-) -> "powerio.PioModule":
-    """One module input: stored `.pio.json` text, a case path, or case text."""
-    supplied = [value for value in (module_json, path, content) if value]
-    if len(supplied) != 1:
-        raise ValueError("pass exactly one of module_json, path, and content")
-    try:
-        if module_json:
-            return powerio.parse_text(module_json, name="module.pio.json")
-        if path is not None:
-            local = _local_path(path, purpose="module input")
-            root = sandbox.admitting_root(Path(local))
-            return powerio.parse_file(
-                local,
-                _fmt(from_format),
-                include_root=None if root is None else str(root),
-            )
-        return powerio.parse_text(
-            content or "",
-            name="mcp-input",
-            format=_fmt(from_format),
-        )
-    except ValueError as exc:
-        raise _coded_error("module input", exc) from exc
-
-
-def _selected_args(
-    time_position: Optional[int], scenario: Optional[str]
-) -> Dict[str, Any]:
-    if (time_position is None) == (scenario is None):
-        raise ValueError("pass exactly one of time_position and scenario")
-    return {"time_position": time_position, "scenario": scenario}
-
-
-_MODULE_INPUT_HELP = (
-    "Input is exactly one of `module_json` (stored `.pio.json` text; a "
-    "released 0.9 package upgrades one way on read), `path`, or `content` "
-    "(case data parsed into a module; `from_format` selects the reader)."
-)
-
-
-@mcp.tool(
-    name="inspect",
-    description="Inspect a module's typed value and discover the operations "
-    "that apply to it. " + _MODULE_INPUT_HELP,
-)
-def _inspect_tool(
-    module_json: str = "",
-    path: Optional[str] = None,
-    content: str = "",
-    from_format: Optional[str] = None,
-) -> dict:
-    module = _stored_module(module_json, path, content, from_format)
-    return {**_header("powerio.inspect"), **module.inspect()}
-
-
-@mcp.tool(
-    name="list_states",
-    description="List the exact typed time point labels or scenario IDs a "
-    "stored module's value can select. " + _MODULE_INPUT_HELP,
-)
-def _list_states_tool(
-    module_json: str = "",
-    path: Optional[str] = None,
-    content: str = "",
-    from_format: Optional[str] = None,
-) -> dict:
-    module = _stored_module(module_json, path, content, from_format)
-    try:
-        inventory = module.list_states()
-    except ValueError as exc:
-        raise _coded_error("list states", exc) from exc
-    return {**_header("powerio.list_states"), "kind": module.kind, **inventory}
-
-
-def _inspect_state_payload(
-    module_json: Optional[str] = None,
-    path: Optional[str] = None,
-    content: Optional[str] = None,
-    from_format: Optional[str] = None,
-    time_position: Optional[int] = None,
-    scenario: Optional[str] = None,
-) -> dict:
-    module = _stored_module(module_json, path, content, from_format)
-    keys = _selected_args(time_position, scenario)
-    try:
-        selected = module.inspect_state(**keys)
-    except ValueError as exc:
-        raise _coded_error("state inspection", exc) from exc
-    return {**keys, "selected": selected}
-
-
-@mcp.tool(
-    name="inspect_state",
-    description="Inspect one existing typed item by time position or scenario "
-    "ID. Inspection never clones the collection or serializes it; "
-    "`export_state` is the separate materialization. " + _MODULE_INPUT_HELP,
-)
-def _inspect_state_tool(
-    module_json: str = "",
-    path: Optional[str] = None,
-    content: str = "",
-    from_format: Optional[str] = None,
-    time_position: Optional[int] = None,
-    scenario: Optional[str] = None,
-) -> dict:
-    return {
-        **_header("powerio.inspect_state"),
-        **_inspect_state_payload(
-            module_json,
-            path,
-            content,
-            from_format,
-            time_position,
-            scenario,
-        ),
-    }
-
-
-@mcp.tool(
-    name="export_state",
-    description="Export one selected time point or scenario as an "
-    "independent static module document, with the selection stated in its "
-    "history. " + _MODULE_INPUT_HELP,
-)
-def _export_state_tool(
-    module_json: str = "",
-    path: Optional[str] = None,
-    content: str = "",
-    from_format: Optional[str] = None,
-    time_position: Optional[int] = None,
-    scenario: Optional[str] = None,
-) -> dict:
-    module = _stored_module(module_json, path, content, from_format)
-    keys = _selected_args(time_position, scenario)
-    try:
-        exported = module.export_state(**keys)
-    except ValueError as exc:
-        raise _coded_error("state export", exc) from exc
-    return {
-        **_header("powerio.export_state"),
-        **keys,
-        "kind": exported.kind,
-        "module_json": _emitted_text(exported.emit("pio-json")),
-    }
-
-
-def _to_balanced_report_payload(
-    module_json: Optional[str] = None,
-    path: Optional[str] = None,
-    content: Optional[str] = None,
-    from_format: Optional[str] = None,
-    base_mva: float = 100.0,
-) -> dict:
-    module = _stored_module(module_json, path, content, from_format)
-    try:
-        readiness = module.to_balanced_report(base_mva)
-    except ValueError as exc:
-        raise _coded_error("lowering inspection", exc) from exc
-    return readiness
+def _display_tool(path: str, format: Optional[str] = None) -> dict:
+    """Parse a PowerWorld display file."""
+    return _display_impl(path, format)
 
 
 @mcp.tool(
     name="to_balanced_report",
-    description="Report whether a multiconductor module can transform to a "
-    "balanced network: blockers, assumptions, approximations, and "
-    "unrepresentable fields. " + _MODULE_INPUT_HELP,
+    description="Report whether a MulticonductorNetwork can become a "
+    "BalancedNetwork. "
+    + _MODULE_INPUT_HELP,
 )
 def _to_balanced_report_tool(
-    module_json: str = "",
+    powerio_ir: str = "",
     path: Optional[str] = None,
     content: str = "",
-    from_format: Optional[str] = None,
+    format: Optional[str] = None,
     base_mva: float = 100.0,
 ) -> dict:
+    module = _load_module(
+        powerio_ir=powerio_ir, path=path, content=content, format=format
+    )
+    try:
+        report = module.to_balanced_report(base_mva)
+    except (powerio.PowerIOError, ValueError) as exc:
+        raise _coded_error("balanced conversion report", exc) from exc
+    return report
+
+
+@mcp.tool(
+    name="to_balanced",
+    description="Convert a MulticonductorNetwork to a BalancedNetwork and "
+    "return serialized PowerIO IR. "
+    + _MODULE_INPUT_HELP,
+)
+def _to_balanced_tool(
+    powerio_ir: str = "",
+    path: Optional[str] = None,
+    content: str = "",
+    format: Optional[str] = None,
+    base_mva: float = 100.0,
+) -> dict:
+    module = _load_module(
+        powerio_ir=powerio_ir, path=path, content=content, format=format
+    )
+    try:
+        converted = module.to_balanced(base_mva)
+    except (powerio.PowerIOError, ValueError) as exc:
+        raise _coded_error("balanced conversion", exc) from exc
     return {
-        **_header("powerio.to_balanced_report"),
-        **_to_balanced_report_payload(
-            module_json, path, content, from_format, base_mva
-        ),
+        "value_type": _canonical_type(converted),
+        "powerio_ir": _serialize_module_text(converted),
+        "summary": _summary_payload(converted),
     }
 
 
 @mcp.tool(
     name="about",
-    description="Version and schema identity of this powerio build: the "
-    "release, the stored module schema, the BMOPF schema, and the tool "
-    "names this server exposes.",
+    description="Return the PowerIO version, IR version, feature set, and MCP tools.",
 )
 def _about_tool() -> dict:
     return {
-        **_header("powerio.about"),
         **powerio.versions(),
         "tools": sorted(tool.name for tool in mcp._tool_manager.list_tools()),
     }
 
 
-@mcp.tool(
-    name="to_balanced",
-    description="Explicitly lower a multiconductor module to a balanced "
-    "module document. Records and source ownership carry over; the pass "
-    "appends its findings and a Transform history entry. " + _MODULE_INPUT_HELP,
-)
-def _to_balanced_tool(
-    module_json: str = "",
+def parse(
     path: Optional[str] = None,
-    content: str = "",
-    from_format: Optional[str] = None,
-    base_mva: float = 100.0,
+    content: Optional[str] = None,
+    format: Optional[str] = None,
 ) -> dict:
-    module = _stored_module(module_json, path, content, from_format)
-    try:
-        lowered = module.to_balanced(base_mva)
-    except ValueError as exc:
-        raise _coded_error("balanced lowering", exc) from exc
-    return {
-        **_header("powerio.to_balanced"),
-        "kind": lowered.kind,
-        "module_json": _emitted_text(lowered.emit("pio-json")),
-    }
+    return _parse_impl(path, content, format)
 
 
 def emit(
@@ -1592,120 +708,79 @@ def emit(
     destination: Optional[str] = None,
     path: Optional[str] = None,
     content: Optional[str] = None,
-    json: Optional[str] = None,
-    module_json: Optional[str] = None,
-    from_format: Optional[str] = None,
-    json_format: Optional[str] = None,
-    options: Optional[Dict[str, Any]] = None,
+    powerio_ir: Optional[str] = None,
+    source_format: Optional[str] = None,
     overwrite: bool = False,
 ) -> dict:
-    if destination is None:
-        payload = _emit_text_payload(
-            format,
-            path=path,
-            content=content,
-            json=json,
-            module_json=module_json,
-            from_format=from_format,
-            json_format=json_format,
-            options=options,
-        )
-    else:
-        payload = _emit_destination_payload(
-            destination,
-            path=path,
-            content=content,
-            json=json,
-            module_json=module_json,
-            format=format,
-            from_format=from_format,
-            json_format=json_format,
-            options=options,
-            overwrite=overwrite,
-        )
-    return {**_header("powerio.emit"), **payload}
+    module = _load_module(
+        path=path, content=content, powerio_ir=powerio_ir, format=source_format
+    )
+    return {
+        **_emit_module(module, format, destination, overwrite),
+    }
 
 
 def summarize(
     path: Optional[str] = None,
     content: Optional[str] = None,
-    json: Optional[str] = None,
-    module_json: Optional[str] = None,
-    from_format: Optional[str] = None,
-    json_format: Optional[str] = None,
-    options: Optional[Dict[str, Any]] = None,
+    powerio_ir: Optional[str] = None,
+    format: Optional[str] = None,
+    time_index: Optional[int] = None,
+    scenario_id: Optional[str] = None,
 ) -> dict:
-    return _summary_impl(
-        path, content, json, module_json, from_format, json_format, options
+    return _summarize_impl(
+        path=path,
+        content=content,
+        powerio_ir=powerio_ir,
+        format=format,
+        time_index=time_index,
+        scenario_id=scenario_id,
     )
-
-
-def parse(
-    path: Optional[str] = None,
-    content: Optional[str] = None,
-    from_format: Optional[str] = None,
-    options: Optional[Dict[str, Any]] = None,
-    transport: str = "json",
-) -> dict:
-    return _parse_impl(path, content, from_format, options, transport)
 
 
 def to_normalized(
     path: Optional[str] = None,
     content: Optional[str] = None,
-    json: Optional[str] = None,
-    module_json: Optional[str] = None,
-    from_format: Optional[str] = None,
-    json_format: Optional[str] = None,
-    options: Optional[Dict[str, Any]] = None,
+    powerio_ir: Optional[str] = None,
+    format: Optional[str] = None,
 ) -> dict:
     return _normalize_impl(
-        path,
-        content,
-        json,
-        module_json,
-        from_format,
-        json_format,
-        options,
-        response_schema="powerio.to_normalized",
+        path=path, content=content, powerio_ir=powerio_ir, format=format
     )
 
 
 def calc_matrix(
-    kind: str,
+    matrix: str,
     path: Optional[str] = None,
     content: Optional[str] = None,
-    json: Optional[str] = None,
-    module_json: Optional[str] = None,
-    from_format: Optional[str] = None,
-    json_format: Optional[str] = None,
-    options: Optional[Dict[str, Any]] = None,
-    scheme: str = "bx",
-    formula: str = "series_susceptance",
+    powerio_ir: Optional[str] = None,
+    format: Optional[str] = None,
+    time_index: Optional[int] = None,
+    scenario_id: Optional[str] = None,
+    scheme: _Scheme = "bx",
+    formula: _BranchSusceptanceFormula = "series_susceptance",
 ) -> dict:
     return _matrix_impl(
-        kind,
+        matrix,
         path=path,
         content=content,
-        json=json,
-        module_json=module_json,
-        from_format=from_format,
-        json_format=json_format,
-        options=options,
+        powerio_ir=powerio_ir,
+        format=format,
+        time_index=time_index,
+        scenario_id=scenario_id,
         scheme=scheme,
         formula=formula,
-        response_schema="powerio.calc_matrix",
     )
 
 
-def display(path: str, from_format: Optional[str] = None) -> dict:
-    return _display_impl(path, from_format)
+def display(path: str, format: Optional[str] = None) -> dict:
+    return _display_impl(path, format)
 
 
-def diagnostics(module_json: str, verbose: bool = False) -> dict:
-    return _diagnostics_payload(module_json, verbose)
+def diagnostics(powerio_ir: str) -> dict:
+    return _diagnostics_payload(powerio_ir)
 
 
 def main() -> None:
-    """Console-script entry point: serve the tools over stdio."""
+    """Serve the PowerIO MCP tools over stdio."""
     mcp.run()

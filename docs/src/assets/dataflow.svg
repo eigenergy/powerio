@@ -1,110 +1,115 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
-<svg width="745pt" height="278pt"
- viewBox="0.00 0.00 745.00 278.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
-<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 274)">
+<svg width="781pt" height="294pt"
+ viewBox="0.00 0.00 781.00 294.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 290)">
 <title>powerio_dataflow</title>
-<polygon fill="#f4f6f8" stroke="none" points="-4,4 -4,-274 740.5,-274 740.5,4 -4,4"/>
+<polygon fill="#f4f6f8" stroke="none" points="-4,4 -4,-290 776.5,-290 776.5,4 -4,4"/>
 <g id="node1" class="node">
 <title>source</title>
-<path fill="#f4f6f8" stroke="#4a5568" d="M118,-182C118,-182 12,-182 12,-182 6,-182 0,-176 0,-170 0,-170 0,-150 0,-150 0,-144 6,-138 12,-138 12,-138 118,-138 118,-138 124,-138 130,-144 130,-150 130,-150 130,-170 130,-170 130,-176 124,-182 118,-182"/>
-<text xml:space="preserve" text-anchor="middle" x="65" y="-167.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">Source</text>
-<text xml:space="preserve" text-anchor="middle" x="65" y="-155.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">named immutable bytes</text>
-<text xml:space="preserve" text-anchor="middle" x="65" y="-143.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">(file, directory, memory)</text>
+<path fill="#f4f6f8" stroke="#4a5568" d="M118,-158C118,-158 12,-158 12,-158 6,-158 0,-152 0,-146 0,-146 0,-126 0,-126 0,-120 6,-114 12,-114 12,-114 118,-114 118,-114 124,-114 130,-120 130,-126 130,-126 130,-146 130,-146 130,-152 124,-158 118,-158"/>
+<text xml:space="preserve" text-anchor="middle" x="65" y="-143.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">Source</text>
+<text xml:space="preserve" text-anchor="middle" x="65" y="-131.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">named immutable bytes</text>
+<text xml:space="preserve" text-anchor="middle" x="65" y="-119.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">(file, directory, memory)</text>
 </g>
 <g id="node2" class="node">
 <title>parse</title>
-<path fill="#f4f6f8" stroke="#4a5568" d="M280.5,-178C280.5,-178 179,-178 179,-178 173,-178 167,-172 167,-166 167,-166 167,-154 167,-154 167,-148 173,-142 179,-142 179,-142 280.5,-142 280.5,-142 286.5,-142 292.5,-148 292.5,-154 292.5,-154 292.5,-166 292.5,-166 292.5,-172 286.5,-178 280.5,-178"/>
-<text xml:space="preserve" text-anchor="middle" x="229.75" y="-161.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">parse</text>
-<text xml:space="preserve" text-anchor="middle" x="229.75" y="-149.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">format + kind detection</text>
+<path fill="#f4f6f8" stroke="#4a5568" d="M294.75,-158C294.75,-158 179,-158 179,-158 173,-158 167,-152 167,-146 167,-146 167,-126 167,-126 167,-120 173,-114 179,-114 179,-114 294.75,-114 294.75,-114 300.75,-114 306.75,-120 306.75,-126 306.75,-126 306.75,-146 306.75,-146 306.75,-152 300.75,-158 294.75,-158"/>
+<text xml:space="preserve" text-anchor="middle" x="236.88" y="-143.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">parse</text>
+<text xml:space="preserve" text-anchor="middle" x="236.88" y="-131.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">grid exchange format</text>
+<text xml:space="preserve" text-anchor="middle" x="236.88" y="-119.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">+ structural type detection</text>
 </g>
 <g id="edge1" class="edge">
 <title>source&#45;&gt;parse</title>
-<path fill="none" stroke="#4a5568" d="M130.32,-160C138.57,-160 147.06,-160 155.44,-160"/>
-<polygon fill="#4a5568" stroke="#4a5568" points="155.24,-163.5 165.24,-160 155.24,-156.5 155.24,-163.5"/>
+<path fill="none" stroke="#4a5568" d="M130.22,-136C138.43,-136 146.9,-136 155.32,-136"/>
+<polygon fill="#4a5568" stroke="#4a5568" points="155.23,-139.5 165.23,-136 155.23,-132.5 155.23,-139.5"/>
 </g>
 <g id="node3" class="node">
 <title>module</title>
-<path fill="#f4f6f8" stroke="#4a5568" d="M470,-182C470,-182 341.5,-182 341.5,-182 335.5,-182 329.5,-176 329.5,-170 329.5,-170 329.5,-150 329.5,-150 329.5,-144 335.5,-138 341.5,-138 341.5,-138 470,-138 470,-138 476,-138 482,-144 482,-150 482,-150 482,-170 482,-170 482,-176 476,-182 470,-182"/>
-<text xml:space="preserve" text-anchor="middle" x="405.75" y="-167.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">PioModule&lt;T&gt;</text>
-<text xml:space="preserve" text-anchor="middle" x="405.75" y="-155.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">value + source + diagnostics</text>
-<text xml:space="preserve" text-anchor="middle" x="405.75" y="-143.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">+ history</text>
+<path fill="#f4f6f8" stroke="#4a5568" d="M484.25,-158C484.25,-158 355.75,-158 355.75,-158 349.75,-158 343.75,-152 343.75,-146 343.75,-146 343.75,-126 343.75,-126 343.75,-120 349.75,-114 355.75,-114 355.75,-114 484.25,-114 484.25,-114 490.25,-114 496.25,-120 496.25,-126 496.25,-126 496.25,-146 496.25,-146 496.25,-152 490.25,-158 484.25,-158"/>
+<text xml:space="preserve" text-anchor="middle" x="420" y="-143.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">PioModule&lt;T&gt;</text>
+<text xml:space="preserve" text-anchor="middle" x="420" y="-131.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">value + source + diagnostics</text>
+<text xml:space="preserve" text-anchor="middle" x="420" y="-119.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">+ history</text>
 </g>
 <g id="edge2" class="edge">
 <title>parse&#45;&gt;module</title>
-<path fill="none" stroke="#4a5568" d="M292.59,-160C300.71,-160 309.16,-160 317.61,-160"/>
-<polygon fill="#4a5568" stroke="#4a5568" points="317.58,-163.5 327.58,-160 317.58,-156.5 317.58,-163.5"/>
+<path fill="none" stroke="#4a5568" d="M307.13,-136C315.3,-136 323.71,-136 332.09,-136"/>
+<polygon fill="#4a5568" stroke="#4a5568" points="331.94,-139.5 341.94,-136 331.94,-132.5 331.94,-139.5"/>
 </g>
 <g id="node4" class="node">
-<title>select</title>
-<path fill="#f4f6f8" stroke="#4a5568" d="M704.25,-270C704.25,-270 611.75,-270 611.75,-270 605.75,-270 599.75,-264 599.75,-258 599.75,-258 599.75,-246 599.75,-246 599.75,-240 605.75,-234 611.75,-234 611.75,-234 704.25,-234 704.25,-234 710.25,-234 716.25,-240 716.25,-246 716.25,-246 716.25,-258 716.25,-258 716.25,-264 710.25,-270 704.25,-270"/>
-<text xml:space="preserve" text-anchor="middle" x="658" y="-253.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">state selection</text>
-<text xml:space="preserve" text-anchor="middle" x="658" y="-241.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">(time point, scenario)</text>
+<title>access</title>
+<path fill="#f4f6f8" stroke="#4a5568" d="M760.5,-286C760.5,-286 608,-286 608,-286 602,-286 596,-280 596,-274 596,-274 596,-254 596,-254 596,-248 602,-242 608,-242 608,-242 760.5,-242 760.5,-242 766.5,-242 772.5,-248 772.5,-254 772.5,-254 772.5,-274 772.5,-274 772.5,-280 766.5,-286 760.5,-286"/>
+<text xml:space="preserve" text-anchor="middle" x="684.25" y="-271.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">index / iterate</text>
+<text xml:space="preserve" text-anchor="middle" x="684.25" y="-259.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">TimeSeries&lt;T&gt;, ScenarioSet&lt;T&gt;</text>
+<text xml:space="preserve" text-anchor="middle" x="684.25" y="-247.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">owner rooted typed entry</text>
 </g>
 <g id="edge3" class="edge">
-<title>module&#45;&gt;select</title>
-<path fill="none" stroke="#4a5568" d="M430.03,-182.37C447.76,-198.06 473.56,-218.09 500,-229 527.53,-240.36 559.81,-246.22 587.91,-249.21"/>
-<polygon fill="#4a5568" stroke="#4a5568" points="587.47,-252.69 597.76,-250.15 588.14,-245.72 587.47,-252.69"/>
-<text xml:space="preserve" text-anchor="middle" x="530.75" y="-246.31" font-family="Helvetica,sans-Serif" font-size="9.00" fill="#2d3748">series and sets</text>
+<title>module&#45;&gt;access</title>
+<path fill="none" stroke="#4a5568" d="M446.05,-158.24C464.03,-173.32 489.39,-192.83 514.25,-206 537.99,-218.58 565.02,-229.29 590.39,-237.95"/>
+<polygon fill="#4a5568" stroke="#4a5568" points="589.11,-241.22 599.71,-241.06 591.33,-234.58 589.11,-241.22"/>
+<text xml:space="preserve" text-anchor="middle" x="546.12" y="-234.49" font-family="Helvetica,sans-Serif" font-size="9.00" fill="#2d3748">collection value</text>
 </g>
 <g id="node5" class="node">
-<title>lower</title>
-<path fill="#f4f6f8" stroke="#4a5568" d="M719.25,-216.12C719.25,-216.12 596.75,-216.12 596.75,-216.12 590.75,-216.12 584.75,-210.12 584.75,-204.12 584.75,-204.12 584.75,-181.88 584.75,-181.88 584.75,-175.88 590.75,-169.88 596.75,-169.88 596.75,-169.88 719.25,-169.88 719.25,-169.88 725.25,-169.88 731.25,-175.88 731.25,-181.88 731.25,-181.88 731.25,-204.12 731.25,-204.12 731.25,-210.12 725.25,-216.12 719.25,-216.12"/>
-<text xml:space="preserve" text-anchor="middle" x="658" y="-201.68" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">lowering</text>
-<text xml:space="preserve" text-anchor="middle" x="658" y="-189.68" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">multiconductor → balanced</text>
-<text xml:space="preserve" text-anchor="middle" x="658" y="-175.43" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">(explicit, lossy, reported)</text>
+<title>transform</title>
+<path fill="#f4f6f8" stroke="#4a5568" d="M745.5,-224.12C745.5,-224.12 623,-224.12 623,-224.12 617,-224.12 611,-218.12 611,-212.12 611,-212.12 611,-189.88 611,-189.88 611,-183.88 617,-177.88 623,-177.88 623,-177.88 745.5,-177.88 745.5,-177.88 751.5,-177.88 757.5,-183.88 757.5,-189.88 757.5,-189.88 757.5,-212.12 757.5,-212.12 757.5,-218.12 751.5,-224.12 745.5,-224.12"/>
+<text xml:space="preserve" text-anchor="middle" x="684.25" y="-209.68" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">to_balanced</text>
+<text xml:space="preserve" text-anchor="middle" x="684.25" y="-197.68" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">multiconductor → balanced</text>
+<text xml:space="preserve" text-anchor="middle" x="684.25" y="-183.43" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">(explicit, lossy, reported)</text>
 </g>
-<g id="edge5" class="edge">
-<title>module&#45;&gt;lower</title>
-<path fill="none" stroke="#4a5568" d="M482.17,-169.95C510.89,-173.73 543.77,-178.07 573.21,-181.95"/>
-<polygon fill="#4a5568" stroke="#4a5568" points="572.44,-185.38 582.81,-183.22 573.35,-178.44 572.44,-185.38"/>
-<text xml:space="preserve" text-anchor="middle" x="530.75" y="-180.66" font-family="Helvetica,sans-Serif" font-size="9.00" fill="#2d3748">multiconductor</text>
+<g id="edge4" class="edge">
+<title>module&#45;&gt;transform</title>
+<path fill="none" stroke="#4a5568" d="M461.21,-158.4C477.27,-166.42 496.2,-174.76 514.25,-180 541.45,-187.89 571.96,-192.81 599.5,-195.89"/>
+<polygon fill="#4a5568" stroke="#4a5568" points="598.88,-199.34 609.19,-196.9 599.6,-192.38 598.88,-199.34"/>
+<text xml:space="preserve" text-anchor="middle" x="546.12" y="-193.72" font-family="Helvetica,sans-Serif" font-size="9.00" fill="#2d3748">multiconductor</text>
 </g>
 <g id="node6" class="node">
 <title>matrices</title>
-<path fill="#f4f6f8" stroke="#4a5568" d="M709.12,-152C709.12,-152 606.88,-152 606.88,-152 600.88,-152 594.88,-146 594.88,-140 594.88,-140 594.88,-128 594.88,-128 594.88,-122 600.88,-116 606.88,-116 606.88,-116 709.12,-116 709.12,-116 715.12,-116 721.12,-122 721.12,-128 721.12,-128 721.12,-140 721.12,-140 721.12,-146 715.12,-152 709.12,-152"/>
-<text xml:space="preserve" text-anchor="middle" x="658" y="-135.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">matrix data</text>
-<text xml:space="preserve" text-anchor="middle" x="658" y="-123.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">with element mappings</text>
+<path fill="#f4f6f8" stroke="#4a5568" d="M735.38,-160C735.38,-160 633.12,-160 633.12,-160 627.12,-160 621.12,-154 621.12,-148 621.12,-148 621.12,-128 621.12,-128 621.12,-122 627.12,-116 633.12,-116 633.12,-116 735.38,-116 735.38,-116 741.38,-116 747.38,-122 747.38,-128 747.38,-128 747.38,-148 747.38,-148 747.38,-154 741.38,-160 735.38,-160"/>
+<text xml:space="preserve" text-anchor="middle" x="684.25" y="-145.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">calc_*</text>
+<text xml:space="preserve" text-anchor="middle" x="684.25" y="-133.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">matrix or vector</text>
+<text xml:space="preserve" text-anchor="middle" x="684.25" y="-121.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">with element mappings</text>
 </g>
-<g id="edge7" class="edge">
+<g id="edge6" class="edge">
 <title>module&#45;&gt;matrices</title>
-<path fill="none" stroke="#4a5568" d="M482.3,-150.02C488.28,-149.31 494.24,-148.63 500,-148 527.13,-145.05 556.96,-142.27 583.25,-139.98"/>
-<polygon fill="#4a5568" stroke="#4a5568" points="583.51,-143.47 593.17,-139.12 582.91,-136.5 583.51,-143.47"/>
+<path fill="none" stroke="#4a5568" d="M496.5,-136.58C532,-136.85 574.18,-137.17 609.46,-137.44"/>
+<polygon fill="#4a5568" stroke="#4a5568" points="609.12,-140.93 619.14,-137.51 609.17,-133.93 609.12,-140.93"/>
 </g>
 <g id="node7" class="node">
-<title>write</title>
-<path fill="#f4f6f8" stroke="#4a5568" d="M724.5,-98C724.5,-98 591.5,-98 591.5,-98 585.5,-98 579.5,-92 579.5,-86 579.5,-86 579.5,-66 579.5,-66 579.5,-60 585.5,-54 591.5,-54 591.5,-54 724.5,-54 724.5,-54 730.5,-54 736.5,-60 736.5,-66 736.5,-66 736.5,-86 736.5,-86 736.5,-92 730.5,-98 724.5,-98"/>
-<text xml:space="preserve" text-anchor="middle" x="658" y="-83.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">write</text>
-<text xml:space="preserve" text-anchor="middle" x="658" y="-71.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">same format: byte exact echo</text>
-<text xml:space="preserve" text-anchor="middle" x="658" y="-59.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">cross format: reported losses</text>
+<title>emit</title>
+<path fill="#f4f6f8" stroke="#4a5568" d="M749.62,-98C749.62,-98 618.88,-98 618.88,-98 612.88,-98 606.88,-92 606.88,-86 606.88,-86 606.88,-66 606.88,-66 606.88,-60 612.88,-54 618.88,-54 618.88,-54 749.62,-54 749.62,-54 755.62,-54 761.62,-60 761.62,-66 761.62,-66 761.62,-86 761.62,-86 761.62,-92 755.62,-98 749.62,-98"/>
+<text xml:space="preserve" text-anchor="middle" x="684.25" y="-83.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">emit</text>
+<text xml:space="preserve" text-anchor="middle" x="684.25" y="-71.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">same format: byte exact</text>
+<text xml:space="preserve" text-anchor="middle" x="684.25" y="-59.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">cross format: reported losses</text>
 </g>
-<g id="edge8" class="edge">
-<title>module&#45;&gt;write</title>
-<path fill="none" stroke="#4a5568" d="M473.48,-137.6C506.02,-126.68 545.34,-113.48 579.22,-102.11"/>
-<polygon fill="#4a5568" stroke="#4a5568" points="580.22,-105.47 588.58,-98.97 577.99,-98.83 580.22,-105.47"/>
+<g id="edge7" class="edge">
+<title>module&#45;&gt;emit</title>
+<path fill="none" stroke="#4a5568" d="M496.5,-118.73C527.36,-111.67 563.27,-103.45 595.31,-96.12"/>
+<polygon fill="#4a5568" stroke="#4a5568" points="596.02,-99.55 604.99,-93.91 594.46,-92.72 596.02,-99.55"/>
 </g>
 <g id="node8" class="node">
 <title>stored</title>
-<path fill="#f4f6f8" stroke="#4a5568" d="M714.38,-36C714.38,-36 601.62,-36 601.62,-36 595.62,-36 589.62,-30 589.62,-24 589.62,-24 589.62,-12 589.62,-12 589.62,-6 595.62,0 601.62,0 601.62,0 714.38,0 714.38,0 720.38,0 726.38,-6 726.38,-12 726.38,-12 726.38,-24 726.38,-24 726.38,-30 720.38,-36 714.38,-36"/>
-<text xml:space="preserve" text-anchor="middle" x="658" y="-19.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">.pio.json</text>
-<text xml:space="preserve" text-anchor="middle" x="658" y="-7.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">stored module, schema 1</text>
+<path fill="#f4f6f8" stroke="#4a5568" d="M743.25,-36C743.25,-36 625.25,-36 625.25,-36 619.25,-36 613.25,-30 613.25,-24 613.25,-24 613.25,-12 613.25,-12 613.25,-6 619.25,0 625.25,0 625.25,0 743.25,0 743.25,0 749.25,0 755.25,-6 755.25,-12 755.25,-12 755.25,-24 755.25,-24 755.25,-30 749.25,-36 743.25,-36"/>
+<text xml:space="preserve" text-anchor="middle" x="684.25" y="-19.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">PowerIO IR</text>
+<text xml:space="preserve" text-anchor="middle" x="684.25" y="-7.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">powerio.module, version 1</text>
+</g>
+<g id="edge8" class="edge">
+<title>module&#45;&gt;stored</title>
+<path fill="none" stroke="#4a5568" d="M458.96,-113.69C493.78,-93.85 547.2,-64.98 596,-45 600.01,-43.36 604.16,-41.76 608.38,-40.21"/>
+<polygon fill="#4a5568" stroke="#4a5568" points="609.25,-43.61 617.51,-36.98 606.92,-37.01 609.25,-43.61"/>
+<text xml:space="preserve" text-anchor="middle" x="546.12" y="-82.93" font-family="Helvetica,sans-Serif" font-size="9.00" fill="#2d3748">serialize</text>
+</g>
+<g id="edge5" class="edge">
+<title>transform&#45;&gt;module</title>
+<path fill="none" stroke="#4a5568" stroke-dasharray="5,2" d="M610.72,-178.25C599.8,-175.08 588.63,-171.97 578,-169.25 555.27,-163.43 530.5,-157.83 507.5,-152.95"/>
+<polygon fill="#4a5568" stroke="#4a5568" points="508.35,-149.56 497.85,-150.93 506.92,-156.41 508.35,-149.56"/>
+<text xml:space="preserve" text-anchor="middle" x="546.12" y="-170.45" font-family="Helvetica,sans-Serif" font-size="9.00" fill="#2d3748">derived module</text>
 </g>
 <g id="edge9" class="edge">
-<title>module&#45;&gt;stored</title>
-<path fill="none" stroke="#4a5568" d="M444.4,-130.87C478.31,-105.65 530.25,-69.48 579.5,-45 582.37,-43.57 585.34,-42.19 588.36,-40.85"/>
-<polygon fill="#4a5568" stroke="#4a5568" points="442.44,-127.97 436.54,-136.77 446.64,-133.57 442.44,-127.97"/>
-<polygon fill="#4a5568" stroke="#4a5568" points="589.52,-44.16 597.39,-37.06 586.81,-37.7 589.52,-44.16"/>
-</g>
-<g id="edge4" class="edge">
-<title>select&#45;&gt;module</title>
-<path fill="none" stroke="#4a5568" stroke-dasharray="5,2" d="M603.58,-233.58C595.5,-230.74 587.27,-227.81 579.5,-225 545.26,-212.6 507.37,-198.39 475.83,-186.44"/>
-<polygon fill="#4a5568" stroke="#4a5568" points="477.39,-183.29 466.8,-183.01 474.91,-189.83 477.39,-183.29"/>
-</g>
-<g id="edge6" class="edge">
-<title>lower&#45;&gt;module</title>
-<path fill="none" stroke="#4a5568" stroke-dasharray="5,2" d="M584.4,-177.72C576.69,-176.35 568.95,-175.07 561.5,-174 539.67,-170.85 516.01,-168.28 493.9,-166.25"/>
-<polygon fill="#4a5568" stroke="#4a5568" points="494.28,-162.77 484.01,-165.37 493.66,-169.74 494.28,-162.77"/>
+<title>stored&#45;&gt;module</title>
+<path fill="none" stroke="#4a5568" d="M612.76,-16.42C581.2,-18.28 544.39,-24.15 514.25,-39.25 484.5,-54.15 458.96,-82.48 442.17,-104.65"/>
+<polygon fill="#4a5568" stroke="#4a5568" points="439.5,-102.36 436.41,-112.49 445.15,-106.5 439.5,-102.36"/>
+<text xml:space="preserve" text-anchor="middle" x="546.12" y="-40.45" font-family="Helvetica,sans-Serif" font-size="9.00" fill="#2d3748">deserialize</text>
 </g>
 </g>
 </svg>

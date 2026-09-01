@@ -189,6 +189,7 @@ pub(super) fn bus_row(row: &[f64], i: usize) -> Result<(Bus, Option<Load>, Optio
         g: gs,
         b: bs,
         in_service,
+        section_count: None,
         control: None,
         uid: None,
         extras: Extras::new(),
@@ -251,6 +252,7 @@ pub(super) fn gen_row(row: &[f64], i: usize) -> Result<Generator> {
         cost: None,
         caps,
         regulated_bus: None,
+        active_power_control: None,
         uid: None,
     })
 }
@@ -314,6 +316,7 @@ pub(super) fn storage_row(row: &[f64], i: usize) -> Result<Storage> {
         p_loss: row[storage_col::P_LOSS],
         q_loss: row[storage_col::Q_LOSS],
         in_service: is_in_service(row[storage_col::STATUS]),
+        active_power_control: None,
         uid: None,
         extras: Extras::new(),
     })
@@ -339,6 +342,11 @@ pub(super) fn hvdc_row(row: &[f64], i: usize) -> Result<Hvdc> {
         qmaxt: row[dcline_col::QMAXT],
         loss0: row[dcline_col::LOSS0],
         loss1: row[dcline_col::LOSS1],
+        resistance_ohm: None,
+        nominal_voltage_kv: None,
+        converters_mode: None,
+        converter1: None,
+        converter2: None,
         cost: None,
         uid: None,
         extras: Extras::new(),

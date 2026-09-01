@@ -25,9 +25,9 @@ YTOL_REL = 1e-7
 
 
 def check_case(path: Path) -> str:
-    module = powerio.parse_file(path, value_type=powerio.BalancedNetwork)
+    module = powerio.parse(path)
     case = module.value
-    conv = module.emit("pandapower-json")
+    conv = powerio.emit(module, "pandapower-json")
     net = from_json_string(conv.text)
 
     problems = []

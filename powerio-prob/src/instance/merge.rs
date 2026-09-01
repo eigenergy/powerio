@@ -13,7 +13,7 @@ use powerio_core::{Diagnostic, Error};
 use powerio_tx::{BalancedNetwork, BusId};
 
 use crate::diagnostics::codes;
-use crate::state::row_identity;
+use crate::operating::row_identity;
 
 /// What one merge did: which buses now name which surviving bus, and which
 /// branches the merge removed.

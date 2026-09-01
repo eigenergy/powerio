@@ -129,10 +129,8 @@ def count_features(case) -> dict[str, int]:
 
 def parse_case(path: Path, fmt: str):
     if fmt == "pypsa-csv-folder":
-        return powerio.parse_file(
-            path, format="pypsa-csv", value_type=powerio.BalancedNetwork
-        )
-    return powerio.parse_file(path, value_type=powerio.BalancedNetwork)
+        return powerio.parse(path, format="pypsa-csv")
+    return powerio.parse(path)
 
 
 def scan_one(root_label: str, root: Path, path: Path, fmt: str) -> Row:

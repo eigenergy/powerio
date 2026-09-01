@@ -379,16 +379,23 @@ impl Net {
                 let Some(target) = powerio_tx::format::parse_target_format(to) else {
                     return Err(format!("no writer for {to}"));
                 };
-                let emission = match catch_panic(|| crate::compat::emit_tx_value(net, target)) {
+                let module = powerio_core::PioModule::new(net.clone());
+                let emission = match catch_panic(|| {
+                    crate::module_io::emit_balanced_module(
+                        &module,
+                        target,
+                        &powerio_tx::EmitOptions::default(),
+                    )
+                }) {
                     Ok(Ok(emission)) => emission,
                     Ok(Err(err)) => return Err(format!("emit: {err}")),
                     Err(message) => return Err(format!("emit panicked: {message}")),
                 };
                 warnings.extend(emission.render_diagnostics());
-                match catch_panic(|| crate::compat::parse_str(&emission.text, to)) {
+                match catch_panic(|| crate::module_io::load_balanced_memory(&emission.text, to)) {
                     Ok(Ok(parsed)) => {
-                        warnings.extend(parsed.render_diagnostics());
-                        Ok(Self::Balanced(parsed.network))
+                        warnings.extend(powerio_core::render_diagnostics(&parsed.diagnostics));
+                        Ok(Self::Balanced(parsed.into_value()))
                     }
                     Ok(Err(err)) => Err(format!("readback: {err}")),
                     Err(message) => Err(format!("readback panicked: {message}")),
@@ -398,7 +405,10 @@ impl Net {
                 let Some(target) = powerio_dist::parse_dist_target_format(to) else {
                     return Err(format!("no writer for {to}"));
                 };
-                let emission = match catch_panic(|| crate::compat::emit_dist_value(net, target)) {
+                let module = powerio_core::PioModule::new(net.clone());
+                let emission = match catch_panic(|| {
+                    crate::module_io::emit_multiconductor_module(&module, target)
+                }) {
                     Ok(Ok(emission)) => emission,
                     Ok(Err(err)) => return Err(format!("emit: {err}")),
                     Err(message) => return Err(format!("emit panicked: {message}")),
@@ -409,10 +419,12 @@ impl Net {
                 if super::has_include(&emission.text) {
                     return Err("emitted deck redirects to include files".to_string());
                 }
-                match catch_panic(|| crate::compat::dist_parse_str(&emission.text, to)) {
+                match catch_panic(|| {
+                    crate::module_io::load_multiconductor_memory(&emission.text, to)
+                }) {
                     Ok(Ok(parsed)) => {
-                        warnings.extend(parsed.warnings.iter().cloned());
-                        Ok(Self::Dist(parsed.network))
+                        warnings.extend(powerio_core::render_diagnostics(&parsed.diagnostics));
+                        Ok(Self::Dist(parsed.into_value()))
                     }
                     Ok(Err(err)) => Err(format!("readback: {err}")),
                     Err(message) => Err(format!("readback panicked: {message}")),

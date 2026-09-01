@@ -14,11 +14,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     BalancedNetwork, Branch, BranchCharging, Bus, BusId, BusType, Extras as BalancedExtras,
-    Generator, Load, PioValueKind, Shunt, SourceFormat,
+    Generator, GeoApplyReport, GeoLayer, Load, Shunt, SourceFormat,
 };
 use powerio_core::{Diagnostic, DiagnosticSeverity, HistoryEntry, HistoryId, HistoryKind};
 use powerio_dist::{
-    DistBus, DistLine, DistLineCode, DistLoadVoltageModel, Mat, MulticonductorNetwork,
+    ConductorMatrix, DistBus, DistLine, DistLineCode, DistLoadVoltageModel, MulticonductorNetwork,
 };
 
 use crate::codes;
@@ -181,7 +181,7 @@ impl std::fmt::Display for MulticonductorToBalancedError {
 
 impl std::error::Error for MulticonductorToBalancedError {}
 
-/// Check whether a multiconductor package is ready for the lowering pass.
+/// Check whether a multiconductor network is ready for the lowering pass.
 ///
 /// This is a preflight only: it reports the assumptions and blockers that the
 /// lowering would need to account for, but it does not produce a balanced model
@@ -216,7 +216,7 @@ pub fn to_balanced_network_report(
 /// Lower a transparent three phase multiconductor network to a balanced model.
 ///
 /// The pass is explicit. It does not run from parsers, emitters, matrix builders,
-/// bindings, or package deserialization. Unsupported inputs return structured
+/// bindings, or PowerIO IR deserialization. Unsupported inputs return structured
 /// `TRANSFORM.MULTI_TO_BALANCED.*` diagnostics in [`MulticonductorToBalancedError`].
 pub fn to_balanced_network(
     net: &MulticonductorNetwork,
@@ -243,8 +243,8 @@ pub fn to_balanced_report(
     module: &powerio_core::PioModule<crate::PioValue>,
     options: MulticonductorToBalancedOptions,
 ) -> Result<MulticonductorToBalancedReport, powerio_core::Error> {
-    let crate::PioValue::MulticonductorNetwork(net) = module.value() else {
-        return Err(wrong_kind_error(module.value()));
+    let crate::PioValue::MulticonductorNetwork(net) = &module.value else {
+        return Err(wrong_kind_error(&module.value));
     };
     Ok(to_balanced_network_report(net, options))
 }
@@ -275,7 +275,7 @@ pub fn to_balanced(
         Box<MulticonductorToBalancedError>,
     ),
 > {
-    let crate::PioValue::MulticonductorNetwork(net) = module.value() else {
+    let crate::PioValue::MulticonductorNetwork(net) = &module.value else {
         let error = MulticonductorToBalancedError::new(
             options,
             &[Diagnostic::of(
@@ -283,7 +283,7 @@ pub fn to_balanced(
                 format!(
                     "the module carries a {} value; the balanced lowering takes a \
                      multiconductor network",
-                    module.value().kind().as_str()
+                    module.value.type_name()
                 ),
             )],
         );
@@ -303,7 +303,7 @@ pub fn to_balanced(
     // before the value is consumed, so the additions below hold by
     // construction and a cap-edge input is refused with its module intact.
     let diagnostics_room =
-        powerio_core::limits::MAX_MODULE_DIAGNOSTICS.saturating_sub(module.diagnostics().len());
+        powerio_core::limits::MAX_MODULE_DIAGNOSTICS.saturating_sub(module.diagnostics.len());
     let history_room =
         powerio_core::limits::MAX_MODULE_HISTORY_ENTRIES.saturating_sub(module.history().len());
     if diagnostics.len() > diagnostics_room || history_room == 0 {
@@ -343,6 +343,253 @@ pub fn to_balanced(
     Ok(module)
 }
 
+fn derive_balanced_calculation<I>(
+    module: &powerio_core::PioModule<crate::PioValue>,
+    operation: &'static str,
+    output_type: &'static str,
+    build: impl FnOnce(BalancedNetwork) -> Result<I, powerio_core::Error>,
+) -> Result<powerio_core::PioModule<I>, powerio_core::Error> {
+    if !matches!(module.value, crate::PioValue::BalancedNetwork(_)) {
+        return Err(powerio_core::Error::new(
+            &codes::REQUEST_MODULE_WRONG_MODEL_KIND,
+            format!(
+                "{operation} requires powerio.BalancedNetwork; the module contains {}",
+                module.value.type_name()
+            ),
+        ));
+    }
+    let history = HistoryEntry::new(
+        unused_history_id(module, operation),
+        HistoryKind::Transform,
+        operation,
+    )?
+    .with_input_type("powerio.BalancedNetwork")?
+    .with_output_type(output_type)?;
+    let producer = powerio_core::Producer::new("powerio", crate::VERSION)?;
+    module.clone().try_derive_value(producer, history, |value| {
+        let crate::PioValue::BalancedNetwork(network) = value else {
+            unreachable!("the value type was checked before derivation")
+        };
+        build(network)
+    })
+}
+
+fn derive_multiconductor_calculation<I>(
+    module: &powerio_core::PioModule<crate::PioValue>,
+    operation: &'static str,
+    output_type: &'static str,
+    build: impl FnOnce(MulticonductorNetwork) -> Result<I, powerio_core::Error>,
+) -> Result<powerio_core::PioModule<I>, powerio_core::Error> {
+    if !matches!(module.value, crate::PioValue::MulticonductorNetwork(_)) {
+        return Err(powerio_core::Error::new(
+            &codes::REQUEST_MODULE_WRONG_MODEL_KIND,
+            format!(
+                "{operation} requires powerio.MulticonductorNetwork; the module contains {}",
+                module.value.type_name()
+            ),
+        ));
+    }
+    let history = HistoryEntry::new(
+        unused_history_id(module, operation),
+        HistoryKind::Transform,
+        operation,
+    )?
+    .with_input_type("powerio.MulticonductorNetwork")?
+    .with_output_type(output_type)?;
+    let producer = powerio_core::Producer::new("powerio", crate::VERSION)?;
+    module.clone().try_derive_value(producer, history, |value| {
+        let crate::PioValue::MulticonductorNetwork(network) = value else {
+            unreachable!("the value type was checked before derivation")
+        };
+        build(network)
+    })
+}
+
+/// Apply one geographic layer to a network module.
+///
+/// Balanced bus points and branch routes use
+/// [`BalancedNetwork::apply_geo_layer`]. Multiconductor coordinates use the
+/// same shared matching rules through [`crate::dist_geo::apply_dist_geo_layer`].
+/// The source module is unchanged. The returned module clears retained bytes
+/// and source mappings, preserves its other records, and appends one
+/// `apply_geo_layer` history entry.
+///
+/// # Errors
+/// The module does not contain a balanced or multiconductor network, or its
+/// records cannot accept the new history entry.
+pub fn apply_geo_layer(
+    module: &powerio_core::PioModule<crate::PioValue>,
+    layer: &GeoLayer,
+) -> Result<(powerio_core::PioModule<crate::PioValue>, GeoApplyReport), powerio_core::Error> {
+    let type_name = match &module.value {
+        crate::PioValue::BalancedNetwork(_) => "powerio.BalancedNetwork",
+        crate::PioValue::MulticonductorNetwork(_) => "powerio.MulticonductorNetwork",
+        value => {
+            return Err(powerio_core::Error::new(
+                &codes::REQUEST_MODULE_WRONG_MODEL_KIND,
+                format!(
+                    "apply_geo_layer requires powerio.BalancedNetwork or \
+                     powerio.MulticonductorNetwork; the module contains {}",
+                    value.type_name()
+                ),
+            ));
+        }
+    };
+    let history = HistoryEntry::new(
+        unused_history_id(module, "apply-geo-layer"),
+        HistoryKind::Transform,
+        "apply_geo_layer",
+    )?
+    .with_input_type(type_name)?
+    .with_output_type(type_name)?;
+    let producer = powerio_core::Producer::new("powerio", crate::VERSION)?;
+    let mut report = None;
+    let derived = module
+        .clone()
+        .try_derive_value(producer, history, |mut value| {
+            let applied = match &mut value {
+                crate::PioValue::BalancedNetwork(network) => network.apply_geo_layer(layer),
+                crate::PioValue::MulticonductorNetwork(network) => {
+                    crate::dist_geo::apply_dist_geo_layer(network, layer)
+                }
+                value => {
+                    return Err(powerio_core::Error::new(
+                        &codes::REQUEST_MODULE_WRONG_MODEL_KIND,
+                        format!(
+                            "apply_geo_layer requires powerio.BalancedNetwork or \
+                             powerio.MulticonductorNetwork; the module contains {}",
+                            value.type_name()
+                        ),
+                    ));
+                }
+            };
+            report = Some(applied);
+            Ok(value)
+        })?;
+    let report = report.ok_or_else(|| {
+        powerio_core::Error::new(
+            &codes::REQUEST_MODULE_WRONG_MODEL_KIND,
+            "apply_geo_layer did not receive a network value",
+        )
+    })?;
+    Ok((derived, report))
+}
+
+/// Construct a DC power flow calculation from a balanced network module.
+/// Module diagnostics, source descriptions, provenance, and prior history are
+/// preserved. Retained source bytes and value locators are cleared because
+/// they describe the network rather than the calculation instance.
+pub fn to_dc_pf_instance(
+    module: &powerio_core::PioModule<crate::PioValue>,
+) -> Result<powerio_core::PioModule<powerio_prob::DcPfInstance>, powerio_core::Error> {
+    if matches!(module.value, crate::PioValue::DcPfInstance(_)) {
+        return Ok(module.clone().map_value(|value| match value {
+            crate::PioValue::DcPfInstance(instance) => instance,
+            _ => unreachable!("the value type was checked before extraction"),
+        }));
+    }
+    derive_balanced_calculation(
+        module,
+        "to_dc_pf_instance",
+        "powerio.DcPfInstance",
+        powerio_prob::DcPfInstance::from_network,
+    )
+}
+
+/// Construct an AC power flow calculation from a balanced network module.
+pub fn to_ac_pf_instance(
+    module: &powerio_core::PioModule<crate::PioValue>,
+) -> Result<powerio_core::PioModule<powerio_prob::AcPfInstance>, powerio_core::Error> {
+    if matches!(module.value, crate::PioValue::AcPfInstance(_)) {
+        return Ok(module.clone().map_value(|value| match value {
+            crate::PioValue::AcPfInstance(instance) => instance,
+            _ => unreachable!("the value type was checked before extraction"),
+        }));
+    }
+    derive_balanced_calculation(
+        module,
+        "to_ac_pf_instance",
+        "powerio.AcPfInstance",
+        powerio_prob::AcPfInstance::from_network,
+    )
+}
+
+/// Construct a DC optimal power flow calculation from a balanced network
+/// module.
+pub fn to_dc_opf_instance(
+    module: &powerio_core::PioModule<crate::PioValue>,
+) -> Result<powerio_core::PioModule<powerio_prob::DcOpfInstance>, powerio_core::Error> {
+    if matches!(module.value, crate::PioValue::DcOpfInstance(_)) {
+        return Ok(module.clone().map_value(|value| match value {
+            crate::PioValue::DcOpfInstance(instance) => instance,
+            _ => unreachable!("the value type was checked before extraction"),
+        }));
+    }
+    derive_balanced_calculation(
+        module,
+        "to_dc_opf_instance",
+        "powerio.DcOpfInstance",
+        powerio_prob::DcOpfInstance::from_network,
+    )
+}
+
+/// Construct an AC optimal power flow calculation from a balanced network
+/// module.
+pub fn to_ac_opf_instance(
+    module: &powerio_core::PioModule<crate::PioValue>,
+) -> Result<powerio_core::PioModule<powerio_prob::AcOpfInstance>, powerio_core::Error> {
+    if matches!(module.value, crate::PioValue::AcOpfInstance(_)) {
+        return Ok(module.clone().map_value(|value| match value {
+            crate::PioValue::AcOpfInstance(instance) => instance,
+            _ => unreachable!("the value type was checked before extraction"),
+        }));
+    }
+    derive_balanced_calculation(
+        module,
+        "to_ac_opf_instance",
+        "powerio.AcOpfInstance",
+        powerio_prob::AcOpfInstance::from_network,
+    )
+}
+
+/// Construct a multiconductor AC power flow calculation from a
+/// multiconductor network module.
+pub fn to_mc_ac_pf_instance(
+    module: &powerio_core::PioModule<crate::PioValue>,
+) -> Result<powerio_core::PioModule<powerio_prob::McAcPfInstance>, powerio_core::Error> {
+    if matches!(module.value, crate::PioValue::McAcPfInstance(_)) {
+        return Ok(module.clone().map_value(|value| match value {
+            crate::PioValue::McAcPfInstance(instance) => instance,
+            _ => unreachable!("the value type was checked before extraction"),
+        }));
+    }
+    derive_multiconductor_calculation(
+        module,
+        "to_mc_ac_pf_instance",
+        "powerio.McAcPfInstance",
+        powerio_prob::McAcPfInstance::from_network,
+    )
+}
+
+/// Construct a multiconductor AC optimal power flow calculation from a
+/// multiconductor network module.
+pub fn to_mc_ac_opf_instance(
+    module: &powerio_core::PioModule<crate::PioValue>,
+) -> Result<powerio_core::PioModule<powerio_prob::McAcOpfInstance>, powerio_core::Error> {
+    if matches!(module.value, crate::PioValue::McAcOpfInstance(_)) {
+        return Ok(module.clone().map_value(|value| match value {
+            crate::PioValue::McAcOpfInstance(instance) => instance,
+            _ => unreachable!("the value type was checked before extraction"),
+        }));
+    }
+    derive_multiconductor_calculation(
+        module,
+        "to_mc_ac_opf_instance",
+        "powerio.McAcOpfInstance",
+        powerio_prob::McAcOpfInstance::from_network,
+    )
+}
+
 /// Cap a history note list at the record limit, replacing the overflow with
 /// one note stating how many entries were elided, and normalize every kept
 /// note to the record layer's requirements: NUL replaced, never empty, and
@@ -373,10 +620,10 @@ fn transform_history(
         records.options.clone().into_iter().collect();
     let mut entry = HistoryEntry::new(id, HistoryKind::Transform, "to_balanced")
         .expect("the static history name is valid")
-        .with_input_kind(PioValueKind::MulticonductorNetwork.as_str())
-        .expect("the registered input kind is valid")
-        .with_output_kind(PioValueKind::BalancedNetwork.as_str())
-        .expect("the registered output kind is valid")
+        .with_input_type("powerio.MulticonductorNetwork")
+        .expect("the registered input type is valid")
+        .with_output_type("powerio.BalancedNetwork")
+        .expect("the registered output type is valid")
         .with_parameters(parameters)
         .expect("the transformation has a bounded parameter set");
 
@@ -415,15 +662,15 @@ fn copy_history_with_id(history: &HistoryEntry, id: HistoryId) -> HistoryEntry {
         .expect("the existing history name is valid")
         .with_parameters(history.parameters().clone())
         .expect("the existing parameter set is valid");
-    if let Some(kind) = history.input_kind() {
+    if let Some(type_name) = history.input_type() {
         copied = copied
-            .with_input_kind(kind)
-            .expect("the existing input kind is valid");
+            .with_input_type(type_name)
+            .expect("the existing input type is valid");
     }
-    if let Some(kind) = history.output_kind() {
+    if let Some(type_name) = history.output_type() {
         copied = copied
-            .with_output_kind(kind)
-            .expect("the existing output kind is valid");
+            .with_output_type(type_name)
+            .expect("the existing output type is valid");
     }
     for assumption in history.assumptions() {
         copied = copied
@@ -494,7 +741,7 @@ fn wrong_kind_error(value: &crate::PioValue) -> powerio_core::Error {
         format!(
             "the module carries a {} value; the balanced lowering takes a multiconductor \
              network",
-            value.kind().as_str()
+            value.type_name()
         ),
     )
 }
@@ -1596,7 +1843,11 @@ fn positive_sequence_voltage(
     Some(seq[1])
 }
 
-fn complex_matrix(g_or_r: &Mat, b_or_x: &Mat, scale: f64) -> Vec<Vec<Complex64>> {
+fn complex_matrix(
+    g_or_r: &ConductorMatrix,
+    b_or_x: &ConductorMatrix,
+    scale: f64,
+) -> Vec<Vec<Complex64>> {
     g_or_r
         .iter()
         .zip(b_or_x.iter())
@@ -1834,7 +2085,11 @@ fn limiting_amps(i_max: &[f64], active: &[usize]) -> Option<f64> {
         .reduce(f64::min)
 }
 
-fn partial_phase_admittance(g: &Mat, b: &Mat, active: &[usize]) -> Complex64 {
+fn partial_phase_admittance(
+    g: &ConductorMatrix,
+    b: &ConductorMatrix,
+    active: &[usize],
+) -> Complex64 {
     let mut total = Complex64::new(0.0, 0.0);
     for &idx in active {
         let Some(g_row) = g.get(idx) else {
@@ -2029,7 +2284,7 @@ format!(
     }
 }
 
-fn square_matrix_shape(matrix: &Mat, n: usize) -> bool {
+fn square_matrix_shape(matrix: &ConductorMatrix, n: usize) -> bool {
     matrix.len() == n && matrix.iter().all(|row| row.len() == n)
 }
 

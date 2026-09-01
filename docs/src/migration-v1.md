@@ -1,144 +1,204 @@
-# Migrating from 0.10
+# From the 1.0 beta to 1.0
 
-PowerIO 1.0 corrects OPF preparation and solution contracts found during the
-0.10 consumer integration. The `.pio.json` schema remains `powerio.module/1`,
-but the stored OPF result fields and the Rust, Python, and Julia APIs changed.
-C ABI 6 remains compatible.
+PowerIO 0.10.0 was the public 1.0 beta. PowerIO 1.0 makes the final source and
+ABI break. The
+changes remove duplicate operations and expose the same concepts in Rust,
+Python, Julia, and C.
 
-## OPF preparation follows the instance
+## Parse one `Source`
 
-`build_dc_opf_preparation` and `build_ac_opf_preparation` compile the objective
-and active constraints declared on the instance. The supported balanced
-objectives are an empty objective, which produces a feasibility problem with
-zero cost coefficients, and one `network_generator_cost` term. Other terms
-return `BUILD.OPF.OBJECTIVE_UNSUPPORTED` instead of silently using network
-costs.
+Every grid exchange format enters through `parse`.
 
-Generator space preparation preserves a convex MATPOWER model 1 cost in
-`generators.piecewise_linear`, aligned with the generator identities and dense
-columns. Its breakpoint powers use the preparation power unit; objective
-values are unchanged. The polynomial `q`, `c`, and `c0` entries for that
-generator are zero. Malformed and nonconvex curves return typed errors instead
-of being fitted or silently convexified.
+```rust
+let source = powerio::Source::open("case9.m")?;
+let module = powerio::parse(source, None)?;
 
-`calc_nodal_generator_data` returns `Result`. It rejects a piecewise curve
-because one nodal quadratic cannot represent it. `emit_dcopf_bundle` uses that
-projection and returns the same error; use the generator space preparation for
-an exact piecewise objective. The released `nodal_generator_data` and
-`write_dcopf_bundle` names were removed in 1.0.
+let source = powerio::Source::from_memory("case9.m", bytes)?;
+let module = powerio::parse(source, Some("matpower"))?;
+# Ok::<(), powerio::Error>(())
+```
 
-Each preparation carries stable identities, analysis rows, and source rows
-beside its dense bus, generator, and branch arrays. Source rows use
-`Vec<Option<usize>>`: an original row is `Some(row)`, while a bus or branch
-created by three winding transformer lowering is `None`. Synthetic winding
-identities use `{transformer identity}/winding:{1|2|3}`. A bus explicitly
-typed isolated states no OPF equation; it and every incident element are
-absent from the dense arrays, while the source module remains unchanged.
-Active constraint masks use the same dense order. An unknown identity in
-`ConstraintSelection::Only` returns
-`BUILD.OPF.CONSTRAINT_IDENTITY_UNKNOWN`.
+Python accepts a path, file object, or bytes-like object. A `str` names a
+path; use `io.StringIO` for text already in memory.
 
-## Economic result fields state derivatives
+```python
+module = powerio.parse("case9.m")
+module = powerio.parse(io.StringIO(text), format="matpower", name="case9.m")
+module = powerio.parse(binary_data, format="pwb", name="case.pwb")
+```
 
-The 0.10 price fields and signed branch dual are replaced in 1.0.
-Use these builders and accessors:
+Julia uses multiple dispatch on a path string, `IO`, or
+`AbstractVector{UInt8}`.
 
-- `with_bus_active_power_marginals` records the optimal objective derivative
-  per added MW of demand.
-- AC `with_bus_reactive_power_marginals` records the derivative per added MVAr.
-- `with_branch_thermal_limit_multipliers(from, to)` records the two
-  nonnegative thermal constraint multipliers separately.
+```julia
+module_ = parse("case9.m")
+module_ = parse(IOBuffer(text); format="matpower", name="case9.m")
+module_ = parse(bytes; format="pwb", name="case.pwb")
+```
 
-The bus value has objective units per selected power unit. Call it an LMP only
-when the instance objective supports that interpretation. For a shared branch
-rating, the local derivative of the optimal objective is the negative sum of
-the from and to multipliers.
+C constructs a `PioSource` with `pio_source_open` or
+`pio_source_from_memory`, then calls `pio_parse`.
 
-Stored solution fields use
-`bus_active_power_marginal`, `bus_reactive_power_marginal`,
-`branch_from_limit_multiplier`, and `branch_to_limit_multiplier`.
+The following 0.10 names are removed:
 
-The 0.10 names still read. `bus_price`, `bus_active_price`, and
-`bus_reactive_price` were documented as locational marginal prices: the
-optimal objective change per added demand under the same positive sign, so
-they map directly to the corresponding demand marginal. The signed DC
-`branch_flow_dual` used `from - to`; 1.0 maps a positive value to the from
-bound and the magnitude of a negative value to the to bound, then records
-`READ.MODULE.BRANCH_DUAL_SPLIT`. If a branch had a zero or unlimited rating,
-the original pair is not uniquely recoverable; the deterministic split keeps
-the signed value without claiming otherwise.
+- `parse_file`
+- `parse_text`
+- `parse_str`
+- `parse_bytes`
 
-## Differentiability regularization moved to the solver
+## Read the module fields
 
-`ObjectiveTerm::DifferentiabilityRegularization` is removed. It did not name a
-portable mathematical quantity or unit. Put numerical regularization in solver
-formulation settings and report the declared PowerIO objective separately.
+`PioModule<T>` contains the typed value and its diagnostics, producer, sources,
+source mappings, history, and extensions. Rust, Python, and Julia expose
+`value` and `diagnostics` as fields or properties.
 
-A 0.10 module containing the retired token still decodes. PowerIO removes that
-term and adds the warning `READ.MODULE.OBJECTIVE_TERM_RETIRED`; it does not fail
-with an opaque unknown enum variant.
+Rust dynamic parsing returns `PioModule<PioValue>`. Match `module.value`
+directly. Python uses `isinstance(module.value, BalancedNetwork)`. Julia
+dispatches on `PioModule{BalancedNetwork}` or another concrete parameter.
 
-## Replacing the network on an instance
+`PioValueKind`, `.kind`, `try_into_typed`, `IntoTypedModule`, and binding
+wrappers that duplicate language type inspection are removed. The C ABI uses
+structural names such as `powerio.BalancedNetwork` and exact type predicates;
+it has no ordinal value kind enum.
 
-Use `DcOpfInstance::with_network` or `AcOpfInstance::with_network` when a
-counterfactual changes network parameters. The checked consuming method keeps
-the objective, constraints, branch susceptance formula, and any compatible
-initial state. This prevents a solution for an amended network from being
-attached to an instance rebuilt from defaults.
+Diagnostics belong to the module. Python and Julia no longer provide a
+callable `diagnostics()` operation.
 
-## DC sign conventions
+## Emit formats; serialize PowerIO IR
 
-The public DC susceptance remains negative for an inductive branch. OPF
-preparation exposes the distinct positive solver edge weight. The formulas and
-matrix shapes are listed in [Matrices and Graphs](matrices.md).
+`emit` is the only operation that produces a grid exchange format.
 
-The advanced solver preparation names now state that distinction. Use
-`DcBranchParameters`, `DcGeneratorParameters`, and
-`NodalGeneratorParameters` in place of the 0.10 `*Data` types. The positive
-weight vector is `branches.susceptance_magnitude`, not `branches.b`.
-`DcOpfMatrices.bus_branch_incidence` states its bus by branch orientation, and
-`DcOpfMatrices.branch_flow_matrix` is the branch by bus factor over those
-positive magnitudes. The corresponding calculation is
-`calc_branch_flow_matrix`. The DC OPF bundle keeps `BAt.mtx` unchanged and
-uses `branch_flow_matrix` as its manifest operator name in place of
-`flow_map`.
+```rust
+powerio::emit(&module, "matpower", powerio::Destination::path("copy.m"))?;
+# Ok::<(), powerio::Error>(())
+```
 
-## Rust callables start with actions
+```python
+memory_result = powerio.emit(module, "matpower")
+file_result = powerio.emit(module, "psse", "case.raw")
+```
 
-Rust 1.0 uses verb first names and removes the 0.10 forwarding spellings. Use
-`list_states` for a typed collection inventory. Electrical calculations use
-`calc_branch_susceptance`, `calc_solver_edge_weight`, the `GenCost::calc_quadratic*`
-family, `Branch::calc_effective_tap`, `calc_divisible_tap`,
-`calc_terminal_charging`, `calc_series_admittance`, and
-`calc_total_charging_b`. The related charging, HVDC, transformer, and AC start
-calculations follow the same `calc_*` rule. `to_star_expansion` names the
-three winding transformer projection.
+```julia
+memory_result = emit(module_, "matpower")
+file_result = emit(module_, "psse", "case.raw")
+```
 
-Matrix helpers now lead with their operation: `calc_diagonal`,
-`calc_susceptance_diagonal`, `calc_unit_vector`,
-`calc_reference_indicator`, `calc_zero_impedance_skips`,
-`calc_matrix_stats_for_kind`, `check_sddm`, `select_solver_for_shape`, and the
-`map_*` grounded index methods. In memory serialization uses `to_mtx_bytes`,
-`to_vector_mtx_bytes`, and `to_gridfm_record_batches*`; `number_snapshots`
-stamps the scenario identifiers.
+The result records every artifact, the output layout, fidelity, and emission
+diagnostics. The same call handles text, binary, one file, and directory
+formats.
 
-Component format names parse to typed enums through `parse_*`; facade artifact
-metadata uses `resolve_format`. Geographic projections use
-`to_geo_layer_from_pwd`, the facade owned `to_geo_layer_from_aux_text`, and
-`to_lonlat_from_pwd_mercator`. GridFM discovery uses `list_*` and the base case
-uses universal `parse_file` plus `export_state` when the parsed value is a
-scenario set. Diagnostic projections use `render_*` or `to_*`.
-The released noun and adjective spellings do not remain as 1.0 aliases. The
-[1.0 API surface](final-v1-api-cleanup.md) lists every removed source name and
-its replacement. C ABI 6 keeps all released symbols.
+Use `serialize` and `deserialize` for PowerIO IR. `.pio.json` is not a grid
+exchange format and is absent from format discovery. Both operations use the
+single PowerIO 1.0 document shape: `"schema": "powerio.module"` and
+`"version": 1`. Documents produced by the beta are not PowerIO 1.0 IR and
+must be regenerated from their original power system data.
 
-Applications that need a canonical file name after selecting an output format
-use `resolve_format`. It resolves aliases without exposing the component
-`TargetFormat` enum and reports `token`, `extension`, `is_directory`, and
-`can_emit` in Rust, Python, Julia, and C.
+The following 0.10 names are removed:
 
-At the Rust facade root, `parse_display_file` now returns `powerio::Error`
-rather than `powerio_tx::Error`. The facade no longer exports
-`to_geo_layer_from_aux_substations(&AuxFile)`, whose argument type was not
-available there. Use `to_geo_layer_from_aux_text`; parser authors that already
-hold an `AuxFile` can import the original operation from `powerio-tx`.
+- `write_to`
+- `write_string`
+- `write_file`
+- `to_format`
+- module JSON read and write names
+- the `pio-json` format token
+
+`to_*` remains available for a genuine in-memory semantic transformation.
+
+## Use ordinary collection operations
+
+`TimeSeries<T>` and `ScenarioSet<T>` contain actual typed values. Rust uses
+`len`, `iter`, and checked `get`; Python uses iteration and indexing; Julia
+uses `length`, iteration, and 1-based `getindex`; C provides opaque length and
+element access.
+
+Remove calls to `StateInventory`, `StateSelector`, `SelectedState`,
+`list_states`, `select_state`, and `export_state`. Index the collection
+instead. A returned entry is the contained typed value or an owner rooted
+typed view. It is not encoded and reparsed.
+
+## Apply typed updates
+
+PowerIO defines `OperatingPointUpdate`, `NetworkUpdate`,
+`CalculationUpdate`, `apply_updates`, and `UpdateReport`. Updates identify a
+component by stable `ComponentId`, carry absolute values with explicit units,
+validate the whole batch, and apply atomically. Julia mutation operations end
+in `!`.
+
+`UpdateReport` lists the component IDs and fields changed and reports whether
+energized connectivity changed. A bus demand update must name a load or an
+explicit allocation rule. PowerIO never assigns aggregate demand to an
+arbitrary load. `LoadAllocation::ProportionalToCurrentActivePower` preserves
+the current shares and refuses an all zero basis. `LoadAllocation::Equal`
+divides the replacement equally, so a caller can explicitly restore demand
+after setting every participating load to zero.
+
+## Use calculation names that state the result
+
+The public DC bundle types and the phrase “DC branch coefficients” are gone.
+Use the named calculations:
+
+```text
+calc_incidence_matrix
+calc_branch_susceptances
+calc_bus_susceptance_matrix
+calc_branch_flow_matrix
+calc_branch_phase_shift_injection
+calc_bus_phase_shift_injection
+calc_branch_flow_dc
+calc_bus_injection_dc
+```
+
+The public orientation and signs are:
+
+```text
+A[e, from] = +1
+A[e, to]   = -1
+
+Bf = Diagonal(b) * A
+B  = A' * Diagonal(b) * A
+
+p_branch = -Bf * va + b .* shift
+p_shift  = A' * (b .* shift)
+p_bus    = -B * va + p_shift
+```
+
+`BranchSusceptanceFormula` selects the documented series susceptance,
+tap adjusted reactance, or reactance only equation.
+
+## Calculation instances and solutions
+
+PowerIO 1.0 registers the following calculation pairs:
+
+```text
+DcPfInstance       DcPfSolution
+AcPfInstance       AcPfSolution
+DcOpfInstance      DcOpfSolution
+AcOpfInstance      AcOpfSolution
+McAcPfInstance     McAcPfSolution
+McAcOpfInstance    McAcOpfSolution
+AcScucInstance     AcScucSolution
+```
+
+`SocwrOpfSolution` records a PowerModels SOCWR relaxation, including its
+W-space values and objective lower bound. It is not an `AcOpfSolution` unless
+voltage recovery and AC residual checks support that claim.
+
+Instance fields use `initial_point`, not the catch-all beta name.
+
+## C ABI 7
+
+PowerIO 1.0 replaces ABI 6 with ABI 7. ABI 7 has no ABI 4, 5, or 6 aliases and
+does not reuse removed table IDs. Sources, destinations, modules, typed values,
+collections, diagnostics, artifacts, sparse matrices, and vectors use opaque
+reference counted handles. Every buffer carries an explicit length. Borrowed
+typed handles keep their module owner alive.
+
+PowerIO.jl moves to ABI 7 in the same release. Julia packages should depend on
+PowerIO.jl rather than call the C ABI directly.
+
+## Inputs accepted by 1.0
+
+PowerIO accepts documented aliases for names defined by external formats, such
+as `rawx` for the canonical `psse-rawx` format token. Those aliases identify
+the same third party format; they do not preserve a prerelease PowerIO API or
+IR shape. There are no prerelease source or document aliases in 1.0.
