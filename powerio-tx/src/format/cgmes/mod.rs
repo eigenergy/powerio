@@ -1404,6 +1404,48 @@ mod tests {
     }
 
     #[test]
+    fn generator_voltage_control_round_trips_with_exact_remote_terminal() {
+        let mut network = detailed_network();
+        let regulating_terminal = TerminalReference {
+            equipment: component("load", network.loads()[0].uid.as_deref().unwrap()),
+            terminal: 1,
+        };
+        let generator = &mut network.generators_mut()[0];
+        generator.voltage_regulation_on = false;
+        generator.regulated_bus = Some(BusId(2));
+        generator.regulating_terminal = Some(regulating_terminal.clone());
+
+        let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        let eq = output
+            .files
+            .iter()
+            .find(|(name, _)| name.ends_with("_EQ.xml"))
+            .map(|(_, text)| text)
+            .unwrap();
+        let ssh = output
+            .files
+            .iter()
+            .find(|(name, _)| name.ends_with("_SSH.xml"))
+            .map(|(_, text)| text)
+            .unwrap();
+        assert!(eq.contains("<cim:RegulatingControl.Terminal rdf:resource="));
+        assert!(
+            ssh.contains("<cim:RegulatingControl.enabled>false</cim:RegulatingControl.enabled>")
+        );
+
+        let parsed = read::read_cgmes_documents(output.files, Some("generator-control")).unwrap();
+        let generator = &parsed.network.generators()[0];
+        assert!(!generator.voltage_regulation_on);
+        assert_eq!(generator.regulated_bus, Some(BusId(2)));
+        let regulating_terminal = generator.regulating_terminal.as_ref().unwrap();
+        assert_eq!(regulating_terminal.terminal, 1);
+        assert_eq!(
+            regulating_terminal.equipment.local_id(),
+            parsed.network.loads()[0].uid.as_deref().unwrap()
+        );
+    }
+
+    #[test]
     fn series_compensator_terminals_survive_fresh_emission() {
         let documents = write::write_cgmes(&detailed_network(), CgmesVersion::V3_0)
             .unwrap()

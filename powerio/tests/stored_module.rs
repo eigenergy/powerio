@@ -6,7 +6,7 @@ use powerio_core::{
     HistoryKind, PioModule, Producer, SourceDescriptor, SourceId, SourceMapEntry, SourceRelation,
     SourceSpan, TimePoint,
 };
-use powerio_tx::{Bus, BusId, BusType, Generator, Load, repair_values};
+use powerio_tx::{Bus, BusId, BusType, Generator, Load, TerminalReference, repair_values};
 
 mod helpers;
 use helpers::{deserialize_module_text, serialize_module_text};
@@ -27,6 +27,18 @@ fn small_network() -> BalancedNetwork {
     network.loads_mut().push(Load::new(BusId(2), 40.0, 10.0));
     let mut generator = Generator::new(BusId(1));
     generator.pg = 42.0;
+    generator.voltage_regulation_on = false;
+    generator.regulated_bus = Some(BusId(2));
+    generator.regulating_terminal = Some(
+        serde_json::from_value::<TerminalReference>(serde_json::json!({
+            "equipment": {
+                "component_type": "load",
+                "local_id": "remote-load"
+            },
+            "terminal": 1
+        }))
+        .unwrap(),
+    );
     network.generators_mut().push(generator);
     network
 }
@@ -87,6 +99,17 @@ fn current_ir_round_trips_with_records_and_nonfinite_bounds() {
     };
     assert_eq!(network.buses().len(), 2);
     assert!(network.buses()[1].vmax.is_infinite());
+    assert!(!network.generators()[0].voltage_regulation_on);
+    assert_eq!(network.generators()[0].regulated_bus, Some(BusId(2)));
+    assert_eq!(
+        network.generators()[0]
+            .regulating_terminal
+            .as_ref()
+            .unwrap()
+            .equipment
+            .local_id(),
+        "remote-load"
+    );
     assert_eq!(back.sources().len(), 1);
     assert_eq!(back.source_map().len(), 1);
     assert_eq!(back.diagnostics.len(), 1);

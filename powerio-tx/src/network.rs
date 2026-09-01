@@ -2567,6 +2567,16 @@ pub struct Generator {
     #[serde(default = "default_caps", with = "caps_serde")]
     #[cfg_attr(feature = "schema", schemars(with = "BTreeMap<String, f64>"))]
     pub caps: GenCaps,
+    /// Whether the generator's voltage regulation is enabled. Formats without
+    /// an explicit enable field use `true`, matching the voltage set point
+    /// carried by the balanced generator row.
+    #[serde(default = "default_voltage_regulation_on")]
+    pub voltage_regulation_on: bool,
+    /// The exact equipment terminal whose voltage is regulated. `None` means
+    /// the generator's own terminal, or that the source format names only a
+    /// regulated bus.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regulating_terminal: Option<TerminalReference>,
     /// The remote bus whose voltage this generator regulates, when that is not its
     /// own terminal bus (PSS/E `IREG`). `None` means it regulates its own bus.
     /// Part of the cross-element voltage-control graph: a format that names a
@@ -2599,6 +2609,8 @@ impl Generator {
             in_service: true,
             cost: None,
             caps: default_caps(),
+            voltage_regulation_on: true,
+            regulating_terminal: None,
             regulated_bus: None,
             active_power_control: None,
             uid: None,
@@ -2611,6 +2623,10 @@ impl Generator {
     pub fn has_caps(&self) -> bool {
         self.caps.iter().any(Option::is_some)
     }
+}
+
+const fn default_voltage_regulation_on() -> bool {
+    true
 }
 
 /// A generator's capability / ramp columns, one slot per `GEN_EXTRA_KEYS` name.
@@ -3997,6 +4013,20 @@ impl BalancedNetwork {
             .iter()
             .map(|terminal| (&terminal.equipment, terminal.terminal))
             .collect::<std::collections::HashSet<_>>();
+        for (index, generator) in self.generators().iter().enumerate() {
+            if let Some(reference) = &generator.regulating_terminal
+                && !ac_terminals.contains(&(&reference.equipment, reference.terminal))
+            {
+                return Err(Error::FormatRead {
+                    format,
+                    message: format!(
+                        "generator {index} references undeclared regulating Terminal `{}` number {}",
+                        reference.equipment.local_id(),
+                        reference.terminal
+                    ),
+                });
+            }
+        }
         let check_pcc_terminal = |class: &str,
                                   component: &ComponentId,
                                   pcc: Option<&TerminalReference>|
@@ -5119,7 +5149,12 @@ mod tests {
             in_service: true,
             cost: None,
             caps,
-            regulated_bus: None,
+            voltage_regulation_on: false,
+            regulating_terminal: Some(TerminalReference {
+                equipment: ComponentId::new("load", "L1").unwrap(),
+                terminal: 1,
+            }),
+            regulated_bus: Some(BusId(2)),
             active_power_control: None,
             uid: None,
         };
@@ -5131,6 +5166,9 @@ mod tests {
         assert!(json.contains(r#""ramp_30":1.5"#) && json.contains(r#""apf":0.5"#));
         let back: Generator = serde_json::from_str(&json).unwrap();
         assert_eq!(back.caps, g.caps);
+        assert!(!back.voltage_regulation_on);
+        assert_eq!(back.regulating_terminal, g.regulating_terminal);
+        assert_eq!(back.regulated_bus, Some(BusId(2)));
 
         // Growing GEN_EXTRA_KEYS stays additive: an unknown future key is ignored,
         // a missing key reads as None, and an omitted field is the empty set.
@@ -5144,6 +5182,8 @@ mod tests {
             "vg":1,"mbase":100,"in_service":true,"cost":null}"#;
         let g3: Generator = serde_json::from_str(no_caps).unwrap();
         assert!(!g3.has_caps());
+        assert!(g3.voltage_regulation_on);
+        assert_eq!(g3.regulating_terminal, None);
 
         // An explicit `"caps":null` is the empty set too, the same as omitting it.
         let null_caps = r#"{"bus":1,"pg":10,"qg":0,"pmax":100,"pmin":0,"qmax":50,"qmin":-50,
@@ -5210,6 +5250,8 @@ mod tests {
             in_service: true,
             cost: None,
             caps: GenCaps::default(),
+            voltage_regulation_on: true,
+            regulating_terminal: None,
             regulated_bus: None,
             active_power_control: None,
             uid: None,
@@ -5331,6 +5373,8 @@ mod tests {
             mbase: 0.0, // non-positive base
             in_service: true,
             cost: None,
+            voltage_regulation_on: true,
+            regulating_terminal: None,
             caps: Default::default(),
             regulated_bus: None,
             active_power_control: None,

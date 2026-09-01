@@ -280,7 +280,10 @@ fn gen_obj(
     obj.insert("gen_type".into(), Value::String("Synchronous".into()));
     obj.insert("pfr_eligible".into(), Value::Bool(true));
     obj.insert("quick_start".into(), Value::Bool(false));
-    obj.insert("voltage_regulated".into(), Value::Bool(true));
+    obj.insert(
+        "voltage_regulated".into(),
+        Value::Bool(generator.voltage_regulation_on),
+    );
     if let Some(cost) = &generator.cost {
         if let Some(cost) = cost_obj(cost, warnings) {
             obj.insert("cost".into(), cost);
@@ -873,6 +876,8 @@ fn read_generator(value: &Value) -> Result<(Option<Generator>, Option<Storage>)>
             Some(value) => Some(read_cost(value)?),
         },
         caps,
+        voltage_regulation_on: bool_map_or(obj, "voltage_regulated", true)?,
+        regulating_terminal: None,
         regulated_bus: optional_usize(obj, "reg_bus")?.map(BusId),
         active_power_control: None,
         uid: None,
@@ -1294,7 +1299,6 @@ fn generator_has_source_only_fields(generator: &Map<String, Value>) -> bool {
         || bool_not_default(generator, "quick_start", false)
         || bool_not_default(generator, "grid_forming", false)
         || bool_not_default(generator, "curtailable", false)
-        || bool_not_default(generator, "voltage_regulated", true)
         || generator
             .get("gen_type")
             .and_then(Value::as_str)

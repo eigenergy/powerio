@@ -749,6 +749,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> TextEmission {
         let modsw = extra_i64(&sh.extras, "psse_modsw")
             .filter(|raw| modsw_to_mode(*raw) == c.mode)
             .unwrap_or_else(|| mode_to_modsw(c.mode));
+        let adjm = extra_i64(&sh.extras, "psse_adjm").unwrap_or(0);
         let swrem = c.control_bus.map_or(0, |b| b.0);
         let mut blocks = String::new();
         for blk in &c.blocks {
@@ -764,7 +765,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> TextEmission {
             let id = quoted_device_id(&sh.extras, sh.bus, &mut sw_ids, &mut sanitized_quoted);
             let _ = writeln!(
                 s,
-                "{}, '{id}', {}, 0, {}, {}, {}, {swrem}, 0, {}, '', {}{blocks}",
+                "{}, '{id}', {}, {adjm}, {}, {}, {}, {swrem}, 0, {}, '', {}{blocks}",
                 sh.bus,
                 modsw,
                 i32::from(sh.in_service),
@@ -776,7 +777,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> TextEmission {
         } else {
             let _ = writeln!(
                 s,
-                "{}, {}, 0, {}, {}, {}, {swrem}, {}, '', {}{blocks}",
+                "{}, {}, {adjm}, {}, {}, {}, {swrem}, {}, '', {}{blocks}",
                 sh.bus,
                 modsw,
                 i32::from(sh.in_service),
@@ -2112,6 +2113,7 @@ fn read_switched_shunt(f: &[Cow<'_, str>], rev: u32) -> Result<Shunt> {
     let o2 = 2 * o;
     let bus = id_at(f, 0, 0)?;
     let modsw = int_at(f, 1 + o, 1)?;
+    let adjm = int_at(f, 2 + o, 0)?;
     let swrem = id_at(f, 6 + o, 0)?;
     // Step blocks follow BINIT; stop at the first empty (padding) block or the
     // end of the record. The v35 per-block status Si leads each triple; the
@@ -2152,6 +2154,12 @@ fn read_switched_shunt(f: &[Cow<'_, str>], rev: u32) -> Result<Shunt> {
     // its validation rules survive fresh PSS/E emission.
     if modsw != mode_to_modsw(mode) {
         extras.insert("psse_modsw".into(), Value::from(modsw));
+    }
+    // ADJM changes how mixed reactor and capacitor blocks are combined. The
+    // neutral shunt model has no equivalent field, so retain the PSS/E value
+    // as source metadata for fresh RAW and RAWX emission.
+    if adjm != 0 {
+        extras.insert("psse_adjm".into(), Value::from(adjm));
     }
     Ok(Shunt {
         bus: BusId(bus),
@@ -2224,6 +2232,8 @@ fn read_gen(f: &[Cow<'_, str>], raw_rev: u32) -> Result<Generator> {
         pmin: num_at(f, 17 + o, 0.0)?,
         cost: None,
         caps: Default::default(),
+        voltage_regulation_on: true,
+        regulating_terminal: None,
         regulated_bus: (ireg != 0 && ireg != bus).then_some(BusId(ireg)),
         active_power_control: None,
         uid: None,
@@ -4168,6 +4178,56 @@ Q
                 .lines()
                 .any(|line| line.starts_with("3, 1, 0, 1,"))
         );
+    }
+
+    #[test]
+    fn fresh_emission_preserves_the_switched_shunt_adjustment_method() {
+        for (rev, record) in [
+            (
+                33,
+                "3, 2, 1, 1, 1.05, 0.95, 0, 100.0, '', 0.0, 1, -10.0, 1, 15.0",
+            ),
+            (
+                35,
+                "3, 'S1', 2, 1, 1, 1.05, 0.95, 0, 0, 100.0, '', 0.0, 1, 1, -10.0, 1, 1, 15.0",
+            ),
+        ] {
+            let raw = format!(
+                "0, 100.00, {rev}, 0, 0, 60.00 / adjustment method\n\
+                 CASE\n\
+                 COMMENT\n\
+                 3,'B3',230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9\n\
+                 0 / END OF BUS DATA, BEGIN LOAD DATA\n\
+                 0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA\n\
+                 0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA\n\
+                 0 / END OF GENERATOR DATA, BEGIN BRANCH DATA\n\
+                 0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA\n\
+                 0 / END OF TRANSFORMER DATA, BEGIN AREA DATA\n\
+                 0 / END OF AREA DATA, BEGIN SWITCHED SHUNT DATA\n\
+                 {record}\n\
+                 0 / END OF SWITCHED SHUNT DATA, BEGIN GNE DEVICE DATA\n\
+                 Q\n"
+            );
+            let net = parse_psse(&raw).unwrap();
+            assert_eq!(extra_i64(&net.shunts()[0].extras, "psse_adjm"), Some(1));
+
+            let emitted = write_psse_rev(&net, rev).text;
+            let record = emitted
+                .lines()
+                .skip_while(|line| !line.contains("BEGIN SWITCHED SHUNT DATA"))
+                .nth(1)
+                .expect("fresh output has a switched-shunt record");
+            let columns = fields(record);
+            let adjm_column = if rev >= 35 { 3 } else { 2 };
+            assert_eq!(columns[adjm_column], "1", "revision {rev} ADJM");
+
+            let reparsed = parse_psse(&emitted).unwrap();
+            assert_eq!(
+                extra_i64(&reparsed.shunts()[0].extras, "psse_adjm"),
+                Some(1),
+                "revision {rev} reparsed ADJM"
+            );
+        }
     }
 
     #[test]

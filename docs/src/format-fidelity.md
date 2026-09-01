@@ -145,8 +145,10 @@ on the parsed module. Balanced reader findings carry
   two-terminal DC lines map to the neutral HVDC model. A switched shunt keeps its
   steady-state susceptance `BINIT` as the shunt `b` and carries its mode, voltage
   band, regulated bus, and step blocks. A 2-winding transformer's magnetizing
-  susceptance round-trips through `MAG2` (\\(\mathrm{CM} = 1\\)). Impedances are assumed on the
-  system base (\\(\mathrm{CZ} = \mathrm{CW} = 1\\)).
+  susceptance round-trips through `MAG2`. The reader converts `CW` 1/2/3,
+  `CZ` 1/2/3, and `CM` 1/2 into the neutral tap ratio, system-base impedance,
+  and magnetizing admittance. Fresh output uses the electrically equivalent
+  canonical `CW = CZ = CM = 1` representation.
 - **PowerWorld** `.aux` is read and written. `.pwb` binary cases are read
   only, and `.pwd` display files parse through the separate display API.
   `.aux` carries no system base, so the reader defaults to 100 MVA. No third party `.aux` reader

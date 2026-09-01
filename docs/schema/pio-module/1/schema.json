@@ -6001,6 +6001,17 @@
           "default": null,
           "description": "The remote bus whose voltage this generator regulates, when that is not its\nown terminal bus (PSS/E `IREG`). `None` means it regulates its own bus.\nPart of the cross-element voltage-control graph: a format that names a\nremote regulated bus (PSS/E) keeps it across a round trip instead of\ncollapsing every generator onto its own terminal. `#[serde(default)]` so\nJSON written before the field existed still deserializes."
         },
+        "regulating_terminal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TerminalReference"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The exact equipment terminal whose voltage is regulated. `None` means\nthe generator's own terminal, or that the source format names only a\nregulated bus."
+        },
         "uid": {
           "description": "Stable row identity; see [`Bus::uid`].",
           "type": [
@@ -6024,6 +6035,11 @@
             }
           ],
           "description": "Voltage set point (p.u.)."
+        },
+        "voltage_regulation_on": {
+          "default": true,
+          "description": "Whether the generator's voltage regulation is enabled. Formats without\nan explicit enable field use `true`, matching the voltage set point\ncarried by the balanced generator row.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -11160,7 +11176,7 @@
         },
         {
           "const": "pslf",
-          "description": "Read from a GE PSLF `.epc` case. Same source text is retained, so a\nsame-format write echoes it byte-for-byte; a cross-format or\nsource-dropped write goes through the `.epc` serializer\n([`write_pslf`](crate::write_pslf)).",
+          "description": "Read from a GE PSLF `.epc` case. Same source text is retained, so a\nsame-format write echoes it byte-for-byte; a cross-format or\nsource-dropped write goes through the internal `.epc` serializer.",
           "type": "string"
         },
         {

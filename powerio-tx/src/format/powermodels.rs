@@ -978,6 +978,8 @@ fn read_gen(row: &GenRow, pscale: f64, base_mva: f64, per_unit: bool) -> Generat
         in_service: row.gen_status.unwrap_or(true),
         cost,
         caps,
+        voltage_regulation_on: true,
+        regulating_terminal: None,
         regulated_bus: None,
         active_power_control: None,
         uid: None,

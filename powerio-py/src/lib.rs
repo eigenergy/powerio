@@ -481,6 +481,22 @@ fn active_power_control_to_py<'py>(
     Ok(value.into_any())
 }
 
+fn terminal_reference_to_py<'py>(
+    py: Python<'py>,
+    reference: Option<&powerio_tx::TerminalReference>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let Some(reference) = reference else {
+        return Ok(py.None().into_bound(py));
+    };
+    let equipment = PyDict::new(py);
+    equipment.set_item("component_type", reference.equipment.component_type())?;
+    equipment.set_item("local_id", reference.equipment.local_id())?;
+    let value = PyDict::new(py);
+    value.set_item("equipment", equipment)?;
+    value.set_item("terminal", reference.terminal)?;
+    Ok(value.into_any())
+}
+
 #[pymethods]
 impl PyBalancedNetwork {
     // --- metadata -------------------------------------------------------
@@ -756,6 +772,12 @@ impl PyBalancedNetwork {
             d.set_item("vg", g.vg)?;
             d.set_item("mbase", g.mbase)?;
             d.set_item("in_service", g.in_service)?;
+            d.set_item("voltage_regulation_on", g.voltage_regulation_on)?;
+            d.set_item("regulated_bus", g.regulated_bus.map(|bus| bus.0))?;
+            d.set_item(
+                "regulating_terminal",
+                terminal_reference_to_py(py, g.regulating_terminal.as_ref())?,
+            )?;
             // The MATPOWER gen columns past PMIN, in column order, `None` where
             // the source carried no value. A list, not a name-keyed dict: the
             // consumer that wants them (the ppc bridge) wants the column order,

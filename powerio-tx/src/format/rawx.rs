@@ -85,6 +85,7 @@ const SUBSTATION_SWITCH_FIELDS: &[&str] = &[
 ];
 const SUBSTATION_TERMINAL_FIELDS: &[&str] =
     &["isub", "inode", "type", "eqid", "ibus", "jbus", "kbus"];
+const EXPLICIT_NULL: &str = "null";
 
 const UNSUPPORTED_TABLES: &[(&str, &str)] = &[
     ("vscdc", "voltage source converter DC lines"),
@@ -1146,8 +1147,17 @@ fn read_detailed_connectivity(
             });
             let mut properties = BTreeMap::new();
             for field in ["stat", "vm", "va"] {
-                if let Some(value) = table.value(row, field).filter(|value| !value.is_null()) {
-                    properties.insert(format!("psse_{field}"), value.to_string());
+                match table.value(row, field) {
+                    Some(Value::Null) if matches!(field, "vm" | "va") => {
+                        // Preserve an explicit RAWX null through PowerIO IR.
+                        // Missing columns remain unmarked and retain the
+                        // existing synthesized-output defaults.
+                        properties.insert(format!("psse_{field}"), EXPLICIT_NULL.to_owned());
+                    }
+                    Some(value) if !value.is_null() => {
+                        properties.insert(format!("psse_{field}"), value.to_string());
+                    }
+                    _ => {}
                 }
             }
             metadata.insert(
@@ -1987,6 +1997,21 @@ fn metadata_number(metadata: Option<&ComponentMetadata>, property: &str, default
         .map_or_else(|| jnum(default), jnum)
 }
 
+fn metadata_number_or_null(
+    metadata: Option<&ComponentMetadata>,
+    property: &str,
+    default: f64,
+) -> Value {
+    if metadata
+        .and_then(|value| value.properties.get(property))
+        .is_some_and(|value| value == EXPLICIT_NULL)
+    {
+        Value::Null
+    } else {
+        metadata_number(metadata, property, default)
+    }
+}
+
 fn metadata_integer(metadata: Option<&ComponentMetadata>, property: &str, default: i64) -> Value {
     metadata
         .and_then(|value| value.properties.get(property))
@@ -2188,8 +2213,8 @@ fn add_detailed_connectivity_output_tables(
             ),
             Value::from(bus_id.0),
             metadata_integer(row_metadata, "psse_stat", 1),
-            metadata_number(row_metadata, "psse_vm", bus.vm),
-            metadata_number(row_metadata, "psse_va", bus.va),
+            metadata_number_or_null(row_metadata, "psse_vm", bus.vm),
+            metadata_number_or_null(row_metadata, "psse_va", bus.va),
         ]));
     }
     network.insert(

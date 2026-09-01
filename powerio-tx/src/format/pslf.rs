@@ -738,6 +738,8 @@ fn read_generator(
         in_service: on_at(&rec.rhs, 0, true, "generator status", rec)?,
         cost: None,
         caps: Default::default(),
+        voltage_regulation_on: true,
+        regulating_terminal: None,
         regulated_bus: None,
         active_power_control: None,
         uid: None,

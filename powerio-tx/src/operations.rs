@@ -690,6 +690,8 @@ mod tests {
             in_service: true,
             cost: None,
             caps: Default::default(),
+            voltage_regulation_on: true,
+            regulating_terminal: None,
             regulated_bus: Some(BusId(regulated)),
             active_power_control: None,
             uid: None,

@@ -16,7 +16,7 @@ use std::path::Path;
 
 use powerio_tx::{
     BalancedNetwork, Branch, Bus, BusId, BusType, CoordinateSpace, CoordsKind, GenCaps, Generator,
-    GeoMeta, Location, SourceFormat,
+    GeoMeta, Location, SourceFormat, TerminalReference,
 };
 
 /// A v4-vintage document, written by `BalancedNetwork::to_json` on case30.
@@ -70,8 +70,11 @@ fn snapshot_ignores_unknown_fields_and_defaults_omitted_caps() {
 
     // (a) an unknown future top-level field is ignored (deny_unknown_fields off).
     v["future_field_v5"] = serde_json::json!("ignored");
-    // (b) a generator that omits caps entirely still parses (caps defaults empty).
-    v["generators"][0].as_object_mut().unwrap().remove("caps");
+    // (b) a generator that omits additive fields still receives their released defaults.
+    let generator = v["generators"][0].as_object_mut().unwrap();
+    generator.remove("caps");
+    generator.remove("voltage_regulation_on");
+    generator.remove("regulating_terminal");
 
     let text = serde_json::to_string(&v).unwrap();
     let parsed = BalancedNetwork::from_json(&text)
@@ -81,6 +84,30 @@ fn snapshot_ignores_unknown_fields_and_defaults_omitted_caps() {
         !parsed.generators()[0].has_caps(),
         "an omitted caps field defaults to the empty set"
     );
+    assert!(parsed.generators()[0].voltage_regulation_on);
+    assert_eq!(parsed.generators()[0].regulating_terminal, None);
+}
+
+#[test]
+fn generator_voltage_control_survives_snapshot_round_trip() {
+    let mut net = small_net();
+    let reference: TerminalReference = serde_json::from_value(serde_json::json!({
+        "equipment": {
+            "component_type": "load",
+            "local_id": "remote-load"
+        },
+        "terminal": 1
+    }))
+    .unwrap();
+    net.generators_mut()[0].voltage_regulation_on = false;
+    net.generators_mut()[0].regulated_bus = Some(BusId(2));
+    net.generators_mut()[0].regulating_terminal = Some(reference.clone());
+
+    let parsed = BalancedNetwork::from_json(&net.to_json().unwrap()).unwrap();
+    let generator = &parsed.generators()[0];
+    assert!(!generator.voltage_regulation_on);
+    assert_eq!(generator.regulated_bus, Some(BusId(2)));
+    assert_eq!(generator.regulating_terminal, Some(reference));
 }
 
 fn small_net() -> BalancedNetwork {

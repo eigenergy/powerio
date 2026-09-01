@@ -1561,6 +1561,8 @@ fn gen_from_block(bus: BusId, v: &[f64; 8], in_service: bool) -> Generator {
         in_service,
         cost: None,
         caps: Default::default(),
+        voltage_regulation_on: true,
+        regulating_terminal: None,
         regulated_bus: None,
         active_power_control: None,
         uid: None,
