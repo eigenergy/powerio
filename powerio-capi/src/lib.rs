@@ -19722,6 +19722,7 @@ mod tests {
                 ("xiidm", "case9.xiidm"),
                 ("cgmes", "case9-cgmes"),
                 ("psse-rawx", "case9.rawx"),
+                ("ucte", "case9.uct"),
             ] {
                 let output = directory.path().join(output_name);
                 let output_text = output.to_string_lossy();

@@ -841,6 +841,7 @@ class BalancedNetwork:
         "xiidm",
         "jiidm",
         "cgmes",
+        "ucte",
     ]
     n_buses: int
     n_branches: int

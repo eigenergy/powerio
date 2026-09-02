@@ -52,6 +52,7 @@ pub enum TransmissionFormat {
     Xiidm,
     Jiidm,
     Cgmes,
+    Ucte,
 }
 
 impl TransmissionFormat {
@@ -76,6 +77,7 @@ impl TransmissionFormat {
             Self::Xiidm => "xiidm",
             Self::Jiidm => "jiidm",
             Self::Cgmes => "cgmes",
+            Self::Ucte => "ucte",
         }
     }
 }
@@ -155,6 +157,7 @@ pub fn parse_transmission_format(name: &str) -> Option<TransmissionFormat> {
         "xiidm" | "iidm" => Some(TransmissionFormat::Xiidm),
         "jiidm" => Some(TransmissionFormat::Jiidm),
         "cgmes" => Some(TransmissionFormat::Cgmes),
+        "ucte" | "uct" | "uctedef" => Some(TransmissionFormat::Ucte),
         "opfdata"
         | "opfdatajson"
         | "deepmindopfdata"

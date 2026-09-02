@@ -211,7 +211,9 @@ fn within(root: &Path, path: &Path) -> bool {
 /// Whether a path announces itself as a case file. Used only to decide whether
 /// a parse failure is worth reporting, never to decide whether to try.
 fn names_a_case(path: &Path) -> bool {
-    const CASE_EXTENSIONS: [&str; 8] = ["m", "raw", "rawx", "epc", "aux", "pwb", "json", "dss"];
+    const CASE_EXTENSIONS: [&str; 9] = [
+        "m", "raw", "rawx", "epc", "aux", "pwb", "uct", "json", "dss",
+    ];
     path.extension()
         .and_then(|e| e.to_str())
         .map(str::to_ascii_lowercase)

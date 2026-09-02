@@ -559,7 +559,7 @@ fn routed_family(
         // else (a nameless in-memory source above all) can still carry a
         // JSON document, so content that opens one routes by classification,
         // mirroring the balanced hub's own sniff.
-        "m" | "raw" | "aux" | "epc" | "pwb" | "pwd" => Ok(RoutedFamily::Balanced(None)),
+        "m" | "raw" | "aux" | "epc" | "pwb" | "pwd" | "uct" => Ok(RoutedFamily::Balanced(None)),
         _ => {
             let jsonish = source.primary_buffer().is_ok_and(|buffer| {
                 std::str::from_utf8(buffer.content_bytes()).is_ok_and(|text| {

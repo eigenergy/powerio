@@ -181,6 +181,7 @@ pub mod codes {
     emit_family!(EMIT_XIIDM, "XIIDM", "XIIDM 1.17 XML");
     emit_family!(EMIT_JIIDM, "JIIDM", "JIIDM 1.17 JSON");
     emit_family!(EMIT_CGMES, "CGMES", "CGMES 3.0");
+    emit_family!(EMIT_UCTE, "UCTE", "UCTE-DEF .uct");
     emit_family!(EMIT_UNSUPPORTED, "UNSUPPORTED", "a read only format");
 
     powerio_core::diagnostic_codes! {
@@ -298,6 +299,17 @@ pub mod codes {
         READ_SURGE_RETAINED_SOURCE_ONLY = "READ.SURGE.RETAINED_SOURCE_ONLY", Warning,
             "a Surge section survives in the retained source only";
 
+        READ_UCTE_VALUE_DEFAULTED = "READ.UCTE.VALUE_DEFAULTED", Warning,
+            "a UCTE-DEF value the model needs was not in the record and was defaulted";
+        READ_UCTE_VALUE_SUBSTITUTED = "READ.UCTE.VALUE_SUBSTITUTED", Warning,
+            "a UCTE-DEF value the record states could not be used as given";
+        READ_UCTE_REFERENCE_DROPPED = "READ.UCTE.REFERENCE_DROPPED", Warning,
+            "a UCTE-DEF regulation or special description names a transformer the case does not declare";
+        READ_UCTE_RECORD_IGNORED = "READ.UCTE.RECORD_IGNORED", Warning,
+            "a UCTE-DEF record names no usable electrical element and was ignored";
+        READ_UCTE_RETAINED_SOURCE_ONLY = "READ.UCTE.RETAINED_SOURCE_ONLY", Warning,
+            "a UCTE-DEF block survives in the retained source only";
+
         READ_GEO_SOURCE_MALFORMED = "READ.GEO.SOURCE_MALFORMED", Warning,
             "a geo layer row could not be read and was skipped";
         READ_GEO_NOTES_TRUNCATED = "READ.GEO.NOTES_TRUNCATED", Warning,
@@ -388,7 +400,7 @@ pub mod codes {
 
     /// Every write target's family, in the order [`super::registry`] reports
     /// them.
-    pub const EMIT_FAMILIES: [&EmitFamily; 13] = [
+    pub const EMIT_FAMILIES: [&EmitFamily; 14] = [
         &EMIT_MATPOWER,
         &EMIT_PSSE,
         &EMIT_PSLF,
@@ -401,6 +413,7 @@ pub mod codes {
         &EMIT_XIIDM,
         &EMIT_JIIDM,
         &EMIT_CGMES,
+        &EMIT_UCTE,
         &EMIT_UNSUPPORTED,
     ];
 }
@@ -431,6 +444,7 @@ impl TargetFormat {
             TargetFormat::Xiidm => &codes::EMIT_XIIDM,
             TargetFormat::Jiidm => &codes::EMIT_JIIDM,
             TargetFormat::Cgmes => &codes::EMIT_CGMES,
+            TargetFormat::Ucte => &codes::EMIT_UCTE,
             // This transmission layer has no GOC3 problem or OPFData writer.
             // The facade emits a complete GOC3 solution before reaching this
             // branch. Other requests are refused before any family is
