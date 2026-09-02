@@ -175,8 +175,9 @@ jobs:
       - name: Run tests
         run: pytest python/tests -q
       # The core import path: parse/emit import nothing but the
-      # interpreter. Without the gridfm feature the wrapper must fail with a
-      # clear ImportError, not an AttributeError from the missing native symbol.
+      # interpreter. Without the gridfm feature, emitting the gridfm token
+      # must fail with a PowerIOError that names the missing feature, not an
+      # AttributeError from a missing native symbol.
       - name: Zero-dep parse path
         run: |
           python -m venv /tmp/zerodep
@@ -186,16 +187,15 @@ jobs:
           import sys, powerio
           m = powerio.parse("tests/data/case14.m")
           assert isinstance(m.value, powerio.BalancedNetwork)
-          c = m.value
-          assert m.emit("matpower").text == open("tests/data/case14.m").read()
+          assert powerio.emit(m, "matpower").text == open("tests/data/case14.m").read()
           assert "numpy" not in sys.modules and "scipy" not in sys.modules
-          assert not powerio._powerio._has_gridfm
+          assert not powerio.features()["gridfm"]
           try:
-              c.emit_gridfm(tempfile.mkdtemp(prefix="powerio-gridfm-"))
-          except ImportError as e:
-              assert "gridfm" in str(e)
+              powerio.emit(m, "gridfm", tempfile.mkdtemp(prefix="powerio-gridfm-"))
+          except powerio.PowerIOError as e:
+              assert "gridfm" in str(e) and "feature" in str(e)
           else:
-              raise SystemExit("expected ImportError without the gridfm feature")
+              raise SystemExit("expected a PowerIOError without the gridfm feature")
           PY
 
   goc3-reference:
