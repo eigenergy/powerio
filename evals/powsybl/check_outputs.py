@@ -3877,10 +3877,70 @@ def psse_canonical_frame(frame: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def revision33_synthesized_line_name_cells(
+    source: pp.network.Network,
+    fresh_raw: Path,
+    label: str,
+) -> set[tuple[str, str]]:
+    """Line name cells whose source value is a PowSybl import product.
+
+    RAW 32 and 33 branch records carry no NAME field. PowSybl names such a
+    line ``<bus I name>_<bus J name>_<ckt>`` at import, while a RAW 35 record's
+    NAME field is read as written. A fresh RAW 35 file written from a RAW 33
+    source therefore carries a blank NAME, and PowSybl reads it as an empty
+    name. The cell is excluded only when the source name equals PowSybl's
+    synthesis exactly and the fresh record's NAME field is blank, so an actual
+    dropped name still fails the comparison.
+    """
+    lines = psse_canonical_frame(source.get_lines(all_attributes=True))
+    # PowSybl keeps the PSS/E bus NAME on the bus breaker view bus.
+    buses = source.get_bus_breaker_view_buses(all_attributes=True)
+    fresh_names: dict[tuple[int, int, str], str] = {}
+    in_branches = False
+    for raw_line in fresh_raw.read_text(encoding="utf-8").splitlines():
+        if "BEGIN BRANCH DATA" in raw_line:
+            in_branches = True
+            continue
+        if in_branches and raw_line.startswith("0"):
+            break
+        if not in_branches:
+            continue
+        fields = [field.strip() for field in raw_line.split(",")]
+        ckt = fields[2].strip("'").strip()
+        fresh_names[(int(fields[0]), int(fields[1]), ckt)] = fields[6].strip("'").strip()
+    cells: set[tuple[str, str]] = set()
+    for line_id, row in lines.iterrows():
+        match = re.fullmatch(r"L-(\d+)-(\d+)-(.+)", str(line_id))
+        require(match is not None, f"{label}: unexpected PSS/E line id {line_id!r}")
+        assert match is not None
+        bus_i, bus_j, ckt = int(match.group(1)), int(match.group(2)), match.group(3)
+        name_i = str(buses.at[row["bus_breaker_bus1_id"], "name"]).strip()
+        name_j = str(buses.at[row["bus_breaker_bus2_id"], "name"]).strip()
+        synthesized = f"{name_i}_{name_j}_{ckt}"
+        require(
+            str(row["name"]) == synthesized,
+            f"{label}: source line {line_id!r} name {row['name']!r} is not PowSybl's "
+            f"RAW 33 synthesis {synthesized!r}",
+        )
+        require(
+            fresh_names.get((bus_i, bus_j, ckt)) == "",
+            f"{label}: fresh RAW 35 record for line {line_id!r} has NAME "
+            f"{fresh_names.get((bus_i, bus_j, ckt))!r}; expected a blank field because "
+            "the RAW 33 source carries no branch name",
+        )
+        cells.add((str(line_id), "name"))
+    print(
+        f"{label}: RAW 33 source lines with PowSybl synthesized names={len(cells)}; "
+        "each fresh RAW 35 NAME field is blank"
+    )
+    return cells
+
+
 def check_psse_equivalence(
     source: pp.network.Network,
     fresh: pp.network.Network,
     label: str,
+    excluded_cells: dict[str, set[tuple[str, str]]] | None = None,
 ) -> None:
     expected = PSSE_EXPECTATIONS[label]
     frames = (
@@ -3930,6 +3990,7 @@ def check_psse_equivalence(
             label,
             PSSE_ELECTRICAL_FIELDS,
             exact_ids=True,
+            excluded_cells=(excluded_cells or {}).get(equipment),
         )
         comparisons += compared
 
@@ -4394,6 +4455,13 @@ def main() -> None:
         switched_shunt_source,
         switched_shunt,
         "PSS/E switched shunt",
+        excluded_cells={
+            "line": revision33_synthesized_line_name_cells(
+                switched_shunt_source,
+                output_dir / "switched-shunt.raw",
+                "PSS/E switched shunt",
+            )
+        },
     )
     check_switched_shunts(switched_shunt)
 

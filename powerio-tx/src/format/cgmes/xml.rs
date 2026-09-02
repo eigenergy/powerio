@@ -526,7 +526,7 @@ mod tests {
 
     #[test]
     fn retains_full_model_fields_and_identifies_nested_rdf() {
-        let source = r##"<rdf:RDF
+        let source = r#"<rdf:RDF
             xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
             xmlns:md="http://iec.ch/TC57/61970-552/ModelDescription/1#"
             xmlns:cim="http://iec.ch/TC57/CIM100#">
@@ -539,7 +539,7 @@ mod tests {
             <md:Model.custom><rdf:Description rdf:about="urn:uuid:nested"/></md:Model.custom>
           </md:FullModel>
           <cim:BaseVoltage rdf:ID="_base"/>
-        </rdf:RDF>"##;
+        </rdf:RDF>"#;
         let document = parse_cimxml(source).unwrap();
         let header = document.header.unwrap();
         assert_eq!(header.identity.as_deref(), Some("model-1"));
@@ -558,13 +558,13 @@ mod tests {
 
     #[test]
     fn rejects_one_document_that_mixes_cim16_and_cim100() {
-        let source = r##"<rdf:RDF
+        let source = r#"<rdf:RDF
             xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
             xmlns:cim16="http://iec.ch/TC57/2013/CIM-schema-cim16#"
             xmlns:cim100="http://iec.ch/TC57/CIM100#">
           <cim16:BaseVoltage rdf:ID="_base"/>
           <cim100:TopologicalNode rdf:ID="_node"/>
-        </rdf:RDF>"##;
+        </rdf:RDF>"#;
         let message = parse_cimxml(source).unwrap_err().to_string();
         assert!(message.contains("mixes CIM16 and CIM100 namespaces"));
         assert!(message.contains("CIM-schema-cim16"));

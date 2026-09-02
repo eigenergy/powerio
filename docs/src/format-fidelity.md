@@ -124,10 +124,24 @@ parse warning that hides the cause.
   format emission and produce a diagnostic; they do not become unnamed fields
   on the network. Fresh emission preserves detailed connectivity when present
   and allocates missing local node numbers without changing stable PowerIO
-  identities. XIIDM states no system MVA base, so the balanced calculation view
+  identities. A three winding transformer whose `ratedU0` differs from
+  `ratedU1` keeps that leg impedance base for fresh emission. XIIDM states no
+  system MVA base, so the balanced calculation view
   uses 100 MVA and reports that assumption.
-- **CGMES** reads 2.4.15 on CIM16 and 3.0 on CIM100. EQ and TP are required;
-  SSH, SV, and boundary profile data are used when present. A source can be an
+- **CGMES** reads 2.4.15 on CIM16 and 3.0 on CIM100. CGMES 2.4.15 uses the
+  namespace `http://iec.ch/TC57/2013/CIM-schema-cim16#` with the ENTSO-E
+  extension namespace `http://entsoe.eu/CIM/SchemaExtension/3/1#` (IEC TS
+  61970-600-1/-2:2017); CGMES 3.0 uses `http://iec.ch/TC57/CIM100#` and
+  `http://iec.ch/TC57/CIM100-European#` (IEC 61970-600-1/-2:2021). Both use
+  the IEC 61970-552 CIMXML instance syntax: `rdf:ID` defines a record,
+  `rdf:about` extends one, and `md:FullModel` heads each profile document.
+  EQ and TP are required;
+  SSH, SV, and boundary profile data are used when present. SSH assignments
+  take precedence over SV observations; an SV shunt section count that differs
+  from the SSH assignment is reported and not retained. Each document's
+  `Model.modelingAuthoritySet` is read for the boundary and state variable
+  authority checks, reported, and not retained; fresh output states PowerIO's
+  own modeling authority. A source can be an
   XML profile directory, a directory containing profile ZIP files, or one ZIP
   containing the profiles. The mapping covers hierarchy, AC and DC equipment,
   detailed connectivity, current, active power, and apparent power operating

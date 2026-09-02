@@ -320,6 +320,14 @@ fn warn_full_model_fields(
             ),
         );
     }
+    if let Some(authority) = header.modeling_authority_set.as_deref() {
+        warnings.push_as(
+            &codes::READ_CGMES_FIELD_UNMAPPED,
+            format!(
+                "FullModel property `Model.modelingAuthoritySet` in `{document_name}` is `{authority}`; it identifies the authority of the records this document defines during boundary and state variable checks and is not retained in the electrical model, so fresh CGMES emission states PowerIO's own modeling authority"
+            ),
+        );
+    }
     if let Some(created) = header.created.as_deref() {
         warnings.push_as(
             &codes::READ_CGMES_FIELD_UNMAPPED,
@@ -4002,13 +4010,7 @@ fn read_linear_shunts(mapper: &mut Mapper<'_>) -> Result<Vec<Shunt>> {
         };
         let store = mapper.store;
         let kv = mapper.kv(bus);
-        let sections = store
-            .f(id, "ShuntCompensator.sections")
-            .or_else(|| sv_sections(store, id))
-            .or_else(|| store.f(id, "ShuntCompensator.normalSections"))
-            .unwrap_or(1.0)
-            .max(0.0)
-            .round() as usize;
+        let sections = selected_sections(mapper, id, 1.0);
         let maximum_sections = store
             .f(id, "ShuntCompensator.maximumSections")
             .unwrap_or(sections.max(1) as f64)
@@ -4051,13 +4053,7 @@ fn read_nonlinear_shunts(mapper: &mut Mapper<'_>) -> Result<Vec<Shunt>> {
         };
         let store = mapper.store;
         let kv2 = mapper.kv(bus).powi(2);
-        let sections = store
-            .f(id, "ShuntCompensator.sections")
-            .or_else(|| sv_sections(store, id))
-            .or_else(|| store.f(id, "ShuntCompensator.normalSections"))
-            .unwrap_or(0.0)
-            .max(0.0)
-            .round() as usize;
+        let sections = selected_sections(mapper, id, 0.0);
         let mut points: Vec<_> = store
             .of_class("NonlinearShuntCompensatorPoint")
             .filter(|point| {
@@ -4169,6 +4165,33 @@ fn shunt_control(
         rmpct: 100.0,
         blocks,
     }))
+}
+
+/// The shunt's selected section count: the SSH `ShuntCompensator.sections`
+/// assignment, else the SV `SvShuntCompensatorSections` observation, else
+/// `ShuntCompensator.normalSections`, else `default`. One source neutral
+/// record holds one count, so an SV observation that differs from the SSH
+/// assignment is reported and not retained.
+fn selected_sections(mapper: &mut Mapper<'_>, id: &str, default: f64) -> usize {
+    let store = mapper.store;
+    let assigned = store.f(id, "ShuntCompensator.sections");
+    let observed = sv_sections(store, id);
+    if let (Some(assigned), Some(observed)) = (assigned, observed) {
+        if (assigned - observed).abs() > f64::EPSILON {
+            mapper.warnings.push_as(
+                &codes::READ_CGMES_FIELD_UNMAPPED,
+                format!(
+                    "`SvShuntCompensatorSections.sections` for `{id}` is {observed} while the SSH `ShuntCompensator.sections` assignment is {assigned}; the shunt keeps the SSH assignment and the state variable count is not retained"
+                ),
+            );
+        }
+    }
+    assigned
+        .or(observed)
+        .or_else(|| store.f(id, "ShuntCompensator.normalSections"))
+        .unwrap_or(default)
+        .max(0.0)
+        .round() as usize
 }
 
 fn sv_sections(store: &Store, shunt: &str) -> Option<f64> {

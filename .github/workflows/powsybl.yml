@@ -49,6 +49,7 @@ jobs:
           iidm/iidm-serde/src/test/resources/V1_17/threeWindingsTransformerToBeEstimated.xiidm
           psse/psse-converter/src/test/resources/remoteControl.xiidm
           psse/psse-converter/src/test/resources/twoTerminalDc.xiidm
+          psse/psse-converter/src/test/resources/five_bus_nodeBreaker_rev35.xiidm
           psse/psse-converter/src/test/resources/SwitchedShunt.raw
           psse/psse-converter/src/test/resources/twoSubstations_rev35.rawx
           psse/psse-model-test/src/main/resources/five_bus_nodeBreaker_rev35.raw

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import (
     Any,
@@ -520,6 +522,7 @@ class OmittedField(TypedDict):
         "active_power",
         "reactive_power",
         "voltage_setpoint",
+        "rated_apparent_power",
         "shunt_conductance_per_section",
     ]
 

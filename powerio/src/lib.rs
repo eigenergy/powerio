@@ -235,16 +235,16 @@ fn directory_has_goc3_data(source: &Source) -> bool {
                 .and_then(|extension| extension.to_str())
                 .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
                 && source.buffer(&name).is_ok_and(|buffer| {
-                    serde_json::from_slice::<serde_json::Value>(buffer.content_bytes())
-                        .ok()
-                        .is_some_and(|value| {
+                    serde_json::from_slice::<serde_json::Value>(buffer.content_bytes()).is_ok_and(
+                        |value| {
                             value.as_object().is_some_and(|root| {
                                 root.contains_key("time_series_output")
                                     || (root.contains_key("network")
                                         && root.contains_key("time_series_input")
                                         && root.contains_key("reliability"))
                             })
-                        })
+                        },
+                    )
                 })
         })
     })
@@ -593,14 +593,11 @@ fn json_family(
     let Ok(text) = std::str::from_utf8(buffer.content_bytes()) else {
         return Ok(RoutedFamily::Balanced(None));
     };
-    if serde_json::from_str::<serde_json::Value>(text)
-        .ok()
-        .is_some_and(|value| {
-            value
-                .as_object()
-                .is_some_and(|root| root.contains_key("time_series_output"))
-        })
-    {
+    if serde_json::from_str::<serde_json::Value>(text).is_ok_and(|value| {
+        value
+            .as_object()
+            .is_some_and(|root| root.contains_key("time_series_output"))
+    }) {
         return Ok(RoutedFamily::Goc3);
     }
     let class = format::routing::classify_json_text(text);
