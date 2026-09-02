@@ -310,6 +310,19 @@ pub mod codes {
         READ_UCTE_RETAINED_SOURCE_ONLY = "READ.UCTE.RETAINED_SOURCE_ONLY", Warning,
             "a UCTE-DEF block survives in the retained source only";
 
+        PARSE_IEEE_CDF_MALFORMED = "PARSE.IEEE_CDF.MALFORMED", Error,
+            "an IEEE CDF title card or record could not be decoded", category = Parse;
+        READ_IEEE_CDF_RECORD_TRUNCATED = "READ.IEEE_CDF.RECORD_TRUNCATED", Warning,
+            "an IEEE CDF record ends before a mandatory field, which was read as zero";
+        READ_IEEE_CDF_VALUE_DEFAULTED = "READ.IEEE_CDF.VALUE_DEFAULTED", Warning,
+            "a value the balanced model needs is absent from the IEEE CDF and was defaulted";
+        READ_IEEE_CDF_VALUE_SUBSTITUTED = "READ.IEEE_CDF.VALUE_SUBSTITUTED", Warning,
+            "an IEEE CDF type or side code outside the documented set was read as the nearest documented value";
+        READ_IEEE_CDF_SOURCE_MALFORMED = "READ.IEEE_CDF.SOURCE_MALFORMED", Warning,
+            "an IEEE CDF section header, item count, terminator, record placement, or bus reference disagrees with the records";
+        READ_IEEE_CDF_RETAINED_SOURCE_ONLY = "READ.IEEE_CDF.RETAINED_SOURCE_ONLY", Remark,
+            "an IEEE CDF field or section survives in the retained source only";
+
         READ_GEO_SOURCE_MALFORMED = "READ.GEO.SOURCE_MALFORMED", Warning,
             "a geo layer row could not be read and was skipped";
         READ_GEO_NOTES_TRUNCATED = "READ.GEO.NOTES_TRUNCATED", Warning,

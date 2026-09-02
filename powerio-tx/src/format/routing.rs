@@ -53,6 +53,8 @@ pub enum TransmissionFormat {
     Jiidm,
     Cgmes,
     Ucte,
+    /// The IEEE Common Data Format, a read only fixed column text case.
+    IeeeCdf,
 }
 
 impl TransmissionFormat {
@@ -78,6 +80,7 @@ impl TransmissionFormat {
             Self::Jiidm => "jiidm",
             Self::Cgmes => "cgmes",
             Self::Ucte => "ucte",
+            Self::IeeeCdf => "ieee-cdf",
         }
     }
 }
@@ -158,6 +161,7 @@ pub fn parse_transmission_format(name: &str) -> Option<TransmissionFormat> {
         "jiidm" => Some(TransmissionFormat::Jiidm),
         "cgmes" => Some(TransmissionFormat::Cgmes),
         "ucte" | "uct" | "uctedef" => Some(TransmissionFormat::Ucte),
+        "ieeecdf" | "cdf" => Some(TransmissionFormat::IeeeCdf),
         "opfdata"
         | "opfdatajson"
         | "deepmindopfdata"
@@ -741,6 +745,18 @@ mod tests {
                 TransmissionFormat::SurgeJson
             )))
         );
+    }
+
+    #[test]
+    fn resolves_ieee_cdf_aliases() {
+        for alias in ["ieee-cdf", "ieee_cdf", "IEEECDF", "cdf"] {
+            assert_eq!(
+                super::parse_transmission_format(alias),
+                Some(TransmissionFormat::IeeeCdf),
+                "{alias}"
+            );
+        }
+        assert_eq!(TransmissionFormat::IeeeCdf.name(), "ieee-cdf");
     }
 
     #[test]

@@ -1422,6 +1422,10 @@ pub enum SourceFormat {
     /// 2007.05.01).
     #[serde(rename = "ucte")]
     Ucte,
+    /// Read from an IEEE Common Data Format case. Read only: there is no
+    /// writer, so writing goes through another format's writer.
+    #[serde(rename = "ieee-cdf")]
+    IeeeCdf,
 }
 
 impl SourceFormat {
@@ -1452,6 +1456,7 @@ impl SourceFormat {
             SourceFormat::Jiidm => "jiidm",
             SourceFormat::Cgmes => "cgmes",
             SourceFormat::Ucte => "ucte",
+            SourceFormat::IeeeCdf => "ieee-cdf",
         }
     }
 }
@@ -5621,6 +5626,7 @@ mod tests {
             SourceFormat::Jiidm,
             SourceFormat::Cgmes,
             SourceFormat::Ucte,
+            SourceFormat::IeeeCdf,
         ];
         for f in all {
             match f {
@@ -5643,7 +5649,8 @@ mod tests {
                 | SourceFormat::Xiidm
                 | SourceFormat::Jiidm
                 | SourceFormat::Cgmes
-                | SourceFormat::Ucte => {}
+                | SourceFormat::Ucte
+                | SourceFormat::IeeeCdf => {}
             }
             let token = serde_json::to_value(f).unwrap();
             assert_eq!(token, serde_json::Value::String(f.name().to_owned()));

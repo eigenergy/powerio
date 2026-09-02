@@ -58,7 +58,7 @@ enum Command {
     /// Launch the interactive TUI (default if no subcommand is given).
     Tui {
         /// Directory scanned recursively for case files (.m, .raw, .aux,
-        /// .epc, .pwb, .json, .dss).
+        /// .epc, .pwb, .cdf, .json, .dss).
         #[arg(short, long)]
         data_dir: Option<PathBuf>,
         /// Default output directory for batch exports.
@@ -422,10 +422,10 @@ impl<'a> GenCostCliOptions<'a> {
 }
 
 /// A grid exchange format for `--to` / `--from`. `gridfm`, `goc3-json`,
-/// `opfdata-json`, and `pwb` are parse only here: `convert --from gridfm`
-/// parses a Parquet dataset, while the dedicated `gridfm` subcommand emits a
-/// dataset. GO Challenge 3 and OPFData JSON are source documents, and
-/// PowerWorld `.pwb` has no emitter.
+/// `opfdata-json`, `pwb`, and `ieee-cdf` are parse only here: `convert --from
+/// gridfm` parses a Parquet dataset, while the dedicated `gridfm` subcommand
+/// emits a dataset. GO Challenge 3 and OPFData JSON are source documents, and
+/// PowerWorld `.pwb` and the IEEE CDF have no emitter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum FormatArg {
     #[value(name = "matpower", alias = "m")]
@@ -494,6 +494,9 @@ enum FormatArg {
     /// Parse a PowerWorld `.pwb` binary case (parse only).
     #[value(name = "pwb")]
     Pwb,
+    /// Parse an IEEE Common Data Format case (parse only).
+    #[value(name = "ieee-cdf", alias = "cdf")]
+    IeeeCdf,
     /// OpenDSS `.dss` distribution case (parse and emit).
     #[value(name = "dss", alias = "opendss")]
     Dss,
@@ -531,11 +534,13 @@ impl FormatArg {
             FormatArg::DeepMindOpfDataJson => TargetFormat::DeepMindOpfDataJson,
             // PypsaCsv is a transmission format, but it writes a directory, not a
             // text target; `run_convert` handles it before reaching here. gridfm
-            // is read only here, and Pwb is read only. The distribution formats
-            // belong to `distribution()`. All return `None` from this method.
+            // is read only here, and Pwb and IeeeCdf are read only. The
+            // distribution formats belong to `distribution()`. All return
+            // `None` from this method.
             FormatArg::PypsaCsv
             | FormatArg::Gridfm
             | FormatArg::Pwb
+            | FormatArg::IeeeCdf
             | FormatArg::Dss
             | FormatArg::PmdJson
             | FormatArg::BmopfJson => return None,
@@ -573,7 +578,8 @@ impl FormatArg {
             | FormatArg::SurgeJson
             | FormatArg::DeepMindOpfDataJson
             | FormatArg::Gridfm
-            | FormatArg::Pwb => None,
+            | FormatArg::Pwb
+            | FormatArg::IeeeCdf => None,
         }
     }
 
@@ -602,6 +608,7 @@ impl FormatArg {
             FormatArg::DeepMindOpfDataJson => "opfdata-json",
             FormatArg::Gridfm => "gridfm",
             FormatArg::Pwb => "pwb",
+            FormatArg::IeeeCdf => "ieee-cdf",
             FormatArg::Dss => "dss",
             FormatArg::PmdJson => "pmd-json",
             FormatArg::BmopfJson => "bmopf-json",
@@ -1824,6 +1831,12 @@ fn run_convert(
         return Err(cli_failure(
             &codes::REQUEST_CLI_OUTPUT_REQUIRED,
             "`convert` cannot write PowerWorld .pwb binary cases; use `--to powerworld` for AUX text",
+        ));
+    }
+    if matches!(to, FormatArg::IeeeCdf) {
+        return Err(cli_failure(
+            &codes::REQUEST_CLI_TARGET_UNSUPPORTED,
+            "`convert` cannot write IEEE CDF cases; the format is read only",
         ));
     }
     // A standard input case needs its declared format before any path based
@@ -3078,6 +3091,20 @@ mpc.branch = [
             err.to_string().contains("cannot write PowerWorld .pwb"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn convert_rejects_ieee_cdf_target() {
+        let err = run_convert(
+            &data("case9.m"),
+            FormatArg::IeeeCdf,
+            None,
+            None,
+            0,
+            GenCostCliOptions::preserve(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("cannot write IEEE CDF"), "{err}");
     }
     #[test]
     fn sidecar_paths_must_stay_under_the_output_directory() {

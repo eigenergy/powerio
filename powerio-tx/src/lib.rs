@@ -4,7 +4,8 @@
 //! PowerWorld `.aux`, pandapower JSON, PyPSA CSV, egret JSON, PSLF `.epc`,
 //! PSS/E RAWX 35, PowSybl XIIDM 1.12 through 1.17, CIM CGMES 2.4.15 and 3.0,
 //! Surge JSON,
-//! and DeepMind OPFData JSON. PowerWorld `.pwb` and OPFData files are read
+//! and DeepMind OPFData JSON. PowerWorld `.pwb`, OPFData files, and the IEEE
+//! Common Data Format are read
 //! only. GO Challenge 3 defines a calculation and therefore parses only
 //! through the top level `powerio::parse`, which returns its declared
 //! `AcScucInstance` or `AcScucSolution`. `.pwd` display files parse through

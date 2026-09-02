@@ -11324,8 +11324,8 @@
           "type": "string"
         },
         {
-          "const": "ucte",
-          "description": "Read from an ENTSO-E UCTE-DEF `.uct` file (revision 2003.09.01 or\n2007.05.01).",
+          "const": "ieee-cdf",
+          "description": "Read from an IEEE Common Data Format case. Read only: there is no\nwriter, so writing goes through another format's writer.",
           "type": "string"
         }
       ]
