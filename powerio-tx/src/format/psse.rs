@@ -27,13 +27,13 @@ use std::fmt::Write as _;
 use serde_json::Value;
 
 use super::{
-    TextEmission, TextPosition, branch_rating_set_drop_warning, jnum, sanitize_quoted,
+    TextEmission, branch_rating_set_drop_warning, jnum, sanitize_quoted,
     warn_extra_branch_rating_sets,
 };
 use std::borrow::Cow;
 
 use crate::diagnostics::codes::EMIT_PSSE as F;
-use crate::diagnostics::{Diagnostic, Diagnostics, codes};
+use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
     Area, BalancedNetwork, BalancedNetworkTables, Branch, BranchCharging, BranchRatingSet, Bus,
     BusId, BusType, ComponentMetadata, DetailedConnectivity, Extras, Generator,
@@ -1783,32 +1783,25 @@ fn revision32_shape(section: Section) -> Option<Revision32Shape> {
 }
 
 /// Report a revision 32 record that ends before the last field its typed
-/// layout reads. `span` locates the record in the retained source when the
-/// reader was given its position; the missing fields have already taken their
+/// layout reads. The finding carries the collector's current record span,
+/// the byte range of the record being decoded, when the collector is located
+/// in the source buffer. The missing fields have already taken their
 /// defaults, so the finding is a warning rather than a failure.
-fn check_revision32_width(
-    f: &[Cow<'_, str>],
-    shape: Revision32Shape,
-    span: impl FnOnce() -> Option<powerio_core::SourceSpan>,
-    warnings: &mut Diagnostics,
-) {
+fn check_revision32_width(f: &[Cow<'_, str>], shape: Revision32Shape, warnings: &mut Diagnostics) {
     if f.len() >= shape.width {
         return;
     }
     let first = f.first().map_or("", Cow::as_ref);
-    let message = format!(
-        "PSS/E revision 32 {} record beginning {first:?} has {} field(s); the revision 32 layout reads {} fields through {}, so the missing fields took their defaults",
-        shape.record,
-        f.len(),
-        shape.width,
-        shape.last
+    warnings.push(
+        &codes::READ_PSSE_VALUE_DEFAULTED,
+        format!(
+            "PSS/E revision 32 {} record beginning {first:?} has {} field(s); the revision 32 layout reads {} fields through {}, so the missing fields took their defaults",
+            shape.record,
+            f.len(),
+            shape.width,
+            shape.last
+        ),
     );
-    let diagnostic = Diagnostic::of(&codes::READ_PSSE_VALUE_DEFAULTED, message);
-    let diagnostic = match span() {
-        Some(span) => diagnostic.clone().with_span(span).unwrap_or(diagnostic),
-        None => diagnostic,
-    };
-    warnings.record(diagnostic);
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1908,29 +1901,20 @@ fn apply_pending_regulating_nodes(
 }
 
 /// Parse `source` by borrowing it; the caller retains the buffer. `name_hint`
-/// (e.g. a file stem) names the network when the title line is blank. Findings
-/// carry no source spans; [`parse_psse_source_at`] is the entry the format hub
-/// uses when it knows where the text sits in its retained buffer.
+/// (e.g. a file stem) names the network when the title line is blank.
+///
+/// Every finding raised at a record, and a failure that ends the read at
+/// one, carries that record's byte range when `warnings` is located in the
+/// source buffer (the format hub locates it); an unlocated collector attaches
+/// no span.
 // A flat reader: header parse plus one match arm per section. Splitting it would
 // add indirection without clarity.
-#[cfg(test)]
-fn parse_psse_source(
+pub(crate) fn parse_psse_source(
     source: &str,
     name_hint: Option<&str>,
     warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
-    parse_psse_source_inner(source, name_hint, None, warnings, false)
-}
-
-/// [`parse_psse_source`] with the position of `source` in its retained buffer,
-/// so a record finding can name the bytes it concerns.
-pub(super) fn parse_psse_source_at(
-    source: &str,
-    name_hint: Option<&str>,
-    position: Option<TextPosition<'_>>,
-    warnings: &mut Diagnostics,
-) -> Result<BalancedNetwork> {
-    parse_psse_source_inner(source, name_hint, position, warnings, false)
+    parse_psse_source_inner(source, name_hint, warnings, false)
 }
 
 pub(super) fn parse_psse_source_deferred_regulating_nodes(
@@ -1938,31 +1922,33 @@ pub(super) fn parse_psse_source_deferred_regulating_nodes(
     name_hint: Option<&str>,
     warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
-    parse_psse_source_inner(source, name_hint, None, warnings, true)
+    parse_psse_source_inner(source, name_hint, warnings, true)
 }
 
 #[expect(clippy::too_many_lines)]
 fn parse_psse_source_inner(
     source: &str,
     name_hint: Option<&str>,
-    position: Option<TextPosition<'_>>,
     warnings: &mut Diagnostics,
     defer_regulating_nodes: bool,
 ) -> Result<BalancedNetwork> {
     let content: &str = source;
-    let mut lines = content.lines();
+    let mut lines = RawLines::new(content);
 
     // Header line 1: IC, SBASE, REV, ...
-    let header = lines
-        .by_ref()
-        .find(|line| {
-            let line = line.trim();
-            !line.is_empty() && !is_comment(line)
-        })
-        .ok_or_else(|| Error::FormatRead {
-            format: FMT,
-            message: "empty file".into(),
-        })?;
+    let header = loop {
+        let Some((start, raw)) = lines.next_line() else {
+            return Err(Error::FormatRead {
+                format: FMT,
+                message: "empty file".into(),
+            });
+        };
+        let line = raw.trim();
+        if !line.is_empty() && !is_comment(line) {
+            mark_record(warnings, start, raw);
+            break raw;
+        }
+    };
     let header_fields = fields(header);
     let base_mva = header_fields
         .get(1)
@@ -2003,14 +1989,16 @@ fn parse_psse_source_inner(
             value
         }
     };
-    // Line 2 is the case title; we write the network name there, so read it back.
-    let title = lines.next().unwrap_or("").trim();
+    warnings.leave_record();
+    // Line 2 is the case title; the emitter writes the network name there, so
+    // read it back.
+    let title = lines.next_line().map_or("", |(_, line)| line).trim();
     let name = if title.is_empty() {
         name_hint.unwrap_or("case").to_string()
     } else {
         title.to_string()
     };
-    lines.next(); // line 3: second comment
+    lines.next_line(); // line 3: second comment
 
     let mut buses = Vec::new();
     let mut loads = Vec::new();
@@ -2034,8 +2022,7 @@ fn parse_psse_source_inner(
     let mut section = Section::Bus;
     let mut saw_bus_marker = false;
     let mut skipped_section_name: Option<String> = None;
-    let mut lines = lines.peekable();
-    while let Some(raw) = lines.next() {
+    while let Some((start, raw)) = lines.next_line() {
         let line = raw.trim();
         if line.is_empty() {
             continue;
@@ -2047,6 +2034,7 @@ fn parse_psse_source_inner(
             break;
         }
         if is_terminator(line) {
+            warnings.leave_record();
             // The terminator names the section that begins next ("…, BEGIN
             // SWITCHED SHUNT DATA"); read that rather than counting, so the many
             // unmodeled sections between transformers and switched shunts don't
@@ -2058,19 +2046,18 @@ fn parse_psse_source_inner(
             saw_bus_marker |= matches!(section, Section::Bus);
             continue;
         }
+        // Every finding raised while this record is decoded, and a failure
+        // that ends the read here, carries the record's byte range; a
+        // continuation line extends it.
+        mark_record(warnings, start, raw);
         let f = fields(line);
         // Revision 32 has the shortest layouts, so a record that ends before
         // its last typed field is missing electrical data; the reader reports
-        // the record, with its bytes when the text's position is known.
+        // the record, with its byte range when the collector is located.
         if raw_rev == 32
             && let Some(shape) = revision32_shape(section)
         {
-            check_revision32_width(
-                &f,
-                shape,
-                || position.and_then(|position| position.span(content, raw)),
-                warnings,
-            );
+            check_revision32_width(&f, shape, warnings);
         }
         match section {
             Section::Bus if !saw_bus_marker && buses.is_empty() && is_system_wide_record(&f) => {
@@ -2124,25 +2111,31 @@ fn parse_psse_source_inner(
                 let two_winding = int_at(&f, 2, 0)? == 0;
                 let l2 = next_continuation_line(
                     &mut lines,
+                    warnings,
                     "transformer",
                     "transformer impedance line",
                 )?;
-                let l3 = next_continuation_line(&mut lines, "transformer", "winding data line 1")?;
-                let l4 = next_continuation_line(&mut lines, "transformer", "winding data line 2")?;
+                let l3 = next_continuation_line(
+                    &mut lines,
+                    warnings,
+                    "transformer",
+                    "winding data line 1",
+                )?;
+                let l4 = next_continuation_line(
+                    &mut lines,
+                    warnings,
+                    "transformer",
+                    "winding data line 2",
+                )?;
                 let (f2, f3, f4) = (fields(l2), fields(l3), fields(l4));
                 if two_winding {
                     if raw_rev == 32 {
-                        for (record, f, shape) in [
-                            (l2, &f2, REVISION32_TRANSFORMER_IMPEDANCE_2W),
-                            (l3, &f3, REVISION32_TRANSFORMER_WINDING),
-                            (l4, &f4, REVISION32_TRANSFORMER_WINDING_2),
+                        for (f, shape) in [
+                            (&f2, REVISION32_TRANSFORMER_IMPEDANCE_2W),
+                            (&f3, REVISION32_TRANSFORMER_WINDING),
+                            (&f4, REVISION32_TRANSFORMER_WINDING_2),
                         ] {
-                            check_revision32_width(
-                                f,
-                                shape,
-                                || position.and_then(|position| position.span(content, record)),
-                                warnings,
-                            );
+                            check_revision32_width(f, shape, warnings);
                         }
                     }
                     let index = branches.len();
@@ -2164,22 +2157,21 @@ fn parse_psse_source_inner(
                         });
                     }
                 } else {
-                    let l5 =
-                        next_continuation_line(&mut lines, "transformer", "winding data line 3")?;
+                    let l5 = next_continuation_line(
+                        &mut lines,
+                        warnings,
+                        "transformer",
+                        "winding data line 3",
+                    )?;
                     let f5 = fields(l5);
                     if raw_rev == 32 {
-                        for (record, f, shape) in [
-                            (l2, &f2, REVISION32_TRANSFORMER_IMPEDANCE_3W),
-                            (l3, &f3, REVISION32_TRANSFORMER_WINDING),
-                            (l4, &f4, REVISION32_TRANSFORMER_WINDING),
-                            (l5, &f5, REVISION32_TRANSFORMER_WINDING),
+                        for (f, shape) in [
+                            (&f2, REVISION32_TRANSFORMER_IMPEDANCE_3W),
+                            (&f3, REVISION32_TRANSFORMER_WINDING),
+                            (&f4, REVISION32_TRANSFORMER_WINDING),
+                            (&f5, REVISION32_TRANSFORMER_WINDING),
                         ] {
-                            check_revision32_width(
-                                f,
-                                shape,
-                                || position.and_then(|position| position.span(content, record)),
-                                warnings,
-                            );
+                            check_revision32_width(f, shape, warnings);
                         }
                     }
                     let index = transformers_3w.len();
@@ -2211,10 +2203,18 @@ fn parse_psse_source_inner(
             Section::TwoTerminalDc => {
                 // 3-line record: control line, then the rectifier and inverter
                 // converter lines whose first field is the AC terminal bus.
-                let rectifier =
-                    next_continuation_line(&mut lines, "two-terminal DC", "rectifier line")?;
-                let inverter =
-                    next_continuation_line(&mut lines, "two-terminal DC", "inverter line")?;
+                let rectifier = next_continuation_line(
+                    &mut lines,
+                    warnings,
+                    "two-terminal DC",
+                    "rectifier line",
+                )?;
+                let inverter = next_continuation_line(
+                    &mut lines,
+                    warnings,
+                    "two-terminal DC",
+                    "inverter line",
+                )?;
                 hvdc.push(read_dc_line(
                     &f,
                     &fields(rectifier),
@@ -2232,6 +2232,8 @@ fn parse_psse_source_inner(
             }
         }
     }
+
+    warnings.leave_record();
 
     if raw_rev >= 34 {
         unmodeled_sections.retain(|name, _| !name.starts_with("SUBSTATION"));
@@ -2341,12 +2343,52 @@ fn is_terminator(line: &str) -> bool {
     fields(line).first().map(Cow::as_ref) == Some("0")
 }
 
+/// The lines of the RAW text, each with the byte offset of its first
+/// character, so a record's byte range can be attached to the findings it
+/// produces. A line terminator (`\n` or `\r\n`) is excluded from the yielded
+/// text, as by `str::lines`.
+struct RawLines<'a> {
+    text: &'a str,
+    offset: usize,
+}
+
+impl<'a> RawLines<'a> {
+    fn new(text: &'a str) -> Self {
+        Self { text, offset: 0 }
+    }
+
+    fn next_line(&mut self) -> Option<(usize, &'a str)> {
+        if self.offset >= self.text.len() {
+            return None;
+        }
+        let start = self.offset;
+        let rest = &self.text[start..];
+        let (line, consumed) = match rest.find('\n') {
+            Some(end) => (&rest[..end], end + 1),
+            None => (rest, rest.len()),
+        };
+        self.offset += consumed;
+        Some((start, line.strip_suffix('\r').unwrap_or(line)))
+    }
+}
+
+/// Mark the record on `raw`, a line starting at byte `start`, as the
+/// collector's current record: its text without surrounding whitespace.
+fn mark_record(warnings: &mut Diagnostics, start: usize, raw: &str) {
+    let record_start = start + (raw.len() - raw.trim_start().len());
+    warnings.enter_record(record_start, record_start + raw.trim().len());
+}
+
+/// The next data line of a multi-line record, extending the collector's
+/// current record over it.
 fn next_continuation_line<'a>(
-    lines: &mut std::iter::Peekable<std::str::Lines<'a>>,
+    lines: &mut RawLines<'a>,
+    warnings: &mut Diagnostics,
     record: &str,
     expected: &str,
 ) -> Result<&'a str> {
-    for line in lines.by_ref().map(str::trim) {
+    while let Some((start, raw)) = lines.next_line() {
+        let line = raw.trim();
         if line.is_empty() || is_comment(line) {
             continue;
         }
@@ -2358,6 +2400,8 @@ fn next_continuation_line<'a>(
                 ),
             });
         }
+        let line_start = start + (raw.len() - raw.trim_start().len());
+        warnings.extend_record(line_start + line.len());
         return Ok(line);
     }
     Err(Error::FormatRead {
@@ -4613,6 +4657,7 @@ mod tests {
         parse_psse_source(content, None, &mut warnings)
     }
     use super::*;
+    use crate::diagnostics::Diagnostic;
 
     fn close(actual: f64, expected: f64) {
         assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
@@ -4732,7 +4777,7 @@ mod tests {
         assert!(short[1].message().contains("reads 13 fields through SCALE"));
         assert!(
             short.iter().all(|diagnostic| diagnostic.spans().is_empty()),
-            "a reader without a text position attaches no span"
+            "an unlocated collector attaches no span"
         );
         let unmodeled = warnings
             .lines()

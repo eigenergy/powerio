@@ -582,7 +582,12 @@ pub fn parse_with_json_class(
             PioModule::parsed(network, source, warnings.into_records())
         }
         Err(error) => {
-            let core = powerio_core::Error::new(error.code(), error.to_string());
+            // A reader that failed on a located record leaves that record's
+            // byte range on the collector; the failure carries it as a span.
+            let mut core = powerio_core::Error::new(error.code(), error.to_string());
+            if let Some(span) = warnings.record_span() {
+                core = core.with_span(span);
+            }
             Err(core
                 .with_diagnostics(warnings.into_records())
                 .with_cause(error)
@@ -748,6 +753,12 @@ fn parse_to_network(
         return Ok(network);
     }
     let text = source_text(&buffer)?;
+    // Readers that locate records mark them as byte ranges of `text`; the
+    // retained buffer starts with the byte order mark `text` omits.
+    warnings.locate_in(
+        buffer.id().clone(),
+        (buffer.bytes().len() - buffer.content_bytes().len()) as u64,
+    );
     let fmt = match fmt_hint {
         Some(fmt) => fmt,
         // A caller ahead of this (the `powerio` facade's own routing) may
@@ -763,13 +774,7 @@ fn parse_to_network(
             class => json_target_from_class(class)?,
         },
     };
-    read_source(
-        text,
-        fmt,
-        stem,
-        Some(TextPosition::of_buffer(&buffer)),
-        warnings,
-    )
+    read_source(text, fmt, stem, warnings)
 }
 
 /// The primary buffer of a file or memory source.
@@ -789,62 +794,24 @@ fn source_text(buffer: &powerio_core::SourceBuffer) -> Result<&str> {
     })
 }
 
-/// Where a reader's decoded text sits in its retained source buffer: the
-/// buffer id and the byte offset of the text within the buffer, which is the
-/// length of the byte order mark the decoded slice omits. A reader that knows
-/// where a record starts builds that record's span from it; the module
-/// constructor then maps the buffer id onto the module's source id.
-#[derive(Clone, Copy)]
-pub(crate) struct TextPosition<'a> {
-    source: &'a powerio_core::SourceId,
-    offset: u64,
-}
-
-impl<'a> TextPosition<'a> {
-    fn of_buffer(buffer: &'a powerio_core::SourceBuffer) -> Self {
-        let offset = buffer.bytes().len() - buffer.content_bytes().len();
-        Self {
-            source: buffer.id(),
-            offset: offset as u64,
-        }
-    }
-
-    /// The span of `record`, a subslice of the decoded `text`, in the source
-    /// buffer. `None` when `record` is not a subslice of `text`.
-    pub(crate) fn span(&self, text: &str, record: &str) -> Option<powerio_core::SourceSpan> {
-        let base = text.as_ptr() as usize;
-        let start = record.as_ptr() as usize;
-        let end = start.checked_add(record.len())?;
-        if start < base || end > base.checked_add(text.len())? {
-            return None;
-        }
-        let byte_start = self.offset.checked_add((start - base) as u64)?;
-        let byte_end = self.offset.checked_add((end - base) as u64)?;
-        powerio_core::SourceSpan::new(self.source.clone(), byte_start, byte_end).ok()
-    }
-}
-
 /// Read decoded `text` as `fmt`, using `name_hint` (e.g. the file stem) when
 /// the format carries no name of its own. The single format to reader map:
 /// every parse route funnels through it, so every format is dispatched the
-/// same way. Readers borrow the text; the module retains the source bytes.
-/// `position` locates the text in that retained buffer for readers that
-/// attach record spans to their findings.
+/// same way. Readers borrow the text; the module retains the source bytes,
+/// and `warnings` is located in that buffer for readers that attach record
+/// spans to their findings.
 fn read_source(
     text: &str,
     fmt: TargetFormat,
     name_hint: Option<&str>,
-    position: Option<TextPosition<'_>>,
     warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
     let net = match fmt {
-        TargetFormat::Matpower => matpower::parse_matpower_source(text, name_hint),
+        TargetFormat::Matpower => matpower::parse_matpower_source(text, name_hint, warnings),
         TargetFormat::PowerModelsJson => {
             powermodels::parse_powermodels_json_source(text, name_hint, warnings)
         }
-        TargetFormat::Psse { .. } => {
-            psse::parse_psse_source_at(text, name_hint, position, warnings)
-        }
+        TargetFormat::Psse { .. } => psse::parse_psse_source(text, name_hint, warnings),
         TargetFormat::PsseRawx => rawx::parse_rawx_source(text, name_hint, warnings),
         TargetFormat::PowerWorld => {
             powerworld::map::parse_powerworld_source(text, name_hint, warnings)

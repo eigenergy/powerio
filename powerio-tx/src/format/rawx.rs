@@ -458,8 +458,14 @@ pub(super) fn parse_rawx_source(
     warn_unsupported_tables(network, warnings)?;
     warn_unknown_tables(network, warnings);
 
-    let mut parsed =
-        super::psse::parse_psse_source_deferred_regulating_nodes(&raw, name_hint, warnings)?;
+    // The shared reader decodes text synthesized here, not the RAWX document,
+    // so its record offsets name nothing in the retained buffer and no span is
+    // attached while it runs.
+    let location = warnings.suspend_location();
+    let parsed =
+        super::psse::parse_psse_source_deferred_regulating_nodes(&raw, name_hint, warnings);
+    warnings.resume_location(location);
+    let mut parsed = parsed?;
     *parsed.source_format_mut() = SourceFormat::PsseRawx;
     read_system_switches(network, &mut parsed, warnings)?;
     parsed.assign_missing_component_ids();

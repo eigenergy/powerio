@@ -409,6 +409,13 @@ impl Diagnostic {
     }
 
     pub fn with_span(mut self, span: SourceSpan) -> Result<Self, Error> {
+        self.add_span(span)?;
+        Ok(self)
+    }
+
+    /// Attach one source span to a finding already built, under the same
+    /// count limit the decoder enforces.
+    pub(crate) fn add_span(&mut self, span: SourceSpan) -> Result<(), Error> {
         if self.spans.len() >= crate::validation::MAX_DIAGNOSTIC_SPANS {
             return Err(record_too_large(
                 "source spans",
@@ -416,7 +423,7 @@ impl Diagnostic {
             ));
         }
         self.spans.push(span);
-        Ok(self)
+        Ok(())
     }
 
     pub(crate) fn prefix_target(&mut self, prefix: &str) -> Result<(), Error> {

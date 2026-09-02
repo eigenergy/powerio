@@ -1,5 +1,101 @@
 fn parse_mpc(content: &str) -> crate::Result<crate::network::BalancedNetwork> {
-    super::parse_matpower_source(content, None)
+    let mut warnings = crate::collect::Diagnostics::new();
+    super::parse_matpower_source(content, None, &mut warnings)
+}
+
+/// Parse a case with the collector located in a source named `/input`, and
+/// return the failure with the byte range left on the collector.
+fn parse_mpc_located(content: &str) -> (crate::Error, Option<powerio_core::SourceSpan>) {
+    let mut warnings = crate::collect::Diagnostics::new();
+    warnings.locate_in(powerio_core::SourceId::new("/input").unwrap(), 0);
+    let error = super::parse_matpower_source(content, None, &mut warnings)
+        .expect_err("the case is malformed");
+    (error, warnings.record_span())
+}
+
+fn byte_range(source: &str, text: &str) -> (u64, u64) {
+    let start = source.find(text).expect("the text is in the source");
+    (start as u64, (start + text.len()) as u64)
+}
+
+#[test]
+fn a_short_row_leaves_the_row_byte_range_on_the_collector() {
+    let src = "mpc.baseMVA = 100;\nmpc.bus = [\n\t1  3  0 0 0 0 1 1.0 0 345 1 1.1 0.9;\n\t2  1  0 0;\n];\n";
+    let (error, span) = parse_mpc_located(src);
+    assert!(matches!(
+        error,
+        crate::Error::ShortRow {
+            field: "bus",
+            row: 1,
+            ..
+        }
+    ));
+    let span = span.unwrap();
+    assert_eq!(span.source().as_str(), "/input");
+    assert_eq!(
+        (span.byte_start(), span.byte_end()),
+        byte_range(src, "2  1  0 0")
+    );
+}
+
+#[test]
+fn a_malformed_token_marks_its_row_up_to_the_end_of_the_line() {
+    let src = "mpc.baseMVA = 100;\nmpc.bus = [\n\t1  3  0 0 0 0 1 1.0 0 345 1 1.1 0.9;\n\t2  1  0 abc 0 0 1 1.0 0 345 1 1.1 0.9;  % comment\n];\n";
+    let (error, span) = parse_mpc_located(src);
+    assert!(matches!(
+        error,
+        crate::Error::BadFloat {
+            field: "bus",
+            row: 1,
+            ..
+        }
+    ));
+    let span = span.unwrap();
+    assert_eq!(
+        (span.byte_start(), span.byte_end()),
+        byte_range(src, "2  1  0 abc 0 0 1 1.0 0 345 1 1.1 0.9;")
+    );
+}
+
+#[test]
+fn a_truncated_matrix_marks_the_whole_assignment() {
+    let src = "mpc.baseMVA = 100;\nmpc.bus = [\n\t1  3  0 0 0 0 1 1.0 0 345 1 1.1 0.9;\n";
+    let (error, span) = parse_mpc_located(src);
+    assert!(matches!(error, crate::Error::UnbalancedBrackets("bus")));
+    let span = span.unwrap();
+    assert_eq!(
+        (span.byte_start(), span.byte_end()),
+        byte_range(src, "mpc.bus = [\n\t1  3  0 0 0 0 1 1.0 0 345 1 1.1 0.9;")
+    );
+}
+
+#[test]
+fn a_cost_count_mismatch_marks_the_cost_table() {
+    let src = "mpc.baseMVA = 100;\nmpc.bus = [\n\t1  3  0 0 0 0 1 1.0 0 345 1 1.1 0.9;\n];\nmpc.branch = [];\nmpc.gen = [\n\t1 0 0 10 -10 1 100 1 20 0;\n];\nmpc.gencost = [\n\t2 0 0 3 0.1 1 0;\n\t2 0 0 3 0.1 1 0;\n\t2 0 0 3 0.1 1 0;\n];\n";
+    let (error, span) = parse_mpc_located(src);
+    assert!(matches!(
+        error,
+        crate::Error::GenCostCountMismatch {
+            gens: 1,
+            gencost: 3
+        }
+    ));
+    let span = span.unwrap();
+    let (start, end) = byte_range(src, "mpc.gencost = [");
+    assert_eq!(span.byte_start(), start);
+    assert!(span.byte_end() > end);
+    assert_eq!(
+        &src[span.byte_start() as usize..span.byte_end() as usize].trim_end(),
+        &src[start as usize..].trim_end()
+    );
+}
+
+#[test]
+fn a_well_formed_case_leaves_no_record_on_the_collector() {
+    let mut warnings = crate::collect::Diagnostics::new();
+    warnings.locate_in(powerio_core::SourceId::new("/input").unwrap(), 0);
+    super::parse_matpower_source(CASE_TINY, None, &mut warnings).unwrap();
+    assert_eq!(warnings.record_span(), None);
 }
 use super::write_matpower;
 use crate::indexed::IndexedNetwork;

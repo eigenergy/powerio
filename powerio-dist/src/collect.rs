@@ -5,7 +5,27 @@
 //! emitting crate carries its own copy of this file. Keep the copies byte
 //! identical; the shared record types come from `powerio-core`.
 
-use powerio_core::{Diagnostic, DiagnosticInfo, DiagnosticSeverity, render_diagnostics};
+use powerio_core::{
+    Diagnostic, DiagnosticInfo, DiagnosticSeverity, SourceId, SourceSpan, render_diagnostics,
+};
+
+/// The buffer a reader decodes and the record it is on. While a record is
+/// set, every finding the collector records carries that record's byte range
+/// as a span into the buffer.
+#[derive(Clone, Debug, PartialEq)]
+#[allow(
+    dead_code,
+    reason = "the collector copies stay identical across crates"
+)]
+pub(crate) struct RecordLocation {
+    source: SourceId,
+    /// Byte offset of the decoded text within the retained buffer: the
+    /// length of the byte order mark the reader never sees.
+    base: u64,
+    /// Half open byte range of the current record, relative to the decoded
+    /// text.
+    record: Option<(usize, usize)>,
+}
 
 /// An ordered set of findings, built up as a reader, a lowering pass, or a
 /// writer runs.
@@ -15,7 +35,10 @@ use powerio_core::{Diagnostic, DiagnosticInfo, DiagnosticSeverity, render_diagno
 /// carries are rendered from the records by [`Diagnostics::lines`], never
 /// collected alongside them.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct Diagnostics(Vec<Diagnostic>);
+pub(crate) struct Diagnostics {
+    records: Vec<Diagnostic>,
+    location: Option<RecordLocation>,
+}
 
 #[allow(
     dead_code,
@@ -24,12 +47,16 @@ pub(crate) struct Diagnostics(Vec<Diagnostic>);
 impl Diagnostics {
     #[must_use]
     pub(crate) fn new() -> Self {
-        Self(Vec::new())
+        Self {
+            records: Vec::new(),
+            location: None,
+        }
     }
 
     /// Record a finding at its registered default severity.
     pub(crate) fn push(&mut self, info: &'static DiagnosticInfo, message: impl Into<String>) {
-        self.0.push(Diagnostic::of(info, message));
+        let diagnostic = self.located(Diagnostic::of(info, message));
+        self.records.push(diagnostic);
     }
 
     /// Record a finding at a severity this site raises or lowers.
@@ -39,70 +66,145 @@ impl Diagnostics {
         severity: DiagnosticSeverity,
         message: impl Into<String>,
     ) {
-        self.0
-            .push(Diagnostic::of(info, message).with_severity(severity));
+        let diagnostic = self.located(Diagnostic::of(info, message).with_severity(severity));
+        self.records.push(diagnostic);
     }
 
-    /// Record a finding built with the record's own builders.
+    /// Record a finding built with the record's own builders. A finding that
+    /// already names a span keeps it; one without receives the current
+    /// record's span.
     pub(crate) fn record(&mut self, diagnostic: Diagnostic) {
-        self.0.push(diagnostic);
+        let diagnostic = self.located(diagnostic);
+        self.records.push(diagnostic);
     }
 
     /// Record every finding of another set, in order.
     pub(crate) fn absorb(&mut self, other: impl IntoIterator<Item = Diagnostic>) {
-        self.0.extend(other);
+        self.records.extend(other);
     }
 
     /// Put `other`'s findings ahead of this set's, which is what a conversion
     /// does with the read side.
     pub(crate) fn prepend(&mut self, other: impl IntoIterator<Item = Diagnostic>) {
         let mut front: Vec<_> = other.into_iter().collect();
-        front.append(&mut self.0);
-        self.0 = front;
+        front.append(&mut self.records);
+        self.records = front;
+    }
+
+    /// Name the buffer the running reader decodes so record spans can be
+    /// attached. `base` is the byte offset of the decoded text within the
+    /// retained buffer.
+    pub(crate) fn locate_in(&mut self, source: SourceId, base: u64) {
+        self.location = Some(RecordLocation {
+            source,
+            base,
+            record: None,
+        });
+    }
+
+    /// Take the location off the collector for a reader that decodes text
+    /// other than the retained buffer; [`Diagnostics::resume_location`] puts
+    /// it back.
+    pub(crate) fn suspend_location(&mut self) -> Option<RecordLocation> {
+        self.location.take()
+    }
+
+    pub(crate) fn resume_location(&mut self, location: Option<RecordLocation>) {
+        self.location = location;
+    }
+
+    /// Mark the record being decoded, as a half open byte range of the
+    /// decoded text. A no-op when no buffer is located.
+    pub(crate) fn enter_record(&mut self, start: usize, end: usize) {
+        if let Some(location) = &mut self.location {
+            location.record = Some((start, end.max(start)));
+        }
+    }
+
+    /// Extend the current record to `end`, for a record that continues over
+    /// more than one line.
+    pub(crate) fn extend_record(&mut self, end: usize) {
+        if let Some(location) = &mut self.location
+            && let Some((_, record_end)) = &mut location.record
+        {
+            *record_end = end.max(*record_end);
+        }
+    }
+
+    /// Leave the current record: findings recorded next carry no span.
+    pub(crate) fn leave_record(&mut self) {
+        if let Some(location) = &mut self.location {
+            location.record = None;
+        }
+    }
+
+    /// The span of the record being decoded, in the retained buffer's bytes.
+    #[must_use]
+    pub(crate) fn record_span(&self) -> Option<SourceSpan> {
+        let location = self.location.as_ref()?;
+        let (start, end) = location.record?;
+        SourceSpan::new(
+            location.source.clone(),
+            location.base + start as u64,
+            location.base + end as u64,
+        )
+        .ok()
+    }
+
+    fn located(&self, diagnostic: Diagnostic) -> Diagnostic {
+        match self.record_span() {
+            Some(span) if diagnostic.spans().is_empty() => diagnostic
+                .with_span(span)
+                .expect("a finding with no spans is below the span limit"),
+            _ => diagnostic,
+        }
     }
 
     #[must_use]
     pub(crate) fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.records.is_empty()
     }
 
     #[must_use]
     pub(crate) fn len(&self) -> usize {
-        self.0.len()
+        self.records.len()
     }
 
     #[must_use]
     pub(crate) fn records(&self) -> &[Diagnostic] {
-        &self.0
+        &self.records
     }
 
     #[must_use]
     pub(crate) fn into_records(self) -> Vec<Diagnostic> {
-        self.0
+        self.records
     }
 
     /// The `CODE: message` lines for the text channels.
     #[must_use]
     pub(crate) fn lines(&self) -> Vec<String> {
-        render_diagnostics(&self.0)
+        render_diagnostics(&self.records)
     }
 
     /// The worst severity recorded, or `None` when nothing was.
     #[must_use]
     pub(crate) fn worst_severity(&self) -> Option<DiagnosticSeverity> {
-        self.0.iter().map(Diagnostic::severity).max()
+        self.records.iter().map(Diagnostic::severity).max()
     }
 }
 
 impl From<Vec<Diagnostic>> for Diagnostics {
     fn from(records: Vec<Diagnostic>) -> Self {
-        Self(records)
+        Self {
+            records,
+            location: None,
+        }
     }
 }
 
 impl From<Diagnostics> for Vec<Diagnostic> {
     fn from(diagnostics: Diagnostics) -> Self {
-        diagnostics.0
+        diagnostics.records
     }
 }
 
@@ -111,7 +213,7 @@ impl IntoIterator for Diagnostics {
     type IntoIter = std::vec::IntoIter<Diagnostic>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
+        self.records.into_iter()
     }
 }
 
@@ -170,5 +272,36 @@ mod tests {
         );
         assert_eq!(write.len(), 2);
         assert!(!write.is_empty());
+    }
+
+    #[test]
+    fn findings_carry_the_current_record_span_while_located() {
+        let source = SourceId::new("/input").unwrap();
+        let mut d = Diagnostics::new();
+        d.enter_record(0, 4);
+        d.push(&DROPPED, "before any buffer is located");
+        assert!(d.records()[0].spans().is_empty());
+
+        d.locate_in(source.clone(), 3);
+        d.enter_record(10, 20);
+        d.extend_record(25);
+        d.push(&DROPPED, "inside a record");
+        let span = &d.records()[1].spans()[0];
+        assert_eq!(span.source(), &source);
+        assert_eq!((span.byte_start(), span.byte_end()), (13, 28));
+        assert_eq!(d.record_span().as_ref(), Some(span));
+
+        d.leave_record();
+        d.push(&DROPPED, "between records");
+        assert!(d.records()[2].spans().is_empty());
+        assert_eq!(d.record_span(), None);
+
+        d.enter_record(30, 31);
+        let location = d.suspend_location();
+        d.push(&DROPPED, "while suspended");
+        assert!(d.records()[3].spans().is_empty());
+        d.resume_location(location);
+        d.push(&DROPPED, "after resuming");
+        assert_eq!(d.records()[4].spans()[0].byte_start(), 33);
     }
 }
