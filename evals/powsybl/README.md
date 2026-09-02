@@ -327,6 +327,30 @@ carries no branch NAME field either, so PowSybl synthesizes the same line
 names from both files and no line name cell is excluded. The RAW 32 example
 case performs 403 listed field comparisons and the IEEE 30 bus case 1860.
 
+The gate also reads the eight public IEEE Common Data Format cases PowSybl
+Core ships under `ieee-cdf/ieee-cdf-model/src/main/resources` (9, 9 with a
+zero impedance line, 14, 14 solved, 30, 57, 118, and 300 buses), pinned by
+SHA-256. PyPowSybl loads each `.txt` with its own IEEE-CDF importer, and the
+checker compares that view with the PowerIO IR of the same file: bus count
+in both the bus and bus breaker views, branch count, transformer count
+(PowerIO branches with a nonzero tap), generator and load counts, the count
+of shunts with a nonzero susceptance (PowSybl reads no conductance only
+shunt), and the load and generation MW totals. PowerIO then writes fresh
+MATPOWER from the IR of every case and reads that MATPOWER file back into a
+second IR; the checker counts the MATPOWER rows and requires the reloaded IR
+to state the same counts, shunt table length, and MW totals as the CDF IR
+and PyPowSybl's view. The MATPOWER file is not loaded by PyPowSybl, whose
+MATPOWER importer reads the binary `.mat` form only, and it is not written
+as XIIDM: the XIIDM writer derives its element ids from PowerIO component
+ids, which name a load and a generator at the same bus alike, so a case
+with both at one bus yields duplicate IIDM ids that PyPowSybl refuses.
+The checker also requires that PowerIO reports no
+malformed or truncated record for any of the eight files; the archive
+quirks they do carry (the 118 bus file's headers declare 57 buses and 80
+branches, and the 30 and 57 bus files place their interchange record after
+the `-9` terminator) are reported as `READ.IEEE_CDF.SOURCE_MALFORMED` and
+printed with each case.
+
 The Python environment pins PyPowSybl 1.16.1, pandas 3.0.5, numpy 2.5.2,
 networkx 3.6.1, and prettytable 3.18.0. PyPowSybl's PowSybl Dependencies
 2026.1.0 release pins PowSybl Core 7.3.0. The checker asserts every runtime
