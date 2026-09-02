@@ -21,6 +21,7 @@
   - [From the 1.0 beta to 1.0](migration-v1.md)
   - [1.0 API surface](final-v1-api-cleanup.md)
   - [.pio.json schema](pio-json-schema.md)
+  - [PowerIO IR reference](ir-reference.md)
   - [Crate graph and dependency rules](crate-graph.md)
   - [Architecture map](architecture-map.md)
   - [LLVM and MLIR lessons](compiler-ir.md)

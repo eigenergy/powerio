@@ -6,7 +6,9 @@ PowerIO's design borrows from LLVM and MLIR where their problems genuinely overl
 
 **A small shared foundation under acyclic higher layers.** LLVM's library layering puts Support under IR under the producers. PowerIO's `powerio-core` owns sources, diagnostics, errors, the module, and the generic containers; the network crates, the calculation crate, and the matrix crate stack over it in one direction, and CI asserts the edges from `cargo metadata` ([Crate graph](crate-graph.md)).
 
-**Source ownership that survives parsing.** MLIR's source manager keeps buffers alive so locations mean something after parsing. A `PioModule` retains its source, and the byte exact same format echo reads it back; the diagnostic wire form carries a source identifier plus a byte range into those exact bytes end to end, though 1.0 parsers do not yet emit a span on any diagnostic.
+**Source ownership that survives parsing.** MLIR's source manager keeps buffers alive so locations mean something after parsing. A `PioModule` retains its source, and same format emission returns those bytes unchanged. A diagnostic carries a source identifier plus a byte range into those exact bytes end to end, and the MATPOWER and PSS/E readers attach the range of the record a finding is about, for the failure that ends a read and for warnings alike; the other readers attach no span yet.
+
+**Deterministic serialization.** `serialize` is a function of the module alone: one module serializes to identical text every time, and serializing the module that text deserializes to reproduces the text. Members are written in a fixed order (record fields in declaration order, map keys sorted), diagnostic identities are minted `d0`, `d1`, ... in record order for records that carry none, and every float is written in the shortest decimal form that reads back to the same value. Two equal modules therefore compare equal as documents, which is what a cache key, a golden file, or a content digest needs.
 
 **Structured diagnostics with stable severities and attached context.** The four severities (`error`, `warning`, `remark`, `note`) are MLIR's, with the same meanings: a remark reports on success, a note attaches context to another finding. PowerIO adds the stable dotted code as the identity a consumer branches on, plus targets, related records, and suggested actions.
 
@@ -22,7 +24,7 @@ PowerIO's design borrows from LLVM and MLIR where their problems genuinely overl
 
 **Registries checked mechanically where tables drift.** Structural type names, format tokens, diagnostic codes, and drawn architecture edges are each held to one source by a CI gate, which is the maintainable slice of MLIR's declarative dialect definitions.
 
-**Serialization specified apart from memory.** `.pio.json` version 1 has an explicit schema and validation rules; the Rust structs never derive the public document layout. PowerIO 1.0 reads and writes only that final shape.
+**Serialization specified apart from memory.** `.pio.json` version 1 has an explicit schema and validation rules; the Rust structs never derive the public document layout. PowerIO 1.0 reads and writes only that final shape, and [PowerIO IR reference](ir-reference.md) defines every structural type of that shape field by field, the way the MLIR language reference defines its types; a test holds the page to the generated schema.
 
 **Scrutiny proportional to permanence.** A new core concept (a value family or common module record) needs a registered structural type name, an exact IR representation, and binding coverage. A new format adapter needs none of that.
 

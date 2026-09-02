@@ -9,7 +9,7 @@ documentation state the shipped API.
 
 - One `parse` operation for every supported source, returning a typed module across networks, series, scenario sets, instances, and solutions.
 - Byte exact same format writing, diagnosed cross format conversion, and the explicit multiconductor to balanced transformation.
-- Structured diagnostics with stable codes and native record access in every language; the wire form carries span fields end to end, though 1.0 parsers do not yet emit them.
+- Structured diagnostics with stable codes and native record access in every language. A diagnostic carries source spans end to end, and the MATPOWER and PSS/E readers attach the byte range of the record a finding is about; the other readers attach none yet (see Known limits).
 - Balanced matrices (Y bus, FDPF B' and B'', LACPF, incidence, DC operators, AC power flow Jacobians, PTDF and LODF), all carrying element mappings; direct multiconductor admittance assembles in Rust only this release (see Known limits).
 - One stored `.pio.json` document with `"schema": "powerio.module"` and
   `"version": 1`. Prerelease PowerIO document shapes are not accepted.
@@ -29,6 +29,7 @@ documentation state the shipped API.
 - Classifying an undeclared JSON source is one cheap typed pass, except that a document nesting its payload under a `network`, `grid`, `solution`, or `metadata` marker key (GO Challenge 3, Surge) still allocates that subtree once during classification; cost is linear in the nested payload and transient.
 - The parser allocation rules in the architecture record (`docs/design/v1-architecture.md`) are implemented for MATPOWER, PSS/E, and PowerWorld AUX; PyPSA CSV, PSLF, and OpenDSS still tokenize through owned strings, and several JSON readers (Egret, GO Challenge 3, DeepMind OPFData, pandapower) decode through a `serde_json::Value` tree. Scheduled work, stated here so the architecture record is not read as already shipped.
 - Multiconductor admittance assembly (`powerio_matrix::calc_multiconductor_admittance_matrix`) is Rust only in 1.0: no C entry point, and so no Python or Julia binding yet.
+- Diagnostic source spans come from the MATPOWER and PSS/E readers, which mark the record each finding is about. Findings from the other readers, from transformations, and from emitters carry no byte range, and the text rendering of a diagnostic (`render_diagnostic`) stays `CODE: message`: the rendering function sees only the record, not the retained source, so it cannot state a file, line, and column without an API change.
 - The sparse direct DC sensitivity factorization trades memory for speed against the previous conjugate gradient path: dense band peak memory is up about 3x at 2000 to 3000 buses for an 8 to 10x wall time win, measured against the committed allocation baseline in `evals/allocation`.
 
 ## Version boundaries

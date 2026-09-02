@@ -56,7 +56,10 @@ buffer is separate from the stored module.
 Diagnostic source references and source mappings must name declared source
 IDs. Byte ranges must fit the declared source length. History references must
 name records present in the same document. The deserializer validates those
-relationships before returning a module.
+relationships before returning a module. The MATPOWER and PSS/E readers
+attach the byte range of the record a finding is about to every diagnostic
+they raise at a known record, so a document serialized from their modules
+carries those spans; the other readers attach none yet.
 
 ## Typed values
 
@@ -77,7 +80,9 @@ powerio.SocwrOpfSolution
 data must agree. An incorrect schema name or version, an unknown PowerIO type,
 duplicate identities, invalid references, nonfinite values in untyped
 positions, or a collection whose entries disagree with its element type is
-rejected.
+rejected. [PowerIO IR reference](ir-reference.md) defines every structural
+type field by field: type, unit, sign convention, invariant, and the value a
+reader takes when a field is absent.
 
 Typed floating point fields spell nonfinite values as `"Infinity"`,
 `"-Infinity"`, and `"NaN"`. JSON `null` is not a floating point value.
@@ -92,6 +97,20 @@ document does not invent flattened names for each composition.
 An `OperatingPoint<N>` stores a shared base network and typed overrides keyed
 by stable component identity. The serializer preserves that relationship
 without expanding each entry into another complete static network.
+
+## Determinism
+
+`serialize` is a function of the module alone. Serializing one module twice
+produces identical text, and serializing the module that text deserializes to
+produces the same text again. Members are written in a fixed order: record
+fields in declaration order and map keys (`extras`, `quantities`,
+`extensions`, `details`) sorted. Diagnostic identities are minted `d0`, `d1`,
+... in record order for records that carry none, so the minted identities
+depend only on record order. Every float is written in the shortest decimal
+form that reads back to the same value, and nonfinite values use the three
+string spellings above. Equal modules therefore produce equal documents,
+which lets a document serve as a cache key, a golden file, or the input of a
+content digest.
 
 ## Resource limits
 
