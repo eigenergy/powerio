@@ -47,7 +47,9 @@ own READMEs (`pandapower/README.md`, `pypsa/README.md`).
 ## `psse/` and `egret/`
 
 Original to this repository: the PSS/E RAW files are hand written minimal
-cases (their title lines say what each exercises), and the egret JSON files
+cases (their title lines say what each exercises), except the two PowSybl
+Core revision 32 cases whose source paths, license, and digests are listed in
+`psse/README.md`; the egret JSON files
 are renderings of the MATPOWER cases above (plus a small dcline case) in
 egret's ModelData schema.
 
