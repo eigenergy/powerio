@@ -3,9 +3,13 @@
 The [CGMES contribution audit](cgmes-contribution-audit.md) compares the final
 implementation with Mohamed Numair's original CGMES reader and writer commits.
 
-The gate keeps the case9 XIIDM, CGMES, PSS/E RAW revisions 33 through 35, and
-PSS/E RAWX smoke outputs. It also reads official PowSybl Core reference cases
-for CGMES 2.4.15, CGMES 3.0, XIIDM 1.12 through 1.17, RAW, and RAWX. CI obtains
+The gate keeps the case9 XIIDM, JIIDM, CGMES, PSS/E RAW revisions 33 through
+35, and PSS/E RAWX smoke outputs. It also reads official PowSybl Core reference
+cases for CGMES 2.4.15, CGMES 3.0, XIIDM 1.12 through 1.17, RAW, and RAWX, and
+it asks PowSybl to write the eurostag tutorial network as XIIDM and JIIDM in
+every IIDM version from 1.0 to 1.17; PowerIO reads each of those, emits the
+same encoding at 1.17, and PyPowSybl compares both against the official
+network. CI obtains
 those files with a sparse checkout of `powsybl/powsybl-core` at
 `0939bfcc2c0c094de907dc818dd688b4cbfb7281`; no PowSybl case is copied into
 this repository.
@@ -19,10 +23,13 @@ and loads the fresh RAW 33 written from each.
 
 The gate also asks PowSybl to export the same remote regulation case as XIIDM
 1.12 through 1.17, CGMES 2.4.15 on CIM16, and CGMES 3.0 on CIM100. PowerIO
-reads each PowSybl output, removes retained source bytes through PowerIO IR,
-emits fresh XIIDM 1.17 or CGMES 3.0, and compares both PowSybl views. This
+reads each PowSybl output, serializes and deserializes it through PowerIO IR,
+emits XIIDM 1.17 or CGMES 3.0 from the typed value, and compares both PowSybl
+views. This
 checks the supported input revisions and profiles against files written by
-PowSybl rather than only against files stored in its source tree.
+PowSybl rather than only against files stored in its source tree. The remote
+regulation case is also emitted as JIIDM, which PyPowSybl loads through
+its JIIDM importer and compares against the official network.
 
 PowSybl writes human readable, non-UUID mRIDs in these two CGMES cases.
 PowerIO writes UUID mRIDs as required by its fresh CGMES output rules. The gate
