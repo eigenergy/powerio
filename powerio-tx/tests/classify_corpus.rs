@@ -63,6 +63,42 @@ const EXPECTED: &[(&str, &str, Option<&str>)] = &[
     // metadata object, both beside the CSV folder that carries the case.
     ("pypsa/example/crs.json", "unknown", None),
     ("pypsa/example/meta.json", "unknown", None),
+    // PowSybl JIIDM fixtures use JSON from IIDM 1.11 onward.
+    (
+        "xiidm/powsybl/V1_11/eurostag-tutorial1-lf.json",
+        "transmission",
+        Some("jiidm"),
+    ),
+    (
+        "xiidm/powsybl/V1_12/eurostag-tutorial1-lf.json",
+        "transmission",
+        Some("jiidm"),
+    ),
+    (
+        "xiidm/powsybl/V1_13/eurostag-tutorial1-lf.json",
+        "transmission",
+        Some("jiidm"),
+    ),
+    (
+        "xiidm/powsybl/V1_14/eurostag-tutorial1-lf.json",
+        "transmission",
+        Some("jiidm"),
+    ),
+    (
+        "xiidm/powsybl/V1_15/eurostag-tutorial1-lf.json",
+        "transmission",
+        Some("jiidm"),
+    ),
+    (
+        "xiidm/powsybl/V1_16/eurostag-tutorial1-lf.json",
+        "transmission",
+        Some("jiidm"),
+    ),
+    (
+        "xiidm/powsybl/V1_17/eurostag-tutorial1-lf.json",
+        "transmission",
+        Some("jiidm"),
+    ),
 ];
 
 fn data_root() -> PathBuf {

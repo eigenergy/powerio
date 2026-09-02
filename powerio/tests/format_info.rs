@@ -11,6 +11,7 @@ fn every_canonical_format_reports_its_artifact_shape() {
         ("psse35", Some("raw"), false, true),
         ("psse-rawx", Some("rawx"), false, true),
         ("xiidm", Some("xiidm"), false, true),
+        ("jiidm", Some("jiidm"), false, true),
         ("cgmes", None, true, true),
         ("powerworld", Some("aux"), false, true),
         ("pandapower-json", Some("json"), false, true),

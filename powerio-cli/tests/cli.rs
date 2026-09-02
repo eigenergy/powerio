@@ -520,6 +520,30 @@ fn convert_writes_a_cgmes_profile_directory() {
 }
 
 #[test]
+fn convert_writes_jiidm_and_reads_it_back() {
+    let case = repo_file("tests/data/case9.m");
+    let out = run(&[
+        "convert",
+        case.to_str().unwrap(),
+        "--to",
+        "jiidm",
+        "-o",
+        "-",
+    ]);
+    assert_success(&out);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.starts_with("{\n  \"version\" : \"1.17\","), "{text}");
+    let out = run_with_stdin(&["summary", "-", "--from", "jiidm"], text.as_bytes());
+    assert_success(&out);
+    let summary = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        summary.contains("\"source_format\": \"jiidm\""),
+        "{summary}"
+    );
+    assert!(summary.contains("\"buses\": 9"), "{summary}");
+}
+
+#[test]
 fn convert_reserves_iidm_and_rawx_for_input() {
     let case = repo_file("tests/data/case9.m");
     for (input_spelling, canonical) in [("iidm", "xiidm"), ("rawx", "psse-rawx")] {
