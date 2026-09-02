@@ -23,6 +23,7 @@ fn every_canonical_format_reports_its_artifact_shape() {
         ("goc3-json", Some("json"), false, true),
         ("surge-json", Some("json"), false, true),
         ("opfdata-json", Some("json"), false, false),
+        ("ieee-cdf", Some("txt"), false, false),
         ("dss", Some("dss"), true, true),
         ("pmd-json", Some("json"), false, true),
         ("bmopf-json", Some("json"), false, true),
@@ -52,6 +53,8 @@ fn common_aliases_resolve_without_exposing_component_enums() {
         ("bmopf", "bmopf-json"),
         ("gridopt", "opfdata-json"),
         ("uct", "ucte"),
+        ("cdf", "ieee-cdf"),
+        ("IEEE_CDF", "ieee-cdf"),
     ] {
         assert_eq!(resolve_format(alias).map(|info| info.token), Some(token));
     }

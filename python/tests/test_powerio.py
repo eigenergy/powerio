@@ -394,6 +394,9 @@ def test_resolve_format_reports_canonical_artifact_metadata():
 
     pwb = powerio.resolve_format("pwb")
     assert pwb.can_emit is False
+    assert powerio.resolve_format("cdf") == powerio.FormatInfo(
+        "ieee-cdf", "txt", False, False
+    )
     assert powerio.resolve_format("pio-json") is None
     assert powerio.resolve_format("json") is None
     assert powerio.resolve_format("not-a-format") is None
@@ -2467,6 +2470,7 @@ def test_source_format_stubs_cover_every_variant():
         "jiidm",
         "cgmes",
         "ucte",
+        "ieee-cdf",
     ]
     root = Path(__file__).resolve().parents[1] / "powerio"
     for stub in ("__init__.pyi", "_powerio.pyi"):
