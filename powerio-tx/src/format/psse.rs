@@ -1,8 +1,14 @@
-//! Parse and emit PSS/E `.raw` (revisions 33-35; see [`write_psse_rev`]).
+//! Parse PSS/E `.raw` revisions 32 through 35 and emit revisions 33 through 35
+//! (see [`write_psse_rev`]).
 //!
 //! Covers the core sections — bus, load, fixed shunt, generator, branch, and the
 //! 2- and 3-winding transformer records — which together carry a transmission
-//! power flow case. A switched shunt keeps its steady-state susceptance `BINIT`
+//! power flow case. Revision 32 records end before the bus voltage limits
+//! (`NVHI`, `NVLO`, `EVHI`, `EVLO`), the load `INTRPT` field, the transformer
+//! `VECGRP` field, and the winding `CNXA` field that revision 33 added; the
+//! reader keys each layout off the header revision and a revision 32 source
+//! is always written fresh at revision 33 or later.
+//! A switched shunt keeps its steady-state susceptance `BINIT`
 //! as the shunt `b` and carries its mode, voltage band, regulated bus, RMPCT, and
 //! step blocks on [`SwitchedShuntControl`]. Transformer impedance and winding
 //! bases (`CZ`/`CW`) are normalized to the system base and per unit tap ratios;
@@ -21,13 +27,13 @@ use std::fmt::Write as _;
 use serde_json::Value;
 
 use super::{
-    TextEmission, branch_rating_set_drop_warning, jnum, sanitize_quoted,
+    TextEmission, TextPosition, branch_rating_set_drop_warning, jnum, sanitize_quoted,
     warn_extra_branch_rating_sets,
 };
 use std::borrow::Cow;
 
 use crate::diagnostics::codes::EMIT_PSSE as F;
-use crate::diagnostics::{Diagnostics, codes};
+use crate::diagnostics::{Diagnostic, Diagnostics, codes};
 use crate::network::{
     Area, BalancedNetwork, BalancedNetworkTables, Branch, BranchCharging, BranchRatingSet, Bus,
     BusId, BusType, ComponentMetadata, DetailedConnectivity, Extras, Generator,
@@ -1705,27 +1711,104 @@ pub(crate) fn header_rev(source: &str) -> Result<u32> {
     parse_revision(header_fields.get(2).map(AsRef::as_ref))
 }
 
+/// The header `REV` field as one of the revisions the reader lays records out
+/// for: 32 through 35. An absent field means 33, the historical default.
 fn parse_revision(field: Option<&str>) -> Result<u32> {
     let Some(field) = field.filter(|field| !field.is_empty()) else {
         return Ok(33);
     };
-    let revision = field.parse::<f64>().map_err(|_| Error::FormatRead {
+    let unsupported = || Error::FormatRead {
         format: FMT,
         message: format!(
-            "header REV {field:?} is not a supported revision; expected integral 33, 34, or 35"
+            "header REV {field:?} is not a supported revision; expected integral 32, 33, 34, or 35"
         ),
-    })?;
+    };
+    let revision = field.parse::<f64>().map_err(|_| unsupported())?;
     match revision.to_bits() {
+        value if value == 32.0_f64.to_bits() => Ok(32),
         value if value == 33.0_f64.to_bits() => Ok(33),
         value if value == 34.0_f64.to_bits() => Ok(34),
         value if value == 35.0_f64.to_bits() => Ok(35),
-        _ => Err(Error::FormatRead {
-            format: FMT,
-            message: format!(
-                "header REV {field:?} is not a supported revision; expected integral 33, 34, or 35"
-            ),
-        }),
+        _ => Err(unsupported()),
     }
+}
+
+/// The fields a revision 32 record must state for the typed model: the count
+/// through the last field the reader maps into the network, and that field's
+/// name. The fields after it (ownership, metering, the retained extras) are
+/// optional in every revision, so a record that ends before `width` is
+/// missing electrical data rather than trailing options.
+#[derive(Clone, Copy)]
+struct Revision32Shape {
+    record: &'static str,
+    width: usize,
+    last: &'static str,
+}
+
+impl Revision32Shape {
+    const fn new(record: &'static str, width: usize, last: &'static str) -> Self {
+        Self {
+            record,
+            width,
+            last,
+        }
+    }
+}
+
+const REVISION32_TRANSFORMER_IMPEDANCE_2W: Revision32Shape =
+    Revision32Shape::new("TRANSFORMER DATA impedance line", 3, "SBASE1-2");
+const REVISION32_TRANSFORMER_IMPEDANCE_3W: Revision32Shape =
+    Revision32Shape::new("TRANSFORMER DATA impedance line", 11, "ANSTAR");
+const REVISION32_TRANSFORMER_WINDING: Revision32Shape =
+    Revision32Shape::new("TRANSFORMER DATA winding line", 13, "NTP");
+const REVISION32_TRANSFORMER_WINDING_2: Revision32Shape =
+    Revision32Shape::new("TRANSFORMER DATA winding 2 line", 2, "NOMV2");
+
+/// The typed width of the first line of a revision 32 record in `section`.
+/// Sections the reader skips, and the sections revision 32 does not have,
+/// carry no shape.
+fn revision32_shape(section: Section) -> Option<Revision32Shape> {
+    Some(match section {
+        Section::Bus => Revision32Shape::new("BUS DATA", 9, "VA"),
+        Section::Load => Revision32Shape::new("LOAD DATA", 13, "SCALE"),
+        Section::FixedShunt => Revision32Shape::new("FIXED SHUNT DATA", 5, "BL"),
+        Section::SwitchedShunt => Revision32Shape::new("SWITCHED SHUNT DATA", 10, "BINIT"),
+        Section::Generator => Revision32Shape::new("GENERATOR DATA", 18, "PB"),
+        Section::Branch => Revision32Shape::new("BRANCH DATA", 14, "ST"),
+        Section::Transformer => Revision32Shape::new("TRANSFORMER DATA", 12, "STAT"),
+        Section::TwoTerminalDc => Revision32Shape::new("TWO-TERMINAL DC DATA", 5, "VSCHD"),
+        Section::Area => Revision32Shape::new("AREA DATA", 4, "PTOL"),
+        Section::SystemSwitch | Section::SystemWide | Section::Skip => return None,
+    })
+}
+
+/// Report a revision 32 record that ends before the last field its typed
+/// layout reads. `span` locates the record in the retained source when the
+/// reader was given its position; the missing fields have already taken their
+/// defaults, so the finding is a warning rather than a failure.
+fn check_revision32_width(
+    f: &[Cow<'_, str>],
+    shape: Revision32Shape,
+    span: impl FnOnce() -> Option<powerio_core::SourceSpan>,
+    warnings: &mut Diagnostics,
+) {
+    if f.len() >= shape.width {
+        return;
+    }
+    let first = f.first().map_or("", Cow::as_ref);
+    let message = format!(
+        "PSS/E revision 32 {} record beginning {first:?} has {} field(s); the revision 32 layout reads {} fields through {}, so the missing fields took their defaults",
+        shape.record,
+        f.len(),
+        shape.width,
+        shape.last
+    );
+    let diagnostic = Diagnostic::of(&codes::READ_PSSE_VALUE_DEFAULTED, message);
+    let diagnostic = match span() {
+        Some(span) => diagnostic.clone().with_span(span).unwrap_or(diagnostic),
+        None => diagnostic,
+    };
+    warnings.record(diagnostic);
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1824,17 +1907,30 @@ fn apply_pending_regulating_nodes(
     }
 }
 
-/// Owned-source entry used by the format hub: parse by borrowing `source`, then
-/// move the buffer into the retained source (no copy). `name_hint` (e.g. a file
-/// stem) names the network when the title line is blank.
+/// Parse `source` by borrowing it; the caller retains the buffer. `name_hint`
+/// (e.g. a file stem) names the network when the title line is blank. Findings
+/// carry no source spans; [`parse_psse_source_at`] is the entry the format hub
+/// uses when it knows where the text sits in its retained buffer.
 // A flat reader: header parse plus one match arm per section. Splitting it would
 // add indirection without clarity.
-pub(crate) fn parse_psse_source(
+#[cfg(test)]
+fn parse_psse_source(
     source: &str,
     name_hint: Option<&str>,
     warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
-    parse_psse_source_inner(source, name_hint, warnings, false)
+    parse_psse_source_inner(source, name_hint, None, warnings, false)
+}
+
+/// [`parse_psse_source`] with the position of `source` in its retained buffer,
+/// so a record finding can name the bytes it concerns.
+pub(super) fn parse_psse_source_at(
+    source: &str,
+    name_hint: Option<&str>,
+    position: Option<TextPosition<'_>>,
+    warnings: &mut Diagnostics,
+) -> Result<BalancedNetwork> {
+    parse_psse_source_inner(source, name_hint, position, warnings, false)
 }
 
 pub(super) fn parse_psse_source_deferred_regulating_nodes(
@@ -1842,13 +1938,14 @@ pub(super) fn parse_psse_source_deferred_regulating_nodes(
     name_hint: Option<&str>,
     warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
-    parse_psse_source_inner(source, name_hint, warnings, true)
+    parse_psse_source_inner(source, name_hint, None, warnings, true)
 }
 
 #[expect(clippy::too_many_lines)]
 fn parse_psse_source_inner(
     source: &str,
     name_hint: Option<&str>,
+    position: Option<TextPosition<'_>>,
     warnings: &mut Diagnostics,
     defer_regulating_nodes: bool,
 ) -> Result<BalancedNetwork> {
@@ -1962,6 +2059,19 @@ fn parse_psse_source_inner(
             continue;
         }
         let f = fields(line);
+        // Revision 32 has the shortest layouts, so a record that ends before
+        // its last typed field is missing electrical data; the reader reports
+        // the record, with its bytes when the text's position is known.
+        if raw_rev == 32
+            && let Some(shape) = revision32_shape(section)
+        {
+            check_revision32_width(
+                &f,
+                shape,
+                || position.and_then(|position| position.span(content, raw)),
+                warnings,
+            );
+        }
         match section {
             Section::Bus if !saw_bus_marker && buses.is_empty() && is_system_wide_record(&f) => {
                 // The v34+ system-wide block precedes the bus data; capture its
@@ -1970,7 +2080,7 @@ fn parse_psse_source_inner(
                 parse_solver_line(&f, &mut solver, warnings);
             }
             Section::Bus => {
-                let bus = read_bus(&f)?;
+                let bus = read_bus(&f, raw_rev)?;
                 bus_base_kv.insert(bus.id, bus.base_kv);
                 bus_area_zone.insert(bus.id, (bus.area, bus.zone));
                 buses.push(bus);
@@ -2019,13 +2129,28 @@ fn parse_psse_source_inner(
                 )?;
                 let l3 = next_continuation_line(&mut lines, "transformer", "winding data line 1")?;
                 let l4 = next_continuation_line(&mut lines, "transformer", "winding data line 2")?;
+                let (f2, f3, f4) = (fields(l2), fields(l3), fields(l4));
                 if two_winding {
+                    if raw_rev == 32 {
+                        for (record, f, shape) in [
+                            (l2, &f2, REVISION32_TRANSFORMER_IMPEDANCE_2W),
+                            (l3, &f3, REVISION32_TRANSFORMER_WINDING),
+                            (l4, &f4, REVISION32_TRANSFORMER_WINDING_2),
+                        ] {
+                            check_revision32_width(
+                                f,
+                                shape,
+                                || position.and_then(|position| position.span(content, record)),
+                                warnings,
+                            );
+                        }
+                    }
                     let index = branches.len();
                     let (transformer, node) = read_transformer(
                         &f,
-                        &fields(l2),
-                        &fields(l3),
-                        &fields(l4),
+                        &f2,
+                        &f3,
+                        &f4,
                         raw_rev,
                         base_mva,
                         &bus_base_kv,
@@ -2041,13 +2166,29 @@ fn parse_psse_source_inner(
                 } else {
                     let l5 =
                         next_continuation_line(&mut lines, "transformer", "winding data line 3")?;
+                    let f5 = fields(l5);
+                    if raw_rev == 32 {
+                        for (record, f, shape) in [
+                            (l2, &f2, REVISION32_TRANSFORMER_IMPEDANCE_3W),
+                            (l3, &f3, REVISION32_TRANSFORMER_WINDING),
+                            (l4, &f4, REVISION32_TRANSFORMER_WINDING),
+                            (l5, &f5, REVISION32_TRANSFORMER_WINDING),
+                        ] {
+                            check_revision32_width(
+                                f,
+                                shape,
+                                || position.and_then(|position| position.span(content, record)),
+                                warnings,
+                            );
+                        }
+                    }
                     let index = transformers_3w.len();
                     let (transformer, nodes) = read_transformer_3w(
                         &f,
-                        &fields(l2),
-                        &fields(l3),
-                        &fields(l4),
-                        &fields(l5),
+                        &f2,
+                        &f3,
+                        &f4,
+                        &f5,
                         raw_rev,
                         base_mva,
                         &bus_base_kv,
@@ -2095,7 +2236,7 @@ fn parse_psse_source_inner(
     if raw_rev >= 34 {
         unmodeled_sections.retain(|name, _| !name.starts_with("SUBSTATION"));
     }
-    warn_unmodeled_sections(unmodeled_sections, warnings);
+    warn_unmodeled_sections(unmodeled_sections, raw_rev, warnings);
 
     let mut net = BalancedNetwork::from_tables(BalancedNetworkTables {
         name,
@@ -2496,15 +2637,23 @@ fn ended_section_name(line: &str) -> Option<String> {
 /// multi-terminal DC, impedance correction, substation/node, multi-section line,
 /// induction machine, FACTS, GNE, owner/zone, ...). Counts come from the parser
 /// pass itself, so bare `0` terminators and malformed continuation boundaries are
-/// classified the same way as the records that get skipped.
-fn warn_unmodeled_sections(totals: BTreeMap<String, usize>, warnings: &mut Diagnostics) {
+/// classified the same way as the records that get skipped. No emission target
+/// names revision 32, so a revision 32 source is never written back as its own
+/// text and its skipped sections survive only in the retained module source.
+fn warn_unmodeled_sections(
+    totals: BTreeMap<String, usize>,
+    raw_rev: u32,
+    warnings: &mut Diagnostics,
+) {
+    let retention = if raw_rev == 32 {
+        "retained only in the module source; fresh output uses revision 33 or later and drops it"
+    } else {
+        "preserved only in a same-format .raw echo, dropped on any other write"
+    };
     for (name, rows) in totals {
         warnings.push(
             &codes::READ_PSSE_SECTION_UNSUPPORTED,
-            format!(
-                "PSS/E {name} section ({rows} record line(s)) is not modeled: preserved only in a \
-             same-format .raw echo, dropped on any other write"
-            ),
+            format!("PSS/E {name} section ({rows} record line(s)) is not modeled: {retention}"),
         );
     }
 }
@@ -2959,8 +3108,10 @@ fn bustype(code: i64) -> BusType {
 // The EVHI/EVLO equality below is an exact compare on purpose: the emergency
 // band is typed only when its token differs from the normal-band token.
 #[allow(clippy::float_cmp)]
-fn read_bus(f: &[Cow<'_, str>]) -> Result<Bus> {
-    // I, NAME, BASKV, IDE, AREA, ZONE, OWNER, VM, VA, NVHI, NVLO, EVHI, EVLO
+fn read_bus(f: &[Cow<'_, str>], raw_rev: u32) -> Result<Bus> {
+    // I, NAME, BASKV, IDE, AREA, ZONE, OWNER, VM, VA, then from revision 33
+    // NVHI, NVLO, EVHI, EVLO. A revision 32 record ends at VA and its voltage
+    // limits are the PSS/E defaults.
     let id = f
         .first()
         .and_then(|x| x.parse::<f64>().ok())
@@ -2977,12 +3128,18 @@ fn read_bus(f: &[Cow<'_, str>]) -> Result<Bus> {
         .get(1)
         .filter(|n| !n.is_empty())
         .map(|n| n.trim().to_string());
-    let vmax = num_at(f, 9, 1.1)?;
-    let vmin = num_at(f, 10, 0.9)?;
-    // EVHI/EVLO (v31+); default to the normal band when absent. Keep them typed
-    // only when they actually differ, so the common equal-band case stays `None`.
-    let evhi = num_at(f, 11, vmax)?;
-    let evlo = num_at(f, 12, vmin)?;
+    let (vmax, vmin) = if raw_rev >= 33 {
+        (num_at(f, 9, 1.1)?, num_at(f, 10, 0.9)?)
+    } else {
+        (1.1, 0.9)
+    };
+    // EVHI/EVLO default to the normal band when absent. Keep them typed only
+    // when they actually differ, so the common equal-band case stays `None`.
+    let (evhi, evlo) = if raw_rev >= 33 {
+        (num_at(f, 11, vmax)?, num_at(f, 12, vmin)?)
+    } else {
+        (vmax, vmin)
+    };
     let owner = int_at(f, 6, 1)?;
     let mut extras = Extras::new();
     if owner != 1 {
@@ -3117,11 +3274,13 @@ fn read_load(f: &[Cow<'_, str>], raw_rev: u32, warnings: &mut Diagnostics) -> Re
             extras.insert(key.into(), jnum(value));
         }
     }
-    for (field, key, default) in [
-        (11, "psse_owner", 1_i64),
-        (12, "psse_scal", 1_i64),
-        (13, "psse_intrpt", 0_i64),
-    ] {
+    // INTRPT joins the record at revision 33; a revision 32 record ends at
+    // SCALE.
+    let mut retained_integers = vec![(11, "psse_owner", 1_i64), (12, "psse_scal", 1_i64)];
+    if raw_rev >= 33 {
+        retained_integers.push((13, "psse_intrpt", 0_i64));
+    }
+    for (field, key, default) in retained_integers {
         let value = int_at(f, field, default)?;
         if value != default {
             extras.insert(key.into(), Value::from(value));
@@ -3145,7 +3304,12 @@ fn read_load(f: &[Cow<'_, str>], raw_rev: u32, warnings: &mut Diagnostics) -> Re
         }
     }
     let scal = int_at(f, 12, 1)?;
-    let load_type = f.get(17).and_then(|s| s.trim().parse::<i32>().ok());
+    // LOADTYPE is the revision 35 trailing field; earlier layouts end before it.
+    let load_type = if raw_rev >= 35 {
+        f.get(17).and_then(|s| s.trim().parse::<i32>().ok())
+    } else {
+        None
+    };
     let has_zip_components = [ip, iq, yp, yq].iter().any(|v| *v != 0.0);
     let voltage_model =
         (has_zip_components || scal != 1 || load_type.is_some()).then_some(LoadVoltageModel::Zip {
@@ -3648,7 +3812,10 @@ fn retain_transformer_main_extras(
 ) -> Result<()> {
     retain_integer_extra(extras, fields, 9, "psse_nmetr", 2)?;
     retain_psse_ownership(extras, fields, 12)?;
-    retain_string_extra(extras, fields, 20, "psse_vecgrp");
+    // VECGRP joins the record at revision 33 and ZCOD at revision 35.
+    if raw_rev >= 33 {
+        retain_string_extra(extras, fields, 20, "psse_vecgrp");
+    }
     if raw_rev >= 35 {
         retain_integer_extra(extras, fields, 21, "psse_zcod", 0)?;
     }
@@ -3864,7 +4031,12 @@ fn read_transformer_control(
     let band_max = num_at(winding, rma_i + 2, 1.1)?;
     let band_min = num_at(winding, rma_i + 3, 0.9)?;
     let ntp = int_at(winding, rma_i + 4, 33)?.clamp(0, i64::from(u32::MAX)) as u32;
-    let winding_connection_angle = num_at(winding, rma_i + 8, 0.0)?;
+    // CNXA joins the winding line at revision 33; a revision 32 line ends at CX.
+    let winding_connection_angle = if raw_rev >= 33 {
+        num_at(winding, rma_i + 8, 0.0)?
+    } else {
+        0.0
+    };
     let present = cod != 0
         || cont != 0
         || node != 0
@@ -4454,7 +4626,7 @@ mod tests {
             33
         );
 
-        for revision in ["not-a-revision", "NaN", "34.5", "32", "36"] {
+        for revision in ["not-a-revision", "NaN", "34.5", "31", "36"] {
             let raw = format!(
                 "0, 100.00, {revision}, 0, 0, 60.00 / revision check\n\
                  CASE\nCOMMENT\n\
@@ -4463,10 +4635,114 @@ mod tests {
             );
             let error = parse_psse(&raw).unwrap_err().to_string();
             assert!(
-                error.contains("expected integral 33, 34, or 35"),
+                error.contains("expected integral 32, 33, 34, or 35"),
                 "REV {revision:?} returned the wrong error: {error}"
             );
         }
+        assert_eq!(
+            header_rev("0, 100.00, 32, 0, 0, 60.00\nCASE\nCOMMENT\nQ\n").unwrap(),
+            32
+        );
+    }
+
+    /// Revision 32 records end before the fields revision 33 added: the bus
+    /// voltage limits, the load INTRPT field, the transformer VECGRP field, and
+    /// the winding CNXA field. The reader lays the records out by the header
+    /// revision and reports a record that ends before its last typed field.
+    #[test]
+    fn revision32_layouts_read_and_short_records_are_reported() {
+        let raw = "0, 100.00, 32, 0, 0, 60.00 / revision 32 layouts\n\
+                   CASE\nCOMMENT\n\
+                   1,'B1          ',230.0,3,1,1,1,1.02,0.0\n\
+                   2,'B2          ',115.0,1,1,1,1,1.0,-1.5\n\
+                   3,'B3          ',115.0,1,1,1,1\n\
+                   0 / END OF BUS DATA, BEGIN LOAD DATA\n\
+                   2,'1 ',1,1,1,15.0,5.0,0.0,0.0,0.0,0.0,1,1\n\
+                   3,'1 ',1,1,1,10.0\n\
+                   0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA\n\
+                   0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA\n\
+                   1,'1 ',30.0,0.0,20.0,-20.0,1.02,0,100.0,0.0,1.0,0.0,0.0,1.0,1,100.0,80.0,0.0\n\
+                   0 / END OF GENERATOR DATA, BEGIN BRANCH DATA\n\
+                   2,3,'1 ',0.01,0.05,0.02,100.0,0.0,0.0,0.0,0.0,0.0,0.0,1,1,0.0\n\
+                   0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA\n\
+                   1,2,0,'1 ',1,1,1,0.0,0.0,2,'T1          ',1,1,1.0\n\
+                   0.0,0.1,100.0\n\
+                   0.98,0.0,0.0,50.0,0.0,0.0,0,0,1.5,0.51,1.5,0.51,10,0,0.0,0.0\n\
+                   1.0,0.0\n\
+                   0 / END OF TRANSFORMER DATA, BEGIN AREA DATA\n\
+                   0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA\n\
+                   0 / END OF TWO-TERMINAL DC DATA, BEGIN VOLTAGE SOURCE CONVERTER DATA\n\
+                   0 / END OF VOLTAGE SOURCE CONVERTER DATA, BEGIN IMPEDANCE CORRECTION DATA\n\
+                   0 / END OF IMPEDANCE CORRECTION DATA, BEGIN MULTI-TERMINAL DC DATA\n\
+                   0 / END OF MULTI-TERMINAL DC DATA, BEGIN MULTI-SECTION LINE DATA\n\
+                   0 / END OF MULTI-SECTION LINE DATA, BEGIN ZONE DATA\n\
+                   1,'ZONE 1      '\n\
+                   0 / END OF ZONE DATA, BEGIN INTER-AREA TRANSFER DATA\n\
+                   0 / END OF INTER-AREA TRANSFER DATA, BEGIN OWNER DATA\n\
+                   0 / END OF OWNER DATA, BEGIN FACTS CONTROL DEVICE DATA\n\
+                   0 / END OF FACTS CONTROL DEVICE DATA, BEGIN SWITCHED SHUNT DATA\n\
+                   0 / END OF SWITCHED SHUNT DATA, BEGIN GNE DEVICE DATA\n\
+                   0 / END OF GNE DEVICE DATA\nQ\n";
+        let mut warnings = Diagnostics::new();
+        let net = parse_psse_source(raw, None, &mut warnings).unwrap();
+
+        assert_eq!(net.buses().len(), 3);
+        let bus1 = &net.buses()[0];
+        close(bus1.vm, 1.02);
+        close(bus1.vmax, 1.1);
+        close(bus1.vmin, 0.9);
+        assert_eq!(bus1.evhi, None);
+        let bus3 = &net.buses()[2];
+        close(bus3.vm, 1.0);
+        close(bus3.va, 0.0);
+        assert_eq!(net.loads().len(), 2);
+        close(net.loads()[0].p, 15.0);
+        assert!(!net.loads()[0].extras.contains_key("psse_intrpt"));
+        close(net.loads()[1].p, 10.0);
+        close(net.loads()[1].q, 0.0);
+        let transformer = net
+            .branches()
+            .iter()
+            .find(|branch| branch.is_transformer())
+            .unwrap();
+        close(transformer.calc_effective_tap(), 0.98);
+        assert!(!transformer.extras.contains_key("psse_vecgrp"));
+        let control = transformer.control.as_ref().unwrap();
+        close(control.tap_max, 1.5);
+        assert_eq!(control.ntp, 10);
+        assert_eq!(control.winding_connection_angle, None);
+
+        let short: Vec<&Diagnostic> = warnings
+            .records()
+            .iter()
+            .filter(|diagnostic| diagnostic.code() == "READ.PSSE.VALUE_DEFAULTED")
+            .collect();
+        assert_eq!(short.len(), 2, "{:?}", warnings.lines());
+        assert!(
+            short[0]
+                .message()
+                .contains("BUS DATA record beginning \"3\" has 7 field(s)")
+        );
+        assert!(short[0].message().contains("reads 9 fields through VA"));
+        assert!(
+            short[1]
+                .message()
+                .contains("LOAD DATA record beginning \"3\" has 6 field(s)")
+        );
+        assert!(short[1].message().contains("reads 13 fields through SCALE"));
+        assert!(
+            short.iter().all(|diagnostic| diagnostic.spans().is_empty()),
+            "a reader without a text position attaches no span"
+        );
+        let unmodeled = warnings
+            .lines()
+            .into_iter()
+            .find(|line| line.contains("ZONE section"))
+            .expect("the zone record is reported");
+        assert!(
+            unmodeled.contains("fresh output uses revision 33 or later"),
+            "{unmodeled}"
+        );
     }
 
     #[test]
