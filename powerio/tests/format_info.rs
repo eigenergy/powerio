@@ -13,6 +13,7 @@ fn every_canonical_format_reports_its_artifact_shape() {
         ("xiidm", Some("xiidm"), false, true),
         ("jiidm", Some("jiidm"), false, true),
         ("cgmes", None, true, true),
+        ("ucte", Some("uct"), false, true),
         ("powerworld", Some("aux"), false, true),
         ("pandapower-json", Some("json"), false, true),
         ("pypsa-csv", None, true, true),
@@ -50,6 +51,7 @@ fn common_aliases_resolve_without_exposing_component_enums() {
         ("engineering", "pmd-json"),
         ("bmopf", "bmopf-json"),
         ("gridopt", "opfdata-json"),
+        ("uct", "ucte"),
     ] {
         assert_eq!(resolve_format(alias).map(|info| info.token), Some(token));
     }
