@@ -137,6 +137,45 @@ UCTE_POWSYBL_REJECTIONS = {
     ),
 }
 EXPECTED_CASE14_UCTE = {"buses": 14, "branches": 20, "generators": 5, "loads": 11}
+IEEE_CDF_RELATIVE = Path("ieee-cdf/ieee-cdf-model/src/main/resources")
+# Each public IEEE CDF case PowSybl Core ships: its SHA-256 and the counts
+# PyPowSybl's own importer reads (buses, branches, two winding transformers,
+# generators, loads, shunts with a nonzero susceptance).
+IEEE_CDF_CASES = {
+    "ieee9cdf": (
+        "0b9b9ce0e5b142cfdee105e338b44c2867e16d29447d071cb87e5aed4e77e293",
+        (9, 9, 3, 3, 3, 0),
+    ),
+    "ieee9zeroimpedancecdf": (
+        "a12d519e7a164fecded89347e4095109903e00d6dc4e5e5b551256a8fa2996f8",
+        (9, 9, 3, 3, 3, 0),
+    ),
+    "ieee14cdf": (
+        "68afd87021f42eca37d2787ad71db101cd2170d40528c291e8e94c9dd427abd8",
+        (14, 20, 3, 5, 11, 1),
+    ),
+    "ieee14cdf-solved": (
+        "e354353c3adb66d26d28b9341dced86c2d1706b685831ce94716ba625220cfef",
+        (14, 20, 3, 5, 11, 1),
+    ),
+    "ieee30cdf": (
+        "8a4833f02f012b316ad978a176100963d162d17019f8ea71627e7920118e6c1a",
+        (30, 41, 4, 6, 21, 2),
+    ),
+    "ieee57cdf": (
+        "664806a8c0583ed3cc65bce0ff9cd96d5207ac0a6356ceb43ae0cd8e6bd6761c",
+        (57, 80, 17, 7, 42, 3),
+    ),
+    "ieee118cdf": (
+        "98fdc7b40ad23f19ec6b5e5a27c8fa99caea03da02551f33bb7a246b57aea79d",
+        (118, 186, 9, 54, 91, 14),
+    ),
+    "ieee300cdf": (
+        "b20b9bf3acb9ccc1450b4192a2d287f83153db6c2dd86f4c84bd28df50e021d7",
+        (300, 411, 107, 69, 198, 14),
+    ),
+}
+IEEE_CDF_POWER_ABS_TOL = 1e-6
 
 CIM16 = "http://iec.ch/TC57/2013/CIM-schema-cim16#"
 CIM100 = "http://iec.ch/TC57/CIM100#"
@@ -4954,6 +4993,180 @@ def cgmes_archive(directory: Path, output_dir: Path, stem: str) -> Path:
     return Path(shutil.make_archive(str(output_dir / stem), "zip", root_dir=directory))
 
 
+def powsybl_case_counts(network: pp.network.Network) -> tuple[int, int, int, int, int, int]:
+    """The IEEE CDF count tuple of a PyPowSybl network."""
+    return (
+        len(network.get_buses()),
+        count_branches(network),
+        len(network.get_2_windings_transformers()),
+        len(network.get_generators()),
+        len(network.get_loads()),
+        len(network.get_shunt_compensators()),
+    )
+
+
+def matpower_matrix_rows(text: str, field: str) -> int:
+    """The number of rows in an `mpc.<field> = [ ... ];` matrix."""
+    rows = 0
+    inside = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(f"mpc.{field} = ["):
+            inside = True
+            continue
+        if inside:
+            if stripped.startswith("];"):
+                return rows
+            if stripped.endswith(";"):
+                rows += 1
+    raise AssertionError(f"fresh MATPOWER has no complete mpc.{field} matrix")
+
+
+def powerio_case_counts(data: dict[str, Any]) -> tuple[int, int, int, int, int, int]:
+    """The IEEE CDF count tuple of a PowerIO IR balanced network."""
+    return (
+        len(data["buses"]),
+        len(data["branches"]),
+        sum(1 for branch in data["branches"] if branch["tap"] != 0),
+        len(data["generators"]),
+        len(data["loads"]),
+        sum(1 for shunt in data["shunts"] if shunt["b"] != 0),
+    )
+
+
+def powerio_case_totals(data: dict[str, Any]) -> tuple[float, float]:
+    """Load and generation MW of a PowerIO IR balanced network."""
+    return (
+        sum(load["p"] for load in data["loads"]),
+        sum(generator["pg"] for generator in data["generators"]),
+    )
+
+
+def check_ieee_cdf_case(
+    name: str,
+    expected_sha256: str,
+    expected_counts: tuple[int, int, int, int, int, int],
+    powsybl_core: Path,
+    output_dir: Path,
+) -> None:
+    label = f"IEEE CDF {name}"
+    source_path = powsybl_core / IEEE_CDF_RELATIVE / f"{name}.txt"
+    require(source_path.exists(), f"{label}: missing {source_path}")
+    require(
+        hashlib.sha256(source_path.read_bytes()).hexdigest() == expected_sha256,
+        f"{label}: official PowSybl fixture checksum changed",
+    )
+    source = load_checked(source_path, f"official {label}")
+    source_counts = powsybl_case_counts(source)
+    require(
+        source_counts == expected_counts,
+        f"{label}: PyPowSybl reads {source_counts}, expected {expected_counts}",
+    )
+    require(
+        len(source.get_bus_breaker_view_buses()) == expected_counts[0],
+        f"{label}: PyPowSybl bus breaker view has "
+        f"{len(source.get_bus_breaker_view_buses())} buses, expected {expected_counts[0]}",
+    )
+
+    document = json.loads((output_dir / f"ieee-cdf-{name}.pio.json").read_text())
+    require(
+        document["value"]["type"] == "powerio.BalancedNetwork",
+        f"{label}: PowerIO IR value type is {document['value']['type']}",
+    )
+    data = document["value"]["data"]
+    require(
+        data["source_format"] == "ieee-cdf",
+        f"{label}: PowerIO IR source format is {data['source_format']}",
+    )
+    powerio_counts = powerio_case_counts(data)
+    require(
+        powerio_counts == expected_counts,
+        f"{label}: PowerIO reads {powerio_counts}, PyPowSybl reads {expected_counts}",
+    )
+    # PowSybl reads no shunt whose record states conductance only; PowerIO
+    # keeps it, so its shunt table may be longer than the susceptance count.
+    require(
+        len(data["shunts"]) >= expected_counts[5],
+        f"{label}: PowerIO shunt table shorter than the nonzero susceptance count",
+    )
+    powsybl_load_mw = float(source.get_loads()["p0"].sum())
+    powsybl_generation_mw = float(source.get_generators()["target_p"].sum())
+    powerio_load_mw, powerio_generation_mw = powerio_case_totals(data)
+    require(
+        math.isclose(powsybl_load_mw, powerio_load_mw, abs_tol=IEEE_CDF_POWER_ABS_TOL),
+        f"{label}: load {powerio_load_mw} MW, PyPowSybl reads {powsybl_load_mw} MW",
+    )
+    require(
+        math.isclose(
+            powsybl_generation_mw,
+            powerio_generation_mw,
+            abs_tol=IEEE_CDF_POWER_ABS_TOL,
+        ),
+        f"{label}: generation {powerio_generation_mw} MW, "
+        f"PyPowSybl reads {powsybl_generation_mw} MW",
+    )
+    codes = Counter(diagnostic["code"] for diagnostic in document["diagnostics"])
+    require(
+        "PARSE.IEEE_CDF.MALFORMED" not in codes
+        and "READ.IEEE_CDF.RECORD_TRUNCATED" not in codes,
+        f"{label}: PowerIO reported a malformed or truncated record: {codes}",
+    )
+
+    matpower_text = (output_dir / f"ieee-cdf-{name}.m").read_text()
+    matpower_counts = (
+        matpower_matrix_rows(matpower_text, "bus"),
+        matpower_matrix_rows(matpower_text, "branch"),
+        matpower_matrix_rows(matpower_text, "gen"),
+    )
+    require(
+        matpower_counts == (expected_counts[0], expected_counts[1], expected_counts[3]),
+        f"{label}: fresh MATPOWER rows {matpower_counts}, expected buses, branches, "
+        f"and generators {(expected_counts[0], expected_counts[1], expected_counts[3])}",
+    )
+
+    # The fresh MATPOWER file read back by PowerIO states the same network:
+    # every count, the whole shunt table included, and the MW totals.
+    reloaded = json.loads(
+        (output_dir / f"ieee-cdf-{name}-from-matpower.pio.json").read_text()
+    )
+    require(
+        reloaded["value"]["type"] == "powerio.BalancedNetwork",
+        f"{label}: reloaded MATPOWER IR value type is {reloaded['value']['type']}",
+    )
+    reloaded_data = reloaded["value"]["data"]
+    require(
+        reloaded_data["source_format"] == "matpower",
+        f"{label}: reloaded MATPOWER IR source format is {reloaded_data['source_format']}",
+    )
+    reloaded_counts = powerio_case_counts(reloaded_data)
+    require(
+        reloaded_counts == expected_counts
+        and len(reloaded_data["shunts"]) == len(data["shunts"]),
+        f"{label}: fresh MATPOWER reads back as {reloaded_counts} with "
+        f"{len(reloaded_data['shunts'])} shunt(s), expected {expected_counts} with "
+        f"{len(data['shunts'])}",
+    )
+    reloaded_load_mw, reloaded_generation_mw = powerio_case_totals(reloaded_data)
+    require(
+        math.isclose(reloaded_load_mw, powsybl_load_mw, abs_tol=IEEE_CDF_POWER_ABS_TOL)
+        and math.isclose(
+            reloaded_generation_mw,
+            powsybl_generation_mw,
+            abs_tol=IEEE_CDF_POWER_ABS_TOL,
+        ),
+        f"{label}: fresh MATPOWER reads back with {reloaded_load_mw} MW load and "
+        f"{reloaded_generation_mw} MW generation, PyPowSybl reads {powsybl_load_mw} "
+        f"and {powsybl_generation_mw}",
+    )
+    print(
+        f"{label}: PyPowSybl and PowerIO agree on buses, branches, transformers, "
+        f"generators, loads, shunts={expected_counts}; load {powsybl_load_mw} MW, "
+        f"generation {powsybl_generation_mw} MW; fresh MATPOWER rows {matpower_counts} "
+        f"read back by PowerIO with the same counts and totals; "
+        f"diagnostics={dict(sorted(codes.items()))}"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("output_dir", type=Path)
@@ -5308,6 +5521,14 @@ def main() -> None:
             expected_sha256,
             output_dir / f"{stem}.raw",
             label,
+        )
+    for name, (expected_sha256, expected_counts) in IEEE_CDF_CASES.items():
+        check_ieee_cdf_case(
+            name,
+            expected_sha256,
+            expected_counts,
+            powsybl_core,
+            output_dir,
         )
     print(
         "official PowSybl reference cases: fresh emission checks passed; "

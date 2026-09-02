@@ -31,6 +31,17 @@ mini_grid_node_breaker_bd_source="$cgmes_conformity_root/conformity/cas-1.1.3-da
 small_grid_node_breaker_source="$cgmes_conformity_root/conformity/cas-1.1.3-data-4.0.3/SmallGrid/NodeBreaker/CGMES_v2.4.15_SmallGridTestConfiguration_BaseCase_Complete_v3.0.0"
 small_grid_node_breaker_bd_source="$cgmes_conformity_root/conformity/cas-1.1.3-data-4.0.3/SmallGrid/NodeBreaker/CGMES_v2.4.15_SmallGridTestConfiguration_Boundary_v3.0.0"
 micro_grid_cgmes3_source="$cgmes_conformity_root/cgmes3-test-models/MicroGrid"
+ieee_cdf_root="$powsybl_core/ieee-cdf/ieee-cdf-model/src/main/resources"
+ieee_cdf_cases=(
+    ieee9cdf
+    ieee9zeroimpedancecdf
+    ieee14cdf
+    ieee14cdf-solved
+    ieee30cdf
+    ieee57cdf
+    ieee118cdf
+    ieee300cdf
+)
 
 for source in \
     "$cgmes_2415_source" \
@@ -58,6 +69,13 @@ for version in 12 13 14 15 16 17; do
     source="$xiidm_serde_root/V1_$version/threeWindingsTransformerToBeEstimated.xiidm"
     if [[ ! -f "$source" ]]; then
         echo "missing PowSybl XIIDM 1.$version reference case: $source" >&2
+        exit 1
+    fi
+done
+
+for case in "${ieee_cdf_cases[@]}"; do
+    if [[ ! -f "$ieee_cdf_root/$case.txt" ]]; then
+        echo "missing PowSybl IEEE CDF reference case: $ieee_cdf_root/$case.txt" >&2
         exit 1
     fi
 done
@@ -146,6 +164,16 @@ fresh_emit "$node_breaker_source" psse psse35 five-bus-node-breaker \
     "$output_dir/five-bus-node-breaker.raw"
 fresh_emit "$node_breaker_xiidm_source" xiidm xiidm five-bus-node-breaker-xiidm \
     "$output_dir/five-bus-node-breaker.xiidm"
+
+# Every IEEE CDF case becomes fresh MATPOWER through PowerIO IR, and that
+# MATPOWER file is read back into a second IR the checker compares with the
+# first and with PyPowSybl's own view of the CDF file.
+for case in "${ieee_cdf_cases[@]}"; do
+    fresh_emit "$ieee_cdf_root/$case.txt" ieee-cdf matpower "ieee-cdf-$case" \
+        "$output_dir/ieee-cdf-$case.m"
+    "$powerio_binary" serialize "$output_dir/ieee-cdf-$case.m" --from matpower \
+        -o "$output_dir/ieee-cdf-$case-from-matpower.pio.json"
+done
 
 "$python_binary" "$repository_root/evals/powsybl/export_inputs.py" \
     "$powsybl_core" "$powsybl_inputs"
