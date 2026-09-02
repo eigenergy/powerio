@@ -7,6 +7,6 @@
 mod convert;
 mod dto;
 
-pub(crate) use convert::{emit_module, read_module};
+pub(crate) use convert::{emit_module, encode_diagnostics, read_module};
 #[cfg(feature = "schema")]
 pub(crate) use dto::StoredModule;

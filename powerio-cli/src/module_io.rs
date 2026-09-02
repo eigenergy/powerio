@@ -16,6 +16,8 @@ pub(crate) struct MemoryEmission {
 }
 
 impl MemoryEmission {
+    /// The diagnostics as `CODE: message` lines, for a corpus report.
+    #[allow(dead_code)] // The corpus walker in the library target uses this; the binary does not.
     pub(crate) fn render_diagnostics(&self) -> Vec<String> {
         powerio_core::render_diagnostics(&self.diagnostics)
     }
@@ -101,7 +103,7 @@ pub(crate) fn emit_multiconductor_module_with_options(
     unpack_memory_emission(result, primary)
 }
 
-fn declare_format(
+pub(crate) fn declare_format(
     source: powerio_core::Source,
     format: Option<&str>,
 ) -> Result<powerio_core::Source, powerio_core::Error> {

@@ -14,6 +14,254 @@ fn run(args: &[&str]) -> Output {
     Command::new(bin()).args(args).output().unwrap()
 }
 
+/// Run the binary with `stdin` piped in.
+fn run_with_stdin(args: &[&str], stdin: &[u8]) -> Output {
+    use std::io::Write as _;
+    use std::process::Stdio;
+    let mut child = Command::new(bin())
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(stdin).unwrap();
+    child.wait_with_output().unwrap()
+}
+
+/// The one JSON array of diagnostic records that `--diagnostics-format json`
+/// leaves on stderr; anything else on stderr fails the test.
+fn json_diagnostics(out: &Output) -> Vec<serde_json::Value> {
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let lines: Vec<&str> = stderr.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines.len(), 1, "stderr is not one JSON line:\n{stderr}");
+    serde_json::from_str(lines[0]).unwrap_or_else(|error| panic!("{error}:\n{stderr}"))
+}
+
+const IR_DIAGNOSTIC_FIELDS: [&str; 9] = [
+    "id",
+    "severity",
+    "code",
+    "message",
+    "target",
+    "spans",
+    "related",
+    "details",
+    "suggested_action",
+];
+
+#[test]
+fn convert_reads_a_case_from_stdin_with_a_declared_format() {
+    let case = std::fs::read(repo_file("tests/data/case9.m")).unwrap();
+    let out = run_with_stdin(
+        &[
+            "convert", "-", "--from", "matpower", "--to", "psse", "-o", "-",
+        ],
+        &case,
+    );
+    assert_success(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("powerio export: case9"), "{stdout}");
+    assert!(
+        stdout.contains("/ powerio export") || stdout.contains("BEGIN"),
+        "{stdout}"
+    );
+
+    let out = run_with_stdin(&["summary", "-", "--from", "matpower"], &case);
+    assert_success(&out);
+    let summary: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(summary["elements"]["buses"], 9, "{summary}");
+
+    let out = run_with_stdin(&["serialize", "-", "--from", "matpower"], &case);
+    assert_success(&out);
+    let document: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(document["schema"], "powerio.module", "{document}");
+    assert_eq!(
+        document["value"]["type"], "powerio.BalancedNetwork",
+        "{document}"
+    );
+}
+
+#[test]
+fn stdin_without_a_declared_format_is_a_request_failure() {
+    let case = std::fs::read(repo_file("tests/data/case9.m")).unwrap();
+    let out = run_with_stdin(&["convert", "-", "--to", "psse", "-o", "-"], &case);
+    assert_failure(&out);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("REQUEST.CLI.FORMAT_REQUIRED"), "{stderr}");
+    assert!(stderr.contains("--from"), "{stderr}");
+    assert!(out.stdout.is_empty(), "nothing is written on failure");
+
+    let out = run_with_stdin(
+        &[
+            "convert", "-", "--from", "gridfm", "--to", "psse", "-o", "-",
+        ],
+        &case,
+    );
+    assert_eq!(out.status.code(), Some(2));
+}
+
+#[test]
+fn an_unknown_format_is_a_usage_failure() {
+    let case = repo_file("tests/data/case9.m");
+    let out = run(&[
+        "convert",
+        case.to_str().unwrap(),
+        "--to",
+        "not-a-format",
+        "-o",
+        "-",
+    ]);
+    assert_eq!(out.status.code(), Some(2));
+    let out = run(&[
+        "convert",
+        case.to_str().unwrap(),
+        "--from",
+        "not-a-format",
+        "--to",
+        "psse",
+        "-o",
+        "-",
+    ]);
+    assert_eq!(out.status.code(), Some(2));
+}
+
+#[test]
+fn a_missing_input_exits_with_the_io_status_and_json_records() {
+    let out = run(&[
+        "--diagnostics-format",
+        "json",
+        "convert",
+        "does-not-exist.m",
+        "--to",
+        "psse",
+        "-o",
+        "-",
+    ]);
+    assert_eq!(out.status.code(), Some(3));
+    let diagnostics = json_diagnostics(&out);
+    let record = &diagnostics[0];
+    assert_eq!(record["code"], "READ.IO.OPEN", "{record}");
+    assert_eq!(record["severity"], "error", "{record}");
+    let primary_id = record["id"].as_str().unwrap().to_owned();
+    assert!(
+        record["message"]
+            .as_str()
+            .unwrap()
+            .contains("does-not-exist.m"),
+        "{record}"
+    );
+    // The operating system's reason is a note that names the primary record.
+    let notes: Vec<&serde_json::Value> = diagnostics
+        .iter()
+        .filter(|d| d["severity"] == "note")
+        .collect();
+    assert!(
+        notes.iter().any(|note| {
+            note["message"]
+                .as_str()
+                .unwrap()
+                .contains("No such file or directory")
+        }),
+        "{diagnostics:?}"
+    );
+    for note in &notes {
+        assert_eq!(note["code"], "READ.IO.OPEN", "{note}");
+        assert_eq!(note["related"], serde_json::json!([primary_id]), "{note}");
+    }
+    // Every record has the IR schema's fields and no other.
+    for record in &diagnostics {
+        for key in record.as_object().unwrap().keys() {
+            assert!(
+                IR_DIAGNOSTIC_FIELDS.contains(&key.as_str()),
+                "unexpected field {key} in {record}"
+            );
+        }
+    }
+    // The flag is global: it is accepted after the subcommand too.
+    let out = run(&[
+        "convert",
+        "does-not-exist.m",
+        "--to",
+        "psse",
+        "-o",
+        "-",
+        "--diagnostics-format",
+        "json",
+    ]);
+    assert_eq!(out.status.code(), Some(3));
+    assert_eq!(json_diagnostics(&out)[0]["code"], "READ.IO.OPEN");
+}
+
+#[test]
+fn json_format_leaves_only_the_diagnostics_array_on_stderr() {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let output = std::env::temp_dir().join(format!("powerio-cli-json-{stamp}.raw"));
+    let case = repo_file("tests/data/case9.m");
+    let out = run(&[
+        "--diagnostics-format",
+        "json",
+        "convert",
+        case.to_str().unwrap(),
+        "--to",
+        "psse",
+        "-o",
+        output.to_str().unwrap(),
+    ]);
+    assert_success(&out);
+    assert!(output.is_file(), "{} was not written", output.display());
+    let _ = std::fs::remove_file(&output);
+    // No `wrote <path>` line: stderr is the array alone, even when it is empty.
+    let diagnostics = json_diagnostics(&out);
+    for record in &diagnostics {
+        assert_ne!(record["severity"], "error", "{record}");
+    }
+}
+
+#[test]
+fn a_malformed_case_exits_with_the_parse_status() {
+    let out = run_with_stdin(
+        &[
+            "--diagnostics-format",
+            "json",
+            "convert",
+            "-",
+            "--from",
+            "matpower",
+            "--to",
+            "psse",
+            "-o",
+            "-",
+        ],
+        b"function mpc = broken\nmpc.bus = [\n\t1\t3\n",
+    );
+    assert_eq!(out.status.code(), Some(4));
+    let diagnostics = json_diagnostics(&out);
+    assert!(!diagnostics.is_empty(), "{diagnostics:?}");
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d["code"].as_str().unwrap().starts_with("PARSE.") && d["severity"] == "error"),
+        "{diagnostics:?}"
+    );
+
+    // Without the flag the same failure renders the readable lines.
+    let out = run_with_stdin(
+        &[
+            "convert", "-", "--from", "matpower", "--to", "psse", "-o", "-",
+        ],
+        b"function mpc = broken\nmpc.bus = [\n\t1\t3\n",
+    );
+    assert_eq!(out.status.code(), Some(4));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.starts_with("Error: "), "{stderr}");
+    assert!(stderr.contains("PARSE."), "{stderr}");
+}
+
 fn assert_success(out: &Output) {
     assert!(
         out.status.success(),
