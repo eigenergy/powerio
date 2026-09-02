@@ -51,6 +51,13 @@ license. `cgmes/node-breaker/` is a CGMES 2.4.15 EQ and SSH set without a TP
 profile; `cgmes/node-breaker/README.md` describes its equipment and the
 calculated buses it exercises. No ENTSO-E conformity data is vendored.
 
+## `ieee-cdf/`
+
+The IEEE 14 and 30 bus test cases in the IEEE Common Data Format, copied
+without edits from PowSybl Core (MPL-2.0), which carries the University of
+Washington archive files. Source path, checksums, and the archive quirk in
+the 30 bus file are in `ieee-cdf/README.md`.
+
 ## `psse/` and `egret/`
 
 Original to this repository: the PSS/E RAW files are hand written minimal
