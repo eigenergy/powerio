@@ -7,7 +7,7 @@ using PowerIO
 case = parse("case118.m")          # PioModule{BalancedNetwork}
 net = case.value
 length(net.buses)                  # 118
-net.data.branches[1]               # element tables: buses, branches, generators, and the rest
+net.branches[1]                    # element tables: buses, branches, generators, and the rest
 ```
 
 The network keeps what the source states: element inventory, terminal connections, impedances, ratings, generator capability bounds and cost curves, and the source/default operating assignment. Ratings and costs stay on the network as reusable data; selecting which bounds a calculation enforces happens when an instance is constructed, so one parsed case serves power flow, DC OPF, and AC OPF without reparsing ([Problem Instances and Solutions](instances.md)).
