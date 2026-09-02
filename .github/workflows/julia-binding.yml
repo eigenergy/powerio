@@ -190,4 +190,4 @@ jobs:
         cargo build -p powerio-capi --release --no-default-features --features dist --target-dir target/no-prob
         POWERIO_CAPI="${{ github.workspace }}/target/no-prob/release/libpowerio_capi.so" \
           julia --project=PowerIO.jl -e \
-          'using PowerIO; @assert !has_feature("prob"); @assert !prob_available(); @assert !features().prob'
+          'using PowerIO; @assert library_available(); @assert abi_version() == 7; module_ = parse("PowerIO.jl/test/data/case9.m"); @assert module_.value isa BalancedNetwork'

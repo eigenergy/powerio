@@ -65,6 +65,142 @@ fn convert_to_stdout_keeps_text_on_stdout() {
 }
 
 #[test]
+fn convert_goc3_problem_and_solution_source_emits_official_solution() {
+    let source = repo_file("tests/data/goc3");
+    let out = run(&[
+        "convert",
+        source.to_str().unwrap(),
+        "--to",
+        "goc3-json",
+        "-o",
+        "-",
+    ]);
+    assert_success(&out);
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let output = &value["time_series_output"];
+    assert!(
+        output.is_object(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(output["bus"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        output["simple_dispatchable_device"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn convert_goc3_solution_without_problem_reports_missing_problem() {
+    let solution = repo_file("tests/data/goc3/goc3_small_solution.json");
+    let out = run(&[
+        "convert",
+        solution.to_str().unwrap(),
+        "--to",
+        "goc3-json",
+        "-o",
+        "-",
+    ]);
+    assert_failure(&out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("requires the matching problem file"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn convert_goc3_problem_to_matpower_uses_the_typed_instance() {
+    let problem = repo_file("tests/data/goc3/goc3_small.json");
+    let out = run(&[
+        "convert",
+        problem.to_str().unwrap(),
+        "--from",
+        "goc3",
+        "--to",
+        "matpower",
+        "-o",
+        "-",
+    ]);
+    assert_success(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stdout.contains("mpc.bus = ["), "{stdout}");
+    assert!(stderr.contains("EMIT.CALCULATION.DATA_OMITTED"), "{stderr}");
+    assert!(stderr.contains("powerio.AcScucInstance"), "{stderr}");
+}
+
+#[test]
+fn convert_goc3_problem_and_solution_source_emits_cgmes_network() {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let output = std::env::temp_dir().join(format!("powerio-cli-goc3-cgmes-{stamp}"));
+    let source = repo_file("tests/data/goc3");
+    let out = run(&[
+        "convert",
+        source.to_str().unwrap(),
+        "--to",
+        "cgmes",
+        "-o",
+        output.to_str().unwrap(),
+    ]);
+    assert_success(&out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("EMIT.SOLUTION.DATA_OMITTED"), "{stderr}");
+    assert!(stderr.contains("powerio.AcScucSolution"), "{stderr}");
+
+    let names: Vec<_> = std::fs::read_dir(&output)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names.len(), 4, "{names:?}");
+    assert!(names.iter().any(|name| name.ends_with("_EQ.xml")));
+    assert!(names.iter().any(|name| name.ends_with("_TP.xml")));
+    assert!(names.iter().any(|name| name.ends_with("_SSH.xml")));
+    assert!(names.iter().any(|name| name.ends_with("_SV.xml")));
+    std::fs::remove_dir_all(output).unwrap();
+}
+
+#[test]
+fn convert_goc3_solution_ir_uses_the_same_typed_path() {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let ir = std::env::temp_dir().join(format!("powerio-cli-goc3-{stamp}.pio.json"));
+    let source = repo_file("tests/data/goc3");
+    let serialized = run(&[
+        "serialize",
+        source.to_str().unwrap(),
+        "-o",
+        ir.to_str().unwrap(),
+    ]);
+    assert_success(&serialized);
+
+    let converted = run(&[
+        "convert",
+        ir.to_str().unwrap(),
+        "--to",
+        "matpower",
+        "-o",
+        "-",
+    ]);
+    assert_success(&converted);
+    let stdout = String::from_utf8_lossy(&converted.stdout);
+    let stderr = String::from_utf8_lossy(&converted.stderr);
+    assert!(stdout.contains("mpc.bus = ["), "{stdout}");
+    assert!(stderr.contains("EMIT.SOLUTION.DATA_OMITTED"), "{stderr}");
+    assert!(stderr.contains("powerio.AcScucSolution"), "{stderr}");
+
+    std::fs::remove_file(ir).unwrap();
+}
+
+#[test]
 fn convert_refuses_an_existing_text_output() {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)

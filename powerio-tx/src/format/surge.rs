@@ -14,8 +14,8 @@ use crate::diagnostics::codes::EMIT_SURGE as F;
 use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
     BalancedNetwork, BalancedNetworkTables, Branch, BranchCharging, BranchCurrentRatings,
-    BranchSolution, Bus, BusId, BusType, Extras, GEN_EXTRA_KEYS, GenCaps, GenCost, Generator, Hvdc,
-    Load, LoadVoltageModel, Shunt, SourceFormat, Storage,
+    BranchSolution, Bus, BusId, BusType, Extras, GEN_EXTRA_KEYS, GenCaps, GenCost, Generator,
+    GeneratorEnergySource, Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat, Storage,
 };
 use crate::normalize;
 use crate::{Error, Result};
@@ -755,6 +755,7 @@ fn read_branch(value: &Value) -> Result<Branch> {
     };
     let b = f_map_or(obj, "b", 0.0)?;
     Ok(Branch {
+        name: None,
         from: BusId(required_usize(obj, "from_bus")?),
         to: BusId(required_usize(obj, "to_bus")?),
         r: f_map_or(obj, "r", 0.0)?,
@@ -862,6 +863,7 @@ fn read_generator(value: &Value) -> Result<(Option<Generator>, Option<Storage>)>
 
     let generator = Generator {
         bus,
+        energy_source: GeneratorEnergySource::default(),
         pg,
         qg,
         pmax,

@@ -49,6 +49,11 @@ const EXPECTED: &[(&str, &str, Option<&str>)] = &[
     ),
     ("goc3/goc3_small.json", "transmission", Some("goc3-json")),
     (
+        "goc3/goc3_small_solution.json",
+        "transmission",
+        Some("goc3-json"),
+    ),
+    (
         "pandapower/example.json",
         "transmission",
         Some("pandapower-json"),
@@ -136,10 +141,10 @@ fn every_json_fixture_classifies_as_stated() {
 /// while those paths stay public.
 #[test]
 fn classifier_and_diagnostic_types_are_crate_root_exports() {
-    let class = powerio_tx::classify_json_text(r#"{"model_kind":"balanced","model":{}}"#);
+    let class = powerio_tx::classify_json_text(r#"{"schema":"powerio.module","version":1}"#);
     assert!(matches!(class, powerio_tx::JsonClass::Module));
     assert!(matches!(
-        powerio_tx::classify_json_bytes(b"{\"model_kind\":\"balanced\",\"model\":{}}"),
+        powerio_tx::classify_json_bytes(b"{\"schema\":\"powerio.module\",\"version\":1}"),
         powerio_tx::JsonClass::Module
     ));
     assert!(matches!(

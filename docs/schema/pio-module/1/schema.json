@@ -1309,6 +1309,13 @@
         "in_service": {
           "type": "boolean"
         },
+        "name": {
+          "description": "Source supplied equipment name, when present.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "r": {
           "anyOf": [
             {
@@ -2197,6 +2204,17 @@
         },
         "component": {
           "$ref": "#/$defs/ComponentId"
+        },
+        "equipment_container": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ComponentId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The equipment container that owns this component, when the source model\nidentifies one."
         },
         "external_identifiers": {
           "default": [],
@@ -3368,10 +3386,25 @@
           },
           "type": "array"
         },
+        "junctions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Junction"
+          },
+          "type": "array"
+        },
         "line_commutated_converters": {
           "default": [],
           "items": {
             "$ref": "#/$defs/LineCommutatedConverter"
+          },
+          "type": "array"
+        },
+        "omitted_fields": {
+          "default": [],
+          "description": "Source fields whose absence must remain distinct from an explicit\nnumeric zero or default value during fresh emission.",
+          "items": {
+            "$ref": "#/$defs/OmittedField"
           },
           "type": "array"
         },
@@ -5872,6 +5905,11 @@
             }
           ]
         },
+        "energy_source": {
+          "$ref": "#/$defs/GeneratorEnergySource",
+          "default": "other",
+          "description": "Primary energy source used by the generating equipment."
+        },
         "in_service": {
           "type": "boolean"
         },
@@ -6078,6 +6116,18 @@
         "q_mvar"
       ],
       "type": "object"
+    },
+    "GeneratorEnergySource": {
+      "description": "Primary energy source used by generating equipment.",
+      "enum": [
+        "hydro",
+        "nuclear",
+        "wind",
+        "thermal",
+        "solar",
+        "other"
+      ],
+      "type": "string"
     },
     "GeoMeta": {
       "description": "Network level coordinate metadata.",
@@ -6804,6 +6854,18 @@
         "voltage_level",
         "node1",
         "node2"
+      ],
+      "type": "object"
+    },
+    "Junction": {
+      "description": "A CIM junction and its conducting equipment identity.\n\nIts electrical connection is recorded by the corresponding entries in\n[`DetailedConnectivity::terminals`].",
+      "properties": {
+        "component": {
+          "$ref": "#/$defs/ComponentId"
+        }
+      },
+      "required": [
+        "component"
       ],
       "type": "object"
     },
@@ -8405,6 +8467,32 @@
           "type": "object"
         }
       ]
+    },
+    "OmittedField": {
+      "description": "A field that was absent from a source representation.",
+      "properties": {
+        "component": {
+          "$ref": "#/$defs/ComponentId"
+        },
+        "field": {
+          "$ref": "#/$defs/OmittedFieldName"
+        }
+      },
+      "required": [
+        "component",
+        "field"
+      ],
+      "type": "object"
+    },
+    "OmittedFieldName": {
+      "description": "The name of a field omitted by a source representation.\n\nThe balanced calculation view keeps an ordinary numeric value for these\nfields. This metadata lets an emitter preserve the distinction between a\nfield that was absent and one that was explicitly set to that value.",
+      "enum": [
+        "active_power",
+        "reactive_power",
+        "voltage_setpoint",
+        "shunt_conductance_per_section"
+      ],
+      "type": "string"
     },
     "OperationalLimitGroup": {
       "description": "One named set of loading limits at an equipment terminal.",
@@ -13180,6 +13268,17 @@
     "TapChanger": {
       "description": "A ratio or phase tap changer attached to one transformer winding.",
       "properties": {
+        "component": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ComponentId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The tap changer's own identity when the source assigns one."
+        },
         "kind": {
           "$ref": "#/$defs/TapChangerKind"
         },
@@ -13189,6 +13288,22 @@
         "low_tap_position": {
           "format": "int32",
           "type": "integer"
+        },
+        "neutral_tap_position": {
+          "description": "Tap position at which the ratio or phase shift is neutral.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "normal_tap_position": {
+          "description": "Normal tap position declared by the equipment model.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "regulating": {
           "type": "boolean"
@@ -13277,6 +13392,26 @@
         },
         "transformer": {
           "$ref": "#/$defs/ComponentId"
+        },
+        "voltage_step_increment_percent": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Voltage increment per tap position, in percent, for ratio and\nnonlinear phase tap changers."
         },
         "winding": {
           "description": "One for a two winding transformer, or one through three for a three\nwinding transformer.",
@@ -13507,6 +13642,17 @@
               "type": "null"
             }
           ]
+        },
+        "component": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ComponentId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The terminal's own identity when the source assigns one."
         },
         "connectable_bus": {
           "anyOf": [
@@ -13973,7 +14119,7 @@
       "type": "object"
     },
     "TransformerControl": {
-      "description": "Automatic-control data for a regulating transformer ([`Branch::control`]).\n\nThe limits carry whatever the [`mode`](TransformerControl::mode) regulates:\n`tap_min`/`tap_max` bound the tap ratio (or the phase angle, for\n[`ActiveFlow`](TransformerControlMode::ActiveFlow)), and `band_min`/`band_max`\nbound the controlled quantity (the regulated voltage band, or the\nscheduled MW/MVAr). `ntp` is the number of discrete tap positions and\n`controlled_bus` is the regulated bus (`None` = the transformer's own\nterminal). `mva_base` is the winding MVA base the impedance is referred to.",
+      "description": "Automatic-control data for a regulating transformer ([`Branch::control`]).\n\nThe limits carry whatever the [`mode`](TransformerControl::mode) regulates:\n`tap_min`/`tap_max` bound the tap ratio (or the phase angle for active power\ncontrol), and `band_min`/`band_max` bound the controlled quantity (the\nregulated voltage band or the scheduled MW/MVAr). `ntp` is the number of\ndiscrete tap positions and `controlled_bus` is the regulated bus (`None` =\nthe transformer's own terminal). `mva_base` is the winding MVA base the\nimpedance is referred to.",
       "properties": {
         "band_max": {
           "anyOf": [
@@ -14017,6 +14163,15 @@
             }
           ]
         },
+        "controlled_bus_on_winding_side": {
+          "default": false,
+          "description": "Whether the controlled bus lies on this winding's side of the\ntransformer. PSS/E represents this with a negative `CONT` value.",
+          "type": "boolean"
+        },
+        "enabled": {
+          "description": "Whether automatic regulation is enabled. PSS/E represents this with\nthe sign of `COD` while its magnitude selects [`mode`](Self::mode).",
+          "type": "boolean"
+        },
         "mode": {
           "$ref": "#/$defs/TransformerControlMode"
         },
@@ -14040,6 +14195,17 @@
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
+        },
+        "regulating_terminal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TerminalReference"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Exact regulated terminal when the source identifies one."
         },
         "tap_max": {
           "anyOf": [
@@ -14072,10 +14238,31 @@
               "type": "string"
             }
           ]
+        },
+        "winding_connection_angle": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Winding connection angle for asymmetric active power flow control.\nIt is in degrees in a source network and radians after normalization."
         }
       },
       "required": [
         "mode",
+        "enabled",
         "tap_min",
         "tap_max",
         "band_min",
@@ -14090,7 +14277,7 @@
       "oneOf": [
         {
           "const": "fixed",
-          "description": "Fixed ratio, no automatic adjustment (PSS/E `COD` 0/±4, PSLF type 1).",
+          "description": "Fixed ratio, no automatic adjustment (PSS/E `COD` 0, PSLF type 1).",
           "type": "string"
         },
         {
@@ -14106,6 +14293,16 @@
         {
           "const": "active_flow",
           "description": "Active power flow control via phase shift (PSS/E `COD` ±3, PSLF type 4).",
+          "type": "string"
+        },
+        {
+          "const": "dc_line_quantity",
+          "description": "Control of a DC line quantity (PSS/E `COD` ±4; two-winding transformers only).",
+          "type": "string"
+        },
+        {
+          "const": "asymmetric_active_flow",
+          "description": "Asymmetric active power flow control via phase shift (PSS/E `COD` ±5).",
           "type": "string"
         }
       ]
@@ -15121,6 +15318,17 @@
       "properties": {
         "bus": {
           "$ref": "#/$defs/BusId"
+        },
+        "control": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TransformerControl"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Automatic tap or phase control for this winding."
         },
         "nominal_kv": {
           "anyOf": [

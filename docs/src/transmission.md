@@ -6,7 +6,7 @@ A balanced network is the positive sequence transmission model. MATPOWER, PSS/E,
 using PowerIO
 case = parse("case118.m")          # PioModule{BalancedNetwork}
 net = case.value
-n_buses(net)                       # 118
+length(net.buses)                  # 118
 net.data.branches[1]               # element tables: buses, branches, generators, …
 ```
 

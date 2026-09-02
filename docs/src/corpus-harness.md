@@ -79,7 +79,7 @@ buckets: case-000/, case-001/, …   (opaque ids; grouped by electrical
   │                                 fingerprint, never by filename)
   ▼
 per bucket: pairwise comparisons over every format sibling + per-format
-  │         round trips + derived variants        (the matrix invariants)
+  │         round trips + derived cases           (the matrix invariants)
   ▼
 solve pass: AC power flow per sibling via the existing oracles
   │
@@ -119,11 +119,11 @@ one bucket: convergence disagreement, voltage-magnitude spread beyond
 tolerance, injection residuals. A case whose formats disagree about
 convergence is a conversion defect until proven otherwise.
 
-**Variants.** From each bucket the tool derives deterministic
+**Perturbations.** From each bucket the tool derives deterministic
 perturbations (load scaling, status toggles, quantized impedance jitter,
-per-format token mutations for grammar fuzzing) and reruns the properties.
-Variants inherit the bucket's isolation; their seeds derive from the bucket
-ordinal, not the content.
+format token mutations for grammar fuzzing) and reruns the properties. The
+generated cases inherit the bucket's isolation; their seeds derive from the
+bucket ordinal, not the content.
 
 ## The anonymization boundary
 

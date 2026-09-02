@@ -63,7 +63,7 @@ fn dist_layer_extracts_and_applies_by_name() {
 
     // The canonical wire form round trips into a fresh parse of the same
     // master, matching case insensitively on the OpenDSS names.
-    let round = GeoLayer::parse_text(&layer.to_geojson(), None)
+    let round = GeoLayer::parse(&layer.to_geojson(), None)
         .expect("reparse")
         .layer;
     let mut bare = dist_network();
@@ -84,7 +84,7 @@ fn dist_layer_extracts_and_applies_by_name() {
 #[test]
 fn dist_apply_reads_a_buscoords_sidecar() {
     let mut net = dist_network();
-    let parsed = GeoLayer::parse_text("SourceBus, -89.6, 40.6\nLoadBus, -89.2, 39.9\n", None)
+    let parsed = GeoLayer::parse("SourceBus, -89.6, 40.6\nLoadBus, -89.2, 39.9\n", None)
         .expect("parse buscoords");
     assert!(matches!(
         parsed.layer.space,

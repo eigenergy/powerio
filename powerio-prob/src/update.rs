@@ -1040,7 +1040,13 @@ fn apply_balanced_assignment(
                 row.uid.as_deref()
             })?;
             let previous = network.loads()[index].p;
-            network.loads_mut()[index].p = replacement;
+            powerio_tx::__internal::edit_load_assignment(
+                network,
+                index,
+                load,
+                powerio_tx::OmittedFieldName::ActivePower,
+                |row| row.p = replacement,
+            );
             report.record(
                 load.clone(),
                 UpdatedField::LoadActivePower,
@@ -1056,7 +1062,13 @@ fn apply_balanced_assignment(
                 row.uid.as_deref()
             })?;
             let previous = network.loads()[index].q;
-            network.loads_mut()[index].q = replacement;
+            powerio_tx::__internal::edit_load_assignment(
+                network,
+                index,
+                load,
+                powerio_tx::OmittedFieldName::ReactivePower,
+                |row| row.q = replacement,
+            );
             report.record(
                 load.clone(),
                 UpdatedField::LoadReactivePower,
@@ -1080,7 +1092,13 @@ fn apply_balanced_assignment(
                 |row| row.uid.as_deref(),
             )?;
             let previous = network.generators()[index].pg;
-            network.generators_mut()[index].pg = replacement;
+            powerio_tx::__internal::edit_generator_assignment(
+                network,
+                index,
+                generator,
+                powerio_tx::OmittedFieldName::ActivePower,
+                |row| row.pg = replacement,
+            );
             report.record(
                 generator.clone(),
                 UpdatedField::GeneratorActivePower,
@@ -1104,7 +1122,13 @@ fn apply_balanced_assignment(
                 |row| row.uid.as_deref(),
             )?;
             let previous = network.generators()[index].qg;
-            network.generators_mut()[index].qg = replacement;
+            powerio_tx::__internal::edit_generator_assignment(
+                network,
+                index,
+                generator,
+                powerio_tx::OmittedFieldName::ReactivePower,
+                |row| row.qg = replacement,
+            );
             report.record(
                 generator.clone(),
                 UpdatedField::GeneratorReactivePower,
@@ -1123,7 +1147,13 @@ fn apply_balanced_assignment(
                 |row| row.uid.as_deref(),
             )?;
             let previous = network.generators()[index].vg;
-            network.generators_mut()[index].vg = replacement;
+            powerio_tx::__internal::edit_generator_assignment(
+                network,
+                index,
+                generator,
+                powerio_tx::OmittedFieldName::VoltageSetpoint,
+                |row| row.vg = replacement,
+            );
             report.record(
                 generator.clone(),
                 UpdatedField::GeneratorVoltageMagnitude,
@@ -2196,7 +2226,10 @@ impl_multiconductor_calculation_updates!(McAcPfInstance, McAcOpfInstance);
 mod tests {
     use powerio_core::{FormatId, Source};
     use powerio_dist::{DistBus, DistSwitch};
-    use powerio_tx::{Branch, Bus, BusId, BusType, Load, Switch};
+    use powerio_tx::{
+        Branch, Bus, BusId, BusType, DetailedConnectivity, Load, OmittedField, OmittedFieldName,
+        Switch,
+    };
 
     use super::*;
     use crate::BalancedOperatingPointBuilder;
@@ -2276,6 +2309,73 @@ mod tests {
             "VALIDATE.UPDATE.COMPONENT_UNKNOWN"
         );
         assert_number_eq(network.loads()[0].p, previous);
+    }
+
+    #[test]
+    fn balanced_update_removes_only_the_exact_source_omissions() {
+        let mut network = balanced_network();
+        let load = component(LOAD, "load-0");
+        let mut second_load = network.loads()[0].clone();
+        second_load.uid = Some("load-1".to_owned());
+        network.loads_mut().push(second_load);
+        let second_load = component(LOAD, "load-1");
+        let generator = component(GENERATOR, "generator-0");
+        let mut detailed = DetailedConnectivity::default();
+        detailed.omitted_fields = vec![
+            OmittedField::new(load.clone(), OmittedFieldName::ActivePower),
+            OmittedField::new(load.clone(), OmittedFieldName::ReactivePower),
+            OmittedField::new(second_load.clone(), OmittedFieldName::ActivePower),
+            OmittedField::new(generator.clone(), OmittedFieldName::ActivePower),
+            OmittedField::new(generator.clone(), OmittedFieldName::ReactivePower),
+            OmittedField::new(generator.clone(), OmittedFieldName::VoltageSetpoint),
+        ];
+        *network.detailed_connectivity_mut() = Some(std::sync::Arc::new(detailed));
+
+        apply_updates(
+            &mut network,
+            &[
+                OperatingPointUpdate::LoadActivePower {
+                    load: load.clone(),
+                    terminal: None,
+                    p: ActivePower::from_megawatts(12.0),
+                },
+                OperatingPointUpdate::GeneratorReactivePower {
+                    generator: generator.clone(),
+                    terminal: None,
+                    q: ReactivePower::from_megavars(3.0),
+                },
+            ],
+        )
+        .unwrap();
+
+        let omitted = &network
+            .detailed_connectivity()
+            .as_deref()
+            .unwrap()
+            .omitted_fields;
+        assert!(!omitted.contains(&OmittedField::new(
+            load.clone(),
+            OmittedFieldName::ActivePower,
+        )));
+        assert!(!omitted.contains(&OmittedField::new(
+            generator.clone(),
+            OmittedFieldName::ReactivePower,
+        )));
+        assert!(omitted.contains(&OmittedField::new(load, OmittedFieldName::ReactivePower,)));
+        assert!(omitted.contains(&OmittedField::new(
+            second_load,
+            OmittedFieldName::ActivePower,
+        )));
+        assert!(omitted.contains(&OmittedField::new(
+            generator.clone(),
+            OmittedFieldName::ActivePower,
+        )));
+        assert!(omitted.contains(&OmittedField::new(
+            generator,
+            OmittedFieldName::VoltageSetpoint,
+        )));
+        assert_number_eq(network.loads()[0].p, 12.0);
+        assert_number_eq(network.generators()[0].qg, 3.0);
     }
 
     #[test]

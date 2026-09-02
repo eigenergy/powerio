@@ -55,6 +55,25 @@ component definitions nor the time axis. `emit` writes a complete
 `AcScucSolution` as the official GO Challenge 3 output file; unchanged problem
 data still uses exact same format echo.
 
+PowSybl XIIDM 1.12 through 1.17 and CIM CGMES 2.4.15 and 3.0 now parse and
+emit through `BalancedNetwork`; fresh output uses XIIDM 1.17 and CGMES 3.0.
+The source neutral model retains detailed bus breaker and node breaker
+connectivity, hierarchy, terminals, switches, operational limits, tap changer
+steps and controls, reactive limits, external identities, aliases, AC and DC
+equipment, and the operating and solution quantities those formats carry.
+The interoperability gate removes retained source bytes before writing and
+loads every fresh result with PowSybl. An external RTE 7k check compares all
+29 PyPowSybl tables without committing the 33 MB source case.
+
+PSS/E RAW 33, 34, and 35 and RAWX 35 now use one mapping for transformer
+controls and detailed connectivity. Fresh RAW 34/35 and RAWX output preserves
+AC line and transformer names, exact generator, switched shunt, and transformer
+regulated node references, and the control data for every winding of a
+3-winding transformer. The sign of `COD` records whether automatic adjustment
+is enabled without losing its control mode. `|COD| = 4` means control of a DC
+line quantity on a 2-winding transformer, and `|COD| = 5` means asymmetric
+active power flow control.
+
 ## 0.10.0
 
 PowerIO 0.10 is the public beta of the 1.0 API. API corrections may land before 1.0.0 as downstream integrations exercise the new design.

@@ -16,7 +16,8 @@ use crate::diagnostics::codes::EMIT_PYPSA as F;
 use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
     BalancedNetwork, BalancedNetworkTables, Branch, BranchCharging, Bus, BusId, BusType, Extras,
-    GenCost, Generator, Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat, Storage,
+    GenCost, Generator, GeneratorEnergySource, Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat,
+    Storage,
 };
 use crate::{Error, Result};
 
@@ -243,6 +244,7 @@ fn read_pypsa_csv_static(
             let c2 = row.f("marginal_cost_quadratic");
             generators.push(Generator {
                 bus,
+                energy_source: GeneratorEnergySource::default(),
                 pg: row.f("p_set").unwrap_or(0.0),
                 qg: row.f("q_set").unwrap_or(0.0),
                 pmax,
@@ -292,6 +294,7 @@ fn read_pypsa_csv_static(
             let b = row.f("b").unwrap_or(0.0) * zb;
             let g = row.f("g").unwrap_or(0.0) * zb;
             branches.push(Branch {
+                name: None,
                 from,
                 to,
                 r: row.f("r").unwrap_or(0.0) / zb,
@@ -339,6 +342,7 @@ fn read_pypsa_csv_static(
             let b = row.f("b").unwrap_or(0.0) * s_nom / base_mva;
             let g = row.f("g").unwrap_or(0.0) * s_nom / base_mva;
             branches.push(Branch {
+                name: None,
                 from,
                 to,
                 r: row.f("r").unwrap_or(0.0) * k,
@@ -1653,6 +1657,7 @@ mod tests {
     fn make_gen(bus: usize, cost: Option<GenCost>) -> Generator {
         Generator {
             bus: BusId(bus),
+            energy_source: GeneratorEnergySource::default(),
             pg: 1.0,
             qg: 0.0,
             pmax: 10.0,
@@ -1700,6 +1705,7 @@ mod tests {
 
     fn xfmr(from: usize, to: usize, rate_a: f64) -> Branch {
         Branch {
+            name: None,
             from: BusId(from),
             to: BusId(to),
             r: 0.125,
@@ -1726,6 +1732,7 @@ mod tests {
 
     fn line(from: usize, to: usize) -> Branch {
         Branch {
+            name: None,
             from: BusId(from),
             to: BusId(to),
             r: 0.01,

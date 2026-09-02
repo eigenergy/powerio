@@ -35,7 +35,7 @@ Three rules hold everywhere:
 - emitting another format keeps everything the target can represent and reports each loss as a coded diagnostic;
 - moving between value families is an explicit, recorded operation, never a side effect.
 
-Supported sources: MATPOWER, PSS/E RAW revisions 33 through 35, PSS/E RAWX 35, PowSybl XIIDM 1.17, CIM CGMES 2.4.15 and 3.0, PowerWorld AUX and PWB, PSLF EPC, PowerModels JSON, Egret JSON, pandapower JSON, PyPSA CSV folders, Surge JSON, DOE GO Challenge 3 JSON, DeepMind OPFData JSON, GridFM Parquet datasets, OpenDSS, PowerModelsDistribution engineering JSON, and BMOPF JSON. PowerIO IR enters through `deserialize`, not `parse`. [Formats and Fidelity](format-fidelity.md) states each format's supported profile and write support.
+Supported sources: MATPOWER, PSS/E RAW revisions 33 through 35, PSS/E RAWX 35, PowSybl XIIDM 1.12 through 1.17, CIM CGMES 2.4.15 and 3.0, PowerWorld AUX and PWB, PSLF EPC, PowerModels JSON, Egret JSON, pandapower JSON, PyPSA CSV folders, Surge JSON, DOE GO Challenge 3 JSON, DeepMind OPFData JSON, GridFM Parquet datasets, OpenDSS, PowerModelsDistribution engineering JSON, and BMOPF JSON. PowerIO IR enters through `deserialize`, not `parse`. [Formats and Fidelity](format-fidelity.md) states each format's supported profile and write support.
 
 Operations exposed on more than one surface use the same value types, format
 names, diagnostic codes, signs, and units. [Rust, Python, Julia, and C](languages.md)

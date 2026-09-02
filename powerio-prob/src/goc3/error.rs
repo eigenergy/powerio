@@ -23,13 +23,12 @@ impl Goc3Error {
     /// A wrapped hub failure keeps the hub's own code.
     #[must_use]
     pub fn code(&self) -> &'static powerio_core::DiagnosticInfo {
-        use crate::diagnostics::codes;
         match self {
-            Self::Json(_) => &codes::PARSE_GOC3_MALFORMED,
+            Self::Json(_) => &powerio_tx::diagnostics::codes::PARSE_GOC3_MALFORMED,
             Self::Source(inner) => inner.code(),
             #[cfg(test)]
-            Self::UnsupportedFormat(_) => &codes::REQUEST_GOC3_FORMAT_UNKNOWN,
-            Self::InvalidDocument(_) => &codes::READ_GOC3_INVALID_DOCUMENT,
+            Self::UnsupportedFormat(_) => &crate::diagnostics::codes::REQUEST_GOC3_FORMAT_UNKNOWN,
+            Self::InvalidDocument(_) => &powerio_tx::diagnostics::codes::READ_GOC3_INVALID_DOCUMENT,
         }
     }
 }

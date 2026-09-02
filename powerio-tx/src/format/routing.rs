@@ -404,6 +404,8 @@ struct JsonHeader {
     #[serde(default, deserialize_with = "present")]
     time_series_input: bool,
     #[serde(default, deserialize_with = "present")]
+    time_series_output: bool,
+    #[serde(default, deserialize_with = "present")]
     reliability: bool,
     #[serde(default, deserialize_with = "maybe_str")]
     format: Option<String>,
@@ -459,10 +461,11 @@ impl JsonHeader {
     fn classify(&self) -> JsonClass {
         let is_pandapower = self.pandapower_class.as_deref() == Some("pandapowerNet");
         let is_egret = self.elements && self.system;
-        let is_goc3 = (self.time_series_input || self.reliability)
-            && (self.network.header.simple_dispatchable_device
-                || self.network.header.ac_line
-                || self.network.header.two_winding_transformer);
+        let is_goc3 = self.time_series_output
+            || ((self.time_series_input || self.reliability)
+                && (self.network.header.simple_dispatchable_device
+                    || self.network.header.ac_line
+                    || self.network.header.two_winding_transformer));
         let is_rawx = self.network.header.caseid;
         let is_surge = self.format.as_deref() == Some("surge-json")
             && self.schema_version
@@ -673,6 +676,12 @@ mod tests {
             classify_json_text(
                 r#"{"network":{"bus":[],"simple_dispatchable_device":[]},"time_series_input":{}}"#
             ),
+            JsonClass::Case(Detection::Known(SourceFormat::Transmission(
+                TransmissionFormat::Goc3Json
+            )))
+        );
+        assert_eq!(
+            classify_json_text(r#"{"time_series_output":{"bus":[]}}"#),
             JsonClass::Case(Detection::Known(SourceFormat::Transmission(
                 TransmissionFormat::Goc3Json
             )))

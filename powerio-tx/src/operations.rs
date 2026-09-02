@@ -196,19 +196,29 @@ impl BalancedNetwork {
             .cloned()
             .collect::<Vec<_>>()
             .into();
-        let transformers_3w = self
+        let mut transformers_3w = self
             .transformers_3w()
             .iter()
             .filter(|t| t.windings.iter().all(|w| kept.contains(&w.bus)))
             .cloned()
-            .collect::<Vec<_>>()
-            .into();
+            .collect::<Vec<_>>();
 
         // Clear control references that point outside the kept set.
         for br in &mut branches {
             if let Some(c) = &mut br.control {
                 if c.controlled_bus.is_some_and(|b| !kept.contains(&b)) {
                     c.controlled_bus = None;
+                }
+            }
+        }
+        for transformer in &mut transformers_3w {
+            for winding in &mut transformer.windings {
+                if let Some(control) = &mut winding.control
+                    && control
+                        .controlled_bus
+                        .is_some_and(|bus| !kept.contains(&bus))
+                {
+                    control.controlled_bus = None;
                 }
             }
         }
@@ -259,7 +269,7 @@ impl BalancedNetwork {
             generators: generators.into(),
             storage,
             hvdc,
-            transformers_3w,
+            transformers_3w: transformers_3w.into(),
             areas: areas.into(),
             solver: self.solver().clone(),
             source_format: SourceFormat::InMemory,
@@ -331,6 +341,13 @@ impl BalancedNetwork {
         for t in self.transformers_3w_mut() {
             for w in &mut t.windings {
                 remap(&mut w.bus);
+                if let Some(controlled_bus) = w
+                    .control
+                    .as_mut()
+                    .and_then(|control| control.controlled_bus.as_mut())
+                {
+                    remap(controlled_bus);
+                }
             }
         }
         for a in self.areas_mut() {
@@ -455,12 +472,21 @@ impl BalancedNetwork {
             .branches()
             .iter()
             .any(|b| b.control.as_ref().and_then(|c| c.controlled_bus) == Some(m));
+        let winding_controlled = self.transformers_3w().iter().any(|transformer| {
+            transformer.windings.iter().any(|winding| {
+                winding
+                    .control
+                    .as_ref()
+                    .and_then(|control| control.controlled_bus)
+                    == Some(m)
+            })
+        });
         let regulated = self
             .shunts()
             .iter()
             .any(|s| s.control.as_ref().and_then(|c| c.control_bus) == Some(m));
         let gen_regulated = self.generators().iter().any(|g| g.regulated_bus == Some(m));
-        if controlled || regulated || gen_regulated {
+        if controlled || winding_controlled || regulated || gen_regulated {
             return false;
         }
         let incident: Vec<&Branch> = self
@@ -503,6 +529,7 @@ impl BalancedNetwork {
             angmax = s1.angmax.max(s2.angmax);
         }
         self.branches_mut().push(Branch {
+            name: None,
             from: other_end(s1, m),
             to: other_end(s2, m),
             r: s1.r + s2.r,
@@ -572,7 +599,8 @@ impl BalancedNetwork {
 mod tests {
     use super::*;
     use crate::network::{
-        Area, BusType, Extras, Generator, Impedance, Load, Transformer3W, Winding,
+        Area, BusType, Extras, Generator, GeneratorEnergySource, Impedance, Load, Transformer3W,
+        Winding,
     };
 
     fn bus(id: usize, area: usize, base_kv: f64) -> Bus {
@@ -597,6 +625,7 @@ mod tests {
 
     fn line(from: usize, to: usize) -> Branch {
         Branch {
+            name: None,
             from: BusId(from),
             to: BusId(to),
             r: 0.0,
@@ -656,6 +685,7 @@ mod tests {
             rate_a: 0.0,
             rate_b: 0.0,
             rate_c: 0.0,
+            control: None,
         };
         let imp = Impedance {
             r: 0.0,
@@ -679,6 +709,7 @@ mod tests {
     fn gen_regulating(bus: usize, regulated: usize) -> Generator {
         Generator {
             bus: BusId(bus),
+            energy_source: GeneratorEnergySource::default(),
             pg: 10.0,
             qg: 0.0,
             pmax: 100.0,

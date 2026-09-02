@@ -495,6 +495,7 @@ mod tests {
             rate_a: 0.0,
             rate_b: 0.0,
             rate_c: 0.0,
+            control: None,
         };
         let imp = Impedance {
             r: 0.0,

@@ -19,7 +19,7 @@ use crate::diagnostics::Diagnostics;
 use crate::diagnostics::codes::EMIT_EGRET as F;
 use crate::network::{
     BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, Extras, GenCost,
-    Generator, Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat,
+    Generator, GeneratorEnergySource, Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat,
 };
 use crate::{Error, Result};
 
@@ -1023,6 +1023,7 @@ struct BranchRow {
 fn read_branch(row: BranchRow) -> Result<Branch> {
     let is_xf = row.branch_type.as_ref().and_then(Value::as_str) == Some("transformer");
     Ok(Branch {
+        name: None,
         from: id_cell(row.from_bus.as_ref(), "from_bus")?,
         to: id_cell(row.to_bus.as_ref(), "to_bus")?,
         r: num_cell(row.resistance.as_ref(), "resistance", 0.0)?,
@@ -1107,6 +1108,7 @@ fn read_gen(row: &GenRow) -> Result<Generator> {
     };
     Ok(Generator {
         bus: id_cell(row.bus.as_ref(), "bus")?,
+        energy_source: GeneratorEnergySource::default(),
         pg: num_cell(row.pg.as_ref(), "pg", 0.0)?,
         qg: num_cell(row.qg.as_ref(), "qg", 0.0)?,
         pmax: num_cell(row.p_max.as_ref(), "p_max", 0.0)?,

@@ -73,7 +73,7 @@ using PowerIO
 
 module_ = parse("case9.m")          # PioModule{BalancedNetwork}
 network = module_.value
-n_buses(network)                    # 9
+length(network.buses)               # 9
 module_.diagnostics
 emit(module_, "matpower", "copy.m")
 ```
@@ -99,7 +99,7 @@ Balanced network formats:
 - MATPOWER `.m`
 - PSS/E `.raw` revisions 33, 34, and 35
 - PSS/E RAWX JSON revision 35
-- PowSybl XIIDM XML 1.17
+- PowSybl XIIDM XML 1.12 through 1.17; fresh output uses 1.17
 - CIM CGMES 2.4.15 and 3.0 profile sets; fresh output uses CGMES 3.0
 - PowerWorld `.aux`; `.pwb` is read only and `.pwd` uses the display API
 - GE PSLF `.epc`

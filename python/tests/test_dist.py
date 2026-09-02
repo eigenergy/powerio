@@ -1,7 +1,7 @@
 """The multiconductor value surface and canonical parse/emit path."""
 
-import json
 import io
+import json
 from pathlib import Path
 
 import pytest

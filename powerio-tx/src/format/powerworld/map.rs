@@ -14,8 +14,8 @@ use crate::diagnostics::codes::EMIT_POWERWORLD as F;
 use crate::diagnostics::{Diagnostics, codes};
 use crate::format::{TextEmission, sanitize_quoted, warn_extra_branch_rating_sets};
 use crate::network::{
-    BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, Extras, Generator, Load,
-    LoadVoltageModel, Shunt, SourceFormat,
+    BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, Extras, Generator,
+    GeneratorEnergySource, Load, LoadVoltageModel, Shunt, SourceFormat,
 };
 use crate::{Error, Result};
 
@@ -597,6 +597,7 @@ fn read_shunt(r: &Row, bus_labels: &HashMap<&str, BusId>, index: usize) -> Resul
 fn read_gen(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Generator> {
     Ok(Generator {
         bus: bus_ref(r, &["BusNum"], &["BusName_NomVolt"], bus_labels)?,
+        energy_source: GeneratorEnergySource::default(),
         // GenMW is the solved output; complete case exports write the
         // dispatch setpoint instead.
         pg: f_alias(r, &["GenMW", "GenMWSetPoint", "MWSetPoint"], 0.0)?,
@@ -683,6 +684,7 @@ fn read_branch(
         extras.remove(BRANCH_DEVICE_TYPE);
     }
     Ok(Branch {
+        name: None,
         from,
         to,
         r: f_alias(r, &["LineR", "LineR:1", "R", "Rxfbase"], 0.0)?,

@@ -70,6 +70,100 @@ pub struct PioDiagnosticSpanView {
     pub byte_end: u64,
 }
 
+/// Program identity recorded with one module.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioModuleProducerView {
+    pub name: PioStringView,
+    pub version: PioStringView,
+}
+
+/// One durable source descriptor recorded with a module.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioModuleSourceView {
+    pub id: PioStringView,
+    pub name: PioStringView,
+    pub byte_length: u64,
+    pub format: PioStringView,
+    pub has_format: bool,
+    pub digest_algorithm: PioStringView,
+    pub digest: PioStringView,
+    pub has_digest: bool,
+}
+
+/// One borrowed source byte range from a source map entry.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioSourceSpanView {
+    pub source: PioStringView,
+    pub byte_start: u64,
+    pub byte_end: u64,
+}
+
+/// One typed value target and its relation to source bytes.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioModuleSourceMapEntryView {
+    pub target: PioStringView,
+    pub relation: PioStringView,
+    pub span_count: usize,
+}
+
+/// One operation recorded in module history.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioModuleHistoryEntryView {
+    pub id: PioStringView,
+    pub kind: PioStringView,
+    pub name: PioStringView,
+    pub input_type: PioStringView,
+    pub has_input_type: bool,
+    pub output_type: PioStringView,
+    pub has_output_type: bool,
+    pub parameter_count: usize,
+    pub assumption_count: usize,
+    pub loss_count: usize,
+}
+
+/// One named structured parameter in a module history entry.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioModuleHistoryParameterView {
+    pub name: PioStringView,
+    pub value_kind: PioStringView,
+}
+
+/// One namespaced structured module extension.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioModuleExtensionView {
+    pub namespace: PioStringView,
+    pub value_kind: PioStringView,
+}
+
+/// One structured JSON value stored in module history or extensions.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioJsonValueView {
+    pub kind: PioStringView,
+    pub boolean_value: bool,
+    pub number_kind: PioStringView,
+    pub signed_integer_value: i64,
+    pub unsigned_integer_value: u64,
+    pub floating_point_value: f64,
+    pub string_value: PioStringView,
+    pub element_count: usize,
+}
+
+/// One key and value type in a structured JSON object.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioJsonObjectEntryView {
+    pub key: PioStringView,
+    pub value_kind: PioStringView,
+}
+
 /// Borrowed binary bytes.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -136,6 +230,35 @@ impl PioSizeView {
     }
 }
 
+/// One point in a balanced network coordinate space.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioBalancedLocationView {
+    pub x: f64,
+    pub y: f64,
+    pub kind: PioStringView,
+    pub has_kind: bool,
+}
+
+/// Coordinate metadata for a balanced network.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioBalancedGeoView {
+    pub has_geo: bool,
+    pub space: PioStringView,
+    pub crs: PioStringView,
+    pub has_crs: bool,
+    pub kind: PioStringView,
+    pub has_kind: bool,
+    pub has_canvas: bool,
+    pub canvas_width: f64,
+    pub has_canvas_width: bool,
+    pub canvas_height: f64,
+    pub has_canvas_height: bool,
+    pub canvas_units: PioStringView,
+    pub has_canvas_units: bool,
+}
+
 /// One balanced bus. String and coefficient spans borrow from the network.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -156,6 +279,8 @@ pub struct PioBalancedBusView {
     pub zone: usize,
     pub name: PioStringView,
     pub has_name: bool,
+    pub location: PioBalancedLocationView,
+    pub has_location: bool,
 }
 
 /// Voltage dependence attached to one balanced load.
@@ -239,6 +364,8 @@ pub struct PioBranchRatingView {
 pub struct PioBalancedBranchView {
     pub component_id: PioStringView,
     pub has_component_id: bool,
+    pub name: PioStringView,
+    pub has_name: bool,
     pub from_bus_id: usize,
     pub to_bus_id: usize,
     pub resistance_pu: f64,
@@ -263,6 +390,10 @@ pub struct PioBalancedBranchView {
     pub in_service: bool,
     pub angle_min_degrees: f64,
     pub angle_max_degrees: f64,
+    pub control: PioTransformerControlView,
+    pub has_control: bool,
+    pub route_point_count: usize,
+    pub has_route: bool,
 }
 
 /// One generator cost curve.
@@ -307,6 +438,7 @@ pub struct PioBalancedGeneratorView {
     pub component_id: PioStringView,
     pub has_component_id: bool,
     pub bus_id: usize,
+    pub energy_source: PioStringView,
     pub active_power_mw: f64,
     pub reactive_power_mvar: f64,
     pub active_power_max_mw: f64,
@@ -363,6 +495,27 @@ pub struct PioBalancedStorageView {
 pub struct PioTerminalReferenceView {
     pub equipment: PioComponentIdView,
     pub terminal: u8,
+}
+
+/// Automatic transformer tap or phase control.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioTransformerControlView {
+    pub mode: PioStringView,
+    pub enabled: bool,
+    pub controlled_bus_id: usize,
+    pub has_controlled_bus: bool,
+    pub controlled_bus_on_winding_side: bool,
+    pub regulating_terminal: PioTerminalReferenceView,
+    pub has_regulating_terminal: bool,
+    pub tap_min: f64,
+    pub tap_max: f64,
+    pub band_min: f64,
+    pub band_max: f64,
+    pub tap_position_count: u32,
+    pub mva_base: f64,
+    pub winding_connection_angle: f64,
+    pub has_winding_connection_angle: bool,
 }
 
 /// One balanced static VAR compensator.
@@ -475,6 +628,8 @@ pub struct PioThreeWindingTransformerWindingView {
     pub rating_a_mva: f64,
     pub rating_b_mva: f64,
     pub rating_c_mva: f64,
+    pub control: PioTransformerControlView,
+    pub has_control: bool,
 }
 
 /// One pairwise impedance of a balanced three winding transformer.
@@ -524,6 +679,7 @@ pub struct PioBalancedAreaView {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct PioDetailedConnectivityCountsView {
+    pub omitted_fields: usize,
     pub component_metadata: usize,
     pub subnetworks: usize,
     pub substations: usize,
@@ -532,11 +688,13 @@ pub struct PioDetailedConnectivityCountsView {
     pub calculated_buses: usize,
     pub connectivity_nodes: usize,
     pub busbar_sections: usize,
+    pub junctions: usize,
     pub terminals: usize,
     pub switches: usize,
     pub internal_connections: usize,
     pub operational_limit_groups: usize,
     pub tap_changers: usize,
+    pub equipment_reactive_limits: usize,
     pub boundary_lines: usize,
     pub tie_lines: usize,
     pub dc_converter_units: usize,
@@ -549,6 +707,22 @@ pub struct PioDetailedConnectivityCountsView {
     pub dc_switches: usize,
     pub voltage_source_converters: usize,
     pub line_commutated_converters: usize,
+}
+
+/// One source field that was absent rather than explicitly assigned a value.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioOmittedFieldView {
+    pub component: PioComponentIdView,
+    pub field: PioStringView,
+}
+
+/// Reactive limits retained for one equipment record.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioEquipmentReactiveLimitsView {
+    pub equipment: PioComponentIdView,
+    pub limits: PioReactiveLimitsView,
 }
 
 /// Source neutral case metadata attached to one subnetwork.
@@ -658,6 +832,8 @@ pub struct PioComponentMetadataView {
     pub component: PioComponentIdView,
     pub name: PioStringView,
     pub has_name: bool,
+    pub equipment_container: PioComponentIdView,
+    pub has_equipment_container: bool,
     pub fictitious: bool,
     pub alias_count: usize,
     pub external_identifier_count: usize,
@@ -766,10 +942,19 @@ pub struct PioBusbarSectionView {
     pub node: PioComponentIdView,
 }
 
+/// One source neutral CIM junction.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioJunctionView {
+    pub component: PioComponentIdView,
+}
+
 /// One source neutral AC terminal.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct PioDetailedTerminalView {
+    pub component: PioComponentIdView,
+    pub has_component: bool,
     pub equipment: PioComponentIdView,
     pub terminal: u8,
     pub voltage_level: PioComponentIdView,
@@ -818,6 +1003,7 @@ pub struct PioOperationalLimitGroupView {
     pub terminal: u8,
     pub id: PioStringView,
     pub selected: bool,
+    pub property_count: usize,
     pub has_current_limits: bool,
     pub current_permanent_limit_a: f64,
     pub current_permanent_limit_name: PioStringView,
@@ -838,6 +1024,15 @@ pub struct PioOperationalLimitGroupView {
     pub apparent_power_temporary_limit_count: usize,
 }
 
+/// One segment of an AC/DC converter DC voltage droop curve.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioDroopCurveSegmentView {
+    pub minimum_voltage_kv: f64,
+    pub maximum_voltage_kv: f64,
+    pub k: f64,
+}
+
 /// One temporary source neutral loading limit.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -852,6 +1047,8 @@ pub struct PioTemporaryLimitView {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct PioTapChangerView {
+    pub component: PioComponentIdView,
+    pub has_component: bool,
     pub transformer: PioComponentIdView,
     pub winding: u8,
     pub kind: PioStringView,
@@ -860,6 +1057,12 @@ pub struct PioTapChangerView {
     pub solved_tap_position: i32,
     pub has_solved_tap_position: bool,
     pub low_tap_position: i32,
+    pub neutral_tap_position: i32,
+    pub has_neutral_tap_position: bool,
+    pub normal_tap_position: i32,
+    pub has_normal_tap_position: bool,
+    pub voltage_step_increment_percent: f64,
+    pub has_voltage_step_increment_percent: bool,
     pub load_tap_changing_capabilities: bool,
     pub regulating: bool,
     pub regulation_mode: PioStringView,
@@ -977,8 +1180,22 @@ pub struct PioAcDcConverterView {
     pub has_minimum_active_power: bool,
     pub maximum_active_power_mw: f64,
     pub has_maximum_active_power: bool,
+    pub minimum_dc_voltage_kv: f64,
+    pub has_minimum_dc_voltage: bool,
+    pub maximum_dc_voltage_kv: f64,
+    pub has_maximum_dc_voltage: bool,
     pub rated_dc_voltage_kv: f64,
     pub has_rated_dc_voltage: bool,
+    pub valve_u0_kv: f64,
+    pub has_valve_u0: bool,
+    pub number_of_valves: u32,
+    pub has_number_of_valves: bool,
+    pub idle_loss_mw: f64,
+    pub has_idle_loss: bool,
+    pub switching_loss_mw_per_ampere: f64,
+    pub has_switching_loss: bool,
+    pub resistive_loss_ohm: f64,
+    pub has_resistive_loss: bool,
     pub control_mode: PioStringView,
     pub has_control_mode: bool,
     pub active_power_at_pcc_mw: f64,
@@ -989,6 +1206,20 @@ pub struct PioAcDcConverterView {
     pub has_target_active_power: bool,
     pub target_dc_voltage_kv: f64,
     pub has_target_dc_voltage: bool,
+    pub pcc_terminal: PioTerminalReferenceView,
+    pub has_pcc_terminal: bool,
+    pub droop_curve_segment_count: usize,
+    pub has_droop_curve: bool,
+    pub droop: f64,
+    pub has_droop: bool,
+    pub droop_compensation: f64,
+    pub has_droop_compensation: bool,
+    pub q_share: f64,
+    pub has_q_share: bool,
+    pub maximum_modulation_index: f64,
+    pub has_maximum_modulation_index: bool,
+    pub maximum_valve_current_a: f64,
+    pub has_maximum_valve_current: bool,
     pub dc_current_a: f64,
     pub has_dc_current: bool,
     pub ac_voltage_kv: f64,
@@ -1001,12 +1232,375 @@ pub struct PioAcDcConverterView {
     pub has_voltage_setpoint: bool,
     pub reactive_power_setpoint_mvar: f64,
     pub has_reactive_power_setpoint: bool,
+    pub reactive_limits: PioReactiveLimitsView,
+    pub has_reactive_limits: bool,
+    pub pole_loss_active_power_mw: f64,
+    pub has_pole_loss_active_power: bool,
     pub reactive_model: PioStringView,
     pub has_reactive_model: bool,
     pub power_factor: f64,
     pub has_power_factor: bool,
     pub operating_mode: PioStringView,
     pub has_operating_mode: bool,
+    pub rated_dc_current_a: f64,
+    pub has_rated_dc_current: bool,
+    pub minimum_alpha_degrees: f64,
+    pub has_minimum_alpha: bool,
+    pub maximum_alpha_degrees: f64,
+    pub has_maximum_alpha: bool,
+    pub minimum_gamma_degrees: f64,
+    pub has_minimum_gamma: bool,
+    pub maximum_gamma_degrees: f64,
+    pub has_maximum_gamma: bool,
+    pub target_alpha_degrees: f64,
+    pub has_target_alpha: bool,
+    pub target_gamma_degrees: f64,
+    pub has_target_gamma: bool,
+    pub target_dc_current_a: f64,
+    pub has_target_dc_current: bool,
+    pub alpha_degrees: f64,
+    pub has_alpha: bool,
+    pub gamma_degrees: f64,
+    pub has_gamma: bool,
+    pub delta_degrees: f64,
+    pub has_delta: bool,
+    pub uf_kv: f64,
+    pub has_uf: bool,
+    pub uv_kv: f64,
+    pub has_uv: bool,
+}
+
+/// One point in a multiconductor network coordinate space.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioMulticonductorLocationView {
+    pub x: f64,
+    pub y: f64,
+    pub kind: PioStringView,
+    pub has_kind: bool,
+}
+
+/// Coordinate metadata for a multiconductor network.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioMulticonductorGeoView {
+    pub has_geo: bool,
+    pub space: PioStringView,
+    pub crs: PioStringView,
+    pub has_crs: bool,
+    pub kind: PioStringView,
+    pub has_kind: bool,
+    pub has_canvas: bool,
+    pub canvas_width: f64,
+    pub has_canvas_width: bool,
+    pub canvas_height: f64,
+    pub has_canvas_height: bool,
+    pub canvas_units: PioStringView,
+    pub has_canvas_units: bool,
+}
+
+/// Exact table lengths in a multiconductor network.
+///
+/// Source extension `extras` maps are not exposed through ABI 7. They are
+/// retained by PowerIO for same format emission but are not PowerIO domain data.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioMulticonductorNetworkCountsView {
+    pub buses: usize,
+    pub line_codes: usize,
+    pub lines: usize,
+    pub switches: usize,
+    pub transformers: usize,
+    pub loads: usize,
+    pub generators: usize,
+    pub inverter_based_resources: usize,
+    pub control_profiles: usize,
+    pub shunts: usize,
+    pub capacitors: usize,
+    pub voltage_sources: usize,
+    pub untyped_objects: usize,
+    pub commands: usize,
+    pub options: usize,
+}
+
+/// One multiconductor bus.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioMulticonductorBusView {
+    pub id: PioStringView,
+    pub terminal_count: usize,
+    pub grounded_terminal_count: usize,
+    pub voltage_min_v: f64,
+    pub has_voltage_min: bool,
+    pub voltage_max_v: f64,
+    pub has_voltage_max: bool,
+    pub phase_to_neutral_voltage_min_v: PioF64View,
+    pub has_phase_to_neutral_voltage_min: bool,
+    pub phase_to_neutral_voltage_max_v: PioF64View,
+    pub has_phase_to_neutral_voltage_max: bool,
+    pub phase_to_phase_voltage_min_v: PioF64View,
+    pub has_phase_to_phase_voltage_min: bool,
+    pub phase_to_phase_voltage_max_v: PioF64View,
+    pub has_phase_to_phase_voltage_max: bool,
+    pub positive_sequence_voltage_min_v: f64,
+    pub has_positive_sequence_voltage_min: bool,
+    pub positive_sequence_voltage_max_v: f64,
+    pub has_positive_sequence_voltage_max: bool,
+    pub negative_sequence_voltage_max_v: f64,
+    pub has_negative_sequence_voltage_max: bool,
+    pub zero_sequence_voltage_max_v: f64,
+    pub has_zero_sequence_voltage_max: bool,
+    pub neutral_to_ground_voltage_max_v: f64,
+    pub has_neutral_to_ground_voltage_max: bool,
+    pub location: PioMulticonductorLocationView,
+    pub has_location: bool,
+}
+
+/// One multiconductor line code.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioMulticonductorLineCodeView {
+    pub name: PioStringView,
+    pub conductor_count: usize,
+    pub resistance_matrix_row_count: usize,
+    pub reactance_matrix_row_count: usize,
+    pub conductance_from_matrix_row_count: usize,
+    pub susceptance_from_matrix_row_count: usize,
+    pub conductance_to_matrix_row_count: usize,
+    pub susceptance_to_matrix_row_count: usize,
+    pub current_limit_a: PioF64View,
+    pub has_current_limit: bool,
+    pub apparent_power_limit_va: PioF64View,
+    pub has_apparent_power_limit: bool,
+    pub source: PioStringView,
+    pub has_source: bool,
+}
+
+/// One multiconductor line.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioMulticonductorLineView {
+    pub name: PioStringView,
+    pub bus_from: PioStringView,
+    pub bus_to: PioStringView,
+    pub terminal_map_from_count: usize,
+    pub terminal_map_to_count: usize,
+    pub line_code: PioStringView,
+    pub length_m: f64,
+    pub route_point_count: usize,
+    pub has_route: bool,
+    pub current_limit_a: PioF64View,
+    pub has_current_limit: bool,
+    pub apparent_power_limit_va: PioF64View,
+    pub has_apparent_power_limit: bool,
+}
+
+/// One multiconductor switch.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioMulticonductorSwitchView {
+    pub name: PioStringView,
+    pub bus_from: PioStringView,
+    pub bus_to: PioStringView,
+    pub terminal_map_from_count: usize,
+    pub terminal_map_to_count: usize,
+    pub open: bool,
+    pub current_limit_a: PioF64View,
+    pub has_current_limit: bool,
+}
+
+/// One multiconductor transformer.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioMulticonductorTransformerView {
+    pub name: PioStringView,
+    pub winding_count: usize,
+    pub short_circuit_reactance_percent: PioF64View,
+    pub phase_count: usize,
+}
+
+/// One winding of a multiconductor transformer.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioMulticonductorTransformerWindingView {
+    pub bus: PioStringView,
+    pub terminal_map_count: usize,
+    pub connection: PioStringView,
+    pub rated_voltage_v: f64,
+    pub apparent_power_rating_va: f64,
+    pub resistance_percent: f64,
+    pub tap: f64,
+    pub neutral_resistance_ohm: f64,
+    pub has_neutral_resistance: bool,
+    pub neutral_reactance_ohm: f64,
+    pub has_neutral_reactance: bool,
+}
+
+/// One multiconductor load.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioMulticonductorLoadView {
+    pub name: PioStringView,
+    pub bus: PioStringView,
+    pub terminal_map_count: usize,
+    pub configuration: PioStringView,
+    pub active_power_nominal_w: PioF64View,
+    pub reactive_power_nominal_var: PioF64View,
+    pub voltage_model: PioStringView,
+    pub nominal_voltage_v: PioF64View,
+    pub active_power_constant_impedance: PioF64View,
+    pub active_power_constant_current: PioF64View,
+    pub active_power_constant_power: PioF64View,
+    pub reactive_power_constant_impedance: PioF64View,
+    pub reactive_power_constant_current: PioF64View,
+    pub reactive_power_constant_power: PioF64View,
+    pub active_power_exponent: PioF64View,
+    pub reactive_power_exponent: PioF64View,
+}
+
+/// One multiconductor generator.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioMulticonductorGeneratorView {
+    pub name: PioStringView,
+    pub bus: PioStringView,
+    pub terminal_map_count: usize,
+    pub configuration: PioStringView,
+    pub active_power_nominal_w: PioF64View,
+    pub reactive_power_nominal_var: PioF64View,
+    pub active_power_min_w: PioF64View,
+    pub has_active_power_min: bool,
+    pub active_power_max_w: PioF64View,
+    pub has_active_power_max: bool,
+    pub reactive_power_min_var: PioF64View,
+    pub has_reactive_power_min: bool,
+    pub reactive_power_max_var: PioF64View,
+    pub has_reactive_power_max: bool,
+    pub active_power_dispatch_cost_per_kwh: PioF64View,
+    pub has_active_power_dispatch_cost: bool,
+    pub apparent_power_limit_va: PioF64View,
+    pub has_apparent_power_limit: bool,
+    pub current_limit_a: PioF64View,
+    pub has_current_limit: bool,
+}
+
+/// One inverter based resource.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioInverterBasedResourceView {
+    pub name: PioStringView,
+    pub bus: PioStringView,
+    pub terminal_map_count: usize,
+    pub topology: PioStringView,
+    pub prime_mover: PioStringView,
+    pub apparent_power_limit_va: PioF64View,
+    pub current_limit_a: PioF64View,
+    pub has_current_limit: bool,
+    pub active_power_available_w: f64,
+    pub has_active_power_available: bool,
+    pub active_power_min_w: PioF64View,
+    pub has_active_power_min: bool,
+    pub active_power_max_w: PioF64View,
+    pub has_active_power_max: bool,
+    pub reactive_power_min_var: PioF64View,
+    pub has_reactive_power_min: bool,
+    pub reactive_power_max_var: PioF64View,
+    pub has_reactive_power_max: bool,
+    pub control_profile: PioStringView,
+    pub has_control_profile: bool,
+    pub voltage_aggregation: PioStringView,
+    pub has_voltage_aggregation: bool,
+}
+
+/// One inverter control profile.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioControlProfileView {
+    pub name: PioStringView,
+    pub has_power_factor: bool,
+    pub power_factor: f64,
+    pub has_volt_var: bool,
+    pub volt_var_voltage_reference: PioStringView,
+    pub has_volt_var_voltage_reference: bool,
+    pub volt_var_breakpoints: PioF64View,
+    pub volt_var_reactive_power_limits: PioF64View,
+    pub volt_var_reactive_power_unit: PioStringView,
+    pub has_volt_var_reactive_power_unit: bool,
+    pub volt_var_reactive_power_reference: PioStringView,
+    pub has_volt_var_reactive_power_reference: bool,
+    pub volt_var_active_power_min_for_reactive_power_w: f64,
+    pub has_volt_var_active_power_min_for_reactive_power: bool,
+    pub volt_var_active_power_min_for_max_reactive_power_w: f64,
+    pub has_volt_var_active_power_min_for_max_reactive_power: bool,
+    pub has_volt_watt: bool,
+    pub volt_watt_voltage_reference: PioStringView,
+    pub has_volt_watt_voltage_reference: bool,
+    pub volt_watt_breakpoints: PioF64View,
+    pub volt_watt_active_power_limits: PioF64View,
+    pub volt_watt_active_power_unit: PioStringView,
+    pub has_volt_watt_active_power_unit: bool,
+    pub volt_watt_active_power_reference: PioStringView,
+    pub has_volt_watt_active_power_reference: bool,
+}
+
+/// One multiconductor shunt.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioMulticonductorShuntView {
+    pub name: PioStringView,
+    pub bus: PioStringView,
+    pub terminal_map_count: usize,
+    pub conductance_matrix_row_count: usize,
+    pub susceptance_matrix_row_count: usize,
+}
+
+/// One multiconductor capacitor.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioMulticonductorCapacitorView {
+    pub name: PioStringView,
+    pub bus: PioStringView,
+    pub terminal_map_count: usize,
+    pub configuration: PioStringView,
+    pub rated_reactive_power_var: f64,
+    pub nominal_voltage_v: f64,
+}
+
+/// One multiconductor voltage source.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioVoltageSourceView {
+    pub name: PioStringView,
+    pub bus: PioStringView,
+    pub terminal_map_count: usize,
+    pub voltage_magnitude_v: PioF64View,
+    pub voltage_angle_rad: PioF64View,
+}
+
+/// One source object retained without a typed PowerIO representation.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioMulticonductorUntypedObjectView {
+    pub class_name: PioStringView,
+    pub name: PioStringView,
+    pub property_count: usize,
+}
+
+/// One property of an untyped source object.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioMulticonductorUntypedPropertyView {
+    pub name: PioStringView,
+    pub has_name: bool,
+    pub value: PioStringView,
+}
+
+/// One retained source command.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioMulticonductorCommandView {
+    pub verb: PioStringView,
+    pub args: PioStringView,
 }
 
 /// One bus boundary specification in a DC power flow instance.
@@ -2243,7 +2837,7 @@ pub unsafe extern "C" fn pio_geo_layer_parse(
                     "a geographic sidecar must be valid UTF-8",
                 )
             })?;
-            powerio::GeoLayer::parse_text(text, Some(source.name()))
+            powerio::GeoLayer::parse(text, Some(source.name()))
                 .map(|parsed| {
                     PioGeoLayer::new_raw(GeoLayerInner {
                         layer: parsed.layer,
@@ -2288,6 +2882,76 @@ opaque_handle!(
     /// PowerIO value with diagnostics, source mappings, and history.
     PioModule,
     ModuleInner
+);
+
+#[derive(Clone, Copy)]
+enum ModuleJsonRoot {
+    Extension(usize),
+    HistoryParameter {
+        history_index: usize,
+        parameter_index: usize,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum JsonValueStep {
+    Array(usize),
+    Object(usize),
+}
+
+struct JsonValueInner {
+    owner: Arc<ModuleInner>,
+    root: ModuleJsonRoot,
+    steps: Vec<JsonValueStep>,
+}
+
+impl JsonValueInner {
+    fn child(&self, step: JsonValueStep) -> Self {
+        let mut steps = self.steps.clone();
+        steps.push(step);
+        Self {
+            owner: Arc::clone(&self.owner),
+            root: self.root,
+            steps,
+        }
+    }
+
+    fn value(&self) -> Option<&serde_json::Value> {
+        let mut value = match self.root {
+            ModuleJsonRoot::Extension(index) => {
+                self.owner.module.extensions().values().nth(index)?
+            }
+            ModuleJsonRoot::HistoryParameter {
+                history_index,
+                parameter_index,
+            } => self
+                .owner
+                .module
+                .history()
+                .get(history_index)?
+                .parameters()
+                .values()
+                .nth(parameter_index)?,
+        };
+        for step in &self.steps {
+            value = match (step, value) {
+                (JsonValueStep::Array(index), serde_json::Value::Array(values)) => {
+                    values.get(*index)?
+                }
+                (JsonValueStep::Object(index), serde_json::Value::Object(values)) => {
+                    values.values().nth(*index)?
+                }
+                _ => return None,
+            };
+        }
+        Some(value)
+    }
+}
+
+opaque_handle!(
+    /// Owner-rooted structured value from module history or extensions.
+    PioJsonValue,
+    JsonValueInner
 );
 
 #[derive(Clone, Copy)]
@@ -3131,6 +3795,629 @@ pub unsafe extern "C" fn pio_module_diagnostics(module: *const PioModule) -> *mu
             owner: DiagnosticsOwner::Module(module),
         })
     })
+}
+
+fn source_relation_name(relation: powerio_core::SourceRelation) -> &'static str {
+    match relation {
+        powerio_core::SourceRelation::Exact => "exact",
+        powerio_core::SourceRelation::Defaulted => "defaulted",
+        powerio_core::SourceRelation::Inferred => "inferred",
+        powerio_core::SourceRelation::ConvertedUnits => "converted_units",
+        powerio_core::SourceRelation::Aggregated => "aggregated",
+        powerio_core::SourceRelation::Split => "split",
+        powerio_core::SourceRelation::Synthetic => "synthetic",
+        powerio_core::SourceRelation::Transformed => "transformed",
+        powerio_core::SourceRelation::RetainedExtra => "retained_extra",
+        _ => "unknown",
+    }
+}
+
+fn history_kind_name(kind: HistoryKind) -> &'static str {
+    match kind {
+        HistoryKind::Parse => "parse",
+        HistoryKind::Transform => "transform",
+        HistoryKind::Edit => "edit",
+        HistoryKind::Repair => "repair",
+        HistoryKind::Solve => "solve",
+        _ => "unknown",
+    }
+}
+
+fn json_value_kind(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
+}
+
+/// Read the program identity recorded with a module.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_producer(
+    module: *const PioModule,
+    output: *mut PioModuleProducerView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let module = PioModule::get(module).ok_or_else(|| {
+                boundary_error(&codes::BIND_CAPI_NULL_HANDLE, "PioModule must not be NULL")
+            })?;
+            let producer = module.module.producer();
+            *require_output(output, "output")? = PioModuleProducerView {
+                name: PioStringView::new(producer.name()),
+                version: PioStringView::new(producer.version()),
+            };
+            Ok(true)
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_source_count(module: *const PioModule) -> usize {
+    unsafe { PioModule::get(module) }.map_or(0, |module| module.module.sources().len())
+}
+
+/// Read one durable source descriptor by zero based position.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_source_at(
+    module: *const PioModule,
+    index: usize,
+    output: *mut PioModuleSourceView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let module = PioModule::get(module).ok_or_else(|| {
+                boundary_error(&codes::BIND_CAPI_NULL_HANDLE, "PioModule must not be NULL")
+            })?;
+            let source = module.module.sources().get(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("module source index {index} is out of range"),
+                )
+            })?;
+            let (format, has_format) = source
+                .format()
+                .map_or((PioStringView::EMPTY, false), |format| {
+                    (PioStringView::new(format.as_str()), true)
+                });
+            let digest = source.digest();
+            *require_output(output, "output")? = PioModuleSourceView {
+                id: PioStringView::new(source.id().as_str()),
+                name: PioStringView::new(source.name()),
+                byte_length: source.byte_length(),
+                format,
+                has_format,
+                digest_algorithm: digest.map_or(PioStringView::EMPTY, |digest| {
+                    PioStringView::new(digest.algorithm().as_str())
+                }),
+                digest: digest.map_or(PioStringView::EMPTY, |digest| {
+                    PioStringView::new(digest.value())
+                }),
+                has_digest: digest.is_some(),
+            };
+            Ok(true)
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_source_map_count(module: *const PioModule) -> usize {
+    unsafe { PioModule::get(module) }.map_or(0, |module| module.module.source_map().len())
+}
+
+/// Read one source map entry by zero based position.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_source_map_at(
+    module: *const PioModule,
+    index: usize,
+    output: *mut PioModuleSourceMapEntryView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let module = PioModule::get(module).ok_or_else(|| {
+                boundary_error(&codes::BIND_CAPI_NULL_HANDLE, "PioModule must not be NULL")
+            })?;
+            let source_map = module.module.source_map().get(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("module source map index {index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = PioModuleSourceMapEntryView {
+                target: PioStringView::new(source_map.target()),
+                relation: PioStringView::new(source_relation_name(source_map.relation())),
+                span_count: source_map.spans().len(),
+            };
+            Ok(true)
+        })
+    }
+}
+
+/// Read one byte range from a source map entry.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_source_map_span_at(
+    module: *const PioModule,
+    entry_index: usize,
+    span_index: usize,
+    output: *mut PioSourceSpanView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let module = PioModule::get(module).ok_or_else(|| {
+                boundary_error(&codes::BIND_CAPI_NULL_HANDLE, "PioModule must not be NULL")
+            })?;
+            let source_map = module.module.source_map().get(entry_index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("module source map index {entry_index} is out of range"),
+                )
+            })?;
+            let span = source_map.spans().get(span_index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!(
+                        "source map span index {span_index} is out of range for entry {entry_index}"
+                    ),
+                )
+            })?;
+            *require_output(output, "output")? = PioSourceSpanView {
+                source: PioStringView::new(span.source().as_str()),
+                byte_start: span.byte_start(),
+                byte_end: span.byte_end(),
+            };
+            Ok(true)
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_history_count(module: *const PioModule) -> usize {
+    unsafe { PioModule::get(module) }.map_or(0, |module| module.module.history().len())
+}
+
+/// Read one operation from module history by zero based position.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_history_at(
+    module: *const PioModule,
+    index: usize,
+    output: *mut PioModuleHistoryEntryView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let module = PioModule::get(module).ok_or_else(|| {
+                boundary_error(&codes::BIND_CAPI_NULL_HANDLE, "PioModule must not be NULL")
+            })?;
+            let history = module.module.history().get(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("module history index {index} is out of range"),
+                )
+            })?;
+            let (input_type, has_input_type) = optional_string_view(history.input_type());
+            let (output_type, has_output_type) = optional_string_view(history.output_type());
+            *require_output(output, "output")? = PioModuleHistoryEntryView {
+                id: PioStringView::new(history.id().as_str()),
+                kind: PioStringView::new(history_kind_name(history.kind())),
+                name: PioStringView::new(history.name()),
+                input_type,
+                has_input_type,
+                output_type,
+                has_output_type,
+                parameter_count: history.parameters().len(),
+                assumption_count: history.assumptions().len(),
+                loss_count: history.losses().len(),
+            };
+            Ok(true)
+        })
+    }
+}
+
+/// Read one named structured history parameter by zero based position.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_history_parameter_at(
+    module: *const PioModule,
+    history_index: usize,
+    parameter_index: usize,
+    output: *mut PioModuleHistoryParameterView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let module = PioModule::get(module).ok_or_else(|| {
+                boundary_error(&codes::BIND_CAPI_NULL_HANDLE, "PioModule must not be NULL")
+            })?;
+            let history = module.module.history().get(history_index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("module history index {history_index} is out of range"),
+                )
+            })?;
+            let (name, value) = history
+                .parameters()
+                .iter()
+                .nth(parameter_index)
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                        format!(
+                            "history parameter index {parameter_index} is out of range for entry {history_index}"
+                        ),
+                    )
+                })?;
+            *require_output(output, "output")? = PioModuleHistoryParameterView {
+                name: PioStringView::new(name),
+                value_kind: PioStringView::new(json_value_kind(value)),
+            };
+            Ok(true)
+        })
+    }
+}
+
+/// Return an owner-rooted structured history parameter value.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_history_parameter_value_at(
+    module: *const PioModule,
+    history_index: usize,
+    parameter_index: usize,
+    error: *mut *mut PioError,
+) -> *mut PioJsonValue {
+    unsafe {
+        entry(error, std::ptr::null_mut(), || {
+            let owner = PioModule::arc(module).ok_or_else(|| {
+                boundary_error(&codes::BIND_CAPI_NULL_HANDLE, "PioModule must not be NULL")
+            })?;
+            let history = owner.module.history().get(history_index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("module history index {history_index} is out of range"),
+                )
+            })?;
+            if history.parameters().values().nth(parameter_index).is_none() {
+                return Err(boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!(
+                        "history parameter index {parameter_index} is out of range for entry {history_index}"
+                    ),
+                ));
+            }
+            Ok(PioJsonValue::new_raw(JsonValueInner {
+                owner,
+                root: ModuleJsonRoot::HistoryParameter {
+                    history_index,
+                    parameter_index,
+                },
+                steps: Vec::new(),
+            }))
+        })
+    }
+}
+
+/// Read one assumption attached to a history entry.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_history_assumption_at(
+    module: *const PioModule,
+    history_index: usize,
+    assumption_index: usize,
+    error: *mut *mut PioError,
+) -> PioStringView {
+    unsafe {
+        entry(error, PioStringView::EMPTY, || {
+            let module = PioModule::get(module).ok_or_else(|| {
+                boundary_error(&codes::BIND_CAPI_NULL_HANDLE, "PioModule must not be NULL")
+            })?;
+            let history = module.module.history().get(history_index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("module history index {history_index} is out of range"),
+                )
+            })?;
+            history
+                .assumptions()
+                .get(assumption_index)
+                .map(|value| PioStringView::new(value))
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                        format!(
+                            "history assumption index {assumption_index} is out of range for entry {history_index}"
+                        ),
+                    )
+                })
+        })
+    }
+}
+
+/// Read one declared loss attached to a history entry.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_history_loss_at(
+    module: *const PioModule,
+    history_index: usize,
+    loss_index: usize,
+    error: *mut *mut PioError,
+) -> PioStringView {
+    unsafe {
+        entry(error, PioStringView::EMPTY, || {
+            let module = PioModule::get(module).ok_or_else(|| {
+                boundary_error(&codes::BIND_CAPI_NULL_HANDLE, "PioModule must not be NULL")
+            })?;
+            let history = module.module.history().get(history_index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("module history index {history_index} is out of range"),
+                )
+            })?;
+            history
+                .losses()
+                .get(loss_index)
+                .map(|value| PioStringView::new(value))
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                        format!(
+                            "history loss index {loss_index} is out of range for entry {history_index}"
+                        ),
+                    )
+                })
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_extension_count(module: *const PioModule) -> usize {
+    unsafe { PioModule::get(module) }.map_or(0, |module| module.module.extensions().len())
+}
+
+/// Read one namespaced structured module extension by zero based position.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_extension_at(
+    module: *const PioModule,
+    index: usize,
+    output: *mut PioModuleExtensionView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let module = PioModule::get(module).ok_or_else(|| {
+                boundary_error(&codes::BIND_CAPI_NULL_HANDLE, "PioModule must not be NULL")
+            })?;
+            let (namespace, value) =
+                module
+                    .module
+                    .extensions()
+                    .iter()
+                    .nth(index)
+                    .ok_or_else(|| {
+                        boundary_error(
+                            &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                            format!("module extension index {index} is out of range"),
+                        )
+                    })?;
+            *require_output(output, "output")? = PioModuleExtensionView {
+                namespace: PioStringView::new(namespace),
+                value_kind: PioStringView::new(json_value_kind(value)),
+            };
+            Ok(true)
+        })
+    }
+}
+
+/// Return an owner-rooted structured module extension value.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_extension_value_at(
+    module: *const PioModule,
+    index: usize,
+    error: *mut *mut PioError,
+) -> *mut PioJsonValue {
+    unsafe {
+        entry(error, std::ptr::null_mut(), || {
+            let owner = PioModule::arc(module).ok_or_else(|| {
+                boundary_error(&codes::BIND_CAPI_NULL_HANDLE, "PioModule must not be NULL")
+            })?;
+            if owner.module.extensions().values().nth(index).is_none() {
+                return Err(boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("module extension index {index} is out of range"),
+                ));
+            }
+            Ok(PioJsonValue::new_raw(JsonValueInner {
+                owner,
+                root: ModuleJsonRoot::Extension(index),
+                steps: Vec::new(),
+            }))
+        })
+    }
+}
+
+fn json_value_view(value: &serde_json::Value) -> PioJsonValueView {
+    let mut view = PioJsonValueView {
+        kind: PioStringView::new(json_value_kind(value)),
+        boolean_value: false,
+        number_kind: PioStringView::EMPTY,
+        signed_integer_value: 0,
+        unsigned_integer_value: 0,
+        floating_point_value: 0.0,
+        string_value: PioStringView::EMPTY,
+        element_count: 0,
+    };
+    match value {
+        serde_json::Value::Bool(value) => view.boolean_value = *value,
+        serde_json::Value::Number(value) if value.is_i64() => {
+            view.number_kind = PioStringView::new("signed_integer");
+            view.signed_integer_value = value.as_i64().unwrap_or_default();
+        }
+        serde_json::Value::Number(value) if value.is_u64() => {
+            view.number_kind = PioStringView::new("unsigned_integer");
+            view.unsigned_integer_value = value.as_u64().unwrap_or_default();
+        }
+        serde_json::Value::Number(value) => {
+            view.number_kind = PioStringView::new("floating_point");
+            view.floating_point_value = value.as_f64().unwrap_or(f64::NAN);
+        }
+        serde_json::Value::String(value) => view.string_value = PioStringView::new(value),
+        serde_json::Value::Array(values) => view.element_count = values.len(),
+        serde_json::Value::Object(values) => view.element_count = values.len(),
+        serde_json::Value::Null => {}
+    }
+    view
+}
+
+/// Read the type and scalar or collection data for a structured value.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_json_value_get(
+    value: *const PioJsonValue,
+    output: *mut PioJsonValueView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let value = PioJsonValue::get(value).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_NULL_HANDLE,
+                    "PioJsonValue must not be NULL",
+                )
+            })?;
+            let value = value.value().ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    "the structured value path is out of range",
+                )
+            })?;
+            *require_output(output, "output")? = json_value_view(value);
+            Ok(true)
+        })
+    }
+}
+
+/// Return one owner-rooted element from a structured JSON array.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_json_value_array_at(
+    value: *const PioJsonValue,
+    index: usize,
+    error: *mut *mut PioError,
+) -> *mut PioJsonValue {
+    unsafe {
+        entry(error, std::ptr::null_mut(), || {
+            let value = PioJsonValue::get(value).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_NULL_HANDLE,
+                    "PioJsonValue must not be NULL",
+                )
+            })?;
+            let values = value
+                .value()
+                .and_then(serde_json::Value::as_array)
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::REQUEST_CAPI_TYPE_MISMATCH,
+                        "the structured value is not an array",
+                    )
+                })?;
+            if values.get(index).is_none() {
+                return Err(boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("structured array index {index} is out of range"),
+                ));
+            }
+            Ok(PioJsonValue::new_raw(
+                value.child(JsonValueStep::Array(index)),
+            ))
+        })
+    }
+}
+
+/// Read one key and value type from a structured JSON object.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_json_value_object_entry_at(
+    value: *const PioJsonValue,
+    index: usize,
+    output: *mut PioJsonObjectEntryView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let value = PioJsonValue::get(value).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_NULL_HANDLE,
+                    "PioJsonValue must not be NULL",
+                )
+            })?;
+            let values = value
+                .value()
+                .and_then(serde_json::Value::as_object)
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::REQUEST_CAPI_TYPE_MISMATCH,
+                        "the structured value is not an object",
+                    )
+                })?;
+            let (key, value) = values.iter().nth(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("structured object index {index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = PioJsonObjectEntryView {
+                key: PioStringView::new(key),
+                value_kind: PioStringView::new(json_value_kind(value)),
+            };
+            Ok(true)
+        })
+    }
+}
+
+/// Return one owner-rooted value from a structured JSON object by position.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_json_value_object_value_at(
+    value: *const PioJsonValue,
+    index: usize,
+    error: *mut *mut PioError,
+) -> *mut PioJsonValue {
+    unsafe {
+        entry(error, std::ptr::null_mut(), || {
+            let value = PioJsonValue::get(value).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_NULL_HANDLE,
+                    "PioJsonValue must not be NULL",
+                )
+            })?;
+            let values = value
+                .value()
+                .and_then(serde_json::Value::as_object)
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::REQUEST_CAPI_TYPE_MISMATCH,
+                        "the structured value is not an object",
+                    )
+                })?;
+            if values.values().nth(index).is_none() {
+                return Err(boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("structured object index {index} is out of range"),
+                ));
+            }
+            Ok(PioJsonValue::new_raw(
+                value.child(JsonValueStep::Object(index)),
+            ))
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_json_value_retain(value: *const PioJsonValue) -> *mut PioJsonValue {
+    unsafe { PioJsonValue::retain_raw(value) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_json_value_release(value: *mut PioJsonValue) {
+    unsafe { PioJsonValue::release_raw(value) };
 }
 
 #[unsafe(no_mangle)]
@@ -5258,6 +6545,70 @@ fn terminal_reference_view(
     )
 }
 
+fn transformer_control_mode_name(mode: powerio_tx::TransformerControlMode) -> &'static str {
+    match mode {
+        powerio_tx::TransformerControlMode::Fixed => "fixed",
+        powerio_tx::TransformerControlMode::Voltage => "voltage",
+        powerio_tx::TransformerControlMode::ReactiveFlow => "reactive_flow",
+        powerio_tx::TransformerControlMode::ActiveFlow => "active_flow",
+        powerio_tx::TransformerControlMode::DcLineQuantity => "dc_line_quantity",
+        powerio_tx::TransformerControlMode::AsymmetricActiveFlow => "asymmetric_active_flow",
+        _ => "unknown",
+    }
+}
+
+fn transformer_control_view(
+    value: Option<&powerio_tx::TransformerControl>,
+) -> (PioTransformerControlView, bool) {
+    let empty_terminal = terminal_reference_view(None).0;
+    value.map_or(
+        (
+            PioTransformerControlView {
+                mode: PioStringView::EMPTY,
+                enabled: false,
+                controlled_bus_id: 0,
+                has_controlled_bus: false,
+                controlled_bus_on_winding_side: false,
+                regulating_terminal: empty_terminal,
+                has_regulating_terminal: false,
+                tap_min: 0.0,
+                tap_max: 0.0,
+                band_min: 0.0,
+                band_max: 0.0,
+                tap_position_count: 0,
+                mva_base: 0.0,
+                winding_connection_angle: 0.0,
+                has_winding_connection_angle: false,
+            },
+            false,
+        ),
+        |control| {
+            let (regulating_terminal, has_regulating_terminal) =
+                terminal_reference_view(control.regulating_terminal.as_ref());
+            (
+                PioTransformerControlView {
+                    mode: PioStringView::new(transformer_control_mode_name(control.mode)),
+                    enabled: control.enabled,
+                    controlled_bus_id: control.controlled_bus.map_or(0, |bus| bus.0),
+                    has_controlled_bus: control.controlled_bus.is_some(),
+                    controlled_bus_on_winding_side: control.controlled_bus_on_winding_side,
+                    regulating_terminal,
+                    has_regulating_terminal,
+                    tap_min: control.tap_min,
+                    tap_max: control.tap_max,
+                    band_min: control.band_min,
+                    band_max: control.band_max,
+                    tap_position_count: control.ntp,
+                    mva_base: control.mva_base,
+                    winding_connection_angle: control.winding_connection_angle.unwrap_or(0.0),
+                    has_winding_connection_angle: control.winding_connection_angle.is_some(),
+                },
+                true,
+            )
+        },
+    )
+}
+
 fn scuc_device_kind_name(kind: powerio_prob::ScucDeviceKind) -> &'static str {
     match kind {
         powerio_prob::ScucDeviceKind::Producer => "producer",
@@ -6741,6 +8092,22 @@ pub unsafe extern "C" fn pio_balanced_network_base_frequency_hz(
         .map_or(f64::NAN, BalancedNetwork::base_frequency)
 }
 
+/// Read the optional coordinate space metadata for a balanced network.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_balanced_network_geo(
+    network: *const PioBalancedNetwork,
+    output: *mut PioBalancedGeoView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_balanced_network(network)?;
+            *require_output(output, "output")? = balanced_geo_view(network.geo().as_ref());
+            Ok(true)
+        })
+    }
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_has_detailed_connectivity(
     network: *const PioBalancedNetwork,
@@ -6778,6 +8145,7 @@ pub unsafe extern "C" fn pio_detailed_connectivity_counts(
         entry(error, false, || {
             let details = require_detailed_connectivity(details)?;
             *require_output(output, "output")? = PioDetailedConnectivityCountsView {
+                omitted_fields: details.omitted_fields.len(),
                 component_metadata: details.component_metadata.len(),
                 subnetworks: details.subnetworks.len(),
                 substations: details.substations.len(),
@@ -6786,11 +8154,13 @@ pub unsafe extern "C" fn pio_detailed_connectivity_counts(
                 calculated_buses: details.calculated_buses.len(),
                 connectivity_nodes: details.connectivity_nodes.len(),
                 busbar_sections: details.busbar_sections.len(),
+                junctions: details.junctions.len(),
                 terminals: details.terminals.len(),
                 switches: details.switches.len(),
                 internal_connections: details.internal_connections.len(),
                 operational_limit_groups: details.operational_limit_groups.len(),
                 tap_changers: details.tap_changers.len(),
+                equipment_reactive_limits: details.equipment_reactive_limits.len(),
                 boundary_lines: details.boundary_lines.len(),
                 tie_lines: details.tie_lines.len(),
                 dc_converter_units: details.dc_converter_units.len(),
@@ -6806,6 +8176,17 @@ pub unsafe extern "C" fn pio_detailed_connectivity_counts(
             };
             Ok(true)
         })
+    }
+}
+
+fn omitted_field_name(value: powerio_tx::OmittedFieldName) -> &'static str {
+    match value {
+        powerio_tx::OmittedFieldName::ActivePower => "active_power",
+        powerio_tx::OmittedFieldName::ReactivePower => "reactive_power",
+        powerio_tx::OmittedFieldName::VoltageSetpoint => "voltage_setpoint",
+        powerio_tx::OmittedFieldName::RatedApparentPower => "rated_apparent_power",
+        powerio_tx::OmittedFieldName::ShuntConductancePerSection => "shunt_conductance_per_section",
+        _ => "unknown",
     }
 }
 
@@ -6880,6 +8261,59 @@ fn reactive_limits_view(
         Some(_) => (empty_reactive_limits_view(), true),
         None => (empty_reactive_limits_view(), false),
     }
+}
+
+fn reactive_limit_properties(
+    limits: &powerio_tx::ReactiveLimits,
+) -> &std::collections::BTreeMap<String, String> {
+    match limits {
+        powerio_tx::ReactiveLimits::MinMax(limits) => &limits.properties,
+        powerio_tx::ReactiveLimits::CapabilityCurve(curve) => &curve.properties,
+        _ => unreachable!("all reactive limit forms are handled"),
+    }
+}
+
+fn reactive_capability_curve(
+    limits: &powerio_tx::ReactiveLimits,
+) -> Option<&powerio_tx::ReactiveCapabilityCurve> {
+    match limits {
+        powerio_tx::ReactiveLimits::CapabilityCurve(curve) => Some(curve),
+        _ => None,
+    }
+}
+
+fn string_property_view(
+    properties: &std::collections::BTreeMap<String, String>,
+    index: usize,
+) -> Result<PioStringPropertyView, *mut PioError> {
+    let (name, value) = properties.iter().nth(index).ok_or_else(|| {
+        boundary_error(
+            &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+            format!("property index {index} is out of range"),
+        )
+    })?;
+    Ok(PioStringPropertyView {
+        name: PioStringView::new(name),
+        value: PioStringView::new(value),
+    })
+}
+
+fn reactive_capability_point_view(
+    curve: &powerio_tx::ReactiveCapabilityCurve,
+    index: usize,
+) -> Result<PioReactiveCapabilityCurvePointView, *mut PioError> {
+    let point = curve.points.get(index).ok_or_else(|| {
+        boundary_error(
+            &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+            format!("reactive capability point index {index} is out of range"),
+        )
+    })?;
+    Ok(PioReactiveCapabilityCurvePointView {
+        active_power_mw: point.active_power_mw,
+        minimum_reactive_power_mvar: point.minimum_reactive_power_mvar,
+        maximum_reactive_power_mvar: point.maximum_reactive_power_mvar,
+        property_count: point.properties.len(),
+    })
 }
 
 fn empty_boundary_line_generation_view() -> PioBoundaryLineGenerationView {
@@ -7129,6 +8563,32 @@ fn dc_equipment_view(
     }
 }
 
+/// Read one field that was absent from the source representation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_detailed_connectivity_omitted_field_at(
+    details: *const PioDetailedConnectivity,
+    index: usize,
+    output: *mut PioOmittedFieldView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let details = require_detailed_connectivity(details)?;
+            let field = details.omitted_fields.get(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("omitted field index {index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = PioOmittedFieldView {
+                component: component_id_view(&field.component),
+                field: PioStringView::new(omitted_field_name(field.field)),
+            };
+            Ok(true)
+        })
+    }
+}
+
 /// Read one component metadata record by zero based table position.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_component_metadata_at(
@@ -7147,10 +8607,14 @@ pub unsafe extern "C" fn pio_detailed_connectivity_component_metadata_at(
                 )
             })?;
             let (name, has_name) = optional_string_view(metadata.name.as_deref());
+            let (equipment_container, has_equipment_container) =
+                optional_component_id_view(metadata.equipment_container.as_ref());
             *require_output(output, "output")? = PioComponentMetadataView {
                 component: component_id_view(&metadata.component),
                 name,
                 has_name,
+                equipment_container,
+                has_equipment_container,
                 fictitious: metadata.fictitious,
                 alias_count: metadata.aliases.len(),
                 external_identifier_count: metadata.external_identifiers.len(),
@@ -7642,6 +9106,31 @@ pub unsafe extern "C" fn pio_detailed_connectivity_busbar_section_at(
     }
 }
 
+/// Read one CIM junction by zero based table position.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_detailed_connectivity_junction_at(
+    details: *const PioDetailedConnectivity,
+    index: usize,
+    output: *mut PioJunctionView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let details = require_detailed_connectivity(details)?;
+            let junction = details.junctions.get(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("junction index {index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = PioJunctionView {
+                component: component_id_view(&junction.component),
+            };
+            Ok(true)
+        })
+    }
+}
+
 /// Read one AC terminal by zero based table position.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_terminal_at(
@@ -7663,7 +9152,11 @@ pub unsafe extern "C" fn pio_detailed_connectivity_terminal_at(
             let (connectable_bus, has_connectable_bus) =
                 optional_component_id_view(terminal.connectable_bus.as_ref());
             let (node, has_node) = optional_component_id_view(terminal.node.as_ref());
+            let (component, has_component) =
+                optional_component_id_view(terminal.component.as_ref());
             *require_output(output, "output")? = PioDetailedTerminalView {
+                component,
+                has_component,
                 equipment: component_id_view(&terminal.equipment),
                 terminal: terminal.terminal,
                 voltage_level: component_id_view(&terminal.voltage_level),
@@ -7780,6 +9273,7 @@ pub unsafe extern "C" fn pio_detailed_connectivity_operational_limit_group_at(
                 terminal: group.terminal,
                 id: PioStringView::new(&group.id),
                 selected: group.selected,
+                property_count: group.properties.len(),
                 has_current_limits: current.is_some(),
                 current_permanent_limit_a: current
                     .and_then(|limits| limits.permanent_limit)
@@ -7811,6 +9305,34 @@ pub unsafe extern "C" fn pio_detailed_connectivity_operational_limit_group_at(
                 apparent_power_temporary_limit_count: apparent
                     .map_or(0, |limits| limits.temporary_limits.len()),
             };
+            Ok(true)
+        })
+    }
+}
+
+/// Read one string property from an operational limit group.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_detailed_connectivity_operational_limit_group_property_at(
+    details: *const PioDetailedConnectivity,
+    group_index: usize,
+    property_index: usize,
+    output: *mut PioStringPropertyView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let details = require_detailed_connectivity(details)?;
+            let group = details
+                .operational_limit_groups
+                .get(group_index)
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                        format!("operational limit group index {group_index} is out of range"),
+                    )
+                })?;
+            *require_output(output, "output")? =
+                string_property_view(&group.properties, property_index)?;
             Ok(true)
         })
     }
@@ -8153,7 +9675,10 @@ pub unsafe extern "C" fn pio_detailed_connectivity_tap_changer_at(
                     });
             let (regulation_terminal, has_regulation_terminal) =
                 terminal_reference_view(changer.regulation_terminal.as_ref());
+            let (component, has_component) = optional_component_id_view(changer.component.as_ref());
             *require_output(output, "output")? = PioTapChangerView {
+                component,
+                has_component,
                 transformer: component_id_view(&changer.transformer),
                 winding: changer.winding,
                 kind: PioStringView::new(tap_changer_kind_name(changer.kind)),
@@ -8162,6 +9687,16 @@ pub unsafe extern "C" fn pio_detailed_connectivity_tap_changer_at(
                 solved_tap_position: changer.solved_tap_position.unwrap_or(0),
                 has_solved_tap_position: changer.solved_tap_position.is_some(),
                 low_tap_position: changer.low_tap_position,
+                neutral_tap_position: changer.neutral_tap_position.unwrap_or(0),
+                has_neutral_tap_position: changer.neutral_tap_position.is_some(),
+                normal_tap_position: changer.normal_tap_position.unwrap_or(0),
+                has_normal_tap_position: changer.normal_tap_position.is_some(),
+                voltage_step_increment_percent: changer
+                    .voltage_step_increment_percent
+                    .unwrap_or(0.0),
+                has_voltage_step_increment_percent: changer
+                    .voltage_step_increment_percent
+                    .is_some(),
                 load_tap_changing_capabilities: changer.load_tap_changing_capabilities,
                 regulating: changer.regulating,
                 regulation_mode,
@@ -8212,6 +9747,148 @@ pub unsafe extern "C" fn pio_detailed_connectivity_tap_changer_step_at(
                 conductance_deviation_percent: step.conductance_deviation_percent,
                 susceptance_deviation_percent: step.susceptance_deviation_percent,
             };
+            Ok(true)
+        })
+    }
+}
+
+/// Read reactive limits retained for one equipment record.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_detailed_connectivity_equipment_reactive_limits_at(
+    details: *const PioDetailedConnectivity,
+    index: usize,
+    output: *mut PioEquipmentReactiveLimitsView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let details = require_detailed_connectivity(details)?;
+            let record = details
+                .equipment_reactive_limits
+                .get(index)
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                        format!("equipment reactive limits index {index} is out of range"),
+                    )
+                })?;
+            *require_output(output, "output")? = PioEquipmentReactiveLimitsView {
+                equipment: component_id_view(&record.equipment),
+                limits: reactive_limits_view(Some(&record.limits)).0,
+            };
+            Ok(true)
+        })
+    }
+}
+
+/// Read one property from an equipment reactive limit record.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_detailed_connectivity_equipment_reactive_limit_property_at(
+    details: *const PioDetailedConnectivity,
+    equipment_index: usize,
+    property_index: usize,
+    output: *mut PioStringPropertyView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let details = require_detailed_connectivity(details)?;
+            let record = details
+                .equipment_reactive_limits
+                .get(equipment_index)
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                        format!(
+                            "equipment reactive limits index {equipment_index} is out of range"
+                        ),
+                    )
+                })?;
+            *require_output(output, "output")? =
+                string_property_view(reactive_limit_properties(&record.limits), property_index)?;
+            Ok(true)
+        })
+    }
+}
+
+/// Read one point from an equipment reactive capability curve.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_detailed_connectivity_equipment_reactive_capability_point_at(
+    details: *const PioDetailedConnectivity,
+    equipment_index: usize,
+    point_index: usize,
+    output: *mut PioReactiveCapabilityCurvePointView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let details = require_detailed_connectivity(details)?;
+            let record = details
+                .equipment_reactive_limits
+                .get(equipment_index)
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                        format!(
+                            "equipment reactive limits index {equipment_index} is out of range"
+                        ),
+                    )
+                })?;
+            let curve = reactive_capability_curve(&record.limits).ok_or_else(|| {
+                boundary_error(
+                    &codes::REQUEST_CAPI_TYPE_MISMATCH,
+                    format!(
+                        "equipment reactive limits {equipment_index} is not a capability curve"
+                    ),
+                )
+            })?;
+            *require_output(output, "output")? =
+                reactive_capability_point_view(curve, point_index)?;
+            Ok(true)
+        })
+    }
+}
+
+/// Read one property from an equipment reactive capability curve point.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_detailed_connectivity_equipment_reactive_capability_point_property_at(
+    details: *const PioDetailedConnectivity,
+    equipment_index: usize,
+    point_index: usize,
+    property_index: usize,
+    output: *mut PioStringPropertyView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let details = require_detailed_connectivity(details)?;
+            let record = details
+                .equipment_reactive_limits
+                .get(equipment_index)
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                        format!(
+                            "equipment reactive limits index {equipment_index} is out of range"
+                        ),
+                    )
+                })?;
+            let curve = reactive_capability_curve(&record.limits).ok_or_else(|| {
+                boundary_error(
+                    &codes::REQUEST_CAPI_TYPE_MISMATCH,
+                    format!(
+                        "equipment reactive limits {equipment_index} is not a capability curve"
+                    ),
+                )
+            })?;
+            let point = curve.points.get(point_index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("reactive capability point index {point_index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? =
+                string_property_view(&point.properties, property_index)?;
             Ok(true)
         })
     }
@@ -8533,6 +10210,10 @@ pub unsafe extern "C" fn pio_detailed_connectivity_voltage_source_converter_at(
                             true,
                         )
                     });
+            let (pcc_terminal, has_pcc_terminal) =
+                terminal_reference_view(converter.pcc_terminal.as_ref());
+            let (reactive_limits, has_reactive_limits) =
+                reactive_limits_view(converter.reactive_limits.as_ref());
             *require_output(output, "output")? = PioAcDcConverterView {
                 component: component_id_view(&converter.component),
                 kind: PioStringView::new("voltage_source"),
@@ -8546,8 +10227,22 @@ pub unsafe extern "C" fn pio_detailed_connectivity_voltage_source_converter_at(
                 has_minimum_active_power: converter.minimum_active_power_mw.is_some(),
                 maximum_active_power_mw: converter.maximum_active_power_mw.unwrap_or(0.0),
                 has_maximum_active_power: converter.maximum_active_power_mw.is_some(),
+                minimum_dc_voltage_kv: converter.minimum_dc_voltage_kv.unwrap_or(0.0),
+                has_minimum_dc_voltage: converter.minimum_dc_voltage_kv.is_some(),
+                maximum_dc_voltage_kv: converter.maximum_dc_voltage_kv.unwrap_or(0.0),
+                has_maximum_dc_voltage: converter.maximum_dc_voltage_kv.is_some(),
                 rated_dc_voltage_kv: converter.rated_dc_voltage_kv.unwrap_or(0.0),
                 has_rated_dc_voltage: converter.rated_dc_voltage_kv.is_some(),
+                valve_u0_kv: converter.valve_u0_kv.unwrap_or(0.0),
+                has_valve_u0: converter.valve_u0_kv.is_some(),
+                number_of_valves: converter.number_of_valves.unwrap_or(0),
+                has_number_of_valves: converter.number_of_valves.is_some(),
+                idle_loss_mw: converter.idle_loss_mw.unwrap_or(0.0),
+                has_idle_loss: converter.idle_loss_mw.is_some(),
+                switching_loss_mw_per_ampere: converter.switching_loss_mw_per_ampere.unwrap_or(0.0),
+                has_switching_loss: converter.switching_loss_mw_per_ampere.is_some(),
+                resistive_loss_ohm: converter.resistive_loss_ohm.unwrap_or(0.0),
+                has_resistive_loss: converter.resistive_loss_ohm.is_some(),
                 control_mode,
                 has_control_mode,
                 active_power_at_pcc_mw: converter.active_power_at_pcc_mw.unwrap_or(0.0),
@@ -8558,6 +10253,23 @@ pub unsafe extern "C" fn pio_detailed_connectivity_voltage_source_converter_at(
                 has_target_active_power: converter.target_active_power_mw.is_some(),
                 target_dc_voltage_kv: converter.target_dc_voltage_kv.unwrap_or(0.0),
                 has_target_dc_voltage: converter.target_dc_voltage_kv.is_some(),
+                pcc_terminal,
+                has_pcc_terminal,
+                droop_curve_segment_count: converter
+                    .droop_curve
+                    .as_ref()
+                    .map_or(0, |curve| curve.segments.len()),
+                has_droop_curve: converter.droop_curve.is_some(),
+                droop: converter.droop.unwrap_or(0.0),
+                has_droop: converter.droop.is_some(),
+                droop_compensation: converter.droop_compensation.unwrap_or(0.0),
+                has_droop_compensation: converter.droop_compensation.is_some(),
+                q_share: converter.q_share.unwrap_or(0.0),
+                has_q_share: converter.q_share.is_some(),
+                maximum_modulation_index: converter.maximum_modulation_index.unwrap_or(0.0),
+                has_maximum_modulation_index: converter.maximum_modulation_index.is_some(),
+                maximum_valve_current_a: converter.maximum_valve_current_a.unwrap_or(0.0),
+                has_maximum_valve_current: converter.maximum_valve_current_a.is_some(),
                 dc_current_a: converter.dc_current_a.unwrap_or(0.0),
                 has_dc_current: converter.dc_current_a.is_some(),
                 ac_voltage_kv: converter.ac_voltage_kv.unwrap_or(0.0),
@@ -8570,12 +10282,42 @@ pub unsafe extern "C" fn pio_detailed_connectivity_voltage_source_converter_at(
                 has_voltage_setpoint: converter.voltage_setpoint_kv.is_some(),
                 reactive_power_setpoint_mvar: converter.reactive_power_setpoint_mvar.unwrap_or(0.0),
                 has_reactive_power_setpoint: converter.reactive_power_setpoint_mvar.is_some(),
+                reactive_limits,
+                has_reactive_limits,
+                pole_loss_active_power_mw: converter.pole_loss_active_power_mw.unwrap_or(0.0),
+                has_pole_loss_active_power: converter.pole_loss_active_power_mw.is_some(),
                 reactive_model: PioStringView::EMPTY,
                 has_reactive_model: false,
                 power_factor: 0.0,
                 has_power_factor: false,
                 operating_mode: PioStringView::EMPTY,
                 has_operating_mode: false,
+                rated_dc_current_a: 0.0,
+                has_rated_dc_current: false,
+                minimum_alpha_degrees: 0.0,
+                has_minimum_alpha: false,
+                maximum_alpha_degrees: 0.0,
+                has_maximum_alpha: false,
+                minimum_gamma_degrees: 0.0,
+                has_minimum_gamma: false,
+                maximum_gamma_degrees: 0.0,
+                has_maximum_gamma: false,
+                target_alpha_degrees: 0.0,
+                has_target_alpha: false,
+                target_gamma_degrees: 0.0,
+                has_target_gamma: false,
+                target_dc_current_a: 0.0,
+                has_target_dc_current: false,
+                alpha_degrees: 0.0,
+                has_alpha: false,
+                gamma_degrees: 0.0,
+                has_gamma: false,
+                delta_degrees: converter.delta_degrees.unwrap_or(0.0),
+                has_delta: converter.delta_degrees.is_some(),
+                uf_kv: converter.uf_kv.unwrap_or(0.0),
+                has_uf: converter.uf_kv.is_some(),
+                uv_kv: converter.uv_kv.unwrap_or(0.0),
+                has_uv: converter.uv_kv.is_some(),
             };
             Ok(true)
         })
@@ -8633,6 +10375,8 @@ pub unsafe extern "C" fn pio_detailed_connectivity_line_commutated_converter_at(
                             true,
                         )
                     });
+            let (pcc_terminal, has_pcc_terminal) =
+                terminal_reference_view(converter.pcc_terminal.as_ref());
             *require_output(output, "output")? = PioAcDcConverterView {
                 component: component_id_view(&converter.component),
                 kind: PioStringView::new("line_commutated"),
@@ -8646,8 +10390,22 @@ pub unsafe extern "C" fn pio_detailed_connectivity_line_commutated_converter_at(
                 has_minimum_active_power: converter.minimum_active_power_mw.is_some(),
                 maximum_active_power_mw: converter.maximum_active_power_mw.unwrap_or(0.0),
                 has_maximum_active_power: converter.maximum_active_power_mw.is_some(),
+                minimum_dc_voltage_kv: converter.minimum_dc_voltage_kv.unwrap_or(0.0),
+                has_minimum_dc_voltage: converter.minimum_dc_voltage_kv.is_some(),
+                maximum_dc_voltage_kv: converter.maximum_dc_voltage_kv.unwrap_or(0.0),
+                has_maximum_dc_voltage: converter.maximum_dc_voltage_kv.is_some(),
                 rated_dc_voltage_kv: converter.rated_dc_voltage_kv.unwrap_or(0.0),
                 has_rated_dc_voltage: converter.rated_dc_voltage_kv.is_some(),
+                valve_u0_kv: converter.valve_u0_kv.unwrap_or(0.0),
+                has_valve_u0: converter.valve_u0_kv.is_some(),
+                number_of_valves: converter.number_of_valves.unwrap_or(0),
+                has_number_of_valves: converter.number_of_valves.is_some(),
+                idle_loss_mw: converter.idle_loss_mw.unwrap_or(0.0),
+                has_idle_loss: converter.idle_loss_mw.is_some(),
+                switching_loss_mw_per_ampere: converter.switching_loss_mw_per_ampere.unwrap_or(0.0),
+                has_switching_loss: converter.switching_loss_mw_per_ampere.is_some(),
+                resistive_loss_ohm: converter.resistive_loss_ohm.unwrap_or(0.0),
+                has_resistive_loss: converter.resistive_loss_ohm.is_some(),
                 control_mode,
                 has_control_mode,
                 active_power_at_pcc_mw: converter.active_power_at_pcc_mw.unwrap_or(0.0),
@@ -8658,6 +10416,23 @@ pub unsafe extern "C" fn pio_detailed_connectivity_line_commutated_converter_at(
                 has_target_active_power: converter.target_active_power_mw.is_some(),
                 target_dc_voltage_kv: converter.target_dc_voltage_kv.unwrap_or(0.0),
                 has_target_dc_voltage: converter.target_dc_voltage_kv.is_some(),
+                pcc_terminal,
+                has_pcc_terminal,
+                droop_curve_segment_count: converter
+                    .droop_curve
+                    .as_ref()
+                    .map_or(0, |curve| curve.segments.len()),
+                has_droop_curve: converter.droop_curve.is_some(),
+                droop: 0.0,
+                has_droop: false,
+                droop_compensation: 0.0,
+                has_droop_compensation: false,
+                q_share: 0.0,
+                has_q_share: false,
+                maximum_modulation_index: 0.0,
+                has_maximum_modulation_index: false,
+                maximum_valve_current_a: 0.0,
+                has_maximum_valve_current: false,
                 dc_current_a: converter.dc_current_a.unwrap_or(0.0),
                 has_dc_current: converter.dc_current_a.is_some(),
                 ac_voltage_kv: converter.ac_voltage_kv.unwrap_or(0.0),
@@ -8670,13 +10445,252 @@ pub unsafe extern "C" fn pio_detailed_connectivity_line_commutated_converter_at(
                 has_voltage_setpoint: false,
                 reactive_power_setpoint_mvar: 0.0,
                 has_reactive_power_setpoint: false,
+                reactive_limits: empty_reactive_limits_view(),
+                has_reactive_limits: false,
+                pole_loss_active_power_mw: converter.pole_loss_active_power_mw.unwrap_or(0.0),
+                has_pole_loss_active_power: converter.pole_loss_active_power_mw.is_some(),
                 reactive_model,
                 has_reactive_model,
                 power_factor: converter.power_factor.unwrap_or(0.0),
                 has_power_factor: converter.power_factor.is_some(),
                 operating_mode,
                 has_operating_mode,
+                rated_dc_current_a: converter.rated_dc_current_a.unwrap_or(0.0),
+                has_rated_dc_current: converter.rated_dc_current_a.is_some(),
+                minimum_alpha_degrees: converter.minimum_alpha_degrees.unwrap_or(0.0),
+                has_minimum_alpha: converter.minimum_alpha_degrees.is_some(),
+                maximum_alpha_degrees: converter.maximum_alpha_degrees.unwrap_or(0.0),
+                has_maximum_alpha: converter.maximum_alpha_degrees.is_some(),
+                minimum_gamma_degrees: converter.minimum_gamma_degrees.unwrap_or(0.0),
+                has_minimum_gamma: converter.minimum_gamma_degrees.is_some(),
+                maximum_gamma_degrees: converter.maximum_gamma_degrees.unwrap_or(0.0),
+                has_maximum_gamma: converter.maximum_gamma_degrees.is_some(),
+                target_alpha_degrees: converter.target_alpha_degrees.unwrap_or(0.0),
+                has_target_alpha: converter.target_alpha_degrees.is_some(),
+                target_gamma_degrees: converter.target_gamma_degrees.unwrap_or(0.0),
+                has_target_gamma: converter.target_gamma_degrees.is_some(),
+                target_dc_current_a: converter.target_dc_current_a.unwrap_or(0.0),
+                has_target_dc_current: converter.target_dc_current_a.is_some(),
+                alpha_degrees: converter.alpha_degrees.unwrap_or(0.0),
+                has_alpha: converter.alpha_degrees.is_some(),
+                gamma_degrees: converter.gamma_degrees.unwrap_or(0.0),
+                has_gamma: converter.gamma_degrees.is_some(),
+                delta_degrees: 0.0,
+                has_delta: false,
+                uf_kv: 0.0,
+                has_uf: false,
+                uv_kv: 0.0,
+                has_uv: false,
             };
+            Ok(true)
+        })
+    }
+}
+
+fn droop_curve_segment_view(segment: &powerio_tx::DroopCurveSegment) -> PioDroopCurveSegmentView {
+    PioDroopCurveSegmentView {
+        minimum_voltage_kv: segment.minimum_voltage_kv,
+        maximum_voltage_kv: segment.maximum_voltage_kv,
+        k: segment.k,
+    }
+}
+
+/// Read one DC voltage droop curve segment from a voltage source converter.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_detailed_connectivity_voltage_source_converter_droop_curve_segment_at(
+    details: *const PioDetailedConnectivity,
+    converter_index: usize,
+    segment_index: usize,
+    output: *mut PioDroopCurveSegmentView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let details = require_detailed_connectivity(details)?;
+            let converter = details
+                .voltage_source_converters
+                .get(converter_index)
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                        format!("voltage source converter index {converter_index} is out of range"),
+                    )
+                })?;
+            let curve = converter.droop_curve.as_ref().ok_or_else(|| {
+                boundary_error(
+                    &codes::REQUEST_CAPI_TYPE_MISMATCH,
+                    format!("voltage source converter {converter_index} has no droop curve"),
+                )
+            })?;
+            let segment = curve.segments.get(segment_index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("droop curve segment index {segment_index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = droop_curve_segment_view(segment);
+            Ok(true)
+        })
+    }
+}
+
+/// Read one DC voltage droop curve segment from a line commutated converter.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_detailed_connectivity_line_commutated_converter_droop_curve_segment_at(
+    details: *const PioDetailedConnectivity,
+    converter_index: usize,
+    segment_index: usize,
+    output: *mut PioDroopCurveSegmentView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let details = require_detailed_connectivity(details)?;
+            let converter = details
+                .line_commutated_converters
+                .get(converter_index)
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                        format!(
+                            "line commutated converter index {converter_index} is out of range"
+                        ),
+                    )
+                })?;
+            let curve = converter.droop_curve.as_ref().ok_or_else(|| {
+                boundary_error(
+                    &codes::REQUEST_CAPI_TYPE_MISMATCH,
+                    format!("line commutated converter {converter_index} has no droop curve"),
+                )
+            })?;
+            let segment = curve.segments.get(segment_index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("droop curve segment index {segment_index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = droop_curve_segment_view(segment);
+            Ok(true)
+        })
+    }
+}
+
+/// Read one property from a voltage source converter reactive limit record.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_detailed_connectivity_voltage_source_converter_reactive_limit_property_at(
+    details: *const PioDetailedConnectivity,
+    converter_index: usize,
+    property_index: usize,
+    output: *mut PioStringPropertyView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let details = require_detailed_connectivity(details)?;
+            let converter = details
+                .voltage_source_converters
+                .get(converter_index)
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                        format!("voltage source converter index {converter_index} is out of range"),
+                    )
+                })?;
+            let limits = converter.reactive_limits.as_ref().ok_or_else(|| {
+                boundary_error(
+                    &codes::REQUEST_CAPI_TYPE_MISMATCH,
+                    format!("voltage source converter {converter_index} has no reactive limits"),
+                )
+            })?;
+            *require_output(output, "output")? =
+                string_property_view(reactive_limit_properties(limits), property_index)?;
+            Ok(true)
+        })
+    }
+}
+
+/// Read one point from a voltage source converter reactive capability curve.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_detailed_connectivity_voltage_source_converter_reactive_capability_point_at(
+    details: *const PioDetailedConnectivity,
+    converter_index: usize,
+    point_index: usize,
+    output: *mut PioReactiveCapabilityCurvePointView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let details = require_detailed_connectivity(details)?;
+            let converter = details
+                .voltage_source_converters
+                .get(converter_index)
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                        format!("voltage source converter index {converter_index} is out of range"),
+                    )
+                })?;
+            let curve = converter
+                .reactive_limits
+                .as_ref()
+                .and_then(reactive_capability_curve)
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::REQUEST_CAPI_TYPE_MISMATCH,
+                        format!(
+                            "voltage source converter {converter_index} has no reactive capability curve"
+                        ),
+                    )
+                })?;
+            *require_output(output, "output")? =
+                reactive_capability_point_view(curve, point_index)?;
+            Ok(true)
+        })
+    }
+}
+
+/// Read one property from a voltage source converter reactive capability point.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_detailed_connectivity_voltage_source_converter_reactive_capability_point_property_at(
+    details: *const PioDetailedConnectivity,
+    converter_index: usize,
+    point_index: usize,
+    property_index: usize,
+    output: *mut PioStringPropertyView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let details = require_detailed_connectivity(details)?;
+            let converter = details
+                .voltage_source_converters
+                .get(converter_index)
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                        format!("voltage source converter index {converter_index} is out of range"),
+                    )
+                })?;
+            let curve = converter
+                .reactive_limits
+                .as_ref()
+                .and_then(reactive_capability_curve)
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::REQUEST_CAPI_TYPE_MISMATCH,
+                        format!(
+                            "voltage source converter {converter_index} has no reactive capability curve"
+                        ),
+                    )
+                })?;
+            let point = curve.points.get(point_index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("reactive capability point index {point_index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? =
+                string_property_view(&point.properties, property_index)?;
             Ok(true)
         })
     }
@@ -8835,6 +10849,98 @@ fn optional_string_view(value: Option<&str>) -> (PioStringView, bool) {
     value.map_or((PioStringView::EMPTY, false), |value| {
         (PioStringView::new(value), true)
     })
+}
+
+fn balanced_coords_kind_name(kind: powerio_tx::CoordsKind) -> &'static str {
+    match kind {
+        powerio_tx::CoordsKind::Source => "source",
+        powerio_tx::CoordsKind::Synthetic => "synthetic",
+        powerio_tx::CoordsKind::Manual => "manual",
+        powerio_tx::CoordsKind::Derived => "derived",
+        _ => "unknown",
+    }
+}
+
+fn balanced_location_view(location: &powerio_tx::Location) -> PioBalancedLocationView {
+    let (kind, has_kind) = location.kind.map_or((PioStringView::EMPTY, false), |kind| {
+        (PioStringView::new(balanced_coords_kind_name(kind)), true)
+    });
+    PioBalancedLocationView {
+        x: location.x,
+        y: location.y,
+        kind,
+        has_kind,
+    }
+}
+
+fn empty_balanced_location_view() -> PioBalancedLocationView {
+    PioBalancedLocationView {
+        x: 0.0,
+        y: 0.0,
+        kind: PioStringView::EMPTY,
+        has_kind: false,
+    }
+}
+
+fn balanced_geo_view(geo: Option<&powerio_tx::GeoMeta>) -> PioBalancedGeoView {
+    let Some(geo) = geo else {
+        return PioBalancedGeoView {
+            has_geo: false,
+            space: PioStringView::EMPTY,
+            crs: PioStringView::EMPTY,
+            has_crs: false,
+            kind: PioStringView::EMPTY,
+            has_kind: false,
+            has_canvas: false,
+            canvas_width: 0.0,
+            has_canvas_width: false,
+            canvas_height: 0.0,
+            has_canvas_height: false,
+            canvas_units: PioStringView::EMPTY,
+            has_canvas_units: false,
+        };
+    };
+    let (space, crs, has_crs, canvas) = match &geo.space {
+        powerio_tx::CoordinateSpace::Geographic { crs } => (
+            "geographic",
+            crs.as_deref()
+                .map_or(PioStringView::EMPTY, PioStringView::new),
+            crs.is_some(),
+            None,
+        ),
+        powerio_tx::CoordinateSpace::Projected { crs } => (
+            "projected",
+            crs.as_deref()
+                .map_or(PioStringView::EMPTY, PioStringView::new),
+            crs.is_some(),
+            None,
+        ),
+        powerio_tx::CoordinateSpace::Diagram { canvas } => {
+            ("diagram", PioStringView::EMPTY, false, canvas.as_ref())
+        }
+        powerio_tx::CoordinateSpace::Unknown => ("unknown", PioStringView::EMPTY, false, None),
+        _ => ("unknown", PioStringView::EMPTY, false, None),
+    };
+    let (kind, has_kind) = geo.kind.map_or((PioStringView::EMPTY, false), |kind| {
+        (PioStringView::new(balanced_coords_kind_name(kind)), true)
+    });
+    PioBalancedGeoView {
+        has_geo: true,
+        space: PioStringView::new(space),
+        crs,
+        has_crs,
+        kind,
+        has_kind,
+        has_canvas: canvas.is_some(),
+        canvas_width: canvas.and_then(|canvas| canvas.width).unwrap_or(0.0),
+        has_canvas_width: canvas.is_some_and(|canvas| canvas.width.is_some()),
+        canvas_height: canvas.and_then(|canvas| canvas.height).unwrap_or(0.0),
+        has_canvas_height: canvas.is_some_and(|canvas| canvas.height.is_some()),
+        canvas_units: canvas
+            .and_then(|canvas| canvas.units.as_deref())
+            .map_or(PioStringView::EMPTY, PioStringView::new),
+        has_canvas_units: canvas.is_some_and(|canvas| canvas.units.is_some()),
+    }
 }
 
 fn load_voltage_model_view(load: &powerio_tx::Load) -> PioBalancedLoadVoltageModelView {
@@ -9028,6 +11134,12 @@ pub unsafe extern "C" fn pio_balanced_network_bus_at(
             let output = require_output(output, "output")?;
             let (component_id, has_component_id) = optional_string_view(bus.uid.as_deref());
             let (name, has_name) = optional_string_view(bus.name.as_deref());
+            let (location, has_location) = bus
+                .location
+                .as_ref()
+                .map_or((empty_balanced_location_view(), false), |location| {
+                    (balanced_location_view(location), true)
+                });
             *output = PioBalancedBusView {
                 component_id,
                 has_component_id,
@@ -9045,6 +11157,8 @@ pub unsafe extern "C" fn pio_balanced_network_bus_at(
                 zone: bus.zone,
                 name,
                 has_name,
+                location,
+                has_location,
             };
             Ok(true)
         })
@@ -9236,11 +11350,15 @@ pub unsafe extern "C" fn pio_balanced_network_branch_at(
             })?;
             let output = require_output(output, "output")?;
             let (component_id, has_component_id) = optional_string_view(branch.uid.as_deref());
+            let (name, has_name) = optional_string_view(branch.name.as_deref());
             let charging = branch.calc_terminal_charging();
             let current = branch.current_ratings;
+            let (control, has_control) = transformer_control_view(branch.control.as_ref());
             *output = PioBalancedBranchView {
                 component_id,
                 has_component_id,
+                name,
+                has_name,
                 from_bus_id: branch.from.0,
                 to_bus_id: branch.to.0,
                 resistance_pu: branch.r,
@@ -9265,7 +11383,47 @@ pub unsafe extern "C" fn pio_balanced_network_branch_at(
                 in_service: branch.in_service,
                 angle_min_degrees: branch.angmin,
                 angle_max_degrees: branch.angmax,
+                control,
+                has_control,
+                route_point_count: branch.route.as_ref().map_or(0, Vec::len),
+                has_route: branch.route.is_some(),
             };
+            Ok(true)
+        })
+    }
+}
+
+/// Read one point from an explicitly stored balanced branch route.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_balanced_network_branch_route_point_at(
+    network: *const PioBalancedNetwork,
+    branch_index: usize,
+    point_index: usize,
+    output: *mut PioBalancedLocationView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_balanced_network(network)?;
+            let branch = network.branches().get(branch_index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("branch index {branch_index} is out of range"),
+                )
+            })?;
+            let route = branch.route.as_ref().ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("balanced branch {branch_index} has no route"),
+                )
+            })?;
+            let point = route.get(point_index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("branch route point index {point_index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = balanced_location_view(point);
             Ok(true)
         })
     }
@@ -9341,6 +11499,18 @@ fn active_power_control_view(
     )
 }
 
+fn generator_energy_source_name(value: powerio_tx::GeneratorEnergySource) -> &'static str {
+    match value {
+        powerio_tx::GeneratorEnergySource::Hydro => "hydro",
+        powerio_tx::GeneratorEnergySource::Nuclear => "nuclear",
+        powerio_tx::GeneratorEnergySource::Wind => "wind",
+        powerio_tx::GeneratorEnergySource::Thermal => "thermal",
+        powerio_tx::GeneratorEnergySource::Solar => "solar",
+        powerio_tx::GeneratorEnergySource::Other => "other",
+        _ => "unknown",
+    }
+}
+
 /// Read one generator by zero based table position.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_generator_at(
@@ -9369,6 +11539,9 @@ pub unsafe extern "C" fn pio_balanced_network_generator_at(
                 component_id,
                 has_component_id,
                 bus_id: generator.bus.0,
+                energy_source: PioStringView::new(generator_energy_source_name(
+                    generator.energy_source,
+                )),
                 active_power_mw: generator.pg,
                 reactive_power_mvar: generator.qg,
                 active_power_max_mw: generator.pmax,
@@ -9684,6 +11857,7 @@ pub unsafe extern "C" fn pio_balanced_network_three_winding_transformer_winding_
                     format!("winding index {winding_index} is out of range"),
                 )
             })?;
+            let (control, has_control) = transformer_control_view(winding.control.as_ref());
             *require_output(output, "output")? = PioThreeWindingTransformerWindingView {
                 bus_id: winding.bus.0,
                 tap_ratio: winding.tap,
@@ -9692,6 +11866,8 @@ pub unsafe extern "C" fn pio_balanced_network_three_winding_transformer_winding_
                 rating_a_mva: winding.rate_a,
                 rating_b_mva: winding.rate_b,
                 rating_c_mva: winding.rate_c,
+                control,
+                has_control,
             };
             Ok(true)
         })
@@ -9787,6 +11963,627 @@ pub unsafe extern "C" fn pio_balanced_network_release(network: *mut PioBalancedN
     unsafe { PioBalancedNetwork::release_raw(network) };
 }
 
+unsafe fn require_multiconductor_network<'a>(
+    network: *const PioMulticonductorNetwork,
+) -> Result<&'a powerio_dist::MulticonductorNetwork, *mut PioError> {
+    unsafe { PioMulticonductorNetwork::get(network) }
+        .and_then(MulticonductorNetworkInner::network)
+        .ok_or_else(|| {
+            boundary_error(
+                &codes::BIND_CAPI_NULL_HANDLE,
+                "PioMulticonductorNetwork must not be NULL",
+            )
+        })
+}
+
+fn optional_f64_view(value: Option<&[f64]>) -> (PioF64View, bool) {
+    value.map_or((PioF64View::EMPTY, false), |value| {
+        (PioF64View::new(value), true)
+    })
+}
+
+fn dist_coords_kind_name(kind: powerio_dist::DistCoordsKind) -> &'static str {
+    match kind {
+        powerio_dist::DistCoordsKind::Source => "source",
+        powerio_dist::DistCoordsKind::Synthetic => "synthetic",
+        powerio_dist::DistCoordsKind::Manual => "manual",
+        powerio_dist::DistCoordsKind::Derived => "derived",
+        _ => "unknown",
+    }
+}
+
+fn multiconductor_location_view(
+    location: &powerio_dist::DistLocation,
+) -> PioMulticonductorLocationView {
+    let (kind, has_kind) = location.kind.map_or((PioStringView::EMPTY, false), |kind| {
+        (PioStringView::new(dist_coords_kind_name(kind)), true)
+    });
+    PioMulticonductorLocationView {
+        x: location.x,
+        y: location.y,
+        kind,
+        has_kind,
+    }
+}
+
+fn empty_multiconductor_location_view() -> PioMulticonductorLocationView {
+    PioMulticonductorLocationView {
+        x: 0.0,
+        y: 0.0,
+        kind: PioStringView::EMPTY,
+        has_kind: false,
+    }
+}
+
+fn multiconductor_geo_view(geo: Option<&powerio_dist::DistGeoMeta>) -> PioMulticonductorGeoView {
+    let Some(geo) = geo else {
+        return PioMulticonductorGeoView {
+            has_geo: false,
+            space: PioStringView::EMPTY,
+            crs: PioStringView::EMPTY,
+            has_crs: false,
+            kind: PioStringView::EMPTY,
+            has_kind: false,
+            has_canvas: false,
+            canvas_width: 0.0,
+            has_canvas_width: false,
+            canvas_height: 0.0,
+            has_canvas_height: false,
+            canvas_units: PioStringView::EMPTY,
+            has_canvas_units: false,
+        };
+    };
+    let (space, crs, has_crs, canvas) = match &geo.space {
+        powerio_dist::CoordinateSpace::Geographic { crs } => (
+            "geographic",
+            crs.as_deref()
+                .map_or(PioStringView::EMPTY, PioStringView::new),
+            crs.is_some(),
+            None,
+        ),
+        powerio_dist::CoordinateSpace::Projected { crs } => (
+            "projected",
+            crs.as_deref()
+                .map_or(PioStringView::EMPTY, PioStringView::new),
+            crs.is_some(),
+            None,
+        ),
+        powerio_dist::CoordinateSpace::Diagram { canvas } => {
+            ("diagram", PioStringView::EMPTY, false, canvas.as_ref())
+        }
+        powerio_dist::CoordinateSpace::Unknown => ("unknown", PioStringView::EMPTY, false, None),
+        _ => ("unknown", PioStringView::EMPTY, false, None),
+    };
+    let (kind, has_kind) = geo.kind.map_or((PioStringView::EMPTY, false), |kind| {
+        (PioStringView::new(dist_coords_kind_name(kind)), true)
+    });
+    PioMulticonductorGeoView {
+        has_geo: true,
+        space: PioStringView::new(space),
+        crs,
+        has_crs,
+        kind,
+        has_kind,
+        has_canvas: canvas.is_some(),
+        canvas_width: canvas.and_then(|canvas| canvas.width).unwrap_or(0.0),
+        has_canvas_width: canvas.is_some_and(|canvas| canvas.width.is_some()),
+        canvas_height: canvas.and_then(|canvas| canvas.height).unwrap_or(0.0),
+        has_canvas_height: canvas.is_some_and(|canvas| canvas.height.is_some()),
+        canvas_units: canvas
+            .and_then(|canvas| canvas.units.as_deref())
+            .map_or(PioStringView::EMPTY, PioStringView::new),
+        has_canvas_units: canvas.is_some_and(|canvas| canvas.units.is_some()),
+    }
+}
+
+fn multiconductor_configuration_name(configuration: powerio_dist::Configuration) -> &'static str {
+    match configuration {
+        powerio_dist::Configuration::Wye => "wye",
+        powerio_dist::Configuration::Delta => "delta",
+        powerio_dist::Configuration::SinglePhase => "single_phase",
+        _ => "unknown",
+    }
+}
+
+fn multiconductor_winding_connection_name(
+    connection: powerio_dist::DistWindingConn,
+) -> &'static str {
+    match connection {
+        powerio_dist::DistWindingConn::Wye => "wye",
+        powerio_dist::DistWindingConn::Delta => "delta",
+        _ => "unknown",
+    }
+}
+
+fn inverter_topology_name(topology: powerio_dist::IbrTopology) -> &'static str {
+    match topology {
+        powerio_dist::IbrTopology::SinglePhase => "SINGLE_PHASE",
+        powerio_dist::IbrTopology::ThreeLeg => "THREE_LEG",
+        powerio_dist::IbrTopology::FourLeg => "FOUR_LEG",
+        _ => "UNKNOWN",
+    }
+}
+
+fn inverter_prime_mover_name(prime_mover: powerio_dist::IbrPrimeMover) -> &'static str {
+    match prime_mover {
+        powerio_dist::IbrPrimeMover::Pv => "PV",
+        powerio_dist::IbrPrimeMover::Battery => "BATTERY",
+        powerio_dist::IbrPrimeMover::Generic => "GENERIC",
+        powerio_dist::IbrPrimeMover::Statcom => "STATCOM",
+        powerio_dist::IbrPrimeMover::Dstatcom => "DSTATCOM",
+        _ => "UNKNOWN",
+    }
+}
+
+fn inverter_voltage_aggregation_name(
+    aggregation: powerio_dist::IbrVoltageAggregation,
+) -> &'static str {
+    match aggregation {
+        powerio_dist::IbrVoltageAggregation::PerPhase => "PER_PHASE",
+        powerio_dist::IbrVoltageAggregation::Average => "AVERAGE",
+        _ => "UNKNOWN",
+    }
+}
+
+fn control_voltage_reference_name(
+    reference: powerio_dist::ControlVoltageReference,
+) -> &'static str {
+    match reference {
+        powerio_dist::ControlVoltageReference::PnPerPhase => "PN_PER_PHASE",
+        powerio_dist::ControlVoltageReference::PpPerPhase => "PP_PER_PHASE",
+        powerio_dist::ControlVoltageReference::PpAveraged => "PP_AVERAGED",
+        powerio_dist::ControlVoltageReference::PgAveraged => "PG_AVERAGED",
+        powerio_dist::ControlVoltageReference::PnAveraged => "PN_AVERAGED",
+        powerio_dist::ControlVoltageReference::PgPerPhase => "PG_PER_PHASE",
+        _ => "UNKNOWN",
+    }
+}
+
+fn reactive_power_unit_name(unit: powerio_dist::ReactivePowerUnit) -> &'static str {
+    match unit {
+        powerio_dist::ReactivePowerUnit::VaFraction => "VA_FRACTION",
+        powerio_dist::ReactivePowerUnit::Var => "VAR",
+        _ => "UNKNOWN",
+    }
+}
+
+fn active_power_unit_name(unit: powerio_dist::ActivePowerUnit) -> &'static str {
+    match unit {
+        powerio_dist::ActivePowerUnit::VaFraction => "VA_FRACTION",
+        powerio_dist::ActivePowerUnit::W => "W",
+        _ => "UNKNOWN",
+    }
+}
+
+fn reactive_power_reference_name(reference: powerio_dist::ReactivePowerReference) -> &'static str {
+    match reference {
+        powerio_dist::ReactivePowerReference::VarMax => "VAR_MAX",
+        powerio_dist::ReactivePowerReference::VarAvailable => "VAR_AVAILABLE",
+        _ => "UNKNOWN",
+    }
+}
+
+fn active_power_reference_name(reference: powerio_dist::ActivePowerReference) -> &'static str {
+    match reference {
+        powerio_dist::ActivePowerReference::PAvailable => "P_AVAILABLE",
+        powerio_dist::ActivePowerReference::PMax => "P_MAX",
+        powerio_dist::ActivePowerReference::SMax => "S_MAX",
+        _ => "UNKNOWN",
+    }
+}
+
+fn string_slice_at(
+    values: &[String],
+    index: usize,
+    description: &str,
+) -> Result<PioStringView, *mut PioError> {
+    values
+        .get(index)
+        .map(|value| PioStringView::new(value))
+        .ok_or_else(|| {
+            boundary_error(
+                &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                format!("{description} index {index} is out of range"),
+            )
+        })
+}
+
+fn conductor_matrix_row(
+    matrix: &powerio_dist::ConductorMatrix,
+    row_index: usize,
+    description: &str,
+) -> Result<PioF64View, *mut PioError> {
+    matrix
+        .get(row_index)
+        .map(|row| PioF64View::new(row))
+        .ok_or_else(|| {
+            boundary_error(
+                &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                format!("{description} row index {row_index} is out of range"),
+            )
+        })
+}
+
+fn multiconductor_bus_view(bus: &powerio_dist::DistBus) -> PioMulticonductorBusView {
+    let (vpn_min, has_vpn_min) = optional_f64_view(bus.vpn_min.as_deref());
+    let (vpn_max, has_vpn_max) = optional_f64_view(bus.vpn_max.as_deref());
+    let (vpp_min, has_vpp_min) = optional_f64_view(bus.vpp_min.as_deref());
+    let (vpp_max, has_vpp_max) = optional_f64_view(bus.vpp_max.as_deref());
+    let (location, has_location) = bus
+        .location
+        .as_ref()
+        .map_or((empty_multiconductor_location_view(), false), |location| {
+            (multiconductor_location_view(location), true)
+        });
+    PioMulticonductorBusView {
+        id: PioStringView::new(&bus.id),
+        terminal_count: bus.terminals.len(),
+        grounded_terminal_count: bus.grounded.len(),
+        voltage_min_v: bus.v_min.unwrap_or(0.0),
+        has_voltage_min: bus.v_min.is_some(),
+        voltage_max_v: bus.v_max.unwrap_or(0.0),
+        has_voltage_max: bus.v_max.is_some(),
+        phase_to_neutral_voltage_min_v: vpn_min,
+        has_phase_to_neutral_voltage_min: has_vpn_min,
+        phase_to_neutral_voltage_max_v: vpn_max,
+        has_phase_to_neutral_voltage_max: has_vpn_max,
+        phase_to_phase_voltage_min_v: vpp_min,
+        has_phase_to_phase_voltage_min: has_vpp_min,
+        phase_to_phase_voltage_max_v: vpp_max,
+        has_phase_to_phase_voltage_max: has_vpp_max,
+        positive_sequence_voltage_min_v: bus.vpos_min.unwrap_or(0.0),
+        has_positive_sequence_voltage_min: bus.vpos_min.is_some(),
+        positive_sequence_voltage_max_v: bus.vpos_max.unwrap_or(0.0),
+        has_positive_sequence_voltage_max: bus.vpos_max.is_some(),
+        negative_sequence_voltage_max_v: bus.vneg_max.unwrap_or(0.0),
+        has_negative_sequence_voltage_max: bus.vneg_max.is_some(),
+        zero_sequence_voltage_max_v: bus.vzero_max.unwrap_or(0.0),
+        has_zero_sequence_voltage_max: bus.vzero_max.is_some(),
+        neutral_to_ground_voltage_max_v: bus.vn_max.unwrap_or(0.0),
+        has_neutral_to_ground_voltage_max: bus.vn_max.is_some(),
+        location,
+        has_location,
+    }
+}
+
+fn multiconductor_line_code_view(
+    line_code: &powerio_dist::DistLineCode,
+) -> PioMulticonductorLineCodeView {
+    let (current_limit, has_current_limit) = optional_f64_view(line_code.i_max.as_deref());
+    let (apparent_power_limit, has_apparent_power_limit) =
+        optional_f64_view(line_code.s_max.as_deref());
+    let (source, has_source) = optional_string_view(line_code.source.as_deref());
+    PioMulticonductorLineCodeView {
+        name: PioStringView::new(&line_code.name),
+        conductor_count: line_code.n_conductors,
+        resistance_matrix_row_count: line_code.r_series.len(),
+        reactance_matrix_row_count: line_code.x_series.len(),
+        conductance_from_matrix_row_count: line_code.g_from.len(),
+        susceptance_from_matrix_row_count: line_code.b_from.len(),
+        conductance_to_matrix_row_count: line_code.g_to.len(),
+        susceptance_to_matrix_row_count: line_code.b_to.len(),
+        current_limit_a: current_limit,
+        has_current_limit,
+        apparent_power_limit_va: apparent_power_limit,
+        has_apparent_power_limit,
+        source,
+        has_source,
+    }
+}
+
+fn multiconductor_line_view(line: &powerio_dist::DistLine) -> PioMulticonductorLineView {
+    let (current_limit, has_current_limit) = optional_f64_view(line.i_max.as_deref());
+    let (apparent_power_limit, has_apparent_power_limit) = optional_f64_view(line.s_max.as_deref());
+    PioMulticonductorLineView {
+        name: PioStringView::new(&line.name),
+        bus_from: PioStringView::new(&line.bus_from),
+        bus_to: PioStringView::new(&line.bus_to),
+        terminal_map_from_count: line.terminal_map_from.len(),
+        terminal_map_to_count: line.terminal_map_to.len(),
+        line_code: PioStringView::new(&line.linecode),
+        length_m: line.length,
+        route_point_count: line.route.as_ref().map_or(0, Vec::len),
+        has_route: line.route.is_some(),
+        current_limit_a: current_limit,
+        has_current_limit,
+        apparent_power_limit_va: apparent_power_limit,
+        has_apparent_power_limit,
+    }
+}
+
+fn multiconductor_switch_view(switch: &powerio_dist::DistSwitch) -> PioMulticonductorSwitchView {
+    let (current_limit, has_current_limit) = optional_f64_view(switch.i_max.as_deref());
+    PioMulticonductorSwitchView {
+        name: PioStringView::new(&switch.name),
+        bus_from: PioStringView::new(&switch.bus_from),
+        bus_to: PioStringView::new(&switch.bus_to),
+        terminal_map_from_count: switch.terminal_map_from.len(),
+        terminal_map_to_count: switch.terminal_map_to.len(),
+        open: switch.open,
+        current_limit_a: current_limit,
+        has_current_limit,
+    }
+}
+
+fn multiconductor_load_view(load: &powerio_dist::DistLoad) -> PioMulticonductorLoadView {
+    let empty = PioF64View::EMPTY;
+    let (
+        voltage_model,
+        nominal_voltage,
+        alpha_z,
+        alpha_i,
+        alpha_p,
+        beta_z,
+        beta_i,
+        beta_p,
+        gamma_p,
+        gamma_q,
+    ) = match &load.voltage_model {
+        powerio_dist::DistLoadVoltageModel::ConstantPower { v_nom } => (
+            "constant_power",
+            PioF64View::new(v_nom),
+            empty,
+            empty,
+            empty,
+            empty,
+            empty,
+            empty,
+            empty,
+            empty,
+        ),
+        powerio_dist::DistLoadVoltageModel::ConstantCurrent { v_nom } => (
+            "constant_current",
+            PioF64View::new(v_nom),
+            empty,
+            empty,
+            empty,
+            empty,
+            empty,
+            empty,
+            empty,
+            empty,
+        ),
+        powerio_dist::DistLoadVoltageModel::ConstantImpedance { v_nom } => (
+            "constant_impedance",
+            PioF64View::new(v_nom),
+            empty,
+            empty,
+            empty,
+            empty,
+            empty,
+            empty,
+            empty,
+            empty,
+        ),
+        powerio_dist::DistLoadVoltageModel::Zip {
+            v_nom,
+            alpha_z,
+            alpha_i,
+            alpha_p,
+            beta_z,
+            beta_i,
+            beta_p,
+        } => (
+            "zip",
+            PioF64View::new(v_nom),
+            PioF64View::new(alpha_z),
+            PioF64View::new(alpha_i),
+            PioF64View::new(alpha_p),
+            PioF64View::new(beta_z),
+            PioF64View::new(beta_i),
+            PioF64View::new(beta_p),
+            empty,
+            empty,
+        ),
+        powerio_dist::DistLoadVoltageModel::Exponential {
+            v_nom,
+            gamma_p,
+            gamma_q,
+        } => (
+            "exponential",
+            PioF64View::new(v_nom),
+            empty,
+            empty,
+            empty,
+            empty,
+            empty,
+            empty,
+            PioF64View::new(gamma_p),
+            PioF64View::new(gamma_q),
+        ),
+        _ => (
+            "unknown", empty, empty, empty, empty, empty, empty, empty, empty, empty,
+        ),
+    };
+    PioMulticonductorLoadView {
+        name: PioStringView::new(&load.name),
+        bus: PioStringView::new(&load.bus),
+        terminal_map_count: load.terminal_map.len(),
+        configuration: PioStringView::new(multiconductor_configuration_name(load.configuration)),
+        active_power_nominal_w: PioF64View::new(&load.p_nom),
+        reactive_power_nominal_var: PioF64View::new(&load.q_nom),
+        voltage_model: PioStringView::new(voltage_model),
+        nominal_voltage_v: nominal_voltage,
+        active_power_constant_impedance: alpha_z,
+        active_power_constant_current: alpha_i,
+        active_power_constant_power: alpha_p,
+        reactive_power_constant_impedance: beta_z,
+        reactive_power_constant_current: beta_i,
+        reactive_power_constant_power: beta_p,
+        active_power_exponent: gamma_p,
+        reactive_power_exponent: gamma_q,
+    }
+}
+
+fn multiconductor_generator_view(
+    generator: &powerio_dist::DistGenerator,
+) -> PioMulticonductorGeneratorView {
+    let (p_min, has_p_min) = optional_f64_view(generator.p_min.as_deref());
+    let (p_max, has_p_max) = optional_f64_view(generator.p_max.as_deref());
+    let (q_min, has_q_min) = optional_f64_view(generator.q_min.as_deref());
+    let (q_max, has_q_max) = optional_f64_view(generator.q_max.as_deref());
+    let (cost, has_cost) = optional_f64_view(generator.cost.as_deref());
+    let (s_max, has_s_max) = optional_f64_view(generator.s_max.as_deref());
+    let (i_max, has_i_max) = optional_f64_view(generator.i_max.as_deref());
+    PioMulticonductorGeneratorView {
+        name: PioStringView::new(&generator.name),
+        bus: PioStringView::new(&generator.bus),
+        terminal_map_count: generator.terminal_map.len(),
+        configuration: PioStringView::new(multiconductor_configuration_name(
+            generator.configuration,
+        )),
+        active_power_nominal_w: PioF64View::new(&generator.p_nom),
+        reactive_power_nominal_var: PioF64View::new(&generator.q_nom),
+        active_power_min_w: p_min,
+        has_active_power_min: has_p_min,
+        active_power_max_w: p_max,
+        has_active_power_max: has_p_max,
+        reactive_power_min_var: q_min,
+        has_reactive_power_min: has_q_min,
+        reactive_power_max_var: q_max,
+        has_reactive_power_max: has_q_max,
+        active_power_dispatch_cost_per_kwh: cost,
+        has_active_power_dispatch_cost: has_cost,
+        apparent_power_limit_va: s_max,
+        has_apparent_power_limit: has_s_max,
+        current_limit_a: i_max,
+        has_current_limit: has_i_max,
+    }
+}
+
+fn inverter_based_resource_view(ibr: &powerio_dist::DistIbr) -> PioInverterBasedResourceView {
+    let (i_max, has_i_max) = optional_f64_view(ibr.i_max.as_deref());
+    let (p_min, has_p_min) = optional_f64_view(ibr.p_min.as_deref());
+    let (p_max, has_p_max) = optional_f64_view(ibr.p_max.as_deref());
+    let (q_min, has_q_min) = optional_f64_view(ibr.q_min.as_deref());
+    let (q_max, has_q_max) = optional_f64_view(ibr.q_max.as_deref());
+    let (control_profile, has_control_profile) =
+        optional_string_view(ibr.control_profile.as_deref());
+    let (voltage_aggregation, has_voltage_aggregation) =
+        ibr.voltage_aggregation
+            .map_or((PioStringView::EMPTY, false), |aggregation| {
+                (
+                    PioStringView::new(inverter_voltage_aggregation_name(aggregation)),
+                    true,
+                )
+            });
+    PioInverterBasedResourceView {
+        name: PioStringView::new(&ibr.name),
+        bus: PioStringView::new(&ibr.bus),
+        terminal_map_count: ibr.terminal_map.len(),
+        topology: PioStringView::new(inverter_topology_name(ibr.topology)),
+        prime_mover: PioStringView::new(inverter_prime_mover_name(ibr.prime_mover)),
+        apparent_power_limit_va: PioF64View::new(&ibr.s_max),
+        current_limit_a: i_max,
+        has_current_limit: has_i_max,
+        active_power_available_w: ibr.p_avail.unwrap_or(0.0),
+        has_active_power_available: ibr.p_avail.is_some(),
+        active_power_min_w: p_min,
+        has_active_power_min: has_p_min,
+        active_power_max_w: p_max,
+        has_active_power_max: has_p_max,
+        reactive_power_min_var: q_min,
+        has_reactive_power_min: has_q_min,
+        reactive_power_max_var: q_max,
+        has_reactive_power_max: has_q_max,
+        control_profile,
+        has_control_profile,
+        voltage_aggregation,
+        has_voltage_aggregation,
+    }
+}
+
+fn control_profile_view(profile: &powerio_dist::DistControlProfile) -> PioControlProfileView {
+    let power_factor = profile.power_factor.as_ref();
+    let volt_var = profile.volt_var.as_ref();
+    let volt_watt = profile.volt_watt.as_ref();
+    let (vv_voltage_reference, has_vv_voltage_reference) = volt_var
+        .and_then(|control| control.voltage_reference)
+        .map_or((PioStringView::EMPTY, false), |reference| {
+            (
+                PioStringView::new(control_voltage_reference_name(reference)),
+                true,
+            )
+        });
+    let (vv_q_unit, has_vv_q_unit) = volt_var
+        .and_then(|control| control.q_unit)
+        .map_or((PioStringView::EMPTY, false), |unit| {
+            (PioStringView::new(reactive_power_unit_name(unit)), true)
+        });
+    let (vv_q_ref, has_vv_q_ref) = volt_var.and_then(|control| control.q_ref).map_or(
+        (PioStringView::EMPTY, false),
+        |reference| {
+            (
+                PioStringView::new(reactive_power_reference_name(reference)),
+                true,
+            )
+        },
+    );
+    let (vw_voltage_reference, has_vw_voltage_reference) = volt_watt
+        .and_then(|control| control.voltage_reference)
+        .map_or((PioStringView::EMPTY, false), |reference| {
+            (
+                PioStringView::new(control_voltage_reference_name(reference)),
+                true,
+            )
+        });
+    let (vw_p_unit, has_vw_p_unit) = volt_watt
+        .and_then(|control| control.p_unit)
+        .map_or((PioStringView::EMPTY, false), |unit| {
+            (PioStringView::new(active_power_unit_name(unit)), true)
+        });
+    let (vw_p_ref, has_vw_p_ref) = volt_watt.and_then(|control| control.p_ref).map_or(
+        (PioStringView::EMPTY, false),
+        |reference| {
+            (
+                PioStringView::new(active_power_reference_name(reference)),
+                true,
+            )
+        },
+    );
+    PioControlProfileView {
+        name: PioStringView::new(&profile.name),
+        has_power_factor: power_factor.is_some(),
+        power_factor: power_factor.map_or(0.0, |control| control.pf),
+        has_volt_var: volt_var.is_some(),
+        volt_var_voltage_reference: vv_voltage_reference,
+        has_volt_var_voltage_reference: has_vv_voltage_reference,
+        volt_var_breakpoints: volt_var.map_or(PioF64View::EMPTY, |control| {
+            PioF64View::new(&control.breakpoints)
+        }),
+        volt_var_reactive_power_limits: volt_var.map_or(PioF64View::EMPTY, |control| {
+            PioF64View::new(&control.q_limits)
+        }),
+        volt_var_reactive_power_unit: vv_q_unit,
+        has_volt_var_reactive_power_unit: has_vv_q_unit,
+        volt_var_reactive_power_reference: vv_q_ref,
+        has_volt_var_reactive_power_reference: has_vv_q_ref,
+        volt_var_active_power_min_for_reactive_power_w: volt_var
+            .and_then(|control| control.p_min_for_q)
+            .unwrap_or(0.0),
+        has_volt_var_active_power_min_for_reactive_power: volt_var
+            .is_some_and(|control| control.p_min_for_q.is_some()),
+        volt_var_active_power_min_for_max_reactive_power_w: volt_var
+            .and_then(|control| control.p_min_for_q_max)
+            .unwrap_or(0.0),
+        has_volt_var_active_power_min_for_max_reactive_power: volt_var
+            .is_some_and(|control| control.p_min_for_q_max.is_some()),
+        has_volt_watt: volt_watt.is_some(),
+        volt_watt_voltage_reference: vw_voltage_reference,
+        has_volt_watt_voltage_reference: has_vw_voltage_reference,
+        volt_watt_breakpoints: volt_watt.map_or(PioF64View::EMPTY, |control| {
+            PioF64View::new(&control.breakpoints)
+        }),
+        volt_watt_active_power_limits: volt_watt.map_or(PioF64View::EMPTY, |control| {
+            PioF64View::new(&control.p_limits)
+        }),
+        volt_watt_active_power_unit: vw_p_unit,
+        has_volt_watt_active_power_unit: has_vw_p_unit,
+        volt_watt_active_power_reference: vw_p_ref,
+        has_volt_watt_active_power_reference: has_vw_p_ref,
+    }
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_name(
     network: *const PioMulticonductorNetwork,
@@ -9795,6 +12592,85 @@ pub unsafe extern "C" fn pio_multiconductor_network_name(
         .and_then(MulticonductorNetworkInner::network)
         .and_then(|network| network.name().as_deref())
         .map_or(PioStringView::EMPTY, PioStringView::new)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_has_name(
+    network: *const PioMulticonductorNetwork,
+) -> bool {
+    unsafe { PioMulticonductorNetwork::get(network) }
+        .and_then(MulticonductorNetworkInner::network)
+        .is_some_and(|network| network.name().is_some())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_source_format(
+    network: *const PioMulticonductorNetwork,
+) -> PioStringView {
+    unsafe { PioMulticonductorNetwork::get(network) }
+        .and_then(MulticonductorNetworkInner::network)
+        .and_then(|network| *network.source_format())
+        .map_or(PioStringView::EMPTY, |format| {
+            PioStringView::new(format.name())
+        })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_has_source_format(
+    network: *const PioMulticonductorNetwork,
+) -> bool {
+    unsafe { PioMulticonductorNetwork::get(network) }
+        .and_then(MulticonductorNetworkInner::network)
+        .is_some_and(|network| network.source_format().is_some())
+}
+
+/// Read the network coordinate metadata, including absence through `has_geo`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_geo(
+    network: *const PioMulticonductorNetwork,
+    output: *mut PioMulticonductorGeoView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_multiconductor_network(network)?;
+            *require_output(output, "output")? = multiconductor_geo_view(network.geo().as_ref());
+            Ok(true)
+        })
+    }
+}
+
+/// Read exact table lengths. Defaulted source fields and arbitrary extension
+/// maps are retained internally and are not separate domain tables.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_counts(
+    network: *const PioMulticonductorNetwork,
+    output: *mut PioMulticonductorNetworkCountsView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_multiconductor_network(network)?;
+            *require_output(output, "output")? = PioMulticonductorNetworkCountsView {
+                buses: network.buses().len(),
+                line_codes: network.linecodes().len(),
+                lines: network.lines().len(),
+                switches: network.switches().len(),
+                transformers: network.transformers().len(),
+                loads: network.loads().len(),
+                generators: network.generators().len(),
+                inverter_based_resources: network.ibrs().len(),
+                control_profiles: network.control_profiles().len(),
+                shunts: network.shunts().len(),
+                capacitors: network.capacitors().len(),
+                voltage_sources: network.sources().len(),
+                untyped_objects: network.untyped().len(),
+                commands: network.commands().len(),
+                options: network.options().len(),
+            };
+            Ok(true)
+        })
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -9840,6 +12716,1163 @@ pub unsafe extern "C" fn pio_multiconductor_network_generator_count(
     unsafe { PioMulticonductorNetwork::get(network) }
         .and_then(MulticonductorNetworkInner::network)
         .map_or(0, |network| network.generators().len())
+}
+
+/// Read one multiconductor bus by zero based table position. Borrowed strings
+/// and numeric spans remain valid while the network handle is alive.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_bus_at(
+    network: *const PioMulticonductorNetwork,
+    index: usize,
+    output: *mut PioMulticonductorBusView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_multiconductor_network(network)?;
+            let bus = network.buses().get(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("multiconductor bus index {index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = multiconductor_bus_view(bus);
+            Ok(true)
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_bus_terminal_at(
+    network: *const PioMulticonductorNetwork,
+    bus_index: usize,
+    terminal_index: usize,
+    output: *mut PioStringView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_multiconductor_network(network)?;
+            let bus = network.buses().get(bus_index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("multiconductor bus index {bus_index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? =
+                string_slice_at(&bus.terminals, terminal_index, "bus terminal")?;
+            Ok(true)
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_bus_grounded_terminal_at(
+    network: *const PioMulticonductorNetwork,
+    bus_index: usize,
+    terminal_index: usize,
+    output: *mut PioStringView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_multiconductor_network(network)?;
+            let bus = network.buses().get(bus_index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("multiconductor bus index {bus_index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? =
+                string_slice_at(&bus.grounded, terminal_index, "grounded bus terminal")?;
+            Ok(true)
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_line_code_at(
+    network: *const PioMulticonductorNetwork,
+    index: usize,
+    output: *mut PioMulticonductorLineCodeView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_multiconductor_network(network)?;
+            let line_code = network.linecodes().get(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("multiconductor line code index {index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = multiconductor_line_code_view(line_code);
+            Ok(true)
+        })
+    }
+}
+
+fn multiconductor_line_code_matrix<'a>(
+    network: &'a powerio_dist::MulticonductorNetwork,
+    line_code_index: usize,
+    matrix: &str,
+) -> Result<&'a powerio_dist::ConductorMatrix, *mut PioError> {
+    let line_code = network.linecodes().get(line_code_index).ok_or_else(|| {
+        boundary_error(
+            &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+            format!("multiconductor line code index {line_code_index} is out of range"),
+        )
+    })?;
+    Ok(match matrix {
+        "resistance" => &line_code.r_series,
+        "reactance" => &line_code.x_series,
+        "conductance_from" => &line_code.g_from,
+        "susceptance_from" => &line_code.b_from,
+        "conductance_to" => &line_code.g_to,
+        "susceptance_to" => &line_code.b_to,
+        _ => unreachable!("all line code matrices are handled"),
+    })
+}
+
+unsafe fn write_multiconductor_line_code_matrix_row(
+    network: *const PioMulticonductorNetwork,
+    line_code_index: usize,
+    row_index: usize,
+    matrix: &str,
+    output: *mut PioF64View,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_multiconductor_network(network)?;
+            let values = multiconductor_line_code_matrix(network, line_code_index, matrix)?;
+            *require_output(output, "output")? =
+                conductor_matrix_row(values, row_index, &format!("line code {matrix} matrix"))?;
+            Ok(true)
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_line_code_resistance_matrix_row_at(
+    network: *const PioMulticonductorNetwork,
+    line_code_index: usize,
+    row_index: usize,
+    output: *mut PioF64View,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        write_multiconductor_line_code_matrix_row(
+            network,
+            line_code_index,
+            row_index,
+            "resistance",
+            output,
+            error,
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_line_code_reactance_matrix_row_at(
+    network: *const PioMulticonductorNetwork,
+    line_code_index: usize,
+    row_index: usize,
+    output: *mut PioF64View,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        write_multiconductor_line_code_matrix_row(
+            network,
+            line_code_index,
+            row_index,
+            "reactance",
+            output,
+            error,
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_line_code_conductance_from_matrix_row_at(
+    network: *const PioMulticonductorNetwork,
+    line_code_index: usize,
+    row_index: usize,
+    output: *mut PioF64View,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        write_multiconductor_line_code_matrix_row(
+            network,
+            line_code_index,
+            row_index,
+            "conductance_from",
+            output,
+            error,
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_line_code_susceptance_from_matrix_row_at(
+    network: *const PioMulticonductorNetwork,
+    line_code_index: usize,
+    row_index: usize,
+    output: *mut PioF64View,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        write_multiconductor_line_code_matrix_row(
+            network,
+            line_code_index,
+            row_index,
+            "susceptance_from",
+            output,
+            error,
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_line_code_conductance_to_matrix_row_at(
+    network: *const PioMulticonductorNetwork,
+    line_code_index: usize,
+    row_index: usize,
+    output: *mut PioF64View,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        write_multiconductor_line_code_matrix_row(
+            network,
+            line_code_index,
+            row_index,
+            "conductance_to",
+            output,
+            error,
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_line_code_susceptance_to_matrix_row_at(
+    network: *const PioMulticonductorNetwork,
+    line_code_index: usize,
+    row_index: usize,
+    output: *mut PioF64View,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        write_multiconductor_line_code_matrix_row(
+            network,
+            line_code_index,
+            row_index,
+            "susceptance_to",
+            output,
+            error,
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_line_at(
+    network: *const PioMulticonductorNetwork,
+    index: usize,
+    output: *mut PioMulticonductorLineView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_multiconductor_network(network)?;
+            let line = network.lines().get(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("multiconductor line index {index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = multiconductor_line_view(line);
+            Ok(true)
+        })
+    }
+}
+
+unsafe fn write_multiconductor_line_terminal(
+    network: *const PioMulticonductorNetwork,
+    line_index: usize,
+    terminal_index: usize,
+    from: bool,
+    output: *mut PioStringView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_multiconductor_network(network)?;
+            let line = network.lines().get(line_index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("multiconductor line index {line_index} is out of range"),
+                )
+            })?;
+            let (terminals, description) = if from {
+                (&line.terminal_map_from, "line from terminal")
+            } else {
+                (&line.terminal_map_to, "line to terminal")
+            };
+            *require_output(output, "output")? =
+                string_slice_at(terminals, terminal_index, description)?;
+            Ok(true)
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_line_terminal_from_at(
+    network: *const PioMulticonductorNetwork,
+    line_index: usize,
+    terminal_index: usize,
+    output: *mut PioStringView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        write_multiconductor_line_terminal(network, line_index, terminal_index, true, output, error)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_line_terminal_to_at(
+    network: *const PioMulticonductorNetwork,
+    line_index: usize,
+    terminal_index: usize,
+    output: *mut PioStringView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        write_multiconductor_line_terminal(
+            network,
+            line_index,
+            terminal_index,
+            false,
+            output,
+            error,
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_line_route_point_at(
+    network: *const PioMulticonductorNetwork,
+    line_index: usize,
+    point_index: usize,
+    output: *mut PioMulticonductorLocationView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_multiconductor_network(network)?;
+            let line = network.lines().get(line_index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("multiconductor line index {line_index} is out of range"),
+                )
+            })?;
+            let route = line.route.as_ref().ok_or_else(|| {
+                boundary_error(
+                    &codes::REQUEST_CAPI_TYPE_MISMATCH,
+                    format!("multiconductor line {line_index} has no route"),
+                )
+            })?;
+            let point = route.get(point_index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("line route point index {point_index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = multiconductor_location_view(point);
+            Ok(true)
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_switch_at(
+    network: *const PioMulticonductorNetwork,
+    index: usize,
+    output: *mut PioMulticonductorSwitchView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_multiconductor_network(network)?;
+            let switch = network.switches().get(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("multiconductor switch index {index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = multiconductor_switch_view(switch);
+            Ok(true)
+        })
+    }
+}
+
+unsafe fn write_multiconductor_switch_terminal(
+    network: *const PioMulticonductorNetwork,
+    switch_index: usize,
+    terminal_index: usize,
+    from: bool,
+    output: *mut PioStringView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_multiconductor_network(network)?;
+            let switch = network.switches().get(switch_index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("multiconductor switch index {switch_index} is out of range"),
+                )
+            })?;
+            let (terminals, description) = if from {
+                (&switch.terminal_map_from, "switch from terminal")
+            } else {
+                (&switch.terminal_map_to, "switch to terminal")
+            };
+            *require_output(output, "output")? =
+                string_slice_at(terminals, terminal_index, description)?;
+            Ok(true)
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_switch_terminal_from_at(
+    network: *const PioMulticonductorNetwork,
+    switch_index: usize,
+    terminal_index: usize,
+    output: *mut PioStringView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        write_multiconductor_switch_terminal(
+            network,
+            switch_index,
+            terminal_index,
+            true,
+            output,
+            error,
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_switch_terminal_to_at(
+    network: *const PioMulticonductorNetwork,
+    switch_index: usize,
+    terminal_index: usize,
+    output: *mut PioStringView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        write_multiconductor_switch_terminal(
+            network,
+            switch_index,
+            terminal_index,
+            false,
+            output,
+            error,
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_transformer_at(
+    network: *const PioMulticonductorNetwork,
+    index: usize,
+    output: *mut PioMulticonductorTransformerView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_multiconductor_network(network)?;
+            let transformer = network.transformers().get(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("multiconductor transformer index {index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = PioMulticonductorTransformerView {
+                name: PioStringView::new(&transformer.name),
+                winding_count: transformer.windings.len(),
+                short_circuit_reactance_percent: PioF64View::new(&transformer.xsc_pct),
+                phase_count: transformer.phases,
+            };
+            Ok(true)
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_transformer_winding_at(
+    network: *const PioMulticonductorNetwork,
+    transformer_index: usize,
+    winding_index: usize,
+    output: *mut PioMulticonductorTransformerWindingView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_multiconductor_network(network)?;
+            let transformer = network
+                .transformers()
+                .get(transformer_index)
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                        format!(
+                            "multiconductor transformer index {transformer_index} is out of range"
+                        ),
+                    )
+                })?;
+            let winding = transformer.windings.get(winding_index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("transformer winding index {winding_index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = PioMulticonductorTransformerWindingView {
+                bus: PioStringView::new(&winding.bus),
+                terminal_map_count: winding.terminal_map.len(),
+                connection: PioStringView::new(multiconductor_winding_connection_name(
+                    winding.conn,
+                )),
+                rated_voltage_v: winding.v_ref,
+                apparent_power_rating_va: winding.s_rating,
+                resistance_percent: winding.r_pct,
+                tap: winding.tap,
+                neutral_resistance_ohm: winding.r_neutral.unwrap_or(0.0),
+                has_neutral_resistance: winding.r_neutral.is_some(),
+                neutral_reactance_ohm: winding.x_neutral.unwrap_or(0.0),
+                has_neutral_reactance: winding.x_neutral.is_some(),
+            };
+            Ok(true)
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_transformer_winding_terminal_at(
+    network: *const PioMulticonductorNetwork,
+    transformer_index: usize,
+    winding_index: usize,
+    terminal_index: usize,
+    output: *mut PioStringView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_multiconductor_network(network)?;
+            let transformer = network
+                .transformers()
+                .get(transformer_index)
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                        format!(
+                            "multiconductor transformer index {transformer_index} is out of range"
+                        ),
+                    )
+                })?;
+            let winding = transformer.windings.get(winding_index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("transformer winding index {winding_index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = string_slice_at(
+                &winding.terminal_map,
+                terminal_index,
+                "transformer winding terminal",
+            )?;
+            Ok(true)
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+enum MulticonductorTerminalTable {
+    Load,
+    Generator,
+    InverterBasedResource,
+    Shunt,
+    Capacitor,
+    VoltageSource,
+}
+
+unsafe fn write_multiconductor_terminal(
+    network: *const PioMulticonductorNetwork,
+    table: MulticonductorTerminalTable,
+    element_index: usize,
+    terminal_index: usize,
+    output: *mut PioStringView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_multiconductor_network(network)?;
+            let (terminals, description): (&[String], &str) = match table {
+                MulticonductorTerminalTable::Load => (
+                    &network
+                        .loads()
+                        .get(element_index)
+                        .ok_or_else(|| {
+                            boundary_error(
+                                &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                                format!(
+                                    "multiconductor load index {element_index} is out of range"
+                                ),
+                            )
+                        })?
+                        .terminal_map,
+                    "load terminal",
+                ),
+                MulticonductorTerminalTable::Generator => (
+                    &network
+                        .generators()
+                        .get(element_index)
+                        .ok_or_else(|| {
+                            boundary_error(
+                                &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                                format!(
+                                    "multiconductor generator index {element_index} is out of range"
+                                ),
+                            )
+                        })?
+                        .terminal_map,
+                    "generator terminal",
+                ),
+                MulticonductorTerminalTable::InverterBasedResource => (
+                    &network
+                        .ibrs()
+                        .get(element_index)
+                        .ok_or_else(|| {
+                            boundary_error(
+                                &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                                format!(
+                                    "inverter based resource index {element_index} is out of range"
+                                ),
+                            )
+                        })?
+                        .terminal_map,
+                    "inverter based resource terminal",
+                ),
+                MulticonductorTerminalTable::Shunt => (
+                    &network
+                        .shunts()
+                        .get(element_index)
+                        .ok_or_else(|| {
+                            boundary_error(
+                                &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                                format!(
+                                    "multiconductor shunt index {element_index} is out of range"
+                                ),
+                            )
+                        })?
+                        .terminal_map,
+                    "shunt terminal",
+                ),
+                MulticonductorTerminalTable::Capacitor => (
+                    &network
+                        .capacitors()
+                        .get(element_index)
+                        .ok_or_else(|| {
+                            boundary_error(
+                                &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                                format!(
+                                    "multiconductor capacitor index {element_index} is out of range"
+                                ),
+                            )
+                        })?
+                        .terminal_map,
+                    "capacitor terminal",
+                ),
+                MulticonductorTerminalTable::VoltageSource => (
+                    &network
+                        .sources()
+                        .get(element_index)
+                        .ok_or_else(|| {
+                            boundary_error(
+                                &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                                format!("voltage source index {element_index} is out of range"),
+                            )
+                        })?
+                        .terminal_map,
+                    "voltage source terminal",
+                ),
+            };
+            *require_output(output, "output")? =
+                string_slice_at(terminals, terminal_index, description)?;
+            Ok(true)
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_load_at(
+    network: *const PioMulticonductorNetwork,
+    index: usize,
+    output: *mut PioMulticonductorLoadView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_multiconductor_network(network)?;
+            let load = network.loads().get(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("multiconductor load index {index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = multiconductor_load_view(load);
+            Ok(true)
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_load_terminal_at(
+    network: *const PioMulticonductorNetwork,
+    load_index: usize,
+    terminal_index: usize,
+    output: *mut PioStringView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        write_multiconductor_terminal(
+            network,
+            MulticonductorTerminalTable::Load,
+            load_index,
+            terminal_index,
+            output,
+            error,
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_generator_at(
+    network: *const PioMulticonductorNetwork,
+    index: usize,
+    output: *mut PioMulticonductorGeneratorView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_multiconductor_network(network)?;
+            let generator = network.generators().get(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("multiconductor generator index {index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = multiconductor_generator_view(generator);
+            Ok(true)
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_generator_terminal_at(
+    network: *const PioMulticonductorNetwork,
+    generator_index: usize,
+    terminal_index: usize,
+    output: *mut PioStringView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        write_multiconductor_terminal(
+            network,
+            MulticonductorTerminalTable::Generator,
+            generator_index,
+            terminal_index,
+            output,
+            error,
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_inverter_based_resource_at(
+    network: *const PioMulticonductorNetwork,
+    index: usize,
+    output: *mut PioInverterBasedResourceView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_multiconductor_network(network)?;
+            let resource = network.ibrs().get(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("inverter based resource index {index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = inverter_based_resource_view(resource);
+            Ok(true)
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_inverter_based_resource_terminal_at(
+    network: *const PioMulticonductorNetwork,
+    resource_index: usize,
+    terminal_index: usize,
+    output: *mut PioStringView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        write_multiconductor_terminal(
+            network,
+            MulticonductorTerminalTable::InverterBasedResource,
+            resource_index,
+            terminal_index,
+            output,
+            error,
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_control_profile_at(
+    network: *const PioMulticonductorNetwork,
+    index: usize,
+    output: *mut PioControlProfileView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_multiconductor_network(network)?;
+            let profile = network.control_profiles().get(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("control profile index {index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = control_profile_view(profile);
+            Ok(true)
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_shunt_at(
+    network: *const PioMulticonductorNetwork,
+    index: usize,
+    output: *mut PioMulticonductorShuntView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_multiconductor_network(network)?;
+            let shunt = network.shunts().get(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("multiconductor shunt index {index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = PioMulticonductorShuntView {
+                name: PioStringView::new(&shunt.name),
+                bus: PioStringView::new(&shunt.bus),
+                terminal_map_count: shunt.terminal_map.len(),
+                conductance_matrix_row_count: shunt.g.len(),
+                susceptance_matrix_row_count: shunt.b.len(),
+            };
+            Ok(true)
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_shunt_terminal_at(
+    network: *const PioMulticonductorNetwork,
+    shunt_index: usize,
+    terminal_index: usize,
+    output: *mut PioStringView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        write_multiconductor_terminal(
+            network,
+            MulticonductorTerminalTable::Shunt,
+            shunt_index,
+            terminal_index,
+            output,
+            error,
+        )
+    }
+}
+
+unsafe fn write_multiconductor_shunt_matrix_row(
+    network: *const PioMulticonductorNetwork,
+    shunt_index: usize,
+    row_index: usize,
+    conductance: bool,
+    output: *mut PioF64View,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_multiconductor_network(network)?;
+            let shunt = network.shunts().get(shunt_index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("multiconductor shunt index {shunt_index} is out of range"),
+                )
+            })?;
+            let (matrix, description) = if conductance {
+                (&shunt.g, "shunt conductance matrix")
+            } else {
+                (&shunt.b, "shunt susceptance matrix")
+            };
+            *require_output(output, "output")? =
+                conductor_matrix_row(matrix, row_index, description)?;
+            Ok(true)
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_shunt_conductance_matrix_row_at(
+    network: *const PioMulticonductorNetwork,
+    shunt_index: usize,
+    row_index: usize,
+    output: *mut PioF64View,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        write_multiconductor_shunt_matrix_row(network, shunt_index, row_index, true, output, error)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_shunt_susceptance_matrix_row_at(
+    network: *const PioMulticonductorNetwork,
+    shunt_index: usize,
+    row_index: usize,
+    output: *mut PioF64View,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        write_multiconductor_shunt_matrix_row(network, shunt_index, row_index, false, output, error)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_capacitor_at(
+    network: *const PioMulticonductorNetwork,
+    index: usize,
+    output: *mut PioMulticonductorCapacitorView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_multiconductor_network(network)?;
+            let capacitor = network.capacitors().get(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("multiconductor capacitor index {index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = PioMulticonductorCapacitorView {
+                name: PioStringView::new(&capacitor.name),
+                bus: PioStringView::new(&capacitor.bus),
+                terminal_map_count: capacitor.terminal_map.len(),
+                configuration: PioStringView::new(multiconductor_configuration_name(
+                    capacitor.configuration,
+                )),
+                rated_reactive_power_var: capacitor.q_rated,
+                nominal_voltage_v: capacitor.v_nom,
+            };
+            Ok(true)
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_capacitor_terminal_at(
+    network: *const PioMulticonductorNetwork,
+    capacitor_index: usize,
+    terminal_index: usize,
+    output: *mut PioStringView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        write_multiconductor_terminal(
+            network,
+            MulticonductorTerminalTable::Capacitor,
+            capacitor_index,
+            terminal_index,
+            output,
+            error,
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_voltage_source_at(
+    network: *const PioMulticonductorNetwork,
+    index: usize,
+    output: *mut PioVoltageSourceView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_multiconductor_network(network)?;
+            let source = network.sources().get(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("voltage source index {index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = PioVoltageSourceView {
+                name: PioStringView::new(&source.name),
+                bus: PioStringView::new(&source.bus),
+                terminal_map_count: source.terminal_map.len(),
+                voltage_magnitude_v: PioF64View::new(&source.v_magnitude),
+                voltage_angle_rad: PioF64View::new(&source.v_angle),
+            };
+            Ok(true)
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_voltage_source_terminal_at(
+    network: *const PioMulticonductorNetwork,
+    source_index: usize,
+    terminal_index: usize,
+    output: *mut PioStringView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        write_multiconductor_terminal(
+            network,
+            MulticonductorTerminalTable::VoltageSource,
+            source_index,
+            terminal_index,
+            output,
+            error,
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_untyped_object_at(
+    network: *const PioMulticonductorNetwork,
+    index: usize,
+    output: *mut PioMulticonductorUntypedObjectView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_multiconductor_network(network)?;
+            let object = network.untyped().get(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("untyped object index {index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = PioMulticonductorUntypedObjectView {
+                class_name: PioStringView::new(&object.class),
+                name: PioStringView::new(&object.name),
+                property_count: object.props.len(),
+            };
+            Ok(true)
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_untyped_object_property_at(
+    network: *const PioMulticonductorNetwork,
+    object_index: usize,
+    property_index: usize,
+    output: *mut PioMulticonductorUntypedPropertyView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_multiconductor_network(network)?;
+            let object = network.untyped().get(object_index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("untyped object index {object_index} is out of range"),
+                )
+            })?;
+            let (name, value) = object.props.get(property_index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("untyped object property index {property_index} is out of range"),
+                )
+            })?;
+            let (name, has_name) = optional_string_view(name.as_deref());
+            *require_output(output, "output")? = PioMulticonductorUntypedPropertyView {
+                name,
+                has_name,
+                value: PioStringView::new(value),
+            };
+            Ok(true)
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_command_at(
+    network: *const PioMulticonductorNetwork,
+    index: usize,
+    output: *mut PioMulticonductorCommandView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_multiconductor_network(network)?;
+            let (verb, args) = network.commands().get(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("source command index {index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = PioMulticonductorCommandView {
+                verb: PioStringView::new(verb),
+                args: PioStringView::new(args),
+            };
+            Ok(true)
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_option_at(
+    network: *const PioMulticonductorNetwork,
+    index: usize,
+    output: *mut PioStringPropertyView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let network = require_multiconductor_network(network)?;
+            let (name, value) = network.options().get(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("source option index {index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = PioStringPropertyView {
+                name: PioStringView::new(name),
+                value: PioStringView::new(value),
+            };
+            Ok(true)
+        })
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -12064,6 +16097,64 @@ mod tests {
         network
     }
 
+    fn module_with_complete_records() -> *mut PioModule {
+        use std::collections::BTreeMap;
+
+        let mut module = powerio::PioModule::new(PioValue::BalancedNetwork(BalancedNetwork::new(
+            "metadata", 100.0,
+        )))
+        .with_producer(Producer::new("record-test", "1.2.3").unwrap());
+        let source_id = powerio_core::SourceId::new("source-1").unwrap();
+        let source =
+            powerio_core::SourceDescriptor::new(source_id.clone(), "record-test.xiidm", 128)
+                .unwrap()
+                .with_format(powerio_core::FormatId::new("xiidm").unwrap())
+                .with_digest(
+                    powerio_core::Digest::sha256(
+                        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                    )
+                    .unwrap(),
+                );
+        module.add_source_descriptor(source).unwrap();
+        module
+            .add_source_map_entry(
+                powerio_core::SourceMapEntry::new(
+                    "/value/buses/0",
+                    powerio_core::SourceRelation::Exact,
+                    vec![powerio_core::SourceSpan::new(source_id, 4, 12).unwrap()],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let parameters = BTreeMap::from([(
+            "settings".to_owned(),
+            serde_json::json!({
+                "items": [null, true, "named", 18446744073709551615u64, 1.25]
+            }),
+        )]);
+        let history = HistoryEntry::new(
+            HistoryId::new("history-1").unwrap(),
+            HistoryKind::Transform,
+            "normalize",
+        )
+        .unwrap()
+        .with_input_type("powerio.BalancedNetwork")
+        .unwrap()
+        .with_output_type("powerio.BalancedNetwork")
+        .unwrap()
+        .with_parameters(parameters)
+        .unwrap()
+        .with_assumption("base power is known")
+        .unwrap()
+        .with_loss("source token spelling")
+        .unwrap();
+        module.add_history_entry(history).unwrap();
+        module
+            .insert_extension("org.example.record", serde_json::json!({"enabled": true}))
+            .unwrap();
+        module_handle(module)
+    }
+
     fn multiconductor_network() -> powerio_dist::MulticonductorNetwork {
         let mut network = powerio_dist::MulticonductorNetwork::named("capi-solution-instance");
         network.buses_mut().push(powerio_dist::DistBus::new(
@@ -12077,6 +16168,198 @@ mod tests {
             vec![240.0, 240.0, 240.0],
             vec![0.0, -2.094, 2.094],
         ));
+        network
+    }
+
+    fn complete_multiconductor_network() -> powerio_dist::MulticonductorNetwork {
+        let mut network = powerio_dist::MulticonductorNetwork::named("");
+        *network.source_format_mut() = Some(powerio_dist::DistSourceFormat::Dss);
+        *network.geo_mut() = Some(powerio_dist::DistGeoMeta {
+            space: powerio_dist::CoordinateSpace::Diagram {
+                canvas: Some(powerio_dist::DistCanvas {
+                    width: Some(640.0),
+                    height: None,
+                    units: Some(String::new()),
+                }),
+            },
+            kind: Some(powerio_dist::DistCoordsKind::Manual),
+        });
+
+        let mut bus = powerio_dist::DistBus::new("bus", vec!["1".into(), "2".into()]);
+        bus.grounded.push("2".into());
+        bus.v_min = Some(0.0);
+        bus.vpn_min = Some(Vec::new());
+        bus.vpp_max = Some(vec![240.0, 240.0]);
+        bus.location = Some(powerio_dist::DistLocation {
+            x: 10.0,
+            y: 20.0,
+            kind: None,
+        });
+        network.buses_mut().push(bus);
+
+        let mut line_code = powerio_dist::DistLineCode::new(
+            "code",
+            vec![vec![1.0, 2.0], vec![3.0]],
+            vec![vec![4.0]],
+        );
+        line_code.g_from = vec![vec![5.0]];
+        line_code.b_from = vec![vec![6.0]];
+        line_code.g_to = vec![vec![7.0]];
+        line_code.b_to = vec![vec![8.0]];
+        line_code.i_max = Some(Vec::new());
+        line_code.s_max = Some(vec![900.0]);
+        line_code.source = Some(String::new());
+        network.linecodes_mut().push(line_code);
+
+        let mut line = powerio_dist::DistLine::new(
+            "line",
+            "bus",
+            "bus",
+            vec!["1".into()],
+            vec!["2".into()],
+            "code",
+            12.0,
+        );
+        line.route = Some(Vec::new());
+        line.i_max = Some(vec![10.0]);
+        network.lines_mut().push(line);
+
+        let mut switch = powerio_dist::DistSwitch::new(
+            "switch",
+            "bus",
+            "bus",
+            vec!["1".into()],
+            vec!["2".into()],
+            true,
+        );
+        switch.i_max = Some(Vec::new());
+        network.switches_mut().push(switch);
+
+        let mut winding = powerio_dist::DistWinding::new(
+            "bus",
+            vec!["1".into(), "2".into()],
+            powerio_dist::DistWindingConn::Wye,
+            240.0,
+            1_000.0,
+        );
+        winding.r_pct = 0.5;
+        winding.r_neutral = Some(0.0);
+        network
+            .transformers_mut()
+            .push(powerio_dist::DistTransformer::new(
+                "transformer",
+                vec![winding],
+                vec![2.5],
+                1,
+            ));
+
+        let mut load = powerio_dist::DistLoad::new(
+            "load",
+            "bus",
+            vec!["1".into()],
+            powerio_dist::Configuration::Wye,
+            vec![100.0],
+            vec![20.0],
+        );
+        load.voltage_model = powerio_dist::DistLoadVoltageModel::Zip {
+            v_nom: vec![240.0],
+            alpha_z: vec![0.1],
+            alpha_i: vec![0.2],
+            alpha_p: vec![0.7],
+            beta_z: vec![0.2],
+            beta_i: vec![0.3],
+            beta_p: vec![0.5],
+        };
+        network.loads_mut().push(load);
+
+        let mut generator = powerio_dist::DistGenerator::new(
+            "generator",
+            "bus",
+            vec!["1".into()],
+            powerio_dist::Configuration::SinglePhase,
+            vec![50.0],
+            vec![5.0],
+        );
+        generator.p_min = Some(Vec::new());
+        generator.cost = Some(vec![0.25]);
+        network.generators_mut().push(generator);
+
+        let mut resource = powerio_dist::DistIbr::new(
+            "ibr",
+            "bus",
+            vec!["1".into()],
+            powerio_dist::IbrTopology::SinglePhase,
+            powerio_dist::IbrPrimeMover::Pv,
+            vec![100.0],
+        );
+        resource.i_max = Some(Vec::new());
+        resource.p_avail = Some(75.0);
+        resource.control_profile = Some(String::new());
+        resource.voltage_aggregation = Some(powerio_dist::IbrVoltageAggregation::PerPhase);
+        network.ibrs_mut().push(resource);
+
+        let profile: powerio_dist::DistControlProfile = serde_json::from_value(serde_json::json!({
+            "name": "profile",
+            "power_factor": { "pf": 0.97 },
+            "volt_var": {
+                "voltage_reference": "PN_PER_PHASE",
+                "breakpoints": [0.95, 1.05],
+                "q_limits": [-0.4, 0.4],
+                "q_unit": "VA_FRACTION",
+                "q_ref": "VAR_MAX",
+                "p_min_for_q": 10.0,
+                "p_min_for_q_max": null
+            },
+            "volt_watt": {
+                "voltage_reference": null,
+                "breakpoints": [1.0],
+                "p_limits": [0.8],
+                "p_unit": "W",
+                "p_ref": "P_AVAILABLE"
+            },
+            "extras": {}
+        }))
+        .unwrap();
+        network.control_profiles_mut().push(profile);
+
+        network.shunts_mut().push(powerio_dist::DistShunt::new(
+            "shunt",
+            "bus",
+            vec!["2".into()],
+            vec![vec![0.01, 0.02], vec![0.03]],
+            vec![vec![0.04]],
+        ));
+        network
+            .capacitors_mut()
+            .push(powerio_dist::DistCapacitor::new(
+                "capacitor",
+                "bus",
+                vec!["1".into()],
+                powerio_dist::Configuration::SinglePhase,
+                100.0,
+                240.0,
+            ));
+        network.sources_mut().push(powerio_dist::VoltageSource::new(
+            "source",
+            "bus",
+            vec!["1".into()],
+            vec![240.0],
+            vec![0.0],
+        ));
+        network.untyped_mut().push(powerio_dist::UntypedObject::new(
+            "curve",
+            "raw",
+            vec![
+                (None, "first".into()),
+                (Some(String::new()), "second".into()),
+            ],
+        ));
+        network
+            .commands_mut()
+            .push(("solve".into(), "mode=daily".into()));
+        network
+            .options_mut()
+            .push(("frequency".into(), "60".into()));
         network
     }
 
@@ -12203,6 +16486,178 @@ mod tests {
     }
 
     #[test]
+    fn module_records_are_typed_and_structured_values_keep_the_owner_alive() {
+        unsafe {
+            let module = module_with_complete_records();
+            let mut error = std::ptr::null_mut();
+
+            let mut producer = std::mem::MaybeUninit::<PioModuleProducerView>::uninit();
+            assert!(pio_module_producer(
+                module,
+                producer.as_mut_ptr(),
+                &mut error
+            ));
+            let producer = producer.assume_init();
+            assert_eq!(view_text(producer.name), "record-test");
+            assert_eq!(view_text(producer.version), "1.2.3");
+
+            assert_eq!(pio_module_source_count(module), 1);
+            let mut source = std::mem::MaybeUninit::<PioModuleSourceView>::uninit();
+            assert!(pio_module_source_at(
+                module,
+                0,
+                source.as_mut_ptr(),
+                &mut error
+            ));
+            let source = source.assume_init();
+            assert_eq!(view_text(source.id), "source-1");
+            assert_eq!(view_text(source.name), "record-test.xiidm");
+            assert_eq!(source.byte_length, 128);
+            assert!(source.has_format);
+            assert_eq!(view_text(source.format), "xiidm");
+            assert!(source.has_digest);
+            assert_eq!(view_text(source.digest_algorithm), "sha256");
+            assert_eq!(source.digest.len, 64);
+
+            assert_eq!(pio_module_source_map_count(module), 1);
+            let mut mapping = std::mem::MaybeUninit::<PioModuleSourceMapEntryView>::uninit();
+            assert!(pio_module_source_map_at(
+                module,
+                0,
+                mapping.as_mut_ptr(),
+                &mut error
+            ));
+            let mapping = mapping.assume_init();
+            assert_eq!(view_text(mapping.target), "/value/buses/0");
+            assert_eq!(view_text(mapping.relation), "exact");
+            assert_eq!(mapping.span_count, 1);
+            let mut span = std::mem::MaybeUninit::<PioSourceSpanView>::uninit();
+            assert!(pio_module_source_map_span_at(
+                module,
+                0,
+                0,
+                span.as_mut_ptr(),
+                &mut error
+            ));
+            let span = span.assume_init();
+            assert_eq!(view_text(span.source), "source-1");
+            assert_eq!((span.byte_start, span.byte_end), (4, 12));
+
+            assert_eq!(pio_module_history_count(module), 1);
+            let mut history = std::mem::MaybeUninit::<PioModuleHistoryEntryView>::uninit();
+            assert!(pio_module_history_at(
+                module,
+                0,
+                history.as_mut_ptr(),
+                &mut error
+            ));
+            let history = history.assume_init();
+            assert_eq!(view_text(history.id), "history-1");
+            assert_eq!(view_text(history.kind), "transform");
+            assert_eq!(view_text(history.name), "normalize");
+            assert!(history.has_input_type);
+            assert_eq!(view_text(history.input_type), "powerio.BalancedNetwork");
+            assert!(history.has_output_type);
+            assert_eq!(view_text(history.output_type), "powerio.BalancedNetwork");
+            assert_eq!(history.parameter_count, 1);
+            assert_eq!(history.assumption_count, 1);
+            assert_eq!(history.loss_count, 1);
+            assert_eq!(
+                view_text(pio_module_history_assumption_at(module, 0, 0, &mut error)),
+                "base power is known"
+            );
+            assert_eq!(
+                view_text(pio_module_history_loss_at(module, 0, 0, &mut error)),
+                "source token spelling"
+            );
+            let mut parameter = std::mem::MaybeUninit::<PioModuleHistoryParameterView>::uninit();
+            assert!(pio_module_history_parameter_at(
+                module,
+                0,
+                0,
+                parameter.as_mut_ptr(),
+                &mut error
+            ));
+            let parameter = parameter.assume_init();
+            assert_eq!(view_text(parameter.name), "settings");
+            assert_eq!(view_text(parameter.value_kind), "object");
+
+            assert_eq!(pio_module_extension_count(module), 1);
+            let mut extension = std::mem::MaybeUninit::<PioModuleExtensionView>::uninit();
+            assert!(pio_module_extension_at(
+                module,
+                0,
+                extension.as_mut_ptr(),
+                &mut error
+            ));
+            let extension = extension.assume_init();
+            assert_eq!(view_text(extension.namespace), "org.example.record");
+            assert_eq!(view_text(extension.value_kind), "object");
+
+            let parameter_value = pio_module_history_parameter_value_at(module, 0, 0, &mut error);
+            assert!(!parameter_value.is_null(), "{}", error_text(error));
+            let items = pio_json_value_object_value_at(parameter_value, 0, &mut error);
+            assert!(!items.is_null(), "{}", error_text(error));
+            let unsigned = pio_json_value_array_at(items, 3, &mut error);
+            assert!(!unsigned.is_null(), "{}", error_text(error));
+            let retained_unsigned = pio_json_value_retain(unsigned);
+            let extension_value = pio_module_extension_value_at(module, 0, &mut error);
+            assert!(!extension_value.is_null(), "{}", error_text(error));
+
+            let mut ignored = std::mem::MaybeUninit::<PioModuleSourceView>::uninit();
+            assert!(!pio_module_source_at(
+                module,
+                1,
+                ignored.as_mut_ptr(),
+                &mut error
+            ));
+            assert!(!error.is_null());
+            pio_error_release(error);
+            error = std::ptr::null_mut();
+
+            pio_module_release(module);
+            pio_json_value_release(parameter_value);
+            pio_json_value_release(items);
+            pio_json_value_release(unsigned);
+
+            let mut number = std::mem::MaybeUninit::<PioJsonValueView>::uninit();
+            assert!(pio_json_value_get(
+                retained_unsigned,
+                number.as_mut_ptr(),
+                &mut error
+            ));
+            let number = number.assume_init();
+            assert_eq!(view_text(number.kind), "number");
+            assert_eq!(view_text(number.number_kind), "unsigned_integer");
+            assert_eq!(number.unsigned_integer_value, u64::MAX);
+
+            let enabled = pio_json_value_object_value_at(extension_value, 0, &mut error);
+            assert!(!enabled.is_null(), "{}", error_text(error));
+            let mut boolean = std::mem::MaybeUninit::<PioJsonValueView>::uninit();
+            assert!(pio_json_value_get(
+                enabled,
+                boolean.as_mut_ptr(),
+                &mut error
+            ));
+            let boolean = boolean.assume_init();
+            assert_eq!(view_text(boolean.kind), "boolean");
+            assert!(boolean.boolean_value);
+
+            let mut null_output = std::mem::MaybeUninit::<PioModuleProducerView>::uninit();
+            assert!(!pio_module_producer(
+                std::ptr::null(),
+                null_output.as_mut_ptr(),
+                &mut error
+            ));
+            assert!(!error.is_null());
+            pio_error_release(error);
+            pio_json_value_release(enabled);
+            pio_json_value_release(extension_value);
+            pio_json_value_release(retained_unsigned);
+        }
+    }
+
+    #[test]
     fn structural_access_keeps_the_module_owner_alive() {
         unsafe {
             let module = parse_case9();
@@ -12225,6 +16680,448 @@ mod tests {
 
             pio_balanced_network_release(network);
             pio_diagnostics_release(diagnostics);
+        }
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn multiconductor_typed_views_preserve_ownership_and_optional_values() {
+        unsafe {
+            let module = module_handle(powerio::PioModule::new(PioValue::from(
+                complete_multiconductor_network(),
+            )));
+            let value = pio_module_value(module);
+            let mut error = std::ptr::null_mut();
+            let network = pio_value_multiconductor_network(value, &mut error);
+            assert!(!network.is_null(), "{}", error_text(error));
+            let retained = pio_multiconductor_network_retain(network);
+            pio_module_release(module);
+            pio_value_release(value);
+            pio_multiconductor_network_release(network);
+
+            assert!(pio_multiconductor_network_has_name(retained));
+            assert_eq!(pio_multiconductor_network_name(retained).len, 0);
+            assert!(pio_multiconductor_network_has_source_format(retained));
+            assert_eq!(
+                view_text(pio_multiconductor_network_source_format(retained)),
+                "dss"
+            );
+
+            let mut geo = std::mem::MaybeUninit::<PioMulticonductorGeoView>::uninit();
+            assert!(pio_multiconductor_network_geo(
+                retained,
+                geo.as_mut_ptr(),
+                &mut error,
+            ));
+            let geo = geo.assume_init();
+            assert!(geo.has_geo);
+            assert_eq!(view_text(geo.space), "diagram");
+            assert!(geo.has_canvas);
+            assert!(geo.has_canvas_width);
+            assert!(!geo.has_canvas_height);
+            assert!(geo.has_canvas_units);
+            assert_eq!(geo.canvas_units.len, 0);
+
+            let mut counts = std::mem::MaybeUninit::<PioMulticonductorNetworkCountsView>::uninit();
+            assert!(pio_multiconductor_network_counts(
+                retained,
+                counts.as_mut_ptr(),
+                &mut error,
+            ));
+            let counts = counts.assume_init();
+            for count in [
+                counts.buses,
+                counts.line_codes,
+                counts.lines,
+                counts.switches,
+                counts.transformers,
+                counts.loads,
+                counts.generators,
+                counts.inverter_based_resources,
+                counts.control_profiles,
+                counts.shunts,
+                counts.capacitors,
+                counts.voltage_sources,
+                counts.untyped_objects,
+                counts.commands,
+                counts.options,
+            ] {
+                assert_eq!(count, 1);
+            }
+
+            let mut bus = std::mem::MaybeUninit::<PioMulticonductorBusView>::uninit();
+            assert!(pio_multiconductor_network_bus_at(
+                retained,
+                0,
+                bus.as_mut_ptr(),
+                &mut error,
+            ));
+            let bus = bus.assume_init();
+            assert_eq!(view_text(bus.id), "bus");
+            assert!(bus.has_phase_to_neutral_voltage_min);
+            assert_eq!(bus.phase_to_neutral_voltage_min_v.len, 0);
+            assert!(bus.has_location);
+            assert!(!bus.location.has_kind);
+            let mut text = std::mem::MaybeUninit::<PioStringView>::uninit();
+            assert!(pio_multiconductor_network_bus_terminal_at(
+                retained,
+                0,
+                1,
+                text.as_mut_ptr(),
+                &mut error,
+            ));
+            assert_eq!(view_text(text.assume_init()), "2");
+
+            let mut line_code = std::mem::MaybeUninit::<PioMulticonductorLineCodeView>::uninit();
+            assert!(pio_multiconductor_network_line_code_at(
+                retained,
+                0,
+                line_code.as_mut_ptr(),
+                &mut error,
+            ));
+            let line_code = line_code.assume_init();
+            assert_eq!(line_code.resistance_matrix_row_count, 2);
+            assert!(line_code.has_current_limit);
+            assert_eq!(line_code.current_limit_a.len, 0);
+            assert!(line_code.has_source);
+            assert_eq!(line_code.source.len, 0);
+            let mut matrix_row = std::mem::MaybeUninit::<PioF64View>::uninit();
+            assert!(
+                pio_multiconductor_network_line_code_resistance_matrix_row_at(
+                    retained,
+                    0,
+                    1,
+                    matrix_row.as_mut_ptr(),
+                    &mut error,
+                )
+            );
+            let matrix_row = matrix_row.assume_init();
+            assert_eq!(matrix_row.len, 1);
+            assert_eq!(*matrix_row.data, 3.0);
+
+            let mut line = std::mem::MaybeUninit::<PioMulticonductorLineView>::uninit();
+            assert!(pio_multiconductor_network_line_at(
+                retained,
+                0,
+                line.as_mut_ptr(),
+                &mut error,
+            ));
+            let line = line.assume_init();
+            assert!(line.has_route);
+            assert_eq!(line.route_point_count, 0);
+
+            let mut switch = std::mem::MaybeUninit::<PioMulticonductorSwitchView>::uninit();
+            assert!(pio_multiconductor_network_switch_at(
+                retained,
+                0,
+                switch.as_mut_ptr(),
+                &mut error,
+            ));
+            let switch = switch.assume_init();
+            assert!(switch.open);
+            assert!(switch.has_current_limit);
+            assert_eq!(switch.current_limit_a.len, 0);
+
+            let mut transformer =
+                std::mem::MaybeUninit::<PioMulticonductorTransformerView>::uninit();
+            assert!(pio_multiconductor_network_transformer_at(
+                retained,
+                0,
+                transformer.as_mut_ptr(),
+                &mut error,
+            ));
+            assert_eq!(transformer.assume_init().winding_count, 1);
+            let mut winding =
+                std::mem::MaybeUninit::<PioMulticonductorTransformerWindingView>::uninit();
+            assert!(pio_multiconductor_network_transformer_winding_at(
+                retained,
+                0,
+                0,
+                winding.as_mut_ptr(),
+                &mut error,
+            ));
+            let winding = winding.assume_init();
+            assert!(winding.has_neutral_resistance);
+            assert!(!winding.has_neutral_reactance);
+
+            let mut load = std::mem::MaybeUninit::<PioMulticonductorLoadView>::uninit();
+            assert!(pio_multiconductor_network_load_at(
+                retained,
+                0,
+                load.as_mut_ptr(),
+                &mut error,
+            ));
+            let load = load.assume_init();
+            assert_eq!(view_text(load.voltage_model), "zip");
+            assert_eq!(*load.active_power_constant_power.data, 0.7);
+
+            let mut generator = std::mem::MaybeUninit::<PioMulticonductorGeneratorView>::uninit();
+            assert!(pio_multiconductor_network_generator_at(
+                retained,
+                0,
+                generator.as_mut_ptr(),
+                &mut error,
+            ));
+            let generator = generator.assume_init();
+            assert!(generator.has_active_power_min);
+            assert_eq!(generator.active_power_min_w.len, 0);
+            assert!(generator.has_active_power_dispatch_cost);
+
+            let mut resource = std::mem::MaybeUninit::<PioInverterBasedResourceView>::uninit();
+            assert!(pio_multiconductor_network_inverter_based_resource_at(
+                retained,
+                0,
+                resource.as_mut_ptr(),
+                &mut error,
+            ));
+            let resource = resource.assume_init();
+            assert_eq!(view_text(resource.topology), "SINGLE_PHASE");
+            assert!(resource.has_control_profile);
+            assert_eq!(resource.control_profile.len, 0);
+
+            let mut profile = std::mem::MaybeUninit::<PioControlProfileView>::uninit();
+            assert!(pio_multiconductor_network_control_profile_at(
+                retained,
+                0,
+                profile.as_mut_ptr(),
+                &mut error,
+            ));
+            let profile = profile.assume_init();
+            assert!(profile.has_power_factor);
+            assert!(profile.has_volt_var);
+            assert!(profile.has_volt_watt);
+            assert_eq!(
+                view_text(profile.volt_var_voltage_reference),
+                "PN_PER_PHASE"
+            );
+
+            let mut shunt = std::mem::MaybeUninit::<PioMulticonductorShuntView>::uninit();
+            assert!(pio_multiconductor_network_shunt_at(
+                retained,
+                0,
+                shunt.as_mut_ptr(),
+                &mut error,
+            ));
+            assert_eq!(shunt.assume_init().conductance_matrix_row_count, 2);
+            let mut shunt_matrix_row = std::mem::MaybeUninit::<PioF64View>::uninit();
+            assert!(pio_multiconductor_network_shunt_conductance_matrix_row_at(
+                retained,
+                0,
+                1,
+                shunt_matrix_row.as_mut_ptr(),
+                &mut error,
+            ));
+            assert_eq!(shunt_matrix_row.assume_init().len, 1);
+
+            let mut capacitor = std::mem::MaybeUninit::<PioMulticonductorCapacitorView>::uninit();
+            assert!(pio_multiconductor_network_capacitor_at(
+                retained,
+                0,
+                capacitor.as_mut_ptr(),
+                &mut error,
+            ));
+            assert_eq!(capacitor.assume_init().rated_reactive_power_var, 100.0);
+
+            let mut source = std::mem::MaybeUninit::<PioVoltageSourceView>::uninit();
+            assert!(pio_multiconductor_network_voltage_source_at(
+                retained,
+                0,
+                source.as_mut_ptr(),
+                &mut error,
+            ));
+            assert_eq!(*source.assume_init().voltage_magnitude_v.data, 240.0);
+
+            let mut object = std::mem::MaybeUninit::<PioMulticonductorUntypedObjectView>::uninit();
+            assert!(pio_multiconductor_network_untyped_object_at(
+                retained,
+                0,
+                object.as_mut_ptr(),
+                &mut error,
+            ));
+            assert_eq!(object.assume_init().property_count, 2);
+            let mut property =
+                std::mem::MaybeUninit::<PioMulticonductorUntypedPropertyView>::uninit();
+            assert!(pio_multiconductor_network_untyped_object_property_at(
+                retained,
+                0,
+                0,
+                property.as_mut_ptr(),
+                &mut error,
+            ));
+            assert!(!property.assume_init().has_name);
+            assert!(pio_multiconductor_network_untyped_object_property_at(
+                retained,
+                0,
+                1,
+                property.as_mut_ptr(),
+                &mut error,
+            ));
+            let property = property.assume_init();
+            assert!(property.has_name);
+            assert_eq!(property.name.len, 0);
+
+            let mut command = std::mem::MaybeUninit::<PioMulticonductorCommandView>::uninit();
+            assert!(pio_multiconductor_network_command_at(
+                retained,
+                0,
+                command.as_mut_ptr(),
+                &mut error,
+            ));
+            assert_eq!(view_text(command.assume_init().verb), "solve");
+            let mut option = std::mem::MaybeUninit::<PioStringPropertyView>::uninit();
+            assert!(pio_multiconductor_network_option_at(
+                retained,
+                0,
+                option.as_mut_ptr(),
+                &mut error,
+            ));
+            assert_eq!(view_text(option.assume_init().name), "frequency");
+
+            assert!(
+                std::mem::offset_of!(PioMulticonductorLineView, has_route)
+                    > std::mem::offset_of!(PioMulticonductorLineView, route_point_count)
+            );
+            assert!(
+                std::mem::offset_of!(PioMulticonductorBusView, has_location)
+                    > std::mem::offset_of!(PioMulticonductorBusView, location)
+            );
+
+            let mut null_error = std::ptr::null_mut();
+            let mut null_output = std::mem::MaybeUninit::<PioMulticonductorBusView>::uninit();
+            assert!(!pio_multiconductor_network_bus_at(
+                std::ptr::null(),
+                0,
+                null_output.as_mut_ptr(),
+                &mut null_error,
+            ));
+            assert!(!null_error.is_null());
+            assert_eq!(
+                view_text(pio_error_code(null_error)),
+                codes::BIND_CAPI_NULL_HANDLE.code
+            );
+            pio_error_release(null_error);
+            pio_multiconductor_network_release(retained);
+        }
+    }
+
+    #[test]
+    fn balanced_geography_is_typed_and_preserves_optional_routes() {
+        unsafe {
+            let mut network = case9_network();
+            *network.geo_mut() = Some(powerio_tx::GeoMeta {
+                space: powerio_tx::CoordinateSpace::Diagram {
+                    canvas: Some(powerio_tx::Canvas {
+                        width: Some(800.0),
+                        height: None,
+                        units: Some(String::new()),
+                    }),
+                },
+                kind: Some(powerio_tx::CoordsKind::Manual),
+            });
+            network.buses_mut()[0].location = Some(powerio_tx::Location {
+                x: 12.0,
+                y: 34.0,
+                kind: None,
+            });
+            network.branches_mut()[0].route = Some(Vec::new());
+            network.branches_mut()[1].route = Some(vec![powerio_tx::Location {
+                x: 56.0,
+                y: 78.0,
+                kind: Some(powerio_tx::CoordsKind::Derived),
+            }]);
+
+            let module = module_handle(powerio::PioModule::new(PioValue::BalancedNetwork(network)));
+            let value = pio_module_value(module);
+            let mut error = std::ptr::null_mut();
+            let balanced = pio_value_balanced_network(value, &mut error);
+            assert!(!balanced.is_null(), "{}", error_text(error));
+            let retained = pio_balanced_network_retain(balanced);
+            pio_balanced_network_release(balanced);
+            pio_value_release(value);
+            pio_module_release(module);
+
+            let mut geo = std::mem::MaybeUninit::<PioBalancedGeoView>::uninit();
+            assert!(pio_balanced_network_geo(
+                retained,
+                geo.as_mut_ptr(),
+                &mut error
+            ));
+            let geo = geo.assume_init();
+            assert!(geo.has_geo);
+            assert_eq!(view_text(geo.space), "diagram");
+            assert!(geo.has_kind);
+            assert_eq!(view_text(geo.kind), "manual");
+            assert!(geo.has_canvas);
+            assert!(geo.has_canvas_width);
+            assert_eq!(geo.canvas_width, 800.0);
+            assert!(!geo.has_canvas_height);
+            assert!(geo.has_canvas_units);
+            assert_eq!(geo.canvas_units.len, 0);
+
+            let mut bus = std::mem::MaybeUninit::<PioBalancedBusView>::uninit();
+            assert!(pio_balanced_network_bus_at(
+                retained,
+                0,
+                bus.as_mut_ptr(),
+                &mut error
+            ));
+            let bus = bus.assume_init();
+            assert!(bus.has_location);
+            assert_eq!((bus.location.x, bus.location.y), (12.0, 34.0));
+            assert!(!bus.location.has_kind);
+
+            let mut branch = std::mem::MaybeUninit::<PioBalancedBranchView>::uninit();
+            assert!(pio_balanced_network_branch_at(
+                retained,
+                0,
+                branch.as_mut_ptr(),
+                &mut error
+            ));
+            let branch = branch.assume_init();
+            assert!(branch.has_route);
+            assert_eq!(branch.route_point_count, 0);
+
+            let mut routed_branch = std::mem::MaybeUninit::<PioBalancedBranchView>::uninit();
+            assert!(pio_balanced_network_branch_at(
+                retained,
+                1,
+                routed_branch.as_mut_ptr(),
+                &mut error
+            ));
+            let routed_branch = routed_branch.assume_init();
+            assert!(routed_branch.has_route);
+            assert_eq!(routed_branch.route_point_count, 1);
+            let mut point = std::mem::MaybeUninit::<PioBalancedLocationView>::uninit();
+            assert!(pio_balanced_network_branch_route_point_at(
+                retained,
+                1,
+                0,
+                point.as_mut_ptr(),
+                &mut error
+            ));
+            let point = point.assume_init();
+            assert_eq!((point.x, point.y), (56.0, 78.0));
+            assert!(point.has_kind);
+            assert_eq!(view_text(point.kind), "derived");
+
+            assert!(
+                std::mem::offset_of!(PioBalancedBusView, has_location)
+                    > std::mem::offset_of!(PioBalancedBusView, location)
+            );
+            assert!(
+                std::mem::offset_of!(PioBalancedBranchView, has_route)
+                    > std::mem::offset_of!(PioBalancedBranchView, route_point_count)
+            );
+
+            let mut null_geo = std::mem::MaybeUninit::<PioBalancedGeoView>::uninit();
+            assert!(!pio_balanced_network_geo(
+                std::ptr::null(),
+                null_geo.as_mut_ptr(),
+                &mut error
+            ));
+            assert!(!error.is_null());
+            pio_error_release(error);
+            pio_balanced_network_release(retained);
         }
     }
 
@@ -12539,6 +17436,7 @@ mod tests {
             ));
             let generator = generator.assume_init();
             assert_eq!(generator.bus_id, 1);
+            assert_eq!(view_text(generator.energy_source), "other");
             assert_eq!(generator.active_power_mw, 72.3);
             assert!(generator.has_cost);
             assert!(generator.voltage_regulation_on);
@@ -12626,6 +17524,7 @@ mod tests {
 
             let mut branch =
                 powerio_tx::Branch::new(powerio_tx::BusId(1), powerio_tx::BusId(2), 0.01, 0.1);
+            branch.name = Some("controlled transformer".to_owned());
             branch.charging = Some(powerio_tx::BranchCharging::new(0.01, 0.02, 0.03, 0.04));
             branch
                 .rating_sets
@@ -12635,9 +17534,29 @@ mod tests {
             branch.shift = 4.0;
             branch.angmin = -30.0;
             branch.angmax = 30.0;
+            let mut transformer_control = powerio_tx::TransformerControl::new(
+                powerio_tx::TransformerControlMode::DcLineQuantity,
+            );
+            transformer_control.enabled = false;
+            transformer_control.controlled_bus = Some(powerio_tx::BusId(2));
+            transformer_control.controlled_bus_on_winding_side = true;
+            transformer_control.regulating_terminal = Some(
+                serde_json::from_value(serde_json::json!({
+                    "equipment": {
+                        "component_type": "transformer",
+                        "local_id": "controlled-transformer"
+                    },
+                    "terminal": 2
+                }))
+                .unwrap(),
+            );
+            transformer_control.ntp = 17;
+            transformer_control.winding_connection_angle = Some(12.5);
+            branch.control = Some(transformer_control);
             network.branches_mut().push(branch);
 
             let mut generator = powerio_tx::Generator::new(powerio_tx::BusId(1));
+            generator.energy_source = powerio_tx::GeneratorEnergySource::Nuclear;
             generator.cost = Some(powerio_tx::GenCost::new(2, 10.0, 20.0, vec![1.0, 2.0]));
             generator.caps[8] = Some(25.0);
             generator.voltage_regulation_on = false;
@@ -12723,6 +17642,19 @@ mod tests {
                 &mut error,
             ));
             let branch = branch.assume_init();
+            assert!(branch.has_name);
+            assert_eq!(view_text(branch.name), "controlled transformer");
+            assert!(branch.has_control);
+            assert_eq!(view_text(branch.control.mode), "dc_line_quantity");
+            assert!(!branch.control.enabled);
+            assert!(branch.control.has_controlled_bus);
+            assert_eq!(branch.control.controlled_bus_id, 2);
+            assert!(branch.control.controlled_bus_on_winding_side);
+            assert!(branch.control.has_regulating_terminal);
+            assert_eq!(branch.control.regulating_terminal.terminal, 2);
+            assert_eq!(branch.control.tap_position_count, 17);
+            assert!(branch.control.has_winding_connection_angle);
+            assert_eq!(branch.control.winding_connection_angle, 12.5);
             assert!(branch.terminal_charging_is_explicit);
             assert_eq!(branch.from_conductance_pu, 0.01);
             assert_eq!(branch.to_susceptance_pu, 0.04);
@@ -12753,6 +17685,7 @@ mod tests {
             assert_eq!(generator.regulated_bus_id, 2);
             assert!(!generator.voltage_regulation_on);
             assert!(generator.has_regulating_terminal);
+            assert_eq!(view_text(generator.energy_source), "nuclear");
             assert_eq!(
                 view_text(generator.regulating_terminal.equipment.component_type),
                 "load"
@@ -12891,11 +17824,26 @@ mod tests {
             );
             network.hvdc_mut().push(hvdc);
 
-            let windings = [
+            let mut windings = [
                 powerio_tx::Winding::new(powerio_tx::BusId(1)),
                 powerio_tx::Winding::new(powerio_tx::BusId(2)),
                 powerio_tx::Winding::new(powerio_tx::BusId(3)),
             ];
+            let mut winding_control =
+                powerio_tx::TransformerControl::new(powerio_tx::TransformerControlMode::ActiveFlow);
+            winding_control.controlled_bus = Some(powerio_tx::BusId(3));
+            winding_control.regulating_terminal = Some(
+                serde_json::from_value(serde_json::json!({
+                    "equipment": {
+                        "component_type": "transformer",
+                        "local_id": "T3"
+                    },
+                    "terminal": 3
+                }))
+                .unwrap(),
+            );
+            winding_control.ntp = 21;
+            windings[2].control = Some(winding_control);
             let mut transformer = powerio_tx::Transformer3W::new(
                 windings,
                 [
@@ -13001,7 +17949,15 @@ mod tests {
                 winding.as_mut_ptr(),
                 &mut error,
             ));
-            assert_eq!(winding.assume_init().bus_id, 3);
+            let winding = winding.assume_init();
+            assert_eq!(winding.bus_id, 3);
+            assert!(winding.has_control);
+            assert_eq!(view_text(winding.control.mode), "active_flow");
+            assert!(winding.control.enabled);
+            assert_eq!(winding.control.controlled_bus_id, 3);
+            assert!(winding.control.has_regulating_terminal);
+            assert_eq!(winding.control.regulating_terminal.terminal, 3);
+            assert_eq!(winding.control.tap_position_count, 21);
 
             let mut area = std::mem::MaybeUninit::<PioBalancedAreaView>::uninit();
             assert!(pio_balanced_network_area_at(
@@ -13035,6 +17991,20 @@ mod tests {
 
         unsafe {
             let module = parse_xiidm_text(HIERARCHY);
+            let mut identified_network = match &PioModule::get(module).unwrap().module.value {
+                PioValue::BalancedNetwork(network) => network.clone(),
+                value => panic!("expected balanced network, got {}", value.type_name()),
+            };
+            let identified_details = Arc::make_mut(
+                identified_network
+                    .detailed_connectivity_mut()
+                    .as_mut()
+                    .unwrap(),
+            );
+            identified_details.terminals[0].component =
+                Some(ComponentId::new("terminal", "terminal-T3-1").unwrap());
+            identified_details.tap_changers[0].component =
+                Some(ComponentId::new("tap_changer", "tap-T3-2").unwrap());
             let value = pio_module_value(module);
             let mut error = std::ptr::null_mut();
             let network = pio_value_balanced_network(value, &mut error);
@@ -13087,7 +18057,9 @@ mod tests {
                 terminal.as_mut_ptr(),
                 &mut error,
             ));
-            assert!(terminal.assume_init().connected);
+            let terminal = terminal.assume_init();
+            assert!(terminal.connected);
+            assert!(!terminal.has_component);
 
             let mut limit = std::mem::MaybeUninit::<PioOperationalLimitGroupView>::uninit();
             assert!(pio_detailed_connectivity_operational_limit_group_at(
@@ -13109,11 +18081,47 @@ mod tests {
                 &mut error,
             ));
             let changer = changer.assume_init();
+            assert!(!changer.has_component);
             assert_eq!(view_text(changer.kind), "ratio");
             assert!(changer.has_tap_position);
             assert_eq!(changer.tap_position, 0);
             assert_eq!(changer.step_count, 1);
 
+            pio_detailed_connectivity_release(details);
+
+            let module = module_handle(powerio::PioModule::new(PioValue::BalancedNetwork(
+                identified_network,
+            )));
+            let value = pio_module_value(module);
+            let network = pio_value_balanced_network(value, &mut error);
+            let details = pio_balanced_network_detailed_connectivity(network);
+            pio_value_release(value);
+            pio_module_release(module);
+            pio_balanced_network_release(network);
+
+            let mut terminal = std::mem::MaybeUninit::<PioDetailedTerminalView>::uninit();
+            assert!(pio_detailed_connectivity_terminal_at(
+                details,
+                0,
+                terminal.as_mut_ptr(),
+                &mut error,
+            ));
+            let terminal = terminal.assume_init();
+            assert!(terminal.has_component);
+            assert_eq!(view_text(terminal.component.component_type), "terminal");
+            assert_eq!(view_text(terminal.component.local_id), "terminal-T3-1");
+
+            let mut changer = std::mem::MaybeUninit::<PioTapChangerView>::uninit();
+            assert!(pio_detailed_connectivity_tap_changer_at(
+                details,
+                0,
+                changer.as_mut_ptr(),
+                &mut error,
+            ));
+            let changer = changer.assume_init();
+            assert!(changer.has_component);
+            assert_eq!(view_text(changer.component.component_type), "tap_changer");
+            assert_eq!(view_text(changer.component.local_id), "tap-T3-2");
             pio_detailed_connectivity_release(details);
 
             let without_assigned_tap = HIERARCHY.replace(r#" tapPosition="0""#, "");
@@ -13314,6 +18322,104 @@ mod tests {
     }
 
     #[test]
+    fn omitted_fields_and_equipment_reactive_limits_are_typed_views() {
+        const XIIDM: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<iidm:network xmlns:iidm="http://www.powsybl.org/schema/iidm/equipment/1_12" id="equipment" caseDate="2021-01-03T00:00:00Z" forecastDistance="0" sourceFormat="test" minimumValidationLevel="EQUIPMENT">
+  <iidm:substation id="S"><iidm:voltageLevel id="VL" nominalV="225" topologyKind="NODE_BREAKER">
+    <iidm:nodeBreakerTopology><iidm:busbarSection id="BBS" node="0"/></iidm:nodeBreakerTopology>
+    <iidm:generator id="G" energySource="SOLAR" minP="0" maxP="100" voltageRegulatorOn="true" node="0">
+      <iidm:reactiveCapabilityCurve><iidm:property name="curve" value="retained"/><iidm:point p="0" minQ="-20" maxQ="20"><iidm:property name="point" value="first"/></iidm:point><iidm:point p="100" minQ="-10" maxQ="10"/></iidm:reactiveCapabilityCurve>
+    </iidm:generator>
+  </iidm:voltageLevel></iidm:substation>
+</iidm:network>"#;
+
+        unsafe {
+            let module = parse_xiidm_text(XIIDM);
+            let value = pio_module_value(module);
+            let mut error = std::ptr::null_mut();
+            let network = pio_value_balanced_network(value, &mut error);
+            let details = pio_balanced_network_detailed_connectivity(network);
+
+            let mut counts = std::mem::MaybeUninit::<PioDetailedConnectivityCountsView>::uninit();
+            assert!(pio_detailed_connectivity_counts(
+                details,
+                counts.as_mut_ptr(),
+                &mut error,
+            ));
+            let counts = counts.assume_init();
+            assert_eq!(counts.omitted_fields, 3);
+            assert_eq!(counts.equipment_reactive_limits, 1);
+
+            let mut omitted = std::mem::MaybeUninit::<PioOmittedFieldView>::uninit();
+            assert!(pio_detailed_connectivity_omitted_field_at(
+                details,
+                2,
+                omitted.as_mut_ptr(),
+                &mut error,
+            ));
+            let omitted = omitted.assume_init();
+            assert_eq!(view_text(omitted.component.local_id), "G");
+            assert_eq!(view_text(omitted.field), "voltage_setpoint");
+
+            let mut limits = std::mem::MaybeUninit::<PioEquipmentReactiveLimitsView>::uninit();
+            assert!(pio_detailed_connectivity_equipment_reactive_limits_at(
+                details,
+                0,
+                limits.as_mut_ptr(),
+                &mut error,
+            ));
+            let limits = limits.assume_init();
+            assert_eq!(view_text(limits.equipment.local_id), "G");
+            assert_eq!(view_text(limits.limits.kind), "capability_curve");
+            assert_eq!(limits.limits.property_count, 1);
+            assert_eq!(limits.limits.point_count, 2);
+
+            let mut point = std::mem::MaybeUninit::<PioReactiveCapabilityCurvePointView>::uninit();
+            assert!(
+                pio_detailed_connectivity_equipment_reactive_capability_point_at(
+                    details,
+                    0,
+                    0,
+                    point.as_mut_ptr(),
+                    &mut error,
+                )
+            );
+            let point = point.assume_init();
+            assert_eq!(point.minimum_reactive_power_mvar, -20.0);
+            assert_eq!(point.property_count, 1);
+
+            let mut property = std::mem::MaybeUninit::<PioStringPropertyView>::uninit();
+            assert!(
+                pio_detailed_connectivity_equipment_reactive_capability_point_property_at(
+                    details,
+                    0,
+                    0,
+                    0,
+                    property.as_mut_ptr(),
+                    &mut error,
+                )
+            );
+            let property = property.assume_init();
+            assert_eq!(view_text(property.name), "point");
+            assert_eq!(view_text(property.value), "first");
+
+            let mut generator = std::mem::MaybeUninit::<PioBalancedGeneratorView>::uninit();
+            assert!(pio_balanced_network_generator_at(
+                network,
+                0,
+                generator.as_mut_ptr(),
+                &mut error,
+            ));
+            assert_eq!(view_text(generator.assume_init().energy_source), "solar");
+
+            pio_detailed_connectivity_release(details);
+            pio_balanced_network_release(network);
+            pio_value_release(value);
+            pio_module_release(module);
+        }
+    }
+
+    #[test]
     fn detailed_dc_and_converter_records_are_typed_views() {
         const DC: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <iidm:network xmlns:iidm="http://www.powsybl.org/schema/iidm/1_17" id="dc" caseDate="2026-01-01T00:00:00Z" forecastDistance="0" sourceFormat="test" minimumValidationLevel="STEADY_STATE_HYPOTHESIS">
@@ -13323,7 +18429,7 @@ mod tests {
   <iidm:dcLine id="L" dcNode1="N1" dcNode2="N2" r="4" connected1="true" connected2="true" dcP1="100" dcI1="200" dcP2="-98" dcI2="-195"/>
   <iidm:substation id="SUB"><iidm:voltageLevel id="VL" nominalV="400" topologyKind="BUS_BREAKER">
     <iidm:busBreakerTopology><iidm:bus id="B1"/><iidm:bus id="B2"/></iidm:busBreakerTopology>
-    <iidm:voltageSourceConverter id="VSC" dcNode1="N1" dcConnected1="true" dcNode2="N2" dcConnected2="false" idleLoss="2" switchingLoss="0.2" resistiveLoss="0.000002" controlMode="P_PCC" targetP="301" bus1="B1" connectableBus1="B1" bus2="B2" connectableBus2="B2" voltageRegulatorOn="true" voltageSetpoint="397"><iidm:pccTerminal id="VSC" number="ONE"/><iidm:minMaxReactiveLimits minQ="-20" maxQ="20"/></iidm:voltageSourceConverter>
+    <iidm:voltageSourceConverter id="VSC" dcNode1="N1" dcConnected1="true" dcNode2="N2" dcConnected2="false" idleLoss="2" switchingLoss="0.2" resistiveLoss="0.000002" controlMode="P_PCC_DROOP" targetP="301" targetVdc="502" bus1="B1" connectableBus1="B1" bus2="B2" connectableBus2="B2" voltageRegulatorOn="true" voltageSetpoint="397"><iidm:pccTerminal id="VSC" number="ONE"/><iidm:droopCurve><iidm:segment minV="-100" maxV="100" k="-5"/></iidm:droopCurve><iidm:reactiveCapabilityCurve><iidm:property name="curve" value="retained"/><iidm:point p="-200" minQ="-190" maxQ="192"><iidm:property name="point" value="one"/></iidm:point><iidm:point p="200" minQ="-189" maxQ="191"/></iidm:reactiveCapabilityCurve></iidm:voltageSourceConverter>
   </iidm:voltageLevel></iidm:substation>
 </iidm:network>"#;
 
@@ -13369,13 +18475,105 @@ mod tests {
             ));
             let converter = converter.assume_init();
             assert_eq!(view_text(converter.kind), "voltage_source");
-            assert_eq!(view_text(converter.control_mode), "active_power_at_pcc");
+            assert_eq!(
+                view_text(converter.control_mode),
+                "active_power_at_pcc_and_dc_voltage_droop_curve"
+            );
             assert!(converter.voltage_regulator_on);
+            assert_eq!(converter.idle_loss_mw, 2.0);
+            assert!(converter.has_switching_loss);
+            assert_eq!(converter.switching_loss_mw_per_ampere, 0.2);
+            assert!(converter.has_resistive_loss);
+            assert!(converter.has_pcc_terminal);
+            assert_eq!(converter.pcc_terminal.terminal, 1);
+            assert!(converter.has_reactive_limits);
+            assert_eq!(
+                view_text(converter.reactive_limits.kind),
+                "capability_curve"
+            );
+            assert_eq!(converter.droop_curve_segment_count, 1);
+            assert!(converter.has_droop_curve);
+
+            let mut segment = std::mem::MaybeUninit::<PioDroopCurveSegmentView>::uninit();
+            assert!(
+                pio_detailed_connectivity_voltage_source_converter_droop_curve_segment_at(
+                    details,
+                    0,
+                    0,
+                    segment.as_mut_ptr(),
+                    &mut error,
+                )
+            );
+            let segment = segment.assume_init();
+            assert_eq!(segment.minimum_voltage_kv, -100.0);
+            assert_eq!(segment.maximum_voltage_kv, 100.0);
+            assert_eq!(segment.k, -5.0);
+
+            let mut point = std::mem::MaybeUninit::<PioReactiveCapabilityCurvePointView>::uninit();
+            assert!(
+                pio_detailed_connectivity_voltage_source_converter_reactive_capability_point_at(
+                    details,
+                    0,
+                    0,
+                    point.as_mut_ptr(),
+                    &mut error,
+                )
+            );
+            let point = point.assume_init();
+            assert_eq!(point.active_power_mw, -200.0);
+            assert_eq!(point.property_count, 1);
+
+            let base_network = match &PioModule::get(module).unwrap().module.value {
+                PioValue::BalancedNetwork(network) => network.clone(),
+                value => panic!("expected balanced network, got {}", value.type_name()),
+            };
 
             pio_detailed_connectivity_release(details);
             pio_balanced_network_release(network);
             pio_value_release(value);
             pio_module_release(module);
+
+            let mut empty_curve_network = base_network.clone();
+            std::sync::Arc::make_mut(
+                empty_curve_network
+                    .detailed_connectivity_mut()
+                    .as_mut()
+                    .unwrap(),
+            )
+            .voltage_source_converters[0]
+                .droop_curve = Some(serde_json::from_str(r#"{"segments":[]}"#).unwrap());
+            let mut absent_curve_network = base_network;
+            std::sync::Arc::make_mut(
+                absent_curve_network
+                    .detailed_connectivity_mut()
+                    .as_mut()
+                    .unwrap(),
+            )
+            .voltage_source_converters[0]
+                .droop_curve = None;
+
+            for (network, has_droop_curve) in
+                [(empty_curve_network, true), (absent_curve_network, false)]
+            {
+                let module = module_handle(powerio::PioModule::new(PioValue::from(network)));
+                let value = pio_module_value(module);
+                let network = pio_value_balanced_network(value, &mut error);
+                let details = pio_balanced_network_detailed_connectivity(network);
+                let mut converter = std::mem::MaybeUninit::<PioAcDcConverterView>::uninit();
+                assert!(pio_detailed_connectivity_voltage_source_converter_at(
+                    details,
+                    0,
+                    converter.as_mut_ptr(),
+                    &mut error,
+                ));
+                let converter = converter.assume_init();
+                assert_eq!(converter.droop_curve_segment_count, 0);
+                assert_eq!(converter.has_droop_curve, has_droop_curve);
+                pio_detailed_connectivity_release(details);
+                pio_balanced_network_release(network);
+                pio_value_release(value);
+                pio_module_release(module);
+            }
         }
     }
 

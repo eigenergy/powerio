@@ -47,22 +47,22 @@ fn assert_benchmark_case(path: &Path) {
     assert_bus_and_branch_values(instance, path);
     assert_device_values(instance, &expected, path);
 
-    let compatibility: Vec<_> = module
+    let retained_only: Vec<_> = module
         .diagnostics
         .iter()
         .filter(|diagnostic| diagnostic.code() == "READ.GOC3.RETAINED_SOURCE_ONLY")
         .collect();
     assert_eq!(
-        compatibility.len(),
+        retained_only.len(),
         1,
-        "{}: {compatibility:?}",
+        "{}: {retained_only:?}",
         path.display()
     );
     assert!(
-        compatibility[0]
+        retained_only[0]
             .message()
             .contains("con_loss_factor retained in source only for 73 buses"),
-        "{}: {compatibility:?}",
+        "{}: {retained_only:?}",
         path.display()
     );
 }

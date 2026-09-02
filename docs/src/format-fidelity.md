@@ -2,7 +2,7 @@
 
 PowerIO validates readers and writers against independent tools and committed
 round trip tests. The
-[top level fidelity table](https://github.com/eigenergy/powerio#current-format-fidelity)
+[top level format table](https://github.com/eigenergy/powerio#supported-values-and-formats)
 summarizes the supported directions; the conventions and evidence are below.
 
 ## Conventions
@@ -20,7 +20,7 @@ implementations and the matching powerio code:
 | Angle limits | `angmin`/`angmax` default ±360 (unconstrained) | MATPOWER `idx_brch` `ANGMIN`/`ANGMAX` | `Branch::has_angle_limits` |
 | pandapower/PyPSA impedance | line `r/x` are converted between per unit and ohms with \\(Z_{\mathrm{base}} = V_{\mathrm{kV}}^2 / \mathrm{baseMVA}\\); pandapower line charging is capacitance per km (`c_nf_per_km`, converted via \\(2\pi f \ell Z_{\mathrm{base}}\\)); PyPSA line `b` is siemens | pandapower PPC conversion, PyPSA static components | `pandapower-json`, `pypsa-csv` |
 | dcline `Pt`/`Qf`/`Qt` | sign flips vs MATPOWER | PowerModels `matpower.jl` | `powermodels-json` |
-| Generator cost | \\(c_2 p^2 + c_1 p\\) maps to \\(q = 2c_2\\), \\(c = c_1\\); coefficients high order first | MATPOWER `idx_cost`, egret `matpower_parser` | `GenCost::quadratic` |
+| Generator cost | \\(c_2 p^2 + c_1 p\\) maps to \\(q = 2c_2\\), \\(c = c_1\\); coefficients high order first | MATPOWER `idx_cost`, egret `matpower_parser` | `GenCost::calc_quadratic` |
 | `source_id` | `["bus", id]` for bus-tied elements | PowerModels `matpower.jl` | `powermodels-json` |
 | PSLF shunts | EPC `pu_mw`/`pu_mvar` are per unit on `sbase`; `Shunt` stores MW/MVAr at \\(V = 1\\) | paired EPC/RAW case checks | `pslf` |
 | DOE GO Challenge 3 | an input/problem data file parses to `AcScucInstance`; one `Source` containing that file and its matching output/solution data file parses to `AcScucSolution`; `instance.network()` returns the shared `BalancedNetwork` | pinned GO-3 data model, C3DataUtilities, and GOC3Benchmark.jl D1/D2/D3 files | `powerio::parse`, `powerio::emit` |
@@ -106,10 +106,11 @@ is a setup failure.
 Every loss is a coded diagnostic. Readers itemize what they keep only in the
 retained source (naming the table and counting the affected rows), writers
 report what a target cannot represent, and `emit` returns the writer's findings
-on the parsed module. Balanced reader findings carry
-`READ.TRANSMISSION.PARSE_WARNING`, GridFM parsing carries
-`READ.GRIDFM.FIDELITY_WARNING`, and distribution reads
-`READ.DIST.PARSE_WARNING`.
+on the parsed module. Codes name the format and reason, such as
+`READ.CGMES.RECORD_UNMAPPED`, `READ.CGMES.FIELD_UNMAPPED`,
+`READ.XIIDM.FIELD_UNMAPPED`, or `EMIT.PSSE.FIELD_DROPPED` for RAW and RAWX;
+there is no generic
+parse warning that hides the cause.
 
 - **XIIDM** reads PowSybl XIIDM 1.12 through 1.17 and writes 1.17. It maps
   substations, voltage levels, bus breaker and node breaker topology, busbar
@@ -117,7 +118,9 @@ on the parsed module. Balanced reader findings carry
   batteries, shunts, static VAR compensators, two- and three-winding
   transformers, tap changers and controls, operational limits, reactive
   limits, HVDC converters, aliases, properties, and PowSybl active power
-  control. Unknown extension subtrees remain available for byte exact same
+  control. Areas, one level of nested XIIDM networks, nonlinear shunt section
+  models, physical DC equipment, and VSC/LCC converters also parse and survive
+  fresh emission. Unknown extension subtrees remain available for byte exact same
   format emission and produce a diagnostic; they do not become unnamed fields
   on the network. Fresh emission preserves detailed connectivity when present
   and allocates missing local node numbers without changing stable PowerIO
@@ -127,19 +130,53 @@ on the parsed module. Balanced reader findings carry
   SSH, SV, and boundary profile data are used when present. A source can be an
   XML profile directory, a directory containing profile ZIP files, or one ZIP
   containing the profiles. The mapping covers hierarchy, AC and DC equipment,
-  detailed connectivity, operating limits, tap changers and controls, reactive
+  detailed connectivity, current, active power, and apparent power operating
+  limits, tap changers and controls, reactive
   limits, and the operating and solution values in SSH and SV. Diagram,
   geography, dynamics, and unrecognized CIM classes are counted in
-  diagnostics. Fresh output is a deterministic CGMES 3.0 EQ, TP, SSH, and SV
-  profile set. Imported UUID mRIDs survive; missing mRIDs use UUIDv5 derived
-  from the component type and stable identity. CGMES states physical units but
-  no system MVA base, so PowerIO uses and reports 100 MVA.
+  diagnostics. Fields present on a recognized class but not consumed by the
+  mapping receive grouped `READ.CGMES.FIELD_UNMAPPED` diagnostics naming the
+  class, field, count, and sample identities. Fresh output is a deterministic
+  CGMES 3.0 EQ, TP, SSH, and SV profile set. Imported UUID mRIDs survive for
+  mapped equipment, terminals, tap changers, operational limit sets, hierarchy,
+  and topology records.
+  Missing identities use UUIDv5 derived from the component type and stable
+  identity. Tap changer tables, tap controls and table points, reactive curve
+  points, and individual limit values retain their electrical values and
+  relationships but receive deterministic subordinate mRIDs on fresh emission;
+  parsing reports this identity change. The source neutral limit model retains
+  permanent and temporary limits. Fresh output therefore uses PATL and TATL;
+  parsing reports PATLT or TCT substitution and any fractional duration rounded
+  to whole seconds. Distinct same-kV `BaseVoltage` identities also receive a
+  precise collapse diagnostic before fresh output uses one voltage keyed
+  record. Busbar `VoltageLimit`
+  records are combined with the enclosing voltage level into the most
+  restrictive valid low/high voltage range. An inconsistent pair is diagnosed
+  and ignored; fresh emission writes the resulting `VoltageLevel` fields rather
+  than recreating the individual `VoltageLimit` records. CGMES states physical
+  units but no system MVA base, so PowerIO uses and reports 100 MVA.
 - **PSS/E** reads RAW revisions 33, 34, and 35 and RAWX revision 35. RAW and
-  RAWX share one electrical mapping. RAWX also preserves revision 35
-  substations, nodes, switches, and terminal references. Unsupported RAWX
+  RAWX share one electrical mapping. RAW 34 maps its substation section. RAW
+  35 and RAWX 35 map and freshly emit substations, nodes, switches, busbar
+  sections, and equipment terminal references. Fresh RAW 34/35 and
+  RAWX output preserves AC line and transformer names. Explicit RAW revisions
+  outside 33 through 35, invalid system bases or frequencies, and nonfinite
+  record values are rejected. Fresh output accepts only revisions 33 through
+  35 and returns an error when detailed connectivity cannot form valid RAWX
+  tables. Generator `IREG`/`NREG`,
+  switched shunt `SWREG`/`NREG`, and transformer `CONT`/`NODE` resolve to exact
+  terminal references, including an explicit target on the same bus. Every
+  winding of a 3-winding transformer retains its control mode, regulated
+  terminal, limits, tap position and range, and number of tap positions. A
+  positive `COD` enables automatic adjustment; a negative `COD` retains the
+  same mode with automatic adjustment disabled; zero is fixed. `|COD| = 4`
+  controls a DC line quantity on a 2-winding transformer, and `|COD| = 5`
+  controls asymmetric active power flow. Unsupported RAWX
   tables, including multi-terminal DC, FACTS, GNE, induction machine,
   multi-section line, zone, owner, and interarea transfer records, remain only
-  in byte exact same format emission and produce counted diagnostics.
+  in byte exact same format emission and produce counted diagnostics. Unknown
+  RAWX tables and `caseid` fields receive the same retained source diagnostic;
+  fresh output diagnoses detailed records and fields that RAWX cannot carry.
   3-winding transformers are kept as
   typed records and star-lowered into \\(Y_{\mathrm{bus}}\\)/connectivity by the indexed view;
   two-terminal DC lines map to the neutral HVDC model. A switched shunt keeps its

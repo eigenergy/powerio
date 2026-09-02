@@ -117,8 +117,8 @@ __all__ = [
     "PwdSubstation",
     "ReactivePower",
     "Residuals",
-    "ScenarioSet",
     "Scenario",
+    "ScenarioSet",
     "ScucActiveReserveZone",
     "ScucBranchSwitchingCost",
     "ScucContingency",
@@ -142,16 +142,16 @@ __all__ = [
     "ScucViolationCosts",
     "SocwrOpfSolution",
     "SourceSpan",
-    "TimeSeries",
     "TimePoint",
+    "TimeSeries",
     "UpdateChange",
     "UpdateReport",
     "__version__",
+    "apply_bus_load_active_power",
+    "apply_updates",
     "deserialize",
     "dist",
     "emit",
-    "apply_bus_load_active_power",
-    "apply_updates",
     "features",
     "from_ppc",
     "parse",
@@ -864,7 +864,7 @@ def _bind_collection_entry(
     value: Any,
     location: _CollectionEntry,
 ) -> Any:
-    setattr(value, "_collection_entry", location)
+    value._collection_entry = location
     return value
 
 

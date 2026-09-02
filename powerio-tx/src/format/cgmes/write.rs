@@ -14,19 +14,26 @@
 //! identity.
 //! Header timestamps are a fixed sentinel for the same reason.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
+use std::sync::Arc;
 
 use powerio_core::ComponentId;
+use quick_xml::events::Event;
+use quick_xml::name::ResolveResult;
+use quick_xml::reader::NsReader;
 
-use super::{CGMES_CLASS_PROPERTY, CgmesVersion};
+use super::{CGMES_CLASS_PROPERTY, CgmesDiagnostics, CgmesVersion};
+use crate::diagnostics::codes;
 use crate::network::{
-    AcDcConverterControlMode, ActivePowerControl, BalancedNetwork, BusId, BusType,
+    AcDcConverterControlMode, ActivePowerControl, BalancedNetwork, BusId, BusType, CaseMetadata,
     ComponentMetadata, CurveStyle, DcConverterOperatingMode, DcPolarity, DcSwitchKind, DcTerminal,
-    DetailedConnectivity, LineCommutatedConverter, LineCommutatedConverterOperatingMode,
-    LoadVoltageModel, LoadingLimits, ReactiveLimits, Shunt, StaticVarCompensatorRegulationMode,
-    SwitchKind, SwitchedShuntMode, TapChanger, TapChangerKind, TapChangerRegulationMode, Terminal,
+    DetailedConnectivity, GeneratorEnergySource, LineCommutatedConverter,
+    LineCommutatedConverterOperatingMode, LoadVoltageModel, LoadingLimits, OmittedFieldName,
+    ReactiveCapabilityCurve, ReactiveLimits, Shunt, StaticVarCompensatorRegulationMode, SwitchKind,
+    SwitchedShuntMode, TapChanger, TapChangerKind, TapChangerRegulationMode, Terminal,
     TerminalReference, TopologyEndpoint, TopologyKind, VoltageSourceConverter,
+    calc_reactive_limits_at_active_power,
 };
 use crate::{Error, Result};
 
@@ -36,7 +43,7 @@ use crate::{Error, Result};
 #[non_exhaustive]
 pub struct CgmesFiles {
     pub files: Vec<(String, String)>,
-    pub warnings: Vec<String>,
+    pub warnings: CgmesDiagnostics,
 }
 
 /// Deterministic output needs a fixed header timestamp; consumers read it as
@@ -87,6 +94,138 @@ fn component_mrid(detailed: &DetailedConnectivity, component: &ComponentId) -> S
     )
 }
 
+fn transformer_end_mrid(
+    detailed: Option<&DetailedConnectivity>,
+    transformer_type: &str,
+    transformer_local_id: &str,
+    emitted_transformer_mrid: &str,
+    winding: usize,
+) -> Result<String> {
+    let fallback = || det_mrid("xfend", &format!("{emitted_transformer_mrid}:{winding}"));
+    let Some(detailed) = detailed else {
+        return Ok(fallback());
+    };
+    let mut source_transformer_ids = HashSet::from([transformer_local_id.to_owned()]);
+    if let Some(metadata) =
+        mapped_component_metadata(Some(detailed), transformer_type, transformer_local_id)
+    {
+        source_transformer_ids.extend(
+            metadata
+                .external_identifiers
+                .iter()
+                .filter(|identifier| {
+                    identifier
+                        .authority
+                        .as_deref()
+                        .is_some_and(|authority| authority.eq_ignore_ascii_case("CGMES"))
+                })
+                .map(|identifier| identifier.value.clone()),
+        );
+    }
+    source_transformer_ids.insert(emitted_transformer_mrid.to_owned());
+
+    let mut matches = detailed.component_metadata.iter().filter(|metadata| {
+        metadata
+            .properties
+            .get(CGMES_CLASS_PROPERTY)
+            .is_some_and(|class| class == "PowerTransformerEnd")
+            && metadata
+                .properties
+                .get("PowerTransformerEnd.PowerTransformer")
+                .is_some_and(|transformer| source_transformer_ids.contains(transformer))
+            && metadata
+                .properties
+                .get("TransformerEnd.endNumber")
+                .and_then(|value| value.parse::<f64>().ok())
+                .is_some_and(|value| {
+                    value.is_finite() && value.fract().eq(&0.0) && value.eq(&(winding as f64))
+                })
+    });
+    let Some(retained) = matches.next() else {
+        return Ok(fallback());
+    };
+    if matches.next().is_some() {
+        return Err(emission_error(format!(
+            "PowerTransformer `{transformer_local_id}` has more than one retained PowerTransformerEnd identity for winding {winding}"
+        )));
+    }
+    Ok(component_mrid(detailed, &retained.component))
+}
+
+#[derive(Debug, Clone)]
+struct RetainedIdentifiedMetadata {
+    name: Option<String>,
+    short_name: Option<String>,
+    fictitious: bool,
+}
+
+fn retained_identified_metadata(
+    detailed: Option<&DetailedConnectivity>,
+    warnings: &mut CgmesDiagnostics,
+) -> Arc<HashMap<String, RetainedIdentifiedMetadata>> {
+    let Some(detailed) = detailed else {
+        return Arc::new(HashMap::new());
+    };
+    let mut retained = HashMap::new();
+    for metadata in &detailed.component_metadata {
+        let mut short_names = metadata
+            .aliases
+            .iter()
+            .filter(|alias| alias.alias_type.as_deref() == Some("short_name"));
+        let short_name = short_names.next().map(|alias| alias.value.clone());
+        for alias in short_names {
+            warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
+                "component `{}` has more than one CGMES short name; emitted `{}` and omitted `{}`",
+                metadata.component,
+                short_name.as_deref().unwrap_or_default(),
+                alias.value
+            ));
+        }
+        for alias in metadata
+            .aliases
+            .iter()
+            .filter(|alias| alias.alias_type.as_deref() != Some("short_name"))
+        {
+            warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
+                "component `{}` alias `{}` of type `{}` has no CGMES IdentifiedObject.shortName mapping",
+                metadata.component,
+                alias.value,
+                alias.alias_type.as_deref().unwrap_or("unspecified")
+            ));
+        }
+        for identifier in &metadata.external_identifiers {
+            if identifier
+                .authority
+                .as_deref()
+                .is_some_and(|authority| authority.eq_ignore_ascii_case("CGMES"))
+            {
+                if uuid::Uuid::parse_str(&identifier.value).is_err() {
+                    warnings.push_as(&codes::EMIT_CGMES.value_substituted, format!(
+                        "component `{}` has non-UUID CGMES identifier `{}`; fresh CGMES uses a deterministic UUID",
+                        metadata.component, identifier.value
+                    ));
+                }
+            } else {
+                warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
+                    "component `{}` external identifier `{}` from authority `{}` has no CGMES IdentifiedObject field",
+                    metadata.component,
+                    identifier.value,
+                    identifier.authority.as_deref().unwrap_or("unspecified")
+                ));
+            }
+        }
+        retained.insert(
+            component_mrid(detailed, &metadata.component),
+            RetainedIdentifiedMetadata {
+                name: metadata.name.clone(),
+                short_name,
+                fictitious: metadata.fictitious,
+            },
+        );
+    }
+    Arc::new(retained)
+}
+
 fn component_name<'a>(
     detailed: &'a DetailedConnectivity,
     component: &ComponentId,
@@ -95,6 +234,478 @@ fn component_name<'a>(
     metadata(detailed, component)
         .and_then(|value| value.name.as_deref())
         .unwrap_or(fallback)
+}
+
+fn mapped_component_name<'a>(
+    detailed: Option<&'a DetailedConnectivity>,
+    component_type: &str,
+    local_id: &str,
+    fallback: &'a str,
+) -> &'a str {
+    detailed
+        .and_then(|detailed| {
+            detailed.component_metadata.iter().find(|metadata| {
+                metadata.component.component_type() == component_type
+                    && metadata.component.local_id() == local_id
+            })
+        })
+        .and_then(|metadata| metadata.name.as_deref())
+        .unwrap_or(fallback)
+}
+
+fn mapped_component_metadata<'a>(
+    detailed: Option<&'a DetailedConnectivity>,
+    component_type: &str,
+    local_id: &str,
+) -> Option<&'a ComponentMetadata> {
+    detailed?.component_metadata.iter().find(|metadata| {
+        metadata.component.component_type() == component_type
+            && metadata.component.local_id() == local_id
+    })
+}
+
+fn cgmes_metadata_by_external_id<'a>(
+    detailed: &'a DetailedConnectivity,
+    external_id: &str,
+) -> Option<&'a ComponentMetadata> {
+    detailed.component_metadata.iter().find(|metadata| {
+        metadata.external_identifiers.iter().any(|identifier| {
+            identifier.value == external_id
+                && identifier
+                    .authority
+                    .as_deref()
+                    .is_some_and(|authority| authority.eq_ignore_ascii_case("CGMES"))
+        })
+    })
+}
+
+fn has_cgmes_external_identifier(metadata: &ComponentMetadata) -> bool {
+    metadata.external_identifiers.iter().any(|identifier| {
+        identifier
+            .authority
+            .as_deref()
+            .is_some_and(|authority| authority.eq_ignore_ascii_case("CGMES"))
+    })
+}
+
+fn mapped_generating_unit_metadata<'a>(
+    detailed: Option<&'a DetailedConnectivity>,
+    generator: &str,
+) -> Option<&'a ComponentMetadata> {
+    let detailed = detailed?;
+    let unit = mapped_component_metadata(Some(detailed), "generator", generator)?
+        .properties
+        .get(super::CGMES_GENERATING_UNIT_PROPERTY)?;
+    cgmes_metadata_by_external_id(detailed, unit)
+}
+
+const fn generating_unit_class(source: GeneratorEnergySource) -> &'static str {
+    match source {
+        GeneratorEnergySource::Hydro => "HydroGeneratingUnit",
+        GeneratorEnergySource::Nuclear => "NuclearGeneratingUnit",
+        GeneratorEnergySource::Wind => "WindGeneratingUnit",
+        GeneratorEnergySource::Thermal => "ThermalGeneratingUnit",
+        GeneratorEnergySource::Solar => "SolarGeneratingUnit",
+        GeneratorEnergySource::Other => "GeneratingUnit",
+    }
+}
+
+fn mapped_regulating_control_metadata<'a>(
+    detailed: Option<&'a DetailedConnectivity>,
+    equipment_type: &str,
+    equipment: &str,
+) -> Option<&'a ComponentMetadata> {
+    let detailed = detailed?;
+    let control = mapped_component_metadata(Some(detailed), equipment_type, equipment)?
+        .properties
+        .get(super::CGMES_REGULATING_CONTROL_PROPERTY)?;
+    cgmes_metadata_by_external_id(detailed, control)
+}
+
+fn retained_bool(metadata: Option<&ComponentMetadata>, property: &str) -> Option<bool> {
+    metadata?.properties.get(property)?.parse().ok()
+}
+
+fn unit_multiplier_scale_to_kv(multiplier: &str) -> Option<f64> {
+    match multiplier
+        .strip_prefix("UnitMultiplier.")
+        .unwrap_or(multiplier)
+    {
+        "none" => Some(1e-3),
+        "m" => Some(1e-6),
+        "k" => Some(1.0),
+        "M" => Some(1e3),
+        "G" => Some(1e6),
+        _ => None,
+    }
+}
+
+fn retained_control_target(
+    metadata: Option<&ComponentMetadata>,
+    target_kv: f64,
+    source_control_is_effective: bool,
+    typed_control_is_effective: bool,
+    warnings: &mut CgmesDiagnostics,
+    equipment: &str,
+) -> (String, String) {
+    let multiplier = metadata
+        .and_then(|metadata| {
+            metadata
+                .properties
+                .get("RegulatingControl.targetValueUnitMultiplier")
+        })
+        .map_or("UnitMultiplier.k", String::as_str);
+    let raw_target =
+        metadata.and_then(|metadata| metadata.properties.get("RegulatingControl.targetValue"));
+    let Some(scale_to_kv) = unit_multiplier_scale_to_kv(multiplier) else {
+        warnings.push_as(&codes::EMIT_CGMES.value_substituted, format!(
+            "equipment `{equipment}` has unsupported RegulatingControl.targetValueUnitMultiplier `{multiplier}`; fresh CGMES output uses UnitMultiplier.k"
+        ));
+        return (target_kv.to_string(), "UnitMultiplier.k".into());
+    };
+    let source_target_kv = raw_target
+        .and_then(|value| value.parse::<f64>().ok())
+        .map(|value| value * scale_to_kv);
+    let unchanged = source_target_kv.is_some_and(|value| {
+        let tolerance = 1e-9 * value.abs().max(target_kv.abs()).max(1.0);
+        (value - target_kv).abs() <= tolerance
+    }) || (!source_control_is_effective && !typed_control_is_effective);
+    if unchanged && let Some(raw_target) = raw_target {
+        return (raw_target.clone(), multiplier.into());
+    }
+    ((target_kv / scale_to_kv).to_string(), multiplier.into())
+}
+
+fn mapped_equipment_container_mrid(
+    detailed: Option<&DetailedConnectivity>,
+    component_type: &str,
+    local_id: &str,
+    unsupported_fallback: Option<String>,
+    warnings: &mut CgmesDiagnostics,
+) -> Option<String> {
+    let detailed = detailed?;
+    let container = mapped_component_metadata(Some(detailed), component_type, local_id)?
+        .equipment_container
+        .as_ref()?;
+    if container.component_type() == "cgmes_object" {
+        let component = format!("{component_type}/{local_id}");
+        return match unsupported_fallback {
+            None => {
+                warnings.push_as(
+                    &codes::EMIT_CGMES.field_dropped,
+                    format!(
+                        "component `{component}` references source EquipmentContainer \
+                         `{container}`, whose CGMES class has no typed fresh-emission mapping; \
+                         the EquipmentContainer reference was omitted"
+                    ),
+                );
+                None
+            }
+            Some(fallback) => {
+                warnings.push_as(
+                    &codes::EMIT_CGMES.value_substituted,
+                    format!(
+                        "component `{component}` references source EquipmentContainer \
+                         `{container}`, whose CGMES class has no typed fresh-emission mapping; \
+                         fresh CGMES uses the equipment terminal's VoltageLevel instead"
+                    ),
+                );
+                Some(fallback)
+            }
+        };
+    }
+    Some(component_mrid(detailed, container))
+}
+
+fn field_was_omitted(
+    detailed: Option<&DetailedConnectivity>,
+    component_type: &str,
+    local_id: &str,
+    field: OmittedFieldName,
+) -> bool {
+    detailed.is_some_and(|detailed| {
+        detailed.omitted_fields.iter().any(|omitted| {
+            omitted.field == field
+                && omitted.component.component_type() == component_type
+                && omitted.component.local_id() == local_id
+        })
+    })
+}
+
+fn metadata_property_is_used(property: &str) -> bool {
+    [
+        CGMES_CLASS_PROPERTY,
+        super::CGMES_SV_STATUS_PROPERTY,
+        super::CGMES_GENERATING_UNIT_PROPERTY,
+        super::CGMES_REGULATING_CONTROL_PROPERTY,
+        super::CGMES_SV_VOLTAGE_AUTHORITY_MISMATCH_PROPERTY,
+        "PowerTransformerEnd.PowerTransformer",
+        "TransformerEnd.endNumber",
+        "SeriesCompensator.r0",
+        "SeriesCompensator.x0",
+        "SeriesCompensator.varistorPresent",
+        "SeriesCompensator.varistorRatedCurrent",
+        "SeriesCompensator.varistorVoltageThreshold",
+        "RegulatingCondEq.controlEnabled",
+        "RegulatingControl.discrete",
+        "RegulatingControl.enabled",
+        "RegulatingControl.mode",
+        "RegulatingControl.targetDeadband",
+        "RegulatingControl.targetValue",
+        "RegulatingControl.targetValueUnitMultiplier",
+        "IdentifiedObject.description",
+        "Equipment.aggregate",
+        "GeneratingUnit.genControlSource",
+        "GeneratingUnit.initialP",
+        "GeneratingUnit.nominalP",
+        "SynchronousMachine.type",
+        "SynchronousMachine.operatingMode",
+        "SynchronousMachine.referencePriority",
+    ]
+    .contains(&property)
+}
+
+fn case_metadata_fields(metadata: &CaseMetadata, include_date: bool) -> Vec<String> {
+    let mut fields = Vec::new();
+    if include_date && let Some(value) = &metadata.case_date {
+        fields.push(format!("case_date=`{value}`"));
+    }
+    if let Some(value) = metadata.forecast_distance {
+        fields.push(format!("forecast_distance={value}"));
+    }
+    if let Some(value) = &metadata.source_model_format {
+        fields.push(format!("source_model_format=`{value}`"));
+    }
+    if let Some(value) = &metadata.minimum_validation_level {
+        fields.push(format!("minimum_validation_level=`{value}`"));
+    }
+    fields
+}
+
+fn component_matches_omission_record(
+    network: &BalancedNetwork,
+    component: &ComponentId,
+    field: OmittedFieldName,
+) -> bool {
+    let local_id = component.local_id();
+    match (component.component_type(), field) {
+        ("load", OmittedFieldName::ActivePower | OmittedFieldName::ReactivePower) => {
+            network.loads().iter().enumerate().any(|(index, load)| {
+                load.uid
+                    .clone()
+                    .unwrap_or_else(|| format!("{}-{index}", load.bus))
+                    == local_id
+            })
+        }
+        (
+            "generator",
+            OmittedFieldName::ActivePower
+            | OmittedFieldName::ReactivePower
+            | OmittedFieldName::VoltageSetpoint
+            | OmittedFieldName::RatedApparentPower,
+        ) => network
+            .generators()
+            .iter()
+            .enumerate()
+            .any(|(index, generator)| {
+                generator
+                    .uid
+                    .clone()
+                    .unwrap_or_else(|| format!("{}-{index}", generator.bus))
+                    == local_id
+            }),
+        ("shunt", OmittedFieldName::ShuntConductancePerSection) => {
+            network.shunts().iter().enumerate().any(|(index, shunt)| {
+                shunt
+                    .uid
+                    .clone()
+                    .unwrap_or_else(|| format!("{}-{index}", shunt.bus))
+                    == local_id
+            })
+        }
+        _ => false,
+    }
+}
+
+const fn omitted_field_label(field: OmittedFieldName) -> &'static str {
+    match field {
+        OmittedFieldName::ActivePower => "active_power",
+        OmittedFieldName::ReactivePower => "reactive_power",
+        OmittedFieldName::VoltageSetpoint => "voltage_setpoint",
+        OmittedFieldName::RatedApparentPower => "rated_apparent_power",
+        OmittedFieldName::ShuntConductancePerSection => "shunt_conductance_per_section",
+    }
+}
+
+const fn dc_polarity_label(polarity: DcPolarity) -> &'static str {
+    match polarity {
+        DcPolarity::Positive => "positive",
+        DcPolarity::Middle => "middle",
+        DcPolarity::Negative => "negative",
+    }
+}
+
+#[allow(clippy::too_many_lines)] // one audit pass names every unsupported detailed-connectivity field
+pub(super) fn warn_unemitted_detailed_fields(
+    network: &BalancedNetwork,
+    detailed: &DetailedConnectivity,
+    version: CgmesVersion,
+    warnings: &mut CgmesDiagnostics,
+) {
+    for boundary in &detailed.boundary_lines {
+        let load = boundary
+            .calculation_load
+            .as_ref()
+            .map_or("none".into(), ToString::to_string);
+        let generator = boundary
+            .calculation_generator
+            .as_ref()
+            .map_or("none".into(), ToString::to_string);
+        warnings.push_as(&codes::EMIT_CGMES.record_dropped, format!(
+            "BoundaryLine `{}` is retained in PowerIO detailed connectivity but fresh CGMES does not emit EQBD or TPBD boundary records; its balanced calculation projections are load `{load}` and generator `{generator}`",
+            boundary.component
+        ));
+    }
+    for tie in &detailed.tie_lines {
+        let branch = tie
+            .calculation_branch
+            .as_ref()
+            .map_or("none".into(), ToString::to_string);
+        warnings.push_as(&codes::EMIT_CGMES.record_dropped, format!(
+            "TieLine `{}` joining BoundaryLines `{}` and `{}` is retained in PowerIO detailed connectivity but fresh CGMES emits neither the TieLine nor its boundary records; its balanced calculation projection is branch `{branch}`",
+            tie.component, tie.boundary_line1, tie.boundary_line2
+        ));
+    }
+
+    for node in &detailed.connectivity_nodes {
+        if let Some(number) = node.node_number {
+            warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
+                "ConnectivityNode `{}` has source node number {number}; CGMES identifies connectivity nodes by mRID and has no node number field",
+                node.component
+            ));
+        }
+    }
+    for node in &detailed.dc_nodes {
+        if let Some(voltage) = node.nominal_voltage_kv {
+            warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
+                "DCNode `{}` has nominal_voltage_kv={voltage}; CGMES DCNode has no nominal voltage field",
+                node.component
+            ));
+        }
+        if let Some(voltage) = node.voltage_kv {
+            warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
+                "DCNode `{}` has voltage_kv={voltage}; the emitted EQ, TP, SSH, and SV profiles have no DCNode voltage field",
+                node.component
+            ));
+        }
+    }
+
+    let mut warn_nonconverter_polarity =
+        |class: &str, equipment: &ComponentId, fallback_sequence: usize, terminal: &DcTerminal| {
+            if let Some(polarity) = terminal.polarity {
+                let sequence = terminal
+                    .sequence_number
+                    .map_or(fallback_sequence as u32, |value| value);
+                let identity = terminal
+                    .component
+                    .as_ref()
+                    .map_or_else(|| format!("{equipment}:{sequence}"), ToString::to_string);
+                warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
+                    "{class} `{equipment}` DC terminal `{identity}` has polarity `{}`; CGMES defines ACDCConverterDCTerminal.polarity only for converter terminals",
+                    dc_polarity_label(polarity)
+                ));
+            }
+        };
+    for ground in &detailed.dc_grounds {
+        warn_nonconverter_polarity("DCGround", &ground.component, 1, &ground.dc_terminal);
+    }
+    for busbar in &detailed.dc_busbars {
+        warn_nonconverter_polarity("DCBusbar", &busbar.component, 1, &busbar.dc_terminal);
+    }
+    for line in &detailed.dc_lines {
+        warn_nonconverter_polarity("DCLineSegment", &line.component, 1, &line.dc_terminal1);
+        warn_nonconverter_polarity("DCLineSegment", &line.component, 2, &line.dc_terminal2);
+    }
+    for device in &detailed.dc_series_devices {
+        warn_nonconverter_polarity("DCSeriesDevice", &device.component, 1, &device.dc_terminal1);
+        warn_nonconverter_polarity("DCSeriesDevice", &device.component, 2, &device.dc_terminal2);
+    }
+    for switch in &detailed.dc_switches {
+        warn_nonconverter_polarity("DCSwitch", &switch.component, 1, &switch.dc_terminal1);
+        warn_nonconverter_polarity("DCSwitch", &switch.component, 2, &switch.dc_terminal2);
+    }
+
+    for converter in &detailed.voltage_source_converters {
+        if let (Some(uf), Some(uv)) = (converter.uf_kv, converter.uv_kv) {
+            let tolerance = 1e-9 * uf.abs().max(uv.abs()).max(1.0);
+            if (uf - uv).abs() > tolerance {
+                let (emitted_property, emitted_value, omitted_property, omitted_value) =
+                    if version == CgmesVersion::V3_0 {
+                        ("VsConverter.uv", uv, "VsConverter.uf", uf)
+                    } else {
+                        ("VsConverter.uf", uf, "VsConverter.uv", uv)
+                    };
+                warnings.push_as(&codes::EMIT_CGMES.value_substituted, format!(
+                    "VsConverter `{}` has conflicting valve voltages uf={uf} kV and uv={uv} kV; {} writes {emitted_property}={emitted_value} kV and does not emit {omitted_property}={omitted_value} kV",
+                    converter.component,
+                    version.label()
+                ));
+            }
+        }
+    }
+
+    for metadata in &detailed.component_metadata {
+        for property in metadata
+            .properties
+            .keys()
+            .filter(|property| !metadata_property_is_used(property))
+        {
+            warnings.push_as(
+                &codes::EMIT_CGMES.field_dropped,
+                format!(
+                    "component `{}` metadata property `{property}` has no fresh CGMES mapping",
+                    metadata.component
+                ),
+            );
+        }
+    }
+    for group in &detailed.operational_limit_groups {
+        for property in group.properties.keys() {
+            warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
+                "operational limit group `{}` on equipment `{}` metadata property `{property}` has no fresh CGMES mapping",
+                group.id, group.equipment
+            ));
+        }
+    }
+    for omitted in &detailed.omitted_fields {
+        if !component_matches_omission_record(network, &omitted.component, omitted.field) {
+            warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
+                "omitted field record for component `{}` field `{}` does not match a CGMES assignment the writer can suppress and has no effect on fresh output",
+                omitted.component,
+                omitted_field_label(omitted.field)
+            ));
+        }
+    }
+
+    for subnetwork in &detailed.subnetworks {
+        let fields = case_metadata_fields(&subnetwork.case_metadata, true);
+        let metadata = if fields.is_empty() {
+            "no subnetwork case metadata".into()
+        } else {
+            format!("subnetwork case metadata [{}]", fields.join(", "))
+        };
+        warnings.push_as(&codes::EMIT_CGMES.value_collapsed, format!(
+            "subnetwork `{}` with parent `{}` and {} component reference(s) is flattened into the single fresh CGMES model set; its component grouping and {metadata} are not emitted separately",
+            subnetwork.component,
+            subnetwork.parent,
+            subnetwork.components.len()
+        ));
+    }
+    for field in case_metadata_fields(network.case_metadata(), false) {
+        warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
+            "network case metadata `{field}` has no field in the fresh CGMES EQ, TP, SSH, or SV FullModel headers"
+        ));
+    }
 }
 
 fn detailed_terminal<'a>(
@@ -220,8 +831,18 @@ fn terminal_reference_mrid(
     detailed: Option<&DetailedConnectivity>,
     reference: &TerminalReference,
 ) -> Option<String> {
-    equipment_mrid(network, detailed, &reference.equipment)
-        .map(|equipment| term_id(&equipment, usize::from(reference.terminal)))
+    let equipment = equipment_mrid(network, detailed, &reference.equipment)?;
+    let record = detailed.and_then(|details| {
+        details.terminals.iter().find(|terminal| {
+            terminal.equipment == reference.equipment && terminal.terminal == reference.terminal
+        })
+    });
+    Some(terminal_mrid(
+        detailed,
+        record,
+        &equipment,
+        usize::from(reference.terminal),
+    ))
 }
 
 fn configured_bus_mrid(detailed: &DetailedConnectivity, component: &ComponentId) -> String {
@@ -253,9 +874,17 @@ fn connectivity_node_mrid(
     detailed: Option<&DetailedConnectivity>,
     terminal: Option<&Terminal>,
     bus: BusId,
+    project_mixed_topology: bool,
 ) -> String {
     if let Some(detailed) = detailed {
-        if let Some(node) = terminal.and_then(|value| value.node.as_ref()) {
+        let projected_bus_breaker_terminal = terminal.is_some_and(|terminal| {
+            project_mixed_topology
+                && terminal_voltage_level_topology(detailed, terminal)
+                    == Some(TopologyKind::BusBreaker)
+        });
+        if !projected_bus_breaker_terminal
+            && let Some(node) = terminal.and_then(|value| value.node.as_ref())
+        {
             return component_mrid(detailed, node);
         }
         if let Some(configured) =
@@ -274,6 +903,186 @@ fn connectivity_node_mrid(
     det_mrid("connectivity_node", &format!("bus:{bus}"))
 }
 
+fn terminal_voltage_level_topology(
+    detailed: &DetailedConnectivity,
+    terminal: &Terminal,
+) -> Option<TopologyKind> {
+    detailed
+        .voltage_levels
+        .iter()
+        .find(|level| level.component == terminal.voltage_level)
+        .map(|level| level.topology_kind)
+}
+
+fn project_mixed_topology(detailed: &DetailedConnectivity) -> bool {
+    let has_node_breaker = detailed
+        .voltage_levels
+        .iter()
+        .any(|level| level.topology_kind == TopologyKind::NodeBreaker);
+    let has_bus_breaker = detailed
+        .voltage_levels
+        .iter()
+        .any(|level| level.topology_kind == TopologyKind::BusBreaker);
+    has_node_breaker && has_bus_breaker
+}
+
+fn dc_terminal_nodes(terminal: &DcTerminal) -> impl Iterator<Item = &ComponentId> {
+    [
+        terminal.dc_node.as_ref(),
+        terminal.dc_topological_node.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+}
+
+fn extend_connected_dc_nodes(
+    affected: &mut HashSet<ComponentId>,
+    first: &DcTerminal,
+    second: &DcTerminal,
+) {
+    let nodes = dc_terminal_nodes(first)
+        .chain(dc_terminal_nodes(second))
+        .cloned()
+        .collect::<Vec<_>>();
+    if nodes.iter().any(|node| affected.contains(node)) {
+        affected.extend(nodes);
+    }
+}
+
+fn converters_in_dc_series_device_islands(detailed: &DetailedConnectivity) -> HashSet<ComponentId> {
+    let mut affected = detailed
+        .dc_series_devices
+        .iter()
+        .flat_map(|device| {
+            dc_terminal_nodes(&device.dc_terminal1).chain(dc_terminal_nodes(&device.dc_terminal2))
+        })
+        .cloned()
+        .collect::<HashSet<_>>();
+    loop {
+        let previous_len = affected.len();
+        for line in &detailed.dc_lines {
+            extend_connected_dc_nodes(&mut affected, &line.dc_terminal1, &line.dc_terminal2);
+        }
+        for device in &detailed.dc_series_devices {
+            extend_connected_dc_nodes(&mut affected, &device.dc_terminal1, &device.dc_terminal2);
+        }
+        for switch in &detailed.dc_switches {
+            extend_connected_dc_nodes(&mut affected, &switch.dc_terminal1, &switch.dc_terminal2);
+        }
+        if affected.len() == previous_len {
+            break;
+        }
+    }
+
+    detailed
+        .voltage_source_converters
+        .iter()
+        .filter(|converter| {
+            dc_terminal_nodes(&converter.dc_terminal1)
+                .chain(dc_terminal_nodes(&converter.dc_terminal2))
+                .any(|node| affected.contains(node))
+        })
+        .map(|converter| converter.component.clone())
+        .chain(
+            detailed
+                .line_commutated_converters
+                .iter()
+                .filter(|converter| {
+                    dc_terminal_nodes(&converter.dc_terminal1)
+                        .chain(dc_terminal_nodes(&converter.dc_terminal2))
+                        .any(|node| affected.contains(node))
+                })
+                .map(|converter| converter.component.clone()),
+        )
+        .collect()
+}
+
+fn configured_terminal_bus(terminal: &Terminal) -> Option<&ComponentId> {
+    terminal.connectable_bus.as_ref().or(terminal.bus.as_ref())
+}
+
+pub(super) fn warn_pow_sybl_projected_transformer_connections(
+    network: &BalancedNetwork,
+    detailed: &DetailedConnectivity,
+    warnings: &mut CgmesDiagnostics,
+) {
+    let affected_converters = converters_in_dc_series_device_islands(detailed);
+    if affected_converters.is_empty() {
+        return;
+    }
+    for terminal in &detailed.terminals {
+        if terminal.equipment.component_type() != "branch"
+            || terminal_voltage_level_topology(detailed, terminal) != Some(TopologyKind::BusBreaker)
+            || !network.branches().iter().any(|branch| {
+                branch.uid.as_deref() == Some(terminal.equipment.local_id())
+                    && (branch.is_transformer()
+                        || source_branch_is_power_transformer(
+                            Some(detailed),
+                            terminal.equipment.local_id(),
+                        ))
+            })
+        {
+            continue;
+        }
+        let Some(bus) = configured_terminal_bus(terminal) else {
+            continue;
+        };
+        let mut converters = detailed
+            .terminals
+            .iter()
+            .filter(|candidate| configured_terminal_bus(candidate) == Some(bus))
+            .map(|candidate| &candidate.equipment)
+            .filter(|equipment| affected_converters.contains(*equipment))
+            .cloned()
+            .collect::<Vec<_>>();
+        converters.sort();
+        converters.dedup();
+        if converters.is_empty() {
+            continue;
+        }
+        let has_other_anchor = detailed.terminals.iter().any(|candidate| {
+            configured_terminal_bus(candidate) == Some(bus)
+                && candidate.equipment != terminal.equipment
+                && !converters.contains(&candidate.equipment)
+                && candidate.equipment.component_type() != "cgmes_object"
+        });
+        if has_other_anchor {
+            continue;
+        }
+        let converters = converters
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        warnings.push(format!(
+            "mixed topology projection preserves transformer `{}` terminal {} as connected at configured bus `{bus}`, but its projected ConnectivityNode is shared only with converter(s) [{converters}] in a DC island containing DCSeriesDevice; PowSybl 7.3.0 reports that source island as unsupported BACK_TO_BACK, drops the converter(s), and reloads this transformer terminal as disconnected; PowerIO retains the source connection",
+            terminal.equipment, terminal.terminal
+        ));
+    }
+}
+
+fn terminal_uses_connectivity_node(
+    detailed: &DetailedConnectivity,
+    terminal: &Terminal,
+    project_mixed_topology: bool,
+) -> bool {
+    terminal_voltage_level_topology(detailed, terminal).map_or_else(
+        || {
+            terminal.node.is_some()
+                || (project_mixed_topology
+                    && terminal
+                        .connectable_bus
+                        .as_ref()
+                        .or(terminal.bus.as_ref())
+                        .is_some())
+        },
+        |topology| {
+            topology == TopologyKind::NodeBreaker
+                || (project_mixed_topology && topology == TopologyKind::BusBreaker)
+        },
+    )
+}
+
 fn terminal_topological_node_mrid(
     network: &BalancedNetwork,
     detailed: Option<&DetailedConnectivity>,
@@ -285,11 +1094,7 @@ fn terminal_topological_node_mrid(
             return configured_bus_mrid(detailed, configured);
         }
         if let Some(node) = terminal.and_then(|value| value.node.as_ref())
-            && let Some(calculated_bus) = detailed
-                .connectivity_nodes
-                .iter()
-                .find(|value| value.component == *node)
-                .and_then(|value| value.calculated_bus)
+            && let Some(calculated_bus) = calculated_bus_for_node(detailed, node)
         {
             return bus_mrid(network, calculated_bus);
         }
@@ -317,6 +1122,109 @@ fn terminal_voltage_level_mrid(
     det_mrid("voltagelevel", &bus.to_string())
 }
 
+fn detailed_voltage_level_for_bus(
+    detailed: &DetailedConnectivity,
+    bus: BusId,
+) -> Option<&ComponentId> {
+    detailed
+        .bus_breaker_buses
+        .iter()
+        .find(|configured| configured.calculated_bus == Some(bus))
+        .map(|configured| &configured.voltage_level)
+        .or_else(|| {
+            detailed
+                .calculated_buses
+                .iter()
+                .find(|calculated| calculated.calculated_bus == bus)
+                .map(|calculated| &calculated.voltage_level)
+        })
+        .or_else(|| {
+            detailed
+                .connectivity_nodes
+                .iter()
+                .find(|node| calculated_bus_for_node(detailed, &node.component) == Some(bus))
+                .map(|node| &node.voltage_level)
+        })
+        .or_else(|| {
+            detailed
+                .voltage_levels
+                .iter()
+                .find(|level| level.buses.contains(&bus))
+                .map(|level| &level.component)
+        })
+}
+
+fn missing_detailed_terminal_buses(
+    network: &BalancedNetwork,
+    detailed: &DetailedConnectivity,
+) -> HashSet<BusId> {
+    let mut buses = HashSet::new();
+    let mut check = |component_type: &str, local_id: &str, terminal: usize, bus: BusId| {
+        if detailed_terminal(detailed, component_type, local_id, terminal).is_none() {
+            buses.insert(bus);
+        }
+    };
+
+    for (index, load) in network.loads().iter().enumerate() {
+        let fallback = format!("{}-{index}", load.bus);
+        check(
+            "load",
+            load.uid.as_deref().unwrap_or(&fallback),
+            1,
+            load.bus,
+        );
+    }
+    for (index, generator) in network.generators().iter().enumerate() {
+        let fallback = format!("{}-{index}", generator.bus);
+        check(
+            "generator",
+            generator.uid.as_deref().unwrap_or(&fallback),
+            1,
+            generator.bus,
+        );
+    }
+    for (index, shunt) in network.shunts().iter().enumerate() {
+        let fallback = format!("{}-{index}", shunt.bus);
+        check(
+            "shunt",
+            shunt.uid.as_deref().unwrap_or(&fallback),
+            1,
+            shunt.bus,
+        );
+    }
+    for (index, svc) in network.static_var_compensators().iter().enumerate() {
+        let fallback = format!("{}-{index}", svc.bus);
+        check(
+            "static_var_compensator",
+            svc.uid.as_deref().unwrap_or(&fallback),
+            1,
+            svc.bus,
+        );
+    }
+    if detailed.switches.is_empty() {
+        for (index, switch) in network.switches().iter().enumerate() {
+            let fallback = format!("{}-{}-{index}", switch.from, switch.to);
+            let local_id = switch.uid.as_deref().unwrap_or(&fallback);
+            check("switch", local_id, 1, switch.from);
+            check("switch", local_id, 2, switch.to);
+        }
+    }
+    for (index, branch) in network.branches().iter().enumerate() {
+        let fallback = format!("{}-{}-{index}", branch.from, branch.to);
+        let local_id = branch.uid.as_deref().unwrap_or(&fallback);
+        check("branch", local_id, 1, branch.from);
+        check("branch", local_id, 2, branch.to);
+    }
+    for (index, transformer) in network.transformers_3w().iter().enumerate() {
+        let fallback = format!("transformer3w-{index}");
+        let local_id = transformer.uid.as_deref().unwrap_or(&fallback);
+        for (winding, data) in transformer.windings.iter().enumerate() {
+            check("branch", local_id, winding + 1, data.bus);
+        }
+    }
+    buses
+}
+
 fn switch_class(kind: SwitchKind) -> &'static str {
     match kind {
         SwitchKind::Breaker => "Breaker",
@@ -332,11 +1240,7 @@ fn endpoint_bus(detailed: &DetailedConnectivity, endpoint: &TopologyEndpoint) ->
             .iter()
             .find(|value| value.component == *component)
             .and_then(|value| value.calculated_bus),
-        TopologyEndpoint::Node(component) => detailed
-            .connectivity_nodes
-            .iter()
-            .find(|value| value.component == *component)
-            .and_then(|value| value.calculated_bus),
+        TopologyEndpoint::Node(component) => calculated_bus_for_node(detailed, component),
     }
 }
 
@@ -349,12 +1253,14 @@ fn esc(text: &str) -> String {
 /// One profile document under construction.
 struct Doc {
     body: String,
+    retained_metadata: Arc<HashMap<String, RetainedIdentifiedMetadata>>,
 }
 
 impl Doc {
-    fn new() -> Doc {
+    fn new(retained_metadata: Arc<HashMap<String, RetainedIdentifiedMetadata>>) -> Doc {
         Doc {
             body: String::new(),
+            retained_metadata,
         }
     }
 
@@ -366,6 +1272,17 @@ impl Doc {
             format!("rdf:ID=\"_{id}\"")
         };
         let _ = writeln!(self.body, "  <cim:{class} {attr}>");
+        if !about && let Some(metadata) = self.retained_metadata.get(id).cloned() {
+            if let Some(name) = metadata.name {
+                self.text("IdentifiedObject.name", name);
+            }
+            if let Some(short_name) = metadata.short_name {
+                self.text("IdentifiedObject.shortName", short_name);
+            }
+            if metadata.fictitious {
+                self.text("IdentifiedObject.isFictitious", true);
+            }
+        }
     }
 
     fn close(&mut self, class: &str) {
@@ -398,8 +1315,101 @@ impl Doc {
 
     fn named(&mut self, class: &str, id: &str, name: &str) {
         self.open(class, id, false);
-        self.text("IdentifiedObject.name", name);
+        if self
+            .retained_metadata
+            .get(id)
+            .is_none_or(|metadata| metadata.name.is_none())
+        {
+            self.text("IdentifiedObject.name", name);
+        }
     }
+}
+
+fn write_sv_status(sv: &mut Doc, equipment: &str, in_service: bool) {
+    let status = det_mrid("svstatus", equipment);
+    sv.open("SvStatus", &status, false);
+    sv.reference("SvStatus.ConductingEquipment", equipment);
+    sv.text("SvStatus.inService", in_service);
+    sv.close("SvStatus");
+}
+
+fn write_sv_power_flow(
+    sv: &mut Doc,
+    terminal: &str,
+    active_power_mw: Option<f64>,
+    reactive_power_mvar: Option<f64>,
+    warnings: &mut CgmesDiagnostics,
+) {
+    let (active_power_mw, reactive_power_mvar) = match (active_power_mw, reactive_power_mvar) {
+        (Some(active), Some(reactive)) => (active, reactive),
+        (None, None) => return,
+        (Some(active), None) => {
+            warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
+                "terminal `{terminal}`: retained active power field {active} MW without reactive power; CGMES SvPowerFlow requires both p and q, so the partial observation was not emitted"
+            ));
+            return;
+        }
+        (None, Some(reactive)) => {
+            warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
+                "terminal `{terminal}`: retained reactive power field {reactive} MVAr without active power; CGMES SvPowerFlow requires both p and q, so the partial observation was not emitted"
+            ));
+            return;
+        }
+    };
+    let flow = det_mrid("svpowerflow", terminal);
+    sv.open("SvPowerFlow", &flow, false);
+    sv.reference("SvPowerFlow.Terminal", terminal);
+    sv.text("SvPowerFlow.p", active_power_mw);
+    sv.text("SvPowerFlow.q", reactive_power_mvar);
+    sv.close("SvPowerFlow");
+}
+
+fn write_sv_voltage(
+    sv: &mut Doc,
+    topological_node: &str,
+    voltage_kv: Option<f64>,
+    angle_degrees: Option<f64>,
+    authority_mismatch: bool,
+    warnings: &mut CgmesDiagnostics,
+) {
+    if authority_mismatch {
+        if voltage_kv.is_some() || angle_degrees.is_some() {
+            warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
+                "TopologicalNode `{topological_node}`: retained SvVoltage belongs to a different modeling authority than its source equipment; the observation remains in PowerIO data but was not emitted into the single authority CGMES profile set"
+            ));
+        }
+        return;
+    }
+    let (voltage_kv, angle_degrees) = match (voltage_kv, angle_degrees) {
+        (Some(voltage), Some(angle)) => (voltage, angle),
+        (None, None) => return,
+        (Some(voltage), None) => {
+            warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
+                "TopologicalNode `{topological_node}`: retained voltage field {voltage} kV without an angle; CGMES SvVoltage requires both v and angle, so the partial observation was not emitted"
+            ));
+            return;
+        }
+        (None, Some(angle)) => {
+            warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
+                "TopologicalNode `{topological_node}`: retained angle field {angle} degrees without voltage; CGMES SvVoltage requires both v and angle, so the partial observation was not emitted"
+            ));
+            return;
+        }
+    };
+    let sv_voltage = det_mrid("svvoltage", topological_node);
+    sv.open("SvVoltage", &sv_voltage, false);
+    sv.reference("SvVoltage.TopologicalNode", topological_node);
+    sv.text("SvVoltage.v", voltage_kv);
+    sv.text("SvVoltage.angle", angle_degrees);
+    sv.close("SvVoltage");
+}
+
+fn retained_sv_status(detailed: &DetailedConnectivity, component: &ComponentId) -> Option<bool> {
+    metadata(detailed, component)?
+        .properties
+        .get(super::CGMES_SV_STATUS_PROPERTY)?
+        .parse()
+        .ok()
 }
 
 struct Profiles {
@@ -489,7 +1499,7 @@ fn document(
 struct Writer<'a> {
     net: &'a BalancedNetwork,
     p: Profiles,
-    warnings: Vec<String>,
+    warnings: CgmesDiagnostics,
 }
 
 fn emission_error(message: impl Into<String>) -> Error {
@@ -624,7 +1634,27 @@ fn source_tap_changer<'a>(
     })
 }
 
+fn source_branch_is_power_transformer(
+    detailed: Option<&DetailedConnectivity>,
+    branch_local_id: &str,
+) -> bool {
+    mapped_component_metadata(detailed, "branch", branch_local_id).is_some_and(|metadata| {
+        metadata
+            .properties
+            .get(CGMES_CLASS_PROPERTY)
+            .is_some_and(|class| class == "PowerTransformer")
+    }) || detailed.is_some_and(|detailed| {
+        detailed.tap_changers.iter().any(|tap| {
+            tap.transformer.component_type() == "branch"
+                && tap.transformer.local_id() == branch_local_id
+        })
+    })
+}
+
 fn tap_neutral_position(tap: &TapChanger) -> i32 {
+    if let Some(position) = tap.neutral_tap_position {
+        return position;
+    }
     tap.steps
         .iter()
         .min_by(|left, right| {
@@ -633,6 +1663,40 @@ fn tap_neutral_position(tap: &TapChanger) -> i32 {
             left_distance.total_cmp(&right_distance)
         })
         .map_or(tap.low_tap_position, |value| value.position)
+}
+
+fn tap_high_position(tap: &TapChanger) -> i32 {
+    tap.steps
+        .iter()
+        .map(|value| value.position)
+        .max()
+        .unwrap_or(tap.low_tap_position)
+}
+
+fn tap_normal_position(tap: &TapChanger) -> i32 {
+    tap.normal_tap_position
+        .or(tap.tap_position)
+        .unwrap_or_else(|| tap_neutral_position(tap))
+}
+
+fn ratio_voltage_step_increment_percent(tap: &TapChanger) -> f64 {
+    if let Some(increment) = tap.voltage_step_increment_percent {
+        return increment;
+    }
+    let mut increments = tap.steps.windows(2).filter_map(|steps| {
+        let positions = steps[1].position - steps[0].position;
+        (positions != 0).then(|| (steps[1].rho - steps[0].rho) * 100.0 / f64::from(positions))
+    });
+    let Some(first) = increments.next() else {
+        return 0.0;
+    };
+    if increments.all(|increment| {
+        (increment - first).abs() <= 1e-12 * increment.abs().max(first.abs()).max(1.0)
+    }) {
+        first
+    } else {
+        0.0
+    }
 }
 
 fn tap_rated_kv(network: &BalancedNetwork, tap: &TapChanger) -> f64 {
@@ -687,6 +1751,9 @@ struct TapWriteContext<'a> {
     tap: &'a TapChanger,
 }
 
+// This writes one tap changer consistently across EQ, SSH, and SV; splitting it
+// would separate the shared identifiers and references it validates together.
+#[allow(clippy::too_many_lines)]
 fn write_source_tap_changer(
     eq: &mut Doc,
     ssh: &mut Doc,
@@ -716,9 +1783,14 @@ fn write_source_tap_changer(
         TapChangerKind::Ratio => "ratio",
         TapChangerKind::Phase => "phase",
     };
-    let id = det_mrid(
-        "source_tap_changer",
-        &format!("{}:{}:{kind}", tap.transformer, tap.winding),
+    let id = tap.component.as_ref().map_or_else(
+        || {
+            det_mrid(
+                "source_tap_changer",
+                &format!("{}:{}:{kind}", tap.transformer, tap.winding),
+            )
+        },
+        |component| component_mrid(context.detailed, component),
     );
     let table_class = match tap.kind {
         TapChangerKind::Ratio => "RatioTapChangerTable",
@@ -734,18 +1806,29 @@ fn write_source_tap_changer(
         || tap.regulation_value.is_some()
         || tap.regulation_terminal.is_some())
     .then(|| det_mrid("source_tap_control", &id));
+    let control_terminal = control
+        .as_ref()
+        .map(|_| match tap.regulation_terminal.as_ref() {
+            Some(reference) => terminal_reference_mrid(
+                context.network,
+                Some(context.detailed),
+                reference,
+            )
+            .ok_or_else(|| {
+                format!(
+                    "regulation terminal `{}` terminal {} does not resolve to an emitted CGMES terminal",
+                    reference.equipment, reference.terminal
+                )
+            }),
+            None => Ok(term_id(&owner, usize::from(tap.winding))),
+        })
+        .transpose()?;
 
     eq.named(class, &id, &format!("{kind} tap changer"));
     eq.text("TapChanger.lowStep", tap.low_tap_position);
-    let high = tap
-        .steps
-        .iter()
-        .map(|value| value.position)
-        .max()
-        .unwrap_or(tap.low_tap_position);
-    eq.text("TapChanger.highStep", high);
+    eq.text("TapChanger.highStep", tap_high_position(tap));
     eq.text("TapChanger.neutralStep", tap_neutral_position(tap));
-    eq.text("TapChanger.normalStep", tap_neutral_position(tap));
+    eq.text("TapChanger.normalStep", tap_normal_position(tap));
     eq.text("TapChanger.neutralU", tap_rated_kv(context.network, tap));
     eq.text("TapChanger.ltcFlag", tap.load_tap_changing_capabilities);
     if let Some(control) = &control {
@@ -756,7 +1839,14 @@ fn write_source_tap_changer(
             TapChangerKind::Ratio => "RatioTapChanger.TransformerEnd",
             TapChangerKind::Phase => "PhaseTapChanger.TransformerEnd",
         },
-        &det_mrid("xfend", &format!("{owner}:{}", tap.winding)),
+        &transformer_end_mrid(
+            Some(context.detailed),
+            tap.transformer.component_type(),
+            tap.transformer.local_id(),
+            &owner,
+            usize::from(tap.winding),
+        )
+        .map_err(|error| error.to_string())?,
     );
     eq.reference(
         match tap.kind {
@@ -765,12 +1855,18 @@ fn write_source_tap_changer(
         },
         &table,
     );
+    if tap.kind == TapChangerKind::Ratio {
+        eq.text(
+            "RatioTapChanger.stepVoltageIncrement",
+            ratio_voltage_step_increment_percent(tap),
+        );
+    }
     eq.close(class);
 
     write_source_tap_table(eq, context, &id, &table, table_class, point_class, kind);
 
-    if let Some(control_id) = control {
-        write_source_tap_control(eq, ssh, context, &owner, &control_id);
+    if let (Some(control_id), Some(control_terminal)) = (control, control_terminal) {
+        write_source_tap_control(eq, ssh, context, &control_id, &control_terminal);
     }
     ssh.open(class, &id, true);
     if let Some(position) = tap.tap_position {
@@ -778,15 +1874,12 @@ fn write_source_tap_changer(
     }
     ssh.text("TapChanger.controlEnabled", tap.regulating);
     ssh.close(class);
-    sv.open("SvTapStep", &det_mrid("svtap", &id), false);
-    sv.reference("SvTapStep.TapChanger", &id);
-    sv.text(
-        "SvTapStep.position",
-        tap.solved_tap_position
-            .or(tap.tap_position)
-            .unwrap_or_else(|| tap_neutral_position(tap)),
-    );
-    sv.close("SvTapStep");
+    if let Some(position) = tap.solved_tap_position {
+        sv.open("SvTapStep", &det_mrid("svtap", &id), false);
+        sv.reference("SvTapStep.TapChanger", &id);
+        sv.text("SvTapStep.position", position);
+        sv.close("SvTapStep");
+    }
     Ok(())
 }
 
@@ -822,8 +1915,8 @@ fn write_source_tap_control(
     eq: &mut Doc,
     ssh: &mut Doc,
     context: TapWriteContext<'_>,
-    owner: &str,
     control_id: &str,
+    terminal: &str,
 ) {
     let tap = context.tap;
     eq.named("TapChangerControl", control_id, "tap changer control");
@@ -841,18 +1934,25 @@ fn write_source_tap_control(
             TapChangerRegulationMode::Current => "RegulatingControlModeKind.currentFlow",
         },
     );
-    let terminal = tap
-        .regulation_terminal
-        .as_ref()
-        .and_then(|value| terminal_reference_mrid(context.network, Some(context.detailed), value))
-        .unwrap_or_else(|| term_id(owner, usize::from(tap.winding)));
-    eq.reference("RegulatingControl.Terminal", &terminal);
+    eq.reference("RegulatingControl.Terminal", terminal);
     eq.close("TapChangerControl");
 
     ssh.open("TapChangerControl", control_id, true);
+    ssh.text("RegulatingControl.discrete", true);
     ssh.text("RegulatingControl.enabled", tap.regulating);
     if let Some(value) = tap.regulation_value {
         ssh.text("RegulatingControl.targetValue", value);
+        ssh.enumeration(
+            "RegulatingControl.targetValueUnitMultiplier",
+            context.cim_namespace,
+            match mode {
+                TapChangerRegulationMode::Voltage => "UnitMultiplier.k",
+                TapChangerRegulationMode::ReactivePower | TapChangerRegulationMode::ActivePower => {
+                    "UnitMultiplier.M"
+                }
+                TapChangerRegulationMode::Current => "UnitMultiplier.none",
+            },
+        );
     }
     if let Some(value) = tap.target_deadband {
         ssh.text("RegulatingControl.targetDeadband", value);
@@ -872,34 +1972,50 @@ fn write_source_loading_limits(
     body: &mut Doc,
     types: &mut Vec<SourceLimitType>,
     context: LimitWriteContext<'_>,
+    warnings: &mut CgmesDiagnostics,
 ) {
     let value_property = if context.version == CgmesVersion::V3_0 {
         format!("{}.normalValue", context.class)
     } else {
         format!("{}.value", context.class)
     };
-    if let Some(value) = context.limits.permanent_limit.filter(|value| *value > 0.0) {
-        let type_id = source_limit_type(types, "patl", 0, true);
-        let id = det_mrid(
-            "source_limit",
-            &format!("{}:{}:permanent", context.group_id, context.class),
-        );
-        body.named(
-            context.class,
-            &id,
-            context
-                .limits
-                .permanent_limit_name
-                .as_deref()
-                .unwrap_or("PATL"),
-        );
-        body.reference("OperationalLimit.OperationalLimitSet", context.group_id);
-        body.reference("OperationalLimit.OperationalLimitType", &type_id);
-        body.text(&value_property, value);
-        body.close(context.class);
+    if let Some(value) = context.limits.permanent_limit {
+        if value.is_finite() && value > 0.0 {
+            let type_id = source_limit_type(types, "patl", 0, true);
+            let id = det_mrid(
+                "source_limit",
+                &format!("{}:{}:permanent", context.group_id, context.class),
+            );
+            body.named(
+                context.class,
+                &id,
+                context
+                    .limits
+                    .permanent_limit_name
+                    .as_deref()
+                    .unwrap_or("PATL"),
+            );
+            body.reference("OperationalLimit.OperationalLimitSet", context.group_id);
+            body.reference("OperationalLimit.OperationalLimitType", &type_id);
+            body.text(&value_property, value);
+            body.close(context.class);
+        } else {
+            warnings.push_as(&codes::EMIT_CGMES.record_dropped, format!(
+                "operational limit set `{}` {} permanent limit `{value}` was not emitted because a CGMES limit must be positive and finite",
+                context.group_id, context.class
+            ));
+        }
     }
     for (index, limit) in context.limits.temporary_limits.iter().enumerate() {
         if !limit.value.is_finite() || limit.value <= 0.0 {
+            warnings.push_as(&codes::EMIT_CGMES.record_dropped, format!(
+                "operational limit set `{}` {} temporary limit `{}` with value `{}` and duration {} seconds was not emitted because a CGMES limit must be positive and finite",
+                context.group_id,
+                context.class,
+                limit.name,
+                limit.value,
+                limit.acceptable_duration_seconds
+            ));
             continue;
         }
         let type_id = source_limit_type(types, "tatl", limit.acceptable_duration_seconds, false);
@@ -959,6 +2075,21 @@ fn bus_mrid(net: &BalancedNetwork, bus: BusId) -> String {
 /// Terminal id for equipment `eq` at sequence `seq`.
 fn term_id(eq: &str, seq: usize) -> String {
     det_mrid("terminal", &format!("{eq}:{seq}"))
+}
+
+fn terminal_mrid(
+    detailed: Option<&DetailedConnectivity>,
+    terminal: Option<&Terminal>,
+    equipment_mrid: &str,
+    sequence: usize,
+) -> String {
+    match (
+        detailed,
+        terminal.and_then(|terminal| terminal.component.as_ref()),
+    ) {
+        (Some(detailed), Some(component)) => component_mrid(detailed, component),
+        _ => term_id(equipment_mrid, sequence),
+    }
 }
 
 fn expanded_shunt_sections(shunt: &Shunt) -> Vec<(f64, f64)> {
@@ -1166,6 +2297,7 @@ fn calculated_bus_for_terminal(
     terminal
         .bus
         .as_ref()
+        .or(terminal.connectable_bus.as_ref())
         .and_then(|bus| {
             detailed
                 .bus_breaker_buses
@@ -1174,13 +2306,25 @@ fn calculated_bus_for_terminal(
                 .and_then(|value| value.calculated_bus)
         })
         .or_else(|| {
-            terminal.node.as_ref().and_then(|node| {
-                detailed
-                    .connectivity_nodes
-                    .iter()
-                    .find(|value| value.component == *node)
-                    .and_then(|value| value.calculated_bus)
-            })
+            terminal
+                .node
+                .as_ref()
+                .and_then(|node| calculated_bus_for_node(detailed, node))
+        })
+}
+
+fn calculated_bus_for_node(detailed: &DetailedConnectivity, node: &ComponentId) -> Option<BusId> {
+    detailed
+        .connectivity_nodes
+        .iter()
+        .find(|value| value.component == *node)
+        .and_then(|value| value.calculated_bus)
+        .or_else(|| {
+            detailed
+                .calculated_buses
+                .iter()
+                .find(|calculated| calculated.nodes.contains(node))
+                .map(|calculated| calculated.calculated_bus)
         })
 }
 
@@ -1191,17 +2335,19 @@ fn write_converter_ac_terminals(
     eq: &mut Doc,
     tp: &mut Doc,
     ssh: &mut Doc,
+    sv: &mut Doc,
     converter: &ComponentId,
     owner: &str,
-    warnings: &mut Vec<String>,
+    warnings: &mut CgmesDiagnostics,
 ) {
+    let project_mixed_topology = project_mixed_topology(detailed);
     let records = detailed
         .terminals
         .iter()
         .filter(|terminal| terminal.equipment == *converter)
         .collect::<Vec<_>>();
     if records.is_empty() {
-        warnings.push(format!(
+        warnings.push_as(&codes::EMIT_CGMES.reference_missing, format!(
             "converter `{converter}` has no AC Terminal record; its DC equipment was emitted without an AC connection"
         ));
     }
@@ -1213,24 +2359,155 @@ fn write_converter_ac_terminals(
             ));
             continue;
         };
-        let id = term_id(owner, usize::from(record.terminal));
+        let id = terminal_mrid(
+            Some(detailed),
+            Some(record),
+            owner,
+            usize::from(record.terminal),
+        );
         eq.named("Terminal", &id, &format!("AC terminal {}", record.terminal));
         eq.reference("Terminal.ConductingEquipment", owner);
         eq.text("ACDCTerminal.sequenceNumber", record.terminal);
-        eq.reference(
-            "Terminal.ConnectivityNode",
-            &connectivity_node_mrid(Some(detailed), Some(record), bus),
-        );
+        if terminal_uses_connectivity_node(detailed, record, project_mixed_topology) {
+            eq.reference(
+                "Terminal.ConnectivityNode",
+                &connectivity_node_mrid(Some(detailed), Some(record), bus, project_mixed_topology),
+            );
+        }
         eq.close("Terminal");
-        tp.open("Terminal", &id, true);
-        tp.reference(
-            "Terminal.TopologicalNode",
-            &terminal_topological_node_mrid(network, Some(detailed), Some(record), bus),
-        );
-        tp.close("Terminal");
+        if record.connected {
+            tp.open("Terminal", &id, true);
+            tp.reference(
+                "Terminal.TopologicalNode",
+                &terminal_topological_node_mrid(network, Some(detailed), Some(record), bus),
+            );
+            tp.close("Terminal");
+        }
         ssh.open("Terminal", &id, true);
         ssh.text("ACDCTerminal.connected", record.connected);
         ssh.close("Terminal");
+        write_sv_power_flow(
+            sv,
+            &id,
+            record.active_power_mw,
+            record.reactive_power_mvar,
+            warnings,
+        );
+    }
+}
+
+#[derive(Clone, Copy)]
+struct CapabilityCurveWriteContext<'a> {
+    detailed: &'a DetailedConnectivity,
+    component: &'a ComponentId,
+    owner_mrid: &'a str,
+    class: &'static str,
+    curve_id_kind: &'static str,
+    point_id_kind: &'static str,
+    fallback_name: &'static str,
+    curve: &'a ReactiveCapabilityCurve,
+    cim_ns: &'a str,
+}
+
+fn write_reactive_capability_curve(
+    eq: &mut Doc,
+    context: CapabilityCurveWriteContext<'_>,
+    warnings: &mut CgmesDiagnostics,
+) -> Option<String> {
+    let CapabilityCurveWriteContext {
+        detailed,
+        component,
+        owner_mrid,
+        class,
+        curve_id_kind,
+        point_id_kind,
+        fallback_name,
+        curve,
+        cim_ns,
+    } = context;
+    if curve.points.is_empty() {
+        warnings.push_as(
+            &codes::EMIT_CGMES.record_dropped,
+            format!(
+                "{class} `{component}` has an empty reactive capability curve and was not emitted"
+            ),
+        );
+        return None;
+    }
+    if !curve.properties.is_empty()
+        || curve
+            .points
+            .iter()
+            .any(|point| !point.properties.is_empty())
+    {
+        warnings.push_as(
+            &codes::EMIT_CGMES.field_dropped,
+            format!(
+                "{class} `{component}`: reactive capability curve properties have no CGMES field"
+            ),
+        );
+    }
+    let curve_id = det_mrid(curve_id_kind, owner_mrid);
+    eq.named(
+        class,
+        &curve_id,
+        component_name(detailed, component, fallback_name),
+    );
+    eq.enumeration(
+        "Curve.curveStyle",
+        cim_ns,
+        match curve.curve_style {
+            CurveStyle::ConstantYValue => "CurveStyle.constantYValue",
+            CurveStyle::StraightLineYValues => "CurveStyle.straightLineYValues",
+        },
+    );
+    eq.enumeration("Curve.xUnit", cim_ns, "UnitSymbol.W");
+    eq.enumeration("Curve.y1Unit", cim_ns, "UnitSymbol.VAr");
+    eq.enumeration("Curve.y2Unit", cim_ns, "UnitSymbol.VAr");
+    eq.close(class);
+    for (index, point) in curve.points.iter().enumerate() {
+        let id = det_mrid(point_id_kind, &format!("{curve_id}:{index}"));
+        eq.open("CurveData", &id, false);
+        eq.reference("CurveData.Curve", &curve_id);
+        eq.text("CurveData.xvalue", point.active_power_mw);
+        eq.text("CurveData.y1value", point.minimum_reactive_power_mvar);
+        eq.text("CurveData.y2value", point.maximum_reactive_power_mvar);
+        eq.close("CurveData");
+    }
+    Some(curve_id)
+}
+
+fn retained_equipment_reactive_limits<'a>(
+    detailed: &'a DetailedConnectivity,
+    component: &ComponentId,
+) -> Result<Option<&'a ReactiveLimits>> {
+    let mut matches = detailed
+        .equipment_reactive_limits
+        .iter()
+        .filter(|record| record.equipment == *component);
+    let Some(first) = matches.next() else {
+        return Ok(None);
+    };
+    if matches.next().is_some() {
+        return Err(emission_error(format!(
+            "equipment `{component}` has more than one reactive limits record"
+        )));
+    }
+    Ok(Some(&first.limits))
+}
+
+fn warn_min_max_reactive_limit_properties(
+    component: &ComponentId,
+    limits: &crate::network::MinMaxReactiveLimits,
+    warnings: &mut CgmesDiagnostics,
+) {
+    if !limits.properties.is_empty() {
+        warnings.push_as(
+            &codes::EMIT_CGMES.field_dropped,
+            format!(
+                "equipment `{component}`: min/max reactive limits properties have no CGMES field"
+            ),
+        );
     }
 }
 
@@ -1240,68 +2517,114 @@ fn write_vsc_capability_curve(
     converter: &VoltageSourceConverter,
     converter_mrid: &str,
     cim_ns: &str,
-    warnings: &mut Vec<String>,
-) -> Option<String> {
-    let curve = det_mrid("vsc_capability_curve", converter_mrid);
-    let (curve_style, points) = match converter.reactive_limits.as_ref()? {
-        ReactiveLimits::CapabilityCurve(value) => {
-            if !value.properties.is_empty()
-                || value
-                    .points
-                    .iter()
-                    .any(|point| !point.properties.is_empty())
-            {
-                warnings.push(format!(
-                    "VsConverter `{}`: reactive capability curve properties have no CGMES field",
-                    converter.component
-                ));
-            }
-            (value.curve_style, value.points.clone())
+    warnings: &mut CgmesDiagnostics,
+) -> Result<Option<String>> {
+    let retained = retained_equipment_reactive_limits(detailed, &converter.component)?;
+    let limits = match (converter.reactive_limits.as_ref(), retained) {
+        (Some(direct), Some(generic)) if direct != generic => {
+            return Err(emission_error(format!(
+                "VsConverter `{}` has conflicting direct and equipment reactive limits records",
+                converter.component
+            )));
         }
-        ReactiveLimits::MinMax(value) => (
-            CurveStyle::ConstantYValue,
-            vec![crate::network::ReactiveCapabilityCurvePoint {
-                active_power_mw: 0.0,
-                minimum_reactive_power_mvar: value.minimum_reactive_power_mvar,
-                maximum_reactive_power_mvar: value.maximum_reactive_power_mvar,
+        (Some(direct), _) => Some(direct),
+        (None, generic) => generic,
+    };
+    let Some(limits) = limits else {
+        return Ok(None);
+    };
+    let synthesized;
+    let curve = match limits {
+        ReactiveLimits::CapabilityCurve(value) => value,
+        ReactiveLimits::MinMax(value) => {
+            warn_min_max_reactive_limit_properties(&converter.component, value, warnings);
+            synthesized = ReactiveCapabilityCurve {
+                curve_style: CurveStyle::ConstantYValue,
                 properties: std::collections::BTreeMap::default(),
-            }],
+                points: vec![crate::network::ReactiveCapabilityCurvePoint {
+                    active_power_mw: 0.0,
+                    minimum_reactive_power_mvar: value.minimum_reactive_power_mvar,
+                    maximum_reactive_power_mvar: value.maximum_reactive_power_mvar,
+                    properties: std::collections::BTreeMap::default(),
+                }],
+            };
+            &synthesized
+        }
+    };
+    Ok(write_reactive_capability_curve(
+        eq,
+        CapabilityCurveWriteContext {
+            detailed,
+            component: &converter.component,
+            owner_mrid: converter_mrid,
+            class: "VsCapabilityCurve",
+            curve_id_kind: "vsc_capability_curve",
+            point_id_kind: "vsc_capability_point",
+            fallback_name: "VSC capability curve",
+            curve,
+            cim_ns,
+        },
+        warnings,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_synchronous_machine_reactive_limits(
+    eq: &mut Doc,
+    detailed: &DetailedConnectivity,
+    component: &ComponentId,
+    machine_mrid: &str,
+    cim_ns: &str,
+    active_power_mw: f64,
+    row_minimum_mvar: f64,
+    row_maximum_mvar: f64,
+    warnings: &mut CgmesDiagnostics,
+) -> Result<(f64, f64, Option<String>)> {
+    let Some(limits) = retained_equipment_reactive_limits(detailed, component)? else {
+        return Ok((row_minimum_mvar, row_maximum_mvar, None));
+    };
+    let (minimum_mvar, maximum_mvar) = calc_reactive_limits_at_active_power(
+        &format!("generator `{component}`"),
+        limits,
+        active_power_mw,
+    )
+    .map_err(emission_error)?;
+    let tolerance = 1e-9
+        * minimum_mvar
+            .abs()
+            .max(maximum_mvar.abs())
+            .max(row_minimum_mvar.abs())
+            .max(row_maximum_mvar.abs())
+            .max(1.0);
+    if (minimum_mvar - row_minimum_mvar).abs() > tolerance
+        || (maximum_mvar - row_maximum_mvar).abs() > tolerance
+    {
+        warnings.push_as(&codes::EMIT_CGMES.value_substituted, format!(
+            "generator `{component}`: typed reactive limits evaluate to minQ={minimum_mvar} MVAr and maxQ={maximum_mvar} MVAr at p={active_power_mw} MW, while the balanced generator row contains minQ={row_minimum_mvar} MVAr and maxQ={row_maximum_mvar} MVAr; fresh CGMES uses the typed limits"
+        ));
+    }
+    let curve = match limits {
+        ReactiveLimits::MinMax(limits) => {
+            warn_min_max_reactive_limit_properties(component, limits, warnings);
+            None
+        }
+        ReactiveLimits::CapabilityCurve(curve) => write_reactive_capability_curve(
+            eq,
+            CapabilityCurveWriteContext {
+                detailed,
+                component,
+                owner_mrid: machine_mrid,
+                class: "ReactiveCapabilityCurve",
+                curve_id_kind: "reactive_capability_curve",
+                point_id_kind: "reactive_capability_point",
+                fallback_name: "generator reactive capability curve",
+                curve,
+                cim_ns,
+            },
+            warnings,
         ),
     };
-    if points.is_empty() {
-        warnings.push(format!(
-            "VsConverter `{}` has an empty reactive capability curve; no VsCapabilityCurve was emitted",
-            converter.component
-        ));
-        return None;
-    }
-    eq.named(
-        "VsCapabilityCurve",
-        &curve,
-        component_name(detailed, &converter.component, "VSC capability curve"),
-    );
-    eq.enumeration(
-        "Curve.curveStyle",
-        cim_ns,
-        match curve_style {
-            CurveStyle::ConstantYValue => "CurveStyle.constantYValue",
-            CurveStyle::StraightLineYValues => "CurveStyle.straightLineYValues",
-        },
-    );
-    eq.enumeration("Curve.xUnit", cim_ns, "UnitSymbol.W");
-    eq.enumeration("Curve.y1Unit", cim_ns, "UnitSymbol.VAr");
-    eq.enumeration("Curve.y2Unit", cim_ns, "UnitSymbol.VAr");
-    eq.close("VsCapabilityCurve");
-    for (index, point) in points.iter().enumerate() {
-        let id = det_mrid("vsc_capability_point", &format!("{curve}:{index}"));
-        eq.open("CurveData", &id, false);
-        eq.reference("CurveData.Curve", &curve);
-        eq.text("CurveData.xvalue", point.active_power_mw);
-        eq.text("CurveData.y1value", point.minimum_reactive_power_mvar);
-        eq.text("CurveData.y2value", point.maximum_reactive_power_mvar);
-        eq.close("CurveData");
-    }
-    Some(curve)
+    Ok((minimum_mvar, maximum_mvar, curve))
 }
 
 fn write_vsc_sv(
@@ -1311,9 +2634,9 @@ fn write_vsc_sv(
     converter: &VoltageSourceConverter,
 ) {
     let valve_voltage = if writer.p.cim_ns == profiles(CgmesVersion::V3_0).cim_ns {
-        converter.uv_kv
+        converter.uv_kv.or(converter.uf_kv)
     } else {
-        converter.uf_kv
+        converter.uf_kv.or(converter.uv_kv)
     };
     let missing = [
         (
@@ -1614,10 +2937,13 @@ fn write_dc_equipment(
             },
         )?;
         if ground.dc_terminal.active_power_mw.is_some() || ground.dc_terminal.current_a.is_some() {
-            writer.warnings.push(format!(
-                "DCGround `{}`: CGMES DCTerminal has no active power or current field",
-                ground.component
-            ));
+            writer.warnings.push_as(
+                &codes::EMIT_CGMES.field_dropped,
+                format!(
+                    "DCGround `{}`: CGMES DCTerminal has no active power or current field",
+                    ground.component
+                ),
+            );
         }
     }
     for busbar in &detailed.dc_busbars {
@@ -1643,10 +2969,13 @@ fn write_dc_equipment(
                 )?,
             );
         } else if busbar.rated_dc_voltage_kv.is_some() {
-            writer.warnings.push(format!(
-                "DCBusbar `{}`: rated DC voltage has no CGMES 2.4.15 field",
-                busbar.component
-            ));
+            writer.warnings.push_as(
+                &codes::EMIT_CGMES.field_dropped,
+                format!(
+                    "DCBusbar `{}`: rated DC voltage has no CGMES 2.4.15 field",
+                    busbar.component
+                ),
+            );
         }
         eq.close("DCBusbar");
         write_dc_terminal(
@@ -1665,10 +2994,13 @@ fn write_dc_equipment(
             },
         )?;
         if busbar.dc_terminal.active_power_mw.is_some() || busbar.dc_terminal.current_a.is_some() {
-            writer.warnings.push(format!(
-                "DCBusbar `{}`: CGMES DCTerminal has no active power or current field",
-                busbar.component
-            ));
+            writer.warnings.push_as(
+                &codes::EMIT_CGMES.field_dropped,
+                format!(
+                    "DCBusbar `{}`: CGMES DCTerminal has no active power or current field",
+                    busbar.component
+                ),
+            );
         }
     }
     for line in &detailed.dc_lines {
@@ -1756,10 +3088,13 @@ fn write_dc_equipment(
             || line.dc_terminal1.current_a.is_some()
             || line.dc_terminal2.current_a.is_some()
         {
-            writer.warnings.push(format!(
-                "DCLineSegment `{}`: CGMES DCTerminal has no active power or current field",
-                line.component
-            ));
+            writer.warnings.push_as(
+                &codes::EMIT_CGMES.field_dropped,
+                format!(
+                    "DCLineSegment `{}`: CGMES DCTerminal has no active power or current field",
+                    line.component
+                ),
+            );
         }
     }
     for device in &detailed.dc_series_devices {
@@ -1840,10 +3175,13 @@ fn write_dc_equipment(
             || device.dc_terminal1.current_a.is_some()
             || device.dc_terminal2.current_a.is_some()
         {
-            writer.warnings.push(format!(
-                "DCSeriesDevice `{}`: CGMES DCTerminal has no active power or current field",
-                device.component
-            ));
+            writer.warnings.push_as(
+                &codes::EMIT_CGMES.field_dropped,
+                format!(
+                    "DCSeriesDevice `{}`: CGMES DCTerminal has no active power or current field",
+                    device.component
+                ),
+            );
         }
     }
     for switch in &detailed.dc_switches {
@@ -1897,12 +3235,20 @@ fn write_dc_equipment(
             false,
             version,
         )?;
+        if let Some(open) = switch.open {
+            ssh.open(class, &id, true);
+            ssh.text("Switch.open", open);
+            ssh.close(class);
+        }
         if switch.resistance_ohm.is_some_and(|value| value != 0.0) {
-            writer.warnings.push(format!(
-                "DC switch `{}`: resistance {} ohm has no CGMES DC switch field",
-                switch.component,
-                switch.resistance_ohm.unwrap()
-            ));
+            writer.warnings.push_as(
+                &codes::EMIT_CGMES.field_dropped,
+                format!(
+                    "DC switch `{}`: resistance {} ohm has no CGMES DC switch field",
+                    switch.component,
+                    switch.resistance_ohm.unwrap()
+                ),
+            );
         }
     }
 
@@ -1915,7 +3261,7 @@ fn write_dc_equipment(
             &id,
             writer.p.cim_ns,
             &mut writer.warnings,
-        );
+        )?;
         eq.named(
             "VsConverter",
             &id,
@@ -1973,6 +3319,7 @@ fn write_dc_equipment(
             eq,
             tp,
             ssh,
+            sv,
             &converter.component,
             &id,
             &mut writer.warnings,
@@ -2175,7 +3522,7 @@ fn write_dc_equipment(
         }
         ssh.close("VsConverter");
         if converter.droop_curve.is_some() {
-            writer.warnings.push(format!(
+            writer.warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
                 "VsConverter `{}`: PowerIO's segmented droop curve is not the CGMES scalar droop and was not emitted",
                 converter.component
             ));
@@ -2186,7 +3533,7 @@ fn write_dc_equipment(
             || converter.dc_terminal1.active_power_mw.is_some()
             || converter.dc_terminal2.active_power_mw.is_some()
         {
-            writer.warnings.push(format!(
+            writer.warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
                 "VsConverter `{}`: XIIDM DC terminal current and active power have no CGMES DCTerminal fields; converter dc_current_a owns ACDCConverter.idc",
                 converter.component
             ));
@@ -2259,6 +3606,7 @@ fn write_line_commutated_converter(
         eq,
         tp,
         ssh,
+        sv,
         &converter.component,
         &id,
         &mut writer.warnings,
@@ -2405,13 +3753,13 @@ fn write_line_commutated_converter(
     }
     ssh.close("CsConverter");
     if converter.reactive_model.is_some() || converter.power_factor.is_some() {
-        writer.warnings.push(format!(
+        writer.warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
             "CsConverter `{}`: reactive model and power factor have no direct CGMES field; PCC p/q carries the available operating assignment",
             converter.component
         ));
     }
     if converter.droop_curve.is_some() {
-        writer.warnings.push(format!(
+        writer.warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
             "CsConverter `{}`: PowerIO's segmented droop curve has no CGMES CsConverter field and was not emitted",
             converter.component
         ));
@@ -2422,7 +3770,7 @@ fn write_line_commutated_converter(
         || converter.dc_terminal1.active_power_mw.is_some()
         || converter.dc_terminal2.active_power_mw.is_some()
     {
-        writer.warnings.push(format!(
+        writer.warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
             "CsConverter `{}`: XIIDM DC terminal current and active power have no CGMES DCTerminal fields; converter dc_current_a owns ACDCConverter.idc",
             converter.component
         ));
@@ -2437,6 +3785,11 @@ fn write_line_commutated_converter(
 #[allow(clippy::too_many_lines)] // the four profiles emit in one ordered pass
 #[allow(clippy::if_not_else)] // the line arm reads first, matching the reader
 pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<CgmesFiles> {
+    net.validate().map_err(|error| {
+        emission_error(format!(
+            "network validation failed before CGMES emission: {error}"
+        ))
+    })?;
     if let Some(bus) = net
         .buses()
         .iter()
@@ -2463,26 +3816,69 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
     let mut w = Writer {
         net,
         p,
-        warnings: Vec::new(),
+        warnings: CgmesDiagnostics::new(&codes::EMIT_CGMES.record_dropped),
     };
-    let mut eq = Doc::new();
-    let mut tp = Doc::new();
-    let mut ssh = Doc::new();
-    let mut sv = Doc::new();
+    let detailed = net.detailed_connectivity().as_deref();
+    let retained_metadata = retained_identified_metadata(detailed, &mut w.warnings);
+    if let Some(detailed) = detailed {
+        warn_unemitted_detailed_fields(net, detailed, version, &mut w.warnings);
+    } else {
+        for field in case_metadata_fields(net.case_metadata(), false) {
+            w.warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
+                "network case metadata `{field}` has no field in the fresh CGMES EQ, TP, SSH, or SV FullModel headers"
+            ));
+        }
+    }
+    let mut eq = Doc::new(Arc::clone(&retained_metadata));
+    let mut tp = Doc::new(Arc::clone(&retained_metadata));
+    let mut ssh = Doc::new(Arc::clone(&retained_metadata));
+    let mut sv = Doc::new(Arc::clone(&retained_metadata));
 
     if (net.base_mva() - 100.0).abs() > 1e-9 {
-        w.warnings.push(format!(
-            "system base {} MVA: CGMES carries no MVA base, so a reparse lands \
+        w.warnings.push_as(
+            &codes::EMIT_CGMES.value_collapsed,
+            format!(
+                "system base {} MVA: CGMES carries no MVA base, so a reparse lands \
              per-unit values on 100 MVA",
-            net.base_mva()
-        ));
+                net.base_mva()
+            ),
+        );
     }
-    let detailed = net.detailed_connectivity().as_deref();
+    let project_mixed_topology = detailed.is_some_and(project_mixed_topology);
+    let use_detailed_topology = detailed.is_some_and(|value| {
+        !value.substations.is_empty()
+            || !value.voltage_levels.is_empty()
+            || !value.connectivity_nodes.is_empty()
+            || !value.bus_breaker_buses.is_empty()
+    });
     let mut active_connectivity_nodes = Vec::new();
     let mut active_bus_breaker_buses = Vec::new();
+    let mut active_calculated_buses = Vec::new();
     let mut active_source_lines = Vec::<ComponentId>::new();
     let mut terminal_generated_connectivity_nodes = HashSet::<ComponentId>::new();
+    let mut represented_calculated_buses = HashSet::<BusId>::new();
     if let Some(detailed) = detailed {
+        if project_mixed_topology {
+            let projected_levels = detailed
+                .voltage_levels
+                .iter()
+                .filter(|level| level.topology_kind == TopologyKind::BusBreaker)
+                .count();
+            w.warnings.push_as(&codes::EMIT_CGMES.value_substituted, format!(
+                "source detailed connectivity contains both node breaker and bus breaker VoltageLevels; fresh CGMES emission promotes {projected_levels} bus breaker VoltageLevel(s) to node breaker connectivity by adding one ConnectivityNode per TopologicalNode because PowSybl imports one topology mode per CGMES profile set; PowerIO's typed voltage level topology is unchanged"
+            ));
+            warn_pow_sybl_projected_transformer_connections(net, detailed, &mut w.warnings);
+        }
+        for container in detailed
+            .component_metadata
+            .iter()
+            .filter_map(|metadata| metadata.equipment_container.as_ref())
+            .filter(|container| container.component_type() == "line")
+        {
+            if !active_source_lines.contains(container) {
+                active_source_lines.push(container.clone());
+            }
+        }
         let retained_terminals = detailed
             .terminals
             .iter()
@@ -2492,12 +3888,15 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             retained_terminals
                 .iter()
                 .filter(|terminal| {
-                    terminal.node.is_none()
-                        && (v3
-                            || matches!(
-                                terminal.equipment.component_type(),
-                                "voltage_source_converter" | "line_commutated_converter"
-                            ))
+                    let topology = terminal_voltage_level_topology(detailed, terminal);
+                    let projected_bus_breaker =
+                        project_mixed_topology && topology == Some(TopologyKind::BusBreaker);
+                    (terminal.node.is_none() || projected_bus_breaker)
+                        && terminal_uses_connectivity_node(
+                            detailed,
+                            terminal,
+                            project_mixed_topology,
+                        )
                 })
                 .filter_map(|terminal| terminal.connectable_bus.as_ref().or(terminal.bus.as_ref()))
                 .cloned(),
@@ -2532,7 +3931,23 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             .collect::<HashSet<_>>();
 
         for node in &detailed.connectivity_nodes {
-            let active = node.calculated_bus.is_some()
+            let bus_breaker_level = detailed.voltage_levels.iter().any(|level| {
+                level.component == node.voltage_level
+                    && level.topology_kind == TopologyKind::BusBreaker
+            });
+            if bus_breaker_level {
+                if !project_mixed_topology
+                    && metadata(detailed, &node.component)
+                        .is_some_and(has_cgmes_external_identifier)
+                {
+                    w.warnings.push_as(&codes::EMIT_CGMES.record_dropped, format!(
+                    "source CGMES ConnectivityNode `{}` belongs to typed bus breaker VoltageLevel `{}` and was omitted from fresh emission so the voltage level remains bus breaker",
+                        node.component, node.voltage_level
+                    ));
+                }
+                continue;
+            }
+            let active = calculated_bus_for_node(detailed, &node.component).is_some()
                 || retained_terminal_nodes.contains(&node.component)
                 || retained_switch_nodes.contains(&node.component)
                 || retained_busbar_nodes.contains(&node.component)
@@ -2545,7 +3960,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                     active_source_lines.push(node.voltage_level.clone());
                 }
             } else {
-                w.warnings.push(format!(
+                w.warnings.push_as(&codes::EMIT_CGMES.record_dropped, format!(
                     "source CGMES ConnectivityNode `{}` in ConnectivityNodeContainer `{}` is not connected to a calculated bus or retained equipment and was omitted from fresh CGMES emission; no VoltageLevel or BaseVoltage was generated for that container",
                     node.component, node.voltage_level
                 ));
@@ -2556,19 +3971,79 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 || retained_terminal_buses.contains(&configured.component);
             if active {
                 active_bus_breaker_buses.push(configured);
+                if project_mixed_topology
+                    && detailed.voltage_levels.iter().any(|level| {
+                        level.component == configured.voltage_level
+                            && level.topology_kind == TopologyKind::BusBreaker
+                    })
+                {
+                    terminal_generated_connectivity_nodes.insert(configured.component.clone());
+                }
                 if configured.voltage_level.component_type() == "line"
                     && !active_source_lines.contains(&configured.voltage_level)
                 {
                     active_source_lines.push(configured.voltage_level.clone());
                 }
             } else {
-                w.warnings.push(format!(
+                w.warnings.push_as(&codes::EMIT_CGMES.record_dropped, format!(
                     "source CGMES TopologicalNode `{}` in ConnectivityNodeContainer `{}` is not connected to a calculated bus or retained equipment and was omitted from fresh CGMES emission; no VoltageLevel or BaseVoltage was generated for that container",
                     configured.component, configured.voltage_level
                 ));
             }
         }
+        let configured_calculated_buses = active_bus_breaker_buses
+            .iter()
+            .filter_map(|configured| configured.calculated_bus)
+            .collect::<HashSet<_>>();
+        represented_calculated_buses.extend(configured_calculated_buses);
+        for calculated in &detailed.calculated_buses {
+            if represented_calculated_buses.insert(calculated.calculated_bus) {
+                active_calculated_buses.push((
+                    calculated.calculated_bus,
+                    &calculated.voltage_level,
+                    calculated.voltage_kv,
+                    calculated.angle_degrees,
+                ));
+            }
+        }
+        for node in &active_connectivity_nodes {
+            let Some(calculated_bus) = calculated_bus_for_node(detailed, &node.component) else {
+                continue;
+            };
+            if represented_calculated_buses.insert(calculated_bus) {
+                active_calculated_buses.push((calculated_bus, &node.voltage_level, None, None));
+            }
+        }
+        for level in &detailed.voltage_levels {
+            for bus in &level.buses {
+                if represented_calculated_buses.insert(*bus) {
+                    active_calculated_buses.push((*bus, &level.component, None, None));
+                }
+            }
+        }
     }
+    let fallback_calculated_buses = if use_detailed_topology {
+        net.buses()
+            .iter()
+            .filter(|bus| !represented_calculated_buses.contains(&bus.id))
+            .map(|bus| bus.id)
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    let fallback_connectivity_buses = if use_detailed_topology {
+        let detailed = detailed.expect("detailed topology has detailed connectivity");
+        let terminal_buses = missing_detailed_terminal_buses(net, detailed);
+        net.buses()
+            .iter()
+            .filter(|bus| {
+                terminal_buses.contains(&bus.id) || fallback_calculated_buses.contains(&bus.id)
+            })
+            .map(|bus| bus.id)
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     let mut generated_voltage_levels = Vec::<(ComponentId, f64)>::new();
     if let Some(detailed) = detailed {
         let mut record_container = |container: &ComponentId,
@@ -2635,10 +4110,15 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         for node in &active_connectivity_nodes {
             record_container(
                 &node.voltage_level,
-                node.calculated_bus,
+                calculated_bus_for_node(detailed, &node.component),
                 "ConnectivityNode",
                 &node.component,
             )?;
+        }
+        for (bus, container, _, _) in &active_calculated_buses {
+            let affected = ComponentId::new("calculated_bus", bus.to_string())
+                .expect("calculated bus identity is valid");
+            record_container(container, Some(*bus), "TopologicalNode", &affected)?;
         }
     }
 
@@ -2693,11 +4173,8 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
     eq.close("BaseFrequency");
 
     let fallback_substation = det_mrid("substation", "powerio");
-    if let Some(detailed) = detailed.filter(|value| {
-        !value.voltage_levels.is_empty()
-            || !value.connectivity_nodes.is_empty()
-            || !value.bus_breaker_buses.is_empty()
-    }) {
+    if use_detailed_topology {
+        let detailed = detailed.expect("detailed topology has detailed connectivity");
         let voltage_level_missing_substation = detailed.voltage_levels.iter().any(|level| {
             level.substation.as_ref().is_none_or(|substation| {
                 !detailed
@@ -2706,8 +4183,9 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                     .any(|value| value.component == *substation)
             })
         });
-        let needs_fallback_substation =
-            voltage_level_missing_substation || !generated_voltage_levels.is_empty();
+        let needs_fallback_substation = voltage_level_missing_substation
+            || !generated_voltage_levels.is_empty()
+            || !fallback_calculated_buses.is_empty();
         for substation in &detailed.substations {
             let id = component_mrid(detailed, &substation.component);
             eq.named(
@@ -2725,7 +4203,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 || substation.operator.is_some()
                 || !substation.geographical_tags.is_empty()
             {
-                w.warnings.push(format!(
+                w.warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
                     "substation `{}`: country, operator, and geographical tags are not emitted by the CGMES core equipment profile",
                     substation.component.local_id()
                 ));
@@ -2736,9 +4214,9 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             eq.reference("Substation.Region", &subregion);
             eq.close("Substation");
             if voltage_level_missing_substation {
-                w.warnings.push(
-                    "voltage levels without a declared substation were placed in the PowerIO substation"
-                        .into(),
+                w.warnings.push_as(
+                    &codes::EMIT_CGMES.value_defaulted,
+                    "voltage levels without a declared substation were placed in the PowerIO substation",
                 );
             }
         }
@@ -2783,6 +4261,22 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             eq.reference("VoltageLevel.BaseVoltage", &base_of(*nominal_kv));
             eq.close("VoltageLevel");
         }
+        for bus_id in &fallback_calculated_buses {
+            let bus = net
+                .buses()
+                .iter()
+                .find(|bus| bus.id == *bus_id)
+                .expect("fallback bus exists in the balanced network");
+            let id = det_mrid("voltagelevel", &bus.id.to_string());
+            eq.named("VoltageLevel", &id, &format!("VL{}", bus.id));
+            eq.reference("VoltageLevel.Substation", &fallback_substation);
+            eq.reference("VoltageLevel.BaseVoltage", &base_of(bus.base_kv));
+            eq.close("VoltageLevel");
+            w.warnings.push_as(&codes::EMIT_CGMES.value_defaulted, format!(
+                "balanced bus {} is absent from detailed connectivity; fresh CGMES emitted its TopologicalNode and a generated VoltageLevel and ConnectivityNode",
+                bus.id
+            ));
+        }
         for line in &active_source_lines {
             let id = component_mrid(detailed, line);
             eq.named("Line", &id, component_name(detailed, line, line.local_id()));
@@ -2790,8 +4284,10 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             eq.close("Line");
         }
 
+        let mut defined_connectivity_node_ids = HashSet::<String>::new();
         for node in &active_connectivity_nodes {
             let id = component_mrid(detailed, &node.component);
+            defined_connectivity_node_ids.insert(id.clone());
             eq.named(
                 "ConnectivityNode",
                 &id,
@@ -2802,7 +4298,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 &topology_voltage_level_mrid(detailed, &node.voltage_level),
             );
             eq.close("ConnectivityNode");
-            if let Some(bus) = node.calculated_bus {
+            if let Some(bus) = calculated_bus_for_node(detailed, &node.component) {
                 tp.open("ConnectivityNode", &id, true);
                 tp.reference("ConnectivityNode.TopologicalNode", &bus_mrid(net, bus));
                 tp.close("ConnectivityNode");
@@ -2813,7 +4309,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                     .iter()
                     .any(|level| level.component == node.voltage_level)
             {
-                let affected = node.calculated_bus.map_or_else(
+                let affected = calculated_bus_for_node(detailed, &node.component).map_or_else(
                     || {
                         format!(
                             "ConnectivityNode `{}` with no calculated bus",
@@ -2822,28 +4318,77 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                     },
                     |bus| format!("bus {bus} through ConnectivityNode `{}`", node.component),
                 );
-                w.warnings.push(format!(
+                w.warnings.push_as(&codes::EMIT_CGMES.value_defaulted, format!(
                     "source ConnectivityNodeContainer `{}` for {affected} was not a typed VoltageLevel; during fresh CGMES emission, that topology was placed in generated VoltageLevel `{}`",
                     node.voltage_level,
                     topology_voltage_level_mrid(detailed, &node.voltage_level)
                 ));
             }
         }
+        for (bus, voltage_level, voltage_kv, angle_degrees) in &active_calculated_buses {
+            let balanced_bus = net
+                .buses()
+                .iter()
+                .find(|candidate| candidate.id == *bus)
+                .expect("active calculated bus exists in the balanced network");
+            let id = bus_mrid(net, *bus);
+            tp.named(
+                "TopologicalNode",
+                &id,
+                balanced_bus
+                    .name
+                    .as_deref()
+                    .unwrap_or_else(|| balanced_bus.uid.as_deref().unwrap_or("calculated bus")),
+            );
+            tp.reference(
+                "TopologicalNode.BaseVoltage",
+                &base_of(balanced_bus.base_kv),
+            );
+            tp.reference(
+                "TopologicalNode.ConnectivityNodeContainer",
+                &topology_voltage_level_mrid(detailed, voltage_level),
+            );
+            tp.close("TopologicalNode");
+            write_sv_voltage(
+                &mut sv,
+                &id,
+                *voltage_kv,
+                *angle_degrees,
+                false,
+                &mut w.warnings,
+            );
+        }
+        for bus_id in &fallback_calculated_buses {
+            let bus = net
+                .buses()
+                .iter()
+                .find(|bus| bus.id == *bus_id)
+                .expect("fallback bus exists in the balanced network");
+            let id = bus_mrid(net, bus.id);
+            let voltage_level = det_mrid("voltagelevel", &bus.id.to_string());
+            tp.named(
+                "TopologicalNode",
+                &id,
+                bus.name.as_deref().unwrap_or(&bus.id.to_string()),
+            );
+            tp.reference("TopologicalNode.BaseVoltage", &base_of(bus.base_kv));
+            tp.reference("TopologicalNode.ConnectivityNodeContainer", &voltage_level);
+            tp.close("TopologicalNode");
+            write_sv_voltage(
+                &mut sv,
+                &id,
+                Some(bus.vm * bus.base_kv),
+                Some(bus.va),
+                false,
+                &mut w.warnings,
+            );
+        }
         for configured in &active_bus_breaker_buses {
-            let typed_level = detailed
-                .voltage_levels
-                .iter()
-                .find(|level| level.component == configured.voltage_level);
-            let has_connectivity_nodes = active_connectivity_nodes
-                .iter()
-                .any(|node| node.voltage_level == configured.voltage_level);
-            let is_bus_breaker = typed_level.map_or(!has_connectivity_nodes, |level| {
-                level.topology_kind == TopologyKind::BusBreaker
-            });
-            if is_bus_breaker
-                || terminal_generated_connectivity_nodes.contains(&configured.component)
-            {
+            if terminal_generated_connectivity_nodes.contains(&configured.component) {
                 let id = det_mrid("connectivity_node", &configured.component.to_string());
+                if !defined_connectivity_node_ids.insert(id.clone()) {
+                    continue;
+                }
                 eq.named(
                     "ConnectivityNode",
                     &id,
@@ -2864,6 +4409,31 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                     &configured_bus_mrid(detailed, &configured.component),
                 );
                 tp.close("ConnectivityNode");
+            }
+        }
+        for bus_id in &fallback_connectivity_buses {
+            let id = connectivity_node_mrid(Some(detailed), None, *bus_id, project_mixed_topology);
+            if !defined_connectivity_node_ids.insert(id.clone()) {
+                continue;
+            }
+            let container = detailed_voltage_level_for_bus(detailed, *bus_id).map_or_else(
+                || det_mrid("voltagelevel", &bus_id.to_string()),
+                |component| topology_voltage_level_mrid(detailed, component),
+            );
+            eq.named(
+                "ConnectivityNode",
+                &id,
+                &format!("Generated connectivity node for bus {bus_id}"),
+            );
+            eq.reference("ConnectivityNode.ConnectivityNodeContainer", &container);
+            eq.close("ConnectivityNode");
+            tp.open("ConnectivityNode", &id, true);
+            tp.reference("ConnectivityNode.TopologicalNode", &bus_mrid(net, *bus_id));
+            tp.close("ConnectivityNode");
+            if !fallback_calculated_buses.contains(bus_id) {
+                w.warnings.push_as(&codes::EMIT_CGMES.value_defaulted, format!(
+                    "at least one balanced equipment terminal at bus {bus_id} is absent from detailed connectivity; fresh CGMES emitted a generated ConnectivityNode for that terminal"
+                ));
             }
         }
 
@@ -2906,24 +4476,28 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             );
             tp.close("TopologicalNode");
             if level.is_none() && configured.voltage_level.component_type() != "line" {
-                w.warnings.push(format!(
+                w.warnings.push_as(&codes::EMIT_CGMES.value_defaulted, format!(
                     "source ConnectivityNodeContainer `{}` for TopologicalNode `{}` was not a typed VoltageLevel; during fresh CGMES emission, that topology was placed in generated VoltageLevel `{}`",
                     configured.voltage_level,
                     configured.component,
                     topology_voltage_level_mrid(detailed, &configured.voltage_level)
                 ));
             }
-            if let Some(bus) = configured
-                .calculated_bus
-                .and_then(|id| net.buses().iter().find(|bus| bus.id == id))
-            {
-                let svv = det_mrid("svvoltage", &id);
-                sv.open("SvVoltage", &svv, false);
-                sv.reference("SvVoltage.TopologicalNode", &id);
-                sv.text("SvVoltage.v", bus.vm * bus.base_kv);
-                sv.text("SvVoltage.angle", bus.va);
-                sv.close("SvVoltage");
-            }
+            let authority_mismatch =
+                metadata(detailed, &configured.component).is_some_and(|metadata| {
+                    metadata
+                        .properties
+                        .get(super::CGMES_SV_VOLTAGE_AUTHORITY_MISMATCH_PROPERTY)
+                        .is_some_and(|value| value == "true")
+                });
+            write_sv_voltage(
+                &mut sv,
+                &id,
+                configured.voltage_kv,
+                configured.angle_degrees,
+                authority_mismatch,
+                &mut w.warnings,
+            );
         }
     } else {
         // A flat case has one synthetic hierarchy and connectivity node per bus.
@@ -2936,6 +4510,8 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             eq.named("VoltageLevel", &vl, &format!("VL{}", bus.id));
             eq.reference("VoltageLevel.Substation", &sub);
             eq.reference("VoltageLevel.BaseVoltage", &base_of(bus.base_kv));
+            eq.text("VoltageLevel.lowVoltageLimit", bus.vmin * bus.base_kv);
+            eq.text("VoltageLevel.highVoltageLimit", bus.vmax * bus.base_kv);
             eq.close("VoltageLevel");
 
             let tn = bus_mrid(net, bus.id);
@@ -2967,10 +4543,13 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
 
     for bus in net.buses() {
         if bus.evhi.is_some() || bus.evlo.is_some() {
-            w.warnings.push(format!(
-                "bus {}: emergency voltage band (evhi/evlo) has no CGMES slot",
-                bus.id
-            ));
+            w.warnings.push_as(
+                &codes::EMIT_CGMES.field_dropped,
+                format!(
+                    "bus {}: emergency voltage band (evhi/evlo) has no CGMES slot",
+                    bus.id
+                ),
+            );
         }
     }
 
@@ -2978,68 +4557,143 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
     let terminal = |eq: &mut Doc,
                     tp: &mut Doc,
                     ssh: &mut Doc,
+                    sv: &mut Doc,
                     owner: &str,
                     component_type: &str,
                     local_id: &str,
+                    record_override: Option<&Terminal>,
                     seq: usize,
                     bus: BusId,
-                    connected: bool| {
-        let record = detailed
-            .and_then(|detailed| detailed_terminal(detailed, component_type, local_id, seq));
-        let id = term_id(owner, seq);
+                    connected: bool,
+                    warnings: &mut CgmesDiagnostics| {
+        let record = record_override.or_else(|| {
+            detailed.and_then(|detailed| detailed_terminal(detailed, component_type, local_id, seq))
+        });
+        let id = terminal_mrid(detailed, record, owner, seq);
         eq.open("Terminal", &id, false);
         eq.reference("Terminal.ConductingEquipment", owner);
         eq.text("ACDCTerminal.sequenceNumber", seq);
-        if v3 || record.and_then(|value| value.node.as_ref()).is_some() {
+        if record.is_none_or(|record| {
+            detailed.is_none_or(|detailed| {
+                terminal_uses_connectivity_node(detailed, record, project_mixed_topology)
+            })
+        }) {
             eq.reference(
                 "Terminal.ConnectivityNode",
-                &connectivity_node_mrid(detailed, record, bus),
+                &connectivity_node_mrid(detailed, record, bus, project_mixed_topology),
             );
         }
         eq.close("Terminal");
-        tp.open("Terminal", &id, true);
-        tp.reference(
-            "Terminal.TopologicalNode",
-            &terminal_topological_node_mrid(net, detailed, record, bus),
-        );
-        tp.close("Terminal");
+        let terminal_connected = record.map_or(connected, |value| value.connected);
+        if terminal_connected {
+            tp.open("Terminal", &id, true);
+            tp.reference(
+                "Terminal.TopologicalNode",
+                &terminal_topological_node_mrid(net, detailed, record, bus),
+            );
+            tp.close("Terminal");
+        }
         ssh.open("Terminal", &id, true);
-        ssh.text(
-            "ACDCTerminal.connected",
-            record.map_or(connected, |value| value.connected),
-        );
+        ssh.text("ACDCTerminal.connected", terminal_connected);
         ssh.close("Terminal");
+        if let Some(record) = record
+            && !matches!(
+                record.equipment.component_type(),
+                "voltage_source_converter" | "line_commutated_converter"
+            )
+        {
+            write_sv_power_flow(
+                sv,
+                &id,
+                record.active_power_mw,
+                record.reactive_power_mvar,
+                warnings,
+            );
+        }
+        id
+    };
+
+    let disconnected_terminal = |eq: &mut Doc,
+                                 ssh: &mut Doc,
+                                 sv: &mut Doc,
+                                 owner: &str,
+                                 record: &Terminal,
+                                 warnings: &mut CgmesDiagnostics| {
+        let id = terminal_mrid(detailed, Some(record), owner, usize::from(record.terminal));
+        eq.open("Terminal", &id, false);
+        eq.reference("Terminal.ConductingEquipment", owner);
+        eq.text("ACDCTerminal.sequenceNumber", record.terminal);
+        if terminal_uses_connectivity_node(
+            detailed.expect("detailed terminal has detailed connectivity"),
+            record,
+            project_mixed_topology,
+        ) {
+            if let Some(node) = record.node.as_ref() {
+                eq.reference(
+                    "Terminal.ConnectivityNode",
+                    &component_mrid(
+                        detailed.expect("detailed terminal has detailed connectivity"),
+                        node,
+                    ),
+                );
+            } else if let Some(bus) = record.connectable_bus.as_ref().or(record.bus.as_ref()) {
+                eq.reference(
+                    "Terminal.ConnectivityNode",
+                    &det_mrid("connectivity_node", &bus.to_string()),
+                );
+            }
+        }
+        eq.close("Terminal");
+        ssh.open("Terminal", &id, true);
+        ssh.text("ACDCTerminal.connected", false);
+        ssh.close("Terminal");
+        if !matches!(
+            record.equipment.component_type(),
+            "voltage_source_converter" | "line_commutated_converter"
+        ) {
+            write_sv_power_flow(
+                sv,
+                &id,
+                record.active_power_mw,
+                record.reactive_power_mvar,
+                warnings,
+            );
+        }
         id
     };
 
     if let Some(detailed) = detailed {
         for busbar in &detailed.busbar_sections {
-            let Some(bus) = detailed
-                .connectivity_nodes
-                .iter()
-                .find(|node| node.component == busbar.node)
-                .and_then(|node| node.calculated_bus)
-            else {
-                w.warnings.push(format!(
-                    "busbar section `{}` has no calculated bus and was not emitted",
-                    busbar.component.local_id()
-                ));
-                continue;
-            };
-            let id = component_mrid(detailed, &busbar.component);
             let level = detailed
                 .voltage_levels
                 .iter()
                 .find(|level| level.component == busbar.voltage_level);
+            if level.is_some_and(|level| level.topology_kind == TopologyKind::BusBreaker)
+                && !project_mixed_topology
+            {
+                w.warnings.push_as(&codes::EMIT_CGMES.record_dropped, format!(
+                    "BusbarSection `{}` belongs to bus breaker VoltageLevel `{}`; it remains in PowerIO detailed connectivity but was omitted from fresh CGMES because CIM100 represents that bus branch topology through TopologicalNode terminals",
+                    busbar.component, busbar.voltage_level
+                ));
+                continue;
+            }
+            let bus = calculated_bus_for_node(detailed, &busbar.node);
+            let id = component_mrid(detailed, &busbar.component);
             eq.named(
                 "BusbarSection",
                 &id,
                 component_name(detailed, &busbar.component, busbar.component.local_id()),
             );
-            eq.reference(
-                "Equipment.EquipmentContainer",
-                &component_mrid(detailed, &busbar.voltage_level),
-            );
+            let fallback_container = component_mrid(detailed, &busbar.voltage_level);
+            let container = mapped_equipment_container_mrid(
+                Some(detailed),
+                "busbar_section",
+                busbar.component.local_id(),
+                Some(fallback_container.clone()),
+                &mut w.warnings,
+            )
+            .unwrap_or(fallback_container);
+            eq.reference("Equipment.EquipmentContainer", &container);
             if let Some(level) = level {
                 eq.reference(
                     "ConductingEquipment.BaseVoltage",
@@ -3047,79 +4701,257 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 );
             }
             eq.close("BusbarSection");
-            terminal(
-                &mut eq,
-                &mut tp,
-                &mut ssh,
+            let fallback_busbar_terminal = Terminal {
+                component: None,
+                equipment: busbar.component.clone(),
+                terminal: 1,
+                voltage_level: busbar.voltage_level.clone(),
+                bus: None,
+                connectable_bus: None,
+                node: Some(busbar.node.clone()),
+                connected: bus.is_some(),
+                active_power_mw: None,
+                reactive_power_mvar: None,
+            };
+            let busbar_terminal =
+                detailed_terminal(detailed, "busbar_section", busbar.component.local_id(), 1)
+                    .unwrap_or(&fallback_busbar_terminal);
+            if let Some(bus) = bus {
+                terminal(
+                    &mut eq,
+                    &mut tp,
+                    &mut ssh,
+                    &mut sv,
+                    &id,
+                    "busbar_section",
+                    busbar.component.local_id(),
+                    Some(busbar_terminal),
+                    1,
+                    bus,
+                    busbar_terminal.connected,
+                    &mut w.warnings,
+                );
+            } else if busbar_terminal.connected {
+                return Err(emission_error(format!(
+                    "BusbarSection `{}` terminal 1 is connected but its ConnectivityNode `{}` has no calculated bus",
+                    busbar.component, busbar.node
+                )));
+            } else {
+                disconnected_terminal(
+                    &mut eq,
+                    &mut ssh,
+                    &mut sv,
+                    &id,
+                    busbar_terminal,
+                    &mut w.warnings,
+                );
+            }
+            if let Some(in_service) = retained_sv_status(detailed, &busbar.component) {
+                write_sv_status(&mut sv, &id, in_service);
+            }
+        }
+        for junction in &detailed.junctions {
+            let id = component_mrid(detailed, &junction.component);
+            eq.named(
+                "Junction",
                 &id,
-                "busbar_section",
-                busbar.component.local_id(),
-                1,
-                bus,
-                true,
+                component_name(detailed, &junction.component, junction.component.local_id()),
             );
+            let fallback_container = detailed
+                .terminals
+                .iter()
+                .find(|terminal| terminal.equipment == junction.component)
+                .map(|terminal| topology_voltage_level_mrid(detailed, &terminal.voltage_level));
+            if let Some(container) = mapped_equipment_container_mrid(
+                Some(detailed),
+                "junction",
+                junction.component.local_id(),
+                fallback_container,
+                &mut w.warnings,
+            ) {
+                eq.reference("Equipment.EquipmentContainer", &container);
+            }
+            eq.close("Junction");
+            for record in detailed
+                .terminals
+                .iter()
+                .filter(|record| record.equipment == junction.component)
+            {
+                if let Some(bus) = calculated_bus_for_terminal(detailed, record) {
+                    terminal(
+                        &mut eq,
+                        &mut tp,
+                        &mut ssh,
+                        &mut sv,
+                        &id,
+                        "junction",
+                        junction.component.local_id(),
+                        Some(record),
+                        usize::from(record.terminal),
+                        bus,
+                        record.connected,
+                        &mut w.warnings,
+                    );
+                } else if record.connected {
+                    return Err(emission_error(format!(
+                        "Junction `{}` terminal {} is connected but has no calculated bus",
+                        junction.component, record.terminal
+                    )));
+                } else {
+                    disconnected_terminal(&mut eq, &mut ssh, &mut sv, &id, record, &mut w.warnings);
+                }
+            }
+            if let Some(in_service) = retained_sv_status(detailed, &junction.component) {
+                write_sv_status(&mut sv, &id, in_service);
+            }
         }
         for switch in &detailed.switches {
-            let (Some(first), Some(second)) = (
-                endpoint_bus(detailed, &switch.endpoint1),
-                endpoint_bus(detailed, &switch.endpoint2),
-            ) else {
-                w.warnings.push(format!(
-                    "switch `{}` has an endpoint without a calculated bus and was not emitted",
-                    switch.component.local_id()
-                ));
-                continue;
-            };
+            let first = endpoint_bus(detailed, &switch.endpoint1);
+            let second = endpoint_bus(detailed, &switch.endpoint2);
             let id = component_mrid(detailed, &switch.component);
-            let class = switch_class(switch.kind);
+            let balanced_switch = net
+                .switches()
+                .iter()
+                .find(|value| value.uid.as_deref() == Some(switch.component.local_id()));
+            let class =
+                mapped_component_metadata(Some(detailed), "switch", switch.component.local_id())
+                    .and_then(|metadata| metadata.properties.get(CGMES_CLASS_PROPERTY))
+                    .filter(|class| {
+                        matches!(
+                            class.as_str(),
+                            "Breaker"
+                                | "Disconnector"
+                                | "LoadBreakSwitch"
+                                | "Switch"
+                                | "Fuse"
+                                | "Jumper"
+                                | "GroundDisconnector"
+                                | "DisconnectingCircuitBreaker"
+                        )
+                    })
+                    .map_or_else(|| switch_class(switch.kind), String::as_str);
             eq.named(
                 class,
                 &id,
                 component_name(detailed, &switch.component, switch.component.local_id()),
             );
-            eq.reference(
-                "Equipment.EquipmentContainer",
-                &component_mrid(detailed, &switch.voltage_level),
-            );
+            let fallback_container = component_mrid(detailed, &switch.voltage_level);
+            let container = mapped_equipment_container_mrid(
+                Some(detailed),
+                "switch",
+                switch.component.local_id(),
+                Some(fallback_container.clone()),
+                &mut w.warnings,
+            )
+            .unwrap_or(fallback_container);
+            eq.reference("Equipment.EquipmentContainer", &container);
             eq.text("Switch.normalOpen", switch.open);
             eq.text("Switch.retained", switch.retained);
-            if let Some(current_rating) = net
-                .switches()
-                .iter()
-                .find(|value| value.uid.as_deref() == Some(switch.component.local_id()))
-                .and_then(|value| value.current_rating)
-            {
+            if let Some(current_rating) = balanced_switch.and_then(|value| value.current_rating) {
                 eq.text("Switch.ratedCurrent", current_rating);
             }
             eq.close(class);
-            terminal(
-                &mut eq,
-                &mut tp,
-                &mut ssh,
-                &id,
-                "switch",
-                switch.component.local_id(),
-                1,
-                first,
-                true,
-            );
-            terminal(
-                &mut eq,
-                &mut tp,
-                &mut ssh,
-                &id,
-                "switch",
-                switch.component.local_id(),
-                2,
-                second,
-                true,
-            );
+            if let Some(thermal_rating) = balanced_switch.and_then(|value| value.thermal_rating) {
+                w.warnings.push_as(
+                    &codes::EMIT_CGMES.field_dropped,
+                    format!(
+                        "switch `{}` thermal rating {thermal_rating} MVA was not emitted: CGMES Switch carries rated current, not an apparent power limit",
+                        switch.component.local_id()
+                    ),
+                );
+            }
+            let fallback_switch_terminal = |number: u8,
+                                            endpoint: &TopologyEndpoint,
+                                            bus: Option<BusId>,
+                                            connected: bool|
+             -> Terminal {
+                let balanced_flow = balanced_switch.map(|value| {
+                    if bus == Some(value.to) || (bus.is_none() && number == 2) {
+                        (value.pt, value.qt)
+                    } else {
+                        (value.pf, value.qf)
+                    }
+                });
+                Terminal {
+                    component: None,
+                    equipment: switch.component.clone(),
+                    terminal: number,
+                    voltage_level: switch.voltage_level.clone(),
+                    bus: match endpoint {
+                        TopologyEndpoint::Bus(bus) => Some(bus.clone()),
+                        TopologyEndpoint::Node(_) => None,
+                    },
+                    connectable_bus: match endpoint {
+                        TopologyEndpoint::Bus(bus) => Some(bus.clone()),
+                        TopologyEndpoint::Node(_) => None,
+                    },
+                    node: match endpoint {
+                        TopologyEndpoint::Node(node) => Some(node.clone()),
+                        TopologyEndpoint::Bus(_) => None,
+                    },
+                    connected,
+                    active_power_mw: balanced_flow.and_then(|value| value.0),
+                    reactive_power_mvar: balanced_flow.and_then(|value| value.1),
+                }
+            };
+            let merged_terminal =
+                |number: u8, endpoint: &TopologyEndpoint, bus: Option<BusId>, connected: bool| {
+                    let mut record = detailed_terminal(
+                        detailed,
+                        "switch",
+                        switch.component.local_id(),
+                        usize::from(number),
+                    )
+                    .cloned()
+                    .unwrap_or_else(|| fallback_switch_terminal(number, endpoint, bus, connected));
+                    if let Some(value) = balanced_switch {
+                        let (active, reactive) =
+                            if bus == Some(value.to) || (bus.is_none() && number == 2) {
+                                (value.pt, value.qt)
+                            } else {
+                                (value.pf, value.qf)
+                            };
+                        record.active_power_mw = record.active_power_mw.or(active);
+                        record.reactive_power_mvar = record.reactive_power_mvar.or(reactive);
+                    }
+                    record
+                };
+            let first_terminal = merged_terminal(1, &switch.endpoint1, first, first.is_some());
+            let second_terminal = merged_terminal(2, &switch.endpoint2, second, second.is_some());
+            for (record, bus) in [(&first_terminal, first), (&second_terminal, second)] {
+                if let Some(bus) = bus {
+                    terminal(
+                        &mut eq,
+                        &mut tp,
+                        &mut ssh,
+                        &mut sv,
+                        &id,
+                        "switch",
+                        switch.component.local_id(),
+                        Some(record),
+                        usize::from(record.terminal),
+                        bus,
+                        record.connected,
+                        &mut w.warnings,
+                    );
+                } else if record.connected {
+                    return Err(emission_error(format!(
+                        "switch `{}` terminal {} is connected but its endpoint has no calculated bus",
+                        switch.component, record.terminal
+                    )));
+                } else {
+                    disconnected_terminal(&mut eq, &mut ssh, &mut sv, &id, record, &mut w.warnings);
+                }
+            }
             ssh.open(class, &id, true);
             ssh.text("Switch.open", switch.open);
             ssh.close(class);
+            if let Some(in_service) = retained_sv_status(detailed, &switch.component) {
+                write_sv_status(&mut sv, &id, in_service);
+            }
         }
         if !detailed.internal_connections.is_empty() {
-            w.warnings.push(format!(
+            w.warnings.push_as(&codes::EMIT_CGMES.value_collapsed, format!(
                 "{} internal connection(s) have no distinct CGMES equipment record; their calculated topology is retained through TopologicalNode assignments",
                 detailed.internal_connections.len()
             ));
@@ -3138,7 +4970,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         }
     };
     let mut limit_types_used: Vec<&'static str> = Vec::new();
-    let mut limit_doc = Doc::new();
+    let mut limit_doc = Doc::new(Arc::clone(&retained_metadata));
 
     // --- loads ------------------------------------------------------------
     for (i, load) in net.loads().iter().enumerate() {
@@ -3146,11 +4978,31 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         let local_id = load.uid.as_deref().unwrap_or(&fallback);
         let id = mrid_or("load", &fallback, load.uid.as_deref());
         let record = detailed.and_then(|value| detailed_terminal(value, "load", local_id, 1));
-        eq.named("EnergyConsumer", &id, &format!("load{}-{i}", load.bus));
-        eq.reference(
-            "Equipment.EquipmentContainer",
-            &terminal_voltage_level_mrid(detailed, record, load.bus),
+        let fallback_name = format!("load{}-{i}", load.bus);
+        let class = mapped_component_metadata(detailed, "load", local_id)
+            .and_then(|metadata| metadata.properties.get(CGMES_CLASS_PROPERTY))
+            .filter(|class| {
+                matches!(
+                    class.as_str(),
+                    "EnergyConsumer" | "ConformLoad" | "NonConformLoad" | "StationSupply"
+                )
+            })
+            .map_or("EnergyConsumer", String::as_str);
+        eq.named(
+            class,
+            &id,
+            mapped_component_name(detailed, "load", local_id, &fallback_name),
         );
+        let fallback_container = terminal_voltage_level_mrid(detailed, record, load.bus);
+        let container = mapped_equipment_container_mrid(
+            detailed,
+            "load",
+            local_id,
+            Some(fallback_container.clone()),
+            &mut w.warnings,
+        )
+        .unwrap_or(fallback_container);
+        eq.reference("Equipment.EquipmentContainer", &container);
         let response = load
             .voltage_model
             .as_ref()
@@ -3158,7 +5010,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         if let Some(response) = &response {
             eq.reference("EnergyConsumer.LoadResponse", response);
         }
-        eq.close("EnergyConsumer");
+        eq.close(class);
         if let (Some(model), Some(response)) = (&load.voltage_model, &response) {
             eq.named(
                 "LoadResponseCharacteristic",
@@ -3188,7 +5040,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                     scaling,
                 } => {
                     if v_nom.is_some() || load_type.is_some() || scaling.is_some() {
-                        w.warnings.push(format!(
+                        w.warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
                             "load at bus {}: nominal voltage, source load type, and scaling metadata have no LoadResponseCharacteristic fields and were omitted",
                             load.bus
                         ));
@@ -3222,7 +5074,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                     ..
                 } => {
                     if v_nom.is_some() {
-                        w.warnings.push(format!(
+                        w.warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
                             "load at bus {}: nominal voltage has no LoadResponseCharacteristic field and was omitted",
                             load.bus
                         ));
@@ -3249,20 +5101,28 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             &mut eq,
             &mut tp,
             &mut ssh,
+            &mut sv,
             &id,
             "load",
             local_id,
+            None,
             1,
             load.bus,
             load.in_service,
+            &mut w.warnings,
         );
-        ssh.open("EnergyConsumer", &id, true);
-        ssh.text("EnergyConsumer.p", load.p);
-        ssh.text("EnergyConsumer.q", load.q);
+        ssh.open(class, &id, true);
+        if !field_was_omitted(detailed, "load", local_id, OmittedFieldName::ActivePower) {
+            ssh.text("EnergyConsumer.p", load.p);
+        }
+        if !field_was_omitted(detailed, "load", local_id, OmittedFieldName::ReactivePower) {
+            ssh.text("EnergyConsumer.q", load.q);
+        }
         if v3 {
             ssh.text("Equipment.inService", load.in_service);
         }
-        ssh.close("EnergyConsumer");
+        ssh.close(class);
+        write_sv_status(&mut sv, &id, load.in_service);
     }
 
     // --- generators --------------------------------------------------------
@@ -3270,15 +5130,146 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         let fallback = format!("{}-{i}", machine.bus);
         let local_id = machine.uid.as_deref().unwrap_or(&fallback);
         let id = mrid_or("generator", &fallback, machine.uid.as_deref());
-        let unit = det_mrid("genunit", &id);
-        eq.named(
-            "GeneratingUnit",
-            &unit,
-            &format!("gen{}-{i}-unit", machine.bus),
+        let record = detailed.and_then(|value| detailed_terminal(value, "generator", local_id, 1));
+        let machine_metadata = mapped_component_metadata(detailed, "generator", local_id);
+        let source_is_cgmes = machine_metadata.is_some_and(has_cgmes_external_identifier);
+        let source_control_id = machine_metadata.and_then(|metadata| {
+            metadata
+                .properties
+                .get(super::CGMES_REGULATING_CONTROL_PROPERTY)
+        });
+        let source_control_mode = machine_metadata
+            .and_then(|metadata| metadata.properties.get("RegulatingControl.mode"))
+            .map_or("RegulatingControlModeKind.voltage", String::as_str);
+        let source_machine_control_enabled =
+            retained_bool(machine_metadata, "RegulatingCondEq.controlEnabled");
+        let source_control_enabled = retained_bool(machine_metadata, "RegulatingControl.enabled");
+        let source_control_is_effective = source_control_mode
+            == "RegulatingControlModeKind.voltage"
+            && source_control_enabled.unwrap_or(false)
+            && source_machine_control_enabled.unwrap_or(true);
+        let control_was_edited = source_is_cgmes
+            && source_control_id.is_some()
+            && source_control_is_effective != machine.voltage_regulation_on;
+        if control_was_edited {
+            w.warnings.push_as(&codes::EMIT_CGMES.value_substituted, format!(
+                "generator `{local_id}` source RegulatingControl.enabled={} and RegulatingCondEq.controlEnabled={} represented voltage regulation {}; the typed value is {}, so fresh CGMES output sets both enable flags to the typed value",
+                source_control_enabled.map_or("absent".into(), |value| value.to_string()),
+                source_machine_control_enabled
+                    .map_or("absent".into(), |value| value.to_string()),
+                source_control_is_effective,
+                machine.voltage_regulation_on
+            ));
+        }
+        let machine_control_enabled = if control_was_edited {
+            machine.voltage_regulation_on
+        } else {
+            source_machine_control_enabled.unwrap_or(machine.voltage_regulation_on)
+        };
+        let control_enabled = if control_was_edited {
+            machine.voltage_regulation_on
+        } else {
+            source_control_enabled.unwrap_or(machine.voltage_regulation_on)
+        };
+        let source_control = mapped_regulating_control_metadata(detailed, "generator", local_id);
+        let emit_control = source_control_id.is_some()
+            || !source_is_cgmes
+            || machine.voltage_regulation_on
+            || machine.regulating_terminal.is_some();
+        let control = source_control.map_or_else(
+            || {
+                source_control_id
+                    .filter(|value| uuid::Uuid::parse_str(value).is_ok())
+                    .cloned()
+                    .unwrap_or_else(|| det_mrid("regcontrol", &id))
+            },
+            |metadata| {
+                component_mrid(
+                    detailed
+                        .expect("source RegulatingControl metadata requires detailed connectivity"),
+                    &metadata.component,
+                )
+            },
         );
+        let source_unit = mapped_generating_unit_metadata(detailed, local_id);
+        let unit = source_unit.map_or_else(
+            || det_mrid("genunit", &id),
+            |metadata| {
+                component_mrid(
+                    detailed
+                        .expect("source GeneratingUnit metadata requires detailed connectivity"),
+                    &metadata.component,
+                )
+            },
+        );
+        let unit_fallback_name = format!("gen{}-{i}-unit", machine.bus);
+        let unit_class = generating_unit_class(machine.energy_source);
+        eq.named(
+            unit_class,
+            &unit,
+            source_unit
+                .and_then(|metadata| metadata.name.as_deref())
+                .unwrap_or(&unit_fallback_name),
+        );
+        if let Some(description) =
+            source_unit.and_then(|metadata| metadata.properties.get("IdentifiedObject.description"))
+        {
+            eq.text("IdentifiedObject.description", description);
+        }
+        if let Some(aggregate) =
+            source_unit.and_then(|metadata| metadata.properties.get("Equipment.aggregate"))
+        {
+            eq.text("Equipment.aggregate", aggregate);
+        }
+        if let Some(source_unit) = source_unit {
+            let fallback_container = terminal_voltage_level_mrid(detailed, record, machine.bus);
+            if let Some(container) = mapped_equipment_container_mrid(
+                detailed,
+                source_unit.component.component_type(),
+                source_unit.component.local_id(),
+                Some(fallback_container),
+                &mut w.warnings,
+            ) {
+                eq.reference("Equipment.EquipmentContainer", &container);
+            }
+        }
+        if let Some(control_source) = source_unit
+            .and_then(|metadata| metadata.properties.get("GeneratingUnit.genControlSource"))
+        {
+            eq.enumeration(
+                "GeneratingUnit.genControlSource",
+                w.p.cim_ns,
+                control_source,
+            );
+        }
+        let source_initial_p =
+            source_unit.and_then(|metadata| metadata.properties.get("GeneratingUnit.initialP"));
+        if v3 {
+            if let Some(initial_p) = source_initial_p {
+                w.warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
+                    "GeneratingUnit `{unit}` source initialP `{initial_p}` has no CGMES 3.0 property"
+                ));
+            }
+        } else {
+            eq.text(
+                "GeneratingUnit.initialP",
+                source_initial_p.map_or_else(|| machine.pg.to_string(), Clone::clone),
+            );
+        }
         eq.text("GeneratingUnit.minOperatingP", machine.pmin);
         eq.text("GeneratingUnit.maxOperatingP", machine.pmax);
-        eq.close("GeneratingUnit");
+        if let Some(nominal_p) =
+            source_unit.and_then(|metadata| metadata.properties.get("GeneratingUnit.nominalP"))
+        {
+            eq.text("GeneratingUnit.nominalP", nominal_p);
+        }
+        eq.close(unit_class);
+        let mut unit_ssh_written = false;
+        if v3 {
+            ssh.open(unit_class, &unit, true);
+            ssh.text("Equipment.inService", machine.in_service);
+            unit_ssh_written = true;
+        }
         if let Some(active_power_control) = &machine.active_power_control {
             validate_active_power_control(
                 local_id,
@@ -3289,26 +5280,31 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             if active_power_control.participate
                 && let Some(participation_factor) = active_power_control.participation_factor
             {
-                ssh.open("GeneratingUnit", &unit, true);
+                if !unit_ssh_written {
+                    ssh.open(unit_class, &unit, true);
+                    unit_ssh_written = true;
+                }
                 ssh.text("GeneratingUnit.normalPF", participation_factor);
-                ssh.close("GeneratingUnit");
             }
             if !active_power_control.participate {
-                w.warnings.push(format!(
+                w.warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
                     "generator `{local_id}`: participate=false{} cannot be represented by CGMES GeneratingUnit.normalPF",
                     active_power_control
                         .participation_factor
                         .map_or("", |_| " with a participation factor")
                 ));
             } else if active_power_control.participation_factor.is_none() {
-                w.warnings.push(format!(
+                w.warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
                     "generator `{local_id}`: participate=true without a participation factor cannot be represented by CGMES GeneratingUnit.normalPF"
                 ));
             }
             if active_power_control.droop_percent.is_some() {
-                w.warnings.push(format!(
-                    "generator `{local_id}`: active power control droop has no CGMES property"
-                ));
+                w.warnings.push_as(
+                    &codes::EMIT_CGMES.field_dropped,
+                    format!(
+                        "generator `{local_id}`: active power control droop has no CGMES property"
+                    ),
+                );
             }
             if active_power_control
                 .minimum_target_active_power_mw
@@ -3317,111 +5313,216 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                     .maximum_target_active_power_mw
                     .is_some()
             {
-                w.warnings.push(format!(
+                w.warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
                     "generator `{local_id}`: active power control target limits have no CGMES property"
                 ));
             }
         }
-        let control = det_mrid("regcontrol", &id);
+        if unit_ssh_written {
+            ssh.close(unit_class);
+        }
+        let generator_component = ComponentId::new("generator", local_id)
+            .map_err(|error| emission_error(error.to_string()))?;
+        let (minimum_reactive_power_mvar, maximum_reactive_power_mvar, capability_curve) =
+            if let Some(detailed) = detailed {
+                write_synchronous_machine_reactive_limits(
+                    &mut eq,
+                    detailed,
+                    &generator_component,
+                    &id,
+                    w.p.cim_ns,
+                    machine.pg,
+                    machine.qmin,
+                    machine.qmax,
+                    &mut w.warnings,
+                )?
+            } else {
+                (machine.qmin, machine.qmax, None)
+            };
+        let fallback_name = format!("gen{}-{i}", machine.bus);
         eq.named(
             "SynchronousMachine",
             &id,
-            &format!("gen{}-{i}", machine.bus),
+            mapped_component_name(detailed, "generator", local_id, &fallback_name),
         );
         eq.enumeration(
             "SynchronousMachine.type",
             w.p.cim_ns,
-            "SynchronousMachineKind.generator",
+            machine_metadata
+                .and_then(|metadata| metadata.properties.get("SynchronousMachine.type"))
+                .map_or("SynchronousMachineKind.generator", String::as_str),
         );
-        eq.text("SynchronousMachine.maxQ", machine.qmax);
-        eq.text("SynchronousMachine.minQ", machine.qmin);
+        eq.text("SynchronousMachine.maxQ", maximum_reactive_power_mvar);
+        eq.text("SynchronousMachine.minQ", minimum_reactive_power_mvar);
         if machine.mbase > 0.0 {
             eq.text("RotatingMachine.ratedS", machine.mbase);
         }
         eq.reference("RotatingMachine.GeneratingUnit", &unit);
-        eq.reference("RegulatingCondEq.RegulatingControl", &control);
-        let record = detailed.and_then(|value| detailed_terminal(value, "generator", local_id, 1));
-        eq.reference(
-            "Equipment.EquipmentContainer",
-            &terminal_voltage_level_mrid(detailed, record, machine.bus),
-        );
+        if emit_control {
+            eq.reference(super::CGMES_REGULATING_CONTROL_PROPERTY, &control);
+        }
+        if let Some(curve) = &capability_curve {
+            eq.reference("SynchronousMachine.InitialReactiveCapabilityCurve", curve);
+        }
+        let fallback_container = terminal_voltage_level_mrid(detailed, record, machine.bus);
+        let container = mapped_equipment_container_mrid(
+            detailed,
+            "generator",
+            local_id,
+            Some(fallback_container.clone()),
+            &mut w.warnings,
+        )
+        .unwrap_or(fallback_container);
+        eq.reference("Equipment.EquipmentContainer", &container);
         eq.close("SynchronousMachine");
         let term = terminal(
             &mut eq,
             &mut tp,
             &mut ssh,
+            &mut sv,
             &id,
             "generator",
             local_id,
+            record,
             1,
             machine.bus,
             machine.in_service,
+            &mut w.warnings,
         );
-        let regulating_terminal = machine
-            .regulating_terminal
-            .as_ref()
-            .map(|reference| {
-                terminal_reference_mrid(net, detailed, reference).ok_or_else(|| {
-                    emission_error(format!(
-                        "generator `{local_id}` references terminal {} number {}, which cannot be identified in CGMES output",
-                        reference.equipment, reference.terminal
-                    ))
+        if emit_control {
+            let regulating_terminal = machine
+                .regulating_terminal
+                .as_ref()
+                .map(|reference| {
+                    terminal_reference_mrid(net, detailed, reference).ok_or_else(|| {
+                        emission_error(format!(
+                            "generator `{local_id}` references terminal {} number {}, which cannot be identified in CGMES output",
+                            reference.equipment, reference.terminal
+                        ))
+                    })
                 })
-            })
-            .transpose()?
-            .unwrap_or_else(|| term.clone());
-        eq.named(
-            "RegulatingControl",
-            &control,
-            &format!("gen{}-{i}-avr", machine.bus),
-        );
-        eq.enumeration(
-            "RegulatingControl.mode",
-            w.p.cim_ns,
-            "RegulatingControlModeKind.voltage",
-        );
-        eq.reference("RegulatingControl.Terminal", &regulating_terminal);
-        eq.close("RegulatingControl");
-        ssh.open("SynchronousMachine", &id, true);
-        ssh.text("RotatingMachine.p", -machine.pg);
-        ssh.text("RotatingMachine.q", -machine.qg);
-        if net
-            .buses()
-            .iter()
-            .any(|b| b.id == machine.bus && b.kind == BusType::Ref)
-        {
-            ssh.text("SynchronousMachine.referencePriority", 1);
+                .transpose()?
+                .unwrap_or_else(|| term.clone());
+            let control_fallback_name = format!("gen{}-{i}-avr", machine.bus);
+            eq.named(
+                "RegulatingControl",
+                &control,
+                source_control
+                    .and_then(|metadata| metadata.name.as_deref())
+                    .unwrap_or(&control_fallback_name),
+            );
+            eq.enumeration("RegulatingControl.mode", w.p.cim_ns, source_control_mode);
+            eq.reference("RegulatingControl.Terminal", &regulating_terminal);
+            eq.close("RegulatingControl");
         }
+        ssh.open("SynchronousMachine", &id, true);
+        ssh.text("RegulatingCondEq.controlEnabled", machine_control_enabled);
+        if !field_was_omitted(
+            detailed,
+            "generator",
+            local_id,
+            OmittedFieldName::ActivePower,
+        ) {
+            ssh.text("RotatingMachine.p", -machine.pg);
+        }
+        if !field_was_omitted(
+            detailed,
+            "generator",
+            local_id,
+            OmittedFieldName::ReactivePower,
+        ) {
+            ssh.text("RotatingMachine.q", -machine.qg);
+        }
+        let generated_reference_priority = i32::from(
+            net.buses()
+                .iter()
+                .any(|b| b.id == machine.bus && b.kind == BusType::Ref),
+        );
+        ssh.text(
+            "SynchronousMachine.referencePriority",
+            machine_metadata
+                .and_then(|metadata| {
+                    metadata
+                        .properties
+                        .get("SynchronousMachine.referencePriority")
+                })
+                .map_or_else(|| generated_reference_priority.to_string(), Clone::clone),
+        );
+        ssh.enumeration(
+            "SynchronousMachine.operatingMode",
+            w.p.cim_ns,
+            machine_metadata
+                .and_then(|metadata| metadata.properties.get("SynchronousMachine.operatingMode"))
+                .map_or("SynchronousMachineOperatingMode.generator", String::as_str),
+        );
         if v3 {
             ssh.text("Equipment.inService", machine.in_service);
         }
         ssh.close("SynchronousMachine");
-        ssh.open("RegulatingControl", &control, true);
-        ssh.text("RegulatingControl.enabled", machine.voltage_regulation_on);
-        ssh.text(
-            "RegulatingControl.targetValue",
-            machine.vg * w.kv(machine.regulated_bus.unwrap_or(machine.bus))?,
-        );
-        ssh.close("RegulatingControl");
+        if emit_control {
+            let target_kv = machine.vg * w.kv(machine.regulated_bus.unwrap_or(machine.bus))?;
+            let (target_value, target_multiplier) = retained_control_target(
+                machine_metadata,
+                target_kv,
+                source_control_is_effective,
+                machine.voltage_regulation_on,
+                &mut w.warnings,
+                local_id,
+            );
+            ssh.open("RegulatingControl", &control, true);
+            ssh.text(
+                "RegulatingControl.discrete",
+                machine_metadata
+                    .and_then(|metadata| metadata.properties.get("RegulatingControl.discrete"))
+                    .map_or("false", String::as_str),
+            );
+            ssh.text("RegulatingControl.enabled", control_enabled);
+            if !field_was_omitted(
+                detailed,
+                "generator",
+                local_id,
+                OmittedFieldName::VoltageSetpoint,
+            ) {
+                ssh.text("RegulatingControl.targetValue", target_value);
+                ssh.enumeration(
+                    "RegulatingControl.targetValueUnitMultiplier",
+                    w.p.cim_ns,
+                    &target_multiplier,
+                );
+            }
+            if let Some(deadband) = machine_metadata
+                .and_then(|metadata| metadata.properties.get("RegulatingControl.targetDeadband"))
+            {
+                ssh.text("RegulatingControl.targetDeadband", deadband);
+            }
+            ssh.close("RegulatingControl");
+        }
+        write_sv_status(&mut sv, &id, machine.in_service);
         if machine.regulating_terminal.is_none()
             && machine.regulated_bus.is_some_and(|b| b != machine.bus)
         {
-            w.warnings.push(format!(
+            w.warnings.push_as(&codes::EMIT_CGMES.value_substituted, format!(
                 "generator `{local_id}` names remote regulated bus {} without an exact regulating terminal; CGMES output uses the generator terminal",
                 machine.regulated_bus.expect("checked present")
             ));
         }
         if machine.cost.is_some() {
-            w.warnings.push(format!(
-                "generator at bus {}: cost curves have no CGMES slot",
-                machine.bus
-            ));
+            w.warnings.push_as(
+                &codes::EMIT_CGMES.field_dropped,
+                format!(
+                    "generator at bus {}: cost curves have no CGMES slot",
+                    machine.bus
+                ),
+            );
         }
         if machine.has_caps() {
-            w.warnings.push(format!(
-                "generator at bus {}: capability/ramp columns have no CGMES slot",
-                machine.bus
-            ));
+            w.warnings.push_as(
+                &codes::EMIT_CGMES.field_dropped,
+                format!(
+                    "generator at bus {}: capability/ramp columns have no CGMES slot",
+                    machine.bus
+                ),
+            );
         }
     }
     for (index, storage) in net.storage().iter().enumerate() {
@@ -3434,9 +5535,10 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 -storage.charge_rating,
                 storage.discharge_rating,
             )?;
-            w.warnings.push(format!(
-                "storage `{id}`: active power control has no CGMES battery mapping"
-            ));
+            w.warnings.push_as(
+                &codes::EMIT_CGMES.field_dropped,
+                format!("storage `{id}`: active power control has no CGMES battery mapping"),
+            );
         }
     }
 
@@ -3445,6 +5547,50 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         let fallback = format!("{}-{i}", shunt.bus);
         let local_id = shunt.uid.as_deref().unwrap_or(&fallback);
         let id = mrid_or("shunt", &fallback, shunt.uid.as_deref());
+        let shunt_metadata = mapped_component_metadata(detailed, "shunt", local_id);
+        let source_is_cgmes = shunt_metadata.is_some_and(has_cgmes_external_identifier);
+        let source_control_id = shunt_metadata.and_then(|metadata| {
+            metadata
+                .properties
+                .get(super::CGMES_REGULATING_CONTROL_PROPERTY)
+        });
+        let source_control = mapped_regulating_control_metadata(detailed, "shunt", local_id);
+        let source_control_mode = shunt_metadata
+            .and_then(|metadata| metadata.properties.get("RegulatingControl.mode"))
+            .map_or("RegulatingControlModeKind.voltage", String::as_str);
+        let source_equipment_control_enabled =
+            retained_bool(shunt_metadata, "RegulatingCondEq.controlEnabled");
+        let source_control_enabled = retained_bool(shunt_metadata, "RegulatingControl.enabled");
+        let source_control_is_effective = source_control_id.is_some()
+            && source_control_enabled.unwrap_or(false)
+            && source_equipment_control_enabled.unwrap_or(true);
+        let typed_control_is_effective = shunt
+            .control
+            .as_ref()
+            .is_some_and(|control| control.mode != SwitchedShuntMode::Locked);
+        let control_was_edited = source_is_cgmes
+            && source_control_id.is_some()
+            && source_control_is_effective != typed_control_is_effective;
+        if control_was_edited {
+            w.warnings.push_as(&codes::EMIT_CGMES.value_substituted, format!(
+                "shunt `{local_id}` source RegulatingControl.enabled={} and RegulatingCondEq.controlEnabled={} represented automatic voltage control {}; the typed value is {}, so fresh CGMES output sets both enable flags to the typed value",
+                source_control_enabled.map_or_else(|| "absent".into(), |value| value.to_string()),
+                source_equipment_control_enabled
+                    .map_or_else(|| "absent".into(), |value| value.to_string()),
+                source_control_is_effective,
+                typed_control_is_effective
+            ));
+        }
+        let equipment_control_enabled = if control_was_edited {
+            typed_control_is_effective
+        } else {
+            source_equipment_control_enabled.unwrap_or(typed_control_is_effective)
+        };
+        let control_enabled = if control_was_edited {
+            typed_control_is_effective
+        } else {
+            source_control_enabled.unwrap_or(typed_control_is_effective)
+        };
         let kv = w.kv(shunt.bus)?;
         let sections = expanded_shunt_sections(shunt);
         let sections = if sections.is_empty() {
@@ -3452,10 +5598,28 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         } else {
             sections
         };
-        let (section_count, section_error) = shunt_section_count(shunt, &sections);
+        let (calculated_section_count, section_error) = shunt_section_count(shunt, &sections);
+        let section_count = match shunt.section_count {
+            Some(section_count) => {
+                let section_count = section_count as usize;
+                if section_count > sections.len() {
+                    return Err(emission_error(format!(
+                        "shunt `{local_id}` assigned section count {section_count} exceeds its maximum section count {}",
+                        sections.len()
+                    )));
+                }
+                if section_count != calculated_section_count {
+                    w.warnings.push_as(&codes::EMIT_CGMES.value_substituted, format!(
+                        "shunt `{local_id}` assigned section count {section_count} does not match the section count {calculated_section_count} calculated from its conductance and susceptance; fresh CGMES uses the explicit assigned section count"
+                    ));
+                }
+                section_count
+            }
+            None => calculated_section_count,
+        };
         let section_scale = 1.0 + shunt.g.abs() + shunt.b.abs();
-        if section_error > 1e-9 * section_scale {
-            w.warnings.push(format!(
+        if shunt.section_count.is_none() && section_error > 1e-9 * section_scale {
+            w.warnings.push_as(&codes::EMIT_CGMES.value_substituted, format!(
                 "shunt at bus {}: its assigned conductance and susceptance do not equal a prefix of its control blocks; CGMES uses the closest section count {}",
                 shunt.bus, section_count
             ));
@@ -3466,17 +5630,46 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         } else {
             "NonlinearShuntCompensator"
         };
-        let control_id = shunt.control.as_ref().map(|_| det_mrid("regcontrol", &id));
-        eq.named(class, &id, &format!("shunt{}-{i}", shunt.bus));
+        let control_id = shunt.control.as_ref().map(|_| {
+            source_control.map_or_else(
+                || {
+                    source_control_id
+                        .filter(|value| uuid::Uuid::parse_str(value).is_ok())
+                        .cloned()
+                        .unwrap_or_else(|| det_mrid("regcontrol", &id))
+                },
+                |metadata| {
+                    component_mrid(
+                        detailed.expect(
+                            "source RegulatingControl metadata requires detailed connectivity",
+                        ),
+                        &metadata.component,
+                    )
+                },
+            )
+        });
+        let fallback_name = format!("shunt{}-{i}", shunt.bus);
+        eq.named(
+            class,
+            &id,
+            mapped_component_name(detailed, "shunt", local_id, &fallback_name),
+        );
         if linear {
             eq.text(
                 "LinearShuntCompensator.bPerSection",
                 sections[0].1 / (kv * kv),
             );
-            eq.text(
-                "LinearShuntCompensator.gPerSection",
-                sections[0].0 / (kv * kv),
-            );
+            if !field_was_omitted(
+                detailed,
+                "shunt",
+                local_id,
+                OmittedFieldName::ShuntConductancePerSection,
+            ) {
+                eq.text(
+                    "LinearShuntCompensator.gPerSection",
+                    sections[0].0 / (kv * kv),
+                );
+            }
         }
         eq.text("ShuntCompensator.maximumSections", sections.len());
         eq.text("ShuntCompensator.normalSections", section_count);
@@ -3485,10 +5678,16 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             eq.reference("RegulatingCondEq.RegulatingControl", control);
         }
         let record = detailed.and_then(|value| detailed_terminal(value, "shunt", local_id, 1));
-        eq.reference(
-            "Equipment.EquipmentContainer",
-            &terminal_voltage_level_mrid(detailed, record, shunt.bus),
-        );
+        let fallback_container = terminal_voltage_level_mrid(detailed, record, shunt.bus);
+        let container = mapped_equipment_container_mrid(
+            detailed,
+            "shunt",
+            local_id,
+            Some(fallback_container.clone()),
+            &mut w.warnings,
+        )
+        .unwrap_or(fallback_container);
+        eq.reference("Equipment.EquipmentContainer", &container);
         eq.close(class);
         if !linear {
             for (section, (g, b)) in sections.iter().copied().enumerate() {
@@ -3500,7 +5699,14 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 );
                 eq.text("NonlinearShuntCompensatorPoint.sectionNumber", section + 1);
                 eq.text("NonlinearShuntCompensatorPoint.b", b / (kv * kv));
-                eq.text("NonlinearShuntCompensatorPoint.g", g / (kv * kv));
+                if !field_was_omitted(
+                    detailed,
+                    "shunt",
+                    local_id,
+                    OmittedFieldName::ShuntConductancePerSection,
+                ) {
+                    eq.text("NonlinearShuntCompensatorPoint.g", g / (kv * kv));
+                }
                 eq.close("NonlinearShuntCompensatorPoint");
             }
         }
@@ -3508,58 +5714,109 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             &mut eq,
             &mut tp,
             &mut ssh,
+            &mut sv,
             &id,
             "shunt",
             local_id,
+            record,
             1,
             shunt.bus,
             shunt.in_service,
+            &mut w.warnings,
         );
         ssh.open(class, &id, true);
         ssh.text("ShuntCompensator.sections", section_count);
-        ssh.text(
-            "RegulatingCondEq.controlEnabled",
-            shunt
-                .control
-                .as_ref()
-                .is_some_and(|control| control.mode != SwitchedShuntMode::Locked),
-        );
+        ssh.text("RegulatingCondEq.controlEnabled", equipment_control_enabled);
         if v3 {
             ssh.text("Equipment.inService", shunt.in_service);
         }
         ssh.close(class);
         if let (Some(control), Some(control_id)) = (&shunt.control, control_id) {
+            let control_fallback_name = format!("shunt{}-{i}-control", shunt.bus);
             eq.named(
                 "RegulatingControl",
                 &control_id,
-                &format!("shunt{}-{i}-control", shunt.bus),
+                source_control
+                    .and_then(|metadata| metadata.name.as_deref())
+                    .unwrap_or(&control_fallback_name),
             );
-            eq.enumeration(
-                "RegulatingControl.mode",
-                w.p.cim_ns,
-                "RegulatingControlModeKind.voltage",
-            );
-            eq.reference("RegulatingControl.Terminal", &term);
+            eq.enumeration("RegulatingControl.mode", w.p.cim_ns, source_control_mode);
+            let regulating_terminal = control
+                .regulating_terminal
+                .as_ref()
+                .map(|reference| {
+                    terminal_reference_mrid(net, detailed, reference).ok_or_else(|| {
+                        emission_error(format!(
+                            "shunt `{local_id}` references terminal {} number {}, which cannot be identified in CGMES output",
+                            reference.equipment, reference.terminal
+                        ))
+                    })
+                })
+                .transpose()?
+                .unwrap_or_else(|| term.clone());
+            eq.reference("RegulatingControl.Terminal", &regulating_terminal);
             eq.close("RegulatingControl");
             let controlled_bus = control.control_bus.unwrap_or(shunt.bus);
             let controlled_kv = w.kv(controlled_bus)?;
+            let target_kv = (control.vhigh + control.vlow) * controlled_kv / 2.0;
+            let deadband_kv = (control.vhigh - control.vlow).abs() * controlled_kv;
+            let (target_value, target_multiplier) = retained_control_target(
+                shunt_metadata,
+                target_kv,
+                source_control_is_effective,
+                typed_control_is_effective,
+                &mut w.warnings,
+                local_id,
+            );
+            let scale_to_kv = unit_multiplier_scale_to_kv(&target_multiplier)
+                .expect("retained_control_target returns a supported multiplier");
+            let source_deadband = shunt_metadata
+                .and_then(|metadata| metadata.properties.get("RegulatingControl.targetDeadband"));
+            let source_deadband_kv = source_deadband
+                .and_then(|value| value.parse::<f64>().ok())
+                .map(|value| value * scale_to_kv);
+            let deadband_unchanged = source_deadband_kv.is_some_and(|value| {
+                let tolerance = 1e-9 * value.abs().max(deadband_kv.abs()).max(1.0);
+                (value - deadband_kv).abs() <= tolerance
+            }) || (!source_control_is_effective
+                && !typed_control_is_effective);
+            let target_deadband = if deadband_unchanged {
+                source_deadband.cloned()
+            } else {
+                Some((deadband_kv / scale_to_kv).to_string())
+            };
             ssh.open("RegulatingControl", &control_id, true);
             ssh.text(
-                "RegulatingControl.targetValue",
-                (control.vhigh + control.vlow) * controlled_kv / 2.0,
+                "RegulatingControl.discrete",
+                retained_bool(shunt_metadata, "RegulatingControl.discrete")
+                    .unwrap_or(control.mode == SwitchedShuntMode::Discrete),
             );
-            ssh.text(
-                "RegulatingControl.targetDeadband",
-                (control.vhigh - control.vlow).abs() * controlled_kv,
+            ssh.text("RegulatingControl.enabled", control_enabled);
+            ssh.text("RegulatingControl.targetValue", target_value);
+            ssh.enumeration(
+                "RegulatingControl.targetValueUnitMultiplier",
+                w.p.cim_ns,
+                &target_multiplier,
             );
+            if let Some(target_deadband) = target_deadband {
+                ssh.text("RegulatingControl.targetDeadband", target_deadband);
+            }
             ssh.close("RegulatingControl");
-            if control.control_bus.is_some_and(|bus| bus != shunt.bus) {
-                w.warnings.push(format!(
+            if control.regulating_terminal.is_none()
+                && control.control_bus.is_some_and(|bus| bus != shunt.bus)
+            {
+                w.warnings.push_as(&codes::EMIT_CGMES.value_substituted, format!(
                     "shunt at bus {}: remote regulated bus {} is written as local regulation because the balanced model does not identify a terminal on the regulated equipment",
                     shunt.bus, controlled_bus
                 ));
             }
         }
+        write_sv_status(&mut sv, &id, shunt.in_service);
+        let solved_sections = det_mrid("svshuntsections", &id);
+        sv.open("SvShuntCompensatorSections", &solved_sections, false);
+        sv.reference("SvShuntCompensatorSections.ShuntCompensator", &id);
+        sv.text("SvShuntCompensatorSections.sections", section_count);
+        sv.close("SvShuntCompensatorSections");
     }
 
     // --- static VAR compensators ---------------------------------------------
@@ -3567,14 +5824,90 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         let fallback = format!("{}-{i}", svc.bus);
         let local_id = svc.uid.as_deref().unwrap_or(&fallback);
         let id = mrid_or("static_var_compensator", &fallback, svc.uid.as_deref());
-        let control = det_mrid("regcontrol", &id);
+        let svc_metadata = mapped_component_metadata(detailed, "static_var_compensator", local_id);
+        let source_is_cgmes = svc_metadata.is_some_and(has_cgmes_external_identifier);
+        let source_control_id = svc_metadata.and_then(|metadata| {
+            metadata
+                .properties
+                .get(super::CGMES_REGULATING_CONTROL_PROPERTY)
+        });
+        let source_control =
+            mapped_regulating_control_metadata(detailed, "static_var_compensator", local_id);
+        let source_control_mode = svc_metadata
+            .and_then(|metadata| metadata.properties.get("RegulatingControl.mode"))
+            .map_or_else(
+                || match svc.regulation_mode {
+                    StaticVarCompensatorRegulationMode::Voltage => {
+                        "RegulatingControlModeKind.voltage"
+                    }
+                    StaticVarCompensatorRegulationMode::ReactivePower => {
+                        "RegulatingControlModeKind.reactivePower"
+                    }
+                },
+                String::as_str,
+            );
+        let source_equipment_control_enabled =
+            retained_bool(svc_metadata, "RegulatingCondEq.controlEnabled");
+        let source_control_enabled = retained_bool(svc_metadata, "RegulatingControl.enabled");
+        let source_control_is_effective = source_control_id.is_some()
+            && source_control_enabled.unwrap_or(false)
+            && source_equipment_control_enabled.unwrap_or(true);
+        let control_was_edited = source_is_cgmes
+            && source_control_id.is_some()
+            && source_control_is_effective != svc.regulating;
+        if control_was_edited {
+            w.warnings.push_as(&codes::EMIT_CGMES.value_substituted, format!(
+                "static var compensator `{local_id}` source RegulatingControl.enabled={} and RegulatingCondEq.controlEnabled={} represented regulation {}; the typed value is {}, so fresh CGMES output sets both enable flags to the typed value",
+                source_control_enabled.map_or_else(|| "absent".into(), |value| value.to_string()),
+                source_equipment_control_enabled
+                    .map_or_else(|| "absent".into(), |value| value.to_string()),
+                source_control_is_effective,
+                svc.regulating
+            ));
+        }
+        let equipment_control_enabled = if control_was_edited {
+            svc.regulating
+        } else {
+            source_equipment_control_enabled.unwrap_or(svc.regulating)
+        };
+        let control_enabled = if control_was_edited {
+            svc.regulating
+        } else {
+            source_control_enabled.unwrap_or(svc.regulating)
+        };
+        let control = source_control.map_or_else(
+            || {
+                source_control_id
+                    .filter(|value| uuid::Uuid::parse_str(value).is_ok())
+                    .cloned()
+                    .unwrap_or_else(|| det_mrid("regcontrol", &id))
+            },
+            |metadata| {
+                component_mrid(
+                    detailed
+                        .expect("source RegulatingControl metadata requires detailed connectivity"),
+                    &metadata.component,
+                )
+            },
+        );
         let record = detailed
             .and_then(|value| detailed_terminal(value, "static_var_compensator", local_id, 1));
-        eq.named("StaticVarCompensator", &id, &format!("svc{}-{i}", svc.bus));
-        eq.reference(
-            "Equipment.EquipmentContainer",
-            &terminal_voltage_level_mrid(detailed, record, svc.bus),
+        let fallback_name = format!("svc{}-{i}", svc.bus);
+        eq.named(
+            "StaticVarCompensator",
+            &id,
+            mapped_component_name(detailed, "static_var_compensator", local_id, &fallback_name),
         );
+        let fallback_container = terminal_voltage_level_mrid(detailed, record, svc.bus);
+        let container = mapped_equipment_container_mrid(
+            detailed,
+            "static_var_compensator",
+            local_id,
+            Some(fallback_container.clone()),
+            &mut w.warnings,
+        )
+        .unwrap_or(fallback_container);
+        eq.reference("Equipment.EquipmentContainer", &container);
         eq.reference("RegulatingCondEq.RegulatingControl", &control);
         eq.text(
             "StaticVarCompensator.inductiveRating",
@@ -3610,28 +5943,24 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             &mut eq,
             &mut tp,
             &mut ssh,
+            &mut sv,
             &id,
             "static_var_compensator",
             local_id,
+            record,
             1,
             svc.bus,
             svc.in_service,
+            &mut w.warnings,
         );
         eq.named(
             "RegulatingControl",
             &control,
-            &format!("svc{}-{i}-control", svc.bus),
+            source_control
+                .and_then(|metadata| metadata.name.as_deref())
+                .unwrap_or(&fallback_name),
         );
-        eq.enumeration(
-            "RegulatingControl.mode",
-            w.p.cim_ns,
-            match svc.regulation_mode {
-                StaticVarCompensatorRegulationMode::Voltage => "RegulatingControlModeKind.voltage",
-                StaticVarCompensatorRegulationMode::ReactivePower => {
-                    "RegulatingControlModeKind.reactivePower"
-                }
-            },
-        );
+        eq.enumeration("RegulatingControl.mode", w.p.cim_ns, source_control_mode);
         let regulation_terminal = svc
             .regulating_terminal
             .as_ref()
@@ -3642,30 +5971,52 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
 
         ssh.open("StaticVarCompensator", &id, true);
         ssh.text("StaticVarCompensator.q", svc.q);
-        ssh.text("RegulatingCondEq.controlEnabled", svc.regulating);
+        ssh.text("RegulatingCondEq.controlEnabled", equipment_control_enabled);
         if v3 {
             ssh.text("Equipment.inService", svc.in_service);
         }
         ssh.close("StaticVarCompensator");
         ssh.open("RegulatingControl", &control, true);
-        ssh.text("RegulatingControl.enabled", svc.regulating);
         ssh.text(
-            "RegulatingControl.targetValue",
-            match svc.regulation_mode {
-                StaticVarCompensatorRegulationMode::Voltage => svc.voltage_setpoint_kv,
-                StaticVarCompensatorRegulationMode::ReactivePower => {
-                    svc.reactive_power_setpoint_mvar
-                }
-            },
+            "RegulatingControl.discrete",
+            retained_bool(svc_metadata, "RegulatingControl.discrete").unwrap_or(false),
         );
+        ssh.text("RegulatingControl.enabled", control_enabled);
+        let typed_target = match svc.regulation_mode {
+            StaticVarCompensatorRegulationMode::Voltage => svc.voltage_setpoint_kv,
+            StaticVarCompensatorRegulationMode::ReactivePower => svc.reactive_power_setpoint_mvar,
+        };
+        let (target_value, target_multiplier) = retained_control_target(
+            svc_metadata,
+            typed_target,
+            source_control_is_effective,
+            svc.regulating,
+            &mut w.warnings,
+            local_id,
+        );
+        ssh.text("RegulatingControl.targetValue", target_value);
+        ssh.enumeration(
+            "RegulatingControl.targetValueUnitMultiplier",
+            w.p.cim_ns,
+            &target_multiplier,
+        );
+        if let Some(deadband) = svc_metadata
+            .and_then(|metadata| metadata.properties.get("RegulatingControl.targetDeadband"))
+        {
+            ssh.text("RegulatingControl.targetDeadband", deadband);
+        }
         ssh.close("RegulatingControl");
 
-        let flow = det_mrid("svpowerflow", &local_terminal);
-        sv.open("SvPowerFlow", &flow, false);
-        sv.reference("SvPowerFlow.Terminal", &local_terminal);
-        sv.text("SvPowerFlow.p", svc.p);
-        sv.text("SvPowerFlow.q", svc.q);
-        sv.close("SvPowerFlow");
+        if detailed.is_none() {
+            write_sv_power_flow(
+                &mut sv,
+                &local_terminal,
+                Some(svc.p),
+                Some(svc.q),
+                &mut w.warnings,
+            );
+        }
+        write_sv_status(&mut sv, &id, svc.in_service);
     }
 
     // --- switches -------------------------------------------------------------
@@ -3685,20 +6036,74 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 eq.text("Switch.ratedCurrent", amps);
             }
             eq.close("Breaker");
-            terminal(
+            let first_source =
+                detailed.and_then(|value| detailed_terminal(value, "switch", local_id, 1));
+            let mut first_record = first_source.cloned();
+            if let Some(record) = first_record.as_mut() {
+                record.active_power_mw = record.active_power_mw.or(switch.pf);
+                record.reactive_power_mvar = record.reactive_power_mvar.or(switch.qf);
+            }
+            let first_terminal = terminal(
                 &mut eq,
                 &mut tp,
                 &mut ssh,
+                &mut sv,
                 &id,
                 "switch",
                 local_id,
+                first_record.as_ref(),
                 1,
                 switch.from,
                 true,
+                &mut w.warnings,
             );
-            terminal(
-                &mut eq, &mut tp, &mut ssh, &id, "switch", local_id, 2, switch.to, true,
+            let second_source =
+                detailed.and_then(|value| detailed_terminal(value, "switch", local_id, 2));
+            let mut second_record = second_source.cloned();
+            if let Some(record) = second_record.as_mut() {
+                record.active_power_mw = record.active_power_mw.or(switch.pt);
+                record.reactive_power_mvar = record.reactive_power_mvar.or(switch.qt);
+            }
+            let second_terminal = terminal(
+                &mut eq,
+                &mut tp,
+                &mut ssh,
+                &mut sv,
+                &id,
+                "switch",
+                local_id,
+                second_record.as_ref(),
+                2,
+                switch.to,
+                true,
+                &mut w.warnings,
             );
+            if first_source.is_none() {
+                write_sv_power_flow(
+                    &mut sv,
+                    &first_terminal,
+                    switch.pf,
+                    switch.qf,
+                    &mut w.warnings,
+                );
+            }
+            if second_source.is_none() {
+                write_sv_power_flow(
+                    &mut sv,
+                    &second_terminal,
+                    switch.pt,
+                    switch.qt,
+                    &mut w.warnings,
+                );
+            }
+            if let Some(rating) = switch.thermal_rating {
+                w.warnings.push_as(
+                    &codes::EMIT_CGMES.field_dropped,
+                    format!(
+                        "switch `{local_id}` thermal rating {rating} MVA was not emitted: CGMES Switch carries rated current, not an apparent power limit"
+                    ),
+                );
+            }
             ssh.open("Breaker", &id, true);
             ssh.text("Switch.open", !switch.closed);
             ssh.close("Breaker");
@@ -3706,32 +6111,49 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
     }
 
     // --- branches ---------------------------------------------------------------
-    let mut limit_body = Doc::new();
+    let mut limit_body = Doc::new(Arc::clone(&retained_metadata));
     for (i, branch) in net.branches().iter().enumerate() {
         let fallback = format!("{}-{}-{i}", branch.from, branch.to);
         let local_id = branch.uid.as_deref().unwrap_or(&fallback);
         let id = mrid_or("branch", &fallback, branch.uid.as_deref());
+        let source_terminal =
+            detailed.and_then(|details| detailed_terminal(details, "branch", local_id, 1));
+        let fallback_container =
+            terminal_voltage_level_mrid(detailed, source_terminal, branch.from);
+        let source_container = mapped_equipment_container_mrid(
+            detailed,
+            "branch",
+            local_id,
+            Some(fallback_container),
+            &mut w.warnings,
+        );
         let kv = w.kv(branch.from)?;
         let z_base = kv * kv / net.base_mva();
         let y_base = net.base_mva() / (kv * kv);
         let charging = branch.calc_terminal_charging();
         if !charging.is_matpower_symmetric() {
-            w.warnings.push(format!(
-                "branch {} ({}-{}): asymmetric terminal charging folded into the \
+            w.warnings.push_as(
+                &codes::EMIT_CGMES.value_collapsed,
+                format!(
+                    "branch {} ({}-{}): asymmetric terminal charging folded into the \
                  symmetric bch/gch totals",
-                i + 1,
-                branch.from,
-                branch.to
-            ));
+                    i + 1,
+                    branch.from,
+                    branch.to
+                ),
+            );
         }
         if branch.control.is_some() {
-            w.warnings.push(format!(
-                "branch {} ({}-{}): automatic tap/phase control data is not \
+            w.warnings.push_as(
+                &codes::EMIT_CGMES.field_dropped,
+                format!(
+                    "branch {} ({}-{}): automatic tap/phase control data is not \
                  written (fixed in-service step only)",
-                i + 1,
-                branch.from,
-                branch.to
-            ));
+                    i + 1,
+                    branch.from,
+                    branch.to
+                ),
+            );
         }
         let source_metadata = detailed.and_then(|detailed| {
             detailed.component_metadata.iter().find(|metadata| {
@@ -3746,6 +6168,8 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 .map(String::as_str)
                 == Some("SeriesCompensator")
         });
+        let emits_as_transformer =
+            branch.is_transformer() || source_branch_is_power_transformer(detailed, local_id);
         let series_compensator_has_charging = source_is_series_compensator
             && [charging.g_fr, charging.b_fr, charging.g_to, charging.b_to]
                 .into_iter()
@@ -3768,13 +6192,21 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             } else {
                 format!("unrepresented source fields: {}", unrepresented.join(", "))
             };
-            w.warnings.push(format!(
+            w.warnings.push_as(&codes::EMIT_CGMES.value_substituted, format!(
                 "SeriesCompensator `{local_id}` has nonzero shunt charging and is written as ACLineSegment: positive-sequence r/x, charging, terminal connectivity, service status, and limits are preserved; the equipment class is projected; {fields}"
             ));
         }
-        if !branch.is_transformer() {
+        if !emits_as_transformer {
             if source_is_series_compensator && !series_compensator_has_charging {
-                eq.named("SeriesCompensator", &id, &format!("line{}", i + 1));
+                let fallback_name = branch
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| format!("line{}", i + 1));
+                eq.named(
+                    "SeriesCompensator",
+                    &id,
+                    mapped_component_name(detailed, "branch", local_id, &fallback_name),
+                );
                 eq.text("SeriesCompensator.r", branch.r * z_base);
                 eq.text("SeriesCompensator.x", branch.x * z_base);
                 for property in [
@@ -3791,9 +6223,20 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                     }
                 }
                 eq.reference("ConductingEquipment.BaseVoltage", &base_of(kv));
+                if let Some(container) = &source_container {
+                    eq.reference("Equipment.EquipmentContainer", container);
+                }
                 eq.close("SeriesCompensator");
             } else {
-                eq.named("ACLineSegment", &id, &format!("line{}", i + 1));
+                let fallback_name = branch
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| format!("line{}", i + 1));
+                eq.named(
+                    "ACLineSegment",
+                    &id,
+                    mapped_component_name(detailed, "branch", local_id, &fallback_name),
+                );
                 eq.text("ACLineSegment.r", branch.r * z_base);
                 eq.text("ACLineSegment.x", branch.x * z_base);
                 eq.text("ACLineSegment.bch", branch.calc_total_charging_b() * y_base);
@@ -3802,6 +6245,9 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                     eq.text("ACLineSegment.gch", g_total * y_base);
                 }
                 eq.reference("ConductingEquipment.BaseVoltage", &base_of(kv));
+                if let Some(container) = &source_container {
+                    eq.reference("Equipment.EquipmentContainer", container);
+                }
                 eq.close("ACLineSegment");
             }
         } else {
@@ -3830,7 +6276,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                     .map_or(0.0, |value| value.alpha_degrees);
             let has_source_phase = source_phase_1.is_some() || source_phase_2.is_some();
             if has_source_phase && (source_shift - branch.shift).abs() > 1e-9 {
-                w.warnings.push(format!(
+                w.warnings.push_as(&codes::EMIT_CGMES.value_substituted, format!(
                     "branch {} ({}-{}): fixed phase shift {} degrees differs from the retained tap changer position value {} degrees; the tap changer definition was emitted",
                     i + 1,
                     branch.from,
@@ -3839,10 +6285,21 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                     source_shift
                 ));
             }
-            eq.named("PowerTransformer", &id, &format!("transformer{}", i + 1));
+            let fallback_name = branch
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("transformer{}", i + 1));
+            eq.named(
+                "PowerTransformer",
+                &id,
+                mapped_component_name(detailed, "branch", local_id, &fallback_name),
+            );
+            if let Some(container) = &source_container {
+                eq.reference("Equipment.EquipmentContainer", container);
+            }
             eq.close("PowerTransformer");
             for (endno, u) in [(1usize, u1), (2usize, u2)] {
-                let end = det_mrid("xfend", &format!("{id}:{endno}"));
+                let end = transformer_end_mrid(detailed, "branch", local_id, &id, endno)?;
                 eq.named(
                     "PowerTransformerEnd",
                     &end,
@@ -3850,21 +6307,28 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 );
                 eq.reference("PowerTransformerEnd.PowerTransformer", &id);
                 eq.text("TransformerEnd.endNumber", endno);
-                eq.reference("TransformerEnd.Terminal", &term_id(&id, endno));
+                let source_terminal = detailed
+                    .and_then(|details| detailed_terminal(details, "branch", local_id, endno));
+                eq.reference(
+                    "TransformerEnd.Terminal",
+                    &terminal_mrid(detailed, source_terminal, &id, endno),
+                );
                 eq.text("PowerTransformerEnd.ratedU", u);
+                let (terminal_g, terminal_b) = if endno == 1 {
+                    (charging.g_fr, charging.b_fr)
+                } else {
+                    (charging.g_to, charging.b_to)
+                };
+                let end_z_base = u * u / net.base_mva();
                 if endno == 1 {
-                    let zb1 = u * u / net.base_mva();
-                    eq.text("PowerTransformerEnd.r", branch.r * zb1);
-                    eq.text("PowerTransformerEnd.x", branch.x * zb1);
-                    eq.text(
-                        "PowerTransformerEnd.b",
-                        branch.calc_total_charging_b() / zb1,
-                    );
+                    eq.text("PowerTransformerEnd.r", branch.r * end_z_base);
+                    eq.text("PowerTransformerEnd.x", branch.x * end_z_base);
                 } else {
                     eq.text("PowerTransformerEnd.r", 0.0);
                     eq.text("PowerTransformerEnd.x", 0.0);
-                    eq.text("PowerTransformerEnd.b", 0.0);
                 }
+                eq.text("PowerTransformerEnd.g", terminal_g / end_z_base);
+                eq.text("PowerTransformerEnd.b", terminal_b / end_z_base);
                 eq.close("PowerTransformerEnd");
             }
             if branch.shift != 0.0 && !has_source_phase {
@@ -3882,7 +6346,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 eq.text("TapChanger.ltcFlag", false);
                 eq.reference(
                     "PhaseTapChanger.TransformerEnd",
-                    &det_mrid("xfend", &format!("{id}:1")),
+                    &transformer_end_mrid(detailed, "branch", local_id, &id, 1)?,
                 );
                 eq.text(
                     "PhaseTapChangerLinear.stepPhaseShiftIncrement",
@@ -3901,30 +6365,54 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 sv.close("SvTapStep");
             }
         }
-        terminal(
+        let first_terminal = terminal(
             &mut eq,
             &mut tp,
             &mut ssh,
+            &mut sv,
             &id,
             "branch",
             local_id,
+            None,
             1,
             branch.from,
             branch.in_service,
+            &mut w.warnings,
         );
-        terminal(
+        let second_terminal = terminal(
             &mut eq,
             &mut tp,
             &mut ssh,
+            &mut sv,
             &id,
             "branch",
             local_id,
+            None,
             2,
             branch.to,
             branch.in_service,
+            &mut w.warnings,
         );
+        if detailed.is_none()
+            && let Some(solution) = branch.solution.as_ref()
+        {
+            write_sv_power_flow(
+                &mut sv,
+                &first_terminal,
+                Some(solution.pf),
+                Some(solution.qf),
+                &mut w.warnings,
+            );
+            write_sv_power_flow(
+                &mut sv,
+                &second_terminal,
+                Some(solution.pt),
+                Some(solution.qt),
+                &mut w.warnings,
+            );
+        }
         if v3 {
-            let class = if branch.is_transformer() {
+            let class = if emits_as_transformer {
                 "PowerTransformer"
             } else if source_is_series_compensator && !series_compensator_has_charging {
                 "SeriesCompensator"
@@ -3935,6 +6423,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             ssh.text("Equipment.inService", branch.in_service);
             ssh.close(class);
         }
+        write_sv_status(&mut sv, &id, branch.in_service);
 
         let has_source_limits = detailed.is_some_and(|value| {
             value.operational_limit_groups.iter().any(|group| {
@@ -3957,7 +6446,12 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                     &set,
                     &format!("limits-{}-{kind}", i + 1),
                 );
-                limit_body.reference("OperationalLimitSet.Terminal", &term_id(&id, 1));
+                let source_terminal =
+                    detailed.and_then(|details| detailed_terminal(details, "branch", local_id, 1));
+                limit_body.reference(
+                    "OperationalLimitSet.Terminal",
+                    &terminal_mrid(detailed, source_terminal, &id, 1),
+                );
                 limit_body.close("OperationalLimitSet");
                 let lim = det_mrid("limit", &format!("{id}:{kind}"));
                 limit_body.named("CurrentLimit", &lim, &format!("rate-{}-{kind}", i + 1));
@@ -3978,13 +6472,16 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             rate(branch.rate_b, "tatl");
             rate(branch.rate_c, "tc");
             if !branch.rating_sets.is_empty() || branch.current_ratings.is_some() {
-                w.warnings.push(format!(
-                    "branch {} ({}-{}): extra rating sets / current ratings beyond \
+                w.warnings.push_as(
+                    &codes::EMIT_CGMES.rating_set_dropped,
+                    format!(
+                        "branch {} ({}-{}): extra rating sets / current ratings beyond \
                      A/B/C have no CGMES slot",
-                    i + 1,
-                    branch.from,
-                    branch.to
-                ));
+                        i + 1,
+                        branch.from,
+                        branch.to
+                    ),
+                );
             }
         }
     }
@@ -3999,12 +6496,37 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             &id,
             transformer.name.as_deref().unwrap_or(local_id),
         );
+        let source_terminal =
+            detailed.and_then(|details| detailed_terminal(details, "branch", local_id, 1));
+        let fallback_container =
+            terminal_voltage_level_mrid(detailed, source_terminal, transformer.windings[0].bus);
+        if let Some(container) = mapped_equipment_container_mrid(
+            detailed,
+            "branch",
+            local_id,
+            Some(fallback_container),
+            &mut w.warnings,
+        ) {
+            eq.reference("Equipment.EquipmentContainer", &container);
+        }
         eq.close("PowerTransformer");
 
         let star_impedances = transformer.calc_star_impedances();
         for (index, winding) in transformer.windings.iter().enumerate() {
             let end_number = index + 1;
-            let end = det_mrid("xfend", &format!("{id}:{end_number}"));
+            if let Some(control) = &winding.control {
+                w.warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
+                    "three winding transformer `{local_id}` winding {end_number}: automatic transformer control {:?} (enabled={}, tap range {} to {}, controlled band {} to {}, {} positions) has no CGMES writer mapping and was not emitted",
+                    control.mode,
+                    control.enabled,
+                    control.tap_min,
+                    control.tap_max,
+                    control.band_min,
+                    control.band_max,
+                    control.ntp
+                ));
+            }
+            let end = transformer_end_mrid(detailed, "branch", local_id, &id, end_number)?;
             let bus_kv = w.kv(winding.bus)?;
             let rated_kv = if winding.nominal_kv > 0.0 {
                 winding.nominal_kv
@@ -4029,7 +6551,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 && let Some(step) = tap_step(source_ratio)
                 && (step.rho - tap_factor).abs() > 1e-9
             {
-                w.warnings.push(format!(
+                w.warnings.push_as(&codes::EMIT_CGMES.value_substituted, format!(
                     "three winding transformer `{local_id}` winding {end_number}: fixed tap ratio {tap_factor} differs from the retained tap changer position value {}; the tap changer definition was emitted",
                     step.rho
                 ));
@@ -4038,7 +6560,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 && let Some(step) = tap_step(source_phase)
                 && (step.alpha_degrees - winding.shift).abs() > 1e-9
             {
-                w.warnings.push(format!(
+                w.warnings.push_as(&codes::EMIT_CGMES.value_substituted, format!(
                     "three winding transformer `{local_id}` winding {end_number}: fixed phase shift {} degrees differs from the retained tap changer position value {} degrees; the tap changer definition was emitted",
                     winding.shift, step.alpha_degrees
                 ));
@@ -4054,7 +6576,12 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             );
             eq.reference("PowerTransformerEnd.PowerTransformer", &id);
             eq.text("TransformerEnd.endNumber", end_number);
-            eq.reference("TransformerEnd.Terminal", &term_id(&id, end_number));
+            let source_terminal = detailed
+                .and_then(|details| detailed_terminal(details, "branch", local_id, end_number));
+            eq.reference(
+                "TransformerEnd.Terminal",
+                &terminal_mrid(detailed, source_terminal, &id, end_number),
+            );
             eq.text("PowerTransformerEnd.ratedU", rated_kv);
             eq.text("PowerTransformerEnd.r", star_r * z_base);
             eq.text("PowerTransformerEnd.x", star_x * z_base);
@@ -4140,12 +6667,15 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 &mut eq,
                 &mut tp,
                 &mut ssh,
+                &mut sv,
                 &id,
                 "branch",
                 local_id,
+                None,
                 end_number,
                 winding.bus,
                 transformer.in_service,
+                &mut w.warnings,
             );
 
             let has_source_limits = detailed.is_some_and(|value| {
@@ -4173,7 +6703,10 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                         &set,
                         &format!("limits-3w-{}-{end_number}-{kind}", i + 1),
                     );
-                    limit_body.reference("OperationalLimitSet.Terminal", &term_id(&id, end_number));
+                    limit_body.reference(
+                        "OperationalLimitSet.Terminal",
+                        &terminal_mrid(detailed, source_terminal, &id, end_number),
+                    );
                     limit_body.close("OperationalLimitSet");
                     let limit = det_mrid("limit", &format!("{id}:{end_number}:{kind}"));
                     limit_body.named(
@@ -4201,6 +6734,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             ssh.text("Equipment.inService", transformer.in_service);
             ssh.close("PowerTransformer");
         }
+        write_sv_status(&mut sv, &id, transformer.in_service);
     }
 
     let mut source_limit_types = Vec::new();
@@ -4217,10 +6751,13 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                     tap,
                 },
             ) {
-                w.warnings.push(format!(
-                    "tap changer on `{}` winding {} was not emitted: {message}",
-                    tap.transformer, tap.winding
-                ));
+                w.warnings.push_as(
+                    &codes::EMIT_CGMES.record_dropped,
+                    format!(
+                        "tap changer on `{}` winding {} was not emitted: {message}",
+                        tap.transformer, tap.winding
+                    ),
+                );
             }
         }
         for group in &detailed.operational_limit_groups {
@@ -4248,7 +6785,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 emits |=
                     group.active_power_limits.is_some() || group.apparent_power_limits.is_some();
             } else if group.active_power_limits.is_some() || group.apparent_power_limits.is_some() {
-                w.warnings.push(format!(
+                w.warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
                     "operational limit group `{}`: active and apparent power limits belong to the CIM16 EquipmentOperation profile and were omitted from the four-profile CGMES 2.4.15 output",
                     group.id
                 ));
@@ -4257,10 +6794,13 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 continue;
             }
             limit_body.named("OperationalLimitSet", &set, &group.id);
-            limit_body.reference(
-                "OperationalLimitSet.Terminal",
-                &term_id(&owner, usize::from(group.terminal)),
-            );
+            let reference = TerminalReference {
+                equipment: group.equipment.clone(),
+                terminal: group.terminal,
+            };
+            let terminal = terminal_reference_mrid(net, Some(detailed), &reference)
+                .unwrap_or_else(|| term_id(&owner, usize::from(group.terminal)));
+            limit_body.reference("OperationalLimitSet.Terminal", &terminal);
             limit_body.close("OperationalLimitSet");
             if let Some(limits) = &group.current_limits {
                 write_source_loading_limits(
@@ -4272,6 +6812,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                         class: "CurrentLimit",
                         limits,
                     },
+                    &mut w.warnings,
                 );
             }
             if v3 {
@@ -4285,6 +6826,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                             class: "ActivePowerLimit",
                             limits,
                         },
+                        &mut w.warnings,
                     );
                 }
                 if let Some(limits) = &group.apparent_power_limits {
@@ -4297,11 +6839,12 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                             class: "ApparentPowerLimit",
                             limits,
                         },
+                        &mut w.warnings,
                     );
                 }
             }
             if group.selected {
-                w.warnings.push(format!(
+                w.warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
                     "operational limit group `{}`: CGMES has no selected-group property; all groups were emitted",
                     group.id
                 ));
@@ -4392,21 +6935,47 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         }
         sv.close("TopologicalIsland");
     } else {
-        w.warnings
-            .push("no reference bus: the SV island has no angle reference".into());
+        w.warnings.push_as(
+            &codes::EMIT_CGMES.reference_missing,
+            "no reference bus: the SV island has no angle reference",
+        );
     }
 
     // --- unrepresented families ------------------------------------------------
+    if let Some(detailed) = detailed {
+        for record in &detailed.equipment_reactive_limits {
+            let represented = match record.equipment.component_type() {
+                "generator" => net
+                    .generators()
+                    .iter()
+                    .any(|generator| generator.uid.as_deref() == Some(record.equipment.local_id())),
+                "voltage_source_converter" => detailed
+                    .voltage_source_converters
+                    .iter()
+                    .any(|converter| converter.component == record.equipment),
+                _ => false,
+            };
+            if !represented {
+                w.warnings.push_as(&codes::EMIT_CGMES.record_dropped, format!(
+                    "equipment reactive limits for `{}` were not emitted: the CGMES writer has no reactive limits association for component type `{}`",
+                    record.equipment,
+                    record.equipment.component_type()
+                ));
+            }
+        }
+    }
+    for (index, line) in net.hvdc().iter().enumerate() {
+        let id = line
+            .uid
+            .as_deref()
+            .map_or_else(|| format!("row {}", index + 1), str::to_owned);
+        w.warnings.push(format!(
+            "HVDC line `{id}` is a two terminal calculation record, not a physical CGMES DC network, and was not emitted. It has no DCConverterUnit operating mode and containment, DC node and terminal polarity identities, or ground or metallic return topology; its optional resistance, nominal voltage, converter technology, setpoints, and loss factors are insufficient to construct those standard records without inventing data. Use the source neutral detailed DC equipment records for CGMES emission"
+        ));
+    }
     for (what, count) in [
         ("storage unit", net.storage().len()),
-        ("HVDC line", net.hvdc().len()),
-        (
-            "area record",
-            net.areas()
-                .iter()
-                .filter(|a| a.slack_bus.is_some() || a.net_interchange != 0.0)
-                .count(),
-        ),
+        ("area record", net.areas().len()),
         (
             "solver-parameter block",
             usize::from(net.solver().is_some()),
@@ -4430,10 +6999,10 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         .map(|part| det_mrid("model", &format!("{stem}:{part}")))
         .collect();
     let case_date = net.case_metadata().case_date.clone().unwrap_or_else(|| {
-        w.warnings.push(
+        w.warnings.push_as(
+            &codes::EMIT_CGMES.value_defaulted,
             "case date is absent; CGMES Model.scenarioTime and Model.created use \
-                 2000-01-01T00:00:00Z"
-                .into(),
+                 2000-01-01T00:00:00Z",
         );
         STAMP.into()
     });
@@ -4479,8 +7048,168 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             ),
         ),
     ];
+    validate_rdf_graph(&files)?;
     Ok(CgmesFiles {
         files,
         warnings: w.warnings,
     })
+}
+
+#[allow(clippy::too_many_lines)] // one XML pass classifies definitions and references by RDF role
+pub(super) fn validate_rdf_graph(files: &[(String, String)]) -> Result<()> {
+    const RDF_NS: &[u8] = b"http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    const MD_NS: &[u8] = b"http://iec.ch/TC57/61970-552/ModelDescription/1#";
+
+    let mut fragment_definitions = HashMap::<String, String>::new();
+    let mut model_definitions = HashMap::<String, String>::new();
+    let mut fragment_references = Vec::<(String, &'static str, String)>::new();
+    let mut model_references = Vec::<(String, String)>::new();
+
+    for (name, xml) in files {
+        let mut reader = NsReader::from_str(xml);
+        loop {
+            let (namespace, event) = reader.read_resolved_event().map_err(|error| {
+                emission_error(format!(
+                    "generated CGMES file `{name}` is not valid XML during RDF graph validation: {error}"
+                ))
+            })?;
+            match event {
+                Event::Start(element) | Event::Empty(element) => {
+                    let is_model_namespace = matches!(
+                        namespace,
+                        ResolveResult::Bound(ref value) if value.as_ref() == MD_NS
+                    );
+                    let local_name = element.local_name();
+                    let is_full_model = is_model_namespace && local_name.as_ref() == b"FullModel";
+                    let is_model_dependency =
+                        is_model_namespace && local_name.as_ref() == b"Model.DependentOn";
+
+                    for attribute in element.attributes().with_checks(true) {
+                        let attribute = attribute.map_err(|error| {
+                            emission_error(format!(
+                                "generated CGMES file `{name}` has an invalid XML attribute: {error}"
+                            ))
+                        })?;
+                        let (attribute_namespace, attribute_local_name) =
+                            reader.resolve_attribute(attribute.key);
+                        if !matches!(
+                            attribute_namespace,
+                            ResolveResult::Bound(ref value) if value.as_ref() == RDF_NS
+                        ) {
+                            continue;
+                        }
+                        let value = attribute
+                            .decode_and_unescape_value(reader.decoder())
+                            .map_err(|error| {
+                                emission_error(format!(
+                                    "generated CGMES file `{name}` has an invalid RDF attribute value: {error}"
+                                ))
+                            })?;
+                        let value = value.as_ref();
+                        match attribute_local_name.as_ref() {
+                            b"ID" => {
+                                let id = value.strip_prefix('_').unwrap_or(value);
+                                register_rdf_definition(
+                                    &mut fragment_definitions,
+                                    id,
+                                    name,
+                                    "mRID",
+                                )?;
+                            }
+                            b"about" if is_full_model => {
+                                let id = value.strip_prefix("urn:uuid:").ok_or_else(|| {
+                                    emission_error(format!(
+                                        "generated CGMES FullModel in `{name}` has rdf:about `{value}` instead of a urn:uuid identifier"
+                                    ))
+                                })?;
+                                register_rdf_definition(
+                                    &mut model_definitions,
+                                    id,
+                                    name,
+                                    "model UUID",
+                                )?;
+                            }
+                            b"about" => {
+                                if let Some(id) = rdf_object_reference_id(value) {
+                                    fragment_references.push((
+                                        name.clone(),
+                                        "rdf:about",
+                                        id.to_owned(),
+                                    ));
+                                }
+                            }
+                            b"resource" if is_model_dependency => {
+                                let id = value.strip_prefix("urn:uuid:").ok_or_else(|| {
+                                    emission_error(format!(
+                                        "generated CGMES model dependency in `{name}` has rdf:resource `{value}` instead of a urn:uuid identifier"
+                                    ))
+                                })?;
+                                model_references.push((name.clone(), id.to_owned()));
+                            }
+                            b"resource" => {
+                                if let Some(id) = rdf_object_reference_id(value) {
+                                    fragment_references.push((
+                                        name.clone(),
+                                        "rdf:resource",
+                                        id.to_owned(),
+                                    ));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Event::DocType(_) => {
+                    return Err(emission_error(format!(
+                        "generated CGMES file `{name}` contains a DTD"
+                    )));
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+    }
+
+    for (name, attribute, id) in fragment_references {
+        if !fragment_definitions.contains_key(&id) {
+            return Err(emission_error(format!(
+                "generated CGMES file `{name}` contains a dangling {attribute} reference to `{id}`"
+            )));
+        }
+    }
+    for (name, id) in model_references {
+        if !model_definitions.contains_key(&id) {
+            return Err(emission_error(format!(
+                "generated CGMES file `{name}` contains a dangling model dependency reference to `{id}`"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn register_rdf_definition(
+    definitions: &mut HashMap<String, String>,
+    id: &str,
+    file: &str,
+    kind: &str,
+) -> Result<()> {
+    if id.is_empty() {
+        return Err(emission_error(format!(
+            "generated CGMES file `{file}` defines an empty {kind}"
+        )));
+    }
+    if let Some(first_file) = definitions.insert(id.to_owned(), file.to_owned()) {
+        return Err(emission_error(format!(
+            "generated CGMES defines {kind} `{id}` more than once: first in `{first_file}`, then in `{file}`"
+        )));
+    }
+    Ok(())
+}
+
+fn rdf_object_reference_id(value: &str) -> Option<&str> {
+    value
+        .strip_prefix("#_")
+        .or_else(|| value.strip_prefix('#'))
+        .or_else(|| value.strip_prefix("urn:uuid:"))
+        .filter(|id| !id.is_empty())
 }

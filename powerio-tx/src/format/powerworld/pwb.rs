@@ -59,8 +59,8 @@ use std::collections::hash_map::Entry;
 
 use super::map::{BRANCH_DEVICE_TYPE, LINE_CIRCUIT, derive_bus_kinds};
 use crate::network::{
-    BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, Extras, Generator, Load,
-    Shunt, SourceFormat,
+    BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, Extras, Generator,
+    GeneratorEnergySource, Load, Shunt, SourceFormat,
 };
 use crate::{Error, Result};
 
@@ -1550,6 +1550,7 @@ fn read_gen_f32_block(c: &mut Cur) -> Probe<[f64; 8]> {
 fn gen_from_block(bus: BusId, v: &[f64; 8], in_service: bool) -> Generator {
     Generator {
         bus,
+        energy_source: GeneratorEnergySource::default(),
         pg: v[0] * MVA_BASE,
         qg: v[1] * MVA_BASE,
         qmax: v[2] * MVA_BASE,
@@ -1923,6 +1924,7 @@ fn read_standard_branch_head(
         );
     }
     let br = Branch {
+        name: None,
         from: BusId(from),
         to: BusId(to),
         r,
@@ -2012,6 +2014,7 @@ fn read_step_up_transformer_head(
     // " 1" restated the aux allocator's default.
     let extras = Extras::new();
     let br = Branch {
+        name: None,
         from: BusId(from),
         to,
         r: 0.0,

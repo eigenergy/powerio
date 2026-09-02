@@ -104,7 +104,7 @@ member, suggested extension `.geo.json`:
 When the space is geographic this is valid RFC 7946 GeoJSON, so GIS tools open
 it directly.
 
-Parsing is tolerant; emission is canonical. `GeoLayer::parse_text` takes UTF-8
+Parsing is tolerant; emission is canonical. `GeoLayer::parse` takes UTF-8
 text plus a file name hint and touches no filesystem. It accepts headerless
 buscoords CSV (`bus, x, y`), CSV and JSON records with aliased field names
 (`bus_i`/`bus`/`id`, `lat`/`latitude`/`y`, `lon`/`lng`/`longitude`/`x`, branch

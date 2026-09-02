@@ -3,7 +3,6 @@
 import asyncio
 import io
 import json
-import os
 import shutil
 from pathlib import Path
 
@@ -11,8 +10,9 @@ import pytest
 
 pytest.importorskip("mcp", reason="powerio[mcp] not installed (needs Python 3.10+)")
 
-import powerio
 from powerio.mcp import sandbox, server
+
+import powerio
 
 DATA = Path(__file__).resolve().parents[2] / "tests" / "data"
 DSS = DATA / "dist" / "micro" / "xfmr_single_phase.dss"

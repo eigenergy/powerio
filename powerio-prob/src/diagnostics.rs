@@ -71,10 +71,6 @@ pub mod codes {
             "a generator cost row states a concave curve", category = Data;
         READ_INSTANCE_IO_FAILED = "READ.INSTANCE.IO_FAILED", Error,
             "an instance file could not be read", category = Io;
-        PARSE_GOC3_MALFORMED = "PARSE.GOC3.MALFORMED", Error,
-            "the GOC3 document is not well formed JSON", category = Parse;
-        READ_GOC3_INVALID_DOCUMENT = "READ.GOC3.INVALID_DOCUMENT", Error,
-            "the GOC3 document decodes but does not describe an AC SCUC instance", category = Parse;
         REQUEST_GOC3_FORMAT_UNKNOWN = "REQUEST.GOC3.FORMAT_UNKNOWN", Error,
             "the named GOC3 source format is not one this build reads",
             category = Request;

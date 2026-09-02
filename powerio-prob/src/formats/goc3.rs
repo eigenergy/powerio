@@ -131,7 +131,7 @@ pub fn __parse_goc3_output_buffer(
     let document: SolutionDocument =
         serde_json::from_slice(buffer.content_bytes()).map_err(|error| {
             Error::new(
-                &codes::PARSE_GOC3_MALFORMED,
+                &powerio_tx::diagnostics::codes::PARSE_GOC3_MALFORMED,
                 format!("{}: {error}", buffer.name()),
             )
         })?;
@@ -842,7 +842,10 @@ fn repeated_output_uid(sections: &[(&str, &[&str])]) -> Option<String> {
 }
 
 fn invalid_solution(message: impl Into<String>) -> Error {
-    Error::new(&codes::READ_GOC3_INVALID_DOCUMENT, message)
+    Error::new(
+        &powerio_tx::diagnostics::codes::READ_GOC3_INVALID_DOCUMENT,
+        message,
+    )
 }
 
 /// Decode one official GO Challenge 3 problem input buffer.

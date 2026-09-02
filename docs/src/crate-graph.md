@@ -8,14 +8,13 @@ powerio-core          Source, FormatId, Diagnostic, Error, PioModule<T>,
 ├── powerio-tx        BalancedNetwork + the balanced format parsers and writers
 └── powerio-dist      MulticonductorNetwork + OpenDSS, PMD, BMOPF decoding
 
-powerio-prob          operating points, the seven instances, the seven
+powerio-prob          operating points, the seven instances, the eight
                       solutions, DOE GO Challenge 3 / OPFData / BMOPF assembly
                       → depends on core, tx, dist; matrix free
 powerio-matrix        sparse matrices and graph data for both network families
                       → depends on core, tx, dist, prob
-powerio (facade)      PioValue, automatic dispatch, .pio.json, write dispatch,
-                      re-exports → core, tx, dist, prob (+ matrix behind the
-                      matrix feature)
+powerio (facade)      PioValue, parse, emit, serialize, deserialize, re-exports
+                      → core, tx, dist, prob (+ matrix behind the matrix feature)
 powerio-cli, powerio-capi, powerio-py → the facade
 ```
 
