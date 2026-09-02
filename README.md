@@ -97,7 +97,7 @@ does not replace grid exchange formats such as MATPOWER, PSS/E, or OpenDSS.
 Balanced network formats:
 
 - MATPOWER `.m`
-- PSS/E `.raw` revisions 33, 34, and 35
+- PSS/E `.raw` revisions 32 through 35; fresh output uses 33, 34, or 35
 - PSS/E RAWX JSON revision 35
 - PowSybl XIIDM XML 1.12 through 1.17; fresh output uses 1.17
 - CIM CGMES 2.4.15 and 3.0 profile sets; fresh output uses CGMES 3.0

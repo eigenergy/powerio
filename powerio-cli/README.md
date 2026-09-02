@@ -3,7 +3,8 @@
 The `powerio` command converts formats, exports matrices and GridFM Parquet
 datasets, writes DC OPF bundles, generates synthetic cases, writes `.pio.json`
 documents, verifies matrices, and opens a ratatui interface.
-Transmission conversion covers MATPOWER, PSS/E RAW 33 through 35, PSS/E RAWX
+Transmission conversion covers MATPOWER, PSS/E RAW 32 through 35 input with
+fresh 33 through 35 output, PSS/E RAWX
 35, PowSybl XIIDM 1.12 through 1.17 input with fresh 1.17 output, CIM CGMES
 2.4.15 and 3.0, PowerWorld AUX, PSLF,
 PowerModels JSON, egret JSON, pandapower JSON, PyPSA CSV folders, GOC3 JSON,

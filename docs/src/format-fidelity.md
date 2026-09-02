@@ -170,15 +170,24 @@ parse warning that hides the cause.
   and ignored; fresh emission writes the resulting `VoltageLevel` fields rather
   than recreating the individual `VoltageLimit` records. CGMES states physical
   units but no system MVA base, so PowerIO uses and reports 100 MVA.
-- **PSS/E** reads RAW revisions 33, 34, and 35 and RAWX revision 35. RAW and
-  RAWX share one electrical mapping. RAW 34 maps its substation section. RAW
+- **PSS/E** reads RAW revisions 32 through 35 and RAWX revision 35. RAW and
+  RAWX share one electrical mapping. RAW 32 records end before the bus
+  voltage limits (`NVHI`, `NVLO`, `EVHI`, `EVLO`), the load `INTRPT` field,
+  the transformer `VECGRP` field, and the winding `CNXA` field that revision
+  33 added; the reader lays every record out by the header revision, defaults
+  those fields, and reports a revision 32 record that ends before its last
+  typed field as `READ.PSSE.VALUE_DEFAULTED` with the record's byte range.
+  RAW 34 maps its substation section. RAW
   35 and RAWX 35 map and freshly emit substations, nodes, switches, busbar
   sections, and equipment terminal references. Fresh RAW 34/35 and
   RAWX output preserves AC line and transformer names. Explicit RAW revisions
-  outside 33 through 35, invalid system bases or frequencies, and nonfinite
+  outside 32 through 35, invalid system bases or frequencies, and nonfinite
   record values are rejected. Fresh output accepts only revisions 33 through
   35 and returns an error when detailed connectivity cannot form valid RAWX
-  tables. Generator `IREG`/`NREG`,
+  tables. A RAW 32 module retains its source text like every other revision,
+  but no emission target names revision 32, so writing it back as PSS/E
+  produces fresh revision 33 text and its unmodeled sections survive only in
+  the retained source. Generator `IREG`/`NREG`,
   switched shunt `SWREG`/`NREG`, and transformer `CONT`/`NODE` resolve to exact
   terminal references, including an explicit target on the same bus. Every
   winding of a 3-winding transformer retains its control mode, regulated

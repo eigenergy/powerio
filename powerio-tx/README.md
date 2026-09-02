@@ -5,7 +5,8 @@ successful parse returns `PioModule<BalancedNetwork>`, retaining source bytes
 and structured diagnostics. The top level `powerio` facade adds universal
 format dispatch, dynamic values, stored modules, and `emit`.
 
-Format support covers MATPOWER, PSS/E RAW revisions 33 through 35, PSS/E RAWX
+Format support covers MATPOWER, PSS/E RAW revisions 32 through 35 (fresh
+output at 33 through 35), PSS/E RAWX
 revision 35, PowSybl XIIDM 1.12 through 1.17 input with fresh 1.17 output,
 CIM CGMES 2.4.15 and 3.0, PowerWorld AUX,
 PSLF, PowerModels JSON, egret JSON, pandapower JSON, PyPSA CSV folders, and

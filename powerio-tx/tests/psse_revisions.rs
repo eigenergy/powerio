@@ -507,7 +507,7 @@ fn revision32_module_retains_its_source_and_writes_fresh_33() {
         emitted.render_diagnostics()
     );
     let back = parse_psse(&emitted.text).unwrap();
-    assert_eq!(core(&back), core(&module.value));
+    assert_eq!(core(&back), core(module.value()));
 }
 
 /// A revision 32 record that ends before its last typed field is reported
@@ -550,7 +550,7 @@ fn short_revision32_record_is_reported_with_its_span() {
                 "the span names the module source"
             );
         }
-        let bus = &module.value.buses()[0];
+        let bus = &module.value().buses()[0];
         close(bus.vm, 1.0, "VM defaulted");
         close(bus.va, 0.0, "VA defaulted");
     }
