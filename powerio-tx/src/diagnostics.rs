@@ -206,6 +206,8 @@ pub mod codes {
             "a PSS/E section is preserved in a same-format echo only";
         READ_PSSE_RETAINED_SOURCE_ONLY = "READ.PSSE.RETAINED_SOURCE_ONLY", Remark,
             "a PSS/E field survives in extras rather than in a typed field";
+        READ_PSSE_VALUE_DEFAULTED = "READ.PSSE.VALUE_DEFAULTED", Warning,
+            "a PSS/E record ends before a field the typed model reads, so that field took its default";
 
         READ_PSLF_VALUE_DEFAULTED = "READ.PSLF.VALUE_DEFAULTED", Warning,
             "a PSLF value the model needs was not in the source and was defaulted";
