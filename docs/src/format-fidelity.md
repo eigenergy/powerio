@@ -41,7 +41,8 @@ targets, every PowerWorld output is read back and bridged to PowerModels JSON,
 and the PMread leg covers the PowerModels JSON read side. pandapower JSON and
 PyPSA CSV folders have dedicated import validators because pandapower has its
 own JSON schema and PyPSA is a directory format; both validate the write
-direction only — the pandapower JSON and PyPSA readers have no external oracle.
+direction only, because the pandapower JSON and PyPSA readers have no external
+oracle.
 DOE GO Challenge 3 has a separate pinned reference job described below. Surge
 JSON and the remaining source/target pairs (PowerModels JSON and PowerWorld
 sources into the non-PowerModels targets) rest on the Rust round trip suite.
@@ -287,8 +288,8 @@ parse warning that hides the cause.
   converter terminals; a Surge link states no terminal reactive flow, no cost
   curve, and no received power (the reader derives it from the setpoint and the
   loss model), so those are warned. A link that states converter or control
-  detail — firing angles, converter transformer taps, commutation impedance, a
-  DC voltage schedule — beyond the neutral converter this writer emits is
+  detail beyond the neutral converter this writer emits (firing angles,
+  converter transformer taps, commutation impedance, a DC voltage schedule) is
   warned on the way in.
 - **DeepMind OPFData JSON** reads one raw JSON document from a FullTop or N-1
   release into the balanced transmission model. Topology, limits, loads,

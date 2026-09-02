@@ -321,7 +321,7 @@ beside it. Decompress it before running the check.
 
 | Item | Value |
 |---|---|
-| PowerIO commit | `b2b0e6d4f545cf620c508474ea4e7920e5c40204` |
+| PowerIO commit | `05de92a00dae7fa2030ec14852547d9780e929f5` |
 | PowerIO binary | `target/debug/powerio` |
 | PyPowSybl | 1.16.1 on PowSybl Core 7.3.0 at `0939bfcc2c0c094de907dc818dd688b4cbfb7281` |
 | Source | SHA-256 `cd1cbd8c49c367ca366dd83bb05ead72f984a35de21e135e01f86b74d810a244`, 33,054,521 bytes, 351,970 lines, CDLA-Permissive-2.0 |

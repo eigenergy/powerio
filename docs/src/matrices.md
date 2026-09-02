@@ -32,9 +32,9 @@ the matrix crate projects them into sparse operators. The DC OPF bundle schema i
 | adjacency | \\(n \times n\\) | `calc_adjacency_matrix` | sparse graph adjacency |
 | petgraph graph | n/a | `IndexedNetwork::to_petgraph` | `UnGraph<usize, usize>` |
 
-Computing PTDF and LODF matrices requires a linear solve. Each calculation —
-`calc_ptdf`, `calc_lodf`, `calc_ptdf_lodf`, and the option based
-`calc_ptdf_lodf_with_options` — routes through the same solver selection.
+Computing PTDF and LODF matrices requires a linear solve. Each calculation
+(`calc_ptdf`, `calc_lodf`, `calc_ptdf_lodf`, and the option based
+`calc_ptdf_lodf_with_options`) routes through the same solver selection.
 `SensitivitySolver`, the `solver` field on `SensitivityOptions`, names the choice: `Dense` forces the dense grounded
 factorization, `Sparse` factors the grounded DC bus susceptance matrix once
 with a sparse Cholesky and reuses the factorization across every right hand

@@ -4,9 +4,7 @@ Status: historical knowledge graph from the design work that informed PowerIO
 0.10. It is not current API authority, a crate dependency diagram, or a list of
 current implementation types.
 
-The companion [PowerIO 1.0 issue audit](V1_ISSUE_AUDIT.md) maps these concepts
-to the GitHub tracker.
-The [PowerIO 1.0 terminology](V1_TERMINOLOGY.md) defines every repeated public
+The [PowerIO 1.0 terminology](v1-terminology.md) defines every repeated public
 term used in this graph.
 
 `PioModule<T>` is the accepted top level compiler type. Every successful parse
@@ -679,7 +677,7 @@ The source profile review and compiling prototype settled the dynamic value
 set, serialized identifiers, shared ownership, temporal view families, common
 module records, instance and solution inventories, multiconductor result
 names, and writer ownership. The exact list is normative in
-`V1_ARCHITECTURE.md`. Function option names, private cache shapes, solver
+`v1-architecture.md`. Function option names, private cache shapes, solver
 request enums, and evaluation thresholds remain implementation work rather
 than unresolved ontology. Balanced to multiconductor construction remains
 additive work after 1.0.
