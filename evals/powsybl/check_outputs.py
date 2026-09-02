@@ -112,6 +112,32 @@ XIIDM_VERSION_FIXTURES = {
     ),
 }
 
+UCTE_FIXTURE_ROOTS = (
+    Path("ucte/ucte-converter/src/test/resources"),
+    Path("ucte/ucte-network/src/test/resources"),
+    Path("ucte/ucte-util/src/test/resources"),
+)
+EXPECTED_UCTE_FIXTURE_COUNT = 43
+# The fixtures PowSybl Core 7.3.0 refuses, with the start of its message.
+# PowerIO refuses the first for the same reason; the other two describe
+# cross border topologies PowSybl's tie line pairing cannot represent, which
+# the balanced network holds as ordinary buses and branches.
+UCTE_POWSYBL_REJECTIONS = {
+    "ucte/ucte-converter/src/test/resources/differentLinesVoltage.uct": (
+        "Line EHORTA61 BHORTA11 1 with two different nominal voltages",
+        False,
+    ),
+    "ucte/ucte-converter/src/test/resources/lineBetweenTwoXnodes.uct": (
+        "Line between 2 X-nodes",
+        True,
+    ),
+    "ucte/ucte-converter/src/test/resources/xnodeThreeClosedLine.uct": (
+        "have the same pairing key",
+        True,
+    ),
+}
+EXPECTED_CASE14_UCTE = {"buses": 14, "branches": 20, "generators": 5, "loads": 11}
+
 CIM16 = "http://iec.ch/TC57/2013/CIM-schema-cim16#"
 CIM100 = "http://iec.ch/TC57/CIM100#"
 RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
@@ -1222,6 +1248,216 @@ def check_case9(path: Path, label: str) -> None:
         f"{label}: validation=STEADY_STATE_HYPOTHESIS, buses={bus_count}, "
         f"branches={branch_count}, generators={generator_count}, loads={load_count}"
     )
+
+
+def check_case14_ucte(path: Path) -> None:
+    label = "case14 UCTE-DEF"
+    network = load_checked(path, label)
+    counts = {
+        "buses": len(network.get_bus_breaker_view_buses()),
+        "branches": count_branches(network),
+        "generators": len(network.get_generators()),
+        "loads": len(network.get_loads()),
+    }
+    require(
+        counts == EXPECTED_CASE14_UCTE,
+        f"{label}: PyPowSybl view {counts}, expected {EXPECTED_CASE14_UCTE}",
+    )
+    require(
+        len(network.get_2_windings_transformers()) == 3,
+        f"{label}: {len(network.get_2_windings_transformers())} transformers, expected 3",
+    )
+    print(f"{label}: validation=STEADY_STATE_HYPOTHESIS, {counts}")
+
+
+def ucte_fixture_stem(relative: Path) -> str:
+    return str(relative.with_suffix("")).replace("/", "__")
+
+
+def ucte_ir_counts(ir_path: Path) -> dict[str, Any]:
+    """The bus names, the cross border bus names, and the element counts of
+    a PowerIO IR document read from a UCTE-DEF fixture."""
+    data = json.loads(ir_path.read_text(encoding="utf-8"))["value"]["data"]
+    cross_border_areas = {
+        area["number"] for area in data["areas"] if area.get("area_type") == "CrossBorder"
+    }
+    names = {bus["id"]: bus["name"] for bus in data["buses"]}
+    cross_border = {
+        bus["name"] for bus in data["buses"] if bus["area"] in cross_border_areas
+    }
+    referenced = set()
+    for branch in data["branches"]:
+        referenced.update((names[branch["from"]], names[branch["to"]]))
+    for switch in data["switches"]:
+        referenced.update((names[switch["from"]], names[switch["to"]]))
+    real = set(names.values()) - cross_border
+    return {
+        "names": set(names.values()),
+        "real": real,
+        "cross_border": cross_border,
+        "unreferenced_cross_border": cross_border - referenced,
+        "branches": len(data["branches"]),
+        "switches": len(data["switches"]),
+        "loads": sum(1 for load in data["loads"] if names[load["bus"]] in real),
+        "generators": sum(
+            1 for generator in data["generators"] if names[generator["bus"]] in real
+        ),
+    }
+
+
+def powsybl_ucte_view(network: pp.network.Network) -> dict[str, Any]:
+    """The bus and element inventory PowSybl derives from a UCTE-DEF file:
+    node codes are bus breaker bus ids, an X node transformer adds a Y node
+    bus and a Y-to-X dangling line, and a coupler to an X node becomes a
+    dangling line."""
+    bus_ids = set(network.get_bus_breaker_view_buses().index)
+    node_buses = {bus_id for bus_id in bus_ids if len(bus_id) == 8}
+    dangling = network.get_dangling_lines(all_attributes=True)
+    node_dangling = dangling[dangling["bus_breaker_bus_id"].map(len) == 8]
+    return {
+        "node_buses": node_buses,
+        "y_node_buses": bus_ids - node_buses,
+        "cross_border_keys": set(dangling["pairing_key"]),
+        "elements": len(network.get_lines())
+        + len(network.get_2_windings_transformers())
+        + len(node_dangling)
+        + len(network.get_switches()),
+        "loads": len(network.get_loads()),
+        "generators": len(network.get_generators()),
+    }
+
+
+def check_ucte_references(network: pp.network.Network, label: str) -> None:
+    """Check an ordinary UCTE case through the shared check, while accepting
+    a node-only fixture whose isolated nodes create no terminals or calculated
+    buses in PowSybl."""
+    if len(network.get_terminals()) > 0:
+        check_references(network, label)
+        return
+    voltage_level_ids = set(network.get_voltage_levels().index)
+    require(voltage_level_ids, f"{label}: no voltage levels")
+    buses = network.get_bus_breaker_view_buses()
+    require(len(buses) > 0, f"{label}: no bus breaker buses")
+    require(
+        set(buses["voltage_level_id"]).issubset(voltage_level_ids),
+        f"{label}: a bus references an unknown voltage level",
+    )
+    require(len(network.get_buses()) == 0, f"{label}: isolated nodes formed calculated buses")
+
+
+def check_ucte_fixture(
+    source_path: Path,
+    ir_path: Path,
+    fresh_path: Path,
+    label: str,
+) -> None:
+    """Compare the PowerIO IR of one PowSybl UCTE-DEF fixture with PyPowSybl's
+    view of the same file, then reload the fresh UCTE-DEF output."""
+    source = pp.network.load(str(source_path))
+    check_ucte_references(source, f"official {label}")
+    view = powsybl_ucte_view(source)
+    counts = ucte_ir_counts(ir_path)
+    require(
+        view["node_buses"] - counts["cross_border"] == counts["real"],
+        f"{label}: PyPowSybl node buses {sorted(view['node_buses'])} differ from the "
+        f"PowerIO buses {sorted(counts['real'])}",
+    )
+    require(
+        view["cross_border_keys"] <= counts["cross_border"],
+        f"{label}: PyPowSybl pairing keys {sorted(view['cross_border_keys'])} are not "
+        f"all PowerIO cross border buses {sorted(counts['cross_border'])}",
+    )
+    reached = view["cross_border_keys"] | (view["node_buses"] & counts["cross_border"])
+    require(
+        counts["cross_border"] - reached <= counts["unreferenced_cross_border"],
+        f"{label}: PowerIO cross border buses {sorted(counts['cross_border'] - reached)} "
+        "have branches but no PyPowSybl dangling line",
+    )
+    powerio_elements = counts["branches"] + counts["switches"]
+    require(
+        powerio_elements == view["elements"],
+        f"{label}: PowerIO has {counts['branches']} branches and {counts['switches']} "
+        f"switches; PyPowSybl has {view['elements']} lines, transformers, dangling "
+        "lines, and switches",
+    )
+    if not (view["node_buses"] & counts["cross_border"]):
+        for element in ("loads", "generators"):
+            require(
+                counts[element] == view[element],
+                f"{label}: PowerIO has {counts[element]} {element} on real nodes; "
+                f"PyPowSybl has {view[element]}",
+            )
+    fresh = pp.network.load(str(fresh_path))
+    check_ucte_references(fresh, f"fresh {label}")
+    require(
+        fresh.validate() == source.validate(),
+        f"{label}: fresh UCTE-DEF validates as {fresh.validate().name}, the source as "
+        f"{source.validate().name}",
+    )
+    fresh_view = powsybl_ucte_view(fresh)
+    for key in ("node_buses", "cross_border_keys", "elements", "loads", "generators"):
+        require(
+            fresh_view[key] == view[key],
+            f"{label}: fresh UCTE-DEF {key} {fresh_view[key]} differ from the source "
+            f"{view[key]}",
+        )
+    print(
+        f"{label}: {len(counts['real'])} node buses, {len(counts['cross_border'])} cross "
+        f"border buses, {powerio_elements} elements; fresh UCTE-DEF reloads equal"
+    )
+
+
+def check_ucte_fixtures(powsybl_core: Path, ucte_dir: Path) -> None:
+    fixtures = sorted(
+        path.relative_to(powsybl_core)
+        for root in UCTE_FIXTURE_ROOTS
+        for path in (powsybl_core / root).rglob("*.uct")
+    )
+    require(
+        len(fixtures) == EXPECTED_UCTE_FIXTURE_COUNT,
+        f"UCTE-DEF: {len(fixtures)} fixtures in the checkout, expected "
+        f"{EXPECTED_UCTE_FIXTURE_COUNT}",
+    )
+    checked = 0
+    for relative in fixtures:
+        label = f"UCTE-DEF {relative.name}"
+        stem = ucte_fixture_stem(relative)
+        ir_path = ucte_dir / f"{stem}.pio.json"
+        rejection = UCTE_POWSYBL_REJECTIONS.get(str(relative))
+        if rejection is not None:
+            message, powerio_reads = rejection
+            try:
+                pp.network.load(str(powsybl_core / relative))
+            except Exception as error:  # noqa: BLE001
+                require(
+                    message in str(error),
+                    f"{label}: PyPowSybl refused it for another reason: {error}",
+                )
+            else:
+                raise AssertionError(f"{label}: PyPowSybl loads a fixture pinned as refused")
+            require(
+                ir_path.exists() == powerio_reads,
+                f"{label}: PowerIO {'refused' if powerio_reads else 'read'} a fixture "
+                f"pinned the other way; see {ucte_dir / f'{stem}.read.log'}",
+            )
+            print(f"{label}: PyPowSybl refuses it ({message}); PowerIO reads it: {powerio_reads}")
+            continue
+        require(
+            ir_path.exists(),
+            f"{label}: PowerIO refused it; see {ucte_dir / f'{stem}.read.log'}",
+        )
+        require(
+            (ucte_dir / f"{stem}.m").exists(),
+            f"{label}: MATPOWER emission failed; see {ucte_dir / f'{stem}.matpower.log'}",
+        )
+        check_ucte_fixture(
+            powsybl_core / relative,
+            ir_path,
+            ucte_dir / f"{stem}.fresh.uct",
+            label,
+        )
+        checked += 1
+    print(f"UCTE-DEF: {checked} PowSybl fixtures compared with PyPowSybl")
 
 
 def check_pow_sybl_rejects_raw_revision_34(path: Path) -> None:
@@ -4736,9 +4972,12 @@ def main() -> None:
         (output_dir / "case9-psse33.raw", "case9 PSS/E RAW revision 33"),
         (output_dir / "case9-psse35.raw", "case9 PSS/E RAW revision 35"),
         (output_dir / "case9.rawx", "case9 PSS/E RAWX"),
+        (output_dir / "case9.uct", "case9 UCTE-DEF"),
     ):
         check_case9(path, label)
     check_pow_sybl_rejects_raw_revision_34(output_dir / "case9-psse34.raw")
+    check_case14_ucte(output_dir / "case14.uct")
+    check_ucte_fixtures(powsybl_core, output_dir / "ucte")
 
     cgmes_30_source_path = powsybl_core / CGMES_30_RELATIVE
     cgmes_30_source = load_checked(cgmes_30_source_path, "official CGMES 3.0")
