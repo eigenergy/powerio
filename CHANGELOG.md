@@ -77,6 +77,20 @@ is enabled without losing its control mode. `|COD| = 4` means control of a DC
 line quantity on a 2-winding transformer, and `|COD| = 5` means asymmetric
 active power flow control.
 
+The `powerio` command composes with shell pipelines. `-` as the input of
+`convert`, `summary`, `serialize`, `verify`, `dcopf`, and `sensitivities` reads
+the case from standard input with a declared `--from` format. The exit status
+follows the PowerIO error category: 2 `request`, 3 `io`, 4 `parse`, 5 `data`,
+6 `output`, and 1 for a failure without a category. Failures the command line
+raises itself carry registered `*.CLI.*` diagnostic codes.
+`--diagnostics-format json` replaces every stderr line with one JSON array of
+PowerIO IR diagnostic records covering the whole run, warnings and the failure
+alike, with each reason in a failure's cause chain as a `note` record related
+to the failure record; `powerio::serialize_diagnostics` is that encoding as a
+library function. `EMIT.MULTICONDUCTOR.SIDECAR_DROPPED`, registered but never
+raised before, is the warning `convert` reports when standard output cannot
+carry a sidecar file.
+
 ## 0.10.0
 
 PowerIO 0.10 is the public beta of the 1.0 API. API corrections may land before 1.0.0 as downstream integrations exercise the new design.

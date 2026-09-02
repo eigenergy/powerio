@@ -2351,7 +2351,7 @@ fn decode_severity(severity: dto::Severity) -> DiagnosticSeverity {
 /// from list position, so a diagnostic appended with no id of its own can
 /// never collide with one an external document set explicitly, and
 /// reordering the list can't make a collision appear later either.
-fn encode_diagnostics(diagnostics: &[Diagnostic]) -> Vec<dto::Diagnostic> {
+pub(crate) fn encode_diagnostics(diagnostics: &[Diagnostic]) -> Vec<dto::Diagnostic> {
     let mut used: HashSet<String> = diagnostics
         .iter()
         .filter_map(|diagnostic| diagnostic.id().map(|id| id.as_str().to_owned()))

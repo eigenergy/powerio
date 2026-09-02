@@ -1,10 +1,28 @@
 //! PowerIO IR serialization and deserialization.
 
 use powerio_core::{
-    ArtifactPath, Destination, EmitResult, Error, Fidelity, MemoryArtifact, PioModule, Source,
+    ArtifactPath, Destination, Diagnostic, EmitResult, Error, Fidelity, MemoryArtifact, PioModule,
+    Source,
 };
 
 use crate::PioValue;
+
+/// Serialize a diagnostics list as the JSON array of PowerIO IR diagnostic
+/// records: the encoding a module's `diagnostics` field carries, with an
+/// identity minted for every record that has none.
+///
+/// # Errors
+/// The records cannot be encoded as JSON.
+pub fn serialize_diagnostics(diagnostics: &[Diagnostic]) -> Result<String, Error> {
+    let records = crate::stored::encode_diagnostics(diagnostics);
+    serde_json::to_string(&records).map_err(|cause| {
+        Error::new(
+            &crate::codes::READ_MODULE_INVALID,
+            format!("diagnostics could not be encoded as JSON: {cause}"),
+        )
+        .with_cause(cause)
+    })
+}
 
 /// Generate the JSON Schema for the PowerIO 1.0 IR document.
 #[cfg(feature = "schema")]

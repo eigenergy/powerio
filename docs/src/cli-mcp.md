@@ -16,7 +16,74 @@ powerio gridfm case14.m -o out                     # a GridFM Parquet dataset
 powerio geo extract case.aux -o layer.geo.json     # standalone geographic layers
 ```
 
-Format names, structural value types, and diagnostic codes are the same strings the language APIs use. Exit status is nonzero on failure; diagnostics render one per line as `CODE: message`.
+Format names, structural value types, and diagnostic codes are the same strings the language APIs use. Diagnostics render one per line on stderr as `CODE: message`.
+
+### Standard input and output
+
+`convert`, `summary`, `serialize`, `verify`, `dcopf`, and `sensitivities` read
+the case from standard input when the input is `-`. A stream has no file name
+to infer a format from, so `--from` is required; a gridfm dataset is a
+directory and cannot arrive on a stream. `convert` and `serialize` write a
+single text result to standard output when `-o` is `-` or omitted; a directory
+format such as `pypsa-csv` or `cgmes` needs an output directory.
+
+```sh
+cat case9.m | powerio convert - --from matpower --to psse -o - > case9.raw
+powerio serialize - --from psse < case9.raw
+```
+
+### Exit status
+
+| Status | Meaning |
+|---|---|
+| 0 | success |
+| 1 | a failure without a PowerIO error category |
+| 2 | `request`: the arguments name something the request cannot satisfy (a format the writer cannot produce, a missing `--from` for standard input); clap usage errors also exit 2 |
+| 3 | `io`: a path could not be read or written |
+| 4 | `parse`: the input is malformed, or a refused include left the output incomplete |
+| 5 | `data`: valid input that the operation cannot satisfy |
+| 6 | `output`: the writer could not produce the requested format |
+
+The categories are the `ErrorCategory` values the Rust and Python APIs report
+on every failure, so a shell script and a Python caller branch on the same
+five names.
+
+Every failure the binary reports is a PowerIO error with a registered
+diagnostic code, including the ones the command line raises itself
+(`REQUEST.CLI.FORMAT_REQUIRED`, `REQUEST.CLI.TARGET_UNSUPPORTED`,
+`REQUEST.CLI.OUTPUT_REQUIRED`, `REQUEST.CLI.FAMILY_MISMATCH`,
+`REQUEST.CLI.OPTION_INVALID`, `REQUEST.CLI.NO_CASES`,
+`PARSE.CLI.ERRORS_REPORTED`, `VALIDATE.CLI.INPUT_LACKS_DATA`,
+`EMIT.CLI.SIDECAR_PATH`). A failure that reaches the top of
+the program without one is reported as `BIND.CLI.UNCLASSIFIED` and exits 1.
+
+### Diagnostics format
+
+`--diagnostics-format text` (the default) prints one `CODE: message` line per
+diagnostic as the command runs, `wrote <path>` when a file lands, and a failure
+as `Error:` and `Caused by:` lines.
+
+`--diagnostics-format json` (accepted before or after the subcommand) prints
+one JSON array on stderr when the command ends, and nothing else. The array
+holds every diagnostic the run produced, warnings and errors alike, as PowerIO
+IR diagnostic records: the same encoding a module's `diagnostics` field carries
+in a `.pio.json` document, with the same fields (`id`, `severity`, `code`,
+`message`, `target`, `spans`, `related`, `details`, `suggested_action`). A
+failure adds its record, and each further reason in its cause chain becomes a
+`note` record whose `related` names the failure record:
+
+```json
+[{"id": "failure", "severity": "error", "code": "READ.IO.OPEN",
+  "message": "cannot open source `case9.m`"},
+ {"id": "d0", "severity": "note", "code": "READ.IO.OPEN",
+  "message": "No such file or directory (os error 2)", "related": ["failure"]}]
+```
+
+The same flag shape and the same rule, one record type for warnings and
+failures with notes attached to a primary record, is what GCC
+(`-fdiagnostics-format=`), rustc (`--error-format=json`, `children`), and MLIR
+(`Diagnostic::attachNote`) use; the exit status stays the process exit status
+and is not repeated inside the records.
 
 ## The MCP server
 

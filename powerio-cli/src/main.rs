@@ -5,10 +5,12 @@
 //! Parquet), `serialize` (PowerIO IR), and `convert`. With no subcommand it launches the TUI. Run
 //! `powerio --help` for the full surface.
 
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
+use powerio_core::ErrorCategory;
 use powerio_matrix::io::gridfm::{GridfmOptions, emit_gridfm_batch, number_snapshots};
 use powerio_matrix::matrix::{BranchSusceptanceFormula, BuildOptions, Scheme, check_sddm};
 use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
@@ -20,6 +22,7 @@ use powerio_matrix::{SensitivityOptions, SensitivitySolver};
 use powerio_tx::{EmitOptions, MissingGenCostPolicy};
 use serde_json::json;
 mod cases;
+mod codes;
 mod module_io;
 mod tui;
 
@@ -30,6 +33,24 @@ use powerio_tx::format::routing::SourceFormat as DetectedFormat;
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
+    /// How diagnostics and failures are written on stderr: `text` prints
+    /// one `CODE: message` line per diagnostic and `Error:` lines for a
+    /// failure; `json` prints one JSON array of PowerIO IR diagnostic
+    /// records when the command ends, and nothing else.
+    #[arg(long, global = true, value_enum, default_value_t = DiagnosticsFormat::Text)]
+    diagnostics_format: DiagnosticsFormat,
+}
+
+/// The stderr rendering of diagnostics, selected once per run.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+enum DiagnosticsFormat {
+    /// One `CODE: message` line per diagnostic, `Error:` and `Caused by:`
+    /// lines for a failure, and progress lines such as `wrote <path>`.
+    #[default]
+    Text,
+    /// One JSON array of PowerIO IR diagnostic records, printed when the
+    /// command ends; no other line reaches stderr.
+    Json,
 }
 
 #[derive(Subcommand, Debug)]
@@ -82,7 +103,8 @@ enum Command {
     },
     /// Print matrix stats and the SDDM check for one case.
     Verify {
-        /// Transmission case file or serialized PowerIO IR (`.pio.json`).
+        /// Transmission case file or serialized PowerIO IR (`.pio.json`);
+        /// `-` reads standard input, which requires `--from`.
         input: PathBuf,
         /// Override the inferred input format.
         #[arg(long, value_enum)]
@@ -95,7 +117,8 @@ enum Command {
     /// Emit the static DC OPF matrix/vector bundle for one case.
     #[command(name = "dcopf", visible_alias = "dc-opf")]
     DcOpf {
-        /// Transmission case file or serialized PowerIO IR (`.pio.json`).
+        /// Transmission case file or serialized PowerIO IR (`.pio.json`);
+        /// `-` reads standard input, which requires `--from`.
         input: PathBuf,
         /// Override the inferred input format.
         #[arg(long, value_enum)]
@@ -121,7 +144,8 @@ enum Command {
     },
     /// Emit DC sensitivity matrices (PTDF, LODF) for one case.
     Sensitivities {
-        /// Transmission case file or serialized PowerIO IR (`.pio.json`).
+        /// Transmission case file or serialized PowerIO IR (`.pio.json`);
+        /// `-` reads standard input, which requires `--from`.
         input: PathBuf,
         /// Override the inferred input format.
         #[arg(long, value_enum)]
@@ -142,6 +166,7 @@ enum Command {
     /// Print the canonical network summary JSON.
     Summary {
         /// Input case file, PyPSA CSV folder, or gridfm dataset directory.
+        /// `-` reads the case from standard input, which requires `--from`.
         input: PathBuf,
         /// Override the inferred input format.
         #[arg(long, value_enum)]
@@ -153,6 +178,7 @@ enum Command {
     /// Serialize one input as PowerIO IR (`.pio.json`).
     Serialize {
         /// Input case file, PyPSA CSV folder, or gridfm dataset directory.
+        /// `-` reads the case from standard input, which requires `--from`.
         input: PathBuf,
         /// Output file; `-` or omitted writes to stdout.
         #[arg(short, long)]
@@ -212,7 +238,8 @@ enum Command {
     Convert {
         /// Input case file, or a gridfm dataset directory with `--from gridfm`.
         /// The format is inferred from the extension (`.m`, `.json`, `.raw`,
-        /// `.aux`, `.dss`) unless `--from` is given.
+        /// `.aux`, `.dss`) unless `--from` is given. `-` reads the case from
+        /// standard input, which requires `--from`.
         input: PathBuf,
         /// Target format.
         #[arg(long, value_enum)]
@@ -715,6 +742,7 @@ impl From<TopologyArg> for Topology {
 fn main() -> std::process::ExitCode {
     install_tracing();
     let cli = Cli::parse();
+    let _ = DIAGNOSTICS_FORMAT.set(cli.diagnostics_format);
     let result: anyhow::Result<()> = match cli.command.unwrap_or_else(default_command) {
         Command::Tui { data_dir, out_dir } => tui::run(tui::TuiOptions { data_dir, out_dir }),
         Command::Batch {
@@ -818,12 +846,218 @@ fn main() -> std::process::ExitCode {
         ),
         Command::Geo { command } => run_geo(command),
     };
-    match result {
-        Ok(()) => std::process::ExitCode::SUCCESS,
-        Err(error) => {
-            print_error_chain(&error);
-            std::process::ExitCode::FAILURE
+    let status = match &result {
+        Ok(()) => 0,
+        Err(error) => exit_status(error),
+    };
+    match diagnostics_format() {
+        DiagnosticsFormat::Text => {
+            if let Err(error) = &result {
+                print_error_chain(error);
+            }
         }
+        DiagnosticsFormat::Json => {
+            if let Err(error) = &result {
+                report_diagnostics(&failure_diagnostics(error));
+            }
+            print_collected_json();
+        }
+    }
+    std::process::ExitCode::from(status)
+}
+
+/// A failure the command line raises itself, as an ordinary PowerIO error
+/// built from one of the registered `*.CLI.*` codes in [`codes`], so it carries
+/// the same diagnostic record and error category as any library failure.
+fn cli_failure(
+    info: &'static powerio_core::DiagnosticInfo,
+    message: impl Into<String>,
+) -> anyhow::Error {
+    anyhow::Error::new(powerio_core::Error::new(info, message))
+}
+
+/// Return a command line failure with the named registered code.
+macro_rules! fail_with {
+    ($code:ident, $($arg:tt)*) => { return Err(cli_failure(&codes::$code, format!($($arg)*))) };
+}
+
+/// A command line failure value with the named registered code, for
+/// `ok_or_else` closures.
+macro_rules! failure {
+    ($code:ident, $($arg:tt)*) => { cli_failure(&codes::$code, format!($($arg)*)) };
+}
+
+/// The exit status of a failed run. A failure that carries a PowerIO error
+/// category maps to one fixed code per category: `request` 2, `io` 3,
+/// `parse` 4, `data` 5, `output` 6. Any other failure exits 1. Clap reports a
+/// usage error with 2, the same code as a `request` failure.
+fn exit_status(error: &anyhow::Error) -> u8 {
+    match error_category(error) {
+        Some(ErrorCategory::Request) => 2,
+        Some(ErrorCategory::Io) => 3,
+        Some(ErrorCategory::Parse) => 4,
+        Some(ErrorCategory::Data) => 5,
+        Some(ErrorCategory::Output) => 6,
+        None => 1,
+    }
+}
+
+/// The category of the first PowerIO error in the chain, if any.
+fn error_category(error: &anyhow::Error) -> Option<ErrorCategory> {
+    error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<powerio_core::Error>())
+        .map(powerio_core::Error::category)
+}
+
+static DIAGNOSTICS_FORMAT: std::sync::OnceLock<DiagnosticsFormat> = std::sync::OnceLock::new();
+static COLLECTED_DIAGNOSTICS: std::sync::Mutex<Vec<powerio_core::Diagnostic>> =
+    std::sync::Mutex::new(Vec::new());
+
+fn diagnostics_format() -> DiagnosticsFormat {
+    DIAGNOSTICS_FORMAT.get().copied().unwrap_or_default()
+}
+
+fn collected_diagnostics() -> std::sync::MutexGuard<'static, Vec<powerio_core::Diagnostic>> {
+    COLLECTED_DIAGNOSTICS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Report diagnostics on stderr in the run's format: text prints them now,
+/// one `CODE: message` line each; JSON collects them for the one array
+/// printed when the command ends.
+fn report_diagnostics(diagnostics: &[powerio_core::Diagnostic]) {
+    match diagnostics_format() {
+        DiagnosticsFormat::Text => {
+            for line in powerio_core::render_diagnostics(diagnostics) {
+                eprintln!("{line}");
+            }
+        }
+        DiagnosticsFormat::Json => collected_diagnostics().extend(diagnostics.iter().cloned()),
+    }
+}
+
+/// A progress line such as `wrote <path>`. Text format only, so JSON stderr
+/// holds nothing but the diagnostics array.
+fn report_progress(line: impl std::fmt::Display) {
+    if diagnostics_format() == DiagnosticsFormat::Text {
+        eprintln!("{line}");
+    }
+}
+
+fn report_written(path: &Path) {
+    report_progress(format!("wrote {}", path.display()));
+}
+
+/// Print every diagnostic the run collected as one JSON array of PowerIO IR
+/// diagnostic records. When the records cannot be encoded, print them as
+/// text and say why.
+fn print_collected_json() {
+    let collected = std::mem::take(&mut *collected_diagnostics());
+    match powerio::serialize_diagnostics(&collected) {
+        Ok(text) => eprintln!("{text}"),
+        Err(encode_error) => {
+            for line in powerio_core::render_diagnostics(&collected) {
+                eprintln!("{line}");
+            }
+            eprintln!("Error: could not encode the diagnostics as JSON: {encode_error}");
+        }
+    }
+}
+
+/// The frames of a failure, outermost first, each paired with whether it is
+/// the PowerIO error itself. A frame that only repeats the end of the frame
+/// above it is dropped.
+fn failure_frames(error: &anyhow::Error) -> Vec<(bool, String)> {
+    let mut frames = Vec::new();
+    let mut previous: Option<String> = None;
+    for cause in error.chain() {
+        let text = cause.to_string();
+        let repeats_the_frame_above = previous
+            .as_deref()
+            .is_some_and(|above| above.ends_with(&text));
+        if !repeats_the_frame_above {
+            let is_powerio_error = cause.downcast_ref::<powerio_core::Error>().is_some();
+            frames.push((is_powerio_error, text.clone()));
+        }
+        previous = Some(text);
+    }
+    frames
+}
+
+/// The diagnostic records of a failure: the PowerIO error's own records, then
+/// every other frame of the cause chain as a `note` record whose `related`
+/// names the primary record. A failure with no PowerIO error in its chain
+/// becomes one `BIND.CLI.UNCLASSIFIED` record.
+fn failure_diagnostics(error: &anyhow::Error) -> Vec<powerio_core::Diagnostic> {
+    use powerio_core::{Diagnostic, DiagnosticCode, DiagnosticId, DiagnosticSeverity};
+    let failure = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<powerio_core::Error>());
+    let mut frames = failure_frames(error);
+    let mut records: Vec<Diagnostic> = match failure {
+        Some(failure) if !failure.diagnostics().is_empty() => failure.diagnostics().to_vec(),
+        _ => {
+            let (_, message) = frames.remove(0);
+            vec![Diagnostic::of(&codes::BIND_CLI_UNCLASSIFIED, message)]
+        }
+    };
+    let primary_id = if let Some(id) = records[0].id() {
+        id.clone()
+    } else {
+        let Ok(id) = DiagnosticId::new("failure") else {
+            return records;
+        };
+        records[0] = records[0].clone().with_id(id.clone());
+        id
+    };
+    let Ok(primary_code) = DiagnosticCode::new(records[0].code()) else {
+        return records;
+    };
+    for (is_powerio_error, text) in frames {
+        if is_powerio_error {
+            continue;
+        }
+        let note = Diagnostic::new(primary_code.clone(), DiagnosticSeverity::Note, text);
+        if let Ok(note) = note.with_related(primary_id.clone()) {
+            records.push(note);
+        }
+    }
+    records
+}
+
+/// The input spelling that selects standard input.
+fn is_stdin(input: &Path) -> bool {
+    input.as_os_str() == "-"
+}
+
+/// Read standard input to its end as one in-memory source named `<stdin>`.
+fn stdin_source() -> anyhow::Result<powerio_core::Source> {
+    let mut bytes = Vec::new();
+    std::io::stdin()
+        .lock()
+        .read_to_end(&mut bytes)
+        .context("reading standard input")?;
+    powerio_core::Source::from_memory("<stdin>", bytes)
+        .context("creating the standard input source")
+}
+
+/// The declared format a standard input case needs. Content on a stream has
+/// no file name to infer a format from, so `--from` is required, and a gridfm
+/// dataset is a directory that cannot arrive on a stream.
+fn stdin_format(from: Option<FormatArg>) -> anyhow::Result<FormatArg> {
+    match from {
+        None => Err(cli_failure(
+            &codes::REQUEST_CLI_FORMAT_REQUIRED,
+            "reading a case from standard input needs `--from <format>`; a stream has no \
+             file name to infer the format from",
+        )),
+        Some(FormatArg::Gridfm) => Err(cli_failure(
+            &codes::REQUEST_CLI_FORMAT_REQUIRED,
+            "a gridfm dataset is a directory and cannot be read from standard input",
+        )),
+        Some(format) => Ok(format),
     }
 }
 
@@ -836,19 +1070,20 @@ fn main() -> std::process::ExitCode {
 /// A cause whose text is already a suffix of the frame above it is dropped
 /// instead of reprinted.
 fn print_error_chain(error: &anyhow::Error) {
-    let mut previous: Option<String> = None;
     let mut prefix = "Error";
-    for cause in error.chain() {
-        let text = cause.to_string();
-        let repeats_the_frame_above = previous
-            .as_deref()
-            .is_some_and(|above| above.ends_with(&text));
-        if !repeats_the_frame_above {
-            eprintln!("{prefix}: {text}");
-            prefix = "Caused by";
-        }
-        previous = Some(text);
+    for (_, text) in failure_frames(error) {
+        eprintln!("{prefix}: {text}");
+        prefix = "Caused by";
     }
+}
+
+/// Read one text file through a PowerIO source, so a missing or unreadable
+/// file is the same `READ.IO.OPEN` failure a case input gives.
+fn read_text_file(path: &Path) -> anyhow::Result<String> {
+    let source = powerio_core::Source::open(path)?;
+    let buffer = source.primary_buffer()?;
+    String::from_utf8(buffer.content_bytes().to_vec())
+        .with_context(|| format!("{} is not UTF-8 text", path.display()))
 }
 
 fn run_geo(command: GeoCommand) -> anyhow::Result<()> {
@@ -913,7 +1148,8 @@ fn run_batch(
     };
 
     if found.is_empty() {
-        anyhow::bail!(
+        fail_with!(
+            REQUEST_CLI_NO_CASES,
             "no case files ({}) found under {}",
             cases::CASE_EXTENSIONS_LABEL,
             input.display()
@@ -961,7 +1197,8 @@ fn run_batch(
         );
     }
     if exported == 0 {
-        anyhow::bail!(
+        fail_with!(
+            REQUEST_CLI_NO_CASES,
             "no files under {} loaded as case files ({})",
             input.display(),
             cases::CASE_EXTENSIONS_LABEL
@@ -1059,19 +1296,28 @@ fn missing_gen_cost_policy(
     match arg {
         MissingGenCostArg::Preserve => {
             if default_gen_cost.is_some() {
-                anyhow::bail!("--default-gen-cost is only valid with --missing-gen-cost quadratic");
+                fail_with!(
+                    REQUEST_CLI_OPTION_INVALID,
+                    "--default-gen-cost is only valid with --missing-gen-cost quadratic"
+                );
             }
             Ok(MissingGenCostPolicy::Preserve)
         }
         MissingGenCostArg::Require => {
             if default_gen_cost.is_some() {
-                anyhow::bail!("--default-gen-cost is only valid with --missing-gen-cost quadratic");
+                fail_with!(
+                    REQUEST_CLI_OPTION_INVALID,
+                    "--default-gen-cost is only valid with --missing-gen-cost quadratic"
+                );
             }
             Ok(MissingGenCostPolicy::Require)
         }
         MissingGenCostArg::Zero => {
             if default_gen_cost.is_some() {
-                anyhow::bail!("--default-gen-cost is only valid with --missing-gen-cost quadratic");
+                fail_with!(
+                    REQUEST_CLI_OPTION_INVALID,
+                    "--default-gen-cost is only valid with --missing-gen-cost quadratic"
+                );
             }
             Ok(MissingGenCostPolicy::zero())
         }
@@ -1087,7 +1333,10 @@ fn missing_gen_cost_policy(
 fn parse_cost_triple(value: &str) -> anyhow::Result<[f64; 3]> {
     let parts: Vec<_> = value.split(',').map(str::trim).collect();
     if parts.len() != 3 {
-        anyhow::bail!("--default-gen-cost expects exactly three comma-separated values: C2,C1,C0");
+        fail_with!(
+            REQUEST_CLI_OPTION_INVALID,
+            "--default-gen-cost expects exactly three comma-separated values: C2,C1,C0"
+        );
     }
     let mut out = [0.0; 3];
     for (slot, part) in out.iter_mut().zip(parts) {
@@ -1095,7 +1344,10 @@ fn parse_cost_triple(value: &str) -> anyhow::Result<[f64; 3]> {
             .parse::<f64>()
             .with_context(|| format!("parse --default-gen-cost value `{part}`"))?;
         if !slot.is_finite() {
-            anyhow::bail!("--default-gen-cost values must be finite");
+            fail_with!(
+                REQUEST_CLI_OPTION_INVALID,
+                "--default-gen-cost values must be finite"
+            );
         }
     }
     Ok(out)
@@ -1109,8 +1361,7 @@ fn emit_options(
     let missing_gen_cost = missing_gen_cost_policy(arg, default_gen_cost)?;
     let gen_cost_patches = match gen_cost_csv {
         Some(path) => {
-            let text = std::fs::read_to_string(path)
-                .with_context(|| format!("reading generator cost CSV {}", path.display()))?;
+            let text = read_text_file(path)?;
             powerio_tx::parse_gen_cost_csv(&text)
                 .with_context(|| format!("parsing generator cost CSV {}", path.display()))?
         }
@@ -1175,7 +1426,8 @@ fn run_gridfm(
     // pointer instead of the opaque `UnknownFormat("gridfm")` the text hub would
     // raise (the mirror of `convert`'s `--to gridfm` guard in `FormatArg::to_target`).
     if from == Some(FormatArg::Gridfm) {
-        anyhow::bail!(
+        fail_with!(
+            REQUEST_CLI_OPTION_INVALID,
             "the `gridfm` subcommand writes a gridfm dataset from classical cases; \
              to read a gridfm dataset back, use `convert --from gridfm`"
         );
@@ -1305,14 +1557,18 @@ fn run_corpus(action: CorpusCommand) -> anyhow::Result<()> {
 fn parse_gridfm_scenario(
     input: &Path,
     scenario: i64,
-) -> anyhow::Result<(powerio_matrix::BalancedNetwork, Vec<String>)> {
+) -> anyhow::Result<(
+    powerio_matrix::BalancedNetwork,
+    Vec<powerio_core::Diagnostic>,
+)> {
     let source = powerio_core::Source::open(input)
         .with_context(|| format!("opening gridfm dataset {}", input.display()))?;
     let module = powerio::parse(source, Some("gridfm"))
         .with_context(|| format!("parsing gridfm dataset {}", input.display()))?;
     let scenario_id = scenario.to_string();
     let powerio::PioValue::ScenarioSet(scenarios) = &module.value else {
-        anyhow::bail!(
+        fail_with!(
+            VALIDATE_CLI_INPUT_LACKS_DATA,
             "gridfm produced {}; expected powerio.ScenarioSet<powerio.BalancedNetwork>",
             module.value.type_name()
         );
@@ -1321,20 +1577,20 @@ fn parse_gridfm_scenario(
         .get(&scenario_id)
         .with_context(|| format!("gridfm scenario {scenario} does not exist"))?;
     let powerio::PioValue::BalancedNetwork(network) = value else {
-        anyhow::bail!(
+        fail_with!(
+            VALIDATE_CLI_INPUT_LACKS_DATA,
             "gridfm scenario {scenario} contains {}; expected powerio.BalancedNetwork",
             value.type_name()
         );
     };
-    let diagnostics = powerio_core::render_diagnostics(&module.diagnostics);
-    Ok((network.clone(), diagnostics))
+    Ok((network.clone(), module.diagnostics.clone()))
 }
 
 fn run_summary(input: &Path, from: Option<FormatArg>, scenario: i64) -> anyhow::Result<()> {
     let value =
         if from == Some(FormatArg::Gridfm) || (from.is_none() && looks_like_gridfm_dir(input)) {
             let (network, diagnostics) = parse_gridfm_scenario(input, scenario)?;
-            transmission_summary_json(&network, &diagnostics)
+            transmission_summary_json(&network, &powerio_core::render_diagnostics(&diagnostics))
         } else {
             match parse_family_case(input, from)? {
                 FamilyCase::Distribution(module) => {
@@ -1357,25 +1613,31 @@ fn run_serialize(
     from: Option<FormatArg>,
 ) -> anyhow::Result<()> {
     let module = load_module(input, from)?;
-    let parse_errors = module_error_lines(&module);
+    report_diagnostics(&module.diagnostics);
+    let parse_errors = parse_error_count(&module.diagnostics);
     match output {
         Some(p) if p.as_os_str() != "-" => {
             powerio::serialize(&module, powerio::Destination::path(p))
                 .with_context(|| format!("serializing PowerIO IR to {}", p.display()))?;
-            eprintln!("wrote {}", p.display());
+            report_written(p);
         }
         _ => print!("{}", serialize_module_text(&module)?),
     }
-    // The module is serialized either way — it is the record of what the reader
-    // saw — but a refused include is an `Error` finding in its own document,
-    // so the exit code has to say so, as `convert` does.
-    fail_on_parse_errors(&parse_errors)
+    // The module is serialized either way, as the record of what the reader
+    // saw; a refused include is an `Error` finding in its own document, so the
+    // exit status says so, as `convert` does.
+    fail_on_parse_errors(parse_errors)
 }
 
 fn load_module(
     input: &Path,
     from: Option<FormatArg>,
 ) -> anyhow::Result<powerio_core::PioModule<powerio::PioValue>> {
+    if is_stdin(input) {
+        let format = stdin_format(from)?;
+        return powerio::parse(stdin_source()?, Some(format.name()))
+            .context("parsing standard input");
+    }
     let source = powerio_core::Source::open(input)
         .with_context(|| format!("opening {}", input.display()))?;
     powerio::parse(source, from.map(FormatArg::name))
@@ -1422,7 +1684,8 @@ fn serialize_input(input: &Path, from: Option<FormatArg>) -> anyhow::Result<(Str
     Ok((text, errors))
 }
 
-/// [`parse_error_lines`] for a compiled module's own findings.
+/// The `Error`-or-worse findings of a module as `CODE: message` lines.
+#[cfg(test)]
 fn module_error_lines(module: &powerio_core::PioModule<powerio::PioValue>) -> Vec<String> {
     module
         .diagnostics
@@ -1524,25 +1787,37 @@ fn run_convert(
     gen_cost_options: GenCostCliOptions<'_>,
 ) -> anyhow::Result<()> {
     if to.is_input_spelling() {
-        anyhow::bail!(
-            "`{}` is accepted for input only; use `--to {}`",
-            to.name(),
-            if to == FormatArg::RawxInput {
-                "psse-rawx"
-            } else {
-                "xiidm"
-            }
-        );
+        return Err(cli_failure(
+            &codes::REQUEST_CLI_OUTPUT_REQUIRED,
+            format!(
+                "`{}` is accepted for input only; use `--to {}`",
+                to.name(),
+                if to == FormatArg::RawxInput {
+                    "psse-rawx"
+                } else {
+                    "xiidm"
+                }
+            ),
+        ));
     }
     // gridfm has no convert writer; the dataset writer is the `gridfm`
     // subcommand.
     if matches!(to, FormatArg::Gridfm) {
-        anyhow::bail!("`convert` cannot write a gridfm dataset; use the `gridfm` subcommand");
+        return Err(cli_failure(
+            &codes::REQUEST_CLI_TARGET_UNSUPPORTED,
+            "`convert` cannot write a gridfm dataset; use the `gridfm` subcommand",
+        ));
     }
     if matches!(to, FormatArg::Pwb) {
-        anyhow::bail!(
-            "`convert` cannot write PowerWorld .pwb binary cases; use `--to powerworld` for AUX text"
-        );
+        return Err(cli_failure(
+            &codes::REQUEST_CLI_OUTPUT_REQUIRED,
+            "`convert` cannot write PowerWorld .pwb binary cases; use `--to powerworld` for AUX text",
+        ));
+    }
+    // A standard input case needs its declared format before any path based
+    // inspection of the input runs.
+    if is_stdin(input) {
+        stdin_format(from)?;
     }
     if from == Some(FormatArg::Gridfm) {
         // GridFM selects one scenario before it has a scalar module to emit.
@@ -1555,26 +1830,25 @@ fn run_convert(
             return convert_to_cgmes(input, output, from, scenario, gen_cost_options);
         }
         let target = to.transmission().ok_or_else(|| {
-            anyhow::anyhow!(
-                "no conversion path between the transmission and distribution format families \
+            cli_failure(
+                &codes::REQUEST_CLI_FAMILY_MISMATCH,
+                format!(
+                    "no conversion path between the transmission and distribution format families \
                  (`gridfm` to `{}`)",
-                to.name()
+                    to.name()
+                ),
             )
         })?;
         let options = gen_cost_options.emit_options()?;
         let (network, diagnostics) = parse_gridfm_scenario(input, scenario)?;
-        for diagnostic in &diagnostics {
-            eprintln!("{diagnostic}");
-        }
+        report_diagnostics(&diagnostics);
         let emission = module_io::emit_balanced_module(
             &powerio_core::PioModule::new(network),
             target,
             &options,
         )
         .with_context(|| format!("emitting {target}"))?;
-        for diagnostic in emission.render_diagnostics() {
-            eprintln!("{diagnostic}");
-        }
+        report_diagnostics(&emission.diagnostics);
         write_conversion_output(&emission.text, &emission.sidecars, output)?;
         return Ok(());
     }
@@ -1627,10 +1901,16 @@ fn convert_balanced_module(
     let options = gen_cost_options.emit_options()?;
     if to == FormatArg::PypsaCsv {
         let Some(output) = output else {
-            anyhow::bail!("`--to pypsa-csv` requires `-o <output-dir>`");
+            fail_with!(
+                REQUEST_CLI_OUTPUT_REQUIRED,
+                "`--to pypsa-csv` requires `-o <output-dir>`"
+            );
         };
         if output.as_os_str() == "-" {
-            anyhow::bail!("`--to pypsa-csv` writes a directory and cannot write to stdout");
+            fail_with!(
+                REQUEST_CLI_OUTPUT_REQUIRED,
+                "`--to pypsa-csv` writes a directory and cannot write to stdout"
+            );
         }
         let result = powerio_tx::__emit_pypsa_csv_with_options(
             module,
@@ -1642,10 +1922,16 @@ fn convert_balanced_module(
     }
     if to == FormatArg::Cgmes {
         let Some(output) = output else {
-            anyhow::bail!("`--to cgmes` requires `-o <output-path>`");
+            fail_with!(
+                REQUEST_CLI_OUTPUT_REQUIRED,
+                "`--to cgmes` requires `-o <output-path>`"
+            );
         };
         if output.as_os_str() == "-" {
-            anyhow::bail!("`--to cgmes` cannot write a profile set to stdout");
+            fail_with!(
+                REQUEST_CLI_OUTPUT_REQUIRED,
+                "`--to cgmes` cannot write a profile set to stdout"
+            );
         }
         let result = powerio_tx::emit_with_options(
             module,
@@ -1657,7 +1943,8 @@ fn convert_balanced_module(
         return finish_path_emission(&module.diagnostics, &result, output);
     }
     let target = to.transmission().ok_or_else(|| {
-        anyhow::anyhow!(
+        failure!(
+            REQUEST_CLI_FAMILY_MISMATCH,
             "no conversion path between the transmission and distribution format families \
              (balanced network to `{}`)",
             to.name()
@@ -1674,7 +1961,8 @@ fn convert_multiconductor_module(
     output: Option<&Path>,
 ) -> anyhow::Result<()> {
     let target = to.distribution().ok_or_else(|| {
-        anyhow::anyhow!(
+        failure!(
+            REQUEST_CLI_FAMILY_MISMATCH,
             "no conversion path between the transmission and distribution format families \
              (multiconductor network to `{}`)",
             to.name()
@@ -1690,14 +1978,27 @@ fn convert_typed_module(
     to: FormatArg,
     output: Option<&Path>,
 ) -> anyhow::Result<()> {
-    let format = powerio::resolve_format(to.name())
-        .ok_or_else(|| anyhow::anyhow!("unknown target format `{}`", to.name()))?;
+    let format = powerio::resolve_format(to.name()).ok_or_else(|| {
+        failure!(
+            REQUEST_CLI_OUTPUT_REQUIRED,
+            "unknown target format `{}`",
+            to.name()
+        )
+    })?;
     if format.is_directory {
         let Some(output) = output else {
-            anyhow::bail!("`--to {}` requires `-o <output-path>`", format.token);
+            fail_with!(
+                REQUEST_CLI_OUTPUT_REQUIRED,
+                "`--to {}` requires `-o <output-path>`",
+                format.token
+            );
         };
         if output.as_os_str() == "-" {
-            anyhow::bail!("`--to {}` cannot write to stdout", format.token);
+            fail_with!(
+                REQUEST_CLI_OUTPUT_REQUIRED,
+                "`--to {}` cannot write to stdout",
+                format.token
+            );
         }
         let result = powerio::emit(
             module,
@@ -1719,11 +2020,9 @@ fn finish_memory_emission(
 ) -> anyhow::Result<()> {
     let mut diagnostics = parse_diagnostics.to_vec();
     diagnostics.extend(emission.diagnostics.iter().cloned());
-    for diagnostic in powerio_core::render_diagnostics(&diagnostics) {
-        eprintln!("{diagnostic}");
-    }
+    report_diagnostics(&diagnostics);
     write_conversion_output(&emission.text, &emission.sidecars, output)?;
-    fail_on_parse_errors(&parse_error_lines(&diagnostics))
+    fail_on_parse_errors(parse_error_count(&diagnostics))
 }
 
 fn finish_path_emission(
@@ -1733,36 +2032,31 @@ fn finish_path_emission(
 ) -> anyhow::Result<()> {
     let mut diagnostics = parse_diagnostics.to_vec();
     diagnostics.extend(result.diagnostics().iter().cloned());
-    for diagnostic in powerio_core::render_diagnostics(&diagnostics) {
-        eprintln!("{diagnostic}");
-    }
-    eprintln!("wrote {}", output.display());
-    fail_on_parse_errors(&parse_error_lines(&diagnostics))
+    report_diagnostics(&diagnostics);
+    report_written(output);
+    fail_on_parse_errors(parse_error_count(&diagnostics))
 }
 
-/// The `Error`-or-worse parse findings, formatted for stderr.
-fn parse_error_lines(diagnostics: &[powerio_core::Diagnostic]) -> Vec<String> {
+/// The number of `Error`-or-worse findings among `diagnostics`.
+fn parse_error_count(diagnostics: &[powerio_core::Diagnostic]) -> usize {
     diagnostics
         .iter()
-        .filter(|d| d.severity() >= powerio_dist::DiagnosticSeverity::Error)
-        .map(|d| format!("{}: {}", d.code(), d.message()))
-        .collect()
+        .filter(|d| d.severity() >= powerio_core::DiagnosticSeverity::Error)
+        .count()
 }
 
 /// Exit nonzero after the output is written: the file exists for
 /// inspection, but the parse was incomplete and scripts must not treat the
-/// run as clean (#275).
-fn fail_on_parse_errors(parse_errors: &[String]) -> anyhow::Result<()> {
-    if parse_errors.is_empty() {
+/// run as clean (#275). The error records themselves were reported with the
+/// other diagnostics.
+fn fail_on_parse_errors(parse_errors: usize) -> anyhow::Result<()> {
+    if parse_errors == 0 {
         return Ok(());
     }
-    for e in parse_errors {
-        eprintln!("error: {e}");
-    }
-    anyhow::bail!(
-        "{} parse error(s); the output is incomplete (see the error lines above)",
-        parse_errors.len()
-    )
+    Err(cli_failure(
+        &codes::PARSE_CLI_ERRORS_REPORTED,
+        format!("the reader reported {parse_errors} error(s); the output is incomplete"),
+    ))
 }
 
 /// Commit one complete output file through the no-replace destination:
@@ -1781,7 +2075,7 @@ fn commit_output_file(path: &std::path::Path, bytes: Vec<u8>) -> anyhow::Result<
             Vec::new(),
         )
         .map(|_| ())
-        .map_err(|error| anyhow::anyhow!("{error}"))
+        .map_err(anyhow::Error::new)
 }
 
 /// Write emitted `text` to `output` (stdout on `-` or `None`), placing any
@@ -1803,15 +2097,14 @@ fn write_conversion_output(
                 commit_output_file(p, text.as_bytes().to_vec())
                     .with_context(|| format!("writing {}", p.display()))?;
                 committed.push(p.to_path_buf());
-                eprintln!("wrote {}", p.display());
+                report_written(p);
                 let base = p.parent().unwrap_or_else(|| std::path::Path::new("."));
                 for sidecar in sidecars {
-                    // A sidecar path names a file the primary output refers
-                    // to, so it must stay under the output directory. Today's
-                    // serializers emit validated artifact paths; retain this
-                    // check at the final filesystem seam.
+                    // The case text refers to a sidecar by a relative name, so
+                    // the file must stay under the output directory.
                     if !is_relative_component_path(&sidecar.path) {
-                        anyhow::bail!(
+                        fail_with!(
+                            EMIT_CLI_SIDECAR_PATH,
                             "sidecar `{}` is not a relative path under the output directory",
                             sidecar.path
                         );
@@ -1820,7 +2113,7 @@ fn write_conversion_output(
                     commit_output_file(&path, sidecar.bytes.clone())
                         .with_context(|| format!("writing {}", path.display()))?;
                     committed.push(path.clone());
-                    eprintln!("wrote {}", path.display());
+                    report_written(&path);
                 }
                 Ok(())
             })();
@@ -1833,10 +2126,13 @@ fn write_conversion_output(
         }
         _ => {
             for sidecar in sidecars {
-                eprintln!(
-                    "warning: sidecar `{}` was not emitted because output is stdout",
-                    sidecar.path
-                );
+                report_diagnostics(&[powerio_core::Diagnostic::of(
+                    &powerio_dist::diagnostics::codes::EMIT_MULTICONDUCTOR_SIDECAR_DROPPED,
+                    format!(
+                        "sidecar `{}` was not written because the output is standard output",
+                        sidecar.path
+                    ),
+                )]);
             }
             print!("{text}");
         }
@@ -1872,30 +2168,38 @@ fn run_geo_extract(
         let display = powerio_tx::format::parse_display(source, None)
             .with_context(|| format!("reading {}", input.display()))?;
         let powerio::DisplayData::PowerWorld(display) = display else {
-            anyhow::bail!("{} did not parse as a .pwd display", input.display());
+            fail_with!(
+                VALIDATE_CLI_INPUT_LACKS_DATA,
+                "{} did not parse as a .pwd display",
+                input.display()
+            );
         };
         let layer = powerio::geo::to_geo_layer_from_pwd(&display);
         if layer.features.is_empty() {
-            anyhow::bail!("{} carries no substation symbols", input.display());
+            fail_with!(
+                VALIDATE_CLI_INPUT_LACKS_DATA,
+                "{} carries no substation symbols",
+                input.display()
+            );
         }
         return write_conversion_output(&layer.to_geojson(), &[], output);
     }
     let layer = match parse_family_case(input, from)? {
         FamilyCase::Distribution(module) => {
-            for w in powerio_core::render_diagnostics(&module.diagnostics) {
-                eprintln!("{w}");
-            }
+            report_diagnostics(&module.diagnostics);
             powerio::dist_geo::to_dist_geo_layer(&module.value)
         }
         FamilyCase::Transmission(module) => {
-            for w in powerio_core::render_diagnostics(&module.diagnostics) {
-                eprintln!("{w}");
-            }
+            report_diagnostics(&module.diagnostics);
             module.value.to_geo_layer()
         }
     };
     if layer.features.is_empty() {
-        anyhow::bail!("{} carries no coordinates to extract", input.display());
+        fail_with!(
+            VALIDATE_CLI_INPUT_LACKS_DATA,
+            "{} carries no coordinates to extract",
+            input.display()
+        );
     }
     write_conversion_output(&layer.to_geojson(), &[], output)
 }
@@ -1912,7 +2216,8 @@ fn run_geo_apply(
     from: Option<FormatArg>,
 ) -> anyhow::Result<()> {
     if let Some(format) = to.filter(|format| format.is_input_spelling()) {
-        anyhow::bail!(
+        fail_with!(
+            REQUEST_CLI_OUTPUT_REQUIRED,
             "`{}` is accepted for input only; use `--to {}`",
             format.name(),
             if format == FormatArg::RawxInput {
@@ -1922,19 +2227,14 @@ fn run_geo_apply(
             }
         );
     }
-    let text = std::fs::read_to_string(layer_path)
-        .with_context(|| format!("reading layer {}", layer_path.display()))?;
+    let text = read_text_file(layer_path)?;
     let parsed =
         powerio::geo::GeoLayer::parse(&text, layer_path.file_name().and_then(|n| n.to_str()))
             .with_context(|| format!("parsing layer {}", layer_path.display()))?;
-    for diagnostic in &parsed.diagnostics {
-        eprintln!("{}", powerio_core::render_diagnostic(diagnostic));
-    }
-    let (text, sidecars, warnings) = match parse_family_case(input, from)? {
+    report_diagnostics(&parsed.diagnostics);
+    let (text, sidecars, diagnostics) = match parse_family_case(input, from)? {
         FamilyCase::Distribution(module) => {
-            for w in powerio_core::render_diagnostics(&module.diagnostics) {
-                eprintln!("{w}");
-            }
+            report_diagnostics(&module.diagnostics);
             let dynamic = module.map_value(powerio::PioValue::from);
             let (placed, report) = powerio::apply_geo_layer(&dynamic, &parsed.layer)?;
             report_geo_apply(&report);
@@ -1944,7 +2244,8 @@ fn run_geo_apply(
             });
             let target = match to {
                 Some(f) => f.distribution().ok_or_else(|| {
-                    anyhow::anyhow!(
+                    failure!(
+                        REQUEST_CLI_TARGET_UNSUPPORTED,
                         "`{}` is not a distribution text target; a distribution case writes \
                          back to dss, pmd-json, or bmopf-json",
                         f.name()
@@ -1956,17 +2257,17 @@ fn run_geo_apply(
                     .map(|f| f.name().parse())
                     .transpose()?
                     .ok_or_else(|| {
-                        anyhow::anyhow!("the input carries no source format; pass --to")
+                        failure!(
+                            REQUEST_CLI_TARGET_UNSUPPORTED,
+                            "the input carries no source format; pass --to"
+                        )
                     })?,
             };
             let emission = module_io::emit_multiconductor_module(&placed, target)?;
-            let rendered = emission.render_diagnostics();
-            (emission.text, emission.sidecars, rendered)
+            (emission.text, emission.sidecars, emission.diagnostics)
         }
         FamilyCase::Transmission(module) => {
-            for w in powerio_core::render_diagnostics(&module.diagnostics) {
-                eprintln!("{w}");
-            }
+            report_diagnostics(&module.diagnostics);
             let dynamic = module.map_value(powerio::PioValue::from);
             let (placed, report) = powerio::apply_geo_layer(&dynamic, &parsed.layer)?;
             report_geo_apply(&report);
@@ -1976,7 +2277,8 @@ fn run_geo_apply(
             });
             let target = match to {
                 Some(f) => f.transmission().ok_or_else(|| {
-                    anyhow::anyhow!(
+                    failure!(
+                        REQUEST_CLI_TARGET_UNSUPPORTED,
                         "`{}` is not a transmission text target here; apply writes a single \
                          case file (use `convert` for pypsa-csv and gridfm outputs)",
                         f.name()
@@ -1987,7 +2289,8 @@ fn run_geo_apply(
                     placed.value.source_format()
                 ))
                 .ok_or_else(|| {
-                    anyhow::anyhow!(
+                    failure!(
+                        REQUEST_CLI_TARGET_UNSUPPORTED,
                         "`{:?}` has no write target; pass --to to choose one",
                         placed.value.source_format()
                     )
@@ -1999,38 +2302,34 @@ fn run_geo_apply(
                 &powerio_tx::EmitOptions::default(),
             )
             .with_context(|| format!("emitting {target}"))?;
-            let rendered = emission.render_diagnostics();
-            (emission.text, emission.sidecars, rendered)
+            (emission.text, emission.sidecars, emission.diagnostics)
         }
     };
-    for w in &warnings {
-        eprintln!("{w}");
-    }
+    report_diagnostics(&diagnostics);
     write_conversion_output(&text, &sidecars, output)
 }
 
 fn report_geo_apply(report: &powerio::GeoApplyReport) {
-    eprintln!(
+    report_progress(format!(
         "applied: {} bus point(s), {} branch route(s), {} unmatched feature(s)",
         report.matched_buses, report.matched_branches, report.unmatched_features
-    );
-    eprintln!(
+    ));
+    report_progress(format!(
         "unplaced: {} bus(es) with no location, {} branch(es) with no route",
         report.unlocated_buses, report.unlocated_branches
-    );
+    ));
     // A point sidecar or a substation join states no polylines, so every branch
-    // lands in that second count on a run that placed everything it could. Say
-    // what it means, rather than leave a successful apply reading as a partial
-    // one. `GeoApplyReport::require_located` is the strict gate for a caller
-    // that does want a route on every branch.
+    // lands in that second count on a run that placed everything it could.
+    // `GeoApplyReport::require_located` is the strict check for a caller that
+    // does want a route on every branch.
     if report.unlocated_branches > 0 {
-        eprintln!(
+        report_progress(
             "note: a branch with no route renders from its bus endpoints; only a source \
-             stating intermediate geometry gives it one"
+             stating intermediate geometry gives it one",
         );
     }
     for note in &report.notes {
-        eprintln!("note: {note}");
+        report_progress(format!("note: {note}"));
     }
 }
 
@@ -2038,13 +2337,10 @@ fn run_geo_convert(
     input: &std::path::Path,
     output: Option<&std::path::Path>,
 ) -> anyhow::Result<()> {
-    let text =
-        std::fs::read_to_string(input).with_context(|| format!("reading {}", input.display()))?;
+    let text = read_text_file(input)?;
     let parsed = powerio::geo::GeoLayer::parse(&text, input.file_name().and_then(|n| n.to_str()))
         .with_context(|| format!("parsing {}", input.display()))?;
-    for diagnostic in &parsed.diagnostics {
-        eprintln!("{}", powerio_core::render_diagnostic(diagnostic));
-    }
+    report_diagnostics(&parsed.diagnostics);
     write_conversion_output(&parsed.layer.to_geojson(), &[], output)
 }
 
@@ -2059,16 +2355,20 @@ fn convert_to_pypsa_folder(
     gen_cost_options: GenCostCliOptions<'_>,
 ) -> anyhow::Result<()> {
     let Some(out_dir) = output else {
-        anyhow::bail!("`--to pypsa-csv` requires `-o <output-dir>`");
+        fail_with!(
+            REQUEST_CLI_OUTPUT_REQUIRED,
+            "`--to pypsa-csv` requires `-o <output-dir>`"
+        );
     };
     if out_dir.as_os_str() == "-" {
-        anyhow::bail!("`--to pypsa-csv` writes a directory and cannot write to stdout");
+        fail_with!(
+            REQUEST_CLI_OUTPUT_REQUIRED,
+            "`--to pypsa-csv` writes a directory and cannot write to stdout"
+        );
     }
     let net = if from == Some(FormatArg::Gridfm) {
         let (network, diagnostics) = parse_gridfm_scenario(input, scenario)?;
-        for w in &diagnostics {
-            eprintln!("{w}");
-        }
+        report_diagnostics(&diagnostics);
         network
     } else {
         read_network(input, from)?
@@ -2082,10 +2382,8 @@ fn convert_to_pypsa_folder(
         powerio_core::Destination::path(out_dir),
     )
     .with_context(|| format!("emitting PyPSA CSV folder {}", out_dir.display()))?;
-    for w in powerio_core::render_diagnostics(result.diagnostics()) {
-        eprintln!("{w}");
-    }
-    eprintln!("wrote {}", out_dir.display());
+    report_diagnostics(result.diagnostics());
+    report_written(out_dir);
     Ok(())
 }
 
@@ -2099,31 +2397,34 @@ fn convert_to_cgmes(
     gen_cost_options: GenCostCliOptions<'_>,
 ) -> anyhow::Result<()> {
     let Some(output) = output else {
-        anyhow::bail!("`--to cgmes` requires `-o <output-path>`");
+        fail_with!(
+            REQUEST_CLI_OUTPUT_REQUIRED,
+            "`--to cgmes` requires `-o <output-path>`"
+        );
     };
     if output.as_os_str() == "-" {
-        anyhow::bail!("`--to cgmes` cannot write a profile set to stdout");
+        fail_with!(
+            REQUEST_CLI_OUTPUT_REQUIRED,
+            "`--to cgmes` cannot write a profile set to stdout"
+        );
     }
 
     let module = if from == Some(FormatArg::Gridfm) {
         let (network, diagnostics) = parse_gridfm_scenario(input, scenario)?;
-        for diagnostic in &diagnostics {
-            eprintln!("{diagnostic}");
-        }
+        report_diagnostics(&diagnostics);
         powerio_core::PioModule::new(network)
     } else {
         match parse_family_case(input, from)? {
             FamilyCase::Transmission(module) => *module,
-            FamilyCase::Distribution(_) => anyhow::bail!(
+            FamilyCase::Distribution(_) => fail_with!(
+                REQUEST_CLI_FAMILY_MISMATCH,
                 "{} is a distribution case; CGMES represents a balanced transmission network",
                 input.display()
             ),
         }
     };
-    let parse_errors = parse_error_lines(&module.diagnostics);
-    for diagnostic in powerio_core::render_diagnostics(&module.diagnostics) {
-        eprintln!("{diagnostic}");
-    }
+    let parse_errors = parse_error_count(&module.diagnostics);
+    report_diagnostics(&module.diagnostics);
     let options = gen_cost_options.emit_options()?;
     let result = powerio_tx::emit_with_options(
         &module,
@@ -2132,11 +2433,9 @@ fn convert_to_cgmes(
         powerio_core::Destination::path(output),
     )
     .with_context(|| format!("emitting CGMES to {}", output.display()))?;
-    for diagnostic in powerio_core::render_diagnostics(result.diagnostics()) {
-        eprintln!("{diagnostic}");
-    }
-    eprintln!("wrote {}", output.display());
-    fail_on_parse_errors(&parse_errors)
+    report_diagnostics(result.diagnostics());
+    report_written(output);
+    fail_on_parse_errors(parse_errors)
 }
 
 /// A single-file case input parsed to its own family model.
@@ -2160,10 +2459,13 @@ fn balanced_case(
 ) -> anyhow::Result<powerio_matrix::BalancedNetwork> {
     match parse_family_case(input, from)? {
         FamilyCase::Transmission(module) => Ok(module.into_value()),
-        FamilyCase::Distribution(_) => anyhow::bail!(
-            "{} is a distribution case; this command needs a transmission network",
-            input.display()
-        ),
+        FamilyCase::Distribution(_) => Err(cli_failure(
+            &codes::REQUEST_CLI_FAMILY_MISMATCH,
+            format!(
+                "{} is a distribution case; this command needs a transmission network",
+                input.display()
+            ),
+        )),
     }
 }
 
@@ -2186,7 +2488,8 @@ fn ir_family_case(input: &Path) -> anyhow::Result<FamilyCase> {
             });
             Ok(FamilyCase::Distribution(Box::new(module)))
         }
-        other => anyhow::bail!(
+        other => fail_with!(
+            REQUEST_CLI_FAMILY_MISMATCH,
             "{} stores {}; this command requires powerio.BalancedNetwork or \
              powerio.MulticonductorNetwork",
             input.display(),
@@ -2196,12 +2499,25 @@ fn ir_family_case(input: &Path) -> anyhow::Result<FamilyCase> {
 }
 
 fn parse_family_case(input: &Path, from: Option<FormatArg>) -> anyhow::Result<FamilyCase> {
+    if is_stdin(input) {
+        let f = stdin_format(from)?;
+        let source = module_io::declare_format(stdin_source()?, Some(f.name()))
+            .context("declaring the standard input format")?;
+        return if f.distribution().is_some() {
+            let net = powerio_dist::parse(source).context("reading standard input")?;
+            Ok(FamilyCase::Distribution(Box::new(net)))
+        } else {
+            let parsed = powerio_tx::parse(source).context("reading standard input")?;
+            Ok(FamilyCase::Transmission(Box::new(parsed)))
+        };
+    }
     if let Some(f) = from {
         if f == FormatArg::Gridfm {
-            anyhow::bail!(
+            return Err(cli_failure(
+                &codes::REQUEST_CLI_OPTION_INVALID,
                 "gridfm datasets are read by `convert --from gridfm` or the `gridfm` \
-                 subcommand, not this command"
-            );
+                 subcommand, not this command",
+            ));
         }
         return if f.distribution().is_some() {
             let net = module_io::load_multiconductor_module(input, Some(f.name()))
@@ -2264,13 +2580,15 @@ fn parse_classified_case(case: &cases::ClassifiedCase, input: &Path) -> anyhow::
 fn reject_nontransmission_from(from: Option<FormatArg>) -> anyhow::Result<()> {
     if let Some(f) = from {
         if matches!(f, FormatArg::Gridfm) {
-            anyhow::bail!(
+            fail_with!(
+                REQUEST_CLI_OPTION_INVALID,
                 "gridfm datasets are read by `convert --from gridfm` or the `gridfm` \
                  subcommand, not this command"
             );
         }
         if f.distribution().is_some() {
-            anyhow::bail!(
+            fail_with!(
+                REQUEST_CLI_FAMILY_MISMATCH,
                 "`{}` is a distribution format; this command reads transmission cases \
                  (use `convert` to bridge dss, pmd-json, and bmopf-json)",
                 f.name()
@@ -2287,9 +2605,7 @@ fn read_network(
     reject_nontransmission_from(from)?;
     let parsed = module_io::load_balanced_module(input, from.map(FormatArg::name))
         .with_context(|| format!("reading {}", input.display()))?;
-    for w in powerio_core::render_diagnostics(&parsed.diagnostics) {
-        eprintln!("{w}");
-    }
+    report_diagnostics(&parsed.diagnostics);
     Ok(parsed.into_value())
 }
 
