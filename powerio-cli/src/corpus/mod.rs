@@ -1449,21 +1449,24 @@ mod tests {
 
     use super::{Case, read_case};
 
-    /// Every serde key of `value` outside its `extras` subtrees, where keys
-    /// are powerio's own field names rather than case data.
-    fn model_keys(value: &serde_json::Value, in_extras: bool, out: &mut BTreeSet<String>) {
+    /// Every serde key of `value` outside maps whose keys come from case data.
+    fn model_keys(value: &serde_json::Value, in_case_map: bool, out: &mut BTreeSet<String>) {
         match value {
             serde_json::Value::Array(xs) => {
                 for x in xs {
-                    model_keys(x, in_extras, out);
+                    model_keys(x, in_case_map, out);
                 }
             }
             serde_json::Value::Object(xs) => {
                 for (key, x) in xs {
-                    if !in_extras {
+                    if !in_case_map {
                         out.insert(key.clone());
                     }
-                    model_keys(x, in_extras || key == "extras", out);
+                    model_keys(
+                        x,
+                        in_case_map || matches!(key.as_str(), "extras" | "properties"),
+                        out,
+                    );
                 }
             }
             _ => {}
@@ -1472,8 +1475,8 @@ mod tests {
 
     /// The vocabulary's completeness gate: parse every fixture the readers
     /// accept, union their serde keys, and require every one to be
-    /// vocabulary. A field name outside it masks as a corpus secret the day
-    /// a real corpus teaches the same spelling.
+    /// vocabulary. Keys in `extras` and `properties` maps come from case data
+    /// and remain subject to anonymization.
     #[test]
     fn every_fixture_field_name_is_vocabulary() {
         let data = Path::new(env!("CARGO_MANIFEST_DIR"))
