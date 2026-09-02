@@ -89,6 +89,8 @@ mod tests {
         assert_eq!(resolve_format("pm").unwrap().token, "powermodels-json");
         assert_eq!(resolve_format("engineering").unwrap().token, "pmd-json");
         assert_eq!(resolve_format("xiidm").unwrap().token, "xiidm");
+        assert_eq!(resolve_format("jiidm").unwrap().token, "jiidm");
+        assert_eq!(resolve_format("jiidm").unwrap().extension, Some("jiidm"));
         assert!(resolve_format("cgmes").unwrap().is_directory);
         assert_eq!(resolve_format("iidm"), None);
         assert_eq!(resolve_format("rawx"), None);

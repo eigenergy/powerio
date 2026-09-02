@@ -179,6 +179,7 @@ pub mod codes {
     emit_family!(EMIT_EGRET, "EGRET", "egret JSON");
     emit_family!(EMIT_SURGE, "SURGE", "Surge JSON");
     emit_family!(EMIT_XIIDM, "XIIDM", "XIIDM 1.17 XML");
+    emit_family!(EMIT_JIIDM, "JIIDM", "JIIDM 1.17 JSON");
     emit_family!(EMIT_CGMES, "CGMES", "CGMES 3.0");
     emit_family!(EMIT_UNSUPPORTED, "UNSUPPORTED", "a read only format");
 
@@ -382,7 +383,7 @@ pub mod codes {
 
     /// Every write target's family, in the order [`super::registry`] reports
     /// them.
-    pub const EMIT_FAMILIES: [&EmitFamily; 12] = [
+    pub const EMIT_FAMILIES: [&EmitFamily; 13] = [
         &EMIT_MATPOWER,
         &EMIT_PSSE,
         &EMIT_PSLF,
@@ -393,6 +394,7 @@ pub mod codes {
         &EMIT_EGRET,
         &EMIT_SURGE,
         &EMIT_XIIDM,
+        &EMIT_JIIDM,
         &EMIT_CGMES,
         &EMIT_UNSUPPORTED,
     ];
@@ -422,6 +424,7 @@ impl TargetFormat {
             TargetFormat::EgretJson => &codes::EMIT_EGRET,
             TargetFormat::SurgeJson => &codes::EMIT_SURGE,
             TargetFormat::Xiidm => &codes::EMIT_XIIDM,
+            TargetFormat::Jiidm => &codes::EMIT_JIIDM,
             TargetFormat::Cgmes => &codes::EMIT_CGMES,
             // This transmission layer has no GOC3 problem or OPFData writer.
             // The facade emits a complete GOC3 solution before reaching this

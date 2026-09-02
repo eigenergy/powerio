@@ -1414,9 +1414,12 @@ pub enum SourceFormat {
     /// exact write back to the same format.
     #[serde(rename = "opfdata-json")]
     DeepMindOpfDataJson,
-    /// Read from PowSybl's XIIDM XML grid exchange format, versions 1.12 through 1.17.
+    /// Read from PowSybl's XIIDM XML grid exchange format, versions 1.0 through 1.17.
     #[serde(rename = "xiidm")]
     Xiidm,
+    /// Read from PowSybl's JIIDM JSON grid exchange format, versions 1.0 through 1.17.
+    #[serde(rename = "jiidm")]
+    Jiidm,
     /// Read from a CGMES profile set (2.4.15/CIM16 or 3.0/CIM100).
     #[serde(rename = "cgmes")]
     Cgmes,
@@ -1447,6 +1450,7 @@ impl SourceFormat {
             SourceFormat::SurgeJson => "surge-json",
             SourceFormat::DeepMindOpfDataJson => "opfdata-json",
             SourceFormat::Xiidm => "xiidm",
+            SourceFormat::Jiidm => "jiidm",
             SourceFormat::Cgmes => "cgmes",
         }
     }
@@ -5614,6 +5618,7 @@ mod tests {
             SourceFormat::SurgeJson,
             SourceFormat::DeepMindOpfDataJson,
             SourceFormat::Xiidm,
+            SourceFormat::Jiidm,
             SourceFormat::Cgmes,
         ];
         for f in all {
@@ -5635,6 +5640,7 @@ mod tests {
                 | SourceFormat::SurgeJson
                 | SourceFormat::DeepMindOpfDataJson
                 | SourceFormat::Xiidm
+                | SourceFormat::Jiidm
                 | SourceFormat::Cgmes => {}
             }
             let token = serde_json::to_value(f).unwrap();

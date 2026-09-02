@@ -1,4 +1,10 @@
-//! PowSybl XIIDM 1.12 through 1.17 XML reader and 1.17 writer.
+//! PowSybl IIDM reader and writer: XIIDM XML and JIIDM JSON, versions 1.0
+//! through 1.17 on input and 1.17 on output.
+//!
+//! Both encodings describe the same element tree. [`ParsedXiidm`] consumes
+//! that tree as [`TreeEvent`] values, so one element mapping serves the XML
+//! event stream and the JSON document alike. The JIIDM writer converts the
+//! fresh XIIDM 1.17 text to PowSybl's JSON tree layout.
 
 #![allow(
     clippy::format_push_string,
@@ -39,14 +45,22 @@ use crate::network::{
 use crate::{Error, Generator, Result};
 
 const FORMAT: &str = "XIIDM XML";
+const JSON_FORMAT: &str = "JIIDM JSON";
 /// Retained three winding transformer `ratedU0` when it differs from
 /// `ratedU1`: the voltage base the source stated its leg impedances on.
 const XIIDM_RATED_U0_EXTRA: &str = "xiidm_rated_u0";
+/// Identifier of the operational limits group that holds loading limits an
+/// IIDM document older than 1.12 states directly on the equipment. PowSybl
+/// files those limits under the same default group identifier.
+const DEFAULT_OPERATIONAL_LIMITS_GROUP: &str = "DEFAULT";
 
 const NAMESPACE: &str = "http://www.powsybl.org/schema/iidm/1_17";
 const EQUIPMENT_NAMESPACE: &str = "http://www.powsybl.org/schema/iidm/equipment/1_17";
 const NAMESPACE_PREFIX: &str = "http://www.powsybl.org/schema/iidm/";
 const EQUIPMENT_NAMESPACE_PREFIX: &str = "http://www.powsybl.org/schema/iidm/equipment/";
+/// IIDM 1.0 predates the PowSybl domain and declares the iTesla namespace.
+const ITESLA_NAMESPACE_PREFIX: &str = "http://www.itesla_project.eu/schema/iidm/";
+const EXTENSION_NAMESPACE_PREFIX: &str = "http://www.powsybl.org/schema/iidm/ext/";
 const ACTIVE_POWER_CONTROL_NAMESPACE_V1_0: &str =
     "http://www.itesla_project.eu/schema/iidm/ext/active_power_control/1_0";
 const ACTIVE_POWER_CONTROL_NAMESPACE_V1_1: &str =
@@ -63,12 +77,56 @@ const MAX_XIIDM_ELEMENT_DEPTH: usize = 256;
 pub(crate) fn looks_like_xiidm(bytes: &[u8]) -> bool {
     let head = &bytes[..bytes.len().min(16_384)];
     let text = String::from_utf8_lossy(head);
-    (text.contains(NAMESPACE_PREFIX) || text.contains(EQUIPMENT_NAMESPACE_PREFIX))
+    (text.contains(NAMESPACE_PREFIX)
+        || text.contains(EQUIPMENT_NAMESPACE_PREFIX)
+        || text.contains(ITESLA_NAMESPACE_PREFIX))
         && (text.contains(":network") || text.contains("<network"))
 }
 
+/// Whether JSON text is a PowSybl JIIDM document: an object whose first key
+/// is `version` holding a `major.minor` string, which is the test PowSybl's
+/// own JSON importer applies before reading anything else.
+pub(crate) fn looks_like_jiidm(text: &str) -> bool {
+    let rest = text.trim_start_matches('\u{feff}').trim_start();
+    let Some(rest) = rest.strip_prefix('{') else {
+        return false;
+    };
+    let Some(rest) = rest.trim_start().strip_prefix("\"version\"") else {
+        return false;
+    };
+    let Some(rest) = rest.trim_start().strip_prefix(':') else {
+        return false;
+    };
+    let Some(rest) = rest.trim_start().strip_prefix('"') else {
+        return false;
+    };
+    let Some((version, _)) = rest.split_once('"') else {
+        return false;
+    };
+    version.split_once('.').is_some_and(|(major, minor)| {
+        !major.is_empty()
+            && !minor.is_empty()
+            && major.bytes().all(|value| value.is_ascii_digit())
+            && minor.bytes().all(|value| value.is_ascii_digit())
+    })
+}
+
+/// One PowSybl IIDM serialization version. The order is the release order,
+/// so range comparisons select the versions a rule applies to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum XiidmVersion {
+    V1_0,
+    V1_1,
+    V1_2,
+    V1_3,
+    V1_4,
+    V1_5,
+    V1_6,
+    V1_7,
+    V1_8,
+    V1_9,
+    V1_10,
+    V1_11,
     V1_12,
     V1_13,
     V1_14,
@@ -78,20 +136,63 @@ enum XiidmVersion {
 }
 
 impl XiidmVersion {
+    const ALL: [Self; 18] = [
+        Self::V1_0,
+        Self::V1_1,
+        Self::V1_2,
+        Self::V1_3,
+        Self::V1_4,
+        Self::V1_5,
+        Self::V1_6,
+        Self::V1_7,
+        Self::V1_8,
+        Self::V1_9,
+        Self::V1_10,
+        Self::V1_11,
+        Self::V1_12,
+        Self::V1_13,
+        Self::V1_14,
+        Self::V1_15,
+        Self::V1_16,
+        Self::V1_17,
+    ];
+
+    fn minor(self) -> u32 {
+        self as u32
+    }
+
+    /// The version named by a namespace suffix such as `1_12`.
     fn from_suffix(suffix: &str) -> Option<Self> {
-        Some(match suffix {
-            "1_12" => Self::V1_12,
-            "1_13" => Self::V1_13,
-            "1_14" => Self::V1_14,
-            "1_15" => Self::V1_15,
-            "1_16" => Self::V1_16,
-            "1_17" => Self::V1_17,
-            _ => return None,
-        })
+        let (major, minor) = suffix.split_once('_')?;
+        if major != "1" {
+            return None;
+        }
+        let minor: u32 = minor.parse().ok()?;
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|value| value.minor() == minor)
+    }
+
+    /// The version named by a JIIDM `version` value such as `1.12`.
+    fn from_label(label: &str) -> Option<Self> {
+        Self::from_suffix(&label.replacen('.', "_", 1))
     }
 
     fn label(self) -> &'static str {
         match self {
+            Self::V1_0 => "1.0",
+            Self::V1_1 => "1.1",
+            Self::V1_2 => "1.2",
+            Self::V1_3 => "1.3",
+            Self::V1_4 => "1.4",
+            Self::V1_5 => "1.5",
+            Self::V1_6 => "1.6",
+            Self::V1_7 => "1.7",
+            Self::V1_8 => "1.8",
+            Self::V1_9 => "1.9",
+            Self::V1_10 => "1.10",
+            Self::V1_11 => "1.11",
             Self::V1_12 => "1.12",
             Self::V1_13 => "1.13",
             Self::V1_14 => "1.14",
@@ -99,6 +200,22 @@ impl XiidmVersion {
             Self::V1_16 => "1.16",
             Self::V1_17 => "1.17",
         }
+    }
+
+    /// The XML namespace this version declares for a valid network. IIDM 1.0
+    /// belongs to the iTesla domain; every later version to PowSybl's.
+    fn namespace_uri(self) -> String {
+        let prefix = if self == Self::V1_0 {
+            ITESLA_NAMESPACE_PREFIX
+        } else {
+            NAMESPACE_PREFIX
+        };
+        format!("{prefix}1_{}", self.minor())
+    }
+
+    /// Equipment validation level documents exist from 1.7 on.
+    fn supports_equipment_validation(self) -> bool {
+        self >= Self::V1_7
     }
 }
 
@@ -133,17 +250,39 @@ struct XiidmNamespace {
 }
 
 impl XiidmNamespace {
+    /// The version and validation level a namespace URI names, or `None`
+    /// when the URI is not one PowSybl writes: the equipment namespace exists
+    /// from 1.7 on, the iTesla domain names only 1.0, and the PowSybl domain
+    /// names 1.1 and later.
     fn from_uri(uri: &str) -> Option<Self> {
-        let (validation, suffix) =
-            if let Some(suffix) = uri.strip_prefix(EQUIPMENT_NAMESPACE_PREFIX) {
-                (XiidmValidation::Equipment, suffix)
-            } else {
-                (XiidmValidation::Valid, uri.strip_prefix(NAMESPACE_PREFIX)?)
-            };
+        if let Some(suffix) = uri.strip_prefix(EQUIPMENT_NAMESPACE_PREFIX) {
+            let version = XiidmVersion::from_suffix(suffix)?;
+            return version.supports_equipment_validation().then_some(Self {
+                version,
+                validation: XiidmValidation::Equipment,
+            });
+        }
+        let version = if let Some(suffix) = uri.strip_prefix(ITESLA_NAMESPACE_PREFIX) {
+            XiidmVersion::from_suffix(suffix).filter(|version| *version == XiidmVersion::V1_0)?
+        } else {
+            let suffix = uri.strip_prefix(NAMESPACE_PREFIX)?;
+            XiidmVersion::from_suffix(suffix).filter(|version| *version > XiidmVersion::V1_0)?
+        };
         Some(Self {
-            version: XiidmVersion::from_suffix(suffix)?,
-            validation,
+            version,
+            validation: XiidmValidation::Valid,
         })
+    }
+
+    /// The namespace URI PowSybl writes for this version and validation
+    /// level.
+    fn uri(self) -> String {
+        match self.validation {
+            XiidmValidation::Valid => self.version.namespace_uri(),
+            XiidmValidation::Equipment => {
+                format!("{EQUIPMENT_NAMESPACE_PREFIX}1_{}", self.version.minor())
+            }
+        }
     }
 
     fn is_equipment(self) -> bool {
@@ -158,6 +297,7 @@ impl XiidmNamespace {
 fn is_xiidm_namespace_uri(uri: &str) -> bool {
     uri.strip_prefix(EQUIPMENT_NAMESPACE_PREFIX)
         .or_else(|| uri.strip_prefix(NAMESPACE_PREFIX))
+        .or_else(|| uri.strip_prefix(ITESLA_NAMESPACE_PREFIX))
         .is_some_and(|version| {
             let Some((major, minor)) = version.split_once('_') else {
                 return false;
@@ -250,6 +390,9 @@ struct RawBusbarSection {
     id: String,
     voltage_level: String,
     node: i32,
+    /// IIDM 1.0 states the calculated bus voltage magnitude and angle on
+    /// each busbar section instead of on a calculated bus record.
+    legacy_voltage: Option<(f64, f64)>,
 }
 
 #[derive(Clone, Debug)]
@@ -316,6 +459,34 @@ fn tap_tag(tag: &str) -> Option<ActiveTap> {
         _ => return None,
     };
     Some(ActiveTap { kind, winding })
+}
+
+/// The loading limits kind and optional side an element name states:
+/// `currentLimits` inside an operational limits group, or `currentLimits2`
+/// stated directly on equipment as every IIDM version before 1.12 does.
+fn loading_limit_tag(tag: &str) -> Option<(LoadingLimitKind, Option<u8>)> {
+    let (kind, rest) = [
+        ("activePowerLimits", LoadingLimitKind::ActivePower),
+        ("apparentPowerLimits", LoadingLimitKind::ApparentPower),
+        ("currentLimits", LoadingLimitKind::Current),
+    ]
+    .into_iter()
+    .find_map(|(prefix, kind)| tag.strip_prefix(prefix).map(|rest| (kind, rest)))?;
+    match rest {
+        "" => Some((kind, None)),
+        "1" => Some((kind, Some(1))),
+        "2" => Some((kind, Some(2))),
+        "3" => Some((kind, Some(3))),
+        _ => None,
+    }
+}
+
+/// Move an attribute to the name later IIDM versions use for the same
+/// field, when the source states it under its older name.
+fn rename_attribute(attrs: &mut Attrs, from: &str, to: &str) {
+    if let Some(value) = attrs.remove(from) {
+        attrs.entry(to.to_owned()).or_insert(value);
+    }
 }
 
 fn operational_limits_side(tag: &str) -> Option<u8> {
@@ -450,10 +621,23 @@ struct RawLoadingLimits {
 struct RawOperationalLimitsGroup {
     id: String,
     side: u8,
+    /// The group holds loading limits stated directly on the equipment, the
+    /// only form IIDM versions before 1.12 have. Such a group is the selected
+    /// group of its side.
+    implicit: bool,
     properties: BTreeMap<String, String>,
     active_power: Option<RawLoadingLimits>,
     apparent_power: Option<RawLoadingLimits>,
     current: Option<RawLoadingLimits>,
+}
+
+/// The loading limits element currently open: which kind it is and which
+/// equipment group receives its temporary limits.
+#[derive(Clone, Copy, Debug)]
+struct ActiveLoadingLimit {
+    kind: LoadingLimitKind,
+    equipment: usize,
+    group: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -501,6 +685,44 @@ struct Frame {
     component: Option<ComponentId>,
     equipment: Option<usize>,
     ac_dc_converter: Option<RawAcDcConverterIndex>,
+    /// The two boundary line equipment records a tie line older than IIDM
+    /// 1.10 states inline; its side suffixed loading limits belong to them.
+    legacy_tie_sides: Option<[usize; 2]>,
+}
+
+impl Frame {
+    fn new(tag: &str) -> Self {
+        Self {
+            tag: tag.to_owned(),
+            component: None,
+            equipment: None,
+            ac_dc_converter: None,
+            legacy_tie_sides: None,
+        }
+    }
+}
+
+/// The document encoding a tree came from; it names the module's source
+/// format.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum IidmEncoding {
+    #[default]
+    Xml,
+    Json,
+}
+
+/// One node of the IIDM element tree, independent of the encoding that
+/// carried it. XML events and JSON objects both reduce to this sequence:
+/// every element starts with its attributes, may carry text, and ends.
+enum TreeEvent<'a> {
+    Start {
+        tag: &'a str,
+        namespace: Option<&'a str>,
+        attrs: Attrs,
+        empty: bool,
+    },
+    Text(&'a str),
+    End(&'a str),
 }
 
 #[derive(Clone, Debug)]
@@ -512,6 +734,7 @@ struct PendingAlias {
 
 #[derive(Default)]
 struct ParsedXiidm {
+    encoding: IidmEncoding,
     id: Option<String>,
     case_metadata: CaseMetadata,
     namespace: Option<XiidmNamespace>,
@@ -521,8 +744,11 @@ struct ParsedXiidm {
     current_voltage_level: Option<String>,
     current_area: Option<usize>,
     current_tap: Option<ActiveTap>,
-    current_loading_limit: Option<LoadingLimitKind>,
+    current_loading_limit: Option<ActiveLoadingLimit>,
     current_extension_target: Option<String>,
+    /// Depth inside an extension subtree the mapping does not read; the
+    /// events of that subtree are consumed without effect until it closes.
+    skipped_depth: usize,
     frames: Vec<Frame>,
     pending_alias: Option<PendingAlias>,
     ids: HashSet<String>,
@@ -570,7 +796,6 @@ pub(crate) fn parse_xiidm_bytes(
     reader.config_mut().check_end_names = true;
     reader.config_mut().expand_empty_elements = false;
     let mut parsed = ParsedXiidm::default();
-    let mut skipped_extension_depth = 0_usize;
     let mut element_depth = 0_usize;
     let mut encoding_checked = false;
     let mut buffer = Vec::new();
@@ -593,39 +818,19 @@ pub(crate) fn parse_xiidm_bytes(
                         "XIIDM XML exceeds the {MAX_XIIDM_ELEMENT_DEPTH} element nesting limit"
                     )));
                 }
-                if skipped_extension_depth > 0 {
-                    skipped_extension_depth += 1;
-                    buffer.clear();
-                    continue;
-                }
                 let tag = local_name(element.name().as_ref())?;
-                let active_power_control = tag == "activePowerControl"
-                    && ActivePowerControlVersion::from_namespace(namespace.as_deref()).is_some();
-                if parsed.current_extension_target.is_some()
-                    && tag != "extension"
-                    && !active_power_control
-                {
-                    if namespace.as_deref().is_none_or(is_xiidm_namespace_uri) {
-                        return Err(format_error(format!(
-                            "XIIDM model element `{tag}` appears inside an extension"
-                        )));
-                    }
-                    diagnostics.push(
-                        &codes::READ_XIIDM_ELEMENT_UNMAPPED,
-                        format!(
-                            "XIIDM extension element `{tag}` on `{}` is retained only by exact same format emission",
-                            parsed.current_extension_target.as_deref().unwrap_or_default()
-                        ),
-                    );
-                    skipped_extension_depth = 1;
-                    buffer.clear();
-                    continue;
-                }
-                parsed.start(
-                    &tag,
-                    namespace.as_deref(),
-                    attributes(&element, reader.decoder())?,
-                    false,
+                let attrs = if parsed.skipped_depth > 0 {
+                    Attrs::new()
+                } else {
+                    attributes(&element, reader.decoder())?
+                };
+                parsed.consume(
+                    TreeEvent::Start {
+                        tag: &tag,
+                        namespace: namespace.as_deref(),
+                        attrs,
+                        empty: false,
+                    },
                     diagnostics,
                 )?;
             }
@@ -635,70 +840,43 @@ pub(crate) fn parse_xiidm_bytes(
                         "XIIDM XML exceeds the {MAX_XIIDM_ELEMENT_DEPTH} element nesting limit"
                     )));
                 }
-                if skipped_extension_depth > 0 {
-                    buffer.clear();
-                    continue;
-                }
                 let tag = local_name(element.name().as_ref())?;
-                let active_power_control = tag == "activePowerControl"
-                    && ActivePowerControlVersion::from_namespace(namespace.as_deref()).is_some();
-                if parsed.current_extension_target.is_some()
-                    && tag != "extension"
-                    && !active_power_control
-                {
-                    if namespace.as_deref().is_none_or(is_xiidm_namespace_uri) {
-                        return Err(format_error(format!(
-                            "XIIDM model element `{tag}` appears inside an extension"
-                        )));
-                    }
-                    diagnostics.push(
-                        &codes::READ_XIIDM_ELEMENT_UNMAPPED,
-                        format!(
-                            "XIIDM extension element `{tag}` on `{}` is retained only by exact same format emission",
-                            parsed.current_extension_target.as_deref().unwrap_or_default()
-                        ),
-                    );
-                    buffer.clear();
-                    continue;
-                }
-                parsed.start(
-                    &tag,
-                    namespace.as_deref(),
-                    attributes(&element, reader.decoder())?,
-                    true,
+                let attrs = if parsed.skipped_depth > 0 {
+                    Attrs::new()
+                } else {
+                    attributes(&element, reader.decoder())?
+                };
+                parsed.consume(
+                    TreeEvent::Start {
+                        tag: &tag,
+                        namespace: namespace.as_deref(),
+                        attrs,
+                        empty: true,
+                    },
                     diagnostics,
                 )?;
             }
             Event::End(element) => {
-                if skipped_extension_depth > 0 {
-                    skipped_extension_depth -= 1;
-                    element_depth = element_depth.saturating_sub(1);
-                    buffer.clear();
-                    continue;
-                }
-                parsed.end(&local_name(element.name().as_ref())?)?;
+                parsed.consume(
+                    TreeEvent::End(&local_name(element.name().as_ref())?),
+                    diagnostics,
+                )?;
                 element_depth = element_depth.saturating_sub(1);
             }
             Event::Text(value) => {
-                if skipped_extension_depth == 0
-                    && let Some(alias) = &mut parsed.pending_alias
-                {
-                    alias.value.push_str(
-                        &value
-                            .decode()
-                            .map_err(|error| format_error(error.to_string()))?,
-                    );
+                if parsed.skipped_depth == 0 && parsed.pending_alias.is_some() {
+                    let text = value
+                        .decode()
+                        .map_err(|error| format_error(error.to_string()))?;
+                    parsed.consume(TreeEvent::Text(&text), diagnostics)?;
                 }
             }
             Event::CData(value) => {
-                if skipped_extension_depth == 0
-                    && let Some(alias) = &mut parsed.pending_alias
-                {
-                    alias.value.push_str(
-                        &value
-                            .decode()
-                            .map_err(|error| format_error(error.to_string()))?,
-                    );
+                if parsed.skipped_depth == 0 && parsed.pending_alias.is_some() {
+                    let text = value
+                        .decode()
+                        .map_err(|error| format_error(error.to_string()))?;
+                    parsed.consume(TreeEvent::Text(&text), diagnostics)?;
                 }
             }
             Event::DocType(_) | Event::GeneralRef(_) => {
@@ -716,6 +894,396 @@ pub(crate) fn parse_xiidm_bytes(
         buffer.clear();
     }
     parsed.finish(diagnostics)
+}
+
+pub(crate) fn parse_jiidm_source(
+    text: &str,
+    diagnostics: &mut Diagnostics,
+) -> Result<BalancedNetwork> {
+    if text.len() > MAX_XIIDM_BYTES {
+        return Err(format_error(format!(
+            "JIIDM JSON exceeds the {MAX_XIIDM_BYTES} byte input limit"
+        )));
+    }
+    let document: JsonNode = serde_json::from_str(text.trim_start_matches('\u{feff}'))
+        .map_err(|error| format_error(format!("malformed JIIDM JSON: {error}")))?;
+    let JsonNode::Object(root) = &document else {
+        return Err(format_error("JIIDM document is not a JSON object"));
+    };
+    let version_label = json_field_text(root, "version")
+        .ok_or_else(|| format_error("JIIDM document has no string `version`"))?;
+    let mut extension_versions = BTreeMap::new();
+    if let Some((_, JsonNode::Array(entries))) =
+        root.iter().find(|(key, _)| key == "extensionVersions")
+    {
+        for entry in entries {
+            let JsonNode::Object(fields) = entry else {
+                return Err(format_error(
+                    "JIIDM `extensionVersions` entry is not an object",
+                ));
+            };
+            let name = json_field_text(fields, "extensionName")
+                .ok_or_else(|| format_error("JIIDM extension version has no `extensionName`"))?;
+            let version = json_field_text(fields, "version")
+                .ok_or_else(|| format_error("JIIDM extension version has no `version`"))?;
+            extension_versions.insert(name.to_owned(), version.to_owned());
+        }
+    }
+    let mut parsed = ParsedXiidm {
+        encoding: IidmEncoding::Json,
+        ..ParsedXiidm::default()
+    };
+    let namespace = match XiidmVersion::from_label(version_label) {
+        Some(version) => {
+            let equipment = json_field_text(root, "minimumValidationLevel") == Some("EQUIPMENT")
+                && version.supports_equipment_validation();
+            XiidmNamespace {
+                version,
+                validation: if equipment {
+                    XiidmValidation::Equipment
+                } else {
+                    XiidmValidation::Valid
+                },
+            }
+            .uri()
+        }
+        // An unknown version still names a PowSybl namespace, so the root
+        // reader reports it with the same coded diagnostic as XML input.
+        None => format!("{NAMESPACE_PREFIX}{}", version_label.replacen('.', "_", 1)),
+    };
+    let walker = JsonWalker {
+        namespace: &namespace,
+        extension_versions: &extension_versions,
+    };
+    walker.walk(&mut parsed, "network", root, None, 1, diagnostics)?;
+    parsed.finish(diagnostics)
+}
+
+/// Text of a scalar string field in a JSON object.
+fn json_field_text<'a>(fields: &'a [(String, JsonNode)], name: &str) -> Option<&'a str> {
+    fields.iter().find_map(|(key, value)| match value {
+        JsonNode::String(text) if key == name => Some(text.as_str()),
+        _ => None,
+    })
+}
+
+/// A JSON document with object keys in document order. PowSybl reads
+/// attributes before child nodes and elements in sequence, so the order the
+/// document states is the order the tree mapping receives.
+#[derive(Clone, Debug)]
+enum JsonNode {
+    Null,
+    Bool(bool),
+    Number(serde_json::Number),
+    String(String),
+    Array(Vec<JsonNode>),
+    Object(Vec<(String, JsonNode)>),
+}
+
+impl JsonNode {
+    fn is_scalar(&self) -> bool {
+        !matches!(self, Self::Array(_) | Self::Object(_))
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for JsonNode {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct NodeVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for NodeVisitor {
+            type Value = JsonNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+
+            fn visit_bool<E>(self, value: bool) -> std::result::Result<JsonNode, E> {
+                Ok(JsonNode::Bool(value))
+            }
+
+            fn visit_i64<E>(self, value: i64) -> std::result::Result<JsonNode, E> {
+                Ok(JsonNode::Number(value.into()))
+            }
+
+            fn visit_u64<E>(self, value: u64) -> std::result::Result<JsonNode, E> {
+                Ok(JsonNode::Number(value.into()))
+            }
+
+            fn visit_f64<E>(self, value: f64) -> std::result::Result<JsonNode, E>
+            where
+                E: serde::de::Error,
+            {
+                serde_json::Number::from_f64(value)
+                    .map(JsonNode::Number)
+                    .ok_or_else(|| E::custom("JSON number is not finite"))
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<JsonNode, E> {
+                Ok(JsonNode::String(value.to_owned()))
+            }
+
+            fn visit_string<E>(self, value: String) -> std::result::Result<JsonNode, E> {
+                Ok(JsonNode::String(value))
+            }
+
+            fn visit_unit<E>(self) -> std::result::Result<JsonNode, E> {
+                Ok(JsonNode::Null)
+            }
+
+            fn visit_none<E>(self) -> std::result::Result<JsonNode, E> {
+                Ok(JsonNode::Null)
+            }
+
+            fn visit_some<D>(self, deserializer: D) -> std::result::Result<JsonNode, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                serde::Deserialize::deserialize(deserializer)
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> std::result::Result<JsonNode, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let mut values = Vec::new();
+                while let Some(value) = seq.next_element()? {
+                    values.push(value);
+                }
+                Ok(JsonNode::Array(values))
+            }
+
+            fn visit_map<A>(self, mut map: A) -> std::result::Result<JsonNode, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut entries = Vec::new();
+                while let Some((key, value)) = map.next_entry::<String, JsonNode>()? {
+                    entries.push((key, value));
+                }
+                Ok(JsonNode::Object(entries))
+            }
+        }
+
+        deserializer.deserialize_any(NodeVisitor)
+    }
+}
+
+/// PowSybl's JSON array field names and the element each entry is. Elements
+/// outside this table repeat as plain object fields, as `voltageLevelRef`
+/// does under an area.
+const JIIDM_ARRAY_ELEMENTS: [(&str, &str); 46] = [
+    ("networks", "network"),
+    ("extensions", "extension"),
+    ("switches", "switch"),
+    ("steps", "step"),
+    ("aliases", "alias"),
+    ("areas", "area"),
+    ("batteries", "battery"),
+    ("areaBoundaries", "areaBoundary"),
+    ("buses", "bus"),
+    ("busbarSections", "busbarSection"),
+    ("temporaryLimits", "temporaryLimit"),
+    ("boundaryLines", "boundaryLine"),
+    ("danglingLines", "danglingLine"),
+    ("dcNodes", "dcNode"),
+    ("dcGrounds", "dcGround"),
+    ("dcLines", "dcLine"),
+    ("dcSwitches", "dcSwitch"),
+    ("segments", "segment"),
+    ("generators", "generator"),
+    ("hvdcLines", "hvdcLine"),
+    ("lccConverterStations", "lccConverterStation"),
+    ("lines", "line"),
+    ("lineCommutatedConverters", "lineCommutatedConverter"),
+    ("loads", "load"),
+    ("internalConnections", "internalConnection"),
+    ("overloadManagementSystems", "overloadManagementSystem"),
+    ("properties", "property"),
+    ("points", "point"),
+    ("shunts", "shunt"),
+    ("sections", "section"),
+    ("shuntCompensators", "shuntCompensator"),
+    ("staticVarCompensators", "staticVarCompensator"),
+    ("substations", "substation"),
+    ("threeWindingsTransformers", "threeWindingsTransformer"),
+    ("tieLines", "tieLine"),
+    ("twoWindingsTransformers", "twoWindingsTransformer"),
+    ("voltageAngleLimits", "voltageAngleLimit"),
+    ("voltageLevels", "voltageLevel"),
+    ("fictitiousInjections", "inj"),
+    ("voltageSourceConverters", "voltageSourceConverter"),
+    ("vscConverterStations", "vscConverterStation"),
+    ("grounds", "ground"),
+    ("operationalLimitsGroups", "operationalLimitsGroup"),
+    ("operationalLimitsGroups1", "operationalLimitsGroup1"),
+    ("operationalLimitsGroups2", "operationalLimitsGroup2"),
+    ("operationalLimitsGroups3", "operationalLimitsGroup3"),
+];
+
+fn jiidm_array_element(array: &str) -> Option<&'static str> {
+    JIIDM_ARRAY_ELEMENTS
+        .iter()
+        .find(|(name, _)| *name == array)
+        .map(|(_, element)| *element)
+}
+
+fn jiidm_array_name(element: &str) -> Option<&'static str> {
+    JIIDM_ARRAY_ELEMENTS
+        .iter()
+        .find(|(_, name)| *name == element)
+        .map(|(array, _)| *array)
+}
+
+/// Drives [`ParsedXiidm`] from a JIIDM object tree.
+struct JsonWalker<'a> {
+    namespace: &'a str,
+    extension_versions: &'a BTreeMap<String, String>,
+}
+
+impl JsonWalker<'_> {
+    /// The namespace of an extension element: the versioned active power
+    /// control namespace when the document names a version the reader maps,
+    /// otherwise a PowSybl extension namespace the mapping does not read.
+    fn extension_namespace(&self, name: &str) -> String {
+        let version = self
+            .extension_versions
+            .get(name)
+            .map_or("1.2", String::as_str);
+        if name == "activePowerControl" {
+            match version {
+                "1.0" => return ACTIVE_POWER_CONTROL_NAMESPACE_V1_0.to_owned(),
+                "1.1" => return ACTIVE_POWER_CONTROL_NAMESPACE_V1_1.to_owned(),
+                "1.2" => return ACTIVE_POWER_CONTROL_NAMESPACE_V1_2.to_owned(),
+                _ => {}
+            }
+        }
+        format!(
+            "{EXTENSION_NAMESPACE_PREFIX}{name}/{}",
+            version.replacen('.', "_", 1)
+        )
+    }
+
+    fn walk(
+        &self,
+        parsed: &mut ParsedXiidm,
+        tag: &str,
+        fields: &[(String, JsonNode)],
+        namespace: Option<&str>,
+        depth: usize,
+        diagnostics: &mut Diagnostics,
+    ) -> Result<()> {
+        if depth > MAX_XIIDM_ELEMENT_DEPTH {
+            return Err(format_error(format!(
+                "JIIDM JSON exceeds the {MAX_XIIDM_ELEMENT_DEPTH} element nesting limit"
+            )));
+        }
+        let root = depth == 1;
+        let mut attrs = Attrs::new();
+        let mut content = None;
+        if root {
+            attrs.insert("xmlns:iidm".to_owned(), self.namespace.to_owned());
+        }
+        for (key, value) in fields {
+            if root && (key == "version" || key == "extensionVersions") {
+                continue;
+            }
+            match value {
+                JsonNode::String(text) if key == "content" => content = Some(text.as_str()),
+                JsonNode::Bool(_) | JsonNode::Number(_) | JsonNode::String(_) => {
+                    attrs.insert(key.clone(), json_scalar_text(value));
+                }
+                JsonNode::Array(values)
+                    if !values.is_empty() && values.iter().all(JsonNode::is_scalar) =>
+                {
+                    attrs.insert(key.clone(), json_array_text(values));
+                }
+                JsonNode::Null | JsonNode::Array(_) | JsonNode::Object(_) => {}
+            }
+        }
+        let element_namespace = namespace.unwrap_or(self.namespace);
+        parsed.consume(
+            TreeEvent::Start {
+                tag,
+                namespace: Some(element_namespace),
+                attrs,
+                empty: false,
+            },
+            diagnostics,
+        )?;
+        if let Some(text) = content {
+            parsed.consume(TreeEvent::Text(text), diagnostics)?;
+        }
+        let in_extension = tag == "extension";
+        for (key, value) in fields {
+            let child_namespace = if in_extension {
+                Some(self.extension_namespace(key))
+            } else {
+                namespace.map(str::to_owned)
+            };
+            match value {
+                JsonNode::Object(child) => {
+                    self.walk(
+                        parsed,
+                        key,
+                        child,
+                        child_namespace.as_deref(),
+                        depth + 1,
+                        diagnostics,
+                    )?;
+                }
+                JsonNode::Array(values) if !values.iter().all(JsonNode::is_scalar) => {
+                    let element = jiidm_array_element(key).unwrap_or(key.as_str());
+                    for entry in values {
+                        let JsonNode::Object(child) = entry else {
+                            return Err(format_error(format!(
+                                "JIIDM array `{key}` mixes objects with scalar values"
+                            )));
+                        };
+                        self.walk(
+                            parsed,
+                            element,
+                            child,
+                            child_namespace.as_deref(),
+                            depth + 1,
+                            diagnostics,
+                        )?;
+                    }
+                }
+                _ => {}
+            }
+        }
+        parsed.consume(TreeEvent::End(tag), diagnostics)
+    }
+}
+
+/// The attribute text of a JSON scalar, in the spelling the XML attribute
+/// readers accept.
+fn json_scalar_text(value: &JsonNode) -> String {
+    match value {
+        JsonNode::Bool(value) => value.to_string(),
+        JsonNode::Number(value) => value.to_string(),
+        JsonNode::String(value) => value.clone(),
+        JsonNode::Null | JsonNode::Array(_) | JsonNode::Object(_) => String::new(),
+    }
+}
+
+/// The attribute text of a JSON scalar array: PowSybl's XML writer joins
+/// integer arrays with commas and encodes string arrays as one CSV record,
+/// quoting values that contain a comma, a quote, or a line break.
+fn json_array_text(values: &[JsonNode]) -> String {
+    values
+        .iter()
+        .map(|value| match value {
+            JsonNode::String(text) if text.contains([',', '"', '\n', '\r']) => {
+                format!("\"{}\"", text.replace('"', "\"\""))
+            }
+            other => json_scalar_text(other),
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn validate_xml_encoding(
@@ -758,6 +1326,80 @@ fn reject_xml_entities(bytes: &[u8]) -> Result<()> {
 }
 
 impl ParsedXiidm {
+    /// The version of the document being read, once the root network has
+    /// declared it.
+    fn version(&self) -> Option<XiidmVersion> {
+        self.namespace.map(|namespace| namespace.version)
+    }
+
+    fn version_at_most(&self, version: XiidmVersion) -> bool {
+        self.version().is_some_and(|value| value <= version)
+    }
+
+    fn version_at_least(&self, version: XiidmVersion) -> bool {
+        self.version().is_some_and(|value| value >= version)
+    }
+
+    /// Consume one tree event. Elements inside an extension subtree the
+    /// mapping does not read are counted and otherwise ignored until that
+    /// subtree closes; every other event reaches the element mapping.
+    fn consume(&mut self, event: TreeEvent<'_>, diagnostics: &mut Diagnostics) -> Result<()> {
+        match event {
+            TreeEvent::Start {
+                tag,
+                namespace,
+                attrs,
+                empty,
+            } => {
+                if self.skipped_depth > 0 {
+                    if !empty {
+                        self.skipped_depth += 1;
+                    }
+                    return Ok(());
+                }
+                let active_power_control = tag == "activePowerControl"
+                    && ActivePowerControlVersion::from_namespace(namespace).is_some();
+                if self.current_extension_target.is_some()
+                    && tag != "extension"
+                    && !active_power_control
+                {
+                    if namespace.is_none_or(is_xiidm_namespace_uri) {
+                        return Err(format_error(format!(
+                            "XIIDM model element `{tag}` appears inside an extension"
+                        )));
+                    }
+                    diagnostics.push(
+                        &codes::READ_XIIDM_ELEMENT_UNMAPPED,
+                        format!(
+                            "XIIDM extension element `{tag}` on `{}` is retained only by exact same format emission",
+                            self.current_extension_target.as_deref().unwrap_or_default()
+                        ),
+                    );
+                    if !empty {
+                        self.skipped_depth = 1;
+                    }
+                    return Ok(());
+                }
+                self.start(tag, namespace, attrs, empty, diagnostics)
+            }
+            TreeEvent::Text(text) => {
+                if self.skipped_depth == 0
+                    && let Some(alias) = &mut self.pending_alias
+                {
+                    alias.value.push_str(text);
+                }
+                Ok(())
+            }
+            TreeEvent::End(tag) => {
+                if self.skipped_depth > 0 {
+                    self.skipped_depth -= 1;
+                    return Ok(());
+                }
+                self.end(tag)
+            }
+        }
+    }
+
     fn start(
         &mut self,
         tag: &str,
@@ -784,12 +1426,7 @@ impl ParsedXiidm {
                 )));
             }
         }
-        let mut frame = Frame {
-            tag: tag.to_owned(),
-            component: None,
-            equipment: None,
-            ac_dc_converter: None,
-        };
+        let mut frame = Frame::new(tag);
         match tag {
             "network" => {
                 let root = !self.root_seen;
@@ -1045,13 +1682,19 @@ impl ParsedXiidm {
                 let voltage_level = self.require_voltage_level(tag)?;
                 let id = required_text(&attrs, "id")?.to_owned();
                 frame.component = Some(self.register_component("busbar_section", &id, &attrs)?);
+                let legacy_voltage = if self.version_at_most(XiidmVersion::V1_0) {
+                    optional_f64(&attrs, "v")?.zip(optional_f64(&attrs, "angle")?)
+                } else {
+                    None
+                };
                 self.busbar_sections.push(RawBusbarSection {
                     id,
                     voltage_level,
                     node: required_i32(&attrs, "node")?,
+                    legacy_voltage,
                 });
             }
-            "switch" => self.read_switch(&attrs, &mut frame)?,
+            "switch" => self.read_switch(&attrs, &mut frame, diagnostics)?,
             "internalConnection" => self.internal_connections.push(RawInternalConnection {
                 voltage_level: self.require_voltage_level(tag)?,
                 node1: required_i32(&attrs, "node1")?,
@@ -1059,36 +1702,62 @@ impl ParsedXiidm {
             }),
             "load" => self.read_equipment(EquipmentKind::Load, attrs, &mut frame)?,
             "generator" => self.read_equipment(EquipmentKind::Generator, attrs, &mut frame)?,
-            "battery" => self.read_equipment(EquipmentKind::Battery, attrs, &mut frame)?,
-            "shunt"
-                if self
-                    .namespace
-                    .is_some_and(|namespace| namespace.version <= XiidmVersion::V1_15) =>
-            {
-                self.read_equipment(EquipmentKind::Shunt, attrs, &mut frame)?;
+            "battery" => {
+                let mut attrs = attrs;
+                if self.version_at_most(XiidmVersion::V1_7) {
+                    rename_attribute(&mut attrs, "p0", "targetP");
+                    rename_attribute(&mut attrs, "q0", "targetQ");
+                }
+                self.read_equipment(EquipmentKind::Battery, attrs, &mut frame)?;
             }
-            "shuntCompensator"
-                if self
-                    .namespace
-                    .is_some_and(|namespace| namespace.version >= XiidmVersion::V1_16) =>
-            {
+            "shunt" if self.version_at_most(XiidmVersion::V1_15) => {
+                let mut attrs = attrs;
+                let legacy_model = if self.version_at_most(XiidmVersion::V1_2) {
+                    let model = (
+                        0.0,
+                        required_f64(&attrs, "bPerSection")?,
+                        required_u32(&attrs, "maximumSectionCount")?,
+                    );
+                    let section_count = required_u32(&attrs, "currentSectionCount")?;
+                    attrs.remove("bPerSection");
+                    attrs.remove("maximumSectionCount");
+                    attrs.remove("currentSectionCount");
+                    attrs.insert("sectionCount".to_owned(), section_count.to_string());
+                    if self.version_at_most(XiidmVersion::V1_1) {
+                        attrs
+                            .entry("voltageRegulatorOn".to_owned())
+                            .or_insert_with(|| "false".to_owned());
+                    }
+                    Some(model)
+                } else {
+                    None
+                };
+                self.read_equipment(EquipmentKind::Shunt, attrs, &mut frame)?;
+                if let Some(model) = legacy_model {
+                    let equipment = frame.equipment.expect("equipment was read");
+                    self.equipment[equipment].shunt_linear = Some(model);
+                    self.equipment[equipment].shunt_conductance_omitted = true;
+                }
+            }
+            "shuntCompensator" if self.version_at_least(XiidmVersion::V1_16) => {
                 self.read_equipment(EquipmentKind::Shunt, attrs, &mut frame)?;
             }
             "staticVarCompensator" => {
+                let mut attrs = attrs;
+                if self.version_at_most(XiidmVersion::V1_2) {
+                    rename_attribute(&mut attrs, "voltageSetPoint", "voltageSetpoint");
+                    rename_attribute(&mut attrs, "reactivePowerSetPoint", "reactivePowerSetpoint");
+                }
                 self.read_equipment(EquipmentKind::StaticVarCompensator, attrs, &mut frame)?;
             }
-            "boundaryLine"
-                if self
-                    .namespace
-                    .is_some_and(|namespace| namespace.version >= XiidmVersion::V1_16) =>
-            {
+            "boundaryLine" if self.version_at_least(XiidmVersion::V1_16) => {
                 self.read_equipment(EquipmentKind::BoundaryLine, attrs, &mut frame)?;
             }
-            "danglingLine"
-                if self
-                    .namespace
-                    .is_some_and(|namespace| namespace.version <= XiidmVersion::V1_15) =>
-            {
+            "danglingLine" if self.version_at_most(XiidmVersion::V1_15) => {
+                let mut attrs = attrs;
+                if self.version_at_most(XiidmVersion::V1_10) {
+                    rename_attribute(&mut attrs, "ucteXnodeCode", "pairingKey");
+                }
                 self.read_equipment(EquipmentKind::BoundaryLine, attrs, &mut frame)?;
             }
             "shunt" | "shuntCompensator" | "boundaryLine" | "danglingLine" => {
@@ -1113,6 +1782,15 @@ impl ParsedXiidm {
                 self.read_equipment(EquipmentKind::Transformer, attrs, &mut frame)?;
             }
             "threeWindingsTransformer" => {
+                let mut attrs = attrs;
+                // IIDM 1.0 has no `ratedU0`; the leg impedances are stated on
+                // the first winding's rated voltage.
+                if self.version_at_most(XiidmVersion::V1_0)
+                    && !attrs.contains_key("ratedU0")
+                    && let Some(rated_u1) = attrs.get("ratedU1").cloned()
+                {
+                    attrs.insert("ratedU0".to_owned(), rated_u1);
+                }
                 self.read_equipment(EquipmentKind::ThreeWindingTransformer, attrs, &mut frame)?;
             }
             "hvdcLine" => {
@@ -1120,12 +1798,13 @@ impl ParsedXiidm {
                 frame.component = Some(self.register_component("hvdc", &id, &attrs)?);
                 self.hvdc_lines.push(RawHvdcLine { id, attrs });
             }
+            "tieLine" if self.version_at_most(XiidmVersion::V1_9) => {
+                self.read_legacy_tie_line(&attrs, &mut frame, diagnostics)?;
+            }
             "tieLine" => {
                 let id = required_text(&attrs, "id")?.to_owned();
                 frame.component = Some(self.register_component("tie_line", &id, &attrs)?);
-                let modern = self
-                    .namespace
-                    .is_some_and(|namespace| namespace.version >= XiidmVersion::V1_16);
+                let modern = self.version_at_least(XiidmVersion::V1_16);
                 self.tie_lines.push(RawTieLine {
                     id,
                     boundary_line1: required_text(
@@ -1292,6 +1971,14 @@ impl ParsedXiidm {
                     && self
                         .namespace
                         .is_some_and(|namespace| namespace.version <= XiidmVersion::V1_13);
+                // Before 1.12 a ratio tap changer states `targetV` instead of
+                // a regulation mode and value; a stated target means voltage
+                // regulation.
+                let legacy_ratio_target = (active.kind == TapKind::Ratio
+                    && self.version_at_most(XiidmVersion::V1_11))
+                .then(|| optional_f64(&attrs, "targetV"))
+                .transpose()?
+                .flatten();
                 let regulation_mode = if legacy_fixed_phase_tap {
                     diagnostics.push(
                         &codes::READ_XIIDM_VERSION_COMPATIBILITY,
@@ -1302,17 +1989,13 @@ impl ParsedXiidm {
                         ),
                     );
                     Some(TapChangerRegulationMode::Current)
+                } else if legacy_ratio_target.is_some() {
+                    Some(TapChangerRegulationMode::Voltage)
                 } else {
-                    match active.kind {
-                        TapKind::Ratio => attrs
-                            .get("regulationMode")
-                            .map(|mode| parse_tap_regulation_mode(active.kind, mode))
-                            .transpose()?,
-                        TapKind::Phase => attrs
-                            .get("regulationMode")
-                            .map(|mode| parse_tap_regulation_mode(active.kind, mode))
-                            .transpose()?,
-                    }
+                    attrs
+                        .get("regulationMode")
+                        .map(|mode| parse_tap_regulation_mode(active.kind, mode))
+                        .transpose()?
                 };
                 let load_tap_changing_capabilities = match active.kind {
                     TapKind::Phase
@@ -1355,8 +2038,16 @@ impl ParsedXiidm {
                     load_tap_changing_capabilities,
                     regulating,
                     regulation_mode,
-                    regulation_value: optional_f64(&attrs, "regulationValue")?,
-                    target_deadband: optional_f64(&attrs, "targetDeadband")?,
+                    regulation_value: match legacy_ratio_target {
+                        Some(target) => Some(target),
+                        None => optional_f64(&attrs, "regulationValue")?,
+                    },
+                    // IIDM 1.0 and 1.1 allow a regulating tap changer without
+                    // a deadband; PowSybl reads that as a zero deadband.
+                    target_deadband: match optional_f64(&attrs, "targetDeadband")? {
+                        None if regulating && self.version_at_most(XiidmVersion::V1_1) => Some(0.0),
+                        value => value,
+                    },
                     regulation_terminal: None,
                     steps: Vec::new(),
                 };
@@ -1380,30 +2071,77 @@ impl ParsedXiidm {
                     .push(RawOperationalLimitsGroup {
                         id: required_text(&attrs, "id")?.to_owned(),
                         side: operational_limits_side(tag).expect("matched limit group"),
+                        implicit: false,
                         properties: BTreeMap::new(),
                         active_power: None,
                         apparent_power: None,
                         current: None,
                     });
             }
-            "activePowerLimits" | "apparentPowerLimits" | "currentLimits" => {
-                let kind = match tag {
-                    "activePowerLimits" => LoadingLimitKind::ActivePower,
-                    "apparentPowerLimits" => LoadingLimitKind::ApparentPower,
-                    _ => LoadingLimitKind::Current,
-                };
+            tag if loading_limit_tag(tag).is_some() => {
+                let (kind, side) = loading_limit_tag(tag).expect("matched loading limits");
                 let limits = RawLoadingLimits {
                     permanent_limit: optional_f64(&attrs, "permanentLimit")?,
                     permanent_name: attrs.get("permanentLimitName").cloned(),
                     temporary_limits: Vec::new(),
                 };
-                let group = self.current_operational_limits_group_mut()?;
-                match kind {
-                    LoadingLimitKind::ActivePower => group.active_power = Some(limits),
-                    LoadingLimitKind::ApparentPower => group.apparent_power = Some(limits),
-                    LoadingLimitKind::Current => group.current = Some(limits),
+                let parent = self.frames.last();
+                let inside_group =
+                    parent.is_some_and(|frame| operational_limits_side(&frame.tag).is_some());
+                let (equipment, group) = if inside_group {
+                    if side.is_some() {
+                        return Err(format_error(format!(
+                            "loading limits `{tag}` inside an operational limits group must not name a side"
+                        )));
+                    }
+                    let equipment = self.current_equipment()?;
+                    let group = self.equipment[equipment].operational_limits.len() - 1;
+                    (equipment, group)
+                } else if let Some(sides) = parent.and_then(|frame| frame.legacy_tie_sides) {
+                    // A tie line older than IIDM 1.10 states each boundary
+                    // line's limits with that side's suffix.
+                    let side = side.filter(|side| (1..=2).contains(side)).ok_or_else(|| {
+                        format_error(format!(
+                            "tie line loading limits `{tag}` must name side 1 or 2"
+                        ))
+                    })?;
+                    let equipment = sides[usize::from(side - 1)];
+                    (
+                        equipment,
+                        self.implicit_operational_limits_group(equipment, 1),
+                    )
+                } else {
+                    let equipment = self.current_equipment()?;
+                    let side = side.unwrap_or(1);
+                    if side > self.equipment[equipment].kind.terminal_count() {
+                        return Err(format_error(format!(
+                            "loading limits `{tag}` name a side `{}` does not have",
+                            self.equipment[equipment].id
+                        )));
+                    }
+                    (
+                        equipment,
+                        self.implicit_operational_limits_group(equipment, side),
+                    )
+                };
+                frame.equipment = Some(equipment);
+                let target = &mut self.equipment[equipment].operational_limits[group];
+                let slot = match kind {
+                    LoadingLimitKind::ActivePower => &mut target.active_power,
+                    LoadingLimitKind::ApparentPower => &mut target.apparent_power,
+                    LoadingLimitKind::Current => &mut target.current,
+                };
+                if slot.replace(limits).is_some() {
+                    return Err(format_error(format!(
+                        "equipment `{}` states `{tag}` more than once for one operational limits group",
+                        self.equipment[equipment].id
+                    )));
                 }
-                self.current_loading_limit = Some(kind);
+                self.current_loading_limit = Some(ActiveLoadingLimit {
+                    kind,
+                    equipment,
+                    group,
+                });
             }
             "temporaryLimit" if self.current_loading_limit.is_some() => {
                 let limit = RawTemporaryLimit {
@@ -1412,9 +2150,9 @@ impl ParsedXiidm {
                     value: optional_f64(&attrs, "value")?,
                     fictitious: optional_bool(&attrs, "fictitious")?.unwrap_or(false),
                 };
-                let kind = self.current_loading_limit.expect("matched loading limit");
-                let group = self.current_operational_limits_group_mut()?;
-                let limits = match kind {
+                let active = self.current_loading_limit.expect("matched loading limit");
+                let group = &mut self.equipment[active.equipment].operational_limits[active.group];
+                let limits = match active.kind {
                     LoadingLimitKind::ActivePower => group.active_power.as_mut(),
                     LoadingLimitKind::ApparentPower => group.apparent_power.as_mut(),
                     LoadingLimitKind::Current => group.current.as_mut(),
@@ -1465,10 +2203,7 @@ impl ParsedXiidm {
             if tap_tag(tag).is_some() {
                 self.current_tap = None;
             }
-            if matches!(
-                tag,
-                "activePowerLimits" | "apparentPowerLimits" | "currentLimits"
-            ) {
+            if loading_limit_tag(tag).is_some() {
                 self.current_loading_limit = None;
             }
             if tag == "area" {
@@ -1547,18 +2282,18 @@ impl ParsedXiidm {
             diagnostics.push(
                 &codes::PARSE_XIIDM_VERSION_UNSUPPORTED,
                 format!(
-                    "XIIDM namespace `{uri}` is unsupported; PowerIO reads XIIDM 1.12 through 1.17"
+                    "IIDM namespace `{uri}` is unsupported; PowerIO reads IIDM 1.0 through 1.17"
                 ),
             );
             return Err(format_error(format!(
-                "unsupported XIIDM namespace `{uri}`; supported input versions are 1.12 through 1.17"
+                "unsupported IIDM namespace `{uri}`; supported input versions are 1.0 through 1.17"
             )));
         };
         if namespace.version != XiidmVersion::V1_17 {
             diagnostics.push(
                 &codes::READ_XIIDM_VERSION_COMPATIBILITY,
                 format!(
-                    "XIIDM {} input was read; fresh XIIDM output uses 1.17",
+                    "IIDM {} input was read; fresh XIIDM and JIIDM output uses 1.17",
                     namespace.version.label()
                 ),
             );
@@ -1567,13 +2302,21 @@ impl ParsedXiidm {
         let id = required_text(attrs, "id")?.to_owned();
         frame.component = Some(self.register_component("balanced_network", &id, attrs)?);
         self.id = Some(id);
+        // The validation level attribute exists from 1.7 on; every earlier
+        // document is a steady state hypothesis.
+        let minimum_validation_level = if namespace.version.supports_equipment_validation() {
+            required_text(attrs, "minimumValidationLevel")?.to_owned()
+        } else {
+            attrs
+                .get("minimumValidationLevel")
+                .cloned()
+                .unwrap_or_else(|| DEFAULT_VALIDATION_LEVEL.to_owned())
+        };
         self.case_metadata = CaseMetadata {
             case_date: Some(required_text(attrs, "caseDate")?.to_owned()),
-            forecast_distance: Some(required_i32(attrs, "forecastDistance")?),
+            forecast_distance: Some(optional_i32(attrs, "forecastDistance")?.unwrap_or(0)),
             source_model_format: Some(required_text(attrs, "sourceFormat")?.to_owned()),
-            minimum_validation_level: Some(
-                required_text(attrs, "minimumValidationLevel")?.to_owned(),
-            ),
+            minimum_validation_level: Some(minimum_validation_level),
         };
         self.root_seen = true;
         Ok(())
@@ -1604,9 +2347,33 @@ impl ParsedXiidm {
         Ok(())
     }
 
-    fn read_switch(&mut self, attrs: &Attrs, frame: &mut Frame) -> Result<()> {
+    fn read_switch(
+        &mut self,
+        attrs: &Attrs,
+        frame: &mut Frame,
+        diagnostics: &mut Diagnostics,
+    ) -> Result<()> {
         let voltage_level = self.require_voltage_level("switch")?;
         let id = required_text(attrs, "id")?.to_owned();
+        // Versions before 1.8 could write a switch with the same bus or node
+        // at both ends; PowSybl discards such a switch when reading them.
+        if self.version_at_most(XiidmVersion::V1_7) {
+            let same_ends = if attrs.contains_key("bus1") {
+                attrs.get("bus1") == attrs.get("bus2")
+            } else {
+                attrs.get("node1") == attrs.get("node2")
+            };
+            if same_ends {
+                diagnostics.push(
+                    &codes::READ_XIIDM_VERSION_COMPATIBILITY,
+                    format!(
+                        "XIIDM {} switch `{id}` connects one end to itself; PowSybl discards it and so does this reader",
+                        self.namespace.expect("version checked").version.label()
+                    ),
+                );
+                return Ok(());
+            }
+        }
         frame.component = Some(self.register_component("switch", &id, attrs)?);
         let kind = match required_text(attrs, "kind")? {
             "BREAKER" => SwitchKind::Breaker,
@@ -1647,11 +2414,100 @@ impl ParsedXiidm {
         attrs: Attrs,
         frame: &mut Frame,
     ) -> Result<()> {
-        let id = required_text(&attrs, "id")?.to_owned();
-        frame.component = Some(self.register_component(kind.component_type(), &id, &attrs)?);
         let voltage_level = (kind.terminal_count() == 1)
             .then(|| self.require_voltage_level(kind.component_type()))
             .transpose()?;
+        self.read_equipment_in(kind, attrs, frame, voltage_level)
+    }
+
+    /// Read one tie line of IIDM 1.9 or older, which states both boundary
+    /// lines inline: each side's identity, impedance, terminal, and flows
+    /// carry a `_1` or `_2` suffix, and the pairing key is the tie line's
+    /// `ucteXnodeCode`. The two sides become boundary line equipment records
+    /// and the tie line references them as later versions do.
+    fn read_legacy_tie_line(
+        &mut self,
+        attrs: &Attrs,
+        frame: &mut Frame,
+        diagnostics: &mut Diagnostics,
+    ) -> Result<()> {
+        let id = required_text(attrs, "id")?.to_owned();
+        frame.component = Some(self.register_component("tie_line", &id, attrs)?);
+        let pairing_key = attrs.get("ucteXnodeCode").cloned();
+        let mut sides = [0_usize; 2];
+        let mut boundary_ids = [String::new(), String::new()];
+        for side in 1..=2_u8 {
+            let suffix = format!("_{side}");
+            let boundary_id = required_text(attrs, &format!("id{suffix}"))?.to_owned();
+            let voltage_level = required_text(attrs, &format!("voltageLevelId{side}"))?.to_owned();
+            let mut boundary = Attrs::new();
+            boundary.insert("id".to_owned(), boundary_id.clone());
+            if let Some(name) = attrs.get(&format!("name{suffix}")) {
+                boundary.insert("name".to_owned(), name.clone());
+            }
+            if let Some(fictitious) = attrs.get(&format!("fictitious{suffix}")) {
+                boundary.insert("fictitious".to_owned(), fictitious.clone());
+            }
+            boundary.insert("p0".to_owned(), "0".to_owned());
+            boundary.insert("q0".to_owned(), "0".to_owned());
+            for name in ["r", "x"] {
+                boundary.insert(
+                    name.to_owned(),
+                    required_text(attrs, &format!("{name}{suffix}"))?.to_owned(),
+                );
+            }
+            for (name, first, second) in [("g", "g1", "g2"), ("b", "b1", "b2")] {
+                let total = required_f64(attrs, &format!("{first}{suffix}"))?
+                    + required_f64(attrs, &format!("{second}{suffix}"))?;
+                boundary.insert(name.to_owned(), number(total));
+            }
+            if let Some(key) = &pairing_key {
+                boundary.insert("pairingKey".to_owned(), key.clone());
+            }
+            for name in ["bus", "connectableBus", "node", "p", "q"] {
+                if let Some(value) = attrs.get(&format!("{name}{side}")) {
+                    boundary.insert(name.to_owned(), value.clone());
+                }
+            }
+            if attrs.contains_key(&format!("xnodeP{suffix}"))
+                || attrs.contains_key(&format!("xnodeQ{suffix}"))
+            {
+                diagnostics.push(
+                    &codes::READ_XIIDM_FIELD_UNMAPPED,
+                    format!(
+                        "XIIDM tie line `{id}` states boundary flows `xnodeP{suffix}`/`xnodeQ{suffix}`; PowSybl recomputes them from the half lines and fresh output omits them"
+                    ),
+                );
+            }
+            let mut side_frame = Frame::new("danglingLine");
+            self.read_equipment_in(
+                EquipmentKind::BoundaryLine,
+                boundary,
+                &mut side_frame,
+                Some(voltage_level),
+            )?;
+            sides[usize::from(side - 1)] = side_frame.equipment.expect("equipment was read");
+            boundary_ids[usize::from(side - 1)] = boundary_id;
+        }
+        let [boundary_line1, boundary_line2] = boundary_ids;
+        self.tie_lines.push(RawTieLine {
+            id,
+            boundary_line1,
+            boundary_line2,
+        });
+        frame.legacy_tie_sides = Some(sides);
+        Ok(())
+    }
+
+    fn read_equipment_in(
+        &mut self,
+        kind: EquipmentKind,
+        attrs: Attrs,
+        frame: &mut Frame,
+        voltage_level: Option<String>,
+    ) -> Result<()> {
+        let id = required_text(&attrs, "id")?.to_owned();
+        frame.component = Some(self.register_component(kind.component_type(), &id, &attrs)?);
         let equipment_index = self.equipment.len();
         frame.equipment = Some(equipment_index);
         if self
@@ -1867,11 +2723,15 @@ impl ParsedXiidm {
             .last()
             .map(|frame| frame.tag.clone())
             .unwrap_or_default();
-        if matches!(
-            parent.as_str(),
-            "activePowerLimits" | "apparentPowerLimits" | "currentLimits" | "temporaryLimit"
-        ) {
-            let group = self.current_operational_limits_group_mut()?.id.clone();
+        if loading_limit_tag(parent.as_str()).is_some() || parent == "temporaryLimit" {
+            let group = self
+                .current_loading_limit
+                .map(|active| {
+                    self.equipment[active.equipment].operational_limits[active.group]
+                        .id
+                        .clone()
+                })
+                .unwrap_or_default();
             diagnostics.push(
                 &codes::READ_XIIDM_FIELD_UNMAPPED,
                 format!(
@@ -1880,16 +2740,18 @@ impl ParsedXiidm {
             );
             return Ok(());
         }
-        if self.frames.iter().rev().any(|frame| {
-            matches!(
-                frame.tag.as_str(),
-                "operationalLimitsGroup"
-                    | "operationalLimitsGroup1"
-                    | "operationalLimitsGroup2"
-                    | "operationalLimitsGroup3"
-            )
-        }) {
-            self.current_operational_limits_group_mut()?
+        if self
+            .frames
+            .iter()
+            .any(|frame| operational_limits_side(&frame.tag).is_some())
+        {
+            let equipment = self.current_equipment()?;
+            self.equipment[equipment]
+                .operational_limits
+                .last_mut()
+                .ok_or_else(|| {
+                    format_error("operational limits group property has no group parent")
+                })?
                 .properties
                 .insert(name, value);
             return Ok(());
@@ -2031,12 +2893,27 @@ impl ParsedXiidm {
         Ok(())
     }
 
-    fn current_operational_limits_group_mut(&mut self) -> Result<&mut RawOperationalLimitsGroup> {
-        let equipment = self.current_equipment()?;
-        self.equipment[equipment]
-            .operational_limits
-            .last_mut()
-            .ok_or_else(|| format_error("loading limits have no operational limits group parent"))
+    /// The index of the operational limits group that receives loading
+    /// limits stated directly on `equipment` for `side`, created on first
+    /// use.
+    fn implicit_operational_limits_group(&mut self, equipment: usize, side: u8) -> usize {
+        let groups = &mut self.equipment[equipment].operational_limits;
+        if let Some(index) = groups
+            .iter()
+            .position(|group| group.implicit && group.side == side)
+        {
+            return index;
+        }
+        groups.push(RawOperationalLimitsGroup {
+            id: DEFAULT_OPERATIONAL_LIMITS_GROUP.to_owned(),
+            side,
+            implicit: true,
+            properties: BTreeMap::new(),
+            active_power: None,
+            apparent_power: None,
+            current: None,
+        });
+        groups.len() - 1
     }
 
     fn current_tap_mut(&mut self, equipment: usize, active: ActiveTap) -> Result<&mut TapChanger> {
@@ -2123,10 +3000,7 @@ impl ParsedXiidm {
         if tap_tag(tag).is_some() {
             self.current_tap = None;
         }
-        if matches!(
-            tag,
-            "activePowerLimits" | "apparentPowerLimits" | "currentLimits"
-        ) {
+        if loading_limit_tag(tag).is_some() {
             self.current_loading_limit = None;
         }
         let frame = self
@@ -3118,7 +3992,10 @@ fn build_network(parsed: &ParsedXiidm, diagnostics: &mut Diagnostics) -> Result<
         DEFAULT_BASE_MVA,
     );
     *network.case_metadata_mut() = parsed.case_metadata.clone();
-    *network.source_format_mut() = SourceFormat::Xiidm;
+    *network.source_format_mut() = match parsed.encoding {
+        IidmEncoding::Xml => SourceFormat::Xiidm,
+        IidmEncoding::Json => SourceFormat::Jiidm,
+    };
     *network.buses_mut() = buses;
     *network.loads_mut() = loads;
     *network.shunts_mut() = shunts;
@@ -3850,12 +4727,25 @@ impl<'a> BusBuilder<'a> {
                 .get(root)
                 .copied()
                 .cloned()
-                .unwrap_or(RawBus {
-                    id: None,
-                    voltage_level: level.id.clone(),
-                    nodes: group.clone(),
-                    v: None,
-                    angle: None,
+                .unwrap_or_else(|| {
+                    // IIDM 1.0 states the calculated bus voltage on its
+                    // busbar sections; every section of one bus states the
+                    // same value.
+                    let legacy_voltage = self
+                        .parsed
+                        .busbar_sections
+                        .iter()
+                        .filter(|value| {
+                            value.voltage_level == level.id && group.contains(&value.node)
+                        })
+                        .find_map(|value| value.legacy_voltage);
+                    RawBus {
+                        id: None,
+                        voltage_level: level.id.clone(),
+                        nodes: group.clone(),
+                        v: legacy_voltage.map(|(v, _)| v),
+                        angle: legacy_voltage.map(|(_, angle)| angle),
+                    }
                 });
             let local_id = self
                 .parsed
@@ -4557,7 +5447,14 @@ fn selected_operational_limit_group_ids(equipment: &RawEquipment, side: u8) -> R
     if let Some(value) = equipment.attrs.get(&singular_key) {
         return Ok(vec![value.clone()]);
     }
-    Ok(Vec::new())
+    // Limits stated directly on the equipment are the selected limits of
+    // their side.
+    Ok(equipment
+        .operational_limits
+        .iter()
+        .filter(|group| group.implicit && group.side == side)
+        .map(|group| group.id.clone())
+        .collect())
 }
 
 fn parse_operational_limits_group_ids(value: &str) -> Result<Vec<String>> {
@@ -5345,9 +6242,13 @@ fn build_detailed_connectivity(
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    let connectivity_nodes = buses
-        .node_map
-        .iter()
+    // Voltage level then node number: the table order does not depend on
+    // the map's iteration order, so the same network reads the same way from
+    // either encoding and on every run.
+    let mut node_entries = buses.node_map.iter().collect::<Vec<_>>();
+    node_entries.sort_by_key(|(key, _)| *key);
+    let connectivity_nodes = node_entries
+        .into_iter()
         .map(|((voltage_level, node), bus)| {
             Ok(ConnectivityNode {
                 component: node_component_id(voltage_level, *node)?,
@@ -6823,6 +7724,980 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
     write_active_power_control_extensions(network, &|_| true, 2, &mut output)?;
     output.push_str("</iidm:network>\n");
     Ok(TextEmission::new(output, diagnostics))
+}
+
+/// Write the network as PowSybl JIIDM 1.17: the fresh XIIDM 1.17 tree in
+/// PowSybl's JSON layout. Repeated elements become arrays under PowSybl's
+/// plural field names, attributes become typed scalars, and each element's
+/// attributes follow the order PowSybl's sequential JSON reader consumes
+/// them in.
+pub(crate) fn write_jiidm(network: &BalancedNetwork) -> Result<TextEmission> {
+    let emission = write_xiidm(network)?;
+    let text = xiidm_to_jiidm(&emission.text)?;
+    Ok(TextEmission {
+        text,
+        diagnostics: emission.diagnostics,
+        fidelity: emission.fidelity,
+    })
+}
+
+/// One value of the JIIDM output tree. Scalars are stored as their rendered
+/// JSON token.
+enum JsonOut {
+    Scalar(String),
+    Array(Vec<JsonOut>),
+    Object(Vec<(String, JsonOut)>),
+}
+
+/// An XML element under construction while its children are read.
+struct OpenElement {
+    tag: String,
+    attrs: Vec<(String, String)>,
+    namespaces: Vec<String>,
+    content: Option<String>,
+    children: Vec<(String, JsonOut)>,
+}
+
+fn jiidm_emission_error(message: impl Into<String>) -> Error {
+    Error::Emit {
+        format: JSON_FORMAT,
+        message: message.into(),
+    }
+}
+
+fn xiidm_to_jiidm(xml: &str) -> Result<String> {
+    let mut reader = NsReader::from_str(xml);
+    reader.config_mut().trim_text(true);
+    let mut stack: Vec<OpenElement> = Vec::new();
+    let mut root = None;
+    loop {
+        let event = reader
+            .read_event()
+            .map_err(|error| jiidm_emission_error(format!("fresh XIIDM is malformed: {error}")))?;
+        match event {
+            Event::Start(element) => stack.push(open_element(&element, reader.decoder())?),
+            Event::Empty(element) => {
+                let open = open_element(&element, reader.decoder())?;
+                close_element(open, &mut stack, &mut root)?;
+            }
+            Event::End(_) => {
+                let open = stack.pop().ok_or_else(|| {
+                    jiidm_emission_error("fresh XIIDM closes an unopened element")
+                })?;
+                close_element(open, &mut stack, &mut root)?;
+            }
+            Event::Text(text) => {
+                let open = stack.last_mut().ok_or_else(|| {
+                    jiidm_emission_error("fresh XIIDM has text outside an element")
+                })?;
+                let text = text
+                    .decode()
+                    .map_err(|error| jiidm_emission_error(error.to_string()))?;
+                open.content.get_or_insert_with(String::new).push_str(&text);
+            }
+            Event::CData(text) => {
+                let open = stack.last_mut().ok_or_else(|| {
+                    jiidm_emission_error("fresh XIIDM has text outside an element")
+                })?;
+                let text = text
+                    .decode()
+                    .map_err(|error| jiidm_emission_error(error.to_string()))?;
+                open.content.get_or_insert_with(String::new).push_str(&text);
+            }
+            Event::Decl(_) | Event::Comment(_) | Event::PI(_) => {}
+            Event::DocType(_) | Event::GeneralRef(_) => {
+                return Err(jiidm_emission_error(
+                    "fresh XIIDM carries a DTD or entity reference",
+                ));
+            }
+            Event::Eof => break,
+        }
+    }
+    let root = root.ok_or_else(|| jiidm_emission_error("fresh XIIDM has no root element"))?;
+    let mut output = String::new();
+    render_json(&root, 0, &mut output);
+    output.push('\n');
+    Ok(output)
+}
+
+fn open_element(
+    element: &BytesStart<'_>,
+    decoder: quick_xml::encoding::Decoder,
+) -> Result<OpenElement> {
+    let tag = local_name(element.name().as_ref())?;
+    let mut attrs = Vec::new();
+    let mut namespaces = Vec::new();
+    for attribute in element.attributes() {
+        let attribute = attribute.map_err(|error| jiidm_emission_error(error.to_string()))?;
+        let key = std::str::from_utf8(attribute.key.as_ref())
+            .map_err(|error| jiidm_emission_error(error.to_string()))?;
+        let value = attribute
+            .decode_and_unescape_value(decoder)
+            .map_err(|error| jiidm_emission_error(error.to_string()))?
+            .into_owned();
+        if key == "xmlns" || key.starts_with("xmlns:") {
+            namespaces.push(value);
+        } else {
+            attrs.push((local_name(key.as_bytes())?, value));
+        }
+    }
+    Ok(OpenElement {
+        tag,
+        attrs,
+        namespaces,
+        content: None,
+        children: Vec::new(),
+    })
+}
+
+/// Turn a finished element into its JSON object and attach it to its parent:
+/// as one entry of the parent's plural array when PowSybl lists the element,
+/// otherwise as a field named after the element.
+fn close_element(
+    open: OpenElement,
+    stack: &mut [OpenElement],
+    root: &mut Option<JsonOut>,
+) -> Result<()> {
+    let is_root = stack.is_empty();
+    let mut entries = Vec::new();
+    if is_root {
+        entries.push(("version".to_owned(), JsonOut::Scalar(json_string("1.17"))));
+        let extension_versions = open
+            .namespaces
+            .iter()
+            .filter_map(|namespace| {
+                let version = match namespace.as_str() {
+                    ACTIVE_POWER_CONTROL_NAMESPACE_V1_0 => "1.0",
+                    ACTIVE_POWER_CONTROL_NAMESPACE_V1_1 => "1.1",
+                    ACTIVE_POWER_CONTROL_NAMESPACE_V1_2 => "1.2",
+                    _ => return None,
+                };
+                Some(JsonOut::Object(vec![
+                    (
+                        "extensionName".to_owned(),
+                        JsonOut::Scalar(json_string("activePowerControl")),
+                    ),
+                    ("version".to_owned(), JsonOut::Scalar(json_string(version))),
+                ]))
+            })
+            .collect::<Vec<_>>();
+        if !extension_versions.is_empty() {
+            entries.push((
+                "extensionVersions".to_owned(),
+                JsonOut::Array(extension_versions),
+            ));
+        }
+    }
+    let order = jiidm_attribute_order(&open.tag);
+    let rank = |name: &str| {
+        order
+            .iter()
+            .position(|candidate| *candidate == name)
+            .unwrap_or(order.len())
+    };
+    let mut attrs = open.attrs;
+    attrs.sort_by_key(|(name, _)| rank(name));
+    for (name, value) in attrs {
+        let value = jiidm_attribute_value(&open.tag, &name, &value)?;
+        entries.push((name, value));
+    }
+    if let Some(content) = open.content {
+        entries.push(("content".to_owned(), JsonOut::Scalar(json_string(&content))));
+    }
+    entries.extend(open.children);
+    let object = JsonOut::Object(entries);
+    let Some(parent) = stack.last_mut() else {
+        *root = Some(object);
+        return Ok(());
+    };
+    if let Some(array_name) = jiidm_array_name(&open.tag) {
+        if let Some((_, JsonOut::Array(values))) = parent
+            .children
+            .iter_mut()
+            .find(|(name, _)| name == array_name)
+        {
+            values.push(object);
+        } else {
+            parent
+                .children
+                .push((array_name.to_owned(), JsonOut::Array(vec![object])));
+        }
+    } else {
+        parent.children.push((open.tag, object));
+    }
+    Ok(())
+}
+
+const IDENTIFIABLE_ATTRIBUTES: [&str; 3] = ["id", "name", "fictitious"];
+
+/// The attribute order PowSybl's sequential JSON reader consumes for each
+/// element. Attributes the table does not name follow the named ones in
+/// document order.
+fn jiidm_attribute_order(tag: &str) -> &'static [&'static str] {
+    match tag {
+        "network" => &[
+            "id",
+            "caseDate",
+            "forecastDistance",
+            "sourceFormat",
+            "minimumValidationLevel",
+        ],
+        "substation" => &[
+            "id",
+            "name",
+            "fictitious",
+            "country",
+            "tso",
+            "geographicalTags",
+        ],
+        "voltageLevel" => &[
+            "id",
+            "name",
+            "fictitious",
+            "nominalV",
+            "lowVoltageLimit",
+            "highVoltageLimit",
+            "topologyKind",
+        ],
+        "bus" => &[
+            "id",
+            "name",
+            "fictitious",
+            "v",
+            "angle",
+            "fictitiousP0",
+            "fictitiousQ0",
+            "nodes",
+        ],
+        "busbarSection" => &["id", "name", "fictitious", "node"],
+        "switch" => &[
+            "id",
+            "name",
+            "fictitious",
+            "kind",
+            "retained",
+            "open",
+            "node1",
+            "node2",
+            "bus1",
+            "bus2",
+        ],
+        "internalConnection" => &["node1", "node2"],
+        "inj" => &["node", "fictitiousP0", "fictitiousQ0"],
+        "load" => &[
+            "id",
+            "name",
+            "fictitious",
+            "loadType",
+            "p0",
+            "q0",
+            "node",
+            "bus",
+            "connectableBus",
+            "p",
+            "q",
+        ],
+        "generator" => &[
+            "id",
+            "name",
+            "fictitious",
+            "energySource",
+            "minP",
+            "maxP",
+            "ratedS",
+            "voltageRegulatorOn",
+            "targetP",
+            "targetV",
+            "targetQ",
+            "isCondenser",
+            "equivalentLocalTargetV",
+            "node",
+            "bus",
+            "connectableBus",
+            "p",
+            "q",
+        ],
+        "battery" => &[
+            "id",
+            "name",
+            "fictitious",
+            "targetP",
+            "targetQ",
+            "minP",
+            "maxP",
+            "node",
+            "bus",
+            "connectableBus",
+            "p",
+            "q",
+        ],
+        "shuntCompensator" => &[
+            "id",
+            "name",
+            "fictitious",
+            "sectionCount",
+            "solvedSectionCount",
+            "voltageRegulatorOn",
+            "targetV",
+            "targetDeadband",
+            "node",
+            "bus",
+            "connectableBus",
+            "p",
+            "q",
+        ],
+        "staticVarCompensator" => &[
+            "id",
+            "name",
+            "fictitious",
+            "bMin",
+            "bMax",
+            "voltageSetpoint",
+            "reactivePowerSetpoint",
+            "regulationMode",
+            "regulating",
+            "node",
+            "bus",
+            "connectableBus",
+            "p",
+            "q",
+        ],
+        "boundaryLine" => &[
+            "id",
+            "name",
+            "fictitious",
+            "p0",
+            "q0",
+            "r",
+            "x",
+            "g",
+            "b",
+            "generationVoltageRegulationOn",
+            "generationMinP",
+            "generationMaxP",
+            "generationTargetP",
+            "generationTargetV",
+            "generationTargetQ",
+            "node",
+            "bus",
+            "connectableBus",
+            "pairingKey",
+            "p",
+            "q",
+            "selectedOperationalLimitsGroupIds",
+        ],
+        "line" => &[
+            "id",
+            "name",
+            "fictitious",
+            "r",
+            "x",
+            "g1",
+            "b1",
+            "g2",
+            "b2",
+            "voltageLevelId1",
+            "node1",
+            "bus1",
+            "connectableBus1",
+            "voltageLevelId2",
+            "node2",
+            "bus2",
+            "connectableBus2",
+            "p1",
+            "q1",
+            "p2",
+            "q2",
+            "selectedOperationalLimitsGroupIds1",
+            "selectedOperationalLimitsGroupIds2",
+        ],
+        "twoWindingsTransformer" => &[
+            "id",
+            "name",
+            "fictitious",
+            "r",
+            "x",
+            "g",
+            "b",
+            "ratedU1",
+            "ratedU2",
+            "ratedS",
+            "voltageLevelId1",
+            "node1",
+            "bus1",
+            "connectableBus1",
+            "voltageLevelId2",
+            "node2",
+            "bus2",
+            "connectableBus2",
+            "p1",
+            "q1",
+            "p2",
+            "q2",
+            "selectedOperationalLimitsGroupIds1",
+            "selectedOperationalLimitsGroupIds2",
+        ],
+        "threeWindingsTransformer" => &[
+            "id",
+            "name",
+            "fictitious",
+            "r1",
+            "x1",
+            "g1",
+            "b1",
+            "ratedU1",
+            "ratedS1",
+            "r2",
+            "x2",
+            "g2",
+            "b2",
+            "ratedU2",
+            "ratedS2",
+            "r3",
+            "x3",
+            "g3",
+            "b3",
+            "ratedU3",
+            "ratedS3",
+            "ratedU0",
+            "voltageLevelId1",
+            "node1",
+            "bus1",
+            "connectableBus1",
+            "voltageLevelId2",
+            "node2",
+            "bus2",
+            "connectableBus2",
+            "voltageLevelId3",
+            "node3",
+            "bus3",
+            "connectableBus3",
+            "p1",
+            "q1",
+            "p2",
+            "q2",
+            "p3",
+            "q3",
+            "selectedOperationalLimitsGroupIds1",
+            "selectedOperationalLimitsGroupIds2",
+            "selectedOperationalLimitsGroupIds3",
+        ],
+        "ratioTapChanger" | "ratioTapChanger1" | "ratioTapChanger2" | "ratioTapChanger3"
+        | "phaseTapChanger" | "phaseTapChanger1" | "phaseTapChanger2" | "phaseTapChanger3" => &[
+            "regulating",
+            "lowTapPosition",
+            "tapPosition",
+            "solvedTapPosition",
+            "targetDeadband",
+            "loadTapChangingCapabilities",
+            "regulationMode",
+            "regulationValue",
+        ],
+        "step" => &["r", "x", "g", "b", "rho", "alpha"],
+        "terminalRef" | "regulatingTerminal" | "pccTerminal" => &["id", "side", "number"],
+        "minMaxReactiveLimits" => &["minQ", "maxQ"],
+        "point" => &["p", "minQ", "maxQ"],
+        "shuntLinearModel" => &["bPerSection", "gPerSection", "maximumSectionCount"],
+        "section" => &["b", "g"],
+        "exponentialModel" => &["np", "nq"],
+        "zipModel" => &["c0p", "c1p", "c2p", "c0q", "c1q", "c2q"],
+        "operationalLimitsGroup"
+        | "operationalLimitsGroup1"
+        | "operationalLimitsGroup2"
+        | "operationalLimitsGroup3"
+        | "voltageLevelRef"
+        | "boundaryRef"
+        | "extension" => &["id"],
+        "currentLimits" | "activePowerLimits" | "apparentPowerLimits" => {
+            &["permanentLimitName", "permanentLimit"]
+        }
+        "temporaryLimit" => &["name", "acceptableDuration", "value", "fictitious"],
+        "property" => &["name", "value"],
+        "alias" => &["type"],
+        "hvdcLine" => &[
+            "id",
+            "name",
+            "fictitious",
+            "r",
+            "nominalV",
+            "convertersMode",
+            "activePowerSetpoint",
+            "maxP",
+            "converterStation1",
+            "converterStation2",
+        ],
+        "vscConverterStation" => &[
+            "id",
+            "name",
+            "fictitious",
+            "voltageRegulatorOn",
+            "lossFactor",
+            "voltageSetpoint",
+            "reactivePowerSetpoint",
+            "node",
+            "bus",
+            "connectableBus",
+            "p",
+            "q",
+        ],
+        "lccConverterStation" => &[
+            "id",
+            "name",
+            "fictitious",
+            "lossFactor",
+            "powerFactor",
+            "node",
+            "bus",
+            "connectableBus",
+            "p",
+            "q",
+        ],
+        "area" => &["id", "name", "fictitious", "areaType", "interchangeTarget"],
+        "areaBoundary" => &["ac", "type"],
+        "dcNode" => &["id", "name", "fictitious", "nominalV", "v"],
+        "dcGround" => &[
+            "id",
+            "name",
+            "fictitious",
+            "dcNode",
+            "r",
+            "connected",
+            "dcP",
+            "dcI",
+        ],
+        "dcLine" => &[
+            "id",
+            "name",
+            "fictitious",
+            "dcNode1",
+            "dcNode2",
+            "r",
+            "connected1",
+            "connected2",
+            "dcP1",
+            "dcI1",
+            "dcP2",
+            "dcI2",
+        ],
+        "dcSwitch" => &[
+            "id",
+            "name",
+            "fictitious",
+            "dcNode1",
+            "dcNode2",
+            "kind",
+            "open",
+            "r",
+        ],
+        "voltageSourceConverter" => &[
+            "id",
+            "name",
+            "fictitious",
+            "dcNode1",
+            "dcConnected1",
+            "dcNode2",
+            "dcConnected2",
+            "idleLoss",
+            "switchingLoss",
+            "resistiveLoss",
+            "controlMode",
+            "targetP",
+            "targetVdc",
+            "node1",
+            "node2",
+            "bus1",
+            "connectableBus1",
+            "bus2",
+            "connectableBus2",
+            "voltageRegulatorOn",
+            "voltageSetpoint",
+            "reactivePowerSetpoint",
+            "p1",
+            "q1",
+            "p2",
+            "q2",
+            "dcP1",
+            "dcI1",
+            "dcP2",
+            "dcI2",
+        ],
+        "lineCommutatedConverter" => &[
+            "id",
+            "name",
+            "fictitious",
+            "dcNode1",
+            "dcConnected1",
+            "dcNode2",
+            "dcConnected2",
+            "idleLoss",
+            "switchingLoss",
+            "resistiveLoss",
+            "controlMode",
+            "targetP",
+            "targetVdc",
+            "node1",
+            "node2",
+            "bus1",
+            "connectableBus1",
+            "bus2",
+            "connectableBus2",
+            "reactiveModel",
+            "powerFactor",
+            "p1",
+            "q1",
+            "p2",
+            "q2",
+            "dcP1",
+            "dcI1",
+            "dcP2",
+            "dcI2",
+        ],
+        "activePowerControl" => &[
+            "participate",
+            "droop",
+            "participationFactor",
+            "maxTargetP",
+            "minTargetP",
+        ],
+        "tieLine" => &[
+            "id",
+            "name",
+            "fictitious",
+            "boundaryLineId1",
+            "boundaryLineId2",
+        ],
+        "segment" => &["minV", "maxV", "k"],
+        _ => &IDENTIFIABLE_ATTRIBUTES,
+    }
+}
+
+/// The JSON token for one XML attribute, typed the way PowSybl's JSON
+/// reader consumes that attribute: strings, booleans, integers, integer
+/// arrays, string arrays, or numbers. An attribute the table does not know
+/// refuses emission rather than guessing a type PowSybl would reject.
+fn jiidm_attribute_value(tag: &str, name: &str, text: &str) -> Result<JsonOut> {
+    let scalar = |token: String| Ok(JsonOut::Scalar(token));
+    match name {
+        "value" if tag == "property" => return scalar(json_string(text)),
+        "id"
+        | "name"
+        | "country"
+        | "tso"
+        | "kind"
+        | "bus"
+        | "bus1"
+        | "bus2"
+        | "bus3"
+        | "connectableBus"
+        | "connectableBus1"
+        | "connectableBus2"
+        | "connectableBus3"
+        | "voltageLevelId1"
+        | "voltageLevelId2"
+        | "voltageLevelId3"
+        | "topologyKind"
+        | "energySource"
+        | "loadType"
+        | "regulationMode"
+        | "caseDate"
+        | "sourceFormat"
+        | "minimumValidationLevel"
+        | "areaType"
+        | "dcNode"
+        | "dcNode1"
+        | "dcNode2"
+        | "boundaryLineId1"
+        | "boundaryLineId2"
+        | "converterStation1"
+        | "converterStation2"
+        | "convertersMode"
+        | "side"
+        | "number"
+        | "type"
+        | "permanentLimitName"
+        | "pairingKey"
+        | "controlMode"
+        | "reactiveModel" => return scalar(json_string(text)),
+        "open"
+        | "retained"
+        | "fictitious"
+        | "voltageRegulatorOn"
+        | "regulating"
+        | "loadTapChangingCapabilities"
+        | "connected"
+        | "connected1"
+        | "connected2"
+        | "dcConnected1"
+        | "dcConnected2"
+        | "participate"
+        | "generationVoltageRegulationOn"
+        | "isCondenser"
+        | "ac" => {
+            return match text {
+                "true" | "false" => scalar(text.to_owned()),
+                _ => Err(jiidm_emission_error(format!(
+                    "attribute `{name}` on `{tag}` is not a boolean: `{text}`"
+                ))),
+            };
+        }
+        "node"
+        | "node1"
+        | "node2"
+        | "node3"
+        | "forecastDistance"
+        | "tapPosition"
+        | "lowTapPosition"
+        | "solvedTapPosition"
+        | "sectionCount"
+        | "maximumSectionCount"
+        | "acceptableDuration"
+        | "solvedSectionCount" => {
+            return text
+                .parse::<i64>()
+                .map(|value| JsonOut::Scalar(value.to_string()))
+                .map_err(|_| {
+                    jiidm_emission_error(format!(
+                        "attribute `{name}` on `{tag}` is not an integer: `{text}`"
+                    ))
+                });
+        }
+        "nodes" => {
+            let values = text
+                .split(',')
+                .map(|value| {
+                    value
+                        .trim()
+                        .parse::<i64>()
+                        .map(|value| JsonOut::Scalar(value.to_string()))
+                        .map_err(|_| {
+                            jiidm_emission_error(format!(
+                                "attribute `nodes` on `{tag}` is not an integer list: `{text}`"
+                            ))
+                        })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            return Ok(JsonOut::Array(values));
+        }
+        "geographicalTags"
+        | "selectedOperationalLimitsGroupIds"
+        | "selectedOperationalLimitsGroupIds1"
+        | "selectedOperationalLimitsGroupIds2"
+        | "selectedOperationalLimitsGroupIds3" => {
+            let values = parse_operational_limits_group_ids(text)?
+                .into_iter()
+                .map(|value| JsonOut::Scalar(json_string(&value)))
+                .collect();
+            return Ok(JsonOut::Array(values));
+        }
+        "r"
+        | "x"
+        | "g"
+        | "b"
+        | "g1"
+        | "b1"
+        | "g2"
+        | "b2"
+        | "g3"
+        | "b3"
+        | "r1"
+        | "x1"
+        | "r2"
+        | "x2"
+        | "r3"
+        | "x3"
+        | "ratedU0"
+        | "ratedU1"
+        | "ratedU2"
+        | "ratedU3"
+        | "ratedS"
+        | "ratedS1"
+        | "ratedS2"
+        | "ratedS3"
+        | "nominalV"
+        | "lowVoltageLimit"
+        | "highVoltageLimit"
+        | "v"
+        | "angle"
+        | "p"
+        | "q"
+        | "p1"
+        | "q1"
+        | "p2"
+        | "q2"
+        | "p3"
+        | "q3"
+        | "p0"
+        | "q0"
+        | "targetP"
+        | "targetQ"
+        | "targetV"
+        | "targetDeadband"
+        | "minP"
+        | "maxP"
+        | "minQ"
+        | "maxQ"
+        | "bMin"
+        | "bMax"
+        | "voltageSetpoint"
+        | "reactivePowerSetpoint"
+        | "activePowerSetpoint"
+        | "permanentLimit"
+        | "rho"
+        | "alpha"
+        | "bPerSection"
+        | "gPerSection"
+        | "np"
+        | "nq"
+        | "c0p"
+        | "c1p"
+        | "c2p"
+        | "c0q"
+        | "c1q"
+        | "c2q"
+        | "interchangeTarget"
+        | "regulationValue"
+        | "lossFactor"
+        | "powerFactor"
+        | "idleLoss"
+        | "switchingLoss"
+        | "resistiveLoss"
+        | "targetVdc"
+        | "dcP"
+        | "dcI"
+        | "dcP1"
+        | "dcI1"
+        | "dcP2"
+        | "dcI2"
+        | "k"
+        | "minV"
+        | "maxV"
+        | "droop"
+        | "participationFactor"
+        | "minTargetP"
+        | "maxTargetP"
+        | "generationMinP"
+        | "generationMaxP"
+        | "generationTargetP"
+        | "generationTargetQ"
+        | "generationTargetV"
+        | "fictitiousP0"
+        | "fictitiousQ0"
+        | "equivalentLocalTargetV"
+        | "value" => {}
+        _ => {
+            return Err(jiidm_emission_error(format!(
+                "attribute `{name}` on `{tag}` has no JIIDM type"
+            )));
+        }
+    }
+    json_number(text).map(JsonOut::Scalar).ok_or_else(|| {
+        jiidm_emission_error(format!(
+            "attribute `{name}` on `{tag}` is not a finite number: `{text}`"
+        ))
+    })
+}
+
+/// The JSON number token for XML attribute text: the text itself when it is
+/// already a JSON number literal, otherwise the shortest decimal that names
+/// the same finite value.
+fn json_number(text: &str) -> Option<String> {
+    let value: f64 = text.parse().ok()?;
+    if !value.is_finite() {
+        return None;
+    }
+    let mut rest = text.strip_prefix('-').unwrap_or(text);
+    let integer = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    if integer == 0 || (integer > 1 && rest.starts_with('0')) {
+        return Some(value.to_string());
+    }
+    rest = &rest[integer..];
+    if let Some(fraction) = rest.strip_prefix('.') {
+        let digits = fraction.len()
+            - fraction
+                .trim_start_matches(|c: char| c.is_ascii_digit())
+                .len();
+        if digits == 0 {
+            return Some(value.to_string());
+        }
+        rest = &fraction[digits..];
+    }
+    if let Some(exponent) = rest.strip_prefix(['e', 'E']) {
+        let exponent = exponent.strip_prefix(['+', '-']).unwrap_or(exponent);
+        if exponent.is_empty() || !exponent.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Some(value.to_string());
+        }
+        rest = "";
+    }
+    Some(if rest.is_empty() {
+        text.to_owned()
+    } else {
+        value.to_string()
+    })
+}
+
+fn json_string(text: &str) -> String {
+    let mut output = String::with_capacity(text.len() + 2);
+    output.push('"');
+    for character in text.chars() {
+        match character {
+            '"' => output.push_str("\\\""),
+            '\\' => output.push_str("\\\\"),
+            '\n' => output.push_str("\\n"),
+            '\r' => output.push_str("\\r"),
+            '\t' => output.push_str("\\t"),
+            control if (control as u32) < 0x20 => {
+                output.push_str(&format!("\\u{:04x}", control as u32));
+            }
+            other => output.push(other),
+        }
+    }
+    output.push('"');
+    output
+}
+
+/// Render a value the way PowSybl's pretty printer lays JIIDM out: two space
+/// indentation, `"key" : value`, and arrays inline as `[ a, b ]`.
+fn render_json(value: &JsonOut, indent: usize, output: &mut String) {
+    match value {
+        JsonOut::Scalar(token) => output.push_str(token),
+        JsonOut::Array(values) => {
+            if values.is_empty() {
+                output.push_str("[ ]");
+                return;
+            }
+            output.push_str("[ ");
+            for (position, value) in values.iter().enumerate() {
+                if position > 0 {
+                    output.push_str(", ");
+                }
+                render_json(value, indent, output);
+            }
+            output.push_str(" ]");
+        }
+        JsonOut::Object(entries) => {
+            if entries.is_empty() {
+                output.push_str("{ }");
+                return;
+            }
+            output.push_str("{\n");
+            for (position, (key, value)) in entries.iter().enumerate() {
+                if position > 0 {
+                    output.push_str(",\n");
+                }
+                for _ in 0..indent + 2 {
+                    output.push(' ');
+                }
+                output.push_str(&json_string(key));
+                output.push_str(" : ");
+                render_json(value, indent + 2, output);
+            }
+            output.push('\n');
+            for _ in 0..indent {
+                output.push(' ');
+            }
+            output.push('}');
+        }
+    }
 }
 
 fn write_subnetwork(
@@ -10461,13 +12336,13 @@ fn injection_solution_attributes(
     }
 }
 
+/// The shortest decimal that reads back to exactly `value`, without an
+/// exponent, so a value survives emission and a second read unchanged.
 fn number(value: f64) -> String {
-    let value = format!("{value:.17}");
-    let value = value.trim_end_matches('0').trim_end_matches('.');
-    if value.is_empty() || value == "-0" {
+    if value == 0.0 {
         "0".to_owned()
     } else {
-        value.to_owned()
+        value.to_string()
     }
 }
 
@@ -11402,14 +13277,14 @@ mod tests {
 
     #[test]
     fn refuses_unverified_xiidm_versions_with_a_structured_diagnostic() {
-        let source = NODE_BREAKER.replace(NAMESPACE, "http://www.powsybl.org/schema/iidm/1_11");
+        let source = NODE_BREAKER.replace(NAMESPACE, "http://www.powsybl.org/schema/iidm/1_18");
         assert!(looks_like_xiidm(source.as_bytes()));
         let mut diagnostics = Diagnostics::new();
         let error = parse_xiidm_source(&source, &mut diagnostics).unwrap_err();
         assert!(
             error
                 .to_string()
-                .contains("supported input versions are 1.12 through 1.17")
+                .contains("supported input versions are 1.0 through 1.17")
         );
         assert!(
             diagnostics
@@ -12971,5 +14846,167 @@ mod tests {
         );
         let error = parse_xiidm_source(&nested, &mut Diagnostics::new()).unwrap_err();
         assert!(error.to_string().contains("only one level"));
+    }
+
+    #[test]
+    fn jiidm_is_recognized_by_its_leading_version_field() {
+        assert!(looks_like_jiidm(
+            "{\n  \"version\" : \"1.17\",\n  \"id\" : \"x\"}"
+        ));
+        assert!(looks_like_jiidm("\u{feff}{\"version\":\"1.0\"}"));
+        assert!(!looks_like_jiidm("{\"id\":\"x\",\"version\":\"1.17\"}"));
+        assert!(!looks_like_jiidm("{\"version\":\"3.2.2\"}"));
+        assert!(!looks_like_jiidm("{\"version\":1}"));
+        assert!(!looks_like_jiidm("[{\"version\":\"1.17\"}]"));
+    }
+
+    #[test]
+    fn json_numbers_pass_through_or_shorten() {
+        assert_eq!(json_number("24").as_deref(), Some("24"));
+        assert_eq!(json_number("-9999.99").as_deref(), Some("-9999.99"));
+        assert_eq!(json_number("1.93E-4").as_deref(), Some("1.93E-4"));
+        assert_eq!(json_number("007").as_deref(), Some("7"));
+        assert_eq!(json_number("5.").as_deref(), Some("5"));
+        assert_eq!(json_number(".5").as_deref(), Some("0.5"));
+        assert_eq!(json_number("NaN"), None);
+        assert_eq!(json_number("inf"), None);
+    }
+
+    #[test]
+    fn jiidm_extensions_and_unknown_versions_follow_the_xml_rules() {
+        let document = r#"{
+  "version" : "1.13",
+  "extensionVersions" : [ {
+    "extensionName" : "activePowerControl",
+    "version" : "1.1"
+  } ],
+  "id" : "sim1",
+  "caseDate" : "2013-01-15T18:45:00.000+01:00",
+  "forecastDistance" : 0,
+  "sourceFormat" : "test",
+  "minimumValidationLevel" : "STEADY_STATE_HYPOTHESIS",
+  "substations" : [ {
+    "id" : "P1",
+    "voltageLevels" : [ {
+      "id" : "VL",
+      "nominalV" : 24.0,
+      "topologyKind" : "BUS_BREAKER",
+      "busBreakerTopology" : {
+        "buses" : [ { "id" : "B", "v" : 24.5, "angle" : 0.0 } ]
+      },
+      "generators" : [ {
+        "id" : "GEN",
+        "energySource" : "OTHER",
+        "minP" : 0.0,
+        "maxP" : 100.0,
+        "voltageRegulatorOn" : true,
+        "targetP" : 50.0,
+        "targetV" : 24.5,
+        "bus" : "B",
+        "connectableBus" : "B",
+        "minMaxReactiveLimits" : { "minQ" : -10.0, "maxQ" : 10.0 }
+      } ]
+    } ]
+  } ],
+  "extensions" : [ {
+    "id" : "GEN",
+    "position" : { "feeder" : { "direction" : "BOTTOM", "order" : [ 1, 2 ] } },
+    "activePowerControl" : { "participate" : true, "droop" : 2.0, "participationFactor" : 1.5 }
+  } ]
+}"#;
+        let mut diagnostics = Diagnostics::new();
+        let network = parse_jiidm_source(document, &mut diagnostics).unwrap();
+        assert_eq!(network.source_format(), SourceFormat::Jiidm);
+        assert_eq!(network.buses().len(), 1);
+        let control = network.generators()[0]
+            .active_power_control
+            .as_ref()
+            .unwrap();
+        assert!(control.participate);
+        assert_eq!(control.droop_percent, Some(2.0));
+        assert_eq!(control.participation_factor, Some(1.5));
+        let messages = diagnostics
+            .records()
+            .iter()
+            .map(|diagnostic| format!("{}: {}", diagnostic.code(), diagnostic.message()))
+            .collect::<Vec<_>>();
+        assert!(messages.iter().any(|message| {
+            message.starts_with("READ.XIIDM.ELEMENT_UNMAPPED")
+                && message.contains("`position` on `GEN`")
+        }));
+        assert!(messages.iter().any(|message| {
+            message.starts_with("READ.XIIDM.VERSION.COMPATIBILITY") && message.contains("1.13")
+        }));
+
+        let unsupported = document.replacen("\"version\" : \"1.13\"", "\"version\" : \"1.18\"", 1);
+        let mut diagnostics = Diagnostics::new();
+        let error = parse_jiidm_source(&unsupported, &mut diagnostics).unwrap_err();
+        assert!(error.to_string().contains("1.0 through 1.17"));
+        assert!(
+            diagnostics
+                .records()
+                .iter()
+                .any(|diagnostic| diagnostic.code() == "PARSE.XIIDM.VERSION_UNSUPPORTED")
+        );
+
+        let fresh = write_jiidm(&network).unwrap();
+        assert!(fresh.text.contains("\"extensionVersions\" : [ {"));
+        assert!(
+            fresh
+                .text
+                .contains("\"extensionName\" : \"activePowerControl\"")
+        );
+        let reread = parse_jiidm_source(&fresh.text, &mut Diagnostics::new()).unwrap();
+        assert_eq!(
+            reread.generators()[0].active_power_control,
+            network.generators()[0].active_power_control
+        );
+    }
+
+    #[test]
+    fn pre_1_8_self_connected_switches_and_unregulated_shunts_are_read_as_powsybl_does() {
+        let source = r#"<?xml version="1.0" encoding="UTF-8"?>
+<iidm:network xmlns:iidm="http://www.powsybl.org/schema/iidm/1_1" id="legacy" caseDate="2019-01-01T00:00:00Z" forecastDistance="0" sourceFormat="test">
+  <iidm:substation id="S" country="FR">
+    <iidm:voltageLevel id="VL" nominalV="380.0" topologyKind="BUS_BREAKER">
+      <iidm:busBreakerTopology>
+        <iidm:bus id="B1"/>
+        <iidm:bus id="B2"/>
+        <iidm:switch id="SELF" kind="BREAKER" retained="true" open="false" bus1="B1" bus2="B1"/>
+        <iidm:switch id="SW" kind="BREAKER" retained="true" open="false" bus1="B1" bus2="B2"/>
+      </iidm:busBreakerTopology>
+      <iidm:generator id="G" energySource="OTHER" minP="0.0" maxP="100.0" voltageRegulatorOn="true" targetP="10.0" targetV="380.0" bus="B1" connectableBus="B1">
+        <iidm:minMaxReactiveLimits minQ="-10.0" maxQ="10.0"/>
+      </iidm:generator>
+      <iidm:shunt id="SH" bPerSection="1.0E-5" maximumSectionCount="2" currentSectionCount="1" bus="B2" connectableBus="B2"/>
+      <iidm:load id="L" loadType="UNDEFINED" p0="5.0" q0="1.0" bus="B2" connectableBus="B2"/>
+    </iidm:voltageLevel>
+  </iidm:substation>
+</iidm:network>"#;
+        let mut diagnostics = Diagnostics::new();
+        let network = parse_xiidm_source(source, &mut diagnostics).unwrap();
+        let switches = network
+            .detailed_connectivity()
+            .as_ref()
+            .unwrap()
+            .switches
+            .iter()
+            .map(|switch| switch.component.local_id().to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(switches, vec!["SW".to_owned()]);
+        assert!(diagnostics.records().iter().any(|diagnostic| {
+            diagnostic.code() == "READ.XIIDM.VERSION.COMPATIBILITY"
+                && diagnostic.message().contains("`SELF`")
+        }));
+        let shunt = &network.shunts()[0];
+        assert_eq!(shunt.section_count, Some(1));
+        assert_f64_close(shunt.b, 1.0e-5 * 380.0 * 380.0);
+        assert!(
+            shunt
+                .control
+                .as_ref()
+                .is_none_or(|control| control.mode == SwitchedShuntMode::Locked)
+        );
+        assert!(write_xiidm(&network).unwrap().text.contains(NAMESPACE));
     }
 }

@@ -3,7 +3,7 @@
 //! Each format module owns its parser and/or serializer: MATPOWER `.m`,
 //! PowerModels JSON, PSS/E `.raw`, PowerWorld `.aux`, egret `ModelData` JSON,
 //! pandapower JSON, PyPSA CSV folders, PSLF `.epc`, PSS/E RAWX 35, PowSybl
-//! XIIDM 1.12 through 1.17, CIM CGMES 2.4.15 and 3.0, GO Challenge 3 JSON,
+//! XIIDM and JIIDM 1.0 through 1.17, CIM CGMES 2.4.15 and 3.0, GO Challenge 3 JSON,
 //! Surge JSON, and
 //! DeepMind OPFData JSON. PowerWorld `.pwb` cases and OPFData JSON are input
 //! only. GO Challenge 3 defines a calculation rather than a bare network, so
@@ -88,7 +88,7 @@ pub(crate) use pslf::write_pslf;
 pub(crate) use psse::write_psse_rev;
 pub(crate) use rawx::write_rawx;
 pub(crate) use surge::write_surge_json;
-pub(crate) use xiidm::write_xiidm;
+pub(crate) use xiidm::{write_jiidm, write_xiidm};
 
 /// A target case format. See [`emit`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,6 +123,8 @@ pub enum TargetFormat {
     DeepMindOpfDataJson,
     /// PowSybl XIIDM XML, version 1.17.
     Xiidm,
+    /// PowSybl JIIDM JSON, version 1.17.
+    Jiidm,
     /// IEC CIM Common Grid Model Exchange Specification profile set.
     Cgmes,
 }
@@ -144,6 +146,7 @@ impl TargetFormat {
             TargetFormat::Matpower => "m",
             TargetFormat::Pslf => "epc",
             TargetFormat::Xiidm => "xiidm",
+            TargetFormat::Jiidm => "jiidm",
             TargetFormat::Cgmes => "xml",
         }
     }
@@ -164,6 +167,7 @@ impl TargetFormat {
             TargetFormat::SurgeJson => "Surge JSON",
             TargetFormat::DeepMindOpfDataJson => "DeepMind OPFData JSON",
             TargetFormat::Xiidm => "XIIDM 1.17 XML",
+            TargetFormat::Jiidm => "JIIDM 1.17 JSON",
             TargetFormat::Cgmes => "CGMES 3.0 profile set",
         }
     }
@@ -186,6 +190,7 @@ impl TargetFormat {
             TargetFormat::SurgeJson => "surge-json",
             TargetFormat::DeepMindOpfDataJson => "opfdata-json",
             TargetFormat::Xiidm => "xiidm",
+            TargetFormat::Jiidm => "jiidm",
             TargetFormat::Cgmes => "cgmes",
         }
     }
@@ -277,8 +282,8 @@ pub fn parse_display_format(name: &str) -> Option<DisplayFormat> {
 /// if unrecognized. Accepts `matpower`/`m`, `powermodels-json`/`powermodels`/`pm`,
 /// `egret-json`/`egret`, `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`,
 /// `powerworld`/`aux`, `pslf`/`epc`, `goc3-json`/`goc3`, and
-/// `surge-json`/`surge`, `opfdata-json`/`opfdata`/`gridopt`, `xiidm`, and
-/// `cgmes`.
+/// `surge-json`/`surge`, `opfdata-json`/`opfdata`/`gridopt`, `xiidm`, `jiidm`,
+/// and `cgmes`.
 /// Case-insensitive. The one place the bindings (Python, C ABI) share, so a new
 /// format means one new arm here, not three. CGMES emits a profile directory;
 /// PyPSA CSV folders, GridFM datasets, and PowerWorld `.pwb` are routed by
@@ -310,6 +315,7 @@ pub fn parse_target_format(name: &str) -> Option<TargetFormat> {
         TransmissionFormat::SurgeJson => TargetFormat::SurgeJson,
         TransmissionFormat::DeepMindOpfDataJson => TargetFormat::DeepMindOpfDataJson,
         TransmissionFormat::Xiidm => TargetFormat::Xiidm,
+        TransmissionFormat::Jiidm => TargetFormat::Jiidm,
         TransmissionFormat::Cgmes => TargetFormat::Cgmes,
         TransmissionFormat::PypsaCsv | TransmissionFormat::Pwb | TransmissionFormat::Gridfm => {
             return None;
@@ -541,6 +547,18 @@ pub fn parse_with_json_class(
         || source
             .primary_buffer()
             .is_ok_and(|buffer| xiidm::looks_like_xiidm(buffer.content_bytes()));
+    let is_jiidm = source.format().is_some_and(|format| {
+        routing::parse_transmission_format(format.as_str()) == Some(TransmissionFormat::Jiidm)
+    }) || std::path::Path::new(source.name())
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("jiidm"))
+        || matches!(
+            json_class,
+            Some(routing::JsonClass::Case(routing::Detection::Known(
+                routing::SourceFormat::Transmission(TransmissionFormat::Jiidm)
+            )))
+        );
     let is_cgmes = source.format().is_some_and(|format| {
         routing::parse_transmission_format(format.as_str()) == Some(TransmissionFormat::Cgmes)
     }) || cgmes::looks_like_profile_set(&source);
@@ -555,6 +573,11 @@ pub fn parse_with_json_class(
                 source.with_format(
                     powerio_core::FormatId::new("psse-rawx")
                         .expect("the canonical RAWX token is valid"),
+                )
+            } else if is_jiidm {
+                source.with_format(
+                    powerio_core::FormatId::new("jiidm")
+                        .expect("the canonical JIIDM token is valid"),
                 )
             } else if is_xiidm {
                 source.with_format(
@@ -717,6 +740,7 @@ fn parse_to_network(
                 Some("rawx") => Some(TargetFormat::PsseRawx),
                 Some("aux") => Some(TargetFormat::PowerWorld),
                 Some("xiidm") => Some(TargetFormat::Xiidm),
+                Some("jiidm") => Some(TargetFormat::Jiidm),
                 Some("xml") if looks_like_xiidm => Some(TargetFormat::Xiidm),
                 Some("xml" | "zip") => Some(TargetFormat::Cgmes),
                 Some("json") => None,
@@ -834,6 +858,7 @@ fn read_source(
             opfdata::parse_opfdata_source(text, name_hint, warnings)
         }
         TargetFormat::Xiidm => xiidm::parse_xiidm_source(text, warnings),
+        TargetFormat::Jiidm => xiidm::parse_jiidm_source(text, warnings),
         TargetFormat::Cgmes => {
             cgmes::parse_text(name_hint.unwrap_or("profile.xml"), text, warnings)
         }
@@ -895,10 +920,12 @@ pub(crate) fn reject_empty_case(net: &BalancedNetwork, format: &'static str) -> 
             || !detailed.dc_lines.is_empty()
             || !detailed.dc_switches.is_empty()
     });
-    let has_empty_xiidm_voltage_level = net.source_format() == SourceFormat::Xiidm
-        && detailed
-            .as_ref()
-            .is_some_and(|detailed| !detailed.voltage_levels.is_empty());
+    let has_empty_xiidm_voltage_level = matches!(
+        net.source_format(),
+        SourceFormat::Xiidm | SourceFormat::Jiidm
+    ) && detailed
+        .as_ref()
+        .is_some_and(|detailed| !detailed.voltage_levels.is_empty());
     if net.buses().is_empty() && !has_dc_equipment && !has_empty_xiidm_voltage_level {
         return Err(Error::FormatRead {
             format,
@@ -917,7 +944,7 @@ pub(crate) fn reject_empty_case(net: &BalancedNetwork, format: &'static str) -> 
 pub const SOURCE_FORMAT_NAMES: &str = "matpower/m, powermodels-json/powermodels/pm, \
      egret-json/egret, psse/raw, psse34, psse35, psse-rawx/rawx, powerworld/aux, \
      pandapower-json/pandapower/pp, pslf/epc, pypsa-csv/pypsa, pwb, goc3-json/goc3, \
-     surge-json/surge, opfdata-json/opfdata/gridopt, xiidm/iidm, cgmes";
+     surge-json/surge, opfdata-json/opfdata/gridopt, xiidm/iidm, jiidm, cgmes";
 
 /// An unrecognized source format token. When the token names a distribution
 /// format (`dss`, `pmd`, `bmopf`), the error points at the distribution
@@ -978,6 +1005,7 @@ fn transmission_json_target(format: TransmissionFormat) -> Result<TargetFormat> 
         TransmissionFormat::SurgeJson => Ok(TargetFormat::SurgeJson),
         TransmissionFormat::DeepMindOpfDataJson => Ok(TargetFormat::DeepMindOpfDataJson),
         TransmissionFormat::PsseRawx => Ok(TargetFormat::PsseRawx),
+        TransmissionFormat::Jiidm => Ok(TargetFormat::Jiidm),
         other => Err(Error::UnknownFormat(format!(
             "JSON classifier returned non-JSON transmission format `{}`",
             other.name()
@@ -1133,6 +1161,7 @@ pub(crate) fn emit_value_text(net: &BalancedNetwork, format: TargetFormat) -> Re
             });
         }
         TargetFormat::Xiidm => write_xiidm(net)?,
+        TargetFormat::Jiidm => write_jiidm(net)?,
         TargetFormat::Cgmes => {
             return Err(Error::WriteUnsupported { format: "cgmes" });
         }
@@ -1220,19 +1249,19 @@ pub fn emit_with_options(
             );
         }
     }
-    if format == TargetFormat::Xiidm
+    if matches!(format, TargetFormat::Xiidm | TargetFormat::Jiidm)
         && options.is_default()
         && let Some(source) = module.source()
         && source
             .format()
             .and_then(|value| parse_target_format(value.as_str()))
-            == Some(TargetFormat::Xiidm)
+            == Some(format)
         && source.acquired_buffers().len() == 1
     {
         let buffer = source.primary_buffer()?;
         let artifact = powerio_core::MemoryArtifact::new(
-            powerio_core::ArtifactPath::new("case.xiidm")
-                .expect("static name is a valid artifact path"),
+            powerio_core::ArtifactPath::new(format!("case.{}", format.extension()))
+                .expect("the format extension names a valid artifact path"),
             buffer.bytes().to_vec(),
         );
         return destination.__commit_artifacts(
