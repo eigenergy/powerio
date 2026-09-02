@@ -27,6 +27,7 @@ implementations and the matching powerio code:
 | Surge angles | Surge JSON carries voltage angles, phase shifts, and angle limits in radians; `BalancedNetwork` stores degrees | Rust Surge round trip tests | `surge-json` |
 | DeepMind OPFData JSON | DeepMind OPFData carries p.u. powers and radian angles; `BalancedNetwork` stores the solved snapshot in MW/MVAr and degrees, with zero based links mapped to one based bus IDs | Paper Appendix A, the PyG loader, the smallest complete official fixture, and size independent FullTop and N-1 property tests | `opfdata-json` |
 | UCTE-DEF units and signs | ohm, microsiemens, kV, MW, MVAr, and ampere on the node voltage level; generation and its limits are negative for an injection and the reader negates them; a current limit becomes `rate_a` as \\(\sqrt{3}\, U I / 1000\\) MVA; no system base, so the balanced view uses 100 MVA at 50 Hz | PowSybl Core [`UcteImporter`](https://github.com/powsybl/powsybl-core/blob/0939bfcc2c0c094de907dc818dd688b4cbfb7281/ucte/ucte-converter/src/main/java/com/powsybl/ucte/converter/UcteImporter.java) and [`UcteNode.fix`](https://github.com/powsybl/powsybl-core/blob/0939bfcc2c0c094de907dc818dd688b4cbfb7281/ucte/ucte-network/src/main/java/com/powsybl/ucte/network/UcteNode.java#L413-L444) | `ucte` |
+| IEEE CDF shunts and taps | bus `G`/`B` are per unit on the title card MVA base and `Shunt` stores MW/MVAr at \\(V = 1\\); the tap bus is the from bus and the final turns ratio is the MATPOWER `TAP`; the phase shifter angle keeps its sign | MATPOWER `cdf2mpc`, PowSybl [`IeeeCdfBusReader`](https://github.com/powsybl/powsybl-core/blob/0939bfcc2c0c094de907dc818dd688b4cbfb7281/ieee-cdf/ieee-cdf-model/src/main/java/com/powsybl/ieeecdf/model/reader/IeeeCdfBusReader.java#L26-L51) and [`IeeeCdfBranchReader`](https://github.com/powsybl/powsybl-core/blob/0939bfcc2c0c094de907dc818dd688b4cbfb7281/ieee-cdf/ieee-cdf-model/src/main/java/com/powsybl/ieeecdf/model/reader/IeeeCdfBranchReader.java#L27-L62), the vendored 14 and 30 bus cases against `case14.m` and `case30.m` | `ieee-cdf` |
 
 egret's own MATPOWER parser uses the same reductions (bus type as
 `matpower_bustype`, polynomial coefficients reversed to a `{degree: coefficient}`
@@ -435,6 +436,50 @@ parse warning that hides the cause.
   echo impossible.
   The raw source echoes byte exactly; there is no canonical writer, `.pt` cache
   reader, archive reader, downloader, or batch directory API.
+- **IEEE Common Data Format** (`ieee-cdf`, alias `cdf`) is read only. The
+  reader takes the title card MVA base and date; the bus records (number,
+  name, area, loss zone, type, solved voltage and angle, load, generation,
+  base kV, desired voltage, MVAr or voltage limits, shunt G and B, remote
+  controlled bus); the branch records (tap and Z bus, circuit, type, R, X,
+  B, the three MVA ratings, control bus and side, turns ratio, phase shift
+  angle, tap limits, step size, and the controlled quantity limits); and the
+  interchange records (area number, slack bus, export, tolerance, code, and
+  name). The tap bus is the from bus and a nonzero turns ratio marks a
+  transformer; a blank branch type reads as a transmission line, as the
+  PowSybl reader reads it; a type 1 through 4 branch without a ratio reads
+  as unity;
+  types 2, 3, and 4 carry a regulating transformer control block whose
+  `ntp` derives from the step size. A type 1 bus reads as PQ with a fixed
+  reactive generator and the limit columns as its voltage band; every type
+  2 or 3 bus, and any bus with nonzero generation, carries a generator. The
+  format states no active power limits, no machine base, and no voltage
+  limits, so `pmin` 0 MW, `pmax` 9999 MW, `mbase` equal to the system base,
+  and `vmax`/`vmin` 1.1/0.9 p.u. are assumed and reported as
+  `READ.IEEE_CDF.VALUE_DEFAULTED`. Loss zone names, tie lines, the branch
+  area and loss zone columns, alternate swing bus names, and the title
+  originator, year, and season survive in the retained source only
+  (`READ.IEEE_CDF.RETAINED_SOURCE_ONLY`). A record cut before a mandatory
+  field reads that field as zero and reports `READ.IEEE_CDF.RECORD_TRUNCATED`
+  with the record's span; a header item count, terminator, misplaced
+  record, zero impedance branch, or undeclared bus reference is
+  `READ.IEEE_CDF.SOURCE_MALFORMED`; a type or side code outside the
+  documented set is `READ.IEEE_CDF.VALUE_SUBSTITUTED`; a title card without
+  a positive MVA base or a record whose bus numbers or numeric fields cannot
+  be decoded ends the read with a spanned `PARSE.IEEE_CDF.MALFORMED`. The
+  column ranges follow PowSybl Core's
+  [`IeeeCdfBusReader`](https://github.com/powsybl/powsybl-core/blob/0939bfcc2c0c094de907dc818dd688b4cbfb7281/ieee-cdf/ieee-cdf-model/src/main/java/com/powsybl/ieeecdf/model/reader/IeeeCdfBusReader.java#L26-L51)
+  and
+  [`IeeeCdfBranchReader`](https://github.com/powsybl/powsybl-core/blob/0939bfcc2c0c094de907dc818dd688b4cbfb7281/ieee-cdf/ieee-cdf-model/src/main/java/com/powsybl/ieeecdf/model/reader/IeeeCdfBranchReader.java#L27-L62),
+  which read the public archive files. Those files place the last two branch
+  limits one column to the left of the 1973 table, and the reader accepts both
+  layouts.
+  A `.txt` or `.cdf` file whose first card is a CDF title card is detected
+  without a declared format. Fresh output of this format is not required and
+  there is no writer: `emit` to `ieee-cdf` is refused as read only, and a
+  case converts to any writable format. The PowSybl gate reads every public
+  IEEE case with PyPowSybl's own CDF importer and compares its bus, branch,
+  generator, load, and shunt counts and load and generation totals with the
+  PowerIO parse, then reloads fresh MATPOWER written from each case.
 - **GridFM Parquet datasets** (the `gridfm` feature) parse to a scenario set
   of balanced networks over one shared element identity map: lossy, but each
   scenario recovers everything a power flow needs. That is bus
