@@ -6,7 +6,10 @@ use powerio_core::{
     HistoryKind, PioModule, Producer, SourceDescriptor, SourceId, SourceMapEntry, SourceRelation,
     SourceSpan, TimePoint,
 };
-use powerio_tx::{Bus, BusId, BusType, Generator, Load, TerminalReference, repair_values};
+use powerio_tx::{
+    Bus, BusId, BusType, Generator, Load, TerminalReference, TransformerControl,
+    TransformerControlMode, repair_values,
+};
 
 mod helpers;
 use helpers::{deserialize_module_text, serialize_module_text};
@@ -25,6 +28,28 @@ fn small_network() -> BalancedNetwork {
         vec![powerio_tx::Branch::new(BusId(1), BusId(2), 0.01, 0.1)],
     );
     network.loads_mut().push(Load::new(BusId(2), 40.0, 10.0));
+    let branch = &mut network.branches_mut()[0];
+    branch.name = Some("stored-transformer".to_owned());
+    branch.tap = 1.0;
+    let mut control = TransformerControl::new(TransformerControlMode::AsymmetricActiveFlow);
+    control.enabled = false;
+    control.controlled_bus = Some(BusId(2));
+    control.controlled_bus_on_winding_side = true;
+    control.regulating_terminal = Some(
+        serde_json::from_value(serde_json::json!({
+            "equipment": {
+                "component_type": "transformer",
+                "local_id": "stored-transformer"
+            },
+            "terminal": 2
+        }))
+        .unwrap(),
+    );
+    control.tap_min = 0.92;
+    control.tap_max = 1.08;
+    control.ntp = 17;
+    control.winding_connection_angle = Some(12.5);
+    branch.control = Some(control);
     let mut generator = Generator::new(BusId(1));
     generator.pg = 42.0;
     generator.voltage_regulation_on = false;
@@ -99,6 +124,27 @@ fn current_ir_round_trips_with_records_and_nonfinite_bounds() {
     };
     assert_eq!(network.buses().len(), 2);
     assert!(network.buses()[1].vmax.is_infinite());
+    assert_eq!(
+        network.branches()[0].name.as_deref(),
+        Some("stored-transformer")
+    );
+    let control = network.branches()[0].control.as_ref().unwrap();
+    assert_eq!(control.mode, TransformerControlMode::AsymmetricActiveFlow);
+    assert!(!control.enabled);
+    assert_eq!(control.controlled_bus, Some(BusId(2)));
+    assert!(control.controlled_bus_on_winding_side);
+    assert_eq!(
+        control
+            .regulating_terminal
+            .as_ref()
+            .unwrap()
+            .equipment
+            .local_id(),
+        "stored-transformer"
+    );
+    assert_eq!(control.regulating_terminal.as_ref().unwrap().terminal, 2);
+    assert_eq!(control.ntp, 17);
+    assert_eq!(control.winding_connection_angle, Some(12.5));
     assert!(!network.generators()[0].voltage_regulation_on);
     assert_eq!(network.generators()[0].regulated_bus, Some(BusId(2)));
     assert_eq!(

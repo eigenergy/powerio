@@ -1,4 +1,4 @@
-//! PowSybl XIIDM 1.12/1.17 XML reader and 1.17 writer.
+//! PowSybl XIIDM 1.12 through 1.17 XML reader and 1.17 writer.
 
 #![allow(
     clippy::format_push_string,
@@ -24,21 +24,23 @@ use crate::network::{
     BranchSolution, Bus, BusBreakerBus, BusId, BusType, BusbarSection, CalculatedBus, CaseMetadata,
     ComponentAlias, ComponentMetadata, ConnectivityNode, CurveStyle, DcGround, DcLine, DcNode,
     DcSwitch, DcSwitchKind, DcTerminal, DetailedConnectivity, DroopCurve, DroopCurveSegment,
-    EquipmentReactiveLimits, Hvdc, HvdcConverter, HvdcConverterKind, HvdcConvertersMode, Impedance,
-    InternalConnection, LineCommutatedConverter, LineCommutatedConverterReactiveModel, Load,
-    LoadVoltageModel, LoadingLimits, MinMaxReactiveLimits, OperationalLimitGroup,
+    EquipmentReactiveLimits, GeneratorEnergySource, Hvdc, HvdcConverter, HvdcConverterKind,
+    HvdcConvertersMode, Impedance, InternalConnection, LineCommutatedConverter,
+    LineCommutatedConverterReactiveModel, Load, LoadVoltageModel, LoadingLimits,
+    MinMaxReactiveLimits, OmittedField, OmittedFieldName, OperationalLimitGroup,
     ReactiveCapabilityCurve, ReactiveCapabilityCurvePoint, ReactiveLimits, Shunt, ShuntBlock,
     SourceFormat, StaticVarCompensator, StaticVarCompensatorRegulationMode, Storage, Subnetwork,
     Substation, Switch, SwitchKind, SwitchedShuntControl, SwitchedShuntMode,
     TapChanger as NetworkTapChanger, TapChangerKind, TapChangerRegulationMode,
     TapChangerStep as NetworkTapChangerStep, TemporaryLimit, Terminal, TerminalReference, TieLine,
-    TopologyEndpoint, TopologyKind, TopologySwitch, Transformer3W, VoltageLevel,
-    VoltageSourceConverter, Winding,
+    TopologyEndpoint, TopologyKind, TopologySwitch, Transformer3W, TransformerControlMode,
+    VoltageLevel, VoltageSourceConverter, Winding,
 };
 use crate::{Error, Generator, Result};
 
 const FORMAT: &str = "XIIDM XML";
 const NAMESPACE: &str = "http://www.powsybl.org/schema/iidm/1_17";
+const EQUIPMENT_NAMESPACE: &str = "http://www.powsybl.org/schema/iidm/equipment/1_17";
 const NAMESPACE_PREFIX: &str = "http://www.powsybl.org/schema/iidm/";
 const EQUIPMENT_NAMESPACE_PREFIX: &str = "http://www.powsybl.org/schema/iidm/equipment/";
 const ACTIVE_POWER_CONTROL_NAMESPACE_V1_0: &str =
@@ -142,6 +144,10 @@ impl XiidmNamespace {
 
     fn is_equipment(self) -> bool {
         self.validation == XiidmValidation::Equipment
+    }
+
+    fn matches_uri(self, uri: Option<&str>) -> bool {
+        uri.and_then(Self::from_uri) == Some(self)
     }
 }
 
@@ -404,6 +410,7 @@ struct RawEquipment {
     load_model: Option<RawLoadModel>,
     shunt_linear: Option<(f64, f64, u32)>,
     shunt_sections: Vec<(f64, f64)>,
+    shunt_conductance_omitted: bool,
     ratio_tap: Option<TapChanger>,
     phase_tap: Option<TapChanger>,
     winding_ratio_taps: [Option<TapChanger>; 3],
@@ -594,6 +601,11 @@ pub(crate) fn parse_xiidm_bytes(
                     && tag != "extension"
                     && !active_power_control
                 {
+                    if namespace.as_deref().is_none_or(is_xiidm_namespace_uri) {
+                        return Err(format_error(format!(
+                            "XIIDM model element `{tag}` appears inside an extension"
+                        )));
+                    }
                     diagnostics.push(
                         &codes::READ_XIIDM_ELEMENT_UNMAPPED,
                         format!(
@@ -630,6 +642,11 @@ pub(crate) fn parse_xiidm_bytes(
                     && tag != "extension"
                     && !active_power_control
                 {
+                    if namespace.as_deref().is_none_or(is_xiidm_namespace_uri) {
+                        return Err(format_error(format!(
+                            "XIIDM model element `{tag}` appears inside an extension"
+                        )));
+                    }
                     diagnostics.push(
                         &codes::READ_XIIDM_ELEMENT_UNMAPPED,
                         format!(
@@ -748,6 +765,21 @@ impl ParsedXiidm {
         if !self.root_seen && tag != "network" {
             return Err(format_error("root element is not `network`"));
         }
+        if self.root_seen {
+            let recognized_extension = self.current_extension_target.is_some()
+                && tag == "activePowerControl"
+                && ActivePowerControlVersion::from_namespace(namespace).is_some();
+            if !recognized_extension
+                && !self
+                    .namespace
+                    .is_some_and(|selected| selected.matches_uri(namespace))
+            {
+                return Err(format_error(format!(
+                    "XIIDM element `{tag}` uses XML namespace `{}` instead of the root network namespace",
+                    namespace.unwrap_or("(none)")
+                )));
+            }
+        }
         let mut frame = Frame {
             tag: tag.to_owned(),
             component: None,
@@ -755,8 +787,30 @@ impl ParsedXiidm {
             ac_dc_converter: None,
         };
         match tag {
-            "network" => self.read_network(&attrs, &mut frame, diagnostics)?,
+            "network" => {
+                let root = !self.root_seen;
+                self.read_network(&attrs, &mut frame, diagnostics)?;
+                if root
+                    && !self
+                        .namespace
+                        .is_some_and(|selected| selected.matches_uri(namespace))
+                {
+                    return Err(format_error(format!(
+                        "XIIDM root element uses XML namespace `{}` instead of its declared XIIDM namespace",
+                        namespace.unwrap_or("(none)")
+                    )));
+                }
+            }
             "extension" => {
+                if !self
+                    .frames
+                    .last()
+                    .is_some_and(|frame| frame.tag == "network")
+                {
+                    return Err(format_error(
+                        "XIIDM extension must be a direct child of a network",
+                    ));
+                }
                 if self.current_extension_target.is_some() {
                     return Err(format_error(
                         "nested XIIDM extension elements are not supported",
@@ -979,7 +1033,10 @@ impl ParsedXiidm {
                     topology,
                 });
             }
-            "bus" => self.read_bus(&attrs, &mut frame)?,
+            "bus" => {
+                self.read_bus(&attrs, &mut frame)?;
+                report_unmapped_bus_attributes(&attrs, diagnostics)?;
+            }
             "busbarSection" => {
                 let voltage_level = self.require_voltage_level(tag)?;
                 let id = required_text(&attrs, "id")?.to_owned();
@@ -1205,6 +1262,8 @@ impl ParsedXiidm {
             }
             "shuntLinearModel" => {
                 let index = self.current_equipment()?;
+                self.equipment[index].shunt_conductance_omitted =
+                    !attrs.contains_key("gPerSection");
                 self.equipment[index].shunt_linear = Some((
                     optional_f64(&attrs, "gPerSection")?.unwrap_or(0.0),
                     required_f64(&attrs, "bPerSection")?,
@@ -1213,6 +1272,7 @@ impl ParsedXiidm {
             }
             "section" if self.current_equipment_kind() == Some(EquipmentKind::Shunt) => {
                 let index = self.current_equipment()?;
+                self.equipment[index].shunt_conductance_omitted |= !attrs.contains_key("g");
                 self.equipment[index].shunt_sections.push((
                     optional_f64(&attrs, "g")?.unwrap_or(0.0),
                     required_f64(&attrs, "b")?,
@@ -1221,27 +1281,75 @@ impl ParsedXiidm {
             tag if tap_tag(tag).is_some() => {
                 let index = self.current_equipment()?;
                 let active = tap_tag(tag).expect("matched tap tag");
-                let regulation_mode = match active.kind {
-                    TapKind::Ratio => attrs
+                let legacy_fixed_phase_tap = active.kind == TapKind::Phase
+                    && attrs
                         .get("regulationMode")
-                        .map(|mode| parse_tap_regulation_mode(active.kind, mode))
-                        .transpose()?,
-                    TapKind::Phase => attrs
-                        .get("regulationMode")
-                        .map(|mode| parse_tap_regulation_mode(active.kind, mode))
-                        .transpose()?,
+                        .is_some_and(|mode| mode == "FIXED_TAP")
+                    && self
+                        .namespace
+                        .is_some_and(|namespace| namespace.version <= XiidmVersion::V1_13);
+                let regulation_mode = if legacy_fixed_phase_tap {
+                    diagnostics.push(
+                        &codes::READ_XIIDM_VERSION_COMPATIBILITY,
+                        format!(
+                            "XIIDM {} phase tap changer on `{}` uses legacy FIXED_TAP mode; it is read as CURRENT_LIMITER with regulation disabled",
+                            self.namespace.expect("version checked").version.label(),
+                            self.equipment[index].id,
+                        ),
+                    );
+                    Some(TapChangerRegulationMode::Current)
+                } else {
+                    match active.kind {
+                        TapKind::Ratio => attrs
+                            .get("regulationMode")
+                            .map(|mode| parse_tap_regulation_mode(active.kind, mode))
+                            .transpose()?,
+                        TapKind::Phase => attrs
+                            .get("regulationMode")
+                            .map(|mode| parse_tap_regulation_mode(active.kind, mode))
+                            .transpose()?,
+                    }
+                };
+                let load_tap_changing_capabilities = match active.kind {
+                    TapKind::Phase
+                        if self
+                            .namespace
+                            .is_some_and(|namespace| namespace.version <= XiidmVersion::V1_13) =>
+                    {
+                        true
+                    }
+                    TapKind::Ratio | TapKind::Phase => {
+                        required_bool(&attrs, "loadTapChangingCapabilities")?
+                    }
+                };
+                let source_regulating = optional_bool(&attrs, "regulating")?.unwrap_or(false);
+                let regulating = if legacy_fixed_phase_tap {
+                    false
+                } else if active.kind == TapKind::Ratio
+                    && self
+                        .namespace
+                        .is_some_and(|namespace| namespace.version <= XiidmVersion::V1_13)
+                    && !load_tap_changing_capabilities
+                    && source_regulating
+                {
+                    diagnostics.push(
+                        &codes::READ_XIIDM_VERSION_COMPATIBILITY,
+                        format!(
+                            "XIIDM {} ratio tap changer on `{}` declares `regulating=true` without load tap changing capability; PowSybl treats regulation as disabled",
+                            self.namespace.expect("version checked").version.label(),
+                            self.equipment[index].id,
+                        ),
+                    );
+                    false
+                } else {
+                    source_regulating
                 };
                 let tap = TapChanger {
                     tap_position: optional_i32(&attrs, "tapPosition")?,
                     solved_tap_position: optional_i32(&attrs, "solvedTapPosition")?,
                     low_tap_position: optional_i32(&attrs, "lowTapPosition")?.unwrap_or(0),
-                    load_tap_changing_capabilities: match active.kind {
-                        TapKind::Ratio => required_bool(&attrs, "loadTapChangingCapabilities")?,
-                        TapKind::Phase => {
-                            optional_bool(&attrs, "loadTapChangingCapabilities")?.unwrap_or(false)
-                        }
-                    },
-                    regulating: optional_bool(&attrs, "regulating")?.unwrap_or(false),
+                    load_tap_changing_capabilities,
+                    regulating,
                     regulation_mode,
                     regulation_value: optional_f64(&attrs, "regulationValue")?,
                     target_deadband: optional_f64(&attrs, "targetDeadband")?,
@@ -1317,7 +1425,7 @@ impl ParsedXiidm {
                     value: String::new(),
                 });
             }
-            "property" => self.read_property(&attrs)?,
+            "property" => self.read_property(&attrs, diagnostics)?,
             "slackTerminal" => self.slack_terminal = Some(required_text(&attrs, "id")?.to_owned()),
             "terminalRef" if self.current_tap.is_some() => {
                 let reference = parse_terminal_reference(&attrs)?;
@@ -1558,6 +1666,7 @@ impl ParsedXiidm {
             load_model: None,
             shunt_linear: None,
             shunt_sections: Vec::new(),
+            shunt_conductance_omitted: false,
             ratio_tap: None,
             phase_tap: None,
             winding_ratio_taps: std::array::from_fn(|_| None),
@@ -1746,9 +1855,27 @@ impl ParsedXiidm {
         Ok(())
     }
 
-    fn read_property(&mut self, attrs: &Attrs) -> Result<()> {
+    fn read_property(&mut self, attrs: &Attrs, diagnostics: &mut Diagnostics) -> Result<()> {
         let name = required_text(attrs, "name")?.to_owned();
         let value = required_text(attrs, "value")?.to_owned();
+        let parent = self
+            .frames
+            .last()
+            .map(|frame| frame.tag.clone())
+            .unwrap_or_default();
+        if matches!(
+            parent.as_str(),
+            "activePowerLimits" | "apparentPowerLimits" | "currentLimits" | "temporaryLimit"
+        ) {
+            let group = self.current_operational_limits_group_mut()?.id.clone();
+            diagnostics.push(
+                &codes::READ_XIIDM_FIELD_UNMAPPED,
+                format!(
+                    "XIIDM operational limits group `{group}` has property `{name}={value}` on `{parent}`; the balanced operational limit model does not represent properties at that level and fresh XIIDM output omits it"
+                ),
+            );
+            return Ok(());
+        }
         if self.frames.iter().rev().any(|frame| {
             matches!(
                 frame.tag.as_str(),
@@ -1847,6 +1974,19 @@ impl ParsedXiidm {
             }
             return Ok(());
         }
+        if self
+            .frames
+            .last()
+            .is_some_and(|frame| frame.component.is_none())
+        {
+            diagnostics.push(
+                &codes::READ_XIIDM_FIELD_UNMAPPED,
+                format!(
+                    "XIIDM `{parent}` has property `{name}={value}`; the corresponding source neutral record does not represent properties and fresh XIIDM output omits it"
+                ),
+            );
+            return Ok(());
+        }
         let component = self.current_component()?.clone();
         self.metadata
             .get_mut(&component)
@@ -1927,6 +2067,7 @@ impl ParsedXiidm {
             ComponentMetadata {
                 component: component.clone(),
                 name: attrs.get("name").cloned(),
+                equipment_container: None,
                 aliases: Vec::new(),
                 external_identifiers: Vec::new(),
                 properties: BTreeMap::new(),
@@ -2054,10 +2195,108 @@ type MissingAssignmentGroups = BTreeMap<(&'static str, &'static str), MissingAss
 fn assignment_attributes(kind: EquipmentKind) -> &'static [&'static str] {
     match kind {
         EquipmentKind::Load | EquipmentKind::BoundaryLine => &["p0", "q0"],
-        EquipmentKind::Generator => &["targetP"],
+        EquipmentKind::Generator => &["targetP", "targetQ", "targetV"],
         EquipmentKind::Battery => &["targetP", "targetQ"],
         EquipmentKind::Shunt => &["sectionCount"],
         _ => &[],
+    }
+}
+
+fn omitted_assignment_name(kind: EquipmentKind, attribute: &str) -> Option<OmittedFieldName> {
+    match (kind, attribute) {
+        (
+            EquipmentKind::Load
+            | EquipmentKind::Generator
+            | EquipmentKind::Battery
+            | EquipmentKind::BoundaryLine,
+            "p0" | "targetP",
+        ) => Some(OmittedFieldName::ActivePower),
+        (
+            EquipmentKind::Load
+            | EquipmentKind::Generator
+            | EquipmentKind::Battery
+            | EquipmentKind::BoundaryLine,
+            "q0" | "targetQ",
+        ) => Some(OmittedFieldName::ReactivePower),
+        (EquipmentKind::Generator, "targetV") => Some(OmittedFieldName::VoltageSetpoint),
+        _ => None,
+    }
+}
+
+fn collect_omitted_fields(parsed: &ParsedXiidm) -> Result<Vec<OmittedField>> {
+    let mut omitted = Vec::new();
+    for equipment in &parsed.equipment {
+        let component = component_id(equipment.kind.component_type(), &equipment.id)?;
+        for &attribute in assignment_attributes(equipment.kind) {
+            let Some(field) = omitted_assignment_name(equipment.kind, attribute) else {
+                continue;
+            };
+            if !equipment.attrs.contains_key(attribute) {
+                omitted.push(OmittedField {
+                    component: component.clone(),
+                    field,
+                });
+            }
+        }
+        if equipment.kind == EquipmentKind::Generator && !equipment.attrs.contains_key("ratedS") {
+            omitted.push(OmittedField {
+                component: component.clone(),
+                field: OmittedFieldName::RatedApparentPower,
+            });
+        }
+        if equipment.kind == EquipmentKind::Shunt && equipment.shunt_conductance_omitted {
+            omitted.push(OmittedField {
+                component,
+                field: OmittedFieldName::ShuntConductancePerSection,
+            });
+        }
+    }
+    Ok(omitted)
+}
+
+fn omission_requires_equipment_validation(
+    network: &BalancedNetwork,
+    omitted: &OmittedField,
+) -> bool {
+    match (omitted.component.component_type(), omitted.field) {
+        ("generator", OmittedFieldName::ReactivePower) => network
+            .generators()
+            .iter()
+            .find(|generator| generator.uid.as_deref() == Some(omitted.component.local_id()))
+            .is_none_or(|generator| !generator.voltage_regulation_on),
+        ("generator", OmittedFieldName::VoltageSetpoint) => network
+            .generators()
+            .iter()
+            .find(|generator| generator.uid.as_deref() == Some(omitted.component.local_id()))
+            .is_none_or(|generator| generator.voltage_regulation_on),
+        ("generator", OmittedFieldName::RatedApparentPower) => false,
+        ("shunt", OmittedFieldName::ShuntConductancePerSection) => false,
+        _ => true,
+    }
+}
+
+fn parse_generator_energy_source(attrs: &Attrs) -> Result<GeneratorEnergySource> {
+    match required_text(attrs, "energySource")? {
+        "HYDRO" => Ok(GeneratorEnergySource::Hydro),
+        "NUCLEAR" => Ok(GeneratorEnergySource::Nuclear),
+        "WIND" => Ok(GeneratorEnergySource::Wind),
+        "THERMAL" => Ok(GeneratorEnergySource::Thermal),
+        "SOLAR" => Ok(GeneratorEnergySource::Solar),
+        "OTHER" => Ok(GeneratorEnergySource::Other),
+        value => Err(format_error(format!(
+            "unknown XIIDM generator energySource `{value}`"
+        ))),
+    }
+}
+
+const fn generator_energy_source_text(source: GeneratorEnergySource) -> &'static str {
+    match source {
+        GeneratorEnergySource::Hydro => "HYDRO",
+        GeneratorEnergySource::Nuclear => "NUCLEAR",
+        GeneratorEnergySource::Wind => "WIND",
+        GeneratorEnergySource::Thermal => "THERMAL",
+        GeneratorEnergySource::Solar => "SOLAR",
+        GeneratorEnergySource::Other => "OTHER",
     }
 }
 
@@ -2169,6 +2408,114 @@ fn assigned_section_count_or_zero(
     )))
 }
 
+#[allow(clippy::float_cmp)]
+fn report_unmapped_bus_attributes(attrs: &Attrs, diagnostics: &mut Diagnostics) -> Result<()> {
+    let id = attrs
+        .get("id")
+        .map_or_else(|| "calculated bus".to_owned(), |id| format!("bus `{id}`"));
+    for attribute in ["fictitiousP0", "fictitiousQ0"] {
+        if let Some(value) = optional_f64(attrs, attribute)?
+            && value != 0.0
+        {
+            diagnostics.push(
+                &codes::READ_XIIDM_FIELD_UNMAPPED,
+                format!(
+                    "XIIDM {id} has `{attribute}={value}`; the balanced bus table does not represent fictitious bus injection and fresh XIIDM output omits it"
+                ),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn report_unmapped_equipment_attributes(
+    parsed: &ParsedXiidm,
+    diagnostics: &mut Diagnostics,
+) -> Result<()> {
+    for equipment in &parsed.equipment {
+        match equipment.kind {
+            EquipmentKind::Generator => {
+                if optional_bool(&equipment.attrs, "isCondenser")? == Some(true) {
+                    diagnostics.push(
+                        &codes::READ_XIIDM_FIELD_UNMAPPED,
+                        format!(
+                            "XIIDM generator `{}` has `isCondenser=true`; the balanced generator table does not represent synchronous condenser mode and fresh XIIDM output omits it",
+                            equipment.id
+                        ),
+                    );
+                }
+                if let Some(value) = optional_f64(&equipment.attrs, "equivalentLocalTargetV")? {
+                    diagnostics.push(
+                        &codes::READ_XIIDM_FIELD_UNMAPPED,
+                        format!(
+                            "XIIDM generator `{}` has `equivalentLocalTargetV={value}`; the balanced generator table does not represent the equivalent local voltage target and fresh XIIDM output omits it",
+                            equipment.id
+                        ),
+                    );
+                }
+            }
+            EquipmentKind::Load => {
+                if let Some(load_type) = equipment
+                    .attrs
+                    .get("loadType")
+                    .filter(|value| value.as_str() != "UNDEFINED")
+                {
+                    diagnostics.push(
+                        &codes::READ_XIIDM_FIELD_UNMAPPED,
+                        format!(
+                            "XIIDM load `{}` has `loadType={load_type}`; the balanced load table does not represent the XIIDM load type and fresh XIIDM output uses `UNDEFINED`",
+                            equipment.id
+                        ),
+                    );
+                }
+            }
+            EquipmentKind::Shunt => {
+                if let Some(value) = optional_u32(&equipment.attrs, "solvedSectionCount")? {
+                    diagnostics.push(
+                        &codes::READ_XIIDM_FIELD_UNMAPPED,
+                        format!(
+                            "XIIDM shunt `{}` has `solvedSectionCount={value}`; the balanced shunt table does not distinguish solved and assigned section counts and fresh XIIDM output omits the solved count",
+                            equipment.id
+                        ),
+                    );
+                }
+            }
+            EquipmentKind::Transformer => {
+                if let Some(value) = optional_f64(&equipment.attrs, "ratedS")? {
+                    diagnostics.push(
+                        &codes::READ_XIIDM_FIELD_UNMAPPED,
+                        format!(
+                            "XIIDM two winding transformer `{}` has `ratedS={value}`; the balanced branch table does not represent transformer nameplate apparent power and fresh XIIDM output omits it",
+                            equipment.id
+                        ),
+                    );
+                }
+            }
+            EquipmentKind::ThreeWindingTransformer => {
+                for side in 1..=3 {
+                    let attribute = format!("ratedS{side}");
+                    if let Some(value) = optional_f64(&equipment.attrs, &attribute)? {
+                        diagnostics.push(
+                            &codes::READ_XIIDM_FIELD_UNMAPPED,
+                            format!(
+                                "XIIDM three winding transformer `{}` has `{attribute}={value}`; the balanced three winding transformer table does not represent winding nameplate apparent power and fresh XIIDM output omits it",
+                                equipment.id
+                            ),
+                        );
+                    }
+                }
+            }
+            EquipmentKind::Battery
+            | EquipmentKind::StaticVarCompensator
+            | EquipmentKind::BoundaryLine
+            | EquipmentKind::Line
+            | EquipmentKind::VscConverterStation
+            | EquipmentKind::LccConverterStation => {}
+        }
+    }
+    Ok(())
+}
+
 fn build_network(parsed: &ParsedXiidm, diagnostics: &mut Diagnostics) -> Result<BalancedNetwork> {
     let has_dc_equipment = !parsed.dc_nodes.is_empty()
         || !parsed.dc_grounds.is_empty()
@@ -2178,6 +2525,7 @@ fn build_network(parsed: &ParsedXiidm, diagnostics: &mut Diagnostics) -> Result<
         return Err(format_error("network has no voltage levels"));
     }
     validate_dc_references(parsed)?;
+    report_unmapped_equipment_attributes(parsed, diagnostics)?;
     let voltage_levels: HashMap<&str, &RawVoltageLevel> = parsed
         .voltage_levels
         .iter()
@@ -2300,6 +2648,42 @@ fn build_network(parsed: &ParsedXiidm, diagnostics: &mut Diagnostics) -> Result<
                 let mut load = Load::new(bus1, p, q);
                 load.uid = Some(equipment.id.clone());
                 load.in_service = connected1;
+                if let Some(RawLoadModel::Zip {
+                    c0p,
+                    c1p,
+                    c2p,
+                    c0q,
+                    c1q,
+                    c2q,
+                }) = equipment.load_model.as_ref()
+                {
+                    if p.abs() <= f64::EPSILON
+                        && [*c0p, *c1p, *c2p]
+                            .iter()
+                            .any(|value| value.abs() > f64::EPSILON)
+                    {
+                        diagnostics.push(
+                            &codes::READ_XIIDM_FIELD_UNMAPPED,
+                            format!(
+                                "XIIDM load `{}` has zero p0 with nonzero active power ZIP coefficients; the balanced load stores zero active power components and fresh XIIDM output uses zero active coefficients",
+                                equipment.id
+                            ),
+                        );
+                    }
+                    if q.abs() <= f64::EPSILON
+                        && [*c0q, *c1q, *c2q]
+                            .iter()
+                            .any(|value| value.abs() > f64::EPSILON)
+                    {
+                        diagnostics.push(
+                            &codes::READ_XIIDM_FIELD_UNMAPPED,
+                            format!(
+                                "XIIDM load `{}` has zero q0 with nonzero reactive power ZIP coefficients; the balanced load stores zero reactive power components and fresh XIIDM output uses zero reactive coefficients",
+                                equipment.id
+                            ),
+                        );
+                    }
+                }
                 load.voltage_model = equipment.load_model.as_ref().map(|model| match model {
                     RawLoadModel::Zip {
                         c0p,
@@ -2332,6 +2716,7 @@ fn build_network(parsed: &ParsedXiidm, diagnostics: &mut Diagnostics) -> Result<
             EquipmentKind::Generator => {
                 let mut generator = Generator::new(bus1);
                 generator.uid = Some(equipment.id.clone());
+                generator.energy_source = parse_generator_energy_source(&equipment.attrs)?;
                 generator.pg = assigned_power_or_zero(
                     parsed,
                     equipment,
@@ -2581,8 +2966,14 @@ fn build_network(parsed: &ParsedXiidm, diagnostics: &mut Diagnostics) -> Result<
                 svc.reactive_power_setpoint_mvar =
                     optional_f64(&equipment.attrs, "reactivePowerSetpoint")?.unwrap_or(0.0);
                 svc.regulation_mode = mode;
-                svc.regulating =
-                    !legacy_off && optional_bool(&equipment.attrs, "regulating")?.unwrap_or(false);
+                svc.regulating = if parsed
+                    .namespace
+                    .is_some_and(|namespace| namespace.version <= XiidmVersion::V1_13)
+                {
+                    !legacy_off && equipment.attrs.contains_key("regulationMode")
+                } else {
+                    optional_bool(&equipment.attrs, "regulating")?.unwrap_or(false)
+                };
                 svc.regulating_terminal = equipment
                     .regulating_terminal
                     .as_ref()
@@ -2741,73 +3132,13 @@ fn build_network(parsed: &ParsedXiidm, diagnostics: &mut Diagnostics) -> Result<
     Ok(network)
 }
 
-#[allow(clippy::float_cmp, clippy::manual_midpoint)]
 fn reactive_limits_at_active_power(
     owner: &str,
     limits: &ReactiveLimits,
     active_power_mw: f64,
 ) -> Result<(f64, f64)> {
-    match limits {
-        ReactiveLimits::MinMax(limits) => {
-            if limits.minimum_reactive_power_mvar > limits.maximum_reactive_power_mvar {
-                return Err(format_error(format!("{owner} has minQ greater than maxQ")));
-            }
-            Ok((
-                limits.minimum_reactive_power_mvar,
-                limits.maximum_reactive_power_mvar,
-            ))
-        }
-        ReactiveLimits::CapabilityCurve(curve) => {
-            if curve.points.len() < 2 {
-                return Err(format_error(format!(
-                    "{owner} reactiveCapabilityCurve has fewer than two points"
-                )));
-            }
-            let mut points = curve.points.iter().collect::<Vec<_>>();
-            points
-                .sort_by(|first, second| first.active_power_mw.total_cmp(&second.active_power_mw));
-            for pair in points.windows(2) {
-                if pair[0].active_power_mw == pair[1].active_power_mw {
-                    return Err(format_error(format!(
-                        "{owner} reactiveCapabilityCurve has duplicate active power points"
-                    )));
-                }
-            }
-            let (first, second) = if active_power_mw <= points[0].active_power_mw {
-                (points[0], points[0])
-            } else if active_power_mw >= points[points.len() - 1].active_power_mw {
-                (points[points.len() - 1], points[points.len() - 1])
-            } else {
-                let upper = points.partition_point(|point| point.active_power_mw < active_power_mw);
-                (points[upper - 1], points[upper])
-            };
-            let (minimum, maximum) = if std::ptr::eq(first, second) {
-                (
-                    first.minimum_reactive_power_mvar,
-                    first.maximum_reactive_power_mvar,
-                )
-            } else {
-                let fraction = (active_power_mw - first.active_power_mw)
-                    / (second.active_power_mw - first.active_power_mw);
-                (
-                    first.minimum_reactive_power_mvar
-                        + fraction
-                            * (second.minimum_reactive_power_mvar
-                                - first.minimum_reactive_power_mvar),
-                    first.maximum_reactive_power_mvar
-                        + fraction
-                            * (second.maximum_reactive_power_mvar
-                                - first.maximum_reactive_power_mvar),
-                )
-            };
-            if minimum <= maximum {
-                Ok((minimum, maximum))
-            } else {
-                let midpoint = (minimum + maximum) / 2.0;
-                Ok((midpoint, midpoint))
-            }
-        }
-    }
+    crate::network::calc_reactive_limits_at_active_power(owner, limits, active_power_mw)
+        .map_err(format_error)
 }
 
 struct BoundaryMapping {
@@ -2881,15 +3212,24 @@ fn map_boundary_lines(
             .ok_or_else(|| format_error("boundary line has no calculated terminal bus"))?;
         let p0 = assigned_power_or_zero(parsed, equipment, "p0", missing_assignments, diagnostics)?;
         let q0 = assigned_power_or_zero(parsed, equipment, "q0", missing_assignments, diagnostics)?;
-        let generation = if equipment
-            .attrs
-            .contains_key("generationVoltageRegulationOn")
-        {
+        let has_generation = [
+            "generationVoltageRegulationOn",
+            "generationMinP",
+            "generationMaxP",
+            "generationTargetP",
+            "generationTargetQ",
+            "generationTargetV",
+        ]
+        .iter()
+        .any(|attribute| equipment.attrs.contains_key(*attribute))
+            || equipment.reactive_limits.is_some();
+        let generation = if has_generation {
             Some(BoundaryLineGeneration {
-                voltage_regulation_on: required_bool(
+                voltage_regulation_on: optional_bool(
                     &equipment.attrs,
                     "generationVoltageRegulationOn",
-                )?,
+                )?
+                .unwrap_or(false),
                 minimum_active_power_mw: optional_f64(&equipment.attrs, "generationMinP")?,
                 maximum_active_power_mw: optional_f64(&equipment.attrs, "generationMaxP")?,
                 target_active_power_mw: optional_f64(&equipment.attrs, "generationTargetP")?,
@@ -3646,6 +3986,7 @@ fn equipment_terminals(
         terminals.push((
             connection.bus_id,
             Terminal {
+                component: None,
                 equipment: component_id(equipment.kind.component_type(), &equipment.id)?,
                 terminal: side,
                 voltage_level: component_id("voltage_level", &voltage_level)?,
@@ -3849,6 +4190,7 @@ fn ac_dc_converter_terminals(
         }
         let connection = buses.terminal_bus(&converter.voltage_level, &converter.attrs, side)?;
         terminals.push(Terminal {
+            component: None,
             equipment: component.clone(),
             terminal: side,
             voltage_level: component_id("voltage_level", &converter.voltage_level)?,
@@ -4114,6 +4456,15 @@ fn read_transformer(
 ) -> Result<Branch> {
     let rated_u1 = required_f64(&equipment.attrs, "ratedU1")?;
     let rated_u2 = required_f64(&equipment.attrs, "ratedU2")?;
+    if rated_u2 != nominal_v2 {
+        diagnostics.push(
+            &codes::READ_XIIDM_FIELD_UNMAPPED,
+            format!(
+                "XIIDM two winding transformer `{}` has ratedU1={rated_u1} kV and ratedU2={rated_u2} kV while terminal 2 has nominal voltage {nominal_v2} kV; fresh XIIDM output preserves the ratio but normalizes ratedU2 to the terminal voltage level",
+                equipment.id
+            ),
+        );
+    }
     let mut r = required_f64(&equipment.attrs, "r")?;
     let mut x = required_f64(&equipment.attrs, "x")?;
     let mut g = optional_f64(&equipment.attrs, "g")?.unwrap_or(0.0);
@@ -4185,18 +4536,21 @@ fn selected_operational_limits_groups(
 }
 
 fn selected_operational_limit_group_ids(equipment: &RawEquipment, side: u8) -> Result<Vec<String>> {
-    let key = if equipment.kind == EquipmentKind::BoundaryLine && side == 1 {
-        "selectedOperationalLimitsGroupIds".to_owned()
+    let (plural_key, singular_key) = if equipment.kind == EquipmentKind::BoundaryLine && side == 1 {
+        (
+            "selectedOperationalLimitsGroupIds".to_owned(),
+            "selectedOperationalLimitsGroupId".to_owned(),
+        )
     } else {
-        format!("selectedOperationalLimitsGroupIds{side}")
+        (
+            format!("selectedOperationalLimitsGroupIds{side}"),
+            format!("selectedOperationalLimitsGroupId{side}"),
+        )
     };
-    if let Some(value) = equipment.attrs.get(&key) {
+    if let Some(value) = equipment.attrs.get(&plural_key) {
         return parse_operational_limits_group_ids(value);
     }
-    if equipment.kind == EquipmentKind::BoundaryLine
-        && side == 1
-        && let Some(value) = equipment.attrs.get("selectedOperationalLimitsGroup")
-    {
+    if let Some(value) = equipment.attrs.get(&singular_key) {
         return Ok(vec![value.clone()]);
     }
     Ok(Vec::new())
@@ -4457,6 +4811,7 @@ fn read_three_winding_transformer(
     let mut star_x = [0.0; 3];
     let mut star_g = [0.0; 3];
     let mut star_b = [0.0; 3];
+    let mut rated_u = [0.0; 3];
     let mut windings = std::array::from_fn(|side| Winding::new(terminals[side].0));
     for side in 0..3 {
         let suffix = side + 1;
@@ -4464,7 +4819,8 @@ fn read_three_winding_transformer(
         star_x[side] = required_f64(&equipment.attrs, &format!("x{suffix}"))?;
         star_g[side] = optional_f64(&equipment.attrs, &format!("g{suffix}"))?.unwrap_or(0.0);
         star_b[side] = optional_f64(&equipment.attrs, &format!("b{suffix}"))?.unwrap_or(0.0);
-        let rated_u = required_f64(&equipment.attrs, &format!("ratedU{suffix}"))?;
+        let winding_rated_u = required_f64(&equipment.attrs, &format!("ratedU{suffix}"))?;
+        rated_u[side] = winding_rated_u;
         let level = voltage_levels[terminals[side].1.voltage_level.local_id()];
         let mut rho = 1.0;
         let mut alpha = 0.0;
@@ -4493,9 +4849,9 @@ fn read_three_winding_transformer(
                 }
             }
         }
-        windings[side].tap = rated_u / level.nominal_v * rho;
+        windings[side].tap = winding_rated_u / level.nominal_v * rho;
         windings[side].shift = -alpha;
-        windings[side].nominal_kv = rated_u;
+        windings[side].nominal_kv = winding_rated_u;
         let apparent = calc_loading_limit_projection(equipment, suffix as u8, |group| {
             group.apparent_power.as_ref()
         })?;
@@ -4541,10 +4897,16 @@ fn read_three_winding_transformer(
             ),
         );
     }
-    if (star_g[1] != 0.0 || star_g[2] != 0.0 || star_b[1] != 0.0 || star_b[2] != 0.0)
-        && (star_g.iter().filter(|value| **value != 0.0).count() > 1
-            || star_b.iter().filter(|value| **value != 0.0).count() > 1)
-    {
+    if rated_u0 != rated_u[0] {
+        diagnostics.push(
+            &codes::READ_XIIDM_FIELD_UNMAPPED,
+            format!(
+                "XIIDM three winding transformer `{}` has ratedU0={rated_u0} kV and ratedU1={} kV; fresh XIIDM output uses ratedU1 as ratedU0",
+                equipment.id, rated_u[0]
+            ),
+        );
+    }
+    if star_g[1] != 0.0 || star_g[2] != 0.0 || star_b[1] != 0.0 || star_b[2] != 0.0 {
         diagnostics.push(
             &codes::READ_XIIDM_FIELD_UNMAPPED,
             format!(
@@ -4854,12 +5216,16 @@ fn map_tap_changer(
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(NetworkTapChanger {
+        component: None,
         transformer: component_id(equipment.kind.component_type(), &equipment.id)?,
         winding,
         kind,
         tap_position: raw.tap_position,
         solved_tap_position: raw.solved_tap_position,
         low_tap_position: raw.low_tap_position,
+        neutral_tap_position: Some(raw.low_tap_position),
+        normal_tap_position: raw.tap_position,
+        voltage_step_increment_percent: None,
         load_tap_changing_capabilities: raw.load_tap_changing_capabilities,
         regulating: raw.regulating,
         regulation_mode: raw.regulation_mode,
@@ -4922,7 +5288,7 @@ fn map_tap_changers(parsed: &ParsedXiidm) -> Result<Vec<NetworkTapChanger>> {
 fn build_detailed_connectivity(
     parsed: &ParsedXiidm,
     buses: &BusBuilder<'_>,
-    terminals: Vec<Terminal>,
+    mut terminals: Vec<Terminal>,
     boundary_lines: Vec<BoundaryLine>,
     tie_lines: Vec<TieLine>,
 ) -> Result<DetailedConnectivity> {
@@ -5041,6 +5407,18 @@ fn build_detailed_connectivity(
             })
         })
         .collect::<Result<Vec<_>>>()?;
+    terminals.extend(busbar_sections.iter().map(|busbar| Terminal {
+        component: None,
+        equipment: busbar.component.clone(),
+        terminal: 1,
+        voltage_level: busbar.voltage_level.clone(),
+        bus: None,
+        connectable_bus: None,
+        node: Some(busbar.node.clone()),
+        connected: true,
+        active_power_mw: None,
+        reactive_power_mvar: None,
+    }));
     let switches = parsed
         .switches
         .iter()
@@ -5068,6 +5446,7 @@ fn build_detailed_connectivity(
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(DetailedConnectivity {
+        omitted_fields: collect_omitted_fields(parsed)?,
         component_metadata: parsed.metadata.values().cloned().collect(),
         subnetworks: parsed
             .subnetworks
@@ -5085,6 +5464,7 @@ fn build_detailed_connectivity(
         calculated_buses,
         connectivity_nodes,
         busbar_sections,
+        junctions: Vec::new(),
         terminals,
         switches,
         internal_connections,
@@ -5492,6 +5872,17 @@ fn resolve_regulating_bus(
     voltage_levels: &HashMap<&str, &RawVoltageLevel>,
 ) -> Result<Option<BusId>> {
     let resolved = resolve_terminal_reference(parsed, reference)?;
+    if resolved.equipment.component_type() == "busbar_section" {
+        let busbar = parsed
+            .busbar_sections
+            .iter()
+            .find(|busbar| busbar.id == reference.id)
+            .expect("resolved busbar section exists");
+        return Ok(buses
+            .node_map
+            .get(&(busbar.voltage_level.clone(), busbar.node))
+            .copied());
+    }
     let Some(equipment) = parsed.equipment.iter().find(|equipment| {
         equipment.id == reference.id
             && equipment.kind.component_type() == resolved.equipment.component_type()
@@ -5547,6 +5938,7 @@ fn push_derived_terminal(
 ) {
     let (voltage_level, configured_bus) = bus_connections.get(&bus).expect("checked bus reference");
     detailed.terminals.push(Terminal {
+        component: None,
         equipment,
         terminal,
         voltage_level: voltage_level.clone(),
@@ -5559,7 +5951,36 @@ fn push_derived_terminal(
     });
 }
 
-fn derive_detailed_connectivity(network: &BalancedNetwork) -> DetailedConnectivity {
+fn bus_group_root(parent: &mut [usize], mut index: usize) -> usize {
+    let mut root = index;
+    while parent[root] != root {
+        root = parent[root];
+    }
+    while parent[index] != index {
+        let next = parent[index];
+        parent[index] = root;
+        index = next;
+    }
+    root
+}
+
+fn join_bus_groups(parent: &mut [usize], first: usize, second: usize) {
+    let first = bus_group_root(parent, first);
+    let second = bus_group_root(parent, second);
+    if first != second {
+        let (root, child) = if first < second {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        parent[child] = root;
+    }
+}
+
+fn derive_detailed_connectivity(
+    network: &BalancedNetwork,
+    diagnostics: &mut Diagnostics,
+) -> Result<DetailedConnectivity> {
     let substation =
         component_id("substation", "powerio-substation").expect("static component identity");
     let mut detailed = DetailedConnectivity::default();
@@ -5569,29 +5990,109 @@ fn derive_detailed_connectivity(network: &BalancedNetwork) -> DetailedConnectivi
         operator: None,
         geographical_tags: Vec::new(),
     });
+    let bus_positions = network
+        .buses()
+        .iter()
+        .enumerate()
+        .map(|(index, bus)| (bus.id, index))
+        .collect::<HashMap<_, _>>();
+    let mut bus_groups = (0..network.buses().len()).collect::<Vec<_>>();
+    for switch in network.switches() {
+        let from = *bus_positions
+            .get(&switch.from)
+            .expect("network validation checked the switch bus");
+        let to = *bus_positions
+            .get(&switch.to)
+            .expect("network validation checked the switch bus");
+        let from_kv = network.buses()[from].base_kv;
+        let to_kv = network.buses()[to].base_kv;
+        if from_kv.to_bits() != to_kv.to_bits() {
+            return Err(Error::Emit {
+                format: FORMAT,
+                message: format!(
+                    "switch `{}` joins buses {} ({from_kv} kV) and {} ({to_kv} kV); one XIIDM switch cannot join different voltage levels",
+                    switch.uid.as_deref().expect("prepared identity"),
+                    switch.from,
+                    switch.to,
+                ),
+            });
+        }
+        join_bus_groups(&mut bus_groups, from, to);
+    }
+    let mut grouped_buses = BTreeMap::<usize, Vec<&Bus>>::new();
+    for (index, bus) in network.buses().iter().enumerate() {
+        let root = bus_group_root(&mut bus_groups, index);
+        grouped_buses.entry(root).or_default().push(bus);
+    }
     let mut bus_connections = HashMap::new();
-    for bus in network.buses() {
-        let voltage_level = component_id("voltage_level", &format!("powerio-vl-{}", bus.id))
+    for buses in grouped_buses.values() {
+        let first_bus = buses.first().expect("a bus group is not empty");
+        let voltage_level = component_id("voltage_level", &format!("powerio-vl-{}", first_bus.id))
             .expect("derived voltage level identity");
-        let configured_bus =
-            component_id("bus", &format!("powerio-bus-{}", bus.id)).expect("derived bus identity");
+        let low_voltage_limit_kv = buses
+            .iter()
+            .map(|bus| bus.vmin * bus.base_kv)
+            .reduce(f64::max)
+            .expect("a bus group is not empty");
+        let high_voltage_limit_kv = buses
+            .iter()
+            .map(|bus| bus.vmax * bus.base_kv)
+            .reduce(f64::min)
+            .expect("a bus group is not empty");
+        if low_voltage_limit_kv > high_voltage_limit_kv {
+            return Err(Error::Emit {
+                format: FORMAT,
+                message: format!(
+                    "switch-connected buses {} have no common voltage limit range for XIIDM voltage level `{}`",
+                    buses
+                        .iter()
+                        .map(|bus| bus.id.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    voltage_level.local_id(),
+                ),
+            });
+        }
+        if buses.len() > 1
+            && buses.iter().any(|bus| {
+                (bus.vmin * bus.base_kv).to_bits() != low_voltage_limit_kv.to_bits()
+                    || (bus.vmax * bus.base_kv).to_bits() != high_voltage_limit_kv.to_bits()
+            })
+        {
+            diagnostics.push(
+                &codes::EMIT_XIIDM.value_collapsed,
+                format!(
+                    "switch-connected buses {} have distinct voltage limits; XIIDM voltage level `{}` uses their common range [{low_voltage_limit_kv}, {high_voltage_limit_kv}] kV",
+                    buses
+                        .iter()
+                        .map(|bus| bus.id.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    voltage_level.local_id(),
+                ),
+            );
+        }
         detailed.voltage_levels.push(VoltageLevel {
             component: voltage_level.clone(),
             substation: Some(substation.clone()),
-            nominal_kv: bus.base_kv,
-            low_voltage_limit_kv: Some(bus.vmin * bus.base_kv),
-            high_voltage_limit_kv: Some(bus.vmax * bus.base_kv),
+            nominal_kv: first_bus.base_kv,
+            low_voltage_limit_kv: Some(low_voltage_limit_kv),
+            high_voltage_limit_kv: Some(high_voltage_limit_kv),
             topology_kind: TopologyKind::BusBreaker,
-            buses: vec![bus.id],
+            buses: buses.iter().map(|bus| bus.id).collect(),
         });
-        detailed.bus_breaker_buses.push(BusBreakerBus {
-            component: configured_bus.clone(),
-            voltage_level: voltage_level.clone(),
-            calculated_bus: Some(bus.id),
-            voltage_kv: Some(bus.vm * bus.base_kv),
-            angle_degrees: Some(bus.va),
-        });
-        bus_connections.insert(bus.id, (voltage_level, configured_bus));
+        for bus in buses {
+            let configured_bus = component_id("bus", &format!("powerio-bus-{}", bus.id))
+                .expect("derived bus identity");
+            detailed.bus_breaker_buses.push(BusBreakerBus {
+                component: configured_bus.clone(),
+                voltage_level: voltage_level.clone(),
+                calculated_bus: Some(bus.id),
+                voltage_kv: Some(bus.vm * bus.base_kv),
+                angle_degrees: Some(bus.va),
+            });
+            bus_connections.insert(bus.id, (voltage_level.clone(), configured_bus));
+        }
     }
     for load in network.loads() {
         push_derived_terminal(
@@ -5663,6 +6164,47 @@ fn derive_detailed_connectivity(network: &BalancedNetwork) -> DetailedConnectivi
             branch.in_service,
         );
     }
+    if !network.switches().is_empty() {
+        diagnostics.push(
+            &codes::EMIT_XIIDM.value_defaulted,
+            format!(
+                "{} balanced switch record(s) carry no physical switch kind; fresh XIIDM emits them as breakers",
+                network.switches().len()
+            ),
+        );
+    }
+    for switch in network.switches() {
+        let component = component_id("switch", switch.uid.as_deref().expect("prepared identity"))
+            .expect("valid stored identity");
+        let (voltage_level, first_bus) = bus_connections
+            .get(&switch.from)
+            .expect("network validation checked the switch bus");
+        let (second_voltage_level, second_bus) = bus_connections
+            .get(&switch.to)
+            .expect("network validation checked the switch bus");
+        debug_assert_eq!(voltage_level, second_voltage_level);
+        detailed.switches.push(TopologySwitch {
+            component: component.clone(),
+            voltage_level: voltage_level.clone(),
+            kind: SwitchKind::Breaker,
+            endpoint1: TopologyEndpoint::Bus(first_bus.clone()),
+            endpoint2: TopologyEndpoint::Bus(second_bus.clone()),
+            open: !switch.closed,
+            retained: true,
+        });
+        let fields = [
+            switch.thermal_rating.map(|_| "thermal rating"),
+            switch.current_rating.map(|_| "current rating"),
+            switch.pf.map(|_| "from-side active power"),
+            switch.qf.map(|_| "from-side reactive power"),
+            switch.pt.map(|_| "to-side active power"),
+            switch.qt.map(|_| "to-side reactive power"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        diagnose_xiidm_dropped_fields(&component, &fields, diagnostics);
+    }
     for transformer in network.transformers_3w() {
         let component = component_id(
             "transformer_3w",
@@ -5695,13 +6237,18 @@ fn derive_detailed_connectivity(network: &BalancedNetwork) -> DetailedConnectivi
             );
         }
     }
-    detailed
+    Ok(detailed)
 }
 
 /// Lookup tables used only while writing XIIDM. The parsed model keeps source
 /// order in its vectors; each grouped vector below is filled in that same
 /// order so indexing does not change emitted XML ordering.
 struct XiidmWriteIndex<'a> {
+    /// `true` when the caller supplied detailed terminals. In that case an
+    /// absent terminal power value stays absent instead of being filled from
+    /// the balanced calculation view.
+    supplied_detailed_connectivity: bool,
+    omitted_fields: HashSet<(ComponentId, OmittedFieldName)>,
     metadata: HashMap<ComponentId, &'a ComponentMetadata>,
     terminals: HashMap<(ComponentId, u8), &'a Terminal>,
     node_numbers: HashMap<ComponentId, i32>,
@@ -5829,6 +6376,12 @@ impl<'a> XiidmWriteIndex<'a> {
         }
 
         let mut index = Self {
+            supplied_detailed_connectivity: network.detailed_connectivity().is_some(),
+            omitted_fields: detailed
+                .omitted_fields
+                .iter()
+                .map(|value| (value.component.clone(), value.field))
+                .collect(),
             metadata,
             terminals,
             node_numbers,
@@ -6065,6 +6618,10 @@ impl<'a> XiidmWriteIndex<'a> {
         self.metadata.get(component).copied()
     }
 
+    fn is_omitted(&self, component: &ComponentId, field: OmittedFieldName) -> bool {
+        self.omitted_fields.contains(&(component.clone(), field))
+    }
+
     fn terminal(&self, component: &ComponentId, side: u8) -> Option<&'a Terminal> {
         self.terminals.get(&(component.clone(), side)).copied()
     }
@@ -6098,6 +6655,10 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
         prepared
     });
     let network = prepared_network.as_ref().unwrap_or(network);
+    network.validate().map_err(|error| Error::Emit {
+        format: FORMAT,
+        message: format!("network validation failed before XIIDM emission: {error}"),
+    })?;
     validate_xiidm_hvdc_emission(network)?;
     let mut diagnostics = Diagnostics::new();
     let metadata = network.case_metadata();
@@ -6124,7 +6685,7 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
         );
         DEFAULT_SOURCE_MODEL_FORMAT
     });
-    let validation = metadata
+    let declared_validation = metadata
         .minimum_validation_level
         .as_deref()
         .unwrap_or_else(|| {
@@ -6136,6 +6697,36 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
             );
             DEFAULT_VALIDATION_LEVEL
         });
+    let detailed = network.detailed_connectivity().as_deref();
+    let has_omitted_required_fields = detailed.is_some_and(|value| {
+        value
+            .omitted_fields
+            .iter()
+            .any(|omitted| omission_requires_equipment_validation(network, omitted))
+    });
+    let equipment_mode = declared_validation == "EQUIPMENT"
+        || has_omitted_required_fields
+        || detailed.is_some_and(|value| {
+            value.subnetworks.iter().any(|subnetwork| {
+                subnetwork.case_metadata.minimum_validation_level.as_deref() == Some("EQUIPMENT")
+            })
+        });
+    if has_omitted_required_fields && declared_validation != "EQUIPMENT" {
+        diagnostics.push(
+            &codes::EMIT_XIIDM.value_defaulted,
+            "XIIDM fields recorded as omitted require equipment validation; emitted `minimumValidationLevel=\"EQUIPMENT\"`",
+        );
+    }
+    let validation = if equipment_mode {
+        "EQUIPMENT"
+    } else {
+        declared_validation
+    };
+    let namespace = if equipment_mode {
+        EQUIPMENT_NAMESPACE
+    } else {
+        NAMESPACE
+    };
     let active_power_control_namespace = network
         .generators()
         .iter()
@@ -6148,7 +6739,7 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
         " xmlns:apc=\"{ACTIVE_POWER_CONTROL_NAMESPACE_V1_2}\""
     ));
     let mut output = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<iidm:network xmlns:iidm=\"{NAMESPACE}\"{} id=\"{}\" caseDate=\"{}\" forecastDistance=\"{forecast_distance}\" sourceFormat=\"{}\" minimumValidationLevel=\"{}\">\n",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<iidm:network xmlns:iidm=\"{namespace}\"{} id=\"{}\" caseDate=\"{}\" forecastDistance=\"{forecast_distance}\" sourceFormat=\"{}\" minimumValidationLevel=\"{}\">\n",
         active_power_control_namespace.as_deref().unwrap_or(""),
         xml(network.name()),
         xml(case_date),
@@ -6156,6 +6747,9 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
         xml(validation),
     );
     if let Some(detailed) = network.detailed_connectivity() {
+        diagnose_xiidm_projection(detailed, &mut diagnostics)?;
+        validate_xiidm_tap_changers(detailed)?;
+        validate_xiidm_reactive_limits(detailed)?;
         validate_xiidm_dc_emission(detailed)?;
         let index = XiidmWriteIndex::new(network, detailed)?;
         let network_component = component_id("balanced_network", network.name())?;
@@ -6207,7 +6801,9 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
         &codes::EMIT_XIIDM.value_defaulted,
         "the network has no substation or voltage level hierarchy; XIIDM hierarchy was derived from buses",
     );
-    let detailed = derive_detailed_connectivity(network);
+    let detailed = derive_detailed_connectivity(network, &mut diagnostics)?;
+    validate_xiidm_tap_changers(&detailed)?;
+    validate_xiidm_reactive_limits(&detailed)?;
     validate_xiidm_dc_emission(&detailed)?;
     let index = XiidmWriteIndex::new(network, &detailed)?;
     write_detailed_body(
@@ -6462,6 +7058,544 @@ fn xiidm_emission_error(component: &ComponentId, field: &str) -> Error {
         format: FORMAT,
         message: format!("cannot emit `{component}`: XIIDM requires `{field}`"),
     }
+}
+
+fn ordered_xiidm_tap_steps(tap: &NetworkTapChanger) -> Result<Vec<&NetworkTapChangerStep>> {
+    let mut steps = tap.steps.iter().collect::<Vec<_>>();
+    steps.sort_unstable_by_key(|step| step.position);
+    for (offset, step) in steps.iter().enumerate() {
+        let offset = i32::try_from(offset).map_err(|_| Error::Emit {
+            format: FORMAT,
+            message: format!(
+                "cannot emit transformer `{}` tap changer on winding {}: too many tap steps",
+                tap.transformer.local_id(),
+                tap.winding
+            ),
+        })?;
+        let expected = tap
+            .low_tap_position
+            .checked_add(offset)
+            .ok_or_else(|| Error::Emit {
+                format: FORMAT,
+                message: format!(
+                    "cannot emit transformer `{}` tap changer on winding {}: tap step position overflows i32",
+                    tap.transformer.local_id(),
+                    tap.winding
+                ),
+            })?;
+        if step.position != expected {
+            return Err(Error::Emit {
+                format: FORMAT,
+                message: format!(
+                    "cannot emit transformer `{}` tap changer on winding {}: XIIDM assigns consecutive step positions from lowTapPosition {}, but found position {} where {} was required",
+                    tap.transformer.local_id(),
+                    tap.winding,
+                    tap.low_tap_position,
+                    step.position,
+                    expected
+                ),
+            });
+        }
+    }
+    for (field, position) in [
+        ("tapPosition", tap.tap_position),
+        ("solvedTapPosition", tap.solved_tap_position),
+    ] {
+        if let Some(position) = position
+            && !steps.iter().any(|step| step.position == position)
+        {
+            return Err(Error::Emit {
+                format: FORMAT,
+                message: format!(
+                    "cannot emit transformer `{}` tap changer on winding {}: {field} {position} has no matching step",
+                    tap.transformer.local_id(),
+                    tap.winding
+                ),
+            });
+        }
+    }
+    Ok(steps)
+}
+
+fn validate_xiidm_tap_changers(detailed: &DetailedConnectivity) -> Result<()> {
+    for tap in &detailed.tap_changers {
+        if !tap.steps.is_empty() {
+            ordered_xiidm_tap_steps(tap)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_xiidm_reactive_limits(detailed: &DetailedConnectivity) -> Result<()> {
+    let validate = |component: &ComponentId, limits: &ReactiveLimits| -> Result<()> {
+        if matches!(
+            limits,
+            ReactiveLimits::CapabilityCurve(ReactiveCapabilityCurve {
+                curve_style: CurveStyle::ConstantYValue,
+                ..
+            })
+        ) {
+            return Err(Error::Emit {
+                format: FORMAT,
+                message: format!(
+                    "cannot emit `{component}`: XIIDM reactiveCapabilityCurve uses CurveStyle.straightLineYValues, not CurveStyle.constantYValue"
+                ),
+            });
+        }
+        Ok(())
+    };
+    for record in &detailed.equipment_reactive_limits {
+        validate(&record.equipment, &record.limits)?;
+    }
+    for boundary in &detailed.boundary_lines {
+        if let Some(limits) = boundary
+            .generation
+            .as_ref()
+            .and_then(|generation| generation.reactive_limits.as_ref())
+        {
+            validate(&boundary.component, limits)?;
+        }
+    }
+    for converter in &detailed.voltage_source_converters {
+        if let Some(limits) = converter.reactive_limits.as_ref() {
+            validate(&converter.component, limits)?;
+        }
+    }
+    Ok(())
+}
+
+fn diagnose_xiidm_dropped_fields(
+    component: &ComponentId,
+    fields: &[&str],
+    diagnostics: &mut Diagnostics,
+) {
+    if fields.is_empty() {
+        return;
+    }
+    diagnostics.push(
+        &codes::EMIT_XIIDM.field_dropped,
+        format!(
+            "`{component}` has no XIIDM 1.17 representation for: {}",
+            fields.join(", ")
+        ),
+    );
+}
+
+fn diagnose_xiidm_dc_terminal(
+    equipment: &ComponentId,
+    side: &str,
+    terminal: &DcTerminal,
+    diagnostics: &mut Diagnostics,
+) {
+    let fields = [
+        terminal.component.as_ref().map(|_| "terminal identity"),
+        terminal.sequence_number.map(|_| "terminal sequence number"),
+        terminal
+            .dc_topological_node
+            .as_ref()
+            .map(|_| "DC topological node"),
+        terminal.polarity.map(|_| "terminal polarity"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    if !fields.is_empty() {
+        diagnostics.push(
+            &codes::EMIT_XIIDM.field_dropped,
+            format!(
+                "`{equipment}` {side} has no XIIDM 1.17 representation for: {}",
+                fields.join(", ")
+            ),
+        );
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+fn diagnose_xiidm_projection(
+    detailed: &DetailedConnectivity,
+    diagnostics: &mut Diagnostics,
+) -> Result<()> {
+    let metadata_by_component = detailed
+        .component_metadata
+        .iter()
+        .map(|metadata| (&metadata.component, metadata))
+        .collect::<HashMap<_, _>>();
+    for terminal in &detailed.terminals {
+        let Some(component) = terminal.component.as_ref() else {
+            continue;
+        };
+        let has_metadata = metadata_by_component
+            .get(component)
+            .is_some_and(|metadata| {
+                metadata.name.is_some()
+                    || metadata.equipment_container.is_some()
+                    || !metadata.aliases.is_empty()
+                    || !metadata.external_identifiers.is_empty()
+                    || !metadata.properties.is_empty()
+                    || metadata.fictitious
+            });
+        diagnostics.push(
+            &codes::EMIT_XIIDM.field_dropped,
+            format!(
+                "`{}` terminal {} identity `{component}`{} has no XIIDM 1.17 representation",
+                terminal.equipment,
+                terminal.terminal,
+                if has_metadata {
+                    " and its attached metadata"
+                } else {
+                    ""
+                },
+            ),
+        );
+    }
+    for node in &detailed.connectivity_nodes {
+        let xiidm_identity = node
+            .node_number
+            .and_then(|number| node_component_id(node.voltage_level.local_id(), number).ok());
+        let metadata = metadata_by_component.get(&node.component);
+        let has_unrepresentable_metadata = metadata.is_some_and(|metadata| {
+            metadata.name.is_some()
+                || metadata.equipment_container.is_some()
+                || !metadata.aliases.is_empty()
+                || !metadata.external_identifiers.is_empty()
+                || !metadata.properties.is_empty()
+                || metadata.fictitious
+        });
+        if xiidm_identity.as_ref() != Some(&node.component) || has_unrepresentable_metadata {
+            diagnostics.push(
+                &codes::EMIT_XIIDM.field_dropped,
+                format!(
+                    "connectivity node `{}`{} is emitted only as an XIIDM local node number; its source identity{} cannot be retained",
+                    node.component,
+                    if node.node_number.is_none() {
+                        " has no source node number and receives an allocated number"
+                    } else {
+                        ""
+                    },
+                    if has_unrepresentable_metadata {
+                        " and attached metadata"
+                    } else {
+                        ""
+                    },
+                ),
+            );
+        }
+    }
+    for tap in &detailed.tap_changers {
+        let mut fields = Vec::new();
+        if tap.component.is_some() {
+            fields.push("tap changer identity");
+        }
+        if tap.neutral_tap_position != Some(tap.low_tap_position) {
+            fields.push("neutral tap position distinct from low tap position");
+        }
+        if tap.normal_tap_position != tap.tap_position {
+            fields.push("normal tap position distinct from assigned tap position");
+        }
+        if tap.voltage_step_increment_percent.is_some() {
+            fields.push("voltage step increment");
+        }
+        diagnose_xiidm_dropped_fields(&tap.transformer, &fields, diagnostics);
+    }
+    for metadata in &detailed.component_metadata {
+        if !metadata.external_identifiers.is_empty() {
+            diagnostics.push(
+                &codes::EMIT_XIIDM.value_collapsed,
+                format!(
+                    "`{}` external identifiers are emitted as XIIDM aliases; XIIDM does not preserve the distinction between an alias and an external identifier",
+                    metadata.component
+                ),
+            );
+        }
+        if let Some(container) = &metadata.equipment_container {
+            diagnostics.push(
+                &codes::EMIT_XIIDM.field_dropped,
+                format!(
+                    "`{}` explicit equipment container `{container}` is expressed through XIIDM nesting where possible; the source metadata relationship is not retained",
+                    metadata.component
+                ),
+            );
+        }
+    }
+    for (kind, components) in [
+        (
+            "DC busbar",
+            detailed
+                .dc_busbars
+                .iter()
+                .map(|value| &value.component)
+                .collect::<Vec<_>>(),
+        ),
+        (
+            "DC series device",
+            detailed
+                .dc_series_devices
+                .iter()
+                .map(|value| &value.component)
+                .collect::<Vec<_>>(),
+        ),
+        (
+            "junction",
+            detailed
+                .junctions
+                .iter()
+                .map(|value| &value.component)
+                .collect::<Vec<_>>(),
+        ),
+    ] {
+        if !components.is_empty() {
+            return Err(Error::Emit {
+                format: FORMAT,
+                message: format!(
+                    "cannot emit {kind} records as XIIDM 1.17 without changing connectivity: {}",
+                    components
+                        .iter()
+                        .map(std::string::ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            });
+        }
+    }
+    for (kind, components) in [
+        (
+            "DC converter unit",
+            detailed
+                .dc_converter_units
+                .iter()
+                .map(|value| &value.component)
+                .collect::<Vec<_>>(),
+        ),
+        (
+            "DC topological node",
+            detailed
+                .dc_topological_nodes
+                .iter()
+                .map(|value| &value.component)
+                .collect::<Vec<_>>(),
+        ),
+    ] {
+        if !components.is_empty() {
+            diagnostics.push(
+                &codes::EMIT_XIIDM.field_dropped,
+                format!(
+                    "XIIDM 1.17 has no {kind} record; omitted {}",
+                    components
+                        .iter()
+                        .map(std::string::ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            );
+        }
+    }
+    for node in &detailed.dc_nodes {
+        diagnose_xiidm_dropped_fields(
+            &node.component,
+            &[
+                node.dc_converter_unit
+                    .as_ref()
+                    .map(|_| "DC converter unit")
+                    .into_iter(),
+                node.dc_topological_node
+                    .as_ref()
+                    .map(|_| "DC topological node")
+                    .into_iter(),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>(),
+            diagnostics,
+        );
+    }
+    for ground in &detailed.dc_grounds {
+        let fields = [
+            ground
+                .equipment_container
+                .as_ref()
+                .map(|_| "equipment container"),
+            ground.rated_dc_voltage_kv.map(|_| "rated DC voltage"),
+            ground.inductance_h.map(|_| "inductance"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        diagnose_xiidm_dropped_fields(&ground.component, &fields, diagnostics);
+        diagnose_xiidm_dc_terminal(
+            &ground.component,
+            "DC terminal",
+            &ground.dc_terminal,
+            diagnostics,
+        );
+    }
+    for line in &detailed.dc_lines {
+        let fields = [
+            line.equipment_container
+                .as_ref()
+                .map(|_| "equipment container"),
+            line.rated_dc_voltage_kv.map(|_| "rated DC voltage"),
+            line.inductance_h.map(|_| "inductance"),
+            line.capacitance_f.map(|_| "capacitance"),
+            line.length_km.map(|_| "length"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        diagnose_xiidm_dropped_fields(&line.component, &fields, diagnostics);
+        diagnose_xiidm_dc_terminal(
+            &line.component,
+            "first DC terminal",
+            &line.dc_terminal1,
+            diagnostics,
+        );
+        diagnose_xiidm_dc_terminal(
+            &line.component,
+            "second DC terminal",
+            &line.dc_terminal2,
+            diagnostics,
+        );
+    }
+    for switch in &detailed.dc_switches {
+        let fields = [
+            switch
+                .equipment_container
+                .as_ref()
+                .map(|_| "equipment container"),
+            switch.rated_dc_voltage_kv.map(|_| "rated DC voltage"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        diagnose_xiidm_dropped_fields(&switch.component, &fields, diagnostics);
+        diagnose_xiidm_dc_terminal(
+            &switch.component,
+            "first DC terminal",
+            &switch.dc_terminal1,
+            diagnostics,
+        );
+        diagnose_xiidm_dc_terminal(
+            &switch.component,
+            "second DC terminal",
+            &switch.dc_terminal2,
+            diagnostics,
+        );
+    }
+    for converter in &detailed.voltage_source_converters {
+        let fields = [
+            converter
+                .dc_converter_unit
+                .as_ref()
+                .map(|_| "DC converter unit"),
+            converter
+                .base_apparent_power_mva
+                .map(|_| "base apparent power"),
+            converter
+                .minimum_dc_voltage_kv
+                .map(|_| "minimum DC voltage"),
+            converter
+                .maximum_dc_voltage_kv
+                .map(|_| "maximum DC voltage"),
+            converter.rated_dc_voltage_kv.map(|_| "rated DC voltage"),
+            converter.valve_u0_kv.map(|_| "valve threshold voltage"),
+            converter.number_of_valves.map(|_| "number of valves"),
+            converter.active_power_at_pcc_mw.map(|_| "PCC active power"),
+            converter
+                .reactive_power_at_pcc_mvar
+                .map(|_| "PCC reactive power"),
+            converter.droop.map(|_| "scalar droop"),
+            converter.droop_compensation.map(|_| "droop compensation"),
+            converter.q_share.map(|_| "reactive power sharing factor"),
+            converter
+                .maximum_modulation_index
+                .map(|_| "maximum modulation index"),
+            converter
+                .maximum_valve_current_a
+                .map(|_| "maximum valve current"),
+            converter
+                .pole_loss_active_power_mw
+                .map(|_| "pole loss active power"),
+            converter.dc_current_a.map(|_| "solved DC current"),
+            converter.ac_voltage_kv.map(|_| "solved AC voltage"),
+            converter.dc_voltage_kv.map(|_| "solved DC voltage"),
+            converter.delta_degrees.map(|_| "solved converter angle"),
+            converter.uf_kv.map(|_| "solved filter voltage"),
+            converter.uv_kv.map(|_| "solved valve voltage"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        diagnose_xiidm_dropped_fields(&converter.component, &fields, diagnostics);
+        diagnose_xiidm_dc_terminal(
+            &converter.component,
+            "first DC terminal",
+            &converter.dc_terminal1,
+            diagnostics,
+        );
+        diagnose_xiidm_dc_terminal(
+            &converter.component,
+            "second DC terminal",
+            &converter.dc_terminal2,
+            diagnostics,
+        );
+    }
+    for converter in &detailed.line_commutated_converters {
+        let fields = [
+            converter
+                .dc_converter_unit
+                .as_ref()
+                .map(|_| "DC converter unit"),
+            converter
+                .base_apparent_power_mva
+                .map(|_| "base apparent power"),
+            converter
+                .minimum_dc_voltage_kv
+                .map(|_| "minimum DC voltage"),
+            converter
+                .maximum_dc_voltage_kv
+                .map(|_| "maximum DC voltage"),
+            converter.rated_dc_voltage_kv.map(|_| "rated DC voltage"),
+            converter.valve_u0_kv.map(|_| "valve threshold voltage"),
+            converter.number_of_valves.map(|_| "number of valves"),
+            converter.active_power_at_pcc_mw.map(|_| "PCC active power"),
+            converter
+                .reactive_power_at_pcc_mvar
+                .map(|_| "PCC reactive power"),
+            converter.operating_mode.map(|_| "operating mode"),
+            converter.rated_dc_current_a.map(|_| "rated DC current"),
+            converter.minimum_alpha_degrees.map(|_| "minimum alpha"),
+            converter.maximum_alpha_degrees.map(|_| "maximum alpha"),
+            converter.minimum_gamma_degrees.map(|_| "minimum gamma"),
+            converter.maximum_gamma_degrees.map(|_| "maximum gamma"),
+            converter.target_alpha_degrees.map(|_| "target alpha"),
+            converter.target_gamma_degrees.map(|_| "target gamma"),
+            converter.target_dc_current_a.map(|_| "target DC current"),
+            converter
+                .pole_loss_active_power_mw
+                .map(|_| "pole loss active power"),
+            converter.dc_current_a.map(|_| "solved DC current"),
+            converter.ac_voltage_kv.map(|_| "solved AC voltage"),
+            converter.dc_voltage_kv.map(|_| "solved DC voltage"),
+            converter.alpha_degrees.map(|_| "solved alpha"),
+            converter.gamma_degrees.map(|_| "solved gamma"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        diagnose_xiidm_dropped_fields(&converter.component, &fields, diagnostics);
+        diagnose_xiidm_dc_terminal(
+            &converter.component,
+            "first DC terminal",
+            &converter.dc_terminal1,
+            diagnostics,
+        );
+        diagnose_xiidm_dc_terminal(
+            &converter.component,
+            "second DC terminal",
+            &converter.dc_terminal2,
+            diagnostics,
+        );
+    }
+    Ok(())
 }
 
 fn validate_xiidm_dc_terminal(
@@ -6768,6 +7902,7 @@ fn write_ac_dc_converters(
     level: &VoltageLevel,
     included: &dyn Fn(&ComponentId) -> bool,
     output: &mut String,
+    diagnostics: &mut Diagnostics,
 ) {
     for converter in index
         .vscs_by_level
@@ -6778,6 +7913,12 @@ fn write_ac_dc_converters(
         .filter(|converter| included(&converter.component))
     {
         let metadata = index.metadata(&converter.component);
+        diagnose_converter_active_power_limits(
+            &converter.component,
+            converter.minimum_active_power_mw,
+            converter.maximum_active_power_mw,
+            diagnostics,
+        );
         output.push_str(&format!(
             "      <iidm:voltageSourceConverter id=\"{}\"{} dcNode1=\"{}\" dcConnected1=\"{}\" dcNode2=\"{}\" dcConnected2=\"{}\" idleLoss=\"{}\" switchingLoss=\"{}\" resistiveLoss=\"{}\" controlMode=\"{}\"{}{}{} voltageRegulatorOn=\"{}\"{}{}>\n",
             xml(converter.component.local_id()),
@@ -6850,6 +7991,12 @@ fn write_ac_dc_converters(
         .filter(|converter| included(&converter.component))
     {
         let metadata = index.metadata(&converter.component);
+        diagnose_converter_active_power_limits(
+            &converter.component,
+            converter.minimum_active_power_mw,
+            converter.maximum_active_power_mw,
+            diagnostics,
+        );
         output.push_str(&format!(
             "      <iidm:lineCommutatedConverter id=\"{}\"{} dcNode1=\"{}\" dcConnected1=\"{}\" dcNode2=\"{}\" dcConnected2=\"{}\" idleLoss=\"{}\" switchingLoss=\"{}\" resistiveLoss=\"{}\" controlMode=\"{}\"{}{}{} reactiveModel=\"{}\" powerFactor=\"{}\">\n",
             xml(converter.component.local_id()),
@@ -6907,6 +8054,36 @@ fn write_ac_dc_converters(
         );
         write_droop_curve(converter.droop_curve.as_ref(), output);
         output.push_str("      </iidm:lineCommutatedConverter>\n");
+    }
+}
+
+fn diagnose_converter_active_power_limits(
+    component: &ComponentId,
+    minimum_active_power_mw: Option<f64>,
+    maximum_active_power_mw: Option<f64>,
+    diagnostics: &mut Diagnostics,
+) {
+    let fields = [
+        minimum_active_power_mw.map(|_| "minimum active power"),
+        maximum_active_power_mw.map(|_| "maximum active power"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    if !fields.is_empty() {
+        diagnostics.push(
+            &codes::EMIT_XIIDM.field_dropped,
+            format!(
+                "converter `{}` {} {} no XIIDM 1.17 field",
+                component.local_id(),
+                fields.join(" and "),
+                if fields.len() == 1 {
+                    "limit has"
+                } else {
+                    "limits have"
+                },
+            ),
+        );
     }
 }
 
@@ -7560,7 +8737,7 @@ fn write_detailed_voltage_level(
         write_static_var_compensator(index, svc, output);
     }
     write_hvdc_converter_stations(index, level, included, output, diagnostics);
-    write_ac_dc_converters(index, level, included, output);
+    write_ac_dc_converters(index, level, included, output, diagnostics);
     for boundary in index
         .boundaries_by_level
         .get(&level.component)
@@ -7587,6 +8764,20 @@ fn is_boundary_calculation_component(
         .is_some_and(|component| calculations.contains(&component))
 }
 
+fn assignment_attribute(
+    index: &XiidmWriteIndex<'_>,
+    component: &ComponentId,
+    field: OmittedFieldName,
+    name: &str,
+    value: f64,
+) -> String {
+    if index.is_omitted(component, field) {
+        String::new()
+    } else {
+        format!(" {name}=\"{}\"", number(value))
+    }
+}
+
 fn write_boundary_line(
     index: &XiidmWriteIndex<'_>,
     boundary: &BoundaryLine,
@@ -7596,6 +8787,20 @@ fn write_boundary_line(
     let metadata = index.metadata(&boundary.component);
     let terminal = terminal_attributes(index, &boundary.component, 1, false, true);
     let selected = selected_boundary_operational_limits_attribute(index, &boundary.component);
+    let active_power = assignment_attribute(
+        index,
+        &boundary.component,
+        OmittedFieldName::ActivePower,
+        "p0",
+        boundary.active_power_setpoint_mw,
+    );
+    let reactive_power = assignment_attribute(
+        index,
+        &boundary.component,
+        OmittedFieldName::ReactivePower,
+        "q0",
+        boundary.reactive_power_setpoint_mvar,
+    );
     let generation = boundary
         .generation
         .as_ref()
@@ -7611,11 +8816,9 @@ fn write_boundary_line(
             )
         });
     output.push_str(&format!(
-        "      <iidm:boundaryLine id=\"{}\"{} p0=\"{}\" q0=\"{}\" r=\"{}\" x=\"{}\" g=\"{}\" b=\"{}\"{}{}{terminal}{selected}>\n",
+        "      <iidm:boundaryLine id=\"{}\"{}{active_power}{reactive_power} r=\"{}\" x=\"{}\" g=\"{}\" b=\"{}\"{}{}{terminal}{selected}>\n",
         xml(boundary.component.local_id()),
         identifiable_attributes(metadata),
-        number(boundary.active_power_setpoint_mw),
-        number(boundary.reactive_power_setpoint_mvar),
         number(boundary.resistance_ohm),
         number(boundary.reactance_ohm),
         number(boundary.conductance_siemens),
@@ -7646,6 +8849,20 @@ fn write_load(index: &XiidmWriteIndex<'_>, load: &Load, output: &mut String) {
     let component = component_id("load", id).expect("valid stored identity");
     let terminal = terminal_attributes(index, &component, 1, false, load.in_service);
     let metadata = index.metadata(&component);
+    let active_power = assignment_attribute(
+        index,
+        &component,
+        OmittedFieldName::ActivePower,
+        "p0",
+        load.p,
+    );
+    let reactive_power = assignment_attribute(
+        index,
+        &component,
+        OmittedFieldName::ReactivePower,
+        "q0",
+        load.q,
+    );
     let model = match &load.voltage_model {
         None | Some(LoadVoltageModel::ConstantPower) => None,
         Some(LoadVoltageModel::Zip {
@@ -7676,11 +8893,9 @@ fn write_load(index: &XiidmWriteIndex<'_>, load: &Load, output: &mut String) {
     let children = model.is_some() || has_identifiable_children(metadata);
     if children {
         output.push_str(&format!(
-            "      <iidm:load id=\"{}\"{} loadType=\"UNDEFINED\" p0=\"{}\" q0=\"{}\"{terminal}>\n",
+            "      <iidm:load id=\"{}\"{} loadType=\"UNDEFINED\"{active_power}{reactive_power}{terminal}>\n",
             xml(id),
             identifiable_attributes(metadata),
-            number(load.p),
-            number(load.q),
         ));
         write_identifiable_children(metadata, output);
         if let Some(model) = model {
@@ -7689,11 +8904,9 @@ fn write_load(index: &XiidmWriteIndex<'_>, load: &Load, output: &mut String) {
         output.push_str("      </iidm:load>\n");
     } else {
         output.push_str(&format!(
-            "      <iidm:load id=\"{}\"{} loadType=\"UNDEFINED\" p0=\"{}\" q0=\"{}\"{terminal}/>\n",
+            "      <iidm:load id=\"{}\"{} loadType=\"UNDEFINED\"{active_power}{reactive_power}{terminal}/>\n",
             xml(id),
             identifiable_attributes(metadata),
-            number(load.p),
-            number(load.q),
         ));
     }
 }
@@ -7713,11 +8926,39 @@ fn write_generator(
         .regulated_bus
         .and_then(|bus| index.buses.get(&bus).map(|bus| bus.base_kv))
         .unwrap_or(level.nominal_kv);
+    let target_active_power = assignment_attribute(
+        index,
+        &component,
+        OmittedFieldName::ActivePower,
+        "targetP",
+        generator.pg,
+    );
+    let target_reactive_power = assignment_attribute(
+        index,
+        &component,
+        OmittedFieldName::ReactivePower,
+        "targetQ",
+        generator.qg,
+    );
+    let target_voltage = assignment_attribute(
+        index,
+        &component,
+        OmittedFieldName::VoltageSetpoint,
+        "targetV",
+        generator.vg * target_base_kv,
+    );
+    let rated_apparent_power = assignment_attribute(
+        index,
+        &component,
+        OmittedFieldName::RatedApparentPower,
+        "ratedS",
+        generator.mbase,
+    );
     output.push_str(&format!(
-        "      <iidm:generator id=\"{}\"{} energySource=\"OTHER\" minP=\"{}\" maxP=\"{}\" voltageRegulatorOn=\"{}\" targetP=\"{}\" targetQ=\"{}\" targetV=\"{}\"{terminal}>\n",
-        xml(id), identifiable_attributes(metadata), number(generator.pmin), number(generator.pmax),
-        generator.voltage_regulation_on, number(generator.pg), number(generator.qg),
-        number(generator.vg * target_base_kv),
+        "      <iidm:generator id=\"{}\"{} energySource=\"{}\" minP=\"{}\" maxP=\"{}\" voltageRegulatorOn=\"{}\"{rated_apparent_power}{target_active_power}{target_reactive_power}{target_voltage}{terminal}>\n",
+        xml(id), identifiable_attributes(metadata),
+        generator_energy_source_text(generator.energy_source), number(generator.pmin),
+        number(generator.pmax), generator.voltage_regulation_on,
     ));
     write_identifiable_children(metadata, output);
     if let Some(reference) = &generator.regulating_terminal {
@@ -7766,10 +9007,24 @@ fn write_storage(
     let component = component_id("storage", id).expect("valid stored identity");
     let terminal = terminal_attributes(index, &component, 1, false, storage.in_service);
     let metadata = index.metadata(&component);
+    let target_active_power = assignment_attribute(
+        index,
+        &component,
+        OmittedFieldName::ActivePower,
+        "targetP",
+        storage.ps,
+    );
+    let target_reactive_power = assignment_attribute(
+        index,
+        &component,
+        OmittedFieldName::ReactivePower,
+        "targetQ",
+        storage.qs,
+    );
     output.push_str(&format!(
-        "      <iidm:battery id=\"{}\"{} targetP=\"{}\" targetQ=\"{}\" minP=\"{}\" maxP=\"{}\"{terminal}>\n",
-        xml(id), identifiable_attributes(metadata), number(storage.ps), number(storage.qs),
-        number(-storage.charge_rating), number(storage.discharge_rating),
+        "      <iidm:battery id=\"{}\"{}{target_active_power}{target_reactive_power} minP=\"{}\" maxP=\"{}\"{terminal}>\n",
+        xml(id), identifiable_attributes(metadata), number(-storage.charge_rating),
+        number(storage.discharge_rating),
     ));
     write_identifiable_children(metadata, output);
     if let Some(record) = index.reactive_limits.get(&component).copied() {
@@ -7801,6 +9056,8 @@ fn write_shunt(
     let component = component_id("shunt", id).expect("valid stored identity");
     let terminal = terminal_attributes(index, &component, 1, false, shunt.in_service);
     let metadata = index.metadata(&component);
+    let conductance_omitted =
+        index.is_omitted(&component, OmittedFieldName::ShuntConductancePerSection);
     let scale = level.nominal_kv * level.nominal_kv;
     let Some(control) = &shunt.control else {
         let assigned_section_count = shunt
@@ -7813,9 +9070,14 @@ fn write_shunt(
             xml(id), identifiable_attributes(metadata),
         ));
         write_identifiable_children(metadata, output);
+        let conductance = if conductance_omitted {
+            String::new()
+        } else {
+            format!(" gPerSection=\"{}\"", number(shunt.g / scale))
+        };
         output.push_str(&format!(
-            "        <iidm:shuntLinearModel gPerSection=\"{}\" bPerSection=\"{}\" maximumSectionCount=\"1\"/>\n      </iidm:shuntCompensator>\n",
-            number(shunt.g / scale), number(shunt.b / scale),
+            "        <iidm:shuntLinearModel{conductance} bPerSection=\"{}\" maximumSectionCount=\"1\"/>\n      </iidm:shuntCompensator>\n",
+            number(shunt.b / scale),
         ));
         return;
     };
@@ -7825,9 +9087,14 @@ fn write_shunt(
             xml(id), identifiable_attributes(metadata),
         ));
         write_identifiable_children(metadata, output);
+        let conductance = if conductance_omitted {
+            String::new()
+        } else {
+            format!(" gPerSection=\"{}\"", number(shunt.g / scale))
+        };
         output.push_str(&format!(
-            "        <iidm:shuntLinearModel gPerSection=\"{}\" bPerSection=\"{}\" maximumSectionCount=\"1\"/>\n      </iidm:shuntCompensator>\n",
-            number(shunt.g / scale), number(shunt.b / scale),
+            "        <iidm:shuntLinearModel{conductance} bPerSection=\"{}\" maximumSectionCount=\"1\"/>\n      </iidm:shuntCompensator>\n",
+            number(shunt.b / scale),
         ));
         diagnostics.push(
             &codes::EMIT_XIIDM.field_dropped,
@@ -7874,9 +9141,13 @@ fn write_shunt(
     }
     if control.blocks.len() == 1 {
         let block = &control.blocks[0];
+        let conductance = if conductance_omitted {
+            String::new()
+        } else {
+            format!(" gPerSection=\"{}\"", number(block.g / scale))
+        };
         output.push_str(&format!(
-            "        <iidm:shuntLinearModel gPerSection=\"{}\" bPerSection=\"{}\" maximumSectionCount=\"{}\"/>\n",
-            number(block.g / scale),
+            "        <iidm:shuntLinearModel{conductance} bPerSection=\"{}\" maximumSectionCount=\"{}\"/>\n",
             number(block.b / scale),
             block.steps,
         ));
@@ -7884,9 +9155,13 @@ fn write_shunt(
         output.push_str("        <iidm:shuntNonLinearModel>\n");
         for block in &control.blocks {
             for _ in 0..block.steps {
+                let conductance = if conductance_omitted {
+                    String::new()
+                } else {
+                    format!(" g=\"{}\"", number(block.g / scale))
+                };
                 output.push_str(&format!(
-                    "          <iidm:section g=\"{}\" b=\"{}\"/>\n",
-                    number(block.g / scale),
+                    "          <iidm:section{conductance} b=\"{}\"/>\n",
                     number(block.b / scale),
                 ));
             }
@@ -8092,7 +9367,7 @@ fn write_tap_changer(
     if let Some(reference) = &tap.regulation_terminal {
         output.push_str(&write_terminal_reference("terminalRef", reference, 8));
     }
-    for step in &tap.steps {
+    for step in ordered_xiidm_tap_steps(tap).expect("validated XIIDM tap step positions") {
         let alpha = if tap.kind == TapChangerKind::Phase {
             format!(" alpha=\"{}\"", number(step.alpha_degrees))
         } else {
@@ -8236,6 +9511,18 @@ fn write_three_winding_transformer(
         }
     }
     output.push_str("    </iidm:threeWindingsTransformer>\n");
+    for (side, winding) in transformer.windings.iter().enumerate() {
+        if let Some(control) = &winding.control {
+            diagnostics.push(
+                &codes::EMIT_XIIDM.field_dropped,
+                format!(
+                    "three winding transformer `{id}` winding {} {} data has no XIIDM transformer field",
+                    side + 1,
+                    transformer_control_mode_name(control.mode),
+                ),
+            );
+        }
+    }
     if (transformer.star_vm - 1.0).abs() > f64::EPSILON || transformer.star_va.abs() > f64::EPSILON
     {
         diagnostics.push(
@@ -8367,7 +9654,13 @@ fn write_hvdc_converter_stations(
             let power_factor = converter
                 .power_factor
                 .expect("XIIDM LCC emission was validated");
-            let solution = injection_solution_attributes(index, &component, p, q);
+            let solution = if index.supplied_detailed_connectivity
+                && index.terminal(&component, 1).is_some()
+            {
+                String::new()
+            } else {
+                injection_solution_attributes(index, &component, p, q)
+            };
             output.push_str(&format!(
                     "      <iidm:lccConverterStation id=\"{}\"{} lossFactor=\"{}\" powerFactor=\"{}\"{terminal}{solution}/>\n",
                     xml(&id),
@@ -8385,7 +9678,13 @@ fn write_hvdc_converter_stations(
                 "reactivePowerSetpoint",
                 converter.reactive_power_setpoint_mvar,
             );
-            let solution = injection_solution_attributes(index, &component, p, q);
+            let solution = if index.supplied_detailed_connectivity
+                && index.terminal(&component, 1).is_some()
+            {
+                String::new()
+            } else {
+                injection_solution_attributes(index, &component, p, q)
+            };
             output.push_str(&format!(
                     "      <iidm:vscConverterStation id=\"{}\"{} lossFactor=\"{}\" voltageRegulatorOn=\"{}\"{voltage_setpoint}{reactive_power_setpoint}{terminal}{solution}>\n        <iidm:minMaxReactiveLimits minQ=\"{}\" maxQ=\"{}\"/>\n{}      </iidm:vscConverterStation>\n",
                     xml(&id),
@@ -8501,7 +9800,7 @@ fn write_line(
     let limits = has_branch_operational_limits(branch);
     output.push_str(&format!(
         "  <iidm:line id=\"{}\"{} r=\"{}\" x=\"{}\" g1=\"{}\" b1=\"{}\" g2=\"{}\" b2=\"{}\"{terminal1}{terminal2}{}{}>\n",
-        xml(id), identifiable_attributes(metadata), number(r), number(x), number(g1), number(b1), number(g2), number(b2),
+        xml(id), identifiable_attributes_with_name(metadata, branch.name.as_deref()), number(r), number(x), number(g1), number(b1), number(g2), number(b2),
         branch_solution_attributes(index, &component, branch.solution),
         selected_operational_limits_attributes(index, &component, 2, |_| limits),
     ));
@@ -8551,7 +9850,7 @@ fn write_transformer(
     output.push_str(&format!(
         "    <iidm:twoWindingsTransformer id=\"{}\"{} r=\"{}\" x=\"{}\" g=\"{}\" b=\"{}\" ratedU1=\"{}\" ratedU2=\"{}\"{terminal1}{terminal2}{}{}>\n",
         xml(id),
-        identifiable_attributes(metadata),
+        identifiable_attributes_with_name(metadata, branch.name.as_deref()),
         number(unapply(branch.r * zbase, resistance_factor)),
         number(unapply(branch.x * zbase, reactance_factor)),
         number(unapply(charging.g_fr / zbase, conductance_factor)),
@@ -8911,6 +10210,26 @@ fn warn_branch_fields(id: &str, branch: &Branch, diagnostics: &mut Diagnostics) 
             format!("branch `{id}` angle bounds have no XIIDM branch attribute"),
         );
     }
+    if let Some(control) = &branch.control {
+        diagnostics.push(
+            &codes::EMIT_XIIDM.field_dropped,
+            format!(
+                "transformer `{id}` {} data has no XIIDM transformer field",
+                transformer_control_mode_name(control.mode),
+            ),
+        );
+    }
+}
+
+fn transformer_control_mode_name(mode: TransformerControlMode) -> &'static str {
+    match mode {
+        TransformerControlMode::Fixed => "fixed tap control",
+        TransformerControlMode::Voltage => "voltage control",
+        TransformerControlMode::ReactiveFlow => "reactive power flow control",
+        TransformerControlMode::ActiveFlow => "active power flow control",
+        TransformerControlMode::DcLineQuantity => "DC line quantity control",
+        TransformerControlMode::AsymmetricActiveFlow => "asymmetric active power flow control",
+    }
 }
 
 fn terminal_attributes(
@@ -8934,14 +10253,9 @@ fn terminal_attributes(
         optional_number_attribute(&format!("q{suffix}"), terminal.reactive_power_mvar),
     );
     if let Some(node) = terminal
-        .connected
-        .then(|| {
-            terminal
-                .node
-                .as_ref()
-                .and_then(|node| index.node_number(node))
-        })
-        .flatten()
+        .node
+        .as_ref()
+        .and_then(|node| index.node_number(node))
     {
         let voltage_level = if branch {
             format!(
@@ -8997,6 +10311,23 @@ fn identifiable_attributes(metadata: Option<&ComponentMetadata>) -> String {
     };
     let mut attributes = optional_text_attribute("name", metadata.name.as_deref());
     if metadata.fictitious {
+        attributes.push_str(" fictitious=\"true\"");
+    }
+    attributes
+}
+
+fn identifiable_attributes_with_name(
+    metadata: Option<&ComponentMetadata>,
+    typed_name: Option<&str>,
+) -> String {
+    if metadata
+        .and_then(|metadata| metadata.name.as_deref())
+        .is_some()
+    {
+        return identifiable_attributes(metadata);
+    }
+    let mut attributes = optional_text_attribute("name", typed_name);
+    if metadata.is_some_and(|metadata| metadata.fictitious) {
         attributes.push_str(" fictitious=\"true\"");
     }
     attributes
@@ -9143,6 +10474,8 @@ fn xml(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
 
     fn assert_f64_close(actual: f64, expected: f64) {
@@ -9223,6 +10556,146 @@ mod tests {
   </iidm:substation>
 </iidm:network>"#;
 
+    #[test]
+    fn xiidm_projection_refuses_connectivity_loss_and_reports_cgmes_only_records() {
+        let empty_terminal = DcTerminal {
+            component: None,
+            sequence_number: None,
+            dc_node: None,
+            dc_topological_node: None,
+            polarity: None,
+            connected: None,
+            active_power_mw: None,
+            current_a: None,
+        };
+        let mut connectivity = DetailedConnectivity::default();
+        connectivity.dc_busbars.push(crate::network::DcBusbar {
+            component: component_id("dc_busbar", "B").unwrap(),
+            equipment_container: None,
+            dc_terminal: empty_terminal,
+            rated_dc_voltage_kv: Some(320.0),
+        });
+        let error = diagnose_xiidm_projection(&connectivity, &mut Diagnostics::new()).unwrap_err();
+        assert!(error.to_string().contains("DC busbar"));
+        assert!(error.to_string().contains("without changing connectivity"));
+
+        let mut connectivity = DetailedConnectivity::default();
+        connectivity
+            .dc_converter_units
+            .push(crate::network::DcConverterUnit {
+                component: component_id("dc_converter_unit", "U").unwrap(),
+                substation: None,
+                operation_mode: crate::network::DcConverterOperatingMode::Bipolar,
+            });
+        connectivity
+            .dc_topological_nodes
+            .push(crate::network::DcTopologicalNode {
+                component: component_id("dc_topological_node", "TN").unwrap(),
+                dc_converter_unit: Some(component_id("dc_converter_unit", "U").unwrap()),
+            });
+        let mut diagnostics = Diagnostics::new();
+        diagnose_xiidm_projection(&connectivity, &mut diagnostics).unwrap();
+        let messages = diagnostics
+            .records()
+            .iter()
+            .filter(|diagnostic| diagnostic.code() == codes::EMIT_XIIDM.field_dropped.code)
+            .map(powerio_core::Diagnostic::message)
+            .collect::<Vec<_>>();
+        assert_eq!(messages.len(), 2);
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("DC converter unit"))
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("DC topological node"))
+        );
+    }
+
+    #[test]
+    fn xiidm_projection_reports_source_identities_and_metadata_it_cannot_retain() {
+        let voltage_level = component_id("voltage_level", "VL").unwrap();
+        let terminal = component_id("terminal", "terminal-mrid").unwrap();
+        let connectivity_node = component_id("connectivity_node", "node-mrid").unwrap();
+        let transformer = component_id("branch", "T").unwrap();
+        let load = component_id("load", "L").unwrap();
+        let mut connectivity = DetailedConnectivity::default();
+        connectivity.terminals.push(Terminal {
+            component: Some(terminal),
+            equipment: load.clone(),
+            terminal: 1,
+            voltage_level: voltage_level.clone(),
+            bus: None,
+            connectable_bus: None,
+            node: Some(connectivity_node.clone()),
+            connected: false,
+            active_power_mw: None,
+            reactive_power_mvar: None,
+        });
+        connectivity.connectivity_nodes.push(ConnectivityNode {
+            component: connectivity_node,
+            voltage_level: voltage_level.clone(),
+            node_number: Some(7),
+            calculated_bus: None,
+        });
+        connectivity.tap_changers.push(NetworkTapChanger {
+            component: Some(component_id("tap_changer", "tap-mrid").unwrap()),
+            transformer,
+            winding: 1,
+            kind: TapChangerKind::Ratio,
+            tap_position: Some(1),
+            solved_tap_position: None,
+            low_tap_position: 0,
+            neutral_tap_position: None,
+            normal_tap_position: Some(2),
+            voltage_step_increment_percent: Some(1.25),
+            load_tap_changing_capabilities: true,
+            regulating: false,
+            regulation_mode: None,
+            regulation_value: None,
+            target_deadband: None,
+            regulation_terminal: None,
+            steps: Vec::new(),
+        });
+        connectivity.component_metadata.push(ComponentMetadata {
+            component: load,
+            name: None,
+            equipment_container: Some(voltage_level),
+            aliases: Vec::new(),
+            external_identifiers: vec![crate::network::ExternalIdentifier {
+                value: "external-1".into(),
+                authority: Some("authority".into()),
+            }],
+            properties: BTreeMap::new(),
+            fictitious: false,
+        });
+
+        let mut diagnostics = Diagnostics::new();
+        diagnose_xiidm_projection(&connectivity, &mut diagnostics).unwrap();
+        let messages = diagnostics.lines().join("\n");
+        assert!(messages.contains("terminal 1 identity `terminal/terminal-mrid`"));
+        assert!(messages.contains("connectivity node `connectivity_node/node-mrid`"));
+        assert!(messages.contains("tap changer identity"));
+        assert!(messages.contains("neutral tap position distinct from low tap position"));
+        assert!(messages.contains("normal tap position distinct from assigned tap position"));
+        assert!(messages.contains("voltage step increment"));
+        assert!(messages.contains("external identifiers are emitted as XIIDM aliases"));
+        assert!(messages.contains("explicit equipment container `voltage_level/VL`"));
+
+        let mut native = DetailedConnectivity::default();
+        native.connectivity_nodes.push(ConnectivityNode {
+            component: node_component_id("VL", 7).unwrap(),
+            voltage_level: component_id("voltage_level", "VL").unwrap(),
+            node_number: Some(7),
+            calculated_bus: None,
+        });
+        let mut diagnostics = Diagnostics::new();
+        diagnose_xiidm_projection(&native, &mut diagnostics).unwrap();
+        assert!(diagnostics.is_empty());
+    }
+
     const EQUIPMENT_COVERAGE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <iidm:network xmlns:iidm="http://www.powsybl.org/schema/iidm/1_17" id="equipment" caseDate="2026-01-01T00:00:00Z" forecastDistance="0" sourceFormat="test" minimumValidationLevel="STEADY_STATE_HYPOTHESIS">
   <iidm:substation id="S">
@@ -9239,12 +10712,12 @@ mod tests {
       <iidm:busBreakerTopology><iidm:bus id="B3" v="11" angle="-2"/></iidm:busBreakerTopology>
     </iidm:voltageLevel>
     <iidm:threeWindingsTransformer id="T3" ratedU0="132" ratedU1="132" ratedU2="33" ratedU3="11" r1="17.424" x1="34.848" r2="1.7424" x2="3.4848" r3="0.8712" x3="1.7424" bus1="B1" connectableBus1="B1" voltageLevelId1="VL1" bus2="B2" connectableBus2="B2" voltageLevelId2="VL2" bus3="B3" connectableBus3="B3" voltageLevelId3="VL3" selectedOperationalLimitsGroupIds1="normal">
-      <iidm:ratioTapChanger2 tapPosition="0" lowTapPosition="0" loadTapChangingCapabilities="false"><iidm:step rho="1.05"/></iidm:ratioTapChanger2>
+      <iidm:ratioTapChanger2 tapPosition="0" lowTapPosition="0" loadTapChangingCapabilities="false"><iidm:property name="tap-kind" value="ratio"/><iidm:step rho="1.05"><iidm:property name="step-label" value="nominal"/></iidm:step></iidm:ratioTapChanger2>
       <iidm:operationalLimitsGroup1 id="normal"><iidm:apparentPowerLimits permanentLimit="90"><iidm:temporaryLimit name="emergency" acceptableDuration="600" value="100"/></iidm:apparentPowerLimits></iidm:operationalLimitsGroup1>
     </iidm:threeWindingsTransformer>
   </iidm:substation>
   <iidm:line id="L" r="1" x="10" bus1="B1" connectableBus1="B1" voltageLevelId1="VL1" bus2="B2" connectableBus2="B2" voltageLevelId2="VL2" selectedOperationalLimitsGroupIds1="normal" selectedOperationalLimitsGroupIds2="normal">
-    <iidm:operationalLimitsGroup1 id="normal"><iidm:apparentPowerLimits permanentLimit="120"><iidm:temporaryLimit name="long" acceptableDuration="1200" value="140"/><iidm:temporaryLimit name="short" acceptableDuration="60" value="160"/></iidm:apparentPowerLimits><iidm:currentLimits permanentLimit="500"/></iidm:operationalLimitsGroup1>
+    <iidm:operationalLimitsGroup1 id="normal"><iidm:apparentPowerLimits permanentLimit="120"><iidm:property name="limit-set" value="seasonal"/><iidm:temporaryLimit name="long" acceptableDuration="1200" value="140"><iidm:property name="cause" value="contingency"/></iidm:temporaryLimit><iidm:temporaryLimit name="short" acceptableDuration="60" value="160"/></iidm:apparentPowerLimits><iidm:currentLimits permanentLimit="500"/></iidm:operationalLimitsGroup1>
     <iidm:operationalLimitsGroup1 id="seasonal"><iidm:apparentPowerLimits permanentLimit="100" permanentLimitName="summer"/></iidm:operationalLimitsGroup1>
     <iidm:operationalLimitsGroup2 id="normal"><iidm:apparentPowerLimits permanentLimit="110"/><iidm:currentLimits permanentLimit="450"/></iidm:operationalLimitsGroup2>
   </iidm:line>
@@ -9461,6 +10934,123 @@ mod tests {
                 .iter()
                 .all(|node| node.calculated_bus == Some(BusId::new(1)))
         );
+        assert!(detailed.terminals.iter().any(|terminal| {
+            terminal.equipment == component_id("busbar_section", "BBS").unwrap()
+                && terminal.terminal == 1
+                && terminal.node == Some(component_id("connectivity_node", "VL/2").unwrap())
+        }));
+    }
+
+    #[test]
+    fn tap_changer_can_regulate_a_busbar_section_terminal() {
+        let source = NODE_BREAKER
+            .replace(
+                "<iidm:bus v=\"110\" angle=\"0\" nodes=\"0,1,2\"/>",
+                "<iidm:bus v=\"110\" angle=\"0\" nodes=\"0,1\"/><iidm:bus v=\"110\" angle=\"0\" nodes=\"2\"/>",
+            )
+            .replace("open=\"false\"", "open=\"true\"")
+            .replace(
+                "    </iidm:voltageLevel>\n  </iidm:substation>",
+                r#"    </iidm:voltageLevel>
+    <iidm:twoWindingsTransformer id="T" r="1" x="10" g="0" b="0" ratedU1="110" ratedU2="110" voltageLevelId1="VL" node1="0" voltageLevelId2="VL" node2="2">
+      <iidm:ratioTapChanger regulating="true" tapPosition="0" lowTapPosition="0" loadTapChangingCapabilities="true" regulationMode="VOLTAGE" regulationValue="110">
+        <iidm:terminalRef id="BBS"/>
+        <iidm:step rho="1" r="0" x="0" g="0" b="0"/>
+      </iidm:ratioTapChanger>
+    </iidm:twoWindingsTransformer>
+  </iidm:substation>"#,
+            );
+        let network = parse_xiidm_source(&source, &mut Diagnostics::new()).unwrap();
+        let detailed = network.detailed_connectivity().as_ref().unwrap();
+        let tap = detailed
+            .tap_changers
+            .iter()
+            .find(|tap| tap.transformer.local_id() == "T")
+            .unwrap();
+        assert_eq!(
+            tap.regulation_terminal,
+            Some(TerminalReference {
+                equipment: component_id("busbar_section", "BBS").unwrap(),
+                terminal: 1,
+            })
+        );
+
+        let emission = write_xiidm(&network).unwrap();
+        assert!(emission.text.contains("<iidm:terminalRef id=\"BBS\"/>"));
+        parse_xiidm_source(&emission.text, &mut Diagnostics::new()).unwrap();
+    }
+
+    #[test]
+    fn valid_xiidm_preserves_an_omitted_generator_target_q() {
+        let source = BUS_BREAKER
+            .replace(NAMESPACE, "http://www.powsybl.org/schema/iidm/1_12")
+            .replace(" targetQ=\"10\"", "");
+        let network = parse_xiidm_source(&source, &mut Diagnostics::new()).unwrap();
+        let component = component_id("generator", "G1").unwrap();
+        assert_f64_close(network.generators()[0].qg, 0.0);
+        assert!(
+            network
+                .detailed_connectivity()
+                .as_deref()
+                .unwrap()
+                .omitted_fields
+                .contains(&OmittedField {
+                    component: component.clone(),
+                    field: OmittedFieldName::ReactivePower,
+                })
+        );
+        assert!(
+            network
+                .detailed_connectivity()
+                .as_deref()
+                .unwrap()
+                .omitted_fields
+                .contains(&OmittedField {
+                    component: component.clone(),
+                    field: OmittedFieldName::RatedApparentPower,
+                })
+        );
+
+        let restored = BalancedNetwork::from_json(&network.to_json().unwrap()).unwrap();
+        let emission = write_xiidm(&restored).unwrap();
+        let generator = emission
+            .text
+            .lines()
+            .find(|line| line.contains("<iidm:generator id=\"G1\""))
+            .unwrap();
+        assert!(emission.text.contains(NAMESPACE));
+        assert!(!emission.text.contains(EQUIPMENT_NAMESPACE));
+        assert!(
+            emission
+                .text
+                .contains("minimumValidationLevel=\"STEADY_STATE_HYPOTHESIS\"")
+        );
+        assert!(generator.contains("targetP=\"100\""));
+        assert!(!generator.contains("targetQ="));
+        assert!(generator.contains("targetV=\"230\""));
+        assert!(!generator.contains("ratedS="));
+        let reparsed = parse_xiidm_source(&emission.text, &mut Diagnostics::new()).unwrap();
+        assert!(
+            reparsed
+                .detailed_connectivity()
+                .as_deref()
+                .unwrap()
+                .omitted_fields
+                .contains(&OmittedField {
+                    component,
+                    field: OmittedFieldName::ReactivePower,
+                })
+        );
+
+        let mut changed = restored;
+        changed.generators_mut()[0].mbase = 125.0;
+        let changed = write_xiidm(&changed).unwrap();
+        let generator = changed
+            .text
+            .lines()
+            .find(|line| line.contains("<iidm:generator id=\"G1\""))
+            .unwrap();
+        assert!(generator.contains("ratedS=\"125\""));
     }
 
     #[test]
@@ -9470,8 +11060,11 @@ mod tests {
   <iidm:substation id="S">
     <iidm:voltageLevel id="VL" nominalV="225" topologyKind="NODE_BREAKER">
       <iidm:nodeBreakerTopology><iidm:busbarSection id="BBS" node="0"/></iidm:nodeBreakerTopology>
-      <iidm:generator id="G" energySource="OTHER" minP="0" maxP="100" voltageRegulatorOn="true" node="0"><iidm:minMaxReactiveLimits minQ="-20" maxQ="20"/></iidm:generator>
+      <iidm:load id="L" loadType="UNDEFINED" node="0"/>
+      <iidm:generator id="G" energySource="SOLAR" minP="0" maxP="100" voltageRegulatorOn="true" node="0"><iidm:minMaxReactiveLimits minQ="-20" maxQ="20"/></iidm:generator>
+      <iidm:battery id="BAT" minP="-10" maxP="10" node="0"><iidm:minMaxReactiveLimits minQ="-5" maxQ="5"/></iidm:battery>
       <iidm:shunt id="SH" voltageRegulatorOn="false" node="0"><iidm:shuntLinearModel bPerSection="-0.001" maximumSectionCount="1"/></iidm:shunt>
+      <iidm:danglingLine id="BL" r="0" x="0.1" g="0" b="0" node="0"/>
     </iidm:voltageLevel>
   </iidm:substation>
 </iidm:network>"#;
@@ -9480,9 +11073,86 @@ mod tests {
         let network = parse_xiidm_source(source, &mut diagnostics).unwrap();
         assert_eq!(network.generators().len(), 1);
         assert_f64_close(network.generators()[0].pg, 0.0);
+        assert_f64_close(network.generators()[0].qg, 0.0);
+        assert_f64_close(network.generators()[0].vg, 1.0);
+        assert_eq!(
+            network.generators()[0].energy_source,
+            GeneratorEnergySource::Solar
+        );
+        assert_eq!(network.loads().len(), 2);
+        let load = network
+            .loads()
+            .iter()
+            .find(|load| load.uid.as_deref() == Some("L"))
+            .unwrap();
+        assert_f64_close(load.p, 0.0);
+        assert_f64_close(load.q, 0.0);
+        assert_eq!(network.storage().len(), 1);
+        assert_f64_close(network.storage()[0].ps, 0.0);
+        assert_f64_close(network.storage()[0].qs, 0.0);
         assert_eq!(network.shunts().len(), 1);
         assert_eq!(network.shunts()[0].section_count, None);
+        assert_f64_close(network.shunts()[0].g, 0.0);
         assert_f64_close(network.shunts()[0].b, 0.0);
+        let detailed = network.detailed_connectivity().as_deref().unwrap();
+        assert_eq!(detailed.omitted_fields.len(), 11);
+        assert!(detailed.omitted_fields.contains(&OmittedField {
+            component: component_id("generator", "G").unwrap(),
+            field: OmittedFieldName::VoltageSetpoint,
+        }));
+        assert!(detailed.omitted_fields.contains(&OmittedField {
+            component: component_id("generator", "G").unwrap(),
+            field: OmittedFieldName::RatedApparentPower,
+        }));
+        assert!(detailed.omitted_fields.contains(&OmittedField {
+            component: component_id("shunt", "SH").unwrap(),
+            field: OmittedFieldName::ShuntConductancePerSection,
+        }));
+        let normalized = network.to_normalized().unwrap();
+        assert_f64_close(normalized.generators()[0].pg, 0.0);
+        assert_f64_close(normalized.generators()[0].qg, 0.0);
+        assert_f64_close(normalized.generators()[0].vg, 1.0);
+        assert_eq!(
+            normalized
+                .detailed_connectivity()
+                .as_deref()
+                .unwrap()
+                .omitted_fields,
+            detailed.omitted_fields
+        );
+        let restored = BalancedNetwork::from_json(&network.to_json().unwrap()).unwrap();
+        assert_eq!(
+            restored
+                .detailed_connectivity()
+                .as_deref()
+                .unwrap()
+                .omitted_fields,
+            detailed.omitted_fields
+        );
+        let mut edited = network.clone();
+        edited.generators_mut()[0].pg = 25.0;
+        let edited_detailed = edited.detailed_connectivity().as_deref().unwrap();
+        assert!(
+            !edited_detailed
+                .omitted_fields
+                .iter()
+                .any(|omitted| { omitted.component == component_id("generator", "G").unwrap() })
+        );
+        assert!(
+            edited_detailed
+                .omitted_fields
+                .iter()
+                .any(|omitted| { omitted.component == component_id("load", "L").unwrap() })
+        );
+        let edited_emission = write_xiidm(&edited).unwrap();
+        let generator_line = edited_emission
+            .text
+            .lines()
+            .find(|line| line.contains("<iidm:generator id=\"G\""))
+            .unwrap();
+        assert!(generator_line.contains("targetP=\"25\""));
+        assert!(generator_line.contains("targetQ=\"0\""));
+        assert!(generator_line.contains("targetV=\"225\""));
         assert!(
             diagnostics
                 .records()
@@ -9496,11 +11166,31 @@ mod tests {
                 .any(|message| message.contains("has no `targetP`"))
         );
         let emission = write_xiidm(&network).unwrap();
-        assert!(emission.text.contains(NAMESPACE));
+        assert!(emission.text.contains(EQUIPMENT_NAMESPACE));
+        assert!(emission.text.contains("energySource=\"SOLAR\""));
+        assert!(!emission.text.contains("targetP="));
+        assert!(!emission.text.contains("targetQ="));
+        assert!(!emission.text.contains("targetV="));
+        assert!(!emission.text.contains(" p0="));
+        assert!(!emission.text.contains(" q0="));
         assert!(emission.text.contains("<iidm:shuntCompensator"));
         assert!(!emission.text.contains("sectionCount="));
         assert!(emission.text.contains("bPerSection=\"-0.001\""));
+        assert!(!emission.text.contains("gPerSection="));
         assert!(!emission.text.contains("<iidm:shunt id="));
+        let reparsed = parse_xiidm_source(&emission.text, &mut Diagnostics::new()).unwrap();
+        assert_eq!(
+            reparsed
+                .detailed_connectivity()
+                .as_deref()
+                .unwrap()
+                .omitted_fields,
+            detailed.omitted_fields
+        );
+        assert_eq!(
+            reparsed.generators()[0].energy_source,
+            GeneratorEnergySource::Solar
+        );
     }
 
     #[test]
@@ -9570,7 +11260,7 @@ mod tests {
     }
 
     #[test]
-    fn reads_legacy_svc_off_as_voltage_control_disabled() {
+    fn applies_legacy_svc_regulation_modes() {
         let source = r#"<?xml version="1.0" encoding="UTF-8"?>
 <iidm:network xmlns:iidm="http://www.powsybl.org/schema/iidm/1_13" id="svc" caseDate="2026-01-01T00:00:00Z" forecastDistance="0" sourceFormat="test" minimumValidationLevel="STEADY_STATE_HYPOTHESIS">
   <iidm:voltageLevel id="VL" nominalV="400" topologyKind="BUS_BREAKER">
@@ -9595,6 +11285,92 @@ mod tests {
         assert_eq!(record.matches(" p=\"").count(), 1);
         assert_eq!(record.matches(" q=\"").count(), 1);
         parse_xiidm_source(&emission.text, &mut Diagnostics::new()).unwrap();
+
+        let voltage = source.replace("regulationMode=\"OFF\"", "regulationMode=\"VOLTAGE\"");
+        let network = parse_xiidm_source(&voltage, &mut Diagnostics::new()).unwrap();
+        assert!(network.static_var_compensators()[0].regulating);
+        let emission = write_xiidm(&network).unwrap();
+        let record = emission
+            .text
+            .lines()
+            .find(|line| line.contains("<iidm:staticVarCompensator"))
+            .unwrap();
+        assert!(record.contains("regulating=\"true\""));
+    }
+
+    #[test]
+    fn applies_pre_1_14_phase_tap_capability_rule() {
+        let source = r#"<?xml version="1.0" encoding="UTF-8"?>
+<iidm:network xmlns:iidm="http://www.powsybl.org/schema/iidm/equipment/1_12" id="phase" caseDate="2026-01-01T00:00:00Z" forecastDistance="0" sourceFormat="test" minimumValidationLevel="EQUIPMENT">
+  <iidm:substation id="S">
+    <iidm:voltageLevel id="VL1" nominalV="225" topologyKind="BUS_BREAKER"><iidm:busBreakerTopology><iidm:bus id="B1"/></iidm:busBreakerTopology></iidm:voltageLevel>
+    <iidm:voltageLevel id="VL2" nominalV="225" topologyKind="BUS_BREAKER"><iidm:busBreakerTopology><iidm:bus id="B2"/></iidm:busBreakerTopology></iidm:voltageLevel>
+    <iidm:twoWindingsTransformer id="T" r="1" x="10" g="0" b="0" ratedU1="225" ratedU2="225" voltageLevelId1="VL1" bus1="B1" connectableBus1="B1" voltageLevelId2="VL2" bus2="B2" connectableBus2="B2">
+      <iidm:phaseTapChanger regulating="false" lowTapPosition="0" tapPosition="0" regulationMode="CURRENT_LIMITER" regulationValue="100"><iidm:step rho="1" alpha="0" r="0" x="0" g="0" b="0"/></iidm:phaseTapChanger>
+    </iidm:twoWindingsTransformer>
+  </iidm:substation>
+</iidm:network>"#;
+        let network = parse_xiidm_source(source, &mut Diagnostics::new()).unwrap();
+        let tap = &network
+            .detailed_connectivity()
+            .as_ref()
+            .unwrap()
+            .tap_changers[0];
+        assert_eq!(tap.kind, TapChangerKind::Phase);
+        assert!(tap.load_tap_changing_capabilities);
+
+        let emission = write_xiidm(&network).unwrap();
+        let tap = emission
+            .text
+            .lines()
+            .find(|line| line.contains("<iidm:phaseTapChanger"))
+            .unwrap();
+        assert!(tap.contains("loadTapChangingCapabilities=\"true\""));
+    }
+
+    #[test]
+    fn reads_legacy_fixed_phase_tap_as_nonregulating_current_limiter() {
+        for version in ["1_12", "1_13"] {
+            let source = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<iidm:network xmlns:iidm="http://www.powsybl.org/schema/iidm/{version}" id="phase" caseDate="2026-01-01T00:00:00Z" forecastDistance="0" sourceFormat="test" minimumValidationLevel="STEADY_STATE_HYPOTHESIS">
+  <iidm:substation id="S">
+    <iidm:voltageLevel id="VL1" nominalV="225" topologyKind="BUS_BREAKER"><iidm:busBreakerTopology><iidm:bus id="B1"/></iidm:busBreakerTopology></iidm:voltageLevel>
+    <iidm:voltageLevel id="VL2" nominalV="225" topologyKind="BUS_BREAKER"><iidm:busBreakerTopology><iidm:bus id="B2"/></iidm:busBreakerTopology></iidm:voltageLevel>
+    <iidm:twoWindingsTransformer id="T" r="1" x="10" g="0" b="0" ratedU1="225" ratedU2="225" voltageLevelId1="VL1" bus1="B1" connectableBus1="B1" voltageLevelId2="VL2" bus2="B2" connectableBus2="B2">
+      <iidm:phaseTapChanger regulating="true" lowTapPosition="0" tapPosition="0" regulationMode="FIXED_TAP"><iidm:step rho="1" alpha="0" r="0" x="0" g="0" b="0"/></iidm:phaseTapChanger>
+    </iidm:twoWindingsTransformer>
+  </iidm:substation>
+</iidm:network>"#
+            );
+            let mut diagnostics = Diagnostics::new();
+            let network = parse_xiidm_source(&source, &mut diagnostics).unwrap();
+            let tap = &network
+                .detailed_connectivity()
+                .as_ref()
+                .unwrap()
+                .tap_changers[0];
+            assert!(!tap.regulating, "XIIDM {version}");
+            assert_eq!(
+                tap.regulation_mode,
+                Some(TapChangerRegulationMode::Current),
+                "XIIDM {version}"
+            );
+            assert!(diagnostics.lines().iter().any(|line| {
+                line.contains("legacy FIXED_TAP mode")
+                    && line.contains("CURRENT_LIMITER")
+                    && line.contains("regulation disabled")
+            }));
+
+            let emission = write_xiidm(&network).unwrap();
+            let phase = emission
+                .text
+                .lines()
+                .find(|line| line.contains("<iidm:phaseTapChanger"))
+                .unwrap();
+            assert!(phase.contains("regulationMode=\"CURRENT_LIMITER\""));
+            assert!(phase.contains("regulating=\"false\""));
+        }
     }
 
     #[test]
@@ -9656,7 +11432,7 @@ mod tests {
             .lines()
             .find(|line| line.contains("<iidm:phaseTapChanger"))
             .unwrap();
-        assert!(phase.contains("loadTapChangingCapabilities=\"false\""));
+        assert!(phase.contains("loadTapChangingCapabilities=\"true\""));
         parse_xiidm_source(&emission.text, &mut Diagnostics::new()).unwrap();
     }
 
@@ -9835,6 +11611,78 @@ mod tests {
     }
 
     #[test]
+    fn rejects_model_elements_outside_the_root_xiidm_namespace() {
+        let mixed_release = BUS_BREAKER.replacen(
+            "<iidm:bus id=\"B1\"",
+            "<old:bus xmlns:old=\"http://www.powsybl.org/schema/iidm/1_16\" id=\"B1\"",
+            1,
+        );
+        let error = parse_xiidm_source(&mixed_release, &mut Diagnostics::new()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("element `bus` uses XML namespace")
+        );
+        assert!(error.to_string().contains("schema/iidm/1_16"));
+
+        let foreign = BUS_BREAKER.replacen(
+            "<iidm:bus id=\"B1\"",
+            "<foreign:bus xmlns:foreign=\"urn:foreign\" id=\"B1\"",
+            1,
+        );
+        let error = parse_xiidm_source(&foreign, &mut Diagnostics::new()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("element `bus` uses XML namespace")
+        );
+        assert!(error.to_string().contains("urn:foreign"));
+
+        let foreign_root = BUS_BREAKER
+            .replacen(
+                "<iidm:network",
+                "<foreign:network xmlns:foreign=\"urn:foreign\"",
+                1,
+            )
+            .replace("</iidm:network>", "</foreign:network>");
+        let error = parse_xiidm_source(&foreign_root, &mut Diagnostics::new()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("root element uses XML namespace")
+        );
+        assert!(error.to_string().contains("urn:foreign"));
+    }
+
+    #[test]
+    fn accepts_extensions_only_at_the_network_extension_point() {
+        parse_xiidm_source(POWSYBL_ACTIVE_POWER_CONTROL, &mut Diagnostics::new()).unwrap();
+
+        let misplaced = BUS_BREAKER.replacen(
+            "    </iidm:voltageLevel>",
+            "      <iidm:extension id=\"G1\"/>\n    </iidm:voltageLevel>",
+            1,
+        );
+        let error = parse_xiidm_source(&misplaced, &mut Diagnostics::new()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("extension must be a direct child of a network")
+        );
+
+        let misplaced_model = BUS_BREAKER.replace(
+            "</iidm:network>",
+            "  <iidm:extension id=\"G1\"><iidm:bus id=\"not-an-extension\"/></iidm:extension>\n</iidm:network>",
+        );
+        let error = parse_xiidm_source(&misplaced_model, &mut Diagnostics::new()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("model element `bus` appears inside an extension")
+        );
+    }
+
+    #[test]
     fn parses_powsybl_operational_limit_group_csv() {
         assert_eq!(
             parse_operational_limits_group_ids(
@@ -9850,6 +11698,198 @@ mod tests {
             ]
         );
         assert!(parse_operational_limits_group_ids("\"unclosed").is_err());
+    }
+
+    #[test]
+    fn reads_pre_1_16_selected_operational_limit_group_ids() {
+        let source = EQUIPMENT_COVERAGE
+            .replace("/schema/iidm/1_17", "/schema/iidm/1_12")
+            .replace(
+                "selectedOperationalLimitsGroupIds1",
+                "selectedOperationalLimitsGroupId1",
+            )
+            .replace(
+                "selectedOperationalLimitsGroupIds2",
+                "selectedOperationalLimitsGroupId2",
+            );
+        let network = parse_xiidm_source(&source, &mut Diagnostics::new()).unwrap();
+        let groups = &network
+            .detailed_connectivity()
+            .as_ref()
+            .unwrap()
+            .operational_limit_groups;
+        assert_eq!(
+            groups
+                .iter()
+                .filter(|group| group.equipment.local_id() == "L" && group.selected)
+                .map(|group| (group.terminal, group.id.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(1, "normal"), (2, "normal")]
+        );
+
+        let emission = write_xiidm(&network).unwrap();
+        let line = emission
+            .text
+            .lines()
+            .find(|line| line.contains("<iidm:line id=\"L\""))
+            .unwrap();
+        assert!(line.contains("selectedOperationalLimitsGroupIds1=\"normal\""));
+        assert!(line.contains("selectedOperationalLimitsGroupIds2=\"normal\""));
+    }
+
+    #[test]
+    fn applies_pre_1_14_ratio_tap_regulation_rule() {
+        let source = EQUIPMENT_COVERAGE
+            .replace("/schema/iidm/1_17", "/schema/iidm/1_12")
+            .replace(
+                "selectedOperationalLimitsGroupIds1",
+                "selectedOperationalLimitsGroupId1",
+            )
+            .replace(
+                "selectedOperationalLimitsGroupIds2",
+                "selectedOperationalLimitsGroupId2",
+            )
+            .replace(
+                "<iidm:ratioTapChanger2 tapPosition=\"0\" lowTapPosition=\"0\" loadTapChangingCapabilities=\"false\">",
+                "<iidm:ratioTapChanger2 tapPosition=\"0\" lowTapPosition=\"0\" loadTapChangingCapabilities=\"false\" regulating=\"true\" regulationMode=\"VOLTAGE\" regulationValue=\"33\"><iidm:terminalRef id=\"T3\" side=\"TWO\"/>",
+            );
+        let mut diagnostics = Diagnostics::new();
+        let network = parse_xiidm_source(&source, &mut diagnostics).unwrap();
+        let tap = network
+            .detailed_connectivity()
+            .as_ref()
+            .unwrap()
+            .tap_changers
+            .iter()
+            .find(|tap| tap.transformer.local_id() == "T3" && tap.winding == 2)
+            .unwrap();
+        assert!(!tap.load_tap_changing_capabilities);
+        assert!(!tap.regulating);
+        assert!(diagnostics.lines().iter().any(|line| {
+            line.contains("PowSybl treats regulation as disabled") && line.contains("T3")
+        }));
+
+        let emission = write_xiidm(&network).unwrap();
+        let tap = emission
+            .text
+            .lines()
+            .find(|line| line.contains("<iidm:ratioTapChanger2"))
+            .unwrap();
+        assert!(tap.contains("regulating=\"false\""));
+    }
+
+    #[test]
+    fn fresh_emission_orders_and_validates_tap_step_positions() {
+        let mut network = parse_xiidm_source(EQUIPMENT_COVERAGE, &mut Diagnostics::new()).unwrap();
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        let tap = detailed
+            .tap_changers
+            .iter_mut()
+            .find(|tap| tap.transformer.local_id() == "T3" && tap.winding == 2)
+            .unwrap();
+        let mut lower = tap.steps[0].clone();
+        lower.position = -1;
+        lower.rho = 0.95;
+        let mut middle = tap.steps[0].clone();
+        middle.position = 0;
+        middle.rho = 1.0;
+        let mut upper = tap.steps[0].clone();
+        upper.position = 1;
+        upper.rho = 1.05;
+        tap.low_tap_position = -1;
+        tap.tap_position = Some(0);
+        tap.solved_tap_position = Some(1);
+        tap.steps = vec![upper, lower, middle];
+
+        let emission = write_xiidm(&network).unwrap();
+        let reparsed = parse_xiidm_source(&emission.text, &mut Diagnostics::new()).unwrap();
+        let tap = reparsed
+            .detailed_connectivity()
+            .as_ref()
+            .unwrap()
+            .tap_changers
+            .iter()
+            .find(|tap| tap.transformer.local_id() == "T3" && tap.winding == 2)
+            .unwrap();
+        assert_eq!(
+            tap.steps
+                .iter()
+                .map(|step| (step.position, step.rho))
+                .collect::<Vec<_>>(),
+            vec![(-1, 0.95), (0, 1.0), (1, 1.05)]
+        );
+        assert_eq!(tap.tap_position, Some(0));
+        assert_eq!(tap.solved_tap_position, Some(1));
+
+        let mut noncontiguous = network.clone();
+        let detailed = Arc::make_mut(noncontiguous.detailed_connectivity_mut().as_mut().unwrap());
+        let tap = detailed
+            .tap_changers
+            .iter_mut()
+            .find(|tap| tap.transformer.local_id() == "T3" && tap.winding == 2)
+            .unwrap();
+        tap.steps[0].position = 2;
+        let error = write_xiidm(&noncontiguous).unwrap_err();
+        assert!(error.to_string().contains("consecutive step positions"));
+        assert!(
+            error
+                .to_string()
+                .contains("position 2 where 1 was required")
+        );
+
+        let mut missing_assigned_step = network;
+        let detailed = Arc::make_mut(
+            missing_assigned_step
+                .detailed_connectivity_mut()
+                .as_mut()
+                .unwrap(),
+        );
+        let tap = detailed
+            .tap_changers
+            .iter_mut()
+            .find(|tap| tap.transformer.local_id() == "T3" && tap.winding == 2)
+            .unwrap();
+        tap.tap_position = Some(4);
+        let error = write_xiidm(&missing_assigned_step).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("tapPosition 4 has no matching step")
+        );
+    }
+
+    #[test]
+    fn fresh_emission_rejects_constant_y_reactive_limits_on_all_xiidm_equipment() {
+        let mut network = parse_xiidm_source(EQUIPMENT_COVERAGE, &mut Diagnostics::new()).unwrap();
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        let limits = detailed
+            .equipment_reactive_limits
+            .iter_mut()
+            .find(|limits| limits.equipment.local_id() == "G")
+            .unwrap();
+        limits.limits = ReactiveLimits::CapabilityCurve(ReactiveCapabilityCurve {
+            curve_style: CurveStyle::ConstantYValue,
+            properties: BTreeMap::new(),
+            points: vec![
+                ReactiveCapabilityCurvePoint {
+                    active_power_mw: 0.0,
+                    minimum_reactive_power_mvar: -100.0,
+                    maximum_reactive_power_mvar: 100.0,
+                    properties: BTreeMap::new(),
+                },
+                ReactiveCapabilityCurvePoint {
+                    active_power_mw: 200.0,
+                    minimum_reactive_power_mvar: -50.0,
+                    maximum_reactive_power_mvar: 50.0,
+                    properties: BTreeMap::new(),
+                },
+            ],
+        });
+
+        let error = write_xiidm(&network).unwrap_err();
+        assert!(error.to_string().contains("generator/G"));
+        assert!(error.to_string().contains("CurveStyle.constantYValue"));
+        assert!(error.to_string().contains("CurveStyle.straightLineYValues"));
     }
 
     #[test]
@@ -10008,6 +12048,38 @@ mod tests {
     }
 
     #[test]
+    fn absent_hvdc_converter_terminal_power_remains_absent() {
+        let network = parse_xiidm_source(EQUIPMENT_COVERAGE, &mut Diagnostics::new()).unwrap();
+        let detailed = network.detailed_connectivity().as_ref().unwrap();
+        let second = detailed
+            .terminals
+            .iter()
+            .find(|terminal| terminal.equipment.local_id() == "C2" && terminal.terminal == 1)
+            .unwrap();
+        assert_eq!(second.active_power_mw, None);
+        assert_eq!(second.reactive_power_mvar, None);
+
+        let emission = write_xiidm(&network).unwrap();
+        let converter = emission
+            .text
+            .lines()
+            .find(|line| line.contains("<iidm:vscConverterStation id=\"C2\""))
+            .unwrap();
+        assert!(!converter.contains(" p="));
+        assert!(!converter.contains(" q="));
+
+        let reparsed = parse_xiidm_source(&emission.text, &mut Diagnostics::new()).unwrap();
+        let reparsed = reparsed.detailed_connectivity().as_ref().unwrap();
+        let second = reparsed
+            .terminals
+            .iter()
+            .find(|terminal| terminal.equipment.local_id() == "C2" && terminal.terminal == 1)
+            .unwrap();
+        assert_eq!(second.active_power_mw, None);
+        assert_eq!(second.reactive_power_mvar, None);
+    }
+
+    #[test]
     fn iidm_is_input_only_and_normalizes_to_xiidm() {
         let source = powerio_core::Source::from_memory("case.xml", BUS_BREAKER.as_bytes().to_vec())
             .unwrap()
@@ -10044,8 +12116,142 @@ mod tests {
     }
 
     #[test]
+    fn balanced_switches_survive_fresh_xiidm_without_detailed_connectivity() {
+        let mut network = parse_xiidm_source(BUS_BREAKER, &mut Diagnostics::new()).unwrap();
+        *network.detailed_connectivity_mut() = None;
+        let from = network.buses()[0].id;
+        let to = network.buses()[1].id;
+        let mut switch = Switch::new(from, to, false);
+        switch.uid = Some("coupler".into());
+        switch.thermal_rating = Some(100.0);
+        switch.current_rating = Some(500.0);
+        switch.pf = Some(10.0);
+        switch.qf = Some(2.0);
+        switch.pt = Some(-9.8);
+        switch.qt = Some(-1.9);
+        network.switches_mut().push(switch);
+
+        let emission = write_xiidm(&network).unwrap();
+        assert!(emission.text.contains(
+            "<iidm:switch id=\"coupler\" kind=\"BREAKER\" open=\"true\" retained=\"true\""
+        ));
+        assert!(emission.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code() == codes::EMIT_XIIDM.value_defaulted.code
+                && diagnostic.message().contains("physical switch kind")
+                && diagnostic.message().contains("breakers")
+        }));
+        let dropped = emission
+            .diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code() == codes::EMIT_XIIDM.field_dropped.code
+                    && diagnostic.message().contains("switch/coupler")
+            })
+            .expect("unrepresentable switch fields are diagnosed")
+            .message();
+        for field in [
+            "thermal rating",
+            "current rating",
+            "from-side active power",
+            "from-side reactive power",
+            "to-side active power",
+            "to-side reactive power",
+        ] {
+            assert!(dropped.contains(field), "missing `{field}` in `{dropped}`");
+        }
+
+        let reparsed = parse_xiidm_source(&emission.text, &mut Diagnostics::new()).unwrap();
+        assert_eq!(reparsed.switches().len(), 1);
+        assert_eq!(reparsed.switches()[0].uid.as_deref(), Some("coupler"));
+        assert!(!reparsed.switches()[0].closed);
+        let detailed = reparsed.detailed_connectivity().as_deref().unwrap();
+        assert_eq!(detailed.switches.len(), 1);
+        assert_eq!(detailed.switches[0].kind, SwitchKind::Breaker);
+        assert!(detailed.switches[0].open);
+    }
+
+    #[test]
+    fn fresh_emission_rejects_dangling_detailed_topology_references() {
+        let mut network = parse_xiidm_source(NODE_BREAKER, &mut Diagnostics::new()).unwrap();
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        detailed.connectivity_nodes[0].voltage_level =
+            component_id("voltage_level", "missing").unwrap();
+
+        let error = write_xiidm(&network).unwrap_err().to_string();
+        assert!(error.contains("network validation failed before XIIDM emission"));
+        assert!(error.contains("references unknown voltage level"));
+    }
+
+    #[test]
+    fn node_breaker_emission_keeps_a_disconnected_terminals_physical_node() {
+        let mut network = parse_xiidm_source(NODE_BREAKER, &mut Diagnostics::new()).unwrap();
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        let generator_terminal = detailed
+            .terminals
+            .iter_mut()
+            .find(|terminal| {
+                terminal.equipment.component_type() == "generator"
+                    && terminal.equipment.local_id() == "G"
+            })
+            .unwrap();
+        generator_terminal.connected = false;
+        let node_number = detailed
+            .connectivity_nodes
+            .iter()
+            .find(|node| node.component == *generator_terminal.node.as_ref().unwrap())
+            .and_then(|node| node.node_number)
+            .unwrap();
+
+        let emission = write_xiidm(&network).unwrap();
+        let generator = emission
+            .text
+            .lines()
+            .find(|line| line.contains("<iidm:generator id=\"G\""))
+            .unwrap();
+        assert!(generator.contains(&format!(" node=\"{node_number}\"")));
+        parse_xiidm_source(&emission.text, &mut Diagnostics::new()).unwrap();
+    }
+
+    #[test]
     fn maps_three_winding_hvdc_and_operational_limits() {
-        let network = parse_xiidm_source(EQUIPMENT_COVERAGE, &mut Diagnostics::new()).unwrap();
+        let mut diagnostics = Diagnostics::new();
+        let network = parse_xiidm_source(EQUIPMENT_COVERAGE, &mut diagnostics).unwrap();
+        let unmapped_limit_properties = diagnostics
+            .records()
+            .iter()
+            .filter(|diagnostic| diagnostic.code() == "READ.XIIDM.FIELD_UNMAPPED")
+            .map(|diagnostic| diagnostic.message())
+            .filter(|message| message.contains("operational limits group `normal`"))
+            .collect::<Vec<_>>();
+        assert_eq!(unmapped_limit_properties.len(), 2);
+        assert!(
+            unmapped_limit_properties
+                .iter()
+                .any(|message| message.contains("`limit-set=seasonal` on `apparentPowerLimits`"))
+        );
+        assert!(
+            unmapped_limit_properties
+                .iter()
+                .any(|message| message.contains("`cause=contingency` on `temporaryLimit`"))
+        );
+        let unmapped_fields = diagnostics
+            .records()
+            .iter()
+            .filter(|diagnostic| diagnostic.code() == "READ.XIIDM.FIELD_UNMAPPED")
+            .map(|diagnostic| diagnostic.message())
+            .collect::<Vec<_>>();
+        assert!(
+            unmapped_fields
+                .iter()
+                .any(|message| message.contains("`tap-kind=ratio`")
+                    && message.contains("`ratioTapChanger2`"))
+        );
+        assert!(
+            unmapped_fields
+                .iter()
+                .any(|message| message.contains("`step-label=nominal`")
+                    && message.contains("`step`"))
+        );
         assert_eq!(network.branches().len(), 1);
         assert_eq!(network.transformers_3w().len(), 1);
         assert_eq!(network.hvdc().len(), 1);
@@ -10092,6 +12298,10 @@ mod tests {
                 .text
                 .contains("selectedOperationalLimitsGroupIds1=\"powerio\"")
         );
+        assert!(!emission.text.contains("limit-set"));
+        assert!(!emission.text.contains("contingency"));
+        assert!(!emission.text.contains("tap-kind"));
+        assert!(!emission.text.contains("step-label"));
         let reparsed = parse_xiidm_source(&emission.text, &mut Diagnostics::new()).unwrap();
         assert_eq!(reparsed.transformers_3w().len(), 1);
         assert_eq!(reparsed.hvdc().len(), 1);
@@ -10335,6 +12545,35 @@ mod tests {
             detailed.line_commutated_converters
         );
 
+        let mut converter_limits = network.clone();
+        let detailed = std::sync::Arc::make_mut(
+            converter_limits
+                .detailed_connectivity_mut()
+                .as_mut()
+                .unwrap(),
+        );
+        detailed.voltage_source_converters[0].minimum_active_power_mw = Some(-250.0);
+        detailed.line_commutated_converters[0].maximum_active_power_mw = Some(250.0);
+        let emission = write_xiidm(&converter_limits).unwrap();
+        let dropped_limits = emission
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code() == codes::EMIT_XIIDM.field_dropped.code)
+            .collect::<Vec<_>>();
+        assert_eq!(dropped_limits.len(), 2);
+        assert!(
+            dropped_limits
+                .iter()
+                .any(|diagnostic| diagnostic.message().contains("VSC")
+                    && diagnostic.message().contains("minimum active power"))
+        );
+        assert!(
+            dropped_limits
+                .iter()
+                .any(|diagnostic| diagnostic.message().contains("LCC")
+                    && diagnostic.message().contains("maximum active power"))
+        );
+
         let mut constant_curve = network.clone();
         let detailed =
             std::sync::Arc::make_mut(constant_curve.detailed_connectivity_mut().as_mut().unwrap());
@@ -10372,12 +12611,18 @@ mod tests {
       <iidm:nodeBreakerTopology>
         <iidm:busbarSection id="B1" node="0"/>
         <iidm:busbarSection id="B2" node="1"/>
-        <iidm:bus nodes="0"/>
+        <iidm:bus nodes="0"><iidm:property name="calculated-source" value="study"/></iidm:bus>
       </iidm:nodeBreakerTopology>
     </iidm:voltageLevel>
   </iidm:substation>
 </iidm:network>"#;
-        let network = parse_xiidm_source(source, &mut Diagnostics::new()).unwrap();
+        let mut diagnostics = Diagnostics::new();
+        let network = parse_xiidm_source(source, &mut diagnostics).unwrap();
+        assert!(diagnostics.records().iter().any(|diagnostic| {
+            diagnostic.code() == "READ.XIIDM.FIELD_UNMAPPED"
+                && diagnostic.message().contains("`calculated-source=study`")
+                && diagnostic.message().contains("`bus`")
+        }));
         assert_eq!(network.buses().len(), 2);
         let detailed = network.detailed_connectivity().as_ref().unwrap();
         assert_eq!(detailed.calculated_buses.len(), 1);
@@ -10393,6 +12638,7 @@ mod tests {
         assert_eq!(calculated.len(), 1);
         assert!(!calculated[0].contains(" v="));
         assert!(!calculated[0].contains(" angle="));
+        assert!(!emission.text.contains("calculated-source"));
     }
 
     #[test]
@@ -10402,10 +12648,11 @@ mod tests {
   <iidm:substation id="S">
     <iidm:voltageLevel id="VL" nominalV="100" topologyKind="BUS_BREAKER">
       <iidm:busBreakerTopology><iidm:bus id="B"/></iidm:busBreakerTopology>
-      <iidm:load id="L" p0="10" q0="2" bus="B" connectableBus="B"/>
+      <iidm:load id="L" loadType="UNDEFINED" p0="10" q0="2" bus="B" connectableBus="B"><iidm:zipModel c0p="1" c1p="0" c2p="0" c0q="1" c1q="0" c2q="0"><iidm:property name="load-model-source" value="study"/></iidm:zipModel></iidm:load>
       <iidm:shuntCompensator id="SH" sectionCount="2" voltageRegulatorOn="true" targetV="101" targetDeadband="2" bus="B" connectableBus="B">
         <iidm:shuntNonLinearModel>
-          <iidm:section g="0.001" b="0.002"/>
+          <iidm:property name="shunt-model-source" value="study"/>
+          <iidm:section g="0.001" b="0.002"><iidm:property name="section-source" value="study"/></iidm:section>
           <iidm:section g="0.003" b="0.004"/>
         </iidm:shuntNonLinearModel>
         <iidm:regulatingTerminal id="L"/>
@@ -10418,12 +12665,17 @@ mod tests {
 </iidm:network>"#;
         let mut diagnostics = Diagnostics::new();
         let network = parse_xiidm_source(source, &mut diagnostics).unwrap();
-        assert!(
-            !diagnostics
-                .lines()
-                .iter()
-                .any(|message| message.contains("shuntNonLinearModel"))
-        );
+        for (parent, property) in [
+            ("zipModel", "load-model-source=study"),
+            ("shuntNonLinearModel", "shunt-model-source=study"),
+            ("section", "section-source=study"),
+        ] {
+            assert!(diagnostics.records().iter().any(|diagnostic| {
+                diagnostic.code() == "READ.XIIDM.FIELD_UNMAPPED"
+                    && diagnostic.message().contains(&format!("`{parent}`"))
+                    && diagnostic.message().contains(&format!("`{property}`"))
+            }));
+        }
         assert_eq!(network.areas().len(), 1);
         assert_eq!(network.areas()[0].number, 7);
         assert_eq!(network.areas()[0].uid.as_deref(), Some("A7"));
@@ -10452,6 +12704,9 @@ mod tests {
         assert!(emission.text.contains("<iidm:shuntNonLinearModel>"));
         assert!(emission.text.contains("<iidm:area id=\"A7\""));
         assert!(emission.text.contains("<iidm:voltageLevelRef id=\"VL\"/>"));
+        assert!(!emission.text.contains("load-model-source"));
+        assert!(!emission.text.contains("shunt-model-source"));
+        assert!(!emission.text.contains("section-source"));
         let reparsed = parse_xiidm_source(&emission.text, &mut Diagnostics::new()).unwrap();
         assert_eq!(reparsed.areas(), network.areas());
         assert_eq!(reparsed.shunts(), network.shunts());
@@ -10540,6 +12795,89 @@ mod tests {
             reparsed_detail.operational_limit_groups,
             detailed.operational_limit_groups
         );
+    }
+
+    #[test]
+    fn a_partial_boundary_generation_assignment_is_not_lost() {
+        let source = BUS_BREAKER.replacen(
+            "      <iidm:generator id=\"G1\"",
+            "      <iidm:boundaryLine id=\"BL\" p0=\"0\" q0=\"0\" r=\"1\" x=\"2\" generationTargetQ=\"7\" bus=\"B1\" connectableBus=\"B1\"/>\n      <iidm:generator id=\"G1\"",
+            1,
+        );
+        let network = parse_xiidm_source(&source, &mut Diagnostics::new()).unwrap();
+        let boundary = network
+            .detailed_connectivity()
+            .as_ref()
+            .unwrap()
+            .boundary_lines
+            .iter()
+            .find(|boundary| boundary.component.local_id() == "BL")
+            .unwrap();
+        let generation = boundary.generation.as_ref().unwrap();
+        assert_eq!(generation.target_reactive_power_mvar, Some(7.0));
+        assert!(!generation.voltage_regulation_on);
+        let generator = network
+            .generators()
+            .iter()
+            .find(|generator| generator.uid.as_deref() == Some("BL"))
+            .unwrap();
+        assert_f64_close(generator.qg, 7.0);
+
+        let emission = write_xiidm(&network).unwrap();
+        let boundary = emission
+            .text
+            .lines()
+            .find(|line| line.contains("<iidm:boundaryLine id=\"BL\""))
+            .unwrap();
+        assert!(boundary.contains("generationTargetQ=\"7\""));
+    }
+
+    #[test]
+    fn diagnoses_voltage_ratio_three_winding_shunt_and_zero_zip_projection() {
+        let two_winding = BUS_BREAKER.replacen(
+            "  </iidm:substation>",
+            "    <iidm:twoWindingsTransformer id=\"T\" r=\"1\" x=\"10\" g=\"0\" b=\"0\" ratedU1=\"230\" ratedU2=\"115\" bus1=\"B1\" connectableBus1=\"B1\" voltageLevelId1=\"VL1\" bus2=\"B2\" connectableBus2=\"B2\" voltageLevelId2=\"VL2\"/>\n  </iidm:substation>",
+            1,
+        );
+        let mut diagnostics = Diagnostics::new();
+        parse_xiidm_source(&two_winding, &mut diagnostics).unwrap();
+        assert!(diagnostics.lines().iter().any(|line| {
+            line.contains("two winding transformer `T`")
+                && line.contains("ratedU2=115")
+                && line.contains("normalizes ratedU2")
+        }));
+
+        let three_winding = EQUIPMENT_COVERAGE
+            .replace("ratedU0=\"132\"", "ratedU0=\"130\"")
+            .replace("r2=\"1.7424\"", "g2=\"0.001\" r2=\"1.7424\"");
+        let mut diagnostics = Diagnostics::new();
+        parse_xiidm_source(&three_winding, &mut diagnostics).unwrap();
+        assert!(diagnostics.lines().iter().any(|line| {
+            line.contains("three winding transformer `T3`")
+                && line.contains("ratedU0=130")
+                && line.contains("uses ratedU1 as ratedU0")
+        }));
+        assert!(diagnostics.lines().iter().any(|line| {
+            line.contains("three winding transformer `T3`")
+                && line.contains("leg shunt admittances")
+        }));
+
+        let zero_zip = BUS_BREAKER.replace(
+            "<iidm:load id=\"L1\" loadType=\"UNDEFINED\" p0=\"90\" q0=\"30\" bus=\"B2\" connectableBus=\"B2\"/>",
+            "<iidm:load id=\"L1\" loadType=\"UNDEFINED\" p0=\"0\" q0=\"0\" bus=\"B2\" connectableBus=\"B2\"><iidm:zipModel c0p=\"1\" c1p=\"0\" c2p=\"0\" c0q=\"1\" c1q=\"0\" c2q=\"0\"/></iidm:load>",
+        );
+        let mut diagnostics = Diagnostics::new();
+        let network = parse_xiidm_source(&zero_zip, &mut diagnostics).unwrap();
+        assert!(diagnostics.lines().iter().any(|line| {
+            line.contains("load `L1` has zero p0") && line.contains("ZIP coefficients")
+        }));
+        assert!(diagnostics.lines().iter().any(|line| {
+            line.contains("load `L1` has zero q0") && line.contains("ZIP coefficients")
+        }));
+        let emission = write_xiidm(&network).unwrap();
+        assert!(emission.text.contains(
+            "<iidm:zipModel c0p=\"0\" c1p=\"0\" c2p=\"0\" c0q=\"0\" c1q=\"0\" c2q=\"0\"/>"
+        ));
     }
 
     #[test]

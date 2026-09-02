@@ -43,8 +43,8 @@ __all__ = [
     "checked_path",
     "checked_read_tree",
     "decode_local_path",
-    "staged_file_write",
     "staged_directory_write",
+    "staged_file_write",
 ]
 
 _T = TypeVar("_T")

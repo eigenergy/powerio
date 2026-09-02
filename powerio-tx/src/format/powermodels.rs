@@ -33,8 +33,8 @@ use crate::diagnostics::codes::EMIT_POWERMODELS as F;
 use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
     BalancedNetwork, BalancedNetworkTables, Branch, BranchCharging, BranchCurrentRatings,
-    BranchSolution, Bus, BusId, BusType, GEN_EXTRA_KEYS, GenCost, Generator, Hvdc, Load,
-    LoadVoltageModel, Shunt, SourceFormat, Storage, Switch,
+    BranchSolution, Bus, BusId, BusType, GEN_EXTRA_KEYS, GenCost, Generator, GeneratorEnergySource,
+    Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat, Storage, Switch,
 };
 use crate::normalize::{self, GEN_PU_KEYS};
 use crate::{Error, Result};
@@ -831,6 +831,7 @@ fn read_branch(
     let b_fr = row.b_fr.unwrap_or(0.0);
     let b_to = row.b_to.unwrap_or(0.0);
     Branch {
+        name: None,
         from: BusId(row.f_bus.unwrap_or(0) as usize),
         to: BusId(row.t_bus.unwrap_or(0) as usize),
         r: row.br_r.unwrap_or(0.0),
@@ -965,6 +966,7 @@ fn read_gen(row: &GenRow, pscale: f64, base_mva: f64, per_unit: bool) -> Generat
     let cost = row.cost.read(base_mva, per_unit);
     Generator {
         bus: BusId(row.gen_bus.unwrap_or(0) as usize),
+        energy_source: GeneratorEnergySource::default(),
         pg: row.pg.unwrap_or(0.0) * pscale,
         qg: row.qg.unwrap_or(0.0) * pscale,
         // The writer emits an unbounded limit (±Inf) as JSON null; read a missing

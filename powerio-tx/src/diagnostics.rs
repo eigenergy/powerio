@@ -188,6 +188,8 @@ pub mod codes {
             "a MATPOWER matrix is missing, short, unparseable, or unbalanced", category = Parse;
         PARSE_SOURCE_MALFORMED = "PARSE.SOURCE.MALFORMED", Error,
             "a format reader refused the source it was given", category = Parse;
+        PARSE_GOC3_MALFORMED = "PARSE.GOC3.MALFORMED", Error,
+            "a GO Challenge 3 data file is not well formed JSON", category = Parse;
         PARSE_XIIDM_VERSION_UNSUPPORTED = "PARSE.XIIDM.VERSION_UNSUPPORTED", Error,
             "the XIIDM namespace names a version PowerIO has not tested", category = Parse;
 
@@ -220,6 +222,8 @@ pub mod codes {
             "a pandapower field with no canonical home was dropped";
         READ_CGMES_RECORD_UNMAPPED = "READ.CGMES.RECORD_UNMAPPED", Warning,
             "a CGMES record has no representation in the balanced network model";
+        READ_CGMES_FIELD_UNMAPPED = "READ.CGMES.FIELD_UNMAPPED", Warning,
+            "a field on a mapped CGMES record has no representation in the balanced network model";
         READ_CGMES_VALUE_DEFAULTED = "READ.CGMES.VALUE_DEFAULTED", Warning,
             "a value absent from the CGMES profile set was defaulted";
         READ_CGMES_VALUE_APPROXIMATED = "READ.CGMES.VALUE_APPROXIMATED", Warning,
@@ -246,6 +250,18 @@ pub mod codes {
         READ_POWERMODELS_FIELD_DROPPED = "READ.POWERMODELS.FIELD_DROPPED", Warning,
             "a PowerModels field the canonical model cannot state was dropped";
 
+        READ_GOC3_AMBIGUOUS_DOCUMENTS = "READ.GOC3.AMBIGUOUS_DOCUMENTS", Error,
+            "a GO Challenge 3 source contains more than one problem or solution data file",
+            category = Parse;
+        READ_GOC3_PROBLEM_REQUIRED = "READ.GOC3.PROBLEM_REQUIRED", Error,
+            "a GO Challenge 3 solution data file requires its matching problem data file",
+            category = Parse;
+        READ_GOC3_SOURCE_UNRECOGNIZED = "READ.GOC3.SOURCE_UNRECOGNIZED", Error,
+            "a declared GO Challenge 3 source contains no problem or solution data file",
+            category = Parse;
+        READ_GOC3_INVALID_DOCUMENT = "READ.GOC3.INVALID_DOCUMENT", Error,
+            "the GO Challenge 3 document decodes but is not a valid problem or solution file",
+            category = Parse;
         READ_GOC3_VALUE_INFERRED = "READ.GOC3.VALUE_INFERRED", Warning,
             "a GO Challenge 3 value the document never states was inferred";
         READ_GOC3_OPTIONAL_FIELD_UNTYPED = "READ.GOC3.OPTIONAL_FIELD_UNTYPED", Remark,

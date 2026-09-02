@@ -12,11 +12,11 @@ use serde_json::{Map, Value};
 use powerio_core::ComponentId;
 
 use super::{TextEmission, jnum};
-use crate::diagnostics::{Diagnostic, Diagnostics, codes};
+use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
     BalancedNetwork, BusId, BusbarSection, ComponentMetadata, ConnectivityNode,
-    DetailedConnectivity, SourceFormat, Substation, Switch, SwitchKind, Terminal, TopologyEndpoint,
-    TopologyKind, TopologySwitch, VoltageLevel,
+    DetailedConnectivity, SourceFormat, Substation, Switch, SwitchKind, Terminal,
+    TerminalReference, TopologyEndpoint, TopologyKind, TopologySwitch, VoltageLevel,
 };
 use crate::{Error, Result};
 
@@ -73,9 +73,17 @@ const SWITCHED_SHUNT_FIELDS: &[&str] = &[
     "rmidnt", "binit", "s1", "n1", "b1", "s2", "n2", "b2", "s3", "n3", "b3", "s4", "n4", "b4",
     "s5", "n5", "b5", "s6", "n6", "b6", "s7", "n7", "b7", "s8", "n8", "b8",
 ];
-const SYSTEM_SWITCH_FIELDS: &[&str] = &[
+const SYSTEM_SWITCH_RATING_FIELDS: &[&str] = &[
     "ibus", "jbus", "ckt", "xpu", "rate1", "rate2", "rate3", "rate4", "rate5", "rate6", "rate7",
     "rate8", "rate9", "rate10", "rate11", "rate12", "stat", "nstat", "met", "stype", "name",
+];
+const SYSTEM_SWITCH_RSET_FIELDS: &[&str] = &[
+    "ibus", "jbus", "ckt", "xpu", "rsetnam", "stat", "nstat", "met", "stype", "name",
+];
+const SYSTEM_SWITCH_FIELDS: &[&str] = &[
+    "ibus", "jbus", "ckt", "xpu", "rsetnam", "rate1", "rate2", "rate3", "rate4", "rate5", "rate6",
+    "rate7", "rate8", "rate9", "rate10", "rate11", "rate12", "stat", "nstat", "met", "stype",
+    "name",
 ];
 const SUBSTATION_FIELDS: &[&str] = &["isub", "name", "lati", "long", "srg"];
 const SUBSTATION_NODE_FIELDS: &[&str] = &["isub", "inode", "name", "ibus", "stat", "vm", "va"];
@@ -101,6 +109,37 @@ const UNSUPPORTED_TABLES: &[(&str, &str)] = &[
     ("facts", "FACTS devices"),
     ("gne", "GNE devices"),
     ("indmach", "induction machines"),
+];
+
+const KNOWN_NETWORK_MEMBERS: &[&str] = &[
+    "caseid",
+    "bus",
+    "load",
+    "fixshunt",
+    "generator",
+    "acline",
+    "transformer",
+    "area",
+    "twotermdc",
+    "swshunt",
+    "sysswd",
+    "sub",
+    "subnode",
+    "subswd",
+    "subterm",
+    "vscdc",
+    "impcor",
+    "ntermdc",
+    "ntermdcconv",
+    "ntermdcbus",
+    "ntermdclink",
+    "msline",
+    "zone",
+    "iatransfer",
+    "owner",
+    "facts",
+    "gne",
+    "indmach",
 ];
 
 #[derive(Debug)]
@@ -271,11 +310,31 @@ pub(super) fn parse_rawx_source(
             return Err(malformed(format!("RAWX caseid repeats field `{field}`")));
         }
     }
+    warn_caseid_fields(case_object, &case_columns, warnings);
     let case_value = |field: &str| {
         case_columns
             .get(field)
             .and_then(|index| case_data.get(*index))
     };
+    for (field, default) in [("ic", 0.0), ("xfrrat", 0.0), ("nxfrat", 1.0)] {
+        let value = numeric_value(case_value(field), &format!("caseid.{field}"), Some(default))?;
+        if !value.eq(&default) {
+            warnings.push(
+                &codes::READ_PSSE_FIELD_DROPPED,
+                format!(
+                    "PSS/E RAWX `caseid.{field}` value {value} is not retained in the balanced network; retained only in the same format source"
+                ),
+            );
+        }
+    }
+    if let Some(title2) = string_value(case_value("title2"), "caseid.title2")?
+        && !title2.is_empty()
+    {
+        warnings.push(
+            &codes::READ_PSSE_FIELD_DROPPED,
+            "PSS/E RAWX `caseid.title2` is not retained in the balanced network; retained only in the same format source",
+        );
+    }
     let revision = integer_value(case_value("rev"), "caseid.rev", Some(35))?;
     if revision != 35 {
         return Err(malformed(format!(
@@ -396,14 +455,17 @@ pub(super) fn parse_rawx_source(
             ),
         );
     }
-    warn_rawx_fields(network, warnings)?;
     warn_unsupported_tables(network, warnings)?;
+    warn_unknown_tables(network, warnings);
 
-    let mut parsed = super::psse::parse_psse_source(&raw, name_hint, warnings)?;
+    let mut parsed =
+        super::psse::parse_psse_source_deferred_regulating_nodes(&raw, name_hint, warnings)?;
     *parsed.source_format_mut() = SourceFormat::PsseRawx;
     read_system_switches(network, &mut parsed, warnings)?;
     parsed.assign_missing_component_ids();
     read_detailed_connectivity(network, &mut parsed, warnings)?;
+    let detailed = parsed.detailed_connectivity().clone();
+    apply_regulating_terminals(network, &mut parsed, detailed.as_deref(), warnings)?;
     parsed.check_references(FMT)?;
     Ok(parsed)
 }
@@ -618,46 +680,82 @@ fn string_value<'a>(value: Option<&'a Value>, field: &str) -> Result<Option<&'a 
     }
 }
 
-fn warn_rawx_fields(network: &Map<String, Value>, warnings: &mut Diagnostics) -> Result<()> {
-    for (table_name, field, description) in [
-        ("generator", "nreg", "node based generator regulation"),
-        ("swshunt", "nreg", "node based switched shunt regulation"),
-        (
-            "transformer",
-            "node1",
-            "transformer winding 1 node assignment",
-        ),
-        (
-            "transformer",
-            "node2",
-            "transformer winding 2 node assignment",
-        ),
-        (
-            "transformer",
-            "node3",
-            "transformer winding 3 node assignment",
-        ),
-        ("transformer", "zcod", "transformer ZCOD"),
-    ] {
-        let Some(table) = Table::parse(network, table_name)? else {
-            continue;
-        };
-        let used = table.rows.iter().filter(|row| {
-            table
-                .value(row, field)
-                .is_some_and(|value| !value.is_null() && value.as_f64().unwrap_or(0.0) != 0.0)
-        });
-        let count = used.count();
-        if count > 0 {
-            warnings.push(
-                &codes::READ_PSSE_FIELD_DROPPED,
-                format!(
-                    "{count} RAWX `{table_name}` record(s) carry {description}; the current balanced model has no corresponding field"
-                ),
-            );
-        }
+fn warn_caseid_fields(
+    case_object: &Map<String, Value>,
+    columns: &BTreeMap<String, usize>,
+    warnings: &mut Diagnostics,
+) {
+    let known: BTreeSet<&str> = CASE_FIELDS.iter().copied().collect();
+    let unknown = columns
+        .keys()
+        .map(String::as_str)
+        .filter(|field| !known.contains(field))
+        .collect::<Vec<_>>();
+    if !unknown.is_empty() {
+        warnings.push(
+            &codes::READ_PSSE_FIELD_DROPPED,
+            format!(
+                "PSS/E RAWX `caseid` fields {} are not modeled; retained only in the same format source",
+                unknown.join(", ")
+            ),
+        );
     }
-    Ok(())
+
+    let unknown_members = case_object
+        .keys()
+        .map(String::as_str)
+        .filter(|member| !matches!(*member, "fields" | "data"))
+        .collect::<Vec<_>>();
+    if !unknown_members.is_empty() {
+        warnings.push(
+            &codes::READ_PSSE_FIELD_DROPPED,
+            format!(
+                "PSS/E RAWX `caseid` object members {} are not modeled; retained only in the same format source",
+                unknown_members.join(", ")
+            ),
+        );
+    }
+}
+
+fn warn_unknown_tables(network: &Map<String, Value>, warnings: &mut Diagnostics) {
+    let known: BTreeSet<&str> = KNOWN_NETWORK_MEMBERS.iter().copied().collect();
+    for (name, value) in network {
+        if known.contains(name.as_str()) || !rawx_member_has_content(value) {
+            continue;
+        }
+        let count = value
+            .as_object()
+            .and_then(|object| object.get("data"))
+            .and_then(Value::as_array)
+            .map(Vec::len);
+        let message = count.map_or_else(
+            || {
+                format!(
+                    "PSS/E RAWX network member `{name}` is not modeled; retained only in the same format source"
+                )
+            },
+            |count| {
+                format!(
+                    "PSS/E RAWX `{name}` table contains {count} unmodeled record(s); retained only in the same format source"
+                )
+            },
+        );
+        warnings.push(&codes::READ_PSSE_SECTION_UNSUPPORTED, message);
+    }
+}
+
+fn rawx_member_has_content(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(value) => *value,
+        Value::Number(_) => true,
+        Value::String(value) => !value.is_empty(),
+        Value::Array(values) => !values.is_empty(),
+        Value::Object(object) => object
+            .get("data")
+            .and_then(Value::as_array)
+            .map_or(!object.is_empty(), |rows| !rows.is_empty()),
+    }
 }
 
 fn warn_unsupported_tables(network: &Map<String, Value>, warnings: &mut Diagnostics) -> Result<()> {
@@ -701,7 +799,7 @@ fn read_system_switches(
         switch.thermal_rating = (rate > 0.0).then_some(rate);
         for field in [
             "ckt", "xpu", "rate2", "rate3", "rate4", "rate5", "rate6", "rate7", "rate8", "rate9",
-            "rate10", "rate11", "rate12", "nstat", "met", "stype", "name",
+            "rate10", "rate11", "rate12", "rsetnam", "nstat", "met", "stype", "name",
         ] {
             if let Some(value) = table.value(row, field).filter(|value| !value.is_null()) {
                 switch.extras.insert(format!("psse_{field}"), value.clone());
@@ -1003,6 +1101,166 @@ struct RawxNode {
     voltage_level: ComponentId,
 }
 
+pub(super) fn regulating_terminal(
+    detailed: &DetailedConnectivity,
+    bus: BusId,
+    source_node: i32,
+) -> Option<TerminalReference> {
+    let node = detailed
+        .connectivity_nodes
+        .iter()
+        .find(|node| node.calculated_bus == Some(bus) && node.node_number == Some(source_node))?;
+    detailed
+        .terminals
+        .iter()
+        .filter(|terminal| terminal.node.as_ref() == Some(&node.component))
+        // A busbar section is the exact logical target when one represents the
+        // PSS/E node. Otherwise use an equipment terminal connected to it.
+        .min_by_key(|terminal| usize::from(terminal.equipment.component_type() != "busbar_section"))
+        .map(|terminal| TerminalReference {
+            equipment: terminal.equipment.clone(),
+            terminal: terminal.terminal,
+        })
+}
+
+#[allow(clippy::too_many_lines)]
+fn apply_regulating_terminals(
+    source: &Map<String, Value>,
+    parsed: &mut BalancedNetwork,
+    detailed: Option<&DetailedConnectivity>,
+    warnings: &mut Diagnostics,
+) -> Result<()> {
+    let mut assign = |target: &mut Option<TerminalReference>,
+                      bus: BusId,
+                      node: i32,
+                      description: String| {
+        if node == 0 {
+            return;
+        }
+        if let Some(reference) =
+            detailed.and_then(|detailed| regulating_terminal(detailed, bus, node))
+        {
+            *target = Some(reference);
+        } else {
+            warnings.push(
+                &codes::READ_PSSE_REFERENCE_DROPPED,
+                format!(
+                    "{description}: node {node} at regulated bus {bus} has no detailed connectivity terminal"
+                ),
+            );
+        }
+    };
+
+    if let Some(table) = Table::parse(source, "generator")? {
+        for (index, row) in table.rows.iter().zip(parsed.generators_mut()) {
+            let ireg = BusId(table_bus(&table, index, "ireg")?);
+            let node = integer_value(table.value(index, "nreg"), "generator.nreg", Some(0))?;
+            let node = i32::try_from(node)
+                .map_err(|_| malformed("RAWX generator.nreg is outside the i32 range"))?;
+            let bus = if ireg.0 == 0 { row.bus } else { ireg };
+            assign(
+                &mut row.regulating_terminal,
+                bus,
+                node,
+                format!("PSS/E generator at bus {}", row.bus),
+            );
+        }
+    }
+
+    let fixed_shunts = Table::parse(source, "fixshunt")?.map_or(0, |table| table.rows.len());
+    if let Some(table) = Table::parse(source, "swshunt")? {
+        for (index, shunt) in table
+            .rows
+            .iter()
+            .zip(parsed.shunts_mut().iter_mut().skip(fixed_shunts))
+        {
+            let Some(control) = shunt.control.as_mut() else {
+                continue;
+            };
+            let swreg = BusId(table_bus(&table, index, "swreg")?);
+            let node = integer_value(table.value(index, "nreg"), "swshunt.nreg", Some(0))?;
+            let node = i32::try_from(node)
+                .map_err(|_| malformed("RAWX swshunt.nreg is outside the i32 range"))?;
+            let bus = if swreg.0 == 0 { shunt.bus } else { swreg };
+            assign(
+                &mut control.regulating_terminal,
+                bus,
+                node,
+                format!("PSS/E switched shunt at bus {}", shunt.bus),
+            );
+        }
+    }
+
+    let line_count = Table::parse(source, "acline")?.map_or(0, |table| table.rows.len());
+    if let Some(table) = Table::parse(source, "transformer")? {
+        let mut two_winding_index = 0;
+        let mut three_winding_index = 0;
+        for row in table.rows {
+            let kbus = table_bus(&table, row, "kbus")?;
+            if kbus == 0 {
+                let transformer = parsed
+                    .branches_mut()
+                    .get_mut(line_count + two_winding_index)
+                    .ok_or_else(|| {
+                        malformed("RAWX two winding transformer controls did not map one for one")
+                    })?;
+                two_winding_index += 1;
+                if let Some(control) = transformer.control.as_mut() {
+                    let node =
+                        integer_value(table.value(row, "node1"), "transformer.node1", Some(0))?;
+                    let node = i32::try_from(node).map_err(|_| {
+                        malformed("RAWX transformer.node1 is outside the i32 range")
+                    })?;
+                    let bus = control.controlled_bus.unwrap_or(transformer.from);
+                    assign(
+                        &mut control.regulating_terminal,
+                        bus,
+                        node,
+                        format!(
+                            "PSS/E two winding transformer {}-{}",
+                            transformer.from, transformer.to
+                        ),
+                    );
+                }
+            } else {
+                let transformer = parsed
+                    .transformers_3w_mut()
+                    .get_mut(three_winding_index)
+                    .ok_or_else(|| {
+                        malformed("RAWX three winding transformer controls did not map one for one")
+                    })?;
+                three_winding_index += 1;
+                for (winding_index, winding) in transformer.windings.iter_mut().enumerate() {
+                    let Some(control) = winding.control.as_mut() else {
+                        continue;
+                    };
+                    let field = format!("node{}", winding_index + 1);
+                    let node = integer_value(
+                        table.value(row, &field),
+                        "transformer winding node",
+                        Some(0),
+                    )?;
+                    let node = i32::try_from(node).map_err(|_| {
+                        malformed("RAWX transformer winding node is outside the i32 range")
+                    })?;
+                    let bus = control.controlled_bus.unwrap_or(winding.bus);
+                    assign(
+                        &mut control.regulating_terminal,
+                        bus,
+                        node,
+                        format!(
+                            "PSS/E three winding transformer winding {} at bus {}",
+                            winding_index + 1,
+                            winding.bus
+                        ),
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)]
 fn read_detailed_connectivity(
     source: &Map<String, Value>,
@@ -1041,7 +1299,18 @@ fn read_detailed_connectivity(
     }
 
     let mut detailed = DetailedConnectivity::default();
-    let mut metadata = BTreeMap::<ComponentId, ComponentMetadata>::new();
+    let mut metadata = parsed
+        .detailed_connectivity()
+        .as_deref()
+        .map(|detailed| {
+            detailed
+                .component_metadata
+                .iter()
+                .cloned()
+                .map(|metadata| (metadata.component.clone(), metadata))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
     let mut substations = BTreeMap::<i64, ComponentId>::new();
     for row in substation_table.rows {
         let number = integer_value(substation_table.value(row, "isub"), "sub.isub", None)?;
@@ -1071,6 +1340,7 @@ fn read_detailed_connectivity(
                 component,
                 name: string_value(substation_table.value(row, "name"), "sub.name")?
                     .map(str::to_owned),
+                equipment_container: None,
                 aliases: Vec::new(),
                 external_identifiers: Vec::new(),
                 properties,
@@ -1166,6 +1436,7 @@ fn read_detailed_connectivity(
                     component,
                     name: string_value(table.value(row, "name"), "subnode.name")?
                         .map(str::to_owned),
+                    equipment_container: None,
                     aliases: Vec::new(),
                     external_identifiers: Vec::new(),
                     properties,
@@ -1248,6 +1519,7 @@ fn read_detailed_connectivity(
                 ComponentMetadata {
                     component,
                     name: string_value(table.value(row, "name"), "subswd.name")?.map(str::to_owned),
+                    equipment_container: None,
                     aliases: Vec::new(),
                     external_identifiers: Vec::new(),
                     properties,
@@ -1307,6 +1579,7 @@ fn read_detailed_connectivity(
             let terminal = u8::try_from(terminal_number)
                 .map_err(|_| malformed("RAWX equipment has more than 255 terminals"))?;
             detailed.terminals.push(Terminal {
+                component: None,
                 equipment: equipment.clone(),
                 terminal,
                 voltage_level: node.voltage_level.clone(),
@@ -1323,6 +1596,7 @@ fn read_detailed_connectivity(
                 .or_insert_with(|| ComponentMetadata {
                     component: equipment,
                     name: None,
+                    equipment_container: None,
                     aliases: Vec::new(),
                     external_identifiers: Vec::new(),
                     properties: BTreeMap::new(),
@@ -1355,6 +1629,18 @@ fn read_detailed_connectivity(
             voltage_level: node.voltage_level.clone(),
             node: node.component.clone(),
         });
+        detailed.terminals.push(Terminal {
+            component: None,
+            equipment: component.clone(),
+            terminal: 1,
+            voltage_level: node.voltage_level.clone(),
+            bus: None,
+            connectable_bus: None,
+            node: Some(node.component.clone()),
+            connected: true,
+            active_power_mw: None,
+            reactive_power_mvar: None,
+        });
         let name = metadata
             .get(&node.component)
             .and_then(|value| value.name.clone());
@@ -1363,6 +1649,7 @@ fn read_detailed_connectivity(
             ComponentMetadata {
                 component,
                 name,
+                equipment_container: None,
                 aliases: Vec::new(),
                 external_identifiers: Vec::new(),
                 properties: BTreeMap::new(),
@@ -1376,7 +1663,7 @@ fn read_detailed_connectivity(
     Ok(())
 }
 
-/// Read revision 35 nested substation records from a legacy RAW source and
+/// Read revision 34+ nested substation records from a legacy RAW source and
 /// attach the same detailed connectivity produced by the RAWX tables.
 #[allow(clippy::too_many_lines)]
 pub(super) fn read_raw_detailed_connectivity(
@@ -1597,38 +1884,27 @@ fn transformer_fields() -> Vec<String> {
 
 /// Emit a neutral network through the shared PSS/E revision 35 writer, then
 /// encode those records as RAWX tables.
-pub(crate) fn write_rawx(net: &BalancedNetwork) -> TextEmission {
-    let raw = super::psse::write_psse_rev(net, 35);
-    let text = raw_to_rawx(net, &raw.text)
-        .expect("the revision 35 PSS/E writer always produces complete records");
-    let mut diagnostics = raw.diagnostics;
+pub(crate) fn write_rawx(net: &BalancedNetwork) -> Result<TextEmission> {
+    let raw = super::psse::write_psse_rev_without_detailed_connectivity(net, 35);
+    let mut diagnostics = Diagnostics::from(raw.diagnostics);
+    let text = raw_to_rawx(net, &raw.text, &mut diagnostics).map_err(|error| Error::Emit {
+        format: FMT,
+        message: error.to_string(),
+    })?;
     if net.solver().is_some() {
-        diagnostics.push(Diagnostic::of(
+        diagnostics.push(
             &codes::EMIT_PSSE.field_dropped,
             "solver parameters dropped: PSS/E RAWX 35 has no system wide table",
-        ));
+        );
     }
-    let current_ratings = net
-        .switches()
-        .iter()
-        .filter(|switch| switch.current_rating.is_some())
-        .count();
-    if current_ratings > 0 {
-        diagnostics.push(Diagnostic::of(
-            &codes::EMIT_PSSE.field_dropped,
-            format!(
-                "{current_ratings} switch current rating(s) dropped: PSS/E RAWX system switching devices carry MVA ratings"
-            ),
-        ));
-    }
-    TextEmission {
+    Ok(TextEmission {
         text,
-        diagnostics,
+        diagnostics: diagnostics.into_records(),
         fidelity: powerio_core::Fidelity::Canonical,
-    }
+    })
 }
 
-fn raw_to_rawx(net: &BalancedNetwork, raw: &str) -> Result<String> {
+fn raw_to_rawx(net: &BalancedNetwork, raw: &str, diagnostics: &mut Diagnostics) -> Result<String> {
     let (header, title, sections) = split_raw(raw)?;
     let mut network = Map::new();
     let mut case_data = tokens_as_values(&header, &CASE_FIELDS[..6], &[])?;
@@ -1677,8 +1953,8 @@ fn raw_to_rawx(net: &BalancedNetwork, raw: &str) -> Result<String> {
         &["shntid", "rmidnt"],
         &sections,
     );
-    add_system_switch_output_table(&mut network, net);
-    add_detailed_connectivity_output_tables(&mut network, net)?;
+    add_system_switch_output_table(&mut network, net, diagnostics);
+    add_detailed_connectivity_output_tables(&mut network, net, diagnostics)?;
     apply_detailed_equipment_ids(&mut network, net)?;
 
     let mut root = Map::new();
@@ -1854,39 +2130,83 @@ fn add_two_terminal_output_table(
     Ok(())
 }
 
-fn add_system_switch_output_table(network: &mut Map<String, Value>, net: &BalancedNetwork) {
+fn add_system_switch_output_table(
+    network: &mut Map<String, Value>,
+    net: &BalancedNetwork,
+    diagnostics: &mut Diagnostics,
+) {
     if net.switches().is_empty() {
         return;
     }
-    let rows =
-        net.switches()
+    let has_ratings = net.switches().iter().any(|switch| {
+        switch.thermal_rating.is_some()
+            || (2..=12).any(|rating| switch.extras.contains_key(&format!("psse_rate{rating}")))
+    });
+    let has_rating_set_names = net
+        .switches()
+        .iter()
+        .any(|switch| switch.extras.contains_key("psse_rsetnam"));
+    let use_rating_set_names = has_rating_set_names && !has_ratings;
+    if has_rating_set_names && has_ratings {
+        let count = net
+            .switches()
             .iter()
-            .enumerate()
-            .map(|(index, switch)| {
-                let extra = |field: &str| switch.extras.get(&format!("psse_{field}")).cloned();
-                let mut row = vec![
-                    Value::from(switch.from.0),
-                    Value::from(switch.to.0),
-                    extra("ckt").unwrap_or_else(|| Value::String((index + 1).to_string())),
-                    extra("xpu").unwrap_or_else(|| Value::from(0.0)),
-                    switch.thermal_rating.map_or(Value::from(0.0), jnum),
-                ];
+            .filter(|switch| switch.extras.contains_key("psse_rsetnam"))
+            .count();
+        diagnostics.push(
+            &codes::EMIT_PSSE.field_dropped,
+            format!(
+                "{count} system switching device rating set name(s) dropped: one RAWX `sysswd` table cannot mix `rsetnam` rows with explicit RATE1-RATE12 rows"
+            ),
+        );
+    }
+
+    let mut switch_ids = BTreeMap::new();
+    let rows = net
+        .switches()
+        .iter()
+        .map(|switch| {
+            let extra = |field: &str| switch.extras.get(&format!("psse_{field}")).cloned();
+            let preferred_ckt = switch.extras.get("psse_ckt").and_then(Value::as_str);
+            let ckt = super::allocate_circuit_id(
+                preferred_ckt,
+                (switch.from, switch.to),
+                &mut switch_ids,
+            );
+            let mut row = vec![
+                Value::from(switch.from.0),
+                Value::from(switch.to.0),
+                Value::String(ckt),
+                extra("xpu").unwrap_or_else(|| Value::from(0.0)),
+            ];
+            if use_rating_set_names {
+                row.push(extra("rsetnam").unwrap_or_else(|| Value::String(String::new())));
+            } else {
+                row.push(switch.thermal_rating.map_or(Value::from(0.0), jnum));
                 row.extend((2..=12).map(|rating| {
                     extra(&format!("rate{rating}")).unwrap_or_else(|| Value::from(0.0))
                 }));
-                row.extend([
-                    Value::from(i64::from(switch.closed)),
-                    extra("nstat").unwrap_or_else(|| Value::from(1)),
-                    extra("met").unwrap_or_else(|| Value::from(1)),
-                    extra("stype").unwrap_or_else(|| Value::from(1)),
-                    extra("name").unwrap_or_else(|| Value::String(String::new())),
-                ]);
-                Value::Array(row)
-            })
-            .collect();
+            }
+            row.extend([
+                Value::from(i64::from(switch.closed)),
+                extra("nstat").unwrap_or_else(|| Value::from(1)),
+                extra("met").unwrap_or_else(|| Value::from(1)),
+                extra("stype").unwrap_or_else(|| Value::from(1)),
+                extra("name").unwrap_or_else(|| Value::String(String::new())),
+            ]);
+            Value::Array(row)
+        })
+        .collect();
     network.insert(
         "sysswd".to_owned(),
-        table_object(SYSTEM_SWITCH_FIELDS, Value::Array(rows)),
+        table_object(
+            if use_rating_set_names {
+                SYSTEM_SWITCH_RSET_FIELDS
+            } else {
+                SYSTEM_SWITCH_RATING_FIELDS
+            },
+            Value::Array(rows),
+        ),
     );
 }
 
@@ -2042,14 +2362,14 @@ fn psse_equipment_type(
         .cloned()
         .or_else(|| {
             Some(
-                match equipment.component_type() {
-                    "load" => "L",
-                    "shunt" => "F",
-                    "generator" => "M",
-                    "branch" => "B",
-                    "transformer" if terminal_count >= 3 => "3",
-                    "transformer" => "2",
-                    "hvdc" => "D",
+                match (equipment.component_type(), terminal_count) {
+                    ("load", 1) => "L",
+                    ("shunt", 1) => "F",
+                    ("generator", 1) => "M",
+                    ("branch", 2) => "B",
+                    ("transformer", 2) => "2",
+                    ("transformer", 3) => "3",
+                    ("hvdc", 2) => "D",
                     _ => return None,
                 }
                 .to_owned(),
@@ -2057,15 +2377,266 @@ fn psse_equipment_type(
         })
 }
 
+// Keep this as one inventory so every detailed record and field is counted once
+// before RAWX projection.
+#[allow(clippy::too_many_lines)]
+fn warn_detailed_output_losses(detailed: &DetailedConnectivity, warnings: &mut Diagnostics) {
+    let unsupported_records = [
+        ("subnetwork", detailed.subnetworks.len()),
+        ("bus breaker bus", detailed.bus_breaker_buses.len()),
+        ("calculated bus", detailed.calculated_buses.len()),
+        ("junction", detailed.junctions.len()),
+        ("internal connection", detailed.internal_connections.len()),
+        (
+            "operational limit group",
+            detailed.operational_limit_groups.len(),
+        ),
+        ("tap changer", detailed.tap_changers.len()),
+        (
+            "equipment reactive limit",
+            detailed.equipment_reactive_limits.len(),
+        ),
+        ("boundary line", detailed.boundary_lines.len()),
+        ("tie line", detailed.tie_lines.len()),
+        ("DC converter unit", detailed.dc_converter_units.len()),
+        ("DC topological node", detailed.dc_topological_nodes.len()),
+        ("DC node", detailed.dc_nodes.len()),
+        ("DC ground", detailed.dc_grounds.len()),
+        ("DC busbar", detailed.dc_busbars.len()),
+        ("DC line detail", detailed.dc_lines.len()),
+        ("DC series device", detailed.dc_series_devices.len()),
+        ("DC topology switch", detailed.dc_switches.len()),
+        (
+            "voltage source converter detail",
+            detailed.voltage_source_converters.len(),
+        ),
+        (
+            "line commutated converter detail",
+            detailed.line_commutated_converters.len(),
+        ),
+    ];
+    for (record, count) in unsupported_records {
+        if count > 0 {
+            warnings.push(
+                &codes::EMIT_PSSE.record_dropped,
+                format!(
+                    "{count} detailed {record} record(s) dropped: PSS/E RAWX substation tables cannot represent them"
+                ),
+            );
+        }
+    }
+
+    if !detailed.omitted_fields.is_empty() {
+        warnings.push(
+            &codes::EMIT_PSSE.field_dropped,
+            format!(
+                "{} detailed source omission marker(s) dropped: PSS/E RAWX cannot retain source absence markers",
+                detailed.omitted_fields.len()
+            ),
+        );
+    }
+
+    let substation_fields = detailed
+        .substations
+        .iter()
+        .map(|substation| {
+            usize::from(substation.country.is_some())
+                + usize::from(substation.operator.is_some())
+                + substation.geographical_tags.len()
+        })
+        .sum::<usize>();
+    if substation_fields > 0 {
+        warnings.push(
+            &codes::EMIT_PSSE.field_dropped,
+            format!(
+                "{substation_fields} substation country, operator, or geographical tag value(s) dropped: PSS/E RAWX `sub` has no corresponding fields"
+            ),
+        );
+    }
+
+    let metadata_fields = detailed
+        .component_metadata
+        .iter()
+        .map(|metadata| {
+            usize::from(metadata.equipment_container.is_some())
+                + metadata.aliases.len()
+                + metadata.external_identifiers.len()
+                + usize::from(metadata.fictitious)
+                + metadata
+                    .properties
+                    .keys()
+                    .filter(|property| !rawx_metadata_property_is_emitted(property))
+                    .count()
+        })
+        .sum::<usize>();
+    if metadata_fields > 0 {
+        warnings.push(
+            &codes::EMIT_PSSE.extras_dropped,
+            format!(
+                "{metadata_fields} detailed component metadata value(s) dropped: PSS/E RAWX emits only its named substation, node, switch, and terminal fields"
+            ),
+        );
+    }
+
+    let retained_switches = detailed
+        .switches
+        .iter()
+        .filter(|switch| switch.retained)
+        .count();
+    if retained_switches > 0 {
+        warnings.push(
+            &codes::EMIT_PSSE.field_dropped,
+            format!(
+                "{retained_switches} topology switch retained flag(s) dropped: PSS/E RAWX switching device records have no retained field"
+            ),
+        );
+    }
+    let load_break_switches = detailed
+        .switches
+        .iter()
+        .filter(|switch| switch.kind == SwitchKind::LoadBreakSwitch)
+        .count();
+    if load_break_switches > 0 {
+        warnings.push(
+            &codes::EMIT_PSSE.value_collapsed,
+            format!(
+                "{load_break_switches} load break switch kind(s) emitted as disconnectors: PSS/E RAWX has no distinct load break switch code"
+            ),
+        );
+    }
+
+    let terminal_identities = detailed
+        .terminals
+        .iter()
+        .filter(|terminal| terminal.component.is_some())
+        .count();
+    let terminal_bus_references = detailed
+        .terminals
+        .iter()
+        .map(|terminal| {
+            usize::from(terminal.bus.is_some()) + usize::from(terminal.connectable_bus.is_some())
+        })
+        .sum::<usize>();
+    let disconnected = detailed
+        .terminals
+        .iter()
+        .filter(|terminal| !terminal.connected)
+        .count();
+    let terminal_powers = detailed
+        .terminals
+        .iter()
+        .map(|terminal| {
+            usize::from(terminal.active_power_mw.is_some())
+                + usize::from(terminal.reactive_power_mvar.is_some())
+        })
+        .sum::<usize>();
+    let mut terminal_numbers = BTreeMap::<&ComponentId, Vec<u8>>::new();
+    for terminal in &detailed.terminals {
+        terminal_numbers
+            .entry(&terminal.equipment)
+            .or_default()
+            .push(terminal.terminal);
+    }
+    let noncanonical_terminal_numbers = terminal_numbers
+        .values_mut()
+        .map(|numbers| {
+            numbers.sort_unstable();
+            numbers
+                .iter()
+                .enumerate()
+                .filter(|(index, number)| usize::from(**number) != index + 1)
+                .count()
+        })
+        .sum::<usize>();
+    for (count, description) in [
+        (terminal_identities, "terminal component identities"),
+        (
+            terminal_bus_references,
+            "terminal bus and connectable bus references",
+        ),
+        (disconnected, "disconnected terminal flags"),
+        (terminal_powers, "terminal active and reactive power values"),
+        (
+            noncanonical_terminal_numbers,
+            "noncanonical terminal sequence numbers",
+        ),
+    ] {
+        if count > 0 {
+            warnings.push(
+                &codes::EMIT_PSSE.field_dropped,
+                format!(
+                    "{count} {description} dropped: PSS/E RAWX `subterm` has no corresponding field"
+                ),
+            );
+        }
+    }
+}
+
+fn rawx_metadata_property_is_emitted(property: &str) -> bool {
+    matches!(
+        property,
+        "psse_isub"
+            | "psse_lati"
+            | "psse_long"
+            | "psse_srg"
+            | "psse_stat"
+            | "psse_vm"
+            | "psse_va"
+            | "psse_swdid"
+            | "psse_type"
+            | "psse_nstat"
+            | "psse_xpu"
+            | "psse_rate1"
+            | "psse_rate2"
+            | "psse_rate3"
+            | "psse_eqid"
+            | "psse_zr"
+            | "psse_zx"
+            | "psse_rt"
+            | "psse_xt"
+            | "psse_gtap"
+            | "psse_rmpct"
+            | "psse_baslod"
+            | "psse_o1"
+            | "psse_f1"
+            | "psse_o2"
+            | "psse_f2"
+            | "psse_o3"
+            | "psse_f3"
+            | "psse_o4"
+            | "psse_f4"
+            | "psse_wmod"
+            | "psse_wpf"
+            | "psse_bus_1"
+            | "psse_bus_2"
+            | "psse_bus_3"
+    )
+}
+
 #[allow(clippy::too_many_lines)]
 fn add_detailed_connectivity_output_tables(
     network: &mut Map<String, Value>,
     net: &BalancedNetwork,
+    warnings: &mut Diagnostics,
 ) -> Result<()> {
     let Some(detailed) = net.detailed_connectivity().as_deref() else {
         return Ok(());
     };
+    warn_detailed_output_losses(detailed, warnings);
     if detailed.connectivity_nodes.is_empty() {
+        let dropped = detailed.substations.len()
+            + detailed.voltage_levels.len()
+            + detailed.busbar_sections.len()
+            + detailed.switches.len()
+            + detailed.terminals.len();
+        if dropped > 0 {
+            warnings.push(
+                &codes::EMIT_PSSE.record_dropped,
+                format!(
+                    "{dropped} detailed substation, voltage level, busbar, switch, or terminal record(s) dropped: PSS/E RAWX substation tables require connectivity nodes"
+                ),
+            );
+        }
         return Ok(());
     }
     let metadata = metadata_by_component(detailed);
@@ -2182,6 +2753,7 @@ fn add_detailed_connectivity_output_tables(
         *next = next.checked_add(1).unwrap_or(i32::MAX);
     }
     let mut node_info = BTreeMap::<ComponentId, (i64, i32, BusId)>::new();
+    let mut node_voltage_levels = BTreeMap::<ComponentId, ComponentId>::new();
     let mut node_rows = Vec::new();
     for node in &detailed.connectivity_nodes {
         let substation_number = node_substations[&node.component];
@@ -2202,6 +2774,7 @@ fn add_detailed_connectivity_output_tables(
             node.component.clone(),
             (substation_number, node_number, bus_id),
         );
+        node_voltage_levels.insert(node.component.clone(), node.voltage_level.clone());
         let row_metadata = metadata.get(&node.component).copied();
         node_rows.push(Value::Array(vec![
             Value::from(substation_number),
@@ -2223,10 +2796,12 @@ fn add_detailed_connectivity_output_tables(
     );
 
     let mut switch_rows = Vec::new();
+    let mut non_node_switches = 0usize;
     for switch in &detailed.switches {
         let (TopologyEndpoint::Node(first), TopologyEndpoint::Node(second)) =
             (&switch.endpoint1, &switch.endpoint2)
         else {
+            non_node_switches += 1;
             continue;
         };
         let (first_substation, first_node, _) = node_info.get(first).ok_or_else(|| {
@@ -2235,6 +2810,14 @@ fn add_detailed_connectivity_output_tables(
         let (second_substation, second_node, _) = node_info.get(second).ok_or_else(|| {
             malformed(format!("RAWX switch endpoint {second} is not a known node"))
         })?;
+        let first_level = &node_voltage_levels[first];
+        let second_level = &node_voltage_levels[second];
+        if first_level != second_level || &switch.voltage_level != first_level {
+            return Err(malformed(format!(
+                "RAWX switch {} does not stay within its declared voltage level",
+                switch.component
+            )));
+        }
         if first_substation != second_substation {
             return Err(malformed(format!(
                 "RAWX switch {} joins two substations",
@@ -2272,6 +2855,14 @@ fn add_detailed_connectivity_output_tables(
             metadata_number(row_metadata, "psse_rate3", 0.0),
         ]));
     }
+    if non_node_switches > 0 {
+        warnings.push(
+            &codes::EMIT_PSSE.record_dropped,
+            format!(
+                "{non_node_switches} detailed topology switch record(s) dropped: PSS/E RAWX `subswd` requires two connectivity node endpoints"
+            ),
+        );
+    }
     if !switch_rows.is_empty() {
         network.insert(
             "subswd".to_owned(),
@@ -2287,11 +2878,21 @@ fn add_detailed_connectivity_output_tables(
             .push(terminal);
     }
     let mut terminal_rows = Vec::new();
+    let mut unsupported_terminal_equipment = 0usize;
     for (equipment, mut terminals) in terminals_by_equipment {
         terminals.sort_by_key(|terminal| terminal.terminal);
         let row_metadata = metadata.get(&equipment).copied();
         let Some(equipment_type) = psse_equipment_type(&equipment, terminals.len(), row_metadata)
         else {
+            let implicit_busbar = detailed.busbar_sections.iter().any(|busbar| {
+                busbar.component == equipment
+                    && terminals.len() == 1
+                    && terminals[0].terminal == 1
+                    && terminals[0].node.as_ref() == Some(&busbar.node)
+            });
+            if !implicit_busbar {
+                unsupported_terminal_equipment += terminals.len();
+            }
             continue;
         };
         let equipment_id = metadata_text(row_metadata, "psse_eqid", || {
@@ -2303,11 +2904,17 @@ fn add_detailed_connectivity_output_tables(
                 terminal
                     .node
                     .as_ref()
-                    .and_then(|node| node_info.get(node))
+                    .and_then(|node| {
+                        let level = node_voltage_levels.get(node)?;
+                        if level != &terminal.voltage_level {
+                            return None;
+                        }
+                        node_info.get(node)
+                    })
                     .map(|(_, _, bus)| *bus)
                     .ok_or_else(|| {
                         malformed(format!(
-                            "RAWX equipment terminal for {equipment} has no known node"
+                            "RAWX equipment terminal for {equipment} has no known node in its declared voltage level"
                         ))
                     })
             })
@@ -2355,6 +2962,14 @@ fn add_detailed_connectivity_output_tables(
             ]));
         }
     }
+    if unsupported_terminal_equipment > 0 {
+        warnings.push(
+            &codes::EMIT_PSSE.record_dropped,
+            format!(
+                "{unsupported_terminal_equipment} detailed terminal record(s) dropped: their equipment type has no PSS/E RAWX `subterm.type` code"
+            ),
+        );
+    }
     if !terminal_rows.is_empty() {
         network.insert(
             "subterm".to_owned(),
@@ -2366,11 +2981,14 @@ fn add_detailed_connectivity_output_tables(
 
 /// Encode detailed connectivity as the nested revision 35 RAW substation
 /// records. RAWX stores the same records in four flat tables.
-pub(super) fn write_raw_substation_data(net: &BalancedNetwork) -> Result<Option<String>> {
+pub(super) fn write_raw_substation_data(
+    net: &BalancedNetwork,
+) -> Result<(Option<String>, Diagnostics)> {
     let mut network = Map::new();
-    add_detailed_connectivity_output_tables(&mut network, net)?;
+    let mut warnings = Diagnostics::new();
+    add_detailed_connectivity_output_tables(&mut network, net, &mut warnings)?;
     let Some(substations) = Table::parse(&network, "sub")? else {
-        return Ok(None);
+        return Ok((None, warnings));
     };
     let nodes = Table::parse(&network, "subnode")?;
     let switches = Table::parse(&network, "subswd")?;
@@ -2453,7 +3071,15 @@ pub(super) fn write_raw_substation_data(net: &BalancedNetwork) -> Result<Option<
         }
         output.push_str("0 / END OF SUBSTATION EQUIPMENT TERMINAL DATA\n");
     }
-    Ok(Some(output))
+    if substitutions > 0 {
+        warnings.push(
+            &codes::EMIT_PSSE.value_substituted,
+            format!(
+                "{substitutions} quoted PSS/E substation field(s) (`sub.name`, `subnode.name`, `subswd.swdid`/`name`, or `subterm.type`/`eqid`) contained a quote or line break; replaced with spaces"
+            ),
+        );
+    }
+    Ok((Some(output), warnings))
 }
 
 fn table_object(fields: &[&str], data: Value) -> Value {
@@ -2517,6 +3143,17 @@ mod tests {
         assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
     }
 
+    fn table_value(root: &Value, table: &str, row: usize, field: &str) -> Value {
+        let table = &root["network"][table];
+        let column = table["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .position(|value| value == field)
+            .unwrap();
+        table["data"][row][column].clone()
+    }
+
     const MINIMAL: &str = r#"{
       "network": {
         "caseid": {"fields":["rev","sbase","basfrq","title1"],"data":[35,100,60,"rawx-small"]},
@@ -2571,8 +3208,14 @@ mod tests {
     #[test]
     fn emits_parseable_revision_35_rawx() {
         let mut diagnostics = Diagnostics::new();
-        let net = parse_rawx_source(MINIMAL, None, &mut diagnostics).unwrap();
-        let emitted = write_rawx(&net);
+        let mut net = parse_rawx_source(MINIMAL, None, &mut diagnostics).unwrap();
+        net.generators_mut()[0].energy_source = crate::network::GeneratorEnergySource::Wind;
+        let emitted = write_rawx(&net).unwrap();
+        assert!(emitted.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code() == "EMIT.PSSE.FIELD_DROPPED"
+                && diagnostic.message().contains("generator energy source")
+                && diagnostic.message().contains("wind=1")
+        }));
         let root: Value = serde_json::from_str(&emitted.text).unwrap();
         assert_eq!(root["network"]["caseid"]["data"][2], 35);
         let mut diagnostics = Diagnostics::new();
@@ -2600,6 +3243,236 @@ mod tests {
     }
 
     #[test]
+    fn diagnoses_unknown_tables_case_fields_and_retained_header_values() {
+        let mut root: Value = serde_json::from_str(MINIMAL).unwrap();
+        let network = root["network"].as_object_mut().unwrap();
+        network.insert(
+            "vendor_table".to_owned(),
+            serde_json::json!({"fields": ["id"], "data": [[1], [2]]}),
+        );
+        network.insert(
+            "empty_vendor_table".to_owned(),
+            serde_json::json!({"fields": ["id"], "data": []}),
+        );
+        let caseid = network["caseid"].as_object_mut().unwrap();
+        caseid["fields"]
+            .as_array_mut()
+            .unwrap()
+            .extend(["vendorflag", "ic", "xfrrat", "nxfrat", "title2"].map(Value::from));
+        caseid["data"].as_array_mut().unwrap().extend([
+            Value::from(7),
+            Value::from(1),
+            Value::from(2),
+            Value::from(3),
+            Value::from("second title"),
+        ]);
+        caseid.insert("vendor_member".to_owned(), Value::Bool(true));
+
+        let mut diagnostics = Diagnostics::new();
+        parse_rawx_source(
+            &serde_json::to_string(&root).unwrap(),
+            None,
+            &mut diagnostics,
+        )
+        .unwrap();
+        let lines = diagnostics.lines();
+        assert!(lines.iter().any(|line| {
+            line.contains("READ.PSSE.SECTION_UNSUPPORTED")
+                && line.contains("vendor_table")
+                && line.contains('2')
+        }));
+        assert!(
+            lines
+                .iter()
+                .all(|line| !line.contains("empty_vendor_table"))
+        );
+        assert!(lines.iter().any(|line| {
+            line.contains("READ.PSSE.FIELD_DROPPED")
+                && line.contains("caseid")
+                && line.contains("vendorflag")
+        }));
+        assert!(lines.iter().any(|line| line.contains("vendor_member")));
+        for field in [
+            "caseid.ic",
+            "caseid.xfrrat",
+            "caseid.nxfrat",
+            "caseid.title2",
+        ] {
+            assert!(
+                lines.iter().any(|line| line.contains(field)),
+                "missing diagnostic for {field}: {lines:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn preserves_string_encoded_transformer_zcod() {
+        let mut root: Value = serde_json::from_str(TRANSFORMERS_AND_SWITCH).unwrap();
+        let transformer = root["network"]["transformer"].as_object_mut().unwrap();
+        transformer["fields"]
+            .as_array_mut()
+            .unwrap()
+            .push(Value::from("zcod"));
+        let rows = transformer["data"].as_array_mut().unwrap();
+        rows[0].as_array_mut().unwrap().push(Value::from("1"));
+        rows[1].as_array_mut().unwrap().push(Value::Null);
+
+        let mut diagnostics = Diagnostics::new();
+        let parsed = parse_rawx_source(
+            &serde_json::to_string(&root).unwrap(),
+            None,
+            &mut diagnostics,
+        )
+        .unwrap();
+        assert_eq!(parsed.branches()[0].extras["psse_zcod"], Value::from(1));
+        assert!(
+            diagnostics
+                .lines()
+                .iter()
+                .all(|line| !line.contains("ZCOD")),
+            "unexpected diagnostic: {:?}",
+            diagnostics.lines()
+        );
+
+        let emitted = write_rawx(&parsed).unwrap();
+        let reparsed = parse_rawx_source(&emitted.text, None, &mut Diagnostics::new()).unwrap();
+        assert_eq!(reparsed.branches()[0].extras["psse_zcod"], Value::from(1));
+    }
+
+    #[test]
+    fn rawx_output_returns_detailed_connectivity_errors_instead_of_panicking() {
+        let mut net =
+            parse_rawx_source(TRANSFORMERS_AND_SWITCH, None, &mut Diagnostics::new()).unwrap();
+        let detailed = std::sync::Arc::make_mut(net.detailed_connectivity_mut().as_mut().unwrap());
+        detailed.substations.push(detailed.substations[0].clone());
+
+        let error = write_rawx(&net).unwrap_err();
+        assert!(matches!(error, Error::Emit { .. }));
+        assert!(
+            error
+                .to_string()
+                .contains("repeats PSS/E substation number")
+        );
+    }
+
+    #[test]
+    fn raw_substation_output_diagnoses_sanitized_names_and_identifiers() {
+        let mut net =
+            parse_rawx_source(TRANSFORMERS_AND_SWITCH, None, &mut Diagnostics::new()).unwrap();
+        let detailed = std::sync::Arc::make_mut(net.detailed_connectivity_mut().as_mut().unwrap());
+        let substation = detailed.substations[0].component.clone();
+        let node = detailed.connectivity_nodes[0].component.clone();
+        let switch = detailed.switches[0].component.clone();
+        let equipment = detailed.terminals[0].equipment.clone();
+
+        detailed
+            .component_metadata
+            .iter_mut()
+            .find(|metadata| metadata.component == substation)
+            .unwrap()
+            .name = Some("SUB'NAME".into());
+        detailed
+            .component_metadata
+            .iter_mut()
+            .find(|metadata| metadata.component == node)
+            .unwrap()
+            .name = Some("NODE'NAME".into());
+        let switch_metadata = detailed
+            .component_metadata
+            .iter_mut()
+            .find(|metadata| metadata.component == switch)
+            .unwrap();
+        switch_metadata.name = Some("SWITCH'NAME".into());
+        switch_metadata
+            .properties
+            .insert("psse_swdid".into(), "SW'ID".into());
+        detailed
+            .component_metadata
+            .iter_mut()
+            .find(|metadata| metadata.component == equipment)
+            .unwrap()
+            .properties
+            .insert("psse_eqid".into(), "EQ'ID".into());
+
+        let (records, warnings) = write_raw_substation_data(&net).unwrap();
+        let records = records.unwrap();
+        for sanitized in [
+            "'SUB NAME'",
+            "'NODE NAME'",
+            "'SW ID'",
+            "'SWITCH NAME'",
+            "'EQ ID'",
+        ] {
+            assert!(
+                records.contains(sanitized),
+                "missing {sanitized}: {records}"
+            );
+        }
+        assert!(warnings.records().iter().any(|diagnostic| {
+            diagnostic.code() == "EMIT.PSSE.VALUE_SUBSTITUTED"
+                && diagnostic.message().contains("sub.name")
+                && diagnostic.message().contains("subswd.swdid")
+                && diagnostic.message().contains("subterm.type`/`eqid")
+                && diagnostic.message().contains("replaced with spaces")
+        }));
+    }
+
+    #[test]
+    fn rawx_output_diagnoses_unrepresentable_switch_and_terminal_data() {
+        let mut net =
+            parse_rawx_source(TRANSFORMERS_AND_SWITCH, None, &mut Diagnostics::new()).unwrap();
+        let detailed = std::sync::Arc::make_mut(net.detailed_connectivity_mut().as_mut().unwrap());
+        let switch = &mut detailed.switches[0];
+        switch.endpoint1 = TopologyEndpoint::Bus(ComponentId::new("bus", "1").unwrap());
+        switch.kind = SwitchKind::LoadBreakSwitch;
+        switch.retained = true;
+
+        let terminal = &mut detailed.terminals[0];
+        terminal.component = Some(ComponentId::new("terminal", "t1").unwrap());
+        terminal.bus = Some(ComponentId::new("bus", "configured").unwrap());
+        terminal.connectable_bus = Some(ComponentId::new("bus", "connectable").unwrap());
+        terminal.connected = false;
+        terminal.active_power_mw = Some(1.0);
+        terminal.reactive_power_mvar = Some(2.0);
+
+        let mut unsupported = detailed.terminals[1].clone();
+        unsupported.equipment = ComponentId::new("junction", "unsupported").unwrap();
+        unsupported.terminal = 1;
+        detailed.terminals.push(unsupported);
+
+        let emitted = write_rawx(&net).unwrap();
+        let diagnostics = emitted.render_diagnostics();
+        for expected in [
+            "requires two connectivity node endpoints",
+            "load break switch kind",
+            "retained flag",
+            "terminal component identities",
+            "terminal bus and connectable bus references",
+            "disconnected terminal flags",
+            "terminal active and reactive power values",
+            "equipment type has no PSS/E RAWX `subterm.type` code",
+        ] {
+            assert!(
+                diagnostics.iter().any(|line| line.contains(expected)),
+                "missing {expected:?}: {diagnostics:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rawx_output_diagnoses_detailed_records_without_connectivity_nodes() {
+        let mut net =
+            parse_rawx_source(TRANSFORMERS_AND_SWITCH, None, &mut Diagnostics::new()).unwrap();
+        let detailed = std::sync::Arc::make_mut(net.detailed_connectivity_mut().as_mut().unwrap());
+        detailed.connectivity_nodes.clear();
+
+        let emitted = write_rawx(&net).unwrap();
+        assert!(emitted.render_diagnostics().iter().any(|line| {
+            line.contains("EMIT.PSSE.RECORD_DROPPED") && line.contains("require connectivity nodes")
+        }));
+    }
+
+    #[test]
     fn rejects_json_past_the_parser_nesting_limit() {
         let mut nested =
             String::from(r#"{"network":{"caseid":{"fields":["rev"],"data":[35]},"extra":"#);
@@ -2616,6 +3489,7 @@ mod tests {
         let net = parse_rawx_source(TRANSFORMERS_AND_SWITCH, None, &mut diagnostics).unwrap();
         assert_eq!(net.branches().len(), 1);
         let transformer = &net.branches()[0];
+        assert_eq!(transformer.name.as_deref(), Some("TWO"));
         assert!((transformer.r - 0.02).abs() < 1e-12);
         assert!((transformer.x - 0.20).abs() < 1e-12);
         assert!((transformer.tap - 1.0).abs() < 1e-12);
@@ -2635,7 +3509,7 @@ mod tests {
         assert_eq!(detailed.switches.len(), 1);
         assert_eq!(detailed.switches[0].kind, SwitchKind::Breaker);
         assert!(!detailed.switches[0].open);
-        assert_eq!(detailed.terminals.len(), 5);
+        assert_eq!(detailed.terminals.len(), 6);
         assert_eq!(detailed.busbar_sections.len(), 1);
         assert!(diagnostics.into_records().iter().all(|diagnostic| {
             diagnostic.code() != "READ.PSSE.SECTION_UNSUPPORTED"
@@ -2644,10 +3518,78 @@ mod tests {
     }
 
     #[test]
+    fn powysbl_system_switch_rating_set_name_round_trips() {
+        let mut root: Value = serde_json::from_str(TRANSFORMERS_AND_SWITCH).unwrap();
+        root["network"]["sysswd"] = serde_json::json!({
+            "fields": ["ibus", "jbus", "ckt", "xpu", "rsetnam", "stat", "nstat", "met", "stype", "name"],
+            "data": [[3, 2, "S1", 0.0001, "RATESET", 0, 1, 1, 2, "breaker"]]
+        });
+        let source = serde_json::to_string(&root).unwrap();
+        let mut parsed = parse_rawx_source(&source, None, &mut Diagnostics::new()).unwrap();
+        let switch = &parsed.switches()[0];
+        assert_eq!(switch.thermal_rating, None);
+        assert_eq!(switch.extras["psse_rsetnam"], Value::from("RATESET"));
+        parsed
+            .switches_mut()
+            .push(Switch::new(BusId(1), BusId(2), true));
+        parsed
+            .switches_mut()
+            .push(Switch::new(BusId(2), BusId(3), true));
+        parsed
+            .switches_mut()
+            .push(Switch::new(BusId(1), BusId(2), false));
+
+        let emitted = write_rawx(&parsed).unwrap();
+        assert!(!emitted.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code() == "EMIT.PSSE.FIELD_DROPPED"
+                && diagnostic.message().contains("rating set name")
+        }));
+        let output: Value = serde_json::from_str(&emitted.text).unwrap();
+        assert_eq!(
+            output["network"]["sysswd"]["fields"],
+            serde_json::json!([
+                "ibus", "jbus", "ckt", "xpu", "rsetnam", "stat", "nstat", "met", "stype", "name"
+            ])
+        );
+        assert_eq!(output["network"]["sysswd"]["data"][0][4], "RATESET");
+        assert_eq!(output["network"]["sysswd"]["data"][1][2], "1");
+        assert_eq!(output["network"]["sysswd"]["data"][2][2], "1");
+        assert_eq!(output["network"]["sysswd"]["data"][3][2], "2");
+
+        let reparsed = parse_rawx_source(&emitted.text, None, &mut Diagnostics::new()).unwrap();
+        assert_eq!(
+            reparsed.switches()[0].extras["psse_rsetnam"],
+            Value::from("RATESET")
+        );
+
+        let mut mixed = parsed;
+        mixed.switches_mut()[0].thermal_rating = Some(55.0);
+        let emitted = write_rawx(&mixed).unwrap();
+        assert!(emitted.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code() == "EMIT.PSSE.FIELD_DROPPED"
+                && diagnostic.message().contains("rating set name")
+                && diagnostic.message().contains("RATE1-RATE12")
+        }));
+    }
+
+    #[test]
     fn transformer_and_switch_output_reloads() {
         let mut diagnostics = Diagnostics::new();
-        let net = parse_rawx_source(TRANSFORMERS_AND_SWITCH, None, &mut diagnostics).unwrap();
-        let emitted = write_rawx(&net);
+        let mut net = parse_rawx_source(TRANSFORMERS_AND_SWITCH, None, &mut diagnostics).unwrap();
+        net.switches_mut()[0].current_rating = Some(2_000.0);
+        net.switches_mut()[0].pf = Some(10.0);
+        net.switches_mut()[0].qf = Some(2.0);
+        net.switches_mut()[0].pt = Some(-9.8);
+        net.switches_mut()[0].qt = Some(-1.9);
+        let emitted = write_rawx(&net).unwrap();
+        assert!(emitted.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code() == "EMIT.PSSE.FIELD_DROPPED"
+                && diagnostic.message().contains("switch current rating")
+        }));
+        assert!(emitted.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code() == "EMIT.PSSE.FIELD_DROPPED"
+                && diagnostic.message().contains("switch power flow result")
+        }));
         let root: Value = serde_json::from_str(&emitted.text).unwrap();
         assert_eq!(
             root["network"]["transformer"]["data"]
@@ -2682,12 +3624,158 @@ mod tests {
         let mut diagnostics = Diagnostics::new();
         let back = parse_rawx_source(&emitted.text, None, &mut diagnostics).unwrap();
         assert_eq!(back.branches().len(), 1);
+        assert_eq!(back.branches()[0].name.as_deref(), Some("TWO"));
         assert_eq!(back.transformers_3w().len(), 1);
+        assert_eq!(back.transformers_3w()[0].name.as_deref(), Some("THREE"));
         assert_eq!(back.switches().len(), 1);
         let detailed = back.detailed_connectivity().as_deref().unwrap();
         assert_eq!(detailed.connectivity_nodes.len(), 4);
         assert_eq!(detailed.switches.len(), 1);
-        assert_eq!(detailed.terminals.len(), 5);
+        assert_eq!(detailed.terminals.len(), 6);
+    }
+
+    #[test]
+    fn exact_node_regulation_targets_survive_rawx_output() {
+        let mut root: Value = serde_json::from_str(TRANSFORMERS_AND_SWITCH).unwrap();
+        root["network"]["generator"] = serde_json::json!({
+            "fields": ["ibus", "machid", "pg", "qg", "qt", "qb", "vs", "ireg", "nreg", "mbase", "stat", "pt", "pb"],
+            "data": [[1, "G1", 20, 0, 50, -50, 1, 1, 1, 100, 1, 80, 0]]
+        });
+        root["network"]["swshunt"] = serde_json::json!({
+            "fields": ["ibus", "shntid", "modsw", "adjm", "stat", "vswhi", "vswlo", "swreg", "nreg", "rmpct", "rmidnt", "binit", "s1", "n1", "b1"],
+            "data": [[1, "S1", 1, 0, 1, 1.05, 0.95, 1, 1, 100, "", 0, 1, 1, 0.01]]
+        });
+        let transformer = root["network"]["transformer"].as_object_mut().unwrap();
+        transformer
+            .get_mut("fields")
+            .unwrap()
+            .as_array_mut()
+            .unwrap()
+            .extend(["node1", "cod2", "cont2", "node2", "cod3", "cont3", "node3"].map(Value::from));
+        let rows = transformer.get_mut("data").unwrap().as_array_mut().unwrap();
+        rows[0]
+            .as_array_mut()
+            .unwrap()
+            .extend([3, 0, 0, 0, 0, 0, 0].map(Value::from));
+        rows[1].as_array_mut().unwrap()[28] = Value::from(1);
+        rows[1].as_array_mut().unwrap()[29] = Value::from(1);
+        rows[1]
+            .as_array_mut()
+            .unwrap()
+            .extend([2, 1, 2, 3, 1, 3, 4].map(Value::from));
+
+        let source = serde_json::to_string(&root).unwrap();
+        let net = parse_rawx_source(&source, None, &mut Diagnostics::new()).unwrap();
+        assert!(net.generators()[0].regulating_terminal.is_some());
+        assert!(
+            net.shunts()
+                .last()
+                .unwrap()
+                .control
+                .as_ref()
+                .unwrap()
+                .regulating_terminal
+                .is_some()
+        );
+        assert!(
+            net.branches()[0]
+                .control
+                .as_ref()
+                .unwrap()
+                .regulating_terminal
+                .is_some()
+        );
+        assert!(net.transformers_3w()[0].windings.iter().all(|winding| {
+            winding
+                .control
+                .as_ref()
+                .and_then(|control| control.regulating_terminal.as_ref())
+                .is_some()
+        }));
+
+        let emitted = write_rawx(&net).unwrap();
+        let output: Value = serde_json::from_str(&emitted.text).unwrap();
+        assert_eq!(table_value(&output, "generator", 0, "ireg"), 1);
+        assert_eq!(table_value(&output, "generator", 0, "nreg"), 1);
+        assert_eq!(table_value(&output, "swshunt", 0, "swreg"), 1);
+        assert_eq!(table_value(&output, "swshunt", 0, "nreg"), 1);
+        assert_eq!(table_value(&output, "transformer", 0, "cont1"), 2);
+        assert_eq!(table_value(&output, "transformer", 0, "node1"), 3);
+        assert_eq!(table_value(&output, "transformer", 1, "cont1"), 1);
+        assert_eq!(table_value(&output, "transformer", 1, "node1"), 2);
+        assert_eq!(table_value(&output, "transformer", 1, "cont2"), 2);
+        assert_eq!(table_value(&output, "transformer", 1, "node2"), 3);
+        assert_eq!(table_value(&output, "transformer", 1, "cont3"), 3);
+        assert_eq!(table_value(&output, "transformer", 1, "node3"), 4);
+
+        let back = parse_rawx_source(&emitted.text, None, &mut Diagnostics::new()).unwrap();
+        assert!(back.generators()[0].regulating_terminal.is_some());
+        assert!(back.transformers_3w()[0].windings.iter().all(|winding| {
+            winding
+                .control
+                .as_ref()
+                .and_then(|control| control.regulating_terminal.as_ref())
+                .is_some()
+        }));
+    }
+
+    #[test]
+    fn nonzero_regulating_nodes_without_connectivity_are_diagnosed() {
+        let mut root: Value = serde_json::from_str(TRANSFORMERS_AND_SWITCH).unwrap();
+        let network = root["network"].as_object_mut().unwrap();
+        for table in ["sub", "subnode", "subswd", "subterm"] {
+            network.remove(table);
+        }
+        network.insert(
+            "generator".to_owned(),
+            serde_json::json!({
+                "fields": ["ibus", "machid", "pg", "qg", "qt", "qb", "vs", "ireg", "nreg", "mbase", "stat", "pt", "pb"],
+                "data": [[1, "G1", 20, 0, 50, -50, 1, 1, 7, 100, 1, 80, 0]]
+            }),
+        );
+        let transformer = network
+            .get_mut("transformer")
+            .unwrap()
+            .as_object_mut()
+            .unwrap();
+        transformer
+            .get_mut("fields")
+            .unwrap()
+            .as_array_mut()
+            .unwrap()
+            .push(Value::from("node1"));
+        for row in transformer.get_mut("data").unwrap().as_array_mut().unwrap() {
+            row.as_array_mut().unwrap().push(Value::from(8));
+        }
+
+        let mut diagnostics = Diagnostics::new();
+        let parsed = parse_rawx_source(
+            &serde_json::to_string(&root).unwrap(),
+            None,
+            &mut diagnostics,
+        )
+        .unwrap();
+
+        assert!(parsed.generators()[0].regulating_terminal.is_none());
+        assert!(
+            parsed.branches()[0]
+                .control
+                .as_ref()
+                .unwrap()
+                .regulating_terminal
+                .is_none()
+        );
+        let lines = diagnostics.lines();
+        assert!(lines.iter().any(|line| {
+            line.contains("generator at bus 1")
+                && line.contains("node 7")
+                && line.contains("no detailed connectivity terminal")
+        }));
+        assert!(lines.iter().any(|line| {
+            line.contains("two winding transformer 1-2")
+                && line.contains("node 8")
+                && line.contains("no detailed connectivity terminal")
+        }));
     }
 
     #[test]
@@ -2699,7 +3787,7 @@ mod tests {
             node.node_number = (index == 0).then_some(9);
         }
 
-        let emitted = write_rawx(&net);
+        let emitted = write_rawx(&net).unwrap();
         let back = parse_rawx_source(&emitted.text, None, &mut Diagnostics::new()).unwrap();
         let numbers = back
             .detailed_connectivity()
@@ -2761,7 +3849,7 @@ mod tests {
         let source = serde_json::to_string(&root).unwrap();
         let net = parse_rawx_source(&source, None, &mut Diagnostics::new()).unwrap();
 
-        let emitted = write_rawx(&net);
+        let emitted = write_rawx(&net).unwrap();
         let root: Value = serde_json::from_str(&emitted.text).unwrap();
 
         assert_eq!(root["network"]["generator"]["data"][0][1], "G1");

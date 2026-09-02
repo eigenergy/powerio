@@ -57,6 +57,7 @@ current_docs=(
   docs/src/python.md
   docs/src/capi.md
   docs/src/cli-mcp.md
+  docs/src/corpus-harness.md
   docs/src/pio-json-schema.md
   docs/src/scope-v1.md
   docs/src/final-v1-api-cleanup.md
@@ -77,6 +78,16 @@ if hits=$(rg -n -i "$catch_all" "${current_docs[@]}" 2>/dev/null); then
   exit 1
 fi
 
+public_report_paths=(
+  powerio-cli/src/corpus/mod.rs
+  powerio-cli/src/corpus/fingerprint.rs
+)
+if hits=$(rg -n -i "$catch_all" "${public_report_paths[@]}" 2>/dev/null); then
+  echo "catch-all terminology in public command output:"
+  echo "$hits"
+  exit 1
+fi
+
 # The public bindings and facade must not regain beta aliases or wrapper
 # types. Test helpers and component parser internals are intentionally outside
 # this audit.
@@ -92,8 +103,7 @@ surface_paths=(
 )
 
 retired='\b(parse_file|parse_text|parse_str|parse_bytes|write_to|write_string|write_file|to_format|PioValueKind|try_into_typed|IntoTypedModule|StateInventory|StateSelector|SelectedState|list_states|select_state|export_state|materialize_network|PioDcData|DcNetworkData|dc_network_data|dc_data)\b'
-if hits=$(rg -n "$retired" "${surface_paths[@]}" 2>/dev/null \
-  | grep -v 'GeoLayer::parse_text'); then
+if hits=$(rg -n "$retired" "${surface_paths[@]}" 2>/dev/null); then
   echo "retired PowerIO beta API on the public surface:"
   echo "$hits"
   exit 1

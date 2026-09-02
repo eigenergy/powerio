@@ -4,17 +4,6 @@
 powerio_core::diagnostic_codes! {
     REQUEST_PARSE_POWERIO_IR = "REQUEST.PARSE.POWERIO_IR", Error,
         "PowerIO IR is decoded with deserialize, not parse", category = Request;
-    READ_GOC3_AMBIGUOUS_DOCUMENTS = "READ.GOC3.AMBIGUOUS_DOCUMENTS", Error,
-        "a GO Challenge 3 source contains more than one problem or solution data file",
-        category = Parse;
-    PARSE_GOC3_MALFORMED = "PARSE.GOC3.MALFORMED", Error,
-        "a GO Challenge 3 data file is not well formed JSON", category = Parse;
-    READ_GOC3_PROBLEM_REQUIRED = "READ.GOC3.PROBLEM_REQUIRED", Error,
-        "a GO Challenge 3 solution data file requires its matching problem data file",
-        category = Parse;
-    READ_GOC3_SOURCE_UNRECOGNIZED = "READ.GOC3.SOURCE_UNRECOGNIZED", Error,
-        "a declared GO Challenge 3 source contains no problem or solution data file",
-        category = Parse;
     READ_MODULE_UNSUPPORTED = "READ.MODULE.UNSUPPORTED", Error,
         "the stored module names a schema or version this build does not read", category = Request;
     READ_MODULE_INVALID = "READ.MODULE.INVALID", Error,

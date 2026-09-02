@@ -15,7 +15,7 @@ use serde_json::{Map, Value};
 use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
     BalancedNetwork, BalancedNetworkTables, Branch, BranchCharging, BranchRatingSet, Bus, BusId,
-    BusType, Extras, GenCost, Generator, Hvdc, Load, Shunt, SourceFormat,
+    BusType, Extras, GenCost, Generator, GeneratorEnergySource, Hvdc, Load, Shunt, SourceFormat,
 };
 use crate::normalize;
 use crate::{CoordinateSpace, CoordsKind, GeoMeta, Location};
@@ -382,6 +382,7 @@ fn read_branches(
                 0.0
             };
             Ok(Branch {
+                name: None,
                 from,
                 to,
                 r: number(obj, "r").unwrap_or(0.0),
@@ -489,6 +490,7 @@ fn read_producer(
     let initial = initial_status(obj);
     Generator {
         bus,
+        energy_source: GeneratorEnergySource::default(),
         pg: initial.and_then(|s| number(s, "p")).unwrap_or(0.0) * base_mva,
         qg: initial.and_then(|s| number(s, "q")).unwrap_or(0.0) * base_mva,
         pmax: first_number(ts, "p_ub").unwrap_or(0.0) * base_mva,

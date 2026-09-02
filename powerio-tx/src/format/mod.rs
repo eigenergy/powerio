@@ -3,7 +3,8 @@
 //! Each format module owns its parser and/or serializer: MATPOWER `.m`,
 //! PowerModels JSON, PSS/E `.raw`, PowerWorld `.aux`, egret `ModelData` JSON,
 //! pandapower JSON, PyPSA CSV folders, PSLF `.epc`, PSS/E RAWX 35, PowSybl
-//! XIIDM 1.17, CIM CGMES 2.4.15 and 3.0, GO Challenge 3 JSON, Surge JSON, and
+//! XIIDM 1.12 through 1.17, CIM CGMES 2.4.15 and 3.0, GO Challenge 3 JSON,
+//! Surge JSON, and
 //! DeepMind OPFData JSON. PowerWorld `.pwb` cases and OPFData JSON are input
 //! only. GO Challenge 3 defines a calculation rather than a bare network, so
 //! its implementation is private to the `powerio` facade's typed parser.
@@ -428,8 +429,7 @@ pub fn parse_display(source: powerio_core::Source, from: Option<&str>) -> Result
                 message: format!("not valid UTF-8: {error}"),
             })?;
             Ok(DisplayData::Geo(
-                crate::geo::GeoLayer::parse_text(text, path.file_name().and_then(|n| n.to_str()))?
-                    .layer,
+                crate::geo::GeoLayer::parse(text, path.file_name().and_then(|n| n.to_str()))?.layer,
             ))
         }
     }
@@ -1073,7 +1073,7 @@ fn echo_text(module: &PioModule<BalancedNetwork>, target: TargetFormat) -> Optio
     // source's own; any other revision goes through write_psse_rev so the
     // caller gets the layout it asked for instead of the original bytes.
     if let TargetFormat::Psse { rev } = target
-        && psse::header_rev(text.trim_start_matches('\u{feff}')) != rev
+        && psse::header_rev(text.trim_start_matches('\u{feff}')).ok()? != rev
     {
         return None;
     }
@@ -1085,8 +1085,22 @@ pub(crate) fn emit_value_text(net: &BalancedNetwork, format: TargetFormat) -> Re
     let mut conv = match format {
         TargetFormat::PowerModelsJson => write_powermodels_json(net),
         TargetFormat::EgretJson => write_egret_json(net),
-        TargetFormat::Psse { rev } => write_psse_rev(net, rev),
-        TargetFormat::PsseRawx => write_rawx(net),
+        TargetFormat::Psse { rev } => {
+            if !matches!(rev, 33..=35) {
+                return Err(Error::Emit {
+                    format: "PSS/E .raw",
+                    message: format!(
+                        "unsupported revision {rev}; emission supports only revisions 33, 34, and 35"
+                    ),
+                });
+            }
+            net.check_base_mva()?;
+            write_psse_rev(net, rev)
+        }
+        TargetFormat::PsseRawx => {
+            net.check_base_mva()?;
+            write_rawx(net)?
+        }
         TargetFormat::PowerWorld => write_powerworld(net),
         TargetFormat::PandapowerJson => write_pandapower_json(net),
         // From another source (or no retained source): canonical MATPOWER from
@@ -1398,8 +1412,9 @@ fn warn_psse_downgrade(
     if let (TargetFormat::Psse { rev }, SourceFormat::Psse, Some(src)) =
         (format, module.value.source_format(), source_text.as_deref())
     {
-        let src_rev = psse::header_rev(src);
-        if src_rev > rev {
+        if let Ok(src_rev) = psse::header_rev(src)
+            && src_rev > rev
+        {
             conv.push(
                 &codes::EMIT_PSSE_DOWNGRADED,
                 format!(

@@ -1,16 +1,9 @@
-//! Schema lock for the balanced model JSON document.
+//! Schema checks for the balanced network JSON document.
 //!
-//! The C ABI and the Julia bridge ride on this transport, and `PIO_ABI_VERSION`
-//! ties the model JSON schema to the ABI version (`powerio-capi/include/powerio.h`).
-//! So an accidental serde rename, retype, or removed default is a forced C ABI
-//! break, not a quiet change. These tests pin three things:
-//!   1. a committed v4-vintage snapshot keeps parsing under the current `from_json`
-//!      (a rename/retype of any present field breaks parsing the frozen bytes),
-//!   2. generator `caps` stays a name-keyed object on the wire (a length-exact
-//!      array would force a v5 the day `GEN_EXTRA_KEYS` grows), and
-//!   3. `deny_unknown_fields` stays off and `caps` keeps its `serde(default)`, so a
-//!      newer snapshot's extra key and an older snapshot that predates `caps` both
-//!      parse.
+//! Version 1 writes canonical source format names and stable component IDs. It
+//! does not carry the prerelease C ABI snapshots forward as a second wire
+//! format. Additive fields keep their Serde defaults so a reader can accept a
+//! version 1 document written by a newer PowerIO build.
 
 use std::path::Path;
 
@@ -19,46 +12,17 @@ use powerio_tx::{
     GeoMeta, Location, SourceFormat, TerminalReference,
 };
 
-/// A v4-vintage document, written by `BalancedNetwork::to_json` on case30.
-/// Regenerate ONLY on a deliberate schema change, and then bump `PIO_ABI_VERSION`.
-fn golden_v4() -> String {
+fn prerelease_snapshot() -> String {
     let path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/model-json/case30_v4.json");
     std::fs::read_to_string(&path).expect("the committed v4 golden snapshot must exist")
 }
 
 #[test]
-fn golden_v4_snapshot_still_parses() {
-    let text = golden_v4();
-    let net = BalancedNetwork::from_json(&text).expect("the v4 golden must still parse");
-    assert_eq!(net.buses().len(), 30);
-    assert_eq!(net.branches().len(), 41);
-    assert_eq!(net.generators().len(), 6);
-    assert_eq!(net.loads().len(), 20);
-    assert_eq!(net.shunts().len(), 2);
-    assert_eq!(net.base_mva().to_bits(), 100.0_f64.to_bits());
-    assert!(
-        net.generators().iter().all(|g| g.cost.is_some()),
-        "case30 gen costs must survive the round trip"
-    );
-
-    // The freeze-critical wire form: caps is a name-keyed object, never an array.
-    assert!(
-        text.contains(r#""caps":{"#) && !text.contains(r#""caps":["#),
-        "generator caps must serialize as an object"
-    );
-
-    // Re-serialize and read back: the schema round-trips without drift, and the
-    // CURRENT serializer (not just the frozen golden bytes) still emits caps as a
-    // name-keyed object, so a writer-side wire-form regression fails here too.
-    let again = net.to_json().unwrap();
-    assert!(
-        again.contains(r#""caps":{"#) && !again.contains(r#""caps":["#),
-        "the live serializer must still emit caps as an object"
-    );
-    let back = BalancedNetwork::from_json(&again).unwrap();
-    assert_eq!(back.buses().len(), net.buses().len());
-    assert_eq!(back.generators().len(), net.generators().len());
+fn prerelease_source_format_spelling_is_not_a_version_1_document() {
+    let error = BalancedNetwork::from_json(&prerelease_snapshot())
+        .expect_err("the prerelease enum spelling must not define a second wire format");
+    assert!(error.to_string().contains("unknown variant `Matpower`"));
 }
 
 #[test]
@@ -134,19 +98,20 @@ fn small_net() -> BalancedNetwork {
 }
 
 #[test]
-fn uid_survives_snapshot_roundtrip_and_stays_off_the_wire_when_absent() {
+fn component_ids_survive_snapshot_roundtrip_and_are_assigned_when_absent() {
     let mut net = small_net();
     net.generators_mut()[0].uid = Some("gen-a".to_owned());
 
     let v: serde_json::Value = serde_json::from_str(&net.to_json().unwrap()).unwrap();
     assert_eq!(v["generators"][0]["uid"], serde_json::json!("gen-a"));
-    // A row without a uid omits the key instead of writing null, so snapshots
-    // from parsers that never set it are byte-identical to the pre-uid vintage.
-    assert!(v["buses"][0].get("uid").is_none());
+    let bus_uid = v["buses"][0]["uid"]
+        .as_str()
+        .expect("version 1 serialization assigns a stable component ID");
+    assert!(!bus_uid.is_empty());
 
     let parsed = BalancedNetwork::from_json(&serde_json::to_string(&v).unwrap()).unwrap();
     assert_eq!(parsed.generators()[0].uid.as_deref(), Some("gen-a"));
-    assert_eq!(parsed.buses()[0].uid, None);
+    assert_eq!(parsed.buses()[0].uid.as_deref(), Some(bus_uid));
 }
 
 #[test]

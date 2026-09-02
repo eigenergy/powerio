@@ -72,6 +72,17 @@ fn pslf_write_read_round_trip_preserves_the_core() {
     let text = emit_pslf(&net0).text;
     let net1 = parse_pslf(&text).unwrap();
 
+    assert_eq!(
+        net0.branches()[0].name,
+        None,
+        "the source transformer record type is not a component name"
+    );
+    assert_eq!(
+        net1.branches()[0].name,
+        None,
+        "the emitted `xfmr` record type is not a component name"
+    );
+
     assert_eq!(net1.buses().len(), net0.buses().len());
     assert_eq!(net1.branches().len(), net0.branches().len());
     assert_eq!(net1.loads().len(), net0.loads().len());

@@ -148,7 +148,7 @@ impl GeoLayer {
     /// sniffed. Accepts headerless buscoords CSV (`bus,x,y`), CSV and JSON
     /// records with aliased field names, and GeoJSON Point/LineString
     /// features. Rejects input carrying no usable coordinates.
-    pub fn parse_text(text: &str, name_hint: Option<&str>) -> Result<GeoParsed> {
+    pub fn parse(text: &str, name_hint: Option<&str>) -> Result<GeoParsed> {
         // Windows exports lead with a UTF-8 BOM; serde_json rejects it.
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         let mut parsed = GeoParsed {
@@ -197,7 +197,7 @@ impl GeoLayer {
 
     /// [`to_geojson`](Self::to_geojson) behind the extraction surfaces' shared
     /// guard: an empty layer is refused because the written document would not
-    /// read back ([`parse_text`](Self::parse_text) rejects a document with
+    /// read back ([`parse`](Self::parse) rejects a document with
     /// no features).
     pub fn to_geojson_checked(&self) -> Result<String> {
         if self.features.is_empty() {

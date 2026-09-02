@@ -38,7 +38,7 @@ Julia:
 using PowerIO
 case = parse("case9.m")
 case isa PioModule{BalancedNetwork}
-n_buses(case.value)                   # 9
+length(case.value.buses)              # 9
 case.diagnostics                      # the reader's findings, usually empty here
 emit(case, "matpower", "copy.m")     # same format: byte exact echo
 result = emit(case, "psse")         # another format: artifacts + diagnostics

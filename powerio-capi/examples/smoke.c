@@ -2,7 +2,7 @@
  *
  *   cc -I powerio-capi/include powerio-capi/examples/smoke.c \
  *      -L target/release -lpowerio_capi -o smoke
- *   ./smoke tests/data/case9.m
+ *   ./smoke tests/data/case9.m [gridfm_dataset_dir]
  */
 #include "powerio.h"
 
@@ -42,8 +42,13 @@ static void report_error(const char *operation, PioError *error) {
 }
 
 int main(int argc, char **argv) {
+#ifdef PIO_GRIDFM
+    if (argc < 2 || argc > 3) {
+        fprintf(stderr, "usage: %s case9.m [gridfm_dataset_dir]\n", argv[0]);
+#else
     if (argc != 2) {
         fprintf(stderr, "usage: %s case9.m\n", argv[0]);
+#endif
         return 2;
     }
 
@@ -212,6 +217,59 @@ int main(int argc, char **argv) {
     }
 
     pio_module_release(module);
+
+#ifdef PIO_GRIDFM
+    if (argc == 3) {
+        PioSource *dataset_source =
+            pio_source_open(argv[2], strlen(argv[2]), &error);
+        PioModule *dataset = NULL;
+        if (dataset_source == NULL) {
+            report_error("pio_source_open GridFM", error);
+            error = NULL;
+        } else {
+            dataset = pio_parse(dataset_source, NULL, 0, &error);
+            pio_source_release(dataset_source);
+            if (dataset == NULL) {
+                report_error("pio_parse GridFM", error);
+                error = NULL;
+            }
+        }
+        if (dataset != NULL) {
+            PioValueHandle *dataset_value = pio_module_value(dataset);
+            CHECK(dataset_value != NULL, "GridFM module value");
+            CHECK(pio_value_is_type(
+                      dataset_value,
+                      "powerio.ScenarioSet<powerio.BalancedNetwork>",
+                      sizeof("powerio.ScenarioSet<powerio.BalancedNetwork>") -
+                          1),
+                  "GridFM structural type");
+            PioScenarioSetHandle *scenarios =
+                pio_value_scenario_set(dataset_value, &error);
+            if (scenarios == NULL) {
+                report_error("pio_value_scenario_set", error);
+                error = NULL;
+            } else {
+                CHECK(pio_scenario_set_len(scenarios) != 0,
+                      "GridFM scenario count");
+                CHECK(view_equals(pio_scenario_set_element_type(scenarios),
+                                  "powerio.BalancedNetwork"),
+                      "GridFM scenario element type");
+                PioValueHandle *first =
+                    pio_scenario_set_get_at(scenarios, 0, &error);
+                CHECK(first != NULL, "GridFM first scenario");
+                if (first != NULL) {
+                    CHECK(view_equals(pio_value_type_name(first),
+                                      "powerio.BalancedNetwork"),
+                          "GridFM scenario value type");
+                    pio_value_release(first);
+                }
+                pio_scenario_set_release(scenarios);
+            }
+            pio_value_release(dataset_value);
+            pio_module_release(dataset);
+        }
+    }
+#endif
 
     pio_module_release(NULL);
     pio_value_release(NULL);

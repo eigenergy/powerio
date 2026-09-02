@@ -13,7 +13,7 @@ use powerio_tx::{
 };
 
 fn parse(text: &str, hint: Option<&str>) -> powerio_tx::GeoParsed {
-    GeoLayer::parse_text(text, hint).expect("parse geo layer")
+    GeoLayer::parse(text, hint).expect("parse geo layer")
 }
 
 fn small_network() -> BalancedNetwork {
@@ -536,7 +536,7 @@ fn malformed_inputs_error_without_panicking() {
         r#"[{"branch": "b", "path": [[0]]}]"#,
     ];
     for text in cases {
-        let result = GeoLayer::parse_text(text, None);
+        let result = GeoLayer::parse(text, None);
         assert!(result.is_err(), "expected an error for {text:?}");
     }
 }
@@ -557,5 +557,5 @@ fn oversized_coordinate_values_read_but_stay_unknown_space() {
     let parsed = parse("b1, 1e308, -1e308\n", None);
     assert!(matches!(parsed.layer.space, CoordinateSpace::Unknown));
     // Non-finite coordinates are dropped, so an all-inf file errors.
-    assert!(GeoLayer::parse_text("b1, inf, nan\n", None).is_err());
+    assert!(GeoLayer::parse("b1, inf, nan\n", None).is_err());
 }

@@ -54,6 +54,10 @@ pub struct ComponentMetadata {
     pub component: ComponentId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// The equipment container that owns this component, when the source model
+    /// identifies one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equipment_container: Option<ComponentId>,
     #[serde(default)]
     pub aliases: Vec<ComponentAlias>,
     #[serde(default)]
@@ -167,11 +171,25 @@ pub struct BusbarSection {
     pub node: ComponentId,
 }
 
+/// A CIM junction and its conducting equipment identity.
+///
+/// Its electrical connection is recorded by the corresponding entries in
+/// [`DetailedConnectivity::terminals`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct Junction {
+    pub component: ComponentId,
+}
+
 /// One equipment terminal and its bus breaker or node breaker connection.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Terminal {
+    /// The terminal's own identity when the source assigns one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component: Option<ComponentId>,
     pub equipment: ComponentId,
     /// One for single terminal equipment, or the branch/transformer side number.
     pub terminal: u8,
@@ -529,6 +547,78 @@ pub enum ReactiveLimits {
     CapabilityCurve(ReactiveCapabilityCurve),
 }
 
+/// Evaluate reactive limits at one active power assignment. Format readers use
+/// this shared calculation when projecting a capability curve onto the
+/// balanced generator row.
+#[allow(clippy::float_cmp, clippy::manual_midpoint)]
+pub(crate) fn calc_reactive_limits_at_active_power(
+    owner: &str,
+    limits: &ReactiveLimits,
+    active_power_mw: f64,
+) -> std::result::Result<(f64, f64), String> {
+    match limits {
+        ReactiveLimits::MinMax(limits) => {
+            if limits.minimum_reactive_power_mvar > limits.maximum_reactive_power_mvar {
+                return Err(format!("{owner} has minQ greater than maxQ"));
+            }
+            Ok((
+                limits.minimum_reactive_power_mvar,
+                limits.maximum_reactive_power_mvar,
+            ))
+        }
+        ReactiveLimits::CapabilityCurve(curve) => {
+            if curve.points.len() < 2 {
+                return Err(format!(
+                    "{owner} reactiveCapabilityCurve has fewer than two points"
+                ));
+            }
+            let mut points = curve.points.iter().collect::<Vec<_>>();
+            points
+                .sort_by(|first, second| first.active_power_mw.total_cmp(&second.active_power_mw));
+            for pair in points.windows(2) {
+                if pair[0].active_power_mw == pair[1].active_power_mw {
+                    return Err(format!(
+                        "{owner} reactiveCapabilityCurve has duplicate active power points"
+                    ));
+                }
+            }
+            let (first, second) = if active_power_mw <= points[0].active_power_mw {
+                (points[0], points[0])
+            } else if active_power_mw >= points[points.len() - 1].active_power_mw {
+                (points[points.len() - 1], points[points.len() - 1])
+            } else {
+                let upper = points.partition_point(|point| point.active_power_mw < active_power_mw);
+                (points[upper - 1], points[upper])
+            };
+            let (minimum, maximum) = if std::ptr::eq(first, second) {
+                (
+                    first.minimum_reactive_power_mvar,
+                    first.maximum_reactive_power_mvar,
+                )
+            } else {
+                let fraction = (active_power_mw - first.active_power_mw)
+                    / (second.active_power_mw - first.active_power_mw);
+                (
+                    first.minimum_reactive_power_mvar
+                        + fraction
+                            * (second.minimum_reactive_power_mvar
+                                - first.minimum_reactive_power_mvar),
+                    first.maximum_reactive_power_mvar
+                        + fraction
+                            * (second.maximum_reactive_power_mvar
+                                - first.maximum_reactive_power_mvar),
+                )
+            };
+            if minimum <= maximum {
+                Ok((minimum, maximum))
+            } else {
+                let midpoint = (minimum + maximum) / 2.0;
+                Ok((midpoint, midpoint))
+            }
+        }
+    }
+}
+
 /// Reactive limits retained for equipment whose balanced calculation row
 /// carries only the limits evaluated at its current active power assignment.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -879,6 +969,9 @@ pub struct TapChangerStep {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct TapChanger {
+    /// The tap changer's own identity when the source assigns one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component: Option<ComponentId>,
     pub transformer: ComponentId,
     /// One for a two winding transformer, or one through three for a three
     /// winding transformer.
@@ -893,6 +986,16 @@ pub struct TapChanger {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solved_tap_position: Option<i32>,
     pub low_tap_position: i32,
+    /// Tap position at which the ratio or phase shift is neutral.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub neutral_tap_position: Option<i32>,
+    /// Normal tap position declared by the equipment model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normal_tap_position: Option<i32>,
+    /// Voltage increment per tap position, in percent, for ratio and
+    /// nonlinear phase tap changers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voltage_step_increment_percent: Option<f64>,
     pub load_tap_changing_capabilities: bool,
     pub regulating: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -935,12 +1038,49 @@ pub struct Subnetwork {
     pub components: Vec<ComponentId>,
 }
 
+/// The name of a field omitted by a source representation.
+///
+/// The balanced calculation view keeps an ordinary numeric value for these
+/// fields. This metadata lets an emitter preserve the distinction between a
+/// field that was absent and one that was explicitly set to that value.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum OmittedFieldName {
+    ActivePower,
+    ReactivePower,
+    VoltageSetpoint,
+    RatedApparentPower,
+    ShuntConductancePerSection,
+}
+
+/// A field that was absent from a source representation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct OmittedField {
+    pub component: ComponentId,
+    pub field: OmittedFieldName,
+}
+
+impl OmittedField {
+    #[must_use]
+    pub fn new(component: ComponentId, field: OmittedFieldName) -> Self {
+        Self { component, field }
+    }
+}
+
 /// Source neutral hierarchy and detailed connectivity retained beside the
 /// balanced calculation view.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct DetailedConnectivity {
+    /// Source fields whose absence must remain distinct from an explicit
+    /// numeric zero or default value during fresh emission.
+    #[serde(default)]
+    pub omitted_fields: Vec<OmittedField>,
     #[serde(default)]
     pub component_metadata: Vec<ComponentMetadata>,
     #[serde(default)]
@@ -957,6 +1097,8 @@ pub struct DetailedConnectivity {
     pub connectivity_nodes: Vec<ConnectivityNode>,
     #[serde(default)]
     pub busbar_sections: Vec<BusbarSection>,
+    #[serde(default)]
+    pub junctions: Vec<Junction>,
     #[serde(default)]
     pub terminals: Vec<Terminal>,
     #[serde(default)]
@@ -1267,7 +1409,7 @@ pub enum SourceFormat {
     /// exact write back to the same format.
     #[serde(rename = "opfdata-json")]
     DeepMindOpfDataJson,
-    /// Read from PowSybl's XIIDM XML grid exchange format, version 1.17.
+    /// Read from PowSybl's XIIDM XML grid exchange format, versions 1.12 through 1.17.
     #[serde(rename = "xiidm")]
     Xiidm,
     /// Read from a CGMES profile set (2.4.15/CIM16 or 3.0/CIM100).
@@ -1464,10 +1606,51 @@ table_accessors! {
     geo, geo_mut: Option<GeoMeta>;
     /// Source neutral case metadata when the source records it.
     case_metadata, case_metadata_mut: CaseMetadata;
-    /// Authoritative hierarchy and detailed connectivity when present.
-    detailed_connectivity, detailed_connectivity_mut: Option<std::sync::Arc<DetailedConnectivity>>;
     /// Solver / solution-control metadata when the source carries it.
     solver, solver_mut: Option<SolverParams>;
+}
+
+impl BalancedNetwork {
+    /// Authoritative hierarchy and detailed connectivity when present.
+    #[must_use]
+    pub fn detailed_connectivity(&self) -> &Option<std::sync::Arc<DetailedConnectivity>> {
+        &self.tables.detailed_connectivity
+    }
+
+    /// Mutable access to detailed connectivity. Taking mutable access clears
+    /// source field omission records because a caller can change any of the
+    /// corresponding values through this reference.
+    #[must_use]
+    pub fn detailed_connectivity_mut(
+        &mut self,
+    ) -> &mut Option<std::sync::Arc<DetailedConnectivity>> {
+        let tables = self.tables_mut();
+        if let Some(detailed) = tables.detailed_connectivity.as_mut() {
+            std::sync::Arc::make_mut(detailed).omitted_fields.clear();
+        }
+        &mut tables.detailed_connectivity
+    }
+
+    fn clear_omitted_fields(&mut self, component_type: &str, fields: &[OmittedFieldName]) {
+        let Some(detailed) = self.tables_mut().detailed_connectivity.as_mut() else {
+            return;
+        };
+        std::sync::Arc::make_mut(detailed)
+            .omitted_fields
+            .retain(|omitted| {
+                omitted.component.component_type() != component_type
+                    || !fields.contains(&omitted.field)
+            });
+    }
+
+    fn clear_omitted_field(&mut self, component: &ComponentId, field: OmittedFieldName) {
+        let Some(detailed) = self.tables_mut().detailed_connectivity.as_mut() else {
+            return;
+        };
+        std::sync::Arc::make_mut(detailed)
+            .omitted_fields
+            .retain(|omitted| omitted.component != *component || omitted.field != field);
+    }
 }
 
 /// The element tables sit behind their own shared allocation inside the
@@ -1533,18 +1716,130 @@ impl BalancedNetwork {
 
 shared_table_accessors! {
     buses, buses_mut: Vec<Bus>;
-    loads, loads_mut: Vec<Load>;
-    shunts, shunts_mut: Vec<Shunt>;
     static_var_compensators, static_var_compensators_mut: Vec<StaticVarCompensator>;
     branches, branches_mut: Vec<Branch>;
     switches, switches_mut: Vec<Switch>;
-    generators, generators_mut: Vec<Generator>;
-    storage, storage_mut: Vec<Storage>;
     hvdc, hvdc_mut: Vec<Hvdc>;
     /// Three-winding transformers, kept as typed records.
     transformers_3w, transformers_3w_mut: Vec<Transformer3W>;
     /// Area records: scheduled interchange and per-area swing bus.
     areas, areas_mut: Vec<Area>;
+}
+
+impl BalancedNetwork {
+    #[must_use]
+    pub fn loads(&self) -> &Vec<Load> {
+        &self.tables.loads
+    }
+
+    /// Mutable load access makes source omission metadata conservative: a
+    /// subsequent emission writes the numeric active and reactive power values.
+    #[must_use]
+    pub fn loads_mut(&mut self) -> &mut Vec<Load> {
+        self.clear_omitted_fields(
+            "load",
+            &[
+                OmittedFieldName::ActivePower,
+                OmittedFieldName::ReactivePower,
+            ],
+        );
+        std::sync::Arc::make_mut(&mut self.tables_mut().loads)
+    }
+
+    /// Edit one load assignment while preserving omission metadata for every
+    /// other source field. This internal primitive is used by typed updates
+    /// after resolving a stable component identity to `index`.
+    #[doc(hidden)]
+    pub(crate) fn edit_load_assignment<R>(
+        &mut self,
+        index: usize,
+        component: &ComponentId,
+        field: OmittedFieldName,
+        edit: impl FnOnce(&mut Load) -> R,
+    ) -> R {
+        debug_assert_eq!(component.component_type(), "load");
+        debug_assert!(matches!(
+            field,
+            OmittedFieldName::ActivePower | OmittedFieldName::ReactivePower
+        ));
+        self.clear_omitted_field(component, field);
+        edit(&mut std::sync::Arc::make_mut(&mut self.tables_mut().loads)[index])
+    }
+
+    #[must_use]
+    pub fn generators(&self) -> &Vec<Generator> {
+        &self.tables.generators
+    }
+
+    /// Mutable generator access makes source omission metadata conservative:
+    /// a subsequent emission writes all numeric generator assignments.
+    #[must_use]
+    pub fn generators_mut(&mut self) -> &mut Vec<Generator> {
+        self.clear_omitted_fields(
+            "generator",
+            &[
+                OmittedFieldName::ActivePower,
+                OmittedFieldName::ReactivePower,
+                OmittedFieldName::VoltageSetpoint,
+                OmittedFieldName::RatedApparentPower,
+            ],
+        );
+        std::sync::Arc::make_mut(&mut self.tables_mut().generators)
+    }
+
+    /// Edit one generator assignment while preserving omission metadata for
+    /// every other source field. This internal primitive is used by typed
+    /// updates after resolving a stable component identity to `index`.
+    #[doc(hidden)]
+    pub(crate) fn edit_generator_assignment<R>(
+        &mut self,
+        index: usize,
+        component: &ComponentId,
+        field: OmittedFieldName,
+        edit: impl FnOnce(&mut Generator) -> R,
+    ) -> R {
+        debug_assert_eq!(component.component_type(), "generator");
+        debug_assert!(matches!(
+            field,
+            OmittedFieldName::ActivePower
+                | OmittedFieldName::ReactivePower
+                | OmittedFieldName::VoltageSetpoint
+        ));
+        self.clear_omitted_field(component, field);
+        edit(&mut std::sync::Arc::make_mut(&mut self.tables_mut().generators)[index])
+    }
+
+    #[must_use]
+    pub fn storage(&self) -> &Vec<Storage> {
+        &self.tables.storage
+    }
+
+    /// Mutable storage access makes source omission metadata conservative: a
+    /// subsequent emission writes both numeric power assignments.
+    #[must_use]
+    pub fn storage_mut(&mut self) -> &mut Vec<Storage> {
+        self.clear_omitted_fields(
+            "storage",
+            &[
+                OmittedFieldName::ActivePower,
+                OmittedFieldName::ReactivePower,
+            ],
+        );
+        std::sync::Arc::make_mut(&mut self.tables_mut().storage)
+    }
+
+    #[must_use]
+    pub fn shunts(&self) -> &Vec<Shunt> {
+        &self.tables.shunts
+    }
+
+    /// Mutable shunt access makes source omission metadata conservative: a
+    /// subsequent emission writes conductance per section.
+    #[must_use]
+    pub fn shunts_mut(&mut self) -> &mut Vec<Shunt> {
+        self.clear_omitted_fields("shunt", &[OmittedFieldName::ShuntConductancePerSection]);
+        std::sync::Arc::make_mut(&mut self.tables_mut().shunts)
+    }
 }
 
 impl BalancedNetwork {
@@ -2043,6 +2338,9 @@ impl StaticVarCompensator {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Branch {
+    /// Source supplied equipment name, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub from: BusId,
     pub to: BusId,
     /// Series resistance (p.u.).
@@ -2208,6 +2506,7 @@ impl Branch {
     #[must_use]
     pub fn new(from: BusId, to: BusId, r: f64, x: f64) -> Self {
         Self {
+            name: None,
             from,
             to,
             r,
@@ -2442,7 +2741,7 @@ impl Switch {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum TransformerControlMode {
-    /// Fixed ratio, no automatic adjustment (PSS/E `COD` 0/±4, PSLF type 1).
+    /// Fixed ratio, no automatic adjustment (PSS/E `COD` 0, PSLF type 1).
     Fixed,
     /// Bus voltage control via tap (LTC; PSS/E `COD` ±1, PSLF type 2).
     Voltage,
@@ -2450,29 +2749,47 @@ pub enum TransformerControlMode {
     ReactiveFlow,
     /// Active power flow control via phase shift (PSS/E `COD` ±3, PSLF type 4).
     ActiveFlow,
+    /// Control of a DC line quantity (PSS/E `COD` ±4; two-winding transformers only).
+    DcLineQuantity,
+    /// Asymmetric active power flow control via phase shift (PSS/E `COD` ±5).
+    AsymmetricActiveFlow,
 }
 
 /// Automatic-control data for a regulating transformer ([`Branch::control`]).
 ///
 /// The limits carry whatever the [`mode`](TransformerControl::mode) regulates:
-/// `tap_min`/`tap_max` bound the tap ratio (or the phase angle, for
-/// [`ActiveFlow`](TransformerControlMode::ActiveFlow)), and `band_min`/`band_max`
-/// bound the controlled quantity (the regulated voltage band, or the
-/// scheduled MW/MVAr). `ntp` is the number of discrete tap positions and
-/// `controlled_bus` is the regulated bus (`None` = the transformer's own
-/// terminal). `mva_base` is the winding MVA base the impedance is referred to.
+/// `tap_min`/`tap_max` bound the tap ratio (or the phase angle for active power
+/// control), and `band_min`/`band_max` bound the controlled quantity (the
+/// regulated voltage band or the scheduled MW/MVAr). `ntp` is the number of
+/// discrete tap positions and `controlled_bus` is the regulated bus (`None` =
+/// the transformer's own terminal). `mva_base` is the winding MVA base the
+/// impedance is referred to.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct TransformerControl {
     pub mode: TransformerControlMode,
+    /// Whether automatic regulation is enabled. PSS/E represents this with
+    /// the sign of `COD` while its magnitude selects [`mode`](Self::mode).
+    pub enabled: bool,
     pub controlled_bus: Option<BusId>,
+    /// Whether the controlled bus lies on this winding's side of the
+    /// transformer. PSS/E represents this with a negative `CONT` value.
+    #[serde(default)]
+    pub controlled_bus_on_winding_side: bool,
+    /// Exact regulated terminal when the source identifies one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regulating_terminal: Option<TerminalReference>,
     pub tap_min: f64,
     pub tap_max: f64,
     pub band_min: f64,
     pub band_max: f64,
     pub ntp: u32,
     pub mva_base: f64,
+    /// Winding connection angle for asymmetric active power flow control.
+    /// It is in degrees in a source network and radians after normalization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub winding_connection_angle: Option<f64>,
 }
 
 impl Default for TransformerControl {
@@ -2480,13 +2797,17 @@ impl Default for TransformerControl {
         // PSS/E's documented defaults for an unset winding-control block.
         TransformerControl {
             mode: TransformerControlMode::Fixed,
+            enabled: false,
             controlled_bus: None,
+            controlled_bus_on_winding_side: false,
+            regulating_terminal: None,
             tap_min: 0.9,
             tap_max: 1.1,
             band_min: 0.9,
             band_max: 1.1,
             ntp: 33,
             mva_base: 0.0,
+            winding_connection_angle: None,
         }
     }
 }
@@ -2496,6 +2817,7 @@ impl TransformerControl {
     pub fn new(mode: TransformerControlMode) -> Self {
         Self {
             mode,
+            enabled: mode != TransformerControlMode::Fixed,
             ..Self::default()
         }
     }
@@ -2543,6 +2865,9 @@ impl ActivePowerControl {
 #[non_exhaustive]
 pub struct Generator {
     pub bus: BusId,
+    /// Primary energy source used by the generating equipment.
+    #[serde(default)]
+    pub energy_source: GeneratorEnergySource,
     /// Real power set point (MW).
     pub pg: f64,
     /// Reactive power set point (MVAr).
@@ -2598,6 +2923,7 @@ impl Generator {
     pub fn new(bus: BusId) -> Self {
         Self {
             bus,
+            energy_source: GeneratorEnergySource::Other,
             pg: 0.0,
             qg: 0.0,
             pmax: 0.0,
@@ -2623,6 +2949,21 @@ impl Generator {
     pub fn has_caps(&self) -> bool {
         self.caps.iter().any(Option::is_some)
     }
+}
+
+/// Primary energy source used by generating equipment.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum GeneratorEnergySource {
+    Hydro,
+    Nuclear,
+    Wind,
+    Thermal,
+    Solar,
+    #[default]
+    Other,
 }
 
 const fn default_voltage_regulation_on() -> bool {
@@ -3010,6 +3351,9 @@ pub struct Winding {
     pub rate_a: f64,
     pub rate_b: f64,
     pub rate_c: f64,
+    /// Automatic tap or phase control for this winding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control: Option<TransformerControl>,
 }
 
 impl Winding {
@@ -3023,6 +3367,7 @@ impl Winding {
             rate_a: 0.0,
             rate_b: 0.0,
             rate_c: 0.0,
+            control: None,
         }
     }
 }
@@ -3121,6 +3466,7 @@ impl Transformer3W {
         };
         let zs = self.calc_star_impedances();
         let branch = |w: &Winding, (r, x): (f64, f64)| Branch {
+            name: None,
             from: w.bus,
             to: star_id,
             r,
@@ -3137,7 +3483,7 @@ impl Transformer3W {
             in_service: self.in_service,
             angmin: -360.0,
             angmax: 360.0,
-            control: None,
+            control: w.control.clone(),
             solution: None,
             uid: None,
             route: None,
@@ -3695,8 +4041,20 @@ impl BalancedNetwork {
                     });
                 }
             }
-            if let Some(bus) = br.control.as_ref().and_then(|c| c.controlled_bus) {
-                check(bus, "transformer control")?;
+            if let Some(control) = br.control.as_ref() {
+                if control.controlled_bus_on_winding_side
+                    && control.controlled_bus.is_none_or(|bus| bus.0 == 0)
+                {
+                    return Err(Error::FormatRead {
+                        format,
+                        message: format!(
+                            "transformer control on branch {i} marks its controlled bus as lying on the winding side but has no nonzero controlled bus"
+                        ),
+                    });
+                }
+                if let Some(bus) = control.controlled_bus {
+                    check(bus, "transformer control")?;
+                }
             }
         }
         for (i, sw) in self.switches().iter().enumerate() {
@@ -3742,6 +4100,22 @@ impl BalancedNetwork {
         for t in self.transformers_3w() {
             for w in &t.windings {
                 check(w.bus, "3-winding transformer")?;
+                if let Some(control) = w.control.as_ref() {
+                    if control.controlled_bus_on_winding_side
+                        && control.controlled_bus.is_none_or(|bus| bus.0 == 0)
+                    {
+                        return Err(Error::FormatRead {
+                            format,
+                            message: format!(
+                                "3-winding transformer control at bus {} marks its controlled bus as lying on the winding side but has no nonzero controlled bus",
+                                w.bus
+                            ),
+                        });
+                    }
+                    if let Some(bus) = control.controlled_bus {
+                        check(bus, "3-winding transformer control")?;
+                    }
+                }
             }
         }
         if let Some(detailed) = self.detailed_connectivity().as_ref() {
@@ -3770,9 +4144,516 @@ impl BalancedNetwork {
                     }
                 }
             }
+            let declared_components = detailed
+                .component_metadata
+                .iter()
+                .map(|metadata| &metadata.component)
+                .chain(
+                    detailed
+                        .substations
+                        .iter()
+                        .map(|substation| &substation.component),
+                )
+                .chain(detailed.voltage_levels.iter().map(|level| &level.component))
+                .chain(
+                    detailed
+                        .dc_converter_units
+                        .iter()
+                        .map(|unit| &unit.component),
+                )
+                .collect::<std::collections::HashSet<_>>();
+            for metadata in &detailed.component_metadata {
+                if let Some(container) = metadata.equipment_container.as_ref()
+                    && !declared_components.contains(container)
+                {
+                    return Err(Error::FormatRead {
+                        format,
+                        message: format!(
+                            "component `{}` references unknown equipment container `{container}`",
+                            metadata.component
+                        ),
+                    });
+                }
+            }
+            let mut junctions = std::collections::HashSet::new();
+            for junction in &detailed.junctions {
+                if !junctions.insert(&junction.component) {
+                    return Err(Error::FormatRead {
+                        format,
+                        message: format!("duplicate Junction `{}`", junction.component.local_id()),
+                    });
+                }
+                if !declared_components.contains(&junction.component) {
+                    return Err(Error::FormatRead {
+                        format,
+                        message: format!(
+                            "Junction `{}` has no component metadata",
+                            junction.component.local_id()
+                        ),
+                    });
+                }
+                if !detailed
+                    .terminals
+                    .iter()
+                    .any(|terminal| terminal.equipment == junction.component)
+                {
+                    return Err(Error::FormatRead {
+                        format,
+                        message: format!(
+                            "Junction `{}` has no terminal",
+                            junction.component.local_id()
+                        ),
+                    });
+                }
+            }
         }
+        self.check_detailed_ac_references(format, &ids)?;
         self.check_detailed_dc_references(format)?;
         self.check_star_expansion_headroom(format)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn check_detailed_ac_references(
+        &self,
+        format: &'static str,
+        balanced_buses: &std::collections::HashSet<BusId>,
+    ) -> crate::Result<()> {
+        let Some(detailed) = self.detailed_connectivity().as_ref() else {
+            return Ok(());
+        };
+        let error = |message: String| Error::FormatRead { format, message };
+
+        let mut metadata_components = std::collections::HashSet::new();
+        for metadata in &detailed.component_metadata {
+            if !metadata_components.insert(metadata.component.clone()) {
+                return Err(error(format!(
+                    "duplicate component metadata `{}`",
+                    metadata.component
+                )));
+            }
+        }
+
+        let mut substations = std::collections::HashSet::new();
+        for substation in &detailed.substations {
+            if !substations.insert(substation.component.clone()) {
+                return Err(error(format!(
+                    "duplicate substation `{}`",
+                    substation.component
+                )));
+            }
+        }
+
+        let mut voltage_levels = std::collections::HashSet::new();
+        let mut voltage_level_topology = std::collections::HashMap::new();
+        let mut calculated_bus_levels = std::collections::HashMap::new();
+        for level in &detailed.voltage_levels {
+            if !voltage_levels.insert(level.component.clone()) {
+                return Err(error(format!(
+                    "duplicate voltage level `{}`",
+                    level.component
+                )));
+            }
+            voltage_level_topology.insert(level.component.clone(), level.topology_kind);
+            if let Some(substation) = &level.substation
+                && !substations.contains(substation)
+            {
+                return Err(error(format!(
+                    "voltage level `{}` references unknown substation `{substation}`",
+                    level.component
+                )));
+            }
+            let mut level_buses = std::collections::HashSet::new();
+            for bus in &level.buses {
+                if !balanced_buses.contains(bus) {
+                    return Err(error(format!(
+                        "voltage level `{}` references unknown calculated bus {bus}",
+                        level.component
+                    )));
+                }
+                if !level_buses.insert(*bus) {
+                    return Err(error(format!(
+                        "voltage level `{}` repeats calculated bus {bus}",
+                        level.component
+                    )));
+                }
+                if let Some(first_level) =
+                    calculated_bus_levels.insert(*bus, level.component.clone())
+                    && first_level != level.component
+                {
+                    return Err(error(format!(
+                        "calculated bus {bus} belongs to both voltage levels `{first_level}` and `{}`",
+                        level.component
+                    )));
+                }
+            }
+        }
+        let known_container = |container: &ComponentId| {
+            voltage_levels.contains(container) || metadata_components.contains(container)
+        };
+
+        let mut configured_buses = std::collections::HashSet::new();
+        let mut configured_bus_levels = std::collections::HashMap::new();
+        for bus in &detailed.bus_breaker_buses {
+            if !configured_buses.insert(bus.component.clone()) {
+                return Err(error(format!(
+                    "duplicate bus breaker bus `{}`",
+                    bus.component
+                )));
+            }
+            if !known_container(&bus.voltage_level) {
+                let detail = if bus.calculated_bus.is_none() {
+                    " has no calculated bus and"
+                } else {
+                    ""
+                };
+                return Err(error(format!(
+                    "TopologicalNode `{}`{detail} references unknown voltage level or connectivity container `{}`",
+                    bus.component, bus.voltage_level
+                )));
+            }
+            configured_bus_levels.insert(bus.component.clone(), bus.voltage_level.clone());
+            if let Some(calculated) = bus.calculated_bus
+                && !balanced_buses.contains(&calculated)
+            {
+                return Err(error(format!(
+                    "bus breaker bus `{}` references unknown calculated bus {calculated}",
+                    bus.component
+                )));
+            }
+            if voltage_levels.contains(&bus.voltage_level)
+                && let Some(calculated) = bus.calculated_bus
+                && let Some(first_level) =
+                    calculated_bus_levels.insert(calculated, bus.voltage_level.clone())
+                && first_level != bus.voltage_level
+            {
+                return Err(error(format!(
+                    "calculated bus {calculated} belongs to both connectivity containers `{first_level}` and `{}`",
+                    bus.voltage_level
+                )));
+            }
+        }
+
+        let mut connectivity_nodes = std::collections::HashSet::new();
+        let mut connectivity_node_levels = std::collections::HashMap::new();
+        let mut connectivity_node_calculated_buses = std::collections::HashMap::new();
+        for node in &detailed.connectivity_nodes {
+            if !connectivity_nodes.insert(node.component.clone()) {
+                return Err(error(format!(
+                    "duplicate connectivity node `{}`",
+                    node.component
+                )));
+            }
+            if !known_container(&node.voltage_level) {
+                let detail = if node.calculated_bus.is_none() {
+                    " has no calculated bus and"
+                } else {
+                    ""
+                };
+                return Err(error(format!(
+                    "ConnectivityNode `{}`{detail} references unknown voltage level or connectivity container `{}`",
+                    node.component, node.voltage_level
+                )));
+            }
+            connectivity_node_levels.insert(node.component.clone(), node.voltage_level.clone());
+            connectivity_node_calculated_buses.insert(node.component.clone(), node.calculated_bus);
+            if let Some(calculated) = node.calculated_bus
+                && !balanced_buses.contains(&calculated)
+            {
+                return Err(error(format!(
+                    "connectivity node `{}` references unknown calculated bus {calculated}",
+                    node.component
+                )));
+            }
+            if voltage_levels.contains(&node.voltage_level)
+                && let Some(calculated) = node.calculated_bus
+                && let Some(first_level) =
+                    calculated_bus_levels.insert(calculated, node.voltage_level.clone())
+                && first_level != node.voltage_level
+            {
+                return Err(error(format!(
+                    "calculated bus {calculated} belongs to both connectivity containers `{first_level}` and `{}`",
+                    node.voltage_level
+                )));
+            }
+        }
+
+        let mut calculated_buses = std::collections::HashSet::new();
+        let mut calculated_bus_nodes = std::collections::HashMap::new();
+        for calculated in &detailed.calculated_buses {
+            if !calculated_buses.insert(calculated.calculated_bus) {
+                return Err(error(format!(
+                    "duplicate calculated bus {} in detailed connectivity",
+                    calculated.calculated_bus
+                )));
+            }
+            if !balanced_buses.contains(&calculated.calculated_bus) {
+                return Err(error(format!(
+                    "detailed connectivity references unknown calculated bus {}",
+                    calculated.calculated_bus
+                )));
+            }
+            if !known_container(&calculated.voltage_level) {
+                return Err(error(format!(
+                    "calculated bus {} references unknown voltage level or connectivity container `{}`",
+                    calculated.calculated_bus, calculated.voltage_level
+                )));
+            }
+            if voltage_levels.contains(&calculated.voltage_level)
+                && let Some(first_level) = calculated_bus_levels
+                    .insert(calculated.calculated_bus, calculated.voltage_level.clone())
+                && first_level != calculated.voltage_level
+            {
+                return Err(error(format!(
+                    "calculated bus {} belongs to both connectivity containers `{first_level}` and `{}`",
+                    calculated.calculated_bus, calculated.voltage_level
+                )));
+            }
+            for node in &calculated.nodes {
+                let Some(node_level) = connectivity_node_levels.get(node) else {
+                    return Err(error(format!(
+                        "calculated bus {} references unknown connectivity node `{node}`",
+                        calculated.calculated_bus
+                    )));
+                };
+                if node_level != &calculated.voltage_level {
+                    return Err(error(format!(
+                        "calculated bus {} in `{}` contains connectivity node `{node}` from `{node_level}`",
+                        calculated.calculated_bus, calculated.voltage_level
+                    )));
+                }
+                if let Some(Some(node_bus)) = connectivity_node_calculated_buses.get(node)
+                    && *node_bus != calculated.calculated_bus
+                {
+                    return Err(error(format!(
+                        "connectivity node `{node}` names calculated bus {node_bus}, but calculated bus {} also claims that node",
+                        calculated.calculated_bus
+                    )));
+                }
+                if let Some(first_bus) =
+                    calculated_bus_nodes.insert(node.clone(), calculated.calculated_bus)
+                {
+                    return Err(error(format!(
+                        "connectivity node `{node}` is listed by calculated buses {first_bus} and {}",
+                        calculated.calculated_bus
+                    )));
+                }
+            }
+        }
+
+        let mut busbars = std::collections::HashSet::new();
+        for busbar in &detailed.busbar_sections {
+            if !busbars.insert(busbar.component.clone()) {
+                return Err(error(format!(
+                    "duplicate busbar section `{}`",
+                    busbar.component
+                )));
+            }
+            if !known_container(&busbar.voltage_level) {
+                return Err(error(format!(
+                    "busbar section `{}` references unknown voltage level or connectivity container `{}`",
+                    busbar.component, busbar.voltage_level
+                )));
+            }
+            let Some(node_level) = connectivity_node_levels.get(&busbar.node) else {
+                return Err(error(format!(
+                    "busbar section `{}` references unknown connectivity node `{}`",
+                    busbar.component, busbar.node
+                )));
+            };
+            if voltage_levels.contains(&busbar.voltage_level)
+                && voltage_levels.contains(node_level)
+                && node_level != &busbar.voltage_level
+            {
+                return Err(error(format!(
+                    "busbar section `{}` in `{}` references connectivity node `{}` from `{node_level}`",
+                    busbar.component, busbar.voltage_level, busbar.node
+                )));
+            }
+        }
+
+        let mut terminal_components = std::collections::HashSet::new();
+        let mut terminal_keys = std::collections::HashSet::new();
+        for terminal in &detailed.terminals {
+            if terminal.terminal == 0 {
+                return Err(error(format!(
+                    "equipment `{}` has terminal 0",
+                    terminal.equipment
+                )));
+            }
+            if !terminal_keys.insert((terminal.equipment.clone(), terminal.terminal)) {
+                return Err(error(format!(
+                    "equipment `{}` repeats terminal {}",
+                    terminal.equipment, terminal.terminal
+                )));
+            }
+            if let Some(component) = &terminal.component
+                && !terminal_components.insert(component.clone())
+            {
+                return Err(error(format!("duplicate terminal identity `{component}`")));
+            }
+            if !known_container(&terminal.voltage_level) {
+                return Err(error(format!(
+                    "equipment `{}` terminal {} references unknown voltage level or connectivity container `{}`",
+                    terminal.equipment, terminal.terminal, terminal.voltage_level
+                )));
+            }
+            for bus in [terminal.bus.as_ref(), terminal.connectable_bus.as_ref()]
+                .into_iter()
+                .flatten()
+            {
+                let Some(bus_level) = configured_bus_levels.get(bus) else {
+                    return Err(error(format!(
+                        "equipment `{}` terminal {} references unknown bus breaker bus `{bus}`",
+                        terminal.equipment, terminal.terminal
+                    )));
+                };
+                if bus_level != &terminal.voltage_level {
+                    return Err(error(format!(
+                        "equipment `{}` terminal {} in `{}` references bus `{bus}` from `{bus_level}`",
+                        terminal.equipment, terminal.terminal, terminal.voltage_level
+                    )));
+                }
+            }
+            if let Some(node) = &terminal.node {
+                let Some(node_level) = connectivity_node_levels.get(node) else {
+                    return Err(error(format!(
+                        "equipment `{}` terminal {} references unknown connectivity node `{node}`",
+                        terminal.equipment, terminal.terminal
+                    )));
+                };
+                if node_level != &terminal.voltage_level {
+                    return Err(error(format!(
+                        "equipment `{}` terminal {} in `{}` references connectivity node `{node}` from `{node_level}`",
+                        terminal.equipment, terminal.terminal, terminal.voltage_level
+                    )));
+                }
+            }
+        }
+
+        let mut switches = std::collections::HashSet::new();
+        for switch in &detailed.switches {
+            if !switches.insert(switch.component.clone()) {
+                return Err(error(format!(
+                    "duplicate topology switch `{}`",
+                    switch.component
+                )));
+            }
+            if !voltage_levels.contains(&switch.voltage_level)
+                && !metadata_components.contains(&switch.voltage_level)
+            {
+                return Err(error(format!(
+                    "topology switch `{}` references unknown voltage level or connectivity container `{}`",
+                    switch.component, switch.voltage_level
+                )));
+            }
+            for endpoint in [&switch.endpoint1, &switch.endpoint2] {
+                match endpoint {
+                    TopologyEndpoint::Bus(bus) => {
+                        let Some(bus_level) = configured_bus_levels.get(bus) else {
+                            return Err(error(format!(
+                                "topology switch `{}` references unknown bus breaker bus `{bus}`",
+                                switch.component
+                            )));
+                        };
+                        if voltage_level_topology.get(&switch.voltage_level)
+                            == Some(&TopologyKind::NodeBreaker)
+                        {
+                            return Err(error(format!(
+                                "topology switch `{}` uses a bus endpoint in node breaker voltage level `{}`",
+                                switch.component, switch.voltage_level
+                            )));
+                        }
+                        let _ = bus_level;
+                    }
+                    TopologyEndpoint::Node(node) => {
+                        let Some(node_level) = connectivity_node_levels.get(node) else {
+                            return Err(error(format!(
+                                "topology switch `{}` references unknown connectivity node `{node}`",
+                                switch.component
+                            )));
+                        };
+                        if voltage_level_topology.get(&switch.voltage_level)
+                            == Some(&TopologyKind::BusBreaker)
+                        {
+                            return Err(error(format!(
+                                "topology switch `{}` uses a node endpoint in bus breaker voltage level `{}`",
+                                switch.component, switch.voltage_level
+                            )));
+                        }
+                        let _ = node_level;
+                    }
+                }
+            }
+        }
+
+        for connection in &detailed.internal_connections {
+            if !voltage_levels.contains(&connection.voltage_level) {
+                return Err(error(format!(
+                    "internal connection references unknown voltage level `{}`",
+                    connection.voltage_level
+                )));
+            }
+            for node in [&connection.node1, &connection.node2] {
+                let Some(node_level) = connectivity_node_levels.get(node) else {
+                    return Err(error(format!(
+                        "internal connection references unknown connectivity node `{node}`"
+                    )));
+                };
+                if node_level != &connection.voltage_level {
+                    return Err(error(format!(
+                        "internal connection in `{}` references connectivity node `{node}` from `{node_level}`",
+                        connection.voltage_level
+                    )));
+                }
+            }
+        }
+
+        let mut tap_components = std::collections::HashSet::new();
+        let mut tap_keys = std::collections::HashSet::new();
+        for tap in &detailed.tap_changers {
+            if tap.winding == 0 {
+                return Err(error(format!(
+                    "transformer `{}` has a tap changer on winding 0",
+                    tap.transformer
+                )));
+            }
+            let kind = match tap.kind {
+                TapChangerKind::Ratio => 0_u8,
+                TapChangerKind::Phase => 1_u8,
+            };
+            if !tap_keys.insert((tap.transformer.clone(), tap.winding, kind)) {
+                return Err(error(format!(
+                    "transformer `{}` repeats its {:?} tap changer on winding {}",
+                    tap.transformer, tap.kind, tap.winding
+                )));
+            }
+            if let Some(component) = &tap.component
+                && !tap_components.insert(component.clone())
+            {
+                return Err(error(format!(
+                    "duplicate tap changer identity `{component}`"
+                )));
+            }
+            let mut positions = std::collections::HashSet::new();
+            for step in &tap.steps {
+                if !positions.insert(step.position) {
+                    return Err(error(format!(
+                        "transformer `{}` winding {} repeats tap position {}",
+                        tap.transformer, tap.winding, step.position
+                    )));
+                }
+            }
+            if let Some(reference) = &tap.regulation_terminal
+                && !terminal_keys.contains(&(reference.equipment.clone(), reference.terminal))
+            {
+                return Err(error(format!(
+                    "transformer `{}` winding {} regulates unknown equipment terminal `{}` terminal {}",
+                    tap.transformer, tap.winding, reference.equipment, reference.terminal
+                )));
+            }
+        }
+
+        Ok(())
     }
 
     #[allow(clippy::too_many_lines)]
@@ -4013,18 +4894,54 @@ impl BalancedNetwork {
             .iter()
             .map(|terminal| (&terminal.equipment, terminal.terminal))
             .collect::<std::collections::HashSet<_>>();
+        let check_regulating_terminal =
+            |what: &str, reference: Option<&TerminalReference>| -> crate::Result<()> {
+                if let Some(reference) = reference
+                    && !ac_terminals.contains(&(&reference.equipment, reference.terminal))
+                {
+                    return Err(Error::FormatRead {
+                        format,
+                        message: format!(
+                            "{what} references undeclared regulating Terminal `{}` number {}",
+                            reference.equipment.local_id(),
+                            reference.terminal
+                        ),
+                    });
+                }
+                Ok(())
+            };
         for (index, generator) in self.generators().iter().enumerate() {
-            if let Some(reference) = &generator.regulating_terminal
-                && !ac_terminals.contains(&(&reference.equipment, reference.terminal))
-            {
-                return Err(Error::FormatRead {
-                    format,
-                    message: format!(
-                        "generator {index} references undeclared regulating Terminal `{}` number {}",
-                        reference.equipment.local_id(),
-                        reference.terminal
-                    ),
-                });
+            check_regulating_terminal(
+                &format!("generator {index}"),
+                generator.regulating_terminal.as_ref(),
+            )?;
+        }
+        for (index, branch) in self.branches().iter().enumerate() {
+            if let Some(control) = &branch.control {
+                check_regulating_terminal(
+                    &format!("transformer branch {index}"),
+                    control.regulating_terminal.as_ref(),
+                )?;
+            }
+        }
+        for (index, shunt) in self.shunts().iter().enumerate() {
+            if let Some(control) = &shunt.control {
+                check_regulating_terminal(
+                    &format!("switched shunt {index}"),
+                    control.regulating_terminal.as_ref(),
+                )?;
+            }
+        }
+        for (transformer_index, transformer) in self.transformers_3w().iter().enumerate() {
+            for (winding_index, winding) in transformer.windings.iter().enumerate() {
+                if let Some(control) = &winding.control {
+                    check_regulating_terminal(
+                        &format!(
+                            "three winding transformer {transformer_index} winding {winding_index}"
+                        ),
+                        control.regulating_terminal.as_ref(),
+                    )?;
+                }
             }
         }
         let check_pcc_terminal = |class: &str,
@@ -4124,6 +5041,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn detailed_dc_reference_test_network() -> BalancedNetwork {
         let substation = component("substation", "S");
         let converter_unit = component("dc_converter_unit", "U");
@@ -4164,7 +5082,17 @@ mod tests {
                 operator: None,
                 geographical_tags: Vec::new(),
             }],
+            voltage_levels: vec![VoltageLevel {
+                component: voltage_level.clone(),
+                substation: Some(substation.clone()),
+                nominal_kv: 230.0,
+                low_voltage_limit_kv: None,
+                high_voltage_limit_kv: None,
+                topology_kind: TopologyKind::BusBreaker,
+                buses: Vec::new(),
+            }],
             terminals: vec![Terminal {
+                component: None,
                 equipment: pcc_equipment,
                 terminal: 1,
                 voltage_level,
@@ -4415,6 +5343,7 @@ mod tests {
         });
         let detailed = DetailedConnectivity {
             terminals: vec![Terminal {
+                component: None,
                 equipment: component("voltage_source_converter", "vsc"),
                 terminal: 1,
                 voltage_level: component("voltage_level", "vl"),
@@ -4910,6 +5839,7 @@ mod tests {
             rate_a: 100.0,
             rate_b: 0.0,
             rate_c: 0.0,
+            control: None,
         }
     }
 
@@ -5080,9 +6010,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn check_references_rejects_a_dangling_winding_control_bus() {
+        let mut net =
+            BalancedNetwork::in_memory("t", 100.0, vec![bus(1), bus(2), bus(3)], Vec::new());
+        let mut transformer = transformer_3w();
+        let mut control = TransformerControl::new(TransformerControlMode::Voltage);
+        control.controlled_bus = Some(BusId(4));
+        transformer.windings[2].control = Some(control);
+        net.transformers_3w_mut().push(transformer);
+        let err = net.validate().unwrap_err().to_string();
+        assert!(
+            err.contains("3-winding transformer control references unknown bus 4"),
+            "got {err}"
+        );
+    }
+
     /// A regulating transformer (bus 1→2) controlling the voltage at bus `reg`.
     fn regulating_branch(reg: usize) -> Branch {
         Branch {
+            name: None,
             from: BusId(1),
             to: BusId(2),
             r: 0.0,
@@ -5101,13 +6048,17 @@ mod tests {
             angmax: 360.0,
             control: Some(TransformerControl {
                 mode: TransformerControlMode::Voltage,
+                enabled: true,
                 controlled_bus: Some(BusId(reg)),
+                controlled_bus_on_winding_side: false,
+                regulating_terminal: None,
                 tap_min: 0.95,
                 tap_max: 1.05,
                 band_min: 1.0,
                 band_max: 1.02,
                 ntp: 17,
                 mva_base: 100.0,
+                winding_connection_angle: None,
             }),
             solution: None,
             uid: None,
@@ -5138,6 +6089,7 @@ mod tests {
         caps[10] = Some(0.5); // apf
         let g = Generator {
             bus: BusId(1),
+            energy_source: GeneratorEnergySource::default(),
             pg: 10.0,
             qg: 0.0,
             pmax: 100.0,
@@ -5213,6 +6165,7 @@ mod tests {
             extras: Extras::new(),
         };
         let branch = Branch {
+            name: None,
             from: BusId(1),
             to: BusId(2),
             r: 0.0,
@@ -5239,6 +6192,7 @@ mod tests {
         // (caps serializes as a name-keyed object), not the parent `caps`.
         let mut g = Generator {
             bus: BusId(1),
+            energy_source: GeneratorEnergySource::default(),
             pg: 0.0,
             qg: 0.0,
             pmax: 0.0,
@@ -5308,6 +6262,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn check_references_rejects_winding_side_without_a_controlled_bus() {
+        let mut net = BalancedNetwork::in_memory("t", 100.0, vec![bus(1), bus(2)], Vec::new());
+        let mut branch = regulating_branch(2);
+        let control = branch.control.as_mut().unwrap();
+        control.controlled_bus = None;
+        control.controlled_bus_on_winding_side = true;
+        net.branches_mut().push(branch);
+
+        let err = net.validate().unwrap_err().to_string();
+        assert!(
+            err.contains("winding side but has no nonzero controlled bus"),
+            "got {err}"
+        );
+    }
+
     /// A discrete switched shunt on bus 1 regulating the voltage at bus `reg`.
     fn switched_shunt(reg: usize) -> Shunt {
         Shunt {
@@ -5363,6 +6333,7 @@ mod tests {
         net.buses_mut()[1].va = 9000.0; // past ±2000°
         net.generators_mut().push(Generator {
             bus: BusId(1),
+            energy_source: GeneratorEnergySource::default(),
             pg: 10.0,
             qg: 0.0,
             pmax: 100.0,

@@ -2,7 +2,15 @@
 
 `powerio-capi` exports ABI 7 through `powerio-capi/include/powerio.h`. The
 header is generated from the Rust declarations and checked in. Regenerate it
-with `scripts/capi-header-regen.sh`; do not edit it by hand.
+with:
+
+```sh
+cbindgen --config powerio-capi/cbindgen.toml --crate powerio-capi \
+  --output powerio-capi/include/powerio.h
+```
+
+`scripts/capi-header-regen.sh` checks the generated header against the checked
+in file. Do not edit it by hand.
 
 ABI 7 is the only C surface in PowerIO 1.0. Symbols from ABI 4, 5, and 6 are
 not aliases and are not exported. A caller must compare `pio_abi_version()`

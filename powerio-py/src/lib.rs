@@ -481,6 +481,18 @@ fn active_power_control_to_py<'py>(
     Ok(value.into_any())
 }
 
+fn generator_energy_source_name(value: powerio_tx::GeneratorEnergySource) -> &'static str {
+    match value {
+        powerio_tx::GeneratorEnergySource::Hydro => "hydro",
+        powerio_tx::GeneratorEnergySource::Nuclear => "nuclear",
+        powerio_tx::GeneratorEnergySource::Wind => "wind",
+        powerio_tx::GeneratorEnergySource::Thermal => "thermal",
+        powerio_tx::GeneratorEnergySource::Solar => "solar",
+        powerio_tx::GeneratorEnergySource::Other => "other",
+        _ => "unknown",
+    }
+}
+
 fn terminal_reference_to_py<'py>(
     py: Python<'py>,
     reference: Option<&powerio_tx::TerminalReference>,
@@ -494,6 +506,44 @@ fn terminal_reference_to_py<'py>(
     let value = PyDict::new(py);
     value.set_item("equipment", equipment)?;
     value.set_item("terminal", reference.terminal)?;
+    Ok(value.into_any())
+}
+
+fn transformer_control_to_py<'py>(
+    py: Python<'py>,
+    control: Option<&powerio_tx::TransformerControl>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let Some(control) = control else {
+        return Ok(py.None().into_bound(py));
+    };
+    let value = PyDict::new(py);
+    let mode = match control.mode {
+        powerio_tx::TransformerControlMode::Fixed => "fixed",
+        powerio_tx::TransformerControlMode::Voltage => "voltage",
+        powerio_tx::TransformerControlMode::ReactiveFlow => "reactive_flow",
+        powerio_tx::TransformerControlMode::ActiveFlow => "active_flow",
+        powerio_tx::TransformerControlMode::DcLineQuantity => "dc_line_quantity",
+        powerio_tx::TransformerControlMode::AsymmetricActiveFlow => "asymmetric_active_flow",
+        _ => "unknown",
+    };
+    value.set_item("mode", mode)?;
+    value.set_item("enabled", control.enabled)?;
+    value.set_item("controlled_bus", control.controlled_bus.map(|bus| bus.0))?;
+    value.set_item(
+        "controlled_bus_on_winding_side",
+        control.controlled_bus_on_winding_side,
+    )?;
+    value.set_item(
+        "regulating_terminal",
+        terminal_reference_to_py(py, control.regulating_terminal.as_ref())?,
+    )?;
+    value.set_item("tap_min", control.tap_min)?;
+    value.set_item("tap_max", control.tap_max)?;
+    value.set_item("band_min", control.band_min)?;
+    value.set_item("band_max", control.band_max)?;
+    value.set_item("tap_position_count", control.ntp)?;
+    value.set_item("mva_base", control.mva_base)?;
+    value.set_item("winding_connection_angle", control.winding_connection_angle)?;
     Ok(value.into_any())
 }
 
@@ -698,6 +748,7 @@ impl PyBalancedNetwork {
         let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner().branches().len());
         for br in self.inner().branches() {
             let d = PyDict::new(py);
+            d.set_item("name", br.name.as_deref())?;
             d.set_item("from_id", br.from.0)?;
             d.set_item("to_id", br.to.0)?;
             d.set_item("r", br.r)?;
@@ -727,6 +778,10 @@ impl PyBalancedNetwork {
             d.set_item("in_service", br.in_service)?;
             d.set_item("angmin", br.angmin)?;
             d.set_item("angmax", br.angmax)?;
+            d.set_item(
+                "control",
+                transformer_control_to_py(py, br.control.as_ref())?,
+            )?;
             d.set_item("pf", br.solution.map(|s| s.pf))?;
             d.set_item("qf", br.solution.map(|s| s.qf))?;
             d.set_item("pt", br.solution.map(|s| s.pt))?;
@@ -763,6 +818,10 @@ impl PyBalancedNetwork {
         for g in self.inner().generators() {
             let d = PyDict::new(py);
             d.set_item("bus", g.bus.0)?;
+            d.set_item(
+                "energy_source",
+                generator_energy_source_name(g.energy_source),
+            )?;
             d.set_item("pg", g.pg)?;
             d.set_item("qg", g.qg)?;
             d.set_item("pmax", g.pmax)?;
@@ -1100,7 +1159,7 @@ impl PyBalancedNetwork {
         text: &str,
         name_hint: Option<&str>,
     ) -> PyResult<(PyBalancedNetwork, Bound<'py, PyDict>)> {
-        let parsed = powerio::GeoLayer::parse_text(text, name_hint)
+        let parsed = powerio::GeoLayer::parse(text, name_hint)
             .map_err(|error| PowerIOParseError::new_err(error.to_string()))?;
         let mut inner = self.inner().clone();
         let report = inner.apply_geo_layer(&parsed.layer);
@@ -1206,7 +1265,7 @@ impl PyMulticonductorNetwork {
         text: &str,
         name_hint: Option<&str>,
     ) -> PyResult<(PyMulticonductorNetwork, Bound<'py, PyDict>)> {
-        let parsed = powerio::GeoLayer::parse_text(text, name_hint)
+        let parsed = powerio::GeoLayer::parse(text, name_hint)
             .map_err(|error| PowerIOParseError::new_err(error.to_string()))?;
         let mut net = self.inner().clone();
         let report = powerio::dist_geo::apply_dist_geo_layer(&mut net, &parsed.layer);
@@ -4202,7 +4261,7 @@ fn parse_geo<'py>(
     text: &str,
     name_hint: Option<&str>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let parsed = powerio::GeoLayer::parse_text(text, name_hint)
+    let parsed = powerio::GeoLayer::parse(text, name_hint)
         .map_err(|error| PowerIOParseError::new_err(error.to_string()))?;
     let out = PyDict::new(py);
     out.set_item("geojson", parsed.layer.to_geojson())?;

@@ -31,9 +31,9 @@ use std::collections::BTreeSet;
 use std::io::{Cursor, Read};
 use std::path::{Component, Path};
 
-use powerio_core::{ArtifactPath, MemoryArtifact, Source};
+use powerio_core::{ArtifactPath, DiagnosticInfo, MemoryArtifact, Source};
 
-use crate::diagnostics::{Diagnostics, codes};
+use crate::diagnostics::Diagnostics;
 use crate::network::BalancedNetwork;
 use crate::{Error, Result};
 
@@ -41,6 +41,72 @@ const MAX_FILES: usize = 4_096;
 const MAX_BYTES: u64 = 64 << 20;
 const MAX_COMPRESSION_RATIO: u64 = 200;
 const CGMES_CLASS_PROPERTY: &str = "cgmes_class";
+const CGMES_SV_STATUS_PROPERTY: &str = "SvStatus.inService";
+const CGMES_GENERATING_UNIT_PROPERTY: &str = "RotatingMachine.GeneratingUnit";
+const CGMES_REGULATING_CONTROL_PROPERTY: &str = "RegulatingCondEq.RegulatingControl";
+const CGMES_SV_VOLTAGE_AUTHORITY_MISMATCH_PROPERTY: &str =
+    "powerio.cgmes.sv_voltage_authority_mismatch";
+
+#[derive(Debug, Clone)]
+struct CgmesDiagnostic {
+    info: &'static DiagnosticInfo,
+    message: String,
+}
+
+impl std::ops::Deref for CgmesDiagnostic {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.message
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CgmesDiagnostics {
+    default_info: &'static DiagnosticInfo,
+    records: Vec<CgmesDiagnostic>,
+}
+
+impl CgmesDiagnostics {
+    fn new(default_info: &'static DiagnosticInfo) -> Self {
+        Self {
+            default_info,
+            records: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, message: impl Into<String>) {
+        self.push_as(self.default_info, message);
+    }
+
+    fn push_as(&mut self, info: &'static DiagnosticInfo, message: impl Into<String>) {
+        self.records.push(CgmesDiagnostic {
+            info,
+            message: message.into(),
+        });
+    }
+
+    fn extend(&mut self, other: Self) {
+        self.records.extend(other.records);
+    }
+}
+
+impl std::ops::Deref for CgmesDiagnostics {
+    type Target = [CgmesDiagnostic];
+
+    fn deref(&self) -> &Self::Target {
+        &self.records
+    }
+}
+
+impl IntoIterator for CgmesDiagnostics {
+    type Item = CgmesDiagnostic;
+    type IntoIter = std::vec::IntoIter<CgmesDiagnostic>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.records.into_iter()
+    }
+}
 
 pub(crate) fn looks_like_profile_set(source: &Source) -> bool {
     if source.is_directory() {
@@ -80,15 +146,8 @@ pub(crate) fn parse_source(
         .file_stem()
         .and_then(|stem| stem.to_str());
     let parsed = read::read_cgmes_documents(documents, name)?;
-    for warning in parsed.warnings {
-        let code = if warning.contains("assuming") || warning.contains("100 MVA") {
-            &codes::READ_CGMES_VALUE_DEFAULTED
-        } else if warning.contains("approximat") || warning.contains("mapped to") {
-            &codes::READ_CGMES_VALUE_APPROXIMATED
-        } else {
-            &codes::READ_CGMES_RECORD_UNMAPPED
-        };
-        diagnostics.push(code, warning);
+    for diagnostic in parsed.warnings {
+        diagnostics.push(diagnostic.info, diagnostic.message);
     }
     Ok(parsed.network)
 }
@@ -100,8 +159,8 @@ pub(crate) fn parse_text(
 ) -> Result<BalancedNetwork> {
     reject_unsafe_xml(text.as_bytes())?;
     let parsed = read::read_cgmes_documents(vec![(name.to_string(), text.to_string())], None)?;
-    for warning in parsed.warnings {
-        diagnostics.push(&codes::READ_CGMES_RECORD_UNMAPPED, warning);
+    for diagnostic in parsed.warnings {
+        diagnostics.push(diagnostic.info, diagnostic.message);
     }
     Ok(parsed.network)
 }
@@ -208,23 +267,24 @@ fn push_zip(
                 "archive {archive_name} contains symbolic link {raw_name}"
             )));
         }
-        let ext = extension(path.as_str());
-        if ext == Some("zip") {
+        let size = file.size();
+        let compressed = file.compressed_size();
+        if size > MAX_BYTES || exceeds_compression_ratio(size, compressed) {
+            return Err(format_error(format!(
+                "archive entry {raw_name} exceeds the CGMES decompression limits"
+            )));
+        }
+        let prefix_length = usize::try_from(size.min(4)).expect("four bytes fit usize");
+        let mut prefix = vec![0_u8; prefix_length];
+        file.read_exact(&mut prefix)
+            .map_err(|error| format_error(format!("cannot decompress {raw_name}: {error}")))?;
+        if is_zip_signature(&prefix) {
             return Err(format_error(format!(
                 "archive {archive_name} contains nested archive {raw_name}"
             )));
         }
-        if ext != Some("xml") {
+        if extension(path.as_str()) != Some("xml") {
             continue;
-        }
-        let size = file.size();
-        let compressed = file.compressed_size();
-        if size > MAX_BYTES
-            || (size > 0 && (compressed == 0 || size / compressed.max(1) > MAX_COMPRESSION_RATIO))
-        {
-            return Err(format_error(format!(
-                "archive entry {raw_name} exceeds the CGMES decompression limits"
-            )));
         }
         let remaining = MAX_BYTES.saturating_sub(*total);
         if size > remaining {
@@ -233,8 +293,9 @@ fn push_zip(
             ));
         }
         let mut content = Vec::with_capacity(usize::try_from(size).unwrap_or(0));
+        content.extend_from_slice(&prefix);
         file.by_ref()
-            .take(remaining + 1)
+            .take(remaining.saturating_sub(prefix.len() as u64) + 1)
             .read_to_end(&mut content)
             .map_err(|error| format_error(format!("cannot decompress {raw_name}: {error}")))?;
         push_xml(
@@ -247,6 +308,17 @@ fn push_zip(
         )?;
     }
     Ok(())
+}
+
+fn exceeds_compression_ratio(size: u64, compressed: u64) -> bool {
+    size > 0 && (compressed == 0 || size > compressed.saturating_mul(MAX_COMPRESSION_RATIO))
+}
+
+fn is_zip_signature(bytes: &[u8]) -> bool {
+    matches!(
+        bytes,
+        [b'P', b'K', 0x03, 0x04, ..] | [b'P', b'K', 0x05, 0x06, ..] | [b'P', b'K', 0x07, 0x08, ..]
+    )
 }
 
 fn push_xml(
@@ -342,24 +414,8 @@ pub(crate) fn artifacts(network: &BalancedNetwork) -> Result<(Vec<MemoryArtifact
         })
         .collect();
     let mut diagnostics = Diagnostics::new();
-    for warning in output.warnings {
-        let code = if warning.contains("no reference bus") {
-            &codes::EMIT_CGMES.reference_missing
-        } else if warning.contains("rating set") || warning.contains("A/B/C") {
-            &codes::EMIT_CGMES.rating_set_dropped
-        } else if warning.contains("placed in") || warning.contains("base_kv 0") {
-            &codes::EMIT_CGMES.value_defaulted
-        } else if warning.contains("folded")
-            || warning.contains("written as")
-            || warning.contains("reparse")
-        {
-            &codes::EMIT_CGMES.value_collapsed
-        } else if warning.contains("field") || warning.contains("cost curve") {
-            &codes::EMIT_CGMES.field_dropped
-        } else {
-            &codes::EMIT_CGMES.record_dropped
-        };
-        diagnostics.push(code, warning);
+    for diagnostic in output.warnings {
+        diagnostics.push(diagnostic.info, diagnostic.message);
     }
     Ok((artifacts, diagnostics))
 }
@@ -405,18 +461,21 @@ mod tests {
     use super::*;
     use crate::TargetFormat;
     use crate::network::{
-        AcDcConverterControlMode, ActivePowerControl, Branch, Bus, BusBreakerBus, BusId, BusType,
-        BusbarSection, ComponentMetadata, ConnectivityNode, CurveStyle, DcBusbar,
-        DcConverterOperatingMode, DcConverterUnit, DcGround, DcLine, DcNode, DcPolarity,
-        DcSeriesDevice, DcSwitch, DcSwitchKind, DcTerminal, DcTopologicalNode,
-        DetailedConnectivity, ExternalIdentifier, Generator, Impedance, LineCommutatedConverter,
-        LineCommutatedConverterOperatingMode, LineCommutatedConverterReactiveModel, Load,
-        LoadVoltageModel, LoadingLimits, OperationalLimitGroup, ReactiveCapabilityCurve,
-        ReactiveCapabilityCurvePoint, ReactiveLimits, Shunt, ShuntBlock, StaticVarCompensator,
-        StaticVarCompensatorRegulationMode, Substation, SwitchKind, SwitchedShuntControl,
-        SwitchedShuntMode, TapChanger, TapChangerKind, TapChangerRegulationMode, TapChangerStep,
-        TemporaryLimit, Terminal, TerminalReference, TopologyEndpoint, TopologyKind,
-        TopologySwitch, Transformer3W, VoltageLevel, VoltageSourceConverter, Winding,
+        AcDcConverterControlMode, ActivePowerControl, Area, BoundaryLine, Branch, BranchSolution,
+        Bus, BusBreakerBus, BusId, BusType, BusbarSection, CalculatedBus, CaseMetadata,
+        ComponentMetadata, ConnectivityNode, CurveStyle, DcBusbar, DcConverterOperatingMode,
+        DcConverterUnit, DcGround, DcLine, DcNode, DcPolarity, DcSeriesDevice, DcSwitch,
+        DcSwitchKind, DcTerminal, DcTopologicalNode, DetailedConnectivity, EquipmentReactiveLimits,
+        ExternalIdentifier, Generator, GeneratorEnergySource, Hvdc, Impedance, Junction,
+        LineCommutatedConverter, LineCommutatedConverterOperatingMode,
+        LineCommutatedConverterReactiveModel, Load, LoadVoltageModel, LoadingLimits,
+        MinMaxReactiveLimits, OmittedField, OmittedFieldName, OperationalLimitGroup,
+        ReactiveCapabilityCurve, ReactiveCapabilityCurvePoint, ReactiveLimits, Shunt, ShuntBlock,
+        StaticVarCompensator, StaticVarCompensatorRegulationMode, Subnetwork, Substation, Switch,
+        SwitchKind, SwitchedShuntControl, SwitchedShuntMode, TapChanger, TapChangerKind,
+        TapChangerRegulationMode, TapChangerStep, TemporaryLimit, Terminal, TerminalReference,
+        TieLine, TopologyEndpoint, TopologyKind, TopologySwitch, Transformer3W, VoltageLevel,
+        VoltageSourceConverter, Winding,
     };
 
     fn component(component_type: &str, local_id: &str) -> ComponentId {
@@ -491,6 +550,77 @@ mod tests {
             .collect()
     }
 
+    fn voltage_limit_documents(
+        version: CgmesVersion,
+        voltage_level_limits: (f64, f64),
+        operational_limits: (f64, f64),
+    ) -> Vec<(String, String)> {
+        const VOLTAGE_LEVEL_MRID: &str = "10000000-0000-4000-8000-000000000001";
+        const BUSBAR_MRID: &str = "10000000-0000-4000-8000-000000000002";
+
+        let mut network = detailed_network();
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        detailed.voltage_levels[0].low_voltage_limit_kv = None;
+        detailed.voltage_levels[0].high_voltage_limit_kv = None;
+        for (component, mrid) in [
+            (&detailed.voltage_levels[0].component, VOLTAGE_LEVEL_MRID),
+            (&detailed.busbar_sections[0].component, BUSBAR_MRID),
+        ] {
+            detailed
+                .component_metadata
+                .iter_mut()
+                .find(|metadata| metadata.component == *component)
+                .unwrap()
+                .external_identifiers = vec![ExternalIdentifier {
+                value: mrid.into(),
+                authority: Some("CGMES".into()),
+            }];
+        }
+
+        let (kind_property, kind_namespace, value_property) = match version {
+            CgmesVersion::V2_4_15 => (
+                "entsoe:OperationalLimitType.limitType",
+                "http://entsoe.eu/CIM/SchemaExtension/3/1#LimitTypeKind",
+                "VoltageLimit.value",
+            ),
+            CgmesVersion::V3_0 => (
+                "eu:OperationalLimitType.kind",
+                "http://iec.ch/TC57/CIM100-European#LimitKind",
+                "VoltageLimit.normalValue",
+            ),
+        };
+        let (level_low, level_high) = voltage_level_limits;
+        let (operational_low, operational_high) = operational_limits;
+        let records = format!(
+            r##"  <cim:VoltageLevel rdf:about="#_{VOLTAGE_LEVEL_MRID}">
+    <cim:VoltageLevel.lowVoltageLimit>{level_low}</cim:VoltageLevel.lowVoltageLimit>
+    <cim:VoltageLevel.highVoltageLimit>{level_high}</cim:VoltageLevel.highVoltageLimit>
+  </cim:VoltageLevel>
+  <cim:OperationalLimitSet rdf:ID="_voltage-limit-set">
+    <cim:OperationalLimitSet.Equipment rdf:resource="#_{BUSBAR_MRID}"/>
+  </cim:OperationalLimitSet>
+  <cim:OperationalLimitType rdf:ID="_low-voltage-limit-type">
+    <{kind_property} rdf:resource="{kind_namespace}.lowVoltage"/>
+  </cim:OperationalLimitType>
+  <cim:OperationalLimitType rdf:ID="_high-voltage-limit-type">
+    <{kind_property} rdf:resource="{kind_namespace}.highVoltage"/>
+  </cim:OperationalLimitType>
+  <cim:VoltageLimit rdf:ID="_low-voltage-limit">
+    <cim:OperationalLimit.OperationalLimitSet rdf:resource="#_voltage-limit-set"/>
+    <cim:OperationalLimit.OperationalLimitType rdf:resource="#_low-voltage-limit-type"/>
+    <cim:{value_property}>{operational_low}</cim:{value_property}>
+  </cim:VoltageLimit>
+  <cim:VoltageLimit rdf:ID="_high-voltage-limit">
+    <cim:OperationalLimit.OperationalLimitSet rdf:resource="#_voltage-limit-set"/>
+    <cim:OperationalLimit.OperationalLimitType rdf:resource="#_high-voltage-limit-type"/>
+    <cim:{value_property}>{operational_high}</cim:{value_property}>
+  </cim:VoltageLimit>
+"##
+        );
+        let documents = write::write_cgmes(&network, version).unwrap().files;
+        insert_profile_records(documents, &records, None, None)
+    }
+
     #[allow(clippy::too_many_lines)] // the fixture names every linked topology table explicitly
     fn detailed_network() -> BalancedNetwork {
         let mut network = network();
@@ -507,6 +637,7 @@ mod tests {
         let branch = component("branch", network.branches()[0].uid.as_deref().unwrap());
         let terminal =
             |equipment: ComponentId, number: u8, bus: ComponentId, node: ComponentId| Terminal {
+                component: None,
                 equipment,
                 terminal: number,
                 voltage_level: voltage_level.clone(),
@@ -528,11 +659,13 @@ mod tests {
             (&switch, "North breaker"),
         ];
         let detailed = DetailedConnectivity {
+            omitted_fields: Vec::new(),
             component_metadata: named_components
                 .into_iter()
                 .map(|(component, name)| ComponentMetadata {
                     component: component.clone(),
                     name: Some(name.into()),
+                    equipment_container: None,
                     aliases: Vec::new(),
                     external_identifiers: Vec::new(),
                     properties: std::collections::BTreeMap::new(),
@@ -591,6 +724,7 @@ mod tests {
                 voltage_level: voltage_level.clone(),
                 node: first_node.clone(),
             }],
+            junctions: Vec::new(),
             terminals: vec![
                 terminal(busbar, 1, first_bus.clone(), first_node.clone()),
                 terminal(load, 1, second_bus.clone(), second_node.clone()),
@@ -627,6 +761,55 @@ mod tests {
             line_commutated_converters: Vec::new(),
         };
         *network.detailed_connectivity_mut() = Some(Arc::new(detailed));
+        network
+    }
+
+    fn mixed_topology_network() -> BalancedNetwork {
+        let mut network = detailed_network();
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        let second_level = component("voltage_level", "vl-B");
+        let second_bus = component("bus", "tn-B");
+        let second_node = component("connectivity_node", "node-B");
+        let switch = component("switch", "breaker-A");
+        let substation = detailed.voltage_levels[0].substation.clone();
+        detailed.voltage_levels[0]
+            .buses
+            .retain(|bus| *bus != BusId(2));
+        detailed.voltage_levels.push(VoltageLevel {
+            component: second_level.clone(),
+            substation,
+            nominal_kv: 230.0,
+            low_voltage_limit_kv: Some(210.0),
+            high_voltage_limit_kv: Some(250.0),
+            topology_kind: TopologyKind::BusBreaker,
+            buses: vec![BusId(2)],
+        });
+        detailed.component_metadata.push(ComponentMetadata {
+            component: second_level.clone(),
+            name: Some("South 230 kV".into()),
+            equipment_container: None,
+            aliases: Vec::new(),
+            external_identifiers: Vec::new(),
+            properties: std::collections::BTreeMap::new(),
+            fictitious: false,
+        });
+        detailed.bus_breaker_buses[1].voltage_level = second_level.clone();
+        detailed
+            .connectivity_nodes
+            .retain(|node| node.component != second_node);
+        detailed.switches.clear();
+        detailed
+            .terminals
+            .retain(|terminal| terminal.equipment != switch);
+        for terminal in detailed
+            .terminals
+            .iter_mut()
+            .filter(|terminal| terminal.bus.as_ref() == Some(&second_bus))
+        {
+            terminal.voltage_level = second_level.clone();
+            terminal.node = None;
+        }
+        network.validate().unwrap();
         network
     }
 
@@ -793,6 +976,24 @@ mod tests {
     }
 
     #[test]
+    fn simple_hvdc_reports_the_missing_physical_cgmes_data() {
+        let mut network = detailed_network();
+        let mut line = Hvdc::new(BusId(1), BusId(2));
+        line.uid = Some("dc-link".into());
+        line.resistance_ohm = Some(2.5);
+        line.nominal_voltage_kv = Some(320.0);
+        network.hvdc_mut().push(line);
+
+        let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        assert!(output.warnings.iter().any(|warning| {
+            warning.contains("HVDC line `dc-link` is a two terminal calculation record")
+                && warning.contains("DCConverterUnit operating mode and containment")
+                && warning.contains("DC node and terminal polarity identities")
+                && warning.contains("without inventing data")
+        }));
+    }
+
+    #[test]
     fn synchronous_machine_emits_the_required_generator_kind() {
         for (version, namespace) in [
             (
@@ -812,6 +1013,641 @@ mod tests {
                 "<cim:SynchronousMachine.type rdf:resource=\"{namespace}SynchronousMachineKind.generator\"/>"
             )));
         }
+    }
+
+    #[test]
+    fn synchronous_machine_reactive_capability_curve_round_trips() {
+        let mut network = detailed_network();
+        network.generators_mut()[0].pg = 50.0;
+        network.generators_mut()[0].qmin = -1.0;
+        network.generators_mut()[0].qmax = 1.0;
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        let generator = detailed
+            .terminals
+            .iter()
+            .find(|terminal| terminal.equipment.component_type() == "generator")
+            .map(|terminal| terminal.equipment.clone())
+            .unwrap();
+        let limits = ReactiveLimits::CapabilityCurve(ReactiveCapabilityCurve {
+            curve_style: CurveStyle::StraightLineYValues,
+            properties: std::collections::BTreeMap::new(),
+            points: vec![
+                ReactiveCapabilityCurvePoint {
+                    active_power_mw: -100.0,
+                    minimum_reactive_power_mvar: -20.0,
+                    maximum_reactive_power_mvar: 20.0,
+                    properties: std::collections::BTreeMap::new(),
+                },
+                ReactiveCapabilityCurvePoint {
+                    active_power_mw: 100.0,
+                    minimum_reactive_power_mvar: -40.0,
+                    maximum_reactive_power_mvar: 40.0,
+                    properties: std::collections::BTreeMap::new(),
+                },
+            ],
+        });
+        detailed
+            .equipment_reactive_limits
+            .push(EquipmentReactiveLimits {
+                equipment: generator,
+                limits: limits.clone(),
+            });
+
+        let first = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        let second = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        assert_eq!(first.files, second.files);
+        let eq = first
+            .files
+            .iter()
+            .find(|(name, _)| name.ends_with("_EQ.xml"))
+            .map(|(_, xml)| xml)
+            .unwrap();
+        assert!(eq.contains("SynchronousMachine.InitialReactiveCapabilityCurve"));
+        assert!(eq.contains("<cim:ReactiveCapabilityCurve rdf:ID="));
+        assert_eq!(eq.matches("<cim:CurveData rdf:ID=").count(), 2);
+        assert!(eq.contains("<cim:CurveData.xvalue>-100</cim:CurveData.xvalue>"));
+        assert!(eq.contains("<cim:CurveData.y1value>-40</cim:CurveData.y1value>"));
+        assert!(eq.contains("<cim:SynchronousMachine.minQ>-35</cim:SynchronousMachine.minQ>"));
+        assert!(eq.contains("<cim:SynchronousMachine.maxQ>35</cim:SynchronousMachine.maxQ>"));
+        assert!(first.warnings.iter().any(|warning| {
+            warning.info.code == crate::diagnostics::codes::EMIT_CGMES.value_substituted.code
+                && warning.contains("typed reactive limits evaluate to minQ=-35")
+                && warning.contains("balanced generator row contains minQ=-1")
+        }));
+
+        let parsed = read::read_cgmes_documents(first.files, Some("machine-curve")).unwrap();
+        let machine = &parsed.network.generators()[0];
+        assert!((machine.qmin - -35.0).abs() < 1e-12);
+        assert!((machine.qmax - 35.0).abs() < 1e-12);
+        let detailed = parsed.network.detailed_connectivity().as_deref().unwrap();
+        assert_eq!(detailed.equipment_reactive_limits.len(), 1);
+        assert_eq!(detailed.equipment_reactive_limits[0].limits, limits);
+        assert!(!parsed.warnings.iter().any(|warning| {
+            warning.contains("ReactiveCapabilityCurve object(s)")
+                || warning.contains("CurveData object(s)")
+        }));
+    }
+
+    #[test]
+    fn typed_min_max_reactive_limits_override_the_balanced_generator_projection() {
+        let mut network = detailed_network();
+        network.generators_mut()[0].qmin = -1.0;
+        network.generators_mut()[0].qmax = 1.0;
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        let generator = detailed
+            .terminals
+            .iter()
+            .find(|terminal| terminal.equipment.component_type() == "generator")
+            .map(|terminal| terminal.equipment.clone())
+            .unwrap();
+        let mut properties = std::collections::BTreeMap::new();
+        properties.insert("source_extension".into(), "retained".into());
+        detailed
+            .equipment_reactive_limits
+            .push(EquipmentReactiveLimits {
+                equipment: generator,
+                limits: ReactiveLimits::MinMax(MinMaxReactiveLimits {
+                    minimum_reactive_power_mvar: -25.0,
+                    maximum_reactive_power_mvar: 30.0,
+                    properties,
+                }),
+            });
+        detailed
+            .equipment_reactive_limits
+            .push(EquipmentReactiveLimits {
+                equipment: component("storage", "not-emitted"),
+                limits: ReactiveLimits::MinMax(MinMaxReactiveLimits {
+                    minimum_reactive_power_mvar: -5.0,
+                    maximum_reactive_power_mvar: 5.0,
+                    properties: std::collections::BTreeMap::new(),
+                }),
+            });
+
+        let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        let eq = output
+            .files
+            .iter()
+            .find(|(name, _)| name.ends_with("_EQ.xml"))
+            .map(|(_, xml)| xml)
+            .unwrap();
+        assert!(eq.contains("<cim:SynchronousMachine.minQ>-25</cim:SynchronousMachine.minQ>"));
+        assert!(eq.contains("<cim:SynchronousMachine.maxQ>30</cim:SynchronousMachine.maxQ>"));
+        assert!(output.warnings.iter().any(|warning| {
+            warning.info.code == crate::diagnostics::codes::EMIT_CGMES.value_substituted.code
+                && warning.contains("typed reactive limits evaluate to minQ=-25")
+        }));
+        assert!(output.warnings.iter().any(|warning| {
+            warning.info.code == crate::diagnostics::codes::EMIT_CGMES.field_dropped.code
+                && warning.contains("min/max reactive limits properties")
+        }));
+        assert!(output.warnings.iter().any(|warning| {
+            warning.info.code == crate::diagnostics::codes::EMIT_CGMES.record_dropped.code
+                && warning.contains("storage/not-emitted")
+                && warning.contains("no reactive limits association")
+        }));
+
+        let parsed = read::read_cgmes_documents(output.files, Some("machine-min-max")).unwrap();
+        assert!((parsed.network.generators()[0].qmin + 25.0).abs() < 1e-12);
+        assert!((parsed.network.generators()[0].qmax - 30.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn sv_status_overrides_ssh_and_round_trips() {
+        let mut network = detailed_network();
+        network.loads_mut()[0].in_service = false;
+        network.generators_mut()[0].in_service = false;
+        network.branches_mut()[0].in_service = false;
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        let busbar = detailed.busbar_sections[0].component.clone();
+        detailed
+            .component_metadata
+            .iter_mut()
+            .find(|metadata| metadata.component == busbar)
+            .unwrap()
+            .properties
+            .insert(CGMES_SV_STATUS_PROPERTY.into(), "false".into());
+
+        let mut output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        let sv = output
+            .files
+            .iter()
+            .find(|(name, _)| name.ends_with("_SV.xml"))
+            .map(|(_, xml)| xml)
+            .unwrap();
+        assert_eq!(sv.matches("<cim:SvStatus rdf:ID=").count(), 4);
+        assert_eq!(
+            sv.matches("<cim:SvStatus.inService>false</cim:SvStatus.inService>")
+                .count(),
+            4
+        );
+
+        let ssh = output
+            .files
+            .iter_mut()
+            .find(|(name, _)| name.ends_with("_SSH.xml"))
+            .map(|(_, xml)| xml)
+            .unwrap();
+        *ssh = ssh.replace(
+            "<cim:Equipment.inService>false</cim:Equipment.inService>",
+            "<cim:Equipment.inService>true</cim:Equipment.inService>",
+        );
+        let parsed = read::read_cgmes_documents(output.files.clone(), Some("sv-status")).unwrap();
+        assert!(!parsed.network.loads()[0].in_service);
+        assert!(!parsed.network.generators()[0].in_service);
+        assert!(!parsed.network.branches()[0].in_service);
+        let detailed = parsed.network.detailed_connectivity().as_deref().unwrap();
+        assert!(detailed.component_metadata.iter().any(|metadata| {
+            metadata.component.component_type() == "busbar_section"
+                && metadata
+                    .properties
+                    .get(CGMES_SV_STATUS_PROPERTY)
+                    .is_some_and(|value| value == "false")
+        }));
+        assert!(
+            !parsed
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("SvStatus object(s)"))
+        );
+
+        let sv = output
+            .files
+            .iter_mut()
+            .find(|(name, _)| name.ends_with("_SV.xml"))
+            .map(|(_, xml)| xml)
+            .unwrap();
+        *sv = sv.replacen(
+            "SvStatus.ConductingEquipment",
+            "SvStatus.MissingConductingEquipment",
+            1,
+        );
+        let Err(error) = read::read_cgmes_documents(output.files, Some("invalid-sv-status")) else {
+            panic!("SvStatus without a conducting equipment reference parsed");
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("has no SvStatus.ConductingEquipment reference")
+        );
+    }
+
+    const MAPPED_GENERATING_UNIT_MRID: &str = "11111111-1111-4111-8111-111111111111";
+
+    fn network_with_mapped_equipment_metadata() -> BalancedNetwork {
+        let mut network = detailed_network();
+        let load = network.loads()[0].uid.clone().unwrap();
+        let generator = network.generators()[0].uid.clone().unwrap();
+        let branch = network.branches()[0].uid.clone().unwrap();
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        let voltage_level = detailed.voltage_levels[0].component.clone();
+        let substation = detailed.substations[0].component.clone();
+        for (component_type, local_id, name) in [
+            ("load", load.as_str(), "Retained load name"),
+            ("generator", generator.as_str(), "Retained generator name"),
+            ("branch", branch.as_str(), "Retained line name"),
+        ] {
+            detailed.component_metadata.push(ComponentMetadata {
+                component: component(component_type, local_id),
+                name: Some(name.into()),
+                equipment_container: Some(voltage_level.clone()),
+                aliases: Vec::new(),
+                external_identifiers: Vec::new(),
+                properties: std::collections::BTreeMap::new(),
+                fictitious: false,
+            });
+        }
+        detailed
+            .component_metadata
+            .iter_mut()
+            .find(|metadata| {
+                metadata.component.component_type() == "generator"
+                    && metadata.component.local_id() == generator
+            })
+            .unwrap()
+            .properties
+            .insert(
+                CGMES_GENERATING_UNIT_PROPERTY.into(),
+                MAPPED_GENERATING_UNIT_MRID.into(),
+            );
+        detailed.component_metadata.push(ComponentMetadata {
+            component: component("cgmes_object", MAPPED_GENERATING_UNIT_MRID),
+            name: Some("Retained generating unit name".into()),
+            equipment_container: Some(substation),
+            aliases: Vec::new(),
+            external_identifiers: vec![ExternalIdentifier {
+                value: MAPPED_GENERATING_UNIT_MRID.into(),
+                authority: Some("CGMES".into()),
+            }],
+            properties: std::collections::BTreeMap::from([
+                (
+                    "IdentifiedObject.description".into(),
+                    "Retained unit description".into(),
+                ),
+                ("Equipment.aggregate".into(), "false".into()),
+                (
+                    "GeneratingUnit.genControlSource".into(),
+                    "GeneratorControlSource.offAGC".into(),
+                ),
+                ("GeneratingUnit.nominalP".into(), "125".into()),
+            ]),
+            fictitious: false,
+        });
+        network.validate().unwrap();
+        network
+    }
+
+    #[test]
+    fn mapped_equipment_names_and_containers_round_trip() {
+        let network = network_with_mapped_equipment_metadata();
+        let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        let equipment = output
+            .files
+            .iter()
+            .find(|(name, _)| name.ends_with("_EQ.xml"))
+            .map(|(_, xml)| xml)
+            .unwrap();
+        assert!(equipment.contains(&format!(
+            "<cim:GeneratingUnit rdf:ID=\"_{MAPPED_GENERATING_UNIT_MRID}\">"
+        )));
+        assert!(equipment.contains(
+            "<cim:IdentifiedObject.name>Retained generating unit name</cim:IdentifiedObject.name>"
+        ));
+        assert!(equipment.contains(
+            "<cim:IdentifiedObject.description>Retained unit description</cim:IdentifiedObject.description>"
+        ));
+        assert!(
+            equipment.contains("<cim:GeneratingUnit.nominalP>125</cim:GeneratingUnit.nominalP>")
+        );
+        let reparsed = read::read_cgmes_documents(output.files, Some("mapped-metadata")).unwrap();
+        let detailed = reparsed.network.detailed_connectivity().as_deref().unwrap();
+        for name in [
+            "Retained load name",
+            "Retained generator name",
+            "Retained line name",
+        ] {
+            let metadata = detailed
+                .component_metadata
+                .iter()
+                .find(|metadata| metadata.name.as_deref() == Some(name))
+                .unwrap();
+            let container = metadata.equipment_container.as_ref().unwrap();
+            assert!(detailed.voltage_levels.iter().any(|level| {
+                level.component == *container
+                    && detailed.component_metadata.iter().any(|metadata| {
+                        metadata.component == level.component
+                            && metadata.name.as_deref() == Some("North 230 kV")
+                    })
+            }));
+        }
+        let unit = detailed
+            .component_metadata
+            .iter()
+            .find(|metadata| metadata.name.as_deref() == Some("Retained generating unit name"))
+            .unwrap();
+        let container = unit.equipment_container.as_ref().unwrap();
+        assert!(detailed.substations.iter().any(|substation| {
+            substation.component == *container
+                && detailed.component_metadata.iter().any(|metadata| {
+                    metadata.component == substation.component
+                        && metadata.name.as_deref() == Some("North substation")
+                })
+        }));
+    }
+
+    #[test]
+    fn generating_unit_classes_round_trip_as_generator_energy_sources() {
+        for (energy_source, class) in [
+            (GeneratorEnergySource::Hydro, "HydroGeneratingUnit"),
+            (GeneratorEnergySource::Nuclear, "NuclearGeneratingUnit"),
+            (GeneratorEnergySource::Wind, "WindGeneratingUnit"),
+            (GeneratorEnergySource::Thermal, "ThermalGeneratingUnit"),
+            (GeneratorEnergySource::Solar, "SolarGeneratingUnit"),
+            (GeneratorEnergySource::Other, "GeneratingUnit"),
+        ] {
+            let mut network = network();
+            network.generators_mut()[0].energy_source = energy_source;
+            let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+            let equipment = output
+                .files
+                .iter()
+                .find(|(name, _)| name.ends_with("_EQ.xml"))
+                .map(|(_, xml)| xml)
+                .unwrap();
+            let steady_state_hypothesis = output
+                .files
+                .iter()
+                .find(|(name, _)| name.ends_with("_SSH.xml"))
+                .map(|(_, xml)| xml)
+                .unwrap();
+            assert!(equipment.contains(&format!("<cim:{class} rdf:ID=")));
+            assert!(steady_state_hypothesis.contains(&format!("<cim:{class} rdf:about=")));
+
+            let parsed = read::read_cgmes_documents(output.files, Some("energy-source")).unwrap();
+            assert_eq!(parsed.network.generators()[0].energy_source, energy_source);
+            let detailed = parsed.network.detailed_connectivity().as_deref().unwrap();
+            assert!(detailed.component_metadata.iter().any(|metadata| {
+                metadata
+                    .properties
+                    .get(CGMES_CLASS_PROPERTY)
+                    .is_some_and(|value| value == class)
+            }));
+        }
+    }
+
+    #[test]
+    fn dangling_component_metadata_container_is_rejected() {
+        let mut network = detailed_network();
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        detailed.component_metadata[0].equipment_container =
+            Some(component("voltage_level", "missing"));
+        let error = network.validate().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("references unknown equipment container `voltage_level/missing`")
+        );
+    }
+
+    #[test]
+    fn fresh_emission_replaces_an_unsupported_container_with_the_terminal_voltage_level() {
+        let mut network = detailed_network();
+        let load = component("load", network.loads()[0].uid.as_deref().unwrap());
+        let unsupported_container = component("cgmes_object", "bay-A");
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        detailed.component_metadata.push(ComponentMetadata {
+            component: unsupported_container.clone(),
+            name: Some("Bay A".into()),
+            equipment_container: None,
+            aliases: Vec::new(),
+            external_identifiers: Vec::new(),
+            properties: std::collections::BTreeMap::new(),
+            fictitious: false,
+        });
+        detailed.component_metadata.push(ComponentMetadata {
+            component: load,
+            name: Some("North load".into()),
+            equipment_container: Some(unsupported_container),
+            aliases: Vec::new(),
+            external_identifiers: Vec::new(),
+            properties: std::collections::BTreeMap::new(),
+            fictitious: false,
+        });
+        network.validate().unwrap();
+
+        let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        assert!(output.warnings.iter().any(|warning| {
+            warning.info.code == crate::diagnostics::codes::EMIT_CGMES.value_substituted.code
+                && warning.contains("load/")
+                && warning.contains("cgmes_object/bay-A")
+                && warning.contains("terminal's VoltageLevel")
+        }));
+
+        let parsed = read::read_cgmes_documents(output.files, Some("container-fallback")).unwrap();
+        let detailed = parsed.network.detailed_connectivity().as_deref().unwrap();
+        let load = detailed
+            .component_metadata
+            .iter()
+            .find(|metadata| metadata.name.as_deref() == Some("North load"))
+            .unwrap();
+        let container = load.equipment_container.as_ref().unwrap();
+        assert_eq!(container.component_type(), "voltage_level");
+        assert!(
+            detailed
+                .voltage_levels
+                .iter()
+                .any(|level| level.component == *container)
+        );
+    }
+
+    #[test]
+    fn dc_only_detailed_connectivity_emits_declared_substations() {
+        let substation = component("substation", "dc-substation");
+        let converter_unit = component("dc_converter_unit", "dc-unit");
+        let mut network = BalancedNetwork::new("dc-only", 100.0);
+        *network.detailed_connectivity_mut() = Some(Arc::new(DetailedConnectivity {
+            component_metadata: vec![ComponentMetadata {
+                component: substation.clone(),
+                name: Some("DC substation".into()),
+                equipment_container: None,
+                aliases: Vec::new(),
+                external_identifiers: Vec::new(),
+                properties: std::collections::BTreeMap::new(),
+                fictitious: false,
+            }],
+            substations: vec![Substation {
+                component: substation,
+                country: None,
+                operator: None,
+                geographical_tags: Vec::new(),
+            }],
+            dc_converter_units: vec![DcConverterUnit {
+                component: converter_unit,
+                substation: Some(component("substation", "dc-substation")),
+                operation_mode: DcConverterOperatingMode::Bipolar,
+            }],
+            ..DetailedConnectivity::default()
+        }));
+
+        let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        let equipment = output
+            .files
+            .iter()
+            .find(|(name, _)| name.ends_with("_EQ.xml"))
+            .map(|(_, xml)| xml)
+            .unwrap();
+        assert!(equipment.contains("<cim:Substation rdf:ID="));
+        assert!(equipment.contains("<cim:IdentifiedObject.name>DC substation"));
+        assert!(equipment.contains("<cim:DCConverterUnit.Substation rdf:resource="));
+    }
+
+    #[test]
+    fn busbar_containment_conflicts_are_rejected_and_switch_terminals_may_cross_containers() {
+        let add_second_level = |network: &mut BalancedNetwork| {
+            let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+            let second_level = component("voltage_level", "vl-B");
+            let second_node = component("connectivity_node", "node-C");
+            detailed.voltage_levels.push(VoltageLevel {
+                component: second_level.clone(),
+                substation: detailed.voltage_levels[0].substation.clone(),
+                nominal_kv: 230.0,
+                low_voltage_limit_kv: None,
+                high_voltage_limit_kv: None,
+                topology_kind: TopologyKind::NodeBreaker,
+                buses: Vec::new(),
+            });
+            detailed.connectivity_nodes.push(ConnectivityNode {
+                component: second_node.clone(),
+                voltage_level: second_level,
+                node_number: None,
+                calculated_bus: None,
+            });
+            second_node
+        };
+
+        let mut busbar = detailed_network();
+        let second_node = add_second_level(&mut busbar);
+        Arc::make_mut(busbar.detailed_connectivity_mut().as_mut().unwrap()).busbar_sections[0]
+            .node = second_node;
+        assert!(
+            busbar
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("busbar section")
+        );
+
+        let mut switch = detailed_network();
+        let second_node = add_second_level(&mut switch);
+        Arc::make_mut(switch.detailed_connectivity_mut().as_mut().unwrap()).switches[0].endpoint2 =
+            TopologyEndpoint::Node(second_node);
+        switch.validate().unwrap();
+    }
+
+    #[test]
+    fn cim_junction_round_trips_with_name_container_and_terminal() {
+        const JUNCTION_MRID: &str = "5249a78f-6642-4fc5-968f-06e2ed18fab7";
+        let mut network = detailed_network();
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        let junction = component("junction", JUNCTION_MRID);
+        let container = detailed.voltage_levels[0].component.clone();
+        detailed.component_metadata.push(ComponentMetadata {
+            component: junction.clone(),
+            name: Some("Junction XJ1".into()),
+            equipment_container: Some(container.clone()),
+            aliases: Vec::new(),
+            external_identifiers: vec![ExternalIdentifier {
+                value: JUNCTION_MRID.into(),
+                authority: Some("CGMES".into()),
+            }],
+            properties: std::collections::BTreeMap::new(),
+            fictitious: false,
+        });
+        detailed.junctions.push(Junction {
+            component: junction.clone(),
+        });
+        let mut terminal = detailed.terminals[0].clone();
+        terminal.equipment = junction;
+        terminal.terminal = 1;
+        detailed.terminals.push(terminal);
+        network.validate().unwrap();
+
+        let network = BalancedNetwork::from_json(&network.to_json().unwrap()).unwrap();
+        for version in [CgmesVersion::V2_4_15, CgmesVersion::V3_0] {
+            let output = write::write_cgmes(&network, version).unwrap();
+            let equipment = output
+                .files
+                .iter()
+                .find(|(name, _)| name.ends_with("_EQ.xml"))
+                .map(|(_, xml)| xml)
+                .unwrap();
+            assert!(equipment.contains(&format!("<cim:Junction rdf:ID=\"_{JUNCTION_MRID}\">")));
+            assert!(
+                equipment.contains(
+                    "<cim:IdentifiedObject.name>Junction XJ1</cim:IdentifiedObject.name>"
+                )
+            );
+
+            let parsed = read::read_cgmes_documents(output.files, Some("junction")).unwrap();
+            let detailed = parsed.network.detailed_connectivity().as_deref().unwrap();
+            assert_eq!(detailed.junctions.len(), 1);
+            let junction = &detailed.junctions[0].component;
+            assert!(
+                detailed
+                    .terminals
+                    .iter()
+                    .any(|terminal| { terminal.equipment == *junction && terminal.terminal == 1 })
+            );
+            let metadata = detailed
+                .component_metadata
+                .iter()
+                .find(|metadata| metadata.component == *junction)
+                .unwrap();
+            assert_eq!(metadata.name.as_deref(), Some("Junction XJ1"));
+            let container = metadata.equipment_container.as_ref().unwrap();
+            assert!(detailed.component_metadata.iter().any(|metadata| {
+                metadata.component == *container && metadata.name.as_deref() == Some("North 230 kV")
+            }));
+        }
+    }
+
+    #[test]
+    fn v2415_busbar_without_connectivity_node_is_preserved() {
+        let network = detailed_network();
+        let mut output = write::write_cgmes(&network, CgmesVersion::V2_4_15).unwrap();
+        let eq = output
+            .files
+            .iter_mut()
+            .find(|(name, _)| name.ends_with("_EQ.xml"))
+            .map(|(_, xml)| xml)
+            .unwrap();
+        let connection = eq
+            .lines()
+            .find(|line| line.contains("<cim:Terminal.ConnectivityNode "))
+            .unwrap()
+            .to_owned();
+        *eq = eq.replacen(&format!("{connection}\n"), "", 1);
+
+        let parsed = read::read_cgmes_documents(output.files, Some("v2415-busbar")).unwrap();
+        let detailed = parsed.network.detailed_connectivity().as_deref().unwrap();
+        assert_eq!(detailed.busbar_sections.len(), 1);
+        let busbar = &detailed.busbar_sections[0];
+        let node = detailed
+            .connectivity_nodes
+            .iter()
+            .find(|node| node.component == busbar.node)
+            .unwrap();
+        assert!(node.component.local_id().starts_with("terminal-"));
+        assert_eq!(node.calculated_bus, Some(BusId(1)));
+
+        let fresh = write::write_cgmes(&parsed.network, CgmesVersion::V3_0).unwrap();
+        let eq = fresh
+            .files
+            .iter()
+            .find(|(name, _)| name.ends_with("_EQ.xml"))
+            .map(|(_, xml)| xml)
+            .unwrap();
+        assert!(eq.contains("<cim:IdentifiedObject.name>North busbar</cim:IdentifiedObject.name>"));
+        assert!(eq.contains("<cim:Equipment.EquipmentContainer rdf:resource="));
     }
 
     #[test]
@@ -932,6 +1768,7 @@ mod tests {
             detailed.component_metadata.push(ComponentMetadata {
                 component,
                 name: Some(name.into()),
+                equipment_container: None,
                 aliases: Vec::new(),
                 external_identifiers: vec![ExternalIdentifier {
                     value: mrid.into(),
@@ -981,6 +1818,222 @@ mod tests {
     }
 
     #[test]
+    fn disconnected_terminal_with_a_calculated_bus_omits_its_tp_association() {
+        const TERMINAL_MRID: &str = "89000000-0000-4000-8000-000000000001";
+        let mut network = detailed_network();
+        let terminal_component = component("terminal", TERMINAL_MRID);
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        let terminal = detailed
+            .terminals
+            .iter_mut()
+            .find(|terminal| terminal.equipment.component_type() == "load")
+            .unwrap();
+        assert!(terminal.node.is_some());
+        terminal.component = Some(terminal_component.clone());
+        terminal.connected = false;
+        detailed.component_metadata.push(ComponentMetadata {
+            component: terminal_component,
+            name: Some("Disconnected load terminal".into()),
+            equipment_container: None,
+            aliases: Vec::new(),
+            external_identifiers: vec![ExternalIdentifier {
+                value: TERMINAL_MRID.into(),
+                authority: Some("CGMES".into()),
+            }],
+            properties: std::collections::BTreeMap::new(),
+            fictitious: false,
+        });
+
+        let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        let profile = |suffix: &str| {
+            output
+                .files
+                .iter()
+                .find(|(name, _)| name.ends_with(suffix))
+                .map(|(_, text)| text.as_str())
+                .unwrap()
+        };
+        let terminal_id = format!("_{TERMINAL_MRID}");
+        assert!(profile("_EQ.xml").contains(&format!("rdf:ID=\"{terminal_id}\"")));
+        assert!(!profile("_TP.xml").contains(&format!("rdf:about=\"#{terminal_id}\"")));
+        assert!(profile("_SSH.xml").contains(&format!("rdf:about=\"#{terminal_id}\"")));
+        assert!(
+            profile("_SSH.xml")
+                .contains("<cim:ACDCTerminal.connected>false</cim:ACDCTerminal.connected>")
+        );
+
+        let parsed =
+            read::read_cgmes_documents(output.files, Some("disconnected-terminal")).unwrap();
+        let terminal = parsed
+            .network
+            .detailed_connectivity()
+            .as_deref()
+            .unwrap()
+            .terminals
+            .iter()
+            .find(|terminal| {
+                terminal
+                    .component
+                    .as_ref()
+                    .is_some_and(|component| component.local_id() == TERMINAL_MRID)
+            })
+            .unwrap();
+        assert!(!terminal.connected);
+        assert!(terminal.bus.is_none());
+        assert!(terminal.node.is_some());
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn disconnected_detailed_equipment_round_trips_without_a_topological_node() {
+        let mut network = detailed_network();
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        let voltage_level = detailed.voltage_levels[0].component.clone();
+        let first_node = component("connectivity_node", "81000000-0000-4000-8000-000000000001");
+        let second_node = component("connectivity_node", "81000000-0000-4000-8000-000000000002");
+        let busbar = component("busbar_section", "82000000-0000-4000-8000-000000000001");
+        let junction = component("junction", "83000000-0000-4000-8000-000000000001");
+        let switch = component("switch", "84000000-0000-4000-8000-000000000001");
+        let terminal_ids = [
+            component("terminal", "85000000-0000-4000-8000-000000000001"),
+            component("terminal", "85000000-0000-4000-8000-000000000002"),
+            component("terminal", "85000000-0000-4000-8000-000000000003"),
+            component("terminal", "85000000-0000-4000-8000-000000000004"),
+        ];
+
+        detailed.connectivity_nodes.extend([
+            ConnectivityNode {
+                component: first_node.clone(),
+                voltage_level: voltage_level.clone(),
+                node_number: None,
+                calculated_bus: None,
+            },
+            ConnectivityNode {
+                component: second_node.clone(),
+                voltage_level: voltage_level.clone(),
+                node_number: None,
+                calculated_bus: None,
+            },
+        ]);
+        detailed.busbar_sections.push(BusbarSection {
+            component: busbar.clone(),
+            voltage_level: voltage_level.clone(),
+            node: first_node.clone(),
+        });
+        detailed.junctions.push(Junction {
+            component: junction.clone(),
+        });
+        detailed.switches.push(TopologySwitch {
+            component: switch.clone(),
+            voltage_level: voltage_level.clone(),
+            kind: SwitchKind::Breaker,
+            endpoint1: TopologyEndpoint::Node(first_node.clone()),
+            endpoint2: TopologyEndpoint::Node(second_node.clone()),
+            open: true,
+            retained: true,
+        });
+        let disconnected_terminal =
+            |component: ComponentId, equipment: ComponentId, terminal: u8, node: ComponentId| {
+                Terminal {
+                    component: Some(component),
+                    equipment,
+                    terminal,
+                    voltage_level: voltage_level.clone(),
+                    bus: None,
+                    connectable_bus: None,
+                    node: Some(node),
+                    connected: false,
+                    active_power_mw: None,
+                    reactive_power_mvar: None,
+                }
+            };
+        detailed.terminals.extend([
+            disconnected_terminal(
+                terminal_ids[0].clone(),
+                busbar.clone(),
+                1,
+                first_node.clone(),
+            ),
+            disconnected_terminal(
+                terminal_ids[1].clone(),
+                junction.clone(),
+                1,
+                second_node.clone(),
+            ),
+            disconnected_terminal(terminal_ids[2].clone(), switch.clone(), 1, first_node),
+            disconnected_terminal(terminal_ids[3].clone(), switch.clone(), 2, second_node),
+        ]);
+        for value in [&busbar, &junction, &switch]
+            .into_iter()
+            .chain(terminal_ids.iter())
+        {
+            detailed.component_metadata.push(ComponentMetadata {
+                component: value.clone(),
+                name: Some(value.local_id().into()),
+                equipment_container: None,
+                aliases: Vec::new(),
+                external_identifiers: vec![ExternalIdentifier {
+                    value: value.local_id().into(),
+                    authority: Some("CGMES".into()),
+                }],
+                properties: std::collections::BTreeMap::new(),
+                fictitious: false,
+            });
+        }
+
+        network.validate().unwrap();
+        let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        assert!(
+            !output
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("not emitted"))
+        );
+        let all_xml = output
+            .files
+            .iter()
+            .map(|(_, xml)| xml.as_str())
+            .collect::<String>();
+        for value in [&busbar, &junction, &switch] {
+            assert!(all_xml.contains(value.local_id()));
+        }
+        assert_eq!(
+            all_xml.matches("<cim:ACDCTerminal.connected>false").count(),
+            4
+        );
+
+        let parsed = read::read_cgmes_documents(output.files, Some("disconnected")).unwrap();
+        let parsed = parsed.network.detailed_connectivity().as_deref().unwrap();
+        assert!(
+            parsed
+                .busbar_sections
+                .iter()
+                .any(|value| value.component.local_id() == busbar.local_id())
+        );
+        assert!(
+            parsed
+                .junctions
+                .iter()
+                .any(|value| value.component.local_id() == junction.local_id())
+        );
+        assert!(
+            parsed
+                .switches
+                .iter()
+                .any(|value| value.component.local_id() == switch.local_id())
+        );
+        for id in &terminal_ids {
+            assert!(parsed.terminals.iter().any(|terminal| {
+                terminal
+                    .component
+                    .as_ref()
+                    .is_some_and(|value| value.local_id() == id.local_id())
+                    && !terminal.connected
+            }));
+        }
+    }
+
+    #[test]
     fn unrelated_boundary_connectivity_node_and_line_are_omitted() {
         const CONNECTIVITY_NODE_MRID: &str = "44444444-4444-4444-8444-444444444444";
         const SOURCE_LINE_MRID: &str = "55555555-5555-4555-8555-555555555555";
@@ -1006,6 +2059,7 @@ mod tests {
                 }],
                 component,
                 name: Some(name.into()),
+                equipment_container: None,
                 aliases: Vec::new(),
                 properties: std::collections::BTreeMap::new(),
                 fictitious: false,
@@ -1070,6 +2124,7 @@ mod tests {
                 }],
                 component,
                 name: Some(name.into()),
+                equipment_container: None,
                 aliases: Vec::new(),
                 properties: std::collections::BTreeMap::new(),
                 fictitious: false,
@@ -1100,6 +2155,43 @@ mod tests {
                 .iter()
                 .any(|node| node.component == *emitted_node)
         );
+    }
+
+    #[test]
+    fn missing_balanced_terminal_records_get_generated_connectivity_nodes() {
+        for (equipment_type, terminal_number) in [("load", 1), ("branch", 2)] {
+            let mut network = detailed_network();
+            let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+            detailed.terminals.retain(|terminal| {
+                terminal.equipment.component_type() != equipment_type
+                    || usize::from(terminal.terminal) != terminal_number
+            });
+            network.validate().unwrap();
+
+            for version in [CgmesVersion::V2_4_15, CgmesVersion::V3_0] {
+                let output = write::write_cgmes(&network, version).unwrap();
+                assert!(output.warnings.iter().any(|warning| {
+                    warning.contains("balanced equipment terminal at bus 2")
+                        && warning.contains("generated ConnectivityNode")
+                }));
+                let parsed =
+                    read::read_cgmes_documents(output.files, Some("missing-balanced-terminal"))
+                        .unwrap();
+                let detailed = parsed.network.detailed_connectivity().as_deref().unwrap();
+                let terminal = detailed
+                    .terminals
+                    .iter()
+                    .find(|terminal| {
+                        terminal.equipment.component_type() == equipment_type
+                            && usize::from(terminal.terminal) == terminal_number
+                    })
+                    .unwrap();
+                let node = terminal.node.as_ref().unwrap();
+                assert!(detailed.connectivity_nodes.iter().any(|candidate| {
+                    candidate.component == *node && candidate.calculated_bus == Some(BusId(2))
+                }));
+            }
+        }
     }
 
     #[test]
@@ -1213,6 +2305,105 @@ mod tests {
     }
 
     #[test]
+    fn imported_power_transformer_end_identities_round_trip_exactly() {
+        let mut network = network();
+        network.branches_mut()[0].tap = 1.05;
+
+        let mut third = Bus::new(BusId(3), BusType::Pq, 115.0);
+        third.uid = Some("bus-3".into());
+        network.buses_mut().push(third);
+        let mut winding1 = Winding::new(BusId(1));
+        winding1.nominal_kv = 230.0;
+        let mut winding2 = Winding::new(BusId(2));
+        winding2.nominal_kv = 230.0;
+        let mut winding3 = Winding::new(BusId(3));
+        winding3.nominal_kv = 115.0;
+        let mut transformer = Transformer3W::new(
+            [winding1, winding2, winding3],
+            [
+                Impedance::new(0.01, 0.10, 100.0),
+                Impedance::new(0.02, 0.20, 100.0),
+                Impedance::new(0.03, 0.30, 100.0),
+            ],
+        );
+        transformer.uid = Some("three-winding-end-id-test".into());
+        network.transformers_3w_mut().push(transformer);
+
+        let mut files = write::write_cgmes(&network, CgmesVersion::V3_0)
+            .unwrap()
+            .files;
+        let eq = files
+            .iter()
+            .find(|(name, _)| name.ends_with("_EQ.xml"))
+            .map(|(_, xml)| xml)
+            .unwrap();
+        let generated = eq
+            .lines()
+            .filter_map(|line| {
+                line.trim()
+                    .strip_prefix("<cim:PowerTransformerEnd rdf:ID=\"_")
+                    .and_then(|tail| tail.split('\"').next())
+                    .map(str::to_owned)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(generated.len(), 5);
+        let retained = [
+            "10000000-0000-4000-8000-000000000001",
+            "10000000-0000-4000-8000-000000000002",
+            "10000000-0000-4000-8000-000000000003",
+            "10000000-0000-4000-8000-000000000004",
+            "10000000-0000-4000-8000-000000000005",
+        ];
+        for (generated, retained) in generated.iter().zip(retained) {
+            for (_, xml) in &mut files {
+                *xml = xml.replace(&format!("_{generated}"), &format!("_{retained}"));
+            }
+        }
+
+        let parsed = read::read_cgmes_documents(files, Some("retained-transformer-ends")).unwrap();
+        let detailed = parsed.network.detailed_connectivity().as_deref().unwrap();
+        for retained in retained {
+            let metadata = detailed
+                .component_metadata
+                .iter()
+                .find(|metadata| {
+                    metadata.external_identifiers.iter().any(|identifier| {
+                        identifier.authority.as_deref() == Some("CGMES")
+                            && identifier.value == retained
+                    })
+                })
+                .unwrap();
+            assert_eq!(
+                metadata
+                    .properties
+                    .get(CGMES_CLASS_PROPERTY)
+                    .map(String::as_str),
+                Some("PowerTransformerEnd")
+            );
+            assert!(
+                metadata
+                    .properties
+                    .contains_key("PowerTransformerEnd.PowerTransformer")
+            );
+            assert!(metadata.properties.contains_key("TransformerEnd.endNumber"));
+        }
+
+        let fresh = write::write_cgmes(&parsed.network, CgmesVersion::V3_0).unwrap();
+        let eq = fresh
+            .files
+            .iter()
+            .find(|(name, _)| name.ends_with("_EQ.xml"))
+            .map(|(_, xml)| xml)
+            .unwrap();
+        for retained in retained {
+            assert!(
+                eq.contains(&format!("<cim:PowerTransformerEnd rdf:ID=\"_{retained}\">")),
+                "missing retained transformer end {retained}"
+            );
+        }
+    }
+
+    #[test]
     fn every_transformer_end_emits_zero_susceptance_when_it_has_none() {
         let mut network = network();
         network.branches_mut()[0].tap = 1.05;
@@ -1263,10 +2454,47 @@ mod tests {
     }
 
     #[test]
+    fn missing_transformer_rated_voltage_uses_the_connected_bus_with_a_diagnostic() {
+        let mut network = network();
+        network.branches_mut()[0].tap = 1.05;
+        let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        let files = output
+            .files
+            .into_iter()
+            .map(|(name, text)| {
+                if !name.ends_with("_EQ.xml") {
+                    return (name, text);
+                }
+                let mut filtered = text
+                    .lines()
+                    .filter(|line| !line.contains("PowerTransformerEnd.ratedU"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                filtered.push('\n');
+                (name, filtered)
+            })
+            .collect();
+        let parsed = read::read_cgmes_documents(files, Some("missing-rated-voltage")).unwrap();
+        let actual = &parsed.network.branches()[0];
+        assert!(actual.r.is_finite() && actual.r > 0.0 && actual.r < 1.0);
+        assert!(actual.x.is_finite() && actual.x > 0.0 && actual.x < 1.0);
+        let warnings = parsed
+            .warnings
+            .iter()
+            .filter(|warning| {
+                warning.info.code == crate::diagnostics::codes::READ_CGMES_VALUE_DEFAULTED.code
+                    && warning.contains("PowerTransformerEnd.ratedU is absent")
+            })
+            .count();
+        assert_eq!(warnings, 2);
+    }
+
+    #[test]
     fn nonlinear_shunt_sections_round_trip_with_conductance() {
         let mut network = network();
         let mut shunt = Shunt::new(BusId(2), 0.3, 5.0);
         shunt.uid = Some("nonlinear-shunt-1".into());
+        shunt.section_count = Some(2);
         shunt.control = Some(SwitchedShuntControl {
             mode: SwitchedShuntMode::Discrete,
             vhigh: 1.04,
@@ -1294,11 +2522,22 @@ mod tests {
             eq.matches("<cim:NonlinearShuntCompensatorPoint ").count(),
             3
         );
+        let sv = output
+            .files
+            .iter()
+            .find(|(name, _)| name.ends_with("_SV.xml"))
+            .map(|(_, text)| text)
+            .unwrap();
+        assert!(sv.contains("<cim:SvShuntCompensatorSections "));
+        assert!(sv.contains(
+            "<cim:SvShuntCompensatorSections.sections>2</cim:SvShuntCompensatorSections.sections>"
+        ));
 
         let parsed = read::read_cgmes_documents(output.files, Some("nonlinear-shunt")).unwrap();
         let shunt = &parsed.network.shunts()[0];
         assert!((shunt.g - 0.3).abs() < 1e-10);
         assert!((shunt.b - 5.0).abs() < 1e-10);
+        assert_eq!(shunt.section_count, Some(2));
         assert!(shunt.in_service);
         let control = shunt.control.as_ref().unwrap();
         assert_eq!(control.mode, SwitchedShuntMode::Discrete);
@@ -1404,12 +2643,796 @@ mod tests {
     }
 
     #[test]
+    fn busbar_and_switch_terminals_round_trip_exactly() {
+        let mut network = detailed_network();
+        let terminal_ids = [
+            "10000000-0000-4000-8000-000000000001",
+            "10000000-0000-4000-8000-000000000002",
+            "10000000-0000-4000-8000-000000000003",
+        ];
+        let expected = [
+            ("busbar_section", 1_u8, terminal_ids[0], false, 1.25, -0.5),
+            ("switch", 1_u8, terminal_ids[1], false, 2.0, 3.0),
+            ("switch", 2_u8, terminal_ids[2], true, -2.0, -3.0),
+        ];
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        for (equipment_type, number, id, connected, p, q) in expected {
+            let terminal = detailed
+                .terminals
+                .iter_mut()
+                .find(|terminal| {
+                    terminal.equipment.component_type() == equipment_type
+                        && terminal.terminal == number
+                })
+                .unwrap();
+            let component = component("terminal", id);
+            terminal.component = Some(component.clone());
+            terminal.connected = connected;
+            terminal.active_power_mw = Some(p);
+            terminal.reactive_power_mvar = Some(q);
+            detailed.component_metadata.push(ComponentMetadata {
+                component,
+                name: None,
+                equipment_container: None,
+                aliases: Vec::new(),
+                external_identifiers: vec![ExternalIdentifier {
+                    value: id.into(),
+                    authority: Some("CGMES".into()),
+                }],
+                properties: std::collections::BTreeMap::new(),
+                fictitious: false,
+            });
+        }
+
+        let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        let parsed = read::read_cgmes_documents(output.files, Some("terminal-identity")).unwrap();
+        let detailed = parsed.network.detailed_connectivity().as_deref().unwrap();
+        for (equipment_type, number, id, connected, p, q) in expected {
+            let terminal = detailed
+                .terminals
+                .iter()
+                .find(|terminal| {
+                    terminal.equipment.component_type() == equipment_type
+                        && terminal.terminal == number
+                })
+                .unwrap();
+            assert_eq!(terminal.component.as_ref().unwrap().local_id(), id);
+            assert_eq!(terminal.connected, connected);
+            assert_eq!(terminal.active_power_mw, Some(p));
+            assert_eq!(terminal.reactive_power_mvar, Some(q));
+        }
+    }
+
+    #[test]
+    fn voltage_level_buses_seed_topological_nodes() {
+        let mut network = detailed_network();
+        network.loads_mut().clear();
+        network.generators_mut().clear();
+        network.branches_mut().clear();
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        detailed.bus_breaker_buses.clear();
+        detailed.calculated_buses.clear();
+        detailed.connectivity_nodes.clear();
+        detailed.busbar_sections.clear();
+        detailed.terminals.clear();
+        detailed.switches.clear();
+
+        network.validate().unwrap();
+        let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        let topology = output
+            .files
+            .iter()
+            .find(|(name, _)| name.ends_with("_TP.xml"))
+            .map(|(_, text)| text)
+            .unwrap();
+        assert_eq!(topology.matches("<cim:TopologicalNode ").count(), 2);
+        assert_eq!(
+            topology
+                .matches("<cim:TopologicalNode.ConnectivityNodeContainer ")
+                .count(),
+            2
+        );
+
+        let reparsed =
+            read::read_cgmes_documents(output.files, Some("voltage-level-buses")).unwrap();
+        assert_eq!(reparsed.network.buses().len(), 2);
+    }
+
+    #[test]
+    fn partial_detailed_topology_preserves_every_balanced_bus() {
+        let mut network = detailed_network();
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        let second_bus = component("bus", "tn-B");
+        let second_node = component("connectivity_node", "node-B");
+        detailed.voltage_levels[0]
+            .buses
+            .retain(|bus| *bus != BusId(2));
+        detailed
+            .bus_breaker_buses
+            .retain(|bus| bus.component != second_bus);
+        detailed
+            .connectivity_nodes
+            .retain(|node| node.component != second_node);
+        detailed.terminals.retain(|terminal| {
+            terminal.bus.as_ref() != Some(&second_bus)
+                && terminal.node.as_ref() != Some(&second_node)
+        });
+        detailed.switches.clear();
+        network.validate().unwrap();
+
+        for version in [CgmesVersion::V2_4_15, CgmesVersion::V3_0] {
+            let output = write::write_cgmes(&network, version).unwrap();
+            assert!(output.warnings.iter().any(|warning| {
+                warning.contains("balanced bus 2 is absent from detailed connectivity")
+                    && warning.contains("generated VoltageLevel and ConnectivityNode")
+            }));
+            let topology = output
+                .files
+                .iter()
+                .find(|(name, _)| name.ends_with("_TP.xml"))
+                .map(|(_, text)| text)
+                .unwrap();
+            assert_eq!(topology.matches("<cim:TopologicalNode ").count(), 2);
+
+            let parsed =
+                read::read_cgmes_documents(output.files, Some("partial-topology")).unwrap();
+            assert_eq!(parsed.network.buses().len(), 2);
+            assert!(parsed.network.buses().iter().any(|bus| bus.id == BusId(2)));
+            assert_eq!(parsed.network.loads().len(), 1);
+            assert_eq!(parsed.network.branches().len(), 1);
+        }
+    }
+
+    #[test]
+    fn xiidm_node_breaker_calculated_bus_is_emitted_as_a_cgmes_topological_node() {
+        let source = r#"<?xml version="1.0" encoding="UTF-8"?>
+<iidm:network xmlns:iidm="http://www.powsybl.org/schema/iidm/1_17" id="nodes" caseDate="2025-01-01T00:00:00Z" forecastDistance="0" sourceFormat="test" minimumValidationLevel="STEADY_STATE_HYPOTHESIS">
+  <iidm:substation id="S">
+    <iidm:voltageLevel id="VL" nominalV="110" topologyKind="NODE_BREAKER">
+      <iidm:nodeBreakerTopology>
+        <iidm:bus v="110" angle="0" nodes="0,1,2"/>
+        <iidm:busbarSection id="BBS" node="2"/>
+        <iidm:switch id="BR" kind="BREAKER" open="false" node1="1" node2="2"/>
+        <iidm:internalConnection node1="0" node2="1"/>
+      </iidm:nodeBreakerTopology>
+      <iidm:generator id="G" energySource="OTHER" minP="0" maxP="10" voltageRegulatorOn="true" targetP="5" node="0">
+        <iidm:minMaxReactiveLimits minQ="-2" maxQ="2"/>
+      </iidm:generator>
+    </iidm:voltageLevel>
+  </iidm:substation>
+</iidm:network>"#;
+        let mut xiidm_diagnostics = Diagnostics::new();
+        let mut network =
+            crate::format::xiidm::parse_xiidm_source(source, &mut xiidm_diagnostics).unwrap();
+        let detailed = network.detailed_connectivity().as_deref().unwrap();
+        assert!(detailed.bus_breaker_buses.is_empty());
+        assert_eq!(detailed.calculated_buses.len(), 1);
+        assert_eq!(detailed.calculated_buses[0].nodes.len(), 3);
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        for node in &mut detailed.connectivity_nodes {
+            node.calculated_bus = None;
+        }
+        assert!(
+            detailed
+                .connectivity_nodes
+                .iter()
+                .all(|node| node.calculated_bus.is_none())
+        );
+
+        let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        let topology = output
+            .files
+            .iter()
+            .find(|(name, _)| name.ends_with("_TP.xml"))
+            .map(|(_, text)| text)
+            .unwrap();
+        assert_eq!(topology.matches("<cim:TopologicalNode ").count(), 1);
+        assert_eq!(
+            topology
+                .matches("<cim:ConnectivityNode.TopologicalNode ")
+                .count(),
+            3
+        );
+
+        let reparsed = read::read_cgmes_documents(output.files, Some("node-breaker")).unwrap();
+        assert_eq!(reparsed.network.buses().len(), 1);
+        let reparsed_detailed = reparsed.network.detailed_connectivity().as_deref().unwrap();
+        assert_eq!(reparsed_detailed.bus_breaker_buses.len(), 1);
+        assert_eq!(reparsed_detailed.connectivity_nodes.len(), 3);
+        assert!(
+            reparsed_detailed
+                .connectivity_nodes
+                .iter()
+                .all(|node| node.calculated_bus == Some(BusId::new(1)))
+        );
+    }
+
+    #[test]
+    fn calculated_bus_node_conflicts_are_rejected() {
+        let mut network = detailed_network();
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        let voltage_level = detailed.voltage_levels[0].component.clone();
+        let node = detailed.connectivity_nodes[1].component.clone();
+        detailed.calculated_buses.push(CalculatedBus {
+            voltage_level: voltage_level.clone(),
+            calculated_bus: BusId(1),
+            nodes: vec![node.clone()],
+            voltage_kv: None,
+            angle_degrees: None,
+        });
+
+        let error = network.validate().unwrap_err().to_string();
+        assert!(error.contains(&node.to_string()), "{error}");
+        assert!(error.contains('1') && error.contains('2'), "{error}");
+
+        let mut network = detailed_network();
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        let node = detailed.connectivity_nodes[0].component.clone();
+        for connectivity_node in &mut detailed.connectivity_nodes {
+            connectivity_node.calculated_bus = None;
+        }
+        detailed.calculated_buses.extend([
+            CalculatedBus {
+                voltage_level: voltage_level.clone(),
+                calculated_bus: BusId(1),
+                nodes: vec![node.clone()],
+                voltage_kv: None,
+                angle_degrees: None,
+            },
+            CalculatedBus {
+                voltage_level,
+                calculated_bus: BusId(2),
+                nodes: vec![node.clone()],
+                voltage_kv: None,
+                angle_degrees: None,
+            },
+        ]);
+        let error = network.validate().unwrap_err().to_string();
+        assert!(error.contains(&node.to_string()), "{error}");
+        assert!(error.contains('1') && error.contains('2'), "{error}");
+    }
+
+    #[test]
+    fn mixed_voltage_level_topologies_emit_complete_node_breaker_connectivity() {
+        let network = mixed_topology_network();
+        let original = network.detailed_connectivity().as_deref().unwrap();
+        assert_eq!(
+            original
+                .voltage_levels
+                .iter()
+                .filter(|level| level.topology_kind == TopologyKind::NodeBreaker)
+                .count(),
+            1
+        );
+        assert_eq!(
+            original
+                .voltage_levels
+                .iter()
+                .filter(|level| level.topology_kind == TopologyKind::BusBreaker)
+                .count(),
+            1
+        );
+        let expected_counts = (
+            network.buses().len(),
+            network.branches().len(),
+            network.generators().len(),
+            network.loads().len(),
+        );
+
+        let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        assert!(output.warnings.iter().any(|warning| {
+            warning.contains("contains both node breaker and bus breaker VoltageLevels")
+                && warning.contains("promotes 1 bus breaker VoltageLevel(s)")
+                && warning.contains("one ConnectivityNode per TopologicalNode")
+        }));
+        let parsed = read::read_cgmes_documents(output.files, Some("mixed-topology")).unwrap();
+        let detailed = parsed.network.detailed_connectivity().as_deref().unwrap();
+        let generator_terminal = detailed
+            .terminals
+            .iter()
+            .find(|terminal| terminal.equipment.component_type() == "generator")
+            .unwrap();
+        let load_terminal = detailed
+            .terminals
+            .iter()
+            .find(|terminal| terminal.equipment.component_type() == "load")
+            .unwrap();
+        assert!(generator_terminal.node.is_some());
+        assert!(load_terminal.node.is_some());
+        assert_eq!(
+            detailed
+                .voltage_levels
+                .iter()
+                .find(|level| level.component == generator_terminal.voltage_level)
+                .map(|level| level.topology_kind),
+            Some(TopologyKind::NodeBreaker)
+        );
+        assert_eq!(
+            detailed
+                .voltage_levels
+                .iter()
+                .find(|level| level.component == load_terminal.voltage_level)
+                .map(|level| level.topology_kind),
+            Some(TopologyKind::NodeBreaker)
+        );
+        assert_eq!(
+            (
+                parsed.network.buses().len(),
+                parsed.network.branches().len(),
+                parsed.network.generators().len(),
+                parsed.network.loads().len(),
+            ),
+            expected_counts
+        );
+    }
+
+    #[test]
+    fn projected_converter_only_transformer_connection_is_diagnosed() {
+        let mut network = mixed_topology_network();
+        network.branches_mut()[0].tap = 1.0;
+        network.loads_mut().clear();
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        detailed
+            .terminals
+            .retain(|terminal| terminal.equipment.component_type() != "load");
+
+        let converter = component("voltage_source_converter", "converter-A");
+        let dc_node_1 = component("dc_node", "dc-node-1");
+        let dc_node_2 = component("dc_node", "dc-node-2");
+        let dc_terminal = |node: &ComponentId| DcTerminal {
+            component: None,
+            sequence_number: None,
+            dc_node: Some(node.clone()),
+            dc_topological_node: None,
+            polarity: None,
+            connected: Some(true),
+            active_power_mw: None,
+            current_a: None,
+        };
+        detailed.dc_series_devices.push(DcSeriesDevice {
+            component: component("dc_series_device", "series-A"),
+            equipment_container: None,
+            dc_terminal1: dc_terminal(&dc_node_1),
+            dc_terminal2: dc_terminal(&dc_node_2),
+            rated_dc_voltage_kv: None,
+            resistance_ohm: None,
+            inductance_h: None,
+        });
+        detailed.voltage_source_converters.push(
+            serde_json::from_value(serde_json::json!({
+                "component": converter,
+                "dc_terminal1": dc_terminal(&dc_node_1),
+                "dc_terminal2": dc_terminal(&dc_node_2),
+            }))
+            .unwrap(),
+        );
+        detailed.terminals.push(Terminal {
+            component: None,
+            equipment: converter,
+            terminal: 1,
+            voltage_level: component("voltage_level", "vl-B"),
+            bus: Some(component("bus", "tn-B")),
+            connectable_bus: Some(component("bus", "tn-B")),
+            node: None,
+            connected: true,
+            active_power_mw: None,
+            reactive_power_mvar: None,
+        });
+
+        let detailed = network.detailed_connectivity().as_deref().unwrap();
+        let mut warnings =
+            CgmesDiagnostics::new(&crate::diagnostics::codes::EMIT_CGMES.record_dropped);
+        write::warn_pow_sybl_projected_transformer_connections(&network, detailed, &mut warnings);
+        let branch = &network.branches()[0];
+        let branch_id = branch.uid.as_deref().unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains(&format!("transformer `branch/{branch_id}` terminal 2")));
+        assert!(warnings[0].contains("configured bus `bus/tn-B`"));
+        assert!(warnings[0].contains("voltage_source_converter/converter-A"));
+        assert!(warnings[0].contains("unsupported BACK_TO_BACK"));
+        assert!(warnings[0].contains("reloads this transformer terminal as disconnected"));
+    }
+
+    const PROJECTED_VOLTAGE_LEVEL_MRID: &str = "0f268ca2-545f-4acf-b01d-b223a0c4e30d";
+    const PROJECTED_BUSBAR_MRID: &str = "9fa5c795-e6b1-4226-a9fc-e506b4fe68f4";
+
+    fn mixed_topology_network_with_busbar() -> BalancedNetwork {
+        let mut network = mixed_topology_network();
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        let voltage_level = component("voltage_level", "vl-B");
+        let bus = component("bus", "tn-B");
+        let node = component("connectivity_node", "terminal-busbar-b");
+        let busbar = component("busbar_section", "bbs-B");
+        detailed
+            .component_metadata
+            .iter_mut()
+            .find(|metadata| metadata.component == voltage_level)
+            .unwrap()
+            .external_identifiers
+            .push(ExternalIdentifier {
+                value: PROJECTED_VOLTAGE_LEVEL_MRID.into(),
+                authority: Some("CGMES".into()),
+            });
+        detailed.component_metadata.push(ComponentMetadata {
+            component: busbar.clone(),
+            name: Some("South busbar".into()),
+            equipment_container: Some(voltage_level.clone()),
+            aliases: Vec::new(),
+            external_identifiers: vec![ExternalIdentifier {
+                value: PROJECTED_BUSBAR_MRID.into(),
+                authority: Some("CGMES".into()),
+            }],
+            properties: std::collections::BTreeMap::new(),
+            fictitious: false,
+        });
+        detailed.connectivity_nodes.push(ConnectivityNode {
+            component: node.clone(),
+            voltage_level: voltage_level.clone(),
+            node_number: None,
+            calculated_bus: Some(BusId(2)),
+        });
+        detailed.busbar_sections.push(BusbarSection {
+            component: busbar.clone(),
+            voltage_level: voltage_level.clone(),
+            node: node.clone(),
+        });
+        detailed.terminals.push(Terminal {
+            component: None,
+            equipment: busbar,
+            terminal: 1,
+            voltage_level,
+            bus: Some(bus.clone()),
+            connectable_bus: Some(bus),
+            node: Some(node),
+            connected: true,
+            active_power_mw: None,
+            reactive_power_mvar: None,
+        });
+        assert_eq!(
+            detailed
+                .voltage_levels
+                .iter()
+                .find(|level| level.component == component("voltage_level", "vl-B"))
+                .map(|level| level.topology_kind),
+            Some(TopologyKind::BusBreaker)
+        );
+        network
+    }
+
+    #[test]
+    fn bus_breaker_busbar_is_retained_during_mixed_topology_projection() {
+        let network = mixed_topology_network_with_busbar();
+        let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        let eq = output
+            .files
+            .iter()
+            .find(|(name, _)| name.ends_with("_EQ.xml"))
+            .map(|(_, xml)| xml)
+            .unwrap();
+        assert!(eq.contains("<cim:IdentifiedObject.name>South busbar</"));
+        assert!(eq.contains(&format!(
+            "<cim:BusbarSection rdf:ID=\"_{PROJECTED_BUSBAR_MRID}\">"
+        )));
+        assert!(eq.contains(&format!(
+            "<cim:Equipment.EquipmentContainer rdf:resource=\"#_{PROJECTED_VOLTAGE_LEVEL_MRID}\"/>"
+        )));
+        assert!(eq.contains("<cim:ConductingEquipment.BaseVoltage rdf:resource=\"#"));
+        assert!(!output.warnings.iter().any(|warning| {
+            warning.contains("BusbarSection `busbar_section/bbs-B`")
+                && warning.contains("was omitted")
+        }));
+        assert!(output.warnings.iter().any(|warning| {
+            warning.contains("contains both node breaker and bus breaker VoltageLevels")
+                && warning.contains("one ConnectivityNode per TopologicalNode")
+        }));
+
+        let parsed = read::read_cgmes_documents(output.files, Some("bus-breaker-busbar")).unwrap();
+        let detailed = parsed.network.detailed_connectivity().as_deref().unwrap();
+        let level_component = detailed
+            .component_metadata
+            .iter()
+            .find(|metadata| {
+                metadata.external_identifiers.iter().any(|identifier| {
+                    identifier.authority.as_deref() == Some("CGMES")
+                        && identifier.value == PROJECTED_VOLTAGE_LEVEL_MRID
+                })
+            })
+            .map(|metadata| &metadata.component)
+            .unwrap();
+        let level = detailed
+            .voltage_levels
+            .iter()
+            .find(|level| level.component == *level_component)
+            .unwrap();
+        assert_eq!(level.topology_kind, TopologyKind::NodeBreaker);
+        assert!((level.nominal_kv - 230.0).abs() < 1e-12);
+
+        let busbar_metadata = detailed
+            .component_metadata
+            .iter()
+            .find(|metadata| {
+                metadata.external_identifiers.iter().any(|identifier| {
+                    identifier.authority.as_deref() == Some("CGMES")
+                        && identifier.value == PROJECTED_BUSBAR_MRID
+                })
+            })
+            .unwrap();
+        assert_eq!(busbar_metadata.name.as_deref(), Some("South busbar"));
+        assert_eq!(
+            busbar_metadata.equipment_container.as_ref(),
+            Some(level_component)
+        );
+        let parsed_busbar = detailed
+            .busbar_sections
+            .iter()
+            .find(|record| record.component == busbar_metadata.component)
+            .unwrap();
+        assert_eq!(&parsed_busbar.voltage_level, level_component);
+        let parsed_terminal = detailed
+            .terminals
+            .iter()
+            .find(|terminal| terminal.equipment == parsed_busbar.component)
+            .unwrap();
+        assert_eq!(parsed_terminal.node.as_ref(), Some(&parsed_busbar.node));
+        let parsed_bus = detailed
+            .bus_breaker_buses
+            .iter()
+            .find(|record| record.calculated_bus == Some(BusId(2)))
+            .unwrap();
+        assert_eq!(parsed_terminal.bus.as_ref(), Some(&parsed_bus.component));
+        let parsed_node = detailed
+            .connectivity_nodes
+            .iter()
+            .find(|record| record.component == parsed_busbar.node)
+            .unwrap();
+        assert_eq!(&parsed_node.voltage_level, level_component);
+        assert_eq!(parsed_node.calculated_bus, Some(BusId(2)));
+    }
+
+    #[test]
+    fn exact_sv_observations_round_trip_without_filling_absent_values() {
+        let mut network = detailed_network();
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        detailed.bus_breaker_buses[0].voltage_kv = Some(231.25);
+        detailed.bus_breaker_buses[0].angle_degrees = Some(-2.75);
+        let expected_flows = [
+            ("load", 1, 20.25, 5.5),
+            ("generator", 1, -20.5, -4.75),
+            ("branch", 1, 18.0, 3.0),
+            ("branch", 2, -17.75, -2.5),
+        ];
+        for (component_type, sequence, active, reactive) in expected_flows {
+            let terminal = detailed
+                .terminals
+                .iter_mut()
+                .find(|terminal| {
+                    terminal.equipment.component_type() == component_type
+                        && terminal.terminal == sequence
+                })
+                .unwrap();
+            terminal.active_power_mw = Some(active);
+            terminal.reactive_power_mvar = Some(reactive);
+        }
+
+        let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        let sv = output
+            .files
+            .iter()
+            .find(|(name, _)| name.ends_with("_SV.xml"))
+            .map(|(_, xml)| xml)
+            .unwrap();
+        assert_eq!(sv.matches("<cim:SvPowerFlow rdf:ID=").count(), 4);
+        assert_eq!(sv.matches("<cim:SvVoltage rdf:ID=").count(), 1);
+
+        let parsed = read::read_cgmes_documents(output.files, Some("exact-sv")).unwrap();
+        let detailed = parsed.network.detailed_connectivity().as_deref().unwrap();
+        for (component_type, sequence, active, reactive) in expected_flows {
+            let terminal = detailed
+                .terminals
+                .iter()
+                .find(|terminal| {
+                    terminal.equipment.component_type() == component_type
+                        && terminal.terminal == sequence
+                })
+                .unwrap();
+            assert_eq!(terminal.active_power_mw, Some(active));
+            assert_eq!(terminal.reactive_power_mvar, Some(reactive));
+        }
+        let first = detailed
+            .bus_breaker_buses
+            .iter()
+            .find(|bus| bus.calculated_bus == Some(BusId(1)))
+            .unwrap();
+        let second = detailed
+            .bus_breaker_buses
+            .iter()
+            .find(|bus| bus.calculated_bus == Some(BusId(2)))
+            .unwrap();
+        assert_eq!(first.voltage_kv, Some(231.25));
+        assert_eq!(first.angle_degrees, Some(-2.75));
+        assert_eq!(second.voltage_kv, None);
+        assert_eq!(second.angle_degrees, None);
+    }
+
+    #[test]
+    fn partial_sv_power_flow_is_diagnosed_instead_of_silently_dropped() {
+        let mut network = detailed_network();
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        let load_terminal = detailed
+            .terminals
+            .iter_mut()
+            .find(|terminal| terminal.equipment.component_type() == "load")
+            .unwrap();
+        load_terminal.active_power_mw = Some(12.5);
+        load_terminal.reactive_power_mvar = None;
+
+        let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        assert!(output.warnings.iter().any(|warning| {
+            warning.contains("retained active power field 12.5 MW without reactive power")
+                && warning.contains("CGMES SvPowerFlow requires both p and q")
+        }));
+        let sv = output
+            .files
+            .iter()
+            .find(|(name, _)| name.ends_with("_SV.xml"))
+            .map(|(_, xml)| xml)
+            .unwrap();
+        assert!(!sv.contains("<cim:SvPowerFlow rdf:ID="));
+
+        let mut network = detailed_network();
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        detailed.bus_breaker_buses[0].voltage_kv = Some(231.0);
+        detailed.bus_breaker_buses[0].angle_degrees = None;
+        let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        assert!(output.warnings.iter().any(|warning| {
+            warning.contains("retained voltage field 231 kV without an angle")
+                && warning.contains("CGMES SvVoltage requires both v and angle")
+        }));
+        let sv = output
+            .files
+            .iter()
+            .find(|(name, _)| name.ends_with("_SV.xml"))
+            .map(|(_, xml)| xml)
+            .unwrap();
+        assert!(!sv.contains("<cim:SvVoltage rdf:ID="));
+    }
+
+    #[test]
+    fn flat_branch_and_switch_solution_values_emit_as_sv_power_flow() {
+        let mut network = network();
+        network.branches_mut()[0].solution = Some(BranchSolution {
+            pf: 18.0,
+            qf: 3.0,
+            pt: -17.75,
+            qt: -2.5,
+        });
+        let mut switch = Switch::new(BusId(1), BusId(2), false);
+        switch.uid = Some("coupler".into());
+        switch.current_rating = Some(500.0);
+        switch.thermal_rating = Some(100.0);
+        switch.pf = Some(5.0);
+        switch.qf = Some(1.0);
+        switch.pt = Some(-4.9);
+        switch.qt = Some(-0.9);
+        network.switches_mut().push(switch);
+
+        let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        assert!(output.warnings.iter().any(|warning| {
+            warning.info.code == crate::diagnostics::codes::EMIT_CGMES.field_dropped.code
+                && warning.contains("switch `coupler` thermal rating 100 MVA")
+                && warning.contains("rated current")
+        }));
+        let parsed = read::read_cgmes_documents(output.files, Some("flat-solutions")).unwrap();
+        let detailed = parsed.network.detailed_connectivity().as_deref().unwrap();
+        assert_eq!(parsed.network.branches().len(), 1);
+        assert_eq!(parsed.network.switches().len(), 1);
+        let branch_id = parsed.network.branches()[0].uid.as_deref().unwrap();
+        let switch_id = parsed.network.switches()[0].uid.as_deref().unwrap();
+        for (component_type, local_id, side, active, reactive) in [
+            ("branch", branch_id, 1, 18.0, 3.0),
+            ("branch", branch_id, 2, -17.75, -2.5),
+            ("switch", switch_id, 1, 5.0, 1.0),
+            ("switch", switch_id, 2, -4.9, -0.9),
+        ] {
+            let terminal = detailed
+                .terminals
+                .iter()
+                .find(|terminal| {
+                    terminal.equipment.component_type() == component_type
+                        && terminal.equipment.local_id() == local_id
+                        && terminal.terminal == side
+                })
+                .unwrap();
+            assert_eq!(terminal.active_power_mw, Some(active));
+            assert_eq!(terminal.reactive_power_mvar, Some(reactive));
+        }
+    }
+
+    #[test]
+    fn detailed_switch_uses_balanced_solution_values_when_terminal_values_are_absent() {
+        let mut network = detailed_network();
+        let mut switch = Switch::new(BusId(1), BusId(2), false);
+        switch.uid = Some("breaker-A".into());
+        switch.current_rating = Some(500.0);
+        switch.thermal_rating = Some(100.0);
+        switch.pf = Some(5.0);
+        switch.qf = Some(1.0);
+        switch.pt = Some(-4.9);
+        switch.qt = Some(-0.9);
+        network.switches_mut().push(switch);
+
+        let check = |network: &BalancedNetwork, label: &str| {
+            let output = write::write_cgmes(network, CgmesVersion::V3_0).unwrap();
+            assert!(output.warnings.iter().any(|warning| {
+                warning.info.code == crate::diagnostics::codes::EMIT_CGMES.field_dropped.code
+                    && warning.contains("switch `breaker-A` thermal rating 100 MVA")
+            }));
+            let parsed = read::read_cgmes_documents(output.files, Some(label)).unwrap();
+            let detailed = parsed.network.detailed_connectivity().as_deref().unwrap();
+            assert_eq!(parsed.network.switches().len(), 1);
+            let switch_id = parsed.network.switches()[0].uid.as_deref().unwrap();
+            for (side, active, reactive) in [(1, 5.0, 1.0), (2, -4.9, -0.9)] {
+                let terminal = detailed
+                    .terminals
+                    .iter()
+                    .find(|terminal| {
+                        terminal.equipment.component_type() == "switch"
+                            && terminal.equipment.local_id() == switch_id
+                            && terminal.terminal == side
+                    })
+                    .unwrap();
+                assert_eq!(terminal.active_power_mw, Some(active));
+                assert_eq!(terminal.reactive_power_mvar, Some(reactive));
+            }
+        };
+
+        check(&network, "detailed-switch-solution");
+
+        let mut without_topology_switch = network;
+        Arc::make_mut(
+            without_topology_switch
+                .detailed_connectivity_mut()
+                .as_mut()
+                .unwrap(),
+        )
+        .switches
+        .clear();
+        check(
+            &without_topology_switch,
+            "detailed-terminals-with-balanced-switch",
+        );
+    }
+
+    #[test]
     fn generator_voltage_control_round_trips_with_exact_remote_terminal() {
+        const TERMINAL_MRID: &str = "de305d54-75b4-431b-adb2-eb6b9e546099";
         let mut network = detailed_network();
         let regulating_terminal = TerminalReference {
             equipment: component("load", network.loads()[0].uid.as_deref().unwrap()),
             terminal: 1,
         };
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        let terminal_component = component("terminal", "load-terminal");
+        detailed
+            .terminals
+            .iter_mut()
+            .find(|terminal| {
+                terminal.equipment == regulating_terminal.equipment && terminal.terminal == 1
+            })
+            .unwrap()
+            .component = Some(terminal_component.clone());
+        detailed.component_metadata.push(ComponentMetadata {
+            component: terminal_component,
+            name: Some("Load terminal".into()),
+            equipment_container: None,
+            aliases: Vec::new(),
+            external_identifiers: vec![ExternalIdentifier {
+                value: TERMINAL_MRID.into(),
+                authority: Some("CGMES".into()),
+            }],
+            properties: std::collections::BTreeMap::new(),
+            fictitious: false,
+        });
         let generator = &mut network.generators_mut()[0];
         generator.voltage_regulation_on = false;
         generator.regulated_bus = Some(BusId(2));
@@ -1428,15 +3451,55 @@ mod tests {
             .find(|(name, _)| name.ends_with("_SSH.xml"))
             .map(|(_, text)| text)
             .unwrap();
-        assert!(eq.contains("<cim:RegulatingControl.Terminal rdf:resource="));
+        assert!(eq.contains(&format!("<cim:Terminal rdf:ID=\"_{TERMINAL_MRID}\">")));
+        assert!(eq.contains(&format!(
+            "<cim:RegulatingControl.Terminal rdf:resource=\"#_{TERMINAL_MRID}\"/>"
+        )));
         assert!(
             ssh.contains("<cim:RegulatingControl.enabled>false</cim:RegulatingControl.enabled>")
         );
+        assert!(
+            ssh.contains("<cim:RegulatingControl.discrete>false</cim:RegulatingControl.discrete>")
+        );
+        assert!(ssh.contains(
+            "<cim:RegulatingControl.targetValueUnitMultiplier rdf:resource=\"http://iec.ch/TC57/CIM100#UnitMultiplier.k\"/>"
+        ));
+        assert!(ssh.contains(
+            "<cim:RegulatingCondEq.controlEnabled>false</cim:RegulatingCondEq.controlEnabled>"
+        ));
+        assert!(ssh.contains(
+            "<cim:SynchronousMachine.operatingMode rdf:resource=\"http://iec.ch/TC57/CIM100#SynchronousMachineOperatingMode.generator\"/>"
+        ));
 
         let parsed = read::read_cgmes_documents(output.files, Some("generator-control")).unwrap();
         let generator = &parsed.network.generators()[0];
         assert!(!generator.voltage_regulation_on);
         assert_eq!(generator.regulated_bus, Some(BusId(2)));
+        let detailed = parsed.network.detailed_connectivity().as_deref().unwrap();
+        let terminal = detailed
+            .terminals
+            .iter()
+            .find(|terminal| {
+                terminal
+                    .component
+                    .as_ref()
+                    .is_some_and(|component| component.local_id() == TERMINAL_MRID)
+            })
+            .unwrap();
+        assert_eq!(terminal.terminal, 1);
+        assert_eq!(
+            terminal.equipment.local_id(),
+            parsed.network.loads()[0].uid.as_deref().unwrap()
+        );
+        let component = terminal.component.as_ref().unwrap();
+        let metadata = detailed
+            .component_metadata
+            .iter()
+            .find(|metadata| metadata.component == *component)
+            .unwrap();
+        assert!(metadata.external_identifiers.iter().any(|identifier| {
+            identifier.value == TERMINAL_MRID && identifier.authority.as_deref() == Some("CGMES")
+        }));
         let regulating_terminal = generator.regulating_terminal.as_ref().unwrap();
         assert_eq!(regulating_terminal.terminal, 1);
         assert_eq!(
@@ -1563,6 +3626,7 @@ mod tests {
             detailed.component_metadata.push(ComponentMetadata {
                 component,
                 name: Some(name.into()),
+                equipment_container: None,
                 aliases: Vec::new(),
                 external_identifiers: vec![ExternalIdentifier {
                     value: mrid.into(),
@@ -1721,7 +3785,7 @@ mod tests {
                 &second_dc_node,
                 &second_dc_topological_node,
                 None,
-                false,
+                true,
                 None,
             ),
             dc_terminal2: dc_terminal(
@@ -1730,7 +3794,7 @@ mod tests {
                 &third_dc_node,
                 &third_dc_topological_node,
                 None,
-                false,
+                true,
                 None,
             ),
             kind: DcSwitchKind::Breaker,
@@ -1748,17 +3812,19 @@ mod tests {
         let second_node = component("connectivity_node", "node-B");
         detailed.terminals.extend([
             Terminal {
+                component: None,
                 equipment: voltage_source.clone(),
                 terminal: 1,
                 voltage_level: voltage_level.clone(),
                 bus: Some(first_bus.clone()),
                 connectable_bus: Some(first_bus),
                 node: Some(first_node),
-                connected: true,
+                connected: false,
                 active_power_mw: Some(150.0),
                 reactive_power_mvar: Some(20.0),
             },
             Terminal {
+                component: None,
                 equipment: line_commutated.clone(),
                 terminal: 1,
                 voltage_level,
@@ -1902,6 +3968,110 @@ mod tests {
                 alpha_degrees: Some(12.5),
                 gamma_degrees: Some(18.5),
             });
+
+        let mut assignment_only = network.clone();
+        let assignment_detailed = Arc::make_mut(
+            assignment_only
+                .detailed_connectivity_mut()
+                .as_mut()
+                .unwrap(),
+        );
+        for terminal in assignment_detailed.terminals.iter_mut().filter(|terminal| {
+            matches!(
+                terminal.equipment.component_type(),
+                "voltage_source_converter" | "line_commutated_converter"
+            )
+        }) {
+            terminal.active_power_mw = None;
+            terminal.reactive_power_mvar = None;
+        }
+        let assignment_output = write::write_cgmes(&assignment_only, CgmesVersion::V3_0).unwrap();
+        let assignment_parsed =
+            read::read_cgmes_documents(assignment_output.files, Some("converter-assignment"))
+                .unwrap();
+        let assignment_detailed = assignment_parsed
+            .network
+            .detailed_connectivity()
+            .as_deref()
+            .unwrap();
+        assert_eq!(
+            assignment_detailed.voltage_source_converters[0].active_power_at_pcc_mw,
+            Some(150.0)
+        );
+        assert_eq!(
+            assignment_detailed.voltage_source_converters[0].reactive_power_at_pcc_mvar,
+            Some(20.0)
+        );
+        assert!(
+            assignment_detailed
+                .terminals
+                .iter()
+                .filter(|terminal| {
+                    matches!(
+                        terminal.equipment.component_type(),
+                        "voltage_source_converter" | "line_commutated_converter"
+                    )
+                })
+                .all(|terminal| terminal.active_power_mw.is_none()
+                    && terminal.reactive_power_mvar.is_none())
+        );
+
+        let mut generic_converter_limits = network.clone();
+        let generic_detailed = Arc::make_mut(
+            generic_converter_limits
+                .detailed_connectivity_mut()
+                .as_mut()
+                .unwrap(),
+        );
+        let converter_component = generic_detailed.voltage_source_converters[0]
+            .component
+            .clone();
+        let limits = generic_detailed.voltage_source_converters[0]
+            .reactive_limits
+            .take()
+            .unwrap();
+        generic_detailed
+            .equipment_reactive_limits
+            .push(EquipmentReactiveLimits {
+                equipment: converter_component,
+                limits,
+            });
+        let generic_output =
+            write::write_cgmes(&generic_converter_limits, CgmesVersion::V3_0).unwrap();
+        assert!(
+            generic_output
+                .files
+                .iter()
+                .any(|(_, xml)| xml.contains("<cim:VsCapabilityCurve "))
+        );
+
+        let mut conflicting_converter_limits = network.clone();
+        let conflicting_detailed = Arc::make_mut(
+            conflicting_converter_limits
+                .detailed_connectivity_mut()
+                .as_mut()
+                .unwrap(),
+        );
+        let converter_component = conflicting_detailed.voltage_source_converters[0]
+            .component
+            .clone();
+        conflicting_detailed
+            .equipment_reactive_limits
+            .push(EquipmentReactiveLimits {
+                equipment: converter_component,
+                limits: ReactiveLimits::MinMax(MinMaxReactiveLimits {
+                    minimum_reactive_power_mvar: -1.0,
+                    maximum_reactive_power_mvar: 1.0,
+                    properties: std::collections::BTreeMap::new(),
+                }),
+            });
+        let error =
+            write::write_cgmes(&conflicting_converter_limits, CgmesVersion::V3_0).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("has conflicting direct and equipment reactive limits records")
+        );
 
         let mut missing_line_value = network.clone();
         Arc::make_mut(
@@ -2197,6 +4367,7 @@ mod tests {
         assert!(all_xml.contains("<cim:DCConductingEquipment.ratedUdc>315"));
         assert!(all_xml.contains("<cim:DCSeriesDevice.resistance>0.75"));
         assert!(all_xml.contains("<cim:DCSeriesDevice.inductance>0.015"));
+        assert!(all_xml.contains("<cim:Switch.open>true</cim:Switch.open>"));
         assert!(all_xml.contains("<cim:CsConverter.targetAlpha>12"));
         assert!(all_xml.contains("<cim:CsConverter.targetGamma>18"));
         assert!(all_xml.contains("<cim:CsConverter.targetIdc>450"));
@@ -2204,7 +4375,7 @@ mod tests {
             all_xml
                 .matches("<cim:ACDCTerminal.connected>false</cim:ACDCTerminal.connected>")
                 .count(),
-            2
+            1
         );
         assert!(!all_xml.contains("<cim:VsConverter.droop>0</cim:VsConverter.droop>"));
         assert!(!all_xml.contains("<cim:ACDCConverter.ratedUdc>1</"));
@@ -2218,6 +4389,11 @@ mod tests {
         assert!(all_xml.contains(
             "<cim:Curve.y2Unit rdf:resource=\"http://iec.ch/TC57/CIM100#UnitSymbol.VAr\"/>"
         ));
+        assert_eq!(all_xml.matches("<cim:SvPowerFlow rdf:ID=").count(), 2);
+        assert!(all_xml.contains("<cim:SvPowerFlow.p>150</cim:SvPowerFlow.p>"));
+        assert!(all_xml.contains("<cim:SvPowerFlow.q>20</cim:SvPowerFlow.q>"));
+        assert!(all_xml.contains("<cim:SvPowerFlow.p>-145</cim:SvPowerFlow.p>"));
+        assert!(all_xml.contains("<cim:SvPowerFlow.q>35</cim:SvPowerFlow.q>"));
 
         let mut unknown_style_files = output.files.clone();
         let eq = &mut unknown_style_files
@@ -2364,6 +4540,46 @@ mod tests {
             detailed.line_commutated_converters[0].operating_mode,
             Some(LineCommutatedConverterOperatingMode::Inverter)
         );
+        let voltage_source_terminal = detailed
+            .terminals
+            .iter()
+            .find(|terminal| terminal.equipment.component_type() == "voltage_source_converter")
+            .unwrap();
+        assert!(!voltage_source_terminal.connected);
+        assert!(voltage_source_terminal.bus.is_none());
+        assert!(voltage_source_terminal.node.is_some());
+        assert_eq!(voltage_source_terminal.active_power_mw, Some(150.0));
+        assert_eq!(voltage_source_terminal.reactive_power_mvar, Some(20.0));
+        let line_commutated_terminal = detailed
+            .terminals
+            .iter()
+            .find(|terminal| terminal.equipment.component_type() == "line_commutated_converter")
+            .unwrap();
+        assert_eq!(line_commutated_terminal.active_power_mw, Some(-145.0));
+        assert_eq!(line_commutated_terminal.reactive_power_mvar, Some(35.0));
+
+        let mut closed_network = network;
+        Arc::make_mut(closed_network.detailed_connectivity_mut().as_mut().unwrap()).dc_switches
+            [0]
+        .open = Some(false);
+        let closed = write::write_cgmes(&closed_network, CgmesVersion::V3_0).unwrap();
+        let closed_xml = closed
+            .files
+            .iter()
+            .map(|(_, xml)| xml.as_str())
+            .collect::<String>();
+        assert!(closed_xml.contains("<cim:Switch.open>false</cim:Switch.open>"));
+        let reparsed = read::read_cgmes_documents(closed.files, Some("closed-dc-switch")).unwrap();
+        assert_eq!(
+            reparsed
+                .network
+                .detailed_connectivity()
+                .as_deref()
+                .unwrap()
+                .dc_switches[0]
+                .open,
+            Some(false)
+        );
     }
 
     #[test]
@@ -2470,7 +4686,348 @@ mod tests {
     }
 
     #[test]
+    fn retained_load_and_switch_classes_survive_fresh_emission() {
+        let files = write::write_cgmes(&detailed_network(), CgmesVersion::V3_0)
+            .unwrap()
+            .files
+            .into_iter()
+            .map(|(name, text)| {
+                (
+                    name,
+                    text.replace("cim:EnergyConsumer", "cim:ConformLoad")
+                        .replace("cim:Breaker", "cim:Fuse"),
+                )
+            })
+            .collect();
+        let parsed = read::read_cgmes_documents(files, Some("retained-classes")).unwrap();
+        let detailed = parsed.network.detailed_connectivity().as_deref().unwrap();
+        assert!(detailed.component_metadata.iter().any(|metadata| {
+            metadata.component.component_type() == "load"
+                && metadata
+                    .properties
+                    .get(CGMES_CLASS_PROPERTY)
+                    .map(String::as_str)
+                    == Some("ConformLoad")
+        }));
+        assert!(detailed.component_metadata.iter().any(|metadata| {
+            metadata.component.component_type() == "switch"
+                && metadata
+                    .properties
+                    .get(CGMES_CLASS_PROPERTY)
+                    .map(String::as_str)
+                    == Some("Fuse")
+        }));
+
+        let fresh = write::write_cgmes(&parsed.network, CgmesVersion::V3_0).unwrap();
+        let equipment = &fresh
+            .files
+            .iter()
+            .find(|(name, _)| name.ends_with("_EQ.xml"))
+            .unwrap()
+            .1;
+        assert!(equipment.contains("<cim:ConformLoad "));
+        assert!(equipment.contains("<cim:Fuse "));
+        assert!(!equipment.contains("<cim:EnergyConsumer "));
+        assert!(!equipment.contains("<cim:Breaker "));
+    }
+
+    #[test]
+    fn external_network_injection_substitution_is_explicit() {
+        let files = write::write_cgmes(&detailed_network(), CgmesVersion::V3_0)
+            .unwrap()
+            .files;
+        let topological_node = files
+            .iter()
+            .find(|(name, _)| name.ends_with("_TP.xml"))
+            .and_then(|(_, text)| {
+                text.lines()
+                    .find(|line| line.contains("<cim:TopologicalNode rdf:ID="))
+            })
+            .and_then(|line| line.split("rdf:ID=\"").nth(1))
+            .and_then(|value| value.split('"').next())
+            .unwrap()
+            .trim_start_matches('_')
+            .to_string();
+        let equipment = r##"  <cim:ExternalNetworkInjection rdf:ID="_external-1">
+    <cim:ExternalNetworkInjection.maxP>100</cim:ExternalNetworkInjection.maxP>
+    <cim:ExternalNetworkInjection.minP>-100</cim:ExternalNetworkInjection.minP>
+    <cim:ExternalNetworkInjection.maxQ>50</cim:ExternalNetworkInjection.maxQ>
+    <cim:ExternalNetworkInjection.minQ>-50</cim:ExternalNetworkInjection.minQ>
+  </cim:ExternalNetworkInjection>
+  <cim:Terminal rdf:ID="_external-terminal">
+    <cim:Terminal.ConductingEquipment rdf:resource="#_external-1"/>
+    <cim:ACDCTerminal.sequenceNumber>1</cim:ACDCTerminal.sequenceNumber>
+  </cim:Terminal>
+"##;
+        let topology = format!(
+            r##"  <cim:Terminal rdf:about="#_external-terminal">
+    <cim:Terminal.TopologicalNode rdf:resource="#_{topological_node}"/>
+  </cim:Terminal>
+"##
+        );
+        let ssh = r##"  <cim:ExternalNetworkInjection rdf:about="#_external-1">
+    <cim:ExternalNetworkInjection.p>-30</cim:ExternalNetworkInjection.p>
+    <cim:ExternalNetworkInjection.q>-5</cim:ExternalNetworkInjection.q>
+  </cim:ExternalNetworkInjection>
+"##;
+        let files = insert_profile_records(files, equipment, Some(&topology), Some(ssh));
+        let parsed = read::read_cgmes_documents(files, Some("external-injection")).unwrap();
+        let generator = parsed
+            .network
+            .generators()
+            .iter()
+            .find(|generator| generator.uid.as_deref() == Some("external-1"))
+            .unwrap();
+        assert_eq!(generator.pg, 30.0);
+        assert_eq!(generator.qg, 5.0);
+        assert!(parsed.warnings.iter().any(|warning| {
+            warning.info.code == crate::diagnostics::codes::READ_CGMES_VALUE_APPROXIMATED.code
+                && warning.contains("ExternalNetworkInjection `external-1`")
+                && warning.contains("fresh CGMES output emits a SynchronousMachine")
+        }));
+        let fresh = write::write_cgmes(&parsed.network, CgmesVersion::V3_0).unwrap();
+        let equipment = &fresh
+            .files
+            .iter()
+            .find(|(name, _)| name.ends_with("_EQ.xml"))
+            .unwrap()
+            .1;
+        assert!(equipment.contains("<cim:SynchronousMachine "));
+        assert!(!equipment.contains("<cim:ExternalNetworkInjection "));
+    }
+
+    #[test]
+    fn conflicting_solution_observations_are_rejected() {
+        fn reference_in_first_block(text: &str, class: &str, property: &str) -> String {
+            let start = text.find(&format!("<cim:{class} ")).unwrap();
+            let end = text[start..]
+                .find(&format!("</cim:{class}>"))
+                .map(|offset| start + offset)
+                .unwrap();
+            text[start..end]
+                .lines()
+                .find(|line| line.contains(&format!("<cim:{property} ")))
+                .and_then(|line| line.split("rdf:resource=\"#").nth(1))
+                .and_then(|value| value.split('"').next())
+                .unwrap()
+                .to_string()
+        }
+        fn append_sv(files: &mut [(String, String)], record: &str) {
+            let (_, text) = files
+                .iter_mut()
+                .find(|(name, _)| name.ends_with("_SV.xml"))
+                .unwrap();
+            *text = text.replace("</rdf:RDF>", &format!("{record}</rdf:RDF>"));
+        }
+
+        let mut voltage_network = detailed_network();
+        let detailed = Arc::make_mut(
+            voltage_network
+                .detailed_connectivity_mut()
+                .as_mut()
+                .unwrap(),
+        );
+        detailed.bus_breaker_buses[0].voltage_kv = Some(230.0);
+        detailed.bus_breaker_buses[0].angle_degrees = Some(0.0);
+        let base = write::write_cgmes(&voltage_network, CgmesVersion::V3_0)
+            .unwrap()
+            .files;
+        let sv = &base
+            .iter()
+            .find(|(name, _)| name.ends_with("_SV.xml"))
+            .unwrap()
+            .1;
+        let node = reference_in_first_block(sv, "SvVoltage", "SvVoltage.TopologicalNode");
+        let mut voltage_files = base.clone();
+        append_sv(
+            &mut voltage_files,
+            &format!(
+                r##"  <cim:SvVoltage rdf:ID="_conflicting-voltage">
+    <cim:SvVoltage.TopologicalNode rdf:resource="#{node}"/>
+    <cim:SvVoltage.v>999</cim:SvVoltage.v>
+    <cim:SvVoltage.angle>99</cim:SvVoltage.angle>
+  </cim:SvVoltage>
+"##
+            ),
+        );
+        let message = read::read_cgmes_documents(voltage_files, Some("conflicting-voltage"))
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(message.contains("conflicting SvVoltage observations"));
+
+        let mut flow_network = detailed_network();
+        let detailed = Arc::make_mut(flow_network.detailed_connectivity_mut().as_mut().unwrap());
+        detailed.terminals[0].active_power_mw = Some(1.0);
+        detailed.terminals[0].reactive_power_mvar = Some(2.0);
+        let mut flow_files = write::write_cgmes(&flow_network, CgmesVersion::V3_0)
+            .unwrap()
+            .files;
+        let sv = &flow_files
+            .iter()
+            .find(|(name, _)| name.ends_with("_SV.xml"))
+            .unwrap()
+            .1;
+        let terminal = reference_in_first_block(sv, "SvPowerFlow", "SvPowerFlow.Terminal");
+        append_sv(
+            &mut flow_files,
+            &format!(
+                r##"  <cim:SvPowerFlow rdf:ID="_conflicting-flow">
+    <cim:SvPowerFlow.Terminal rdf:resource="#{terminal}"/>
+    <cim:SvPowerFlow.p>3</cim:SvPowerFlow.p>
+    <cim:SvPowerFlow.q>4</cim:SvPowerFlow.q>
+  </cim:SvPowerFlow>
+"##
+            ),
+        );
+        let message = read::read_cgmes_documents(flow_files, Some("conflicting-flow"))
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(message.contains("conflicting SvPowerFlow observations"));
+    }
+
+    #[test]
+    fn flat_network_voltage_limits_and_all_area_records_are_reported() {
+        let mut network = network();
+        network.buses_mut()[0].vmin = 0.91;
+        network.buses_mut()[0].vmax = 1.09;
+        network.areas_mut().push(Area::new(1));
+        network.areas_mut().push(Area::new(2));
+        let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        let equipment = &output
+            .files
+            .iter()
+            .find(|(name, _)| name.ends_with("_EQ.xml"))
+            .unwrap()
+            .1;
+        assert!(equipment.contains("<cim:VoltageLevel.lowVoltageLimit>209.3"));
+        assert!(equipment.contains("<cim:VoltageLevel.highVoltageLimit>250.7"));
+        assert!(output.warnings.iter().any(|warning| {
+            warning.contains("2 area record(s) have no CGMES mapping yet and are dropped")
+        }));
+    }
+
+    #[test]
+    fn voltage_limits_use_the_most_restrictive_valid_voltage_level_range() {
+        const VOLTAGE_LEVEL_MRID: &str = "10000000-0000-4000-8000-000000000001";
+        let cases = [
+            (
+                "operational-tighter",
+                (380.0, 420.0),
+                (390.0, 410.0),
+                (390.0, 410.0),
+            ),
+            (
+                "voltage-level-tighter",
+                (380.0, 420.0),
+                (370.0, 430.0),
+                (380.0, 420.0),
+            ),
+            (
+                "inconsistent-voltage-level",
+                (420.0, 380.0),
+                (380.0, 420.0),
+                (380.0, 420.0),
+            ),
+        ];
+        for version in [CgmesVersion::V2_4_15, CgmesVersion::V3_0] {
+            for (name, voltage_level_limits, operational_limits, expected) in cases {
+                let parsed = read::read_cgmes_documents(
+                    voltage_limit_documents(version, voltage_level_limits, operational_limits),
+                    Some(name),
+                )
+                .unwrap();
+                let level = parsed
+                    .network
+                    .detailed_connectivity()
+                    .as_deref()
+                    .unwrap()
+                    .voltage_levels
+                    .iter()
+                    .find(|level| level.component.local_id() == VOLTAGE_LEVEL_MRID)
+                    .unwrap();
+                assert_eq!(
+                    level.low_voltage_limit_kv,
+                    Some(expected.0),
+                    "{version:?} {name}"
+                );
+                assert_eq!(
+                    level.high_voltage_limit_kv,
+                    Some(expected.1),
+                    "{version:?} {name}"
+                );
+                assert!(parsed.warnings.iter().any(|warning| {
+                    warning.info.code
+                        == crate::diagnostics::codes::READ_CGMES_VALUE_APPROXIMATED.code
+                        && warning.contains("most restrictive valid")
+                        && warning.contains("low-voltage-limit")
+                        && warning.contains("high-voltage-limit")
+                }));
+                if name == "inconsistent-voltage-level" {
+                    assert!(parsed.warnings.iter().any(|warning| {
+                        warning.info.code
+                            == crate::diagnostics::codes::READ_CGMES_VALUE_APPROXIMATED.code
+                            && warning
+                                .contains("both inconsistent VoltageLevel limits were ignored")
+                    }));
+                }
+
+                let fresh = write::write_cgmes(&parsed.network, CgmesVersion::V3_0).unwrap();
+                let equipment = &fresh
+                    .files
+                    .iter()
+                    .find(|(name, _)| name.ends_with("_EQ.xml"))
+                    .unwrap()
+                    .1;
+                assert!(equipment.contains("<cim:VoltageLevel.lowVoltageLimit>"));
+                assert!(equipment.contains("<cim:VoltageLevel.highVoltageLimit>"));
+                assert!(!equipment.contains("<cim:VoltageLimit"));
+                let reparsed =
+                    read::read_cgmes_documents(fresh.files, Some("fresh-limits")).unwrap();
+                let reparsed_level = reparsed
+                    .network
+                    .detailed_connectivity()
+                    .as_deref()
+                    .unwrap()
+                    .voltage_levels
+                    .iter()
+                    .find(|level| level.component.local_id() == VOLTAGE_LEVEL_MRID)
+                    .unwrap();
+                assert_eq!(reparsed_level.low_voltage_limit_kv, Some(expected.0));
+                assert_eq!(reparsed_level.high_voltage_limit_kv, Some(expected.1));
+            }
+        }
+    }
+
+    #[test]
+    fn unmappable_voltage_limit_has_a_specific_diagnostic() {
+        let documents = voltage_limit_documents(CgmesVersion::V3_0, (380.0, 420.0), (390.0, 410.0));
+        let documents = insert_profile_records(
+            documents,
+            r##"  <cim:OperationalLimitSet rdf:ID="_orphan-voltage-limit-set"/>
+  <cim:VoltageLimit rdf:ID="_orphan-voltage-limit">
+    <cim:OperationalLimit.OperationalLimitSet rdf:resource="#_orphan-voltage-limit-set"/>
+    <cim:OperationalLimit.OperationalLimitType rdf:resource="#_low-voltage-limit-type"/>
+    <cim:VoltageLimit.normalValue>395</cim:VoltageLimit.normalValue>
+  </cim:VoltageLimit>
+"##,
+            None,
+            None,
+        );
+        let parsed = read::read_cgmes_documents(documents, Some("orphan-voltage-limit")).unwrap();
+        assert!(parsed.warnings.iter().any(|warning| {
+            warning.info.code == crate::diagnostics::codes::READ_CGMES_RECORD_UNMAPPED.code
+                && warning.contains("VoltageLimit `orphan-voltage-limit`")
+                && warning.contains("does not target equipment or a terminal in one VoltageLevel")
+                && warning.contains("was not mapped")
+        }));
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
     fn real_cgmes_tap_associations_and_table_steps_round_trip() {
+        const RATIO_TAP_MRID: &str = "de305d54-75b4-431b-adb2-eb6b9e546077";
         let mut network = detailed_network();
         network.branches_mut()[0].tap = 1.05;
         network.branches_mut()[0].shift = 2.0;
@@ -2485,14 +5042,19 @@ mod tests {
             susceptance_deviation_percent: 0.0,
         };
         let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        let ratio_tap_component = component("tap_changer", "source-ratio-tap");
         detailed.tap_changers = vec![
             TapChanger {
+                component: Some(ratio_tap_component.clone()),
                 transformer: transformer.clone(),
                 winding: 1,
                 kind: TapChangerKind::Ratio,
                 tap_position: Some(1),
                 solved_tap_position: Some(0),
                 low_tap_position: -1,
+                neutral_tap_position: Some(0),
+                normal_tap_position: Some(0),
+                voltage_step_increment_percent: Some(5.0),
                 load_tap_changing_capabilities: true,
                 regulating: true,
                 regulation_mode: Some(TapChangerRegulationMode::Voltage),
@@ -2505,12 +5067,16 @@ mod tests {
                 steps: vec![step(-1, 0.95, 0.0), step(0, 1.0, 0.0), step(1, 1.05, 0.0)],
             },
             TapChanger {
+                component: None,
                 transformer,
                 winding: 1,
                 kind: TapChangerKind::Phase,
                 tap_position: Some(1),
                 solved_tap_position: Some(-1),
                 low_tap_position: -1,
+                neutral_tap_position: Some(0),
+                normal_tap_position: Some(0),
+                voltage_step_increment_percent: None,
                 load_tap_changing_capabilities: true,
                 regulating: true,
                 regulation_mode: Some(TapChangerRegulationMode::ActivePower),
@@ -2520,6 +5086,18 @@ mod tests {
                 steps: vec![step(-1, 1.0, -2.0), step(0, 1.0, 0.0), step(1, 1.0, 2.0)],
             },
         ];
+        detailed.component_metadata.push(ComponentMetadata {
+            component: ratio_tap_component,
+            name: Some("Imported ratio tap".into()),
+            equipment_container: None,
+            aliases: Vec::new(),
+            external_identifiers: vec![ExternalIdentifier {
+                value: RATIO_TAP_MRID.into(),
+                authority: Some("CGMES".into()),
+            }],
+            properties: std::collections::BTreeMap::new(),
+            fictitious: false,
+        });
 
         let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
         let eq = output
@@ -2529,6 +5107,9 @@ mod tests {
             .map(|(_, text)| text)
             .unwrap();
         assert!(eq.contains("<cim:RatioTapChanger.TransformerEnd "));
+        assert!(eq.contains(&format!(
+            "<cim:RatioTapChanger rdf:ID=\"_{RATIO_TAP_MRID}\">"
+        )));
         assert!(eq.contains("<cim:PhaseTapChanger.TransformerEnd "));
         assert!(eq.contains("<cim:TapChangerTablePoint.step>"));
         assert!(eq.contains("<cim:TapChangerTablePoint.ratio>"));
@@ -2545,6 +5126,10 @@ mod tests {
             .find(|tap| tap.kind == TapChangerKind::Ratio)
             .unwrap();
         assert_eq!(ratio.tap_position, Some(1));
+        assert_eq!(
+            ratio.component.as_ref().map(ComponentId::local_id),
+            Some(RATIO_TAP_MRID)
+        );
         assert_eq!(ratio.solved_tap_position, Some(0));
         assert_eq!(ratio.steps.len(), 3);
         assert!((ratio.steps[0].rho - 0.95).abs() < 1e-12);
@@ -2557,6 +5142,155 @@ mod tests {
         assert!((phase.steps[2].alpha_degrees - 2.0).abs() < 1e-12);
         assert!((parsed.network.branches()[0].tap - 1.05).abs() < 1e-12);
         assert!((parsed.network.branches()[0].shift - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn tap_sv_requires_a_solved_position_and_unknown_control_terminal_is_diagnosed() {
+        const TAP_MRID: &str = "20000000-0000-4000-8000-000000000001";
+        let mut network = detailed_network();
+        let transformer = component("branch", network.branches()[0].uid.as_deref().unwrap());
+        let tap_component = component("tap_changer", TAP_MRID);
+        let step = |position, rho| TapChangerStep {
+            position,
+            rho,
+            alpha_degrees: 0.0,
+            resistance_deviation_percent: 0.0,
+            reactance_deviation_percent: 0.0,
+            conductance_deviation_percent: 0.0,
+            susceptance_deviation_percent: 0.0,
+        };
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        detailed.tap_changers.push(TapChanger {
+            component: Some(tap_component.clone()),
+            transformer: transformer.clone(),
+            winding: 1,
+            kind: TapChangerKind::Ratio,
+            tap_position: Some(1),
+            solved_tap_position: None,
+            low_tap_position: -1,
+            neutral_tap_position: Some(0),
+            normal_tap_position: Some(0),
+            voltage_step_increment_percent: Some(5.0),
+            load_tap_changing_capabilities: true,
+            regulating: true,
+            regulation_mode: Some(TapChangerRegulationMode::Voltage),
+            regulation_value: Some(228.0),
+            target_deadband: Some(2.0),
+            regulation_terminal: Some(TerminalReference {
+                equipment: transformer,
+                terminal: 2,
+            }),
+            steps: vec![step(-1, 0.95), step(0, 1.0), step(1, 1.05)],
+        });
+        detailed.component_metadata.push(ComponentMetadata {
+            component: tap_component,
+            name: None,
+            equipment_container: None,
+            aliases: Vec::new(),
+            external_identifiers: vec![ExternalIdentifier {
+                value: TAP_MRID.into(),
+                authority: Some("CGMES".into()),
+            }],
+            properties: std::collections::BTreeMap::new(),
+            fictitious: false,
+        });
+
+        let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        let ssh = output
+            .files
+            .iter()
+            .find(|(name, _)| name.ends_with("_SSH.xml"))
+            .map(|(_, text)| text)
+            .unwrap();
+        let sv = output
+            .files
+            .iter()
+            .find(|(name, _)| name.ends_with("_SV.xml"))
+            .map(|(_, text)| text)
+            .unwrap();
+        assert!(ssh.contains("<cim:TapChanger.step>1</cim:TapChanger.step>"));
+        assert!(!sv.contains("<cim:SvTapStep "));
+
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        detailed.tap_changers[0].solved_tap_position = Some(-1);
+        let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        let sv = output
+            .files
+            .iter()
+            .find(|(name, _)| name.ends_with("_SV.xml"))
+            .map(|(_, text)| text)
+            .unwrap();
+        assert!(sv.contains("<cim:SvTapStep.position>-1</cim:SvTapStep.position>"));
+
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        detailed.tap_changers[0].regulation_terminal = Some(TerminalReference {
+            equipment: component("branch", "missing-transformer"),
+            terminal: 1,
+        });
+        let error = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("regulates unknown equipment terminal"));
+        assert!(message.contains("branch/missing-transformer"));
+    }
+
+    #[test]
+    fn invalid_operational_limits_are_diagnosed() {
+        let mut network = detailed_network();
+        let branch = component("branch", network.branches()[0].uid.as_deref().unwrap());
+        Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap())
+            .operational_limit_groups
+            .push(OperationalLimitGroup {
+                equipment: branch,
+                terminal: 1,
+                id: "invalid-limits".into(),
+                properties: std::collections::BTreeMap::new(),
+                selected: false,
+                current_limits: Some(LoadingLimits {
+                    permanent_limit: Some(-1.0),
+                    permanent_limit_name: Some("invalid permanent".into()),
+                    temporary_limits: vec![
+                        TemporaryLimit {
+                            name: "invalid temporary".into(),
+                            value: f64::NAN,
+                            acceptable_duration_seconds: 300,
+                            fictitious: false,
+                        },
+                        TemporaryLimit {
+                            name: "valid temporary".into(),
+                            value: 1200.0,
+                            acceptable_duration_seconds: 60,
+                            fictitious: false,
+                        },
+                    ],
+                }),
+                active_power_limits: None,
+                apparent_power_limits: None,
+            });
+
+        let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        let dropped = output
+            .warnings
+            .iter()
+            .filter(|warning| {
+                warning.info.code == crate::diagnostics::codes::EMIT_CGMES.record_dropped.code
+            })
+            .collect::<Vec<_>>();
+        assert!(dropped.iter().any(|warning| {
+            warning.contains("permanent limit `-1`")
+                && warning.contains("must be positive and finite")
+        }));
+        assert!(dropped.iter().any(|warning| {
+            warning.contains("temporary limit `invalid temporary`")
+                && warning.contains("must be positive and finite")
+        }));
+        let all_xml = output
+            .files
+            .iter()
+            .map(|(_, text)| text.as_str())
+            .collect::<String>();
+        assert!(!all_xml.contains("invalid permanent"));
+        assert!(!all_xml.contains("invalid temporary"));
+        assert!(all_xml.contains("valid temporary"));
     }
 
     #[test]
@@ -2575,6 +5309,112 @@ mod tests {
 
         let parsed = read::read_cgmes_documents(output.files, Some("escaped-name")).unwrap();
         assert_eq!(parsed.network.name(), "A & B <North>");
+    }
+
+    #[test]
+    fn fresh_cgmes_rejects_duplicate_mrids() {
+        const SHARED_MRID: &str = "30000000-0000-4000-8000-000000000001";
+        let mut network = network();
+        network.loads_mut()[0].uid = Some(SHARED_MRID.into());
+        network.generators_mut()[0].uid = Some(SHARED_MRID.into());
+        let error = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains(SHARED_MRID));
+        assert!(message.contains("defines mRID"));
+        assert!(message.contains("more than once"));
+    }
+
+    #[test]
+    fn rdf_graph_validation_ignores_marker_text() {
+        let xml = r##"<rdf:RDF
+            xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+            xmlns:md="http://iec.ch/TC57/61970-552/ModelDescription/1#"
+            xmlns:cim="http://iec.ch/TC57/CIM100#">
+          <md:FullModel rdf:about="urn:uuid:10000000-0000-4000-8000-000000000001"/>
+          <cim:BaseVoltage rdf:ID="_20000000-0000-4000-8000-000000000001">
+            <cim:IdentifiedObject.name>literal rdf:ID="_not-an-object" rdf:resource="#_missing"</cim:IdentifiedObject.name>
+          </cim:BaseVoltage>
+        </rdf:RDF>"##;
+        write::validate_rdf_graph(&[("markers.xml".into(), xml.into())]).unwrap();
+    }
+
+    #[test]
+    fn rdf_graph_validation_separates_full_model_and_fragment_identifiers() {
+        const SHARED_UUID: &str = "30000000-0000-4000-8000-000000000001";
+        let xml = format!(
+            r##"<rdf:RDF
+                xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                xmlns:model="http://iec.ch/TC57/61970-552/ModelDescription/1#"
+                xmlns:cim="http://iec.ch/TC57/CIM100#">
+              <model:FullModel rdf:about="urn:uuid:{SHARED_UUID}">
+                <model:Model.DependentOn rdf:resource="urn:uuid:{SHARED_UUID}"/>
+              </model:FullModel>
+              <cim:BaseVoltage rdf:ID="_{SHARED_UUID}"/>
+              <cim:BaseVoltage rdf:about="#_{SHARED_UUID}"/>
+            </rdf:RDF>"##
+        );
+        write::validate_rdf_graph(&[("shared-uuid.xml".into(), xml.clone())]).unwrap();
+
+        let dangling = xml.replace(
+            &format!("rdf:about=\"#_{SHARED_UUID}\""),
+            "rdf:about=\"#_missing\"",
+        );
+        let error = write::validate_rdf_graph(&[("dangling.xml".into(), dangling)]).unwrap_err();
+        assert!(error.to_string().contains("dangling rdf:about reference"));
+        assert!(error.to_string().contains("missing"));
+    }
+
+    #[test]
+    fn short_names_and_fictitious_flags_round_trip() {
+        let mut network = detailed_network();
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        let voltage_level = detailed.voltage_levels[0].component.clone();
+        let metadata = detailed
+            .component_metadata
+            .iter_mut()
+            .find(|metadata| metadata.component == voltage_level)
+            .unwrap();
+        metadata.aliases = vec![
+            crate::network::ComponentAlias {
+                value: "N230".into(),
+                alias_type: Some("short_name".into()),
+            },
+            crate::network::ComponentAlias {
+                value: "legacy-vl".into(),
+                alias_type: Some("legacy".into()),
+            },
+        ];
+        metadata.fictitious = true;
+
+        let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        assert!(output.warnings.iter().any(|warning| {
+            warning.contains("alias `legacy-vl` of type `legacy`")
+                && warning.contains("has no CGMES IdentifiedObject.shortName mapping")
+        }));
+        let eq = output
+            .files
+            .iter()
+            .find(|(name, _)| name.ends_with("_EQ.xml"))
+            .map(|(_, text)| text)
+            .unwrap();
+        assert!(
+            eq.contains("<cim:IdentifiedObject.shortName>N230</cim:IdentifiedObject.shortName>")
+        );
+        assert!(eq.contains(
+            "<cim:IdentifiedObject.isFictitious>true</cim:IdentifiedObject.isFictitious>"
+        ));
+
+        let reparsed = read::read_cgmes_documents(output.files, Some("metadata")).unwrap();
+        let detailed = reparsed.network.detailed_connectivity().as_deref().unwrap();
+        let metadata = detailed
+            .component_metadata
+            .iter()
+            .find(|metadata| metadata.aliases.iter().any(|alias| alias.value == "N230"))
+            .unwrap();
+        assert!(metadata.fictitious);
+        assert!(metadata.aliases.iter().any(|alias| {
+            alias.value == "N230" && alias.alias_type.as_deref() == Some("short_name")
+        }));
     }
 
     #[test]
@@ -2741,6 +5581,30 @@ mod tests {
     }
 
     #[test]
+    fn renamed_nested_archives_and_fractional_ratio_overflow_are_refused() {
+        let mut nested = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        nested
+            .start_file("EQ.xml", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        nested.write_all(b"<rdf:RDF/>").unwrap();
+        let nested = nested.finish().unwrap().into_inner();
+
+        let mut outer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        outer
+            .start_file("renamed.xml", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        outer.write_all(&nested).unwrap();
+        let bytes = outer.finish().unwrap().into_inner();
+        let source = Source::from_memory("nested.zip", bytes).unwrap();
+        let error = acquire_documents(&source).unwrap_err();
+        assert!(error.to_string().contains("nested archive"));
+
+        assert!(!exceeds_compression_ratio(20_000, 100));
+        assert!(exceeds_compression_ratio(20_001, 100));
+        assert!(exceeds_compression_ratio(1, 0));
+    }
+
+    #[test]
     fn xml_declarations_that_enable_entities_are_refused() {
         for xml in [
             "<!DOCTYPE rdf:RDF SYSTEM \"file:///etc/passwd\"><rdf:RDF/>",
@@ -2756,6 +5620,421 @@ mod tests {
         let parsed = read::read_cgmes_documents(output.files, Some("cim16")).unwrap();
         assert_eq!(parsed.network.source_format(), crate::SourceFormat::Cgmes);
         assert_eq!(parsed.network.buses().len(), 2);
+    }
+
+    #[test]
+    fn topological_nodes_require_an_exact_positive_base_voltage() {
+        let files = write::write_cgmes(&network(), CgmesVersion::V3_0)
+            .unwrap()
+            .files;
+
+        let without_reference = files
+            .iter()
+            .cloned()
+            .map(|(name, text)| {
+                if !name.ends_with("_TP.xml") {
+                    return (name, text);
+                }
+                let line = text
+                    .lines()
+                    .find(|line| line.contains("<cim:TopologicalNode.BaseVoltage "))
+                    .unwrap();
+                (name, text.replacen(&format!("{line}\n"), "", 1))
+            })
+            .collect();
+        let error = read::read_cgmes_documents(without_reference, Some("missing-base-reference"))
+            .err()
+            .unwrap();
+        assert!(
+            error
+                .to_string()
+                .contains("has no TopologicalNode.BaseVoltage reference")
+        );
+
+        for replacement in [None, Some("0"), Some("-230")] {
+            let changed = files
+                .iter()
+                .cloned()
+                .map(|(name, text)| {
+                    if !name.ends_with("_EQ.xml") {
+                        return (name, text);
+                    }
+                    let line = text
+                        .lines()
+                        .find(|line| line.contains("<cim:BaseVoltage.nominalVoltage>"))
+                        .unwrap();
+                    let new_line = replacement.map(|replacement| {
+                        let value_start = line.find('>').unwrap() + 1;
+                        let value_end = line.rfind('<').unwrap();
+                        format!(
+                            "{}{replacement}{}",
+                            &line[..value_start],
+                            &line[value_end..]
+                        )
+                    });
+                    let text = new_line.map_or_else(
+                        || text.replacen(&format!("{line}\n"), "", 1),
+                        |new_line| text.replacen(line, &new_line, 1),
+                    );
+                    (name, text)
+                })
+                .collect();
+            let error = read::read_cgmes_documents(changed, Some("invalid-base-voltage"))
+                .err()
+                .unwrap();
+            let message = error.to_string();
+            if let Some(replacement) = replacement {
+                assert!(message.contains("nonpositive nominal voltage"));
+                assert!(message.contains(replacement));
+            } else {
+                assert!(message.contains("without BaseVoltage.nominalVoltage"));
+            }
+        }
+    }
+
+    #[test]
+    fn sv_power_flow_supplies_missing_or_partial_ssh_assignments() {
+        let mut network = detailed_network();
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        let load_terminal = detailed
+            .terminals
+            .iter_mut()
+            .find(|terminal| terminal.equipment.component_type() == "load")
+            .unwrap();
+        load_terminal.active_power_mw = Some(21.0);
+        load_terminal.reactive_power_mvar = Some(6.0);
+        let files = write::write_cgmes(&network, CgmesVersion::V2_4_15)
+            .unwrap()
+            .files;
+
+        let without_ssh = files
+            .iter()
+            .filter(|(name, _)| !name.ends_with("_SSH.xml"))
+            .cloned()
+            .collect();
+        let parsed = read::read_cgmes_documents(without_ssh, Some("sv-only")).unwrap();
+        assert!((parsed.network.loads()[0].p - 21.0).abs() < 1e-12);
+        assert!((parsed.network.loads()[0].q - 6.0).abs() < 1e-12);
+        assert!(parsed.warnings.iter().any(|warning| {
+            warning.contains("has no SSH p or q assignment")
+                && warning.contains("p=21 MW")
+                && warning.contains("q=6 MVAr")
+        }));
+
+        let partial_ssh = files
+            .into_iter()
+            .map(|(name, text)| {
+                if !name.ends_with("_SSH.xml") {
+                    return (name, text);
+                }
+                let line = text
+                    .lines()
+                    .find(|line| line.contains("<cim:EnergyConsumer.q>"))
+                    .unwrap();
+                (name, text.replacen(&format!("{line}\n"), "", 1))
+            })
+            .collect();
+        let parsed = read::read_cgmes_documents(partial_ssh, Some("partial-ssh")).unwrap();
+        assert!((parsed.network.loads()[0].p - 20.0).abs() < 1e-12);
+        assert!((parsed.network.loads()[0].q - 6.0).abs() < 1e-12);
+        assert!(parsed.warnings.iter().any(|warning| {
+            warning.contains("has SSH p=20 MW but no SSH q assignment")
+                && warning.contains("used q=6 MVAr")
+        }));
+    }
+
+    #[test]
+    fn fresh_cgmes_preserves_absent_xiidm_assignments() {
+        let mut network = detailed_network();
+        let mut shunt = Shunt::new(BusId(2), 0.0, -0.01);
+        shunt.uid = Some("omitted-shunt".into());
+        network.shunts_mut().push(shunt);
+        let load = component("load", network.loads()[0].uid.as_deref().unwrap());
+        let generator = component("generator", network.generators()[0].uid.as_deref().unwrap());
+        let shunt = component("shunt", "omitted-shunt");
+        {
+            let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+            detailed.terminals.push(Terminal {
+                component: None,
+                equipment: shunt.clone(),
+                terminal: 1,
+                voltage_level: detailed.voltage_levels[0].component.clone(),
+                bus: Some(detailed.bus_breaker_buses[1].component.clone()),
+                connectable_bus: Some(detailed.bus_breaker_buses[1].component.clone()),
+                node: Some(detailed.connectivity_nodes[1].component.clone()),
+                connected: true,
+                active_power_mw: None,
+                reactive_power_mvar: None,
+            });
+        }
+
+        let explicit = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        let explicit_xml = explicit
+            .files
+            .iter()
+            .map(|(_, text)| text.as_str())
+            .collect::<String>();
+        for property in [
+            "EnergyConsumer.p",
+            "EnergyConsumer.q",
+            "RotatingMachine.p",
+            "RotatingMachine.q",
+            "RegulatingControl.targetValue",
+            "LinearShuntCompensator.gPerSection",
+        ] {
+            assert!(explicit_xml.contains(&format!("<cim:{property}>")));
+        }
+
+        Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap()).omitted_fields = vec![
+            OmittedField::new(load.clone(), OmittedFieldName::ActivePower),
+            OmittedField::new(load, OmittedFieldName::ReactivePower),
+            OmittedField::new(generator.clone(), OmittedFieldName::ActivePower),
+            OmittedField::new(generator.clone(), OmittedFieldName::ReactivePower),
+            OmittedField::new(generator, OmittedFieldName::VoltageSetpoint),
+            OmittedField::new(shunt, OmittedFieldName::ShuntConductancePerSection),
+        ];
+        let omitted = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        let omitted_xml = omitted
+            .files
+            .iter()
+            .map(|(_, text)| text.as_str())
+            .collect::<String>();
+        for property in [
+            "EnergyConsumer.p",
+            "EnergyConsumer.q",
+            "RotatingMachine.p",
+            "RotatingMachine.q",
+            "RegulatingControl.targetValue",
+            "LinearShuntCompensator.gPerSection",
+        ] {
+            assert!(!omitted_xml.contains(&format!("<cim:{property}>")));
+        }
+        assert!(
+            omitted
+                .warnings
+                .iter()
+                .all(|warning| !warning.contains("omitted field record")),
+            "supported omission records must be consumed by the writer"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // the fixture exercises each diagnostic family explicitly
+    fn fresh_output_diagnoses_boundary_case_and_metadata_projection() {
+        let mut network = detailed_network();
+        network.case_metadata_mut().forecast_distance = Some(2);
+        network.case_metadata_mut().source_model_format = Some("XIIDM".into());
+        network.case_metadata_mut().minimum_validation_level =
+            Some("STEADY_STATE_HYPOTHESIS".into());
+
+        let load = component("load", network.loads()[0].uid.as_deref().unwrap());
+        let generator = component("generator", network.generators()[0].uid.as_deref().unwrap());
+        let branch = component("branch", network.branches()[0].uid.as_deref().unwrap());
+        let first_boundary = component("boundary_line", "boundary-a");
+        let second_boundary = component("boundary_line", "boundary-b");
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        detailed.connectivity_nodes[0].node_number = Some(17);
+        detailed.boundary_lines = vec![
+            BoundaryLine {
+                component: first_boundary.clone(),
+                voltage_level: detailed.voltage_levels[0].component.clone(),
+                active_power_setpoint_mw: 10.0,
+                reactive_power_setpoint_mvar: 2.0,
+                resistance_ohm: 0.1,
+                reactance_ohm: 1.0,
+                conductance_siemens: 0.0,
+                susceptance_siemens: 0.0,
+                pairing_key: Some("pair-a".into()),
+                generation: None,
+                calculation_load: Some(load.clone()),
+                calculation_generator: Some(generator.clone()),
+            },
+            BoundaryLine {
+                component: second_boundary.clone(),
+                voltage_level: detailed.voltage_levels[0].component.clone(),
+                active_power_setpoint_mw: -10.0,
+                reactive_power_setpoint_mvar: -2.0,
+                resistance_ohm: 0.1,
+                reactance_ohm: 1.0,
+                conductance_siemens: 0.0,
+                susceptance_siemens: 0.0,
+                pairing_key: Some("pair-a".into()),
+                generation: None,
+                calculation_load: None,
+                calculation_generator: None,
+            },
+        ];
+        detailed.tie_lines.push(TieLine {
+            component: component("tie_line", "tie-a"),
+            boundary_line1: first_boundary,
+            boundary_line2: second_boundary,
+            calculation_branch: Some(branch.clone()),
+        });
+        detailed.subnetworks.push(Subnetwork {
+            component: component("subnetwork", "child-a"),
+            parent: component("network", "root"),
+            case_metadata: CaseMetadata {
+                case_date: Some("2025-01-02T03:04:05Z".into()),
+                forecast_distance: Some(1),
+                source_model_format: Some("XIIDM".into()),
+                minimum_validation_level: Some("EQUIPMENT".into()),
+            },
+            components: vec![load.clone(), generator],
+        });
+        detailed
+            .component_metadata
+            .iter_mut()
+            .find(|metadata| metadata.component.component_type() == "voltage_level")
+            .unwrap()
+            .properties
+            .insert("vendor.unmappedProperty".into(), "retained".into());
+        detailed
+            .operational_limit_groups
+            .push(OperationalLimitGroup {
+                equipment: branch,
+                terminal: 1,
+                id: "limit-group-with-metadata".into(),
+                properties: std::collections::BTreeMap::from([(
+                    "vendor.limitProperty".into(),
+                    "retained".into(),
+                )]),
+                selected: false,
+                current_limits: None,
+                active_power_limits: None,
+                apparent_power_limits: None,
+            });
+        detailed
+            .omitted_fields
+            .push(OmittedField::new(load, OmittedFieldName::VoltageSetpoint));
+
+        let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        let has = |code: &str, text: &str| {
+            output
+                .warnings
+                .iter()
+                .any(|warning| warning.info.code == code && warning.contains(text))
+        };
+        assert!(has(
+            "EMIT.CGMES.RECORD_DROPPED",
+            "BoundaryLine `boundary_line/boundary-a`"
+        ));
+        assert!(has("EMIT.CGMES.RECORD_DROPPED", "TieLine `tie_line/tie-a`"));
+        assert!(has("EMIT.CGMES.FIELD_DROPPED", "source node number 17"));
+        assert!(has(
+            "EMIT.CGMES.VALUE_COLLAPSED",
+            "subnetwork `subnetwork/child-a`"
+        ));
+        assert!(has("EMIT.CGMES.FIELD_DROPPED", "forecast_distance=2"));
+        assert!(has(
+            "EMIT.CGMES.FIELD_DROPPED",
+            "source_model_format=`XIIDM`"
+        ));
+        assert!(has(
+            "EMIT.CGMES.FIELD_DROPPED",
+            "minimum_validation_level=`STEADY_STATE_HYPOTHESIS`"
+        ));
+        assert!(has("EMIT.CGMES.FIELD_DROPPED", "vendor.unmappedProperty"));
+        assert!(has("EMIT.CGMES.FIELD_DROPPED", "vendor.limitProperty"));
+        assert!(has("EMIT.CGMES.FIELD_DROPPED", "field `voltage_setpoint`"));
+    }
+
+    #[test]
+    fn dc_projection_fields_receive_exact_emission_diagnostics() {
+        let network = network();
+        let mut detailed = DetailedConnectivity::default();
+        let dc_node = component("dc_node", "dc-node-with-voltage");
+        detailed.dc_nodes.push(DcNode {
+            component: dc_node.clone(),
+            nominal_voltage_kv: Some(320.0),
+            dc_converter_unit: None,
+            dc_topological_node: None,
+            voltage_kv: Some(318.0),
+        });
+        let dc_terminal = DcTerminal {
+            component: Some(component("dc_terminal", "ground-terminal")),
+            sequence_number: Some(1),
+            dc_node: Some(dc_node),
+            dc_topological_node: None,
+            polarity: Some(DcPolarity::Positive),
+            connected: Some(true),
+            active_power_mw: None,
+            current_a: None,
+        };
+        detailed.dc_grounds.push(DcGround {
+            component: component("dc_ground", "ground-with-polarity"),
+            equipment_container: None,
+            dc_terminal: dc_terminal.clone(),
+            rated_dc_voltage_kv: None,
+            resistance_ohm: None,
+            inductance_h: None,
+        });
+        detailed
+            .voltage_source_converters
+            .push(VoltageSourceConverter {
+                component: component("voltage_source_converter", "vsc-conflicting-voltage"),
+                dc_converter_unit: None,
+                dc_terminal1: dc_terminal.clone(),
+                dc_terminal2: dc_terminal,
+                base_apparent_power_mva: None,
+                minimum_active_power_mw: None,
+                maximum_active_power_mw: None,
+                minimum_dc_voltage_kv: None,
+                maximum_dc_voltage_kv: None,
+                rated_dc_voltage_kv: None,
+                valve_u0_kv: None,
+                number_of_valves: None,
+                idle_loss_mw: None,
+                switching_loss_mw_per_ampere: None,
+                resistive_loss_ohm: None,
+                control_mode: None,
+                active_power_at_pcc_mw: None,
+                reactive_power_at_pcc_mvar: None,
+                target_active_power_mw: None,
+                target_dc_voltage_kv: None,
+                pcc_terminal: None,
+                droop_curve: None,
+                droop: None,
+                droop_compensation: None,
+                q_share: None,
+                maximum_modulation_index: None,
+                maximum_valve_current_a: None,
+                voltage_regulator_on: None,
+                voltage_setpoint_kv: None,
+                reactive_power_setpoint_mvar: None,
+                reactive_limits: None,
+                pole_loss_active_power_mw: None,
+                dc_current_a: None,
+                ac_voltage_kv: None,
+                dc_voltage_kv: None,
+                delta_degrees: None,
+                uf_kv: Some(229.0),
+                uv_kv: Some(231.0),
+            });
+        let mut warnings =
+            CgmesDiagnostics::new(&crate::diagnostics::codes::EMIT_CGMES.record_dropped);
+        write::warn_unemitted_detailed_fields(
+            &network,
+            &detailed,
+            CgmesVersion::V3_0,
+            &mut warnings,
+        );
+
+        let has = |code: &str, text: &str| {
+            warnings
+                .iter()
+                .any(|warning| warning.info.code == code && warning.contains(text))
+        };
+        assert!(has("EMIT.CGMES.FIELD_DROPPED", "nominal_voltage_kv=320"));
+        assert!(has("EMIT.CGMES.FIELD_DROPPED", "voltage_kv=318"));
+        assert!(has("EMIT.CGMES.FIELD_DROPPED", "polarity `positive`"));
+        assert!(has(
+            "EMIT.CGMES.VALUE_SUBSTITUTED",
+            "uf=229 kV and uv=231 kV"
+        ));
+        assert!(has(
+            "EMIT.CGMES.VALUE_SUBSTITUTED",
+            "writes VsConverter.uv=231 kV"
+        ));
     }
 
     #[test]
@@ -2857,6 +6136,9 @@ mod tests {
                 .as_mut()
                 .unwrap(),
         );
+        emitted_dc
+            .component_metadata
+            .extend(source_dc.component_metadata.clone());
         emitted_dc.dc_converter_units = source_dc.dc_converter_units;
         emitted_dc.dc_topological_nodes = source_dc.dc_topological_nodes;
         emitted_dc.dc_nodes = source_dc.dc_nodes;

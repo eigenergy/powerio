@@ -11,7 +11,6 @@ from __future__ import annotations
 import base64
 import io
 import json
-import os
 from pathlib import Path
 from typing import Annotated, Any, Dict, Literal, Optional, cast
 
@@ -340,7 +339,6 @@ def _emit_module(
         checked = sandbox.checked_path(
             destination, purpose="destination", for_write=True
         )
-        target = Path(checked)
         if _fmt(format) in _DIRECTORY_FORMATS:
 
             def write_directory(staging: str) -> Dict[str, Any]:

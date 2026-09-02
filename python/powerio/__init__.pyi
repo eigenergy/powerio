@@ -188,9 +188,48 @@ class ComponentIdentity(TypedDict):
     component_type: str
     local_id: str
 
+class ComponentAlias(TypedDict, total=False):
+    value: str
+    alias_type: str
+
+class ExternalIdentifier(TypedDict, total=False):
+    value: str
+    authority: str
+
+class ComponentMetadata(TypedDict, total=False):
+    component: ComponentIdentity
+    name: str
+    equipment_container: ComponentIdentity
+    aliases: List[ComponentAlias]
+    external_identifiers: List[ExternalIdentifier]
+    properties: Dict[str, str]
+    fictitious: bool
+
 class TerminalReference(TypedDict):
     equipment: ComponentIdentity
     terminal: int
+
+class TransformerControl(TypedDict):
+    mode: Literal[
+        "fixed",
+        "voltage",
+        "reactive_flow",
+        "active_flow",
+        "dc_line_quantity",
+        "asymmetric_active_flow",
+        "unknown",
+    ]
+    enabled: bool
+    controlled_bus: Optional[int]
+    controlled_bus_on_winding_side: bool
+    regulating_terminal: Optional[TerminalReference]
+    tap_min: float
+    tap_max: float
+    band_min: float
+    band_max: float
+    tap_position_count: int
+    mva_base: float
+    winding_connection_angle: Optional[float]
 
 class Bus(TypedDict):
     id: int
@@ -239,6 +278,7 @@ class BranchRatingSet(TypedDict):
     rate_mva: float
 
 class Branch(TypedDict):
+    name: Optional[str]
     from_id: int
     to_id: int
     r: float
@@ -260,11 +300,39 @@ class Branch(TypedDict):
     in_service: bool
     angmin: float
     angmax: float
+    control: Optional[TransformerControl]
     pf: Optional[float]
     qf: Optional[float]
     pt: Optional[float]
     qt: Optional[float]
     uid: Optional[str]
+
+class ThreeWindingTransformerWinding(TypedDict):
+    bus: int
+    tap: float
+    shift: float
+    nominal_kv: float
+    rate_a: float
+    rate_b: float
+    rate_c: float
+    control: Optional[TransformerControl]
+
+class ThreeWindingTransformerImpedance(TypedDict):
+    r: float
+    x: float
+    base_mva: float
+
+class ThreeWindingTransformer(TypedDict):
+    windings: List[ThreeWindingTransformerWinding]
+    z: List[ThreeWindingTransformerImpedance]
+    star_vm: float
+    star_va: float
+    mag_g: float
+    mag_b: float
+    in_service: bool
+    name: Optional[str]
+    uid: Optional[str]
+    extras: Dict[str, Any]
 
 class Switch(TypedDict):
     from_id: int
@@ -280,6 +348,7 @@ class Switch(TypedDict):
 
 class Gen(TypedDict):
     bus: int
+    energy_source: Literal["hydro", "nuclear", "wind", "thermal", "solar", "other"]
     pg: float
     qg: float
     pmax: float
@@ -334,15 +403,35 @@ class Subnetwork(TypedDict):
     case_metadata: CaseMetadata
     components: List[ComponentIdentity]
 
+class MinMaxReactiveLimits(TypedDict):
+    minimum_reactive_power_mvar: float
+    maximum_reactive_power_mvar: float
+    properties: Dict[str, str]
+
 class ReactiveCapabilityCurvePoint(TypedDict):
     active_power_mw: float
     minimum_reactive_power_mvar: float
     maximum_reactive_power_mvar: float
     properties: Dict[str, str]
 
-class ReactiveLimits(TypedDict, total=False):
-    kind: Literal["min_max", "capability_curve"]
-    limits: Dict[str, Any]
+class ReactiveCapabilityCurve(TypedDict):
+    curve_style: Literal["constant_y_value", "straight_line_y_values"]
+    properties: Dict[str, str]
+    points: List[ReactiveCapabilityCurvePoint]
+
+class MinMaxReactiveLimitsRecord(TypedDict):
+    kind: Literal["min_max"]
+    limits: MinMaxReactiveLimits
+
+class ReactiveCapabilityCurveRecord(TypedDict):
+    kind: Literal["capability_curve"]
+    limits: ReactiveCapabilityCurve
+
+ReactiveLimits = Union[MinMaxReactiveLimitsRecord, ReactiveCapabilityCurveRecord]
+
+class EquipmentReactiveLimits(TypedDict):
+    equipment: ComponentIdentity
+    limits: ReactiveLimits
 
 class BoundaryLineGeneration(TypedDict, total=False):
     voltage_regulation_on: bool
@@ -374,19 +463,47 @@ class TieLine(TypedDict, total=False):
     calculation_branch: ComponentIdentity
 
 class TapChanger(TypedDict, total=False):
+    component: ComponentIdentity
     transformer: ComponentIdentity
     winding: int
     kind: Literal["ratio", "phase"]
     tap_position: int
     solved_tap_position: int
     low_tap_position: int
+    neutral_tap_position: int
+    normal_tap_position: int
+    voltage_step_increment_percent: float
     load_tap_changing_capabilities: bool
     regulating: bool
     regulation_mode: str
     regulation_value: float
     target_deadband: float
-    regulation_terminal: Dict[str, Any]
-    steps: List[Dict[str, Any]]
+    regulation_terminal: TerminalReference
+    steps: List["TapChangerStep"]
+
+class TapChangerStep(TypedDict):
+    position: int
+    rho: float
+    alpha_degrees: float
+    resistance_deviation_percent: float
+    reactance_deviation_percent: float
+    conductance_deviation_percent: float
+    susceptance_deviation_percent: float
+
+class Substation(TypedDict, total=False):
+    component: ComponentIdentity
+    country: str
+    operator: str
+    geographical_tags: List[str]
+
+class VoltageLevel(TypedDict, total=False):
+    component: ComponentIdentity
+    substation: ComponentIdentity
+    nominal_kv: float
+    low_voltage_limit_kv: float
+    high_voltage_limit_kv: float
+    topology_kind: Literal["bus_breaker", "node_breaker"]
+    buses: List[int]
 
 class ConnectivityNode(TypedDict, total=False):
     component: ComponentIdentity
@@ -394,12 +511,288 @@ class ConnectivityNode(TypedDict, total=False):
     node_number: Optional[int]
     calculated_bus: Optional[int]
 
+class Junction(TypedDict):
+    component: ComponentIdentity
+
+class OmittedField(TypedDict):
+    component: ComponentIdentity
+    field: Literal[
+        "active_power",
+        "reactive_power",
+        "voltage_setpoint",
+        "shunt_conductance_per_section",
+    ]
+
+class BusBreakerBus(TypedDict, total=False):
+    component: ComponentIdentity
+    voltage_level: ComponentIdentity
+    calculated_bus: int
+    voltage_kv: float
+    angle_degrees: float
+
+class CalculatedBus(TypedDict, total=False):
+    voltage_level: ComponentIdentity
+    calculated_bus: int
+    nodes: List[ComponentIdentity]
+    voltage_kv: float
+    angle_degrees: float
+
+class BusbarSection(TypedDict):
+    component: ComponentIdentity
+    voltage_level: ComponentIdentity
+    node: ComponentIdentity
+
+class DetailedTerminal(TypedDict, total=False):
+    component: ComponentIdentity
+    equipment: ComponentIdentity
+    terminal: int
+    voltage_level: ComponentIdentity
+    bus: ComponentIdentity
+    connectable_bus: ComponentIdentity
+    node: ComponentIdentity
+    connected: bool
+    active_power_mw: float
+    reactive_power_mvar: float
+
+class TopologyEndpoint(TypedDict):
+    kind: Literal["bus", "node"]
+    component: ComponentIdentity
+
+class TopologySwitch(TypedDict):
+    component: ComponentIdentity
+    voltage_level: ComponentIdentity
+    kind: Literal["breaker", "disconnector", "load_break_switch"]
+    endpoint1: TopologyEndpoint
+    endpoint2: TopologyEndpoint
+    open: bool
+    retained: bool
+
+class InternalConnection(TypedDict):
+    voltage_level: ComponentIdentity
+    node1: ComponentIdentity
+    node2: ComponentIdentity
+
+class TemporaryLimit(TypedDict):
+    name: str
+    value: float
+    acceptable_duration_seconds: int
+    fictitious: bool
+
+class LoadingLimits(TypedDict, total=False):
+    permanent_limit: float
+    permanent_limit_name: str
+    temporary_limits: List[TemporaryLimit]
+
+class OperationalLimitGroup(TypedDict, total=False):
+    equipment: ComponentIdentity
+    terminal: int
+    id: str
+    properties: Dict[str, str]
+    selected: bool
+    current_limits: LoadingLimits
+    active_power_limits: LoadingLimits
+    apparent_power_limits: LoadingLimits
+
+class DcConverterUnit(TypedDict, total=False):
+    component: ComponentIdentity
+    substation: ComponentIdentity
+    operation_mode: Literal[
+        "bipolar", "monopolar_ground_return", "monopolar_metallic_return"
+    ]
+
+class DcTopologicalNode(TypedDict, total=False):
+    component: ComponentIdentity
+    dc_converter_unit: ComponentIdentity
+
+class DcTerminal(TypedDict, total=False):
+    component: ComponentIdentity
+    sequence_number: int
+    dc_node: ComponentIdentity
+    dc_topological_node: ComponentIdentity
+    polarity: Literal["positive", "middle", "negative"]
+    connected: bool
+    active_power_mw: float
+    current_a: float
+
+class DcNode(TypedDict, total=False):
+    component: ComponentIdentity
+    nominal_voltage_kv: float
+    dc_converter_unit: ComponentIdentity
+    dc_topological_node: ComponentIdentity
+    voltage_kv: float
+
+class DcGround(TypedDict, total=False):
+    component: ComponentIdentity
+    equipment_container: ComponentIdentity
+    dc_terminal: DcTerminal
+    rated_dc_voltage_kv: float
+    resistance_ohm: float
+    inductance_h: float
+
+class DcBusbar(TypedDict, total=False):
+    component: ComponentIdentity
+    equipment_container: ComponentIdentity
+    dc_terminal: DcTerminal
+    rated_dc_voltage_kv: float
+
+class DcLine(TypedDict, total=False):
+    component: ComponentIdentity
+    equipment_container: ComponentIdentity
+    dc_terminal1: DcTerminal
+    dc_terminal2: DcTerminal
+    rated_dc_voltage_kv: float
+    resistance_ohm: float
+    inductance_h: float
+    capacitance_f: float
+    length_km: float
+
+class DcSeriesDevice(TypedDict, total=False):
+    component: ComponentIdentity
+    equipment_container: ComponentIdentity
+    dc_terminal1: DcTerminal
+    dc_terminal2: DcTerminal
+    rated_dc_voltage_kv: float
+    resistance_ohm: float
+    inductance_h: float
+
+class DcSwitch(TypedDict, total=False):
+    component: ComponentIdentity
+    equipment_container: ComponentIdentity
+    dc_terminal1: DcTerminal
+    dc_terminal2: DcTerminal
+    kind: Literal["switch", "breaker", "disconnector"]
+    rated_dc_voltage_kv: float
+    open: bool
+    resistance_ohm: float
+
+class DroopCurveSegment(TypedDict):
+    minimum_voltage_kv: float
+    maximum_voltage_kv: float
+    k: float
+
+class DroopCurve(TypedDict):
+    segments: List[DroopCurveSegment]
+
+AcDcConverterControlMode = Literal[
+    "active_power_at_pcc",
+    "dc_voltage",
+    "dc_current",
+    "active_power_at_pcc_and_dc_voltage_droop_curve",
+    "active_power_at_pcc_and_dc_voltage_droop",
+    "active_power_at_pcc_and_dc_voltage_droop_with_compensation",
+    "active_power_at_pcc_and_dc_voltage_droop_pilot",
+]
+
+class VoltageSourceConverter(TypedDict, total=False):
+    component: ComponentIdentity
+    dc_converter_unit: ComponentIdentity
+    dc_terminal1: DcTerminal
+    dc_terminal2: DcTerminal
+    base_apparent_power_mva: float
+    minimum_active_power_mw: float
+    maximum_active_power_mw: float
+    minimum_dc_voltage_kv: float
+    maximum_dc_voltage_kv: float
+    rated_dc_voltage_kv: float
+    valve_u0_kv: float
+    number_of_valves: int
+    idle_loss_mw: float
+    switching_loss_mw_per_ampere: float
+    resistive_loss_ohm: float
+    control_mode: AcDcConverterControlMode
+    active_power_at_pcc_mw: float
+    reactive_power_at_pcc_mvar: float
+    target_active_power_mw: float
+    target_dc_voltage_kv: float
+    pcc_terminal: TerminalReference
+    droop_curve: DroopCurve
+    droop: float
+    droop_compensation: float
+    q_share: float
+    maximum_modulation_index: float
+    maximum_valve_current_a: float
+    voltage_regulator_on: bool
+    voltage_setpoint_kv: float
+    reactive_power_setpoint_mvar: float
+    reactive_limits: ReactiveLimits
+    pole_loss_active_power_mw: float
+    dc_current_a: float
+    ac_voltage_kv: float
+    dc_voltage_kv: float
+    delta_degrees: float
+    uf_kv: float
+    uv_kv: float
+
+class LineCommutatedConverter(TypedDict, total=False):
+    component: ComponentIdentity
+    dc_converter_unit: ComponentIdentity
+    dc_terminal1: DcTerminal
+    dc_terminal2: DcTerminal
+    base_apparent_power_mva: float
+    minimum_active_power_mw: float
+    maximum_active_power_mw: float
+    minimum_dc_voltage_kv: float
+    maximum_dc_voltage_kv: float
+    rated_dc_voltage_kv: float
+    valve_u0_kv: float
+    number_of_valves: int
+    idle_loss_mw: float
+    switching_loss_mw_per_ampere: float
+    resistive_loss_ohm: float
+    control_mode: AcDcConverterControlMode
+    active_power_at_pcc_mw: float
+    reactive_power_at_pcc_mvar: float
+    target_active_power_mw: float
+    target_dc_voltage_kv: float
+    pcc_terminal: TerminalReference
+    droop_curve: DroopCurve
+    reactive_model: Literal["fixed_power_factor", "calculated_power_factor"]
+    power_factor: float
+    operating_mode: Literal["rectifier", "inverter"]
+    rated_dc_current_a: float
+    minimum_alpha_degrees: float
+    maximum_alpha_degrees: float
+    minimum_gamma_degrees: float
+    maximum_gamma_degrees: float
+    target_alpha_degrees: float
+    target_gamma_degrees: float
+    target_dc_current_a: float
+    pole_loss_active_power_mw: float
+    dc_current_a: float
+    ac_voltage_kv: float
+    dc_voltage_kv: float
+    alpha_degrees: float
+    gamma_degrees: float
+
 class DetailedConnectivity(TypedDict, total=False):
+    omitted_fields: List[OmittedField]
+    component_metadata: List[ComponentMetadata]
     subnetworks: List[Subnetwork]
+    substations: List[Substation]
+    voltage_levels: List[VoltageLevel]
+    bus_breaker_buses: List[BusBreakerBus]
+    calculated_buses: List[CalculatedBus]
     connectivity_nodes: List[ConnectivityNode]
+    busbar_sections: List[BusbarSection]
+    junctions: List[Junction]
+    terminals: List[DetailedTerminal]
+    switches: List[TopologySwitch]
+    internal_connections: List[InternalConnection]
+    operational_limit_groups: List[OperationalLimitGroup]
+    tap_changers: List[TapChanger]
+    equipment_reactive_limits: List[EquipmentReactiveLimits]
     boundary_lines: List[BoundaryLine]
     tie_lines: List[TieLine]
-    tap_changers: List[TapChanger]
+    dc_converter_units: List[DcConverterUnit]
+    dc_topological_nodes: List[DcTopologicalNode]
+    dc_nodes: List[DcNode]
+    dc_grounds: List[DcGround]
+    dc_busbars: List[DcBusbar]
+    dc_lines: List[DcLine]
+    dc_series_devices: List[DcSeriesDevice]
+    dc_switches: List[DcSwitch]
+    voltage_source_converters: List[VoltageSourceConverter]
+    line_commutated_converters: List[LineCommutatedConverter]
 
 class PwdSubstation(NamedTuple):
     number: int
@@ -467,7 +860,7 @@ class BalancedNetwork:
     generators: List[Gen]
     storage: List[Storage]
     hvdc: List[Dict[str, Any]]
-    transformers_3w: List[Dict[str, Any]]
+    transformers_3w: List[ThreeWindingTransformer]
     areas: List[Dict[str, Any]]
     detailed_connectivity: Optional[DetailedConnectivity]
     def reference_bus_index(self) -> int: ...

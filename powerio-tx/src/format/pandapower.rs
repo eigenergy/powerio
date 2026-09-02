@@ -16,7 +16,8 @@ use crate::diagnostics::codes::EMIT_PANDAPOWER as F;
 use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
     BalancedNetwork, BalancedNetworkTables, Branch, BranchCharging, Bus, BusId, BusType, Extras,
-    GenCost, Generator, Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat, Storage,
+    GenCost, Generator, GeneratorEnergySource, Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat,
+    Storage,
 };
 use crate::{Error, Result};
 
@@ -285,6 +286,7 @@ pub(crate) fn parse_pandapower_source(
             );
             generators.push(Generator {
                 bus,
+                energy_source: GeneratorEnergySource::default(),
                 pg: row.f_or("p_mw", 0.0) * row.f_or("scaling", 1.0),
                 qg: res_gen.get(&idx).map_or(0.0, |r| r.1),
                 pmax: row.f_or("max_p_mw", row.f_or("p_mw", 0.0)),
@@ -312,6 +314,7 @@ pub(crate) fn parse_pandapower_source(
             let solved = res_ext_grid.get(&idx).copied().unwrap_or((0.0, 0.0));
             generators.push(Generator {
                 bus,
+                energy_source: GeneratorEnergySource::default(),
                 pg: solved.0,
                 qg: solved.1,
                 pmax: row.f_or("max_p_mw", f64::INFINITY),
@@ -341,6 +344,7 @@ pub(crate) fn parse_pandapower_source(
             let p = row.f_or("p_mw", 0.0);
             generators.push(Generator {
                 bus,
+                energy_source: GeneratorEnergySource::default(),
                 pg: p * scale,
                 qg: row.f_or("q_mvar", 0.0) * scale,
                 pmax: row.f_or("max_p_mw", p),
@@ -382,6 +386,7 @@ pub(crate) fn parse_pandapower_source(
                 * par;
             let g = row.f_or("g_us_per_km", 0.0) * row.f_or("length_km", 1.0) * 1e-6 * zbase * par;
             branches.push(Branch {
+                name: None,
                 from,
                 to,
                 r: row.f_or("r_ohm_per_km", 0.0) * row.f_or("length_km", 1.0) / zbase / par,
@@ -550,6 +555,7 @@ pub(crate) fn parse_pandapower_source(
             let z = row.f_or("vk_percent", 0.0).abs() * base_mva / (sn * 100.0) * z_corr;
             let x = (z * z - r * r).max(0.0).sqrt() * row.f_or("vk_percent", 0.0).signum();
             branches.push(Branch {
+                name: None,
                 from,
                 to,
                 r: r / par,
@@ -3561,6 +3567,7 @@ mod tests {
     fn test_gen(bus: usize, cost: Option<GenCost>) -> Generator {
         Generator {
             bus: BusId(bus),
+            energy_source: GeneratorEnergySource::default(),
             pg: 1.0,
             qg: 0.0,
             pmax: 2.0,
@@ -3582,6 +3589,7 @@ mod tests {
 
     fn test_branch(from: usize, to: usize, tap: f64) -> Branch {
         Branch {
+            name: None,
             from: BusId(from),
             to: BusId(to),
             r: 0.01,

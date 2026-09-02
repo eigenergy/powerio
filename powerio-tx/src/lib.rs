@@ -2,7 +2,8 @@
 //!
 //! Readers and writers cover MATPOWER `.m`, PowerModels JSON, PSS/E `.raw`,
 //! PowerWorld `.aux`, pandapower JSON, PyPSA CSV, egret JSON, PSLF `.epc`,
-//! PSS/E RAWX 35, PowSybl XIIDM 1.17, CIM CGMES 2.4.15 and 3.0, Surge JSON,
+//! PSS/E RAWX 35, PowSybl XIIDM 1.12 through 1.17, CIM CGMES 2.4.15 and 3.0,
+//! Surge JSON,
 //! and DeepMind OPFData JSON. PowerWorld `.pwb` and OPFData files are read
 //! only. GO Challenge 3 defines a calculation and therefore parses only
 //! through the top level `powerio::parse`, which returns its declared
@@ -62,8 +63,34 @@ pub mod version;
 /// `powerio-tx` API. Applications should use the top level `powerio` facade.
 #[doc(hidden)]
 pub mod __internal {
+    use powerio_core::ComponentId;
+
     #[doc(hidden)]
     pub use crate::format::goc3::{Goc3Document, Goc3Record, parse_goc3_instance_network};
+
+    use crate::{BalancedNetwork, Generator, Load, OmittedFieldName};
+
+    #[doc(hidden)]
+    pub fn edit_load_assignment<R>(
+        network: &mut BalancedNetwork,
+        index: usize,
+        component: &ComponentId,
+        field: OmittedFieldName,
+        edit: impl FnOnce(&mut Load) -> R,
+    ) -> R {
+        network.edit_load_assignment(index, component, field, edit)
+    }
+
+    #[doc(hidden)]
+    pub fn edit_generator_assignment<R>(
+        network: &mut BalancedNetwork,
+        index: usize,
+        component: &ComponentId,
+        field: OmittedFieldName,
+        edit: impl FnOnce(&mut Generator) -> R,
+    ) -> R {
+        network.edit_generator_assignment(index, component, field, edit)
+    }
 }
 
 pub use dc::BranchSusceptanceFormula;
@@ -100,17 +127,17 @@ pub use network::{
     ComponentAlias, ComponentMetadata, ConnectivityNode, CurveStyle, DEFAULT_BASE_FREQUENCY,
     DcBusbar, DcConverterOperatingMode, DcConverterUnit, DcGround, DcLine, DcNode, DcPolarity,
     DcSeriesDevice, DcSwitch, DcSwitchKind, DcTerminal, DcTopologicalNode, DetailedConnectivity,
-    DroopCurve, DroopCurveSegment, ExternalIdentifier, Extras, GenCaps, GenCost, Generator, Hvdc,
-    HvdcConverter, HvdcConverterKind, HvdcConvertersMode, Impedance, InternalConnection,
-    LineCommutatedConverter, LineCommutatedConverterOperatingMode,
+    DroopCurve, DroopCurveSegment, ExternalIdentifier, Extras, GenCaps, GenCost, Generator,
+    GeneratorEnergySource, Hvdc, HvdcConverter, HvdcConverterKind, HvdcConvertersMode, Impedance,
+    InternalConnection, Junction, LineCommutatedConverter, LineCommutatedConverterOperatingMode,
     LineCommutatedConverterReactiveModel, Load, LoadVoltageModel, LoadingLimits,
-    MinMaxReactiveLimits, OperationalLimitGroup, ReactiveCapabilityCurve,
-    ReactiveCapabilityCurvePoint, ReactiveLimits, Shunt, ShuntBlock, SolverParams, SourceFormat,
-    StaticVarCompensator, StaticVarCompensatorRegulationMode, Storage, Subnetwork, Substation,
-    Switch, SwitchKind, SwitchedShuntControl, SwitchedShuntMode, TapChanger, TapChangerKind,
-    TapChangerRegulationMode, TapChangerStep, TemporaryLimit, Terminal, TerminalReference, TieLine,
-    TopologyEndpoint, TopologyKind, TopologySwitch, Transformer3W, TransformerControl,
-    TransformerControlMode, VoltageLevel, VoltageSourceConverter, Winding,
+    MinMaxReactiveLimits, OmittedField, OmittedFieldName, OperationalLimitGroup,
+    ReactiveCapabilityCurve, ReactiveCapabilityCurvePoint, ReactiveLimits, Shunt, ShuntBlock,
+    SolverParams, SourceFormat, StaticVarCompensator, StaticVarCompensatorRegulationMode, Storage,
+    Subnetwork, Substation, Switch, SwitchKind, SwitchedShuntControl, SwitchedShuntMode,
+    TapChanger, TapChangerKind, TapChangerRegulationMode, TapChangerStep, TemporaryLimit, Terminal,
+    TerminalReference, TieLine, TopologyEndpoint, TopologyKind, TopologySwitch, Transformer3W,
+    TransformerControl, TransformerControlMode, VoltageLevel, VoltageSourceConverter, Winding,
     calc_series_admittance_of, repair_values,
 };
 pub use normalize::{

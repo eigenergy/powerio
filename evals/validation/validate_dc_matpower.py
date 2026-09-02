@@ -148,9 +148,17 @@ def compare(path: str, want_ptdf: bool = True) -> list[str]:
         ("series_susceptance", None),
     ]:
         incidence = net.calc_incidence_matrix(pio_formula).toarray()
-        branch_matrix = net.calc_branch_susceptance_matrix(pio_formula).toarray()
+        branch_susceptances = np.asarray(
+            net.calc_branch_susceptances(pio_formula), float
+        )
+        branch_matrix = net.calc_branch_flow_matrix(pio_formula).toarray()
         bus_matrix = net.calc_bus_susceptance_matrix(pio_formula).toarray()
-        inj = np.asarray(net.calc_phase_shift_injection(pio_formula), float)
+        branch_shift_injection = np.asarray(
+            net.calc_branch_phase_shift_injection(pio_formula), float
+        )
+        bus_shift_injection = np.asarray(
+            net.calc_bus_phase_shift_injection(pio_formula), float
+        )
         branch_flow = np.asarray(
             net.calc_branch_flow_dc(np.zeros(mp["nb"]), pio_formula), float
         )
@@ -167,23 +175,27 @@ def compare(path: str, want_ptdf: bool = True) -> list[str]:
         expected_incidence = mp["Cft"][idx, :].toarray()
         expected_branch_matrix = exp_b[:, None] * expected_incidence
         expected_bus_matrix = expected_incidence.T @ expected_branch_matrix
-        b_from_matrix = branch_matrix[np.arange(len(idx)), mp["f"][idx]]
         dinc = np.max(np.abs(incidence - expected_incidence))
         dbf = np.max(np.abs(branch_matrix - expected_branch_matrix))
         dbus = np.max(np.abs(bus_matrix - expected_bus_matrix))
-        sus = b_from_matrix
-        db = np.max(np.abs(sus - exp_b) / np.maximum(1.0, np.abs(exp_b)))
+        db = np.max(
+            np.abs(branch_susceptances - exp_b) / np.maximum(1.0, np.abs(exp_b))
+        )
         exp_shift = mp["shift"][idx] * np.pi / 180.0
         expected_branch_flow = exp_b * exp_shift
         expected_injection = expected_incidence.T @ expected_branch_flow
+        dbranchshift = np.max(
+            np.abs(branch_shift_injection - expected_branch_flow)
+        )
+        dbusshift = np.max(np.abs(bus_shift_injection - expected_injection))
         dflow = np.max(np.abs(branch_flow - expected_branch_flow))
-        dinj = np.max(np.abs(inj - expected_injection))
         dbusinj = np.max(np.abs(bus_injection - expected_injection))
         nshift = int((np.abs(exp_shift) > 0).sum())
         print(
             f"  {pio_formula:<24} rows={len(idx):<6} shifted={nshift:<4} "
             f"dA={dinc:.3e} dBf={dbf:.3e} dB={dbus:.3e} "
-            f"db={db:.3e} dflow={dflow:.3e} dPshift={dinj:.3e} "
+            f"db={db:.3e} dPbranchShift={dbranchshift:.3e} "
+            f"dPbusShift={dbusshift:.3e} dflow={dflow:.3e} "
             f"dPbus={dbusinj:.3e}"
         )
         if dinc >= ABS_TOL:
@@ -206,9 +218,13 @@ def compare(path: str, want_ptdf: bool = True) -> list[str]:
             failures.append(
                 f"{pio_formula}: branch flow diff {dflow:.3e} >= {ABS_TOL:.0e}"
             )
-        if dinj >= ABS_TOL:
+        if dbranchshift >= ABS_TOL:
             failures.append(
-                f"{pio_formula}: shift injection diff {dinj:.3e} >= {ABS_TOL:.0e}"
+                f"{pio_formula}: branch shift injection diff {dbranchshift:.3e} >= {ABS_TOL:.0e}"
+            )
+        if dbusshift >= ABS_TOL:
+            failures.append(
+                f"{pio_formula}: bus shift injection diff {dbusshift:.3e} >= {ABS_TOL:.0e}"
             )
         if dbusinj >= ABS_TOL:
             failures.append(

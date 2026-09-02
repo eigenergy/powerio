@@ -58,12 +58,10 @@ updates `Cargo.lock`. Then:
 
 ## Naming
 
-The cross-language verb taxonomy lives in the
-[language API guide](https://eigenergy.github.io/powerio/guide/languages.html):
-`parse` produces a stored module of whichever family claims the source,
-`from_json` rebuilds a network from its own serialization, `to_*` derive
-from a parsed value, and `convert_file` goes file to text in one call. A
-network is the parsed model; a case is the file it came from.
+The [language API guide](https://eigenergy.github.io/powerio/guide/languages.html)
+defines the public verbs. `parse` reads a grid exchange representation, `emit`
+produces one, and `serialize` and `deserialize` move PowerIO IR. Derived
+calculations use `calc_*`; `to_*` is reserved for semantic transformations.
 
 ## Text encoding
 

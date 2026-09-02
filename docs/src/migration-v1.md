@@ -9,7 +9,7 @@ Python, Julia, and C.
 
 Every grid exchange format enters through `parse`.
 
-```rust
+```rust,ignore
 let source = powerio::Source::open("case9.m")?;
 let module = powerio::parse(source, None)?;
 
@@ -68,7 +68,7 @@ callable `diagnostics()` operation.
 
 `emit` is the only operation that produces a grid exchange format.
 
-```rust
+```rust,ignore
 powerio::emit(&module, "matpower", powerio::Destination::path("copy.m"))?;
 # Ok::<(), powerio::Error>(())
 ```

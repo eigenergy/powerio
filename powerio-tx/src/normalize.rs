@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 use crate::network::{
     BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, GEN_EXTRA_KEYS, GenCost,
     Generator, Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat, StaticVarCompensator, Storage,
-    Switch, Transformer3W,
+    Switch, Transformer3W, TransformerControl, TransformerControlMode,
 };
 use crate::{Error, Result};
 
@@ -28,6 +28,40 @@ pub(crate) const DEG_TO_RAD: f64 = std::f64::consts::PI / 180.0;
 /// Radians → degrees, the inverse of [`DEG_TO_RAD`], used when reading a per-unit
 /// source back into the neutral degree model.
 pub(crate) const RAD_TO_DEG: f64 = 180.0 / std::f64::consts::PI;
+
+fn norm_transformer_control(
+    control: &mut TransformerControl,
+    base_mva: f64,
+    map: &HashMap<BusId, BusId>,
+) {
+    control.controlled_bus = control
+        .controlled_bus
+        .and_then(|controlled_bus| remap(map, controlled_bus));
+    // Siemens defines RMA/RMI as phase shift angles only for |COD| 3 and 5.
+    // The values are unused for |COD| 0 and 4, so Fixed and DcLineQuantity
+    // retain their source values instead of assigning units they do not have.
+    if matches!(
+        control.mode,
+        TransformerControlMode::ActiveFlow | TransformerControlMode::AsymmetricActiveFlow
+    ) {
+        control.tap_min *= DEG_TO_RAD;
+        control.tap_max *= DEG_TO_RAD;
+    }
+    // Siemens defines VMA/VMI as Mvar for |COD| 2 and MW for |COD| 3 and 5.
+    // They are unused for |COD| 0 and 4.
+    if matches!(
+        control.mode,
+        TransformerControlMode::ReactiveFlow
+            | TransformerControlMode::ActiveFlow
+            | TransformerControlMode::AsymmetricActiveFlow
+    ) {
+        control.band_min /= base_mva;
+        control.band_max /= base_mva;
+    }
+    if let Some(angle) = &mut control.winding_connection_angle {
+        *angle *= DEG_TO_RAD;
+    }
+}
 
 /// The gen capability columns that are per-unitized (the ramp rates). The PQ-curve
 /// points (`pc1`/`pc2`/`qc*`) and `apf` stay raw, exactly as PowerModels'
@@ -351,7 +385,7 @@ fn norm_branches(
             // if its target was filtered out (out of service / isolated), so the
             // normalized network has no dangling control reference.
             if let Some(c) = &mut branch.control {
-                c.controlled_bus = c.controlled_bus.and_then(|b| remap(map, b));
+                norm_transformer_control(c, base, map);
             }
             Some((branch, Some(row)))
         })
@@ -575,6 +609,9 @@ fn norm_transformers_3w(
             let mut windings = t.windings.clone();
             for w in &mut windings {
                 w.bus = remap(map, w.bus)?;
+                if let Some(control) = &mut w.control {
+                    norm_transformer_control(control, base, map);
+                }
                 w.shift *= DEG_TO_RAD;
                 w.rate_a /= base;
                 w.rate_b /= base;
@@ -851,6 +888,7 @@ impl BalancedNetwork {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::network::GeneratorEnergySource;
 
     fn approx(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9
@@ -860,6 +898,52 @@ mod tests {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../tests/data/angle_bounds_clamp.m");
         crate::parse_file(path, None).unwrap().network
+    }
+
+    #[test]
+    fn transformer_control_normalization_follows_psse_field_units_for_every_mode() {
+        // Siemens PSS/E 35.4.1 defines RMA/RMI as ratios for |COD| 1/2,
+        // degrees for |COD| 3/5, and unused for |COD| 0/4. VMA/VMI are p.u.
+        // voltage for |COD| 1, Mvar for |COD| 2, MW for |COD| 3/5, and unused
+        // for |COD| 0/4. Preserve unused values rather than inventing units.
+        let map = HashMap::from([(BusId(7), BusId(7))]);
+        let cases = [
+            (TransformerControlMode::Fixed, false, false),
+            (TransformerControlMode::Voltage, false, false),
+            (TransformerControlMode::ReactiveFlow, false, true),
+            (TransformerControlMode::ActiveFlow, true, true),
+            (TransformerControlMode::DcLineQuantity, false, false),
+            (TransformerControlMode::AsymmetricActiveFlow, true, true),
+        ];
+
+        for (mode, angle_limits, power_band) in cases {
+            let mut control = TransformerControl::new(mode);
+            control.controlled_bus = Some(BusId(7));
+            control.tap_min = -10.0;
+            control.tap_max = 20.0;
+            control.band_min = -50.0;
+            control.band_max = 75.0;
+            control.winding_connection_angle =
+                (mode == TransformerControlMode::AsymmetricActiveFlow).then_some(30.0);
+
+            norm_transformer_control(&mut control, 100.0, &map);
+
+            let tap_scale = if angle_limits { DEG_TO_RAD } else { 1.0 };
+            let band_scale = if power_band { 0.01 } else { 1.0 };
+            assert!(approx(control.tap_min, -10.0 * tap_scale), "{mode:?}");
+            assert!(approx(control.tap_max, 20.0 * tap_scale), "{mode:?}");
+            assert!(approx(control.band_min, -50.0 * band_scale), "{mode:?}");
+            assert!(approx(control.band_max, 75.0 * band_scale), "{mode:?}");
+            assert_eq!(control.controlled_bus, Some(BusId(7)), "{mode:?}");
+            if mode == TransformerControlMode::AsymmetricActiveFlow {
+                assert!(approx(
+                    control.winding_connection_angle.unwrap(),
+                    30.0 * DEG_TO_RAD
+                ));
+            } else {
+                assert_eq!(control.winding_connection_angle, None, "{mode:?}");
+            }
+        }
     }
 
     #[test]
@@ -949,6 +1033,7 @@ mod tests {
             extras: Extras::new(),
         };
         let branch = Branch {
+            name: None,
             from: BusId(1),
             to: BusId(2),
             r: 0.0,
@@ -984,6 +1069,7 @@ mod tests {
         );
         net.generators_mut().push(Generator {
             bus: BusId(1),
+            energy_source: GeneratorEnergySource::default(),
             pg: 10.0,
             qg: 0.0,
             pmax: 100.0,
@@ -1055,6 +1141,7 @@ mod tests {
         };
         let mkgen = |bus: usize, pmax: f64| Generator {
             bus: BusId(bus),
+            energy_source: GeneratorEnergySource::default(),
             pg: 0.0,
             qg: 0.0,
             pmax,

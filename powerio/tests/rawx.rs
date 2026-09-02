@@ -16,6 +16,10 @@ const RAWX_FIDELITY: &str = r#"{
   "network": {
     "caseid": {"fields":["rev","sbase","basfrq","title1"],"data":[35,100,60,"rawx-fidelity"]},
     "bus": {"fields":["ibus","name","baskv","ide","area","zone","owner","vm","va"],"data":[[1,"Slack",230,3,1,1,1,1,0]]},
+    "generator": {
+      "fields":["ibus","machid","pg","qg","qt","qb","vs","ireg","nreg","mbase","zr","zx","rt","xt","gtap","stat","rmpct","pt","pb","baslod","o1","f1","o2","f2","o3","f3","o4","f4","wmod","wpf"],
+      "data":[[1,"A",20,5,50,-50,1,0,0,100,0.0019,0.29,0.02,0.31,1.03,1,87.5,80,0,3,2,0.75,3,0.25,0,1,0,1,1,0.97]]
+    },
     "swshunt": {
       "fields":["ibus","shntid","modsw","adjm","stat","vswhi","vswlo","swreg","nreg","rmpct","rmidnt","binit","s1","n1","b1"],
       "data":[[1,"S1",2,1,1,1.05,0.95,0,0,100,"",0,1,1,10]]
@@ -111,6 +115,30 @@ fn ir_fresh_emission_preserves_adjm_and_null_subnode_voltage() {
     .unwrap();
     let root: serde_json::Value = serde_json::from_str(&memory_text(emitted)).unwrap();
 
+    let generator = &root["network"]["generator"];
+    let generator_fields = generator["fields"].as_array().unwrap();
+    let generator_row = generator["data"][0].as_array().unwrap();
+    let generator_value = |field: &str| {
+        let column = generator_fields
+            .iter()
+            .position(|candidate| candidate == field)
+            .unwrap();
+        &generator_row[column]
+    };
+    assert_eq!(generator_value("machid"), "A");
+    assert_eq!(generator_value("zr"), 0.0019);
+    assert_eq!(generator_value("zx"), 0.29);
+    assert_eq!(generator_value("rt"), 0.02);
+    assert_eq!(generator_value("xt"), 0.31);
+    assert_eq!(generator_value("gtap"), 1.03);
+    assert_eq!(generator_value("rmpct"), 87.5);
+    assert_eq!(generator_value("baslod"), 3);
+    assert_eq!(generator_value("o1"), 2);
+    assert_eq!(generator_value("f1"), 0.75);
+    assert_eq!(generator_value("o2"), 3);
+    assert_eq!(generator_value("f2"), 0.25);
+    assert_eq!(generator_value("wmod"), 1);
+    assert_eq!(generator_value("wpf"), 0.97);
     assert_eq!(root["network"]["swshunt"]["data"][0][3], 1);
     assert!(root["network"]["subnode"]["data"][0][5].is_null());
     assert!(root["network"]["subnode"]["data"][0][6].is_null());

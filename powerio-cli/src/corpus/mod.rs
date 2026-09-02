@@ -73,7 +73,7 @@ const SCHEMA_KEYS: [&str; 83] = [
     "leg.panic",
     "leg.failure",
     "leg.unresolved-include",
-    "sibling.variant",
+    "sibling.different-data",
     "sibling.status",
     "sibling.ybus",
     "electrical.unavailable",
@@ -140,7 +140,7 @@ const SCHEMA_KEYS: [&str; 83] = [
     "elements",
     "compared",
     "unresolved-include",
-    "variant",
+    "different_case_data",
 ];
 
 /// One readable case in the corpus, as ingest found it.
@@ -543,12 +543,12 @@ pub struct Comparison {
     /// Serde paths that changed, already collapsed to their class.
     pub model_diffs: Vec<String>,
     pub failure: Option<String>,
-    /// Two members of one bucket that are related but not the same data: a
-    /// case and its derivative. Recorded so the run states what it declined to
-    /// compare rather than silently dropping the pair.
-    pub variant: bool,
+    /// Two members of one bucket describe related cases but contain different
+    /// limits or other declared case data.
+    pub different_case_data: bool,
     /// A written deck that pulls in other files, which a string readback
-    /// cannot resolve. Recorded for the same reason as `variant`.
+    /// cannot resolve. Recorded for the same reason as
+    /// [`different_case_data`](Self::different_case_data).
     pub unresolved_include: bool,
     /// Elements the two sides disagree about the service status of.
     pub status_changed: usize,
@@ -623,11 +623,11 @@ fn compare_transmission(bucket: &Bucket, out: &mut Vec<Comparison>) {
             // Two files in one bucket that state different limits are a case
             // and its derivative, and their differences are honest. They are
             // still compared — a reader defect hides just as well between a
-            // case and its variant — but the pair is labelled so the severity
+            // case and its derivative — but the pair is labelled so the severity
             // says which kind of difference this is.
-            let twin = fingerprint::same_data(source, sibling);
+            let twin = fingerprint::same_case_data(source, sibling);
             let mut leg = sibling_leg(bucket, member, other, source, sibling);
-            leg.variant = !twin;
+            leg.different_case_data = !twin;
             out.push(leg);
         }
     }
@@ -792,7 +792,7 @@ fn empty_comparison(bucket: &Bucket, leg: Leg) -> Comparison {
         dc_terminal: None,
         model_diffs: Vec::new(),
         failure: None,
-        variant: false,
+        different_case_data: false,
         unresolved_include: false,
         status_changed: 0,
     }
@@ -1146,9 +1146,9 @@ fn findings_for(comparison: &Comparison, sanitizer: &Sanitizer) -> Vec<Finding> 
         );
         return out;
     }
-    if comparison.variant {
+    if comparison.different_case_data {
         push(
-            "sibling.variant",
+            "sibling.different-data",
             "declared",
             serde_json::json!({ "compared": true }),
         );
@@ -1170,7 +1170,7 @@ fn findings_for(comparison: &Comparison, sanitizer: &Sanitizer) -> Vec<Finding> 
     }
     if comparison.ybus.is_some() {
         let honest_difference = comparison.leg.via == Via::Sibling
-            && (comparison.variant || comparison.status_changed > 0);
+            && (comparison.different_case_data || comparison.status_changed > 0);
         // The changed entry's bus pair and magnitudes stay in the work
         // directory: a `Y_bus` entry is grid data. The finding states that the
         // admittance moved on this leg, which is what makes it actionable.
@@ -1191,11 +1191,11 @@ fn findings_for(comparison: &Comparison, sanitizer: &Sanitizer) -> Vec<Finding> 
     if comparison.injection.is_some() {
         // On a conversion leg powerio moved the power itself, so any move is a
         // defect. On a sibling leg the two files may honestly hold different
-        // operating points — a base case and its contingency variant sit side
+        // operating points — a base case and its contingency case sit side
         // by side in every planning archive — so a move that is only a status
         // disagreement is reported for triage rather than as a defect.
         let honest_difference = comparison.leg.via == Via::Sibling
-            && (comparison.injection_status_only || comparison.variant);
+            && (comparison.injection_status_only || comparison.different_case_data);
         push(
             if honest_difference {
                 "sibling.status"

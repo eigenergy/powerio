@@ -16,8 +16,9 @@ use super::{TextEmission, sanitize_quoted, warn_extra_branch_rating_sets};
 use crate::diagnostics::codes::EMIT_PSLF as F;
 use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
-    BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, Extras, Generator, Hvdc,
-    Impedance, Load, LoadVoltageModel, Shunt, SourceFormat, Transformer3W, Winding,
+    BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, Extras, Generator,
+    GeneratorEnergySource, Hvdc, Impedance, Load, LoadVoltageModel, Shunt, SourceFormat,
+    Transformer3W, Winding,
 };
 use crate::{Error, Result};
 
@@ -522,6 +523,7 @@ fn read_branch(rec: &Record) -> Result<Branch> {
         extras.insert("pslf_section_id".into(), string_or_number(section));
     }
     Ok(Branch {
+        name: None,
         from: BusId(req_id(&rec.lhs, 0, "branch from bus", rec)?),
         to: BusId(req_id(&rec.lhs, 3, "branch to bus", rec)?),
         r: num_at(&rec.rhs, 1, 0.0, "branch r", rec)?,
@@ -563,6 +565,7 @@ enum TransformerRecord {
 /// The `.epc` record carries the three pairwise impedances and the primary
 /// winding's ratio/ratings; the secondary and tertiary winding ratios are not
 /// represented at these column positions, so they default to nominal.
+#[allow(clippy::too_many_lines)]
 fn read_transformer(rec: &Record, base_mva: f64) -> Result<TransformerRecord> {
     let rhs1 = line_rhs(rec, 0);
     let line2 = line_tokens(rec, 1);
@@ -602,6 +605,7 @@ fn read_transformer(rec: &Record, base_mva: f64) -> Result<TransformerRecord> {
             rate_a: 0.0,
             rate_b: 0.0,
             rate_c: 0.0,
+            control: None,
         };
         let imp = |r, x| Impedance {
             r,
@@ -618,6 +622,7 @@ fn read_transformer(rec: &Record, base_mva: f64) -> Result<TransformerRecord> {
                     rate_a,
                     rate_b,
                     rate_c,
+                    control: None,
                 },
                 nominal(to),
                 nominal(BusId(tertiary)),
@@ -647,6 +652,9 @@ fn read_transformer(rec: &Record, base_mva: f64) -> Result<TransformerRecord> {
         extras.insert("pslf_tbase".into(), number_value(tbase));
     }
     Ok(TransformerRecord::TwoWinding(Branch {
+        // `lhs[8]` is the transformer record type (`xfmr`), not a component
+        // name. The two winding record has no separate name field here.
+        name: None,
         from,
         to,
         r,
@@ -727,6 +735,7 @@ fn read_generator(
     };
     Ok(Generator {
         bus,
+        energy_source: GeneratorEnergySource::default(),
         pg: num_at(&rec.rhs, 8, 0.0, "generator pgen", rec)?,
         qg: num_at(&rec.rhs, 11, 0.0, "generator qgen", rec)?,
         pmax: num_at(&rec.rhs, 9, 0.0, "generator pmax", rec)?,
@@ -2160,6 +2169,7 @@ end
             Vec::new(),
         );
         net.branches_mut().push(Branch {
+            name: None,
             from: BusId(1),
             to: BusId(2),
             r: 0.01,

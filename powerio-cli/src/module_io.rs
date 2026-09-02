@@ -70,6 +70,15 @@ pub(crate) fn emit_balanced_module(
     unpack_memory_emission(result, None)
 }
 
+#[allow(dead_code)] // The binary consumes this helper; the library target does not.
+pub(crate) fn emit_module(
+    module: &powerio_core::PioModule<powerio::PioValue>,
+    format: &str,
+) -> anyhow::Result<MemoryEmission> {
+    let result = powerio::emit(module, format, powerio_core::Destination::memory("output")?)?;
+    unpack_memory_emission(result, None)
+}
+
 pub(crate) fn emit_multiconductor_module(
     module: &powerio_core::PioModule<powerio_dist::MulticonductorNetwork>,
     target: powerio_dist::DistTargetFormat,

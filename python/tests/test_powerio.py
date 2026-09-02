@@ -193,6 +193,7 @@ def test_xiidm_balanced_equipment_is_available(tmp_path):
     assert network.shunts[0]["section_count"] == 2
 
     generator_control = network.generators[0]["active_power_control"]
+    assert network.generators[0]["energy_source"] == "other"
     assert generator_control == {
         "participate": False,
         "droop_percent": 3.0,
@@ -266,7 +267,7 @@ def test_xiidm_subnetworks_boundary_lines_and_tie_lines_are_available():
     assert tie["calculation_branch"]["component_type"] == "branch"
 
 
-def test_xiidm_unassigned_tap_position_remains_absent(case9):
+def test_xiidm_unassigned_tap_position_remains_absent(case9, tmp_path):
     assert case9.detailed_connectivity is None
     source = """<?xml version="1.0" encoding="UTF-8"?>
 <iidm:network xmlns:iidm="http://www.powsybl.org/schema/iidm/equipment/1_12" id="tap" caseDate="2021-01-03T00:00:00Z" forecastDistance="0" sourceFormat="test" minimumValidationLevel="EQUIPMENT">
@@ -279,13 +280,24 @@ def test_xiidm_unassigned_tap_position_remains_absent(case9):
 </iidm:network>
 """
 
-    network = powerio.parse(
-        io.StringIO(source), name="tap.xiidm", format="xiidm"
-    ).value
+    module = powerio.parse(io.StringIO(source), name="tap.xiidm", format="xiidm")
+    network = module.value
     tap_changer = network.detailed_connectivity["tap_changers"][0]
+    assert "component" not in network.detailed_connectivity["terminals"][0]
+    assert "component" not in tap_changer
     assert "tap_position" not in tap_changer
     assert tap_changer["low_tap_position"] == 0
     assert tap_changer["steps"][0]["rho"] == 1.0
+
+    destination = tmp_path / "tap-cgmes"
+    powerio.emit(module, "cgmes", destination)
+    cgmes_details = powerio.parse(
+        destination, format="cgmes"
+    ).value.detailed_connectivity
+    assert cgmes_details["terminals"][0]["component"]["component_type"] == "terminal"
+    assert (
+        cgmes_details["tap_changers"][0]["component"]["component_type"] == "tap_changer"
+    )
 
 
 def test_xiidm_connectivity_node_numbers_are_available():
@@ -311,6 +323,37 @@ def test_xiidm_connectivity_node_numbers_are_available():
     nodes = details["connectivity_nodes"]
     assert sorted(node["node_number"] for node in nodes) == [0, 1, 2]
     assert all(node["calculated_bus"] == 1 for node in nodes)
+    assert details["equipment_reactive_limits"][0]["equipment"]["local_id"] == "G"
+
+
+def test_xiidm_equipment_omissions_and_reactive_curve_are_available():
+    source = """<?xml version="1.0" encoding="UTF-8"?>
+<iidm:network xmlns:iidm="http://www.powsybl.org/schema/iidm/equipment/1_12" id="equipment" caseDate="2021-01-03T00:00:00Z" forecastDistance="0" sourceFormat="test" minimumValidationLevel="EQUIPMENT">
+  <iidm:substation id="S"><iidm:voltageLevel id="VL" nominalV="225" topologyKind="NODE_BREAKER">
+    <iidm:nodeBreakerTopology><iidm:busbarSection id="BBS" node="0"/></iidm:nodeBreakerTopology>
+    <iidm:generator id="G" energySource="SOLAR" minP="0" maxP="100" voltageRegulatorOn="true" node="0">
+      <iidm:reactiveCapabilityCurve><iidm:property name="curve" value="retained"/><iidm:point p="0" minQ="-20" maxQ="20"><iidm:property name="point" value="first"/></iidm:point><iidm:point p="100" minQ="-10" maxQ="10"/></iidm:reactiveCapabilityCurve>
+    </iidm:generator>
+  </iidm:voltageLevel></iidm:substation>
+</iidm:network>
+"""
+
+    network = powerio.parse(
+        io.StringIO(source), name="equipment.xiidm", format="xiidm"
+    ).value
+    assert network.generators[0]["energy_source"] == "solar"
+    details = network.detailed_connectivity
+    assert [field["field"] for field in details["omitted_fields"]] == [
+        "active_power",
+        "reactive_power",
+        "voltage_setpoint",
+    ]
+    limits = details["equipment_reactive_limits"][0]
+    assert limits["equipment"]["local_id"] == "G"
+    assert limits["limits"]["kind"] == "capability_curve"
+    curve = limits["limits"]["limits"]
+    assert curve["properties"] == {"curve": "retained"}
+    assert curve["points"][0]["properties"] == {"point": "first"}
 
 
 def test_public_type_is_balanced_network(case9):
@@ -2032,6 +2075,182 @@ def test_emit_round_trip_through_psse(tmp_path):
         (back.text).encode(), "matpower", value_type=powerio.BalancedNetwork
     ).value
     assert case.n_buses == 30
+
+
+def test_psse_transformer_name_and_control_view(tmp_path):
+    source = tmp_path / "controlled.rawx"
+    source.write_text(
+        json.dumps(
+            {
+                "network": {
+                    "caseid": {
+                        "fields": ["rev", "sbase", "basfrq", "title1"],
+                        "data": [35, 100, 60, "controlled"],
+                    },
+                    "bus": {
+                        "fields": ["ibus", "name", "baskv", "ide", "vm", "va"],
+                        "data": [[1, "B1", 230, 3, 1, 0], [2, "B2", 18, 1, 1, 0]],
+                    },
+                    "transformer": {
+                        "fields": [
+                            "ibus",
+                            "jbus",
+                            "kbus",
+                            "ckt",
+                            "cw",
+                            "cz",
+                            "cm",
+                            "name",
+                            "stat",
+                            "r1_2",
+                            "x1_2",
+                            "sbase1_2",
+                            "windv1",
+                            "nomv1",
+                            "wdg1rate1",
+                            "cod1",
+                            "cont1",
+                            "node1",
+                            "rma1",
+                            "rmi1",
+                            "vma1",
+                            "vmi1",
+                            "ntp1",
+                            "cnxa1",
+                            "windv2",
+                            "nomv2",
+                        ],
+                        "data": [
+                            [
+                                1,
+                                2,
+                                0,
+                                "T1",
+                                1,
+                                1,
+                                1,
+                                "CONTROLLED TRANSFORMER",
+                                1,
+                                0.01,
+                                0.10,
+                                100,
+                                1.05,
+                                230,
+                                100,
+                                -1,
+                                -2,
+                                2,
+                                1.08,
+                                0.92,
+                                1.05,
+                                0.98,
+                                17,
+                                0,
+                                1,
+                                18,
+                            ],
+                            [
+                                1,
+                                2,
+                                0,
+                                "T2",
+                                1,
+                                1,
+                                1,
+                                "DC LINE CONTROL",
+                                1,
+                                0.02,
+                                0.20,
+                                100,
+                                1,
+                                230,
+                                90,
+                                4,
+                                0,
+                                0,
+                                1.08,
+                                0.92,
+                                0,
+                                0,
+                                17,
+                                0,
+                                1,
+                                18,
+                            ],
+                            [
+                                1,
+                                2,
+                                0,
+                                "T3",
+                                1,
+                                1,
+                                1,
+                                "ASYMMETRIC CONTROL",
+                                1,
+                                0.03,
+                                0.30,
+                                100,
+                                1,
+                                230,
+                                80,
+                                5,
+                                0,
+                                0,
+                                15,
+                                -15,
+                                100,
+                                -100,
+                                21,
+                                12.5,
+                                1,
+                                18,
+                            ],
+                        ],
+                    },
+                    "sub": {
+                        "fields": ["isub", "name", "lati", "long", "srg"],
+                        "data": [[1, "SUB", 0, 0, 0]],
+                    },
+                    "subnode": {
+                        "fields": ["isub", "inode", "name", "ibus", "stat", "vm", "va"],
+                        "data": [[1, 1, "T1-H", 1, 1, 1, 0], [1, 2, "T1-L", 2, 1, 1, 0]],
+                    },
+                    "subterm": {
+                        "fields": ["isub", "inode", "type", "eqid", "ibus", "jbus", "kbus"],
+                        "data": [[1, 1, "2", "T1", 1, 2, 0], [1, 2, "2", "T1", 2, 1, 0]],
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    branch = powerio.parse(source).value.branches[0]
+    assert branch["name"] == "CONTROLLED TRANSFORMER"
+    assert branch["control"]["mode"] == "voltage"
+    assert branch["control"]["enabled"] is False
+    assert branch["control"]["controlled_bus"] == 2
+    assert branch["control"]["controlled_bus_on_winding_side"] is True
+    terminal = branch["control"]["regulating_terminal"]
+    assert terminal["equipment"]["component_type"] == "transformer"
+    assert terminal["terminal"] == 2
+    assert branch["control"]["tap_position_count"] == 17
+
+    dc_control = next(
+        branch
+        for branch in powerio.parse(source).value.branches
+        if branch["name"] == "DC LINE CONTROL"
+    )["control"]
+    assert dc_control["mode"] == "dc_line_quantity"
+    assert dc_control["enabled"] is True
+
+    asymmetric_control = next(
+        branch
+        for branch in powerio.parse(source).value.branches
+        if branch["name"] == "ASYMMETRIC CONTROL"
+    )["control"]
+    assert asymmetric_control["mode"] == "asymmetric_active_flow"
+    assert asymmetric_control["winding_connection_angle"] == 12.5
 
 
 def test_emit_destination_preserves_the_crlf_echo(tmp_path):

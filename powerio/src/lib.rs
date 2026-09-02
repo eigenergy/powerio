@@ -146,7 +146,7 @@ impl Goc3DataFiles {
         };
         if let Some(existing) = slot {
             return Err(Error::new(
-                &codes::READ_GOC3_AMBIGUOUS_DOCUMENTS,
+                &powerio_tx::diagnostics::codes::READ_GOC3_AMBIGUOUS_DOCUMENTS,
                 format!(
                     "GO Challenge 3 source contains both `{}` and `{}` as {} data files",
                     existing.name(),
@@ -167,7 +167,7 @@ fn goc3_file_kind(buffer: &SourceBuffer) -> Result<Option<Goc3DataFileKind>> {
     let value: serde_json::Value =
         serde_json::from_slice(buffer.content_bytes()).map_err(|error| {
             Error::new(
-                &codes::PARSE_GOC3_MALFORMED,
+                &powerio_tx::diagnostics::codes::PARSE_GOC3_MALFORMED,
                 format!("{}: {error}", buffer.name()),
             )
         })?;
@@ -183,7 +183,7 @@ fn goc3_file_kind(buffer: &SourceBuffer) -> Result<Option<Goc3DataFileKind>> {
         (false, true) => Ok(Some(Goc3DataFileKind::Solution)),
         (false, false) => Ok(None),
         (true, true) => Err(Error::new(
-            &codes::READ_GOC3_AMBIGUOUS_DOCUMENTS,
+            &powerio_tx::diagnostics::codes::READ_GOC3_AMBIGUOUS_DOCUMENTS,
             format!(
                 "{} contains both the GO Challenge 3 problem and solution roots",
                 buffer.name()
@@ -361,7 +361,11 @@ fn parse_goc3(
         } else {
             "the source contains neither a GO Challenge 3 problem file nor a solution file"
         };
-        return Err(Error::new(&codes::READ_GOC3_PROBLEM_REQUIRED, message).with_source(source));
+        return Err(Error::new(
+            &powerio_tx::diagnostics::codes::READ_GOC3_PROBLEM_REQUIRED,
+            message,
+        )
+        .with_source(source));
     };
 
     let (instance, diagnostics) =

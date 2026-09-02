@@ -19,12 +19,14 @@ the matrix crate projects them into sparse operators. The DC OPF bundle schema i
 | \\(\Re(Y_{\mathrm{bus}})\\), \\(-\Im(Y_{\mathrm{bus}})\\) | \\(n \times n\\) | `calc_admittance_matrix` | full admittance, keeps taps and shifts |
 | LACPF (linear AC power flow) block | \\(2n \times 2n\\) | `calc_lacpf_matrix` | \\(\begin{bmatrix}G & -B \\\\ -B & -G\end{bmatrix}\\), flat start, indefinite |
 | PowerModels DC incidence \\(A\\) | \\(m \times n\\) | `DcOperators::calc_incidence_matrix` | row \\(e\\) has \\(+1\\) at the from bus, \\(-1\\) at the to bus |
-| DC branch susceptance \\(B_f\\) | \\(m \times n\\) | `DcOperators::calc_branch_susceptance_matrix` | \\(B_f = \operatorname{diag}(b)A\\) |
+| DC branch susceptances \\(b\\) | \\(m\\) | `DcOperators::calc_branch_susceptances` | one signed susceptance per in service branch |
+| DC branch flow matrix \\(B_f\\) | \\(m \times n\\) | `DcOperators::calc_branch_flow_matrix` | \\(B_f = \operatorname{diag}(b)A\\) |
 | DC bus susceptance \\(B\\) | \\(n \times n\\) | `DcOperators::calc_bus_susceptance_matrix` | \\(B = A^\mathsf{T}\operatorname{diag}(b)A\\) |
-| phase shift injection \\(p_{shift}\\) | \\(n\\) | `DcOperators::calc_phase_shift_injection` | \\(p_{shift} = A^\mathsf{T}(b .* shift)\\) |
+| DC branch phase shift injection | \\(m\\) | `DcOperators::calc_branch_phase_shift_injection` | \\(b .* shift\\) |
+| DC bus phase shift injection \\(p_{shift}\\) | \\(n\\) | `DcOperators::calc_bus_phase_shift_injection` | \\(p_{shift} = A^\mathsf{T}(b .* shift)\\) |
 | DC bus injection \\(p_{bus}\\) | \\(n\\) | `DcOperators::calc_bus_injection_dc` | \\(p_{bus} = -Bv_a + p_{shift}\\) |
 | weighted bus factor \\(L\\) | \\(n \times n\\) | `calc_weighted_laplacian` | \\(L = C \operatorname{diag}(w) C^\mathsf{T}\\); internal solver data |
-| solver branch flow matrix | \\(m \times n\\) | `calc_branch_flow_matrix` | positive solver susceptance magnitudes times \\(C^\mathsf{T}\\) |
+| solver branch flow matrix | \\(m \times n\\) | `calc_solver_branch_flow_matrix` | positive solver susceptance magnitudes times \\(C^\mathsf{T}\\); internal solver data |
 | PTDF | \\(m \times n\\) | `calc_ptdf` | routes through `Auto` solver selection; `calc_ptdf_lodf_with_options` exposes the choice |
 | LODF | \\(m \times m\\) | `calc_lodf` | routes through `Auto` solver selection; option based builds can prune small output entries |
 | adjacency | \\(n \times n\\) | `calc_adjacency_matrix` | sparse graph adjacency |
@@ -55,8 +57,9 @@ voltage magnitude updates. PowerIO exports the full \\(n \times n\\) matrices so
 callers can apply their own bus type reduction.
 
 `DcOperators` exposes the public DC calculations through
-`calc_incidence_matrix`, `calc_branch_susceptance_matrix`,
-`calc_bus_susceptance_matrix`, `calc_phase_shift_injection`,
+`calc_incidence_matrix`, `calc_branch_susceptances`,
+`calc_bus_susceptance_matrix`, `calc_branch_flow_matrix`,
+`calc_branch_phase_shift_injection`, `calc_bus_phase_shift_injection`,
 `calc_bus_injection_dc`, and `calc_branch_flow_dc`. The `calc_*` prefix marks a newly computed result;
 nouns remain stored fields or borrowed accessors. The incidence matrix follows
 PowerModels: branches by buses, with \\(+1\\) at the from bus and \\(-1\\) at the
