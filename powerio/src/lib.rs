@@ -50,6 +50,9 @@ pub use powerio_tx::{
     calc_series_admittance_of, classify_json_bytes, classify_json_text, repair_values,
     to_geo_layer_from_pwd, to_lonlat_from_pwd_mercator,
 };
+/// The CGMES emit option values and the module extension namespace that
+/// carries a parsed profile set's `md:FullModel` records.
+pub use powerio_tx::format::{CGMES_DOCUMENT_EXTENSION, CgmesProfile, CgmesVersion};
 /// Balanced network records and the public network and geographic submodules.
 /// Derived indexes, normalization data, solver tables, and component error
 /// types remain available from `powerio-tx` rather than being duplicated at

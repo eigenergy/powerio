@@ -2691,3 +2691,52 @@ def test_calculation_updates_are_constructed_from_typed_updates():
     assert powerio.CalculationUpdate(network).data_role == "network"
     assert not hasattr(powerio.CalculationUpdate, "operating_point")
     assert not hasattr(powerio.CalculationUpdate, "network")
+
+
+def test_emit_options_select_the_cgmes_version_and_profiles(tmp_path):
+    module = powerio.parse(DATA / "case9.m")
+    destination = tmp_path / "case9-cim16"
+    result = powerio.emit(
+        module,
+        "cgmes",
+        destination,
+        options={"cgmes_version": "2.4.15", "cgmes_profiles": "EQ,TP"},
+    )
+    assert result.layout == "directory"
+    names = sorted(artifact.name for artifact in result.artifacts)
+    assert len(names) == 2
+    assert names[0].endswith("_EQ.xml")
+    assert names[1].endswith("_TP.xml")
+    equipment = (destination / names[0]).read_text()
+    assert "http://iec.ch/TC57/2013/CIM-schema-cim16#" in equipment
+
+    reparsed = powerio.parse(destination, format="cgmes")
+    assert reparsed.value.n_buses == 9
+
+    with pytest.raises(powerio.PowerIOError, match="REQUEST.EMIT.OPTION_INVALID"):
+        powerio.emit(module, "cgmes", options={"cgmes_version": "16"})
+    with pytest.raises(powerio.PowerIOError, match="REQUEST.EMIT.OPTION_INVALID"):
+        powerio.emit(module, "matpower", options={"cgmes_version": "2.4.15"})
+    with pytest.raises(ValueError):
+        powerio.emit(module, "cgmes", options={"cgmes_profiles": "EQ&TP"})
+
+
+def test_two_authority_set_assembles_one_tie_line():
+    module = powerio.parse(DATA / "cgmes" / "two-authority", format="cgmes")
+    network = module.value
+    assert network.n_buses == 4
+    assert len(network.branches) == 3
+    detailed = network.detailed_connectivity
+    assert len(detailed["tie_lines"]) == 1
+    assert len(detailed["boundary_lines"]) == 2
+    boundary_line = detailed["boundary_lines"][0]
+    assert boundary_line["pairing_key"] == "X node A-B"
+    stored = json.loads(powerio.serialize(module).text)
+    documents = stored["extensions"]["powerio.cgmes"]["documents"]
+    assert len(documents) == 8
+    topology_a = next(d for d in documents if d["source"] == "authority-a_TP.xml")
+    assert topology_a["modeling_authority_set"] == "http://example.org/cgmes/authority-a"
+    assert topology_a["depends_on"] == [
+        "urn:uuid:aaaaaaaa-1111-4000-8000-000000000001",
+        "urn:uuid:00000000-1111-4000-8000-000000000002",
+    ]

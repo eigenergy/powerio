@@ -37,7 +37,7 @@ import os as _os
 from collections import namedtuple
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Iterable, Optional, Union
+from typing import Any, Iterable, Mapping, Optional, Union
 
 from . import _powerio
 from ._powerio import (
@@ -1419,8 +1419,43 @@ def _emit_to_destination(
     return result
 
 
-def emit(module: PioModule, format: str, destination: Optional[Any] = None) -> EmitResult:
-    """Emit a module as one grid exchange format."""
+def _format_with_options(format: str, options: Optional[Mapping[str, Any]]) -> str:
+    """The format name with the emit options as its ``?name=value&...`` suffix.
+
+    The suffix is the one spelling of emit options every PowerIO binding and
+    the C ABI share; the core parses it and rejects an unknown option.
+    """
+    if not options:
+        return format
+    pairs = []
+    for key, value in options.items():
+        key = str(key)
+        value = str(value)
+        for text in (key, value):
+            if any(separator in text for separator in "?&="):
+                raise ValueError(
+                    f"emit option {key!r}={value!r} must not contain '?', '&', or '='"
+                )
+        pairs.append(f"{key}={value}")
+    return f"{format}?{'&'.join(pairs)}"
+
+
+def emit(
+    module: PioModule,
+    format: str,
+    destination: Optional[Any] = None,
+    *,
+    options: Optional[Mapping[str, Any]] = None,
+) -> EmitResult:
+    """Emit a module as one grid exchange format.
+
+    ``options`` names emit options by their core spelling: ``cgmes_version``
+    (``"2.4.15"`` or ``"3.0"``) and ``cgmes_profiles`` (a comma separated
+    subset of ``EQ``, ``TP``, ``SSH``, ``SV``, ``EQ_BD``, and ``TP_BD``), both
+    for the ``cgmes`` format. An unknown option raises ``PowerIOError`` with
+    code ``REQUEST.EMIT.OPTION_INVALID``.
+    """
+    format = _format_with_options(format, options)
     return _emit_to_destination(
         module,
         destination,

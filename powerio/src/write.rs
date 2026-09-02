@@ -580,6 +580,7 @@ fn emit_balanced_network(
     module: &PioModule<PioValue>,
     network: &BalancedNetwork,
     format: &str,
+    options: &powerio_tx::EmitOptions,
     destination: Destination,
     preserve_retained_source: bool,
     diagnostics: Vec<Diagnostic>,
@@ -613,7 +614,7 @@ fn emit_balanced_network(
         let Some(target) = powerio_tx::format::parse_target_format(format) else {
             return Err(unknown_format(format));
         };
-        powerio_tx::emit(&typed, target, destination)
+        powerio_tx::emit_with_options(&typed, target, options, destination)
     }?;
     Ok(result.__with_diagnostics(diagnostics))
 }
@@ -681,6 +682,7 @@ fn multiconductor_calculation_network(
 fn emit_network_or_calculation(
     module: &PioModule<PioValue>,
     format: &str,
+    options: &powerio_tx::EmitOptions,
     destination: Destination,
 ) -> Result<EmitResult, Error> {
     if matches!(module.value, PioValue::AcScucInstance(_)) && is_goc3(format) {
@@ -691,6 +693,7 @@ fn emit_network_or_calculation(
             module,
             network,
             format,
+            options,
             destination,
             false,
             vec![calculation_data_omitted(module.value.type_name(), format)],
@@ -707,9 +710,15 @@ fn emit_network_or_calculation(
         );
     }
     match &module.value {
-        PioValue::BalancedNetwork(network) => {
-            emit_balanced_network(module, network, format, destination, true, Vec::new())
-        }
+        PioValue::BalancedNetwork(network) => emit_balanced_network(
+            module,
+            network,
+            format,
+            options,
+            destination,
+            true,
+            Vec::new(),
+        ),
         PioValue::MulticonductorNetwork(network) => emit_multiconductor_network(
             module,
             network.clone(),
@@ -720,7 +729,15 @@ fn emit_network_or_calculation(
         ),
         PioValue::BalancedOperatingPoint(point) => {
             let (network, diagnostics) = network_with_balanced_operating_point(point, format);
-            emit_balanced_network(module, &network, format, destination, false, diagnostics)
+            emit_balanced_network(
+                module,
+                &network,
+                format,
+                options,
+                destination,
+                false,
+                diagnostics,
+            )
         }
         PioValue::MulticonductorOperatingPoint(point) => {
             let (network, diagnostics) = network_with_multiconductor_operating_point(point, format);
@@ -734,12 +751,14 @@ fn emit_balanced_solution_network(
     module: &PioModule<PioValue>,
     network: &BalancedNetwork,
     format: &str,
+    options: &powerio_tx::EmitOptions,
     destination: Destination,
 ) -> Result<EmitResult, Error> {
     emit_balanced_network(
         module,
         network,
         format,
+        options,
         destination,
         false,
         vec![solution_data_omitted(module.value.type_name(), format)],
@@ -765,6 +784,7 @@ fn emit_multiconductor_solution_network(
 fn emit_solution(
     module: &PioModule<PioValue>,
     format: &str,
+    options: &powerio_tx::EmitOptions,
     destination: Destination,
 ) -> Result<EmitResult, Error> {
     match &module.value {
@@ -772,30 +792,35 @@ fn emit_solution(
             module,
             &network_with_dc_pf_solution(solution),
             format,
+            options,
             destination,
         ),
         PioValue::AcPfSolution(solution) => emit_balanced_solution_network(
             module,
             &network_with_ac_pf_solution(solution),
             format,
+            options,
             destination,
         ),
         PioValue::DcOpfSolution(solution) => emit_balanced_solution_network(
             module,
             &network_with_dc_opf_solution(solution),
             format,
+            options,
             destination,
         ),
         PioValue::AcOpfSolution(solution) => emit_balanced_solution_network(
             module,
             &network_with_ac_opf_solution(solution),
             format,
+            options,
             destination,
         ),
         PioValue::SocwrOpfSolution(solution) => emit_balanced_network(
             module,
             solution.network(),
             format,
+            options,
             destination,
             false,
             vec![relaxation_data_omitted(format)],
@@ -813,10 +838,44 @@ fn emit_solution(
             module,
             solution.instance().network(),
             format,
+            options,
             destination,
         ),
         _ => unreachable!("caller selected a value that is not a solution"),
     }
+}
+
+/// Split `format[?name=value[&name=value]...]` into the format name and the
+/// emit options the suffix names. The suffix is the one spelling of emit
+/// options every language binding and the C ABI share.
+fn split_format_options(format: &str) -> Result<(&str, powerio_tx::EmitOptions), Error> {
+    let (name, query) = match format.split_once('?') {
+        Some((name, query)) => (name, Some(query)),
+        None => (format, None),
+    };
+    let mut options = powerio_tx::EmitOptions::default();
+    for pair in query
+        .into_iter()
+        .flat_map(|query| query.split('&'))
+        .filter(|pair| !pair.is_empty())
+    {
+        let Some((key, value)) = pair.split_once('=') else {
+            return Err(Error::new(
+                &powerio_tx::diagnostics::codes::REQUEST_EMIT_OPTION_INVALID,
+                format!("emit option `{pair}` is not spelled `name=value`"),
+            ));
+        };
+        options
+            .apply_named(key, value)
+            .map_err(|error| Error::new(error.code(), error.to_string()).with_cause(error))?;
+    }
+    if !options.is_default() && !is_cgmes_dir(name) {
+        return Err(Error::new(
+            &powerio_tx::diagnostics::codes::REQUEST_EMIT_OPTION_INVALID,
+            format!("cgmes_version and cgmes_profiles apply only to the cgmes format, not to {name}"),
+        ));
+    }
+    Ok((name, options))
 }
 
 fn emit_dynamic(
@@ -824,7 +883,10 @@ fn emit_dynamic(
     format: &str,
     destination: Destination,
 ) -> Result<EmitResult, Error> {
-    if let Some(artifacts) = echo_retained_directory(module, format)? {
+    let (format, options) = split_format_options(format)?;
+    if options.is_default()
+        && let Some(artifacts) = echo_retained_directory(module, format)?
+    {
         return destination.__commit_artifacts(
             true,
             powerio_core::Fidelity::ExactSameFormat,
@@ -864,7 +926,9 @@ fn emit_dynamic(
         | PioValue::AcOpfInstance(_)
         | PioValue::McAcPfInstance(_)
         | PioValue::McAcOpfInstance(_)
-        | PioValue::AcScucInstance(_) => emit_network_or_calculation(module, format, destination),
+        | PioValue::AcScucInstance(_) => {
+            emit_network_or_calculation(module, format, &options, destination)
+        }
         PioValue::DcPfSolution(_)
         | PioValue::AcPfSolution(_)
         | PioValue::DcOpfSolution(_)
@@ -872,7 +936,7 @@ fn emit_dynamic(
         | PioValue::SocwrOpfSolution(_)
         | PioValue::McAcPfSolution(_)
         | PioValue::McAcOpfSolution(_)
-        | PioValue::AcScucSolution(_) => emit_solution(module, format, destination),
+        | PioValue::AcScucSolution(_) => emit_solution(module, format, &options, destination),
         _ => {
             if known_format_name(format) {
                 Err(unsupported_type(module, format))

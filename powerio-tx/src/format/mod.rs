@@ -79,7 +79,7 @@ pub use pypsa::{
     pypsa_axis as __pypsa_axis,
 };
 
-pub use cgmes::CgmesVersion;
+pub use cgmes::{CgmesProfile, CgmesVersion, DOCUMENT_EXTENSION as CGMES_DOCUMENT_EXTENSION};
 pub(crate) use egret::write_egret_json;
 pub(crate) use pandapower::write_pandapower_json;
 pub(crate) use powermodels::write_powermodels_json;
@@ -545,7 +545,8 @@ pub fn parse_with_json_class(
         routing::parse_transmission_format(format.as_str()) == Some(TransmissionFormat::Cgmes)
     }) || cgmes::looks_like_profile_set(&source);
     let mut warnings = Diagnostics::new();
-    match parse_to_network(&source, &mut warnings, json_class) {
+    let mut extras = ParseExtras::default();
+    match parse_to_network(&source, &mut warnings, json_class, &mut extras) {
         Ok(mut network) => {
             network.assign_missing_component_ids();
             // Record the detected format on the retained source before the
@@ -579,7 +580,11 @@ pub fn parse_with_json_class(
                     Err(_) => source,
                 }
             };
-            PioModule::parsed(network, source, warnings.into_records())
+            let mut module = PioModule::parsed(network, source, warnings.into_records())?;
+            for (namespace, value) in extras.extensions {
+                module.insert_extension(namespace, value)?;
+            }
+            Ok(module)
         }
         Err(error) => {
             let core = powerio_core::Error::new(error.code(), error.to_string());
@@ -596,11 +601,19 @@ pub fn parse_with_json_class(
 /// computed on this source's own text ([`parse_with_json_class`]); when it is
 /// `None`, this classifies inline at the point a `.json` source needs it,
 /// exactly as [`parse`] always has.
+/// Module records a reader produces beside the network and its diagnostics:
+/// namespaced extension values that [`parse`] stores on the module.
+#[derive(Debug, Default)]
+pub(crate) struct ParseExtras {
+    pub(crate) extensions: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
 #[allow(clippy::too_many_lines)]
 fn parse_to_network(
     source: &powerio_core::Source,
     warnings: &mut Diagnostics,
     json_class: Option<routing::JsonClass>,
+    extras: &mut ParseExtras,
 ) -> Result<BalancedNetwork> {
     let from = source.format().map(powerio_core::FormatId::as_str);
     let path = std::path::Path::new(source.name());
@@ -630,7 +643,7 @@ fn parse_to_network(
             routing::parse_transmission_format(format) == Some(TransmissionFormat::Cgmes)
         }) || (from.is_none() && cgmes::looks_like_profile_set(source))
         {
-            return cgmes::parse_source(source, warnings);
+            return cgmes::parse_source(source, warnings, extras);
         }
         // Any other directory has no reader; refuse it as a directory before
         // the extension logic reads ".07" off a name like `pglib-opf-23.07`.
@@ -650,7 +663,7 @@ fn parse_to_network(
         routing::parse_transmission_format(format) == Some(TransmissionFormat::Cgmes)
     }) || (from.is_none() && cgmes::looks_like_profile_set(source))
     {
-        return cgmes::parse_source(source, warnings);
+        return cgmes::parse_source(source, warnings, extras);
     }
     if from.is_some_and(|format| format == "model-json") {
         let buffer = primary(source)?;
@@ -763,7 +776,7 @@ fn parse_to_network(
             class => json_target_from_class(class)?,
         },
     };
-    read_source(text, fmt, stem, warnings)
+    read_source(text, fmt, stem, warnings, extras)
 }
 
 /// The primary buffer of a file or memory source.
@@ -792,6 +805,7 @@ fn read_source(
     fmt: TargetFormat,
     name_hint: Option<&str>,
     warnings: &mut Diagnostics,
+    extras: &mut ParseExtras,
 ) -> Result<BalancedNetwork> {
     let net = match fmt {
         TargetFormat::Matpower => matpower::parse_matpower_source(text, name_hint),
@@ -822,7 +836,7 @@ fn read_source(
         }
         TargetFormat::Xiidm => xiidm::parse_xiidm_source(text, warnings),
         TargetFormat::Cgmes => {
-            cgmes::parse_text(name_hint.unwrap_or("profile.xml"), text, warnings)
+            cgmes::parse_text(name_hint.unwrap_or("profile.xml"), text, warnings, extras)
         }
     }?;
     reject_empty_case(&net, fmt.label())?;
@@ -1018,16 +1032,71 @@ impl TextEmission {
 ///
 /// The default preserves the module as stated. Other options work on a cloned
 /// network and never mutate the caller's case.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct EmitOptions {
     pub missing_gen_cost: MissingGenCostPolicy,
     pub gen_cost_patches: Vec<GenCostPatch>,
+    /// The CGMES release fresh `cgmes` output declares; CGMES 3.0 by default.
+    pub cgmes_version: CgmesVersion,
+    /// The profile documents fresh `cgmes` output writes; EQ, TP, SSH, and SV
+    /// by default.
+    pub cgmes_profiles: Vec<CgmesProfile>,
+}
+
+impl Default for EmitOptions {
+    fn default() -> Self {
+        Self {
+            missing_gen_cost: MissingGenCostPolicy::default(),
+            gen_cost_patches: Vec::new(),
+            cgmes_version: CgmesVersion::default(),
+            cgmes_profiles: CgmesProfile::DEFAULT.to_vec(),
+        }
+    }
 }
 
 impl EmitOptions {
+    /// The option names [`EmitOptions::apply_named`] accepts.
+    pub const NAMED: [&'static str; 2] = ["cgmes_version", "cgmes_profiles"];
+
     #[must_use]
     pub fn is_default(&self) -> bool {
-        self.missing_gen_cost.is_preserve() && self.gen_cost_patches.is_empty()
+        self.missing_gen_cost.is_preserve()
+            && self.gen_cost_patches.is_empty()
+            && self.cgmes_version == CgmesVersion::default()
+            && self.cgmes_profiles == CgmesProfile::DEFAULT
+    }
+
+    /// True when an option applies only to the `cgmes` target.
+    #[must_use]
+    pub fn has_cgmes_options(&self) -> bool {
+        self.cgmes_version != CgmesVersion::default()
+            || self.cgmes_profiles != CgmesProfile::DEFAULT
+    }
+
+    /// Set one option from its name and text value, the spelling the command
+    /// line, the C ABI, and the bindings share: `cgmes_version` takes `2.4.15`
+    /// or `3.0`, and `cgmes_profiles` takes a comma separated list of `EQ`,
+    /// `TP`, `SSH`, `SV`, `EQ_BD`, and `TP_BD`.
+    ///
+    /// # Errors
+    /// [`Error::InvalidEmitOption`] for an unknown name or a value the option
+    /// does not accept.
+    pub fn apply_named(&mut self, name: &str, value: &str) -> Result<()> {
+        match name.trim() {
+            "cgmes_version" => self.cgmes_version = CgmesVersion::parse_option(value)?,
+            "cgmes_profiles" => self.cgmes_profiles = CgmesProfile::parse_list(value)?,
+            other => {
+                return Err(Error::InvalidEmitOption(format!(
+                    "`{other}` is not an emit option; the options are {}",
+                    Self::NAMED
+                        .iter()
+                        .map(|name| format!("`{name}`"))
+                        .collect::<Vec<_>>()
+                        .join(" and ")
+                )));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1229,13 +1298,21 @@ pub fn emit_with_options(
             Vec::new(),
         );
     }
+    if format != TargetFormat::Cgmes && options.has_cgmes_options() {
+        return Err(core_error(Error::InvalidEmitOption(format!(
+            "cgmes_version and cgmes_profiles apply only to the cgmes target, not to {format}"
+        ))));
+    }
     if format == TargetFormat::Cgmes {
-        let (working, mut diagnostics) = if options.is_default() {
-            (module.value.clone(), Vec::new())
-        } else {
-            apply_emit_cost_policy(&module.value, options).map_err(core_error)?
-        };
-        let (artifacts, format_diagnostics) = cgmes::artifacts(&working).map_err(core_error)?;
+        let (working, mut diagnostics) =
+            if options.gen_cost_patches.is_empty() && options.missing_gen_cost.is_preserve() {
+                (module.value.clone(), Vec::new())
+            } else {
+                apply_emit_cost_policy(&module.value, options).map_err(core_error)?
+            };
+        let (artifacts, format_diagnostics) =
+            cgmes::artifacts(&working, options.cgmes_version, &options.cgmes_profiles)
+                .map_err(core_error)?;
         diagnostics.extend(format_diagnostics.into_records());
         return destination.__commit_artifacts(
             true,

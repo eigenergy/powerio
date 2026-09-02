@@ -263,6 +263,11 @@ enum Command {
         /// CSV with columns gen_index,bus,c2,c1,c0 and optional startup,shutdown.
         #[arg(long)]
         gen_cost_csv: Option<PathBuf>,
+        /// A named emission option as `KEY=VALUE`, repeatable. `cgmes_version`
+        /// selects `2.4.15` or `3.0` and `cgmes_profiles` a comma separated
+        /// subset of EQ, TP, SSH, SV, EQ_BD, and TP_BD for `--to cgmes`.
+        #[arg(long = "emit-option", value_name = "KEY=VALUE")]
+        emit_option: Vec<String>,
     },
     /// Extract, apply, or normalize standalone geographic layers (.geo.json).
     Geo {
@@ -383,23 +388,28 @@ enum MissingGenCostArg {
     Quadratic,
 }
 
+/// The emission options `convert` takes: the generator cost policy and the
+/// named `--emit-option KEY=VALUE` pairs.
 #[derive(Clone, Copy, Debug)]
-struct GenCostCliOptions<'a> {
+struct EmitCliOptions<'a> {
     missing_gen_cost: MissingGenCostArg,
     default_gen_cost: Option<&'a str>,
     gen_cost_csv: Option<&'a Path>,
+    named: &'a [String],
 }
 
-impl<'a> GenCostCliOptions<'a> {
+impl<'a> EmitCliOptions<'a> {
     const fn new(
         missing_gen_cost: MissingGenCostArg,
         default_gen_cost: Option<&'a str>,
         gen_cost_csv: Option<&'a Path>,
+        named: &'a [String],
     ) -> Self {
         Self {
             missing_gen_cost,
             default_gen_cost,
             gen_cost_csv,
+            named,
         }
     }
 
@@ -409,15 +419,37 @@ impl<'a> GenCostCliOptions<'a> {
             missing_gen_cost: MissingGenCostArg::Preserve,
             default_gen_cost: None,
             gen_cost_csv: None,
+            named: &[],
         }
     }
 
     fn emit_options(self) -> anyhow::Result<EmitOptions> {
-        emit_options(
+        let mut options = emit_options(
             self.missing_gen_cost,
             self.default_gen_cost,
             self.gen_cost_csv,
-        )
+        )?;
+        for pair in self.named {
+            let Some((key, value)) = pair.split_once('=') else {
+                return Err(cli_failure(
+                    &codes::REQUEST_CLI_OPTION_INVALID,
+                    format!("`--emit-option {pair}` is not spelled `KEY=VALUE`"),
+                ));
+            };
+            options
+                .apply_named(key, value)
+                .map_err(|error| cli_failure(&codes::REQUEST_CLI_OPTION_INVALID, error.to_string()))?;
+        }
+        Ok(options)
+    }
+
+    /// The facade format name with the named options as its `?` suffix, the
+    /// spelling the facade's `emit` accepts for every value type.
+    fn format_with_options(self, token: &str) -> String {
+        if self.named.is_empty() {
+            return token.to_string();
+        }
+        format!("{token}?{}", self.named.join("&"))
     }
 }
 
@@ -832,16 +864,18 @@ fn main() -> std::process::ExitCode {
             missing_gen_cost,
             default_gen_cost,
             gen_cost_csv,
+            emit_option,
         } => run_convert(
             &input,
             to,
             output.as_deref(),
             from,
             scenario,
-            GenCostCliOptions::new(
+            EmitCliOptions::new(
                 missing_gen_cost,
                 default_gen_cost.as_deref(),
                 gen_cost_csv.as_deref(),
+                &emit_option,
             ),
         ),
         Command::Geo { command } => run_geo(command),
@@ -1370,6 +1404,7 @@ fn emit_options(
     Ok(EmitOptions {
         missing_gen_cost,
         gen_cost_patches,
+        ..EmitOptions::default()
     })
 }
 
@@ -1784,7 +1819,7 @@ fn run_convert(
     output: Option<&std::path::Path>,
     from: Option<FormatArg>,
     scenario: i64,
-    gen_cost_options: GenCostCliOptions<'_>,
+    gen_cost_options: EmitCliOptions<'_>,
 ) -> anyhow::Result<()> {
     if to.is_input_spelling() {
         return Err(cli_failure(
@@ -1871,7 +1906,7 @@ fn convert_parsed_module(
     module: powerio::PioModule<powerio::PioValue>,
     to: FormatArg,
     output: Option<&Path>,
-    gen_cost_options: &GenCostCliOptions<'_>,
+    gen_cost_options: &EmitCliOptions<'_>,
 ) -> anyhow::Result<()> {
     match &module.value {
         powerio::PioValue::BalancedNetwork(_) => {
@@ -1888,7 +1923,7 @@ fn convert_parsed_module(
             });
             convert_multiconductor_module(&module, to, output)
         }
-        _ => convert_typed_module(&module, to, output),
+        _ => convert_typed_module(&module, to, output, gen_cost_options),
     }
 }
 
@@ -1896,7 +1931,7 @@ fn convert_balanced_module(
     module: &powerio::PioModule<powerio::BalancedNetwork>,
     to: FormatArg,
     output: Option<&Path>,
-    gen_cost_options: &GenCostCliOptions<'_>,
+    gen_cost_options: &EmitCliOptions<'_>,
 ) -> anyhow::Result<()> {
     let options = gen_cost_options.emit_options()?;
     if to == FormatArg::PypsaCsv {
@@ -1977,6 +2012,7 @@ fn convert_typed_module(
     module: &powerio::PioModule<powerio::PioValue>,
     to: FormatArg,
     output: Option<&Path>,
+    emit_options: &EmitCliOptions<'_>,
 ) -> anyhow::Result<()> {
     let format = powerio::resolve_format(to.name()).ok_or_else(|| {
         failure!(
@@ -2002,13 +2038,13 @@ fn convert_typed_module(
         }
         let result = powerio::emit(
             module,
-            format.token,
+            &emit_options.format_with_options(format.token),
             powerio_core::Destination::path(output),
         )
         .with_context(|| format!("emitting {} to {}", format.token, output.display()))?;
         return finish_path_emission(&module.diagnostics, &result, output);
     }
-    let emission = module_io::emit_module(module, format.token)
+    let emission = module_io::emit_module(module, &emit_options.format_with_options(format.token))
         .with_context(|| format!("emitting {}", format.token))?;
     finish_memory_emission(&module.diagnostics, &emission, output)
 }
@@ -2352,7 +2388,7 @@ fn convert_to_pypsa_folder(
     output: Option<&std::path::Path>,
     from: Option<FormatArg>,
     scenario: i64,
-    gen_cost_options: GenCostCliOptions<'_>,
+    gen_cost_options: EmitCliOptions<'_>,
 ) -> anyhow::Result<()> {
     let Some(out_dir) = output else {
         fail_with!(
@@ -2394,7 +2430,7 @@ fn convert_to_cgmes(
     output: Option<&std::path::Path>,
     from: Option<FormatArg>,
     scenario: i64,
-    gen_cost_options: GenCostCliOptions<'_>,
+    gen_cost_options: EmitCliOptions<'_>,
 ) -> anyhow::Result<()> {
     let Some(output) = output else {
         fail_with!(
@@ -2613,7 +2649,7 @@ fn read_network(
 mod tests {
     use super::cases::{infer_input_family, looks_like_distribution_input};
     use super::{
-        BranchSusceptanceFormulaArg, Cli, Command, FamilyCase, FormatArg, GenCostCliOptions,
+        BranchSusceptanceFormulaArg, Cli, Command, FamilyCase, FormatArg, EmitCliOptions,
         distribution_summary_json, parse_family_case, run_convert, run_serialize, serialize_input,
         transmission_summary_json,
     };
@@ -2954,7 +2990,7 @@ mpc.branch = [
             Some(&output),
             None,
             0,
-            GenCostCliOptions::preserve(),
+            EmitCliOptions::preserve(),
         )
         .unwrap_err();
         assert!(err.to_string().contains("no conversion path"), "{err}");
@@ -2981,7 +3017,7 @@ mpc.branch = [
             Some(&output),
             Some(FormatArg::PypsaCsv),
             0,
-            GenCostCliOptions::preserve(),
+            EmitCliOptions::preserve(),
         )
         .unwrap();
         let text = std::fs::read_to_string(&output).unwrap();
@@ -3039,7 +3075,7 @@ mpc.branch = [
             Some(&output),
             Some(FormatArg::BmopfJson),
             0,
-            GenCostCliOptions::preserve(),
+            EmitCliOptions::preserve(),
         )
         .unwrap();
 
@@ -3059,7 +3095,7 @@ mpc.branch = [
             None,
             None,
             0,
-            GenCostCliOptions::preserve(),
+            EmitCliOptions::preserve(),
         )
         .unwrap_err();
         assert!(

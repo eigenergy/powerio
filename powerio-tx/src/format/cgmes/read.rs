@@ -13,7 +13,7 @@
 //! the parse warnings, never dropped silently.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use powerio_core::ComponentId;
 
@@ -21,8 +21,9 @@ use super::xml::{CimDocument, CimObject, ModelHeader, PropValue, parse_cimxml};
 use super::{CGMES_CLASS_PROPERTY, CgmesDiagnostics, CgmesVersion};
 use crate::diagnostics::codes;
 use crate::network::{
-    AcDcConverterControlMode, ActivePowerControl, BalancedNetwork, Branch, BranchCharging, Bus,
-    BusBreakerBus, BusId, BusType, BusbarSection, CalculatedBus, ComponentAlias, ComponentMetadata,
+    AcDcConverterControlMode, ActivePowerControl, BalancedNetwork, BoundaryLine,
+    BoundaryLineGeneration, Branch, BranchCharging, Bus, BusBreakerBus, BusId, BusType,
+    BusbarSection, CalculatedBus, ComponentAlias, ComponentMetadata,
     ConnectivityNode, CurveStyle, DcBusbar, DcConverterOperatingMode, DcConverterUnit, DcGround,
     DcLine, DcNode, DcPolarity, DcSeriesDevice, DcSwitch, DcSwitchKind, DcTerminal,
     DcTopologicalNode, DetailedConnectivity, EquipmentReactiveLimits, ExternalIdentifier,
@@ -32,8 +33,8 @@ use crate::network::{
     Shunt, ShuntBlock, SourceFormat, StaticVarCompensator, StaticVarCompensatorRegulationMode,
     Substation, Switch, SwitchKind, SwitchedShuntControl, SwitchedShuntMode, TapChanger,
     TapChangerKind, TapChangerRegulationMode, TapChangerStep, TemporaryLimit, Terminal,
-    TerminalReference, TopologyEndpoint, TopologyKind, TopologySwitch, Transformer3W, VoltageLevel,
-    VoltageSourceConverter, Winding,
+    TerminalReference, TieLine, TopologyEndpoint, TopologyKind, TopologySwitch, Transformer3W,
+    VoltageLevel, VoltageSourceConverter, Winding,
 };
 use crate::{Error, Result};
 
@@ -41,10 +42,57 @@ const FMT: &str = "CGMES";
 /// CGMES has no system MVA base; every per-unit value lands on this one.
 const SYSTEM_MVA: f64 = 100.0;
 
+#[derive(Debug)]
 pub(crate) struct Parsed {
     pub(crate) network: BalancedNetwork,
     pub(crate) warnings: CgmesDiagnostics,
+    /// One record per `md:FullModel` header in the source, in document order.
+    pub(crate) documents: Vec<ModelDocument>,
 }
+
+/// The `md:FullModel` header of one profile document, retained beside the
+/// electrical model so the module keeps each document's identity, profiles,
+/// modeling authority, and `Model.DependentOn` references.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ModelDocument {
+    pub(crate) source: String,
+    pub(crate) identity: Option<String>,
+    pub(crate) profiles: Vec<String>,
+    pub(crate) modeling_authority_set: Option<String>,
+    pub(crate) dependent_on: Vec<String>,
+    pub(crate) version: Option<String>,
+    pub(crate) created: Option<String>,
+    pub(crate) scenario_time: Option<String>,
+    pub(crate) description: Option<String>,
+}
+
+impl ModelDocument {
+    /// True when the document declares a boundary profile (`EQ_BD` or `TP_BD`).
+    fn is_boundary(&self) -> bool {
+        self.profiles.iter().any(|profile| is_boundary_profile(profile))
+    }
+}
+
+fn is_boundary_profile(profile: &str) -> bool {
+    profile.contains("EquipmentBoundary") || profile.contains("TopologyBoundary")
+}
+
+/// The metadata property naming the modeling authority set of the document
+/// that defines a component.
+pub(crate) const MODELING_AUTHORITY_PROPERTY: &str = "Model.modelingAuthoritySet";
+/// The metadata property carrying a joined boundary element's service status
+/// as the reader resolved it from SV, SSH, and terminal data.
+pub(crate) const RETAINED_IN_SERVICE_PROPERTY: &str = "powerio.cgmes.in_service";
+/// The metadata property on a boundary line naming the EquivalentInjection
+/// that stood at its boundary node.
+pub(crate) const EQUIVALENT_INJECTION_PROPERTY: &str = "powerio.cgmes.equivalent_injection";
+/// The metadata property on a boundary TopologicalNode carrying its nominal
+/// voltage once the node is no longer a calculation bus.
+pub(crate) const NOMINAL_VOLTAGE_PROPERTY: &str = "BaseVoltage.nominalVoltage";
+/// The metadata property on a ConnectivityNode naming the boundary
+/// TopologicalNode it belongs to once that node is no longer a calculation bus.
+pub(crate) const CONNECTIVITY_NODE_TOPOLOGICAL_NODE_PROPERTY: &str =
+    "ConnectivityNode.TopologicalNode";
 
 /// The per-file role, from the `md:FullModel` profile URIs.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -316,7 +364,7 @@ fn warn_full_model_fields(
         warnings.push_as(
             &codes::READ_CGMES_FIELD_UNMAPPED,
             format!(
-                "FullModel RDF identity `{identity}` in `{document_name}` is not retained in the electrical model; fresh CGMES emission assigns a deterministic FullModel identity"
+                "FullModel RDF identity `{identity}` in `{document_name}` is retained in the module's CGMES document records and not in the electrical model; fresh CGMES emission assigns a deterministic FullModel identity"
             ),
         );
     }
@@ -324,7 +372,7 @@ fn warn_full_model_fields(
         warnings.push_as(
             &codes::READ_CGMES_FIELD_UNMAPPED,
             format!(
-                "FullModel property `Model.modelingAuthoritySet` in `{document_name}` is `{authority}`; it identifies the authority of the records this document defines during boundary and state variable checks and is not retained in the electrical model, so fresh CGMES emission states PowerIO's own modeling authority"
+                "FullModel property `Model.modelingAuthoritySet` in `{document_name}` is `{authority}`; it is retained in the module's CGMES document records and on the metadata of every component this document defines, and fresh CGMES emission states PowerIO's own modeling authority"
             ),
         );
     }
@@ -332,7 +380,7 @@ fn warn_full_model_fields(
         warnings.push_as(
             &codes::READ_CGMES_FIELD_UNMAPPED,
             format!(
-                "FullModel property `Model.created` in `{document_name}` is `{created}` and is not retained; `Model.scenarioTime`, when present, remains the network case date"
+                "FullModel property `Model.created` in `{document_name}` is `{created}` and is retained only in the module's CGMES document records; `Model.scenarioTime`, when present, remains the network case date"
             ),
         );
     }
@@ -340,7 +388,7 @@ fn warn_full_model_fields(
         warnings.push_as(
             &codes::READ_CGMES_FIELD_UNMAPPED,
             format!(
-                "FullModel property `Model.version` in `{document_name}` is `{version}` and is not retained; fresh CGMES emission writes its own document version"
+                "FullModel property `Model.version` in `{document_name}` is `{version}` and is retained only in the module's CGMES document records; fresh CGMES emission writes its own document version"
             ),
         );
     }
@@ -360,7 +408,7 @@ fn warn_full_model_fields(
         warnings.push_as(
             &codes::READ_CGMES_FIELD_UNMAPPED,
             format!(
-                "FullModel in `{document_name}` has {} `Model.DependentOn` reference(s) [`{samples}`]{remainder}; the merged electrical model does not retain profile document dependencies and fresh emission rebuilds them",
+                "FullModel in `{document_name}` has {} `Model.DependentOn` reference(s) [`{samples}`]{remainder}; they are retained in the module's CGMES document records, and fresh emission rebuilds the dependencies of the documents it writes",
                 header.dependent_on.len()
             ),
         );
@@ -441,17 +489,31 @@ struct Merged {
     class: String,
     defined: bool,
     modeling_authority_set: Option<String>,
+    /// Index into [`Store::documents`] of the document that defines the
+    /// object, when one does.
+    defined_in: Option<usize>,
     props: Vec<(String, PropValue)>,
+}
+
+/// The document facts the merge needs when two definitions collide.
+struct DocumentTag {
+    name: String,
+    modeling_authority_set: Option<String>,
+    boundary: bool,
 }
 
 /// The merged object store plus the id and class indexes the mapping reads.
 struct Store {
     objects: Vec<Merged>,
     by_id: HashMap<String, usize>,
+    documents: Vec<DocumentTag>,
     /// Properties successfully read by the source neutral mapping. This lets
     /// the final diagnostic pass distinguish a mapped class from fields on
     /// that class which the mapping did not consume.
     read_props: RefCell<BTreeSet<(usize, usize)>>,
+    /// ACLineSegments joined into tie lines; their components carry the
+    /// `boundary_line` type instead of `branch`.
+    boundary_line_ids: RefCell<HashSet<String>>,
 }
 
 /// CIM100 SSH serializes the inherited `Equipment.inService` property in an
@@ -463,11 +525,27 @@ fn is_profile_extension_class(class: &str) -> bool {
 }
 
 impl Store {
-    fn merge(&mut self, doc: CimDocument) -> Result<()> {
-        let modeling_authority_set = doc
-            .header
-            .as_ref()
-            .and_then(|header| header.modeling_authority_set.clone());
+    /// An empty store whose one document is an unnamed, single authority
+    /// model, for merging documents that carry no header of their own.
+    #[cfg(test)]
+    fn for_one_document() -> Self {
+        Store {
+            objects: Vec::new(),
+            by_id: HashMap::new(),
+            documents: vec![DocumentTag {
+                name: "test.xml".into(),
+                modeling_authority_set: None,
+                boundary: false,
+            }],
+            read_props: RefCell::new(BTreeSet::new()),
+            boundary_line_ids: RefCell::new(HashSet::new()),
+        }
+    }
+
+    /// Merge one document's objects. `document` indexes [`Store::documents`].
+    fn merge(&mut self, doc: CimDocument, document: usize) -> Result<()> {
+        let modeling_authority_set = self.documents[document].modeling_authority_set.clone();
+        let boundary_document = self.documents[document].boundary;
         for CimObject {
             class,
             id,
@@ -483,9 +561,15 @@ impl Store {
             }
             validate_typed_literals(&class, &id, &props)?;
             if let Some(&at) = self.by_id.get(&id) {
+                let boundary_object = boundary_document || self.is_boundary(&id);
                 if self.objects[at].class != class {
                     if !definition && is_profile_extension_class(&class) {
-                        merge_properties(&id, &mut self.objects[at].props, props)?;
+                        merge_properties(
+                            &id,
+                            &mut self.objects[at].props,
+                            props,
+                            boundary_object,
+                        )?;
                         continue;
                     }
                     if !self.objects[at].defined
@@ -493,32 +577,38 @@ impl Store {
                     {
                         self.objects[at].class = class;
                     } else {
-                        return Err(Error::FormatRead {
-                            format: FMT,
+                        return Err(Error::CgmesIdentityConflict {
                             message: format!(
-                                "RDF identifier `{id}` is used for both {} and {class}",
-                                self.objects[at].class
+                                "RDF identifier `{id}` is used for both {} in {} and {class} in {}",
+                                self.objects[at].class,
+                                self.describe_definition(at),
+                                self.describe_document(document)
                             ),
                         });
                     }
                 }
                 if definition && self.objects[at].defined {
-                    return Err(Error::FormatRead {
-                        format: FMT,
-                        message: format!("RDF identifier `{id}` is defined more than once"),
+                    return Err(Error::CgmesIdentityConflict {
+                        message: format!(
+                            "RDF identifier `{id}` ({}) is defined by both {} and {}; one assembled model cannot hold two definitions of one mRID",
+                            self.objects[at].class,
+                            self.describe_definition(at),
+                            self.describe_document(document)
+                        ),
                     });
                 }
                 if definition {
                     self.objects[at]
                         .modeling_authority_set
                         .clone_from(&modeling_authority_set);
+                    self.objects[at].defined_in = Some(document);
                 }
                 self.objects[at].defined |= definition;
-                merge_properties(&id, &mut self.objects[at].props, props)?;
+                merge_properties(&id, &mut self.objects[at].props, props, boundary_object)?;
             } else {
                 self.by_id.insert(id.clone(), self.objects.len());
                 let mut merged_props = Vec::new();
-                merge_properties(&id, &mut merged_props, props)?;
+                merge_properties(&id, &mut merged_props, props, boundary_document)?;
                 self.objects.push(Merged {
                     id,
                     class,
@@ -528,11 +618,27 @@ impl Store {
                     } else {
                         None
                     },
+                    defined_in: definition.then_some(document),
                     props: merged_props,
                 });
             }
         }
         Ok(())
+    }
+
+    fn describe_document(&self, document: usize) -> String {
+        let tag = &self.documents[document];
+        match tag.modeling_authority_set.as_deref() {
+            Some(authority) => format!("`{}` (modelingAuthoritySet `{authority}`)", tag.name),
+            None => format!("`{}` (no modelingAuthoritySet)", tag.name),
+        }
+    }
+
+    fn describe_definition(&self, at: usize) -> String {
+        self.objects[at].defined_in.map_or_else(
+            || "an earlier document".to_string(),
+            |document| self.describe_document(document),
+        )
     }
 
     fn class_of(&self, id: &str) -> Option<&str> {
@@ -545,6 +651,24 @@ impl Store {
         self.by_id
             .get(id)
             .and_then(|&at| self.objects[at].modeling_authority_set.as_deref())
+    }
+
+    /// True when a boundary profile document (`EQ_BD` or `TP_BD`) defines
+    /// the object.
+    fn is_boundary(&self, id: &str) -> bool {
+        self.by_id
+            .get(id)
+            .and_then(|&at| self.objects[at].defined_in)
+            .is_some_and(|document| self.documents[document].boundary)
+    }
+
+    /// The component type of an object: the class mapping, except that a
+    /// joined tie line half is a `boundary_line`.
+    fn component_type_of(&self, id: &str) -> &'static str {
+        if self.boundary_line_ids.borrow().contains(id) {
+            return "boundary_line";
+        }
+        component_type(self.class_of(id).unwrap_or_default())
     }
 
     fn contains(&self, id: &str) -> bool {
@@ -611,6 +735,26 @@ impl Store {
         Some(target)
     }
 
+    /// Every target of a repeatable reference property, in merge order.
+    fn refs(&self, id: &str, key: &str) -> Vec<&str> {
+        let Some(&at) = self.by_id.get(id) else {
+            return Vec::new();
+        };
+        self.objects[at]
+            .props
+            .iter()
+            .enumerate()
+            .filter(|(_, (property, _))| property == key)
+            .filter_map(|(property_at, (_, value))| match value {
+                PropValue::Ref(target) => {
+                    self.mark_read(at, property_at);
+                    Some(target.as_str())
+                }
+                PropValue::Text(_) => None,
+            })
+            .collect()
+    }
+
     /// The `value` half of an `EnumClass.value` reference.
     fn enum_value(&self, id: &str, key: &str) -> Option<&str> {
         self.refv(id, key)?.rsplit('.').next()
@@ -622,14 +766,22 @@ impl Store {
     }
 }
 
+/// Merge `incoming` property values into `merged`. A boundary object may
+/// receive one `ConnectivityNode.TopologicalNode` reference from each
+/// individual grid model's topology profile, because each model assigns its
+/// own TopologicalNode to a shared boundary ConnectivityNode; those
+/// references are kept side by side and joined during assembly.
 fn merge_properties(
     object: &str,
     merged: &mut Vec<(String, PropValue)>,
     incoming: Vec<(String, PropValue)>,
+    boundary_object: bool,
 ) -> Result<()> {
     for (property, value) in incoming {
         if let Some((_, existing)) = merged.iter().find(|(name, _)| name == &property) {
-            if existing != &value && repeatable_property(&property) {
+            let repeatable = repeatable_property(&property)
+                || (boundary_object && property == CONNECTIVITY_NODE_TOPOLOGICAL_NODE_PROPERTY);
+            if existing != &value && repeatable {
                 merged.push((property, value));
             } else if existing != &value {
                 return Err(Error::FormatRead {
@@ -666,18 +818,29 @@ fn describe_property_value(value: &PropValue) -> String {
 }
 
 /// Terminal wiring: equipment → its terminals (sequence order), terminal →
-/// topological node, and the terminal SSH connection value.
+/// topological node, node → its terminals, and the terminal SSH connection
+/// value.
+///
+/// A node is normally a TopologicalNode. A boundary ConnectivityNode that no
+/// topology profile assigns to a TopologicalNode (each individual grid model
+/// of a CGMES 3 common grid model leaves the boundary point to the assembly)
+/// is its own node, keyed by the ConnectivityNode identity.
 struct Wiring {
     of_equipment: HashMap<String, Vec<String>>,
     node_of: HashMap<String, String>,
+    terminals_at: HashMap<String, Vec<String>>,
     connected: HashMap<String, bool>,
+    /// Boundary ConnectivityNodes standing in as nodes, with their terminals.
+    connectivity_node_nodes: BTreeSet<String>,
 }
 
 impl Wiring {
     fn build(store: &Store) -> Wiring {
         let mut of_equipment: HashMap<String, Vec<(f64, String)>> = HashMap::new();
         let mut node_of = HashMap::new();
+        let mut terminals_at: HashMap<String, Vec<String>> = HashMap::new();
         let mut connected = HashMap::new();
+        let mut connectivity_node_nodes = BTreeSet::new();
         for id in store.of_class("Terminal") {
             if let Some(eq) = store.refv(id, "Terminal.ConductingEquipment") {
                 let seq = store
@@ -690,13 +853,32 @@ impl Wiring {
                     .push((seq, id.to_string()));
             }
             // 2.4.15 TP links the terminal itself; 3.0 links through the
-            // connectivity node. Either way the terminal lands on a TN.
-            let tn = store.refv(id, "Terminal.TopologicalNode").or_else(|| {
-                let cn = store.refv(id, "Terminal.ConnectivityNode")?;
-                store.refv(cn, "ConnectivityNode.TopologicalNode")
-            });
-            if let Some(tn) = tn {
-                node_of.insert(id.to_string(), tn.to_string());
+            // connectivity node. Either way the terminal lands on a TN, or on
+            // a boundary connectivity node that has none.
+            let connectivity_node = store.refv(id, "Terminal.ConnectivityNode");
+            let node = store
+                .refv(id, "Terminal.TopologicalNode")
+                .or_else(|| {
+                    store.refv(
+                        connectivity_node?,
+                        CONNECTIVITY_NODE_TOPOLOGICAL_NODE_PROPERTY,
+                    )
+                })
+                .or_else(|| {
+                    let cn = connectivity_node?;
+                    if store.is_boundary(cn) {
+                        connectivity_node_nodes.insert(cn.to_string());
+                        Some(cn)
+                    } else {
+                        None
+                    }
+                });
+            if let Some(node) = node {
+                node_of.insert(id.to_string(), node.to_string());
+                terminals_at
+                    .entry(node.to_string())
+                    .or_default()
+                    .push(id.to_string());
             }
             if let Some(is_connected) = store.boolean(id, "ACDCTerminal.connected") {
                 connected.insert(id.to_string(), is_connected);
@@ -712,7 +894,9 @@ impl Wiring {
         Wiring {
             of_equipment,
             node_of,
+            terminals_at,
             connected,
+            connectivity_node_nodes,
         }
     }
 
@@ -722,6 +906,10 @@ impl Wiring {
 
     fn node(&self, terminal: &str) -> Option<&str> {
         self.node_of.get(terminal).map(String::as_str)
+    }
+
+    fn terminals_at(&self, node: &str) -> &[String] {
+        self.terminals_at.get(node).map_or(&[], Vec::as_slice)
     }
 
     /// In service as far as the terminals say: every terminal connected
@@ -737,8 +925,13 @@ impl Wiring {
 struct Mapper<'a> {
     store: &'a Store,
     wiring: Wiring,
+    /// Node → calculation bus. A boundary node joined into a tie line has
+    /// no entry.
     bus_of_tn: HashMap<String, BusId>,
     kv_of: HashMap<BusId, f64>,
+    /// Node → nominal kV, for every node including the joined boundary nodes.
+    node_kv: HashMap<String, f64>,
+    assembly: Assembly,
     /// Terminal → solved SvPowerFlow (p, q), the SSH fallback.
     sv_flow: HashMap<String, (f64, f64)>,
     /// Conducting equipment → solved service status. SV takes precedence
@@ -841,7 +1034,9 @@ pub(crate) fn read_cgmes_documents(
     let mut store = Store {
         objects: Vec::new(),
         by_id: HashMap::new(),
+        documents: Vec::new(),
         read_props: RefCell::new(BTreeSet::new()),
+        boundary_line_ids: RefCell::new(HashSet::new()),
     };
     let mut versions: Vec<CgmesVersion> = Vec::new();
     let mut description: Option<String> = None;
@@ -849,6 +1044,7 @@ pub(crate) fn read_cgmes_documents(
     let mut skipped: Vec<String> = Vec::new();
     let mut has_eq = false;
     let mut has_tp = false;
+    let mut model_documents = Vec::new();
 
     for (name, text) in documents {
         let doc = parse_cimxml(&text)?;
@@ -860,6 +1056,41 @@ pub(crate) fn read_cgmes_documents(
             }
         }
         warn_full_model_fields(&name, doc.header.as_ref(), &mut warnings);
+        let record = ModelDocument {
+            source: name.clone(),
+            identity: doc.header.as_ref().and_then(|header| header.identity.clone()),
+            profiles: doc
+                .header
+                .as_ref()
+                .map(|header| header.profiles.clone())
+                .unwrap_or_default(),
+            modeling_authority_set: doc
+                .header
+                .as_ref()
+                .and_then(|header| header.modeling_authority_set.clone()),
+            dependent_on: doc
+                .header
+                .as_ref()
+                .map(|header| header.dependent_on.clone())
+                .unwrap_or_default(),
+            version: doc.header.as_ref().and_then(|header| header.version.clone()),
+            created: doc.header.as_ref().and_then(|header| header.created.clone()),
+            scenario_time: doc
+                .header
+                .as_ref()
+                .and_then(|header| header.scenario_time.clone()),
+            description: doc
+                .header
+                .as_ref()
+                .and_then(|header| header.description.clone()),
+        };
+        store.documents.push(DocumentTag {
+            name: name.clone(),
+            modeling_authority_set: record.modeling_authority_set.clone(),
+            boundary: record.is_boundary(),
+        });
+        let document_index = store.documents.len() - 1;
+        model_documents.push(record);
         if let Some(header) = doc.header.as_ref() {
             if let Some(value) = header.scenario_time.as_ref() {
                 if scenario_time
@@ -903,8 +1134,9 @@ pub(crate) fn read_cgmes_documents(
                 profile.contains("/Topology/") || profile.contains("/CIM/Topology-")
             });
         }
-        store.merge(doc)?;
+        store.merge(doc, document_index)?;
     }
+    warn_missing_dependencies(&model_documents, &mut warnings);
 
     let version = match versions.as_slice() {
         [] => {
@@ -954,7 +1186,40 @@ pub(crate) fn read_cgmes_documents(
         name_hint,
         &mut warnings,
     )?;
-    Ok(Parsed { network, warnings })
+    Ok(Parsed {
+        network,
+        warnings,
+        documents: model_documents,
+    })
+}
+
+/// Report every `Model.DependentOn` reference that names a model outside the
+/// source. The assembled model is still built from the documents present;
+/// references into the absent model fail the reference checks separately.
+fn warn_missing_dependencies(documents: &[ModelDocument], warnings: &mut CgmesDiagnostics) {
+    let identities = documents
+        .iter()
+        .filter_map(|document| document.identity.as_deref())
+        .collect::<HashSet<_>>();
+    for document in documents {
+        for dependency in &document.dependent_on {
+            if identities.contains(dependency.as_str()) {
+                continue;
+            }
+            let authority = document
+                .modeling_authority_set
+                .as_deref()
+                .map_or_else(String::new, |value| format!(" (modelingAuthoritySet `{value}`)"));
+            warnings.push_as(
+                &codes::READ_CGMES_DEPENDENCY_MISSING,
+                format!(
+                    "`{}`{authority} with profiles [{}] declares Model.DependentOn `urn:uuid:{dependency}`, which no document in the source defines; objects of that model are absent from the assembled set",
+                    document.source,
+                    document.profiles.join(", ")
+                ),
+            );
+        }
+    }
 }
 
 fn validate_critical_references(store: &Store) -> Result<()> {
@@ -1100,6 +1365,302 @@ const CONSUMED: &[&str] = &[
     "Junction",
 ];
 
+/// One EquivalentInjection or EnergySource standing at a joined boundary
+/// node, retained as the boundary line's setpoint instead of as a load.
+struct BoundaryInjection {
+    id: String,
+    p: f64,
+    q: f64,
+    in_service: bool,
+    regulating: bool,
+}
+
+/// Two ACLineSegments from different modeling authorities that meet at one
+/// boundary node and become one tie line branch.
+struct TiePair {
+    /// The boundary point: the boundary ConnectivityNode when the source has
+    /// one, else the boundary TopologicalNode.
+    key: String,
+    /// Every node the individual grid models assigned to this point. One
+    /// shared TopologicalNode in an assembled set; one per model when each
+    /// topology profile names its own; the ConnectivityNode itself when none
+    /// does.
+    nodes: Vec<String>,
+    /// The halves in identity order, so the tie line identity is stable.
+    lines: [String; 2],
+    /// The boundary side terminal of each half.
+    boundary_terminals: [String; 2],
+    /// Per half, the service status the reader resolved from SV, SSH, and
+    /// terminal data; set once the tie line branch is built.
+    half_in_service: [bool; 2],
+    /// Per half, the injections at the boundary node that belong to the
+    /// half's modeling authority.
+    injections: [Vec<BoundaryInjection>; 2],
+}
+
+impl TiePair {
+    /// PowSybl names a tie line `<id1> + <id2>` with the identities in
+    /// lexicographic order; the same identity keeps both readers in step.
+    fn tie_id(&self) -> String {
+        format!("{} + {}", self.lines[0], self.lines[1])
+    }
+}
+
+/// The result of joining the individual grid models at their boundary nodes.
+#[derive(Default)]
+struct Assembly {
+    pairs: Vec<TiePair>,
+    /// ACLineSegment → the pair it belongs to.
+    half_of: HashMap<String, usize>,
+    /// Nodes that become no calculation bus because a tie line joins them.
+    eliminated: HashSet<String>,
+    /// Boundary ConnectivityNodes with no TopologicalNode that keep a
+    /// calculation bus, with their nominal kV, in identity order.
+    synthetic_nodes: Vec<(String, f64)>,
+}
+
+impl Assembly {
+    fn pair_of_node(&self, node: &str) -> Option<usize> {
+        self.pairs
+            .iter()
+            .position(|pair| pair.nodes.iter().any(|value| value == node))
+    }
+}
+
+/// The boundary point a node belongs to, when it is a boundary node.
+///
+/// `boundary_node_of_tn` maps a TopologicalNode to the boundary
+/// ConnectivityNode that names it. A TopologicalNode is a boundary node when
+/// such a ConnectivityNode names it, when a boundary profile defines it, or
+/// when its container is a boundary Line.
+fn boundary_key(
+    store: &Store,
+    wiring: &Wiring,
+    boundary_node_of_tn: &HashMap<&str, &str>,
+    node: &str,
+) -> Option<String> {
+    if wiring.connectivity_node_nodes.contains(node) {
+        return Some(node.to_string());
+    }
+    if store.class_of(node) != Some("TopologicalNode") {
+        return None;
+    }
+    if let Some(connectivity_node) = boundary_node_of_tn.get(node) {
+        return Some((*connectivity_node).to_string());
+    }
+    if store.is_boundary(node) {
+        return Some(node.to_string());
+    }
+    let container = store.refv(node, "TopologicalNode.ConnectivityNodeContainer")?;
+    store.is_boundary(container).then(|| node.to_string())
+}
+
+/// The nominal voltage of a boundary ConnectivityNode that no topology
+/// profile assigned to a TopologicalNode: the base voltage its lines
+/// declare, else the base voltage at their far ends.
+fn synthetic_node_kv(
+    store: &Store,
+    wiring: &Wiring,
+    node_kv: &HashMap<String, f64>,
+    node: &str,
+) -> Option<f64> {
+    let mut far_end = None;
+    for terminal in wiring.terminals_at(node) {
+        let Some(equipment) = store.refv(terminal, "Terminal.ConductingEquipment") else {
+            continue;
+        };
+        if let Some(kv) = store
+            .refv(equipment, "ConductingEquipment.BaseVoltage")
+            .and_then(|base| store.f(base, "BaseVoltage.nominalVoltage"))
+            .filter(|kv| kv.is_finite() && *kv > 0.0)
+        {
+            return Some(kv);
+        }
+        if far_end.is_none() {
+            far_end = wiring
+                .terminals(equipment)
+                .iter()
+                .filter(|other| *other != terminal)
+                .filter_map(|other| wiring.node(other))
+                .find_map(|far| node_kv.get(far).copied());
+        }
+    }
+    far_end
+}
+
+/// Join the individual grid models at their boundary nodes.
+///
+/// A boundary point joined by exactly two ACLineSegments from different
+/// modeling authorities, with nothing but injections beside them, becomes one
+/// tie line: the point is no calculation bus, and the two lines become one
+/// branch between their network side buses. Every other boundary point keeps
+/// its calculation bus, so an unpaired boundary line keeps its impedance and
+/// its injection exactly as the source states them.
+#[allow(clippy::too_many_lines)] // one pass classifies every boundary point
+fn assemble_boundaries(
+    store: &Store,
+    wiring: &Wiring,
+    node_kv: &mut HashMap<String, f64>,
+    warnings: &mut CgmesDiagnostics,
+) -> Result<Assembly> {
+    let mut boundary_node_of_tn = HashMap::new();
+    for connectivity_node in store.of_class("ConnectivityNode") {
+        if !store.is_boundary(connectivity_node) {
+            continue;
+        }
+        for topological_node in store.refs(
+            connectivity_node,
+            CONNECTIVITY_NODE_TOPOLOGICAL_NODE_PROPERTY,
+        ) {
+            boundary_node_of_tn.insert(topological_node, connectivity_node);
+        }
+    }
+    let mut nodes_by_key: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut key_of_node: HashMap<String, String> = HashMap::new();
+    for node in wiring.terminals_at.keys() {
+        if let Some(key) = boundary_key(store, wiring, &boundary_node_of_tn, node) {
+            nodes_by_key
+                .entry(key.clone())
+                .or_default()
+                .push(node.clone());
+            key_of_node.insert(node.clone(), key);
+        }
+    }
+    for nodes in nodes_by_key.values_mut() {
+        nodes.sort();
+    }
+
+    let mut assembly = Assembly::default();
+    for cn in &wiring.connectivity_node_nodes {
+        let Some(kv) = synthetic_node_kv(store, wiring, node_kv, cn) else {
+            return Err(Error::FormatRead {
+                format: FMT,
+                message: format!(
+                    "boundary ConnectivityNode `{cn}` has no TopologicalNode, and none of its equipment declares a base voltage or lands on a TopologicalNode at its far end"
+                ),
+            });
+        };
+        node_kv.insert(cn.clone(), kv);
+    }
+
+    for (key, nodes) in &nodes_by_key {
+        let mut lines: Vec<(String, String)> = Vec::new();
+        let mut others = Vec::new();
+        for node in nodes {
+            for terminal in wiring.terminals_at(node) {
+                let Some(equipment) = store.refv(terminal, "Terminal.ConductingEquipment") else {
+                    continue;
+                };
+                match store.class_of(equipment) {
+                    Some("ACLineSegment") => {
+                        let far_end = wiring
+                            .terminals(equipment)
+                            .iter()
+                            .filter(|other| *other != terminal)
+                            .filter_map(|other| wiring.node(other))
+                            .next();
+                        match far_end {
+                            Some(far) if !key_of_node.contains_key(far) => {
+                                lines.push((equipment.to_string(), terminal.clone()));
+                            }
+                            _ => others.push(equipment.to_string()),
+                        }
+                    }
+                    // Injections at the boundary point become the boundary
+                    // line setpoints once the point is joined.
+                    Some("EquivalentInjection" | "EnergySource") => {}
+                    _ => others.push(equipment.to_string()),
+                }
+            }
+        }
+        lines.sort();
+        lines.dedup();
+        others.sort();
+        others.dedup();
+        if lines.len() < 2 {
+            continue;
+        }
+        let name = store.name(key);
+        let authorities = lines
+            .iter()
+            .map(|(line, _)| store.modeling_authority_set(line))
+            .collect::<Vec<_>>();
+        let described = lines
+            .iter()
+            .zip(&authorities)
+            .map(|((line, _), authority)| {
+                format!(
+                    "`{line}` (modelingAuthoritySet `{}`)",
+                    authority.unwrap_or("unknown")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let reason = if lines.len() != 2 {
+            Some(format!("{} ACLineSegments meet there", lines.len()))
+        } else if !others.is_empty() {
+            Some(format!(
+                "other conducting equipment [`{}`] also lands there",
+                others.join("`, `")
+            ))
+        } else if authorities[0].is_none() || authorities[1].is_none() {
+            Some("a line has no modeling authority".to_string())
+        } else if authorities[0] == authorities[1] {
+            Some("both lines belong to one modeling authority".to_string())
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            warnings.push_as(
+                &codes::READ_CGMES_VALUE_APPROXIMATED,
+                format!(
+                    "boundary node `{key}` (`{name}`) joins ACLineSegments [{described}] but stays a calculation bus because {reason}; PowSybl pairs only two boundary lines from different models"
+                ),
+            );
+            continue;
+        }
+        let pair_index = assembly.pairs.len();
+        for (line, _) in &lines {
+            assembly.half_of.insert(line.clone(), pair_index);
+        }
+        assembly.eliminated.extend(nodes.iter().cloned());
+        let names = lines
+            .iter()
+            .map(|(line, _)| store.name(line))
+            .collect::<Vec<_>>();
+        let pair = TiePair {
+            key: key.clone(),
+            nodes: nodes.clone(),
+            lines: [lines[0].0.clone(), lines[1].0.clone()],
+            boundary_terminals: [lines[0].1.clone(), lines[1].1.clone()],
+            half_in_service: [true, true],
+            injections: [Vec::new(), Vec::new()],
+        };
+        warnings.push_as(
+            &codes::READ_CGMES_VALUE_APPROXIMATED,
+            format!(
+                "ACLineSegments `{}` (`{}`, modelingAuthoritySet `{}`) and `{}` (`{}`, modelingAuthoritySet `{}`) meet at boundary node `{key}` (`{name}`); PowerIO joins them into tie line branch `{}` with r and x summed and each half's charging at its own network end, retains both halves as boundary lines, and gives the boundary node no calculation bus",
+                pair.lines[0],
+                names[0],
+                authorities[0].unwrap_or_default(),
+                pair.lines[1],
+                names[1],
+                authorities[1].unwrap_or_default(),
+                pair.tie_id()
+            ),
+        );
+        assembly.pairs.push(pair);
+    }
+    for cn in &wiring.connectivity_node_nodes {
+        if !assembly.eliminated.contains(cn) {
+            assembly
+                .synthetic_nodes
+                .push((cn.clone(), node_kv[cn]));
+        }
+    }
+    Ok(assembly)
+}
+
 #[allow(clippy::too_many_lines)] // the element families map in one ordered pass
 fn build(
     store: &Store,
@@ -1111,12 +1672,10 @@ fn build(
 ) -> Result<BalancedNetwork> {
     let wiring = Wiring::build(store);
 
-    // Buses from TopologicalNode, ids in definition order.
-    let mut buses = Vec::new();
-    let mut bus_of_tn = HashMap::new();
-    let mut kv_of = HashMap::new();
-    for (i, tn) in store.of_class("TopologicalNode").enumerate() {
-        let id = BusId(i + 1);
+    // Nominal voltages of every TopologicalNode, validated before any node
+    // is used.
+    let mut node_kv = HashMap::new();
+    for tn in store.of_class("TopologicalNode") {
         let base_voltage = store
             .refv(tn, "TopologicalNode.BaseVoltage")
             .ok_or_else(|| Error::FormatRead {
@@ -1141,12 +1700,37 @@ fn build(
                 ),
             });
         }
+        node_kv.insert(tn.to_string(), kv);
+    }
+    let assembly = assemble_boundaries(store, &wiring, &mut node_kv, warnings)?;
+    *store.boundary_line_ids.borrow_mut() = assembly.half_of.keys().cloned().collect();
+
+    // Buses from TopologicalNode, ids in definition order, then from the
+    // boundary ConnectivityNodes that stand as nodes. A node joined into a
+    // tie line gets no bus.
+    let mut buses = Vec::new();
+    let mut bus_of_tn = HashMap::new();
+    let mut kv_of = HashMap::new();
+    for tn in store.of_class("TopologicalNode") {
+        if assembly.eliminated.contains(tn) {
+            continue;
+        }
+        let id = BusId(buses.len() + 1);
+        let kv = node_kv[tn];
         let mut bus = Bus::new(id, BusType::Pq, kv);
         bus.name = Some(store.name(tn));
         bus.uid = Some(tn.to_string());
         buses.push(bus);
         bus_of_tn.insert(tn.to_string(), id);
         kv_of.insert(id, kv);
+    }
+    for (cn, kv) in &assembly.synthetic_nodes {
+        let id = BusId(buses.len() + 1);
+        let mut bus = Bus::new(id, BusType::Pq, *kv);
+        bus.name = Some(store.name(cn));
+        buses.push(bus);
+        bus_of_tn.insert(cn.clone(), id);
+        kv_of.insert(id, *kv);
     }
     if buses.is_empty() {
         return Err(Error::FormatRead {
@@ -1203,8 +1787,13 @@ fn build(
                     (None, Some(angle)) => format!("no voltage with angle={angle} degrees"),
                     (None, None) => "no voltage or angle value".into(),
                 };
+                let representation = if assembly.eliminated.contains(topological_node) {
+                    "PowerIO joins the boundary lines at the shared node into one tie line branch and retains the node as boundary topology"
+                } else {
+                    "PowerIO maps the shared node to one boundary bus"
+                };
                 warnings.push(format!(
-                    "SvVoltage `{sv_voltage}` for boundary TopologicalNode `{topological_node}` belongs to modelingAuthoritySet `{sv_authority}` and supplies {observation}; the node is shared by conducting equipment from modelingAuthoritySets [`{}`]. PowerIO maps the shared node to one boundary bus, so fresh CGMES omits this observation because it cannot reproduce distinct per-authority PowSybl boundary bus voltages",
+                    "SvVoltage `{sv_voltage}` for boundary TopologicalNode `{topological_node}` belongs to modelingAuthoritySet `{sv_authority}` and supplies {observation}; the node is shared by conducting equipment from modelingAuthoritySets [`{}`]. {representation}, so fresh CGMES omits this observation because it cannot reproduce distinct per-authority PowSybl boundary bus voltages",
                     equipment_authorities.join("`, `")
                 ));
             } else {
@@ -1291,6 +1880,8 @@ fn build(
         wiring,
         bus_of_tn,
         kv_of,
+        node_kv,
+        assembly,
         sv_flow,
         sv_status,
         warnings,
@@ -1452,9 +2043,9 @@ fn terminal_voltage_level<'a>(store: &'a Store, terminal: &str) -> Option<&'a st
 
 fn terminal_nominal_kv(mapper: &Mapper<'_>, terminal: &str) -> Option<f64> {
     if let Some(node) = mapper.wiring.node(terminal)
-        && let Some(bus) = mapper.bus_of_tn.get(node)
+        && let Some(kv) = mapper.node_kv.get(node)
     {
-        return Some(mapper.kv(*bus));
+        return Some(*kv);
     }
     let level = terminal_voltage_level(mapper.store, terminal)?;
     let base = mapper.store.refv(level, "VoltageLevel.BaseVoltage")?;
@@ -1877,10 +2468,7 @@ fn build_detailed_connectivity(
         let solved_power = mapper.sv_flow.get(id).copied();
         terminals.push(Terminal {
             component: Some(component_id("terminal", id)?),
-            equipment: component_id(
-                component_type(store.class_of(equipment).unwrap_or("")),
-                equipment,
-            )?,
+            equipment: component_id(store.component_type_of(equipment), equipment)?,
             terminal,
             voltage_level: component_id(
                 component_type(store.class_of(level).unwrap_or("")),
@@ -1946,11 +2534,68 @@ fn build_detailed_connectivity(
         }
     }
 
+    // The boundary lines that lost their boundary node and the injections
+    // that stood there, with the service status the reader resolved for each.
+    let mut joined_status: HashMap<&str, bool> = HashMap::new();
+    let mut joined_injection: HashMap<&str, &str> = HashMap::new();
+    for pair in &mapper.assembly.pairs {
+        for side in 0..2 {
+            joined_status.insert(pair.lines[side].as_str(), pair.half_in_service[side]);
+            let mut injections = pair.injections[side].iter();
+            if let Some(first) = injections.next() {
+                joined_injection.insert(pair.lines[side].as_str(), first.id.as_str());
+                joined_status.insert(first.id.as_str(), first.in_service);
+            }
+            for extra in injections {
+                joined_status.insert(extra.id.as_str(), extra.in_service);
+                mapper.warnings.push(format!(
+                    "EquivalentInjection `{}` is a second injection of modelingAuthoritySet `{}` at joined boundary node `{}`; boundary line `{}` retains only the first injection's p and q as its setpoint, so p={} MW and q={} MVAr were not retained",
+                    extra.id,
+                    store.modeling_authority_set(&extra.id).unwrap_or_default(),
+                    pair.key,
+                    pair.lines[side],
+                    extra.p,
+                    extra.q
+                ));
+            }
+        }
+    }
+    let joined_topological_node_of_connectivity_node = |node: &str| {
+        store
+            .refs(node, CONNECTIVITY_NODE_TOPOLOGICAL_NODE_PROPERTY)
+            .into_iter()
+            .find(|topological_node| mapper.assembly.eliminated.contains(*topological_node))
+            .map(str::to_string)
+    };
     let component_metadata = store
         .objects
         .iter()
         .map(|object| {
             let mut properties = BTreeMap::new();
+            if let Some(authority) = &object.modeling_authority_set {
+                properties.insert(MODELING_AUTHORITY_PROPERTY.into(), authority.clone());
+            }
+            if object.class == "TopologicalNode"
+                && mapper.assembly.eliminated.contains(&object.id)
+                && let Some(kv) = mapper.node_kv.get(&object.id)
+            {
+                properties.insert(NOMINAL_VOLTAGE_PROPERTY.into(), kv.to_string());
+            }
+            if object.class == "ConnectivityNode"
+                && let Some(topological_node) =
+                    joined_topological_node_of_connectivity_node(&object.id)
+            {
+                properties.insert(
+                    CONNECTIVITY_NODE_TOPOLOGICAL_NODE_PROPERTY.into(),
+                    topological_node,
+                );
+            }
+            if let Some(in_service) = joined_status.get(object.id.as_str()) {
+                properties.insert(RETAINED_IN_SERVICE_PROPERTY.into(), in_service.to_string());
+            }
+            if let Some(injection) = joined_injection.get(object.id.as_str()) {
+                properties.insert(EQUIVALENT_INJECTION_PROPERTY.into(), (*injection).into());
+            }
             if LOAD_CLASSES.contains(&object.class.as_str())
                 || SWITCH_CLASSES.contains(&object.class.as_str())
                 || object.class == "ExternalNetworkInjection"
@@ -2056,7 +2701,7 @@ fn build_detailed_connectivity(
                 );
             }
             Ok(ComponentMetadata {
-                component: component_id(component_type(&object.class), &object.id)?,
+                component: component_id(store.component_type_of(&object.id), &object.id)?,
                 name: store
                     .text(&object.id, "IdentifiedObject.name")
                     .map(str::to_string),
@@ -2090,6 +2735,7 @@ fn build_detailed_connectivity(
         })
         .collect::<Result<Vec<_>>>()?;
 
+    let (boundary_lines, tie_lines) = boundary_line_records(mapper)?;
     let operational_limit_groups = read_operational_limit_groups(mapper, version)?;
     let tap_changers = read_tap_changers(mapper)?;
     let dc = read_dc_equipment(mapper, version)?;
@@ -2111,8 +2757,8 @@ fn build_detailed_connectivity(
         operational_limit_groups,
         tap_changers,
         equipment_reactive_limits,
-        boundary_lines: Vec::new(),
-        tie_lines: Vec::new(),
+        boundary_lines,
+        tie_lines,
         dc_converter_units: dc.converter_units,
         dc_topological_nodes: dc.topological_nodes,
         dc_nodes: dc.nodes,
@@ -2124,6 +2770,73 @@ fn build_detailed_connectivity(
         voltage_source_converters: dc.voltage_source_converters,
         line_commutated_converters: dc.line_commutated_converters,
     })
+}
+
+/// The boundary line and tie line records of every joined boundary point.
+/// Each half keeps its source impedance in ohms and siemens, the boundary
+/// point name as the pairing key, and the first injection of its own
+/// modeling authority as its setpoint; a regulating injection is retained as
+/// boundary generation.
+fn boundary_line_records(mapper: &Mapper<'_>) -> Result<(Vec<BoundaryLine>, Vec<TieLine>)> {
+    let store = mapper.store;
+    let mut boundary_lines = Vec::new();
+    let mut tie_lines = Vec::new();
+    for pair in &mapper.assembly.pairs {
+        for side in 0..2 {
+            let line = pair.lines[side].as_str();
+            let network_terminal = mapper
+                .wiring
+                .terminals(line)
+                .iter()
+                .find(|terminal| **terminal != pair.boundary_terminals[side])
+                .ok_or_else(|| Error::FormatRead {
+                    format: FMT,
+                    message: format!("tie line half `{line}` has no network side terminal"),
+                })?;
+            let level = terminal_voltage_level(store, network_terminal).ok_or_else(|| {
+                Error::FormatRead {
+                    format: FMT,
+                    message: format!(
+                        "tie line half `{line}` has no voltage level at its network side terminal `{network_terminal}`"
+                    ),
+                }
+            })?;
+            let injection = pair.injections[side].first();
+            let (p0, q0) = injection.map_or((0.0, 0.0), |value| (value.p, value.q));
+            let generation = injection
+                .filter(|value| value.regulating)
+                .map(|value| BoundaryLineGeneration {
+                    voltage_regulation_on: true,
+                    minimum_active_power_mw: None,
+                    maximum_active_power_mw: None,
+                    target_active_power_mw: Some(-value.p),
+                    target_reactive_power_mvar: Some(-value.q),
+                    target_voltage_kv: None,
+                    reactive_limits: None,
+                });
+            boundary_lines.push(BoundaryLine {
+                component: component_id("boundary_line", line)?,
+                voltage_level: component_id(store.component_type_of(level), level)?,
+                active_power_setpoint_mw: p0,
+                reactive_power_setpoint_mvar: q0,
+                resistance_ohm: store.f(line, "ACLineSegment.r").unwrap_or(0.0),
+                reactance_ohm: store.f(line, "ACLineSegment.x").unwrap_or(0.0),
+                conductance_siemens: store.f(line, "ACLineSegment.gch").unwrap_or(0.0),
+                susceptance_siemens: store.f(line, "ACLineSegment.bch").unwrap_or(0.0),
+                pairing_key: Some(store.name(&pair.key)),
+                generation,
+                calculation_load: None,
+                calculation_generator: None,
+            });
+        }
+        tie_lines.push(TieLine {
+            component: component_id("tie_line", &pair.tie_id())?,
+            boundary_line1: component_id("boundary_line", &pair.lines[0])?,
+            boundary_line2: component_id("boundary_line", &pair.lines[1])?,
+            calculation_branch: Some(component_id("branch", &pair.tie_id())?),
+        });
+    }
+    Ok((boundary_lines, tie_lines))
 }
 
 #[derive(Default)]
@@ -2245,10 +2958,7 @@ fn converter_pcc_terminal(store: &Store, converter: &str) -> Result<Option<Termi
         message: format!("Terminal `{terminal}` sequence number {sequence} exceeds 255"),
     })?;
     Ok(Some(TerminalReference {
-        equipment: component_id(
-            component_type(store.class_of(equipment).unwrap_or_default()),
-            equipment,
-        )?,
+        equipment: component_id(store.component_type_of(equipment), equipment)?,
         terminal: terminal_number,
     }))
 }
@@ -2931,10 +3641,7 @@ fn terminal_reference(store: &Store, terminal: &str) -> Result<Option<TerminalRe
         .unwrap_or(1.0);
     let terminal = u8::try_from(sequence.round() as u64).unwrap_or(u8::MAX);
     Ok(Some(TerminalReference {
-        equipment: component_id(
-            component_type(store.class_of(equipment).unwrap_or_default()),
-            equipment,
-        )?,
+        equipment: component_id(store.component_type_of(equipment), equipment)?,
         terminal,
     }))
 }
@@ -3381,9 +4088,8 @@ fn read_operational_limit_groups(
             continue;
         }
         for (equipment, terminal) in targets {
-            let class = store.class_of(&equipment).unwrap_or_default();
             groups.push(OperationalLimitGroup {
-                equipment: component_id(component_type(class), &equipment)?,
+                equipment: component_id(store.component_type_of(&equipment), &equipment)?,
                 terminal,
                 id: set.to_string(),
                 properties: BTreeMap::new(),
@@ -4243,22 +4949,63 @@ fn read_switches(mapper: &mut Mapper<'_>) -> Vec<Switch> {
 }
 
 /// Boundary-point injections become loads: they model the neighboring
-/// network's net demand at the tie node.
+/// network's net demand at the tie node. An injection at a boundary node
+/// joined into a tie line instead becomes the setpoint of the boundary line
+/// from its own modeling authority, because the tie line branch carries the
+/// exchange between the models.
 fn read_equivalent_injections(
     mapper: &mut Mapper<'_>,
     loads: &mut Vec<Load>,
     generators: &mut Vec<Generator>,
 ) {
     let mut count = 0usize;
+    let mut joined = 0usize;
     for id in mapper.store.of_class("EquivalentInjection") {
-        let Some(bus) = mapper.bus_of_equipment_terminal(id, 0) else {
-            continue;
-        };
         let (p, q) = mapper.power(id, "EquivalentInjection");
         let regulation = mapper
             .store
             .boolean(id, "EquivalentInjection.regulationStatus")
             .unwrap_or(false);
+        let Some(bus) = mapper.bus_of_equipment_terminal(id, 0) else {
+            let node = mapper
+                .wiring
+                .terminals(id)
+                .first()
+                .and_then(|terminal| mapper.wiring.node(terminal))
+                .map(str::to_string);
+            let Some(pair_index) = node
+                .as_deref()
+                .and_then(|node| mapper.assembly.pair_of_node(node))
+            else {
+                continue;
+            };
+            let in_service = mapper.in_service(id);
+            let authority = mapper.store.modeling_authority_set(id);
+            let side = (0..2).find(|&side| {
+                mapper
+                    .store
+                    .modeling_authority_set(&mapper.assembly.pairs[pair_index].lines[side])
+                    == authority
+            });
+            match side {
+                Some(side) => {
+                    mapper.assembly.pairs[pair_index].injections[side].push(BoundaryInjection {
+                        id: id.to_string(),
+                        p,
+                        q,
+                        in_service,
+                        regulating: regulation,
+                    });
+                    joined += 1;
+                }
+                None => mapper.warnings.push(format!(
+                    "EquivalentInjection `{id}` at joined boundary node `{}` belongs to modelingAuthoritySet `{}`, which matches neither tie line half; its p={p} MW and q={q} MVAr were not retained as a boundary line setpoint",
+                    node.unwrap_or_default(),
+                    authority.unwrap_or("unknown")
+                )),
+            }
+            continue;
+        };
         if regulation {
             let mut generator = Generator::new(bus);
             generator.pg = -p;
@@ -4283,6 +5030,145 @@ fn read_equivalent_injections(
             ),
         );
     }
+    if joined > 0 {
+        mapper.warnings.push_as(
+            &codes::READ_CGMES_VALUE_APPROXIMATED,
+            format!(
+                "{joined} EquivalentInjection(s) at joined boundary nodes are retained as boundary line setpoints and not as loads or generators, because the tie line branch carries the exchange between the models"
+            ),
+        );
+    }
+}
+
+/// The balanced branch of one ACLineSegment on the `kv` base: r and x in
+/// per unit, the total charging split evenly between the ends, the service
+/// status, and the loading limits.
+fn ac_line_branch(
+    mapper: &mut Mapper<'_>,
+    id: &str,
+    from: BusId,
+    to: BusId,
+    kv: f64,
+    version: CgmesVersion,
+) -> Branch {
+    let store = mapper.store;
+    let z_base = kv * kv / SYSTEM_MVA;
+    let y_base = SYSTEM_MVA / (kv * kv);
+    let mut branch = Branch::new(
+        from,
+        to,
+        store.f(id, "ACLineSegment.r").unwrap_or(0.0) / z_base,
+        store.f(id, "ACLineSegment.x").unwrap_or(0.0) / z_base,
+    );
+    branch.b = store.f(id, "ACLineSegment.bch").unwrap_or(0.0) / y_base;
+    let g = store.f(id, "ACLineSegment.gch").unwrap_or(0.0) / y_base;
+    if g != 0.0 {
+        let half_b = branch.b / 2.0;
+        branch.charging = Some(BranchCharging::new(g / 2.0, half_b, g / 2.0, half_b));
+    }
+    branch.in_service = mapper.in_service(id);
+    branch.uid = Some(id.to_string());
+    apply_limits(mapper, id, &mut branch, kv, version);
+    branch
+}
+
+/// The binding rating of two limits where zero means unlimited.
+fn merge_rate(first: f64, second: f64) -> f64 {
+    match (first > 0.0, second > 0.0) {
+        (true, true) => first.min(second),
+        (true, false) => first,
+        (false, true) => second,
+        (false, false) => 0.0,
+    }
+}
+
+/// One branch per tie line: the two halves in series between their network
+/// side buses, on the from bus voltage base, with each half's total charging
+/// at its own network end (the PowSybl tie line model), the binding limit of
+/// either half, and the service status of both halves and both boundary
+/// terminals.
+fn read_tie_lines(mapper: &mut Mapper<'_>, branches: &mut Vec<Branch>, version: CgmesVersion) {
+    for pair_index in 0..mapper.assembly.pairs.len() {
+        let (lines, boundary_terminals, key, tie_id) = {
+            let pair = &mapper.assembly.pairs[pair_index];
+            (
+                pair.lines.clone(),
+                pair.boundary_terminals.clone(),
+                pair.key.clone(),
+                pair.tie_id(),
+            )
+        };
+        let network_bus = |mapper: &Mapper<'_>, side: usize| {
+            mapper
+                .wiring
+                .terminals(&lines[side])
+                .iter()
+                .find(|terminal| **terminal != boundary_terminals[side])
+                .and_then(|terminal| mapper.wiring.node(terminal))
+                .and_then(|node| mapper.bus_of_tn.get(node))
+                .copied()
+        };
+        let (Some(from), Some(to)) = (network_bus(mapper, 0), network_bus(mapper, 1)) else {
+            mapper.warnings.push(format!(
+                "tie line `{tie_id}` at boundary node `{key}`: a half does not land on a calculation bus at its network end; skipped"
+            ));
+            continue;
+        };
+        let store = mapper.store;
+        let kv = mapper.kv(from);
+        let z_base = kv * kv / SYSTEM_MVA;
+        let y_base = SYSTEM_MVA / (kv * kv);
+        let value = |line: &str, property: &str| store.f(line, property).unwrap_or(0.0);
+        let mut branch = Branch::new(
+            from,
+            to,
+            (value(&lines[0], "ACLineSegment.r") + value(&lines[1], "ACLineSegment.r")) / z_base,
+            (value(&lines[0], "ACLineSegment.x") + value(&lines[1], "ACLineSegment.x")) / z_base,
+        );
+        let charging = BranchCharging::new(
+            value(&lines[0], "ACLineSegment.gch") / y_base,
+            value(&lines[0], "ACLineSegment.bch") / y_base,
+            value(&lines[1], "ACLineSegment.gch") / y_base,
+            value(&lines[1], "ACLineSegment.bch") / y_base,
+        );
+        branch.b = charging.b_fr + charging.b_to;
+        branch.charging = Some(charging);
+        let mut half_in_service = [true, true];
+        for side in 0..2 {
+            let mut limits = Branch::new(from, to, 0.0, 1.0);
+            apply_limits(mapper, &lines[side], &mut limits, kv, version);
+            branch.rate_a = merge_rate(branch.rate_a, limits.rate_a);
+            branch.rate_b = merge_rate(branch.rate_b, limits.rate_b);
+            branch.rate_c = merge_rate(branch.rate_c, limits.rate_c);
+            half_in_service[side] = mapper.in_service(&lines[side]);
+        }
+        let boundary_connected = boundary_terminals.iter().all(|terminal| {
+            mapper
+                .wiring
+                .connected
+                .get(terminal)
+                .copied()
+                .unwrap_or(true)
+        });
+        branch.in_service = half_in_service[0] && half_in_service[1] && boundary_connected;
+        branch.uid = Some(tie_id.clone());
+        branch.name = Some(format!(
+            "{} + {}",
+            store.name(&lines[0]),
+            store.name(&lines[1])
+        ));
+        let to_kv = mapper.kv(to);
+        if (to_kv - kv).abs() > 1e-9 * kv.abs().max(to_kv.abs()).max(1.0) {
+            mapper.warnings.push_as(
+                &codes::READ_CGMES_VALUE_APPROXIMATED,
+                format!(
+                    "tie line `{tie_id}` joins buses with base voltages {kv} kV and {to_kv} kV; its per unit values use the {kv} kV base of its from bus"
+                ),
+            );
+        }
+        mapper.assembly.pairs[pair_index].half_in_service = half_in_service;
+        branches.push(branch);
+    }
 }
 
 fn read_branches(
@@ -4291,6 +5177,9 @@ fn read_branches(
 ) -> (Vec<Branch>, Vec<Transformer3W>) {
     let mut branches = Vec::new();
     for id in mapper.store.of_class("ACLineSegment") {
+        if mapper.assembly.half_of.contains_key(id) {
+            continue;
+        }
         let (Some(from), Some(to)) = (
             mapper.bus_of_equipment_terminal(id, 0),
             mapper.bus_of_equipment_terminal(id, 1),
@@ -4302,27 +5191,11 @@ fn read_branches(
             ));
             continue;
         };
-        let store = mapper.store;
         let kv = mapper.kv(from);
-        let z_base = kv * kv / SYSTEM_MVA;
-        let y_base = SYSTEM_MVA / (kv * kv);
-        let mut branch = Branch::new(
-            from,
-            to,
-            store.f(id, "ACLineSegment.r").unwrap_or(0.0) / z_base,
-            store.f(id, "ACLineSegment.x").unwrap_or(0.0) / z_base,
-        );
-        branch.b = store.f(id, "ACLineSegment.bch").unwrap_or(0.0) / y_base;
-        let g = store.f(id, "ACLineSegment.gch").unwrap_or(0.0) / y_base;
-        if g != 0.0 {
-            let half_b = branch.b / 2.0;
-            branch.charging = Some(BranchCharging::new(g / 2.0, half_b, g / 2.0, half_b));
-        }
-        branch.in_service = mapper.in_service(id);
-        branch.uid = Some(id.to_string());
-        apply_limits(mapper, id, &mut branch, kv, version);
+        let branch = ac_line_branch(mapper, id, from, to, kv, version);
         branches.push(branch);
     }
+    read_tie_lines(mapper, &mut branches, version);
     for id in mapper.store.of_class("SeriesCompensator") {
         let (Some(from), Some(to)) = (
             mapper.bus_of_equipment_terminal(id, 0),
@@ -4981,21 +5854,17 @@ mod tests {
 
     #[test]
     fn coalesces_equal_properties_and_rejects_conflicting_profile_values() {
-        let mut store = Store {
-            objects: Vec::new(),
-            by_id: HashMap::new(),
-            read_props: RefCell::new(BTreeSet::new()),
-        };
+        let mut store = Store::for_one_document();
         store
-            .merge(document_with_property(true, PropValue::Text("10".into())))
+            .merge(document_with_property(true, PropValue::Text("10".into())), 0)
             .unwrap();
         store
-            .merge(document_with_property(false, PropValue::Text("10".into())))
+            .merge(document_with_property(false, PropValue::Text("10".into())), 0)
             .unwrap();
         assert_eq!(store.objects[0].props.len(), 1);
 
         let error = store
-            .merge(document_with_property(false, PropValue::Text("11".into())))
+            .merge(document_with_property(false, PropValue::Text("11".into())), 0)
             .unwrap_err();
         let message = error.to_string();
         assert!(message.contains("RDF object `load`"));
@@ -5017,6 +5886,7 @@ mod tests {
                     PropValue::Ref("node-2".into()),
                 ),
             ],
+            false,
         )
         .unwrap();
         assert_eq!(island.len(), 2);
@@ -5038,13 +5908,9 @@ mod tests {
             ("CurrentLimit", "CurrentLimit.value", "NaN"),
             ("TapChanger", "TapChanger.step", "-inf"),
         ] {
-            let mut store = Store {
-                objects: Vec::new(),
-                by_id: HashMap::new(),
-                read_props: RefCell::new(BTreeSet::new()),
-            };
+            let mut store = Store::for_one_document();
             let error = store
-                .merge(document_with_literal(class, property, value))
+                .merge(document_with_literal(class, property, value), 0)
                 .unwrap_err();
             let message = error.to_string();
             assert!(
@@ -5073,13 +5939,9 @@ mod tests {
             ),
             ("TapChanger", "TapChanger.ltcFlag", "on"),
         ] {
-            let mut store = Store {
-                objects: Vec::new(),
-                by_id: HashMap::new(),
-                read_props: RefCell::new(BTreeSet::new()),
-            };
+            let mut store = Store::for_one_document();
             let error = store
-                .merge(document_with_literal(class, property, value))
+                .merge(document_with_literal(class, property, value), 0)
                 .unwrap_err();
             let message = error.to_string();
             assert!(
@@ -5133,13 +5995,9 @@ mod tests {
                 "-1",
             ),
         ] {
-            let mut store = Store {
-                objects: Vec::new(),
-                by_id: HashMap::new(),
-                read_props: RefCell::new(BTreeSet::new()),
-            };
+            let mut store = Store::for_one_document();
             let message = store
-                .merge(document_with_literal(class, property, value))
+                .merge(document_with_literal(class, property, value), 0)
                 .unwrap_err()
                 .to_string();
             assert!(
@@ -5172,13 +6030,9 @@ mod tests {
                 "OperationalLimitType.acceptableDuration",
             ),
         ] {
-            let mut store = Store {
-                objects: Vec::new(),
-                by_id: HashMap::new(),
-                read_props: RefCell::new(BTreeSet::new()),
-            };
+            let mut store = Store::for_one_document();
             store
-                .merge(document_with_literal(class, property, "2.5"))
+                .merge(document_with_literal(class, property, "2.5"), 0)
                 .unwrap();
         }
     }
@@ -5264,11 +6118,7 @@ mod tests {
 
     #[test]
     fn noncanonical_limit_kinds_and_fractional_durations_are_explicit() {
-        let mut store = Store {
-            objects: Vec::new(),
-            by_id: HashMap::new(),
-            read_props: RefCell::new(BTreeSet::new()),
-        };
+        let mut store = Store::for_one_document();
         store
             .merge(CimDocument {
                 cim_namespaces: BTreeSet::from(["http://iec.ch/TC57/CIM100#".into()]),
@@ -5319,7 +6169,7 @@ mod tests {
                         ],
                     },
                 ],
-            })
+            }, 0)
             .unwrap();
         let mut warnings = CgmesDiagnostics::new(&codes::READ_CGMES_RECORD_UNMAPPED);
         let limits = loading_limits(
@@ -5342,11 +6192,7 @@ mod tests {
     #[test]
     fn invalid_temporary_limit_durations_are_explicit() {
         for duration_value in ["-1", "18446744073709551616"] {
-            let mut store = Store {
-                objects: Vec::new(),
-                by_id: HashMap::new(),
-                read_props: RefCell::new(BTreeSet::new()),
-            };
+            let mut store = Store::for_one_document();
             store
                 .merge(CimDocument {
                     cim_namespaces: BTreeSet::from(["http://iec.ch/TC57/CIM100#".into()]),
@@ -5393,7 +6239,7 @@ mod tests {
                             ],
                         },
                     ],
-                })
+                }, 0)
                 .unwrap();
             let mut warnings = CgmesDiagnostics::new(&codes::READ_CGMES_RECORD_UNMAPPED);
             let limits = loading_limits(
@@ -5415,11 +6261,7 @@ mod tests {
 
     #[test]
     fn distinct_equal_base_voltage_identities_are_diagnosed() {
-        let mut store = Store {
-            objects: Vec::new(),
-            by_id: HashMap::new(),
-            read_props: RefCell::new(BTreeSet::new()),
-        };
+        let mut store = Store::for_one_document();
         store
             .merge(CimDocument {
                 cim_namespaces: BTreeSet::from(["http://iec.ch/TC57/CIM100#".into()]),
@@ -5436,7 +6278,7 @@ mod tests {
                         )],
                     })
                     .collect(),
-            })
+            }, 0)
             .unwrap();
         let mut warnings = CgmesDiagnostics::new(&codes::READ_CGMES_RECORD_UNMAPPED);
         warn_collapsed_base_voltage_identities(&store, &mut warnings);
@@ -5449,11 +6291,7 @@ mod tests {
 
     #[test]
     fn unsupported_tap_control_mode_is_not_silently_defaulted() {
-        let mut store = Store {
-            objects: Vec::new(),
-            by_id: HashMap::new(),
-            read_props: RefCell::new(BTreeSet::new()),
-        };
+        let mut store = Store::for_one_document();
         store
             .merge(CimDocument {
                 cim_namespaces: BTreeSet::from(["http://iec.ch/TC57/CIM100#".into()]),
@@ -5478,7 +6316,7 @@ mod tests {
                         )],
                     },
                 ],
-            })
+            }, 0)
             .unwrap();
         let mut warnings = CgmesDiagnostics::new(&codes::READ_CGMES_RECORD_UNMAPPED);
         assert_eq!(tap_control_mode(&store, "tap", &mut warnings), None);
@@ -5491,26 +6329,18 @@ mod tests {
 
     #[test]
     fn rejects_resource_references_for_typed_literals() {
-        let mut store = Store {
-            objects: Vec::new(),
-            by_id: HashMap::new(),
-            read_props: RefCell::new(BTreeSet::new()),
-        };
+        let mut store = Store::for_one_document();
         let mut document = document_with_literal("EnergyConsumer", "EnergyConsumer.p", "1");
         document.objects[0].props[0].1 = PropValue::Ref("not-a-number".into());
 
-        let message = store.merge(document).unwrap_err().to_string();
+        let message = store.merge(document, 0).unwrap_err().to_string();
         assert!(message.contains("EnergyConsumer.p"));
         assert!(message.contains("RDF resource reference, not a typed literal"));
     }
 
     #[test]
     fn unknown_limit_tap_changer_and_generating_unit_classes_are_diagnosed() {
-        let mut store = Store {
-            objects: Vec::new(),
-            by_id: HashMap::new(),
-            read_props: RefCell::new(BTreeSet::new()),
-        };
+        let mut store = Store::for_one_document();
         store
             .merge(CimDocument {
                 cim_namespaces: BTreeSet::from(["http://iec.ch/TC57/CIM100#".into()]),
@@ -5528,7 +6358,7 @@ mod tests {
                     props: Vec::new(),
                 })
                 .collect(),
-            })
+            }, 0)
             .unwrap();
         let mut warnings = CgmesDiagnostics::new(&codes::READ_CGMES_RECORD_UNMAPPED);
         warn_unmapped(&store, &mut warnings);
@@ -5548,11 +6378,7 @@ mod tests {
 
     #[test]
     fn mapped_classes_report_each_unread_field_without_false_mrid_matches() {
-        let mut store = Store {
-            objects: Vec::new(),
-            by_id: HashMap::new(),
-            read_props: RefCell::new(BTreeSet::new()),
-        };
+        let mut store = Store::for_one_document();
         store
             .merge(CimDocument {
                 cim_namespaces: BTreeSet::from(["http://iec.ch/TC57/CIM100#".into()]),
@@ -5603,7 +6429,7 @@ mod tests {
                         )],
                     },
                 ],
-            })
+            }, 0)
             .unwrap();
 
         assert_eq!(store.f("equivalent", "EquivalentInjection.p"), Some(10.0));

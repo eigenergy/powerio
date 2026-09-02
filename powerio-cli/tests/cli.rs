@@ -520,6 +520,56 @@ fn convert_writes_a_cgmes_profile_directory() {
 }
 
 #[test]
+fn convert_emit_options_select_the_cgmes_version_and_profiles() {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let output = std::env::temp_dir().join(format!("powerio-cli-cgmes-options-{stamp}"));
+    let case = repo_file("tests/data/cgmes/two-authority");
+    let out = run(&[
+        "convert",
+        case.to_str().unwrap(),
+        "--to",
+        "cgmes",
+        "--emit-option",
+        "cgmes_version=2.4.15",
+        "--emit-option",
+        "cgmes_profiles=EQ,TP",
+        "-o",
+        output.to_str().unwrap(),
+    ]);
+    assert_success(&out);
+    let mut names: Vec<_> = std::fs::read_dir(&output)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names.len(), 2, "{names:?}");
+    assert!(names[0].ends_with("_EQ.xml"));
+    assert!(names[1].ends_with("_TP.xml"));
+    let equipment = std::fs::read_to_string(output.join(&names[0])).unwrap();
+    assert!(equipment.contains("http://iec.ch/TC57/2013/CIM-schema-cim16#"));
+    std::fs::remove_dir_all(output).unwrap();
+
+    for option in ["cgmes_version=16", "cgmes_profiles=EQ,DL", "cgmes_version"] {
+        let out = run(&[
+            "convert",
+            case.to_str().unwrap(),
+            "--to",
+            "cgmes",
+            "--emit-option",
+            option,
+            "-o",
+            "-",
+        ]);
+        assert_failure(&out);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains("REQUEST.CLI.OPTION_INVALID"), "{stderr}");
+    }
+}
+
+#[test]
 fn convert_reserves_iidm_and_rawx_for_input() {
     let case = repo_file("tests/data/case9.m");
     for (input_spelling, canonical) in [("iidm", "xiidm"), ("rawx", "psse-rawx")] {

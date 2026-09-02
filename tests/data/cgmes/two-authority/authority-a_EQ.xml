@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:cim="http://iec.ch/TC57/2013/CIM-schema-cim16#"
+         xmlns:entsoe="http://entsoe.eu/CIM/SchemaExtension/3/1#"
+         xmlns:md="http://iec.ch/TC57/61970-552/ModelDescription/1#">
+  <md:FullModel rdf:about="urn:uuid:aaaaaaaa-1111-4000-8000-000000000001">
+    <md:Model.scenarioTime>2026-01-01T00:00:00Z</md:Model.scenarioTime>
+    <md:Model.created>2026-01-01T00:00:00Z</md:Model.created>
+    <md:Model.description>Authority A equipment</md:Model.description>
+    <md:Model.version>1</md:Model.version>
+    <md:Model.profile>http://entsoe.eu/CIM/EquipmentCore/3/1</md:Model.profile>
+    <md:Model.DependentOn rdf:resource="urn:uuid:00000000-1111-4000-8000-000000000001"/>
+    <md:Model.modelingAuthoritySet>http://example.org/cgmes/authority-a</md:Model.modelingAuthoritySet>
+  </md:FullModel>
+  <cim:Substation rdf:ID="_aaaaaaaa-0000-4000-8000-000000000001">
+    <cim:IdentifiedObject.name>Substation A</cim:IdentifiedObject.name>
+    <cim:Substation.Region rdf:resource="#_00000000-0000-4000-8000-0000000000f2"/>
+  </cim:Substation>
+  <cim:VoltageLevel rdf:ID="_aaaaaaaa-0000-4000-8000-000000000002">
+    <cim:IdentifiedObject.name>VL A 400</cim:IdentifiedObject.name>
+    <cim:VoltageLevel.Substation rdf:resource="#_aaaaaaaa-0000-4000-8000-000000000001"/>
+    <cim:VoltageLevel.BaseVoltage rdf:resource="#_00000000-0000-4000-8000-0000000000b4"/>
+  </cim:VoltageLevel>
+  <cim:ACLineSegment rdf:ID="_aaaaaaaa-0000-4000-8000-000000000005">
+    <cim:IdentifiedObject.name>Line A 1-2</cim:IdentifiedObject.name>
+    <cim:Equipment.EquipmentContainer rdf:resource="#_aaaaaaaa-0000-4000-8000-000000000002"/>
+    <cim:ConductingEquipment.BaseVoltage rdf:resource="#_00000000-0000-4000-8000-0000000000b4"/>
+    <cim:ACLineSegment.r>2.0</cim:ACLineSegment.r>
+    <cim:ACLineSegment.x>16.0</cim:ACLineSegment.x>
+    <cim:ACLineSegment.bch>0.0002</cim:ACLineSegment.bch>
+  </cim:ACLineSegment>
+  <cim:Terminal rdf:ID="_aaaaaaaa-0000-4000-8000-000000000006">
+    <cim:IdentifiedObject.name>line terminal 1</cim:IdentifiedObject.name>
+    <cim:ACDCTerminal.sequenceNumber>1</cim:ACDCTerminal.sequenceNumber>
+    <cim:Terminal.ConductingEquipment rdf:resource="#_aaaaaaaa-0000-4000-8000-000000000005"/>
+  </cim:Terminal>
+  <cim:Terminal rdf:ID="_aaaaaaaa-0000-4000-8000-000000000007">
+    <cim:IdentifiedObject.name>line terminal 2</cim:IdentifiedObject.name>
+    <cim:ACDCTerminal.sequenceNumber>2</cim:ACDCTerminal.sequenceNumber>
+    <cim:Terminal.ConductingEquipment rdf:resource="#_aaaaaaaa-0000-4000-8000-000000000005"/>
+  </cim:Terminal>
+  <cim:ThermalGeneratingUnit rdf:ID="_aaaaaaaa-0000-4000-8000-00000000000a">
+    <cim:IdentifiedObject.name>Unit A</cim:IdentifiedObject.name>
+    <cim:Equipment.EquipmentContainer rdf:resource="#_aaaaaaaa-0000-4000-8000-000000000001"/>
+    <cim:GeneratingUnit.maxOperatingP>300</cim:GeneratingUnit.maxOperatingP>
+    <cim:GeneratingUnit.minOperatingP>50</cim:GeneratingUnit.minOperatingP>
+  </cim:ThermalGeneratingUnit>
+  <cim:SynchronousMachine rdf:ID="_aaaaaaaa-0000-4000-8000-000000000008">
+    <cim:IdentifiedObject.name>Generator A</cim:IdentifiedObject.name>
+    <cim:Equipment.EquipmentContainer rdf:resource="#_aaaaaaaa-0000-4000-8000-000000000002"/>
+    <cim:ConductingEquipment.BaseVoltage rdf:resource="#_00000000-0000-4000-8000-0000000000b4"/>
+    <cim:RotatingMachine.GeneratingUnit rdf:resource="#_aaaaaaaa-0000-4000-8000-00000000000a"/>
+    <cim:RotatingMachine.ratedS>350</cim:RotatingMachine.ratedS>
+    <cim:SynchronousMachine.maxQ>150</cim:SynchronousMachine.maxQ>
+    <cim:SynchronousMachine.minQ>-150</cim:SynchronousMachine.minQ>
+    <cim:SynchronousMachine.type rdf:resource="http://iec.ch/TC57/2013/CIM-schema-cim16#SynchronousMachineKind.generator"/>
+  </cim:SynchronousMachine>
+  <cim:Terminal rdf:ID="_aaaaaaaa-0000-4000-8000-000000000009">
+    <cim:IdentifiedObject.name>gen terminal 1</cim:IdentifiedObject.name>
+    <cim:ACDCTerminal.sequenceNumber>1</cim:ACDCTerminal.sequenceNumber>
+    <cim:Terminal.ConductingEquipment rdf:resource="#_aaaaaaaa-0000-4000-8000-000000000008"/>
+  </cim:Terminal>
+  <cim:EnergyConsumer rdf:ID="_aaaaaaaa-0000-4000-8000-00000000000b">
+    <cim:IdentifiedObject.name>Load A</cim:IdentifiedObject.name>
+    <cim:Equipment.EquipmentContainer rdf:resource="#_aaaaaaaa-0000-4000-8000-000000000002"/>
+    <cim:ConductingEquipment.BaseVoltage rdf:resource="#_00000000-0000-4000-8000-0000000000b4"/>
+  </cim:EnergyConsumer>
+  <cim:Terminal rdf:ID="_aaaaaaaa-0000-4000-8000-00000000000c">
+    <cim:IdentifiedObject.name>load terminal 1</cim:IdentifiedObject.name>
+    <cim:ACDCTerminal.sequenceNumber>1</cim:ACDCTerminal.sequenceNumber>
+    <cim:Terminal.ConductingEquipment rdf:resource="#_aaaaaaaa-0000-4000-8000-00000000000b"/>
+  </cim:Terminal>
+  <cim:ACLineSegment rdf:ID="_aaaaaaaa-0000-4000-8000-00000000000d">
+    <cim:IdentifiedObject.name>Tie A to X</cim:IdentifiedObject.name>
+    <cim:Equipment.EquipmentContainer rdf:resource="#_00000000-0000-4000-8000-0000000000e1"/>
+    <cim:ConductingEquipment.BaseVoltage rdf:resource="#_00000000-0000-4000-8000-0000000000b4"/>
+    <cim:ACLineSegment.r>1.0</cim:ACLineSegment.r>
+    <cim:ACLineSegment.x>8.0</cim:ACLineSegment.x>
+    <cim:ACLineSegment.bch>0.0001</cim:ACLineSegment.bch>
+  </cim:ACLineSegment>
+  <cim:Terminal rdf:ID="_aaaaaaaa-0000-4000-8000-00000000000e">
+    <cim:IdentifiedObject.name>tie terminal 1</cim:IdentifiedObject.name>
+    <cim:ACDCTerminal.sequenceNumber>1</cim:ACDCTerminal.sequenceNumber>
+    <cim:Terminal.ConductingEquipment rdf:resource="#_aaaaaaaa-0000-4000-8000-00000000000d"/>
+  </cim:Terminal>
+  <cim:Terminal rdf:ID="_aaaaaaaa-0000-4000-8000-00000000000f">
+    <cim:IdentifiedObject.name>tie terminal 2</cim:IdentifiedObject.name>
+    <cim:ACDCTerminal.sequenceNumber>2</cim:ACDCTerminal.sequenceNumber>
+    <cim:Terminal.ConductingEquipment rdf:resource="#_aaaaaaaa-0000-4000-8000-00000000000d"/>
+  </cim:Terminal>
+  <cim:EquivalentInjection rdf:ID="_aaaaaaaa-0000-4000-8000-000000000010">
+    <cim:IdentifiedObject.name>Injection A at X</cim:IdentifiedObject.name>
+    <cim:Equipment.EquipmentContainer rdf:resource="#_00000000-0000-4000-8000-0000000000e1"/>
+    <cim:ConductingEquipment.BaseVoltage rdf:resource="#_00000000-0000-4000-8000-0000000000b4"/>
+  </cim:EquivalentInjection>
+  <cim:Terminal rdf:ID="_aaaaaaaa-0000-4000-8000-000000000011">
+    <cim:IdentifiedObject.name>inj terminal 1</cim:IdentifiedObject.name>
+    <cim:ACDCTerminal.sequenceNumber>1</cim:ACDCTerminal.sequenceNumber>
+    <cim:Terminal.ConductingEquipment rdf:resource="#_aaaaaaaa-0000-4000-8000-000000000010"/>
+  </cim:Terminal>
+</rdf:RDF>

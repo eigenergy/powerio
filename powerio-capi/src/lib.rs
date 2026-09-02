@@ -15003,6 +15003,12 @@ unsafe fn run_output_operation(
 }
 
 /// Emit one module as a grid exchange format.
+///
+/// `format` is a format name, optionally followed by `?` and `name=value`
+/// emit options joined by `&`. The options are `cgmes_version` (`2.4.15` or
+/// `3.0`) and `cgmes_profiles` (a comma separated subset of EQ, TP, SSH, SV,
+/// EQ_BD, and TP_BD); both apply only to `cgmes`, and an unknown or malformed
+/// option fails with `REQUEST.EMIT.OPTION_INVALID`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_emit(
     module: *const PioModule,
@@ -19756,6 +19762,52 @@ mod tests {
                 pio_module_release(reparsed);
             }
 
+            pio_module_release(module);
+        }
+    }
+
+    #[test]
+    fn emit_format_suffix_carries_the_cgmes_options() {
+        unsafe {
+            let module = parse_case9();
+            let mut error = std::ptr::null_mut();
+            let destination =
+                pio_destination_memory(c"profiles".as_ptr(), "profiles".len(), &mut error);
+            assert!(!destination.is_null(), "{}", error_text(error));
+            let format = "cgmes?cgmes_version=2.4.15&cgmes_profiles=EQ,TP";
+            let result = pio_emit(
+                module,
+                format.as_ptr().cast(),
+                format.len(),
+                destination,
+                &mut error,
+            );
+            assert!(!result.is_null(), "{}", error_text(error));
+            assert_eq!(pio_emit_result_artifact_count(result), 2);
+            let artifact = pio_emit_result_artifact(result, 0, &mut error);
+            let bytes = pio_artifact_bytes(artifact);
+            let text = std::str::from_utf8(std::slice::from_raw_parts(bytes.data, bytes.len))
+                .unwrap();
+            assert!(text.contains("http://iec.ch/TC57/2013/CIM-schema-cim16#"));
+            pio_artifact_release(artifact);
+            pio_emit_result_release(result);
+
+            let format = "cgmes?cgmes_version=16";
+            let refused = pio_emit(
+                module,
+                format.as_ptr().cast(),
+                format.len(),
+                destination,
+                &mut error,
+            );
+            assert!(refused.is_null());
+            assert!(
+                error_text(error).contains("REQUEST.EMIT.OPTION_INVALID"),
+                "{}",
+                error_text(error)
+            );
+            pio_error_release(error);
+            pio_destination_release(destination);
             pio_module_release(module);
         }
     }

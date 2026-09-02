@@ -109,6 +109,11 @@ pub enum Error {
         message: String,
     },
 
+    /// One RDF identifier is defined by more than one CGMES profile document,
+    /// so the assembled set has no single object for it.
+    #[error("CGMES read error: {message}")]
+    CgmesIdentityConflict { message: String },
+
     #[error("{format} emission failed: {message}")]
     Emit {
         format: &'static str,
@@ -117,6 +122,11 @@ pub enum Error {
 
     #[error("unknown or unsupported case format: {0}")]
     UnknownFormat(String),
+
+    /// An emit option name, value, or target pairing the writer does not
+    /// accept.
+    #[error("invalid emit option: {0}")]
+    InvalidEmitOption(String),
 
     /// The target format is recognized but read only: it has no writer. A
     /// same-format write can still echo retained source; everything else is
@@ -149,6 +159,7 @@ impl Error {
             | Error::BadId { .. }
             | Error::UnbalancedBrackets(_) => &codes::PARSE_MATPOWER_MALFORMED,
             Error::FormatRead { .. } => &codes::PARSE_SOURCE_MALFORMED,
+            Error::CgmesIdentityConflict { .. } => &codes::READ_CGMES_IDENTITY_CONFLICT,
             Error::Emit { .. } => &codes::EMIT_FORMAT_REQUIRED_VALUE_MISSING,
             Error::Io(_) => &codes::READ_IO_FAILED,
             Error::UnknownBus { .. } => &codes::BUILD_INDEX_UNKNOWN_BUS,
@@ -167,6 +178,7 @@ impl Error {
             Error::UngroundedComponent { .. } => &codes::BUILD_INDEX_UNGROUNDED_COMPONENT,
             Error::UnlocatedElements { .. } => &codes::BUILD_GEO_UNLOCATED_ELEMENTS,
             Error::UnknownFormat(_) => &codes::REQUEST_FORMAT_UNKNOWN,
+            Error::InvalidEmitOption(_) => &codes::REQUEST_EMIT_OPTION_INVALID,
             Error::WriteUnsupported { .. } => &codes::REQUEST_FORMAT_WRITE_UNSUPPORTED,
         }
     }
@@ -181,7 +193,9 @@ impl Error {
             // WriteUnsupported keeps the Request category so bindings
             // surface it the same way (a ValueError, not a data error): the
             // request named a format the writer can't produce.
-            Error::UnknownFormat(_) | Error::WriteUnsupported { .. } => C::Request,
+            Error::UnknownFormat(_)
+            | Error::InvalidEmitOption(_)
+            | Error::WriteUnsupported { .. } => C::Request,
             Error::Emit { .. } => C::Output,
             // Malformed or unparseable input. Only the parser/format readers
             // raise these.
@@ -190,7 +204,8 @@ impl Error {
             | Error::BadFloat { .. }
             | Error::BadId { .. }
             | Error::UnbalancedBrackets(_)
-            | Error::FormatRead { .. } => C::Parse,
+            | Error::FormatRead { .. }
+            | Error::CgmesIdentityConflict { .. } => C::Parse,
             // A well-formed case that can't satisfy a requested operation. These
             // surface mid-build (matrix/OPF/gridfm), not at parse time —
             // `UnknownBus` and the scenario batch checks included: the file
@@ -246,6 +261,10 @@ mod tests {
                 format: "psse",
                 message: "bad record".into(),
             },
+            Error::CgmesIdentityConflict {
+                message: "RDF identifier `x` is defined twice".into(),
+            },
+            Error::InvalidEmitOption("cgmes_version `4`".into()),
             Error::Emit {
                 format: "xiidm",
                 message: "missing nominalV".into(),

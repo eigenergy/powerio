@@ -4116,6 +4116,12 @@ void pio_update_change_release(PioUpdateChange *change);
 
 /**
  * Emit one module as a grid exchange format.
+ *
+ * `format` is a format name, optionally followed by `?` and `name=value`
+ * emit options joined by `&`. The options are `cgmes_version` (`2.4.15` or
+ * `3.0`) and `cgmes_profiles` (a comma separated subset of EQ, TP, SSH, SV,
+ * EQ_BD, and TP_BD); both apply only to `cgmes`, and an unknown or malformed
+ * option fails with `REQUEST.EMIT.OPTION_INVALID`.
  */
 PioEmitResult *pio_emit(const PioModule *module,
                         const char *format,

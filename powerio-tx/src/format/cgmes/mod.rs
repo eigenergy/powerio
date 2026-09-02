@@ -34,6 +34,7 @@ use std::path::{Component, Path};
 use powerio_core::{ArtifactPath, DiagnosticInfo, MemoryArtifact, Source};
 
 use crate::diagnostics::Diagnostics;
+use crate::format::ParseExtras;
 use crate::network::BalancedNetwork;
 use crate::{Error, Result};
 
@@ -137,9 +138,14 @@ fn looks_like_cgmes_xml(bytes: &[u8]) -> bool {
         && text.contains("FullModel")
 }
 
+/// The module extension namespace carrying the `md:FullModel` records of a
+/// parsed profile set.
+pub const DOCUMENT_EXTENSION: &str = "powerio.cgmes";
+
 pub(crate) fn parse_source(
     source: &Source,
     diagnostics: &mut Diagnostics,
+    extras: &mut ParseExtras,
 ) -> Result<BalancedNetwork> {
     let documents = acquire_documents(source)?;
     let name = Path::new(source.name())
@@ -149,6 +155,10 @@ pub(crate) fn parse_source(
     for diagnostic in parsed.warnings {
         diagnostics.push(diagnostic.info, diagnostic.message);
     }
+    extras.extensions.insert(
+        DOCUMENT_EXTENSION.to_string(),
+        document_records(&parsed.documents),
+    );
     Ok(parsed.network)
 }
 
@@ -156,13 +166,48 @@ pub(crate) fn parse_text(
     name: &str,
     text: &str,
     diagnostics: &mut Diagnostics,
+    extras: &mut ParseExtras,
 ) -> Result<BalancedNetwork> {
     reject_unsafe_xml(text.as_bytes())?;
     let parsed = read::read_cgmes_documents(vec![(name.to_string(), text.to_string())], None)?;
     for diagnostic in parsed.warnings {
         diagnostics.push(diagnostic.info, diagnostic.message);
     }
+    extras.extensions.insert(
+        DOCUMENT_EXTENSION.to_string(),
+        document_records(&parsed.documents),
+    );
     Ok(parsed.network)
+}
+
+/// The `md:FullModel` header of every document as one JSON record set:
+/// `{"documents": [{"source", "model", "profiles", "modeling_authority_set",
+/// "depends_on", "version", "created", "scenario_time", "description"}]}`.
+/// Model identities keep the `urn:uuid:` spelling the headers use.
+fn document_records(documents: &[read::ModelDocument]) -> serde_json::Value {
+    let urn = |identity: &str| format!("urn:uuid:{identity}");
+    serde_json::json!({
+        "documents": documents
+            .iter()
+            .map(|document| {
+                serde_json::json!({
+                    "source": document.source,
+                    "model": document.identity.as_deref().map(urn),
+                    "profiles": document.profiles,
+                    "modeling_authority_set": document.modeling_authority_set,
+                    "depends_on": document
+                        .dependent_on
+                        .iter()
+                        .map(|dependency| urn(dependency))
+                        .collect::<Vec<_>>(),
+                    "version": document.version,
+                    "created": document.created,
+                    "scenario_time": document.scenario_time,
+                    "description": document.description,
+                })
+            })
+            .collect::<Vec<_>>(),
+    })
 }
 
 fn acquire_documents(source: &Source) -> Result<Vec<(String, String)>> {
@@ -401,11 +446,37 @@ fn format_error(message: impl Into<String>) -> Error {
     }
 }
 
-pub(crate) fn artifacts(network: &BalancedNetwork) -> Result<(Vec<MemoryArtifact>, Diagnostics)> {
-    let output = write::write_cgmes(network, CgmesVersion::V3_0)?;
+/// Fresh profile documents for `network`: the complete EQ, TP, SSH, and SV
+/// set is written and validated as one RDF graph, then only the requested
+/// profiles are returned. A subset keeps the `Model.DependentOn` references of
+/// the complete set, so a later export of the remaining profiles from the
+/// same network fits the same model identities.
+pub(crate) fn artifacts(
+    network: &BalancedNetwork,
+    version: CgmesVersion,
+    profiles: &[CgmesProfile],
+) -> Result<(Vec<MemoryArtifact>, Diagnostics)> {
+    if let Some(profile) = profiles
+        .iter()
+        .find(|profile| matches!(profile, CgmesProfile::EqBd | CgmesProfile::TpBd))
+    {
+        return Err(Error::Emit {
+            format: "CGMES",
+            message: format!(
+                "profile {} was requested, but fresh CGMES output writes the EQ, TP, SSH, and SV profiles of one modeling authority and produces no boundary set",
+                profile.label()
+            ),
+        });
+    }
+    let output = write::write_cgmes(network, version)?;
     let artifacts = output
         .files
         .into_iter()
+        .filter(|(name, _)| {
+            profiles
+                .iter()
+                .any(|profile| name.ends_with(&format!("_{}.xml", profile.label())))
+        })
         .map(|(name, text)| {
             MemoryArtifact::new(
                 ArtifactPath::new(name).expect("CGMES writer emits portable fixed names"),
@@ -421,12 +492,13 @@ pub(crate) fn artifacts(network: &BalancedNetwork) -> Result<(Vec<MemoryArtifact
 }
 
 /// The CGMES release family a file set declares, from its `cim` namespace.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CgmesVersion {
     /// CGMES 2.4.15 on CIM16 (`…/CIM-schema-cim16#`, any vintage year).
     V2_4_15,
-    /// CGMES 3.0 on CIM100 (`…/CIM100#`).
+    /// CGMES 3.0 on CIM100 (`…/CIM100#`); the fresh output default.
+    #[default]
     V3_0,
 }
 
@@ -441,11 +513,115 @@ impl CgmesVersion {
         }
     }
 
+    /// The release named by an emit option value: `2.4.15` or `3.0`.
+    ///
+    /// # Errors
+    /// [`Error::InvalidEmitOption`] for any other spelling.
+    pub fn parse_option(value: &str) -> Result<Self> {
+        match value.trim() {
+            "2.4.15" => Ok(CgmesVersion::V2_4_15),
+            "3.0" => Ok(CgmesVersion::V3_0),
+            other => Err(Error::InvalidEmitOption(format!(
+                "cgmes_version `{other}` is not a CGMES release; use `2.4.15` or `3.0`"
+            ))),
+        }
+    }
+
+    /// The option value that names this release.
+    #[must_use]
+    pub fn option_value(self) -> &'static str {
+        match self {
+            CgmesVersion::V2_4_15 => "2.4.15",
+            CgmesVersion::V3_0 => "3.0",
+        }
+    }
+
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             CgmesVersion::V2_4_15 => "CGMES 2.4.15 (CIM16)",
             CgmesVersion::V3_0 => "CGMES 3.0 (CIM100)",
+        }
+    }
+}
+
+/// One CGMES profile document of a model set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CgmesProfile {
+    /// Equipment.
+    Eq,
+    /// Topology.
+    Tp,
+    /// Steady state hypothesis.
+    Ssh,
+    /// State variables.
+    Sv,
+    /// Equipment boundary.
+    EqBd,
+    /// Topology boundary (CGMES 2.4.15 only).
+    TpBd,
+}
+
+impl CgmesProfile {
+    /// The profiles fresh CGMES output writes by default.
+    pub const DEFAULT: [CgmesProfile; 4] = [
+        CgmesProfile::Eq,
+        CgmesProfile::Tp,
+        CgmesProfile::Ssh,
+        CgmesProfile::Sv,
+    ];
+
+    /// The profile named by one token of the `cgmes_profiles` option.
+    ///
+    /// # Errors
+    /// [`Error::InvalidEmitOption`] for a token outside `EQ`, `TP`, `SSH`,
+    /// `SV`, `EQ_BD`, and `TP_BD`.
+    pub fn parse_option(value: &str) -> Result<Self> {
+        match value.trim().to_ascii_uppercase().as_str() {
+            "EQ" => Ok(CgmesProfile::Eq),
+            "TP" => Ok(CgmesProfile::Tp),
+            "SSH" => Ok(CgmesProfile::Ssh),
+            "SV" => Ok(CgmesProfile::Sv),
+            "EQ_BD" => Ok(CgmesProfile::EqBd),
+            "TP_BD" => Ok(CgmesProfile::TpBd),
+            other => Err(Error::InvalidEmitOption(format!(
+                "cgmes_profiles token `{other}` is not a CGMES profile; use EQ, TP, SSH, SV, EQ_BD, or TP_BD"
+            ))),
+        }
+    }
+
+    /// The comma separated `cgmes_profiles` option as an ordered list without
+    /// repetition.
+    ///
+    /// # Errors
+    /// [`Error::InvalidEmitOption`] for an empty list or an unknown token.
+    pub fn parse_list(value: &str) -> Result<Vec<Self>> {
+        let mut profiles = Vec::new();
+        for token in value.split(',') {
+            let profile = Self::parse_option(token)?;
+            if !profiles.contains(&profile) {
+                profiles.push(profile);
+            }
+        }
+        if profiles.is_empty() {
+            return Err(Error::InvalidEmitOption(
+                "cgmes_profiles names no profile; use a comma separated list of EQ, TP, SSH, SV, EQ_BD, and TP_BD".into(),
+            ));
+        }
+        Ok(profiles)
+    }
+
+    /// The profile's conventional file suffix and option token.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            CgmesProfile::Eq => "EQ",
+            CgmesProfile::Tp => "TP",
+            CgmesProfile::Ssh => "SSH",
+            CgmesProfile::Sv => "SV",
+            CgmesProfile::EqBd => "EQ_BD",
+            CgmesProfile::TpBd => "TP_BD",
         }
     }
 }
@@ -5525,7 +5701,7 @@ mod tests {
         }
         let bytes = writer.finish().unwrap().into_inner();
         let source = Source::from_memory("case.zip", bytes.clone()).unwrap();
-        let parsed = parse_source(&source, &mut Diagnostics::new()).unwrap();
+        let parsed = parse_source(&source, &mut Diagnostics::new(), &mut ParseExtras::default()).unwrap();
         assert_eq!(parsed.buses().len(), 2);
 
         let module = crate::format::parse(source.clone()).unwrap();
@@ -5549,7 +5725,7 @@ mod tests {
         )
         .unwrap();
         let source = Source::open(directory.path()).unwrap();
-        let parsed = parse_source(&source, &mut Diagnostics::new()).unwrap();
+        let parsed = parse_source(&source, &mut Diagnostics::new(), &mut ParseExtras::default()).unwrap();
         assert_eq!(parsed.branches().len(), 1);
 
         let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
@@ -5559,7 +5735,7 @@ mod tests {
         writer.write_all(b"<rdf:RDF/>").unwrap();
         let bytes = writer.finish().unwrap().into_inner();
         let source = Source::from_memory("unsafe.zip", bytes).unwrap();
-        assert!(parse_source(&source, &mut Diagnostics::new()).is_err());
+        assert!(parse_source(&source, &mut Diagnostics::new(), &mut ParseExtras::default()).is_err());
     }
 
     #[test]
@@ -5620,6 +5796,324 @@ mod tests {
         let parsed = read::read_cgmes_documents(output.files, Some("cim16")).unwrap();
         assert_eq!(parsed.network.source_format(), crate::SourceFormat::Cgmes);
         assert_eq!(parsed.network.buses().len(), 2);
+    }
+
+    /// The synthetic two authority set: one individual grid model per
+    /// authority (EQ, TP, SSH) plus the boundary set (EQ_BD, TP_BD), in file
+    /// name order.
+    fn two_authority_documents() -> Vec<(String, String)> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/data/cgmes/two-authority");
+        let mut names = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".xml"))
+            .collect::<Vec<_>>();
+        names.sort();
+        names
+            .into_iter()
+            .map(|name| {
+                let text = std::fs::read_to_string(root.join(&name)).unwrap();
+                (name, text)
+            })
+            .collect()
+    }
+
+    const LINE_A: &str = "aaaaaaaa-0000-4000-8000-000000000005";
+    const TIE_A: &str = "aaaaaaaa-0000-4000-8000-00000000000d";
+    const TIE_B: &str = "bbbbbbbb-0000-4000-8000-00000000000d";
+    const INJECTION_A: &str = "aaaaaaaa-0000-4000-8000-000000000010";
+    const BOUNDARY_NODE: &str = "00000000-0000-4000-8000-0000000000d1";
+    const AUTHORITY_A: &str = "http://example.org/cgmes/authority-a";
+    const AUTHORITY_B: &str = "http://example.org/cgmes/authority-b";
+
+    #[test]
+    fn two_authority_set_assembles_one_tie_line() {
+        let parsed = read::read_cgmes_documents(two_authority_documents(), None).unwrap();
+        let network = &parsed.network;
+        assert_eq!(network.buses().len(), 4);
+        assert!(
+            network
+                .buses()
+                .iter()
+                .all(|bus| bus.uid.as_deref() != Some(BOUNDARY_NODE)),
+            "the joined boundary node is no calculation bus"
+        );
+        assert_eq!(network.loads().len(), 2);
+        assert_eq!(network.generators().len(), 2);
+        assert_eq!(network.branches().len(), 3);
+        let tie_id = format!("{TIE_A} + {TIE_B}");
+        let tie = network
+            .branches()
+            .iter()
+            .find(|branch| branch.uid.as_deref() == Some(tie_id.as_str()))
+            .expect("the two boundary lines become one tie line branch");
+        // (1 + 3) ohm and (8 + 24) ohm on the 400 kV, 100 MVA base.
+        assert!((tie.r - 0.0025).abs() < 1e-12);
+        assert!((tie.x - 0.02).abs() < 1e-12);
+        let charging = tie.charging.as_ref().unwrap();
+        assert!((charging.b_fr - 0.16).abs() < 1e-9);
+        assert!((charging.b_to - 0.48).abs() < 1e-9);
+        assert!(tie.in_service);
+
+        let detailed = network.detailed_connectivity().as_deref().unwrap();
+        assert_eq!(detailed.tie_lines.len(), 1);
+        assert_eq!(
+            detailed.tie_lines[0].calculation_branch,
+            Some(component("branch", &tie_id))
+        );
+        assert_eq!(detailed.boundary_lines.len(), 2);
+        let half_a = detailed
+            .boundary_lines
+            .iter()
+            .find(|line| line.component.local_id() == TIE_A)
+            .unwrap();
+        assert_eq!(half_a.resistance_ohm, 1.0);
+        assert_eq!(half_a.active_power_setpoint_mw, -60.0);
+        assert_eq!(half_a.pairing_key.as_deref(), Some("X node A-B"));
+        let property = |component_type: &str, local_id: &str, property: &str| {
+            detailed
+                .component_metadata
+                .iter()
+                .find(|metadata| metadata.component == component(component_type, local_id))
+                .and_then(|metadata| metadata.properties.get(property).cloned())
+        };
+        assert_eq!(
+            property("branch", LINE_A, read::MODELING_AUTHORITY_PROPERTY).as_deref(),
+            Some(AUTHORITY_A)
+        );
+        assert_eq!(
+            property("boundary_line", TIE_B, read::MODELING_AUTHORITY_PROPERTY).as_deref(),
+            Some(AUTHORITY_B)
+        );
+        assert_eq!(
+            property("boundary_line", TIE_A, read::EQUIVALENT_INJECTION_PROPERTY).as_deref(),
+            Some(INJECTION_A)
+        );
+        assert_eq!(
+            property("bus", BOUNDARY_NODE, read::NOMINAL_VOLTAGE_PROPERTY).as_deref(),
+            Some("400")
+        );
+        assert!(
+            detailed
+                .bus_breaker_buses
+                .iter()
+                .any(|bus| bus.component.local_id() == BOUNDARY_NODE && bus.calculated_bus.is_none())
+        );
+        assert!(parsed.warnings.iter().any(|warning| {
+            warning.info.code == "READ.CGMES.VALUE_APPROXIMATED"
+                && warning.message.contains("joins them into tie line branch")
+        }));
+
+        assert_eq!(parsed.documents.len(), 8);
+        let topology_a = parsed
+            .documents
+            .iter()
+            .find(|document| document.source == "authority-a_TP.xml")
+            .unwrap();
+        assert_eq!(
+            topology_a.modeling_authority_set.as_deref(),
+            Some(AUTHORITY_A)
+        );
+        assert_eq!(
+            topology_a.dependent_on,
+            [
+                "aaaaaaaa-1111-4000-8000-000000000001",
+                "00000000-1111-4000-8000-000000000002"
+            ]
+        );
+
+        let output = write::write_cgmes(network, CgmesVersion::V3_0).unwrap();
+        let equipment = &output
+            .files
+            .iter()
+            .find(|(name, _)| name.ends_with("_EQ.xml"))
+            .unwrap()
+            .1;
+        let topology = &output
+            .files
+            .iter()
+            .find(|(name, _)| name.ends_with("_TP.xml"))
+            .unwrap()
+            .1;
+        assert!(equipment.contains(&format!("rdf:ID=\"_{TIE_A}\"")));
+        assert!(equipment.contains(&format!("rdf:ID=\"_{TIE_B}\"")));
+        assert!(equipment.contains(&format!("rdf:ID=\"_{INJECTION_A}\"")));
+        assert!(topology.contains(&format!("rdf:ID=\"_{BOUNDARY_NODE}\"")));
+        assert!(output.warnings.iter().any(|warning| {
+            warning.message.contains("was assembled from boundary lines")
+        }));
+        assert!(
+            output
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains(AUTHORITY_B))
+        );
+        let reparsed = read::read_cgmes_documents(output.files, None).unwrap();
+        assert_eq!(reparsed.network.buses().len(), 5);
+        assert_eq!(reparsed.network.branches().len(), 4);
+        assert_eq!(reparsed.network.loads().len(), 4);
+    }
+
+    #[test]
+    fn conflicting_mrid_across_authorities_is_a_coded_error() {
+        let documents = two_authority_documents()
+            .into_iter()
+            .map(|(name, text)| {
+                if name.starts_with("authority-b") {
+                    (
+                        name,
+                        text.replace("bbbbbbbb-0000-4000-8000-000000000005", LINE_A),
+                    )
+                } else {
+                    (name, text)
+                }
+            })
+            .collect();
+        let error = read::read_cgmes_documents(documents, None).unwrap_err();
+        assert_eq!(error.code().code, "READ.CGMES.IDENTITY_CONFLICT");
+        let message = error.to_string();
+        assert!(message.contains(LINE_A), "{message}");
+        assert!(message.contains(AUTHORITY_A), "{message}");
+        assert!(message.contains(AUTHORITY_B), "{message}");
+        assert!(message.contains("authority-a_EQ.xml"), "{message}");
+        assert!(message.contains("authority-b_EQ.xml"), "{message}");
+    }
+
+    #[test]
+    fn missing_dependency_is_a_coded_diagnostic() {
+        let documents = two_authority_documents()
+            .into_iter()
+            .map(|(name, text)| {
+                if name == "authority-a_TP.xml" {
+                    (
+                        name,
+                        text.replacen(
+                            "    <md:Model.modelingAuthoritySet>",
+                            "    <md:Model.DependentOn rdf:resource=\"urn:uuid:deadbeef-0000-4000-8000-000000000001\"/>\n    <md:Model.modelingAuthoritySet>",
+                            1,
+                        ),
+                    )
+                } else {
+                    (name, text)
+                }
+            })
+            .collect();
+        let parsed = read::read_cgmes_documents(documents, None).unwrap();
+        assert_eq!(parsed.network.buses().len(), 4);
+        let missing = parsed
+            .warnings
+            .iter()
+            .filter(|warning| warning.info.code == "READ.CGMES.DEPENDENCY_MISSING")
+            .collect::<Vec<_>>();
+        assert_eq!(missing.len(), 1);
+        assert!(missing[0].message.contains("authority-a_TP.xml"));
+        assert!(missing[0].message.contains(AUTHORITY_A));
+        assert!(
+            missing[0]
+                .message
+                .contains("urn:uuid:deadbeef-0000-4000-8000-000000000001")
+        );
+    }
+
+    #[test]
+    fn cim16_profile_subsets_validate_against_the_reader() {
+        let network = network();
+        for subset in [
+            vec![CgmesProfile::Eq, CgmesProfile::Tp],
+            vec![CgmesProfile::Eq, CgmesProfile::Tp, CgmesProfile::Ssh],
+            vec![CgmesProfile::Eq, CgmesProfile::Tp, CgmesProfile::Sv],
+            CgmesProfile::DEFAULT.to_vec(),
+        ] {
+            let (emitted, _) = artifacts(&network, CgmesVersion::V2_4_15, &subset).unwrap();
+            assert_eq!(emitted.len(), subset.len(), "{subset:?}");
+            let documents = emitted
+                .iter()
+                .map(|artifact| {
+                    let text = std::str::from_utf8(artifact.bytes()).unwrap().to_owned();
+                    assert!(text.contains("CIM-schema-cim16"), "{}", artifact.name());
+                    (artifact.name().as_str().to_owned(), text)
+                })
+                .collect::<Vec<_>>();
+            for (profile, (name, _)) in subset.iter().zip(&documents) {
+                assert!(name.ends_with(&format!("_{}.xml", profile.label())), "{name}");
+            }
+            let parsed = read::read_cgmes_documents(documents, None).unwrap();
+            assert_eq!(parsed.network.buses().len(), 2, "{subset:?}");
+            assert_eq!(parsed.network.branches().len(), 1, "{subset:?}");
+        }
+
+        let (emitted, _) =
+            artifacts(&network, CgmesVersion::V2_4_15, &[CgmesProfile::Ssh]).unwrap();
+        assert_eq!(emitted.len(), 1);
+        assert!(emitted[0].name().as_str().ends_with("_SSH.xml"));
+        let documents = emitted
+            .iter()
+            .map(|artifact| {
+                (
+                    artifact.name().as_str().to_owned(),
+                    std::str::from_utf8(artifact.bytes()).unwrap().to_owned(),
+                )
+            })
+            .collect();
+        let error = read::read_cgmes_documents(documents, None).unwrap_err();
+        assert!(error.to_string().contains("missing required EQ and TP"));
+
+        let error = artifacts(&network, CgmesVersion::V2_4_15, &[CgmesProfile::EqBd]).unwrap_err();
+        assert_eq!(error.code().code, "EMIT.FORMAT.REQUIRED_VALUE_MISSING");
+        assert!(error.to_string().contains("EQ_BD"));
+    }
+
+    #[test]
+    fn emit_options_name_the_cgmes_version_and_profiles() {
+        let mut options = crate::format::EmitOptions::default();
+        assert!(options.is_default());
+        options.apply_named("cgmes_version", "2.4.15").unwrap();
+        options.apply_named("cgmes_profiles", " eq, TP ,ssh").unwrap();
+        assert_eq!(options.cgmes_version, CgmesVersion::V2_4_15);
+        assert_eq!(
+            options.cgmes_profiles,
+            [CgmesProfile::Eq, CgmesProfile::Tp, CgmesProfile::Ssh]
+        );
+        assert!(!options.is_default());
+        for (name, value) in [
+            ("cgmes_version", "16"),
+            ("cgmes_profiles", "EQ,DL"),
+            ("cgmes_profiles", ""),
+            ("naming_strategy", "identity"),
+        ] {
+            let error = options.apply_named(name, value).unwrap_err();
+            assert_eq!(error.code().code, "REQUEST.EMIT.OPTION_INVALID", "{name}={value}");
+        }
+
+        let module = PioModule::new(network());
+        let error = crate::format::emit_with_options(
+            &module,
+            TargetFormat::Matpower,
+            &options,
+            Destination::memory("case.m").unwrap(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.info().map(|info| info.code),
+            Some("REQUEST.EMIT.OPTION_INVALID")
+        );
+        let result = crate::format::emit_with_options(
+            &module,
+            TargetFormat::Cgmes,
+            &options,
+            Destination::memory("profiles").unwrap(),
+        )
+        .unwrap();
+        let EmittedOutput::Memory { artifacts } = result.output() else {
+            panic!("a memory destination returned paths")
+        };
+        assert_eq!(artifacts.len(), 3);
+        assert!(
+            std::str::from_utf8(artifacts[0].bytes())
+                .unwrap()
+                .contains("CIM-schema-cim16")
+        );
     }
 
     #[test]

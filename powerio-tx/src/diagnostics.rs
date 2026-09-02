@@ -228,6 +228,14 @@ pub mod codes {
             "a value absent from the CGMES profile set was defaulted";
         READ_CGMES_VALUE_APPROXIMATED = "READ.CGMES.VALUE_APPROXIMATED", Warning,
             "a CGMES value was represented through an explicit approximation";
+        READ_CGMES_IDENTITY_CONFLICT = "READ.CGMES.IDENTITY_CONFLICT", Error,
+            "one RDF identifier is defined by more than one CGMES profile document, so the assembled set has no single object for it",
+            category = Parse;
+        READ_CGMES_DEPENDENCY_MISSING = "READ.CGMES.DEPENDENCY_MISSING", Warning,
+            "a CGMES profile document depends on a model that the source does not contain";
+        REQUEST_EMIT_OPTION_INVALID = "REQUEST.EMIT.OPTION_INVALID", Error,
+            "an emit option is unknown, malformed, or does not apply to the requested format",
+            category = Request;
         READ_PANDAPOWER_VALUE_INFERRED = "READ.PANDAPOWER.VALUE_INFERRED", Warning,
             "a value pandapower does not store was reconstructed on a declared convention";
         READ_PANDAPOWER_TABLE_UNSUPPORTED = "READ.PANDAPOWER.TABLE_UNSUPPORTED", Warning,

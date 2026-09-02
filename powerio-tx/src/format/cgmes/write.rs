@@ -23,16 +23,21 @@ use quick_xml::events::Event;
 use quick_xml::name::ResolveResult;
 use quick_xml::reader::NsReader;
 
+use super::read::{
+    CONNECTIVITY_NODE_TOPOLOGICAL_NODE_PROPERTY, EQUIVALENT_INJECTION_PROPERTY,
+    MODELING_AUTHORITY_PROPERTY, NOMINAL_VOLTAGE_PROPERTY, RETAINED_IN_SERVICE_PROPERTY,
+};
 use super::{CGMES_CLASS_PROPERTY, CgmesDiagnostics, CgmesVersion};
 use crate::diagnostics::codes;
 use crate::network::{
-    AcDcConverterControlMode, ActivePowerControl, BalancedNetwork, BusId, BusType, CaseMetadata,
-    ComponentMetadata, CurveStyle, DcConverterOperatingMode, DcPolarity, DcSwitchKind, DcTerminal,
-    DetailedConnectivity, GeneratorEnergySource, LineCommutatedConverter,
-    LineCommutatedConverterOperatingMode, LoadVoltageModel, LoadingLimits, OmittedFieldName,
+    AcDcConverterControlMode, ActivePowerControl, BalancedNetwork, BoundaryLine, Branch,
+    BranchCharging, Bus, BusId, BusType, CalculatedBus, CaseMetadata, ComponentMetadata,
+    CurveStyle, DcConverterOperatingMode, DcPolarity, DcSwitchKind, DcTerminal,
+    DetailedConnectivity, Generator, GeneratorEnergySource, LineCommutatedConverter,
+    LineCommutatedConverterOperatingMode, Load, LoadVoltageModel, LoadingLimits, OmittedFieldName,
     ReactiveCapabilityCurve, ReactiveLimits, Shunt, StaticVarCompensatorRegulationMode, SwitchKind,
     SwitchedShuntMode, TapChanger, TapChangerKind, TapChangerRegulationMode, Terminal,
-    TerminalReference, TopologyEndpoint, TopologyKind, VoltageSourceConverter,
+    TerminalReference, TieLine, TopologyEndpoint, TopologyKind, VoltageSourceConverter,
     calc_reactive_limits_at_active_power,
 };
 use crate::{Error, Result};
@@ -439,6 +444,11 @@ fn metadata_property_is_used(property: &str) -> bool {
         super::CGMES_GENERATING_UNIT_PROPERTY,
         super::CGMES_REGULATING_CONTROL_PROPERTY,
         super::CGMES_SV_VOLTAGE_AUTHORITY_MISMATCH_PROPERTY,
+        MODELING_AUTHORITY_PROPERTY,
+        RETAINED_IN_SERVICE_PROPERTY,
+        EQUIVALENT_INJECTION_PROPERTY,
+        NOMINAL_VOLTAGE_PROPERTY,
+        CONNECTIVITY_NODE_TOPOLOGICAL_NODE_PROPERTY,
         "PowerTransformerEnd.PowerTransformer",
         "TransformerEnd.endNumber",
         "SeriesCompensator.r0",
@@ -704,6 +714,393 @@ pub(super) fn warn_unemitted_detailed_fields(
             "network case metadata `{field}` has no field in the fresh CGMES EQ, TP, SSH, or SV FullModel headers"
         ));
     }
+}
+
+/// A tie line the CGMES reader assembled from two boundary lines, with the
+/// records the emitted set needs to state both source ACLineSegments and
+/// their shared boundary node again.
+struct AssembledTieLine {
+    tie: TieLine,
+    halves: [BoundaryLine; 2],
+    /// Per half: the network side terminal and the boundary side terminal.
+    terminals: [(Terminal, Terminal); 2],
+}
+
+/// The calculation bus a terminal record lands on through its configured bus
+/// or its connectivity node.
+fn terminal_calculated_bus(detailed: &DetailedConnectivity, terminal: &Terminal) -> Option<BusId> {
+    if let Some(bus) = terminal.bus.as_ref().or(terminal.connectable_bus.as_ref())
+        && let Some(configured) = detailed
+            .bus_breaker_buses
+            .iter()
+            .find(|value| value.component == *bus)
+    {
+        return configured.calculated_bus;
+    }
+    let node = terminal.node.as_ref()?;
+    detailed
+        .connectivity_nodes
+        .iter()
+        .find(|value| value.component == *node)
+        .and_then(|value| value.calculated_bus)
+}
+
+/// The tie lines the CGMES reader assembled: both halves carry the retained
+/// service status the reader resolved, both have one terminal on a
+/// calculation bus and one on the shared boundary node, and the balanced
+/// network holds the joined branch.
+fn assembled_tie_lines(net: &BalancedNetwork, detailed: &DetailedConnectivity) -> Vec<AssembledTieLine> {
+    let mut assembled = Vec::new();
+    for tie in &detailed.tie_lines {
+        let Some(branch_id) = tie.calculation_branch.as_ref() else {
+            continue;
+        };
+        if !net
+            .branches()
+            .iter()
+            .any(|branch| branch.uid.as_deref() == Some(branch_id.local_id()))
+        {
+            continue;
+        }
+        let half = |component: &ComponentId| -> Option<(BoundaryLine, (Terminal, Terminal))> {
+            let line = detailed
+                .boundary_lines
+                .iter()
+                .find(|value| value.component == *component)?;
+            metadata(detailed, component)?
+                .properties
+                .get(RETAINED_IN_SERVICE_PROPERTY)?;
+            let mut terminals = detailed
+                .terminals
+                .iter()
+                .filter(|terminal| terminal.equipment == *component);
+            let first = terminals.next()?;
+            let second = terminals.next()?;
+            if terminals.next().is_some() {
+                return None;
+            }
+            match (
+                terminal_calculated_bus(detailed, first),
+                terminal_calculated_bus(detailed, second),
+            ) {
+                (Some(_), None) => Some((line.clone(), (first.clone(), second.clone()))),
+                (None, Some(_)) => Some((line.clone(), (second.clone(), first.clone()))),
+                _ => None,
+            }
+        };
+        let (Some((first, first_terminals)), Some((second, second_terminals))) =
+            (half(&tie.boundary_line1), half(&tie.boundary_line2))
+        else {
+            continue;
+        };
+        let shared_bus = first_terminals.1.bus.is_some() && first_terminals.1.bus == second_terminals.1.bus;
+        let shared_node =
+            first_terminals.1.node.is_some() && first_terminals.1.node == second_terminals.1.node;
+        if !shared_bus && !shared_node {
+            continue;
+        }
+        assembled.push(AssembledTieLine {
+            tie: tie.clone(),
+            halves: [first, second],
+            terminals: [first_terminals, second_terminals],
+        });
+    }
+    assembled
+}
+
+/// The balanced branch of one boundary line between `from` and `to` on the
+/// `kv` base: the conversion the reader applies to an ACLineSegment.
+fn boundary_line_branch(line: &BoundaryLine, from: BusId, to: BusId, kv: f64) -> Branch {
+    let z_base = kv * kv / 100.0;
+    let y_base = 100.0 / (kv * kv);
+    let mut branch = Branch::new(
+        from,
+        to,
+        line.resistance_ohm / z_base,
+        line.reactance_ohm / z_base,
+    );
+    branch.b = line.susceptance_siemens / y_base;
+    let g = line.conductance_siemens / y_base;
+    if g != 0.0 {
+        let half_b = branch.b / 2.0;
+        branch.charging = Some(BranchCharging::new(g / 2.0, half_b, g / 2.0, half_b));
+    }
+    branch.uid = Some(line.component.local_id().to_string());
+    branch
+}
+
+fn retained_in_service(detailed: &DetailedConnectivity, component: &ComponentId) -> Option<bool> {
+    metadata(detailed, component)?
+        .properties
+        .get(RETAINED_IN_SERVICE_PROPERTY)?
+        .parse()
+        .ok()
+}
+
+/// Move a joined tie line half's records back to the `branch` type.
+fn retype_boundary_line(component: &mut ComponentId, halves: &HashSet<String>) {
+    if component.component_type() == "boundary_line" && halves.contains(component.local_id()) {
+        *component = ComponentId::new("branch", component.local_id())
+            .expect("a boundary line identity is a valid branch identity");
+    }
+}
+
+fn retype_terminal_reference(reference: &mut Option<TerminalReference>, halves: &HashSet<String>) {
+    if let Some(reference) = reference {
+        retype_boundary_line(&mut reference.equipment, halves);
+    }
+}
+
+/// The network with every assembled tie line stated as the reader found it:
+/// the shared boundary node as a calculation bus again, the two source
+/// ACLineSegments as branches, and the injections at the node as loads or
+/// generators. Fresh CGMES then writes the boundary equipment of each
+/// modeling authority instead of one joined line, and a reparse assembles
+/// the same tie line. `None` when the network holds no assembled tie line.
+#[allow(clippy::too_many_lines)] // one pass restores every record the join removed
+fn expand_assembled_tie_lines(
+    net: &BalancedNetwork,
+    warnings: &mut CgmesDiagnostics,
+) -> Option<BalancedNetwork> {
+    let source_detailed = net.detailed_connectivity().as_deref()?;
+    let assembled = assembled_tie_lines(net, source_detailed);
+    if assembled.is_empty() {
+        return None;
+    }
+    let mut expanded = net.clone();
+    let halves = assembled
+        .iter()
+        .flat_map(|tie| tie.halves.iter())
+        .map(|half| half.component.local_id().to_string())
+        .collect::<HashSet<_>>();
+    let mut next_bus = expanded
+        .buses()
+        .iter()
+        .map(|bus| bus.id.0)
+        .max()
+        .unwrap_or(0)
+        + 1;
+    let mut detailed = source_detailed.clone();
+    let kv_of = |expanded: &BalancedNetwork, bus: BusId| {
+        expanded
+            .buses()
+            .iter()
+            .find(|value| value.id == bus)
+            .map(|value| value.base_kv)
+    };
+    for tie in &assembled {
+        let network_bus = |side: usize| terminal_calculated_bus(source_detailed, &tie.terminals[side].0);
+        let (Some(network_bus_0), Some(network_bus_1)) = (network_bus(0), network_bus(1)) else {
+            continue;
+        };
+        let network_kv = kv_of(&expanded, network_bus_0).unwrap_or(1.0);
+        let boundary_terminal = &tie.terminals[0].1;
+        let boundary_bus = BusId(next_bus);
+        next_bus += 1;
+        let mut bus = Bus::new(boundary_bus, BusType::Pq, network_kv);
+        if let Some(configured_id) = boundary_terminal.bus.as_ref() {
+            let configured = detailed
+                .bus_breaker_buses
+                .iter_mut()
+                .find(|value| value.component == *configured_id)
+                .expect("an assembled boundary terminal names a retained TopologicalNode");
+            configured.calculated_bus = Some(boundary_bus);
+            let voltage_level = configured.voltage_level.clone();
+            let voltage_kv = configured.voltage_kv;
+            let angle_degrees = configured.angle_degrees;
+            let node_metadata = metadata(source_detailed, configured_id);
+            if let Some(kv) = node_metadata
+                .and_then(|value| value.properties.get(NOMINAL_VOLTAGE_PROPERTY))
+                .and_then(|value| value.parse::<f64>().ok())
+                .filter(|kv| kv.is_finite() && *kv > 0.0)
+            {
+                bus.base_kv = kv;
+            }
+            if let Some(voltage) = voltage_kv {
+                bus.vm = voltage / bus.base_kv;
+            }
+            if let Some(angle) = angle_degrees {
+                bus.va = angle;
+            }
+            bus.name = node_metadata.and_then(|value| value.name.clone());
+            bus.uid = Some(configured_id.local_id().to_string());
+            let nodes = detailed
+                .connectivity_nodes
+                .iter_mut()
+                .filter(|node| {
+                    metadata(source_detailed, &node.component).is_some_and(|value| {
+                        value
+                            .properties
+                            .get(CONNECTIVITY_NODE_TOPOLOGICAL_NODE_PROPERTY)
+                            .is_some_and(|topological_node| {
+                                topological_node == configured_id.local_id()
+                            })
+                    })
+                })
+                .map(|node| {
+                    node.calculated_bus = Some(boundary_bus);
+                    node.component.clone()
+                })
+                .collect::<Vec<_>>();
+            if !nodes.is_empty() {
+                detailed.calculated_buses.push(CalculatedBus {
+                    voltage_level,
+                    calculated_bus: boundary_bus,
+                    nodes,
+                    voltage_kv,
+                    angle_degrees,
+                });
+            }
+        } else if let Some(node_id) = boundary_terminal.node.as_ref() {
+            let node = detailed
+                .connectivity_nodes
+                .iter_mut()
+                .find(|value| value.component == *node_id)
+                .expect("an assembled boundary terminal names a retained ConnectivityNode");
+            node.calculated_bus = Some(boundary_bus);
+            bus.name = metadata(source_detailed, node_id).and_then(|value| value.name.clone());
+            detailed.calculated_buses.push(CalculatedBus {
+                voltage_level: node.voltage_level.clone(),
+                calculated_bus: boundary_bus,
+                nodes: vec![node_id.clone()],
+                voltage_kv: None,
+                angle_degrees: None,
+            });
+        }
+        expanded.buses_mut().push(bus);
+
+        let joined_id = tie
+            .tie
+            .calculation_branch
+            .as_ref()
+            .map(|component| component.local_id().to_string())
+            .unwrap_or_default();
+        let position = expanded
+            .branches()
+            .iter()
+            .position(|branch| branch.uid.as_deref() == Some(joined_id.as_str()))
+            .unwrap_or(expanded.branches().len());
+        expanded.branches_mut().remove(position);
+        let network_buses = [network_bus_0, network_bus_1];
+        for side in (0..2).rev() {
+            let half = &tie.halves[side];
+            let (network_terminal, boundary_side) = &tie.terminals[side];
+            let (from, to) = if network_terminal.terminal <= boundary_side.terminal {
+                (network_buses[side], boundary_bus)
+            } else {
+                (boundary_bus, network_buses[side])
+            };
+            let kv = kv_of(&expanded, from).unwrap_or(network_kv);
+            let mut branch = boundary_line_branch(half, from, to, kv);
+            branch.in_service = retained_in_service(source_detailed, &half.component)
+                .unwrap_or(network_terminal.connected && boundary_side.connected);
+            expanded.branches_mut().insert(position, branch);
+
+            if let Some(injection) = metadata(source_detailed, &half.component)
+                .and_then(|value| value.properties.get(EQUIVALENT_INJECTION_PROPERTY))
+            {
+                let in_service = ComponentId::new("load", injection)
+                    .ok()
+                    .and_then(|component| retained_in_service(source_detailed, &component))
+                    .unwrap_or(true);
+                if let Some(generation) = &half.generation {
+                    let mut generator = Generator::new(boundary_bus);
+                    generator.pg = generation.target_active_power_mw.unwrap_or(0.0);
+                    generator.qg = generation.target_reactive_power_mvar.unwrap_or(0.0);
+                    generator.in_service = in_service;
+                    generator.uid = Some(injection.clone());
+                    expanded.generators_mut().push(generator);
+                } else {
+                    let mut load = Load::new(
+                        boundary_bus,
+                        half.active_power_setpoint_mw,
+                        half.reactive_power_setpoint_mvar,
+                    );
+                    load.in_service = in_service;
+                    load.uid = Some(injection.clone());
+                    expanded.loads_mut().push(load);
+                }
+            }
+        }
+        warnings.push_as(&codes::EMIT_CGMES.value_substituted, format!(
+            "tie line branch `{joined_id}` was assembled from boundary lines `{}` and `{}`; fresh CGMES writes both source ACLineSegments with their shared boundary node as TopologicalNode `{}` instead of the joined branch",
+            tie.halves[0].component.local_id(),
+            tie.halves[1].component.local_id(),
+            bus_uid_or_generated(&expanded, boundary_bus)
+        ));
+    }
+
+    detailed.tie_lines.retain(|tie| {
+        !assembled
+            .iter()
+            .any(|value| value.tie.component == tie.component)
+    });
+    detailed
+        .boundary_lines
+        .retain(|line| !halves.contains(line.component.local_id()));
+    for terminal in &mut detailed.terminals {
+        retype_boundary_line(&mut terminal.equipment, &halves);
+    }
+    for metadata in &mut detailed.component_metadata {
+        retype_boundary_line(&mut metadata.component, &halves);
+    }
+    for group in &mut detailed.operational_limit_groups {
+        retype_boundary_line(&mut group.equipment, &halves);
+    }
+    for tap in &mut detailed.tap_changers {
+        retype_terminal_reference(&mut tap.regulation_terminal, &halves);
+    }
+    for converter in &mut detailed.voltage_source_converters {
+        retype_terminal_reference(&mut converter.pcc_terminal, &halves);
+    }
+    for converter in &mut detailed.line_commutated_converters {
+        retype_terminal_reference(&mut converter.pcc_terminal, &halves);
+    }
+    for generator in expanded.generators_mut() {
+        retype_terminal_reference(&mut generator.regulating_terminal, &halves);
+    }
+    for compensator in expanded.static_var_compensators_mut() {
+        retype_terminal_reference(&mut compensator.regulating_terminal, &halves);
+    }
+    for shunt in expanded.shunts_mut() {
+        if let Some(control) = shunt.control.as_mut() {
+            retype_terminal_reference(&mut control.regulating_terminal, &halves);
+        }
+    }
+    *expanded.detailed_connectivity_mut() = Some(Arc::new(detailed));
+    expanded.assign_missing_component_ids();
+    Some(expanded)
+}
+
+fn bus_uid_or_generated(net: &BalancedNetwork, bus: BusId) -> String {
+    net.buses()
+        .iter()
+        .find(|value| value.id == bus)
+        .and_then(|value| value.uid.clone())
+        .unwrap_or_else(|| bus_mrid(net, bus))
+}
+
+/// One summary of the modeling authorities the components came from, since
+/// the emitted set states PowerIO's own modeling authority.
+fn warn_modeling_authorities(detailed: &DetailedConnectivity, warnings: &mut CgmesDiagnostics) {
+    let mut counts = std::collections::BTreeMap::<&str, usize>::new();
+    for metadata in &detailed.component_metadata {
+        if let Some(authority) = metadata.properties.get(MODELING_AUTHORITY_PROPERTY) {
+            *counts.entry(authority.as_str()).or_default() += 1;
+        }
+    }
+    if counts.is_empty() {
+        return;
+    }
+    let listed = counts
+        .iter()
+        .map(|(authority, count)| format!("`{authority}` ({count})"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    warnings.push_as(&codes::EMIT_CGMES.value_collapsed, format!(
+        "components from {} modelingAuthoritySet(s) [{listed}] are written under PowerIO's own modeling authority; the source authority of each component stays in its retained metadata",
+        counts.len()
+    ));
 }
 
 fn detailed_terminal<'a>(
@@ -3788,6 +4185,16 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             "network validation failed before CGMES emission: {error}"
         ))
     })?;
+    let mut expansion_warnings = CgmesDiagnostics::new(&codes::EMIT_CGMES.record_dropped);
+    let expanded = expand_assembled_tie_lines(net, &mut expansion_warnings);
+    let net = expanded.as_ref().unwrap_or(net);
+    if expanded.is_some() {
+        net.validate().map_err(|error| {
+            emission_error(format!(
+                "network validation failed after restoring the assembled tie lines for CGMES emission: {error}"
+            ))
+        })?;
+    }
     if let Some(bus) = net
         .buses()
         .iter()
@@ -3814,11 +4221,12 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
     let mut w = Writer {
         net,
         p,
-        warnings: CgmesDiagnostics::new(&codes::EMIT_CGMES.record_dropped),
+        warnings: expansion_warnings,
     };
     let detailed = net.detailed_connectivity().as_deref();
     let retained_metadata = retained_identified_metadata(detailed, &mut w.warnings);
     if let Some(detailed) = detailed {
+        warn_modeling_authorities(detailed, &mut w.warnings);
         warn_unemitted_detailed_fields(net, detailed, version, &mut w.warnings);
     } else {
         for field in case_metadata_fields(net.case_metadata(), false) {

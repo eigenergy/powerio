@@ -7002,7 +7002,12 @@ Q
             );
         }
 
-        let (_, cgmes_diagnostics) = crate::format::cgmes::artifacts(&net).unwrap();
+        let (_, cgmes_diagnostics) = crate::format::cgmes::artifacts(
+            &net,
+            crate::format::CgmesVersion::default(),
+            &crate::format::CgmesProfile::DEFAULT,
+        )
+        .unwrap();
         let dropped_controls = cgmes_diagnostics
             .lines()
             .into_iter()

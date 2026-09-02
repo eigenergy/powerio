@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:cim="http://iec.ch/TC57/2013/CIM-schema-cim16#"
+         xmlns:entsoe="http://entsoe.eu/CIM/SchemaExtension/3/1#"
+         xmlns:md="http://iec.ch/TC57/61970-552/ModelDescription/1#">
+  <md:FullModel rdf:about="urn:uuid:aaaaaaaa-1111-4000-8000-000000000002">
+    <md:Model.scenarioTime>2026-01-01T00:00:00Z</md:Model.scenarioTime>
+    <md:Model.created>2026-01-01T00:00:00Z</md:Model.created>
+    <md:Model.description>Authority A topology</md:Model.description>
+    <md:Model.version>1</md:Model.version>
+    <md:Model.profile>http://entsoe.eu/CIM/Topology/4/1</md:Model.profile>
+    <md:Model.DependentOn rdf:resource="urn:uuid:aaaaaaaa-1111-4000-8000-000000000001"/>
+    <md:Model.DependentOn rdf:resource="urn:uuid:00000000-1111-4000-8000-000000000002"/>
+    <md:Model.modelingAuthoritySet>http://example.org/cgmes/authority-a</md:Model.modelingAuthoritySet>
+  </md:FullModel>
+  <cim:TopologicalNode rdf:ID="_aaaaaaaa-0000-4000-8000-000000000003">
+    <cim:IdentifiedObject.name>TN A 1</cim:IdentifiedObject.name>
+    <cim:TopologicalNode.BaseVoltage rdf:resource="#_00000000-0000-4000-8000-0000000000b4"/>
+    <cim:TopologicalNode.ConnectivityNodeContainer rdf:resource="#_aaaaaaaa-0000-4000-8000-000000000002"/>
+  </cim:TopologicalNode>
+  <cim:TopologicalNode rdf:ID="_aaaaaaaa-0000-4000-8000-000000000004">
+    <cim:IdentifiedObject.name>TN A 2</cim:IdentifiedObject.name>
+    <cim:TopologicalNode.BaseVoltage rdf:resource="#_00000000-0000-4000-8000-0000000000b4"/>
+    <cim:TopologicalNode.ConnectivityNodeContainer rdf:resource="#_aaaaaaaa-0000-4000-8000-000000000002"/>
+  </cim:TopologicalNode>
+  <cim:Terminal rdf:about="#_aaaaaaaa-0000-4000-8000-000000000006">
+    <cim:Terminal.TopologicalNode rdf:resource="#_aaaaaaaa-0000-4000-8000-000000000003"/>
+  </cim:Terminal>
+  <cim:Terminal rdf:about="#_aaaaaaaa-0000-4000-8000-000000000007">
+    <cim:Terminal.TopologicalNode rdf:resource="#_aaaaaaaa-0000-4000-8000-000000000004"/>
+  </cim:Terminal>
+  <cim:Terminal rdf:about="#_aaaaaaaa-0000-4000-8000-000000000009">
+    <cim:Terminal.TopologicalNode rdf:resource="#_aaaaaaaa-0000-4000-8000-000000000003"/>
+  </cim:Terminal>
+  <cim:Terminal rdf:about="#_aaaaaaaa-0000-4000-8000-00000000000c">
+    <cim:Terminal.TopologicalNode rdf:resource="#_aaaaaaaa-0000-4000-8000-000000000004"/>
+  </cim:Terminal>
+  <cim:Terminal rdf:about="#_aaaaaaaa-0000-4000-8000-00000000000e">
+    <cim:Terminal.TopologicalNode rdf:resource="#_aaaaaaaa-0000-4000-8000-000000000004"/>
+  </cim:Terminal>
+  <cim:Terminal rdf:about="#_aaaaaaaa-0000-4000-8000-00000000000f">
+    <cim:Terminal.TopologicalNode rdf:resource="#_00000000-0000-4000-8000-0000000000d1"/>
+  </cim:Terminal>
+  <cim:Terminal rdf:about="#_aaaaaaaa-0000-4000-8000-000000000011">
+    <cim:Terminal.TopologicalNode rdf:resource="#_00000000-0000-4000-8000-0000000000d1"/>
+  </cim:Terminal>
+</rdf:RDF>
