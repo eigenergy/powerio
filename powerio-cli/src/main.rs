@@ -454,6 +454,9 @@ enum FormatArg {
     /// Accepted as an input spelling for `xiidm`.
     #[value(name = "iidm")]
     IidmInput,
+    /// PowSybl JIIDM 1.17 JSON.
+    #[value(name = "jiidm")]
+    Jiidm,
     /// IEC CIM CGMES profile set.
     #[value(name = "cgmes")]
     Cgmes,
@@ -514,6 +517,7 @@ impl FormatArg {
             FormatArg::Psse35 => TargetFormat::Psse { rev: 35 },
             FormatArg::PsseRawx | FormatArg::RawxInput => TargetFormat::PsseRawx,
             FormatArg::Xiidm | FormatArg::IidmInput => TargetFormat::Xiidm,
+            FormatArg::Jiidm => TargetFormat::Jiidm,
             FormatArg::Cgmes => TargetFormat::Cgmes,
             FormatArg::PowerWorld => TargetFormat::PowerWorld,
             FormatArg::PandapowerJson => TargetFormat::PandapowerJson,
@@ -554,6 +558,7 @@ impl FormatArg {
             | FormatArg::RawxInput
             | FormatArg::Xiidm
             | FormatArg::IidmInput
+            | FormatArg::Jiidm
             | FormatArg::Cgmes
             | FormatArg::PowerWorld
             | FormatArg::PandapowerJson
@@ -580,6 +585,7 @@ impl FormatArg {
             FormatArg::RawxInput => "rawx",
             FormatArg::Xiidm => "xiidm",
             FormatArg::IidmInput => "iidm",
+            FormatArg::Jiidm => "jiidm",
             FormatArg::Cgmes => "cgmes",
             FormatArg::PowerWorld => "powerworld",
             FormatArg::PandapowerJson => "pandapower-json",

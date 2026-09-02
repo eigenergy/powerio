@@ -839,6 +839,7 @@ class BalancedNetwork:
         "goc3-json",
         "surge-json",
         "xiidm",
+        "jiidm",
         "cgmes",
     ]
     n_buses: int

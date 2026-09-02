@@ -50,6 +50,7 @@ pub enum TransmissionFormat {
     SurgeJson,
     DeepMindOpfDataJson,
     Xiidm,
+    Jiidm,
     Cgmes,
 }
 
@@ -73,6 +74,7 @@ impl TransmissionFormat {
             Self::SurgeJson => "surge-json",
             Self::DeepMindOpfDataJson => "opfdata-json",
             Self::Xiidm => "xiidm",
+            Self::Jiidm => "jiidm",
             Self::Cgmes => "cgmes",
         }
     }
@@ -151,6 +153,7 @@ pub fn parse_transmission_format(name: &str) -> Option<TransmissionFormat> {
         "goc3" | "goc3json" | "go3" | "gochallenge3" | "c3" => Some(TransmissionFormat::Goc3Json),
         "surge" | "surgejson" => Some(TransmissionFormat::SurgeJson),
         "xiidm" | "iidm" => Some(TransmissionFormat::Xiidm),
+        "jiidm" => Some(TransmissionFormat::Jiidm),
         "cgmes" => Some(TransmissionFormat::Cgmes),
         "opfdata"
         | "opfdatajson"
@@ -237,6 +240,13 @@ impl JsonClass {
 /// Ambiguous means the document contains strong markers from both domains, so
 /// the caller must ask the user for an explicit format.
 pub fn classify_json_text(text: &str) -> JsonClass {
+    // PowSybl JIIDM opens with its `version` key, the same test PowSybl's
+    // importer applies; no other JSON case format starts that way.
+    if super::xiidm::looks_like_jiidm(text) {
+        return JsonClass::Case(Detection::Known(SourceFormat::Transmission(
+            TransmissionFormat::Jiidm,
+        )));
+    }
     // Windows tooling saves JSON with a UTF-8 byte order mark, which
     // serde_json rejects; strip it so a BOM never hides the format.
     let Ok(header) = serde_json::from_str::<JsonHeader>(text.trim_start_matches('\u{feff}')) else {

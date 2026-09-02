@@ -11310,7 +11310,12 @@
         },
         {
           "const": "xiidm",
-          "description": "Read from PowSybl's XIIDM XML grid exchange format, versions 1.12 through 1.17.",
+          "description": "Read from PowSybl's XIIDM XML grid exchange format, versions 1.0 through 1.17.",
+          "type": "string"
+        },
+        {
+          "const": "jiidm",
+          "description": "Read from PowSybl's JIIDM JSON grid exchange format, versions 1.0 through 1.17.",
           "type": "string"
         },
         {
