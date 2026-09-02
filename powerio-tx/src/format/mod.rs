@@ -62,6 +62,7 @@ mod pypsa;
 mod rawx;
 pub mod routing;
 mod surge;
+mod union_find;
 mod xiidm;
 
 pub use powerworld::{PwdDisplay, PwdSubstation};

@@ -231,6 +231,11 @@ pub mod codes {
             "a value absent from the CGMES profile set was defaulted";
         READ_CGMES_VALUE_APPROXIMATED = "READ.CGMES.VALUE_APPROXIMATED", Warning,
             "a CGMES value was represented through an explicit approximation";
+        READ_CGMES_TOPOLOGY_CALCULATED = "READ.CGMES.TOPOLOGY_CALCULATED", Remark,
+            "the set carries no TopologicalNode data, so buses were calculated from ConnectivityNodes and switch positions";
+        READ_CGMES_CONNECTIVITY_INSUFFICIENT = "READ.CGMES.CONNECTIVITY_INSUFFICIENT", Error,
+            "the set carries neither TopologicalNode data nor enough connectivity to calculate buses",
+            category = Parse;
         READ_PANDAPOWER_VALUE_INFERRED = "READ.PANDAPOWER.VALUE_INFERRED", Warning,
             "a value pandapower does not store was reconstructed on a declared convention";
         READ_PANDAPOWER_TABLE_UNSUPPORTED = "READ.PANDAPOWER.TABLE_UNSUPPORTED", Warning,

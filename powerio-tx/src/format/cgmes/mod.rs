@@ -33,7 +33,7 @@ use std::path::{Component, Path};
 
 use powerio_core::{ArtifactPath, DiagnosticInfo, MemoryArtifact, Source};
 
-use crate::diagnostics::Diagnostics;
+use crate::diagnostics::{Diagnostics, codes};
 use crate::network::BalancedNetwork;
 use crate::{Error, Result};
 
@@ -145,11 +145,22 @@ pub(crate) fn parse_source(
     let name = Path::new(source.name())
         .file_stem()
         .and_then(|stem| stem.to_str());
-    let parsed = read::read_cgmes_documents(documents, name)?;
-    for diagnostic in parsed.warnings {
+    read_documents(documents, name, diagnostics)
+}
+
+/// Read the documents, handing every diagnostic to `diagnostics` whether or
+/// not the read succeeds, so a coded refusal reaches the caller with its error.
+fn read_documents(
+    documents: Vec<(String, String)>,
+    name: Option<&str>,
+    diagnostics: &mut Diagnostics,
+) -> Result<BalancedNetwork> {
+    let mut warnings = CgmesDiagnostics::new(&codes::READ_CGMES_RECORD_UNMAPPED);
+    let result = read::read_cgmes_documents_into(documents, name, &mut warnings);
+    for diagnostic in warnings {
         diagnostics.push(diagnostic.info, diagnostic.message);
     }
-    Ok(parsed.network)
+    result
 }
 
 pub(crate) fn parse_text(
@@ -158,11 +169,11 @@ pub(crate) fn parse_text(
     diagnostics: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
     reject_unsafe_xml(text.as_bytes())?;
-    let parsed = read::read_cgmes_documents(vec![(name.to_string(), text.to_string())], None)?;
-    for diagnostic in parsed.warnings {
-        diagnostics.push(diagnostic.info, diagnostic.message);
-    }
-    Ok(parsed.network)
+    read_documents(
+        vec![(name.to_string(), text.to_string())],
+        None,
+        diagnostics,
+    )
 }
 
 fn acquire_documents(source: &Source) -> Result<Vec<(String, String)>> {
