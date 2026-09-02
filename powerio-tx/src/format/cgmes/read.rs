@@ -1,10 +1,15 @@
 //! Merged CGMES profiles into a [`BalancedNetwork`].
 //!
-//! `TopologicalNode` is the bus. Terminals tie conducting equipment to nodes
-//! (directly in 2.4.15 TP; through `ConnectivityNode.TopologicalNode` in
-//! 3.0). SSH carries the operating point (`p`/`q`, switch position, tap steps,
+//! `TopologicalNode` is the bus when the set carries TP data. Terminals tie
+//! conducting equipment to nodes (directly in 2.4.15 TP; through
+//! `ConnectivityNode.TopologicalNode` in 3.0). Without TopologicalNode data
+//! a node breaker set (EquipmentOperation in 2.4.15, any CGMES 3.0 EQ with
+//! ConnectivityNodes) has its buses calculated: the connected components of
+//! the ConnectivityNode graph joined by closed, in service switches, the same
+//! selection PowSybl's `CgmesModelTripleStore.computeIsNodeBreaker` makes.
+//! SSH carries the operating point (`p`/`q`, switch position, tap steps,
 //! sections); SV supplies solved voltage, tap, and terminal power values.
-//! Missing SSH degrades gracefully — vendor exports like the CIGRE MV set
+//! Missing SSH degrades gracefully; vendor exports like the CIGRE MV set
 //! ship EQ/TP/SV only, so element `p`/`q` falls back to the terminal's
 //! `SvPowerFlow`.
 //!
@@ -14,6 +19,7 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fmt::Write as _;
 
 use powerio_core::ComponentId;
 
@@ -41,6 +47,7 @@ const FMT: &str = "CGMES";
 /// CGMES has no system MVA base; every per-unit value lands on this one.
 const SYSTEM_MVA: f64 = 100.0;
 
+#[cfg(test)]
 pub(crate) struct Parsed {
     pub(crate) network: BalancedNetwork,
     pub(crate) warnings: CgmesDiagnostics,
@@ -665,8 +672,19 @@ fn describe_property_value(value: &PropValue) -> String {
     }
 }
 
+/// Where the balanced buses come from.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BusSource {
+    /// One bus per `TopologicalNode` record.
+    TopologicalNodes,
+    /// One bus per connected component of `ConnectivityNode` records joined
+    /// by closed, in service switches.
+    Calculated,
+}
+
 /// Terminal wiring: equipment → its terminals (sequence order), terminal →
-/// topological node, and the terminal SSH connection value.
+/// bus node (the topological node, or the connectivity node when buses are
+/// calculated), and the terminal SSH connection value.
 struct Wiring {
     of_equipment: HashMap<String, Vec<String>>,
     node_of: HashMap<String, String>,
@@ -674,7 +692,7 @@ struct Wiring {
 }
 
 impl Wiring {
-    fn build(store: &Store) -> Wiring {
+    fn build(store: &Store, topology: BusSource) -> Wiring {
         let mut of_equipment: HashMap<String, Vec<(f64, String)>> = HashMap::new();
         let mut node_of = HashMap::new();
         let mut connected = HashMap::new();
@@ -690,13 +708,14 @@ impl Wiring {
                     .push((seq, id.to_string()));
             }
             // 2.4.15 TP links the terminal itself; 3.0 links through the
-            // connectivity node. Either way the terminal lands on a TN.
-            let tn = store.refv(id, "Terminal.TopologicalNode").or_else(|| {
-                let cn = store.refv(id, "Terminal.ConnectivityNode")?;
-                store.refv(cn, "ConnectivityNode.TopologicalNode")
-            });
-            if let Some(tn) = tn {
-                node_of.insert(id.to_string(), tn.to_string());
+            // connectivity node. Either way the terminal lands on a TN. A
+            // calculated topology keys buses by the connectivity node.
+            let node = match topology {
+                BusSource::TopologicalNodes => terminal_topological_node(store, id),
+                BusSource::Calculated => store.refv(id, "Terminal.ConnectivityNode"),
+            };
+            if let Some(node) = node {
+                node_of.insert(id.to_string(), node.to_string());
             }
             if let Some(is_connected) = store.boolean(id, "ACDCTerminal.connected") {
                 connected.insert(id.to_string(), is_connected);
@@ -733,11 +752,24 @@ impl Wiring {
     }
 }
 
+/// One calculated bus: the connectivity nodes it joins, in definition order,
+/// and the voltage level or other connectivity container they resolve to.
+struct CalculatedGroup {
+    bus: BusId,
+    container: String,
+    nodes: Vec<String>,
+}
+
 /// Everything the element builders share.
 struct Mapper<'a> {
     store: &'a Store,
+    topology: BusSource,
     wiring: Wiring,
-    bus_of_tn: HashMap<String, BusId>,
+    /// Bus node identity (topological node, or connectivity node when the
+    /// topology is calculated) → balanced bus.
+    bus_of_node: HashMap<String, BusId>,
+    /// The calculated buses, empty when TopologicalNode records supplied them.
+    calculated: Vec<CalculatedGroup>,
     kv_of: HashMap<BusId, f64>,
     /// Terminal → solved SvPowerFlow (p, q), the SSH fallback.
     sv_flow: HashMap<String, (f64, f64)>,
@@ -750,8 +782,17 @@ struct Mapper<'a> {
 impl Mapper<'_> {
     fn bus_of_equipment_terminal(&mut self, equipment: &str, index: usize) -> Option<BusId> {
         let terminal = self.wiring.terminals(equipment).get(index)?.clone();
-        let tn = self.wiring.node(&terminal)?.to_string();
-        self.bus_of_tn.get(tn.as_str()).copied()
+        let node = self.wiring.node(&terminal)?.to_string();
+        self.bus_of_node.get(node.as_str()).copied()
+    }
+
+    /// The balanced bus a topological node maps to; `None` when the topology
+    /// was calculated, because the set then defines no topological nodes.
+    fn bus_of_topological_node(&self, topological_node: &str) -> Option<BusId> {
+        match self.topology {
+            BusSource::TopologicalNodes => self.bus_of_node.get(topological_node).copied(),
+            BusSource::Calculated => None,
+        }
     }
 
     fn kv(&self, bus: BusId) -> f64 {
@@ -832,12 +873,28 @@ impl Mapper<'_> {
 }
 
 /// Read already acquired CGMES XML profile documents as one case.
-#[allow(clippy::too_many_lines)] // profile classification and merge share one ordered pass
+///
+/// Diagnostics collected before a failure are dropped with it; callers that
+/// must keep them use [`read_cgmes_documents_into`].
+#[cfg(test)]
 pub(crate) fn read_cgmes_documents(
     documents: Vec<(String, String)>,
     name_hint: Option<&str>,
 ) -> Result<Parsed> {
     let mut warnings = CgmesDiagnostics::new(&codes::READ_CGMES_RECORD_UNMAPPED);
+    let network = read_cgmes_documents_into(documents, name_hint, &mut warnings)?;
+    Ok(Parsed { network, warnings })
+}
+
+/// Read already acquired CGMES XML profile documents as one case, appending
+/// every diagnostic to `warnings`, including the coded refusal that precedes
+/// an error.
+#[allow(clippy::too_many_lines)] // profile classification and merge share one ordered pass
+pub(crate) fn read_cgmes_documents_into(
+    documents: Vec<(String, String)>,
+    name_hint: Option<&str>,
+    warnings: &mut CgmesDiagnostics,
+) -> Result<BalancedNetwork> {
     let mut store = Store {
         objects: Vec::new(),
         by_id: HashMap::new(),
@@ -849,6 +906,7 @@ pub(crate) fn read_cgmes_documents(
     let mut skipped: Vec<String> = Vec::new();
     let mut has_eq = false;
     let mut has_tp = false;
+    let mut model_profiles: Vec<Vec<String>> = Vec::new();
 
     for (name, text) in documents {
         let doc = parse_cimxml(&text)?;
@@ -859,7 +917,7 @@ pub(crate) fn read_cgmes_documents(
                 }
             }
         }
-        warn_full_model_fields(&name, doc.header.as_ref(), &mut warnings);
+        warn_full_model_fields(&name, doc.header.as_ref(), warnings);
         if let Some(header) = doc.header.as_ref() {
             if let Some(value) = header.scenario_time.as_ref() {
                 if scenario_time
@@ -896,12 +954,14 @@ pub(crate) fn read_cgmes_documents(
             continue;
         }
         if let Some(header) = doc.header.as_ref() {
-            has_eq |= header.profiles.iter().any(|profile| {
-                profile.contains("/EquipmentCore/") || profile.contains("/CIM/CoreEquipment")
-            });
+            has_eq |= header
+                .profiles
+                .iter()
+                .any(|profile| is_equipment_core(profile));
             has_tp |= header.profiles.iter().any(|profile| {
                 profile.contains("/Topology/") || profile.contains("/CIM/Topology-")
             });
+            model_profiles.push(header.profiles.clone());
         }
         store.merge(doc)?;
     }
@@ -927,37 +987,134 @@ pub(crate) fn read_cgmes_documents(
             });
         }
     };
-    validate_critical_references(&store)?;
+    let topology = if store.of_class("TopologicalNode").next().is_some() {
+        BusSource::TopologicalNodes
+    } else {
+        BusSource::Calculated
+    };
+    validate_critical_references(&store, topology)?;
     if !skipped.is_empty() {
         for summary in skipped {
             warnings.push(summary);
         }
     }
-    if !has_eq || !has_tp {
-        let missing = match (has_eq, has_tp) {
-            (false, false) => "EQ and TP",
-            (false, true) => "EQ",
-            (true, false) => "TP",
-            (true, true) => unreachable!(),
-        };
+    if !has_eq {
         return Err(Error::FormatRead {
             format: FMT,
-            message: format!("CGMES profile set is missing required {missing} profile data"),
+            message: "CGMES profile set is missing required EQ profile data".into(),
         });
     }
+    if topology == BusSource::Calculated {
+        check_calculable_connectivity(&store, &model_profiles, has_tp, warnings)?;
+    }
 
-    let network = build(
+    build(
         &store,
         version,
+        topology,
         description,
         scenario_time,
         name_hint,
-        &mut warnings,
-    )?;
-    Ok(Parsed { network, warnings })
+        warnings,
+    )
 }
 
-fn validate_critical_references(store: &Store) -> Result<()> {
+fn is_equipment_core(profile: &str) -> bool {
+    profile.contains("/EquipmentCore/") || profile.contains("/CIM/CoreEquipment")
+}
+
+fn is_equipment_operation(profile: &str) -> bool {
+    profile.contains("/EquipmentOperation/") || profile.contains("/CIM/Operation")
+}
+
+/// PowSybl's CGMES 3 equipment test: the profile URI starts with the
+/// CoreEquipment-EU namespace and its version is 3.0 or later.
+fn is_cgmes3_equipment_core(profile: &str) -> bool {
+    const PREFIX: &str = "http://iec.ch/TC57/ns/CIM/CoreEquipment-EU/";
+    const FIRST: &str = "http://iec.ch/TC57/ns/CIM/CoreEquipment-EU/3.0";
+    profile.starts_with(PREFIX) && profile >= FIRST
+}
+
+/// Whether the declared profile URIs describe a node breaker set, following
+/// PowSybl's `CgmesModelTripleStore.computeIsNodeBreaker`: every CGMES 3
+/// equipment document is node breaker once ConnectivityNodes exist; a CGMES
+/// 2.4.15 set is node breaker only when each document declaring EquipmentCore
+/// also declares EquipmentOperation, and each document declaring
+/// EquipmentBoundary also declares EquipmentBoundaryOperation.
+fn declares_node_breaker(model_profiles: &[Vec<String>], store: &Store) -> bool {
+    let has_connectivity_nodes = store.of_class("ConnectivityNode").next().is_some();
+    let all_cgmes3 = model_profiles
+        .iter()
+        .flatten()
+        .all(|profile| !is_equipment_core(profile) || is_cgmes3_equipment_core(profile));
+    if all_cgmes3 && has_connectivity_nodes {
+        return true;
+    }
+    model_profiles.iter().all(|profiles| {
+        let core = profiles.iter().any(|profile| is_equipment_core(profile));
+        let operation = profiles
+            .iter()
+            .any(|profile| is_equipment_operation(profile));
+        let bd = profiles
+            .iter()
+            .any(|profile| profile.contains("/EquipmentBoundary/"));
+        let bd_operation = profiles
+            .iter()
+            .any(|profile| profile.contains("/EquipmentBoundaryOperation/"));
+        (!core || operation) && (!bd || bd_operation)
+    })
+}
+
+/// Refuse a set without TopologicalNode data unless it declares node breaker
+/// equipment whose terminals reference ConnectivityNodes; the refusal names
+/// the missing data.
+fn check_calculable_connectivity(
+    store: &Store,
+    model_profiles: &[Vec<String>],
+    has_tp: bool,
+    warnings: &mut CgmesDiagnostics,
+) -> Result<()> {
+    let topology_state = if has_tp {
+        "the TP profile data defines no TopologicalNode records"
+    } else {
+        "the set declares no TP profile data"
+    };
+    let node_count = store.of_class("ConnectivityNode").count();
+    let terminal_count = store.of_class("Terminal").count();
+    let connected_terminal_count = store
+        .of_class("Terminal")
+        .filter(|terminal| store.refv(terminal, "Terminal.ConnectivityNode").is_some())
+        .count();
+    let missing = if !declares_node_breaker(model_profiles, store) {
+        Some(format!(
+            "the declared profiles describe bus branch equipment (no EquipmentOperation or CGMES 3 CoreEquipment profile with ConnectivityNodes), so nothing states which terminals share a bus; the set has {node_count} ConnectivityNode record(s)"
+        ))
+    } else if node_count == 0 {
+        Some("the node breaker profiles define no ConnectivityNode records".to_string())
+    } else if connected_terminal_count == 0 {
+        Some(format!(
+            "none of the {terminal_count} Terminal record(s) references a ConnectivityNode"
+        ))
+    } else {
+        None
+    };
+    if let Some(missing) = missing {
+        let message = format!(
+            "{topology_state} and buses cannot be calculated: {missing}; a TP profile, or an EQ profile with ConnectivityNode connectivity and switch positions, is required"
+        );
+        warnings.push_as(
+            &codes::READ_CGMES_CONNECTIVITY_INSUFFICIENT,
+            message.clone(),
+        );
+        return Err(Error::FormatRead {
+            format: FMT,
+            message,
+        });
+    }
+    Ok(())
+}
+
+fn validate_critical_references(store: &Store, topology: BusSource) -> Result<()> {
     const REQUIRED: [&str; 33] = [
         "Terminal.ConductingEquipment",
         "Terminal.TopologicalNode",
@@ -1007,6 +1164,12 @@ fn validate_critical_references(store: &Store) -> Result<()> {
                     ),
                 });
             };
+            // An SV profile kept without its TP profile observes topological
+            // nodes the set never defines; those observations are counted
+            // and left unmapped when the buses are calculated.
+            if topology == BusSource::Calculated && property == "SvVoltage.TopologicalNode" {
+                continue;
+            }
             if !store.contains(target) {
                 return Err(Error::FormatRead {
                     format: FMT,
@@ -1100,20 +1263,18 @@ const CONSUMED: &[&str] = &[
     "Junction",
 ];
 
-#[allow(clippy::too_many_lines)] // the element families map in one ordered pass
-fn build(
-    store: &Store,
-    version: CgmesVersion,
-    description: Option<String>,
-    scenario_time: Option<String>,
-    name_hint: Option<&str>,
-    warnings: &mut CgmesDiagnostics,
-) -> Result<BalancedNetwork> {
-    let wiring = Wiring::build(store);
+/// The balanced buses and the node and voltage indexes built with them.
+struct BusTable {
+    buses: Vec<Bus>,
+    bus_of_node: HashMap<String, BusId>,
+    kv_of: HashMap<BusId, f64>,
+    calculated: Vec<CalculatedGroup>,
+}
 
-    // Buses from TopologicalNode, ids in definition order.
+/// Buses from TopologicalNode records, ids in definition order.
+fn buses_from_topological_nodes(store: &Store) -> Result<BusTable> {
     let mut buses = Vec::new();
-    let mut bus_of_tn = HashMap::new();
+    let mut bus_of_node = HashMap::new();
     let mut kv_of = HashMap::new();
     for (i, tn) in store.of_class("TopologicalNode").enumerate() {
         let id = BusId(i + 1);
@@ -1145,21 +1306,371 @@ fn build(
         bus.name = Some(store.name(tn));
         bus.uid = Some(tn.to_string());
         buses.push(bus);
-        bus_of_tn.insert(tn.to_string(), id);
+        bus_of_node.insert(tn.to_string(), id);
         kv_of.insert(id, kv);
     }
+    Ok(BusTable {
+        buses,
+        bus_of_node,
+        kv_of,
+        calculated: Vec::new(),
+    })
+}
+
+/// The switch position that decides whether a switch conducts: the SSH
+/// `Switch.open` assignment, else the EQ `Switch.normalOpen` default, else
+/// closed. PowSybl's `SwitchConversion.update` applies the same precedence.
+fn switch_is_open(store: &Store, switch: &str) -> bool {
+    store
+        .boolean(switch, "Switch.open")
+        .or_else(|| store.boolean(switch, "Switch.normalOpen"))
+        .unwrap_or(false)
+}
+
+/// The service status a topology processor reads: the SV `SvStatus.inService`
+/// observation, else the SSH `Equipment.inService` assignment, else in
+/// service. CGMES defines `Equipment.inService` as availability for topology
+/// processing, so a switch out of service never joins its nodes.
+fn switch_in_service(store: &Store, switch: &str, sv_status: &HashMap<String, bool>) -> bool {
+    sv_status
+        .get(switch)
+        .copied()
+        .or_else(|| store.boolean(switch, "Equipment.inService"))
+        .unwrap_or(true)
+}
+
+/// The nominal voltage of a calculated bus: its container's `VoltageLevel`
+/// base voltage, else the base voltage stated by conducting equipment or a
+/// transformer end attached to one of its nodes.
+fn calculated_bus_kv(store: &Store, container: &str, nodes: &[String]) -> Option<f64> {
+    if store.class_of(container) == Some("VoltageLevel")
+        && let Some(kv) = store
+            .refv(container, "VoltageLevel.BaseVoltage")
+            .and_then(|base| store.f(base, "BaseVoltage.nominalVoltage"))
+    {
+        return Some(kv);
+    }
+    let node_set: BTreeSet<&str> = nodes.iter().map(String::as_str).collect();
+    store
+        .of_class("Terminal")
+        .filter(|terminal| {
+            store
+                .refv(terminal, "Terminal.ConnectivityNode")
+                .is_some_and(|node| node_set.contains(node))
+        })
+        .find_map(|terminal| {
+            let equipment = store.refv(terminal, "Terminal.ConductingEquipment")?;
+            let stated = store
+                .refv(equipment, "ConductingEquipment.BaseVoltage")
+                .and_then(|base| store.f(base, "BaseVoltage.nominalVoltage"));
+            if stated.is_some() {
+                return stated;
+            }
+            store.of_class("PowerTransformerEnd").find_map(|end| {
+                (store.refv(end, "TransformerEnd.Terminal") == Some(terminal))
+                    .then(|| {
+                        store
+                            .refv(end, "TransformerEnd.BaseVoltage")
+                            .and_then(|base| store.f(base, "BaseVoltage.nominalVoltage"))
+                            .or_else(|| store.f(end, "PowerTransformerEnd.ratedU"))
+                    })
+                    .flatten()
+            })
+        })
+}
+
+/// The deterministic identity of a calculated bus: UUIDv5 under PowerIO's
+/// CGMES namespace over the sorted connectivity node identities it joins, so
+/// the same nodes always yield the same bus mRID and never a source
+/// TopologicalNode mRID.
+fn calculated_bus_uid(nodes: &[String]) -> String {
+    let namespace = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, b"https://powerio.dev/cgmes");
+    let mut sorted: Vec<&str> = nodes.iter().map(String::as_str).collect();
+    sorted.sort_unstable();
+    let name = format!("calculated-bus:{}", sorted.join(","));
+    uuid::Uuid::new_v5(&namespace, name.as_bytes()).to_string()
+}
+
+/// Buses as the connected components of ConnectivityNodes joined by closed,
+/// in service switches; ids in first node definition order. PowSybl's node
+/// breaker import builds the same graph (`NodeMapping`, `SwitchConversion`)
+/// and lets IIDM compute the buses from it.
+#[allow(clippy::too_many_lines)] // one pass joins nodes, names buses, and reports the result
+fn calculate_buses(
+    store: &Store,
+    wiring: &Wiring,
+    sv_status: &HashMap<String, bool>,
+    warnings: &mut CgmesDiagnostics,
+) -> Result<BusTable> {
+    let nodes: Vec<&str> = store.of_class("ConnectivityNode").collect();
+    let index: HashMap<&str, usize> = nodes
+        .iter()
+        .enumerate()
+        .map(|(position, node)| (*node, position))
+        .collect();
+    let mut union = crate::format::union_find::UnionFind::new(nodes.len());
+    let mut closed = 0usize;
+    let mut open = 0usize;
+    let mut out_of_service = 0usize;
+    let mut unplaced = 0usize;
+    for class in SWITCH_CLASSES {
+        for switch in store.of_class(class) {
+            let terminals = wiring.terminals(switch);
+            let (Some(first), Some(second)) = (terminals.first(), terminals.get(1)) else {
+                unplaced += 1;
+                continue;
+            };
+            let ends = (
+                store
+                    .refv(first, "Terminal.ConnectivityNode")
+                    .and_then(|node| index.get(node)),
+                store
+                    .refv(second, "Terminal.ConnectivityNode")
+                    .and_then(|node| index.get(node)),
+            );
+            let (Some(first), Some(second)) = ends else {
+                unplaced += 1;
+                continue;
+            };
+            if switch_is_open(store, switch) {
+                open += 1;
+            } else if !switch_in_service(store, switch, sv_status) {
+                out_of_service += 1;
+            } else {
+                closed += 1;
+                union.union(*first, *second);
+            }
+        }
+    }
+
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    let mut group_of_root: HashMap<usize, usize> = HashMap::new();
+    for position in 0..nodes.len() {
+        let root = union.find(position);
+        let group = *group_of_root.entry(root).or_insert_with(|| {
+            groups.push(Vec::new());
+            groups.len() - 1
+        });
+        groups[group].push(position);
+    }
+
+    let busbar_names: HashMap<&str, String> = store
+        .of_class("BusbarSection")
+        .filter_map(|busbar| {
+            let terminal = wiring.terminals(busbar).first()?;
+            let node = store.refv(terminal, "Terminal.ConnectivityNode")?;
+            Some((node, store.name(busbar)))
+        })
+        .collect();
+
+    let referenced: BTreeSet<&str> = store
+        .of_class("Terminal")
+        .filter_map(|terminal| store.refv(terminal, "Terminal.ConnectivityNode"))
+        .collect();
+    let mut buses = Vec::new();
+    let mut bus_of_node = HashMap::new();
+    let mut kv_of = HashMap::new();
+    let mut calculated = Vec::new();
+    let mut split_levels = 0usize;
+    let mut unreferenced: Vec<String> = Vec::new();
+    for members in &groups {
+        let member_ids: Vec<String> = members
+            .iter()
+            .map(|member| nodes[*member].to_string())
+            .collect();
+        let container = member_ids
+            .iter()
+            .find_map(|node| connectivity_node_container(store, node))
+            .ok_or_else(|| Error::FormatRead {
+                format: FMT,
+                message: format!(
+                    "ConnectivityNode `{}` has no ConnectivityNode.ConnectivityNodeContainer reference, so its calculated bus has no voltage level",
+                    member_ids[0]
+                ),
+            })?
+            .to_string();
+        let Some(kv) = calculated_bus_kv(store, &container, &member_ids) else {
+            if member_ids
+                .iter()
+                .all(|node| !referenced.contains(node.as_str()))
+            {
+                // An EQ_BD tie point no terminal of this set references (the
+                // EQ_BD lists every interconnection) states no voltage and
+                // connects nothing; PowSybl converts no node for it either.
+                unreferenced.push(member_ids[0].clone());
+                continue;
+            }
+            return Err(Error::FormatRead {
+                format: FMT,
+                message: format!(
+                    "calculated bus for ConnectivityNode `{}` has no nominal voltage: its container `{container}` is not a VoltageLevel with a BaseVoltage and no attached conducting equipment states a BaseVoltage",
+                    member_ids[0]
+                ),
+            });
+        };
+        if kv <= 0.0 {
+            return Err(Error::FormatRead {
+                format: FMT,
+                message: format!(
+                    "calculated bus for ConnectivityNode `{}` has nonpositive nominal voltage {kv} kV",
+                    member_ids[0]
+                ),
+            });
+        }
+        let id = BusId(buses.len() + 1);
+        let (own, foreign): (Vec<String>, Vec<String>) = member_ids
+            .iter()
+            .cloned()
+            .partition(|node| connectivity_node_container(store, node) == Some(container.as_str()));
+        if !foreign.is_empty() {
+            split_levels += 1;
+            warnings.push_as(
+                &codes::READ_CGMES_VALUE_APPROXIMATED,
+                format!(
+                    "calculated bus {id} joins ConnectivityNodes from more than one container through closed switches; it is placed in `{container}` and the {} node(s) from other containers (sample `{}`) map to it without a calculated bus record listing them",
+                    foreign.len(),
+                    foreign[0]
+                ),
+            );
+        }
+        let mut bus = Bus::new(id, BusType::Pq, kv);
+        bus.name = Some(
+            member_ids
+                .iter()
+                .find_map(|node| busbar_names.get(node.as_str()).cloned())
+                .unwrap_or_else(|| store.name(&member_ids[0])),
+        );
+        bus.uid = Some(calculated_bus_uid(&member_ids));
+        buses.push(bus);
+        for node in &member_ids {
+            bus_of_node.insert(node.clone(), id);
+        }
+        kv_of.insert(id, kv);
+        calculated.push(CalculatedGroup {
+            bus: id,
+            container,
+            nodes: own,
+        });
+    }
+
+    let mut summary = format!(
+        "no TopologicalNode data: {} calculated bus(es) joined {} ConnectivityNode(s) through {closed} closed switch(es); {open} open switch(es) separate nodes",
+        buses.len(),
+        nodes.len()
+    );
+    if out_of_service > 0 {
+        let _ = write!(
+            summary,
+            "; {out_of_service} closed switch(es) out of service (SvStatus or Equipment.inService false) separate nodes"
+        );
+    }
+    if unplaced > 0 {
+        let _ = write!(
+            summary,
+            "; {unplaced} switch(es) without two ConnectivityNode terminals join nothing"
+        );
+    }
+    if split_levels > 0 {
+        let _ = write!(
+            summary,
+            "; {split_levels} bus(es) span more than one connectivity container"
+        );
+    }
+    if !unreferenced.is_empty() {
+        let _ = write!(
+            summary,
+            "; {} ConnectivityNode(s) outside any VoltageLevel that no terminal references (sample `{}`) got no bus",
+            unreferenced.len(),
+            unreferenced[0]
+        );
+    }
+    summary.push_str(
+        "; bus identities are UUIDv5 values derived from the joined ConnectivityNode mRIDs, not source TopologicalNode mRIDs",
+    );
+    warnings.push_as(&codes::READ_CGMES_TOPOLOGY_CALCULATED, summary);
+    Ok(BusTable {
+        buses,
+        bus_of_node,
+        kv_of,
+        calculated,
+    })
+}
+
+/// Conducting equipment → solved service status from SV `SvStatus` records.
+fn read_sv_status(store: &Store) -> Result<HashMap<String, bool>> {
+    let mut sv_status = HashMap::new();
+    for status in store.of_class("SvStatus") {
+        let equipment = store
+            .refv(status, "SvStatus.ConductingEquipment")
+            .ok_or_else(|| Error::FormatRead {
+                format: FMT,
+                message: format!(
+                    "SvStatus {} has no SvStatus.ConductingEquipment reference",
+                    store.name(status)
+                ),
+            })?;
+        let in_service =
+            store
+                .boolean(status, "SvStatus.inService")
+                .ok_or_else(|| Error::FormatRead {
+                    format: FMT,
+                    message: format!(
+                        "SvStatus {} has no boolean SvStatus.inService value",
+                        store.name(status)
+                    ),
+                })?;
+        if let Some(previous) = sv_status.insert(equipment.to_string(), in_service)
+            && previous != in_service
+        {
+            return Err(Error::FormatRead {
+                format: FMT,
+                message: format!(
+                    "conducting equipment {} has conflicting SvStatus.inService values",
+                    store.name(equipment)
+                ),
+            });
+        }
+    }
+    Ok(sv_status)
+}
+
+#[allow(clippy::too_many_lines)] // the element families map in one ordered pass
+fn build(
+    store: &Store,
+    version: CgmesVersion,
+    topology: BusSource,
+    description: Option<String>,
+    scenario_time: Option<String>,
+    name_hint: Option<&str>,
+    warnings: &mut CgmesDiagnostics,
+) -> Result<BalancedNetwork> {
+    let wiring = Wiring::build(store, topology);
+    let sv_status = read_sv_status(store)?;
+
+    let BusTable {
+        mut buses,
+        bus_of_node,
+        kv_of,
+        calculated,
+    } = match topology {
+        BusSource::TopologicalNodes => buses_from_topological_nodes(store)?,
+        BusSource::Calculated => calculate_buses(store, &wiring, &sv_status, warnings)?,
+    };
     if buses.is_empty() {
         return Err(Error::FormatRead {
             format: FMT,
-            message: "no TopologicalNode records; the bus-branch reader needs the TP \
-                      part of the set (node-breaker collapse is follow-up work)"
-                .into(),
+            message: "the set defines no TopologicalNode and no ConnectivityNode records, so it has no buses".into(),
         });
     }
+    let bus_of_topological_node = |topological_node: &str| match topology {
+        BusSource::TopologicalNodes => bus_of_node.get(topological_node).copied(),
+        BusSource::Calculated => None,
+    };
 
     // SV voltage values onto the buses. Equal duplicate observations are
     // harmless; different observations for one topological node are ambiguous.
     let mut sv_voltage = HashMap::new();
+    let mut unmapped_sv_voltages = 0usize;
     for sv in store.of_class("SvVoltage") {
         let Some(topological_node) = store.refv(sv, "SvVoltage.TopologicalNode") else {
             continue;
@@ -1175,7 +1686,10 @@ fn build(
                 ),
             });
         }
-        let Some(bus) = bus_of_tn.get(topological_node) else {
+        let Some(bus) = bus_of_topological_node(topological_node) else {
+            if topology == BusSource::Calculated {
+                unmapped_sv_voltages += 1;
+            }
             continue;
         };
         let bus = &mut buses[bus.0 - 1];
@@ -1185,6 +1699,14 @@ fn build(
         if let Some(angle) = observation.1 {
             bus.va = angle;
         }
+    }
+    if unmapped_sv_voltages > 0 {
+        warnings.push_as(
+            &codes::READ_CGMES_RECORD_UNMAPPED,
+            format!(
+                "{unmapped_sv_voltages} SvVoltage record(s) observe TopologicalNode identities the set does not define; the calculated buses keep their default voltage because no TP data ties those observations to ConnectivityNodes"
+            ),
+        );
     }
     for topological_node in store.of_class("TopologicalNode") {
         if let Some((sv_voltage, sv_authority, container_authority)) =
@@ -1252,44 +1774,12 @@ fn build(
             )),
         }
     }
-    let mut sv_status = HashMap::new();
-    for status in store.of_class("SvStatus") {
-        let equipment = store
-            .refv(status, "SvStatus.ConductingEquipment")
-            .ok_or_else(|| Error::FormatRead {
-                format: FMT,
-                message: format!(
-                    "SvStatus {} has no SvStatus.ConductingEquipment reference",
-                    store.name(status)
-                ),
-            })?;
-        let in_service =
-            store
-                .boolean(status, "SvStatus.inService")
-                .ok_or_else(|| Error::FormatRead {
-                    format: FMT,
-                    message: format!(
-                        "SvStatus {} has no boolean SvStatus.inService value",
-                        store.name(status)
-                    ),
-                })?;
-        if let Some(previous) = sv_status.insert(equipment.to_string(), in_service)
-            && previous != in_service
-        {
-            return Err(Error::FormatRead {
-                format: FMT,
-                message: format!(
-                    "conducting equipment {} has conflicting SvStatus.inService values",
-                    store.name(equipment)
-                ),
-            });
-        }
-    }
-
     let mut mapper = Mapper {
         store,
+        topology,
         wiring,
-        bus_of_tn,
+        bus_of_node,
+        calculated,
         kv_of,
         sv_flow,
         sv_status,
@@ -1311,9 +1801,9 @@ fn build(
     for island in store.of_class("TopologicalIsland") {
         if let Some(bus) = store
             .refv(island, "TopologicalIsland.AngleRefTopologicalNode")
-            .and_then(|tn| mapper.bus_of_tn.get(tn))
+            .and_then(|tn| mapper.bus_of_topological_node(tn))
         {
-            reference = Some(*bus);
+            reference = Some(bus);
             break;
         }
     }
@@ -1432,27 +1922,79 @@ fn component_type(class: &str) -> &'static str {
     }
 }
 
+/// The connectivity container a node or equipment container resolves to: a
+/// `Bay` stands in for its `Bay.VoltageLevel`, because PowerIO's topology
+/// records name voltage levels rather than bays; every other container (a
+/// `VoltageLevel`, a `Line`, a `Substation`) is itself.
+fn resolve_container<'a>(store: &'a Store, container: &'a str) -> &'a str {
+    if store.class_of(container) == Some("Bay") {
+        store
+            .refv(container, "Bay.VoltageLevel")
+            .unwrap_or(container)
+    } else {
+        container
+    }
+}
+
+fn connectivity_node_container<'a>(store: &'a Store, node: &str) -> Option<&'a str> {
+    store
+        .refv(node, "ConnectivityNode.ConnectivityNodeContainer")
+        .map(|container| resolve_container(store, container))
+}
+
+fn topological_node_container<'a>(store: &'a Store, node: &str) -> Option<&'a str> {
+    store
+        .refv(node, "TopologicalNode.ConnectivityNodeContainer")
+        .map(|container| resolve_container(store, container))
+}
+
 fn equipment_voltage_level<'a>(store: &'a Store, equipment: &str) -> Option<&'a str> {
     store
         .refv(equipment, "Equipment.EquipmentContainer")
+        .map(|container| resolve_container(store, container))
         .filter(|container| store.class_of(container) == Some("VoltageLevel"))
 }
 
+/// The container a terminal's topology record names: its connectivity node's
+/// container, else its topological node's, else the container of its
+/// conducting equipment (a junction terminal in a 2.4.15 EQ_BD has no
+/// ConnectivityNode and, without TP_BD, no TopologicalNode either).
 fn terminal_voltage_level<'a>(store: &'a Store, terminal: &str) -> Option<&'a str> {
     if let Some(node) = store.refv(terminal, "Terminal.ConnectivityNode") {
-        return store.refv(node, "ConnectivityNode.ConnectivityNodeContainer");
+        return connectivity_node_container(store, node);
     }
     if let Some(node) = store.refv(terminal, "Terminal.TopologicalNode") {
-        return store.refv(node, "TopologicalNode.ConnectivityNodeContainer");
+        return topological_node_level(store, node);
     }
     store
         .refv(terminal, "Terminal.ConductingEquipment")
-        .and_then(|equipment| equipment_voltage_level(store, equipment))
+        .and_then(|equipment| store.refv(equipment, "Equipment.EquipmentContainer"))
+        .map(|container| resolve_container(store, container))
+}
+
+/// The container a TopologicalNode's topology records name. A TopologicalNode
+/// whose own container holds none of its ConnectivityNodes (a TP_BD
+/// TopologicalNode names one Line while its EQ_BD node names another)
+/// follows the nodes' container, because one bus belongs to one container.
+fn topological_node_level<'a>(store: &'a Store, topological_node: &str) -> Option<&'a str> {
+    let own = topological_node_container(store, topological_node)?;
+    let mut members = store.of_class("ConnectivityNode").filter(|node| {
+        store.refv(node, "ConnectivityNode.TopologicalNode") == Some(topological_node)
+    });
+    let Some(first) = members.next() else {
+        return Some(own);
+    };
+    if connectivity_node_container(store, first) == Some(own)
+        || members.any(|node| connectivity_node_container(store, node) == Some(own))
+    {
+        return Some(own);
+    }
+    connectivity_node_container(store, first).or(Some(own))
 }
 
 fn terminal_nominal_kv(mapper: &Mapper<'_>, terminal: &str) -> Option<f64> {
     if let Some(node) = mapper.wiring.node(terminal)
-        && let Some(bus) = mapper.bus_of_tn.get(node)
+        && let Some(bus) = mapper.bus_of_node.get(node)
     {
         return Some(mapper.kv(*bus));
     }
@@ -1688,16 +2230,22 @@ fn build_detailed_connectivity(
                 .refv(id, "VoltageLevel.BaseVoltage")
                 .and_then(|base| store.f(base, "BaseVoltage.nominalVoltage"))
                 .unwrap_or(0.0);
-            let has_nodes = store.of_class("ConnectivityNode").any(|node| {
-                store.refv(node, "ConnectivityNode.ConnectivityNodeContainer") == Some(id)
-            });
-            let mut buses = store
-                .of_class("TopologicalNode")
-                .filter(|node| {
-                    store.refv(node, "TopologicalNode.ConnectivityNodeContainer") == Some(id)
-                })
-                .filter_map(|node| mapper.bus_of_tn.get(node).copied())
-                .collect::<Vec<_>>();
+            let has_nodes = store
+                .of_class("ConnectivityNode")
+                .any(|node| connectivity_node_container(store, node) == Some(id));
+            let mut buses = match mapper.topology {
+                BusSource::TopologicalNodes => store
+                    .of_class("TopologicalNode")
+                    .filter(|node| topological_node_container(store, node) == Some(id))
+                    .filter_map(|node| mapper.bus_of_node.get(node).copied())
+                    .collect::<Vec<_>>(),
+                BusSource::Calculated => mapper
+                    .calculated
+                    .iter()
+                    .filter(|group| group.container == id)
+                    .map(|group| group.bus)
+                    .collect::<Vec<_>>(),
+            };
             buses.sort_unstable();
             buses.dedup();
             Ok(VoltageLevel {
@@ -1722,7 +2270,13 @@ fn build_detailed_connectivity(
 
     let mut connectivity_nodes = Vec::new();
     for id in store.of_class("ConnectivityNode") {
-        if let Some(level) = store.refv(id, "ConnectivityNode.ConnectivityNodeContainer") {
+        if let Some(level) = connectivity_node_container(store, id) {
+            let calculated_bus = match mapper.topology {
+                BusSource::TopologicalNodes => store
+                    .refv(id, "ConnectivityNode.TopologicalNode")
+                    .and_then(|node| mapper.bus_of_node.get(node).copied()),
+                BusSource::Calculated => mapper.bus_of_node.get(id).copied(),
+            };
             connectivity_nodes.push(ConnectivityNode {
                 component: component_id("connectivity_node", id)?,
                 voltage_level: component_id(
@@ -1730,16 +2284,14 @@ fn build_detailed_connectivity(
                     level,
                 )?,
                 node_number: None,
-                calculated_bus: store
-                    .refv(id, "ConnectivityNode.TopologicalNode")
-                    .and_then(|node| mapper.bus_of_tn.get(node).copied()),
+                calculated_bus,
             });
         }
     }
 
     let mut bus_breaker_buses = Vec::new();
     for id in store.of_class("TopologicalNode") {
-        if let Some(level) = store.refv(id, "TopologicalNode.ConnectivityNodeContainer") {
+        if let Some(level) = topological_node_level(store, id) {
             let (voltage_kv, angle_degrees) = solved_voltage(store, id);
             bus_breaker_buses.push(BusBreakerBus {
                 component: component_id("bus", id)?,
@@ -1747,7 +2299,7 @@ fn build_detailed_connectivity(
                     component_type(store.class_of(level).unwrap_or("")),
                     level,
                 )?,
-                calculated_bus: mapper.bus_of_tn.get(id).copied(),
+                calculated_bus: mapper.bus_of_topological_node(id),
                 voltage_kv,
                 angle_degrees,
             });
@@ -1755,32 +2307,70 @@ fn build_detailed_connectivity(
     }
 
     let mut calculated_buses = Vec::new();
-    for id in store.of_class("TopologicalNode") {
-        let (Some(level), Some(calculated_bus)) = (
-            store.refv(id, "TopologicalNode.ConnectivityNodeContainer"),
-            mapper.bus_of_tn.get(id).copied(),
-        ) else {
-            continue;
-        };
-        let nodes = store
-            .of_class("ConnectivityNode")
-            .filter(|node| store.refv(node, "ConnectivityNode.TopologicalNode") == Some(id))
-            .map(|node| component_id("connectivity_node", node))
-            .collect::<Result<Vec<_>>>()?;
-        if nodes.is_empty() {
-            continue;
+    match mapper.topology {
+        BusSource::TopologicalNodes => {
+            for id in store.of_class("TopologicalNode") {
+                let (Some(own_level), Some(level), Some(calculated_bus)) = (
+                    topological_node_container(store, id),
+                    topological_node_level(store, id),
+                    mapper.bus_of_topological_node(id),
+                ) else {
+                    continue;
+                };
+                let members = store
+                    .of_class("ConnectivityNode")
+                    .filter(|node| store.refv(node, "ConnectivityNode.TopologicalNode") == Some(id))
+                    .collect::<Vec<_>>();
+                if members.is_empty() {
+                    continue;
+                }
+                if level != own_level {
+                    mapper.warnings.push_as(
+                        &codes::READ_CGMES_VALUE_APPROXIMATED,
+                        format!(
+                            "TopologicalNode `{id}` is contained by `{own_level}` while its ConnectivityNodes are contained by `{level}`; the topology records follow the ConnectivityNodes"
+                        ),
+                    );
+                }
+                // One record names one container, so nodes joined from another
+                // container map to the bus without being listed.
+                let nodes = members
+                    .iter()
+                    .filter(|node| connectivity_node_container(store, node) == Some(level))
+                    .map(|node| component_id("connectivity_node", node))
+                    .collect::<Result<Vec<_>>>()?;
+                let (voltage_kv, angle_degrees) = solved_voltage(store, id);
+                calculated_buses.push(CalculatedBus {
+                    voltage_level: component_id(
+                        component_type(store.class_of(level).unwrap_or("")),
+                        level,
+                    )?,
+                    calculated_bus,
+                    nodes,
+                    voltage_kv,
+                    angle_degrees,
+                });
+            }
         }
-        let (voltage_kv, angle_degrees) = solved_voltage(store, id);
-        calculated_buses.push(CalculatedBus {
-            voltage_level: component_id(
-                component_type(store.class_of(level).unwrap_or("")),
-                level,
-            )?,
-            calculated_bus,
-            nodes,
-            voltage_kv,
-            angle_degrees,
-        });
+        BusSource::Calculated => {
+            for group in &mapper.calculated {
+                let nodes = group
+                    .nodes
+                    .iter()
+                    .map(|node| component_id("connectivity_node", node))
+                    .collect::<Result<Vec<_>>>()?;
+                calculated_buses.push(CalculatedBus {
+                    voltage_level: component_id(
+                        component_type(store.class_of(&group.container).unwrap_or("")),
+                        &group.container,
+                    )?,
+                    calculated_bus: group.bus,
+                    nodes,
+                    voltage_kv: None,
+                    angle_degrees: None,
+                });
+            }
+        }
     }
 
     let mut synthesized_busbar_nodes = HashMap::new();
@@ -1802,10 +2392,8 @@ fn build_detailed_connectivity(
                 ));
                 continue;
             };
-            let Some(topological_level) = store.refv(
-                topological_node,
-                "TopologicalNode.ConnectivityNodeContainer",
-            ) else {
+            let Some(topological_level) = topological_node_container(store, topological_node)
+            else {
                 mapper.warnings.push(format!(
                     "BusbarSection {} has no unambiguous VoltageLevel through TopologicalNode {} and was skipped",
                     store.name(id),
@@ -1813,7 +2401,7 @@ fn build_detailed_connectivity(
                 ));
                 continue;
             };
-            let Some(calculated_bus) = mapper.bus_of_tn.get(topological_node).copied() else {
+            let Some(calculated_bus) = mapper.bus_of_topological_node(topological_node) else {
                 mapper.warnings.push(format!(
                     "BusbarSection {} TopologicalNode {} has no calculated bus and was skipped",
                     store.name(id),
@@ -1861,6 +2449,7 @@ fn build_detailed_connectivity(
         .collect::<Result<Vec<_>>>()?;
 
     let mut terminals = Vec::new();
+    let mut unplaced_terminals: Vec<String> = Vec::new();
     for id in store.of_class("Terminal") {
         let Some(equipment) = store.refv(id, "Terminal.ConductingEquipment") else {
             continue;
@@ -1874,6 +2463,19 @@ fn build_detailed_connectivity(
             .unwrap_or(1.0);
         let terminal = u8::try_from(sequence as u64).unwrap_or(u8::MAX);
         let bus = store.refv(id, "Terminal.TopologicalNode");
+        let node = store
+            .refv(id, "Terminal.ConnectivityNode")
+            .map(|value| component_id("connectivity_node", value))
+            .transpose()?
+            .or_else(|| synthesized_busbar_nodes.get(id).cloned());
+        let stated_connected = store.boolean(id, "ACDCTerminal.connected").unwrap_or(true);
+        // A terminal that names neither a ConnectivityNode nor a
+        // TopologicalNode (a 2.4.15 EQ_BD junction terminal read without
+        // TP_BD) sits on no bus, so its record states no connection.
+        let unplaced = node.is_none() && bus.is_none();
+        if unplaced && stated_connected {
+            unplaced_terminals.push(id.to_string());
+        }
         let solved_power = mapper.sv_flow.get(id).copied();
         terminals.push(Terminal {
             component: Some(component_id("terminal", id)?),
@@ -1888,15 +2490,21 @@ fn build_detailed_connectivity(
             )?,
             bus: bus.map(|value| component_id("bus", value)).transpose()?,
             connectable_bus: bus.map(|value| component_id("bus", value)).transpose()?,
-            node: store
-                .refv(id, "Terminal.ConnectivityNode")
-                .map(|value| component_id("connectivity_node", value))
-                .transpose()?
-                .or_else(|| synthesized_busbar_nodes.get(id).cloned()),
-            connected: store.boolean(id, "ACDCTerminal.connected").unwrap_or(true),
+            node,
+            connected: stated_connected && !unplaced,
             active_power_mw: solved_power.map(|value| value.0),
             reactive_power_mvar: solved_power.map(|value| value.1),
         });
+    }
+    if !unplaced_terminals.is_empty() {
+        mapper.warnings.push_as(
+            &codes::READ_CGMES_RECORD_UNMAPPED,
+            format!(
+                "{} connected terminal(s) (sample `{}`) reference neither a ConnectivityNode nor a TopologicalNode, so nothing places them on a bus; their records state no connection",
+                unplaced_terminals.len(),
+                unplaced_terminals[0]
+            ),
+        );
     }
 
     let mut switches = Vec::new();
@@ -3948,7 +4556,7 @@ fn apply_regulation(
         .flatten();
     let regulated = terminal
         .and_then(|t| mapper.wiring.node(t))
-        .and_then(|tn| mapper.bus_of_tn.get(tn))
+        .and_then(|tn| mapper.bus_of_node.get(tn))
         .copied();
     if let Some(bus) = regulated {
         if let Some(target) = regulating_control_target_kv(store, control, mapper.warnings)
@@ -4138,7 +4746,7 @@ fn shunt_control(
     let regulated_bus = regulation
         .and_then(|control| store.refv(control, "RegulatingControl.Terminal"))
         .and_then(|terminal| mapper.wiring.node(terminal))
-        .and_then(|node| mapper.bus_of_tn.get(node))
+        .and_then(|node| mapper.bus_of_node.get(node))
         .copied();
     let regulated_kv = regulated_bus.map_or(1.0, |bus| mapper.kv(bus));
     let scale_to_kv = regulation.map_or(1.0, |control| {
@@ -4214,16 +4822,13 @@ fn read_switches(mapper: &mut Mapper<'_>) -> Vec<Switch> {
                 continue;
             };
             if from == to {
-                // Closed inside one topological node: already collapsed by
-                // the topology processor that produced TP.
+                // Closed inside one bus: the topology processor that produced
+                // TP, or the calculated topology, already joined its ends.
                 internal += 1;
                 continue;
             }
             let store = mapper.store;
-            let open = store
-                .boolean(id, "Switch.open")
-                .or_else(|| store.boolean(id, "Switch.normalOpen"))
-                .unwrap_or(false);
+            let open = switch_is_open(store, id);
             let mut switch = Switch::new(from, to, !open);
             switch.current_rating = store.f(id, "Switch.ratedCurrent");
             switch.uid = Some(id.to_string());
@@ -4231,10 +4836,14 @@ fn read_switches(mapper: &mut Mapper<'_>) -> Vec<Switch> {
         }
     }
     if internal > 0 {
+        let bus_kind = match mapper.topology {
+            BusSource::TopologicalNodes => "topological node",
+            BusSource::Calculated => "calculated bus",
+        };
         mapper.warnings.push_as(
             &codes::READ_CGMES_VALUE_APPROXIMATED,
             format!(
-                "{internal} switch(es) internal to one topological node are represented \
+                "{internal} switch(es) internal to one {bus_kind} are represented \
              by the topology itself"
             ),
         );
@@ -4412,7 +5021,7 @@ fn read_two_winding_transformer(
         store
             .refv(end, "TransformerEnd.Terminal")
             .and_then(|terminal| mapper.wiring.node(terminal))
-            .and_then(|node| mapper.bus_of_tn.get(node))
+            .and_then(|node| mapper.bus_of_node.get(node))
             .copied()
     };
     let (Some(from), Some(to)) = (end_terminal(end1), end_terminal(end2)) else {
@@ -4606,7 +5215,7 @@ fn transformer_end_buses(
         let Some(bus) = mapper
             .wiring
             .node(&terminal)
-            .and_then(|node| mapper.bus_of_tn.get(node))
+            .and_then(|node| mapper.bus_of_node.get(node))
             .copied()
         else {
             mapper.warnings.push(format!(

@@ -24,6 +24,7 @@ use quick_xml::name::ResolveResult;
 
 use crate::diagnostics::{Diagnostics, codes};
 use crate::format::TextEmission;
+use crate::format::union_find::UnionFind;
 use crate::network::{
     AcDcConverterControlMode, ActivePowerControl, Area, BalancedNetwork, BoundaryLine,
     BoundaryLineGeneration, Branch, BranchCharging, BranchCurrentRatings, BranchRatingSet,
@@ -6419,37 +6420,6 @@ fn detailed_endpoint(voltage_level: &str, endpoint: &RawEndpoint) -> Result<Topo
             voltage_level,
             *node,
         )?)),
-    }
-}
-
-struct UnionFind {
-    parent: Vec<usize>,
-}
-
-impl UnionFind {
-    fn new(len: usize) -> Self {
-        Self {
-            parent: (0..len).collect(),
-        }
-    }
-
-    fn find(&mut self, value: usize) -> usize {
-        let parent = self.parent[value];
-        if parent == value {
-            value
-        } else {
-            let root = self.find(parent);
-            self.parent[value] = root;
-            root
-        }
-    }
-
-    fn union(&mut self, first: usize, second: usize) {
-        let first = self.find(first);
-        let second = self.find(second);
-        if first != second {
-            self.parent[second] = first;
-        }
     }
 }
 
