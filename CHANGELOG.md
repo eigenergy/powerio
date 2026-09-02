@@ -117,6 +117,19 @@ the failure that ends a read and the warnings alike. `powerio_core::Error`
 gains `with_span`, which attaches a range to the diagnostic that ended an
 operation.
 
+**IIDM 1.0 through 1.17 and JIIDM.** The PowSybl reader accepts every IIDM
+serialization version, from the iTesla namespaced 1.0 to 1.17, with each
+version's rules: busbar section voltages, inline tie lines, `targetV` ratio
+tap changers, legacy shunt and static VAR compensator attributes, and loading
+limits stated on the equipment. Each maps to the same tables as its 1.17 form.
+The new `jiidm` token reads PowSybl's JSON encoding of any of those versions
+and writes JIIDM 1.17 in PowSybl's field layout and order; a bare `.json`
+whose first key is `version` classifies as `jiidm`. `SourceFormat::Jiidm`
+names a module read from JIIDM, and `EMIT.JIIDM.*` codes report its writer.
+XIIDM output stays 1.17. The XIIDM element mapping now reads one tree
+representation produced by either the XML or JSON reader. In the PowSybl
+gate, PyPowSybl reads PowerIO's JIIDM output and PowerIO reads PyPowSybl's.
+
 ## 0.10.0
 
 PowerIO 0.10 is the public beta of the 1.0 API. API corrections may land before 1.0.0 as downstream integrations exercise the new design.
