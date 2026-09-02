@@ -13,7 +13,9 @@ this repository.
 PowSybl Core 7.3.0 reads RAW revisions 32, 33, and 35, but not revision 34.
 The gate loads fresh PowerIO RAW 33, RAW 35, and RAWX 35 output with PowSybl
 and records PowSybl's expected rejection of fresh RAW 34. PowerIO's parser,
-writer, and round trip tests cover revision 34 directly.
+writer, and round trip tests cover revision 34 directly. PowerIO reads RAW 32
+and writes it fresh at revision 33; the gate reads two official RAW 32 cases
+and loads the fresh RAW 33 written from each.
 
 The gate also asks PowSybl to export the same remote regulation case as XIIDM
 1.12 through 1.17, CGMES 2.4.15 on CIM16, and CGMES 3.0 on CIM100. PowerIO
@@ -269,6 +271,24 @@ case performs 337. The existing focused checks additionally require switched
 shunt section counts, the named RAWX line and transformers, explicit null RAWX
 substation node voltages, and exact node breaker generator and three winding
 tap regulation.
+
+The two official RAW 32 cases, `ExampleVersion32_exported.raw` and
+`IEEE_30_bus.raw` from `psse/psse-converter/src/test/resources`, pass through
+PowerIO IR and fresh RAW 33 output before PowSybl reloads them. The checker
+pins each file's SHA-256 and requires the source header to state revision 32
+and the fresh header revision 33. The comparison is the same source and fresh
+dataframe comparison as the other RAW cases, with one verified identity
+exception.
+PSS/E ID fields are two character blank padded strings, and PowSybl names a
+fixed shunt `B<bus>-SH<ID>` with the field as written, so the `' 1'` fixed
+shunts in these cases are `B7-SH 1`, `B10-SH 1`, and `B24-SH 1` in the source
+view; PowerIO stores the trimmed identifier and writes `'1'`, which PowSybl
+names `B7-SH1`. A shunt id is renamed for the comparison only when the source
+field carries leading blanks, the fresh RAW record states the trimmed text,
+and both views contain the id, so a dropped shunt still fails. Fresh RAW 33
+carries no branch NAME field either, so PowSybl synthesizes the same line
+names from both files and no line name cell is excluded. The RAW 32 example
+case performs 403 listed field comparisons and the IEEE 30 bus case 1860.
 
 The Python environment pins PyPowSybl 1.16.1, pandas 3.0.5, numpy 2.5.2,
 networkx 3.6.1, and prettytable 3.18.0. PyPowSybl's PowSybl Dependencies

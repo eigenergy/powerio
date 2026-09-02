@@ -51,6 +51,21 @@ TWO_SUBSTATIONS_RELATIVE = Path(
 SWITCHED_SHUNT_RELATIVE = Path(
     "psse/psse-converter/src/test/resources/SwitchedShunt.raw"
 )
+# PowSybl Core reads RAW revision 32; PowerIO reads it and writes it fresh at
+# revision 33. Each entry names the official source, its SHA-256, and the
+# stem of the fresh RAW 33 file the gate script writes from it.
+RAW_32_FIXTURES = {
+    "PSS/E RAW 32 example": (
+        Path("psse/psse-converter/src/test/resources/ExampleVersion32_exported.raw"),
+        "4769a4c1a39f4441f508285b2828f35adae70a1f13f3f1507cd30590d34b9394",
+        "example-version-32",
+    ),
+    "PSS/E RAW 32 IEEE 30": (
+        Path("psse/psse-converter/src/test/resources/IEEE_30_bus.raw"),
+        "0e281169ed4370ca6f59f2cba788cc6c6da152a251e4c006c1f93e83ff3ac2d7",
+        "ieee-30-bus-32",
+    ),
+}
 NODE_BREAKER_RELATIVE = Path(
     "psse/psse-model-test/src/main/resources/five_bus_nodeBreaker_rev35.raw"
 )
@@ -894,6 +909,34 @@ PSSE_EXPECTATIONS = {
         "ratio changers": 4,
         "ratio steps": 10,
         "switches": 21,
+    },
+    "PSS/E RAW 32 example": {
+        "voltage levels": 8,
+        "buses": 8,
+        "lines": 4,
+        "2W transformers": 4,
+        "3W transformers": 0,
+        "generators": 1,
+        "loads": 2,
+        "shunts": 2,
+        "operational limits": 0,
+        "ratio changers": 4,
+        "ratio steps": 4,
+        "switches": 0,
+    },
+    "PSS/E RAW 32 IEEE 30": {
+        "voltage levels": 30,
+        "buses": 30,
+        "lines": 37,
+        "2W transformers": 4,
+        "3W transformers": 0,
+        "generators": 6,
+        "loads": 21,
+        "shunts": 2,
+        "operational limits": 46,
+        "ratio changers": 4,
+        "ratio steps": 4,
+        "switches": 0,
     },
 }
 XIIDM_EXPECTATIONS = {
@@ -3936,11 +3979,136 @@ def revision33_synthesized_line_name_cells(
     return cells
 
 
+def raw_header_revision(path: Path) -> int:
+    """The REV field of a PSS/E RAW case identification record."""
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("@"):
+            fields = [field.strip() for field in stripped.split("/")[0].split(",")]
+            return int(float(fields[2]))
+    raise AssertionError(f"{path}: no case identification record")
+
+
+def raw_fixed_shunt_ids(path: Path) -> dict[tuple[int, str], str]:
+    """Fixed shunt (bus, trimmed ID) keys mapped to the quoted ID field as written."""
+    ids: dict[tuple[int, str], str] = {}
+    in_section = False
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        if "BEGIN FIXED SHUNT DATA" in raw_line.upper():
+            in_section = True
+            continue
+        if not in_section:
+            continue
+        fields = raw_line.split("/")[0].split(",")
+        if fields[0].strip() == "0":
+            break
+        bus = int(fields[0])
+        field = fields[1].strip()
+        require(
+            len(field) >= 2 and field[0] == "'" and field[-1] == "'",
+            f"{path}: fixed shunt record at bus {bus} has an unquoted ID field {field!r}",
+        )
+        quoted = field[1:-1]
+        ids[(bus, quoted.strip(" "))] = quoted
+    return ids
+
+
+def padded_fixed_shunt_id_renames(
+    source_path: Path,
+    fresh_path: Path,
+    source: pp.network.Network,
+    fresh: pp.network.Network,
+    label: str,
+) -> dict[str, str]:
+    """Fixed shunt ids whose PowSybl spelling keeps leading blanks from the RAW ID field.
+
+    PSS/E ID fields are two character blank padded strings. PowSybl names a
+    fixed shunt ``B<bus>-SH<ID>`` with the field text as written, so a source
+    ``' 1'`` becomes ``B7-SH 1``. PowerIO stores the trimmed identifier and
+    writes it without padding, so the fresh RAW 33 record states ``'1'`` and
+    PowSybl names it ``B7-SH1``. Trailing blanks are already removed by
+    ``psse_canonical_frame``. A rename is admitted only when the source field
+    carries leading blanks, the fresh RAW field is exactly the trimmed text,
+    and both PowSybl views contain the corresponding id, so a dropped or
+    renamed shunt still fails the comparison.
+    """
+    source_ids = raw_fixed_shunt_ids(source_path)
+    fresh_ids = raw_fixed_shunt_ids(fresh_path)
+    source_shunts = psse_canonical_frame(source.get_shunt_compensators())
+    fresh_shunts = psse_canonical_frame(fresh.get_shunt_compensators())
+    renames: dict[str, str] = {}
+    for (bus, trimmed), quoted in source_ids.items():
+        if quoted.lstrip(" ") == quoted:
+            continue
+        require(
+            fresh_ids.get((bus, trimmed)) == trimmed,
+            f"{label}: fresh RAW 33 fixed shunt at bus {bus} does not state ID {trimmed!r} "
+            f"without padding; found {fresh_ids.get((bus, trimmed))!r}",
+        )
+        source_id = f"B{bus}-SH{quoted}".rstrip(" ")
+        fresh_id = f"B{bus}-SH{trimmed}"
+        require(
+            source_id in source_shunts.index,
+            f"{label}: official PowSybl view has no fixed shunt {source_id!r}",
+        )
+        require(
+            fresh_id in fresh_shunts.index,
+            f"{label}: fresh PowSybl view has no fixed shunt {fresh_id!r}",
+        )
+        renames[source_id] = fresh_id
+    print(
+        f"{label}: fixed shunt ids with leading blank padding={len(renames)}; "
+        "each fresh RAW 33 ID field is the trimmed identifier"
+    )
+    return renames
+
+
+def check_raw32_case(
+    source_path: Path,
+    expected_sha256: str,
+    fresh_path: Path,
+    label: str,
+) -> None:
+    require(
+        hashlib.sha256(source_path.read_bytes()).hexdigest() == expected_sha256,
+        f"{label}: official PowSybl fixture checksum changed",
+    )
+    require(
+        raw_header_revision(source_path) == 32,
+        f"{label}: official fixture is not RAW revision 32",
+    )
+    require(
+        raw_header_revision(fresh_path) == 33,
+        f"{label}: fresh output is not RAW revision 33",
+    )
+    source = load_checked(source_path, f"official {label}")
+    fresh = load_checked(fresh_path, f"fresh {label}")
+    check_psse_equivalence(
+        source,
+        fresh,
+        label,
+        id_renames={
+            "shunt": padded_fixed_shunt_id_renames(
+                source_path,
+                fresh_path,
+                source,
+                fresh,
+                label,
+            ),
+        },
+    )
+    print(
+        f"{label}: official fixture SHA-256={expected_sha256}; "
+        "RAW 32 source read and fresh RAW 33 reload passed"
+    )
+
+
 def check_psse_equivalence(
     source: pp.network.Network,
     fresh: pp.network.Network,
     label: str,
     excluded_cells: dict[str, set[tuple[str, str]]] | None = None,
+    id_renames: dict[str, dict[str, str]] | None = None,
 ) -> None:
     expected = PSSE_EXPECTATIONS[label]
     frames = (
@@ -3983,6 +4151,13 @@ def check_psse_equivalence(
             f"{label}: official source has {len(source_frame)} {count_name}, "
             f"expected {expected[count_name]}",
         )
+        renames = (id_renames or {}).get(equipment)
+        if renames:
+            require(
+                all(source_id in source_frame.index for source_id in renames),
+                f"{label}: {equipment} id renames name unknown source ids {sorted(renames)}",
+            )
+            source_frame = source_frame.rename(index=renames)
         _, compared = check_electrical_frame(
             source_frame,
             fresh_frame,
@@ -4495,6 +4670,14 @@ def main() -> None:
         "PSS/E node breaker",
     )
     check_node_breaker(node_breaker)
+
+    for label, (relative_path, expected_sha256, stem) in RAW_32_FIXTURES.items():
+        check_raw32_case(
+            powsybl_core / relative_path,
+            expected_sha256,
+            output_dir / f"{stem}.raw",
+            label,
+        )
     print(
         "official PowSybl reference cases: fresh emission checks passed; "
         f"assertions={ASSERTION_COUNT[0]}"
