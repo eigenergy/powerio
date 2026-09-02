@@ -105,6 +105,18 @@ retained source. Two PowSybl Core revision 32 cases join the fixtures under
 their MPL-2.0 license, and the PowSybl interoperability gate loads the fresh
 revision 33 output written from each.
 
+The guide gains a PowerIO IR reference (`docs/src/ir-reference.md`) that
+defines every structural value type field by field: type, unit, sign
+convention, invariant, and the value a reader takes when a field is absent;
+`powerio/tests/ir_reference.rs` holds the page to the generated schema in both
+directions. `serialize` is deterministic: one module serializes to identical
+text every time, and serializing what that text deserializes to reproduces
+it. The MATPOWER and PSS/E readers attach the byte range of the record a
+finding is about, into the retained source, to the diagnostics they raise:
+the failure that ends a read and the warnings alike. `powerio_core::Error`
+gains `with_span`, which attaches a range to the diagnostic that ended an
+operation.
+
 ## 0.10.0
 
 PowerIO 0.10 is the public beta of the 1.0 API. API corrections may land before 1.0.0 as downstream integrations exercise the new design.
