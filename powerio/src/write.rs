@@ -46,7 +46,6 @@ fn is_goc3(format: &str) -> bool {
 }
 
 /// True when `format` names the GridFM directory target.
-#[cfg(feature = "gridfm")]
 fn is_gridfm_dir(format: &str) -> bool {
     crate::resolve_format(format).is_some_and(|info| info.token == "gridfm")
 }
@@ -194,6 +193,16 @@ fn unsupported_type(module: &PioModule<PioValue>, format: &str) -> Error {
 }
 
 fn unknown_format(format: &str) -> Error {
+    // The descriptor still resolves the token in a build without the GridFM
+    // emitter, so the refusal names the missing feature rather than the name.
+    if cfg!(not(feature = "gridfm")) && is_gridfm_dir(format) {
+        return Error::new(
+            &codes::REQUEST_EMIT_UNKNOWN_FORMAT,
+            format!(
+                "{format} names the GridFM Parquet directory format, which this build compiled without the `gridfm` feature"
+            ),
+        );
+    }
     Error::new(
         &codes::REQUEST_EMIT_UNKNOWN_FORMAT,
         format!("{format} is not a recognized target format name"),
