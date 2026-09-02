@@ -1,6 +1,6 @@
 # Transmission Networks
 
-A balanced network is the positive sequence transmission model. MATPOWER, PSS/E, PowerWorld AUX and PWB, PSLF EPC, PowerModels JSON, Egret JSON, pandapower JSON, Surge JSON, and the PyPSA CSV electrical profile all parse to it, so one workflow serves every balanced source and a new format needs one parser rather than pairwise converters.
+A balanced network is the positive sequence transmission model. MATPOWER, PSS/E, PowerWorld AUX and PWB, PSLF EPC, the IEEE Common Data Format, PowerModels JSON, Egret JSON, pandapower JSON, Surge JSON, and the PyPSA CSV electrical profile all parse to it, so one workflow serves every balanced source and a new format needs one parser rather than pairwise converters.
 
 ```julia
 using PowerIO

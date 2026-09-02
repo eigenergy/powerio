@@ -161,6 +161,17 @@ source spans. The PowSybl gate loads PowerIO UCTE output from a MATPOWER case
 with PyPowSybl and compares bus and branch counts with PyPowSybl for every
 `.uct` fixture in the pinned PowSybl Core checkout.
 
+The IEEE Common Data Format parses to `BalancedNetwork` under the token
+`ieee-cdf` (alias `cdf`). A `.txt` or `.cdf` file opening with a CDF title
+card is detected without a declared format. The reader maps the title card
+MVA base and date, the bus, branch, and interchange sections, transformer
+taps, phase shifts, and regulating control blocks, and reports what the
+format does not state under `READ.IEEE_CDF.*` codes with record spans. Loss
+zone names and tie lines survive in the retained source only. The format is
+read only: `emit` to `ieee-cdf` is refused. The vendored IEEE 14 and 30 bus
+cases are checked against `case14.m` and `case30.m`, and the PowSybl gate
+compares every public IEEE CDF case with PyPowSybl's own CDF importer.
+
 ## 0.10.0
 
 PowerIO 0.10 is the public beta of the 1.0 API. API corrections may land before 1.0.0 as downstream integrations exercise the new design.

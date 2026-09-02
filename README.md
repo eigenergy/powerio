@@ -104,6 +104,7 @@ Balanced network formats:
 - ENTSO-E UCTE-DEF `.uct` revisions 2003.09.01 and 2007.05.01; fresh output uses 2007.05.01
 - PowerWorld `.aux`; `.pwb` is read only and `.pwd` uses the display API
 - GE PSLF `.epc`
+- IEEE Common Data Format (`ieee-cdf`), read only
 - PowerModels JSON
 - Egret JSON
 - pandapower JSON

@@ -53,7 +53,9 @@ PowerWorld `.aux`, PSLF `.epc`, Egret JSON, pandapower JSON, PyPSA CSV directori
 and Surge JSON all parse and emit. DOE GO Challenge 3 problem JSON and DeepMind
 OPFData JSON are parse only inputs; a complete GO Challenge 3 solution emits the
 official output JSON. PowerWorld `.pwb` is a parse only binary input with no
-emitter. PowerWorld `.pwd` display files use the display API. GridFM Parquet
+emitter, and the IEEE Common Data Format (`ieee-cdf`, a `.txt` or `.cdf` file
+detected by its title card) is a parse only text input with no emitter.
+PowerWorld `.pwd` display files use the display API. GridFM Parquet
 directories parse and emit through directory helpers. PowerIO network JSON
 moves through `BalancedNetwork::to_json`/`from_json`; it is a network serialization
 rather than a case format, so 0.9 removed the last `powerio-json` token from
