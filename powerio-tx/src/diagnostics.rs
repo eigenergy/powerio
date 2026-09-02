@@ -290,6 +290,31 @@ pub mod codes {
         READ_SURGE_RETAINED_SOURCE_ONLY = "READ.SURGE.RETAINED_SOURCE_ONLY", Warning,
             "a Surge section survives in the retained source only";
 
+        READ_DGS_ENCRYPTED_PROJECT = "READ.DGS.ENCRYPTED_PROJECT", Error,
+            "a PowerFactory .pfd project file is encrypted; export the study case as DGS",
+            category = Request;
+        READ_DGS_ROUTE_UNDECIDED = "READ.DGS.ROUTE_UNDECIDED", Error,
+            "a DGS export justifies neither the balanced nor the multiconductor network",
+            category = Data;
+        READ_DGS_ROUTED_MULTICONDUCTOR = "READ.DGS.ROUTED_MULTICONDUCTOR", Remark,
+            "a DGS export carries conductor level data and was read as a multiconductor network";
+        READ_DGS_CLASS_UNMAPPED = "READ.DGS.CLASS_UNMAPPED", Warning,
+            "a DGS class has no spelling in the network model and survives in the retained source only";
+        READ_DGS_FIELD_UNMAPPED = "READ.DGS.FIELD_UNMAPPED", Warning,
+            "a DGS attribute on a mapped object has no spelling in the network model";
+        READ_DGS_RECORD_UNMAPPED = "READ.DGS.RECORD_UNMAPPED", Warning,
+            "a DGS object could not be mapped and was dropped";
+        READ_DGS_REFERENCE_DROPPED = "READ.DGS.REFERENCE_DROPPED", Warning,
+            "a DGS object reference names an object the export does not carry";
+        READ_DGS_VALUE_DEFAULTED = "READ.DGS.VALUE_DEFAULTED", Warning,
+            "a value the network model needs is absent from the DGS export and was defaulted";
+        READ_DGS_VALUE_COLLAPSED = "READ.DGS.VALUE_COLLAPSED", Warning,
+            "richer DGS structure was reduced to what the network model holds";
+        READ_DGS_VALUE_SUBSTITUTED = "READ.DGS.VALUE_SUBSTITUTED", Warning,
+            "a DGS value could not be used as stated and was replaced";
+        READ_DGS_VALUE_UNSUPPORTED = "READ.DGS.VALUE_UNSUPPORTED", Warning,
+            "a DGS code outside the modeled set was read as the nearest one or dropped";
+
         READ_GEO_SOURCE_MALFORMED = "READ.GEO.SOURCE_MALFORMED", Warning,
             "a geo layer row could not be read and was skipped";
         READ_GEO_NOTES_TRUNCATED = "READ.GEO.NOTES_TRUNCATED", Warning,
@@ -425,7 +450,9 @@ impl TargetFormat {
             // The facade emits a complete GOC3 solution before reaching this
             // branch. Other requests are refused before any family is
             // consulted, and `REQUEST.FORMAT.WRITE_UNSUPPORTED` carries it.
-            TargetFormat::Goc3Json | TargetFormat::DeepMindOpfDataJson => &codes::EMIT_UNSUPPORTED,
+            TargetFormat::Goc3Json | TargetFormat::DeepMindOpfDataJson | TargetFormat::Dgs => {
+                &codes::EMIT_UNSUPPORTED
+            }
         }
     }
 }

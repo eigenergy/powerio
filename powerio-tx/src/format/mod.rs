@@ -4,8 +4,8 @@
 //! PowerModels JSON, PSS/E `.raw`, PowerWorld `.aux`, egret `ModelData` JSON,
 //! pandapower JSON, PyPSA CSV folders, PSLF `.epc`, PSS/E RAWX 35, PowSybl
 //! XIIDM 1.12 through 1.17, CIM CGMES 2.4.15 and 3.0, GO Challenge 3 JSON,
-//! Surge JSON, and
-//! DeepMind OPFData JSON. PowerWorld `.pwb` cases and OPFData JSON are input
+//! Surge JSON, DeepMind OPFData JSON, and DIgSILENT PowerFactory DGS V5
+//! exports. PowerWorld `.pwb` cases, OPFData JSON, and DGS exports are input
 //! only. GO Challenge 3 defines a calculation rather than a bare network, so
 //! its implementation is private to the `powerio` facade's typed parser.
 //! PowerWorld `.pwd` displays
@@ -49,6 +49,7 @@ use routing::{Detection, JsonClass, SourceFormat as DetectedFormat, Transmission
 
 mod cgmes;
 mod decode;
+pub mod dgs;
 mod egret;
 pub(crate) mod goc3;
 mod matpower;
@@ -125,6 +126,9 @@ pub enum TargetFormat {
     Xiidm,
     /// IEC CIM Common Grid Model Exchange Specification profile set.
     Cgmes,
+    /// DIgSILENT PowerFactory DGS V5 ASCII export. Read only except for an
+    /// exact emission back to the retained source.
+    Dgs,
 }
 
 impl TargetFormat {
@@ -145,6 +149,7 @@ impl TargetFormat {
             TargetFormat::Pslf => "epc",
             TargetFormat::Xiidm => "xiidm",
             TargetFormat::Cgmes => "xml",
+            TargetFormat::Dgs => "dgs",
         }
     }
 
@@ -165,6 +170,7 @@ impl TargetFormat {
             TargetFormat::DeepMindOpfDataJson => "DeepMind OPFData JSON",
             TargetFormat::Xiidm => "XIIDM 1.17 XML",
             TargetFormat::Cgmes => "CGMES 3.0 profile set",
+            TargetFormat::Dgs => "PowerFactory DGS",
         }
     }
 
@@ -187,6 +193,7 @@ impl TargetFormat {
             TargetFormat::DeepMindOpfDataJson => "opfdata-json",
             TargetFormat::Xiidm => "xiidm",
             TargetFormat::Cgmes => "cgmes",
+            TargetFormat::Dgs => "dgs",
         }
     }
 }
@@ -277,8 +284,8 @@ pub fn parse_display_format(name: &str) -> Option<DisplayFormat> {
 /// if unrecognized. Accepts `matpower`/`m`, `powermodels-json`/`powermodels`/`pm`,
 /// `egret-json`/`egret`, `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`,
 /// `powerworld`/`aux`, `pslf`/`epc`, `goc3-json`/`goc3`, and
-/// `surge-json`/`surge`, `opfdata-json`/`opfdata`/`gridopt`, `xiidm`, and
-/// `cgmes`.
+/// `surge-json`/`surge`, `opfdata-json`/`opfdata`/`gridopt`, `xiidm`, `cgmes`,
+/// and `dgs`/`powerfactory`.
 /// Case-insensitive. The one place the bindings (Python, C ABI) share, so a new
 /// format means one new arm here, not three. CGMES emits a profile directory;
 /// PyPSA CSV folders, GridFM datasets, and PowerWorld `.pwb` are routed by
@@ -311,6 +318,7 @@ pub fn parse_target_format(name: &str) -> Option<TargetFormat> {
         TransmissionFormat::DeepMindOpfDataJson => TargetFormat::DeepMindOpfDataJson,
         TransmissionFormat::Xiidm => TargetFormat::Xiidm,
         TransmissionFormat::Cgmes => TargetFormat::Cgmes,
+        TransmissionFormat::Dgs => TargetFormat::Dgs,
         TransmissionFormat::PypsaCsv | TransmissionFormat::Pwb | TransmissionFormat::Gridfm => {
             return None;
         }
@@ -544,6 +552,12 @@ pub fn parse_with_json_class(
     let is_cgmes = source.format().is_some_and(|format| {
         routing::parse_transmission_format(format.as_str()) == Some(TransmissionFormat::Cgmes)
     }) || cgmes::looks_like_profile_set(&source);
+    let is_dgs = source.format().is_some_and(|format| {
+        routing::parse_transmission_format(format.as_str()) == Some(TransmissionFormat::Dgs)
+    }) || std::path::Path::new(source.name())
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("dgs"));
     let mut warnings = Diagnostics::new();
     match parse_to_network(&source, &mut warnings, json_class) {
         Ok(mut network) => {
@@ -565,6 +579,10 @@ pub fn parse_with_json_class(
                 source.with_format(
                     powerio_core::FormatId::new("cgmes")
                         .expect("the canonical CGMES token is valid"),
+                )
+            } else if is_dgs {
+                source.with_format(
+                    powerio_core::FormatId::new("dgs").expect("the canonical DGS token is valid"),
                 )
             } else if source.format().is_some() {
                 source
@@ -679,6 +697,13 @@ fn parse_to_network(
         reject_empty_case(&network, "PSLF .epc")?;
         return Ok(network);
     }
+    // A PowerFactory `.pfd` project is encrypted; the way in is a DGS export.
+    if from.is_some_and(dgs::is_project_name) || (from.is_none() && ext.as_deref() == Some("pfd"))
+    {
+        return Err(Error::UnknownFormat(dgs::encrypted_project_message(
+            source.name(),
+        )));
+    }
     if from
         .and_then(parse_source_target_format)
         .is_some_and(|format| format == TargetFormat::DeepMindOpfDataJson)
@@ -714,6 +739,7 @@ fn parse_to_network(
                 Some("xiidm") => Some(TargetFormat::Xiidm),
                 Some("xml") if looks_like_xiidm => Some(TargetFormat::Xiidm),
                 Some("xml" | "zip") => Some(TargetFormat::Cgmes),
+                Some("dgs") => Some(TargetFormat::Dgs),
                 Some("json") => None,
                 Some("dss") => return Err(unknown_source_format("dss")),
                 other => {
@@ -725,8 +751,13 @@ fn parse_to_network(
                         source_text(&buffer)
                             .is_ok_and(|text| text.trim_start().starts_with(['{', '[']))
                     });
+                    let dgs_like = source
+                        .primary_buffer()
+                        .is_ok_and(|buffer| dgs::looks_like_dgs(buffer.content_bytes()));
                     if jsonish {
                         None
+                    } else if dgs_like {
+                        Some(TargetFormat::Dgs)
                     } else {
                         return Err(Error::UnknownFormat(format!(
                             "cannot infer from source name with {}; \
@@ -748,6 +779,17 @@ fn parse_to_network(
         return Ok(network);
     }
     let text = source_text(&buffer)?;
+    if fmt_hint == Some(TargetFormat::Dgs) {
+        // Findings name the row they come from, as byte spans within the
+        // retained buffer; the decoded text starts after any byte order mark.
+        let spans = dgs::SpanContext {
+            source: buffer.id().clone(),
+            offset: (buffer.bytes().len() - buffer.content_bytes().len()) as u64,
+        };
+        let network = dgs::parse_dgs_source(text, stem, warnings, Some(spans))?;
+        reject_empty_case(&network, TargetFormat::Dgs.label())?;
+        return Ok(network);
+    }
     let fmt = match fmt_hint {
         Some(fmt) => fmt,
         // A caller ahead of this (the `powerio` facade's own routing) may
@@ -824,6 +866,9 @@ fn read_source(
         TargetFormat::Cgmes => {
             cgmes::parse_text(name_hint.unwrap_or("profile.xml"), text, warnings)
         }
+        // DGS normally enters through the dispatch above, where the retained
+        // buffer supplies the span context; this arm keeps the funnel total.
+        TargetFormat::Dgs => dgs::parse_dgs_source(text, name_hint, warnings, None),
     }?;
     reject_empty_case(&net, fmt.label())?;
     Ok(net)
@@ -904,7 +949,7 @@ pub(crate) fn reject_empty_case(net: &BalancedNetwork, format: &'static str) -> 
 pub const SOURCE_FORMAT_NAMES: &str = "matpower/m, powermodels-json/powermodels/pm, \
      egret-json/egret, psse/raw, psse34, psse35, psse-rawx/rawx, powerworld/aux, \
      pandapower-json/pandapower/pp, pslf/epc, pypsa-csv/pypsa, pwb, goc3-json/goc3, \
-     surge-json/surge, opfdata-json/opfdata/gridopt, xiidm/iidm, cgmes";
+     surge-json/surge, opfdata-json/opfdata/gridopt, xiidm/iidm, cgmes, dgs/powerfactory";
 
 /// An unrecognized source format token. When the token names a distribution
 /// format (`dss`, `pmd`, `bmopf`), the error points at the distribution
@@ -1122,6 +1167,9 @@ pub(crate) fn emit_value_text(net: &BalancedNetwork, format: TargetFormat) -> Re
         TargetFormat::Xiidm => write_xiidm(net)?,
         TargetFormat::Cgmes => {
             return Err(Error::WriteUnsupported { format: "cgmes" });
+        }
+        TargetFormat::Dgs => {
+            return Err(Error::WriteUnsupported { format: "dgs" });
         }
     };
     warn_normalized_tap(net, format, &mut conv);

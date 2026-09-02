@@ -1415,6 +1415,11 @@ pub enum SourceFormat {
     /// Read from a CGMES profile set (2.4.15/CIM16 or 3.0/CIM100).
     #[serde(rename = "cgmes")]
     Cgmes,
+    /// Read from a DIgSILENT PowerFactory DGS V5 ASCII export. Read only:
+    /// the retained source is returned for a same format write and every
+    /// other target goes through that format's writer.
+    #[serde(rename = "dgs")]
+    Dgs,
 }
 
 impl SourceFormat {
@@ -1443,6 +1448,7 @@ impl SourceFormat {
             SourceFormat::DeepMindOpfDataJson => "opfdata-json",
             SourceFormat::Xiidm => "xiidm",
             SourceFormat::Cgmes => "cgmes",
+            SourceFormat::Dgs => "dgs",
         }
     }
 }
@@ -5610,6 +5616,7 @@ mod tests {
             SourceFormat::DeepMindOpfDataJson,
             SourceFormat::Xiidm,
             SourceFormat::Cgmes,
+            SourceFormat::Dgs,
         ];
         for f in all {
             match f {
@@ -5630,7 +5637,8 @@ mod tests {
                 | SourceFormat::SurgeJson
                 | SourceFormat::DeepMindOpfDataJson
                 | SourceFormat::Xiidm
-                | SourceFormat::Cgmes => {}
+                | SourceFormat::Cgmes
+                | SourceFormat::Dgs => {}
             }
             let token = serde_json::to_value(f).unwrap();
             assert_eq!(token, serde_json::Value::String(f.name().to_owned()));

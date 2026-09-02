@@ -18,9 +18,13 @@ pub const DISTRIBUTION_EXTENSIONS: &[&str] = &["dss"];
 /// `.json` carries no family signal; the shared JSON shape classifier decides.
 const JSON_EXTENSION: &str = "json";
 
+/// `.dgs` carries no family signal either; the export's own phase technology
+/// data decides.
+pub const DGS_EXTENSION: &str = "dgs";
+
 /// Extension list for error and empty-state messages; a unit test keeps it in
 /// sync with the constants above.
-pub const CASE_EXTENSIONS_LABEL: &str = ".m, .raw, .aux, .epc, .pwb, .json, .dss";
+pub const CASE_EXTENSIONS_LABEL: &str = ".m, .raw, .aux, .epc, .pwb, .json, .dss, .dgs";
 
 /// Infer the case family from clear extensions or, for `.json`, the shared
 /// JSON shape classifier. `Some(true)` is distribution, `Some(false)` is
@@ -39,7 +43,22 @@ pub fn infer_input_family(input: &Path) -> anyhow::Result<Option<bool>> {
     if DISTRIBUTION_EXTENSIONS.contains(&ext) {
         return Ok(Some(true));
     }
+    if ext == DGS_EXTENSION {
+        return Ok(Some(dgs_is_distribution(input)?));
+    }
     Ok(classified_json(input)?.map(|case| case.is_distribution()))
+}
+
+/// Whether a `.dgs` export carries conductor level data. A balanced export
+/// and an export with no topology both read as transmission, where the
+/// parser reports the outcome.
+pub fn dgs_is_distribution(input: &Path) -> anyhow::Result<bool> {
+    use powerio_tx::format::dgs::{DgsRoute, route_text};
+    let text = std::fs::read_to_string(input)
+        .with_context(|| format!("reading DGS class tables from {}", input.display()))?;
+    let route = route_text(text.trim_start_matches('\u{feff}'))
+        .with_context(|| format!("reading {}", input.display()))?;
+    Ok(matches!(route, DgsRoute::Multiconductor(_)))
 }
 
 /// A `.json` case read and classified in one pass. The text rides along so the
@@ -184,6 +203,7 @@ fn has_case_extension(path: &Path) -> bool {
     TRANSMISSION_EXTENSIONS.contains(&ext)
         || DISTRIBUTION_EXTENSIONS.contains(&ext)
         || ext == JSON_EXTENSION
+        || ext == DGS_EXTENSION
 }
 
 /// A case loaded to the transmission model, whatever family it came from.
@@ -237,6 +257,38 @@ pub fn load_network(path: &Path) -> anyhow::Result<LoadedCase> {
             let parsed = crate::module_io::load_multiconductor_module(path, None)
                 .with_context(|| format!("parse {}", path.display()))?;
             lower_to_balanced(parsed, stem, path)
+        }
+        Some(DGS_EXTENSION) => {
+            // The export decides its family; the facade reads it and a
+            // multiconductor result lowers like any distribution case.
+            let source = powerio_core::Source::open(path)
+                .with_context(|| format!("opening {}", path.display()))?;
+            let module = powerio::parse(source, None)
+                .with_context(|| format!("parse {}", path.display()))?;
+            match &module.value {
+                powerio::PioValue::MulticonductorNetwork(_) => {
+                    let parsed = module.map_value(|value| match value {
+                        powerio::PioValue::MulticonductorNetwork(network) => network,
+                        _ => unreachable!("the value variant was checked"),
+                    });
+                    lower_to_balanced(parsed, stem, path)
+                }
+                powerio::PioValue::BalancedNetwork(_) => {
+                    let parsed = module.map_value(|value| match value {
+                        powerio::PioValue::BalancedNetwork(network) => network,
+                        _ => unreachable!("the value variant was checked"),
+                    });
+                    Ok(LoadedCase {
+                        warnings: powerio_core::render_diagnostics(&parsed.diagnostics),
+                        network: parsed.into_value(),
+                    })
+                }
+                other => anyhow::bail!(
+                    "{} parsed to {}, which is not a network",
+                    path.display(),
+                    other.type_name()
+                ),
+            }
         }
         Some(ext) if TRANSMISSION_EXTENSIONS.contains(&ext) => {
             let parsed = crate::module_io::load_balanced_module(path, None)
@@ -384,7 +436,7 @@ mod tests {
         for ext in TRANSMISSION_EXTENSIONS
             .iter()
             .chain(DISTRIBUTION_EXTENSIONS)
-            .chain(std::iter::once(&JSON_EXTENSION))
+            .chain([&JSON_EXTENSION, &DGS_EXTENSION])
         {
             assert!(
                 CASE_EXTENSIONS_LABEL.contains(&format!(".{ext}")),

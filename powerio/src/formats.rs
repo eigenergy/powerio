@@ -58,7 +58,10 @@ pub fn resolve_format(name: &str) -> Option<FormatInfo> {
             format.token(),
             (!is_cgmes).then_some(format.extension()),
             is_cgmes,
-            !matches!(format, powerio_tx::TargetFormat::DeepMindOpfDataJson),
+            !matches!(
+                format,
+                powerio_tx::TargetFormat::DeepMindOpfDataJson | powerio_tx::TargetFormat::Dgs
+            ),
         ));
     }
 
@@ -93,6 +96,10 @@ mod tests {
         assert_eq!(resolve_format("iidm"), None);
         assert_eq!(resolve_format("rawx"), None);
         assert_eq!(resolve_format("psse-rawx").unwrap().token, "psse-rawx");
+        let dgs = resolve_format("powerfactory").unwrap();
+        assert_eq!(dgs.token, "dgs");
+        assert_eq!(dgs.extension, Some("dgs"));
+        assert!(!dgs.can_emit);
     }
 
     #[test]

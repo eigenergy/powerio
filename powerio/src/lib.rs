@@ -110,6 +110,7 @@ mod formats;
 pub use formats::{FormatInfo, resolve_format};
 #[cfg(feature = "gridfm")]
 mod collect;
+mod dgs;
 pub mod dist_geo;
 #[cfg(feature = "gridfm")]
 pub use __gridfm::codes as gridfm_codes;
@@ -322,6 +323,8 @@ pub fn parse(
     }
     match routed_family(&source)? {
         RoutedFamily::Goc3 => parse_goc3(source),
+        RoutedFamily::Dgs => dgs::parse_dgs(source),
+        RoutedFamily::PowerFactoryProject => Err(dgs::encrypted_project(source)),
         RoutedFamily::OpfData => powerio_prob::__internal::__decode_opfdata_solution(source)
             .map(|module| module.map_value(PioValue::from)),
         RoutedFamily::Distribution(detected) => {
@@ -505,6 +508,10 @@ fn parse_egret(
 enum RoutedFamily {
     Balanced(Option<format::routing::JsonClass>),
     Distribution(Option<format::routing::DistributionFormat>),
+    /// A PowerFactory DGS export, which decides its own family by content.
+    Dgs,
+    /// An encrypted PowerFactory `.pfd` project, refused with DGS guidance.
+    PowerFactoryProject,
     Goc3,
     OpfData,
     PypsaDirectory,
@@ -554,6 +561,8 @@ fn routed_family(
         "dss" => Ok(RoutedFamily::Distribution(Some(
             format::routing::DistributionFormat::Dss,
         ))),
+        "dgs" => Ok(RoutedFamily::Dgs),
+        "pfd" => Ok(RoutedFamily::PowerFactoryProject),
         "json" => json_family(source),
         // Extensions with dedicated non-JSON readers keep them; anything
         // else (a nameless in-memory source above all) can still carry a
@@ -573,6 +582,11 @@ fn routed_family(
             });
             if jsonish {
                 json_family(source)
+            } else if source
+                .primary_buffer()
+                .is_ok_and(|buffer| format::dgs::looks_like_dgs(buffer.content_bytes()))
+            {
+                Ok(RoutedFamily::Dgs)
             } else {
                 Ok(RoutedFamily::Balanced(None))
             }
@@ -634,6 +648,12 @@ fn family_of_token(token: &str) -> RoutedFamily {
 
     if token == "model-json" {
         return RoutedFamily::Balanced(None);
+    }
+    if dgs::is_dgs_token(token) {
+        return RoutedFamily::Dgs;
+    }
+    if powerio_tx::format::dgs::is_project_name(token) {
+        return RoutedFamily::PowerFactoryProject;
     }
 
     if powerio_dist::parse_dist_target_format(token).is_some() {

@@ -1,6 +1,6 @@
 # Distribution Networks
 
-A multiconductor network is the conductor level distribution model. OpenDSS, PowerModelsDistribution engineering JSON, and BMOPF JSON parse to it. Construct `McAcPfInstance` or `McAcOpfInstance` explicitly when a calculation is required ([Problem Instances and Solutions](instances.md)).
+A multiconductor network is the conductor level distribution model. OpenDSS, PowerModelsDistribution engineering JSON, BMOPF JSON, and PowerFactory DGS exports that state phase technologies, neutral conductors, or per phase demand parse to it. Construct `McAcPfInstance` or `McAcOpfInstance` explicitly when a calculation is required ([Problem Instances and Solutions](instances.md)).
 
 ```julia
 using PowerIO

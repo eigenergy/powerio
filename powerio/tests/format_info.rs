@@ -21,6 +21,7 @@ fn every_canonical_format_reports_its_artifact_shape() {
         ("goc3-json", Some("json"), false, true),
         ("surge-json", Some("json"), false, true),
         ("opfdata-json", Some("json"), false, false),
+        ("dgs", Some("dgs"), false, false),
         ("dss", Some("dss"), true, true),
         ("pmd-json", Some("json"), false, true),
         ("bmopf-json", Some("json"), false, true),
@@ -49,6 +50,7 @@ fn common_aliases_resolve_without_exposing_component_enums() {
         ("engineering", "pmd-json"),
         ("bmopf", "bmopf-json"),
         ("gridopt", "opfdata-json"),
+        ("powerfactory", "dgs"),
     ] {
         assert_eq!(resolve_format(alias).map(|info| info.token), Some(token));
     }

@@ -39,6 +39,13 @@ OpenDSS, the IEEE PES Task Force on Benchmarking Multiconductor OPF draft
 schema and examples, PowerModelsDistribution renderings, and original micro
 cases. Provenance and per-directory licenses in `dist/README.md`.
 
+## `powerfactory/`
+
+DIgSILENT PowerFactory DGS V5 exports vendored byte for byte from the PowSybl
+Core test resources (MPL-2.0, (c) RTE and the PowSybl contributors), plus one
+synthetic low voltage feeder original to this repository. Source path, pinned
+commit, digests, and what each file exercises are in `powerfactory/README.md`.
+
 ## `pandapower/` and `pypsa/`
 
 Tool generated fixtures with regeneration scripts and license notes in their

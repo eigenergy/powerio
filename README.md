@@ -103,6 +103,7 @@ Balanced network formats:
 - CIM CGMES 2.4.15 and 3.0 profile sets; fresh output uses CGMES 3.0
 - PowerWorld `.aux`; `.pwb` is read only and `.pwd` uses the display API
 - GE PSLF `.epc`
+- DIgSILENT PowerFactory DGS V5 ASCII exports (`.dgs`), read only; an export with conductor level data parses to the multiconductor network instead, and encrypted `.pfd` projects are refused with DGS export guidance
 - PowerModels JSON
 - Egret JSON
 - pandapower JSON

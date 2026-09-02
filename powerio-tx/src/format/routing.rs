@@ -51,6 +51,8 @@ pub enum TransmissionFormat {
     DeepMindOpfDataJson,
     Xiidm,
     Cgmes,
+    /// DIgSILENT PowerFactory DGS V5 ASCII export, read only.
+    Dgs,
 }
 
 impl TransmissionFormat {
@@ -74,6 +76,7 @@ impl TransmissionFormat {
             Self::DeepMindOpfDataJson => "opfdata-json",
             Self::Xiidm => "xiidm",
             Self::Cgmes => "cgmes",
+            Self::Dgs => "dgs",
         }
     }
 }
@@ -152,6 +155,9 @@ pub fn parse_transmission_format(name: &str) -> Option<TransmissionFormat> {
         "surge" | "surgejson" => Some(TransmissionFormat::SurgeJson),
         "xiidm" | "iidm" => Some(TransmissionFormat::Xiidm),
         "cgmes" => Some(TransmissionFormat::Cgmes),
+        "dgs" | "powerfactory" | "powerfactorydgs" | "digsilent" | "digsilentdgs" => {
+            Some(TransmissionFormat::Dgs)
+        }
         "opfdata"
         | "opfdatajson"
         | "deepmindopfdata"
@@ -705,6 +711,18 @@ mod tests {
             );
         }
         assert_eq!(TransmissionFormat::PsseRawx.name(), "psse-rawx");
+    }
+
+    #[test]
+    fn resolves_dgs_aliases() {
+        for alias in ["dgs", "powerfactory", "powerfactory-dgs", "DIgSILENT"] {
+            assert_eq!(
+                super::parse_transmission_format(alias),
+                Some(TransmissionFormat::Dgs),
+                "{alias}"
+            );
+        }
+        assert_eq!(TransmissionFormat::Dgs.name(), "dgs");
     }
 
     #[test]

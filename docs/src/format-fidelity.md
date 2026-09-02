@@ -109,7 +109,8 @@ retained source (naming the table and counting the affected rows), writers
 report what a target cannot represent, and `emit` returns the writer's findings
 on the parsed module. Codes name the format and reason, such as
 `READ.CGMES.RECORD_UNMAPPED`, `READ.CGMES.FIELD_UNMAPPED`,
-`READ.XIIDM.FIELD_UNMAPPED`, or `EMIT.PSSE.FIELD_DROPPED` for RAW and RAWX;
+`READ.XIIDM.FIELD_UNMAPPED`, `READ.DGS.CLASS_UNMAPPED`, or
+`EMIT.PSSE.FIELD_DROPPED` for RAW and RAWX;
 there is no generic
 parse warning that hides the cause.
 
@@ -317,6 +318,81 @@ parse warning that hides the cause.
   echo impossible.
   The raw source echoes byte exactly; there is no canonical writer, `.pt` cache
   reader, archive reader, downloader, or batch directory API.
+- **PowerFactory DGS** reads DIgSILENT PowerFactory DGS V5 ASCII exports
+  (token `dgs`, alias `powerfactory`, extension `.dgs`). The reader decodes
+  the `$$Class;attr(type)` tables, including vector and matrix attributes and
+  decimal commas, into an object index with the `fold_id` hierarchy, then
+  resolves every `StaCubic` cubicle to its `ElmTerm` terminal, element, side,
+  and `StaSwitch` state. The mapping follows the PowSybl PowerFactory
+  converter, which reads the same export definitions. Per unit values use a
+  100 MVA base and each terminal's `uknom`, because DGS carries no system
+  base; the nominal frequency comes from `ElmNet.frnom`.
+  The export decides its network family. Elements described by sequence data
+  alone (three phase `ElmTerm`, `TypLne` with `nlnph = 3` and no neutral,
+  three phase loads, machines, and transformers) parse to `BalancedNetwork`.
+  An export stating a terminal phase technology other than ABC, a `TypLne`
+  neutral or non three phase conductor count, per phase load demand
+  (`i_sym = 1`) or a single or two phase load or generator technology, a
+  single phase transformer, a phase specific cubicle connection, a conductor
+  type class (`TypCon`, `TypGeo`, `TypCabsys`), or a phase domain matrix on a
+  line or tower type parses through `powerio::parse` to
+  `MulticonductorNetwork`, with a `READ.DGS.ROUTED_MULTICONDUCTOR` remark
+  naming the attributes that decided it; the transmission crate's own parser
+  refuses such an export with guidance to the facade. An export with no
+  `ElmTerm` fails with `READ.DGS.ROUTE_UNDECIDED`.
+  Balanced mapping: one bus per group of AC terminals joined by a closed, in
+  service `ElmCoup`, with the group's smallest object id as the bus id, the
+  lead terminal's `loc_name` as the bus name, solved `m:u`/`m:phiu` as the
+  voltage when exported, and `GPSlat`/`GPSlon` as the location. Lines take
+  `TypLne` per kilometer values times `dline`, divided across `nlnum`
+  parallel circuits, with charging from `bline` or `2 pi f cline` and
+  conductance from `gline` or `bline tline`; a line on an `ElmTow` tower
+  takes the diagonal of the tower's positive sequence circuit matrices and
+  the dropped inter circuit coupling is reported. `ElmZpu` common impedances
+  are per unit on `Sn`. Two winding transformers run from the HV cubicle
+  (side 0) to the LV cubicle with the leakage impedance from `uktr`/`pcutr`
+  referred to the LV bus base, the magnetizing admittance from `curmg`/`pfe`
+  on the LV terminal, the tap from `utrn_h`/`utrn_l` against the bus nominal
+  voltages and the current `nntap` step (or the row of an explicit `mTaps`
+  table), the phase shift from `phitr` per step, and `ntrcn`/`imldc`/`t2ldc`/
+  `p_rem`/`ElmTapctrl` as the automatic control; the vector group clock
+  `nt2ag` stays in `extras` and is reported. Three winding transformers keep
+  typed pairwise impedances on the smaller rating of each pair, per winding
+  taps, and the controlled winding's regulation. Loads resolve the
+  `mode_inp` pair (`PQ`, `SP`, `SQ`, `PC`, `QC`, `SC`) and `scale0`;
+  `ElmLodmv` generation becomes a fixed generator. Machines carry `pgini`,
+  `qgini`, `usetp`, `iv_mode`/`av_mode`, `Pmin_uc`/`Pmax_uc`, and reactive
+  limits from the element or type per `iqtype`, an `IntQlim` capability
+  curve collapsing to its widest range; `ElmXnet` external grids are
+  generators whose `bustp` selects PQ, PV, or the slack. The declared slack
+  (`ip_ctrl = 1` or `bustp = SL`) is the reference bus; without one the
+  largest voltage regulating machine's bus is chosen and reported. Shunts
+  read `shtype` 1 (R-L from `rrea`/`xrea` or `ushnm`/`qcapn`) and 2 (C from
+  `gparac`/`bcap`) per section times `ncapa`, and a switchable shunt keeps
+  its voltage band. A DC island behind exactly two `ElmVsc` converters is one
+  HVDC record from the first converter's AC bus to the second's, with the
+  parallel DC line resistances combined; any other DC island is dropped and
+  reported. Load type voltage dependence, unmapped element classes, dangling
+  references, and elements open at one cubicle only are reported under
+  `READ.DGS.FIELD_UNMAPPED`, `READ.DGS.CLASS_UNMAPPED`,
+  `READ.DGS.REFERENCE_DROPPED`, and `READ.DGS.VALUE_COLLAPSED`; every finding
+  carries the byte span of its source row.
+  Multiconductor mapping: terminal conductor sets follow the `ElmTerm`
+  phase technology with the neutral named `4`, line codes take phase domain
+  matrices from the sequence values (`(z0 + 2 z1) / 3` on the diagonal and
+  `(z0 - z1) / 3` off it) and the neutral from `rnline`/`xnline`/`rpnline`/
+  `xpnline`, cubicle `it2p1..3` values map element phases to terminal phases,
+  loads keep their per phase `plinir/s/t` demand or split a balanced value
+  across their phases, `ElmXnet` is a voltage source, and transformers keep
+  their winding connections and taps. Three winding and two winding
+  transformers, shunts, machines, and switches map as in OpenDSS units.
+  The format is read only: an unchanged module emits its retained source
+  and every other target goes through that target's writer. An encrypted
+  `.pfd` project file fails with `READ.DGS.ENCRYPTED_PROJECT`, which names the
+  DGS export as the way in. Validation: `tests/data/powerfactory/ieee14.dgs`
+  reproduces `case14.m` impedances, charging, taps, loads, and the capacitor
+  bank; the PowSybl gate compares element counts and the IEEE 14 values with
+  PyPowSybl on every DGS fixture in the pinned PowSybl Core checkout.
 - **GridFM Parquet datasets** (the `gridfm` feature) parse to a scenario set
   of balanced networks over one shared element identity map: lossy, but each
   scenario recovers everything a power flow needs. That is bus

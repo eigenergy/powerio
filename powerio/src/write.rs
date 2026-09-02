@@ -626,6 +626,32 @@ fn emit_multiconductor_network(
     preserve_retained_source: bool,
     diagnostics: Vec<Diagnostic>,
 ) -> Result<EmitResult, Error> {
+    // A multiconductor network read from a DGS export has no distribution
+    // writer for that format; an unchanged module returns its retained source.
+    if crate::dgs::is_dgs_token(format) {
+        if preserve_retained_source
+            && let Some(bytes) = echo_retained_source(module, format)
+        {
+            let artifact = powerio_core::MemoryArtifact::new(
+                powerio_core::ArtifactPath::new("case.dgs")
+                    .expect("static name is a valid artifact path"),
+                bytes,
+            );
+            return destination
+                .__commit_artifacts(
+                    false,
+                    powerio_core::Fidelity::ExactSameFormat,
+                    vec![artifact],
+                    Vec::new(),
+                )
+                .map(|result| result.__with_diagnostics(diagnostics));
+        }
+        return Err(Error::new(
+            &codes::REQUEST_EMIT_UNKNOWN_FORMAT,
+            "dgs is read only; a multiconductor network with no retained DGS source cannot be \
+             written as DGS",
+        ));
+    }
     let Some(target) = powerio_dist::parse_dist_target_format(format) else {
         return Err(unknown_format(format));
     };

@@ -2461,6 +2461,9 @@ def test_source_format_stubs_cover_every_variant():
         "gridfm",
         "in-memory",
         "normalized",
+        "xiidm",
+        "cgmes",
+        "dgs",
     ]
     root = Path(__file__).resolve().parents[1] / "powerio"
     for stub in ("__init__.pyi", "_powerio.pyi"):

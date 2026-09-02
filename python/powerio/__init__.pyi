@@ -840,6 +840,7 @@ class BalancedNetwork:
         "surge-json",
         "xiidm",
         "cgmes",
+        "dgs",
     ]
     n_buses: int
     n_branches: int

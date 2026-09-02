@@ -91,6 +91,25 @@ library function. `EMIT.MULTICONDUCTOR.SIDECAR_DROPPED`, registered but never
 raised before, is the warning `convert` reports when standard output cannot
 carry a sidecar file.
 
+PowerIO reads DIgSILENT PowerFactory DGS V5 ASCII exports under the format
+token `dgs` (alias `powerfactory`, extension `.dgs`), closing #150. The reader
+decodes the class tables into an object index, resolves `StaCubic` cubicles and
+`StaSwitch` states, and maps `ElmTerm`, `ElmLne` (with `ElmTow` towers and
+`ElmZpu` common impedances), `ElmTr2`, `ElmTr3`, `ElmLod` and its medium and
+low voltage variants, `ElmSym`, `ElmGenstat`, `ElmXnet`, `ElmShnt`, `ElmCoup`,
+and two converter `ElmVsc` DC islands, following the PowSybl PowerFactory
+converter. An export whose elements carry sequence data only parses to
+`BalancedNetwork`; an export that states phase technologies, neutral
+conductors, per phase demand, conductor identities, or phase domain matrices
+parses through `powerio::parse` to `MulticonductorNetwork`; an export with no
+terminals fails with `READ.DGS.ROUTE_UNDECIDED`. Findings carry `READ.DGS.*`
+codes with the byte span of the row they come from. The format is read only:
+an unchanged module emits its retained source, and every other target goes
+through that target's writer. An encrypted `.pfd` project file fails with
+`READ.DGS.ENCRYPTED_PROJECT`, which names the DGS export as the way in. The
+PowSybl interoperability gate compares element counts and the IEEE 14 values
+with PyPowSybl on every DGS fixture in the pinned PowSybl Core checkout.
+
 ## 0.10.0
 
 PowerIO 0.10 is the public beta of the 1.0 API. API corrections may land before 1.0.0 as downstream integrations exercise the new design.

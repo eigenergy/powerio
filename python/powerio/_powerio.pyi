@@ -109,6 +109,9 @@ class _BalancedNetwork:
         "pypsa-csv",
         "goc3-json",
         "surge-json",
+        "xiidm",
+        "cgmes",
+        "dgs",
     ]: ...
     @property
     def n_buses(self) -> int: ...

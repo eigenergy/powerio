@@ -7,8 +7,9 @@ Transmission conversion covers MATPOWER, PSS/E RAW 33 through 35, PSS/E RAWX
 35, PowSybl XIIDM 1.12 through 1.17 input with fresh 1.17 output, CIM CGMES
 2.4.15 and 3.0, PowerWorld AUX, PSLF,
 PowerModels JSON, egret JSON, pandapower JSON, PyPSA CSV folders, GOC3 JSON,
-Surge JSON, and GridFM reads. Distribution conversion covers OpenDSS, PMD JSON,
-and BMOPF JSON.
+Surge JSON, PowerFactory DGS reads, and GridFM reads. Distribution conversion
+covers OpenDSS, PMD JSON, and BMOPF JSON; a DGS export with conductor level
+data reads as a distribution case.
 
 ```
 powerio convert tests/data/case14.m --to psse -o case14.raw

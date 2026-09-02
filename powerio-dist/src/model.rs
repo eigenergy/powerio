@@ -33,16 +33,21 @@ pub enum DistSourceFormat {
     Dss,
     BmopfJson,
     PmdJson,
+    /// A DIgSILENT PowerFactory DGS export that carries conductor level data.
+    /// The `powerio` facade builds this network; the format is read only.
+    Dgs,
 }
 
 impl DistSourceFormat {
-    /// The canonical format name (`dss`, `pmd-json`, `bmopf-json`), accepted
-    /// back by [`crate::parse_dist_target_format`].
+    /// The canonical format name (`dss`, `pmd-json`, `bmopf-json`, `dgs`).
+    /// The first three are accepted back by
+    /// [`crate::parse_dist_target_format`]; `dgs` has no distribution writer.
     pub fn name(self) -> &'static str {
         match self {
             DistSourceFormat::Dss => "dss",
             DistSourceFormat::PmdJson => "pmd-json",
             DistSourceFormat::BmopfJson => "bmopf-json",
+            DistSourceFormat::Dgs => "dgs",
         }
     }
 }

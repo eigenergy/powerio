@@ -422,9 +422,10 @@ impl<'a> GenCostCliOptions<'a> {
 }
 
 /// A grid exchange format for `--to` / `--from`. `gridfm`, `goc3-json`,
-/// `opfdata-json`, and `pwb` are parse only here: `convert --from gridfm`
+/// `opfdata-json`, `dgs`, and `pwb` are parse only here: `convert --from gridfm`
 /// parses a Parquet dataset, while the dedicated `gridfm` subcommand emits a
-/// dataset. GO Challenge 3 and OPFData JSON are source documents, and
+/// dataset. GO Challenge 3 and OPFData JSON are source documents, PowerFactory
+/// DGS is an export with no writer beyond its retained source, and
 /// PowerWorld `.pwb` has no emitter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum FormatArg {
@@ -457,6 +458,10 @@ enum FormatArg {
     /// IEC CIM CGMES profile set.
     #[value(name = "cgmes")]
     Cgmes,
+    /// DIgSILENT PowerFactory DGS V5 ASCII export (parse only; the export
+    /// decides between the balanced and multiconductor families).
+    #[value(name = "dgs", alias = "powerfactory")]
+    Dgs,
     #[value(name = "powerworld", alias = "aux")]
     PowerWorld,
     #[value(name = "pandapower-json", alias = "pandapower", alias = "pp")]
@@ -515,6 +520,7 @@ impl FormatArg {
             FormatArg::PsseRawx | FormatArg::RawxInput => TargetFormat::PsseRawx,
             FormatArg::Xiidm | FormatArg::IidmInput => TargetFormat::Xiidm,
             FormatArg::Cgmes => TargetFormat::Cgmes,
+            FormatArg::Dgs => TargetFormat::Dgs,
             FormatArg::PowerWorld => TargetFormat::PowerWorld,
             FormatArg::PandapowerJson => TargetFormat::PandapowerJson,
             FormatArg::Pslf => TargetFormat::Pslf,
@@ -555,6 +561,7 @@ impl FormatArg {
             | FormatArg::Xiidm
             | FormatArg::IidmInput
             | FormatArg::Cgmes
+            | FormatArg::Dgs
             | FormatArg::PowerWorld
             | FormatArg::PandapowerJson
             | FormatArg::PypsaCsv
@@ -581,6 +588,7 @@ impl FormatArg {
             FormatArg::Xiidm => "xiidm",
             FormatArg::IidmInput => "iidm",
             FormatArg::Cgmes => "cgmes",
+            FormatArg::Dgs => "dgs",
             FormatArg::PowerWorld => "powerworld",
             FormatArg::PandapowerJson => "pandapower-json",
             FormatArg::PypsaCsv => "pypsa-csv",
@@ -2472,7 +2480,14 @@ fn balanced_case(
 /// Deserialize PowerIO IR and adapt a static network to the CLI's family case.
 /// Other values are rejected instead of guessing a projection.
 fn ir_family_case(input: &Path) -> anyhow::Result<FamilyCase> {
-    let module = deserialize_module(input)?;
+    family_case_from_module(deserialize_module(input)?, input)
+}
+
+/// The family a parsed or decoded module belongs to.
+fn family_case_from_module(
+    module: powerio::PioModule<powerio::PioValue>,
+    input: &Path,
+) -> anyhow::Result<FamilyCase> {
     match &module.value {
         powerio::PioValue::BalancedNetwork(_) => {
             let module = module.map_value(|value| match value {
@@ -2501,6 +2516,12 @@ fn ir_family_case(input: &Path) -> anyhow::Result<FamilyCase> {
 fn parse_family_case(input: &Path, from: Option<FormatArg>) -> anyhow::Result<FamilyCase> {
     if is_stdin(input) {
         let f = stdin_format(from)?;
+        // A DGS export decides its own family; the facade reads it.
+        if f == FormatArg::Dgs {
+            let module = powerio::parse(stdin_source()?, Some(f.name()))
+                .context("reading standard input")?;
+            return family_case_from_module(module, input);
+        }
         let source = module_io::declare_format(stdin_source()?, Some(f.name()))
             .context("declaring the standard input format")?;
         return if f.distribution().is_some() {
@@ -2510,6 +2531,14 @@ fn parse_family_case(input: &Path, from: Option<FormatArg>) -> anyhow::Result<Fa
             let parsed = powerio_tx::parse(source).context("reading standard input")?;
             Ok(FamilyCase::Transmission(Box::new(parsed)))
         };
+    }
+    let dgs_extension = input
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case(cases::DGS_EXTENSION));
+    if from == Some(FormatArg::Dgs) || (from.is_none() && dgs_extension) {
+        let module = load_module(input, from)?;
+        return family_case_from_module(module, input);
     }
     if let Some(f) = from {
         if f == FormatArg::Gridfm {
