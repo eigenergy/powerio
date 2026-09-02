@@ -2056,6 +2056,7 @@ def test_emit_matpower_to_each_format():
         "psse",
         "powerworld",
         "pandapower-json",
+        "ucte",
     ]:
         r = _emit_file(str(DATA / "case30.m"), fmt)
         assert isinstance(r.text, str) and len(r.text) > 0
@@ -2302,6 +2303,7 @@ def test_emit_text_matches_emit_file():
         "psse",
         "powerworld",
         "pandapower-json",
+        "ucte",
     ]:
         from_text = _emit_text(text, fmt, name="case30.m")
         from_path = _emit_file(str(DATA / "case30.m"), fmt)
@@ -2464,6 +2466,7 @@ def test_source_format_stubs_cover_every_variant():
         "xiidm",
         "jiidm",
         "cgmes",
+        "ucte",
     ]
     root = Path(__file__).resolve().parents[1] / "powerio"
     for stub in ("__init__.pyi", "_powerio.pyi"):
