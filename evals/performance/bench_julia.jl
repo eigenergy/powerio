@@ -122,24 +122,27 @@ function write_speed_julia(path, rows, matrix_rows)
     println("wrote $path ($(length(rows)) rows)")
 end
 
+# Release the network handle now rather than at finalization so a benchmark
+# loop does not accumulate live networks between garbage collections.
 function free_network!(net)
     net === nothing && return
-    h = getfield(net, :handle)
-    h === nothing || h.ptr == C_NULL || finalize(h)
+    finalize(getfield(net, :handle))
     return
 end
 
+# Parse and materialize the bus, branch, generator, and load tables as Julia
+# structs: the cost of reading every element through the typed views.
 function powerio_jl_materialize_data(path)
     net = PowerIO.parse(path).value
     try
-        return net.data
+        return (collect(net.buses), collect(net.branches), collect(net.generators), collect(net.loads))
     finally
         free_network!(net)
     end
 end
 
 println(rpad("case", 20), rpad("PowerIO.jl", 24), rpad("ExaPowerIO", 24),
-        rpad("PowerModels", 24), rpad("Rust C ABI", 24), rpad("net.data", 24),
+        rpad("PowerModels", 24), rpad("Rust C ABI", 24), rpad("elements", 24),
         "buses (PowerIO / ExaPowerIO)")
 for (name, f, run_pm_parse, _run_pm_ybus) in CASES
     if !isfile(f)
