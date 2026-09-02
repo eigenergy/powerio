@@ -1,4 +1,7 @@
-use powerio::{Destination, EmittedOutput, Fidelity, OutputLayout, PioValue, Source, emit, parse};
+use powerio::{
+    Destination, EmittedOutput, Fidelity, OutputLayout, PioValue, Source, deserialize, emit, parse,
+    serialize,
+};
 use std::io::{Cursor, Write};
 
 #[test]
@@ -33,6 +36,74 @@ fn facade_emits_and_parses_a_cgmes_profile_directory() {
         panic!("a memory destination returned paths");
     };
     assert_eq!(artifacts.len(), 4);
+}
+
+#[test]
+fn facade_calculates_node_breaker_buses_without_a_tp_profile() {
+    let directory = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../tests/data/cgmes/node-breaker"
+    );
+    let module = parse(Source::open(directory).unwrap(), None)
+        .expect("a node breaker EQ and SSH set parses without TP");
+    let PioValue::BalancedNetwork(network) = &module.value else {
+        panic!("CGMES must produce a balanced network");
+    };
+    assert_eq!(network.buses().len(), 3);
+    let remark = module
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code() == "READ.CGMES.TOPOLOGY_CALCULATED")
+        .expect("the calculated topology is reported");
+    assert!(remark.message().contains("3 calculated bus(es)"));
+    let uids: Vec<Option<String>> = network.buses().iter().map(|bus| bus.uid.clone()).collect();
+    assert!(uids.iter().all(Option::is_some));
+
+    // PowerIO IR carries no retained source, so emission from it is fresh.
+    let stored = serialize(&module, Destination::memory("module").unwrap())
+        .expect("the calculated topology serializes");
+    let EmittedOutput::Memory { artifacts: stored } = stored.into_output() else {
+        panic!("a memory destination returned paths")
+    };
+    let restored =
+        deserialize(Source::from_memory("module.pio.json", stored[0].bytes().to_vec()).unwrap())
+            .expect("the stored module deserializes");
+    let fresh = emit(&restored, "cgmes", Destination::memory("fresh").unwrap())
+        .expect("a calculated topology emits fresh CGMES");
+    assert_eq!(fresh.fidelity(), Fidelity::Canonical);
+    let EmittedOutput::Memory { artifacts } = fresh.into_output() else {
+        panic!("a memory destination returned paths")
+    };
+    assert_eq!(artifacts.len(), 4);
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for artifact in artifacts {
+        writer
+            .start_file(
+                artifact.name().as_str(),
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+        writer.write_all(artifact.bytes()).unwrap();
+    }
+    let zip_bytes = writer.finish().unwrap().into_inner();
+    let reparsed = parse(Source::from_memory("fresh.zip", zip_bytes).unwrap(), None)
+        .expect("the fresh profile set, now with TP, parses");
+    let PioValue::BalancedNetwork(reparsed_network) = &reparsed.value else {
+        panic!("CGMES must produce a balanced network");
+    };
+    assert_eq!(reparsed_network.buses().len(), 3);
+    let reparsed_uids: Vec<Option<String>> = reparsed_network
+        .buses()
+        .iter()
+        .map(|bus| bus.uid.clone())
+        .collect();
+    assert_eq!(reparsed_uids, uids);
+    assert!(
+        reparsed
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code() != "READ.CGMES.TOPOLOGY_CALCULATED")
+    );
 }
 
 #[test]

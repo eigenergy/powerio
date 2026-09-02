@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rdf:RDF xmlns:cim="http://iec.ch/TC57/2013/CIM-schema-cim16#" xmlns:entsoe="http://entsoe.eu/CIM/SchemaExtension/3/1#" xmlns:md="http://iec.ch/TC57/61970-552/ModelDescription/1#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <md:FullModel rdf:about="urn:uuid:6e0b7c5a-1b2f-4c1d-9a3e-000000000002">
+    <md:Model.scenarioTime>2026-01-01T00:00:00</md:Model.scenarioTime>
+    <md:Model.created>2026-01-01T00:00:00</md:Model.created>
+    <md:Model.description>PowerIO synthetic node breaker equipment set without a TP profile</md:Model.description>
+    <md:Model.version>1</md:Model.version>
+    <md:Model.profile>http://entsoe.eu/CIM/SteadyStateHypothesis/1/1</md:Model.profile>
+    <md:Model.modelingAuthoritySet>http://powerio.dev/tests</md:Model.modelingAuthoritySet>
+    <md:Model.DependentOn rdf:resource="urn:uuid:6e0b7c5a-1b2f-4c1d-9a3e-000000000001" />
+  </md:FullModel>
+  <cim:Terminal rdf:about="#_1e000000-0000-4000-8000-000000000001">
+    <cim:ACDCTerminal.connected>true</cim:ACDCTerminal.connected>
+  </cim:Terminal>
+  <cim:Terminal rdf:about="#_1e000000-0000-4000-8000-000000000002">
+    <cim:ACDCTerminal.connected>true</cim:ACDCTerminal.connected>
+  </cim:Terminal>
+  <cim:Terminal rdf:about="#_1e000000-0000-4000-8000-000000000011">
+    <cim:ACDCTerminal.connected>true</cim:ACDCTerminal.connected>
+  </cim:Terminal>
+  <cim:Terminal rdf:about="#_1e000000-0000-4000-8000-000000000012">
+    <cim:ACDCTerminal.connected>true</cim:ACDCTerminal.connected>
+  </cim:Terminal>
+  <cim:Terminal rdf:about="#_1e000000-0000-4000-8000-000000000021">
+    <cim:ACDCTerminal.connected>true</cim:ACDCTerminal.connected>
+  </cim:Terminal>
+  <cim:Terminal rdf:about="#_1e000000-0000-4000-8000-000000000022">
+    <cim:ACDCTerminal.connected>true</cim:ACDCTerminal.connected>
+  </cim:Terminal>
+  <cim:Terminal rdf:about="#_1e000000-0000-4000-8000-000000000031">
+    <cim:ACDCTerminal.connected>true</cim:ACDCTerminal.connected>
+  </cim:Terminal>
+  <cim:Terminal rdf:about="#_1e000000-0000-4000-8000-000000000032">
+    <cim:ACDCTerminal.connected>true</cim:ACDCTerminal.connected>
+  </cim:Terminal>
+  <cim:Terminal rdf:about="#_1e000000-0000-4000-8000-000000000041">
+    <cim:ACDCTerminal.connected>true</cim:ACDCTerminal.connected>
+  </cim:Terminal>
+  <cim:Terminal rdf:about="#_1e000000-0000-4000-8000-000000000042">
+    <cim:ACDCTerminal.connected>true</cim:ACDCTerminal.connected>
+  </cim:Terminal>
+  <cim:Terminal rdf:about="#_1e000000-0000-4000-8000-000000000043">
+    <cim:ACDCTerminal.connected>false</cim:ACDCTerminal.connected>
+  </cim:Terminal>
+  <cim:Terminal rdf:about="#_1e000000-0000-4000-8000-000000000051">
+    <cim:ACDCTerminal.connected>true</cim:ACDCTerminal.connected>
+  </cim:Terminal>
+  <cim:Terminal rdf:about="#_1e000000-0000-4000-8000-000000000061">
+    <cim:ACDCTerminal.connected>true</cim:ACDCTerminal.connected>
+  </cim:Terminal>
+  <cim:Terminal rdf:about="#_1e000000-0000-4000-8000-000000000062">
+    <cim:ACDCTerminal.connected>true</cim:ACDCTerminal.connected>
+  </cim:Terminal>
+  <cim:Breaker rdf:about="#_5b000000-0000-4000-8000-000000000001">
+    <cim:Switch.open>false</cim:Switch.open>
+  </cim:Breaker>
+  <cim:Disconnector rdf:about="#_5d000000-0000-4000-8000-000000000001">
+    <cim:Switch.open>true</cim:Switch.open>
+  </cim:Disconnector>
+  <cim:Breaker rdf:about="#_5b000000-0000-4000-8000-000000000002">
+    <cim:Switch.open>false</cim:Switch.open>
+  </cim:Breaker>
+  <cim:EnergyConsumer rdf:about="#_ec000000-0000-4000-8000-000000000001">
+    <cim:EnergyConsumer.p>10</cim:EnergyConsumer.p>
+    <cim:EnergyConsumer.q>2</cim:EnergyConsumer.q>
+  </cim:EnergyConsumer>
+  <cim:EnergyConsumer rdf:about="#_ec000000-0000-4000-8000-000000000002">
+    <cim:EnergyConsumer.p>5</cim:EnergyConsumer.p>
+    <cim:EnergyConsumer.q>1</cim:EnergyConsumer.q>
+  </cim:EnergyConsumer>
+  <cim:EnergyConsumer rdf:about="#_ec000000-0000-4000-8000-000000000003">
+    <cim:EnergyConsumer.p>8</cim:EnergyConsumer.p>
+    <cim:EnergyConsumer.q>3</cim:EnergyConsumer.q>
+  </cim:EnergyConsumer>
+  <cim:SynchronousMachine rdf:about="#_5e000000-0000-4000-8000-000000000001">
+    <cim:RegulatingCondEq.controlEnabled>false</cim:RegulatingCondEq.controlEnabled>
+    <cim:RotatingMachine.p>-30</cim:RotatingMachine.p>
+    <cim:RotatingMachine.q>-5</cim:RotatingMachine.q>
+    <cim:SynchronousMachine.referencePriority>1</cim:SynchronousMachine.referencePriority>
+    <cim:SynchronousMachine.operatingMode rdf:resource="http://iec.ch/TC57/2013/CIM-schema-cim16#SynchronousMachineOperatingMode.generator" />
+  </cim:SynchronousMachine>
+</rdf:RDF>

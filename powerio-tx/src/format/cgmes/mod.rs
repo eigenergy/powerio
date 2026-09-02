@@ -6220,16 +6220,55 @@ mod tests {
         }));
     }
 
+    /// The document without its ConnectivityNode elements and without the
+    /// terminal references to them.
+    fn strip_connectivity_nodes(text: &str) -> String {
+        let mut stripped = String::new();
+        let mut inside_node = false;
+        for line in text.lines() {
+            if line.contains("<cim:ConnectivityNode rdf:ID=") {
+                inside_node = true;
+            }
+            if !inside_node && !line.contains("Terminal.ConnectivityNode") {
+                stripped.push_str(line);
+                stripped.push('\n');
+            }
+            if line.contains("</cim:ConnectivityNode>") {
+                inside_node = false;
+            }
+        }
+        stripped
+    }
+
     #[test]
     fn missing_profiles_malformed_xml_and_dangling_references_are_refused() {
         let output = write::write_cgmes(&network(), CgmesVersion::V3_0).unwrap();
-        let eq_only = output
+        // A CGMES 3.0 EQ carries ConnectivityNodes, so it reads without TP
+        // through calculated buses; stripping those nodes leaves nothing to
+        // calculate from.
+        let eq_only: Vec<(String, String)> = output
             .files
             .iter()
             .filter(|(name, _)| name.ends_with("_EQ.xml"))
             .cloned()
             .collect();
-        assert!(read::read_cgmes_documents(eq_only, Some("missing-tp")).is_err());
+        let calculated = read::read_cgmes_documents(eq_only.clone(), Some("missing-tp")).unwrap();
+        assert_eq!(calculated.network.buses().len(), 2);
+        assert!(calculated.warnings.iter().any(|warning| {
+            warning.info.code == crate::diagnostics::codes::READ_CGMES_TOPOLOGY_CALCULATED.code
+        }));
+        let without_nodes = eq_only
+            .into_iter()
+            .map(|(name, text)| (name, strip_connectivity_nodes(&text)))
+            .collect();
+        let error = read::read_cgmes_documents(without_nodes, Some("missing-tp"))
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            error.contains("the set declares no TP profile data"),
+            "{error}"
+        );
 
         assert!(xml::parse_cimxml("<rdf:RDF><cim:TopologicalNode>").is_err());
 
@@ -6268,5 +6307,205 @@ mod tests {
             })
             .collect();
         assert!(read::read_cgmes_documents(duplicate, Some("duplicate")).is_err());
+    }
+
+    const NODE_BREAKER_EQ: &str =
+        include_str!("../../../../tests/data/cgmes/node-breaker/NodeBreaker_EQ.xml");
+    const NODE_BREAKER_SSH: &str =
+        include_str!("../../../../tests/data/cgmes/node-breaker/NodeBreaker_SSH.xml");
+
+    fn node_breaker_documents() -> Vec<(String, String)> {
+        vec![
+            (
+                "NodeBreaker_EQ.xml".to_string(),
+                NODE_BREAKER_EQ.to_string(),
+            ),
+            (
+                "NodeBreaker_SSH.xml".to_string(),
+                NODE_BREAKER_SSH.to_string(),
+            ),
+        ]
+    }
+
+    fn bus_named<'a>(network: &'a BalancedNetwork, name: &str) -> &'a Bus {
+        network
+            .buses()
+            .iter()
+            .find(|bus| bus.name.as_deref() == Some(name))
+            .unwrap_or_else(|| panic!("no bus named {name}"))
+    }
+
+    fn load_with_uid<'a>(network: &'a BalancedNetwork, uid: &str) -> &'a Load {
+        network
+            .loads()
+            .iter()
+            .find(|load| load.uid.as_deref() == Some(uid))
+            .unwrap_or_else(|| panic!("no load {uid}"))
+    }
+
+    #[test]
+    fn node_breaker_set_without_tp_calculates_buses_from_switch_positions() {
+        let parsed =
+            read::read_cgmes_documents(node_breaker_documents(), Some("node-breaker")).unwrap();
+        let network = &parsed.network;
+        assert_eq!(network.buses().len(), 3);
+        let bb1 = bus_named(network, "BB1");
+        let n3 = bus_named(network, "N3");
+        let bb2 = bus_named(network, "BB2");
+        assert_eq!(bb1.kind, BusType::Ref);
+        assert!(
+            network
+                .buses()
+                .iter()
+                .all(|bus| (bus.base_kv - 110.0).abs() < 1e-12)
+        );
+
+        assert_eq!(
+            load_with_uid(network, "ec000000-0000-4000-8000-000000000001").bus,
+            bb1.id
+        );
+        assert_eq!(
+            load_with_uid(network, "ec000000-0000-4000-8000-000000000002").bus,
+            n3.id
+        );
+        let disconnected = load_with_uid(network, "ec000000-0000-4000-8000-000000000003");
+        assert_eq!(disconnected.bus, bb2.id);
+        assert!(!disconnected.in_service);
+        assert_eq!(network.generators()[0].bus, bb1.id);
+        assert_eq!(
+            (network.branches()[0].from, network.branches()[0].to),
+            (bb1.id, bb2.id)
+        );
+        assert_eq!(network.switches().len(), 1);
+        let open = &network.switches()[0];
+        assert_eq!((open.from, open.to, open.closed), (bb1.id, n3.id, false));
+
+        // Identities derive from the joined ConnectivityNode mRIDs: valid
+        // UUIDs, never a node's own mRID, and identical on every read.
+        for bus in network.buses() {
+            let uid = bus.uid.as_deref().unwrap();
+            assert!(uuid::Uuid::parse_str(uid).is_ok());
+            assert!(!uid.starts_with("c0000000"));
+        }
+        let again =
+            read::read_cgmes_documents(node_breaker_documents(), Some("node-breaker")).unwrap();
+        let uids = |network: &BalancedNetwork| {
+            network
+                .buses()
+                .iter()
+                .map(|bus| bus.uid.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(uids(network), uids(&again.network));
+
+        let detailed = network.detailed_connectivity().as_deref().unwrap();
+        assert!(detailed.bus_breaker_buses.is_empty());
+        assert_eq!(detailed.calculated_buses.len(), 3);
+        let joined = detailed
+            .calculated_buses
+            .iter()
+            .find(|bus| bus.calculated_bus == bb1.id)
+            .unwrap();
+        // N2 sits in a Bay, which resolves to VL1 like N1.
+        assert_eq!(joined.nodes.len(), 2);
+        assert_eq!(
+            joined.voltage_level.local_id(),
+            "a1000000-0000-4000-8000-000000000001"
+        );
+        assert!(
+            detailed
+                .voltage_levels
+                .iter()
+                .all(|level| level.topology_kind == TopologyKind::NodeBreaker)
+        );
+        let vl1 = detailed
+            .voltage_levels
+            .iter()
+            .find(|level| level.component.local_id() == "a1000000-0000-4000-8000-000000000001")
+            .unwrap();
+        assert_eq!(vl1.buses, vec![bb1.id, n3.id]);
+        assert!(parsed.warnings.iter().any(|warning| {
+            warning.info.code == crate::diagnostics::codes::READ_CGMES_TOPOLOGY_CALCULATED.code
+                && warning.contains(
+                    "3 calculated bus(es) joined 5 ConnectivityNode(s) through 2 closed switch(es); 1 open switch(es)",
+                )
+        }));
+    }
+
+    #[test]
+    fn node_breaker_ssh_switch_position_closes_the_disconnector() {
+        let closed = node_breaker_documents()
+            .into_iter()
+            .map(|(name, text)| {
+                if name.ends_with("_SSH.xml") {
+                    (
+                        name,
+                        text.replace(
+                            "<cim:Switch.open>true</cim:Switch.open>",
+                            "<cim:Switch.open>false</cim:Switch.open>",
+                        ),
+                    )
+                } else {
+                    (name, text)
+                }
+            })
+            .collect();
+        let parsed = read::read_cgmes_documents(closed, Some("closed")).unwrap();
+        assert_eq!(parsed.network.buses().len(), 2);
+        assert!(parsed.network.switches().is_empty());
+        let bb1 = bus_named(&parsed.network, "BB1").id;
+        assert_eq!(
+            parsed
+                .network
+                .loads()
+                .iter()
+                .filter(|load| load.bus == bb1)
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn node_breaker_set_without_connectivity_is_refused_with_the_missing_data_named() {
+        let bus_branch = node_breaker_documents()
+            .into_iter()
+            .map(|(name, text)| {
+                (
+                    name,
+                    text.replace(
+                        "    <md:Model.profile>http://entsoe.eu/CIM/EquipmentOperation/3/1</md:Model.profile>\n",
+                        "",
+                    ),
+                )
+            })
+            .collect();
+        let mut warnings =
+            CgmesDiagnostics::new(&crate::diagnostics::codes::READ_CGMES_RECORD_UNMAPPED);
+        let error = read::read_cgmes_documents_into(bus_branch, Some("bus-branch"), &mut warnings)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("the set declares no TP profile data"));
+        assert!(error.contains("bus branch equipment"));
+        assert!(warnings.iter().any(|warning| {
+            warning.info.code
+                == crate::diagnostics::codes::READ_CGMES_CONNECTIVITY_INSUFFICIENT.code
+        }));
+
+        let without_nodes = node_breaker_documents()
+            .into_iter()
+            .map(|(name, text)| {
+                if name.ends_with("_EQ.xml") {
+                    (name, strip_connectivity_nodes(&text))
+                } else {
+                    (name, text)
+                }
+            })
+            .collect();
+        let error = read::read_cgmes_documents(without_nodes, Some("no-nodes"))
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("define no ConnectivityNode records"));
     }
 }
