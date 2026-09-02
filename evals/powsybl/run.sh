@@ -25,6 +25,12 @@ two_substations_source="$powsybl_core/psse/psse-converter/src/test/resources/two
 node_breaker_source="$powsybl_core/psse/psse-model-test/src/main/resources/five_bus_nodeBreaker_rev35.raw"
 node_breaker_xiidm_source="$powsybl_core/psse/psse-converter/src/test/resources/five_bus_nodeBreaker_rev35.xiidm"
 xiidm_serde_root="$powsybl_core/iidm/iidm-serde/src/test/resources"
+cgmes_conformity_root="$powsybl_core/cgmes/cgmes-conformity/src/main/resources"
+mini_grid_node_breaker_source="$cgmes_conformity_root/conformity/cas-1.1.3-data-4.0.3/MiniGrid/NodeBreaker/CGMES_v2.4.15_MiniGridTestConfiguration_BaseCase_Complete_v3"
+mini_grid_node_breaker_bd_source="$cgmes_conformity_root/conformity/cas-1.1.3-data-4.0.3/MiniGrid/NodeBreaker/CGMES_v2.4.15_MiniGridTestConfiguration_Boundary_v3"
+small_grid_node_breaker_source="$cgmes_conformity_root/conformity/cas-1.1.3-data-4.0.3/SmallGrid/NodeBreaker/CGMES_v2.4.15_SmallGridTestConfiguration_BaseCase_Complete_v3.0.0"
+small_grid_node_breaker_bd_source="$cgmes_conformity_root/conformity/cas-1.1.3-data-4.0.3/SmallGrid/NodeBreaker/CGMES_v2.4.15_SmallGridTestConfiguration_Boundary_v3.0.0"
+micro_grid_cgmes3_source="$cgmes_conformity_root/cgmes3-test-models/MicroGrid"
 
 for source in \
     "$cgmes_2415_source" \
@@ -36,7 +42,12 @@ for source in \
     "$ieee_30_bus_32_source" \
     "$two_substations_source" \
     "$node_breaker_source" \
-    "$node_breaker_xiidm_source"; do
+    "$node_breaker_xiidm_source" \
+    "$mini_grid_node_breaker_source" \
+    "$mini_grid_node_breaker_bd_source" \
+    "$small_grid_node_breaker_source" \
+    "$small_grid_node_breaker_bd_source" \
+    "$micro_grid_cgmes3_source"; do
     if [[ ! -e "$source" ]]; then
         echo "missing PowSybl reference case: $source" >&2
         exit 1
@@ -130,6 +141,52 @@ fresh_emit "$powsybl_inputs/powsybl-cgmes-2415.zip" \
     cgmes cgmes powsybl-cgmes-2415 "$output_dir/powsybl-cgmes-2415"
 fresh_emit "$powsybl_inputs/powsybl-cgmes-30.zip" \
     cgmes cgmes powsybl-cgmes-30 "$output_dir/powsybl-cgmes-30"
+
+# Node breaker sets are read twice: the official documents as shipped, and a
+# copy without the TP and TP_BD documents whose buses PowerIO calculates.
+node_breaker_dir="$output_dir/node-breaker"
+stage_cgmes_documents() {
+    local target=$1 mode=$2
+    shift 2
+    mkdir -p "$target"
+    local source file
+    for source in "$@"; do
+        for file in "$source"/*.xml; do
+            case "$mode:$(basename "$file")" in
+                without-tp:*_TP_*|without-tp:*TP_BD*) ;;
+                *) cp "$file" "$target/" ;;
+            esac
+        done
+    done
+}
+run_logged() {
+    local log=$1
+    shift
+    if ! "$@" 2> "$log"; then
+        sed -n '1,$p' "$log" >&2
+        return 1
+    fi
+}
+calculated_topology() {
+    local stem=$1
+    shift
+    stage_cgmes_documents "$node_breaker_dir/$stem-official" with-tp "$@"
+    stage_cgmes_documents "$node_breaker_dir/$stem-without-tp" without-tp "$@"
+    run_logged "$node_breaker_dir/$stem-official.log" "$powerio_binary" serialize \
+        "$node_breaker_dir/$stem-official" --from cgmes \
+        -o "$node_breaker_dir/$stem-official.pio.json"
+    run_logged "$node_breaker_dir/$stem-calculated.log" "$powerio_binary" serialize \
+        "$node_breaker_dir/$stem-without-tp" --from cgmes \
+        -o "$node_breaker_dir/$stem-calculated.pio.json"
+    run_logged "$node_breaker_dir/$stem-calculated-fresh.log" "$powerio_binary" convert \
+        "$node_breaker_dir/$stem-calculated.pio.json" --to cgmes \
+        -o "$node_breaker_dir/$stem-calculated-fresh"
+}
+calculated_topology mini-grid-node-breaker \
+    "$mini_grid_node_breaker_source" "$mini_grid_node_breaker_bd_source"
+calculated_topology small-grid-node-breaker \
+    "$small_grid_node_breaker_source" "$small_grid_node_breaker_bd_source"
+calculated_topology micro-grid-cgmes3 "$micro_grid_cgmes3_source"
 
 "$python_binary" "$repository_root/evals/powsybl/check_outputs.py" \
     "$output_dir" "$powsybl_core"

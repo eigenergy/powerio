@@ -231,6 +231,36 @@ fresh SV profile. The CGMES 2.4.15 Type 2 set has an SV profile with power flow
 and voltage observations but no SvStatus records, so it has no source service
 flags to compare.
 
+Three node breaker sets from the pinned checkout check CGMES import without
+a TP profile: the CGMES 2.4.15 MiniGrid and SmallGrid node breaker base
+cases with their EQ_BD and TP_BD documents under
+`conformity/cas-1.1.3-data-4.0.3`, and the CGMES 3.0 MicroGrid under
+`cgmes3-test-models`. The gate stages each set twice, as shipped and without
+its TP and TP_BD documents, reads both with PowerIO, and emits fresh CGMES
+from the calculated topology. It requires exactly one
+`READ.CGMES.TOPOLOGY_CALCULATED` remark with the pinned bus, ConnectivityNode,
+closed switch, and open switch counts (13 buses from 103 nodes and 90 closed
+switches; 118 from 1225 and 1107; 16 from 42 with 25 closed and 1 open), an
+empty `bus_breaker_buses` table, one `calculated_buses` record per bus, a
+bus `uid` equal to the UUIDv5 under the PowerIO CGMES namespace of
+`calculated-bus:` followed by the sorted ConnectivityNode mRIDs of that
+record, and no bus identity equal to a ConnectivityNode mRID. It then keys
+every connected terminal of PowSybl's bus view by its CGMES terminal alias
+and requires the grouping of those terminals into buses to equal PowerIO's
+grouping through `terminals[].node` and `connectivity_nodes[].calculated_bus`:
+47 shared terminals in 11 buses, 617 in 115, and 49 in 11. The MiniGrid and
+SmallGrid calculated groupings also equal the ConnectivityNode grouping their
+shipped TP states. The CGMES 3.0 MicroGrid TP, dated later than its SSH,
+separates the ends of breaker `5f5d40ae-d52d-4631-9285-b3ceefff784c` that the
+SSH closes; PowSybl follows the SSH position and so does the calculated
+topology, so that grouping is pinned as differing from the shipped TP (18
+buses against 16). Finally PowSybl loads the fresh CGMES emitted from each
+calculated topology, must reach `STEADY_STATE_HYPOTHESIS`, and must group the
+shared terminals as the official set does (38, 557, and 49 shared terminals;
+12, 118, and 16 fresh bus view buses). PowSybl's bus view omits a component
+with no busbar section and fewer than two feeders, so its bus counts stay
+below PowerIO's.
+
 The two XIIDM inputs use exact source and fresh identity sets. The gate compares
 voltage levels, calculated buses, lines, two winding transformers, generators,
 loads, shunts, operational limits, and ratio tap changer rows and steps. The
