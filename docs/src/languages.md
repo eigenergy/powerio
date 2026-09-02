@@ -30,6 +30,16 @@ uses canonical structural type names, an exact type predicate, and owner
 rooted typed accessors. None of the four surfaces has an ordinal value kind
 enum or a typed narrowing wrapper.
 
+Only Rust and C have a `Source` type. Both need an explicit owner for acquired
+bytes: a Rust caller must say who holds the buffers a parse reads and when they
+are released, and a C caller must pair every acquisition with a release call,
+so `Source` makes that ownership visible at the call site. Python and Julia
+values already carry the same information. A path, an open file object, or a
+bytes-like object states where the bytes come from, and the interpreter owns
+and frees them, so `parse` takes those values directly and derives the source
+name from the path or the `name` argument. A `Source` class in Python or Julia
+would restate Rust ownership mechanics without adding information.
+
 Formats made of related files use the same `parse` operation. For GO Challenge
 3, a directory containing only the problem returns `AcScucInstance`; adding
 the matching solution file makes it return `AcScucSolution` in all four

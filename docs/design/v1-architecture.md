@@ -3,12 +3,10 @@
 Status: historical 1.0 design baseline from 2026-08-25. It records the intended
 shape that informed PowerIO 0.10, not the current implementation or API.
 
-The companion [PowerIO 1.0 ontology](V1_ONTOLOGY.md) records the public types,
+The companion [PowerIO 1.0 ontology](v1-ontology.md) records the public types,
 source formats, and allowed transformations as a knowledge graph.
-The [PowerIO 1.0 terminology](V1_TERMINOLOGY.md) defines the words and names
+The [PowerIO 1.0 terminology](v1-terminology.md) defines the words and names
 used throughout the public API.
-The [PowerIO 1.0 issue audit](V1_ISSUE_AUDIT.md) reconciles this design with the
-GitHub milestones.
 
 External definitions anchor this design:
 
@@ -1085,7 +1083,7 @@ collection can provide several named source buffers and a new calculation can
 add a nonexhaustive `PioValue` variant. Stable string identifiers keep C,
 Julia, Python, and serialized APIs additive.
 
-The exact planned format mappings live in `V1_ONTOLOGY.md`; they are not
+The exact planned format mappings live in `v1-ontology.md`; they are not
 repeated here. Experimental branches are implementation references, not 1.0
 API definitions.
 

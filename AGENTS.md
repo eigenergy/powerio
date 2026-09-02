@@ -8,10 +8,10 @@ A Cargo workspace of Rust crates plus a Python package. Parses power network
 sources, converts between formats, and emits sparse matrices and graph data for
 downstream solvers. Feeds the GridFM ML pipeline.
 
-The files under `arch-v1/` record the design work that led to the 0.10 beta.
-They are dated evidence, not current API authority. Read them for historical
-context when changing a public name or meaning, then check the current source,
-tests, release notes, and direct maintainer decisions.
+The files under `docs/design/` record the design work that led to the 0.10
+beta. They are dated evidence, not current API authority. Read them for
+historical context when changing a public name or meaning, then check the
+current source, tests, release notes, and direct maintainer decisions.
 
 - **`powerio-core`**: the shared foundation: `Source`, `FormatId`,
   `Diagnostic`, `Error`, `PioModule<T>`, common module records,

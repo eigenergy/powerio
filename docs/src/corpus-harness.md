@@ -36,8 +36,8 @@ findings carry only the chain properties, each with the format path and the
 seed that replays it.
 
 The run learns as it goes. A ledger in the work directory records, per
-directed format pair, every distinct signature that edge has produced —
-warning shapes, changed model path classes, chain findings — and the next path
+directed format pair, every distinct signature that edge has produced
+(warning shapes, changed model path classes, chain findings), and the next path
 is drawn toward the pairs that have taught the least: an edge's weight is its
 novelty rate, so an unwalked edge scores 1 and a mined-out one decays toward
 zero without ever being excluded. The run ends when `--settle` consecutive
@@ -47,7 +47,7 @@ start over.
 ## What it is for
 
 The vendored fixtures exercise the format readers and writers on fourteen
-cases. Real corpora — utility exports, planning archives, competition data —
+cases. Real corpora (utility exports, planning archives, competition data)
 hold the tail: dialect quirks, fields the fixtures never state, records at
 scales the fixtures never reach. Much of that data is confidential (some of
 it CEII), so it can never become a fixture, appear in a warning quoted in a
@@ -75,7 +75,7 @@ was not rederived from the property.
 corpus dir (read-only, outside the repo)
   │  powerio corpus ingest <dir> --work <scratch outside the repo>
   ▼
-buckets: case-000/, case-001/, …   (opaque ids; grouped by electrical
+buckets: case-000/, case-001/, ... (opaque ids; grouped by electrical
   │                                 fingerprint, never by filename)
   ▼
 per bucket: pairwise comparisons over every format sibling + per-format
@@ -94,7 +94,7 @@ injections. Siblings of one case in different formats share a fingerprint
 (exact-count match, quantized-value match within the conversion tolerances)
 even when every name differs; files that fingerprint alike land in one
 bucket, everything else gets its own. Bucket ids are ordinals assigned in
-fingerprint-sort order — nothing about a bucket id, path, or report row
+fingerprint-sort order; nothing about a bucket id, path, or report row
 derives from a source filename. Unparseable files are findings, not errors
 (a reader crash on real input is the most valuable finding there is), and
 parser panics are reported by code location plus a tool-minimized
@@ -107,14 +107,14 @@ read and write, core survival, `Y_bus` entry-for-entry and per-bus
 injections, and the canonicalized typed-model diff. On top of that,
 *attribution*: every typed-model diff path is paired against the warnings
 that leg emitted, and a diff with no covering warning is an **undeclared
-loss** finding — the generalization of the matrix's green-parity gate to
+loss** finding, the generalization of the matrix's green-parity gate to
 every cell. (This wants stable warning codes; see the resourcing note
 below.)
 
 **Solve pass.** Each sibling solves through the oracles the repository
-already carries — `evals/validation/validate_opendss.py` (opendssdirect) for dss,
+already carries: `evals/validation/validate_opendss.py` (opendssdirect) for dss,
 `evals/validation/validate_psse.jl` (PowerModels) and pandapower `runpp` on the
-transmission side — and the tool compares outcomes across siblings of
+transmission side. The tool then compares outcomes across siblings of
 one bucket: convergence disagreement, voltage-magnitude spread beyond
 tolerance, injection residuals. A case whose formats disagree about
 convergence is a conversion defect until proven otherwise.
@@ -150,7 +150,7 @@ relying on the care of whoever reads the report:
    undeclared loss > miscounted warning > declared loss confirmed.
 2. **Property card**: restate the finding as a falsifiable sentence about
    the format, from the findings file alone.
-3. **Reproducer**: build a minimal synthetic case exhibiting the property —
+3. **Reproducer**: build a minimal synthetic case exhibiting the property,
    from an existing vendored fixture, `powerio synth`, or a handwritten
    2-to-4-bus case using canonical values (1.0, 2.5, 100.0). The test must
    fail before the fix and pass after. **A finding with no synthetic
@@ -182,7 +182,7 @@ Three constraints shape this design:
   should land with the tool.
 - **Sibling ground truth.** The ACTIVSg parity suite is the model: several
   formats, one case, cross-checked. The harness generalizes exactly that
-  pattern, which is also why bucketing is fingerprint-based — sibling
+  pattern, which is also why bucketing is fingerprint-based: sibling
   grouping is the whole game.
 - **Format vocabulary limits.** PowerWorld aux HVDC stayed unimplemented
   because no vendored export states its vocabulary. A corpus containing one
@@ -195,5 +195,5 @@ Three constraints shape this design:
 The tool does not phone anywhere, does not persist bucket contents
 past the run (`--work` is disposable; the report is the only artifact worth
 keeping), and does not attempt statistical anonymization of published
-aggregates — the boundary is categorical (properties, ordinals, deltas),
+aggregates; the boundary is categorical (properties, ordinals, deltas),
 not differential.

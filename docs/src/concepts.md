@@ -132,13 +132,27 @@ error.
 ## Sources and grid exchange formats
 
 A `Source` owns one or more named immutable byte buffers acquired from a file,
-directory, or memory. `parse` detects a grid exchange format from its name and
-content unless the caller supplies a format. `emit` produces one supported
-format and reports any loss.
+directory, or memory. Rust and C callers build it themselves, because those
+languages need an explicit owner for acquired bytes. In Python and Julia a
+path, an open file object, or a bytes-like value plays that role directly,
+since the value already states where the bytes come from and the interpreter
+owns them; [Rust, Python, Julia, and C](languages.md) explains the split.
+`parse` detects a grid exchange format from the source name and content
+unless the caller supplies a format.
+
+`emit` produces one supported format and returns an `EmitResult`. Its
+artifact inventory is the list of artifacts the emission produced: one entry
+per file, each with its name and either its bytes, for a memory destination,
+or its path, after a filesystem commit. A single file format produces one
+artifact; a directory format such as PyPSA CSV, GridFM, or CGMES produces
+one per file. The result also states the layout (one file or a directory),
+the fidelity (an exact same format echo of retained source bytes, or
+canonical fresh output), and the emission diagnostics, which report any loss.
 
 `resolve_format` maps accepted third party spellings to a canonical token and
 reports its conventional filename suffix, output layout, and fresh emission
-support. This is format discovery, not a value type enum.
+support. It describes formats; value types are named by `PioValue` and its
+language counterparts.
 
 PowerIO IR is separate: `serialize` and `deserialize` preserve PowerIO types
 and module records. It has one 1.0 document shape and is absent from grid

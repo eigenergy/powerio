@@ -21,7 +21,11 @@ does not import those optional packages.
 ## Parse one source
 
 `powerio.parse` accepts a path, file object, or bytes-like object. A Python
-`str` always names a path. Use `io.StringIO` for raw text.
+`str` always names a path. Use `io.StringIO` for raw text. There is no Python
+`Source` class: the path, file object, or bytes-like value already states
+where the bytes come from, and the interpreter owns them, so `parse` takes it
+directly. Rust and C build a `Source` because they need that ownership stated
+explicitly; see [Rust, Python, Julia, and C](languages.md).
 
 ```python
 from io import StringIO
@@ -96,8 +100,11 @@ result = powerio.emit(module, "pypsa", "case-directory")
 
 With no destination, artifacts stay in memory. A path destination writes one
 file or a directory. A writable file object accepts a single file artifact.
-Every `EmitResult` contains the artifact inventory, layout, fidelity, and
-emission diagnostics.
+Every `EmitResult` carries the artifact inventory (one `Artifact` per produced
+file, with its `name` and either `data` for a memory result or `path` after a
+filesystem commit), the layout, the fidelity, and the emission diagnostics.
+`result.text` is the one UTF-8 memory artifact when the inventory holds
+exactly one, and `None` otherwise.
 
 PowerIO IR uses separate operations:
 
