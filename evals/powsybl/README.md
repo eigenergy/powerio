@@ -321,7 +321,7 @@ beside it. Decompress it before running the check.
 
 | Item | Value |
 |---|---|
-| PowerIO commit | `RTE_COMMIT_PLACEHOLDER` |
+| PowerIO commit | `b2b0e6d4f545cf620c508474ea4e7920e5c40204` |
 | PowerIO binary | `target/debug/powerio` |
 | PyPowSybl | 1.16.1 on PowSybl Core 7.3.0 at `0939bfcc2c0c094de907dc818dd688b4cbfb7281` |
 | Source | SHA-256 `cd1cbd8c49c367ca366dd83bb05ead72f984a35de21e135e01f86b74d810a244`, 33,054,521 bytes, 351,970 lines, CDLA-Permissive-2.0 |
@@ -330,4 +330,4 @@ beside it. Decompress it before running the check.
 | Validation | source and fresh both stop at load `HASTI3CD1` (`p0 is invalid`); the results match |
 | Diagnostics | `READ.XIIDM.VALUE_DEFAULTED` 10, `READ.XIIDM.VERSION.COMPATIBILITY` 3, `READ.XIIDM.CALCULATION_VIEW` 2; identical in the stored IR and the emission log |
 | Failures | none |
-| Wall time | parse and serialize RTE_PARSE_PLACEHOLDER s, deserialize and emit RTE_EMIT_PLACEHOLDER s, PyPowSybl load 2.2 s source and 2.1 s fresh, total RTE_TOTAL_PLACEHOLDER s (debug build) |
+| Wall time | parse and serialize 231.1 s, deserialize and emit 21.7 s, PyPowSybl load 1.1 s source and 1.1 s fresh, total 255.0 s (debug build) |
