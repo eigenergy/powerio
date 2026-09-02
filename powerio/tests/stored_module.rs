@@ -495,6 +495,91 @@ fn balanced_network_scenario_set_round_trips() {
     assert_eq!(serialize_module_text(&back).unwrap(), text);
 }
 
+// ---- determinism of `serialize` ---------------------------------------------
+
+fn fixture_path(relative: &str) -> String {
+    format!("{}/../tests/data/{relative}", env!("CARGO_MANIFEST_DIR"))
+}
+
+fn parse_fixture(relative: &str, format: &str) -> PioModule<PioValue> {
+    powerio::parse(
+        powerio::Source::open(fixture_path(relative)).unwrap(),
+        Some(format),
+    )
+    .unwrap_or_else(|error| panic!("{relative}: {error}"))
+}
+
+/// Serializing a module twice gives identical text, and serializing what
+/// that text deserializes to gives the same text again.
+fn assert_serialization_is_stable(module: &PioModule<PioValue>, label: &str) {
+    let first = serialize_module_text(module).unwrap();
+    let second = serialize_module_text(module).unwrap();
+    assert_eq!(
+        first, second,
+        "{label}: two serializations of one module differ"
+    );
+    let reread = deserialize_module_text(&first).unwrap();
+    let third = serialize_module_text(&reread).unwrap();
+    assert_eq!(
+        first, third,
+        "{label}: serialize, deserialize, serialize is not identity"
+    );
+}
+
+#[test]
+fn serialization_of_the_fixture_cases_is_deterministic() {
+    for (relative, format) in [
+        ("case9.m", "matpower"),
+        ("case14.m", "matpower"),
+        ("dist/bmopf/example_ieee13.json", "bmopf-json"),
+        ("dist/opendss/ieee13/IEEE13Nodeckt.dss", "dss"),
+    ] {
+        assert_serialization_is_stable(&parse_fixture(relative, format), relative);
+    }
+}
+
+#[test]
+fn serialization_of_records_and_collections_is_deterministic() {
+    use powerio_core::{Scenario, ScenarioId, ScenarioSet};
+
+    assert_serialization_is_stable(&module_with_records(), "records");
+
+    let mut second = small_network();
+    second.loads_mut()[0].p = 55.0;
+    let series = powerio_core::TimeSeries::new(
+        vec![
+            TimePoint::new("h0", Some(std::time::Duration::from_secs(3600))).unwrap(),
+            TimePoint::new("h1", None).unwrap(),
+        ],
+        vec![small_network(), second],
+    )
+    .unwrap();
+    assert_serialization_is_stable(&PioModule::new(PioValue::from(series)), "time series");
+
+    let set = ScenarioSet::new(vec![
+        Scenario::new(ScenarioId::new("peak").unwrap(), Some(0.4), small_network()),
+        Scenario::new(ScenarioId::new("base").unwrap(), Some(0.6), small_network()),
+    ])
+    .unwrap();
+    assert_serialization_is_stable(&PioModule::new(PioValue::from(set)), "scenario set");
+
+    let points = powerio_prob::BalancedOperatingPointBuilder::new(
+        small_network(),
+        vec![
+            TimePoint::new("h0", None).unwrap(),
+            TimePoint::new("h1", None).unwrap(),
+        ],
+    )
+    .load_active_powers(vec![40.0, 55.0])
+    .generator_active_powers(vec![42.0, 61.5])
+    .build()
+    .unwrap();
+    assert_serialization_is_stable(
+        &PioModule::new(PioValue::from(points)),
+        "operating point series",
+    );
+}
+
 // ---- reference validation ----------------------------------------------------
 
 #[test]
