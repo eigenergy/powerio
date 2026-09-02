@@ -143,10 +143,55 @@ parse warning that hides the cause.
   `http://iec.ch/TC57/CIM100-European#` (IEC 61970-600-1/-2:2021). Both use
   the IEC 61970-552 CIMXML instance syntax: `rdf:ID` defines a record,
   `rdf:about` extends one, and `md:FullModel` heads each profile document.
-  EQ and TP are required;
+  EQ is required;
   SSH, SV, and boundary profile data are used when present. SSH assignments
   take precedence over SV observations; an SV shunt section count that differs
-  from the SSH assignment is reported and not retained. Each document's
+  from the SSH assignment is reported and not retained. A set with
+  TopologicalNode data reads one bus per `TopologicalNode`, and that data
+  wins even for node breaker equipment, so source TopologicalNode identities
+  survive. A set without TopologicalNode data reads when its declared profile
+  URIs describe node breaker equipment, the selection PowSybl makes in
+  [`CgmesModelTripleStore.computeIsNodeBreaker`](https://github.com/powsybl/powsybl-core/blob/0939bfcc2c0c094de907dc818dd688b4cbfb7281/cgmes/cgmes-model/src/main/java/com/powsybl/cgmes/model/triplestore/CgmesModelTripleStore.java#L168-L184): every CGMES 2.4.15 document
+  that declares EquipmentCore also declares EquipmentOperation (and every
+  EquipmentBoundary document declares EquipmentBoundaryOperation), or the EQ
+  is CGMES 3.0 CoreEquipment with ConnectivityNode records. The buses are
+  then the connected components of the ConnectivityNode graph joined by
+  switches that are closed and in service, the graph PowSybl's
+  [`NodeMapping`](https://github.com/powsybl/powsybl-core/blob/0939bfcc2c0c094de907dc818dd688b4cbfb7281/cgmes/cgmes-conversion/src/main/java/com/powsybl/cgmes/conversion/NodeMapping.java)
+  and [`SwitchConversion`](https://github.com/powsybl/powsybl-core/blob/0939bfcc2c0c094de907dc818dd688b4cbfb7281/cgmes/cgmes-conversion/src/main/java/com/powsybl/cgmes/conversion/elements/SwitchConversion.java)
+  hand to IIDM. A switch is open when SSH
+  `Switch.open` says so, else when EQ `Switch.normalOpen` says so, else
+  closed; SV `SvStatus.inService`, else SSH `Equipment.inService`, decides
+  service status, which CGMES defines as availability for topology
+  processing (PowSybl 7.3 reads only the switch position; the official sets
+  contain no closed switch out of service, so both rules agree there). A
+  terminal is connected unless SSH `ACDCTerminal.connected` is false; a
+  disconnected terminal leaves its equipment on the bus of its
+  ConnectivityNode with the equipment out of service, where PowSybl inserts
+  a fictitious open switch. Each bus takes the nominal voltage of its nodes'
+  VoltageLevel (a Bay resolves to its VoltageLevel); a node in a Line
+  container takes the base voltage of attached conducting equipment or
+  transformer ends, and a node no terminal references gets no bus. A bus is
+  named after a BusbarSection on it, else its first ConnectivityNode, and
+  its identity is the UUIDv5 under PowerIO's CGMES namespace of the sorted
+  ConnectivityNode mRIDs it joins, so the same nodes always yield the same
+  mRID and no source TopologicalNode mRID is invented; the `bus_breaker_buses`
+  table stays empty and `calculated_buses` lists the nodes of each bus.
+  `READ.CGMES.TOPOLOGY_CALCULATED` (a remark) states the bus, node, and
+  switch counts and the identity rule; `READ.CGMES.CONNECTIVITY_INSUFFICIENT`
+  (an error) names the missing data when a set has neither TopologicalNode
+  records nor calculable connectivity, such as a bus branch EQ without TP.
+  Limits of the calculated topology: SvVoltage observations reference
+  TopologicalNodes, so bus voltages keep their defaults and
+  `READ.CGMES.RECORD_UNMAPPED` counts the observations; no TopologicalIsland
+  names an angle reference, so the reference bus comes from
+  `referencePriority`, an external injection, or the largest machine; a
+  closed switch between two voltage levels joins its nodes into one bus
+  placed in the first node's level, as PowSybl merges those levels; a 2.4.15
+  junction terminal in EQ_BD names no ConnectivityNode and is recorded as
+  disconnected without TP_BD; and PowSybl's bus view omits a component with
+  no busbar section and fewer than two feeders while PowerIO keeps every
+  component as a bus, so bus counts differ by those components. Each document's
   `Model.modelingAuthoritySet` is read for the boundary and state variable
   authority checks, reported, and not retained; fresh output states PowerIO's
   own modeling authority. A source can be an

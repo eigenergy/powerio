@@ -130,6 +130,22 @@ XIIDM output stays 1.17. The XIIDM element mapping now reads one tree
 representation produced by either the XML or JSON reader. In the PowSybl
 gate, PyPowSybl reads PowerIO's JIIDM output and PowerIO reads PyPowSybl's.
 
+CGMES sets without `TopologicalNode` data now read when their declared
+profiles describe node breaker equipment (CGMES 2.4.15 EquipmentOperation,
+or CGMES 3.0 CoreEquipment with `ConnectivityNode` data), matching PowSybl.
+The reader calculates buses as connected components of the
+`ConnectivityNode` graph joined by closed, in-service switches. SSH
+`Switch.open` takes precedence over EQ `Switch.normalOpen`. Each calculated
+bus takes the name of a busbar section on it and a UUIDv5 identity derived
+from the joined `ConnectivityNode` mRIDs, without inventing a source
+`TopologicalNode` mRID. `READ.CGMES.TOPOLOGY_CALCULATED` reports the
+calculation, and `READ.CGMES.CONNECTIVITY_INSUFFICIENT` names missing data
+when a set has neither `TopologicalNode` data nor calculable connectivity.
+Bay containers resolve to their voltage level, and a `TopologicalNode` whose
+container holds none of its `ConnectivityNode` data follows those nodes. The
+PowSybl gate compares calculated bus assignments for the MiniGrid, SmallGrid,
+and CGMES 3.0 MicroGrid node breaker sets with PyPowSybl.
+
 ## 0.10.0
 
 PowerIO 0.10 is the public beta of the 1.0 API. API corrections may land before 1.0.0 as downstream integrations exercise the new design.
