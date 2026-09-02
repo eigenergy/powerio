@@ -7,6 +7,8 @@ import argparse
 from pathlib import Path
 
 from check_outputs import (
+    EUROSTAG_RELATIVE,
+    IIDM_VERSIONS,
     REMOTE_CONTROL_RELATIVE,
     check_powsybl_version,
     load_checked,
@@ -31,6 +33,24 @@ def main() -> None:
         network.save(
             output_dir / f"powsybl-xiidm-1-{version}.xiidm",
             "XIIDM",
+            {"iidm.export.xml.version": f"1.{version}"},
+        )
+
+    # The eurostag tutorial network is representable in every IIDM version,
+    # so PowSybl writes it in each version and in both encodings.
+    eurostag = load_checked(
+        args.powsybl_core.resolve() / EUROSTAG_RELATIVE,
+        "PowSybl eurostag export source",
+    )
+    for version in IIDM_VERSIONS:
+        eurostag.save(
+            output_dir / f"powsybl-eurostag-xiidm-1-{version}.xiidm",
+            "XIIDM",
+            {"iidm.export.xml.version": f"1.{version}"},
+        )
+        eurostag.save(
+            output_dir / f"powsybl-eurostag-jiidm-1-{version}.jiidm",
+            "JIIDM",
             {"iidm.export.xml.version": f"1.{version}"},
         )
 

@@ -71,6 +71,8 @@ fresh_emit() {
 "$powerio_binary" convert "$repository_root/tests/data/case9.m" \
     --to xiidm -o "$output_dir/case9.xiidm"
 "$powerio_binary" convert "$repository_root/tests/data/case9.m" \
+    --to jiidm -o "$output_dir/case9.jiidm"
+"$powerio_binary" convert "$repository_root/tests/data/case9.m" \
     --to cgmes -o "$output_dir/case9-cgmes"
 "$powerio_binary" convert "$repository_root/tests/data/case9.m" \
     --to psse -o "$output_dir/case9-psse33.raw"
@@ -87,6 +89,8 @@ fresh_emit "$cgmes_30_source" cgmes cgmes cgmes-30 \
     "$output_dir/cgmes-30"
 fresh_emit "$remote_control_source" xiidm xiidm remote-control \
     "$output_dir/remote-control.xiidm"
+fresh_emit "$remote_control_source" xiidm jiidm remote-control-jiidm \
+    "$output_dir/remote-control.jiidm"
 fresh_emit "$two_terminal_dc_source" xiidm xiidm two-terminal-dc \
     "$output_dir/two-terminal-dc.xiidm"
 for version in 12 13 14 15 16 17; do
@@ -113,6 +117,14 @@ for version in 12 13 14 15 16 17; do
     fresh_emit "$powsybl_inputs/powsybl-xiidm-1-$version.xiidm" \
         xiidm xiidm "powsybl-xiidm-1-$version" \
         "$output_dir/powsybl-xiidm-1-$version.xiidm"
+done
+for version in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17; do
+    fresh_emit "$powsybl_inputs/powsybl-eurostag-xiidm-1-$version.xiidm" \
+        xiidm xiidm "powsybl-eurostag-xiidm-1-$version" \
+        "$output_dir/powsybl-eurostag-xiidm-1-$version.xiidm"
+    fresh_emit "$powsybl_inputs/powsybl-eurostag-jiidm-1-$version.jiidm" \
+        jiidm jiidm "powsybl-eurostag-jiidm-1-$version" \
+        "$output_dir/powsybl-eurostag-jiidm-1-$version.jiidm"
 done
 fresh_emit "$powsybl_inputs/powsybl-cgmes-2415.zip" \
     cgmes cgmes powsybl-cgmes-2415 "$output_dir/powsybl-cgmes-2415"

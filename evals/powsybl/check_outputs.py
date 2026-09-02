@@ -81,6 +81,10 @@ REMOTE_CONTROL_RELATIVE = Path(
 TWO_TERMINAL_DC_RELATIVE = Path(
     "psse/psse-converter/src/test/resources/twoTerminalDc.xiidm"
 )
+EUROSTAG_RELATIVE = Path(
+    "iidm/iidm-serde/src/test/resources/V1_17/eurostag-tutorial1-lf.xml"
+)
+IIDM_VERSIONS = tuple(range(0, 18))
 XIIDM_VERSION_FIXTURES = {
     "1.12": (
         Path("iidm/iidm-serde/src/test/resources/V1_12/threeWindingsTransformerToBeEstimated.xiidm"),
@@ -1006,6 +1010,22 @@ XIIDM_EXPECTATIONS = {
             "switches": 0,
         }
         for version in XIIDM_VERSION_FIXTURES
+    },
+    "IIDM eurostag": {
+        "voltage levels": 4,
+        "buses": 4,
+        "lines": 2,
+        "2W transformers": 2,
+        "3W transformers": 0,
+        "generators": 1,
+        "loads": 1,
+        "shunts": 0,
+        "LCC converters": 0,
+        "HVDC lines": 0,
+        "operational limits": 0,
+        "ratio changers": 1,
+        "ratio steps": 3,
+        "switches": 0,
     },
 }
 ASSERTION_COUNT = [0]
@@ -3785,8 +3805,10 @@ def check_xiidm_equivalence(
     fresh: pp.network.Network,
     label: str,
     expectation_key: str | None = None,
+    excluded_cells: dict[str, set[tuple[str, str]]] | None = None,
 ) -> None:
     expected = XIIDM_EXPECTATIONS[expectation_key or label]
+    excluded_cells = excluded_cells or {}
     frames = (
         (
             "voltage level",
@@ -3835,6 +3857,7 @@ def check_xiidm_equivalence(
             label,
             XIIDM_ELECTRICAL_FIELDS,
             exact_ids=True,
+            excluded_cells=excluded_cells.get(equipment),
         )
         comparisons += compared
 
@@ -4398,6 +4421,7 @@ def main() -> None:
 
     for path, label in (
         (output_dir / "case9.xiidm", "case9 XIIDM"),
+        (output_dir / "case9.jiidm", "case9 JIIDM"),
         (case9_cgmes_zip, "case9 CGMES"),
         (output_dir / "case9-psse33.raw", "case9 PSS/E RAW revision 33"),
         (output_dir / "case9-psse35.raw", "case9 PSS/E RAW revision 35"),
@@ -4529,6 +4553,17 @@ def main() -> None:
         "XIIDM remote control",
     )
     check_xiidm_remote_control(remote_control)
+    remote_control_jiidm = load_checked(
+        output_dir / "remote-control.jiidm",
+        "fresh JIIDM remote control",
+    )
+    check_xiidm_equivalence(
+        remote_control_source,
+        remote_control_jiidm,
+        "JIIDM remote control",
+        expectation_key="XIIDM remote control",
+    )
+    check_xiidm_remote_control(remote_control_jiidm)
 
     two_terminal_dc_source = load_checked(
         powsybl_core / TWO_TERMINAL_DC_RELATIVE,
@@ -4585,6 +4620,43 @@ def main() -> None:
             f"PowSybl XIIDM 1.{version}",
             expectation_key="XIIDM remote control",
         )
+
+    eurostag_source = load_checked(powsybl_core / EUROSTAG_RELATIVE, "official IIDM eurostag")
+    # The eurostag transformers state rated voltages (24/400 kV and 400/158 kV)
+    # that differ from their terminal nominal voltages. Fresh PowerIO output
+    # keeps the voltage ratio and normalizes the winding voltage base to the
+    # terminal nominal voltage, which the reader reports as
+    # `READ.XIIDM.FIELD_UNMAPPED`; `rho` is still compared.
+    eurostag_fresh_exclusions = {
+        "2W transformer": {
+            (transformer, column)
+            for transformer in ("NGEN_NHV1", "NHV2_NLOAD")
+            for column in ("rated_u1", "rated_u2")
+        }
+    }
+    for version in IIDM_VERSIONS:
+        for encoding, extension in (("xiidm", "xiidm"), ("jiidm", "jiidm")):
+            written = load_checked(
+                powsybl_inputs / f"powsybl-eurostag-{encoding}-1-{version}.{extension}",
+                f"PowSybl generated {encoding.upper()} 1.{version}",
+            )
+            check_xiidm_equivalence(
+                eurostag_source,
+                written,
+                f"PowSybl generated {encoding.upper()} 1.{version}",
+                expectation_key="IIDM eurostag",
+            )
+            fresh = load_checked(
+                output_dir / f"powsybl-eurostag-{encoding}-1-{version}.{extension}",
+                f"fresh {encoding.upper()} from PowSybl {encoding.upper()} 1.{version}",
+            )
+            check_xiidm_equivalence(
+                eurostag_source,
+                fresh,
+                f"fresh {encoding.upper()} from PowSybl {encoding.upper()} 1.{version}",
+                expectation_key="IIDM eurostag",
+                excluded_cells=eurostag_fresh_exclusions,
+            )
 
     for version in ("2415", "30"):
         source_path = powsybl_inputs / f"powsybl-cgmes-{version}.zip"
