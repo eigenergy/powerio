@@ -93,6 +93,31 @@ fresh_emit() {
     --to psse35 -o "$output_dir/case9-psse35.raw"
 "$powerio_binary" convert "$repository_root/tests/data/case9.m" \
     --to psse-rawx -o "$output_dir/case9.rawx"
+"$powerio_binary" convert "$repository_root/tests/data/case9.m" \
+    --to ucte -o "$output_dir/case9.uct"
+"$powerio_binary" convert "$repository_root/tests/data/case14.m" \
+    --to ucte -o "$output_dir/case14.uct"
+
+# Every UCTE-DEF fixture in the checkout: PowerIO reads it into IR and writes
+# MATPOWER and fresh UCTE from the IR; the checker compares the IR with
+# PyPowSybl's view and reloads the fresh UCTE. A fixture PowerIO refuses
+# leaves a `.read.log` and no IR; the checker pins which ones those are.
+ucte_dir="$output_dir/ucte"
+mkdir -p "$ucte_dir"
+find "$powsybl_core/ucte" -type f -name '*.uct' | sort | while read -r source; do
+    relative=${source#"$powsybl_core/"}
+    stem=${relative%.uct}
+    stem=${stem//\//__}
+    if "$powerio_binary" serialize "$source" --from ucte -o "$ucte_dir/$stem.pio.json" \
+        2> "$ucte_dir/$stem.read.log"; then
+        "$powerio_binary" convert "$ucte_dir/$stem.pio.json" --to matpower \
+            -o "$ucte_dir/$stem.m" 2> "$ucte_dir/$stem.matpower.log"
+        "$powerio_binary" convert "$ucte_dir/$stem.pio.json" --to ucte \
+            -o "$ucte_dir/$stem.fresh.uct" 2> "$ucte_dir/$stem.emit.log"
+    else
+        rm -f "$ucte_dir/$stem.pio.json"
+    fi
+done
 
 fresh_emit "$cgmes_2415_source" cgmes cgmes cgmes-2415 \
     "$output_dir/cgmes-2415"
