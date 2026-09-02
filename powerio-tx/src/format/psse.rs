@@ -1928,6 +1928,7 @@ fn parse_psse_source_inner(
     let mut areas = Vec::new();
     let mut solver = SolverParams::default();
     let mut bus_base_kv: BTreeMap<BusId, f64> = BTreeMap::new();
+    let mut bus_area_zone: BTreeMap<BusId, (usize, usize)> = BTreeMap::new();
     let mut unmodeled_sections: BTreeMap<String, usize> = BTreeMap::new();
     let mut regulating_nodes = Vec::new();
 
@@ -1971,9 +1972,14 @@ fn parse_psse_source_inner(
             Section::Bus => {
                 let bus = read_bus(&f)?;
                 bus_base_kv.insert(bus.id, bus.base_kv);
+                bus_area_zone.insert(bus.id, (bus.area, bus.zone));
                 buses.push(bus);
             }
-            Section::Load => loads.push(read_load(&f, raw_rev, warnings)?),
+            Section::Load => {
+                let mut load = read_load(&f, raw_rev, warnings)?;
+                drop_bus_default_area_zone(&mut load, &bus_area_zone);
+                loads.push(load);
+            }
             Section::FixedShunt => shunts.push(read_shunt(&f)?),
             Section::SwitchedShunt => {
                 let index = shunts.len();
@@ -3055,6 +3061,26 @@ fn retain_string_extra(extras: &mut Extras, fields: &[Cow<'_, str>], index: usiz
         .filter(|value| !value.is_empty())
     {
         extras.insert(key.into(), Value::String(value.to_owned()));
+    }
+}
+
+/// A load record's AREA and ZONE default to the values of its bus, and the
+/// writer re-derives those defaults from the bus table. Only an assignment that
+/// differs from the bus is information the record carries, so only that one
+/// is retained as an extra; a matching value would otherwise appear as a
+/// model change after a round trip through PSS/E and as a dropped field on
+/// every cross-format emission.
+fn drop_bus_default_area_zone(load: &mut Load, bus_area_zone: &BTreeMap<BusId, (usize, usize)>) {
+    let Some(&(bus_area, bus_zone)) = bus_area_zone.get(&load.bus) else {
+        return;
+    };
+    for (key, bus_value) in [("psse_area", bus_area), ("psse_zone", bus_zone)] {
+        let matches_bus = extra_i64(&load.extras, key)
+            .and_then(|value| usize::try_from(value).ok())
+            .is_some_and(|value| value == bus_value);
+        if matches_bus {
+            load.extras.remove(key);
+        }
     }
 }
 

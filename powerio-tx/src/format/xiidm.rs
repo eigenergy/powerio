@@ -39,6 +39,10 @@ use crate::network::{
 use crate::{Error, Generator, Result};
 
 const FORMAT: &str = "XIIDM XML";
+/// Retained three winding transformer `ratedU0` when it differs from
+/// `ratedU1`: the voltage base the source stated its leg impedances on.
+const XIIDM_RATED_U0_EXTRA: &str = "xiidm_rated_u0";
+
 const NAMESPACE: &str = "http://www.powsybl.org/schema/iidm/1_17";
 const EQUIPMENT_NAMESPACE: &str = "http://www.powsybl.org/schema/iidm/equipment/1_17";
 const NAMESPACE_PREFIX: &str = "http://www.powsybl.org/schema/iidm/";
@@ -802,10 +806,10 @@ impl ParsedXiidm {
                 }
             }
             "extension" => {
-                if !self
+                if self
                     .frames
                     .last()
-                    .is_some_and(|frame| frame.tag == "network")
+                    .is_none_or(|frame| frame.tag != "network")
                 {
                     return Err(format_error(
                         "XIIDM extension must be a direct child of a network",
@@ -2269,8 +2273,8 @@ fn omission_requires_equipment_validation(
             .iter()
             .find(|generator| generator.uid.as_deref() == Some(omitted.component.local_id()))
             .is_none_or(|generator| generator.voltage_regulation_on),
-        ("generator", OmittedFieldName::RatedApparentPower) => false,
-        ("shunt", OmittedFieldName::ShuntConductancePerSection) => false,
+        ("generator", OmittedFieldName::RatedApparentPower)
+        | ("shunt", OmittedFieldName::ShuntConductancePerSection) => false,
         _ => true,
     }
 }
@@ -4456,7 +4460,7 @@ fn read_transformer(
 ) -> Result<Branch> {
     let rated_u1 = required_f64(&equipment.attrs, "ratedU1")?;
     let rated_u2 = required_f64(&equipment.attrs, "ratedU2")?;
-    if rated_u2 != nominal_v2 {
+    if (rated_u2 - nominal_v2).abs() > f64::EPSILON {
         diagnostics.push(
             &codes::READ_XIIDM_FIELD_UNMAPPED,
             format!(
@@ -4897,13 +4901,15 @@ fn read_three_winding_transformer(
             ),
         );
     }
-    if rated_u0 != rated_u[0] {
-        diagnostics.push(
-            &codes::READ_XIIDM_FIELD_UNMAPPED,
-            format!(
-                "XIIDM three winding transformer `{}` has ratedU0={rated_u0} kV and ratedU1={} kV; fresh XIIDM output uses ratedU1 as ratedU0",
-                equipment.id, rated_u[0]
-            ),
+    // `ratedU0` is the voltage base the leg impedances are stated on and has
+    // no electrical meaning once they are per unit. Fresh output derives it
+    // from winding one, so only a differing source base is retained, and the
+    // writer restates the legs on it.
+    let mut extras = BTreeMap::new();
+    if (rated_u0 - rated_u[0]).abs() > f64::EPSILON {
+        extras.insert(
+            XIIDM_RATED_U0_EXTRA.to_string(),
+            serde_json::Value::from(rated_u0),
         );
     }
     if star_g[1] != 0.0 || star_g[2] != 0.0 || star_b[1] != 0.0 || star_b[2] != 0.0 {
@@ -4925,7 +4931,7 @@ fn read_three_winding_transformer(
         in_service: connected == 3,
         name: equipment.attrs.get("name").cloned(),
         uid: Some(equipment.id.clone()),
-        extras: BTreeMap::default(),
+        extras,
     })
 }
 
@@ -8397,8 +8403,7 @@ fn is_tie_calculation_branch(index: &XiidmWriteIndex<'_>, branch: &Branch) -> bo
         return false;
     };
     component_id("branch", local_id)
-        .ok()
-        .is_some_and(|component| index.tie_calculation_branches.contains(&component))
+        .is_ok_and(|component| index.tie_calculation_branches.contains(&component))
 }
 
 fn write_tie_lines(
@@ -8759,9 +8764,7 @@ fn is_boundary_calculation_component(
     let Some(local_id) = local_id else {
         return false;
     };
-    component_id(component_type, local_id)
-        .ok()
-        .is_some_and(|component| calculations.contains(&component))
+    component_id(component_type, local_id).is_ok_and(|component| calculations.contains(&component))
 }
 
 fn assignment_attribute(
@@ -9398,11 +9401,16 @@ fn write_three_winding_transformer(
         let winding = &transformer.windings[side];
         index.bus(winding.bus)
     });
-    let rated_u0 = if transformer.windings[0].nominal_kv > 0.0 {
-        transformer.windings[0].nominal_kv
-    } else {
-        buses[0].base_kv
-    };
+    let rated_u0 = transformer
+        .extras
+        .get(XIIDM_RATED_U0_EXTRA)
+        .and_then(serde_json::Value::as_f64)
+        .filter(|base| *base > 0.0)
+        .unwrap_or(if transformer.windings[0].nominal_kv > 0.0 {
+            transformer.windings[0].nominal_kv
+        } else {
+            buses[0].base_kv
+        });
     let zbase = rated_u0 * rated_u0 / DEFAULT_BASE_MVA;
     let star = transformer.calc_star_impedances();
     let taps: [Vec<&NetworkTapChanger>; 3] =
@@ -12220,7 +12228,7 @@ mod tests {
             .records()
             .iter()
             .filter(|diagnostic| diagnostic.code() == "READ.XIIDM.FIELD_UNMAPPED")
-            .map(|diagnostic| diagnostic.message())
+            .map(powerio_core::Diagnostic::message)
             .filter(|message| message.contains("operational limits group `normal`"))
             .collect::<Vec<_>>();
         assert_eq!(unmapped_limit_properties.len(), 2);
@@ -12238,7 +12246,7 @@ mod tests {
             .records()
             .iter()
             .filter(|diagnostic| diagnostic.code() == "READ.XIIDM.FIELD_UNMAPPED")
-            .map(|diagnostic| diagnostic.message())
+            .map(powerio_core::Diagnostic::message)
             .collect::<Vec<_>>();
         assert!(
             unmapped_fields
@@ -12851,12 +12859,25 @@ mod tests {
             .replace("ratedU0=\"132\"", "ratedU0=\"130\"")
             .replace("r2=\"1.7424\"", "g2=\"0.001\" r2=\"1.7424\"");
         let mut diagnostics = Diagnostics::new();
-        parse_xiidm_source(&three_winding, &mut diagnostics).unwrap();
-        assert!(diagnostics.lines().iter().any(|line| {
-            line.contains("three winding transformer `T3`")
-                && line.contains("ratedU0=130")
-                && line.contains("uses ratedU1 as ratedU0")
-        }));
+        let network = parse_xiidm_source(&three_winding, &mut diagnostics).unwrap();
+        let transformer = network
+            .transformers_3w()
+            .iter()
+            .find(|transformer| transformer.uid.as_deref() == Some("T3"))
+            .unwrap();
+        assert_eq!(
+            transformer
+                .extras
+                .get(XIIDM_RATED_U0_EXTRA)
+                .and_then(serde_json::Value::as_f64),
+            Some(130.0)
+        );
+        assert!(
+            !diagnostics
+                .lines()
+                .iter()
+                .any(|line| line.contains("ratedU0"))
+        );
         assert!(diagnostics.lines().iter().any(|line| {
             line.contains("three winding transformer `T3`")
                 && line.contains("leg shunt admittances")

@@ -8490,6 +8490,7 @@
         "active_power",
         "reactive_power",
         "voltage_setpoint",
+        "rated_apparent_power",
         "shunt_conductance_per_section"
       ],
       "type": "string"
@@ -11309,7 +11310,7 @@
         },
         {
           "const": "xiidm",
-          "description": "Read from PowSybl's XIIDM XML grid exchange format, version 1.17.",
+          "description": "Read from PowSybl's XIIDM XML grid exchange format, versions 1.12 through 1.17.",
           "type": "string"
         },
         {

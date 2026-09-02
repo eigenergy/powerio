@@ -1,175 +1,367 @@
-# Thin Julia binding over the powerio C ABI (powerio-capi), shared by the parse
-# benchmark and the ExaPowerIO validator. Build the library first:
+# Thin Julia binding over the powerio C ABI 7 (powerio-capi), shared by the
+# parse benchmark and the ExaPowerIO validator. Build the library first:
 #
-#   cargo build --release -p powerio-capi --features arrow,matrix
+#   cargo build --release -p powerio-capi
 #
-# The C ABI returns raw MATPOWER values: demand/shunt/gen in MW/MVAr (not per
-# unit), branch `shift` in degrees, branch `b` as the total line charging, and a
-# raw `tap` that may be 0 (meaning 1). Dense bus index == file order, so row k of
-# every table lines up with bus_ids[k]. See powerio-capi/include/powerio.h.
+# ABI 7 exposes one balanced network through owner rooted typed views: a
+# `pio_balanced_network_*_count` query and a `pio_balanced_network_*_at` fill
+# per element family. The views carry raw MATPOWER values: demand, shunt, and
+# generation in MW/MVAr (not per unit), branch `shift` in degrees, branch `b`
+# as the total line charging, and a raw `tap` that may be 0 (meaning 1). Dense
+# bus index == file order, so row k of every per-bus table lines up with
+# bus_ids[k]. Struct layouts mirror powerio-capi/include/powerio.h field for
+# field; a header change that reorders a view must be mirrored here.
+
+using Libdl
 
 const _LIBEXT = Sys.iswindows() ? "dll" : (Sys.isapple() ? "dylib" : "so")
 const LIBPOWERIO = abspath(joinpath(@__DIR__, "..", "..", "target", "release", "libpowerio_capi.$_LIBEXT"))
-const PIO_ARROW_TABLE_YBUS = Int32(15)
 
-isfile(LIBPOWERIO) || error("libpowerio_capi not found at $LIBPOWERIO — run `cargo build --release -p powerio-capi --features arrow,matrix`")
+isfile(LIBPOWERIO) || error("libpowerio_capi not found at $LIBPOWERIO — run `cargo build --release -p powerio-capi`")
 
 # One structured error read: code and message off the PioError handle, then
 # release it.
 function _take_error(err::Ptr{Cvoid})
+    err == C_NULL && return "(no error detail)"
     code = unsafe_string(ccall((:pio_error_code, LIBPOWERIO), Cstring, (Ptr{Cvoid},), err))
     message = unsafe_string(ccall((:pio_error_message, LIBPOWERIO), Cstring, (Ptr{Cvoid},), err))
     ccall((:pio_error_release, LIBPOWERIO), Cvoid, (Ptr{Cvoid},), err)
     return "$code: $message"
 end
 
-# Parse `path` into a balanced network handle through the module surface:
-# parse to the module, take the balanced network out, release the module.
-function pio_parse_file(path::AbstractString)
+# --- header view structs -------------------------------------------------
+
+struct PioStringView
+    data::Ptr{UInt8}
+    len::Csize_t
+end
+
+struct PioF64View
+    data::Ptr{Float64}
+    len::Csize_t
+end
+
+struct PioComponentIdView
+    component_type::PioStringView
+    local_id::PioStringView
+end
+
+struct PioTerminalReferenceView
+    equipment::PioComponentIdView
+    terminal::UInt8
+end
+
+struct PioBalancedLocationView
+    x::Float64
+    y::Float64
+    kind::PioStringView
+    has_kind::Bool
+end
+
+struct PioBalancedBusView
+    component_id::PioStringView
+    has_component_id::Bool
+    id::Csize_t
+    bus_type::PioStringView
+    vm_pu::Float64
+    va_degrees::Float64
+    base_kv::Float64
+    vmax_pu::Float64
+    vmin_pu::Float64
+    has_emergency_voltage_limits::Bool
+    emergency_vmax_pu::Float64
+    emergency_vmin_pu::Float64
+    area::Csize_t
+    zone::Csize_t
+    name::PioStringView
+    has_name::Bool
+    location::PioBalancedLocationView
+    has_location::Bool
+end
+
+struct PioBalancedLoadVoltageModelView
+    kind::PioStringView
+    p_constant_power_mw::Float64
+    q_constant_power_mvar::Float64
+    p_constant_current_mw::Float64
+    q_constant_current_mvar::Float64
+    p_constant_impedance_mw::Float64
+    q_constant_impedance_mvar::Float64
+    exponential_p_mw::Float64
+    exponential_q_mvar::Float64
+    gamma_p::Float64
+    gamma_q::Float64
+    nominal_voltage_pu::Float64
+    has_nominal_voltage::Bool
+    load_type::Int32
+    has_load_type::Bool
+    scaling::Float64
+    has_scaling::Bool
+end
+
+struct PioBalancedLoadView
+    component_id::PioStringView
+    has_component_id::Bool
+    bus_id::Csize_t
+    p_mw::Float64
+    q_mvar::Float64
+    in_service::Bool
+    voltage_model::PioBalancedLoadVoltageModelView
+end
+
+struct PioBalancedShuntView
+    component_id::PioStringView
+    has_component_id::Bool
+    bus_id::Csize_t
+    conductance_mw::Float64
+    susceptance_mvar::Float64
+    in_service::Bool
+    section_count::UInt32
+    has_section_count::Bool
+    has_control::Bool
+    control_mode::PioStringView
+    control_vmax_pu::Float64
+    control_vmin_pu::Float64
+    control_bus_id::Csize_t
+    has_control_bus::Bool
+    control_reactive_range_percent::Float64
+    control_block_count::Csize_t
+end
+
+struct PioTransformerControlView
+    mode::PioStringView
+    enabled::Bool
+    controlled_bus_id::Csize_t
+    has_controlled_bus::Bool
+    controlled_bus_on_winding_side::Bool
+    regulating_terminal::PioTerminalReferenceView
+    has_regulating_terminal::Bool
+    tap_min::Float64
+    tap_max::Float64
+    band_min::Float64
+    band_max::Float64
+    tap_position_count::UInt32
+    mva_base::Float64
+    winding_connection_angle::Float64
+    has_winding_connection_angle::Bool
+end
+
+struct PioBalancedBranchView
+    component_id::PioStringView
+    has_component_id::Bool
+    name::PioStringView
+    has_name::Bool
+    from_bus_id::Csize_t
+    to_bus_id::Csize_t
+    resistance_pu::Float64
+    reactance_pu::Float64
+    total_charging_susceptance_pu::Float64
+    terminal_charging_is_explicit::Bool
+    from_conductance_pu::Float64
+    from_susceptance_pu::Float64
+    to_conductance_pu::Float64
+    to_susceptance_pu::Float64
+    rate_a_mva::Float64
+    rate_b_mva::Float64
+    rate_c_mva::Float64
+    additional_rating_count::Csize_t
+    has_current_ratings::Bool
+    current_rating_a::Float64
+    current_rating_b::Float64
+    current_rating_c::Float64
+    tap_ratio::Float64
+    effective_tap_ratio::Float64
+    phase_shift_degrees::Float64
+    in_service::Bool
+    angle_min_degrees::Float64
+    angle_max_degrees::Float64
+    control::PioTransformerControlView
+    has_control::Bool
+    route_point_count::Csize_t
+    has_route::Bool
+end
+
+struct PioGeneratorCostView
+    model::UInt8
+    startup::Float64
+    shutdown::Float64
+    ncost::Csize_t
+    coefficients::PioF64View
+end
+
+struct PioActivePowerControlView
+    participate::Bool
+    droop_percent::Float64
+    has_droop_percent::Bool
+    participation_factor::Float64
+    has_participation_factor::Bool
+    minimum_target_active_power_mw::Float64
+    has_minimum_target_active_power::Bool
+    maximum_target_active_power_mw::Float64
+    has_maximum_target_active_power::Bool
+end
+
+struct PioBalancedGeneratorView
+    component_id::PioStringView
+    has_component_id::Bool
+    bus_id::Csize_t
+    energy_source::PioStringView
+    active_power_mw::Float64
+    reactive_power_mvar::Float64
+    active_power_max_mw::Float64
+    active_power_min_mw::Float64
+    reactive_power_max_mvar::Float64
+    reactive_power_min_mvar::Float64
+    voltage_setpoint_pu::Float64
+    machine_base_mva::Float64
+    in_service::Bool
+    has_cost::Bool
+    cost::PioGeneratorCostView
+    regulated_bus_id::Csize_t
+    has_regulated_bus::Bool
+    capability_count::Csize_t
+    active_power_control::PioActivePowerControlView
+    has_active_power_control::Bool
+    voltage_regulation_on::Bool
+    regulating_terminal::PioTerminalReferenceView
+    has_regulating_terminal::Bool
+end
+
+# --- parse ---------------------------------------------------------------
+
+# Parse `path` into a balanced network handle: open the source, parse it to a
+# module, borrow the value as a balanced network, and release the module and
+# source. The network handle is reference counted and outlives both.
+function powerio_parse_balanced(path::AbstractString)
     err = Ref{Ptr{Cvoid}}(C_NULL)
-    m = ccall((:pio_parse_file, LIBPOWERIO), Ptr{Cvoid},
-              (Cstring, Cstring, Ref{Ptr{Cvoid}}), path, C_NULL, err)
+    source = ccall((:pio_source_open, LIBPOWERIO), Ptr{Cvoid},
+                   (Ptr{UInt8}, Csize_t, Ref{Ptr{Cvoid}}), path, sizeof(path), err)
+    source == C_NULL && error("powerio could not open $path: " * _take_error(err[]))
+    m = ccall((:pio_parse, LIBPOWERIO), Ptr{Cvoid},
+              (Ptr{Cvoid}, Ptr{UInt8}, Csize_t, Ref{Ptr{Cvoid}}), source, C_NULL, 0, err)
+    ccall((:pio_source_release, LIBPOWERIO), Cvoid, (Ptr{Cvoid},), source)
     m == C_NULL && error("powerio parse failed for $path: " * _take_error(err[]))
-    h = ccall((:pio_module_balanced_network, LIBPOWERIO), Ptr{Cvoid},
-              (Ptr{Cvoid}, Ref{Ptr{Cvoid}}), m, err)
+    value = ccall((:pio_module_value, LIBPOWERIO), Ptr{Cvoid}, (Ptr{Cvoid},), m)
+    h = ccall((:pio_value_balanced_network, LIBPOWERIO), Ptr{Cvoid},
+              (Ptr{Cvoid}, Ref{Ptr{Cvoid}}), value, err)
+    ccall((:pio_value_release, LIBPOWERIO), Cvoid, (Ptr{Cvoid},), value)
     ccall((:pio_module_release, LIBPOWERIO), Cvoid, (Ptr{Cvoid},), m)
     h == C_NULL && error("powerio parse of $path holds no balanced network: " * _take_error(err[]))
     return h
 end
 
-pio_free(h::Ptr{Cvoid}) = ccall((:pio_balanced_network_release, LIBPOWERIO), Cvoid, (Ptr{Cvoid},), h)
+powerio_release!(h::Ptr{Cvoid}) = ccall((:pio_balanced_network_release, LIBPOWERIO), Cvoid, (Ptr{Cvoid},), h)
 
-pio_n_buses(h)    = Int(ccall((:pio_balanced_network_n_buses, LIBPOWERIO),    Csize_t, (Ptr{Cvoid},), h))
-pio_n_branches(h) = Int(ccall((:pio_balanced_network_n_branches, LIBPOWERIO), Csize_t, (Ptr{Cvoid},), h))
-pio_n_gens(h)     = Int(ccall((:pio_balanced_network_n_gens, LIBPOWERIO),     Csize_t, (Ptr{Cvoid},), h))
-pio_base_mva(h)   = ccall((:pio_balanced_network_base_mva, LIBPOWERIO),       Cdouble, (Ptr{Cvoid},), h)
+powerio_bus_count(h)       = Int(ccall((:pio_balanced_network_bus_count, LIBPOWERIO),       Csize_t, (Ptr{Cvoid},), h))
+powerio_branch_count(h)    = Int(ccall((:pio_balanced_network_branch_count, LIBPOWERIO),    Csize_t, (Ptr{Cvoid},), h))
+powerio_generator_count(h) = Int(ccall((:pio_balanced_network_generator_count, LIBPOWERIO), Csize_t, (Ptr{Cvoid},), h))
+powerio_load_count(h)      = Int(ccall((:pio_balanced_network_load_count, LIBPOWERIO),      Csize_t, (Ptr{Cvoid},), h))
+powerio_shunt_count(h)     = Int(ccall((:pio_balanced_network_shunt_count, LIBPOWERIO),     Csize_t, (Ptr{Cvoid},), h))
+powerio_base_mva(h)        = ccall((:pio_balanced_network_base_mva, LIBPOWERIO),            Cdouble, (Ptr{Cvoid},), h)
 
-mutable struct CArrowArray
-    length::Int64
-    null_count::Int64
-    offset::Int64
-    n_buffers::Int64
-    n_children::Int64
-    buffers::Ptr{Ptr{Cvoid}}
-    children::Ptr{Ptr{Cvoid}}
-    dictionary::Ptr{Cvoid}
-    release::Ptr{Cvoid}
-    private_data::Ptr{Cvoid}
-end
+# One typed view fill. `symbol` names the `pio_balanced_network_*_at` entry
+# point and `T` the matching view struct; the index is zero based. `ccall`
+# takes a literal symbol or a function pointer, so the entry point is
+# resolved through `dlsym` once per call.
+const _LIBHANDLE = Libdl.dlopen(LIBPOWERIO)
 
-mutable struct CArrowSchema
-    format::Ptr{Cchar}
-    name::Ptr{Cchar}
-    metadata::Ptr{Cchar}
-    flags::Int64
-    n_children::Int64
-    children::Ptr{Ptr{Cvoid}}
-    dictionary::Ptr{Cvoid}
-    release::Ptr{Cvoid}
-    private_data::Ptr{Cvoid}
-end
-
-CArrowArray() = CArrowArray(0, 0, 0, 0, 0, Ptr{Ptr{Cvoid}}(C_NULL),
-                            Ptr{Ptr{Cvoid}}(C_NULL), C_NULL, C_NULL, C_NULL)
-CArrowSchema() = CArrowSchema(C_NULL, C_NULL, C_NULL, 0, 0,
-                              Ptr{Ptr{Cvoid}}(C_NULL), C_NULL, C_NULL, C_NULL)
-
-function _release_arrow_array!(arr::Base.RefValue{CArrowArray})
-    release = arr[].release
-    release == C_NULL || ccall(release, Cvoid, (Ref{CArrowArray},), arr)
-    return nothing
-end
-
-function _release_arrow_schema!(sch::Base.RefValue{CArrowSchema})
-    release = sch[].release
-    release == C_NULL || ccall(release, Cvoid, (Ref{CArrowSchema},), sch)
-    return nothing
-end
-
-function pio_export_ybus_arrow(h)
-    arr = Ref(CArrowArray())
-    sch = Ref(CArrowSchema())
+function _view_at(::Type{T}, symbol::Symbol, h::Ptr{Cvoid}, index::Integer) where {T}
+    out = Ref{T}()
     err = Ref{Ptr{Cvoid}}(C_NULL)
-    code = ccall((:pio_balanced_network_to_arrow, LIBPOWERIO), Cint,
-                 (Ptr{Cvoid}, Cint, Ref{CArrowArray}, Ref{CArrowSchema}, Ref{Ptr{Cvoid}}),
-                 h, PIO_ARROW_TABLE_YBUS, arr, sch, err)
-    code == 0 || error("powerio Ybus Arrow export failed: " * _take_error(err[]))
-    try
-        return Int(arr[].length)
-    finally
-        _release_arrow_array!(arr)
-        _release_arrow_schema!(sch)
+    ok = ccall(Libdl.dlsym(_LIBHANDLE, symbol), Bool,
+               (Ptr{Cvoid}, Csize_t, Ref{T}, Ref{Ptr{Cvoid}}), h, index, out, err)
+    ok || error("powerio $symbol($index) failed: " * _take_error(err[]))
+    return out[]
+end
+
+powerio_bus_at(h, i)       = _view_at(PioBalancedBusView,       :pio_balanced_network_bus_at,       h, i)
+powerio_branch_at(h, i)    = _view_at(PioBalancedBranchView,    :pio_balanced_network_branch_at,    h, i)
+powerio_generator_at(h, i) = _view_at(PioBalancedGeneratorView, :pio_balanced_network_generator_at, h, i)
+powerio_load_at(h, i)      = _view_at(PioBalancedLoadView,      :pio_balanced_network_load_at,      h, i)
+powerio_shunt_at(h, i)     = _view_at(PioBalancedShuntView,     :pio_balanced_network_shunt_at,     h, i)
+
+# --- table extractors ----------------------------------------------------
+
+function powerio_bus_ids(h, n)
+    ids = Vector{Int64}(undef, n)
+    for k in 1:n
+        ids[k] = Int64(powerio_bus_at(h, k - 1).id)
     end
+    ids
 end
 
-function powerio_parse_ybus_arrow(path::AbstractString)
-    h = pio_parse_file(path)
-    try
-        return pio_export_ybus_arrow(h)
-    finally
-        pio_free(h)
-    end
-end
-
-# Caller fill extractors: every array call passes a cap and returns the total
-# available (NULL out is the count query). The caps below come from the
-# matching pio_n_* call, so the returned totals always equal them.
-
-function pio_bus_ids(h, n)
-    out = Vector{Int64}(undef, n)
-    ccall((:pio_balanced_network_bus_ids, LIBPOWERIO), Csize_t, (Ptr{Cvoid}, Ptr{Int64}, Csize_t), h, out, n)
-    out
-end
-
-function pio_branches(h, m)
+function powerio_branches(h, m)
     from  = Vector{Int64}(undef, m); to = Vector{Int64}(undef, m)
     r     = Vector{Float64}(undef, m); x = Vector{Float64}(undef, m)
     b     = Vector{Float64}(undef, m); tap = Vector{Float64}(undef, m)
     shift = Vector{Float64}(undef, m); insvc = Vector{UInt8}(undef, m)
-    ccall((:pio_balanced_network_branches, LIBPOWERIO), Csize_t,
-          (Ptr{Cvoid}, Ptr{Int64}, Ptr{Int64}, Ptr{Float64}, Ptr{Float64},
-           Ptr{Float64}, Ptr{Float64}, Ptr{Float64}, Ptr{UInt8}, Csize_t),
-          h, from, to, r, x, b, tap, shift, insvc, m)
+    for k in 1:m
+        v = powerio_branch_at(h, k - 1)
+        from[k] = Int64(v.from_bus_id); to[k] = Int64(v.to_bus_id)
+        r[k] = v.resistance_pu; x[k] = v.reactance_pu
+        b[k] = v.total_charging_susceptance_pu; tap[k] = v.tap_ratio
+        shift[k] = v.phase_shift_degrees; insvc[k] = UInt8(v.in_service)
+    end
     (; from, to, r, x, b, tap, shift, in_service = insvc)
 end
 
-function pio_gens(h, ng)
+function powerio_generators(h, ng)
     bus  = Vector{Int64}(undef, ng); pg = Vector{Float64}(undef, ng)
     pmax = Vector{Float64}(undef, ng); pmin = Vector{Float64}(undef, ng)
     insvc = Vector{UInt8}(undef, ng)
-    ccall((:pio_balanced_network_gens, LIBPOWERIO), Csize_t,
-          (Ptr{Cvoid}, Ptr{Int64}, Ptr{Float64}, Ptr{Float64}, Ptr{Float64}, Ptr{UInt8}, Csize_t),
-          h, bus, pg, pmax, pmin, insvc, ng)
+    for k in 1:ng
+        v = powerio_generator_at(h, k - 1)
+        bus[k] = Int64(v.bus_id); pg[k] = v.active_power_mw
+        pmax[k] = v.active_power_max_mw; pmin[k] = v.active_power_min_mw
+        insvc[k] = UInt8(v.in_service)
+    end
     (; bus, pg, pmax, pmin, in_service = insvc)
 end
 
-function pio_bus_demand(h, n)
-    pd = Vector{Float64}(undef, n); qd = Vector{Float64}(undef, n)
-    ccall((:pio_balanced_network_bus_demand, LIBPOWERIO), Csize_t,
-          (Ptr{Cvoid}, Ptr{Float64}, Ptr{Float64}, Csize_t), h, pd, qd, n)
+# Per-bus demand: in-service loads summed onto their bus in bus_ids order,
+# which is the MATPOWER bus table's PD/QD. An out of service load contributes
+# nothing, matching the MATPOWER writer.
+function powerio_bus_demand(h, bus_ids::Vector{Int64})
+    n = length(bus_ids)
+    row = Dict{Int64,Int}(id => k for (k, id) in enumerate(bus_ids))
+    pd = zeros(Float64, n); qd = zeros(Float64, n)
+    for k in 1:powerio_load_count(h)
+        v = powerio_load_at(h, k - 1)
+        v.in_service || continue
+        i = row[Int64(v.bus_id)]
+        pd[i] += v.p_mw; qd[i] += v.q_mvar
+    end
     (; pd, qd)
 end
 
-function pio_bus_shunt(h, n)
-    gs = Vector{Float64}(undef, n); bs = Vector{Float64}(undef, n)
-    ccall((:pio_balanced_network_bus_shunt, LIBPOWERIO), Csize_t,
-          (Ptr{Cvoid}, Ptr{Float64}, Ptr{Float64}, Csize_t), h, gs, bs, n)
+# Per-bus shunt: in-service shunts summed onto their bus, the MATPOWER GS/BS.
+function powerio_bus_shunt(h, bus_ids::Vector{Int64})
+    n = length(bus_ids)
+    row = Dict{Int64,Int}(id => k for (k, id) in enumerate(bus_ids))
+    gs = zeros(Float64, n); bs = zeros(Float64, n)
+    for k in 1:powerio_shunt_count(h)
+        v = powerio_shunt_at(h, k - 1)
+        v.in_service || continue
+        i = row[Int64(v.bus_id)]
+        gs[i] += v.conductance_mw; bs[i] += v.susceptance_mvar
+    end
     (; gs, bs)
 end
 
-# Parse and extract every table into one NamedTuple, then free the handle.
+# Parse and extract every table into one NamedTuple, then release the handle.
 function powerio_load(path::AbstractString)
-    h = pio_parse_file(path)
+    h = powerio_parse_balanced(path)
     try
-        n, m, ng = pio_n_buses(h), pio_n_branches(h), pio_n_gens(h)
-        (; base_mva = pio_base_mva(h),
-           bus_ids = pio_bus_ids(h, n),
-           branch = pio_branches(h, m),
-           gen = pio_gens(h, ng),
-           demand = pio_bus_demand(h, n),
-           shunt = pio_bus_shunt(h, n),
+        n, m, ng = powerio_bus_count(h), powerio_branch_count(h), powerio_generator_count(h)
+        bus_ids = powerio_bus_ids(h, n)
+        (; base_mva = powerio_base_mva(h),
+           bus_ids,
+           branch = powerio_branches(h, m),
+           gen = powerio_generators(h, ng),
+           demand = powerio_bus_demand(h, bus_ids),
+           shunt = powerio_bus_shunt(h, bus_ids),
            n, m, ng)
     finally
-        pio_free(h)
+        powerio_release!(h)
     end
 end

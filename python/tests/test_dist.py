@@ -1,5 +1,6 @@
 """The multiconductor value surface and canonical parse/emit path."""
 
+import inspect
 import io
 import json
 from pathlib import Path
@@ -391,5 +392,4 @@ def test_parse_confines_includes_to_the_case_directory(tmp_path):
         "escapes the case directory" in diagnostic.message
         for diagnostic in confined.diagnostics
     )
-    with pytest.raises(TypeError, match="unexpected keyword"):
-        powerio.parse(deck, include_root=root)
+    assert "include_root" not in inspect.signature(powerio.parse).parameters

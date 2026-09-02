@@ -18347,7 +18347,7 @@ mod tests {
                 &mut error,
             ));
             let counts = counts.assume_init();
-            assert_eq!(counts.omitted_fields, 3);
+            assert_eq!(counts.omitted_fields, 4);
             assert_eq!(counts.equipment_reactive_limits, 1);
 
             let mut omitted = std::mem::MaybeUninit::<PioOmittedFieldView>::uninit();

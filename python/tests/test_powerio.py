@@ -347,6 +347,7 @@ def test_xiidm_equipment_omissions_and_reactive_curve_are_available():
         "active_power",
         "reactive_power",
         "voltage_setpoint",
+        "rated_apparent_power",
     ]
     limits = details["equipment_reactive_limits"][0]
     assert limits["equipment"]["local_id"] == "G"
@@ -2433,9 +2434,12 @@ def test_gridfm_public_surface_uses_parse_and_emit(case9, tmp_path):
         assert not hasattr(powerio, removed)
     assert not hasattr(case9, "emit_gridfm")
 
+    # `resolve_format` describes the format, not the build; the feature probe
+    # says whether this extension compiled the GridFM parser and emitter.
+    if not powerio.features()["gridfm"]:
+        pytest.skip("this extension was built without the gridfm feature")
     info = powerio.resolve_format("gridfm")
-    if info is None or not info.can_emit:
-        pytest.skip("this extension was built without universal GridFM emission")
+    assert info is not None and info.can_emit
     result = powerio.emit(
         powerio.PioModule.from_value(case9), "gridfm", tmp_path / "dataset"
     )

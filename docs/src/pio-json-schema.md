@@ -1,4 +1,4 @@
-# PowerIO IR
+# PowerIO IR {#pio-module}
 
 A `.pio.json` file serializes one `PioModule<PioValue>`: one typed value with
 its diagnostics, producer, sources, source mappings, history, and extensions.

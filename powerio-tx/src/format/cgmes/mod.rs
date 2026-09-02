@@ -4778,8 +4778,8 @@ mod tests {
             .iter()
             .find(|generator| generator.uid.as_deref() == Some("external-1"))
             .unwrap();
-        assert_eq!(generator.pg, 30.0);
-        assert_eq!(generator.qg, 5.0);
+        assert!((generator.pg - 30.0).abs() <= f64::EPSILON);
+        assert!((generator.qg - 5.0).abs() <= f64::EPSILON);
         assert!(parsed.warnings.iter().any(|warning| {
             warning.info.code == crate::diagnostics::codes::READ_CGMES_VALUE_APPROXIMATED.code
                 && warning.contains("ExternalNetworkInjection `external-1`")

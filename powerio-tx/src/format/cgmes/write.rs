@@ -603,9 +603,7 @@ pub(super) fn warn_unemitted_detailed_fields(
     let mut warn_nonconverter_polarity =
         |class: &str, equipment: &ComponentId, fallback_sequence: usize, terminal: &DcTerminal| {
             if let Some(polarity) = terminal.polarity {
-                let sequence = terminal
-                    .sequence_number
-                    .map_or(fallback_sequence as u32, |value| value);
+                let sequence = terminal.sequence_number.unwrap_or(fallback_sequence as u32);
                 let identity = terminal
                     .component
                     .as_ref()

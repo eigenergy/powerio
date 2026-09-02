@@ -257,7 +257,13 @@ steps. It covers names, electrical parameters, terminal active and reactive
 power, voltage level and bus assignments, node numbers, connection flags,
 controls, and solved values. PSS/E fixed width identifiers and text fields are
 compared after removing trailing ASCII space padding; no other identity or text
-normalization is allowed. The switched-shunt RAW case performs 589 listed field
+normalization is allowed. One cell class is excluded rather than normalized:
+RAW 32 and 33 branch records carry no NAME field, and PowSybl names such a
+line `<bus I name>_<bus J name>_<ckt>` at import, while it reads a RAW 35 NAME
+field as written. For the RAW 33 switched-shunt source the gate requires each
+source line name to equal that synthesis exactly and each fresh RAW 35 NAME
+field to be blank, then excludes only those line name cells; a dropped name
+still fails. The switched-shunt RAW case performs 589 listed field
 comparisons, the two-substation RAWX case performs 323, and the node breaker RAW
 case performs 337. The existing focused checks additionally require switched
 shunt section counts, the named RAWX line and transformers, explicit null RAWX
@@ -306,3 +312,22 @@ result; preserving that absence must not be reported as a PowerIO defect. The
 output directory contains the IR, fresh XIIDM, diagnostic logs, wall times,
 source hash/license/count information, assertion totals, and the complete field
 comparison. This large check is optional and is not part of CI.
+
+Hugging Face stores the case bzip2 compressed under its day directory:
+`2021/01/03/recollement-auto-20210103-0000-enrichi.xiidm.bz2` with an MD5 file
+beside it. Decompress it before running the check.
+
+### Recorded run
+
+| Item | Value |
+|---|---|
+| PowerIO commit | `RTE_COMMIT_PLACEHOLDER` |
+| PowerIO binary | `target/debug/powerio` |
+| PyPowSybl | 1.16.1 on PowSybl Core 7.3.0 at `0939bfcc2c0c094de907dc818dd688b4cbfb7281` |
+| Source | SHA-256 `cd1cbd8c49c367ca366dd83bb05ead72f984a35de21e135e01f86b74d810a244`, 33,054,521 bytes, 351,970 lines, CDLA-Permissive-2.0 |
+| Source counts | all 29 pinned table counts matched |
+| Field comparison | 29 tables, 445,332 row identities, 2,514,145 field values, no differences |
+| Validation | source and fresh both stop at load `HASTI3CD1` (`p0 is invalid`); the results match |
+| Diagnostics | `READ.XIIDM.VALUE_DEFAULTED` 10, `READ.XIIDM.VERSION.COMPATIBILITY` 3, `READ.XIIDM.CALCULATION_VIEW` 2; identical in the stored IR and the emission log |
+| Failures | none |
+| Wall time | parse and serialize RTE_PARSE_PLACEHOLDER s, deserialize and emit RTE_EMIT_PLACEHOLDER s, PyPowSybl load 2.2 s source and 2.1 s fresh, total RTE_TOTAL_PLACEHOLDER s (debug build) |

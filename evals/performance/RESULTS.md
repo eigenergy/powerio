@@ -61,23 +61,22 @@ explicit JSON shaped view materialization that the narrowed parse avoids.
 | case193k | 192768 / 228574 | 287.38 +/- 4.26 ms | 366.67 +/- 61.09 ms | n/a | 274.64 +/- 4.59 ms | n/a |
 <!-- BENCH:speed-julia END -->
 
-The Ybus table times the public PowerIO.jl sparse matrix API. The Rust C ABI
-Arrow column is the raw parse plus Arrow export lower bound; it does not build a
-Julia `SparseMatrixCSC`.
+The Ybus table times the public PowerIO.jl sparse matrix API. C ABI 7 has no
+raw admittance export, so there is no lower bound column.
 
 <!-- BENCH:speed-julia-ybus START -->
-| case | buses / branches | PowerIO.jl Ybus | ExaPowerIO.jl Ybus | Rust C ABI Arrow | PowerModels.jl Ybus |
-| --- | --- | --- | --- | --- | --- |
-| case2869pegase | 2869 / 4582 | 5.19 +/- 0.8 ms | 4.51 +/- 0.2 ms | 4 +/- 0.03 ms | 197.9 +/- 47.1 ms |
-| case_ACTIVSg2000 | 2000 / 3206 | 4.97 +/- 0.08 ms | 3.33 +/- 0.1 ms | 4.11 +/- 0.02 ms | 194.5 +/- 49 ms |
-| case9241pegase | 9241 / 16049 | 18.59 +/- 2.24 ms | 15.01 +/- 20.64 ms | 13.96 +/- 0.07 ms | 853.2 +/- 55.6 ms |
-| case13659pegase | 13659 / 20467 | 28.06 +/- 5.18 ms | 22.13 +/- 20.91 ms | 21.26 +/- 0.34 ms | 1229.5 +/- 16.2 ms |
-| case_ACTIVSg10k | 10000 / 12706 | 23.82 +/- 1.97 ms | 14.69 +/- 20.57 ms | 19.38 +/- 0.31 ms | 1052.3 +/- 24 ms |
-| case_ACTIVSg25k | 25000 / 32230 | 67.98 +/- 26.98 ms | 36.48 +/- 40.91 ms | 53.45 +/- 1.85 ms | 2716 +/- 184.4 ms |
-| case_ACTIVSg70k | 70000 / 88207 | 169.83 +/- 4.71 ms | 105.28 +/- 60.73 ms | 142.17 +/- 0.71 ms | 8514.5 +/- 235.4 ms |
-| case_SyntheticUSA | 82000 / 104121 | 220.92 +/- 7.16 ms | 236.31 +/- 61.52 ms | 179.14 +/- 2.97 ms | n/a |
-| case99k | 99396 / 117860 | 245.57 +/- 54.55 ms | 251.53 +/- 45.77 ms | 201.12 +/- 3.41 ms | n/a |
-| case193k | 192768 / 228574 | 493.77 +/- 61.87 ms | 401.26 +/- 7.22 ms | 403.14 +/- 16.21 ms | n/a |
+| case | buses / branches | PowerIO.jl Ybus | ExaPowerIO.jl Ybus | PowerModels.jl Ybus |
+| --- | --- | --- | --- | --- |
+| case2869pegase | 2869 / 4582 | 5.19 +/- 0.8 ms | 4.51 +/- 0.2 ms | 197.9 +/- 47.1 ms |
+| case_ACTIVSg2000 | 2000 / 3206 | 4.97 +/- 0.08 ms | 3.33 +/- 0.1 ms | 194.5 +/- 49 ms |
+| case9241pegase | 9241 / 16049 | 18.59 +/- 2.24 ms | 15.01 +/- 20.64 ms | 853.2 +/- 55.6 ms |
+| case13659pegase | 13659 / 20467 | 28.06 +/- 5.18 ms | 22.13 +/- 20.91 ms | 1229.5 +/- 16.2 ms |
+| case_ACTIVSg10k | 10000 / 12706 | 23.82 +/- 1.97 ms | 14.69 +/- 20.57 ms | 1052.3 +/- 24 ms |
+| case_ACTIVSg25k | 25000 / 32230 | 67.98 +/- 26.98 ms | 36.48 +/- 40.91 ms | 2716 +/- 184.4 ms |
+| case_ACTIVSg70k | 70000 / 88207 | 169.83 +/- 4.71 ms | 105.28 +/- 60.73 ms | 8514.5 +/- 235.4 ms |
+| case_SyntheticUSA | 82000 / 104121 | 220.92 +/- 7.16 ms | 236.31 +/- 61.52 ms | n/a |
+| case99k | 99396 / 117860 | 245.57 +/- 54.55 ms | 251.53 +/- 45.77 ms | n/a |
+| case193k | 192768 / 228574 | 493.77 +/- 61.87 ms | 401.26 +/- 7.22 ms | n/a |
 <!-- BENCH:speed-julia-ybus END -->
 
 PowerModels `n/a` cells do not mean slow runs. In this run,
