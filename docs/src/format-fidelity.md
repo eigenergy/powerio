@@ -26,6 +26,7 @@ implementations and the matching powerio code:
 | DOE GO Challenge 3 | an input/problem data file parses to `AcScucInstance`; one `Source` containing that file and its matching output/solution data file parses to `AcScucSolution`; `instance.network()` returns the shared `BalancedNetwork` | pinned GO-3 data model, C3DataUtilities, and GOC3Benchmark.jl D1/D2/D3 files | `powerio::parse`, `powerio::emit` |
 | Surge angles | Surge JSON carries voltage angles, phase shifts, and angle limits in radians; `BalancedNetwork` stores degrees | Rust Surge round trip tests | `surge-json` |
 | DeepMind OPFData JSON | DeepMind OPFData carries p.u. powers and radian angles; `BalancedNetwork` stores the solved snapshot in MW/MVAr and degrees, with zero based links mapped to one based bus IDs | Paper Appendix A, the PyG loader, the smallest complete official fixture, and size independent FullTop and N-1 property tests | `opfdata-json` |
+| UCTE-DEF units and signs | ohm, microsiemens, kV, MW, MVAr, and ampere on the node voltage level; generation and its limits are negative for an injection and the reader negates them; a current limit becomes `rate_a` as \\(\sqrt{3}\, U I / 1000\\) MVA; no system base, so the balanced view uses 100 MVA at 50 Hz | PowSybl Core [`UcteImporter`](https://github.com/powsybl/powsybl-core/blob/0939bfcc2c0c094de907dc818dd688b4cbfb7281/ucte/ucte-converter/src/main/java/com/powsybl/ucte/converter/UcteImporter.java) and [`UcteNode.fix`](https://github.com/powsybl/powsybl-core/blob/0939bfcc2c0c094de907dc818dd688b4cbfb7281/ucte/ucte-network/src/main/java/com/powsybl/ucte/network/UcteNode.java#L413-L444) | `ucte` |
 
 egret's own MATPOWER parser uses the same reductions (bus type as
 `matpower_bustype`, polynomial coefficients reversed to a `{degree: coefficient}`
@@ -262,6 +263,62 @@ parse warning that hides the cause.
   `CZ` 1/2/3, and `CM` 1/2 into the neutral tap ratio, system-base impedance,
   and magnetizing admittance. Fresh output uses the electrically equivalent
   canonical `CW = CZ = CM = 1` representation.
+- **UCTE-DEF** reads revisions 2003.09.01 and 2007.05.01 and writes
+  2007.05.01 under the token `ucte` (alias `uct`, extension `.uct`). The
+  column layout is the one PowSybl Core's
+  [`UcteRecordParser`](https://github.com/powsybl/powsybl-core/blob/0939bfcc2c0c094de907dc818dd688b4cbfb7281/ucte/ucte-network/src/main/java/com/powsybl/ucte/network/io/UcteRecordParser.java)
+  reads for both revisions; a 2003
+  file leaves the element name columns blank. The reader maps the `##N`
+  nodes to buses named by their 8 character node code, with a bus id equal
+  to the node's position in the block and the base kV of the voltage level
+  digit (750, 380, 220, 150, 120, 110, 70, 27, 330, or 500 kV). Each `##Z`
+  country is a `ControlArea` area named by its ISO code; the cross border
+  nodes (country letter `X`) form one `CrossBorder` area named `XX`, so a
+  tie line keeps both ends and the cross border node's own load and
+  generation. Node types map PQ, PU, and UT to PQ, PV, and reference; type
+  QT (Q and angle constant) reads as PQ with a warning. A node's load and
+  generation become one load and one generator, with the PowSybl
+  consistency rules applied and reported: an unstated set point reads as
+  zero, unstated limits as 9999, inverted limits are swapped, a set point
+  outside its limits moves the limit, and a voltage regulating node with no
+  voltage reference reads as PQ. `##L` lines are branches on the voltage
+  level base with the total susceptance split evenly; busbar couplers
+  (status 2 and 7) are switches; an equivalent element (status 1 and 9)
+  keeps that mark in its extras; a reactance under 0.05 ohm reads as 0.05
+  ohm as PowSybl reads it. A coupler whose two node codes are equal is
+  ignored with a diagnostic, following PowSybl Core's
+  [`UcteImporter`](https://github.com/powsybl/powsybl-core/blob/0939bfcc2c0c094de907dc818dd688b4cbfb7281/ucte/ucte-converter/src/main/java/com/powsybl/ucte/converter/UcteImporter.java#L350-L363).
+  A line joining two voltage levels is refused, as PowSybl refuses it. `##T`
+  transformers are branches from the regulated
+  winding (node 2) to the non regulated winding (node 1), whose voltage
+  level carries the impedance; the rated voltages set the tap, and the
+  magnetizing admittance sits on the regulated side. `##R` phase regulation
+  multiplies the tap by \\(1 + n' \delta u / 100\\) and becomes a voltage
+  control when it states a target; angle regulation applies the PowSybl
+  asymmetrical or symmetrical formulas to the tap and the phase shift and
+  becomes a disabled active flow control. Both regulations stay in the
+  branch extras so fresh UCTE output replays them exactly. `##TT` special
+  descriptions ride on the transformer extras and `##E` exchange schedules
+  stay in the retained source only; both are reported with
+  `READ.UCTE.RETAINED_SOURCE_ONLY`, and the unstated system base with a
+  `READ.UCTE.VALUE_DEFAULTED` remark. Findings point at their record
+  through source spans. Fresh output writes nodes grouped by country in bus
+  order. A bus keeps its name when it is a UCTE node code; otherwise it
+  receives `<country><spot><level><busbar>`: the country letter of its
+  area's ISO name, else the area number's entry in the UCTE country table in
+  ISO order; the bus id in base 36 as the five character spot; the voltage
+  level digit nearest its base kV (380 kV when none is stated); and busbar
+  `1`, bumped on a collision. Every derived code is reported with
+  `EMIT.UCTE.VALUE_SUBSTITUTED`. A base kV that is not a UCTE level is
+  written under the nearest level with a warning; ohm, kV, MW, and ampere
+  values stay physical, so a re-read expresses them per unit on that level.
+  A phase shift becomes a one step symmetrical angle regulation and a
+  voltage control with a tap range becomes a phase regulation; a line
+  joining two voltage levels is written as a transformer. Shunts, HVDC,
+  storage, static VAR compensators, three winding transformers, costs,
+  capability columns, angle limits, voltage bands and angles, rate B and C,
+  remote regulation, and a frequency other than 50 Hz are reported as
+  dropped.
 - **PowerWorld** `.aux` is read and written. `.pwb` binary cases are read
   only, and `.pwd` display files parse through the separate display API.
   `.aux` carries no system base, so the reader defaults to 100 MVA. No third party `.aux` reader

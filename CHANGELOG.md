@@ -146,6 +146,21 @@ container holds none of its `ConnectivityNode` data follows those nodes. The
 PowSybl gate compares calculated bus assignments for the MiniGrid, SmallGrid,
 and CGMES 3.0 MicroGrid node breaker sets with PyPowSybl.
 
+ENTSO-E UCTE-DEF `.uct` files read and write through `BalancedNetwork` under
+the format token `ucte` (alias `uct`). The reader accepts revisions
+2003.09.01 and 2007.05.01 and maps `##N` nodes with their `##Z` country
+groups, `##L` lines and busbar couplers, `##T` transformers, and `##R` phase
+and angle regulation. `##TT` and `##E` records remain available for same
+format emission and are reported with `READ.UCTE.RETAINED_SOURCE_ONLY` before
+other format emission. A node's 8-character code is the bus name, each
+country is an area, and cross-border `X` nodes form their own area so tie
+lines keep both ends. New output uses revision 2007.05.01; a bus whose name is
+not a UCTE node code receives a derived code and an
+`EMIT.UCTE.VALUE_SUBSTITUTED` warning. Reader findings name their records with
+source spans. The PowSybl gate loads PowerIO UCTE output from a MATPOWER case
+with PyPowSybl and compares bus and branch counts with PyPowSybl for every
+`.uct` fixture in the pinned PowSybl Core checkout.
+
 ## 0.10.0
 
 PowerIO 0.10 is the public beta of the 1.0 API. API corrections may land before 1.0.0 as downstream integrations exercise the new design.

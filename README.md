@@ -101,6 +101,7 @@ Balanced network formats:
 - PSS/E RAWX JSON revision 35
 - PowSybl XIIDM XML 1.12 through 1.17; fresh output uses 1.17
 - CIM CGMES 2.4.15 and 3.0 profile sets; fresh output uses CGMES 3.0
+- ENTSO-E UCTE-DEF `.uct` revisions 2003.09.01 and 2007.05.01; fresh output uses 2007.05.01
 - PowerWorld `.aux`; `.pwb` is read only and `.pwd` uses the display API
 - GE PSLF `.epc`
 - PowerModels JSON
