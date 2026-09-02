@@ -113,7 +113,14 @@ on the parsed module. Codes name the format and reason, such as
 there is no generic
 parse warning that hides the cause.
 
-- **XIIDM** reads PowSybl XIIDM 1.12 through 1.17 and writes 1.17. It maps
+- **XIIDM and JIIDM** read PowSybl IIDM 1.0 through 1.17 in the XML (`xiidm`)
+  and JSON (`jiidm`) encodings and write 1.17 in either; the
+  [IIDM versions](#iidm-versions) table names what each version changed. One
+  element mapping consumes both encodings, so a JIIDM document reads to the
+  same network as the XIIDM document of the same network, and fresh JIIDM
+  follows PowSybl's JSON layout: plural array fields for repeated elements,
+  typed scalars, and each element's attributes in the order PowSybl's
+  sequential JSON reader consumes them. The mapping covers
   substations, voltage levels, bus breaker and node breaker topology, busbar
   sections, switches, lines, tie and boundary lines, loads, generators,
   batteries, shunts, static VAR compensators, two- and three-winding
@@ -339,6 +346,42 @@ parse warning that hides the cause.
   identical). The losses are the module's diagnostics. The same direction
   writer is documented in the
   [top level README](https://github.com/eigenergy/powerio#gridfm).
+
+### IIDM versions
+
+PowerIO reads every IIDM serialization version PowSybl has published and
+writes 1.17. A document of an older version is read with that version's rules
+and reported with `READ.XIIDM.VERSION.COMPATIBILITY`; a namespace naming a
+version outside this table is refused with `PARSE.XIIDM.VERSION_UNSUPPORTED`.
+The table lists, per version, what the reader does differently from 1.17.
+Every row is checked against the PowSybl fixture of the same network in
+`tests/data/xiidm/powsybl`.
+
+| Version | Read | What the version states differently |
+| --- | --- | --- |
+| 1.0 | XIIDM | iTesla namespace. Busbar sections carry the calculated bus `v` and `angle`. Three winding transformers have no `ratedU0` (leg 1 rated voltage is the impedance base), no leg 1 tap changer, and no phase tap changers. Tie lines state both half lines inline with `_1`/`_2` suffixes and `ucteXnodeCode`. Shunts state `bPerSection`, `maximumSectionCount`, and `currentSectionCount` and never regulate. Static VAR compensators spell `voltageSetPoint` and `reactivePowerSetPoint`. Batteries spell `p0` and `q0`. Ratio tap changers state `targetV`. Loading limits sit directly on the equipment as the selected `DEFAULT` group. A switch closing a bus or node onto itself is discarded, as PowSybl does. No `minimumValidationLevel`. |
+| 1.1 | XIIDM | PowSybl namespace. Calculated buses under node breaker topology. Three winding transformer `ratedU0`, leg 1 tap changers, and phase tap changers. |
+| 1.2 | XIIDM | `fictitious` on every identifiable, `targetDeadband` on tap changers, `ratedS`, and shunt voltage regulation. |
+| 1.3 | XIIDM | Shunt linear and nonlinear models with `sectionCount`, aliases, and boundary line generation. |
+| 1.4 | XIIDM | Alias types. |
+| 1.5 | XIIDM | Active and apparent power limits. |
+| 1.6 | XIIDM | Voltage levels outside substations and VSC regulating terminals. |
+| 1.7 | XIIDM | `minimumValidationLevel` and the equipment validation namespace. |
+| 1.8 | XIIDM | Batteries spell `targetP` and `targetQ`. Fictitious bus injections (reported, not retained). Self connected switches are refused. |
+| 1.9 | XIIDM | Shunt `p`. |
+| 1.10 | XIIDM | Tie lines reference two dangling lines. Load models. |
+| 1.11 | XIIDM, JIIDM | `pairingKey` replaces `ucteXnodeCode`. Subnetworks. Voltage angle limits (reported, not retained). |
+| 1.12 | XIIDM, JIIDM | Operational limits groups and ratio tap changer `regulationMode`/`regulationValue`. |
+| 1.13 | XIIDM, JIIDM | Areas, `isCondenser`, and active power control 1.2. |
+| 1.14 | XIIDM, JIIDM | Solved tap positions and section counts, `regulating` on static VAR compensators and phase tap changers. |
+| 1.15 | XIIDM, JIIDM | DC nodes, grounds, lines, switches, and AC/DC converters. |
+| 1.16 | XIIDM, JIIDM | `shuntCompensator` and `boundaryLine` element names and multiple selected limit groups. |
+| 1.17 | XIIDM, JIIDM | Optional zero conductance and susceptance, `retained` and `lowTapPosition` defaults, DC switch resistance. Writers use this version. |
+
+JIIDM has no namespace: the document's `version` field selects the same
+rules, and `minimumValidationLevel` selects the validation level. PowSybl
+ships JIIDM fixtures from 1.11 on; an older `version` value reads with that
+version's XML rules.
 
 ## Missing generator costs
 
