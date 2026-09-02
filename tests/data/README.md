@@ -44,6 +44,13 @@ cases. Provenance and per-directory licenses in `dist/README.md`.
 Tool generated fixtures with regeneration scripts and license notes in their
 own READMEs (`pandapower/README.md`, `pypsa/README.md`).
 
+## `cgmes/`
+
+Hand written CGMES documents original to this repository under its code
+license. `cgmes/node-breaker/` is a CGMES 2.4.15 EQ and SSH set without a TP
+profile; `cgmes/node-breaker/README.md` describes its equipment and the
+calculated buses it exercises. No ENTSO-E conformity data is vendored.
+
 ## `psse/` and `egret/`
 
 Original to this repository: the PSS/E RAW files are hand written minimal
