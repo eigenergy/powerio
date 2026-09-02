@@ -371,7 +371,7 @@ validates the source and reports malformed input as a parse failure.
 | MATPOWER file | yes | yes | `BalancedNetwork` |
 | PowerModels JSON | yes | yes | `BalancedNetwork` |
 | Egret JSON | yes | yes | `BalancedNetwork`, or `TimeSeries<BalancedNetwork>` when every time varying attribute belongs to the supported scalar network profile |
-| PSS/E RAW file, versions 33, 34, and 35 | yes | yes | `BalancedNetwork` |
+| PSS/E RAW file, versions 32 through 35; fresh output uses 33 through 35 | yes | yes | `BalancedNetwork` |
 | PowerWorld AUX file | yes | yes | `BalancedNetwork` |
 | PowerWorld PWB file | yes | no | `BalancedNetwork` |
 | PowerWorld PWD display file | display API | display API | no `PioValue`; display and geo data only |

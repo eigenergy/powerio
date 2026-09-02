@@ -91,6 +91,20 @@ library function. `EMIT.MULTICONDUCTOR.SIDECAR_DROPPED`, registered but never
 raised before, is the warning `convert` reports when standard output cannot
 carry a sidecar file.
 
+PSS/E RAW revision 32 is read. Revision 32 records end before the bus voltage
+limits (`NVHI`, `NVLO`, `EVHI`, `EVLO`), the load `INTRPT` field, the
+transformer `VECGRP` field, and the winding `CNXA` field that revision 33
+added; the reader lays every record out by the header revision and defaults
+those fields, and a revision 32 record that ends before its last typed field
+is reported as `READ.PSSE.VALUE_DEFAULTED` with the record's byte range in the
+retained source. A header revision outside 32 through 35 keeps its coded
+rejection. Fresh output still uses revisions 33 through 35: no emission target
+names revision 32, so a revision 32 source written back as PSS/E produces
+fresh revision 33 text, and its unmodeled sections survive only in the
+retained source. Two PowSybl Core revision 32 cases join the fixtures under
+their MPL-2.0 license, and the PowSybl interoperability gate loads the fresh
+revision 33 output written from each.
+
 ## 0.10.0
 
 PowerIO 0.10 is the public beta of the 1.0 API. API corrections may land before 1.0.0 as downstream integrations exercise the new design.

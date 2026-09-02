@@ -48,7 +48,7 @@ current source, tests, release notes, and direct maintainer decisions.
 
 `BalancedNetwork` and `MulticonductorNetwork` are the two reusable electrical network types. The normalized solver tables and dense row arrays are internal compiler data, hidden from the documented surface; `IndexedNetwork` stays a public derived index view in 1.0 because matrix calculations and downstream consumers take it directly.
 
-Formats. MATPOWER `.m`, PowerModels JSON, PSS/E `.raw` (v33/34/35),
+Formats. MATPOWER `.m`, PowerModels JSON, PSS/E `.raw` (v32 read, v33/34/35),
 PowerWorld `.aux`, PSLF `.epc`, Egret JSON, pandapower JSON, PyPSA CSV directories,
 and Surge JSON all parse and emit. DOE GO Challenge 3 problem JSON and DeepMind
 OPFData JSON are parse only inputs; a complete GO Challenge 3 solution emits the
