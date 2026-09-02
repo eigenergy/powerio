@@ -19,6 +19,8 @@ cgmes_30_source="$powsybl_core/cgmes/cgmes-conformity/src/main/resources/conform
 remote_control_source="$powsybl_core/psse/psse-converter/src/test/resources/remoteControl.xiidm"
 two_terminal_dc_source="$powsybl_core/psse/psse-converter/src/test/resources/twoTerminalDc.xiidm"
 switched_shunt_source="$powsybl_core/psse/psse-converter/src/test/resources/SwitchedShunt.raw"
+example_version_32_source="$powsybl_core/psse/psse-converter/src/test/resources/ExampleVersion32_exported.raw"
+ieee_30_bus_32_source="$powsybl_core/psse/psse-converter/src/test/resources/IEEE_30_bus.raw"
 two_substations_source="$powsybl_core/psse/psse-converter/src/test/resources/twoSubstations_rev35.rawx"
 node_breaker_source="$powsybl_core/psse/psse-model-test/src/main/resources/five_bus_nodeBreaker_rev35.raw"
 node_breaker_xiidm_source="$powsybl_core/psse/psse-converter/src/test/resources/five_bus_nodeBreaker_rev35.xiidm"
@@ -30,6 +32,8 @@ for source in \
     "$remote_control_source" \
     "$two_terminal_dc_source" \
     "$switched_shunt_source" \
+    "$example_version_32_source" \
+    "$ieee_30_bus_32_source" \
     "$two_substations_source" \
     "$node_breaker_source" \
     "$node_breaker_xiidm_source"; do
@@ -92,6 +96,10 @@ for version in 12 13 14 15 16 17; do
 done
 fresh_emit "$switched_shunt_source" psse psse35 switched-shunt \
     "$output_dir/switched-shunt.raw"
+fresh_emit "$example_version_32_source" psse psse example-version-32 \
+    "$output_dir/example-version-32.raw"
+fresh_emit "$ieee_30_bus_32_source" psse psse ieee-30-bus-32 \
+    "$output_dir/ieee-30-bus-32.raw"
 fresh_emit "$two_substations_source" rawx psse-rawx two-substations \
     "$output_dir/two-substations.rawx"
 fresh_emit "$node_breaker_source" psse psse35 five-bus-node-breaker \
