@@ -5,7 +5,8 @@
 //! pandapower JSON, PyPSA CSV folders, PSLF `.epc`, PSS/E RAWX 35, PowSybl
 //! XIIDM and JIIDM 1.0 through 1.17, CIM CGMES 2.4.15 and 3.0, GO Challenge 3 JSON,
 //! Surge JSON, and
-//! DeepMind OPFData JSON. PowerWorld `.pwb` cases and OPFData JSON are input
+//! DeepMind OPFData JSON. PowerWorld `.pwb` cases, OPFData JSON, and the
+//! IEEE Common Data Format are input
 //! only. GO Challenge 3 defines a calculation rather than a bare network, so
 //! its implementation is private to the `powerio` facade's typed parser.
 //! PowerWorld `.pwd` displays
@@ -51,6 +52,7 @@ mod cgmes;
 mod decode;
 mod egret;
 pub(crate) mod goc3;
+mod ieee_cdf;
 mod matpower;
 mod opfdata;
 mod pandapower;
@@ -293,8 +295,8 @@ pub fn parse_display_format(name: &str) -> Option<DisplayFormat> {
 /// `cgmes`, and `ucte`/`uct`.
 /// Case-insensitive. The one place the bindings (Python, C ABI) share, so a new
 /// format means one new arm here, not three. CGMES emits a profile directory;
-/// PyPSA CSV folders, GridFM datasets, and PowerWorld `.pwb` are routed by
-/// [`crate::format::routing`].
+/// PyPSA CSV folders, GridFM datasets, PowerWorld `.pwb`, and IEEE CDF cases
+/// are routed by [`crate::format::routing`].
 ///
 /// [`SourceFormat`]'s reported token is [`SourceFormat::name`], which resolves
 /// here directly, so a module can emit to another module's source format
@@ -325,7 +327,10 @@ pub fn parse_target_format(name: &str) -> Option<TargetFormat> {
         TransmissionFormat::Jiidm => TargetFormat::Jiidm,
         TransmissionFormat::Cgmes => TargetFormat::Cgmes,
         TransmissionFormat::Ucte => TargetFormat::Ucte,
-        TransmissionFormat::PypsaCsv | TransmissionFormat::Pwb | TransmissionFormat::Gridfm => {
+        TransmissionFormat::PypsaCsv
+        | TransmissionFormat::Pwb
+        | TransmissionFormat::Gridfm
+        | TransmissionFormat::IeeeCdf => {
             return None;
         }
     })
@@ -468,13 +473,20 @@ fn is_pslf_name(name: &str) -> bool {
     )
 }
 
+/// Whether a source format name means the IEEE Common Data Format.
+fn is_ieee_cdf_name(name: &str) -> bool {
+    routing::parse_transmission_format(name) == Some(TransmissionFormat::IeeeCdf)
+}
+
 /// Parse the case file at `path`, choosing the parser from `from` (the
 /// [`parse_target_format`] names plus `pypsa-csv`/`pypsa`, `pwb`, `pslf`,
 /// and `epc`) or, when `None`, from the path: a directory containing
 /// `network.csv` parses as a PyPSA CSV folder (any other directory is refused
 /// as a directory with [`Error::UnknownFormat`], before extension inference),
 /// and a file maps by extension (`m`/`json`/`raw`/`aux`/`pwb`/`epc`),
-/// case insensitively (issue #97: `.RAW` is as common as `.raw` in the wild). A
+/// case insensitively (issue #97: `.RAW` is as common as `.raw` in the wild);
+/// a `.txt` or `.cdf` file whose first card is an IEEE CDF title card reads
+/// as `ieee-cdf`. A
 /// `.json` file is classified by top level shape markers: pandapower
 /// (`"_class": "pandapowerNet"`), egret (`elements` and `system`), GO Challenge
 /// 3 (`network` plus `time_series_input`/`reliability`, refused here with
@@ -713,6 +725,28 @@ fn parse_to_network(
         let buffer = primary(source)?;
         let network = pslf::parse_pslf_source(source_text(&buffer)?, stem, warnings)?;
         reject_empty_case(&network, "PSLF .epc")?;
+        return Ok(network);
+    }
+    // An IEEE CDF case has no fixed extension: the public archives use
+    // `.txt` and some tools `.cdf`, so those two are inferred from the
+    // title card layout and any other name needs the declared format.
+    if from.is_some_and(is_ieee_cdf_name)
+        || (from.is_none()
+            && matches!(ext.as_deref(), Some("txt" | "cdf"))
+            && source
+                .primary_buffer()
+                .is_ok_and(|buffer| ieee_cdf::looks_like_ieee_cdf(buffer.content_bytes())))
+    {
+        let buffer = primary(source)?;
+        let text = source_text(&buffer)?;
+        // Record spans refer to the whole retained buffer, so the decoded
+        // text's offset past a byte order mark is part of every span.
+        let origin = ieee_cdf::TextOrigin::new(
+            buffer.id().clone(),
+            (buffer.bytes().len() - buffer.content_bytes().len()) as u64,
+        );
+        let network = ieee_cdf::parse_ieee_cdf_source(text, stem, Some(origin), warnings)?;
+        reject_empty_case(&network, ieee_cdf::FMT)?;
         return Ok(network);
     }
     if from
@@ -954,7 +988,8 @@ pub(crate) fn reject_empty_case(net: &BalancedNetwork, format: &'static str) -> 
 pub const SOURCE_FORMAT_NAMES: &str = "matpower/m, powermodels-json/powermodels/pm, \
      egret-json/egret, psse/raw, psse34, psse35, psse-rawx/rawx, powerworld/aux, \
      pandapower-json/pandapower/pp, pslf/epc, pypsa-csv/pypsa, pwb, goc3-json/goc3, \
-     surge-json/surge, opfdata-json/opfdata/gridopt, xiidm/iidm, jiidm, cgmes, ucte/uct";
+     surge-json/surge, opfdata-json/opfdata/gridopt, xiidm/iidm, jiidm, cgmes, ucte/uct, \
+     ieee-cdf/cdf";
 
 /// An unrecognized source format token. When the token names a distribution
 /// format (`dss`, `pmd`, `bmopf`), the error points at the distribution
@@ -2049,6 +2084,10 @@ mod tests {
             TF::SurgeJson,
             TF::DeepMindOpfDataJson,
             TF::Ucte,
+            TF::Xiidm,
+            TF::Jiidm,
+            TF::Cgmes,
+            TF::IeeeCdf,
         ] {
             assert!(
                 canonical.contains(&format),
@@ -2201,15 +2240,16 @@ mpc.branch = [
             );
         }
         // The derived/in-memory source formats have no writer target, and
-        // neither does the read only .pwb binary.
+        // neither do the read only .pwb binary and the IEEE CDF text.
         for sf in [
             SourceFormat::InMemory,
             SourceFormat::Normalized,
             SourceFormat::Gridfm,
             SourceFormat::PypsaCsv,
             SourceFormat::PowerWorldBinary,
+            SourceFormat::IeeeCdf,
         ] {
-            assert_eq!(parse_target_format(&format!("{sf:?}")), None);
+            assert_eq!(parse_target_format(sf.name()), None);
         }
     }
 }

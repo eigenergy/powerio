@@ -8,8 +8,10 @@ use powerio::BalancedNetwork;
 use powerio::transform::{MulticonductorToBalancedOptions, to_balanced_network};
 use powerio_tx::format::routing::{Detection, JsonClass, SourceFormat as DetectedFormat};
 
-/// Extensions (lowercase) that identify a transmission case file.
-pub const TRANSMISSION_EXTENSIONS: &[&str] = &["m", "raw", "aux", "epc", "pwb", "uct"];
+/// Extensions (lowercase) that identify a transmission case file. `.cdf`
+/// names an IEEE CDF case; the archives' `.txt` spelling is not discovered
+/// because a text file of any kind carries that extension.
+pub const TRANSMISSION_EXTENSIONS: &[&str] = &["m", "raw", "aux", "epc", "pwb", "uct", "cdf"];
 
 /// Extensions (lowercase) that identify a distribution case file. `.pwd` is
 /// the PowerWorld display sibling with no case data and stays excluded.
@@ -20,7 +22,7 @@ const JSON_EXTENSION: &str = "json";
 
 /// Extension list for error and empty-state messages; a unit test keeps it in
 /// sync with the constants above.
-pub const CASE_EXTENSIONS_LABEL: &str = ".m, .raw, .aux, .epc, .pwb, .uct, .json, .dss";
+pub const CASE_EXTENSIONS_LABEL: &str = ".m, .raw, .aux, .epc, .pwb, .uct, .cdf, .json, .dss";
 
 /// Infer the case family from clear extensions or, for `.json`, the shared
 /// JSON shape classifier. `Some(true)` is distribution, `Some(false)` is

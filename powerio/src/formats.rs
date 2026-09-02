@@ -75,6 +75,9 @@ pub fn resolve_format(name: &str) -> Option<FormatInfo> {
         Some(TransmissionFormat::PypsaCsv) => Some(info("pypsa-csv", None, true, true)),
         Some(TransmissionFormat::Pwb) => Some(info("pwb", Some("pwb"), false, false)),
         Some(TransmissionFormat::Gridfm) => Some(info("gridfm", None, true, true)),
+        // The public IEEE archives name their CDF cases `.txt`; the reader also
+        // recognizes `.cdf` and any name with the declared format.
+        Some(TransmissionFormat::IeeeCdf) => Some(info("ieee-cdf", Some("txt"), false, false)),
         _ => None,
     }
 }
@@ -112,6 +115,12 @@ mod tests {
         assert!(!pwb.is_directory);
         assert!(!pwb.can_emit);
         assert_eq!(pwb.extension, Some("pwb"));
+
+        let cdf = resolve_format("cdf").unwrap();
+        assert_eq!(cdf.token, "ieee-cdf");
+        assert!(!cdf.is_directory);
+        assert!(!cdf.can_emit);
+        assert_eq!(cdf.extension, Some("txt"));
     }
 
     #[test]
