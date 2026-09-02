@@ -127,6 +127,67 @@ VSC_TARGET_Q = {
     "76eeb38f-a3ef-4444-9c65-6cb46a7a94da": -40.0,
 }
 
+# Node breaker sets read without their TP documents. Each entry pins the
+# calculated topology remark, the bus identity rule, the bus partition of the
+# terminals PowSybl's bus view shares with PowerIO, the TP partition of the
+# official set, and PowSybl's view of the fresh CGMES emitted from the
+# calculated topology.
+CGMES_NODE_BREAKER_CASES = {
+    "mini-grid-node-breaker": {
+        "label": "CGMES 2.4.15 MiniGrid node breaker",
+        "namespace": CIM16,
+        "calculated_buses": 13,
+        "connectivity_nodes": 103,
+        "closed_switches": 90,
+        "open_switches": 0,
+        "unreferenced_nodes": 0,
+        "unmapped_sv_voltages": 13,
+        "shared_terminals": 47,
+        "shared_buses": 11,
+        "topological_node_buses": 13,
+        "topological_node_partition_matches": True,
+        "fresh_buses": 12,
+        "fresh_shared_terminals": 38,
+    },
+    "small-grid-node-breaker": {
+        "label": "CGMES 2.4.15 SmallGrid node breaker",
+        "namespace": CIM16,
+        "calculated_buses": 118,
+        "connectivity_nodes": 1225,
+        "closed_switches": 1107,
+        "open_switches": 0,
+        "unreferenced_nodes": 0,
+        "unmapped_sv_voltages": 118,
+        "shared_terminals": 617,
+        "shared_buses": 115,
+        "topological_node_buses": 118,
+        "topological_node_partition_matches": True,
+        "fresh_buses": 118,
+        "fresh_shared_terminals": 557,
+    },
+    # The shipped TP of this set (dated 2323Z) separates the ends of closed
+    # breaker B1 `5f5d40ae-d52d-4631-9285-b3ceefff784c` that its SSH (dated
+    # 1930Z) closes. PowSybl's node breaker import follows the SSH switch
+    # positions, and so does PowerIO's calculated topology; the TP partition
+    # therefore has two more buses than the calculated one.
+    "micro-grid-cgmes3": {
+        "label": "CGMES 3.0 MicroGrid node breaker",
+        "namespace": CIM100,
+        "calculated_buses": 16,
+        "connectivity_nodes": 42,
+        "closed_switches": 25,
+        "open_switches": 1,
+        "unreferenced_nodes": 1,
+        "unmapped_sv_voltages": 17,
+        "shared_terminals": 49,
+        "shared_buses": 11,
+        "topological_node_buses": 18,
+        "topological_node_partition_matches": False,
+        "fresh_buses": 16,
+        "fresh_shared_terminals": 49,
+    },
+}
+
 CGMES_30_SOURCE_COUNTS = {
     "buses": 10,
     "lines": 3,
@@ -1253,6 +1314,255 @@ def check_cgmes_projection(
         f"{label}: a source load mRID is missing from fresh output",
     )
     print(f"{label}: source counts={source_counts}; fresh projection counts={fresh_counts}")
+
+
+def component_local_id(component: Any) -> str:
+    return str(component["local_id"]) if isinstance(component, dict) else str(component)
+
+
+def ir_terminal_buses(stored: dict[str, Any]) -> dict[str, int]:
+    """Terminal mRID -> calculated bus for every PowerIO IR terminal whose
+    ConnectivityNode maps to a bus."""
+    detailed = stored["value"]["data"]["detailed_connectivity"]
+    bus_of_node = {
+        component_local_id(node["component"]): node.get("calculated_bus")
+        for node in detailed["connectivity_nodes"]
+    }
+    assignments: dict[str, int] = {}
+    for terminal in detailed["terminals"]:
+        node = terminal.get("node")
+        component = terminal.get("component")
+        if node is None or component is None:
+            continue
+        bus = bus_of_node.get(component_local_id(node))
+        if bus is not None:
+            assignments[component_local_id(component)] = int(bus)
+    return assignments
+
+
+def ir_node_partition(stored: dict[str, Any]) -> set[frozenset[str]]:
+    """The ConnectivityNode identities grouped by calculated bus."""
+    groups: dict[int, set[str]] = {}
+    for node in stored["value"]["data"]["detailed_connectivity"]["connectivity_nodes"]:
+        bus = node.get("calculated_bus")
+        if bus is not None:
+            groups.setdefault(int(bus), set()).add(component_local_id(node["component"]))
+    return {frozenset(nodes) for nodes in groups.values()}
+
+
+def powsybl_terminal_buses(network: pp.network.Network, label: str) -> dict[str, str]:
+    """Terminal mRID -> bus view bus for every connected terminal of the
+    equipment PowSybl's CGMES import aliases with its CGMES terminal."""
+    terminal_of_side: dict[tuple[str, int], str] = {}
+    for element_id, row in network.get_aliases().iterrows():
+        alias_type = str(row["alias_type"])
+        prefix = "CGMES.Terminal"
+        if alias_type.startswith(prefix) and alias_type[len(prefix):] in ("", "1", "2", "3"):
+            side = int(alias_type[len(prefix):] or "1")
+            terminal_of_side[(str(element_id), side)] = str(row["alias"])
+    frames = (
+        (network.get_lines(), 2),
+        (network.get_2_windings_transformers(), 2),
+        (network.get_3_windings_transformers(), 3),
+        (network.get_generators(), 1),
+        (network.get_loads(), 1),
+        (network.get_shunt_compensators(), 1),
+        (network.get_static_var_compensators(), 1),
+        (network.get_busbar_sections(), 1),
+    )
+    assignments: dict[str, str] = {}
+    for frame, sides in frames:
+        for element_id, row in frame.iterrows():
+            for side in range(1, sides + 1):
+                suffix = "" if sides == 1 else str(side)
+                if not bool(row[f"connected{suffix}"]):
+                    continue
+                bus = row[f"bus{suffix}_id"]
+                if not isinstance(bus, str) or bus == "":
+                    continue
+                mrid = terminal_of_side.get((str(element_id), side))
+                require(
+                    mrid is not None,
+                    f"{label}: {element_id} side {side} has no CGMES terminal alias",
+                )
+                assignments[str(mrid)] = bus
+    return assignments
+
+
+def bus_partition(
+    assignments: dict[str, Any],
+    terminals: set[str],
+) -> set[frozenset[str]]:
+    groups: dict[Any, set[str]] = {}
+    for terminal in terminals:
+        groups.setdefault(assignments[terminal], set()).add(terminal)
+    return {frozenset(members) for members in groups.values()}
+
+
+def check_cgmes_calculated_topology(
+    case: dict[str, Any],
+    official_path: Path,
+    official_ir_path: Path,
+    calculated_ir_path: Path,
+    fresh_path: Path,
+) -> None:
+    label = str(case["label"])
+    require_cim_namespace(official_path, str(case["namespace"]), f"official {label}")
+    official = load_checked(official_path, f"official {label}")
+    calculated_ir = json.loads(calculated_ir_path.read_text(encoding="utf-8"))
+    official_ir = json.loads(official_ir_path.read_text(encoding="utf-8"))
+
+    remarks = [
+        diagnostic["message"]
+        for diagnostic in calculated_ir["diagnostics"]
+        if diagnostic["code"] == "READ.CGMES.TOPOLOGY_CALCULATED"
+    ]
+    require(len(remarks) == 1, f"{label}: expected one topology calculation remark")
+    expected_prefix = (
+        f"no TopologicalNode data: {case['calculated_buses']} calculated bus(es) joined "
+        f"{case['connectivity_nodes']} ConnectivityNode(s) through "
+        f"{case['closed_switches']} closed switch(es); "
+        f"{case['open_switches']} open switch(es) separate nodes"
+    )
+    require(
+        remarks[0].startswith(expected_prefix),
+        f"{label}: unexpected calculation remark: {remarks[0]}",
+    )
+    require(
+        "more than one connectivity container" not in remarks[0],
+        f"{label}: a calculated bus spans connectivity containers",
+    )
+    unreferenced = int(case["unreferenced_nodes"])
+    require(
+        (f"{unreferenced} ConnectivityNode(s) outside any VoltageLevel" in remarks[0])
+        == (unreferenced > 0),
+        f"{label}: unexpected unreferenced node count in remark: {remarks[0]}",
+    )
+    require(
+        remarks[0].endswith(
+            "bus identities are UUIDv5 values derived from the joined ConnectivityNode "
+            "mRIDs, not source TopologicalNode mRIDs"
+        ),
+        f"{label}: the remark does not state the identity rule",
+    )
+    require(
+        not any(
+            diagnostic["code"] == "READ.CGMES.CONNECTIVITY_INSUFFICIENT"
+            for diagnostic in calculated_ir["diagnostics"]
+        ),
+        f"{label}: the calculated set was reported as insufficient",
+    )
+    unmapped_prefix = (
+        f"{case['unmapped_sv_voltages']} SvVoltage record(s) observe TopologicalNode identities"
+    )
+    require(
+        any(
+            diagnostic["code"] == "READ.CGMES.RECORD_UNMAPPED"
+            and diagnostic["message"].startswith(unmapped_prefix)
+            for diagnostic in calculated_ir["diagnostics"]
+        ),
+        f"{label}: unmapped SvVoltage count changed",
+    )
+
+    data = calculated_ir["value"]["data"]
+    detailed = data["detailed_connectivity"]
+    require(
+        not detailed["bus_breaker_buses"],
+        f"{label}: the calculated topology claims source TopologicalNode records",
+    )
+    require(
+        len(data["buses"]) == int(case["calculated_buses"])
+        and len(detailed["calculated_buses"]) == len(data["buses"]),
+        f"{label}: {len(data['buses'])} buses and {len(detailed['calculated_buses'])} calculated bus records",
+    )
+    node_ids = {
+        component_local_id(node["component"]) for node in detailed["connectivity_nodes"]
+    }
+    nodes_of_bus = {
+        int(record["calculated_bus"]): sorted(
+            component_local_id(node) for node in record["nodes"]
+        )
+        for record in detailed["calculated_buses"]
+    }
+    for bus in data["buses"]:
+        expected_uid = str(
+            uuid.uuid5(
+                CGMES_UUID_NAMESPACE,
+                "calculated-bus:" + ",".join(nodes_of_bus[int(bus["id"])]),
+            )
+        )
+        require(
+            bus["uid"] == expected_uid,
+            f"{label}: bus {bus['id']} identity {bus['uid']} is not derived from its nodes",
+        )
+        require(
+            bus["uid"] not in node_ids,
+            f"{label}: bus {bus['id']} reuses a ConnectivityNode identity",
+        )
+
+    calculated_assignments = ir_terminal_buses(calculated_ir)
+    official_assignments = powsybl_terminal_buses(official, f"official {label}")
+    require(
+        set(official_assignments) <= set(calculated_assignments),
+        f"{label}: PowSybl bus view terminals are missing from the calculated topology: "
+        f"{sorted(set(official_assignments) - set(calculated_assignments))[:5]}",
+    )
+    shared = set(official_assignments) & set(calculated_assignments)
+    require(
+        len(shared) == int(case["shared_terminals"]),
+        f"{label}: {len(shared)} shared terminals, expected {case['shared_terminals']}",
+    )
+    calculated_partition = bus_partition(calculated_assignments, shared)
+    official_partition = bus_partition(official_assignments, shared)
+    require(
+        calculated_partition == official_partition,
+        f"{label}: terminal to bus assignment differs from PowSybl; PowerIO only "
+        f"{[sorted(group) for group in calculated_partition - official_partition][:3]}, "
+        f"PowSybl only {[sorted(group) for group in official_partition - calculated_partition][:3]}",
+    )
+    require(
+        len(calculated_partition) == int(case["shared_buses"]),
+        f"{label}: {len(calculated_partition)} shared buses, expected {case['shared_buses']}",
+    )
+
+    topological_partition = ir_node_partition(official_ir)
+    node_partition = ir_node_partition(calculated_ir)
+    require(
+        len(topological_partition) == int(case["topological_node_buses"]),
+        f"{label}: {len(topological_partition)} TopologicalNode buses in the official set",
+    )
+    if bool(case["topological_node_partition_matches"]):
+        require(
+            topological_partition == node_partition,
+            f"{label}: calculated buses differ from the official TopologicalNode grouping",
+        )
+    else:
+        require(
+            topological_partition != node_partition,
+            f"{label}: the official TopologicalNode grouping unexpectedly matches",
+        )
+
+    fresh = load_checked(fresh_path, f"fresh {label}")
+    fresh_assignments = powsybl_terminal_buses(fresh, f"fresh {label}")
+    fresh_shared = set(fresh_assignments) & set(official_assignments)
+    require(
+        len(fresh_shared) == int(case["fresh_shared_terminals"]),
+        f"{label}: {len(fresh_shared)} fresh shared terminals, expected {case['fresh_shared_terminals']}",
+    )
+    require(
+        bus_partition(fresh_assignments, fresh_shared)
+        == bus_partition(official_assignments, fresh_shared),
+        f"{label}: fresh CGMES bus assignment differs from PowSybl's official view",
+    )
+    require(
+        len(fresh.get_buses()) == int(case["fresh_buses"]),
+        f"{label}: PowSybl sees {len(fresh.get_buses())} fresh buses, expected {case['fresh_buses']}",
+    )
+    print(
+        f"{label}: calculated buses={case['calculated_buses']}, shared terminals={len(shared)}, "
+        f"shared buses={len(calculated_partition)}, PowSybl bus view={len(official.get_buses())}, "
+        f"fresh bus view={len(fresh.get_buses())}"
+    )
 
 
 def same_missing_value(source_value: Any, fresh_value: Any) -> bool:
@@ -4678,6 +4988,16 @@ def main() -> None:
             output_dir / f"powsybl-cgmes-{version}.emit.log",
             CIM16 if version == "2415" else CIM100,
             f"PowSybl CGMES {version}",
+        )
+
+    node_breaker_dir = output_dir / "node-breaker"
+    for stem, case in CGMES_NODE_BREAKER_CASES.items():
+        check_cgmes_calculated_topology(
+            case,
+            node_breaker_dir / f"{stem}-official",
+            node_breaker_dir / f"{stem}-official.pio.json",
+            node_breaker_dir / f"{stem}-calculated.pio.json",
+            node_breaker_dir / f"{stem}-calculated-fresh",
         )
 
     for version, (relative_path, expected_sha256) in XIIDM_VERSION_FIXTURES.items():
