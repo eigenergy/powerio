@@ -460,6 +460,9 @@ enum FormatArg {
     /// IEC CIM CGMES profile set.
     #[value(name = "cgmes")]
     Cgmes,
+    /// ENTSO-E UCTE-DEF `.uct`; fresh output uses revision 2007.05.01.
+    #[value(name = "ucte", alias = "uct")]
+    Ucte,
     #[value(name = "powerworld", alias = "aux")]
     PowerWorld,
     #[value(name = "pandapower-json", alias = "pandapower", alias = "pp")]
@@ -519,6 +522,7 @@ impl FormatArg {
             FormatArg::Xiidm | FormatArg::IidmInput => TargetFormat::Xiidm,
             FormatArg::Jiidm => TargetFormat::Jiidm,
             FormatArg::Cgmes => TargetFormat::Cgmes,
+            FormatArg::Ucte => TargetFormat::Ucte,
             FormatArg::PowerWorld => TargetFormat::PowerWorld,
             FormatArg::PandapowerJson => TargetFormat::PandapowerJson,
             FormatArg::Pslf => TargetFormat::Pslf,
@@ -560,6 +564,7 @@ impl FormatArg {
             | FormatArg::IidmInput
             | FormatArg::Jiidm
             | FormatArg::Cgmes
+            | FormatArg::Ucte
             | FormatArg::PowerWorld
             | FormatArg::PandapowerJson
             | FormatArg::PypsaCsv
@@ -587,6 +592,7 @@ impl FormatArg {
             FormatArg::IidmInput => "iidm",
             FormatArg::Jiidm => "jiidm",
             FormatArg::Cgmes => "cgmes",
+            FormatArg::Ucte => "ucte",
             FormatArg::PowerWorld => "powerworld",
             FormatArg::PandapowerJson => "pandapower-json",
             FormatArg::PypsaCsv => "pypsa-csv",

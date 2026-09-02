@@ -62,6 +62,7 @@ mod pypsa;
 mod rawx;
 pub mod routing;
 mod surge;
+mod ucte;
 mod union_find;
 mod xiidm;
 
@@ -128,6 +129,8 @@ pub enum TargetFormat {
     Jiidm,
     /// IEC CIM Common Grid Model Exchange Specification profile set.
     Cgmes,
+    /// ENTSO-E UCTE-DEF `.uct`; fresh output uses revision 2007.05.01.
+    Ucte,
 }
 
 impl TargetFormat {
@@ -149,6 +152,7 @@ impl TargetFormat {
             TargetFormat::Xiidm => "xiidm",
             TargetFormat::Jiidm => "jiidm",
             TargetFormat::Cgmes => "xml",
+            TargetFormat::Ucte => "uct",
         }
     }
 
@@ -170,6 +174,7 @@ impl TargetFormat {
             TargetFormat::Xiidm => "XIIDM 1.17 XML",
             TargetFormat::Jiidm => "JIIDM 1.17 JSON",
             TargetFormat::Cgmes => "CGMES 3.0 profile set",
+            TargetFormat::Ucte => "UCTE-DEF .uct",
         }
     }
 
@@ -193,6 +198,7 @@ impl TargetFormat {
             TargetFormat::Xiidm => "xiidm",
             TargetFormat::Jiidm => "jiidm",
             TargetFormat::Cgmes => "cgmes",
+            TargetFormat::Ucte => "ucte",
         }
     }
 }
@@ -284,7 +290,7 @@ pub fn parse_display_format(name: &str) -> Option<DisplayFormat> {
 /// `egret-json`/`egret`, `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`,
 /// `powerworld`/`aux`, `pslf`/`epc`, `goc3-json`/`goc3`, and
 /// `surge-json`/`surge`, `opfdata-json`/`opfdata`/`gridopt`, `xiidm`, `jiidm`,
-/// and `cgmes`.
+/// `cgmes`, and `ucte`/`uct`.
 /// Case-insensitive. The one place the bindings (Python, C ABI) share, so a new
 /// format means one new arm here, not three. CGMES emits a profile directory;
 /// PyPSA CSV folders, GridFM datasets, and PowerWorld `.pwb` are routed by
@@ -318,6 +324,7 @@ pub fn parse_target_format(name: &str) -> Option<TargetFormat> {
         TransmissionFormat::Xiidm => TargetFormat::Xiidm,
         TransmissionFormat::Jiidm => TargetFormat::Jiidm,
         TransmissionFormat::Cgmes => TargetFormat::Cgmes,
+        TransmissionFormat::Ucte => TargetFormat::Ucte,
         TransmissionFormat::PypsaCsv | TransmissionFormat::Pwb | TransmissionFormat::Gridfm => {
             return None;
         }
@@ -744,6 +751,7 @@ fn parse_to_network(
                 Some("jiidm") => Some(TargetFormat::Jiidm),
                 Some("xml") if looks_like_xiidm => Some(TargetFormat::Xiidm),
                 Some("xml" | "zip") => Some(TargetFormat::Cgmes),
+                Some("uct") => Some(TargetFormat::Ucte),
                 Some("json") => None,
                 Some("dss") => return Err(unknown_source_format("dss")),
                 other => {
@@ -863,6 +871,7 @@ fn read_source(
         TargetFormat::Cgmes => {
             cgmes::parse_text(name_hint.unwrap_or("profile.xml"), text, warnings)
         }
+        TargetFormat::Ucte => ucte::parse_ucte_source(text, name_hint, warnings),
     }?;
     reject_empty_case(&net, fmt.label())?;
     Ok(net)
@@ -945,7 +954,7 @@ pub(crate) fn reject_empty_case(net: &BalancedNetwork, format: &'static str) -> 
 pub const SOURCE_FORMAT_NAMES: &str = "matpower/m, powermodels-json/powermodels/pm, \
      egret-json/egret, psse/raw, psse34, psse35, psse-rawx/rawx, powerworld/aux, \
      pandapower-json/pandapower/pp, pslf/epc, pypsa-csv/pypsa, pwb, goc3-json/goc3, \
-     surge-json/surge, opfdata-json/opfdata/gridopt, xiidm/iidm, jiidm, cgmes";
+     surge-json/surge, opfdata-json/opfdata/gridopt, xiidm/iidm, jiidm, cgmes, ucte/uct";
 
 /// An unrecognized source format token. When the token names a distribution
 /// format (`dss`, `pmd`, `bmopf`), the error points at the distribution
@@ -1166,6 +1175,7 @@ pub(crate) fn emit_value_text(net: &BalancedNetwork, format: TargetFormat) -> Re
         TargetFormat::Cgmes => {
             return Err(Error::WriteUnsupported { format: "cgmes" });
         }
+        TargetFormat::Ucte => ucte::write_ucte(net)?,
     };
     warn_normalized_tap(net, format, &mut conv);
     warn_missing_reference(net, format, &mut conv);
@@ -1481,6 +1491,20 @@ fn warn_dropped_frequency(net: &BalancedNetwork, format: TargetFormat, conv: &mu
     if carries_frequency {
         return;
     }
+    // UCTE-DEF has no frequency field either, but it describes the 50 Hz
+    // synchronous area, so a 50 Hz case loses nothing and reads back as 50.
+    if format == TargetFormat::Ucte {
+        if (net.base_frequency() - 50.0).abs() > 1e-9 {
+            conv.push(
+                &format.emit_family().field_dropped,
+                format!(
+                    "system base frequency {} Hz dropped: UCTE-DEF describes the 50 Hz synchronous area and has no frequency field (reads back as 50 Hz)",
+                    net.base_frequency()
+                ),
+            );
+        }
+        return;
+    }
     if (net.base_frequency() - crate::network::DEFAULT_BASE_FREQUENCY).abs() > 1e-9 {
         conv.push(
             &format.emit_family().field_dropped,
@@ -1732,7 +1756,7 @@ pub(super) fn normalized_tap_warning(net: &BalancedNetwork) -> Option<String> {
 /// True when `value` is set and deviates from `reference`: the shared test for
 /// "does this rating column carry information the target cannot" used by the
 /// rate_b/rate_c drop warnings.
-fn nonzero_differs(value: f64, reference: f64) -> bool {
+pub(super) fn nonzero_differs(value: f64, reference: f64) -> bool {
     value.abs() > f64::EPSILON && (value - reference).abs() > f64::EPSILON
 }
 
@@ -2022,6 +2046,7 @@ mod tests {
             TF::Goc3Json,
             TF::SurgeJson,
             TF::DeepMindOpfDataJson,
+            TF::Ucte,
         ] {
             assert!(
                 canonical.contains(&format),
@@ -2160,6 +2185,7 @@ mpc.branch = [
             (SourceFormat::Pslf, TargetFormat::Pslf),
             (SourceFormat::Goc3Json, TargetFormat::Goc3Json),
             (SourceFormat::SurgeJson, TargetFormat::SurgeJson),
+            (SourceFormat::Ucte, TargetFormat::Ucte),
             (
                 SourceFormat::DeepMindOpfDataJson,
                 TargetFormat::DeepMindOpfDataJson,

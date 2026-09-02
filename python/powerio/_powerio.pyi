@@ -112,6 +112,7 @@ class _BalancedNetwork:
         "xiidm",
         "jiidm",
         "cgmes",
+        "ucte",
     ]: ...
     @property
     def n_buses(self) -> int: ...

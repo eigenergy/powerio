@@ -1418,6 +1418,10 @@ pub enum SourceFormat {
     /// Read from a CGMES profile set (2.4.15/CIM16 or 3.0/CIM100).
     #[serde(rename = "cgmes")]
     Cgmes,
+    /// Read from an ENTSO-E UCTE-DEF `.uct` file (revision 2003.09.01 or
+    /// 2007.05.01).
+    #[serde(rename = "ucte")]
+    Ucte,
 }
 
 impl SourceFormat {
@@ -1447,6 +1451,7 @@ impl SourceFormat {
             SourceFormat::Xiidm => "xiidm",
             SourceFormat::Jiidm => "jiidm",
             SourceFormat::Cgmes => "cgmes",
+            SourceFormat::Ucte => "ucte",
         }
     }
 }
@@ -5615,6 +5620,7 @@ mod tests {
             SourceFormat::Xiidm,
             SourceFormat::Jiidm,
             SourceFormat::Cgmes,
+            SourceFormat::Ucte,
         ];
         for f in all {
             match f {
@@ -5636,7 +5642,8 @@ mod tests {
                 | SourceFormat::DeepMindOpfDataJson
                 | SourceFormat::Xiidm
                 | SourceFormat::Jiidm
-                | SourceFormat::Cgmes => {}
+                | SourceFormat::Cgmes
+                | SourceFormat::Ucte => {}
             }
             let token = serde_json::to_value(f).unwrap();
             assert_eq!(token, serde_json::Value::String(f.name().to_owned()));
