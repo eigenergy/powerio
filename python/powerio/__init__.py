@@ -83,7 +83,6 @@ from ._powerio import (
 __all__ = [
     "AcOpfInstance",
     "AcOpfSolution",
-    "GeoLayer",
     "AcPfInstance",
     "AcPfSolution",
     "AcScucInstance",
@@ -102,6 +101,7 @@ __all__ = [
     "DisplayData",
     "EmitResult",
     "FormatInfo",
+    "GeoLayer",
     "McAcOpfInstance",
     "McAcOpfSolution",
     "McAcPfInstance",
