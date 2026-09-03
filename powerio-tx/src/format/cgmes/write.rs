@@ -50,6 +50,49 @@ pub struct CgmesFiles {
 /// provenance metadata, not data.
 const STAMP: &str = "2000-01-01T00:00:00Z";
 
+/// The `OperationalLimitType` one branch rating is written under.
+///
+/// `rate_a` is the permanent limit (PATL). `rate_b` and `rate_c` are temporary
+/// admissible loadings (TATL), told apart by the acceptable duration a CGMES
+/// TATL states: twenty minutes for the short term rating and one minute for
+/// the emergency rating, the durations the reference importer assigns to the
+/// same two ratings. A tripping current kind would state a protection setting
+/// rather than an admissible loading, so it is not used for a rating.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RateLimitType {
+    /// Distinguishes the two TATL durations in a deterministic mRID and in the
+    /// generated set and limit names.
+    label: &'static str,
+    kind: &'static str,
+    /// Seconds a TATL is admissible for; unused when `infinite`.
+    duration_seconds: u64,
+    infinite: bool,
+}
+
+/// `rate_a` as a PATL.
+const RATE_A_LIMIT: RateLimitType = RateLimitType {
+    label: "patl",
+    kind: "patl",
+    duration_seconds: 0,
+    infinite: true,
+};
+
+/// `rate_b` as the twenty minute TATL.
+const RATE_B_LIMIT: RateLimitType = RateLimitType {
+    label: "tatl-1200",
+    kind: "tatl",
+    duration_seconds: 1200,
+    infinite: false,
+};
+
+/// `rate_c` as the one minute emergency TATL.
+const RATE_C_LIMIT: RateLimitType = RateLimitType {
+    label: "tatl-60",
+    kind: "tatl",
+    duration_seconds: 60,
+    infinite: false,
+};
+
 /// A UUID-shaped identifier derived from an object's role and name, so writes
 /// are reproducible; imported mRIDs (element `uid`s) take precedence at the
 /// call sites.
@@ -1485,7 +1528,8 @@ fn document(
     }
     let _ = writeln!(
         out,
-        "    <md:Model.modelingAuthoritySet>http://powerio.dev/cgmes</md:Model.modelingAuthoritySet>"
+        "    <md:Model.modelingAuthoritySet>{}</md:Model.modelingAuthoritySet>",
+        super::POWERIO_MODELING_AUTHORITY_SET
     );
     out.push_str("  </md:FullModel>\n");
     out.push_str(body);
@@ -4998,7 +5042,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             format!("{ext_ns}LimitTypeKind.{kind}")
         }
     };
-    let mut limit_types_used: Vec<&'static str> = Vec::new();
+    let mut limit_types_used: Vec<RateLimitType> = Vec::new();
     let mut limit_doc = Doc::new(Arc::clone(&retained_metadata));
 
     // --- loads ------------------------------------------------------------
@@ -6461,13 +6505,14 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             })
         });
         if !has_source_limits {
-            // PATL/TATL/TC current limits at terminal 1 through √3·kV.
-            let mut rate = |mva: f64, kind: &'static str| {
+            // PATL and TATL current limits at terminal 1 through √3·kV.
+            let mut rate = |mva: f64, limit_type: RateLimitType| {
                 if mva <= 0.0 {
                     return;
                 }
-                if !limit_types_used.contains(&kind) {
-                    limit_types_used.push(kind);
+                let kind = limit_type.label;
+                if !limit_types_used.contains(&limit_type) {
+                    limit_types_used.push(limit_type);
                 }
                 let set = det_mrid("limitset", &format!("{id}:{kind}"));
                 limit_body.named(
@@ -6497,18 +6542,21 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 }
                 limit_body.close("CurrentLimit");
             };
-            rate(branch.rate_a, "patl");
-            rate(branch.rate_b, "tatl");
-            rate(branch.rate_c, "tc");
-            if !branch.rating_sets.is_empty() || branch.current_ratings.is_some() {
+            rate(branch.rate_a, RATE_A_LIMIT);
+            rate(branch.rate_b, RATE_B_LIMIT);
+            rate(branch.rate_c, RATE_C_LIMIT);
+            for rating_set in &branch.rating_sets {
                 w.warnings.push_as(
                     &codes::EMIT_CGMES.rating_set_dropped,
                     format!(
-                        "branch {} ({}-{}): extra rating sets / current ratings beyond \
-                     A/B/C have no CGMES slot",
+                        "branch {} ({}-{}) rating set `{}` = {} MVA dropped: a CGMES temporary \
+                         limit states the seconds it is admissible for and a named rating set \
+                         states no duration to place it under",
                         i + 1,
                         branch.from,
-                        branch.to
+                        branch.to,
+                        rating_set.name,
+                        rating_set.rate_mva
                     ),
                 );
             }
@@ -6715,16 +6763,17 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 })
             });
             if !has_source_limits {
-                for (mva, kind) in [
-                    (winding.rate_a, "patl"),
-                    (winding.rate_b, "tatl"),
-                    (winding.rate_c, "tc"),
+                for (mva, limit_type) in [
+                    (winding.rate_a, RATE_A_LIMIT),
+                    (winding.rate_b, RATE_B_LIMIT),
+                    (winding.rate_c, RATE_C_LIMIT),
                 ] {
                     if mva <= 0.0 {
                         continue;
                     }
-                    if !limit_types_used.contains(&kind) {
-                        limit_types_used.push(kind);
+                    let kind = limit_type.label;
+                    if !limit_types_used.contains(&limit_type) {
+                        limit_types_used.push(limit_type);
                     }
                     let set = det_mrid("limitset", &format!("{id}:{end_number}:{kind}"));
                     limit_body.named(
@@ -6891,9 +6940,9 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         }
     }
 
-    for kind in &limit_types_used {
-        let id = det_mrid("limittype", kind);
-        limit_doc.named("OperationalLimitType", &id, kind);
+    for limit_type in &limit_types_used {
+        let id = det_mrid("limittype", limit_type.label);
+        limit_doc.named("OperationalLimitType", &id, limit_type.label);
         limit_doc.enumeration(
             "OperationalLimitType.direction",
             w.p.cim_ns,
@@ -6903,16 +6952,28 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             limit_doc.ext_ref(
                 w.p.ext.0,
                 "OperationalLimitType.kind",
-                &limit_kind_uri(kind),
+                &limit_kind_uri(limit_type.kind),
             );
-            limit_doc.text("OperationalLimitType.isInfiniteDuration", *kind == "patl");
+            limit_doc.text(
+                "OperationalLimitType.isInfiniteDuration",
+                limit_type.infinite,
+            );
+            if !limit_type.infinite {
+                limit_doc.text(
+                    "OperationalLimitType.acceptableDuration",
+                    limit_type.duration_seconds,
+                );
+            }
         } else {
             limit_doc.ext_ref(
                 w.p.ext.0,
                 "OperationalLimitType.limitType",
-                &limit_kind_uri(kind),
+                &limit_kind_uri(limit_type.kind),
             );
-            limit_doc.text("OperationalLimitType.acceptableDuration", 900);
+            limit_doc.text(
+                "OperationalLimitType.acceptableDuration",
+                limit_type.duration_seconds,
+            );
         }
         limit_doc.close("OperationalLimitType");
     }
@@ -6996,7 +7057,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             };
             if !represented {
                 w.warnings.push_as(&codes::EMIT_CGMES.record_dropped, format!(
-                    "equipment reactive limits for `{}` were not emitted: the CGMES writer has no reactive limits association for component type `{}`",
+                    "equipment reactive limits for `{}` were not emitted: a CGMES ReactiveCapabilityCurve attaches to a synchronous machine or a power electronics connection, and no CGMES record states the {} they bound",
                     record.equipment,
                     record.equipment.component_type()
                 ));
@@ -7012,18 +7073,26 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             "HVDC line `{id}` is a two terminal calculation record, not a physical CGMES DC network, and was not emitted. It has no DCConverterUnit operating mode and containment, DC node and terminal polarity identities, or ground or metallic return topology; its optional resistance, nominal voltage, converter technology, setpoints, and loss factors are insufficient to construct those standard records without inventing data. Use the source neutral detailed DC equipment records for CGMES emission"
         ));
     }
-    for (what, count) in [
-        ("storage unit", net.storage().len()),
-        ("area record", net.areas().len()),
+    for (what, count, reason) in [
+        (
+            "storage unit",
+            net.storage().len(),
+            "a CGMES BatteryUnit states an installed capacity and a charge state and no state              of charge bound, energy capacity, or charge and discharge efficiency",
+        ),
+        (
+            "area record",
+            net.areas().len(),
+            "a CGMES ControlArea states a net interchange and a tolerance, and CGMES states no              control area membership for a node and no area swing bus",
+        ),
         (
             "solver-parameter block",
             usize::from(net.solver().is_some()),
+            "CGMES describes equipment, topology, and state and has no class for the parameters              of a power flow calculation",
         ),
     ] {
         if count > 0 {
-            w.warnings.push(format!(
-                "{count} {what}(s) have no CGMES mapping yet and are dropped"
-            ));
+            w.warnings
+                .push(format!("{count} {what}(s) dropped: {reason}"));
         }
     }
 

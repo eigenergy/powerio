@@ -40,6 +40,10 @@ use crate::{Error, Result};
 const MAX_FILES: usize = 4_096;
 const MAX_BYTES: u64 = 64 << 20;
 const MAX_COMPRESSION_RATIO: u64 = 200;
+/// The modeling authority set fresh CGMES output states. A header carrying it
+/// was synthesized by this writer, so its identity, version, creation time,
+/// and profile dependencies state nothing a source document stated.
+const POWERIO_MODELING_AUTHORITY_SET: &str = "http://powerio.dev/cgmes";
 const CGMES_CLASS_PROPERTY: &str = "cgmes_class";
 const CGMES_SV_STATUS_PROPERTY: &str = "SvStatus.inService";
 const CGMES_GENERATING_UNIT_PROPERTY: &str = "RotatingMachine.GeneratingUnit";
@@ -1154,7 +1158,7 @@ mod tests {
         assert!(output.warnings.iter().any(|warning| {
             warning.info.code == crate::diagnostics::codes::EMIT_CGMES.record_dropped.code
                 && warning.contains("storage/not-emitted")
-                && warning.contains("no reactive limits association")
+                && warning.contains("no CGMES record states the storage")
         }));
 
         let parsed = read::read_cgmes_documents(output.files, Some("machine-min-max")).unwrap();
@@ -4931,7 +4935,7 @@ mod tests {
         assert!(equipment.contains("<cim:VoltageLevel.lowVoltageLimit>209.3"));
         assert!(equipment.contains("<cim:VoltageLevel.highVoltageLimit>250.7"));
         assert!(output.warnings.iter().any(|warning| {
-            warning.contains("2 area record(s) have no CGMES mapping yet and are dropped")
+            warning.contains("2 area record(s) dropped: a CGMES ControlArea states")
         }));
     }
 

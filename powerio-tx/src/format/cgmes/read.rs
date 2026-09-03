@@ -319,6 +319,15 @@ fn warn_full_model_fields(
     let Some(header) = header else {
         return;
     };
+    // A header this writer synthesized restates nothing: the identity, the
+    // authority set, the creation time, the version, and the dependency
+    // references are all values fresh emission assigns, so reporting them as
+    // dropped would make every conversion into CGMES declare a loss the
+    // source never stated.
+    if header.modeling_authority_set.as_deref() == Some(super::POWERIO_MODELING_AUTHORITY_SET) {
+        warn_full_model_extra_properties(document_name, header, warnings);
+        return;
+    }
     if let Some(identity) = header.identity.as_deref() {
         warnings.push_as(
             &codes::READ_CGMES_FIELD_UNMAPPED,
@@ -372,6 +381,16 @@ fn warn_full_model_fields(
             ),
         );
     }
+    warn_full_model_extra_properties(document_name, header, warnings);
+}
+
+/// Report the FullModel properties beyond the mapped set, whoever wrote them:
+/// a property this reader does not map is stated by the document either way.
+fn warn_full_model_extra_properties(
+    document_name: &str,
+    header: &ModelHeader,
+    warnings: &mut CgmesDiagnostics,
+) {
     if !header.unmapped_properties.is_empty() {
         let mut grouped: BTreeMap<&str, usize> = BTreeMap::new();
         for (property, _) in &header.unmapped_properties {
@@ -403,7 +422,7 @@ fn warn_full_model_fields(
         warnings.push_as(
             &codes::READ_CGMES_FIELD_UNMAPPED,
             format!(
-                "FullModel in `{document_name}` has {} property value(s) encoded as nested RDF/XML: {fields}; PowerIO does not flatten or retain that nested structure",
+                "FullModel in `{document_name}` has {} property value(s) encoded as nested RDF/XML: {fields}; a header property reaches the electrical model as one text value and a nested structure has no such spelling",
                 header.nested_properties.len()
             ),
         );
@@ -452,6 +471,7 @@ struct Merged {
 }
 
 /// The merged object store plus the id and class indexes the mapping reads.
+#[derive(Default)]
 struct Store {
     objects: Vec<Merged>,
     by_id: HashMap<String, usize>,
@@ -459,6 +479,16 @@ struct Store {
     /// the final diagnostic pass distinguish a mapped class from fields on
     /// that class which the mapping did not consume.
     read_props: RefCell<BTreeSet<(usize, usize)>>,
+    /// Whether every document that declared a modeling authority declared this
+    /// writer's own. Such a set was produced by fresh CGMES emission, so the
+    /// containers, limit types, islands, and subordinate mRIDs in it are values
+    /// the writer synthesized rather than anything a source case stated, and
+    /// reporting them as unmapped would make every conversion through CGMES
+    /// declare a loss of data that was never stated.
+    own_output: bool,
+    /// Whether any document declared a modeling authority other than this
+    /// writer's own, which makes the set a third party document set.
+    foreign_output: bool,
 }
 
 /// CIM100 SSH serializes the inherited `Equipment.inService` property in an
@@ -475,6 +505,11 @@ impl Store {
             .header
             .as_ref()
             .and_then(|header| header.modeling_authority_set.clone());
+        match modeling_authority_set.as_deref() {
+            Some(super::POWERIO_MODELING_AUTHORITY_SET) => self.own_output = true,
+            Some(_) => self.foreign_output = true,
+            None => {}
+        }
         for CimObject {
             class,
             id,
@@ -895,11 +930,7 @@ pub(crate) fn read_cgmes_documents_into(
     name_hint: Option<&str>,
     warnings: &mut CgmesDiagnostics,
 ) -> Result<BalancedNetwork> {
-    let mut store = Store {
-        objects: Vec::new(),
-        by_id: HashMap::new(),
-        read_props: RefCell::new(BTreeSet::new()),
-    };
+    let mut store = Store::default();
     let mut versions: Vec<CgmesVersion> = Vec::new();
     let mut description: Option<String> = None;
     let mut scenario_time: Option<String> = None;
@@ -5428,9 +5459,13 @@ fn phase_shift_deg(mapper: &mut Mapper<'_>, ptc: &str, invert: bool) -> f64 {
     if invert { -degrees } else { degrees }
 }
 
-/// PATL → `rate_a`, TATL → `rate_b`, TC → `rate_c`, from the operational
-/// limit sets on the equipment's terminals (or the equipment itself).
-/// Current limits convert through √3·kV; apparent/active limits are MVA/MW.
+/// PATL → `rate_a`; a TATL admissible for longer than a minute → `rate_b` and
+/// one admissible for a minute or less → `rate_c`, the short term and
+/// emergency ratings the reference importer reads the same two durations as; a
+/// tripping current kind also lands on `rate_c`. Limits come from the
+/// operational limit sets on the equipment's terminals (or the equipment
+/// itself). Current limits convert through √3·kV; apparent/active limits are
+/// MVA/MW.
 fn apply_limits(
     mapper: &mut Mapper<'_>,
     equipment: &str,
@@ -5447,6 +5482,10 @@ fn apply_limits(
     terminals.push(equipment);
     apply_limits_to_targets(mapper.store, &terminals, branch, kv, version);
 }
+
+/// A temporary limit admissible for this many seconds or fewer is the
+/// emergency rating, as the reference importer classifies it.
+const EMERGENCY_LIMIT_SECONDS: f64 = 60.0;
 
 fn apply_limits_to_targets(
     store: &Store,
@@ -5495,7 +5534,16 @@ fn apply_limits_to_targets(
             };
             let slot = match kind {
                 Some("patl") => Some(&mut branch.rate_a),
-                Some("tatl") => Some(&mut branch.rate_b),
+                Some("tatl") => {
+                    if store
+                        .f(limit_type, "OperationalLimitType.acceptableDuration")
+                        .is_some_and(|seconds| seconds <= EMERGENCY_LIMIT_SECONDS)
+                    {
+                        Some(&mut branch.rate_c)
+                    } else {
+                        Some(&mut branch.rate_b)
+                    }
+                }
                 Some("tc" | "tct") => Some(&mut branch.rate_c),
                 _ => None,
             };
@@ -5547,7 +5595,16 @@ fn normalized_identity_value(raw: &str) -> &str {
 /// Warn for every unconsumed class and every unconsumed field on a consumed
 /// class. Property access is tracked by exact object and property position so
 /// repeated RDF properties cannot hide an unread value.
+/// Whether this document set was produced by fresh CGMES emission: every
+/// declared modeling authority is this writer's own.
+fn is_own_output(store: &Store) -> bool {
+    store.own_output && !store.foreign_output
+}
+
 fn warn_unmapped(store: &Store, warnings: &mut CgmesDiagnostics) {
+    if is_own_output(store) {
+        return;
+    }
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
     let mut fields: BTreeMap<(&str, &str), (usize, Vec<&str>)> = BTreeMap::new();
     let read_props = store.read_props.borrow();
@@ -5569,7 +5626,7 @@ fn warn_unmapped(store: &Store, warnings: &mut CgmesDiagnostics) {
                 warnings.push_as(
                     &codes::READ_CGMES_FIELD_UNMAPPED,
                     format!(
-                        "{} `{}` property `IdentifiedObject.mRID` is {}, but its RDF identity is `{}`; PowerIO uses the RDF identity and fresh CGMES output replaces this mRID",
+                        "{} `{}` property `IdentifiedObject.mRID` is {}, but its RDF identity is `{}`; a CIM object has one identity in the balanced calculation view, taken from the RDF identity, and fresh CGMES output replaces this mRID",
                         object.class,
                         object.id,
                         describe_property_value(value),
@@ -5589,7 +5646,7 @@ fn warn_unmapped(store: &Store, warnings: &mut CgmesDiagnostics) {
     }
     for (class, count) in counts {
         warnings.push(format!(
-            "{count} {class} object(s) have no electrical or hierarchy mapping; only their identity metadata is retained"
+            "{count} {class} object(s) state no electrical value and no container the balanced calculation view holds; their identity metadata is retained and nothing else"
         ));
     }
     for ((class, property), (occurrences, ids)) in fields {
@@ -5602,7 +5659,7 @@ fn warn_unmapped(store: &Store, warnings: &mut CgmesDiagnostics) {
         warnings.push_as(
             &codes::READ_CGMES_FIELD_UNMAPPED,
             format!(
-                "{} {class} object(s) provide {occurrences} `{property}` value(s) that PowerIO does not map (objects: [`{samples}`]{remainder}); fresh CGMES output omits this field",
+                "{} {class} object(s) state {occurrences} `{property}` value(s) that no field of the balanced calculation view holds (objects: [`{samples}`]{remainder}); fresh CGMES output omits this field",
                 ids.len(),
             ),
         );
@@ -5610,6 +5667,9 @@ fn warn_unmapped(store: &Store, warnings: &mut CgmesDiagnostics) {
 }
 
 fn warn_regenerated_subordinate_identities(store: &Store, warnings: &mut CgmesDiagnostics) {
+    if is_own_output(store) {
+        return;
+    }
     for class in [
         "TapChangerControl",
         "RatioTapChangerTable",
@@ -5640,7 +5700,7 @@ fn warn_regenerated_subordinate_identities(store: &Store, warnings: &mut CgmesDi
             ("identities", "are")
         };
         warnings.push(format!(
-            "{} {class} {identity} [`{sample}`]{remainder} {verb} not retained as PowerIO component IDs; the electrical values and relationships are retained, and fresh CGMES assigns deterministic subordinate mRIDs",
+            "{} {class} {identity} [`{sample}`]{remainder} {verb} the mRID of an object subordinate to an element, and the balanced calculation view identifies elements and not their subordinate objects; the electrical values and relationships are retained, and fresh CGMES assigns deterministic subordinate mRIDs",
             ids.len()
         ));
     }
@@ -5678,11 +5738,7 @@ mod tests {
 
     #[test]
     fn coalesces_equal_properties_and_rejects_conflicting_profile_values() {
-        let mut store = Store {
-            objects: Vec::new(),
-            by_id: HashMap::new(),
-            read_props: RefCell::new(BTreeSet::new()),
-        };
+        let mut store = Store::default();
         store
             .merge(document_with_property(true, PropValue::Text("10".into())))
             .unwrap();
@@ -5735,11 +5791,7 @@ mod tests {
             ("CurrentLimit", "CurrentLimit.value", "NaN"),
             ("TapChanger", "TapChanger.step", "-inf"),
         ] {
-            let mut store = Store {
-                objects: Vec::new(),
-                by_id: HashMap::new(),
-                read_props: RefCell::new(BTreeSet::new()),
-            };
+            let mut store = Store::default();
             let error = store
                 .merge(document_with_literal(class, property, value))
                 .unwrap_err();
@@ -5770,11 +5822,7 @@ mod tests {
             ),
             ("TapChanger", "TapChanger.ltcFlag", "on"),
         ] {
-            let mut store = Store {
-                objects: Vec::new(),
-                by_id: HashMap::new(),
-                read_props: RefCell::new(BTreeSet::new()),
-            };
+            let mut store = Store::default();
             let error = store
                 .merge(document_with_literal(class, property, value))
                 .unwrap_err();
@@ -5830,11 +5878,7 @@ mod tests {
                 "-1",
             ),
         ] {
-            let mut store = Store {
-                objects: Vec::new(),
-                by_id: HashMap::new(),
-                read_props: RefCell::new(BTreeSet::new()),
-            };
+            let mut store = Store::default();
             let message = store
                 .merge(document_with_literal(class, property, value))
                 .unwrap_err()
@@ -5869,11 +5913,7 @@ mod tests {
                 "OperationalLimitType.acceptableDuration",
             ),
         ] {
-            let mut store = Store {
-                objects: Vec::new(),
-                by_id: HashMap::new(),
-                read_props: RefCell::new(BTreeSet::new()),
-            };
+            let mut store = Store::default();
             store
                 .merge(document_with_literal(class, property, "2.5"))
                 .unwrap();
@@ -5961,11 +6001,7 @@ mod tests {
 
     #[test]
     fn noncanonical_limit_kinds_and_fractional_durations_are_explicit() {
-        let mut store = Store {
-            objects: Vec::new(),
-            by_id: HashMap::new(),
-            read_props: RefCell::new(BTreeSet::new()),
-        };
+        let mut store = Store::default();
         store
             .merge(CimDocument {
                 cim_namespaces: BTreeSet::from(["http://iec.ch/TC57/CIM100#".into()]),
@@ -6039,11 +6075,7 @@ mod tests {
     #[test]
     fn invalid_temporary_limit_durations_are_explicit() {
         for duration_value in ["-1", "18446744073709551616"] {
-            let mut store = Store {
-                objects: Vec::new(),
-                by_id: HashMap::new(),
-                read_props: RefCell::new(BTreeSet::new()),
-            };
+            let mut store = Store::default();
             store
                 .merge(CimDocument {
                     cim_namespaces: BTreeSet::from(["http://iec.ch/TC57/CIM100#".into()]),
@@ -6112,11 +6144,7 @@ mod tests {
 
     #[test]
     fn distinct_equal_base_voltage_identities_are_diagnosed() {
-        let mut store = Store {
-            objects: Vec::new(),
-            by_id: HashMap::new(),
-            read_props: RefCell::new(BTreeSet::new()),
-        };
+        let mut store = Store::default();
         store
             .merge(CimDocument {
                 cim_namespaces: BTreeSet::from(["http://iec.ch/TC57/CIM100#".into()]),
@@ -6146,11 +6174,7 @@ mod tests {
 
     #[test]
     fn unsupported_tap_control_mode_is_not_silently_defaulted() {
-        let mut store = Store {
-            objects: Vec::new(),
-            by_id: HashMap::new(),
-            read_props: RefCell::new(BTreeSet::new()),
-        };
+        let mut store = Store::default();
         store
             .merge(CimDocument {
                 cim_namespaces: BTreeSet::from(["http://iec.ch/TC57/CIM100#".into()]),
@@ -6188,11 +6212,7 @@ mod tests {
 
     #[test]
     fn rejects_resource_references_for_typed_literals() {
-        let mut store = Store {
-            objects: Vec::new(),
-            by_id: HashMap::new(),
-            read_props: RefCell::new(BTreeSet::new()),
-        };
+        let mut store = Store::default();
         let mut document = document_with_literal("EnergyConsumer", "EnergyConsumer.p", "1");
         document.objects[0].props[0].1 = PropValue::Ref("not-a-number".into());
 
@@ -6203,11 +6223,7 @@ mod tests {
 
     #[test]
     fn unknown_limit_tap_changer_and_generating_unit_classes_are_diagnosed() {
-        let mut store = Store {
-            objects: Vec::new(),
-            by_id: HashMap::new(),
-            read_props: RefCell::new(BTreeSet::new()),
-        };
+        let mut store = Store::default();
         store
             .merge(CimDocument {
                 cim_namespaces: BTreeSet::from(["http://iec.ch/TC57/CIM100#".into()]),
@@ -6238,18 +6254,14 @@ mod tests {
             assert!(warnings.iter().any(|warning| {
                 warning.info.code == codes::READ_CGMES_RECORD_UNMAPPED.code
                     && warning.contains(&format!("1 {class} object(s)"))
-                    && warning.contains("no electrical or hierarchy mapping")
+                    && warning.contains("state no electrical value and no container")
             }));
         }
     }
 
     #[test]
     fn mapped_classes_report_each_unread_field_without_false_mrid_matches() {
-        let mut store = Store {
-            objects: Vec::new(),
-            by_id: HashMap::new(),
-            read_props: RefCell::new(BTreeSet::new()),
-        };
+        let mut store = Store::default();
         store
             .merge(CimDocument {
                 cim_namespaces: BTreeSet::from(["http://iec.ch/TC57/CIM100#".into()]),
