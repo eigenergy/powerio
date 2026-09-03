@@ -670,7 +670,16 @@ fn emit_geo_layer(
     destination: Destination,
 ) -> Result<EmitResult, Error> {
     if !crate::is_geo_layer_token(format) {
-        return Err(if known_format_name(format) {
+        // A `.pwd` display reads into a layer but has no writer, so naming it
+        // as the target is a different mistake from naming a grid case.
+        return Err(if crate::is_pwd_display_token(format) {
+            Error::new(
+                &codes::REQUEST_EMIT_UNSUPPORTED_VALUE_TYPE,
+                format!(
+                    "{format} names the PowerWorld display file, which has no writer; write the layer as `geo-json`"
+                ),
+            )
+        } else if known_format_name(format) {
             Error::new(
                 &codes::REQUEST_EMIT_UNSUPPORTED_VALUE_TYPE,
                 format!(

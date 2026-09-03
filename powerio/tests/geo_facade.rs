@@ -132,3 +132,71 @@ fn a_display_file_parses_serializes_and_emits_as_a_layer() {
         "REQUEST.EMIT.UNSUPPORTED_VALUE_TYPE"
     );
 }
+
+/// The `geo.json` extension is matched after a separator. A case whose stem
+/// merely ends in the same letters keeps its JSON classification, which
+/// matters because JSON content classification has no layer verdict. Naming
+/// the display file as the emit target says the format has no writer rather
+/// than calling it a grid case.
+#[test]
+fn the_layer_extension_needs_a_separator_and_the_display_target_names_its_gap() {
+    let case = r#"{"baseMVA":100,"bus":{"1":{"bus_i":1,"bus_type":3,"pd":0,"qd":0,
+        "gs":0,"bs":0,"area":1,"vm":1,"va":0,"base_kv":230,"zone":1,
+        "vmax":1.1,"vmin":0.9}},"gen":{},"branch":{},"per_unit":true,
+        "source_type":"matpower","name":"apogeo"}"#;
+    for name in ["apogeo.json", "chicago.json"] {
+        let module =
+            powerio::parse(powerio::Source::from_memory(name, case.as_bytes().to_vec()).unwrap())
+                .unwrap_or_else(|error| panic!("`{name}` is a case, not a layer: {error}"));
+        assert_eq!(
+            module.value.type_name(),
+            "powerio.BalancedNetwork",
+            "`{name}` must keep its case classification"
+        );
+    }
+
+    // A name that carries the letters in the middle keeps the reader its own
+    // extension selects.
+    let matpower = "function mpc = c\nmpc.baseMVA = 100;\n\
+                    mpc.bus = [1 3 0 0 0 0 1 1 0 230 1 1.1 0.9;];\n\
+                    mpc.gen = [1 0 0 10 -10 1 100 1 10 0;];\nmpc.branch = [];\n";
+    let module = powerio::parse(
+        powerio::Source::from_memory("geo.json.m", matpower.as_bytes().to_vec()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(module.value.type_name(), "powerio.BalancedNetwork");
+
+    let layer = r#"{"type":"FeatureCollection","features":[{"type":"Feature",
+        "geometry":{"type":"Point","coordinates":[-89.6,40.6]},
+        "properties":{"powerio_target":"bus","powerio_id":"1"}}]}"#;
+    for name in [
+        "layer.geo.json",
+        "layer_geo.json",
+        "layer-geo.json",
+        "geo.json",
+    ] {
+        let module =
+            powerio::parse(powerio::Source::from_memory(name, layer.as_bytes().to_vec()).unwrap())
+                .unwrap_or_else(|error| panic!("`{name}` is a layer: {error}"));
+        assert_eq!(
+            module.value.type_name(),
+            "powerio.GeoLayer",
+            "`{name}` must route to the layer reader"
+        );
+    }
+
+    let module = powerio::parse(
+        powerio::Source::from_memory("layer.geo.json", layer.as_bytes().to_vec()).unwrap(),
+    )
+    .unwrap();
+    let refused = powerio::emit(
+        &module,
+        "powerworld-pwd",
+        powerio::Destination::memory("display").unwrap(),
+    )
+    .unwrap_err();
+    assert!(
+        refused.to_string().contains("has no writer"),
+        "the display target names its own gap: {refused}"
+    );
+}

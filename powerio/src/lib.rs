@@ -706,11 +706,7 @@ fn routed_family(
         .and_then(|extension| extension.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
-    if source
-        .name()
-        .to_ascii_lowercase()
-        .ends_with(powerio_tx::geo::GEO_LAYER_EXTENSION)
-    {
+    if has_geo_layer_extension(source.name()) {
         return Ok(RoutedFamily::Geo);
     }
     match extension.as_str() {
@@ -742,6 +738,21 @@ fn routed_family(
             }
         }
     }
+}
+
+/// Whether `name` carries the compound `geo.json` extension: the whole name,
+/// or the name after a separator, so `layer.geo.json`, `layer_geo.json`, and
+/// `layer-geo.json` all state a layer. A stem that merely ends in the same
+/// letters (`apogeo.json`) does not, and keeps its JSON classification, which
+/// matters because JSON content classification has no layer verdict and would
+/// refuse the file as an unrecognized case.
+fn has_geo_layer_extension(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    let extension = powerio_tx::geo::GEO_LAYER_EXTENSION;
+    name == extension
+        || name
+            .strip_suffix(extension)
+            .is_some_and(|stem| stem.ends_with(['.', '_', '-', '/', '\\']))
 }
 
 /// Whether `token` names the standalone geographic layer document.
