@@ -11,6 +11,7 @@
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
+use super::BmopfProfile;
 use crate::diagnostics::codes as C;
 use crate::error::{Error, Result};
 use crate::geo::{CoordinateSpace, DistCoordsKind, DistGeoMeta, DistLocation};
@@ -44,6 +45,7 @@ pub(crate) fn parse_bmopf_collecting(
         ..MulticonductorNetworkTables::default()
     });
     report_non_numeric_fields(&doc, diags);
+    report_schema_version(&doc, diags);
     let mut rd = Reader {
         net: &mut net,
         diagnostics: crate::diagnostics::Diagnostics::new(),
@@ -54,6 +56,46 @@ pub(crate) fn parse_bmopf_collecting(
     diags.absorb(found);
     crate::model::warn_unresolved_references(&net, diags);
     Ok(net)
+}
+
+/// Resolve the schema version the document declares, and report when it
+/// cannot be resolved.
+///
+/// `meta.$schema` is the one field that states which version a document was
+/// written against, so it is the only thing to detect from. The reader accepts
+/// both versions whatever it finds, since every class 0.2.0 adds at the top
+/// level also reads from `extras` where 0.1.0 puts it. What the version
+/// changes is what a consumer may assume: an unresolved version means the
+/// class layout of the document is not stated anywhere, and a consumer that
+/// assumes one reads a different network on the other. Both findings are
+/// warnings for that reason, not errors.
+fn report_schema_version(doc: &Map<String, Value>, diags: &mut crate::collect::Diagnostics) {
+    let stated = doc
+        .get("meta")
+        .and_then(Value::as_object)
+        .and_then(|m| m.get("$schema"))
+        .and_then(Value::as_str);
+    match stated {
+        None => diags.push(
+            &C::READ_BMOPF_SCHEMA_ABSENT,
+            format!(
+                "the document states no `meta.$schema`, so the BMOPF schema version it was \
+                 written against is unknown; both {} and {} are accepted",
+                BmopfProfile::Bmopf010.version(),
+                BmopfProfile::Bmopf020.version()
+            ),
+        ),
+        Some(id) if BmopfProfile::from_schema_id(id).is_none() => diags.push(
+            &C::READ_BMOPF_SCHEMA_UNKNOWN,
+            format!(
+                "`meta.$schema` is `{id}`, which names no known BMOPF schema version; both {} \
+                 and {} are accepted",
+                BmopfProfile::Bmopf010.version(),
+                BmopfProfile::Bmopf020.version()
+            ),
+        ),
+        Some(_) => {}
+    }
 }
 
 /// Schema 0.1.0 field names typed `number` or an array of them. Derived from

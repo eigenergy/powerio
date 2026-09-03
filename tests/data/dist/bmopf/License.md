@@ -1,12 +1,17 @@
 # License
 
-The schema and the two example networks in this directory are vendored
-unchanged from <https://github.com/distribution-system-opt/bmopf-resources> at
-the commit pinned in `../README.md`, which also records their measured hashes.
-That repository carries no license file at that commit; this directory tracks
+`draft_bmopf_schema.json` and the two example networks in this directory are
+vendored unchanged from
+<https://github.com/distribution-system-opt/bmopf-resources> at the commit
+pinned in `../README.md`, which also records their measured hashes. That
+repository carries no license file at that commit; this directory tracks
 whatever license the IEEE PES Task Force on Benchmarking Multiconductor OPF
 publishes for it, and the files here are vendored for interoperation testing
 with the task force's knowledge (see the review thread on eigenergy/powerio#82).
+
+`bmopf-0.2.0.schema.json` is vendored unchanged from
+<https://github.com/distribution-system-opt/dsopt-schema> at the commit pinned
+in `../README.md`, and that repository publishes it under CC BY 4.0.
 
 Underlying data lineage:
 

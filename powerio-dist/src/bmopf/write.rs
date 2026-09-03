@@ -11,6 +11,7 @@ use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use serde_json::{Map, Value, json};
 
+use super::BmopfProfile;
 use crate::convert::TextEmission;
 use crate::diagnostics::codes as C;
 use crate::diagnostics::{Diagnostic, DiagnosticInfo};
@@ -23,25 +24,28 @@ use crate::model::{
     open_delta_connection, open_delta_pairable, pair_keys, winding_phase_pair,
 };
 
-/// The `$id` of the BMOPF schema this writer targets, and the value it
-/// stamps into `meta.$schema`. The upstream `$id` is not version pinned,
-/// so use it together with [`BMOPF_SCHEMA_VERSION`].
-pub const BMOPF_SCHEMA_ID: &str = "https://raw.githubusercontent.com/frederikgeth/bmopf-report/main/draft_schema_and_networks/draft_bmopf_schema.json";
+/// The `$id` of the schema the writer targets by default, and the value it
+/// stamps into `meta.$schema`. It is
+/// [`BmopfProfile::default`]`().schema_id()`; a writer targeting the other
+/// version reads the `$id` from that version instead.
+pub const BMOPF_SCHEMA_ID: &str = BmopfProfile::Bmopf020.schema_id();
 
-/// The `version` field of the vendored BMOPF schema
-/// (`tests/data/dist/bmopf/draft_bmopf_schema.json`). Upstream can change
-/// the schema without a version bump, so use it together with
-/// [`BMOPF_SCHEMA_ID`].
-pub const BMOPF_SCHEMA_VERSION: &str = "0.1.0";
+/// The version of the schema the writer targets by default, and the value it
+/// stamps into `meta.schema_version`. It is
+/// [`BmopfProfile::default`]`().version()`.
+pub const BMOPF_SCHEMA_VERSION: &str = BmopfProfile::Bmopf020.version();
 
-/// Untyped classes that belong to the BMOPF ecosystem. Schema 0.1.0 dropped
-/// their top-level tables (`additionalProperties: false` + the `extras`
-/// escape hatch), so they re-emit under `extras` instead of the top level.
+/// Untyped classes that belong to the BMOPF ecosystem. Schema 0.1.0 has no
+/// top-level table for them (`additionalProperties: false` plus the free form
+/// `extras` object), so under that version they re-emit under `extras`;
+/// schema 0.2.0 declares all but `capacitor` at the top level, and
+/// [`Writer::raw_table_at_top_level`] answers which.
 const RAW_BMOPF_EXTRAS_TABLES: &[&str] = &[
     "ibr",
     "control_profile",
     "dc_bus",
     "dc_branch",
+    "dc_grounding",
     "dc_load",
     "dc_source",
     "time_series",
@@ -155,11 +159,28 @@ fn regulator_allowed_extras() -> Vec<&'static str> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct BmopfEmitOptions {
+    /// The schema version to write against.
+    ///
+    /// The default is [`BmopfProfile::Bmopf020`], the version that states
+    /// every class the model carries, so output relocates nothing. Set
+    /// [`BmopfProfile::Bmopf010`] to write the version the task force
+    /// accepts, which moves the classes it has no table for under `extras`
+    /// and reports each move.
+    pub profile: BmopfProfile,
     /// Emit the BMOPFTools coordinate sideload fields on buses.
     ///
     /// The default stays schema strict because the BMOPF schema rejects these
     /// fields with `additionalProperties: false`.
     pub sideload_coordinates: bool,
+}
+
+impl BmopfEmitOptions {
+    /// The options with the schema version replaced.
+    #[must_use]
+    pub const fn with_profile(mut self, profile: BmopfProfile) -> Self {
+        self.profile = profile;
+        self
+    }
 }
 
 /// Emits the strict BMOPF document. Every field the schema cannot carry
@@ -355,7 +376,15 @@ impl Writer {
     /// The vintage lives in `$schema` (the canonical bmopf-report `$id`).
     fn meta(&mut self, net: &MulticonductorNetwork) -> Value {
         let mut m = Map::new();
-        m.insert("$schema".into(), json!(BMOPF_SCHEMA_ID));
+        m.insert("$schema".into(), json!(self.options.profile.schema_id()));
+        // Schema 0.1.0 has no `schema_version` field, and its `meta` rejects
+        // what it does not declare, so only 0.2.0 states the version twice.
+        if self.options.profile == BmopfProfile::Bmopf020 {
+            m.insert(
+                "schema_version".into(),
+                json!(self.options.profile.version()),
+            );
+        }
         m.insert(
             "frequency".into(),
             self.num(net.base_frequency(), "meta frequency"),
@@ -368,8 +397,10 @@ impl Writer {
             for (key, value) in stash {
                 match key.as_str() {
                     // Writer-owned: this document is powerio's emission, at
-                    // the model's frequency, against the vintage above.
-                    "$schema" | "frequency" | "case_study_generator" => {}
+                    // the model's frequency, against the version above. A
+                    // source `schema_version` names the version that document
+                    // was written against, not this one.
+                    "$schema" | "schema_version" | "frequency" | "case_study_generator" => {}
                     "title" | "description" | "license" | "authors" | "data_sources"
                     | "created" | "modified" | "provenance" | "version" => {
                         m.insert(key.clone(), value.clone());
@@ -408,14 +439,23 @@ impl Writer {
             doc.insert("transformer".into(), Value::Object(transformers));
         }
 
-        // Schema 0.1.0 dropped the IBR, control profile, DC, and time series
-        // tables from the top level; `extras` is their sanctioned home.
+        // Schema 0.1.0 has no top-level table for the IBR, control profile,
+        // DC, and time series classes, so under that version they emit under
+        // `extras`; schema 0.2.0 declares them, so they emit in place.
         let mut extras = Map::new();
         if let Some(Value::Object(stash)) = net.extras().get(BMOPF_EXTRAS_STASH) {
             extras.extend(stash.clone());
         }
-        self.control_profiles(net, &mut extras);
-        self.ibrs(net, &mut extras);
+        match self.options.profile {
+            BmopfProfile::Bmopf010 => {
+                self.control_profiles(net, &mut extras);
+                self.ibrs(net, &mut extras);
+            }
+            BmopfProfile::Bmopf020 => {
+                self.control_profiles(net, &mut doc);
+                self.ibrs(net, &mut doc);
+            }
+        }
         self.untyped_bmopf_tables(net, &mut doc, &mut extras);
         if !self.transformer_overflow.is_empty() {
             let overflow = std::mem::take(&mut self.transformer_overflow);
@@ -670,8 +710,10 @@ impl Writer {
             // `transformer` table, not under `extras`. Name the slot the
             // object really went to, so a warning points at the part of the
             // document a reader must look at.
+            let top_level = subtype.is_none() && self.raw_table_at_top_level(&u.class);
             let slot_path = match subtype {
                 Some(sub) => format!("transformer.{sub}"),
+                None if top_level => u.class.clone(),
                 None => format!("extras.{}", u.class),
             };
             let slot = match subtype {
@@ -681,6 +723,9 @@ impl Writer {
                     .as_object_mut()
                     .expect("the writer builds the transformer table as an object")
                     .entry(sub.to_string())
+                    .or_insert_with(|| Value::Object(Map::new())),
+                None if top_level => doc
+                    .entry(u.class.clone())
                     .or_insert_with(|| Value::Object(Map::new())),
                 None => extras
                     .entry(u.class.clone())
@@ -712,6 +757,17 @@ impl Writer {
         }
     }
 
+    /// Whether this untyped BMOPF class has a top-level table in the version
+    /// being written.
+    ///
+    /// Schema 0.2.0 declares every class in [`RAW_BMOPF_EXTRAS_TABLES`] except
+    /// `capacitor`, whose top-level table stays strict there, so a capacitor
+    /// too malformed to type still has no slot in it and keeps its raw
+    /// properties under `extras`.
+    fn raw_table_at_top_level(&self, class: &str) -> bool {
+        self.options.profile == BmopfProfile::Bmopf020 && class != "capacitor"
+    }
+
     /// `extras` is seeded from the source document's own `extras` object, so
     /// a value under one of the relocated table names is input, not something
     /// this writer built. A value that is not a table has no slot for a named
@@ -727,6 +783,7 @@ impl Writer {
             .iter()
             .map(|u| u.class.as_str())
             .filter(|class| RAW_BMOPF_EXTRAS_TABLES.contains(class))
+            .filter(|class| !self.raw_table_at_top_level(class))
             .collect();
         for class in classes {
             if extras.get(class).is_some_and(|v| !v.is_object()) {
@@ -1408,16 +1465,23 @@ impl Writer {
         by_subtype
     }
 
-    /// Moves transformer fields with no slot in the schema 0.1.0 subtype
-    /// defs (taps, neutral impedance, no load admittance) out of the
-    /// `additionalProperties: false` subtype objects and into
-    /// `extras.transformer.<subtype>.<name>`, warning per transformer.
-    /// Subtypes the schema leaves undefined (`n_winding`, untyped
-    /// passthrough) are untouched. The module docs enumerate the moved set
-    /// for consumers; extend both together.
+    /// Places the nine transformer fields schema 0.1.0 has no subtype slot
+    /// for (taps, neutral impedance, no load admittance).
+    ///
+    /// Under schema 0.2.0 the two-winding subtypes declare all nine, so the
+    /// fields stay in the subtype object and only the three tap names change:
+    /// 0.2.0 spells the ratio `tap_ratio`, `tap_ratio_min`, `tap_ratio_max`,
+    /// matching its regulator subtypes.
+    ///
+    /// Under schema 0.1.0 the subtype objects are
+    /// `additionalProperties: false`, so the nine move to
+    /// `extras.transformer.<subtype>.<name>` with one warning per
+    /// transformer. Subtypes 0.1.0 leaves undefined (`n_winding`, untyped
+    /// passthrough) are untouched under either version. The module docs
+    /// enumerate the moved set for consumers; extend both together.
     fn split_transformer_overflow(&mut self, by_subtype: &mut Map<String, Value>) {
-        // The transformer fields the emitters still produce that lost their
-        // subtype slots in schema 0.1.0. Listing the moved set (rather than
+        // The transformer fields the emitters still produce that have no
+        // subtype slot in schema 0.1.0. Listing the moved set (rather than
         // an allow-list of the schema shape) keeps the failure mode loud: a
         // future emitted field lands in the subtype object, where the schema
         // validation tests reject it if it has no slot.
@@ -1432,6 +1496,10 @@ impl Writer {
             "g_no_load",
             "b_no_load",
         ];
+        if self.options.profile == BmopfProfile::Bmopf020 {
+            rename_tap_fields(by_subtype);
+            return;
+        }
         for subtype in ["single_phase", "center_tap", "wye_delta", "delta_wye"] {
             let Some(Value::Object(table)) = by_subtype.get_mut(subtype) else {
                 continue;
@@ -2486,6 +2554,34 @@ impl Writer {
     }
 }
 
+/// Spells the two-winding tap ratio the way schema 0.2.0 names it.
+///
+/// 0.1.0 has no slot for the ratio at all, so the emitters spell it `tap`;
+/// 0.2.0 declares `tap_ratio` on the two-winding subtypes and on both
+/// regulator subtypes, so one name covers every transformer that has a ratio.
+/// The value is unchanged: it is the multiplier on the nameplate turns ratio
+/// in both spellings.
+fn rename_tap_fields(by_subtype: &mut Map<String, Value>) {
+    const RENAMED: [(&str, &str); 3] = [
+        ("tap", "tap_ratio"),
+        ("tap_min", "tap_ratio_min"),
+        ("tap_max", "tap_ratio_max"),
+    ];
+    for subtype in ["single_phase", "center_tap", "wye_delta", "delta_wye"] {
+        let Some(Value::Object(table)) = by_subtype.get_mut(subtype) else {
+            continue;
+        };
+        for entry in table.values_mut() {
+            let Value::Object(o) = entry else { continue };
+            for (from, to) in RENAMED {
+                if let Some(value) = o.remove(from) {
+                    o.insert(to.to_string(), value);
+                }
+            }
+        }
+    }
+}
+
 fn collect_bus_usage(value: &Value, refs: &mut BTreeMap<String, BTreeSet<String>>) {
     match value {
         Value::Object(o) => {
@@ -3111,8 +3207,13 @@ mod tests {
     /// by which paths trigger each one.
     #[test]
     fn dropped_and_retained_bmopf_diagnostics_do_not_contradict_their_own_message() {
+        // Schema 0.1.0: the retained-under-extras path is the one that
+        // relocates a transformer field, and only that version relocates.
         let mut w = Writer {
-            options: BmopfEmitOptions::default(),
+            options: BmopfEmitOptions {
+                profile: BmopfProfile::Bmopf010,
+                ..BmopfEmitOptions::default()
+            },
             warnings: crate::diagnostics::Diagnostics::new(),
             grounded: BTreeMap::new(),
             transformer_overflow: Map::new(),

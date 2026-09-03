@@ -2,7 +2,7 @@
 //! `.dss`, PowerModelsDistribution ENGINEERING
 //! JSON ("PMD JSON"), and the draft JSON schema of the IEEE PES Task Force on
 //! Benchmarking Multiconductor OPF ("BMOPF JSON",
-//! <https://github.com/frederikgeth/bmopf-report>).
+//! <https://github.com/distribution-system-opt/dsopt-schema>).
 //!
 //! The model uses wire coordinates: string bus IDs, ordered terminal names,
 //! explicit grounding, terminal maps on every element, SI units, and radians.
@@ -60,7 +60,7 @@ pub mod pmd;
 #[cfg(test)]
 pub(crate) mod testkit;
 
-pub use bmopf::{BMOPF_SCHEMA_ID, BMOPF_SCHEMA_VERSION, BmopfEmitOptions};
+pub use bmopf::{BMOPF_SCHEMA_ID, BMOPF_SCHEMA_VERSION, BmopfEmitOptions, BmopfProfile};
 pub use convert::{
     DistTargetFormat, EmitOptions, classify_distribution_json, emit, emit_with_options, parse,
     parse_dist_target_format,

@@ -135,6 +135,13 @@ pub mod codes {
             "a BMOPF field outside the schema survives in extras or untyped";
         READ_BMOPF_SOURCE_MALFORMED = "READ.BMOPF.SOURCE_MALFORMED", Warning,
             "a BMOPF value is not the shape its key declares";
+        /// The document states no `meta.$schema`, so the schema version it was
+        /// written against is unknown and the reader accepts both versions.
+        READ_BMOPF_SCHEMA_ABSENT = "READ.BMOPF.SCHEMA_ABSENT", Warning,
+            "a BMOPF document states no schema, so its version is unknown";
+        /// The document states a `meta.$schema` that names no known version.
+        READ_BMOPF_SCHEMA_UNKNOWN = "READ.BMOPF.SCHEMA_UNKNOWN", Warning,
+            "a BMOPF document states a schema naming no known version";
 
         // EMIT.BMOPF: the general families beside the nineteen transformer
         // codes the writer already publishes.

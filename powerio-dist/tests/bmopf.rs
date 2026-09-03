@@ -1,12 +1,12 @@
-//! BMOPF reader/writer against the vendored draft schema and the two
-//! public example networks from frederikgeth/bmopf-report.
+//! BMOPF reader/writer against the two vendored schema versions and the two
+//! public example networks from distribution-system-opt/bmopf-resources.
 
 use std::path::PathBuf;
 
 use powerio_dist::{
-    BmopfEmitOptions, Configuration, CoordinateSpace, DiagnosticSeverity, DiagnosticStage, DistBus,
-    DistCoordsKind, DistGeoMeta, DistLineCode, DistLocation, DistTransformer, DistWinding,
-    DistWindingConn, Extras, MulticonductorNetwork, VoltageSource,
+    BmopfEmitOptions, BmopfProfile, Configuration, CoordinateSpace, DiagnosticSeverity,
+    DiagnosticStage, DistBus, DistCoordsKind, DistGeoMeta, DistLineCode, DistLocation,
+    DistTransformer, DistWinding, DistWindingConn, Extras, MulticonductorNetwork, VoltageSource,
 };
 
 mod helpers;
@@ -15,18 +15,39 @@ use helpers::{
     parse_dss_file, parse_dss_str, parse_pmd_str,
 };
 
+/// The findings beside the schema version notice.
+///
+/// A document that states no `meta.$schema` names no schema version, which
+/// the reader reports; the inline documents below state none, so every one of
+/// them carries that finding and it is never what a test is about.
+fn beside_schema_version(warnings: &[String]) -> Vec<&String> {
+    warnings
+        .iter()
+        .filter(|w| !w.starts_with("READ.BMOPF.SCHEMA_"))
+        .collect()
+}
+
 fn fixture(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../tests/data/dist")
         .join(rel)
 }
 
-fn schema_validator() -> jsonschema::Validator {
-    let schema: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(fixture("bmopf/draft_bmopf_schema.json")).unwrap(),
-    )
-    .unwrap();
+/// The validator for one vendored schema version.
+fn schema_validator_for(profile: BmopfProfile) -> jsonschema::Validator {
+    let file = match profile {
+        BmopfProfile::Bmopf010 => "bmopf/draft_bmopf_schema.json",
+        BmopfProfile::Bmopf020 => "bmopf/bmopf-0.2.0.schema.json",
+        _ => unreachable!("every schema version has a vendored document"),
+    };
+    let schema: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture(file)).unwrap()).unwrap();
     jsonschema::validator_for(&schema).expect("vendored schema compiles")
+}
+
+/// The validator for the version the writer targets by default.
+fn schema_validator() -> jsonschema::Validator {
+    schema_validator_for(BmopfProfile::default())
 }
 
 fn errors(validator: &jsonschema::Validator, text: &str) -> Vec<String> {
@@ -52,7 +73,11 @@ fn bmopf_sideloaded_coordinates_promote_to_locations() {
 }"#,
     )
     .unwrap();
-    assert!(net.warnings.is_empty(), "{:?}", net.warnings);
+    assert!(
+        beside_schema_version(&net.warnings).is_empty(),
+        "{:?}",
+        net.warnings
+    );
     let geo = net.geo().as_ref().expect("geo metadata");
     assert_eq!(geo.space, CoordinateSpace::Geographic { crs: None });
     assert_eq!(geo.kind, Some(DistCoordsKind::Source));
@@ -85,11 +110,12 @@ fn vendored_examples_validate_after_canonicalization() {
     }
 }
 
-/// Both vendored fixtures (bmopf-report schema 0.1.0 vintage) validate as
-/// shipped, so any raw validation failure is a real schema mismatch.
+/// Both vendored fixtures are schema 0.1.0 documents and validate as shipped
+/// against that version, so any raw validation failure is a real schema
+/// mismatch.
 #[test]
 fn vendored_examples_raw_validation_is_known_and_bounded() {
-    let v = schema_validator();
+    let v = schema_validator_for(BmopfProfile::Bmopf010);
     for example in ["bmopf/example_ieee13.json", "bmopf/example_enwl_n1_f2.json"] {
         let text = std::fs::read_to_string(fixture(example)).unwrap();
         assert_eq!(errors(&v, &text), Vec::<String>::new(), "{example}");
@@ -803,19 +829,13 @@ fn raw_ibr_and_control_profile_tables_round_trip() {
 
     assert_eq!(errors(&v, &out.text), Vec::<String>::new());
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-    assert_eq!(doc["extras"]["ibr"]["pv"]["control_profile"], "cp");
+    assert_eq!(doc["ibr"]["pv"]["control_profile"], "cp");
+    assert_eq!(doc["control_profile"]["cp"]["power_factor"]["pf"], 0.98);
     assert_eq!(
-        doc["extras"]["control_profile"]["cp"]["power_factor"]["pf"],
-        0.98
-    );
-    assert_eq!(
-        doc["extras"]["control_profile"]["cp"]["volt_var"]["voltage_reference"],
+        doc["control_profile"]["cp"]["volt_var"]["voltage_reference"],
         "PN_PER_PHASE"
     );
-    assert_eq!(
-        doc["extras"]["control_profile"]["cp"]["volt_var"]["q_ref"],
-        "VAR_MAX"
-    );
+    assert_eq!(doc["control_profile"]["cp"]["volt_var"]["q_ref"], "VAR_MAX");
     assert!(
         out.warnings
             .iter()
@@ -1268,10 +1288,10 @@ fn transformer_tap_fields_round_trip_through_bmopf() {
     let out = emit_bmopf_json(&net);
     assert_eq!(errors(&v, &out.text), Vec::<String>::new());
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-    let t = &doc["extras"]["transformer"]["single_phase"]["t"];
-    assert_eq!(t["tap"], 1.05);
-    assert_eq!(t["tap_min"], 0.9);
-    assert_eq!(t["tap_max"], 1.1);
+    let t = &doc["transformer"]["single_phase"]["t"];
+    assert_eq!(t["tap_ratio"], 1.05);
+    assert_eq!(t["tap_ratio_min"], 0.9);
+    assert_eq!(t["tap_ratio_max"], 1.1);
     assert_eq!(t["g_no_load"], serde_json::json!(0.000_001));
     assert_eq!(t["b_no_load"], serde_json::json!(0.0));
 }
@@ -1303,8 +1323,8 @@ fn dss_fixed_to_side_tap_emits_bmopf_ratio_without_bounds() {
     );
 
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-    let t = &doc["extras"]["transformer"]["single_phase"]["t1"];
-    assert!((t["tap"].as_f64().unwrap() - (1.0 / 1.05)).abs() < 1e-12);
+    let t = &doc["transformer"]["single_phase"]["t1"];
+    assert!((t["tap_ratio"].as_f64().unwrap() - (1.0 / 1.05)).abs() < 1e-12);
     assert!(t.get("tap_min").is_none(), "{t:?}");
     assert!(t.get("tap_max").is_none(), "{t:?}");
 }
@@ -1339,8 +1359,8 @@ fn dss_center_tap_uses_first_secondary_tap_and_warns_if_halves_differ() {
     );
 
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-    let t = &doc["extras"]["transformer"]["center_tap"]["t1"];
-    assert!((t["tap"].as_f64().unwrap() - (1.02 / 1.01)).abs() < 1e-12);
+    let t = &doc["transformer"]["center_tap"]["t1"];
+    assert!((t["tap_ratio"].as_f64().unwrap() - (1.02 / 1.01)).abs() < 1e-12);
 }
 
 #[test]
@@ -1379,8 +1399,8 @@ fn pmd_uniform_per_phase_taps_emit_ratio_without_warning() {
         out.warnings
     );
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-    let t = &doc["extras"]["transformer"]["single_phase"]["reg_1"];
-    assert!((t["tap"].as_f64().unwrap() - (1.0 / 1.05)).abs() < 1e-12);
+    let t = &doc["transformer"]["single_phase"]["reg_1"];
+    assert!((t["tap_ratio"].as_f64().unwrap() - (1.0 / 1.05)).abs() < 1e-12);
     assert!(t.get("tap_min").is_none());
     assert!(t.get("tap_max").is_none());
 }
@@ -1423,8 +1443,8 @@ fn pmd_nonuniform_per_phase_taps_warn_with_stable_code() {
     );
 
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-    let t = &doc["extras"]["transformer"]["single_phase"]["reg_1"];
-    assert!((t["tap"].as_f64().unwrap() - (1.0 / 1.05)).abs() < 1e-12);
+    let t = &doc["transformer"]["single_phase"]["reg_1"];
+    assert!((t["tap_ratio"].as_f64().unwrap() - (1.0 / 1.05)).abs() < 1e-12);
 }
 
 #[test]
@@ -1641,7 +1661,7 @@ fn three_phase_transformer_no_load_fields_round_trip_through_bmopf() {
     let t = &doc["transformer"]["wye_delta"]["t"];
     assert_eq!(t["v_nom_from"], serde_json::json!(7200.0));
     assert_eq!(t["v_nom_to"], serde_json::json!(480.0));
-    let ox = &doc["extras"]["transformer"]["wye_delta"]["t"];
+    let ox = &doc["transformer"]["wye_delta"]["t"];
     assert_eq!(ox["g_no_load"], serde_json::json!(0.000_002));
     assert_eq!(ox["b_no_load"], serde_json::json!(-0.000_003));
 }
@@ -1657,7 +1677,7 @@ fn dss_noloadloss_derives_bmopf_no_load_fields() {
     );
     let out = emit_bmopf_json(&net);
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-    let t = &doc["extras"]["transformer"]["single_phase"]["t1"];
+    let t = &doc["transformer"]["single_phase"]["t1"];
     let expected_g = 0.2 / 100.0 * 25_000.0 / (7200.0 * 7200.0);
     let g = t["g_no_load"].as_f64().unwrap();
     assert!((g - expected_g).abs() < 1e-18, "g_no_load = {g}");
@@ -1692,7 +1712,7 @@ fn transformer_neutral_impedance_round_trips_dss_and_bmopf() {
     let out = emit_bmopf_json(&net);
     assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-    let t = &doc["extras"]["transformer"]["single_phase"]["t1"];
+    let t = &doc["transformer"]["single_phase"]["t1"];
     assert_eq!(t["r_neutral_from"], serde_json::json!(5.0));
     assert_eq!(t["x_neutral_from"], serde_json::json!(6.0));
     assert_eq!(t["r_neutral_to"], serde_json::json!(7.0));
@@ -1801,9 +1821,7 @@ fn wye_wye_3_neutral_grounding_decomposes_once_not_per_phase() {
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     let sp = doc["transformer"]["single_phase"].as_object().unwrap();
     assert_eq!(sp.len(), 3);
-    let sp = doc["extras"]["transformer"]["single_phase"]
-        .as_object()
-        .unwrap();
+    let sp = doc["transformer"]["single_phase"].as_object().unwrap();
     assert_eq!(sp["t_1"]["r_neutral_from"], serde_json::json!(5.0));
     assert_eq!(sp["t_1"]["x_neutral_from"], serde_json::json!(6.0));
     assert_eq!(sp["t_1"]["r_neutral_to"], serde_json::json!(7.0));
@@ -1860,9 +1878,7 @@ fn wye_wye_3_raw_no_load_splits_across_decomposition() {
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     let sp = doc["transformer"]["single_phase"].as_object().unwrap();
     assert_eq!(sp.len(), 3);
-    let ox = doc["extras"]["transformer"]["single_phase"]
-        .as_object()
-        .unwrap();
+    let ox = doc["transformer"]["single_phase"].as_object().unwrap();
     let mut g_sum = 0.0;
     let mut b_sum = 0.0;
     for name in ["t_1", "t_2", "t_3"] {
@@ -2304,7 +2320,7 @@ fn bmopf_center_tap_neutral_grounding_rebuilds_once() {
     let out = emit_bmopf_json(&parse_dss_str(&dss));
     assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-    let t = &doc["extras"]["transformer"]["center_tap"]["ct"];
+    let t = &doc["transformer"]["center_tap"]["ct"];
     assert_eq!(t["r_neutral_to"], serde_json::json!(5.0));
     assert_eq!(t["x_neutral_to"], serde_json::json!(6.0));
 }
@@ -2671,10 +2687,10 @@ fn reader_is_liberal_where_the_writer_is_strict() {
 }
 
 /// The writer seeds its `extras` block from the source document's own
-/// `extras` object, then files the relocated top-level tables into the same
-/// block. A source value that is not a table has no slot for a named entry,
-/// so it must not reach the write as one: this used to panic on a document
-/// of a few hundred bytes, through parse and write back.
+/// `extras` object, then, writing schema 0.1.0, files the tables that version
+/// has no top-level slot for into the same block. A source value that is not
+/// a table has no slot for a named entry, so it must not reach the write as
+/// one.
 #[test]
 fn source_extras_value_that_is_not_a_table_does_not_panic() {
     for class in ["time_series", "dc_bus", "dc_branch", "dc_load", "dc_source"] {
@@ -2682,7 +2698,10 @@ fn source_extras_value_that_is_not_a_table_does_not_panic() {
             r#", "extras": {{"{class}": 1}}, "{class}": {{"t1": {{"values": [1.0]}}}}"#
         ));
         let net = parse_bmopf_str(&text).unwrap();
-        let out = emit_bmopf_json(&net);
+        let out = emit_bmopf_json_with_options(
+            &net,
+            BmopfEmitOptions::default().with_profile(BmopfProfile::Bmopf010),
+        );
         assert!(
             out.warnings
                 .iter()
@@ -2700,9 +2719,10 @@ fn source_extras_value_that_is_not_a_table_does_not_panic() {
     }
 }
 
-/// The same slot takes entries from two places: the source `extras` block and
-/// the source top-level table. A name in both is a replacement, and the two
-/// tier fidelity rule says a replacement is never silent.
+/// Writing schema 0.1.0, the same `extras` slot takes entries from two
+/// places: the source `extras` block and the source top-level table. A name in
+/// both is a replacement, and the two tier fidelity rule says a replacement is
+/// never silent.
 #[test]
 fn source_extras_entry_replaced_by_the_top_level_table_warns() {
     let text = doc_with(
@@ -2710,7 +2730,10 @@ fn source_extras_entry_replaced_by_the_top_level_table_warns() {
         "time_series": {"t1": {"values": [1.0]}}"#,
     );
     let net = parse_bmopf_str(&text).unwrap();
-    let out = emit_bmopf_json(&net);
+    let out = emit_bmopf_json_with_options(
+        &net,
+        BmopfEmitOptions::default().with_profile(BmopfProfile::Bmopf010),
+    );
     assert!(
         out.warnings
             .iter()
@@ -3324,10 +3347,15 @@ fn consumer_extras_are_not_read_as_schema_fields() {
         "extras": {"anything": {"cost": "free", "v_nom": null}}
     }"#;
     let net = parse_bmopf_str(text).unwrap();
-    assert!(net.diagnostics.is_empty(), "{:?}", net.diagnostics);
+    let beside: Vec<_> = net
+        .diagnostics
+        .iter()
+        .filter(|d| !d.code().starts_with("READ.BMOPF.SCHEMA_"))
+        .collect();
+    assert!(beside.is_empty(), "{:?}", net.diagnostics);
 }
 
-// ----- regulator subtypes (BMOPFTools schema extension) -------------------
+// ----- regulator subtypes -------------------------------------------------
 
 #[test]
 fn dss_single_phase_regulator_emits_the_autotransformer_subtype() {
@@ -3674,5 +3702,129 @@ fn regulator_banks_survive_a_dss_bmopf_dss_round_trip() {
             .any(|w| w.contains("RECORD_DROPPED") && w.contains("transformer")),
         "{:?}",
         dss.warnings
+    );
+}
+
+// ----- schema versions ----------------------------------------------------
+
+/// The writer stamps the version it targets into `meta`, and the reader
+/// resolves that same value back to the version.
+#[test]
+fn the_written_schema_version_reads_back_as_the_version_written() {
+    for profile in [BmopfProfile::Bmopf010, BmopfProfile::Bmopf020] {
+        let net = parse_bmopf_file(fixture("bmopf/example_ieee13.json")).unwrap();
+        let out =
+            emit_bmopf_json_with_options(&net, BmopfEmitOptions::default().with_profile(profile));
+        assert_eq!(
+            errors(&schema_validator_for(profile), &out.text),
+            Vec::<String>::new(),
+            "{}",
+            profile.version()
+        );
+        let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+        assert_eq!(doc["meta"]["$schema"], profile.schema_id());
+        assert_eq!(
+            BmopfProfile::from_schema_id(doc["meta"]["$schema"].as_str().unwrap()),
+            Some(profile)
+        );
+        // Only 0.2.0 declares the version field, and its `meta` rejects what
+        // it does not declare.
+        match profile {
+            BmopfProfile::Bmopf010 => assert!(doc["meta"]["schema_version"].is_null()),
+            _ => assert_eq!(doc["meta"]["schema_version"], profile.version()),
+        }
+        let reparsed = parse_bmopf_str(&out.text).unwrap();
+        assert!(
+            !reparsed
+                .diagnostics
+                .iter()
+                .any(|d| d.code().starts_with("READ.BMOPF.SCHEMA_")),
+            "{:?}",
+            reparsed.diagnostics
+        );
+    }
+}
+
+/// A document that states no schema names no version, and one that states a
+/// location naming no version is no better. Both are reported, and both parse.
+#[test]
+fn a_document_naming_no_schema_version_is_reported() {
+    let absent = parse_bmopf_str(&doc_with("")).unwrap();
+    assert!(
+        absent
+            .diagnostics
+            .iter()
+            .any(|d| d.code() == "READ.BMOPF.SCHEMA_ABSENT"),
+        "{:?}",
+        absent.diagnostics
+    );
+
+    let unknown = parse_bmopf_str(&doc_with(
+        r#", "meta": {"$schema": "https://example.org/bmopf/schema/v1/bmopf.json"}"#,
+    ))
+    .unwrap();
+    assert!(
+        unknown
+            .diagnostics
+            .iter()
+            .any(|d| d.code() == "READ.BMOPF.SCHEMA_UNKNOWN"),
+        "{:?}",
+        unknown.diagnostics
+    );
+
+    // The two published examples state the draft schema location of the
+    // repository that only ever held 0.1.0, so they resolve.
+    for example in ["bmopf/example_ieee13.json", "bmopf/example_enwl_n1_f2.json"] {
+        let net = parse_bmopf_file(fixture(example)).unwrap();
+        assert!(
+            !net.diagnostics
+                .iter()
+                .any(|d| d.code().starts_with("READ.BMOPF.SCHEMA_")),
+            "{example}: {:?}",
+            net.diagnostics
+        );
+    }
+}
+
+/// Schema 0.2.0 declares the IBR, control profile, DC and time series tables
+/// at the top level, so writing it relocates nothing; schema 0.1.0 has no
+/// table for them and files each under `extras`.
+#[test]
+fn the_tables_schema_0_1_0_relocates_stay_in_place_under_0_2_0() {
+    let text = doc_with(
+        r#", "ibr": {"pv": {"bus": "a", "terminal_map": ["1", "2"],
+            "topology": "SINGLE_PHASE", "prime_mover": "PV", "s_max": [5000.0]}},
+        "time_series": {"t1": {"values": [1.0, 0.5]}},
+        "dc_bus": {"d1": {"terminal_names": ["p", "r"]}}"#,
+    );
+    let net = parse_bmopf_str(&text).unwrap();
+
+    let out = emit_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    for table in ["ibr", "time_series", "dc_bus"] {
+        assert!(doc[table].is_object(), "{table}: {}", out.text);
+        assert!(doc["extras"][table].is_null(), "{table}: {}", out.text);
+    }
+    assert_eq!(
+        errors(&schema_validator(), &out.text),
+        Vec::<String>::new(),
+        "{}",
+        out.text
+    );
+
+    let out = emit_bmopf_json_with_options(
+        &net,
+        BmopfEmitOptions::default().with_profile(BmopfProfile::Bmopf010),
+    );
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    for table in ["ibr", "time_series", "dc_bus"] {
+        assert!(doc["extras"][table].is_object(), "{table}: {}", out.text);
+        assert!(doc[table].is_null(), "{table}: {}", out.text);
+    }
+    assert_eq!(
+        errors(&schema_validator_for(BmopfProfile::Bmopf010), &out.text),
+        Vec::<String>::new(),
+        "{}",
+        out.text
     );
 }

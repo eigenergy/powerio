@@ -20,8 +20,15 @@ Benchmarking Multiconductor OPF.
 - `example_enwl_n1_f2.json` sha256
   `24d2c054b70b5e09d179f785cb09ff90cddbf73c859756154e9eb604782b69f1`
 - The released schemas live in
-  <https://github.com/distribution-system-opt/dsopt-schema>. The copy here is
-  the draft the two examples validate against, kept beside them.
+  <https://github.com/distribution-system-opt/dsopt-schema>. `draft_bmopf_schema.json`
+  is the 0.1.0 draft the two examples validate against, kept beside them.
+- `bmopf-0.2.0.schema.json` is the 0.2.0 proposal, from
+  <https://github.com/distribution-system-opt/dsopt-schema> at commit
+  `f73c5fc245dd02b6e7c0c68c78502542f1378e9b` on branch
+  `propose-bmopf-0.2.0`, unchanged. sha256
+  `c7b960b1496ef13a44c6f44e305511b35d417d8a750ed8ce3cd74a198b50d64c`. It is
+  the version the writer targets by default, so the writer's output is
+  validated against it; the proposal is CC BY 4.0.
 
 ## opendss/
 
