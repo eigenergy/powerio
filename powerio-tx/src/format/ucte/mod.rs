@@ -39,9 +39,8 @@ use super::{TextEmission, warn_extra_branch_rating_sets};
 use crate::diagnostics::codes::EMIT_UCTE as F;
 use crate::diagnostics::{DiagnosticInfo, Diagnostics, codes};
 use crate::network::{
-    Area, BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, Bus, BusId, BusType,
-    Extras, Generator, GeneratorEnergySource, Load, SourceFormat, Switch, TransformerControl,
-    TransformerControlMode,
+    Area, BalancedNetwork, Branch, BranchCharging, Bus, BusId, BusType, Extras, Generator,
+    GeneratorEnergySource, Load, SourceFormat, Switch, TransformerControl, TransformerControlMode,
 };
 use crate::{Error, Result};
 

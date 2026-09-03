@@ -156,8 +156,11 @@ fn the_synthetic_case_parses_to_the_expected_counts_and_values() {
     assert!(approx(line.r, 2.5 / zbase));
     assert!(approx(line.x, 25.0 / zbase));
     assert!(approx(line.b, 300.0e-6 * zbase));
+    // The permanent current limit is one fact stated once, as `rate_a` in MVA
+    // at the element's voltage level; the writer divides by the same voltage
+    // to recover the ampere the record states.
     assert!(approx(line.rate_a, 3f64.sqrt() * 380.0 * 1200.0 / 1000.0));
-    assert_eq!(line.current_ratings.unwrap().c_rating_a, 1200.0);
+    assert!(line.current_ratings.is_none());
     assert_eq!(line.name.as_deref(), Some("GEN-LOAD 1"));
     assert_eq!(line.tap, 0.0);
     assert!(line.in_service);

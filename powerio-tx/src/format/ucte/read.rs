@@ -2,10 +2,10 @@
 
 use super::{
     AngleRegulation, Area, BASE_FREQUENCY, BASE_MVA, BTreeSet, BalancedNetwork, Branch,
-    BranchCharging, BranchCurrentRatings, Bus, BusId, BusType, CONTROL_AREA, CROSS_BORDER_AREA,
-    DEFAULT_POWER_LIMIT, DiagnosticInfo, Diagnostics, ElementId, Error, Extras, FMT, Generator,
-    GeneratorEnergySource, HashMap, Load, MIN_REACTANCE_OHM, NodeCode, ORDER_CODES, PLANT_TYPES,
-    PhaseRegulation, REVISION, REVISIONS, Result, SQRT_3, SourceFormat, Switch, TransformerControl,
+    BranchCharging, Bus, BusId, BusType, CONTROL_AREA, CROSS_BORDER_AREA, DEFAULT_POWER_LIMIT,
+    DiagnosticInfo, Diagnostics, ElementId, Error, Extras, FMT, Generator, GeneratorEnergySource,
+    HashMap, Load, MIN_REACTANCE_OHM, NodeCode, ORDER_CODES, PLANT_TYPES, PhaseRegulation,
+    REVISION, REVISIONS, Result, SQRT_3, SourceFormat, Switch, TransformerControl,
     TransformerControlMode, Value, codes, country_iso, json,
 };
 
@@ -874,7 +874,11 @@ fn rated_voltage(
 }
 
 /// The permanent current limit in ampere becomes `rate_a` in MVA at the
-/// element's voltage level and stays exact in `current_ratings`.
+/// element's voltage level. A rating in MVA and the same rating in ampere
+/// through the element's own voltage are one fact, and the writer divides by
+/// the voltage the reader multiplied by, so a second copy in
+/// `current_ratings` would only make every other target report dropping a
+/// restatement.
 fn apply_current_limit(
     reader: &mut Reader<'_>,
     record: &Record<'_>,
@@ -887,7 +891,6 @@ fn apply_current_limit(
         Some(limit) if limit > 0 => {
             let amps = limit as f64;
             branch.rate_a = SQRT_3 * kv * amps / 1000.0;
-            branch.current_ratings = Some(BranchCurrentRatings::new(amps, 0.0, 0.0));
         }
         Some(limit) => reader.warn(
             &codes::READ_UCTE_VALUE_SUBSTITUTED,
