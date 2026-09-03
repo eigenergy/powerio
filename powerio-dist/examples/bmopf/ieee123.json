@@ -5724,12 +5724,13 @@
     }
   },
   "meta": {
-    "$schema": "https://raw.githubusercontent.com/frederikgeth/bmopf-report/main/draft_schema_and_networks/draft_bmopf_schema.json",
+    "$schema": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.2.0/bmopf.schema.json",
     "case_study_generator": {
       "tool": "powerio",
       "version": "1.0.0"
     },
-    "frequency": 60.0
+    "frequency": 60.0,
+    "schema_version": "0.2.0"
   },
   "name": "ieee123",
   "shunt": {

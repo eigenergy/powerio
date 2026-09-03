@@ -1294,6 +1294,14 @@ fn transformer_tap_fields_round_trip_through_bmopf() {
     assert_eq!(t["tap_ratio_max"], 1.1);
     assert_eq!(t["g_no_load"], serde_json::json!(0.000_001));
     assert_eq!(t["b_no_load"], serde_json::json!(0.0));
+
+    let back = parse_bmopf_str(&out.text).unwrap();
+    assert!((back.transformers()[0].windings[0].tap - 1.05).abs() < 1e-12);
+    let second = emit_bmopf_json(&back);
+    let document: serde_json::Value = serde_json::from_str(&second.text).unwrap();
+    let transformer = &document["transformer"]["single_phase"]["t"];
+    assert_eq!(transformer["tap_ratio_min"], 0.9);
+    assert_eq!(transformer["tap_ratio_max"], 1.1);
 }
 
 #[test]

@@ -1461,6 +1461,9 @@ impl Reader<'_> {
             "tap",
             "tap_min",
             "tap_max",
+            "tap_ratio",
+            "tap_ratio_min",
+            "tap_ratio_max",
         ];
         if !matches!(
             subtype,
@@ -1546,7 +1549,7 @@ impl Reader<'_> {
                 v_ref: v_from,
                 s_rating: s,
                 r_pct: r_from_pct,
-                tap: first_float(o.get("tap")).unwrap_or(1.0),
+                tap: first_float(o.get("tap_ratio").or_else(|| o.get("tap"))).unwrap_or(1.0),
                 r_neutral: first_float(o.get("r_neutral_from")),
                 x_neutral: first_float(o.get("x_neutral_from")),
             },
@@ -1585,9 +1588,9 @@ impl Reader<'_> {
             &mut self.diagnostics,
             &[],
         );
-        for key in ["tap_min", "tap_max"] {
-            if let Some(v) = o.get(key) {
-                extras.insert(key.into(), v.clone());
+        for (key, current) in [("tap_min", "tap_ratio_min"), ("tap_max", "tap_ratio_max")] {
+            if let Some(value) = o.get(current).or_else(|| o.get(key)) {
+                extras.insert(key.into(), value.clone());
             }
         }
         for key in ["g_no_load", "b_no_load"] {

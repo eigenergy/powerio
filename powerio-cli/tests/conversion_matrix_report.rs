@@ -1567,9 +1567,10 @@ const DISTRIBUTION_FORMATS: [DistributionFormat; 3] = [
     },
 ];
 
-// BMOPF schema 0.1.0: the dss→BMOPF drop drops (taps, no load, neutral
-// impedance now ride along under `extras.transformer`), and the BMOPF source
-// rows reflect the re-vendored 0.1.0 example fixtures.
+// BMOPF schema 0.2.0 carries transformer tap ratios and no-load admittance in
+// schema fields; neutral impedance remains available under
+// `extras.transformer`. The BMOPF source rows use the re-vendored 0.2.0
+// examples.
 // The dss leg splits an unbalanced load into one single phase `Load` per phase
 // (#266 item 2), so a case carrying one arrives at the next hop as several. Each
 // part restates the `kv`/`phases`/`conn` extras the dss reader attaches, and
