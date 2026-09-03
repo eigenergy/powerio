@@ -1669,7 +1669,7 @@
           },
           "tap_ratio": {
             "$ref": "#/$defs/nonnegative_number",
-            "description": "Off-nominal turns ratio, secondary over nominal, applied to the 'to'-side winding. Default 1.0, and the start value when the tap is a free variable."
+            "description": "Off-nominal ratio multiplier on the nameplate turns ratio N = v_nom_from / v_nom_to, so the effective ratio is tap_ratio * N and the ideal winding pair relates the coil voltages by that product. Default 1.0, and the start value when the ratio is a free variable. The regulator subtypes state their own `tap_ratio`, which is a regulation ratio rather than a multiplier, because a regulator has no nameplate ratio to multiply."
           },
           "tap_ratio_min": {
             "$ref": "#/$defs/nonnegative_number",
@@ -1774,7 +1774,7 @@
           },
           "tap_ratio": {
             "$ref": "#/$defs/nonnegative_number",
-            "description": "Off-nominal turns ratio, secondary over nominal, applied to the 'to'-side winding. Default 1.0, and the start value when the tap is a free variable."
+            "description": "Off-nominal ratio multiplier on the nameplate turns ratio N = v_nom_from / v_nom_to, so the effective ratio is tap_ratio * N and the ideal winding pair relates the coil voltages by that product. Default 1.0, and the start value when the ratio is a free variable. The regulator subtypes state their own `tap_ratio`, which is a regulation ratio rather than a multiplier, because a regulator has no nameplate ratio to multiply."
           },
           "tap_ratio_min": {
             "$ref": "#/$defs/nonnegative_number",

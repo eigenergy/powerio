@@ -24,11 +24,12 @@ Benchmarking Multiconductor OPF.
   is the 0.1.0 draft the two examples validate against, kept beside them.
 - `bmopf-0.2.0.schema.json` is the 0.2.0 proposal, from
   <https://github.com/distribution-system-opt/dsopt-schema> at commit
-  `f73c5fc245dd02b6e7c0c68c78502542f1378e9b` on branch
+  `202b7b59ae3ea97b81cded0b6d428234f6c536c2` on branch
   `propose-bmopf-0.2.0`, unchanged. sha256
-  `c7b960b1496ef13a44c6f44e305511b35d417d8a750ed8ce3cd74a198b50d64c`. It is
+  `2744afb88a036783a6d22f5e830fe254321a6a68e203d31c6ff2e084d27b20cc`. It is
   the version the writer targets by default, so the writer's output is
-  validated against it; the proposal is CC BY 4.0.
+  validated against it; the proposal is CC BY 4.0. Re-vendor it when that
+  proposal changes.
 
 ## opendss/
 
