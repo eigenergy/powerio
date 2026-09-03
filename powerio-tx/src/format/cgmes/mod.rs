@@ -6340,7 +6340,7 @@ mod tests {
             .loads()
             .iter()
             .find(|load| load.uid.as_deref() == Some(uid))
-            .unwrap_or_else(|| panic!("no load {uid}"))
+            .unwrap_or_else(|| panic!("no load with the requested identifier"))
     }
 
     #[test]
