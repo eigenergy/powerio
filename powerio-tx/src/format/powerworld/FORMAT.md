@@ -151,14 +151,16 @@ quantum, dispatch and branch values likewise. `powerio/tests/`
 
 ## The .pwb binary format (decode evidence)
 
-Established by differential analysis of three lawfully obtained files, no
+Established by differential analysis of lawfully obtained files, no
 PowerWorld software involved: ACTIVSg200.pwb (Simulator 20 era, June 2018,
 same snapshot as the vendored aux), Texas2000_June2016.pwb (June 2016, same
 day as its paired aux export), and ACTIV_SG_2000_v19.pwb (April 2017, validated
 against the published ACTIVSg2000 case with the snapshot deltas pinned in
-the parity test). Every claim below was verified by value match against a
-the paired export on every record unless noted. Offsets are from the field listed;
-integers and floats are little endian.
+the parity test), widened later by the TAMU repository sets, the Texas7k
+saves, and a local corpus of twenty saves whose MATPOWER `.m` and PSS/E
+`.RAW` exports cover most of the same cases. Every claim below was verified
+by value match against a paired export on every record unless noted. Offsets
+are from the field listed; integers and floats are little endian.
 
 ### Header (identical prefix in all three files)
 
@@ -214,8 +216,11 @@ The flag word is a field presence bitmask. Bit 5 set marks the Simulator 20
 era record family (clear on the 2016 era family), bit 4 set marks the count
 prefixed list in the record tail, bit 0 clear means one extra u16 before the
 nominal kV (the generator buses: 49 such records in ACTIVSg200, which has 49
-generators). The head layout through the solved voltage is identical across
-every observed flag word; the tails differ.
+generators). Bit 1 is set on every record of every file in the corpus, and it
+is the reader's only required base bit; bit 2 was also required until a later
+corpus showed whole tables with it clear (below). The head layout through the
+solved voltage is identical across every observed flag word; the tails
+differ.
 
 | file | flag words seen |
 |---|---|
@@ -244,6 +249,41 @@ entries (1341 bytes) on one record, past the bounded resync window, so a
 bit 4 bus record extends the scan to the buffer end exactly as a bit 4
 branch record does. The 39 bus sample case (header 425) shows no
 recognized bus record layout at all in a 44 KiB file.
+
+### Bus record flag words with bit 2 clear (header 425 and 537)
+
+A later corpus of twenty saves adds the first family with bit 2 clear and
+bits 12 and 13 set. Its 5000 bus records carry six flag words, and no others:
+
+| flag word | bits set beyond 1, 12, 13 | records |
+|---|---|---|
+| 0x3002 | none | 42 |
+| 0x3003 | 0 | 208 |
+| 0x3022 | 5 | 10 |
+| 0x3062 | 5, 6 | 646 |
+| 0x3162 | 5, 6, 8 | 142 |
+| 0x3163 | 0, 5, 6, 8 | 3952 |
+
+Bit 0 is clear on the generator buses exactly as in the older families, and
+bit 5, which selects the tail family, is clear over one whole table and set
+over the other nineteen, so this vintage writes both tails. The head layout
+is unchanged, and the whole table decodes: consecutive bus numbers from 1,
+each name the decimal spelling of its own number, nominal kV drawn from
+345/230/138/69/14, area and zone 1, one shared bus label, and the solved
+voltage pair as two f64. Every one of those fields matches the PSS/E `.RAW`
+and MATPOWER `.m` exports of the same case at their print quanta (the `.RAW`
+prints the magnitude at five decimals and the angle at four, the `.m` at
+seven and five).
+
+Bit 2's own field is not in the decoded head, so the reader's mask moved it
+into the presence set: the accept rule is now bit 1 set with every other bit
+outside `0x3575` clear. Bit 2 stays in the record family key, which keeps a
+bit 2 clear table from chaining with a bit 2 set one.
+
+Nineteen of the twenty saves carry header constant 425 and one carries 537,
+and both write the 425 era generator record, which makes 537 the second
+constant after 508 observed with either generator record shape. The reader
+therefore tries both shapes in sequence under 537.
 
 An earlier draft of this section read the Texas7k generator table as "the
 leading u32 equals the aux BusNum on roughly three quarters of the
@@ -419,6 +459,13 @@ case stores zero shunt MW and the reader sets G = 0.
   fills two characters or parses either way).
 - Table glue blocks between count and first record (the v21 resave's bus
   and generator glues carry 52 and 86 bytes including string metadata).
+- Per bus voltage limits: still undecoded. The bit 2 clear corpus is the
+  first one holding two saves of one case that differ only in the limits
+  (0.92/1.06 on load buses and 0.98/1.10 on generator buses in one,
+  0.95/1.04 and 1.00/1.06 in the other), and no f32 at any fixed offset from
+  either the bus record start or the decoded head end tracks them across
+  both saves, so they are not stored in the bus record at a constant offset.
+  Buses keep the 1.1/0.9 defaults.
 - Substation, area/zone names, contingency tables: present after the
   branches, undecoded in this pass.
 

@@ -13,12 +13,13 @@
 //! Supported header constants: 338, 368, 425, 483, 508, 537, 550, 551, and 554.
 //! These constants gate only the writer era; a recognized constant still has
 //! to pass the table walk. Constants 338/368/425 use the older generator record
-//! (`bus`, ID, f32 block), 483/537/550/551 use the regulated bus record, 508
-//! has been observed with both generator families, and 554 uses the regulated
-//! record without the 2021 era presence byte. The bus, load, shunt, and branch
-//! heads are more general: their flag words are Delphi field presence bitmasks,
-//! so one decoded head model admits the observed 0x06, 0x26, and 0x66 families
-//! as long as the later table walk still validates.
+//! (`bus`, ID, f32 block), 483/550/551 use the regulated bus record, 508 and
+//! 537 have been observed with both generator families, and 554 uses the
+//! regulated record without the 2021 era presence byte. The bus, load, shunt,
+//! and branch heads are more general: their flag words are Delphi field
+//! presence bitmasks, so one decoded head model admits the observed 0x02,
+//! 0x06, 0x26, 0x66, 0x3002, and 0x3062 families as long as the later table
+//! walk still validates.
 //!
 //! Known limits, documented rather than guessed:
 //!
@@ -233,18 +234,19 @@ fn parse_pwb_inner(bytes: &[u8], name_hint: Option<&str>) -> Result<BalancedNetw
     reject_unsupported_vintage(bytes)?;
     // The header constant pins the generator record layout wherever the
     // corpus is unambiguous: every 425 file carries the bus + ID shape and
-    // every 483/537/550/551 file the regulated bus shape, while 508 saves
-    // exist with both (Hawaii40 against the Texas7k v21 resave), so only
-    // they try the two in sequence. Beyond pricing, this keeps the layout
-    // a file cannot carry from ever outbidding the right one in the chain
-    // search; a hypothetical file mixing eras fails loudly instead.
+    // every 483/550/551 file the regulated bus shape, while 508 and 537
+    // saves exist with both (Hawaii40 against the Texas7k v21 resave, and the
+    // bit 2 clear bus record corpus against the 2021 era saves), so only they
+    // try the two in sequence. Beyond pricing, this keeps the layout a file
+    // cannot carry from ever outbidding the right one in the chain search; a
+    // file mixing eras fails loudly instead.
     let gen_variants = match header_constant {
         338 | 368 | 425 => GenVariants {
             plain: true,
             reg: false,
             simple_reg: false,
         },
-        508 => GenVariants {
+        508 | 537 => GenVariants {
             plain: true,
             reg: true,
             simple_reg: false,
@@ -875,8 +877,8 @@ fn expect_header(b: &[u8]) -> Result<u64> {
     // Every known PowerWorld binary starts with 15000. The next two words
     // identify the writer family: the decoded constants cover older 0x06 bus
     // records (338/368), the Simulator 19/20/current 425 family, the 2021
-    // regulated generator family (483/537/550/551), the mixed 508 saves, and
-    // the 554 regulated generator variant. Header admission is not trust:
+    // regulated generator family (483/550/551), the mixed 508 and 537 saves,
+    // and the 554 regulated generator variant. Header admission is not trust:
     // every table still has to pass the record probes below.
     if c != 20 || !DECODED.contains(&v) {
         return Err(unsupported_vintage(format!(
@@ -1060,23 +1062,26 @@ struct BusHead {
     /// generator buses). The 2019+ era writers add bits 6 and 8, both per
     /// record (the v21 resave clears bit 6 on its slack bus record; the
     /// bit 6 tails carry a location string block), with their fields in
-    /// the undecoded tail.
+    /// the undecoded tail. Bit 2 is set on every file of the older corpus
+    /// and clear on every record of a later one whose words add bits 12 and
+    /// 13; its field is not in the decoded head.
     unk: u32,
 }
 
-/// Whether a bus record flag word is one this reader decodes: base bits
-/// `0x06` plus any combination of the observed presence bits. Bit 5 changes
-/// the tail family (`0x06` vs `0x26` era), while bits 6, 8, 10, 12, and 13
-/// were admitted only after full table walks showed they leave the decoded
-/// head layout unchanged.
+/// Whether a bus record flag word is one this reader decodes: base bit `0x02`
+/// plus any combination of the observed presence bits. Bit 5 changes the tail
+/// family (`0x06` vs `0x26` era), while bits 2, 6, 8, 10, 12, and 13 were
+/// admitted only after full table walks showed they leave the decoded head
+/// layout unchanged. Bit 1 is the only bit every observed record sets.
 fn known_bus_flags(unk: u32) -> bool {
-    unk & !0x3571 == 0x06
+    unk & !0x3575 == 0x02
 }
 
 /// The record family bits of a bus flag word. One bus table cannot mix tail
 /// families, but individual records can toggle optional presence bits inside
-/// a family. Bit 5 stays in the family key because the 0x06 and 0x26 era tails
-/// differ; the other admitted bits are per record fields or skipped tails.
+/// a family. Bits 2 and 5 stay in the family key because the tails differ
+/// across the `0x02`, `0x06`, and `0x26` eras; the other admitted bits are
+/// per record fields or skipped tails.
 fn bus_family(unk: u32) -> u32 {
     unk & !0x3551
 }
