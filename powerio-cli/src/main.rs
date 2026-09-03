@@ -2374,7 +2374,14 @@ fn run_geo_convert(
     let parsed = powerio::geo::GeoLayer::parse(&text, input.file_name().and_then(|n| n.to_str()))
         .with_context(|| format!("parsing {}", input.display()))?;
     report_diagnostics(&parsed.diagnostics);
-    write_conversion_output(&parsed.layer.to_geojson(), &[], output)
+    // `geo extract` and the facade's `geo-json` emitter both refuse a layer
+    // with no features; converting one document to another does the same.
+    let text = parsed
+        .layer
+        .to_geojson_checked()
+        .map_err(anyhow::Error::new)
+        .with_context(|| format!("converting {}", input.display()))?;
+    write_conversion_output(&text, &[], output)
 }
 
 /// Write `input` out as a PyPSA CSV folder (a directory target, so it never
