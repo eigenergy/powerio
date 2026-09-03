@@ -21,7 +21,11 @@ Set VoltageBases=[12.47, 0.416]
 
 fn parse_mc_module(text: &str) -> powerio_core::PioModule<PioValue> {
     let source = powerio::Source::from_memory("feeder.dss", text.as_bytes().to_vec()).unwrap();
-    powerio::parse(source, Some("dss")).unwrap()
+    powerio::parse_with_options(
+        source,
+        &powerio::ParseOptions::default().format("dss").unwrap(),
+    )
+    .unwrap()
 }
 
 #[test]

@@ -62,12 +62,21 @@ pub fn load_balanced_case(
     load_balanced_module(path, from).map(module_to_parsed)
 }
 
+/// The parse options for an optional format token.
+pub fn options_for(format: Option<&str>) -> Result<powerio::ParseOptions, powerio_core::Error> {
+    let mut options = powerio::ParseOptions::default();
+    if let Some(format) = format {
+        options = options.format(format)?;
+    }
+    Ok(options)
+}
+
 pub fn load_balanced_module(
     path: impl AsRef<Path>,
     from: Option<&str>,
 ) -> Result<powerio_core::PioModule<BalancedNetwork>, powerio_core::Error> {
     let source = powerio::Source::open(path.as_ref())?;
-    into_balanced_module(powerio::parse(source, from)?)
+    into_balanced_module(powerio::parse_with_options(source, &options_for(from)?)?)
 }
 
 pub fn load_balanced_memory(text: &str, from: &str) -> Result<Parsed, powerio_core::Error> {
@@ -81,7 +90,11 @@ pub fn load_balanced_memory_named(
 ) -> Result<Parsed, powerio_core::Error> {
     let name = name_hint.map_or_else(|| "<memory>".to_owned(), std::string::ToString::to_string);
     let source = powerio::Source::from_memory(name, text.as_bytes().to_vec())?;
-    into_balanced_module(powerio::parse(source, Some(from))?).map(module_to_parsed)
+    into_balanced_module(powerio::parse_with_options(
+        source,
+        &powerio::ParseOptions::default().format(from).unwrap(),
+    )?)
+    .map(module_to_parsed)
 }
 
 pub fn load_balanced_bytes(bytes: &[u8], from: &str) -> Result<Parsed, powerio_core::Error> {
@@ -95,7 +108,11 @@ pub fn load_balanced_bytes_named(
 ) -> Result<Parsed, powerio_core::Error> {
     let name = name_hint.map_or_else(|| "<memory>".to_owned(), std::string::ToString::to_string);
     let source = powerio::Source::from_memory(name, bytes.to_vec())?;
-    into_balanced_module(powerio::parse(source, Some(from))?).map(module_to_parsed)
+    into_balanced_module(powerio::parse_with_options(
+        source,
+        &powerio::ParseOptions::default().format(from).unwrap(),
+    )?)
+    .map(module_to_parsed)
 }
 
 pub fn parse_matpower(text: &str) -> Result<BalancedNetwork, powerio_core::Error> {
@@ -155,8 +172,14 @@ pub fn load_multiconductor_module(
 ) -> powerio_core::PioModule<powerio_dist::MulticonductorNetwork> {
     let source =
         powerio::Source::from_memory("<memory>", text.as_bytes().to_vec()).expect("memory source");
-    into_multiconductor_module(powerio::parse(source, Some(from)).expect("source parses"))
-        .expect("source contains a multiconductor network")
+    into_multiconductor_module(
+        powerio::parse_with_options(
+            source,
+            &powerio::ParseOptions::default().format(from).unwrap(),
+        )
+        .expect("source parses"),
+    )
+    .expect("source contains a multiconductor network")
 }
 
 fn wrong_value_type(actual: &str, expected: &str) -> powerio_core::Error {

@@ -209,9 +209,13 @@ fn unknown_format(format: &str) -> Error {
     )
 }
 
-/// Emit one dynamic module as `format` into `destination`. The concrete value
-/// routes to its grid exchange format implementation. PowerIO IR uses
-/// [`crate::serialize`] instead.
+/// Emit one module as `format` into `output`. The concrete value routes to its
+/// grid exchange format implementation. PowerIO IR uses [`crate::serialize`]
+/// instead.
+///
+/// `output` names the file or directory to write, or is a
+/// [`powerio_core::Destination`], which is how a memory destination and its
+/// artifact root name are given.
 ///
 /// # Errors
 /// `REQUEST.EMIT.UNKNOWN_FORMAT` for a format name nothing recognizes,
@@ -224,13 +228,13 @@ fn unknown_format(format: &str) -> Error {
 pub fn emit<T>(
     module: &PioModule<T>,
     format: &str,
-    destination: Destination,
+    output: impl powerio_core::IntoDestination,
 ) -> Result<EmitResult, Error>
 where
     T: Clone + Into<PioValue>,
 {
     let module = module.clone().map_value(Into::into);
-    emit_dynamic(&module, format, destination)
+    emit_dynamic(&module, format, output.into_destination()?)
 }
 
 fn calculation_data_omitted(value_type: &str, format: &str) -> Diagnostic {

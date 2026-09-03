@@ -35,7 +35,7 @@ fn a_time_series_kind_echoes_its_retained_source_on_a_same_format_write() {
     let source =
         powerio_core::Source::from_memory("case.json", EGRET_TIME_SERIES.as_bytes().to_vec())
             .unwrap();
-    let module = powerio::parse(source, None).unwrap();
+    let module = powerio::parse(source).unwrap();
     assert!(
         matches!(
             &module.value,
@@ -68,7 +68,7 @@ fn a_time_series_kind_still_refuses_a_format_its_retained_source_is_not() {
     let source =
         powerio_core::Source::from_memory("case.json", EGRET_TIME_SERIES.as_bytes().to_vec())
             .unwrap();
-    let module = powerio::parse(source, None).unwrap();
+    let module = powerio::parse(source).unwrap();
 
     let error = emit(&module, "matpower", Destination::memory("case.m").unwrap()).unwrap_err();
     assert_eq!(
@@ -103,13 +103,19 @@ fn memory_text(result: &powerio_core::EmitResult) -> &str {
 #[test]
 fn model_json_emits_matpower_semantically_instead_of_echoing_json() {
     let case = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case9.m");
-    let original = powerio::parse(Source::open(case).unwrap(), None).expect("case9 parses");
+    let original = powerio::parse(Source::open(case).unwrap()).expect("case9 parses");
     let PioValue::BalancedNetwork(network) = &original.value else {
         panic!("case9 must produce a balanced network");
     };
     let model_json = network.to_json().expect("model JSON serializes");
     let source = Source::from_memory("network.json", model_json.as_bytes().to_vec()).unwrap();
-    let module = powerio::parse(source, Some("model-json")).expect("declared model JSON parses");
+    let module = powerio::parse_with_options(
+        source,
+        &powerio::ParseOptions::default()
+            .format("model-json")
+            .unwrap(),
+    )
+    .expect("declared model JSON parses");
     assert_eq!(
         module
             .source()
@@ -124,13 +130,17 @@ fn model_json_emits_matpower_semantically_instead_of_echoing_json() {
     assert!(matpower.contains("mpc.baseMVA"), "{matpower}");
     assert_ne!(matpower, model_json);
     let source = Source::from_memory("roundtrip.m", matpower.as_bytes().to_vec()).unwrap();
-    powerio::parse(source, Some("matpower")).expect("emitted MATPOWER parses");
+    powerio::parse_with_options(
+        source,
+        &powerio::ParseOptions::default().format("matpower").unwrap(),
+    )
+    .expect("emitted MATPOWER parses");
 }
 
 #[test]
 fn serialized_module_emits_matpower_semantically_and_reserializes_exactly() {
     let case = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case9.m");
-    let original = powerio::parse(Source::open(case).unwrap(), None).expect("case9 parses");
+    let original = powerio::parse(Source::open(case).unwrap()).expect("case9 parses");
     let stored = serialize(&original, Destination::memory("case.pio.json").unwrap())
         .expect("module serializes");
     let stored_text = memory_text(&stored).to_owned();
@@ -147,7 +157,11 @@ fn serialized_module_emits_matpower_semantically_and_reserializes_exactly() {
     assert!(matpower.contains("mpc.baseMVA"), "{matpower}");
     assert_ne!(matpower, stored_text);
     let source = Source::from_memory("roundtrip.m", matpower.as_bytes().to_vec()).unwrap();
-    powerio::parse(source, Some("matpower")).expect("emitted MATPOWER parses");
+    powerio::parse_with_options(
+        source,
+        &powerio::ParseOptions::default().format("matpower").unwrap(),
+    )
+    .expect("emitted MATPOWER parses");
 }
 
 #[test]
@@ -175,8 +189,13 @@ fn a_pypsa_network_time_series_emits_its_complete_directory_byte_exactly() {
         std::fs::write(source_dir.join(name), bytes).unwrap();
     }
 
-    let module = powerio::parse(Source::open(&source_dir).unwrap(), Some("pypsa-csv"))
-        .expect("the PyPSA series parses");
+    let module = powerio::parse_with_options(
+        Source::open(&source_dir).unwrap(),
+        &powerio::ParseOptions::default()
+            .format("pypsa-csv")
+            .unwrap(),
+    )
+    .expect("the PyPSA series parses");
     assert!(matches!(
         &module.value,
         PioValue::TimeSeries(series)
@@ -223,8 +242,11 @@ fn a_gridfm_scenario_set_emits_its_complete_directory_byte_exactly() {
     )
     .expect("the GridFM fixture writes");
 
-    let module = powerio::parse(Source::open(source_root.path()).unwrap(), Some("gridfm"))
-        .expect("the GridFM dataset parses");
+    let module = powerio::parse_with_options(
+        Source::open(source_root.path()).unwrap(),
+        &powerio::ParseOptions::default().format("gridfm").unwrap(),
+    )
+    .expect("the GridFM dataset parses");
     assert!(matches!(
         &module.value,
         PioValue::ScenarioSet(set)

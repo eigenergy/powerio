@@ -1580,9 +1580,7 @@ fn parse_gridfm_scenario(
     powerio_matrix::BalancedNetwork,
     Vec<powerio_core::Diagnostic>,
 )> {
-    let source = powerio_core::Source::open(input)
-        .with_context(|| format!("opening gridfm dataset {}", input.display()))?;
-    let module = powerio::parse(source, Some("gridfm"))
+    let module = powerio::parse_with_options(input, &parse_options(Some("gridfm"))?)
         .with_context(|| format!("parsing gridfm dataset {}", input.display()))?;
     let scenario_id = scenario.to_string();
     let powerio::PioValue::ScenarioSet(scenarios) = &module.value else {
@@ -1648,18 +1646,25 @@ fn run_serialize(
     fail_on_parse_errors(parse_errors)
 }
 
+/// The parse options for an optional `--from` token.
+fn parse_options(format: Option<&str>) -> anyhow::Result<powerio::ParseOptions> {
+    let mut options = powerio::ParseOptions::default();
+    if let Some(format) = format {
+        options = options.format(format).map_err(anyhow::Error::new)?;
+    }
+    Ok(options)
+}
+
 fn load_module(
     input: &Path,
     from: Option<FormatArg>,
 ) -> anyhow::Result<powerio_core::PioModule<powerio::PioValue>> {
     if is_stdin(input) {
         let format = stdin_format(from)?;
-        return powerio::parse(stdin_source()?, Some(format.name()))
+        return powerio::parse_with_options(stdin_source()?, &parse_options(Some(format.name()))?)
             .context("parsing standard input");
     }
-    let source = powerio_core::Source::open(input)
-        .with_context(|| format!("opening {}", input.display()))?;
-    powerio::parse(source, from.map(FormatArg::name))
+    powerio::parse_with_options(input, &parse_options(from.map(FormatArg::name))?)
         .with_context(|| format!("parsing {}", input.display()))
 }
 

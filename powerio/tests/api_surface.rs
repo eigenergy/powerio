@@ -71,7 +71,7 @@ fn facade_uses_power_system_names_and_universal_emission() {
     let matrix: ConductorMatrix = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
     assert_eq!(matrix.len(), 2);
 
-    let module = parse(Source::open(conformance_path()).unwrap(), None).unwrap();
+    let module = parse(Source::open(conformance_path()).unwrap()).unwrap();
     assert!(matches!(&module.value, PioValue::BalancedNetwork(_)));
 
     let written = emit(
@@ -94,7 +94,7 @@ fn facade_uses_power_system_names_and_universal_emission() {
 
 #[test]
 fn typed_modules_emit_and_serialize_directly() {
-    let parsed = parse(Source::open(conformance_path()).unwrap(), None).unwrap();
+    let parsed = parse(Source::open(conformance_path()).unwrap()).unwrap();
     let PioValue::BalancedNetwork(network) = parsed.value else {
         panic!("MATPOWER input did not produce a balanced network");
     };
@@ -128,7 +128,7 @@ fn typed_modules_emit_and_serialize_directly() {
 
 #[test]
 fn bmopf_parses_to_a_network_and_calculation_construction_is_explicit() {
-    let module = parse(Source::open(bmopf_path()).unwrap(), None).unwrap();
+    let module = parse(Source::open(bmopf_path()).unwrap()).unwrap();
     let PioValue::MulticonductorNetwork(network) = &module.value else {
         panic!("BMOPF input did not produce a multiconductor network");
     };
@@ -149,7 +149,7 @@ fn bmopf_parses_to_a_network_and_calculation_construction_is_explicit() {
 
 #[test]
 fn shared_case_conforms_to_the_named_dc_operations() {
-    let module = parse(Source::open(conformance_path()).unwrap(), None).unwrap();
+    let module = parse(Source::open(conformance_path()).unwrap()).unwrap();
     let PioValue::BalancedNetwork(network) = &module.value else {
         panic!("MATPOWER input did not produce a balanced network");
     };

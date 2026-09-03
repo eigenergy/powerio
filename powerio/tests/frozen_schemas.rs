@@ -5,7 +5,11 @@ use helpers::serialize_module_text;
 
 fn current_ir_version() -> u64 {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case9.m");
-    let module = powerio::parse(powerio::Source::open(path).unwrap(), Some("matpower")).unwrap();
+    let module = powerio::parse_with_options(
+        powerio::Source::open(path).unwrap(),
+        &powerio::ParseOptions::default().format("matpower").unwrap(),
+    )
+    .unwrap();
     let text = serialize_module_text(&module).unwrap();
     let document: serde_json::Value = serde_json::from_str(&text).unwrap();
     document["version"].as_u64().unwrap()

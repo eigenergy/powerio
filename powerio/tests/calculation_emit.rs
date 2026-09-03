@@ -7,7 +7,11 @@ use powerio_core::{Destination, EmittedOutput};
 
 fn network() -> powerio::BalancedNetwork {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case9.m");
-    let module = powerio::parse(Source::open(path).unwrap(), Some("matpower")).unwrap();
+    let module = powerio::parse_with_options(
+        Source::open(path).unwrap(),
+        &powerio::ParseOptions::default().format("matpower").unwrap(),
+    )
+    .unwrap();
     let PioValue::BalancedNetwork(network) = module.value else {
         panic!("case9 must parse as a balanced network");
     };
@@ -81,9 +85,11 @@ fn ac_opf_solution_emits_supported_solved_network_values() {
             .iter()
             .any(|diagnostic| diagnostic.code() == "EMIT.SOLUTION.DATA_OMITTED")
     );
-    let parsed = powerio::parse(
+    let parsed = powerio::parse_with_options(
         Source::from_memory("case.json", memory_bytes(&result)).unwrap(),
-        Some("powermodels-json"),
+        &powerio::ParseOptions::default()
+            .format("powermodels-json")
+            .unwrap(),
     )
     .unwrap();
     let PioValue::BalancedNetwork(network) = parsed.value else {
@@ -119,7 +125,13 @@ fn fresh_goc3_problem_emission_is_not_claimed() {
         env!("CARGO_MANIFEST_DIR"),
         "/../tests/data/goc3/goc3_small.json"
     );
-    let parsed = powerio::parse(Source::open(path).unwrap(), Some("goc3-json")).unwrap();
+    let parsed = powerio::parse_with_options(
+        Source::open(path).unwrap(),
+        &powerio::ParseOptions::default()
+            .format("goc3-json")
+            .unwrap(),
+    )
+    .unwrap();
     let PioValue::AcScucInstance(instance) = parsed.value else {
         panic!("GOC3 problem data must parse as an AC SCUC instance");
     };

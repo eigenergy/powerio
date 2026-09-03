@@ -464,9 +464,11 @@ fn a_nested_network_that_fails_validation_is_refused_per_kind() {
         "/../powerio-prob/tests/data/goc3_small.json"
     );
     let text = std::fs::read_to_string(path).unwrap();
-    let module = powerio::parse(
+    let module = powerio::parse_with_options(
         powerio_core::Source::from_memory("goc3_small.json", text.into_bytes()).unwrap(),
-        Some("goc3-json"),
+        &powerio::ParseOptions::default()
+            .format("goc3-json")
+            .unwrap(),
     )
     .unwrap();
     let PioValue::AcScucInstance(instance) = module.value else {

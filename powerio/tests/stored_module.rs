@@ -502,9 +502,9 @@ fn fixture_path(relative: &str) -> String {
 }
 
 fn parse_fixture(relative: &str, format: &str) -> PioModule<PioValue> {
-    powerio::parse(
+    powerio::parse_with_options(
         powerio::Source::open(fixture_path(relative)).unwrap(),
-        Some(format),
+        &powerio::ParseOptions::default().format(format).unwrap(),
     )
     .unwrap_or_else(|error| panic!("{relative}: {error}"))
 }

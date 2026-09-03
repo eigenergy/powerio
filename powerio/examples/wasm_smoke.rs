@@ -11,7 +11,7 @@ fn main() {
     let bytes = include_bytes!("../../tests/data/case9.m").to_vec();
     let source = powerio::Source::from_memory("case9.m", bytes.clone())
         .expect("named in-memory bytes acquire");
-    let module = powerio::parse(source, None).expect("parse");
+    let module = powerio::parse(source).expect("parse");
     let powerio::PioValue::BalancedNetwork(network) = &module.value else {
         panic!(
             "expected a balanced network, found {}",

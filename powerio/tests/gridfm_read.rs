@@ -129,11 +129,9 @@ fn read_round_trips_power_flow_fingerprint() {
     read.network.validate().unwrap();
 
     // The facade route stamps the format on the stored source descriptor.
-    let module = powerio::parse(
-        powerio_core::Source::open(dir.path().join("case14").join("raw")).unwrap(),
-        None,
-    )
-    .unwrap();
+    let module =
+        powerio::parse(powerio_core::Source::open(dir.path().join("case14").join("raw")).unwrap())
+            .unwrap();
     assert_eq!(
         module
             .sources()

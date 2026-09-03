@@ -44,7 +44,7 @@ fn universal_parse_normalizes_rawx_metadata_and_echoes_exactly() {
     let source = Source::from_memory("input.json", RAWX.as_bytes().to_vec())
         .unwrap()
         .with_format(FormatId::new("rawx").unwrap());
-    let module = parse(source, None).unwrap();
+    let module = parse(source).unwrap();
     assert_eq!(
         module.source().unwrap().format().unwrap().as_str(),
         "psse-rawx"
@@ -73,7 +73,7 @@ fn universal_parse_normalizes_rawx_metadata_and_echoes_exactly() {
 #[test]
 fn matpower_cross_format_output_reloads_as_rawx() {
     let matpower = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case9.m");
-    let module = parse(Source::open(matpower).unwrap(), None).unwrap();
+    let module = parse(Source::open(matpower).unwrap()).unwrap();
     let result = emit(
         &module,
         "psse-rawx",
@@ -84,11 +84,7 @@ fn matpower_cross_format_output_reloads_as_rawx() {
     let root: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(root["network"]["caseid"]["data"][2], 35);
 
-    let back = parse(
-        Source::from_memory("case9.rawx", text.into_bytes()).unwrap(),
-        None,
-    )
-    .unwrap();
+    let back = parse(Source::from_memory("case9.rawx", text.into_bytes()).unwrap()).unwrap();
     let PioValue::BalancedNetwork(network) = &back.value else {
         panic!("RAWX did not produce a balanced network");
     };
@@ -101,7 +97,7 @@ fn ir_fresh_emission_preserves_adjm_and_null_subnode_voltage() {
     let source = Source::from_memory("input.rawx", RAWX_FIDELITY.as_bytes().to_vec())
         .unwrap()
         .with_format(FormatId::new("psse-rawx").unwrap());
-    let module = parse(source, None).unwrap();
+    let module = parse(source).unwrap();
 
     let stored = serialize(&module, Destination::memory("network.pio.json").unwrap()).unwrap();
     let stored = memory_text(stored);
