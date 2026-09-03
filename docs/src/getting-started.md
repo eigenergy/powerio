@@ -57,19 +57,14 @@ powerio.emit(case, "matpower", "copy.m")
 Rust:
 
 ```rust,ignore
-let source = powerio::Source::open("case9.m")?;
-let module = powerio::parse(source, None)?;
+let module = powerio::parse("case9.m")?;
 match &module.value {
     powerio::PioValue::BalancedNetwork(network) => {
         println!("{} buses", network.buses().len());
     }
     other => println!("value type: {}", other.type_name()),
 }
-let result = powerio::emit(
-    &module,
-    "matpower",
-    powerio::Destination::path("copy.m"),
-)?;
+let result = powerio::emit(&module, "matpower", "copy.m")?;
 for diagnostic in result.diagnostics() {
     eprintln!("{}", diagnostic.code());
 }

@@ -14,9 +14,9 @@ source -> parse -> PioModule<T> -> calculation or update -> emit
 
 | Meaning | Rust | Python | Julia | C ABI 7 |
 |---|---|---|---|---|
-| acquire a path | `Source::open(path)` | pass a path object to `parse` | pass a path string to `parse` | `pio_source_open` |
+| name a file | pass the name to `parse` | pass a path object to `parse` | pass a path string to `parse` | `pio_source_open` |
 | acquire memory | `Source::from_memory(name, bytes)` | pass a file or bytes-like object | pass `IO` or `AbstractVector{UInt8}` | `pio_source_from_memory` |
-| parse | `parse(source, format)` | `parse(source, format=..., name=...)` | `parse(source; format=..., name=...)` | `pio_parse` |
+| parse | `parse(input)`, `parse_with_options(input, &options)` | `parse(source, format=..., name=...)` | `parse(source; format=..., name=...)` | `pio_parse` |
 | module value | `module.value` | `module.value` | `module.value` | `pio_module_value` |
 | module diagnostics | `module.diagnostics` | `module.diagnostics` | `module.diagnostics` | `pio_module_diagnostics` |
 | emit a format | `emit(&module, format, destination)` | `emit(module, format, destination=None)` | `emit(module, format, destination=nothing)` | `pio_emit` |
