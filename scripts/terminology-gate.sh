@@ -117,8 +117,9 @@ if hits=$(rg -n '\bLOWER\.[A-Z_]+' "${public_paths[@]}" 2>/dev/null); then
   exit 1
 fi
 
-# Keep the ordinary language quickstarts on the same four operations.
-grep -Fq 'let module = powerio::parse(source, None)?;' README.md
+# Keep the ordinary language quickstarts on the same four operations, each
+# naming the case file and nothing else.
+grep -Fq 'let module = powerio::parse("case9.m")?;' README.md
 grep -Fq 'module = powerio.parse("case9.m")' README.md
 grep -Fq 'module_ = parse("case9.m")' README.md
 
