@@ -62,7 +62,7 @@ fn aliases_and_extensions_route_to_ucte() {
     assert_eq!(TargetFormat::Ucte.token(), "ucte");
     let module = parse_fixture("synthetic_all_blocks.uct");
     assert_eq!(
-        module.value.source_format(),
+        module.value().source_format(),
         powerio_tx::network::SourceFormat::Ucte
     );
     assert_eq!(
@@ -74,7 +74,7 @@ fn aliases_and_extensions_route_to_ucte() {
 #[test]
 fn the_synthetic_case_parses_to_the_expected_counts_and_values() {
     let module = parse_fixture("synthetic_all_blocks.uct");
-    let net = &module.value;
+    let net = &module.value();
     assert_eq!(net.base_mva(), 100.0);
     assert_eq!(net.base_frequency(), 50.0);
     assert_eq!(net.buses().len(), 6);
@@ -267,8 +267,8 @@ fn the_2003_revision_reads_with_the_same_layout() {
     let text = std::fs::read_to_string(data("synthetic_all_blocks.uct")).unwrap();
     let older = text.replace("##C 2007.05.01", "##C 2003.09.01");
     let module = parse_ucte_text("older.uct", &older);
-    assert_eq!(module.value.buses().len(), 6);
-    assert_eq!(module.value.branches().len(), 7);
+    assert_eq!(module.value().buses().len(), 6);
+    assert_eq!(module.value().branches().len(), 7);
     assert!(
         messages(&module)
             .iter()
@@ -307,7 +307,7 @@ BBBBBB11 BBBBBB11 1 7 0.0000 0.0000 0.000000   2000 BABAA\n\
 ##R\n";
     let module = parse_ucte_text("self-coupler.uct", text);
 
-    assert!(module.value.switches().is_empty());
+    assert!(module.value().switches().is_empty());
     assert!(
         messages(&module).iter().any(|message| message
             .starts_with("READ.UCTE.RECORD_IGNORED: line 6:")
@@ -320,7 +320,7 @@ BBBBBB11 BBBBBB11 1 7 0.0000 0.0000 0.000000   2000 BABAA\n\
 #[test]
 fn the_powsybl_fixtures_parse_and_convert_to_matpower() {
     let module = parse_fixture("20170322_1844_SN3_FR2.uct");
-    let net = &module.value;
+    let net = &module.value();
     assert_eq!(net.buses().len(), 5);
     assert_eq!(net.branches().len(), 5);
     assert_eq!(net.generators().len(), 2);
@@ -341,7 +341,7 @@ fn the_powsybl_fixtures_parse_and_convert_to_matpower() {
     assert_eq!(reread.network.branches().len(), 5);
 
     let module = parse_fixture("elementName.uct");
-    let net = &module.value;
+    let net = &module.value();
     assert_eq!(net.buses().len(), 11);
     assert_eq!(net.branches().len(), 8);
     assert_eq!(net.switches().len(), 1);
@@ -383,7 +383,7 @@ fn same_format_emission_returns_the_source_text() {
 #[test]
 fn fresh_output_reads_back_to_the_same_network() {
     let module = parse_fixture("synthetic_all_blocks.uct");
-    let fresh = emit_value(&module.value, TargetFormat::Ucte).unwrap();
+    let fresh = emit_value(module.value(), TargetFormat::Ucte).unwrap();
     let rendered = fresh.render_diagnostics();
     assert!(
         rendered
@@ -401,7 +401,7 @@ fn fresh_output_reads_back_to_the_same_network() {
         fresh.text
     );
     let reread = parse_ucte_text("fresh.uct", &fresh.text);
-    let (a, b) = (&module.value, &reread.value);
+    let (a, b) = (&module.value(), &reread.value());
     assert_eq!(a.buses().len(), b.buses().len());
     for (x, y) in a.buses().iter().zip(b.buses()) {
         assert_eq!(
@@ -475,7 +475,7 @@ fn a_matpower_case_writes_valid_node_codes_and_reads_back() {
         Source::open(Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/case9.m")).unwrap(),
     )
     .unwrap();
-    let fresh = emit_value(&module.value, TargetFormat::Ucte).unwrap();
+    let fresh = emit_value(module.value(), TargetFormat::Ucte).unwrap();
     let rendered = fresh.render_diagnostics();
     // case9 has no bus names and sits at 345 kV, which is not a UCTE level.
     assert!(
@@ -498,7 +498,7 @@ fn a_matpower_case_writes_valid_node_codes_and_reads_back() {
     );
     assert!(rendered.iter().any(|m| m.contains("60 Hz dropped")));
     let reread = parse_ucte_text("case9.uct", &fresh.text);
-    let net = &reread.value;
+    let net = &reread.value();
     assert_eq!(net.buses().len(), 9);
     assert_eq!(net.branches().len(), 9);
     assert_eq!(net.generators().len(), 3);
@@ -518,7 +518,7 @@ fn a_matpower_case_writes_valid_node_codes_and_reads_back() {
     }
     // Physical values survive the level substitution: the slack generator
     // set point in kV and the line ohms are what the source stated.
-    let source = &module.value;
+    let source = &module.value();
     let source_slack = source
         .generators()
         .iter()
@@ -547,7 +547,7 @@ fn a_case_without_base_kv_is_written_at_the_level_nominal_voltage() {
         Source::open(Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/case14.m")).unwrap(),
     )
     .unwrap();
-    let fresh = emit_value(&module.value, TargetFormat::Ucte).unwrap();
+    let fresh = emit_value(module.value(), TargetFormat::Ucte).unwrap();
     let rendered = fresh.render_diagnostics();
     assert!(
         rendered
@@ -563,13 +563,13 @@ fn a_case_without_base_kv_is_written_at_the_level_nominal_voltage() {
         "{rendered:#?}"
     );
     let reread = parse_ucte_text("case14.uct", &fresh.text);
-    let net = &reread.value;
+    let net = &reread.value();
     assert_eq!(net.buses().len(), 14);
     assert_eq!(net.branches().len(), 20);
     assert_eq!(net.branches().iter().filter(|b| b.tap != 0.0).count(), 3);
     // Per unit impedances survive: the level nominal voltage is the base on
     // both sides of the conversion.
-    let source_line = &module.value.branches()[0];
+    let source_line = &module.value().branches()[0];
     let fresh_line = &net.branches()[0];
     assert!(
         (source_line.x - fresh_line.x).abs() < 1e-6,
@@ -578,7 +578,7 @@ fn a_case_without_base_kv_is_written_at_the_level_nominal_voltage() {
         fresh_line.x
     );
     let source_tap = module
-        .value
+        .value()
         .branches()
         .iter()
         .find(|b| b.tap != 0.0)
@@ -624,7 +624,7 @@ fn a_phase_shift_and_a_voltage_control_write_regulation_records() {
     assert!(fresh.text.contains("FSHIFT11 FSLACK11 1"), "{}", fresh.text);
     assert!(fresh.text.contains("SYMM"), "{}", fresh.text);
     let reread = parse_ucte_text("regulated.uct", &fresh.text);
-    let net = &reread.value;
+    let net = &reread.value();
     // The five character voltage step field carries four significant digits.
     let shifter = net.branches().iter().find(|b| b.shift != 0.0).unwrap();
     assert!((shifter.shift - 5.0).abs() < 1e-3, "{}", shifter.shift);

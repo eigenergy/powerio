@@ -11322,6 +11322,11 @@
           "const": "cgmes",
           "description": "Read from a CGMES profile set (2.4.15/CIM16 or 3.0/CIM100).",
           "type": "string"
+        },
+        {
+          "const": "ucte",
+          "description": "Read from an ENTSO-E UCTE-DEF `.uct` file (revision 2003.09.01 or\n2007.05.01).",
+          "type": "string"
         }
       ]
     },
