@@ -535,9 +535,7 @@ fn a_matpower_case_writes_valid_node_codes_and_reads_back() {
     let ohm = |n: &BalancedNetwork| line(n).x * kv(n) * kv(n) / n.base_mva();
     assert!(
         (ohm(source) - ohm(net)).abs() < 1e-2,
-        "{} vs {}",
-        ohm(source),
-        ohm(net)
+        "the source and emitted line impedances differ"
     );
 }
 
@@ -573,9 +571,7 @@ fn a_case_without_base_kv_is_written_at_the_level_nominal_voltage() {
     let fresh_line = &net.branches()[0];
     assert!(
         (source_line.x - fresh_line.x).abs() < 1e-6,
-        "{} vs {}",
-        source_line.x,
-        fresh_line.x
+        "the source and emitted line reactances differ"
     );
     let source_tap = module
         .value()

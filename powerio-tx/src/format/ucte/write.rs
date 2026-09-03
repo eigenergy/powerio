@@ -91,6 +91,7 @@ struct Losses {
     level_substitutions: Vec<String>,
     unstated_kv: Vec<String>,
     truncated_names: usize,
+    sanitized_names: usize,
     out_of_range: Vec<String>,
     non_finite: usize,
     multiple_generators: usize,
@@ -328,7 +329,8 @@ fn put_integer(
 }
 
 fn put_name(field: &mut Field, losses: &mut Losses, begin: usize, width: usize, name: &str) {
-    let name = name.trim_end();
+    let name = crate::format::sanitize_quoted(name.trim_end(), &[], ' ');
+    losses.sanitized_names += usize::from(matches!(&name, std::borrow::Cow::Owned(_)));
     let text: String = name.chars().take(width).collect();
     if text.chars().count() < name.chars().count() {
         losses.truncated_names += 1;
@@ -643,9 +645,6 @@ pub(crate) fn write_ucte(net: &BalancedNetwork) -> Result<TextEmission> {
             numbers.losses.rate_b_c += 1;
         }
         if !is_transformer {
-            if !branch.is_transformer() && from_code.level() != to_code.level() {
-                numbers.losses.relabeled_lines += 1;
-            }
             let Some(order) = order_code(&mut taken, *from_code, *to_code, preferred) else {
                 return Err(Error::Emit {
                     format: FMT,
@@ -1101,6 +1100,15 @@ fn report_losses(net: &BalancedNetwork, losses: &Losses, warnings: &mut Diagnost
             ),
         );
     }
+    if losses.sanitized_names > 0 {
+        warnings.push(
+            &F.value_substituted,
+            format!(
+                "{} name(s) contained a line break that was replaced with a space",
+                losses.sanitized_names
+            ),
+        );
+    }
     if !losses.out_of_range.is_empty() {
         warnings.push(
             &F.value_substituted,
@@ -1414,5 +1422,14 @@ mod tests {
         assert_eq!(base36(1, 5).unwrap(), "00001");
         assert_eq!(base36(36, 5).unwrap(), "00010");
         assert!(base36(36u64.pow(5), 5).is_none());
+    }
+
+    #[test]
+    fn names_cannot_split_a_fixed_width_record() {
+        let mut field = Field::new();
+        let mut losses = Losses::default();
+        put_name(&mut field, &mut losses, 0, 12, "alpha\nbeta");
+        assert_eq!(field.finish(), "alpha beta");
+        assert_eq!(losses.sanitized_names, 1);
     }
 }
