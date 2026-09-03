@@ -104,7 +104,7 @@ fn memory_text(result: &powerio_core::EmitResult) -> &str {
 fn model_json_emits_matpower_semantically_instead_of_echoing_json() {
     let case = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case9.m");
     let original = powerio::parse(Source::open(case).unwrap()).expect("case9 parses");
-    let PioValue::BalancedNetwork(network) = &original.value else {
+    let PioValue::BalancedNetwork(network) = &original.value() else {
         panic!("case9 must produce a balanced network");
     };
     let model_json = network.to_json().expect("model JSON serializes");
@@ -275,7 +275,7 @@ fn a_gridfm_scenario_set_emits_its_complete_directory_byte_exactly() {
 fn an_edit_in_place_stops_the_echo_and_serializes_the_value() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case9.m");
     let original = std::fs::read_to_string(path).unwrap();
-    let mut module = powerio::parse(Source::open(path).unwrap(), Some("matpower")).unwrap();
+    let mut module = powerio::parse(path).unwrap();
     assert!(module.source().is_some(), "the parse retains its source");
 
     let PioValue::BalancedNetwork(network) = module.value_mut() else {

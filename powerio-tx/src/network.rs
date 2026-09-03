@@ -4025,7 +4025,7 @@ impl BalancedNetwork {
         for b in self.buses() {
             // The readers parse ids through `as usize`, which saturates rather
             // than failing, and the C ABI reports them as int64. Two distinct
-            // ids above the ceiling would surface as one value there, so a
+            // ids above the ceiling would read as one value there, so a
             // branch endpoint would match two bus rows.
             if b.id > BusId::MAX {
                 return Err(Error::FormatRead {

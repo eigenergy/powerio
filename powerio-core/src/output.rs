@@ -820,9 +820,9 @@ fn remove_staging(path: &Path, directory: bool) -> std::io::Result<()> {
 /// passes through, which is how a memory destination and its artifact root
 /// name reach the same operations as a file name.
 ///
-/// Implement it for a type of your own to reach the same operations. It
-/// carries this one method and gains no further required method: options
-/// belong to the operation, not to the output.
+/// A caller's own output type reaches the same operations by implementing
+/// it. It carries this one method and gains no further required method:
+/// options belong to the operation, not to the output.
 pub trait IntoDestination {
     /// Resolve the output.
     ///

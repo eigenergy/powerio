@@ -16402,7 +16402,7 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        let PioValue::AcScucInstance(instance) = module.value else {
+        let PioValue::AcScucInstance(instance) = module.into_value() else {
             panic!("GO Challenge 3 problem did not produce powerio.AcScucInstance");
         };
         instance

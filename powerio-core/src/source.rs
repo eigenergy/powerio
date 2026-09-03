@@ -1611,8 +1611,8 @@ pub const MEMORY_SOURCE_NAME: &str = "<memory>";
 /// passes through, so a source carrying named buffers or a widened
 /// acquisition root reaches the same operations as a file name.
 ///
-/// Implement it for a type of your own to reach the same operations. It
-/// carries this one method and gains no further required method: options
+/// A caller's own input type reaches the same operations by implementing it.
+/// It carries this one method and gains no further required method: options
 /// belong to the operation, not to the input.
 pub trait IntoSource {
     /// Acquire the input.

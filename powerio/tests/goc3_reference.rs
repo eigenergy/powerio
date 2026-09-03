@@ -41,7 +41,7 @@ fn assert_benchmark_case(path: &Path) {
         &powerio::ParseOptions::default().format("goc3").unwrap(),
     )
     .unwrap_or_else(|error| panic!("failed to parse {}: {error}", path.display()));
-    let PioValue::AcScucInstance(instance) = &module.value else {
+    let PioValue::AcScucInstance(instance) = &module.value() else {
         panic!("{} did not produce powerio.AcScucInstance", path.display());
     };
     let name = path.file_name().unwrap().to_string_lossy();

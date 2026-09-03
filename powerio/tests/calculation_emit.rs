@@ -12,7 +12,7 @@ fn network() -> powerio::BalancedNetwork {
         &powerio::ParseOptions::default().format("matpower").unwrap(),
     )
     .unwrap();
-    let PioValue::BalancedNetwork(network) = module.value else {
+    let PioValue::BalancedNetwork(network) = module.into_value() else {
         panic!("case9 must parse as a balanced network");
     };
     network
@@ -132,7 +132,7 @@ fn fresh_goc3_problem_emission_is_not_claimed() {
             .unwrap(),
     )
     .unwrap();
-    let PioValue::AcScucInstance(instance) = parsed.value else {
+    let PioValue::AcScucInstance(instance) = parsed.into_value() else {
         panic!("GOC3 problem data must parse as an AC SCUC instance");
     };
     let error = emit(

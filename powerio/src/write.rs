@@ -902,11 +902,11 @@ fn emit_dynamic(
         );
     }
 
-    if let PioValue::GeoLayer(layer) = &module.value {
+    if let PioValue::GeoLayer(layer) = &module.value() {
         return emit_geo_layer(layer, format, destination);
     }
 
-    match &module.value {
+    match &module.value() {
         PioValue::BalancedNetwork(_)
         | PioValue::MulticonductorNetwork(_)
         | PioValue::BalancedOperatingPoint(_)

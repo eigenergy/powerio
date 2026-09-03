@@ -942,8 +942,11 @@ mod tests {
         ] {
             let source = Source::from_memory(name, bytes.clone()).unwrap();
             let module = super::parse_with_options(source, &options(format)).unwrap();
-            let PioValue::BalancedNetwork(network) = &module.value else {
-                panic!("expected BalancedNetwork, got {}", module.value.type_name());
+            let PioValue::BalancedNetwork(network) = &module.value() else {
+                panic!(
+                    "expected BalancedNetwork, got {}",
+                    module.value().type_name()
+                );
             };
             assert_eq!(
                 network.case_metadata().source_model_format.as_deref(),

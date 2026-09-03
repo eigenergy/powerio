@@ -64,8 +64,8 @@ fn a_display_file_parses_serializes_and_emits_as_a_layer() {
         "/../tests/data/powerworld/ACTIVSg200.pwd"
     );
     let module = powerio::parse(path).unwrap();
-    assert_eq!(module.value.type_name(), "powerio.GeoLayer");
-    let powerio::PioValue::GeoLayer(layer) = &module.value else {
+    assert_eq!(module.value().type_name(), "powerio.GeoLayer");
+    let powerio::PioValue::GeoLayer(layer) = &module.value() else {
         panic!("a .pwd reads as a layer");
     };
     assert!(!layer.features.is_empty());
@@ -79,7 +79,7 @@ fn a_display_file_parses_serializes_and_emits_as_a_layer() {
     let bytes = std::fs::read(path).unwrap();
     let named = powerio::parse(powerio::Source::from_memory("display.pwd", bytes.clone()).unwrap())
         .unwrap();
-    assert_eq!(named.value.type_name(), "powerio.GeoLayer");
+    assert_eq!(named.value().type_name(), "powerio.GeoLayer");
     let declared = powerio::parse_with_options(
         bytes,
         &powerio::ParseOptions::default()
@@ -87,7 +87,7 @@ fn a_display_file_parses_serializes_and_emits_as_a_layer() {
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(declared.value.type_name(), "powerio.GeoLayer");
+    assert_eq!(declared.value().type_name(), "powerio.GeoLayer");
 
     // The layer travels through PowerIO IR and out as `geo-json`.
     let ir = powerio::serialize(&module, powerio::Destination::memory("layer").unwrap()).unwrap();
@@ -96,7 +96,7 @@ fn a_display_file_parses_serializes_and_emits_as_a_layer() {
     };
     let text = artifacts.into_iter().next().unwrap().into_bytes();
     let decoded = powerio::deserialize(text).unwrap();
-    let powerio::PioValue::GeoLayer(decoded) = &decoded.value else {
+    let powerio::PioValue::GeoLayer(decoded) = &decoded.value() else {
         panic!("PowerIO IR carries the layer");
     };
     assert_eq!(decoded, layer);
@@ -115,7 +115,7 @@ fn a_display_file_parses_serializes_and_emits_as_a_layer() {
         powerio::Source::from_memory("layer.geo.json", document.into_bytes()).unwrap(),
     )
     .unwrap();
-    let powerio::PioValue::GeoLayer(reread) = &reread.value else {
+    let powerio::PioValue::GeoLayer(reread) = &reread.value() else {
         panic!("the canonical document reads back as a layer");
     };
     assert_eq!(reread.features.len(), layer.features.len());
@@ -149,7 +149,7 @@ fn the_layer_extension_needs_a_separator_and_the_display_target_names_its_gap() 
             powerio::parse(powerio::Source::from_memory(name, case.as_bytes().to_vec()).unwrap())
                 .unwrap_or_else(|error| panic!("`{name}` is a case, not a layer: {error}"));
         assert_eq!(
-            module.value.type_name(),
+            module.value().type_name(),
             "powerio.BalancedNetwork",
             "`{name}` must keep its case classification"
         );
@@ -164,7 +164,7 @@ fn the_layer_extension_needs_a_separator_and_the_display_target_names_its_gap() 
         powerio::Source::from_memory("geo.json.m", matpower.as_bytes().to_vec()).unwrap(),
     )
     .unwrap();
-    assert_eq!(module.value.type_name(), "powerio.BalancedNetwork");
+    assert_eq!(module.value().type_name(), "powerio.BalancedNetwork");
 
     let layer = r#"{"type":"FeatureCollection","features":[{"type":"Feature",
         "geometry":{"type":"Point","coordinates":[-89.6,40.6]},
@@ -179,7 +179,7 @@ fn the_layer_extension_needs_a_separator_and_the_display_target_names_its_gap() 
             powerio::parse(powerio::Source::from_memory(name, layer.as_bytes().to_vec()).unwrap())
                 .unwrap_or_else(|error| panic!("`{name}` is a layer: {error}"));
         assert_eq!(
-            module.value.type_name(),
+            module.value().type_name(),
             "powerio.GeoLayer",
             "`{name}` must route to the layer reader"
         );

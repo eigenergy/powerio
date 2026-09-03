@@ -435,9 +435,9 @@ pub(crate) fn artifacts(network: &BalancedNetwork) -> Result<(Vec<MemoryArtifact
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CgmesVersion {
-    /// CGMES 2.4.15 on CIM16 (`…/CIM-schema-cim16#`, any vintage year).
+    /// CGMES 2.4.15 on CIM16 (`.../CIM-schema-cim16#`, any vintage year).
     V2_4_15,
-    /// CGMES 3.0 on CIM100 (`…/CIM100#`).
+    /// CGMES 3.0 on CIM100 (`.../CIM100#`).
     V3_0,
 }
 

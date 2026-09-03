@@ -49,8 +49,11 @@ mod tests {
         // A document that identifies itself parses from content alone.
         let self_identifying = std::fs::read(data.join("egret/case9.json")).unwrap();
         assert_eq!(
-            powerio::parse(self_identifying).unwrap().value.type_name(),
-            from_name.value.type_name()
+            powerio::parse(self_identifying)
+                .unwrap()
+                .value()
+                .type_name(),
+            from_name.value().type_name()
         );
 
         // A format read from a file extension needs the format declared,
@@ -61,7 +64,7 @@ mod tests {
             &powerio::ParseOptions::default().format("matpower").unwrap(),
         )
         .unwrap();
-        assert_eq!(declared.value.type_name(), from_name.value.type_name());
+        assert_eq!(declared.value().type_name(), from_name.value().type_name());
 
         let out = std::env::temp_dir().join(format!(
             "powerio-facade-{}.m",
@@ -79,7 +82,7 @@ mod tests {
     fn the_readme_example_resolves_through_the_facade_alone() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../data/case9.m");
         let module = powerio::parse(&path).unwrap();
-        let powerio::PioValue::BalancedNetwork(network) = &module.value else {
+        let powerio::PioValue::BalancedNetwork(network) = &module.value() else {
             panic!(
                 "expected a balanced network, found {}",
                 module.value().type_name()

@@ -85,7 +85,7 @@ fn matpower_cross_format_output_reloads_as_rawx() {
     assert_eq!(root["network"]["caseid"]["data"][2], 35);
 
     let back = parse(Source::from_memory("case9.rawx", text.into_bytes()).unwrap()).unwrap();
-    let PioValue::BalancedNetwork(network) = &back.value else {
+    let PioValue::BalancedNetwork(network) = &back.value() else {
         panic!("RAWX did not produce a balanced network");
     };
     assert_eq!(network.buses().len(), 9);

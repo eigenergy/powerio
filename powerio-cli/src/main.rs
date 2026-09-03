@@ -2201,7 +2201,7 @@ fn run_geo_extract(
     {
         let module =
             powerio::parse(input).with_context(|| format!("reading {}", input.display()))?;
-        let powerio::PioValue::GeoLayer(layer) = module.value else {
+        let powerio::PioValue::GeoLayer(layer) = module.value() else {
             fail_with!(
                 VALIDATE_CLI_INPUT_LACKS_DATA,
                 "{} did not read as a display file",

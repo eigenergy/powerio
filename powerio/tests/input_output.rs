@@ -16,34 +16,47 @@ fn data(relative: &str) -> PathBuf {
 #[test]
 fn every_input_kind_reaches_parse() {
     let path = data("case9.m");
-    let expected = powerio::parse(&path).unwrap().value.type_name().to_owned();
+    let expected = powerio::parse(&path)
+        .unwrap()
+        .value()
+        .type_name()
+        .to_owned();
 
     // Names of a file, in each spelling a caller holds one.
     let owned: PathBuf = path.clone();
     let text: String = path.to_str().unwrap().to_owned();
     assert_eq!(
-        powerio::parse(path.as_path()).unwrap().value.type_name(),
-        expected
-    );
-    assert_eq!(powerio::parse(&owned).unwrap().value.type_name(), expected);
-    assert_eq!(
-        powerio::parse(owned.clone()).unwrap().value.type_name(),
+        powerio::parse(path.as_path()).unwrap().value().type_name(),
         expected
     );
     assert_eq!(
-        powerio::parse(text.as_str()).unwrap().value.type_name(),
+        powerio::parse(&owned).unwrap().value().type_name(),
         expected
     );
-    assert_eq!(powerio::parse(&text).unwrap().value.type_name(), expected);
     assert_eq!(
-        powerio::parse(text.clone()).unwrap().value.type_name(),
+        powerio::parse(owned.clone()).unwrap().value().type_name(),
+        expected
+    );
+    assert_eq!(
+        powerio::parse(text.as_str()).unwrap().value().type_name(),
+        expected
+    );
+    assert_eq!(powerio::parse(&text).unwrap().value().type_name(), expected);
+    assert_eq!(
+        powerio::parse(text.clone()).unwrap().value().type_name(),
         expected
     );
 
     // A source the caller built keeps working through the same operation.
     let source = powerio::Source::open(&path).unwrap();
-    assert_eq!(powerio::parse(&source).unwrap().value.type_name(), expected);
-    assert_eq!(powerio::parse(source).unwrap().value.type_name(), expected);
+    assert_eq!(
+        powerio::parse(&source).unwrap().value().type_name(),
+        expected
+    );
+    assert_eq!(
+        powerio::parse(source).unwrap().value().type_name(),
+        expected
+    );
 
     // Content in memory, in each spelling. MATPOWER is detected from the file
     // extension, so content declares its format.
@@ -57,7 +70,7 @@ fn every_input_kind_reaches_parse() {
         powerio::parse_with_options(include_bytes!("../../tests/data/case9.m"), &options)
             .unwrap_or_else(|error| panic!("byte string literal input: {error}")),
     ] {
-        assert_eq!(value.value.type_name(), expected);
+        assert_eq!(value.value().type_name(), expected);
     }
 }
 
@@ -65,9 +78,9 @@ fn every_input_kind_reaches_parse() {
 fn a_directory_reaches_parse_by_name() {
     let module = powerio::parse(data("pypsa/example")).unwrap();
     assert!(
-        matches!(module.value, PioValue::BalancedNetwork(_)),
+        matches!(module.value(), PioValue::BalancedNetwork(_)),
         "{}",
-        module.value.type_name()
+        module.value().type_name()
     );
 }
 
@@ -82,7 +95,7 @@ fn a_declared_format_overrides_detection() {
         &ParseOptions::default().format("egret-json").unwrap(),
     )
     .unwrap();
-    assert!(matches!(module.value, PioValue::BalancedNetwork(_)));
+    assert!(matches!(module.value(), PioValue::BalancedNetwork(_)));
     assert_eq!(
         module
             .source()
@@ -179,13 +192,13 @@ fn every_output_kind_reaches_emit_and_serialize() {
     let ir = dir.join("module.pio.json");
     powerio::serialize(&module, ir.as_path()).unwrap();
     let read_back = powerio::deserialize(ir.as_path()).unwrap();
-    assert_eq!(read_back.value.type_name(), module.value.type_name());
+    assert_eq!(read_back.value().type_name(), module.value().type_name());
     assert_eq!(
         powerio::deserialize(std::fs::read(&ir).unwrap())
             .unwrap()
-            .value
+            .value()
             .type_name(),
-        module.value.type_name()
+        module.value().type_name()
     );
 
     std::fs::remove_dir_all(&dir).unwrap();

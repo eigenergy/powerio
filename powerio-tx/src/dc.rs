@@ -14,8 +14,8 @@ pub const MIN_DIVISIBLE_MAGNITUDE: f64 = 1.491_668_146_240_041_3e-154;
 
 /// The series admittance `(g, b) = (r - jx)/(r² + x²)` of an impedance, with no
 /// bound applied: the caller has already decided the impedance is one to divide
-/// by, and [`calc_series_admittance_of`](crate::calc_series_admittance_of) is the guarded
-/// entry point.
+/// by, and [`calc_series_admittance_of`](crate::calc_series_admittance_of) is the
+/// entry point that checks it.
 ///
 /// `r² + x²` is not formed directly. It overflows to infinity for an impedance
 /// magnitude past about 1e154 — an admittance around 1e-154, which is perfectly
