@@ -46,7 +46,7 @@ fn facade_calculates_node_breaker_buses_without_a_tp_profile() {
     );
     let module = parse(Source::open(directory).unwrap(), None)
         .expect("a node breaker EQ and SSH set parses without TP");
-    let PioValue::BalancedNetwork(network) = &module.value else {
+    let PioValue::BalancedNetwork(network) = &module.value() else {
         panic!("CGMES must produce a balanced network");
     };
     assert_eq!(network.buses().len(), 3);
@@ -88,7 +88,7 @@ fn facade_calculates_node_breaker_buses_without_a_tp_profile() {
     let zip_bytes = writer.finish().unwrap().into_inner();
     let reparsed = parse(Source::from_memory("fresh.zip", zip_bytes).unwrap(), None)
         .expect("the fresh profile set, now with TP, parses");
-    let PioValue::BalancedNetwork(reparsed_network) = &reparsed.value else {
+    let PioValue::BalancedNetwork(reparsed_network) = &reparsed.value() else {
         panic!("CGMES must produce a balanced network");
     };
     assert_eq!(reparsed_network.buses().len(), 3);

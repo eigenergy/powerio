@@ -46,6 +46,13 @@ jobs:
           cgmes/cgmes-conformity/src/main/resources/conformity/cas-1.1.3-data-4.0.3/MiniGrid/NodeBreaker/CGMES_v2.4.15_MiniGridTestConfiguration_Boundary_v3
           cgmes/cgmes-conformity/src/main/resources/conformity/cas-1.1.3-data-4.0.3/SmallGrid/NodeBreaker/CGMES_v2.4.15_SmallGridTestConfiguration_BaseCase_Complete_v3.0.0
           cgmes/cgmes-conformity/src/main/resources/conformity/cas-1.1.3-data-4.0.3/SmallGrid/NodeBreaker/CGMES_v2.4.15_SmallGridTestConfiguration_Boundary_v3.0.0
+          cgmes/cgmes-conformity/src/main/resources/cgmes3-test-models/MicroGrid
+          iidm/iidm-serde/src/test/resources/V1_12/threeWindingsTransformerToBeEstimated.xiidm
+          iidm/iidm-serde/src/test/resources/V1_13/threeWindingsTransformerToBeEstimated.xiidm
+          iidm/iidm-serde/src/test/resources/V1_14/threeWindingsTransformerToBeEstimated.xiidm
+          iidm/iidm-serde/src/test/resources/V1_15/threeWindingsTransformerToBeEstimated.xiidm
+          iidm/iidm-serde/src/test/resources/V1_16/threeWindingsTransformerToBeEstimated.xiidm
+          iidm/iidm-serde/src/test/resources/V1_17/threeWindingsTransformerToBeEstimated.xiidm
           psse/psse-converter/src/test/resources/remoteControl.xiidm
           psse/psse-converter/src/test/resources/twoTerminalDc.xiidm
           psse/psse-converter/src/test/resources/five_bus_nodeBreaker_rev35.xiidm
