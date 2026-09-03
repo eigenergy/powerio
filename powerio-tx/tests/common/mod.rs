@@ -47,6 +47,18 @@ pub fn activsg2000_fetched(name: &str) -> Option<PathBuf> {
     p.exists().then_some(p)
 }
 
+/// The root of a local directory of PowerWorld case files, which
+/// `POWERIO_PWB_CASES` names; `None` when the variable is unset or names no
+/// directory, so tests skip instead of fail. Such files run to hundreds of
+/// kilobytes each and carry whatever licence their holder obtained them
+/// under, so none is vendored and only a machine that already holds a corpus
+/// runs the tests that read one.
+#[allow(dead_code)]
+pub fn pwb_cases_root() -> Option<PathBuf> {
+    let root = PathBuf::from(std::env::var_os("POWERIO_PWB_CASES")?);
+    root.is_dir().then_some(root)
+}
+
 /// A fetched RTS-GMLC fixture (`benchmarks/fetch_powerworld.sh`); `None`
 /// when the fetch has not run, so tests skip instead of fail.
 #[allow(dead_code)]
