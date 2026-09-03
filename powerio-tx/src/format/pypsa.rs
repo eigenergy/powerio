@@ -655,7 +655,7 @@ pub(crate) fn pypsa_csv_artifacts(
         );
     }
     if net.generators().iter().any(Generator::has_caps) {
-        warnings.push(&F.field_dropped, "generator capability/ramp columns dropped: PyPSA generator CSV has no MATPOWER capability columns");
+        warnings.push(&F.field_dropped, "generator capability/ramp columns dropped: a PyPSA generators.csv row states p_nom and no reactive capability curve point");
     }
     let voltage_loads = net
         .loads()
@@ -710,7 +710,7 @@ pub(crate) fn pypsa_csv_artifacts(
         .count();
     if current_ratings > 0 {
         warnings.push(&F.field_dropped, format!(
-            "{current_ratings} branch current rating record(s) dropped: PyPSA static branch tables carry s_nom, not source current ratings"
+            "{current_ratings} branch current rating record(s) dropped: a PyPSA lines.csv row states s_nom in MVA and no current rating"
         ));
     }
     warn_extra_branch_rating_sets(&F, "PyPSA CSV", net, &mut warnings);
@@ -722,7 +722,7 @@ pub(crate) fn pypsa_csv_artifacts(
         .count();
     if branch_solutions > 0 {
         warnings.push(&F.field_dropped, format!(
-            "{branch_solutions} branch solution value set(s) dropped: PyPSA result time series are not written"
+            "{branch_solutions} branch solution value set(s) dropped: a PyPSA component CSV states case data, and a flow belongs to a result time series over snapshots this profile does not state"
         ));
     }
     let terminal_charging = net

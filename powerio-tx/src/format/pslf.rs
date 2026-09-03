@@ -1688,7 +1688,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> TextEmission {
     let with_caps = net.generators().iter().filter(|g| g.has_caps()).count();
     if with_caps > 0 {
         warnings.push(&F.field_dropped, format!(
-            "generator capability/ramp columns dropped for {with_caps} generator(s): the PSLF .epc generator records written here carry no MATPOWER capability columns"
+            "generator capability/ramp columns dropped for {with_caps} generator(s): a PSLF .epc generator record states no reactive capability curve point and no ramp column"
         ));
     }
     if net.hvdc().iter().any(|d| d.cost.is_some()) {
@@ -1731,7 +1731,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> TextEmission {
         .count();
     if current_ratings > 0 {
         warnings.push(&F.field_dropped, format!(
-            "{current_ratings} branch current rating record(s) dropped: PSLF branch records written here carry MVA ratings only"
+            "{current_ratings} branch current rating record(s) dropped: a PSLF .epc branch record states its ratings in MVA through rate1, rate2, and rate3"
         ));
     }
     warn_extra_branch_rating_sets(&F, "PSLF .epc", net, &mut warnings);
@@ -1771,7 +1771,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> TextEmission {
         .count();
     if branch_solutions > 0 {
         warnings.push(&F.field_dropped, format!(
-            "{branch_solutions} branch solution value set(s) dropped: PSLF solved flow fields are not written"
+            "{branch_solutions} branch solution value set(s) dropped: a PSLF .epc branch record states impedance, taps, and ratings and no solved flow"
         ));
     }
     // The generator record this writer emits regulates the unit's own terminal, so

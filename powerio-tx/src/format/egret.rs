@@ -57,7 +57,7 @@ pub fn write_egret_json(net: &BalancedNetwork) -> TextEmission {
     let with_caps = net.generators().iter().filter(|g| g.has_caps()).count();
     if with_caps > 0 {
         warnings.push(&F.field_dropped, format!(
-            "generator capability/ramp columns dropped for {with_caps} generator(s): the egret generator records written here carry none"
+            "generator capability/ramp columns dropped for {with_caps} generator(s): an egret generator dictionary states no reactive capability curve point and no MATPOWER ramp column"
         ));
     }
 
@@ -102,7 +102,7 @@ fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
         warnings.push(
             &F.record_dropped,
             format!(
-                "{} 3-winding transformer(s) dropped: the egret writer emits no 3-winding record",
+                "{} 3-winding transformer(s) dropped: an egret branch dictionary states two buses, so a three winding record needs the star bus and three branches a projection would synthesize",
                 net.transformers_3w().len()
             ),
         );
@@ -114,14 +114,14 @@ fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
     {
         warnings.push(
             &F.field_dropped,
-            "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band",
+            "emergency voltage band(s) (EVHI/EVLO) dropped: an egret bus dictionary states one v_min/v_max pair",
         );
     }
     if !net.storage().is_empty() {
         warnings.push(
             &F.record_dropped,
             format!(
-                "{} storage unit(s) dropped: egret storage mapping not implemented",
+                "{} storage unit(s) dropped: an egret storage dictionary states an energy capacity and charge and discharge efficiencies, which the balanced storage record does not state",
                 net.storage().len()
             ),
         );
@@ -157,7 +157,7 @@ fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
         .count();
     if current_ratings > 0 {
         warnings.push(&F.field_dropped, format!(
-            "{current_ratings} branch current rating record(s) dropped: egret branch records carry MVA ratings only"
+            "{current_ratings} branch current rating record(s) dropped: an egret branch dictionary states its rating in MVA"
         ));
     }
     warn_extra_branch_rating_sets(&F, "egret JSON", net, warnings);
@@ -168,7 +168,7 @@ fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
         .count();
     if branch_solutions > 0 {
         warnings.push(&F.field_dropped, format!(
-            "{branch_solutions} branch solution value set(s) dropped: egret branch result fields are not written"
+            "{branch_solutions} branch solution value set(s) dropped: an egret branch dictionary states case data, and its flow fields belong to a solution the ModelData holds separately"
         ));
     }
 }

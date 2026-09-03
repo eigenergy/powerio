@@ -1566,8 +1566,8 @@ pub(super) fn branch_rating_set_drop_warning(
 /// replay. `consumed` is the writer's own rule: the keys it reads back into a
 /// record. Everything else was retained by a reader because the source stated
 /// more than a rewrite would synthesize, so dropping it without saying so is
-/// an undeclared loss (#330). One line, a count and the reason, matching the
-/// granularity of the other writer warnings.
+/// an undeclared loss (#330). The line names every key it drops, because a key
+/// is the field the target has no record for and a bare count states no loss.
 pub(super) fn warn_dropped_extras(
     family: &'static EmitFamily,
     target: &str,
@@ -1575,47 +1575,113 @@ pub(super) fn warn_dropped_extras(
     consumed: impl Fn(&str) -> bool,
     warnings: &mut Diagnostics,
 ) {
-    let carries = |extras: &crate::network::Extras| extras.keys().any(|k| !consumed(k));
-    let dropped = net.buses().iter().filter(|e| carries(&e.extras)).count()
-        + net.branches().iter().filter(|e| carries(&e.extras)).count()
-        + net.loads().iter().filter(|e| carries(&e.extras)).count()
-        + net.shunts().iter().filter(|e| carries(&e.extras)).count()
-        + net.switches().iter().filter(|e| carries(&e.extras)).count()
-        + net.storage().iter().filter(|e| carries(&e.extras)).count()
-        + net.hvdc().iter().filter(|e| carries(&e.extras)).count()
-        + net
-            .transformers_3w()
-            .iter()
-            .filter(|e| carries(&e.extras))
-            .count();
+    let mut dropped = 0usize;
+    let mut keys: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for extras in net
+        .buses()
+        .iter()
+        .map(|e| &e.extras)
+        .chain(net.branches().iter().map(|e| &e.extras))
+        .chain(net.loads().iter().map(|e| &e.extras))
+        .chain(net.shunts().iter().map(|e| &e.extras))
+        .chain(net.switches().iter().map(|e| &e.extras))
+        .chain(net.storage().iter().map(|e| &e.extras))
+        .chain(net.hvdc().iter().map(|e| &e.extras))
+        .chain(net.transformers_3w().iter().map(|e| &e.extras))
+    {
+        let mut carries = false;
+        for key in extras.keys().filter(|key| !consumed(key)) {
+            carries = true;
+            keys.insert(key.clone());
+        }
+        if carries {
+            dropped += 1;
+        }
+    }
     if dropped > 0 {
+        let named = keys
+            .iter()
+            .take(EXTRAS_KEYS_NAMED)
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join("`, `");
+        let remainder = keys.len().saturating_sub(EXTRAS_KEYS_NAMED);
+        let remainder = if remainder > 0 {
+            format!(" and {remainder} more")
+        } else {
+            String::new()
+        };
         warnings.push(
             &family.extras_dropped,
             format!(
-                "{dropped} element(s) carry source-format passthrough fields (extras) the {target} \
-                 writer does not replay; dropped"
+                "{dropped} element(s) state field(s) `{named}`{remainder} that no {target} record \
+                 holds; dropped"
             ),
         );
     }
 }
 
-/// Warn when a writer drops the area table. Its own line rather than the
-/// extras count: `areas` is a typed field, not a passthrough (#330).
+/// How many extras keys one dropped-extras line names before it counts the
+/// rest. Six keeps the line readable while naming every key the vendored
+/// fixtures reach.
+const EXTRAS_KEYS_NAMED: usize = 6;
+
+/// Warn about the area attributes a target with no area table cannot state.
+///
+/// Every one of these targets writes an area number on each bus row, so area
+/// membership itself survives and an area that states nothing else is carried
+/// whole. What such a format has no place for is the area's own attributes,
+/// and the line names the ones the network states.
 pub(super) fn warn_dropped_areas(
     family: &'static EmitFamily,
     target: &str,
     net: &BalancedNetwork,
     warnings: &mut Diagnostics,
 ) {
-    if !net.areas().is_empty() {
-        warnings.push(
-            &family.areas_dropped,
-            format!(
-                "{} area record(s) dropped: the {target} writer emits no area table",
-                net.areas().len()
-            ),
-        );
+    let mut fields: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    for area in net.areas() {
+        if area.slack_bus.is_some() {
+            fields.insert("swing bus");
+        }
+        if area.net_interchange != 0.0 {
+            fields.insert("scheduled net interchange");
+        }
+        if area.tolerance != 0.0 {
+            fields.insert("interchange tolerance");
+        }
+        if area.name.is_some() {
+            fields.insert("name");
+        }
+        if area.uid.is_some() {
+            fields.insert("source identity");
+        }
+        if area.area_type.is_some() {
+            fields.insert("classification");
+        }
     }
+    if fields.is_empty() {
+        return;
+    }
+    warnings.push(
+        &family.areas_dropped,
+        format!(
+            "{} of {} area record(s) state {}: a {target} bus row carries the area number and \
+             {target} has no record for an area's own attributes",
+            net.areas()
+                .iter()
+                .filter(|area| {
+                    area.slack_bus.is_some()
+                        || area.net_interchange != 0.0
+                        || area.tolerance != 0.0
+                        || area.name.is_some()
+                        || area.uid.is_some()
+                        || area.area_type.is_some()
+                })
+                .count(),
+            net.areas().len(),
+            fields.into_iter().collect::<Vec<_>>().join(", ")
+        ),
+    );
 }
 
 pub(super) fn warn_extra_branch_rating_sets(
