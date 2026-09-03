@@ -171,9 +171,9 @@ its generation script or handwritten provenance; the fixture README's
 "original to this repository" section covers it. Corpus paths never appear
 in the diff.
 
-## Resourcing notes from the 0.9.0 matrix work
+## Constraints from the 0.9.0 matrix work
 
-Three things that session lacked shape this design:
+Three constraints shape this design:
 
 - **Stable warning codes.** Warning↔diff attribution by prose matching is
   fragile; `powerio-dist` already tags some warnings

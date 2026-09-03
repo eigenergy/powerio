@@ -1,8 +1,8 @@
 # PowerIO 1.0 design rationale
 
-Status: reasons for the public choices recorded in the five normative 1.0
-documents. This file explains the alternatives and is not a second API
-specification.
+Status: historical rationale from the design work that informed PowerIO 0.10.
+It explains the alternatives considered at that time and is not current API
+authority.
 
 The selection criteria are:
 

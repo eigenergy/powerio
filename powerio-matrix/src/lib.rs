@@ -24,9 +24,12 @@
 //! the model; [`IndexedNetwork`] maps them to dense indices in `[0, n)`. `tap == 0` means
 //! `tap = 1`. `build_bprime` and `build_bdoubleprime` follow MATPOWER `makeB`;
 //! Y_bus keeps tap magnitudes and phase shifts.
-//! Branch terminal admittance is stored per unit. DC incidence uses
-//! `b = x/(r² + x²)` by default. [`DcConvention::TapAdjustedReactance`] uses `1/(x·τ)`, and
-//! both carry phase shift injection. The full reference across every matrix is in
+//! Branch terminal admittance is stored per unit. Public DC susceptances
+//! carry PowerModels signs, negative for an inductive branch:
+//! `b = -x/(r² + x²)` by default, `-1/(x·τ)` under
+//! [`DcConvention::TapAdjustedReactance`], and both carry phase shift
+//! injection; the positive factor weight is the separate
+//! `DcConvention::solver_edge_weight`. The full reference across every matrix is in
 //! [the matrix guide](https://eigenergy.github.io/powerio/guide/matrices.html).
 
 // Re-export the powerio data layer so one import covers model and matrix types,
@@ -48,7 +51,7 @@ pub use powerio_tx::{
 
 pub mod diagnostics;
 pub mod error;
-pub use error::{ElementCounts, Error, Result, ScenarioMismatch};
+pub use error::{ElementCounts, Error, PiecewiseCostInvalidity, Result, ScenarioMismatch};
 
 /// The hub's error, so a binding can map both through one taxonomy.
 pub use powerio_tx::Error as CoreError;
@@ -57,19 +60,27 @@ pub use powerio_tx::Error as CoreError;
 pub type SparseMatrix = sprs::CsMat<f64>;
 
 mod ac_jacobian;
+mod acopf;
 mod dc_operators;
 mod dcopf;
 pub mod io;
 pub mod matrix;
+mod opf;
 pub mod pipeline;
 pub mod synth;
 
 pub use ac_jacobian::{PowerFlowJacobian, VoltageCoordinates, calc_power_flow_jacobian};
+pub use acopf::{
+    AcBranchData, AcBusData, AcGeneratorData, AcOpfAssemblyOptions, AcOpfPreparation,
+    NodalAcGeneratorData, build_ac_opf_preparation,
+};
 pub use dc_operators::{DcOperators, ReferenceConstrainedSystem};
 pub use dcopf::{
-    DcOpfAssemblyOptions, DcOpfBundleMetadata, DcOpfBundleOptions, DcOpfMatrices, DcOpfOutputs,
-    Units, build_dc_opf_matrices, write_dcopf_bundle,
+    DcBranchData, DcGeneratorData, DcOpfAssemblyOptions, DcOpfBundleMetadata, DcOpfBundleOptions,
+    DcOpfMatrices, DcOpfOutputs, DcOpfPreparation, NodalGeneratorData, Units,
+    build_dc_opf_matrices, build_dc_opf_preparation, write_dcopf_bundle,
 };
+pub use opf::{PiecewiseLinearCost, PreparedObjective};
 
 pub use matrix::multiconductor::{
     AugmentedSystem, DistNode, MulticonductorAdmittance, MulticonductorNodeIndex, NodeRef,

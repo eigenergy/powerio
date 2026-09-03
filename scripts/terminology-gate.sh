@@ -36,7 +36,7 @@ fi
 # stays clear. History pages that document the rename, and CHANGELOG.md's
 # older entries, may still name the retired forms.
 package='(^|`)powerio package\b|\bpackage_json\b|transport="package"|transport = "package"|\b(to_package|from_package|read_package|write_package)\b'
-package_history='retired-names\.md|migration-v1\.md|migration\.md|migration-v0\.9\.md|migration-v0\.7\.md|CHANGELOG\.md'
+package_history='retired-names\.md|migration-v0\.10\.md|migration-v1\.md|migration\.md|migration-v0\.9\.md|migration-v0\.7\.md|CHANGELOG\.md'
 if hits=$(grep -rn -E "$package" "${paths[@]}" 2>/dev/null | grep -vE "$package_history"); then
   echo "leaked 0.9 package vocabulary (see arch-v1/V1_TERMINOLOGY.md):"
   echo "$hits"
@@ -64,7 +64,7 @@ current_docs=(
   docs/src/python.md
   docs/src/capi.md
   docs/src/cli-mcp.md
-  docs/src/beta-scope.md
+  docs/src/scope-v1.md
 )
 generic='\b(envelope|provenance|study)\b'
 if hits=$(grep -n -iE "$generic" "${current_docs[@]}" 2>/dev/null); then

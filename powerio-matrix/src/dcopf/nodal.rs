@@ -10,7 +10,121 @@
 
 use powerio_tx::network::GenCost;
 
-use crate::{Error, Result};
+use crate::{Error, PiecewiseCostInvalidity, PiecewiseLinearCost, Result};
+
+/// The complete supported cost data for one generator before unit scaling of
+/// polynomial coefficients.
+pub(crate) struct GeneratorCostTerms {
+    pub q: f64,
+    pub c: f64,
+    pub c0: f64,
+    pub piecewise_linear: Option<PiecewiseLinearCost>,
+}
+
+/// Compile one generator cost without changing its mathematical form.
+pub(crate) fn generator_cost_terms(
+    cost: &GenCost,
+    gen_index: usize,
+    power_scale: f64,
+) -> Result<GeneratorCostTerms> {
+    match cost.model {
+        1 => Ok(GeneratorCostTerms {
+            q: 0.0,
+            c: 0.0,
+            c0: 0.0,
+            piecewise_linear: Some(piecewise_linear_terms(cost, gen_index, power_scale)?),
+        }),
+        2 => {
+            let (q, c, c0) = quadratic_terms(cost, gen_index)?;
+            Ok(GeneratorCostTerms {
+                q,
+                c,
+                c0,
+                piecewise_linear: None,
+            })
+        }
+        _ => Err(Error::UnsupportedCostModel {
+            gen_index,
+            model: cost.model,
+            ncost: cost.ncost,
+        }),
+    }
+}
+
+fn piecewise_linear_terms(
+    cost: &GenCost,
+    gen_index: usize,
+    power_scale: f64,
+) -> Result<PiecewiseLinearCost> {
+    if cost.ncost < 2 {
+        return Err(Error::InvalidPiecewiseCost {
+            gen_index,
+            reason: PiecewiseCostInvalidity::FewerThanTwoBreakpoints {
+                declared: cost.ncost,
+            },
+        });
+    }
+    let expected_values = cost
+        .ncost
+        .checked_mul(2)
+        .ok_or(Error::InvalidPiecewiseCost {
+            gen_index,
+            reason: PiecewiseCostInvalidity::Truncated {
+                expected_values: usize::MAX,
+                got: cost.coeffs.len(),
+            },
+        })?;
+    if cost.coeffs.len() < expected_values {
+        return Err(Error::InvalidPiecewiseCost {
+            gen_index,
+            reason: PiecewiseCostInvalidity::Truncated {
+                expected_values,
+                got: cost.coeffs.len(),
+            },
+        });
+    }
+
+    let mut power = Vec::with_capacity(cost.ncost);
+    let mut value = Vec::with_capacity(cost.ncost);
+    for (point, pair) in cost.coeffs[..expected_values].chunks_exact(2).enumerate() {
+        let p = pair[0] * power_scale;
+        let v = pair[1];
+        if !p.is_finite() || !v.is_finite() {
+            return Err(Error::InvalidPiecewiseCost {
+                gen_index,
+                reason: PiecewiseCostInvalidity::NonFinitePoint { point },
+            });
+        }
+        if power.last().is_some_and(|previous| p <= *previous) {
+            return Err(Error::InvalidPiecewiseCost {
+                gen_index,
+                reason: PiecewiseCostInvalidity::NonIncreasingPower { point },
+            });
+        }
+        power.push(p);
+        value.push(v);
+    }
+
+    let mut previous_slope: Option<f64> = None;
+    for segment in 0..power.len() - 1 {
+        let slope = (value[segment + 1] - value[segment]) / (power[segment + 1] - power[segment]);
+        if !slope.is_finite() {
+            return Err(Error::InvalidPiecewiseCost {
+                gen_index,
+                reason: PiecewiseCostInvalidity::NonFinitePoint { point: segment + 1 },
+            });
+        }
+        if let Some(previous) = previous_slope {
+            let roundoff = 64.0 * f64::EPSILON * previous.abs().max(slope.abs()).max(1.0);
+            if previous > slope + roundoff {
+                return Err(Error::NonconvexPiecewiseCost { gen_index, segment });
+            }
+        }
+        previous_slope = Some(slope);
+    }
+
+    Ok(PiecewiseLinearCost { power, value })
+}
 
 /// `(q, c, c0)` of one generator's cost row, as both instance builders read it.
 ///

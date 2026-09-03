@@ -270,21 +270,12 @@ fn every_dc_convention_round_trips_under_its_own_name() {
     }
 }
 
-/// SEC-8: `Residuals` and `ObjectiveTerm::DifferentiabilityRegularization`'s
-/// `weight` are `powerio-prob` types plugged directly into the stored
-/// document, with no `StoredF64` wrapping of their own; before routing
-/// `StoredModuleV1` through the same nonfinite adapter every other stored
-/// type uses, a NaN or infinite value here reached `serde_json` as a plain
-/// `f64`, which serializes non-finite floats as `null` and cannot tell
-/// `Some(NAN)` apart from `None` on the way back.
+/// SEC-8: externally defined residual fields still use the stored module's
+/// nonfinite adapter and distinguish a stated NaN from an absent value.
 #[test]
-fn residuals_and_objective_weight_round_trip_every_nonfinite_value() {
+fn residuals_round_trip_every_nonfinite_value() {
     let net = network();
-    let dc_opf = Arc::new(DcOpfInstance::from_network(net).unwrap().with_objective(
-        Objective::default().with_term(ObjectiveTerm::DifferentiabilityRegularization {
-            weight: f64::NEG_INFINITY,
-        }),
-    ));
+    let dc_opf = Arc::new(DcOpfInstance::from_network(net).unwrap());
     let solution = DcOpfSolution::new(
         dc_opf,
         Termination::Converged,
@@ -315,16 +306,6 @@ fn residuals_and_objective_weight_round_trip_every_nonfinite_value() {
         back.residuals().max_reactive_power_mismatch,
         Some(f64::INFINITY)
     );
-    let ObjectiveTerm::DifferentiabilityRegularization { weight } =
-        back.instance().objective().terms()[0]
-    else {
-        panic!("expected the regularization term");
-    };
-    #[allow(clippy::float_cmp)] // exact infinity, not a computed value
-    {
-        assert_eq!(weight, f64::NEG_INFINITY);
-    }
-
     // Some(NAN) is distinct from None: a second solution with the mismatch
     // unstated must read back unstated, not as a smuggled-in NaN.
     let dc_opf = Arc::new(DcOpfInstance::from_network(network()).unwrap());
@@ -356,6 +337,245 @@ fn residuals_and_objective_weight_round_trip_every_nonfinite_value() {
             .max_reactive_power_mismatch
             .unwrap()
             .is_nan()
+    );
+}
+
+#[test]
+fn v010_differentiability_regularization_is_read_with_a_migration_diagnostic() {
+    let instance = DcOpfInstance::from_network(network()).unwrap();
+    let module = PioModule::new(PioValue::DcOpfInstance(instance));
+    let mut stored: serde_json::Value =
+        serde_json::from_str(&write_module(&module).unwrap()).unwrap();
+    stored["value"]["data"]["objective"]["terms"] = serde_json::json!([{
+        "term": "differentiability_regularization",
+        "weight": 1e-6
+    }]);
+    let back = read_module(&serde_json::to_string(&stored).unwrap()).unwrap();
+    let PioValue::DcOpfInstance(instance) = back.value() else {
+        panic!("expected the dc_opf_instance kind");
+    };
+    assert!(instance.objective().terms().is_empty());
+    assert!(
+        back.diagnostics()
+            .iter()
+            .any(|diagnostic| { diagnostic.code() == "READ.MODULE.OBJECTIVE_TERM_RETIRED" })
+    );
+}
+
+/// An optimization solver distinguishes proving the constraints empty and
+/// proving the objective unbounded from a plain numerical failure. Every
+/// termination kind round trips through the stored document under its stable
+/// snake_case name, so a consumer reading a stored solution can act on the
+/// outcome the producer actually reached.
+#[test]
+fn every_termination_kind_round_trips() {
+    for (termination, name) in [
+        (Termination::Converged, "converged"),
+        (Termination::IterationLimit, "iteration_limit"),
+        (Termination::Infeasible, "infeasible"),
+        (Termination::Unbounded, "unbounded"),
+        (Termination::Failed, "failed"),
+        (Termination::NotReported, "not_reported"),
+    ] {
+        let dc_opf = Arc::new(DcOpfInstance::from_network(network()).unwrap());
+        let solution = DcOpfSolution::new(
+            dc_opf,
+            termination.clone(),
+            vec![0.0, -0.02],
+            vec![40.0, -40.0],
+            vec![40.0],
+            vec![-40.0],
+            vec![40.0],
+            412.5,
+        )
+        .unwrap();
+        let module = PioModule::new(PioValue::DcOpfSolution(solution));
+        let text = write_module(&module).unwrap();
+        let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(raw["value"]["data"]["termination"]["kind"], name);
+        let back = read_module(&text).unwrap();
+        let PioValue::DcOpfSolution(back) = back.value() else {
+            panic!("expected the dc_opf_solution kind");
+        };
+        assert_eq!(back.termination(), &termination);
+    }
+}
+
+/// Objective derivatives and the two directional thermal multipliers round
+/// trip without assuming a currency or collapsing two KKT multipliers into
+/// one signed number.
+#[test]
+fn opf_economic_outputs_round_trip() {
+    let dc_opf = Arc::new(DcOpfInstance::from_network(network()).unwrap());
+    let solution = DcOpfSolution::new(
+        dc_opf,
+        Termination::Converged,
+        vec![0.0, -0.02],
+        vec![40.0, -40.0],
+        vec![40.0],
+        vec![-40.0],
+        vec![40.0],
+        412.5,
+    )
+    .unwrap()
+    .with_bus_active_power_marginals(vec![10.31, 12.05])
+    .unwrap()
+    .with_branch_thermal_limit_multipliers(vec![0.0], vec![1.74])
+    .unwrap();
+    let text = round_trip(PioValue::DcOpfSolution(solution), "dc_opf_solution");
+    let back = read_module(&text).unwrap();
+    let PioValue::DcOpfSolution(back) = back.value() else {
+        panic!("expected the dc_opf_solution kind");
+    };
+    assert_eq!(back.bus_active_power_marginals(), Some(&[10.31, 12.05][..]));
+    assert_eq!(
+        back.bus_active_power_marginal(powerio_tx::BusId(2)),
+        Some(12.05)
+    );
+    assert_eq!(back.branch_from_limit_multipliers(), Some(&[0.0][..]));
+    assert_eq!(back.branch_to_limit_multiplier("branches:0"), Some(1.74));
+
+    let ac_opf = Arc::new(AcOpfInstance::from_network(network()).unwrap());
+    let solution = AcOpfSolution::new(
+        ac_opf,
+        Termination::Converged,
+        vec![1.01, 0.99],
+        vec![0.0, -1.2],
+        vec![40.5, -40.0],
+        vec![10.4, -10.0],
+        vec![40.5],
+        vec![10.4],
+        vec![-40.0],
+        vec![-10.0],
+        vec![40.5],
+        vec![10.4],
+        428.0,
+    )
+    .unwrap()
+    .with_bus_active_power_marginals(vec![11.2, 11.9])
+    .unwrap()
+    .with_bus_reactive_power_marginals(vec![0.0, 0.4])
+    .unwrap()
+    .with_branch_thermal_limit_multipliers(vec![0.3], vec![0.0])
+    .unwrap();
+    let text = round_trip(PioValue::AcOpfSolution(solution), "ac_opf_solution");
+    let back = read_module(&text).unwrap();
+    let PioValue::AcOpfSolution(back) = back.value() else {
+        panic!("expected the ac_opf_solution kind");
+    };
+    assert_eq!(back.bus_active_power_marginals(), Some(&[11.2, 11.9][..]));
+    assert_eq!(
+        back.bus_reactive_power_marginal(powerio_tx::BusId(2)),
+        Some(0.4)
+    );
+    assert_eq!(back.branch_from_limit_multipliers(), Some(&[0.3][..]));
+    assert_eq!(back.branch_to_limit_multiplier("branches:0"), Some(0.0));
+
+    // A wrong length is refused at attachment, the same shape rule the
+    // primal columns enforce.
+    let dc_opf = Arc::new(DcOpfInstance::from_network(network()).unwrap());
+    let solution = DcOpfSolution::new(
+        dc_opf,
+        Termination::Converged,
+        vec![0.0, -0.02],
+        vec![40.0, -40.0],
+        vec![40.0],
+        vec![-40.0],
+        vec![40.0],
+        412.5,
+    )
+    .unwrap();
+    assert!(
+        solution
+            .clone()
+            .with_bus_active_power_marginals(vec![10.31])
+            .is_err()
+    );
+    assert!(
+        solution
+            .with_branch_thermal_limit_multipliers(vec![-0.1], vec![0.0])
+            .is_err()
+    );
+}
+
+#[test]
+fn v010_economic_output_names_upgrade_deterministically() {
+    let fixture =
+        include_str!("../../tests/data/module-v1-upgrade/v010-dc-opf-economic-output.pio.json");
+    let upgraded = read_module(fixture).unwrap();
+    let PioValue::DcOpfSolution(solution) = upgraded.value() else {
+        panic!("expected dc_opf_solution");
+    };
+    assert_eq!(
+        solution.bus_active_power_marginals(),
+        Some(&[10.31, 12.05][..])
+    );
+    assert_eq!(solution.branch_from_limit_multipliers(), Some(&[0.0][..]));
+    assert_eq!(solution.branch_to_limit_multipliers(), Some(&[1.74][..]));
+    assert!(
+        upgraded
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| { diagnostic.code() == "READ.MODULE.BRANCH_DUAL_SPLIT" })
+    );
+    let rewritten: serde_json::Value =
+        serde_json::from_str(&write_module(&upgraded).unwrap()).unwrap();
+    let rewritten = rewritten["value"]["data"].as_object().unwrap();
+    assert!(rewritten.contains_key("bus_active_power_marginal"));
+    assert!(rewritten.contains_key("branch_from_limit_multiplier"));
+    assert!(rewritten.contains_key("branch_to_limit_multiplier"));
+    assert!(!rewritten.contains_key("bus_price"));
+    assert!(!rewritten.contains_key("branch_flow_dual"));
+
+    let mut positive: serde_json::Value = serde_json::from_str(fixture).unwrap();
+    positive["value"]["data"]["branch_flow_dual"] = serde_json::json!([1.74]);
+    let upgraded = read_module(&serde_json::to_string_pretty(&positive).unwrap()).unwrap();
+    let PioValue::DcOpfSolution(solution) = upgraded.value() else {
+        panic!("expected dc_opf_solution");
+    };
+    assert_eq!(solution.branch_from_limit_multipliers(), Some(&[1.74][..]));
+    assert_eq!(solution.branch_to_limit_multipliers(), Some(&[0.0][..]));
+
+    let ac_opf = Arc::new(AcOpfInstance::from_network(network()).unwrap());
+    let solution = AcOpfSolution::new(
+        ac_opf,
+        Termination::Converged,
+        vec![1.01, 0.99],
+        vec![0.0, -1.2],
+        vec![40.5, -40.0],
+        vec![10.4, -10.0],
+        vec![40.5],
+        vec![10.4],
+        vec![-40.0],
+        vec![-10.0],
+        vec![40.5],
+        vec![10.4],
+        428.0,
+    )
+    .unwrap()
+    .with_bus_active_power_marginals(vec![11.2, 11.9])
+    .unwrap()
+    .with_bus_reactive_power_marginals(vec![0.0, 0.4])
+    .unwrap();
+    let text = write_module(&PioModule::new(PioValue::AcOpfSolution(solution))).unwrap();
+    let mut raw: serde_json::Value = serde_json::from_str(&text).unwrap();
+    raw["producer"]["version"] = serde_json::json!("0.10.0");
+    let data = raw["value"]["data"].as_object_mut().unwrap();
+    let active = data.remove("bus_active_power_marginal").unwrap();
+    data.insert("bus_active_price".into(), active);
+    let reactive = data.remove("bus_reactive_power_marginal").unwrap();
+    data.insert("bus_reactive_price".into(), reactive);
+    let upgraded = read_module(&serde_json::to_string_pretty(&raw).unwrap()).unwrap();
+    let PioValue::AcOpfSolution(solution) = upgraded.value() else {
+        panic!("expected ac_opf_solution");
+    };
+    assert_eq!(
+        solution.bus_active_power_marginals(),
+        Some(&[11.2, 11.9][..])
+    );
+    assert_eq!(
+        solution.bus_reactive_power_marginals(),
+        Some(&[0.0, 0.4][..])
     );
 }
 

@@ -15,6 +15,14 @@ pub mod codes {
         // BUILD: assembling a derived object from a network that already parsed.
         BUILD_MATRIX_SHAPE_MISMATCH = "BUILD.MATRIX.SHAPE_MISMATCH", Error,
             "an operand's length does not match the matrix it is used with", category = Data;
+        BUILD_OPF_OBJECTIVE_UNSUPPORTED = "BUILD.OPF.OBJECTIVE_UNSUPPORTED", Error,
+            "the OPF preparation cannot compile the instance objective", category = Data;
+        BUILD_OPF_CONSTRAINT_IDENTITY_UNKNOWN = "BUILD.OPF.CONSTRAINT_IDENTITY_UNKNOWN", Error,
+            "an active constraint selection names no element in its family", category = Data;
+        BUILD_OPF_ELEMENT_IDENTITY_DUPLICATE = "BUILD.OPF.ELEMENT_IDENTITY_DUPLICATE", Error,
+            "an OPF element family does not have unique stable identities", category = Data;
+        BUILD_OPF_NODAL_COST_UNSUPPORTED = "BUILD.OPF.NODAL_COST_UNSUPPORTED", Error,
+            "a nodal quadratic projection cannot carry the prepared generator cost", category = Request;
         BUILD_MULTI_UNSUPPORTED_STAMP = "BUILD.MULTI.UNSUPPORTED_STAMP", Warning,
             "an element has no exact multiconductor admittance or ideal stamp and was omitted loudly";
         BUILD_SENSITIVITY_SINGULAR = "BUILD.SENSITIVITY.SINGULAR", Error,

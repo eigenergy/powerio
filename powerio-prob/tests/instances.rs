@@ -5,13 +5,13 @@
 
 use std::sync::Arc;
 
-use powerio_core::Source;
+use powerio_core::{Source, TimePoint};
 use powerio_prob::{
-    AcBusSpecification, AcOpfInstance, AcPfInstance, DcOpfInstance, DcPfInstance, DcPfSolution,
-    McAcOpfInstance, McAcPfInstance, McAcPfSolution, ObjectiveTerm, Termination,
-    merge_zero_impedance_buses,
+    AcBusSpecification, AcOpfInstance, AcPfInstance, BalancedStateBuilder, DcOpfInstance,
+    DcPfInstance, DcPfSolution, McAcOpfInstance, McAcPfInstance, McAcPfSolution, ObjectiveTerm,
+    Termination, merge_zero_impedance_buses,
 };
-use powerio_tx::{BalancedNetwork, BusId};
+use powerio_tx::{BalancedNetwork, BusId, BusType};
 
 fn case9() -> BalancedNetwork {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case9.m");
@@ -51,6 +51,54 @@ fn every_instance_shares_the_network_without_copying_tables() {
     // Cloning an instance clones no network table.
     let cloned = ac_opf.clone();
     assert_eq!(cloned.network().buses().as_ptr(), bus_ptr);
+}
+
+#[test]
+fn costless_networks_construct_explicit_feasibility_opf_instances() {
+    let mut net = case9();
+    for generator in net.generators_mut() {
+        generator.cost = None;
+    }
+
+    let dc = DcOpfInstance::from_network(net.clone()).unwrap();
+    let ac = AcOpfInstance::from_network(net).unwrap();
+    assert!(dc.objective().terms().is_empty());
+    assert!(ac.objective().terms().is_empty());
+}
+
+#[test]
+fn partial_generator_cost_data_remains_a_network_cost_objective() {
+    let mut net = case9();
+    net.generators_mut()[0].cost = None;
+
+    let dc = DcOpfInstance::from_network(net.clone()).unwrap();
+    let ac = AcOpfInstance::from_network(net).unwrap();
+    assert_eq!(
+        dc.objective().terms(),
+        &[ObjectiveTerm::NetworkGeneratorCost]
+    );
+    assert_eq!(
+        ac.objective().terms(),
+        &[ObjectiveTerm::NetworkGeneratorCost]
+    );
+}
+
+#[test]
+fn an_isolated_generator_is_not_dispatchable() {
+    let mut net = case9();
+    for generator in net.generators_mut() {
+        generator.in_service = false;
+    }
+    let isolated_bus = net.buses()[8].id;
+    net.buses_mut()[8].kind = BusType::Isolated;
+    net.generators_mut()[0].bus = isolated_bus;
+    net.generators_mut()[0].in_service = true;
+
+    let error = DcOpfInstance::from_network(net).unwrap_err();
+    assert_eq!(
+        error.info().map(|info| info.code),
+        Some("BUILD.INSTANCE.NO_GENERATORS")
+    );
 }
 
 #[test]
@@ -112,12 +160,43 @@ fn the_objective_edit_never_copies_the_shared_network() {
     let bus_ptr = net.buses().as_ptr();
     let instance = DcOpfInstance::from_network(net)
         .unwrap()
-        .with_objective_term(ObjectiveTerm::DifferentiabilityRegularization { weight: 1e-6 });
+        .with_objective_term(ObjectiveTerm::NetworkPerPhaseCost);
     assert_eq!(instance.objective().terms().len(), 2);
     assert_eq!(instance.network().buses().as_ptr(), bus_ptr);
     let (pf, diagnostics) = instance.to_dc_pf().unwrap();
     assert_eq!(pf.network().buses().as_ptr(), bus_ptr);
     assert_eq!(diagnostics.len(), 1);
+}
+
+#[test]
+fn replacing_an_opf_network_preserves_problem_semantics_and_rebinds_initial_state() {
+    let net = case9();
+    let initial =
+        BalancedStateBuilder::new(net.clone(), vec![TimePoint::new("initial", None).unwrap()])
+            .branch_in_service(vec![1.0; net.branches().len()])
+            .build()
+            .unwrap()
+            .values()[0]
+            .clone();
+    let instance = DcOpfInstance::from_network(net.clone())
+        .unwrap()
+        .with_objective_term(ObjectiveTerm::NetworkPerPhaseCost)
+        .with_initial_state(initial);
+
+    let mut edited = net;
+    edited.branches_mut()[0].rate_a += 25.0;
+    let replaced = instance.with_network(edited.clone()).unwrap();
+
+    assert_eq!(replaced.objective().terms().len(), 2);
+    assert!(
+        (replaced.network().branches()[0].rate_a - edited.branches()[0].rate_a).abs()
+            < f64::EPSILON
+    );
+    let rebound = replaced.initial_state().unwrap();
+    assert!(
+        (rebound.network().branches()[0].rate_a - edited.branches()[0].rate_a).abs() < f64::EPSILON
+    );
+    assert_eq!(rebound.branch_in_service("branches:0"), Some(true));
 }
 
 #[test]

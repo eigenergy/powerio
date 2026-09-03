@@ -39,6 +39,16 @@
           },
           "type": "array"
         },
+        "branch_from_limit_multiplier": {
+          "description": "Nonnegative multiplier on the from-terminal apparent power bound.",
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "branch_from_reactive_flow": {
           "items": {
             "$ref": "#/$defs/StoredF64"
@@ -50,6 +60,16 @@
             "$ref": "#/$defs/StoredF64"
           },
           "type": "array"
+        },
+        "branch_to_limit_multiplier": {
+          "description": "Nonnegative multiplier on the to-terminal apparent power bound.",
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "branch_to_reactive_flow": {
           "items": {
@@ -63,11 +83,53 @@
           },
           "type": "array"
         },
+        "bus_active_power_marginal": {
+          "description": "Optimal objective derivative per added MW of demand, by bus.",
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "bus_active_price": {
+          "description": "Read only 0.10 name for the active demand marginal.",
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": [
+            "array",
+            "null"
+          ],
+          "writeOnly": true
+        },
         "bus_reactive_injection": {
           "items": {
             "$ref": "#/$defs/StoredF64"
           },
           "type": "array"
+        },
+        "bus_reactive_power_marginal": {
+          "description": "Optimal objective derivative per added MVAr of demand, by bus.",
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "bus_reactive_price": {
+          "description": "Read only 0.10 name for the reactive demand marginal.",
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": [
+            "array",
+            "null"
+          ],
+          "writeOnly": true
         },
         "bus_voltage_angle": {
           "items": {
@@ -1531,11 +1593,32 @@
     "DcOpfSolutionV1": {
       "additionalProperties": false,
       "properties": {
+        "branch_flow_dual": {
+          "description": "Read only 0.10 signed thermal dual (`from - to`). The 1.x reader splits\nit into the two directional multiplier columns.",
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": [
+            "array",
+            "null"
+          ],
+          "writeOnly": true
+        },
         "branch_from_active_flow": {
           "items": {
             "$ref": "#/$defs/StoredF64"
           },
           "type": "array"
+        },
+        "branch_from_limit_multiplier": {
+          "description": "Nonnegative multiplier on the from-side thermal bound, by branch.",
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "branch_to_active_flow": {
           "items": {
@@ -1543,11 +1626,42 @@
           },
           "type": "array"
         },
+        "branch_to_limit_multiplier": {
+          "description": "Nonnegative multiplier on the to-side thermal bound, by branch.",
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "bus_active_injection": {
           "items": {
             "$ref": "#/$defs/StoredF64"
           },
           "type": "array"
+        },
+        "bus_active_power_marginal": {
+          "description": "Optimal objective derivative per added MW of demand, by bus.",
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "bus_price": {
+          "description": "Read only 0.10 name for the active demand marginal.",
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": [
+            "array",
+            "null"
+          ],
+          "writeOnly": true
         },
         "bus_voltage_angle": {
           "items": {
@@ -5643,6 +5757,7 @@
         },
         {
           "additionalProperties": false,
+          "description": "Read only compatibility for 0.10 documents. The runtime removes this\nterm and records `READ.MODULE.OBJECTIVE_TERM_RETIRED` because the token\ndid not define a portable quantity or unit.",
           "properties": {
             "term": {
               "const": "differentiability_regularization",
@@ -10467,6 +10582,32 @@
           "properties": {
             "kind": {
               "const": "iteration_limit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The solver proved the constraints admit no solution. The optimization\noutcome an OPF consumer acts on differently from a numerical failure:\nthe case is overconstrained, and no retry or setting change fixes it.",
+          "properties": {
+            "kind": {
+              "const": "infeasible",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The solver proved the objective unbounded over the feasible set.",
+          "properties": {
+            "kind": {
+              "const": "unbounded",
               "type": "string"
             }
           },

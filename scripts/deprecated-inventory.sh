@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# List every item deprecated for removal, so the 0.10.0 release can assert the
+# List every item deprecated for removal, so the 1.0.0 release can assert the
 # set is empty. Run with --assert-empty to fail when any remain.
 set -euo pipefail
 
@@ -24,6 +24,6 @@ fi
 echo "total: $count"
 
 if [ "${1:-}" = "--assert-empty" ] && [ "$count" -ne 0 ]; then
-  echo "error: 0.10.0 carries no deprecated items; remove the ones listed above" >&2
+  echo "error: 1.0.0 carries no deprecated items; remove the ones listed above" >&2
   exit 1
 fi

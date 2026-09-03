@@ -708,7 +708,7 @@ dependencies = [
 
 [[package]]
 name = "powerio"
-version = "0.10.0"
+version = "1.0.0"
 dependencies = [
  "num-complex",
  "powerio-core",
@@ -722,7 +722,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-core"
-version = "0.10.0"
+version = "1.0.0"
 dependencies = [
  "libc",
  "serde",
@@ -731,7 +731,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-dist"
-version = "0.10.0"
+version = "1.0.0"
 dependencies = [
  "powerio-core",
  "serde",
@@ -751,7 +751,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-matrix"
-version = "0.10.0"
+version = "1.0.0"
 dependencies = [
  "faer",
  "num-complex",
@@ -773,7 +773,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-prob"
-version = "0.10.0"
+version = "1.0.0"
 dependencies = [
  "powerio-core",
  "powerio-dist",
@@ -785,7 +785,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-tx"
-version = "0.10.0"
+version = "1.0.0"
 dependencies = [
  "lexical-core",
  "num-complex",

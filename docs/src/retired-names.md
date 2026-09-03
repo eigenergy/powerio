@@ -1,6 +1,6 @@
 # Retired crates and API names
 
-0.10 removes the pre-1.0 surfaces the architecture retired. Each row names the replacement; the [migration guide](migration-v1.md) walks the mechanical changes.
+0.10 removes the pre-1.0 surfaces the architecture retired. Each row names the replacement; the [migration guide](migration-v0.10.md) walks the mechanical changes.
 
 ## Crates
 

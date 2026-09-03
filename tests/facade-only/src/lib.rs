@@ -18,9 +18,16 @@ mod names_resolve_through_the_facade {
     type _ScenarioSet = powerio::ScenarioSet<f64>;
     type _TimePoint = powerio::TimePoint;
     type _SourceSpan = powerio::SourceSpan;
+    type _HistoryEntry = powerio::HistoryEntry;
+    type _HistoryId = powerio::HistoryId;
+    type _HistoryKind = powerio::HistoryKind;
     type _OperatingPoint = powerio::OperatingPoint<powerio::BalancedNetwork>;
+    type _AcPfInstance = powerio::AcPfInstance;
+    type _AcPfSolution = powerio::AcPfSolution;
     type _AcOpfInstance = powerio::AcOpfInstance;
     type _AcOpfSolution = powerio::AcOpfSolution;
+    type _DcOpfInstance = powerio::DcOpfInstance;
+    type _DcOpfSolution = powerio::DcOpfSolution;
     type _MulticonductorNetwork = powerio::MulticonductorNetwork;
     type _BalancedNetwork = powerio::BalancedNetwork;
 }

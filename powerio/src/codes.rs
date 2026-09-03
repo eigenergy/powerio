@@ -14,6 +14,10 @@ powerio_core::diagnostic_codes! {
         "a 0.9 operating point update field has no state quantity", category = Data;
     READ_MODULE_UPGRADED = "READ.MODULE.UPGRADED", Note,
         "a released 0.9 package was upgraded one way to the stored module";
+    READ_MODULE_OBJECTIVE_TERM_RETIRED = "READ.MODULE.OBJECTIVE_TERM_RETIRED", Warning,
+        "a retired solver setting was removed from a stored OPF objective";
+    READ_MODULE_BRANCH_DUAL_SPLIT = "READ.MODULE.BRANCH_DUAL_SPLIT", Warning,
+        "a legacy signed branch dual was split into directional multipliers";
     REQUEST_STATE_NOT_A_COLLECTION = "REQUEST.STATE.NOT_A_COLLECTION", Error,
         "the value carries no time or scenario collection to select from",
         category = Request;

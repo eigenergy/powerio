@@ -66,6 +66,11 @@ const EXPECTED: &[(&str, &str, Option<&str>)] = &[
     ("module-v1/dc-opf-solution.pio.json", "module", None),
     ("module-v1/dc-pf-instance.pio.json", "module", None),
     ("module-v1/dc-pf-solution.pio.json", "module", None),
+    (
+        "module-v1-upgrade/v010-dc-opf-economic-output.pio.json",
+        "module",
+        None,
+    ),
     ("module-v1/mc-ac-opf-instance.pio.json", "module", None),
     ("module-v1/mc-ac-opf-solution.pio.json", "module", None),
     ("module-v1/mc-ac-pf-instance.pio.json", "module", None),

@@ -12,15 +12,12 @@ use crate::VERSION;
 /// The key every powerio authored document uses for [`VERSION`].
 pub const VERSION_KEY: &str = "powerio_version";
 
-/// The 0.x lineage a 1.x build also reads.
+/// Released public beta lineage whose authored documents load in 1.x.
 ///
-/// 0.10.0 ships the documents 1.0 freezes, on purpose: it is the public beta
-/// of the 1.0 API, and 1.0.0 publishes its formats rather than changing what
-/// is written. A gate that refused `0.10.0` at 1.0.0 would make every
-/// consumer regenerate an archive whose bytes did not change. The earlier
-/// released 0.9 stored lineage does not cross here: `.pio.json` documents it
-/// wrote upgrade one way through the frozen 0.9 decoder.
-const FROZEN_LINEAGE: (u64, u64) = (0, 10);
+/// PowerIO 0.10 and 1.x use `powerio.module/1`. The 1.x reader performs the
+/// directed semantic upgrade for retired 0.10 values. The released 0.9 stored
+/// lineage instead upgrades through its separate decoder.
+const PUBLIC_BETA_LINEAGE: (u64, u64) = (0, 10);
 
 /// Whether this build reads a document stamped `version`.
 ///
@@ -29,9 +26,8 @@ const FROZEN_LINEAGE: (u64, u64) = (0, 10);
 /// what cargo and Pkg already mean by a 0.x bump. A version this function
 /// cannot parse as semver never loads.
 ///
-/// One lineage crosses a major boundary: a 1.x build also reads a `0.9`
-/// document, because 0.9.0 shipped the formats 1.0 freezes. Nothing else
-/// crosses, and 2.0 reads neither.
+/// The public beta document lineage crosses into 1.x. Nothing else crosses,
+/// and 2.0 reads none of them.
 #[must_use]
 pub fn supports(version: &str) -> bool {
     let Some(document) = lineage(version) else {
@@ -47,7 +43,7 @@ fn reads(build: (u64, u64), document: (u64, u64)) -> bool {
     if major == build_major {
         return major != 0 || minor == build_minor;
     }
-    build_major == 1 && document == FROZEN_LINEAGE
+    build_major == 1 && document == PUBLIC_BETA_LINEAGE
 }
 
 /// The diagnosis for a document this build does not read: the release that
@@ -118,10 +114,7 @@ fn bounded_version(version: &str) -> std::borrow::Cow<'_, str> {
 pub fn lineage_label() -> String {
     match current_lineage() {
         (0, minor) => format!("0.{minor}.x"),
-        (1, _) => format!(
-            "major version 1 and {}.{}.x",
-            FROZEN_LINEAGE.0, FROZEN_LINEAGE.1
-        ),
+        (1, _) => format!("major version 1 and 0.{}.x", PUBLIC_BETA_LINEAGE.1),
         (major, _) => format!("major version {major}"),
     }
 }
@@ -228,7 +221,7 @@ mod tests {
     }
 
     #[test]
-    fn this_build_reads_its_own_version_and_the_frozen_lineage() {
+    fn this_build_reads_its_own_version_and_the_public_beta() {
         assert!(supports(VERSION));
         assert!(supports("0.10.0"));
         assert!(supports("0.10.99"));
@@ -240,36 +233,22 @@ mod tests {
     }
 
     #[test]
-    fn one_x_reads_the_lineage_it_froze() {
-        // 0.9.0 ships the documents 1.0 publishes, so a 1.x build reads a 0.9
-        // document rather than making every consumer regenerate an archive
-        // whose bytes did not change. Without this, the release goal — that
-        // 0.9.0's formats are 1.0.0's — is false for every document at rest.
-        assert!(reads((1, 0), FROZEN_LINEAGE));
-        assert!(reads((1, 7), FROZEN_LINEAGE));
+    fn one_x_reads_the_public_beta_lineage() {
+        // The public beta shares the stored schema that 1.0 publishes. The
+        // 1.x reader applies any directed semantic upgrade.
+        assert!(reads((1, 0), PUBLIC_BETA_LINEAGE));
+        assert!(reads((1, 7), PUBLIC_BETA_LINEAGE));
+        assert!(!reads((1, 0), (0, 9)));
         assert!(reads((1, 0), (1, 4)), "a 1.x build reads any 1.x document");
     }
 
     #[test]
-    fn the_frozen_lineage_is_never_behind_this_build() {
-        // FROZEN_LINEAGE is the last 0.x, the one a 1.x build also reads. It is
-        // a constant with nothing tying it to the crate version, so a 0.x
-        // released past it would be a lineage no 1.x build reads. Whoever cuts
-        // that release moves the constant or drops the carve-out.
-        let (major, minor) = current_lineage();
-        if major == 0 {
-            assert!(
-                (major, minor) <= FROZEN_LINEAGE,
-                "0.{minor} ships past the frozen lineage 0.{}",
-                FROZEN_LINEAGE.1
-            );
-        }
-    }
-
-    #[test]
     fn nothing_else_crosses_a_major_boundary() {
-        assert!(!reads((1, 0), (0, 8)), "only the frozen lineage crosses");
-        assert!(!reads((2, 0), FROZEN_LINEAGE), "2.0 froze nothing");
+        assert!(
+            !reads((1, 0), (0, 8)),
+            "only the public beta lineage crosses"
+        );
+        assert!(!reads((2, 0), PUBLIC_BETA_LINEAGE));
         assert!(!reads((0, 9), (1, 0)), "0.9 cannot read the future");
         assert!(!reads((0, 9), (0, 8)), "a 0.x minor is its own lineage");
     }

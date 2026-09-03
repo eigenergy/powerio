@@ -40,6 +40,21 @@ fn check_length(what: &'static str, got: usize, expected: usize) -> Result<(), E
     }
 }
 
+fn check_nonnegative_multipliers(what: &'static str, values: &[f64]) -> Result<(), Error> {
+    if let Some((row, value)) = values
+        .iter()
+        .copied()
+        .enumerate()
+        .find(|(_, value)| !value.is_finite() || *value < 0.0)
+    {
+        return Err(Error::new(
+            &codes::BUILD_SOLUTION_MULTIPLIER_INVALID,
+            format!("{what} row {row} is {value}; multipliers must be finite and nonnegative"),
+        ));
+    }
+    Ok(())
+}
+
 /// Identity to row position over one network's tables, built once per
 /// solution on first keyed access so repeated reads never rescan a table.
 #[derive(Clone, Debug, Default)]
@@ -515,7 +530,8 @@ impl AcPfSolution {
 }
 
 /// The DC optimal power flow solution: the DC power flow results plus the
-/// optimized generator active dispatch and the objective value.
+/// optimized generator active dispatch, the objective value, and the
+/// optional economic outputs an optimizing producer can attach.
 #[derive(Clone, Debug)]
 pub struct DcOpfSolution {
     instance: Arc<DcOpfInstance>,
@@ -528,6 +544,9 @@ pub struct DcOpfSolution {
     branch_to_active_flow: Vec<f64>,
     generator_active_power: Vec<f64>,
     objective: f64,
+    bus_active_power_marginal: Option<Vec<f64>>,
+    branch_from_limit_multiplier: Option<Vec<f64>>,
+    branch_to_limit_multiplier: Option<Vec<f64>>,
     index: SolutionIndex,
 }
 
@@ -580,11 +599,62 @@ impl DcOpfSolution {
             branch_to_active_flow,
             generator_active_power,
             objective,
+            bus_active_power_marginal: None,
+            branch_from_limit_multiplier: None,
+            branch_to_limit_multiplier: None,
             index,
         })
     }
 
     shared_solution_accessors!(DcOpfInstance);
+
+    /// Attach the derivative of the optimal objective with respect to added
+    /// active demand at each bus, in objective units per MW and bus table
+    /// order. A network generator cost objective gives the usual active power
+    /// locational marginal price; a different objective does not imply money.
+    ///
+    /// # Errors
+    /// A column whose length disagrees with the instance's bus table.
+    pub fn with_bus_active_power_marginals(mut self, marginals: Vec<f64>) -> Result<Self, Error> {
+        check_length(
+            "bus active power marginals",
+            marginals.len(),
+            self.instance.network().buses().len(),
+        )?;
+        self.bus_active_power_marginal = Some(marginals);
+        Ok(self)
+    }
+
+    /// Attach the two nonnegative KKT multipliers for every branch thermal
+    /// bound, in objective units per MW and branch table order. `from` is the
+    /// multiplier on `flow <= rating`; `to` is the multiplier on
+    /// `-flow <= rating`. Increasing one symmetric rating by one MW changes
+    /// the local optimal objective by the negative sum of the two values. A
+    /// branch omitted by the approximation carries zero in both columns.
+    ///
+    /// # Errors
+    /// A column whose length disagrees with the instance's branch table.
+    pub fn with_branch_thermal_limit_multipliers(
+        mut self,
+        from: Vec<f64>,
+        to: Vec<f64>,
+    ) -> Result<Self, Error> {
+        check_length(
+            "branch from-side thermal limit multipliers",
+            from.len(),
+            self.instance.network().branches().len(),
+        )?;
+        check_length(
+            "branch to-side thermal limit multipliers",
+            to.len(),
+            self.instance.network().branches().len(),
+        )?;
+        check_nonnegative_multipliers("branch from-side thermal limit multipliers", &from)?;
+        check_nonnegative_multipliers("branch to-side thermal limit multipliers", &to)?;
+        self.branch_from_limit_multiplier = Some(from);
+        self.branch_to_limit_multiplier = Some(to);
+        Ok(self)
+    }
 
     /// The optimized objective value.
     #[must_use]
@@ -596,6 +666,47 @@ impl DcOpfSolution {
     #[must_use]
     pub fn generator_active_power(&self, identity: &str) -> Option<f64> {
         Some(self.generator_active_power[generator_position(self.row_index(), identity)?])
+    }
+
+    /// Optimal objective derivative per added MW of active demand at one bus.
+    #[must_use]
+    pub fn bus_active_power_marginal(&self, bus: BusId) -> Option<f64> {
+        Some(self.bus_active_power_marginal.as_ref()?[bus_position(self.row_index(), bus)?])
+    }
+
+    /// From-side thermal bound multiplier by stable branch identity.
+    #[must_use]
+    pub fn branch_from_limit_multiplier(&self, identity: &str) -> Option<f64> {
+        Some(
+            self.branch_from_limit_multiplier.as_ref()?
+                [branch_position(self.row_index(), identity)?],
+        )
+    }
+
+    /// To-side thermal bound multiplier by stable branch identity.
+    #[must_use]
+    pub fn branch_to_limit_multiplier(&self, identity: &str) -> Option<f64> {
+        Some(
+            self.branch_to_limit_multiplier.as_ref()?[branch_position(self.row_index(), identity)?],
+        )
+    }
+
+    /// All active demand marginals in bus table order, when attached.
+    #[must_use]
+    pub fn bus_active_power_marginals(&self) -> Option<&[f64]> {
+        self.bus_active_power_marginal.as_deref()
+    }
+
+    /// All from-side thermal bound multipliers in branch table order.
+    #[must_use]
+    pub fn branch_from_limit_multipliers(&self) -> Option<&[f64]> {
+        self.branch_from_limit_multiplier.as_deref()
+    }
+
+    /// All to-side thermal bound multipliers in branch table order.
+    #[must_use]
+    pub fn branch_to_limit_multipliers(&self) -> Option<&[f64]> {
+        self.branch_to_limit_multiplier.as_deref()
     }
 
     /// Voltage angle at one bus, degrees.
@@ -642,6 +753,10 @@ pub struct AcOpfSolution {
     generator_active_power: Vec<f64>,
     generator_reactive_power: Vec<f64>,
     objective: f64,
+    bus_active_power_marginal: Option<Vec<f64>>,
+    bus_reactive_power_marginal: Option<Vec<f64>>,
+    branch_from_limit_multiplier: Option<Vec<f64>>,
+    branch_to_limit_multiplier: Option<Vec<f64>>,
     index: SolutionIndex,
 }
 
@@ -726,16 +841,129 @@ impl AcOpfSolution {
             generator_active_power,
             generator_reactive_power,
             objective,
+            bus_active_power_marginal: None,
+            bus_reactive_power_marginal: None,
+            branch_from_limit_multiplier: None,
+            branch_to_limit_multiplier: None,
             index,
         })
     }
 
     shared_solution_accessors!(AcOpfInstance);
 
+    /// Attach the derivative of the optimal objective with respect to added
+    /// active demand, in objective units per MW and bus table order.
+    ///
+    /// # Errors
+    /// A column whose length disagrees with the instance's bus table.
+    pub fn with_bus_active_power_marginals(mut self, marginals: Vec<f64>) -> Result<Self, Error> {
+        check_length(
+            "bus active power marginals",
+            marginals.len(),
+            self.instance.network().buses().len(),
+        )?;
+        self.bus_active_power_marginal = Some(marginals);
+        Ok(self)
+    }
+
+    /// Attach the derivative of the optimal objective with respect to added
+    /// reactive demand, in objective units per MVAr and bus table order.
+    ///
+    /// # Errors
+    /// A column whose length disagrees with the instance's bus table.
+    pub fn with_bus_reactive_power_marginals(mut self, marginals: Vec<f64>) -> Result<Self, Error> {
+        check_length(
+            "bus reactive power marginals",
+            marginals.len(),
+            self.instance.network().buses().len(),
+        )?;
+        self.bus_reactive_power_marginal = Some(marginals);
+        Ok(self)
+    }
+
+    /// Attach the two nonnegative apparent power limit multipliers, in
+    /// objective units per MVA and branch table order. Increasing the shared
+    /// rating by one MVA changes the local optimal objective by the negative
+    /// sum of the from and to terminal multipliers.
+    pub fn with_branch_thermal_limit_multipliers(
+        mut self,
+        from: Vec<f64>,
+        to: Vec<f64>,
+    ) -> Result<Self, Error> {
+        check_length(
+            "branch from-terminal thermal limit multipliers",
+            from.len(),
+            self.instance.network().branches().len(),
+        )?;
+        check_length(
+            "branch to-terminal thermal limit multipliers",
+            to.len(),
+            self.instance.network().branches().len(),
+        )?;
+        check_nonnegative_multipliers("branch from-terminal thermal limit multipliers", &from)?;
+        check_nonnegative_multipliers("branch to-terminal thermal limit multipliers", &to)?;
+        self.branch_from_limit_multiplier = Some(from);
+        self.branch_to_limit_multiplier = Some(to);
+        Ok(self)
+    }
+
     /// The optimized objective value.
     #[must_use]
     pub const fn objective(&self) -> f64 {
         self.objective
+    }
+
+    /// Optimal objective derivative per added MW of active demand at one bus.
+    #[must_use]
+    pub fn bus_active_power_marginal(&self, bus: BusId) -> Option<f64> {
+        Some(self.bus_active_power_marginal.as_ref()?[bus_position(self.row_index(), bus)?])
+    }
+
+    /// Optimal objective derivative per added MVAr of reactive demand.
+    #[must_use]
+    pub fn bus_reactive_power_marginal(&self, bus: BusId) -> Option<f64> {
+        Some(self.bus_reactive_power_marginal.as_ref()?[bus_position(self.row_index(), bus)?])
+    }
+
+    /// From-terminal apparent power bound multiplier by branch identity.
+    #[must_use]
+    pub fn branch_from_limit_multiplier(&self, identity: &str) -> Option<f64> {
+        Some(
+            self.branch_from_limit_multiplier.as_ref()?
+                [branch_position(self.row_index(), identity)?],
+        )
+    }
+
+    /// To-terminal apparent power bound multiplier by branch identity.
+    #[must_use]
+    pub fn branch_to_limit_multiplier(&self, identity: &str) -> Option<f64> {
+        Some(
+            self.branch_to_limit_multiplier.as_ref()?[branch_position(self.row_index(), identity)?],
+        )
+    }
+
+    /// All active demand marginals in bus table order, when attached.
+    #[must_use]
+    pub fn bus_active_power_marginals(&self) -> Option<&[f64]> {
+        self.bus_active_power_marginal.as_deref()
+    }
+
+    /// All reactive demand marginals in bus table order, when attached.
+    #[must_use]
+    pub fn bus_reactive_power_marginals(&self) -> Option<&[f64]> {
+        self.bus_reactive_power_marginal.as_deref()
+    }
+
+    /// All from-terminal thermal bound multipliers in branch table order.
+    #[must_use]
+    pub fn branch_from_limit_multipliers(&self) -> Option<&[f64]> {
+        self.branch_from_limit_multiplier.as_deref()
+    }
+
+    /// All to-terminal thermal bound multipliers in branch table order.
+    #[must_use]
+    pub fn branch_to_limit_multipliers(&self) -> Option<&[f64]> {
+        self.branch_to_limit_multiplier.as_deref()
     }
 
     /// Optimized active power of one generator, MW, by stable identity.

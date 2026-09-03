@@ -1,7 +1,8 @@
-# PowerIO 1.0 architecture baseline
+# PowerIO 1.0 architecture record
 
-Status: ready for implementation. The long interview and final source and API
-audit are reconciled here. A new broad architecture interview is not required.
+Status: historical design record for the work that led to PowerIO 0.10. It is
+not current API authority. Use the released API, current source, tests,
+migration guide, and changelog for present behavior.
 
 Read the documents in this order:
 
@@ -12,10 +13,10 @@ Read the documents in this order:
    and allowed transformations.
 4. [V1_ARCHITECTURE.md](V1_ARCHITECTURE.md) fixes ownership, schema, instance,
    solution, matrix, writer, crate, ABI, and binding semantics.
-5. [V1_ISSUE_AUDIT.md](V1_ISSUE_AUDIT.md) maps the design to issues and current
-   PR salvage work.
-6. [V1_IMPLEMENTATION.md](V1_IMPLEMENTATION.md) gives dependency order, stacks,
-   gates, and the fresh session goal.
+5. [V1_ISSUE_AUDIT.md](V1_ISSUE_AUDIT.md) maps the design to the issues and PRs
+   open when the record was written.
+6. [V1_IMPLEMENTATION.md](V1_IMPLEMENTATION.md) records the historical
+   implementation order and validation gates.
 
 The disposable [prototype](prototype/) compiles the public Rust choices that
 could not be settled from source definitions alone:
@@ -79,11 +80,8 @@ schedules and calculation instructions, and solved QSTS samples remain
 distinct; complete sampled states can use
 `TimeSeries<OperatingPoint<MulticonductorNetwork>>`.
 
-Current open PRs are not one mergeable 1.0 stack. The issue audit records what
-to retain, rebuild, or discard. A 0.9.1 release is possible only as a reduced
-backward compatible maintenance release before any breaking Rust branch
-merges.
+The issue audit records the then open PRs and their planned disposition. That
+snapshot is preserved as history rather than current integration guidance.
 
-Implementation can start after reading this baseline and running the prototype.
-Ask for user input only when source implementation exposes a genuine public
-product choice absent from these documents and upstream definitions.
+The prototype and implementation record explain how the 0.10 work was checked.
+They do not prescribe current changes.

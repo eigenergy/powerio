@@ -1024,3 +1024,368 @@ fn gencost_quadratic_branches() {
     // Coefficient slice shorter than ncost: rejected, not misread by position.
     assert_eq!(mk(2, 3, vec![1.0]).quadratic(), None);
 }
+
+/// The consumer contract of the public preparation: an external solver
+/// formulates the complete DC OPF from `build_dc_opf_preparation` alone —
+/// demand, generator costs and bounds with source rows, thermal limits, and
+/// the reference set — and its positive solver edge weights are exactly the
+/// negation of the PowerModels signed susceptances `dc_network_data`
+/// reports, term for term, with an identical phase shift injection. That is
+/// the 0.10 sign relation between the two public assemblies: 0.9's
+/// `branch_susceptance` returned the positive weight, 0.10's returns the
+/// PowerModels value.
+#[test]
+fn public_preparation_formulates_the_complete_dc_opf() {
+    use powerio_matrix::{DcOpfAssemblyOptions, build_dc_opf_preparation as prepare_instance};
+    use powerio_prob::DcOpfInstance;
+    use powerio_tx::{Load, dc_network_data};
+
+    let mut shifted = Branch::new(BusId(2), BusId(3), 0.0, 0.2);
+    shifted.shift = 30.0;
+    shifted.rate_a = 60.0;
+    let mut network = net(
+        "consumer",
+        vec![
+            Bus::new(BusId(1), BusType::Ref, 230.0),
+            Bus::new(BusId(2), BusType::Pq, 230.0),
+            Bus::new(BusId(3), BusType::Pq, 230.0),
+        ],
+        vec![Branch::new(BusId(1), BusId(2), 0.01, 0.1), shifted],
+    );
+    network.loads_mut().push(Load::new(BusId(3), 90.0, 0.0));
+    let mut generator = Generator::new(BusId(1));
+    generator.pmax = 200.0;
+    generator.cost = Some(GenCost::new(2, 0.0, 0.0, vec![0.02, 11.0, 3.0]));
+    network.generators_mut().push(generator);
+
+    let view = IndexedNetwork::new(&network);
+    let data = dc_network_data(&view, DcConvention::SeriesSusceptance);
+    assert!(data.omitted.is_empty(), "{:?}", data.omitted);
+
+    let instance = DcOpfInstance::from_network(network.clone())
+        .expect("instance")
+        .with_approximation(DcConvention::SeriesSusceptance);
+    let prep = prepare_instance(&instance, &DcOpfAssemblyOptions::default()).expect("prepare");
+
+    // The two public assemblies describe the same rows in the same order.
+    assert_eq!(prep.branches.from_bus, data.from_indices);
+    assert_eq!(prep.branches.to_bus, data.to_indices);
+    for (row, (&weight, &susceptance)) in prep.branches.b.iter().zip(&data.susceptance).enumerate()
+    {
+        assert!(weight > 0.0, "row {row}: solver weight must be positive");
+        assert!(
+            susceptance < 0.0,
+            "row {row}: public susceptance is PowerModels signed"
+        );
+        assert!(
+            (weight + susceptance).abs() < 1e-12,
+            "row {row}: weight {weight} is not the negation of {susceptance}"
+        );
+    }
+    // One shared phase shift injection, entry for entry.
+    assert_eq!(prep.p_shift.len(), data.shift_injection.len());
+    for (bus, (&prepared, &public)) in prep.p_shift.iter().zip(&data.shift_injection).enumerate() {
+        assert!(
+            (prepared - public).abs() < 1e-12,
+            "bus {bus}: p_shift {prepared} vs shift_injection {public}"
+        );
+    }
+
+    // The preparation alone carries the complete numerical problem: per unit
+    // demand, thermal limits, and generator cost and bounds with their
+    // source rows, so a solver never re-derives them from the network.
+    assert_eq!(prep.p_d, vec![0.0, 0.0, 0.9]);
+    assert!((prep.branches.f_max[1] - 0.6).abs() < 1e-12);
+    assert_eq!(prep.generators.bus_of_gen, vec![0]);
+    assert_eq!(prep.generators.source_rows, vec![Some(0)]);
+    // MATPOWER c2 p^2 + c1 p + c0 in per unit: q = 2 c2 base^2, c = c1 base.
+    assert!((prep.generators.q[0] - 2.0 * 0.02 * 100.0 * 100.0).abs() < 1e-9);
+    assert!((prep.generators.c[0] - 11.0 * 100.0).abs() < 1e-9);
+    assert!((prep.generators.c0[0] - 3.0).abs() < 1e-12);
+    assert!((prep.generators.pmax[0] - 2.0).abs() < 1e-12);
+    assert_eq!(
+        prep.reference_buses.iter().copied().collect::<Vec<_>>(),
+        vec![0]
+    );
+    // The withdrawal helper agrees with the raw columns.
+    let withdrawal = prep.fixed_nodal_withdrawal();
+    for (bus, &total) in withdrawal.iter().enumerate() {
+        let expected = prep.p_d[bus] + prep.g_s[bus] + prep.p_shift[bus];
+        assert!((total - expected).abs() < 1e-12);
+    }
+}
+
+#[test]
+fn public_preparation_compiles_objective_and_constraint_selections() {
+    use powerio_matrix::{DcOpfAssemblyOptions, PreparedObjective, build_dc_opf_preparation};
+    use powerio_prob::{ActiveConstraints, ConstraintSelection, DcOpfInstance, Objective};
+
+    let mut first = Branch::new(BusId(1), BusId(2), 0.0, 0.1);
+    first.uid = Some("line-a".into());
+    first.rate_a = 80.0;
+    let mut second = Branch::new(BusId(2), BusId(3), 0.0, 0.1);
+    second.uid = Some("line-b".into());
+    second.rate_a = 70.0;
+    let mut network = net(
+        "semantics",
+        vec![
+            Bus::new(BusId(1), BusType::Ref, 230.0),
+            Bus::new(BusId(2), BusType::Pq, 230.0),
+            Bus::new(BusId(3), BusType::Pq, 230.0),
+        ],
+        vec![first, second],
+    );
+    let mut generator = Generator::new(BusId(1));
+    generator.uid = Some("generator-a".into());
+    // A feasibility objective must not require or silently apply a cost.
+    generator.cost = None;
+    network.generators_mut().push(generator);
+
+    let mut constraints = ActiveConstraints::default();
+    constraints.generator_capability = ConstraintSelection::None;
+    constraints.thermal_limits = ConstraintSelection::Only(vec!["line-b".into()]);
+    constraints.angle_bounds = ConstraintSelection::Only(vec!["line-a".into()]);
+    let instance = DcOpfInstance::from_network(network)
+        .unwrap()
+        .with_objective(Objective::none())
+        .with_constraints(constraints);
+    let prepared = build_dc_opf_preparation(&instance, &DcOpfAssemblyOptions::default()).unwrap();
+
+    assert_eq!(prepared.objective, PreparedObjective::Feasibility);
+    assert_eq!(prepared.generators.q, vec![0.0]);
+    assert_eq!(prepared.generators.identities, vec!["generator-a"]);
+    assert_eq!(prepared.generators.capability_active, vec![false]);
+    assert_eq!(prepared.branches.identities, vec!["line-a", "line-b"]);
+    assert_eq!(prepared.branches.thermal_limit_active, vec![false, true]);
+    assert_eq!(prepared.branches.angle_bound_active, vec![true, false]);
+}
+
+#[test]
+fn public_preparation_excludes_explicitly_isolated_rows() {
+    use powerio_matrix::{DcOpfAssemblyOptions, build_dc_opf_preparation};
+    use powerio_prob::DcOpfInstance;
+    use powerio_tx::Load;
+
+    let mut network = net(
+        "isolated-source-row",
+        vec![
+            Bus::new(BusId(1), BusType::Ref, 230.0),
+            Bus::new(BusId(2), BusType::Pq, 230.0),
+            Bus::new(BusId(3), BusType::Isolated, 230.0),
+        ],
+        vec![
+            Branch::new(BusId(1), BusId(2), 0.0, 0.1),
+            Branch::new(BusId(2), BusId(3), 0.0, 0.1),
+        ],
+    );
+    network.loads_mut().push(Load::new(BusId(2), 40.0, 0.0));
+    network.loads_mut().push(Load::new(BusId(3), 99.0, 0.0));
+    network.generators_mut().push(poly_gen(1, 100.0, 0.0, 1.0));
+    network.generators_mut().push(Generator::new(BusId(3)));
+
+    let instance = DcOpfInstance::from_network(network).unwrap();
+    let prepared = build_dc_opf_preparation(&instance, &DcOpfAssemblyOptions::default()).unwrap();
+
+    assert_eq!(prepared.bus_ids, vec![BusId(1), BusId(2)]);
+    assert_eq!(prepared.bus_analysis_rows, vec![0, 1]);
+    assert_eq!(prepared.bus_source_rows, vec![Some(0), Some(1)]);
+    assert_eq!(prepared.p_d, vec![0.0, 0.4]);
+    assert_eq!(prepared.branches.analysis_rows, vec![0]);
+    assert_eq!(prepared.branches.source_rows, vec![Some(0)]);
+    assert_eq!(prepared.generators.analysis_rows, vec![0]);
+    assert_eq!(prepared.generators.source_rows, vec![Some(0)]);
+    assert_eq!(prepared.n_source_branches, 2);
+    assert_eq!(prepared.n_source_generators, 2);
+}
+
+#[test]
+fn public_preparation_refuses_unsupported_objectives_and_unknown_constraints() {
+    use powerio_matrix::{DcOpfAssemblyOptions, build_dc_opf_preparation};
+    use powerio_prob::{ActiveConstraints, ConstraintSelection, DcOpfInstance, Objective};
+
+    let network = net_with_gens(
+        "errors",
+        vec![
+            Bus::new(BusId(1), BusType::Ref, 230.0),
+            Bus::new(BusId(2), BusType::Pq, 230.0),
+        ],
+        vec![Branch::new(BusId(1), BusId(2), 0.0, 0.1)],
+        vec![poly_gen(1, 100.0, 0.0, 1.0)],
+    );
+    let unsupported = DcOpfInstance::from_network(network.clone())
+        .unwrap()
+        .with_objective(Objective::network_per_phase_cost());
+    assert!(matches!(
+        build_dc_opf_preparation(&unsupported, &DcOpfAssemblyOptions::default()),
+        Err(Error::UnsupportedOpfObjective { .. })
+    ));
+
+    for family in [
+        "generator capability",
+        "bus voltage bounds",
+        "branch thermal limits",
+        "branch angle bounds",
+    ] {
+        let mut constraints = ActiveConstraints::default();
+        let selection = ConstraintSelection::Only(vec!["missing-identity".into()]);
+        match family {
+            "generator capability" => constraints.generator_capability = selection,
+            "bus voltage bounds" => constraints.voltage_bounds = selection,
+            "branch thermal limits" => constraints.thermal_limits = selection,
+            "branch angle bounds" => constraints.angle_bounds = selection,
+            _ => unreachable!(),
+        }
+        let unknown = DcOpfInstance::from_network(network.clone())
+            .unwrap()
+            .with_constraints(constraints);
+        assert!(matches!(
+            build_dc_opf_preparation(&unknown, &DcOpfAssemblyOptions::default()),
+            Err(Error::UnknownConstraintIdentity {
+                family: actual,
+                ..
+            }) if actual == family
+        ));
+    }
+}
+
+#[test]
+fn three_winding_lowering_has_explicit_analysis_identities_and_no_source_rows() {
+    use powerio_matrix::{DcOpfAssemblyOptions, build_dc_opf_preparation};
+    use powerio_prob::{ActiveConstraints, ConstraintSelection, DcOpfInstance};
+    use powerio_tx::{Impedance, Transformer3W, Winding};
+
+    let mut network = net(
+        "three-winding",
+        vec![
+            Bus::new(BusId(1), BusType::Ref, 230.0),
+            Bus::new(BusId(2), BusType::Pq, 230.0),
+            Bus::new(BusId(3), BusType::Pq, 230.0),
+        ],
+        Vec::new(),
+    );
+    let mut transformer = Transformer3W::new(
+        [
+            Winding::new(BusId(1)),
+            Winding::new(BusId(2)),
+            Winding::new(BusId(3)),
+        ],
+        [
+            Impedance::new(0.0, 0.2, 100.0),
+            Impedance::new(0.0, 0.2, 100.0),
+            Impedance::new(0.0, 0.2, 100.0),
+        ],
+    );
+    transformer.uid = Some("tx-main".into());
+    for winding in &mut transformer.windings {
+        winding.rate_a = 100.0;
+    }
+    network.transformers_3w_mut().push(transformer);
+    network.generators_mut().push(poly_gen(1, 100.0, 0.0, 1.0));
+
+    let mut constraints = ActiveConstraints::default();
+    constraints.thermal_limits = ConstraintSelection::Only(vec!["tx-main/winding:2".into()]);
+    let instance = DcOpfInstance::from_network(network)
+        .unwrap()
+        .with_constraints(constraints);
+    let prepared = build_dc_opf_preparation(&instance, &DcOpfAssemblyOptions::default()).unwrap();
+
+    assert_eq!(prepared.n_source_branches, 0);
+    assert_eq!(
+        prepared.branches.identities,
+        vec![
+            "tx-main/winding:1",
+            "tx-main/winding:2",
+            "tx-main/winding:3"
+        ]
+    );
+    assert_eq!(prepared.branches.analysis_rows, vec![0, 1, 2]);
+    assert_eq!(prepared.branches.source_rows, vec![None, None, None]);
+    assert_eq!(
+        prepared.branches.thermal_limit_active,
+        vec![false, true, false]
+    );
+}
+
+/// Exact value of a two bus linear dispatch. The branch flow is
+/// `p_from - demand_from`, so its feasible interval is the symmetric rating.
+fn two_bus_dispatch_value(costs: [f64; 2], demand: [f64; 2], rating: f64) -> f64 {
+    let total = demand[0] + demand[1];
+    let lower = 0.0_f64.max(demand[0] - rating);
+    let upper = total.min(demand[0] + rating);
+    assert!(lower <= upper);
+    let p_from = if costs[0] <= costs[1] { upper } else { lower };
+    costs[0] * p_from + costs[1] * (total - p_from)
+}
+
+fn central_difference(mut f: impl FnMut(f64) -> f64, x: f64) -> f64 {
+    let step = 1e-4;
+    (f(x + step) - f(x - step)) / (2.0 * step)
+}
+
+#[test]
+fn economic_output_signs_match_optimal_value_derivatives() {
+    use std::sync::Arc;
+
+    use powerio_prob::{DcOpfInstance, DcOpfSolution, Termination};
+
+    let mut branch = Branch::new(BusId(1), BusId(2), 0.0, 0.1);
+    branch.rate_a = 40.0;
+    let network = net_with_gens(
+        "economic-signs",
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![branch],
+        vec![poly_gen(1, 200.0, 0.0, 10.0), poly_gen(2, 200.0, 0.0, 30.0)],
+    );
+    let instance = Arc::new(DcOpfInstance::from_network(network).unwrap());
+
+    let costs = [10.0, 30.0];
+    let demand = [0.0, 100.0];
+    let rating = 40.0;
+    let demand_from_derivative = central_difference(
+        |value| two_bus_dispatch_value(costs, [value, demand[1]], rating),
+        demand[0],
+    );
+    let demand_to_derivative = central_difference(
+        |value| two_bus_dispatch_value(costs, [demand[0], value], rating),
+        demand[1],
+    );
+    let rating_derivative =
+        central_difference(|value| two_bus_dispatch_value(costs, demand, value), rating);
+
+    let solution = DcOpfSolution::new(
+        instance,
+        Termination::Converged,
+        vec![0.0, -0.04],
+        vec![40.0, -40.0],
+        vec![40.0],
+        vec![-40.0],
+        vec![40.0, 60.0],
+        two_bus_dispatch_value(costs, demand, rating),
+    )
+    .unwrap()
+    .with_bus_active_power_marginals(vec![10.0, 30.0])
+    .unwrap()
+    .with_branch_thermal_limit_multipliers(vec![20.0], vec![0.0])
+    .unwrap();
+
+    assert!(
+        (solution.bus_active_power_marginal(BusId(1)).unwrap() - demand_from_derivative).abs()
+            < 1e-8
+    );
+    assert!(
+        (solution.bus_active_power_marginal(BusId(2)).unwrap() - demand_to_derivative).abs() < 1e-8
+    );
+    let multiplier_sum = solution.branch_from_limit_multiplier("branches:0").unwrap()
+        + solution.branch_to_limit_multiplier("branches:0").unwrap();
+    assert!((rating_derivative + multiplier_sum).abs() < 1e-8);
+
+    // Reverse the merit order and demand direction. The negative flow bound
+    // binds, so the same shadow value belongs to the separate `to` column.
+    let reverse_costs = [30.0, 10.0];
+    let reverse_demand = [100.0, 0.0];
+    let reverse_rating_derivative = central_difference(
+        |value| two_bus_dispatch_value(reverse_costs, reverse_demand, value),
+        rating,
+    );
+    assert!((reverse_rating_derivative + 20.0).abs() < 1e-8);
+}
