@@ -1141,7 +1141,8 @@ class GeoLayer(_TypedValue):
         """The canonical ``.geo.json`` document for this layer."""
         result = emit(self.module, "geo-json")
         data = result.artifacts[0].data
-        assert data is not None
+        if data is None:
+            raise ValueError("the layer emission returned no artifact bytes")
         return data.decode("utf-8")
 
 
@@ -1435,11 +1436,24 @@ def _emit_to_destination(
     if result.layout != "file" or len(result.artifacts) != 1:
         raise ValueError("a directory emission requires a path destination")
     data = result.artifacts[0].data
-    assert data is not None
-    try:
-        write(data)
-    except TypeError:
+    if data is None:
+        raise ValueError("the emission returned no artifact bytes to write")
+    # A text mode stream takes str and a binary one takes bytes. Ask a real
+    # stream which it is rather than writing bytes and retrying on TypeError:
+    # a TypeError raised inside the stream's own write would otherwise trigger
+    # a second, partially duplicated write. A duck typed sink states neither,
+    # so it keeps the retry.
+    if isinstance(destination, _io.TextIOBase) or isinstance(
+        getattr(destination, "encoding", None), str
+    ):
         write(data.decode("utf-8"))
+    elif isinstance(destination, (_io.RawIOBase, _io.BufferedIOBase)):
+        write(data)
+    else:
+        try:
+            write(data)
+        except TypeError:
+            write(data.decode("utf-8"))
     return result
 
 
