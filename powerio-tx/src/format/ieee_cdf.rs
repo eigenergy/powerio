@@ -133,11 +133,14 @@ pub(crate) fn looks_like_ieee_cdf(bytes: &[u8]) -> bool {
     };
     let dated = title.len() >= 9 && title.as_bytes()[3] == b'/' && title.as_bytes()[6] == b'/';
     let based = field(title, title_col::BASE_MVA).is_some_and(|raw| parse_float(raw).is_some());
+    // The header has to start in column 1, as the section reader below
+    // requires: a card indented by a blank is a record that lost its bus
+    // number, and reading such a file as CDF yields an empty network rather
+    // than a refusal.
     let bus_header = lines
         .find(|line| !line.trim().is_empty())
         .is_some_and(|line| {
-            line.trim_start()
-                .get(..8)
+            line.get(..8)
                 .is_some_and(|head| head.eq_ignore_ascii_case("BUS DATA"))
         });
     (dated && based) || bus_header
@@ -1299,6 +1302,12 @@ mod tests {
         assert!(!looks_like_ieee_cdf(b"function mpc = case9\n"));
         assert!(!looks_like_ieee_cdf(b"0, 100.0, 33, 0, 0, 60.0\n"));
         assert!(!looks_like_ieee_cdf(b""));
+        // An indented header is a record that lost its bus number, not a
+        // card. The section reader below reads it as one too, so admitting it
+        // here would read the whole file as a case with no buses.
+        assert!(!looks_like_ieee_cdf(
+            b"                               100.0\n BUS DATA FOLLOWS\n"
+        ));
     }
 
     #[test]
