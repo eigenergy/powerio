@@ -1904,9 +1904,17 @@ impl BalancedNetwork {
     /// them. A suffix distinguishes several records attached to the same bus
     /// or terminal pair.
     ///
+    /// The identities are unique across the whole network, not only within one
+    /// table: a load and a generator at bus 3 are two records, and formats that
+    /// index every element by one identifier (XIIDM, CGMES) reject the same
+    /// identifier twice. The first record to claim a stem keeps it and the next
+    /// takes a numeric suffix.
+    ///
     /// Callers that assemble a network by pushing records can call this once
     /// after construction. PowerIO parsers call it before returning a module.
     pub fn assign_missing_component_ids(&mut self) {
+        let mut used = self.component_ids_in_use();
+        let mut next_suffix = HashMap::new();
         macro_rules! assign {
             ($table:ident, $table_mut:ident, $set_uid:expr, $stem:expr) => {
                 if self.$table().iter().any(|value| value.uid.is_none()) {
@@ -1915,6 +1923,8 @@ impl BalancedNetwork {
                         |value| value.uid.as_deref(),
                         $set_uid,
                         $stem,
+                        &mut used,
+                        &mut next_suffix,
                     );
                 }
             };
@@ -1984,6 +1994,33 @@ impl BalancedNetwork {
             }
         );
     }
+
+    /// Every identity the network's records already carry.
+    fn component_ids_in_use(&self) -> HashSet<String> {
+        let mut used = HashSet::new();
+        macro_rules! collect {
+            ($($table:ident),+) => {
+                $(used.extend(
+                    self.$table()
+                        .iter()
+                        .filter_map(|value| value.uid.as_deref().map(str::to_owned)),
+                );)+
+            };
+        }
+        collect!(
+            buses,
+            loads,
+            shunts,
+            static_var_compensators,
+            branches,
+            switches,
+            generators,
+            storage,
+            hvdc,
+            transformers_3w
+        );
+        used
+    }
 }
 
 fn assign_missing_ids<T>(
@@ -1991,13 +2028,9 @@ fn assign_missing_ids<T>(
     uid: impl for<'a> Fn(&'a T) -> Option<&'a str>,
     mut set_uid: impl FnMut(&mut T, String),
     stem: impl Fn(&T) -> String,
+    used: &mut HashSet<String>,
+    next_suffix: &mut HashMap<String, usize>,
 ) {
-    let mut used: HashSet<String> = values
-        .iter()
-        .filter_map(|value| uid(value).map(str::to_owned))
-        .collect();
-    let mut next_suffix = HashMap::<String, usize>::new();
-
     for value in values {
         if uid(value).is_some() {
             continue;
@@ -5604,6 +5637,45 @@ mod tests {
         let restored = BalancedNetwork::from_json(&network.to_json().unwrap()).unwrap();
         assert_eq!(restored.loads()[0].uid, network.loads()[0].uid);
         assert_eq!(restored.branches()[0].uid, network.branches()[0].uid);
+    }
+
+    /// XIIDM and CGMES index every element by one identifier, so a load and a
+    /// generator at the same bus cannot both be `bus-20`.
+    #[test]
+    fn generated_identities_are_unique_across_tables() {
+        let mut network = BalancedNetwork::in_memory(
+            "cross table ids",
+            100.0,
+            vec![
+                Bus::new(BusId(10), BusType::Ref, 230.0),
+                Bus::new(BusId(20), BusType::Pq, 230.0),
+            ],
+            vec![Branch::new(BusId(10), BusId(20), 0.0, 0.1)],
+        );
+        network.loads_mut().push(Load::new(BusId(20), 10.0, 1.0));
+        network.shunts_mut().push(Shunt::new(BusId(20), 0.0, 0.5));
+        network.generators_mut().push(Generator::new(BusId(20)));
+        network.assign_missing_component_ids();
+
+        let mut identities = vec![
+            network.loads()[0].uid.clone().unwrap(),
+            network.shunts()[0].uid.clone().unwrap(),
+            network.generators()[0].uid.clone().unwrap(),
+        ];
+        identities.sort();
+        assert_eq!(identities, ["bus-20", "bus-20-2", "bus-20-3"]);
+
+        // Assigning again leaves every identity alone, so an identity stays
+        // stable across a reload.
+        let before = identities.clone();
+        network.assign_missing_component_ids();
+        let mut after = vec![
+            network.loads()[0].uid.clone().unwrap(),
+            network.shunts()[0].uid.clone().unwrap(),
+            network.generators()[0].uid.clone().unwrap(),
+        ];
+        after.sort();
+        assert_eq!(after, before);
     }
 
     #[test]
