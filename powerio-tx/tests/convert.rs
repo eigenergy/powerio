@@ -9,9 +9,9 @@ use helpers::*;
 use std::path::{Path, PathBuf};
 
 use powerio_tx::{
-    BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, BranchRatingSet, BranchSolution,
-    Bus, BusId, BusType, EmitOptions, Load, LoadVoltageModel, MissingGenCostPolicy, SourceFormat,
-    TargetFormat, parse_gen_cost_csv,
+    Area, BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, BranchRatingSet,
+    BranchSolution, Bus, BusId, BusType, EmitOptions, Load, LoadVoltageModel, MissingGenCostPolicy,
+    SourceFormat, TargetFormat, parse_gen_cost_csv,
 };
 use serde_json::Value;
 
@@ -310,6 +310,25 @@ fn extra_branch_rating_sets_survive_model_json() {
     assert_eq!(back.branches()[0].rating_sets.len(), 1);
     assert_eq!(back.branches()[0].rating_sets[0].name, "RATE4");
     assert!((back.branches()[0].rating_sets[0].rate_mva - 125.0).abs() < 1e-12);
+}
+
+#[test]
+fn writers_without_a_bus_area_field_report_membership_loss() {
+    let mut net = rich_audit_network();
+    net.areas_mut().push(Area::new(7));
+
+    let pandapower = emit_pandapower_json(&net);
+    assert!(has_warning(
+        &pandapower.render_diagnostics(),
+        "writes neither an area table nor a bus area number"
+    ));
+
+    let out = tmp_dir("area-membership-pypsa");
+    let pypsa = emit_pypsa_csv_folder(&net, &out).unwrap();
+    assert!(has_warning(
+        &pypsa.render_diagnostics(),
+        "writes neither an area table nor a bus area number"
+    ));
 }
 
 #[test]

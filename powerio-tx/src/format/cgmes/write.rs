@@ -6560,6 +6560,17 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                     ),
                 );
             }
+            if branch.current_ratings.is_some() {
+                w.warnings.push_as(
+                    &codes::EMIT_CGMES.field_dropped,
+                    format!(
+                        "branch {} ({}-{}) current rating record dropped: CGMES CurrentLimit values were derived from the MVA ratings at the terminal voltage and cannot also state separate ampere ratings",
+                        i + 1,
+                        branch.from,
+                        branch.to
+                    ),
+                );
+            }
         }
     }
 
@@ -6970,10 +6981,12 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 "OperationalLimitType.limitType",
                 &limit_kind_uri(limit_type.kind),
             );
-            limit_doc.text(
-                "OperationalLimitType.acceptableDuration",
-                limit_type.duration_seconds,
-            );
+            if !limit_type.infinite {
+                limit_doc.text(
+                    "OperationalLimitType.acceptableDuration",
+                    limit_type.duration_seconds,
+                );
+            }
         }
         limit_doc.close("OperationalLimitType");
     }

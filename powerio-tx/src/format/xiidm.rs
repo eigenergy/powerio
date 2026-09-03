@@ -1212,6 +1212,13 @@ impl JsonWalker<'_> {
     fn extension_namespace(&self, name: &str) -> String {
         let stated = self.extension_versions.get(name).map(String::as_str);
         let version = stated.unwrap_or("1.2");
+        if name == "slackTerminal"
+            && let Some(minor) = version.strip_prefix("1.")
+            && !minor.is_empty()
+            && minor.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return format!("{SLACK_TERMINAL_NAMESPACE_PREFIX}1_{minor}");
+        }
         if let Some((_, _, namespace)) = MAPPED_EXTENSION_NAMESPACES
             .iter()
             .find(|(extension, mapped, _)| *extension == name && *mapped == version)
@@ -7880,7 +7887,11 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
         xml(source_model_format),
         xml(validation),
     );
-    if let Some(detailed) = network.detailed_connectivity() {
+    if let Some(detailed) = network
+        .detailed_connectivity()
+        .as_deref()
+        .filter(|detailed| network.buses().is_empty() || !detailed.voltage_levels.is_empty())
+    {
         diagnose_xiidm_projection(detailed, &mut diagnostics)?;
         validate_xiidm_tap_changers(detailed)?;
         validate_xiidm_reactive_limits(detailed)?;
@@ -7940,9 +7951,15 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
     }
     diagnostics.push(
         &codes::EMIT_XIIDM.value_defaulted,
-        "the network has no substation or voltage level hierarchy; XIIDM hierarchy was derived from buses",
+        "the network has no complete substation or voltage level hierarchy; XIIDM hierarchy was derived from buses",
     );
-    let detailed = derive_detailed_connectivity(network, &mut diagnostics)?;
+    let mut detailed = derive_detailed_connectivity(network, &mut diagnostics)?;
+    if let Some(supplied) = network.detailed_connectivity() {
+        detailed.omitted_fields.clone_from(&supplied.omitted_fields);
+        detailed
+            .component_metadata
+            .clone_from(&supplied.component_metadata);
+    }
     validate_xiidm_tap_changers(&detailed)?;
     validate_xiidm_reactive_limits(&detailed)?;
     validate_xiidm_dc_emission(&detailed)?;
@@ -14213,6 +14230,22 @@ mod tests {
             .find(|bus| bus.kind == BusType::Ref)
             .unwrap();
         assert_eq!(reference.uid.as_deref(), Some("B2"));
+
+        let jiidm = write_jiidm(&network).unwrap();
+        let older = jiidm
+            .text
+            .replacen("\"version\" : \"1.5\"", "\"version\" : \"1.3\"", 1);
+        assert_ne!(
+            older, jiidm.text,
+            "the fixture must state SlackTerminal 1.3"
+        );
+        let back = parse_jiidm_source(&older, &mut Diagnostics::new()).unwrap();
+        let reference = back
+            .buses()
+            .iter()
+            .find(|bus| bus.kind == BusType::Ref)
+            .unwrap();
+        assert_eq!(reference.uid.as_deref(), Some("B2"));
     }
 
     /// A slack terminal naming an equipment the document does not declare is a
@@ -14693,6 +14726,55 @@ mod tests {
         assert_eq!(detailed.switches.len(), 1);
         assert_eq!(detailed.switches[0].kind, SwitchKind::Breaker);
         assert!(detailed.switches[0].open);
+    }
+
+    #[test]
+    fn metadata_only_detailed_connectivity_derives_a_writable_hierarchy() {
+        let mut network = parse_xiidm_source(BUS_BREAKER, &mut Diagnostics::new()).unwrap();
+        let metadata = network
+            .detailed_connectivity()
+            .as_ref()
+            .unwrap()
+            .component_metadata
+            .clone();
+        *network.detailed_connectivity_mut() = Some(Arc::new(DetailedConnectivity {
+            component_metadata: metadata,
+            ..DetailedConnectivity::default()
+        }));
+
+        let emission = write_xiidm(&network).unwrap();
+        assert!(emission.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code() == codes::EMIT_XIIDM.value_defaulted.code
+                && diagnostic.message().contains("hierarchy was derived")
+        }));
+        let reparsed = parse_xiidm_source(&emission.text, &mut Diagnostics::new()).unwrap();
+        assert!(
+            !reparsed
+                .detailed_connectivity()
+                .as_ref()
+                .unwrap()
+                .voltage_levels
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn dc_only_detailed_connectivity_needs_no_ac_voltage_level() {
+        let source = r#"<?xml version="1.0" encoding="UTF-8"?>
+<iidm:network xmlns:iidm="http://www.powsybl.org/schema/iidm/1_17" id="dc-only" caseDate="2026-01-01T00:00:00Z" forecastDistance="0" sourceFormat="test" minimumValidationLevel="STEADY_STATE_HYPOTHESIS">
+  <iidm:dcNode id="N1" nominalV="500"/>
+  <iidm:dcNode id="N2" nominalV="500"/>
+  <iidm:dcSwitch id="S" dcNode1="N1" dcNode2="N2" kind="BREAKER" open="false" r="0"/>
+</iidm:network>"#;
+        let network = parse_xiidm_source(source, &mut Diagnostics::new()).unwrap();
+
+        let emission = write_xiidm(&network).unwrap();
+        assert!(emission.text.contains("<iidm:dcNode"));
+        assert!(emission.text.contains("<iidm:dcSwitch"));
+        assert!(!emission.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code() == codes::EMIT_XIIDM.value_defaulted.code
+                && diagnostic.message().contains("hierarchy was derived")
+        }));
     }
 
     #[test]

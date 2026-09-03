@@ -1763,7 +1763,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> TextEmission {
         },
         &mut warnings,
     );
-    super::warn_dropped_areas(&F, "PSLF .epc", net, &mut warnings);
+    super::warn_dropped_areas(&F, "PSLF .epc", true, net, &mut warnings);
     let branch_solutions = net
         .branches()
         .iter()

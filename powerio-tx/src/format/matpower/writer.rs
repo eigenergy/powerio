@@ -147,6 +147,29 @@ fn canonical_warnings(net: &BalancedNetwork) -> Diagnostics {
              with no status"
         ));
     }
+    let mut shunts_per_bus = BTreeMap::<BusId, usize>::new();
+    let switched_shunts = net
+        .shunts()
+        .iter()
+        .filter(|shunt| shunt.in_service)
+        .inspect(|shunt| *shunts_per_bus.entry(shunt.bus).or_default() += 1)
+        .filter(|shunt| shunt.control.is_some() || shunt.section_count.is_some())
+        .count();
+    let collapsed_buses = shunts_per_bus.values().filter(|count| **count > 1).count();
+    if switched_shunts > 0 || collapsed_buses > 0 {
+        let message = match (switched_shunts, collapsed_buses) {
+            (switched, 0) => format!(
+                "{switched} switched shunt control record(s) dropped: a MATPOWER bus row carries only the current aggregate GS/BS values"
+            ),
+            (0, buses) => format!(
+                "shunt identity on {buses} bus(es) collapsed: a MATPOWER bus row carries only one aggregate GS/BS pair"
+            ),
+            (switched, buses) => format!(
+                "{switched} switched shunt control record(s) dropped and shunt identity on {buses} bus(es) collapsed: a MATPOWER bus row carries only one aggregate GS/BS pair"
+            ),
+        };
+        warnings.push(&F.value_collapsed, message);
+    }
     warn_extra_branch_rating_sets(&F, "MATPOWER .m", net, &mut warnings);
     let branch_solutions = net
         .branches()

@@ -9,22 +9,19 @@
 //! is a target column: the balanced case formats, the PowSybl and ENTSO-E
 //! exchange formats (XIIDM, JIIDM, CGMES, UCTE-DEF), the dataset directories
 //! (PyPSA CSV, GridFM Parquet), PowerIO's own network document, and the three
-//! read only sources (IEEE CDF, GO Challenge 3, DeepMind OPFData). That is
-//! nineteen rows and sixteen columns, which no PR comment renders readably as
-//! one table, so the columns are grouped by what the formats are for and each
-//! group keeps every source row. The grouping changes the layout and not the
-//! cells: every source is still run into every target.
+//! read only sources (PSS/E RAW revision 32, IEEE CDF, GO Challenge 3, and
+//! DeepMind OPFData). That is twenty rows and sixteen columns, which no PR
+//! comment renders readably as one table, so the columns are grouped by what
+//! the formats are for and each group keeps every source row. The grouping
+//! changes the layout and not the cells: every source is still run into every
+//! target.
 //!
-//! Two parse only inputs are named here rather than run. A revision 32 `.raw`
-//! row is the next one to land, and both vendored version 32 exports currently
-//! fail three checks rather than reporting a loss: the XIIDM and JIIDM cells
-//! fail to read back because the writer takes its detailed connectivity path
-//! for a network whose detailed record states no voltage level and emits no
-//! hierarchy at all; the MATPOWER, pandapower, GridFM, and UCTE cells change
-//! the element counts (a shunt, a generator, a branch). A `.pwb` row waits on
-//! the same vintage work: the export this repository vendors states no located
-//! bus type, so the case reaches a dataset target with no reference bus and
-//! cannot be written at all.
+//! One parse only input is named here rather than run. The only vendored
+//! PowerWorld `.pwb` export states no located bus type, so its network has no
+//! reference bus. GridFM requires exactly one reference bus and therefore
+//! cannot write that source; a PWB row cannot satisfy the all-target contract
+//! until a redistributable fixture states a slack bus or the binary record
+//! carrying that designation is understood.
 //!
 //! A geographic layer is a `powerio.GeoLayer` rather than a network, and no
 //! grid exchange format states a standalone layer, so it has its own one cell
@@ -458,7 +455,7 @@ struct MatrixReport {
     /// column indices it renders. Every table keeps every source row, so the
     /// split changes only how the same cells are laid out.
     groups: Vec<(&'static str, Vec<usize>)>,
-    case_count: usize,
+    coverage: &'static str,
     cells: Vec<Vec<Cell>>,
     failures: Vec<String>,
 }
@@ -531,7 +528,7 @@ fn silent_loss_note(cell: &Cell) -> String {
 fn write_matrix_section(markdown: &mut String, title: &str, report: &MatrixReport) {
     writeln!(markdown, "### {title}").unwrap();
     writeln!(markdown).unwrap();
-    writeln!(markdown, "{} cases per source row.", report.case_count).unwrap();
+    writeln!(markdown, "{}", report.coverage).unwrap();
     for (group, columns) in &report.groups {
         if columns.is_empty() {
             continue;
@@ -715,7 +712,7 @@ fn code_object_name(text: &str) -> String {
 }
 
 /// Which table a target column renders in. One table of every source against
-/// every target is 18 rows by 16 columns, which no PR comment renders
+/// every target is 20 rows by 16 columns, which no PR comment renders
 /// readably, so the columns are grouped by what the formats are for and every
 /// group keeps every source row. No cell is dropped by the grouping.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -799,7 +796,7 @@ const fn read_only(
 /// Every 1.0 transmission format. The writable ones are both source rows and
 /// target columns, in this order; the read only ones are source rows only and
 /// come last, so a target column index indexes this array directly.
-const TRANSMISSION_FORMATS: [TransmissionFormat; 19] = [
+const TRANSMISSION_FORMATS: [TransmissionFormat; 20] = [
     transmission("MATPOWER .m", "matpower", Emission::Document, Family::Case),
     transmission(
         "PowerModels JSON",
@@ -855,6 +852,12 @@ const TRANSMISSION_FORMATS: [TransmissionFormat; 19] = [
         "model-json",
         Emission::ModelJson,
         Family::Dataset,
+    ),
+    read_only(
+        "PSS/E .raw 32",
+        "psse",
+        Family::Case,
+        "psse/ExampleVersion32_exported.raw",
     ),
     read_only(
         "IEEE CDF",
@@ -1082,7 +1085,17 @@ fn transmission_targets() -> impl Iterator<Item = (usize, TransmissionFormat)> {
 // - `GO Challenge 3 JSON` is a new source row. A problem statement parses as
 //   the security constrained commitment it states, and the row runs the
 //   network that problem is stated on into every target.
-const TRANSMISSION_WARNING_BASELINE: [[usize; TRANSMISSION_TARGETS]; 19] = [
+// - `PSS/E .raw 32` is a new read-only source row over PowSybl's eight-bus
+//   export. Its two source warnings are the unmodeled OWNER and ZONE sections.
+//   Target-specific warnings name area attributes, switched-shunt and tap
+//   control, the self-loop UCTE cannot state, and each target's synthesized
+//   defaults. The electrical and core invariants hold after reducing the
+//   source to records the target format actually defines.
+// - MATPOWER carries only aggregate bus GS/BS values. Two IIDM payload cases
+//   contain switched shunt controls, so the XIIDM, JIIDM, and CGMES source
+//   rows each add two warnings in the MATPOWER column rather than silently
+//   discarding the control records.
+const TRANSMISSION_WARNING_BASELINE: [[usize; TRANSMISSION_TARGETS]; 20] = [
     [0, 1, 15, 15, 18, 7, 15, 23, 14, 76, 76, 64, 48, 15, 27, 0], // MATPOWER .m
     [0, 0, 15, 15, 17, 6, 14, 22, 13, 75, 75, 63, 47, 14, 27, 0], // PowerModels JSON
     [1, 1, 0, 0, 2, 1, 3, 1, 2, 38, 38, 19, 35, 9, 32, 0],        // PSS/E .raw 33
@@ -1092,9 +1105,9 @@ const TRANSMISSION_WARNING_BASELINE: [[usize; TRANSMISSION_TARGETS]; 19] = [
     [1, 1, 8, 8, 9, 1, 2, 1, 8, 62, 62, 43, 59, 9, 28, 1],        // pandapower JSON
     [0, 0, 9, 9, 12, 0, 7, 0, 7, 73, 73, 43, 42, 9, 27, 0],       // Surge JSON
     [0, 0, 1, 1, 1, 0, 4, 3, 0, 44, 44, 18, 34, 8, 32, 0],        // PSLF .epc
-    [7, 7, 39, 39, 8, 7, 9, 7, 8, 12, 12, 191, 66, 15, 38, 6],    // XIIDM 1.17
-    [7, 7, 39, 39, 8, 7, 9, 7, 8, 12, 12, 191, 66, 15, 38, 6],    // JIIDM 1.17
-    [7, 7, 74, 327, 7, 7, 8, 7, 7, 50, 50, 19, 58, 14, 39, 7],    // CGMES 3.0
+    [9, 7, 39, 39, 8, 7, 9, 7, 8, 12, 12, 191, 66, 15, 38, 6],    // XIIDM 1.17
+    [9, 7, 39, 39, 8, 7, 9, 7, 8, 12, 12, 191, 66, 15, 38, 6],    // JIIDM 1.17
+    [9, 7, 74, 327, 7, 7, 8, 7, 7, 50, 50, 19, 58, 14, 39, 7],    // CGMES 3.0
     [
         25, 19, 13, 13, 25, 19, 13, 19, 25, 49, 49, 26, 13, 19, 37, 7,
     ], // UCTE-DEF .uct
@@ -1103,6 +1116,7 @@ const TRANSMISSION_WARNING_BASELINE: [[usize; TRANSMISSION_TARGETS]; 19] = [
         28, 27, 35, 35, 35, 27, 30, 27, 33, 95, 95, 64, 67, 33, 54, 27,
     ], // GridFM Parquet
     [0, 1, 15, 15, 18, 7, 15, 23, 14, 76, 76, 64, 48, 15, 27, 0], // model JSON
+    [4, 3, 2, 2, 3, 3, 4, 3, 5, 16, 16, 11, 10, 5, 8, 2],         // PSS/E .raw 32
     [7, 7, 6, 6, 7, 7, 8, 7, 7, 14, 14, 10, 14, 8, 12, 6],        // IEEE CDF
     [5, 4, 7, 7, 8, 4, 7, 4, 6, 9, 9, 9, 14, 8, 7, 1],            // GO Challenge 3 JSON
     [3, 2, 5, 5, 5, 3, 4, 2, 4, 33, 33, 10, 32, 5, 8, 2],         // DeepMind OPFData JSON
@@ -1175,7 +1189,7 @@ fn run_transmission_matrix() -> MatrixReport {
         sources,
         targets,
         groups,
-        case_count: TRANSMISSION_CASES.len(),
+        coverage: "Six generated cases per writable source row; one vendored case per read-only source row.",
         cells,
         failures,
     }
@@ -1422,6 +1436,39 @@ fn network_a_target_holds(
     if matches!(target.token, "xiidm" | "jiidm") {
         return network_iidm_holds(network);
     }
+    if target.token == "matpower" || target.token == "gridfm" {
+        let mut held = network.clone();
+        let mut merged = BTreeMap::<powerio_tx::BusId, powerio_tx::Shunt>::new();
+        for shunt in held.shunts().iter().filter(|shunt| shunt.in_service) {
+            let aggregate = merged
+                .entry(shunt.bus)
+                .or_insert_with(|| powerio_tx::Shunt::new(shunt.bus, 0.0, 0.0));
+            aggregate.g += shunt.g;
+            aggregate.b += shunt.b;
+        }
+        *held.shunts_mut() = merged.into_values().collect();
+        return held;
+    }
+    if target.token == "pandapower-json" {
+        let mut held = network.clone();
+        let generator_buses = held
+            .generators()
+            .iter()
+            .map(|generator| generator.bus)
+            .collect::<std::collections::HashSet<_>>();
+        let empty_references = held
+            .buses()
+            .iter()
+            .filter(|bus| {
+                bus.kind == powerio_tx::BusType::Ref && !generator_buses.contains(&bus.id)
+            })
+            .map(|bus| bus.id)
+            .collect::<Vec<_>>();
+        for bus in empty_references {
+            held.generators_mut().push(powerio_tx::Generator::new(bus));
+        }
+        return held;
+    }
     if target.token != "ucte" {
         return network.clone();
     }
@@ -1432,6 +1479,8 @@ fn network_a_target_holds(
     // one bus state one generation.
     let mut held = network.clone();
     held.shunts_mut().clear();
+    held.branches_mut()
+        .retain(|branch| branch.from != branch.to);
     for generator in held.generators_mut() {
         if !generator.in_service {
             generator.in_service = true;
@@ -1453,6 +1502,20 @@ fn network_a_target_holds(
         }
     }
     *held.generators_mut() = merged;
+    let generator_buses = held
+        .generators()
+        .iter()
+        .map(|generator| generator.bus)
+        .collect::<std::collections::HashSet<_>>();
+    let empty_references = held
+        .buses()
+        .iter()
+        .filter(|bus| bus.kind == powerio_tx::BusType::Ref && !generator_buses.contains(&bus.id))
+        .map(|bus| bus.id)
+        .collect::<Vec<_>>();
+    for bus in empty_references {
+        held.generators_mut().push(powerio_tx::Generator::new(bus));
+    }
     held
 }
 
@@ -1603,7 +1666,7 @@ fn run_geo_layer_matrix() -> MatrixReport {
         sources: vec![SOURCE],
         targets: vec![TARGET],
         groups: vec![("Into the geographic layer document", vec![0])],
-        case_count: 1,
+        coverage: "One case per source row.",
         cells: vec![vec![cell]],
         failures,
     }
@@ -1700,7 +1763,7 @@ fn run_distribution_matrix() -> MatrixReport {
         sources: formats.clone(),
         targets: formats,
         groups,
-        case_count: DISTRIBUTION_CASES.len(),
+        coverage: "Seven cases per source row.",
         cells,
         failures,
     }

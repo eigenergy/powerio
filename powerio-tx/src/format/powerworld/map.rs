@@ -1106,7 +1106,7 @@ pub(crate) fn write_powerworld(net: &BalancedNetwork) -> TextEmission {
         |key| matches!(key, "LoadID" | "ShuntID" | "BranchDeviceType") || key == LINE_CIRCUIT,
         &mut warnings,
     );
-    super::super::warn_dropped_areas(&F, "PowerWorld .aux", net, &mut warnings);
+    super::super::warn_dropped_areas(&F, "PowerWorld .aux", true, net, &mut warnings);
     let branch_solutions = net
         .branches()
         .iter()

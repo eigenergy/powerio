@@ -479,12 +479,10 @@ struct Store {
     /// the final diagnostic pass distinguish a mapped class from fields on
     /// that class which the mapping did not consume.
     read_props: RefCell<BTreeSet<(usize, usize)>>,
-    /// Whether every document that declared a modeling authority declared this
-    /// writer's own. Such a set was produced by fresh CGMES emission, so the
-    /// containers, limit types, islands, and subordinate mRIDs in it are values
-    /// the writer synthesized rather than anything a source case stated, and
-    /// reporting them as unmapped would make every conversion through CGMES
-    /// declare a loss of data that was never stated.
+    /// Whether a document declared this writer's modeling authority. The
+    /// declaration permits suppressing only the exact container, island, and
+    /// subordinate values fresh emission synthesizes; it does not make other
+    /// classes or properties safe to ignore.
     own_output: bool,
     /// Whether any document declared a modeling authority other than this
     /// writer's own, which makes the set a third party document set.
@@ -5595,27 +5593,73 @@ fn normalized_identity_value(raw: &str) -> &str {
 /// Warn for every unconsumed class and every unconsumed field on a consumed
 /// class. Property access is tracked by exact object and property position so
 /// repeated RDF properties cannot hide an unread value.
-/// Whether this document set was produced by fresh CGMES emission: every
-/// declared modeling authority is this writer's own.
+/// Whether every declared modeling authority is this writer's own.
 fn is_own_output(store: &Store) -> bool {
     store.own_output && !store.foreign_output
 }
 
+/// Unmapped container classes fresh emission creates to make a complete
+/// equipment hierarchy. No source-neutral record supplies their identity or
+/// fields.
+fn synthesized_unmapped_class(class: &str) -> bool {
+    matches!(class, "GeographicalRegion" | "SubGeographicalRegion")
+}
+
+/// Properties fresh emission derives solely to connect its generated CGMES
+/// hierarchy and state records.
+fn synthesized_unmapped_property(class: &str, property: &str) -> bool {
+    matches!(
+        (class, property),
+        ("GeneratingUnit", "Equipment.inService")
+            | ("OperationalLimitType", "OperationalLimitType.direction")
+            | (
+                "LinearShuntCompensator",
+                "ShuntCompensator.nomU" | "ShuntCompensator.normalSections"
+            )
+            | ("Substation", "Substation.Region")
+            | ("TopologicalIsland", "TopologicalIsland.TopologicalNodes")
+    )
+}
+
+/// Classes whose mRID identifies a record subordinate to source-neutral
+/// equipment. Fresh emission derives these identities from their owner.
+fn synthesized_subordinate_identity(class: &str) -> bool {
+    matches!(
+        class,
+        "TapChangerControl"
+            | "RatioTapChangerTable"
+            | "RatioTapChangerTablePoint"
+            | "PhaseTapChangerTable"
+            | "PhaseTapChangerTablePoint"
+            | "ReactiveCapabilityCurve"
+            | "VsCapabilityCurve"
+            | "CurveData"
+            | "OperationalLimitType"
+            | "CurrentLimit"
+            | "ActivePowerLimit"
+            | "ApparentPowerLimit"
+    )
+}
+
 fn warn_unmapped(store: &Store, warnings: &mut CgmesDiagnostics) {
-    if is_own_output(store) {
-        return;
-    }
+    let own_output = is_own_output(store);
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
     let mut fields: BTreeMap<(&str, &str), (usize, Vec<&str>)> = BTreeMap::new();
     let read_props = store.read_props.borrow();
     for (object_at, object) in store.objects.iter().enumerate() {
         let class = object.class.as_str();
         if !class_is_consumed(class) {
+            if own_output && synthesized_unmapped_class(class) {
+                continue;
+            }
             *counts.entry(class).or_default() += 1;
             continue;
         }
         for (property_at, (property, value)) in object.props.iter().enumerate() {
             if read_props.contains(&(object_at, property_at)) {
+                continue;
+            }
+            if own_output && synthesized_unmapped_property(class, property) {
                 continue;
             }
             if property == "IdentifiedObject.mRID" {
@@ -5667,9 +5711,6 @@ fn warn_unmapped(store: &Store, warnings: &mut CgmesDiagnostics) {
 }
 
 fn warn_regenerated_subordinate_identities(store: &Store, warnings: &mut CgmesDiagnostics) {
-    if is_own_output(store) {
-        return;
-    }
     for class in [
         "TapChangerControl",
         "RatioTapChangerTable",
@@ -5684,6 +5725,9 @@ fn warn_regenerated_subordinate_identities(store: &Store, warnings: &mut CgmesDi
         "ActivePowerLimit",
         "ApparentPowerLimit",
     ] {
+        if is_own_output(store) && synthesized_subordinate_identity(class) {
+            continue;
+        }
         let ids = store.of_class(class).collect::<Vec<_>>();
         if ids.is_empty() {
             continue;
@@ -6349,6 +6393,94 @@ mod tests {
             warning.contains("EquivalentInjection.p")
                 || (warning.contains("IdentifiedObject.mRID")
                     && warning.contains("EquivalentInjection"))
+        }));
+    }
+
+    #[test]
+    fn powerio_authority_suppresses_only_values_fresh_emission_synthesizes() {
+        let mut store = Store {
+            own_output: true,
+            ..Store::default()
+        };
+        store
+            .merge(CimDocument {
+                cim_namespaces: BTreeSet::from(["http://iec.ch/TC57/CIM100#".into()]),
+                header: None,
+                objects: vec![
+                    CimObject {
+                        class: "GeographicalRegion".into(),
+                        id: "generated-region".into(),
+                        definition: true,
+                        props: Vec::new(),
+                    },
+                    CimObject {
+                        class: "Substation".into(),
+                        id: "substation".into(),
+                        definition: true,
+                        props: vec![
+                            (
+                                "Substation.Region".into(),
+                                PropValue::Ref("generated-region".into()),
+                            ),
+                            (
+                                "Substation.vendorProperty".into(),
+                                PropValue::Text("retained".into()),
+                            ),
+                        ],
+                    },
+                    CimObject {
+                        class: "ACLineSegment".into(),
+                        id: "line".into(),
+                        definition: true,
+                        props: vec![(
+                            "ACLineSegment.shortCircuitEndTemperature".into(),
+                            PropValue::Text("80".into()),
+                        )],
+                    },
+                    CimObject {
+                        class: "LinearShuntCompensator".into(),
+                        id: "shunt".into(),
+                        definition: true,
+                        props: vec![
+                            (
+                                "ShuntCompensator.nomU".into(),
+                                PropValue::Text("230".into()),
+                            ),
+                            (
+                                "ShuntCompensator.normalSections".into(),
+                                PropValue::Text("1".into()),
+                            ),
+                        ],
+                    },
+                    CimObject {
+                        class: "VendorControl".into(),
+                        id: "control".into(),
+                        definition: true,
+                        props: Vec::new(),
+                    },
+                ],
+            })
+            .unwrap();
+
+        let mut warnings = CgmesDiagnostics::new(&codes::READ_CGMES_RECORD_UNMAPPED);
+        warn_unmapped(&store, &mut warnings);
+        assert!(warnings.iter().any(|warning| {
+            warning.info.code == codes::READ_CGMES_FIELD_UNMAPPED.code
+                && warning.contains("shortCircuitEndTemperature")
+        }));
+        assert!(warnings.iter().any(|warning| {
+            warning.info.code == codes::READ_CGMES_FIELD_UNMAPPED.code
+                && warning.contains("Substation.vendorProperty")
+        }));
+        assert!(warnings.iter().any(|warning| {
+            warning.info.code == codes::READ_CGMES_RECORD_UNMAPPED.code
+                && warning.contains("VendorControl")
+        }));
+        assert!(!warnings.iter().any(|warning| {
+            warning.contains("GeographicalRegion")
+                || warning.contains("Substation.Region")
+                || warning.contains("ShuntCompensator.nomU")
+                || warning.contains("ShuntCompensator.normalSections")
         }));
     }
 }

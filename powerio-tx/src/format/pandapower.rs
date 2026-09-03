@@ -1011,7 +1011,7 @@ fn warn_pandapower_branch_losses(net: &BalancedNetwork, warnings: &mut Diagnosti
         ));
     }
     warn_extra_branch_rating_sets(&F, "pandapower JSON", net, warnings);
-    super::warn_dropped_areas(&F, "pandapower JSON", net, warnings);
+    super::warn_dropped_areas(&F, "pandapower JSON", false, net, warnings);
     let branch_solutions = net
         .branches()
         .iter()
@@ -1673,11 +1673,13 @@ fn ext_grid_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
     let mut data = Vec::new();
     // A Ref bus with no generator gets an ext_grid row so pandapower sees a
     // slack; reading the file back materializes the row as a Ref generator.
+    let mut synthesized = 0usize;
     for b in net.buses() {
         if b.kind != BusType::Ref || net.generators().iter().any(|g| g.bus == b.id) {
             continue;
         }
         index.push(Value::from(data.len() as u64));
+        synthesized += 1;
         data.push(vec![
             b.name.clone().map_or(Value::Null, Value::String),
             pp_bus(b.id),
@@ -1687,6 +1689,14 @@ fn ext_grid_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
             Value::Bool(true),
             Value::Bool(true),
         ]);
+    }
+    if synthesized > 0 {
+        warnings.push(
+            &F.value_defaulted,
+            format!(
+                "{synthesized} reference bus(es) have no generator; emitted zero-output ext_grid rows because pandapower requires a slack element, and those rows read back as generators"
+            ),
+        );
     }
     frame("ext_grid", &columns, index, data, warnings)
 }
@@ -3691,6 +3701,7 @@ mod tests {
     #[test]
     fn writer_zip_load_columns_round_trip() {
         let mut net = test_net(vec![test_bus(1, BusType::Ref)]);
+        net.generators_mut().push(test_gen(1, None));
         net.loads_mut().push(Load {
             bus: BusId(1),
             p: 10.0,
@@ -3834,6 +3845,10 @@ mod tests {
                 json!(true),
             ]
         );
+        assert!(conv.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code() == F.value_defaulted.code
+                && diagnostic.message().contains("read back as generators")
+        }));
     }
 
     #[test]

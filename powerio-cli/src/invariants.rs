@@ -11,7 +11,7 @@
 //! magnitudes into a findings file that may leave the machine. A shared
 //! `format!` would have forced one of those two to be wrong.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 use powerio_dist::MulticonductorNetwork;
 use powerio_matrix::BalancedNetwork;
@@ -124,9 +124,98 @@ struct BusRow {
 }
 
 /// The relabeling-free electrical digest: one row per bus and one conductance
-/// and susceptance pair per off-diagonal admittance entry, both sorted so a
-/// renumbering does not change them.
+/// and susceptance pair per off-diagonal admittance entry. Comparison treats
+/// both collections as tolerance-aware multisets, so a renumbering does not
+/// change them.
 type ElectricalDigest = (Vec<BusRow>, Vec<(f64, f64)>);
+
+/// Return one left-hand item that cannot participate in a complete matching.
+///
+/// The alternating-path search compares each item with the predicate instead
+/// of sorting approximate values by their exact float bits. Processing the
+/// most constrained items first keeps the ordinary case linear in the number
+/// of candidate pairs while still finding a complete matching when a greedy
+/// pairing would choose the wrong near-equal row.
+fn unmatched_multiset_item<T>(
+    before: &[T],
+    after: &[T],
+    matches: impl Fn(&T, &T) -> bool,
+) -> Option<usize> {
+    if before.len() != after.len() {
+        return Some(0);
+    }
+    let candidates = before
+        .iter()
+        .map(|before| {
+            after
+                .iter()
+                .enumerate()
+                .filter_map(|(index, after)| matches(before, after).then_some(index))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let mut order = (0..before.len()).collect::<Vec<_>>();
+    order.sort_by_key(|index| candidates[*index].len());
+
+    let mut left_match: Vec<Option<usize>> = vec![None; before.len()];
+    let mut right_match: Vec<Option<usize>> = vec![None; after.len()];
+    for root in order {
+        let mut visited_left = vec![false; before.len()];
+        let mut visited_right = vec![false; after.len()];
+        let mut parent_right = vec![None; after.len()];
+        let mut queue = VecDeque::from([root]);
+        visited_left[root] = true;
+        let mut free = None;
+        while let Some(left) = queue.pop_front() {
+            for &right in &candidates[left] {
+                if visited_right[right] {
+                    continue;
+                }
+                visited_right[right] = true;
+                parent_right[right] = Some(left);
+                if let Some(next_left) = right_match[right] {
+                    if !visited_left[next_left] {
+                        visited_left[next_left] = true;
+                        queue.push_back(next_left);
+                    }
+                } else {
+                    free = Some(right);
+                    break;
+                }
+            }
+            if free.is_some() {
+                break;
+            }
+        }
+        let Some(mut right) = free else {
+            return Some(root);
+        };
+        loop {
+            let left = parent_right[right].expect("an augmenting edge records its left endpoint");
+            let previous = left_match[left].replace(right);
+            right_match[right] = Some(left);
+            let Some(previous) = previous else {
+                break;
+            };
+            right = previous;
+        }
+    }
+    None
+}
+
+fn bus_rows_match(before: &BusRow, after: &BusRow, tolerance: f64) -> bool {
+    !beyond_tol(before.diagonal.0, after.diagonal.0, tolerance)
+        && !beyond_tol(before.diagonal.1, after.diagonal.1, tolerance)
+        && before
+            .injections
+            .iter()
+            .zip(&after.injections)
+            .all(|(before, after)| !beyond_tol(*before, *after, tolerance))
+}
+
+fn admittances_match(before: &(f64, f64), after: &(f64, f64), tolerance: f64) -> bool {
+    !beyond_tol(before.0, after.0, tolerance) && !beyond_tol(before.1, after.1, tolerance)
+}
 
 /// The electrical problem compared up to bus relabeling, for a target format
 /// that states no bus number.
@@ -136,8 +225,8 @@ type ElectricalDigest = (Vec<BusRow>, Vec<(f64, f64)>);
 /// are compared as sorted multisets. That is the power flow problem itself: an
 /// admittance that changed, an injection that moved to a bus with different
 /// neighbours, or an element that vanished all show up, while a renumbering
-/// alone does not. Two buses carrying identical rows are interchangeable, and
-/// exchanging them is the same power flow problem.
+/// alone does not. Two buses carrying rows equal within the requested tolerance
+/// are interchangeable, and exchanging them is the same power flow problem.
 ///
 /// Returns the first row that disagrees, in the digest's own order.
 #[must_use]
@@ -201,9 +290,6 @@ pub fn electrical_change_up_to_relabeling(
                 off_diagonal.push(value);
             }
         }
-        let key = |value: &(f64, f64)| (value.0.to_bits(), value.1.to_bits());
-        rows.sort_by_key(|row| (key(&row.diagonal), row.injections.map(f64::to_bits)));
-        off_diagonal.sort_by_key(key);
         Some((rows, off_diagonal))
     };
     let (before_rows, before_off) = digest(before)?;
@@ -222,29 +308,62 @@ pub fn electrical_change_up_to_relabeling(
             after_off.len()
         ));
     }
-    for (before, after) in before_rows.iter().zip(&after_rows) {
-        let moved = beyond_tol(before.diagonal.0, after.diagonal.0, tolerance)
-            || beyond_tol(before.diagonal.1, after.diagonal.1, tolerance)
-            || before
-                .injections
-                .iter()
-                .zip(&after.injections)
-                .any(|(before, after)| beyond_tol(*before, *after, tolerance));
-        if moved {
-            return Some(format!("bus row {before:?} became {after:?}"));
-        }
+    if let Some(index) = unmatched_multiset_item(&before_rows, &after_rows, |before, after| {
+        bus_rows_match(before, after, tolerance)
+    }) {
+        return Some(format!(
+            "bus row {:?} has no matching result row",
+            before_rows[index]
+        ));
     }
-    for (before, after) in before_off.iter().zip(&after_off) {
-        if beyond_tol(before.0, after.0, tolerance) || beyond_tol(before.1, after.1, tolerance) {
-            return Some(format!(
-                "off-diagonal admittance {before:?} became {after:?}"
-            ));
-        }
+    if let Some(index) = unmatched_multiset_item(&before_off, &after_off, |before, after| {
+        admittances_match(before, after, tolerance)
+    }) {
+        return Some(format!(
+            "off-diagonal admittance {:?} has no matching result entry",
+            before_off[index]
+        ));
     }
     None
 }
 
-/// Why a `Y_bus` comparison produced no answer./// Why a `Y_bus` comparison produced no answer.
+#[cfg(test)]
+mod relabeling_tests {
+    use super::{BusRow, bus_rows_match, unmatched_multiset_item};
+
+    #[test]
+    fn near_equal_rows_pair_by_all_electrical_values() {
+        let before = [
+            BusRow {
+                diagonal: (1.0, 0.0),
+                injections: [0.0; 4],
+            },
+            BusRow {
+                diagonal: (1.000_001, 0.0),
+                injections: [5.0, 0.0, 0.0, 0.0],
+            },
+        ];
+        let after = [
+            BusRow {
+                diagonal: (1.0, 0.0),
+                injections: [5.0, 0.0, 0.0, 0.0],
+            },
+            BusRow {
+                diagonal: (1.000_001, 0.0),
+                injections: [0.0; 4],
+            },
+        ];
+
+        assert_eq!(
+            unmatched_multiset_item(&before, &after, |before, after| {
+                bus_rows_match(before, after, 1e-3)
+            }),
+            None
+        );
+    }
+}
+
+/// Why a `Y_bus` comparison produced no answer.
 ///
 /// Distinguished from "the matrices agree" on purpose: a network the matrix
 /// builder refuses is a conversion failure, and reporting it as agreement is

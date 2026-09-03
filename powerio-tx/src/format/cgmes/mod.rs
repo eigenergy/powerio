@@ -476,18 +476,19 @@ mod tests {
     use super::*;
     use crate::TargetFormat;
     use crate::network::{
-        AcDcConverterControlMode, ActivePowerControl, Area, BoundaryLine, Branch, BranchSolution,
-        Bus, BusBreakerBus, BusId, BusType, BusbarSection, CalculatedBus, CaseMetadata,
-        ComponentMetadata, ConnectivityNode, CurveStyle, DcBusbar, DcConverterOperatingMode,
-        DcConverterUnit, DcGround, DcLine, DcNode, DcPolarity, DcSeriesDevice, DcSwitch,
-        DcSwitchKind, DcTerminal, DcTopologicalNode, DetailedConnectivity, EquipmentReactiveLimits,
-        ExternalIdentifier, Generator, GeneratorEnergySource, Hvdc, Impedance, Junction,
-        LineCommutatedConverter, LineCommutatedConverterOperatingMode,
-        LineCommutatedConverterReactiveModel, Load, LoadVoltageModel, LoadingLimits,
-        MinMaxReactiveLimits, OmittedField, OmittedFieldName, OperationalLimitGroup,
-        ReactiveCapabilityCurve, ReactiveCapabilityCurvePoint, ReactiveLimits, Shunt, ShuntBlock,
-        StaticVarCompensator, StaticVarCompensatorRegulationMode, Subnetwork, Substation, Switch,
-        SwitchKind, SwitchedShuntControl, SwitchedShuntMode, TapChanger, TapChangerKind,
+        AcDcConverterControlMode, ActivePowerControl, Area, BoundaryLine, Branch,
+        BranchCurrentRatings, BranchSolution, Bus, BusBreakerBus, BusId, BusType, BusbarSection,
+        CalculatedBus, CaseMetadata, ComponentMetadata, ConnectivityNode, CurveStyle, DcBusbar,
+        DcConverterOperatingMode, DcConverterUnit, DcGround, DcLine, DcNode, DcPolarity,
+        DcSeriesDevice, DcSwitch, DcSwitchKind, DcTerminal, DcTopologicalNode,
+        DetailedConnectivity, EquipmentReactiveLimits, ExternalIdentifier, Generator,
+        GeneratorEnergySource, Hvdc, Impedance, Junction, LineCommutatedConverter,
+        LineCommutatedConverterOperatingMode, LineCommutatedConverterReactiveModel, Load,
+        LoadVoltageModel, LoadingLimits, MinMaxReactiveLimits, OmittedField, OmittedFieldName,
+        OperationalLimitGroup, ReactiveCapabilityCurve, ReactiveCapabilityCurvePoint,
+        ReactiveLimits, Shunt, ShuntBlock, StaticVarCompensator,
+        StaticVarCompensatorRegulationMode, Subnetwork, Substation, Switch, SwitchKind,
+        SwitchedShuntControl, SwitchedShuntMode, TapChanger, TapChangerKind,
         TapChangerRegulationMode, TapChangerStep, TemporaryLimit, Terminal, TerminalReference,
         TieLine, TopologyEndpoint, TopologyKind, TopologySwitch, Transformer3W, VoltageLevel,
         VoltageSourceConverter, Winding,
@@ -516,6 +517,41 @@ mod tests {
             .push(Branch::new(BusId(1), BusId(2), 0.01, 0.1));
         network.assign_missing_component_ids();
         network
+    }
+
+    #[test]
+    fn derived_cgmes_limits_report_separate_current_ratings() {
+        let mut network = network();
+        network.branches_mut()[0].rate_a = 100.0;
+        network.branches_mut()[0].current_ratings =
+            Some(BranchCurrentRatings::new(500.0, 600.0, 700.0));
+
+        let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        assert!(output.warnings.iter().any(|warning| {
+            warning.info.code == codes::EMIT_CGMES.field_dropped.code
+                && warning.contains("current rating record dropped")
+        }));
+    }
+
+    #[test]
+    fn a_v2415_permanent_limit_states_no_acceptable_duration() {
+        let mut network = network();
+        network.branches_mut()[0].rate_a = 100.0;
+
+        let output = write::write_cgmes(&network, CgmesVersion::V2_4_15).unwrap();
+        let xml = output
+            .files
+            .iter()
+            .map(|(_, text)| text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let permanent = xml
+            .split("<cim:OperationalLimitType ")
+            .nth(1)
+            .and_then(|text| text.split("</cim:OperationalLimitType>").next())
+            .expect("a positive rate_a emits one limit type");
+        assert!(permanent.contains("<cim:IdentifiedObject.name>patl</"));
+        assert!(!permanent.contains("acceptableDuration"), "{permanent}");
     }
 
     fn append_vs_converter_records(

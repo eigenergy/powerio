@@ -107,7 +107,7 @@ pub fn write_powermodels_json(net: &BalancedNetwork) -> TextEmission {
             net.transformers_3w().len()
         ));
     }
-    super::warn_dropped_areas(&F, "PowerModels JSON", net, &mut warnings);
+    super::warn_dropped_areas(&F, "PowerModels JSON", true, net, &mut warnings);
     let voltage_loads = net
         .loads()
         .iter()

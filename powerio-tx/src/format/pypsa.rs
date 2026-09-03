@@ -714,7 +714,7 @@ pub(crate) fn pypsa_csv_artifacts(
         ));
     }
     warn_extra_branch_rating_sets(&F, "PyPSA CSV", net, &mut warnings);
-    super::warn_dropped_areas(&F, "PyPSA CSV", net, &mut warnings);
+    super::warn_dropped_areas(&F, "PyPSA CSV", false, net, &mut warnings);
     let branch_solutions = net
         .branches()
         .iter()

@@ -97,7 +97,7 @@ pub fn write_egret_json(net: &BalancedNetwork) -> TextEmission {
 }
 
 fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
-    super::warn_dropped_areas(&F, "egret JSON", net, warnings);
+    super::warn_dropped_areas(&F, "egret JSON", true, net, warnings);
     if !net.transformers_3w().is_empty() {
         warnings.push(
             &F.record_dropped,

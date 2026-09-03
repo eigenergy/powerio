@@ -1626,18 +1626,30 @@ pub(super) fn warn_dropped_extras(
 /// fixtures reach.
 const EXTRAS_KEYS_NAMED: usize = 6;
 
-/// Warn about the area attributes a target with no area table cannot state.
+/// Warn about the area data a target with no area table cannot state.
 ///
-/// Every one of these targets writes an area number on each bus row, so area
-/// membership itself survives and an area that states nothing else is carried
-/// whole. What such a format has no place for is the area's own attributes,
-/// and the line names the ones the network states.
+/// A target whose bus row carries the area number preserves membership and
+/// loses only attributes of the area record. A target with no bus area field
+/// loses the membership as well, so even an otherwise empty area is reported.
 pub(super) fn warn_dropped_areas(
     family: &'static EmitFamily,
     target: &str,
+    writes_bus_area: bool,
     net: &BalancedNetwork,
     warnings: &mut Diagnostics,
 ) {
+    if !writes_bus_area {
+        if !net.areas().is_empty() {
+            warnings.push(
+                &family.areas_dropped,
+                format!(
+                    "{} area record(s) dropped: {target} writes neither an area table nor a bus area number",
+                    net.areas().len()
+                ),
+            );
+        }
+        return;
+    }
     let mut fields: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
     for area in net.areas() {
         if area.slack_bus.is_some() {
