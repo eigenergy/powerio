@@ -1996,7 +1996,7 @@ impl BalancedNetwork {
     }
 
     /// Every identity the network's records already carry.
-    fn component_ids_in_use(&self) -> HashSet<String> {
+    pub(crate) fn component_ids_in_use(&self) -> HashSet<String> {
         let mut used = HashSet::new();
         macro_rules! collect {
             ($($table:ident),+) => {

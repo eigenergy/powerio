@@ -320,6 +320,30 @@ fn fresh_jiidm_follows_the_powsybl_field_order() {
         key_orders(&reference, "", &mut reference_orders);
         let mut fresh_orders = Vec::new();
         key_orders(&fresh, "", &mut fresh_orders);
+        // IIDM has no bus type, so PowerIO states the reference bus as the
+        // SlackTerminal extension PowSybl defines for it. A PowSybl fixture
+        // that declares no reference bus therefore has no `extensions` paths
+        // where the fresh output has them; every path the fixture does state
+        // is compared in order.
+        let reference_paths = reference_orders
+            .iter()
+            .map(|(path, _)| path.clone())
+            .collect::<std::collections::HashSet<_>>();
+        let extra = fresh_orders
+            .iter()
+            .filter(|(path, _)| !reference_paths.contains(path))
+            .map(|(path, _)| path.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            extra,
+            [
+                "/extensionVersions[]",
+                "/extensions[]",
+                "/extensions[]/slackTerminal"
+            ],
+            "{name}"
+        );
+        fresh_orders.retain(|(path, _)| reference_paths.contains(path));
         assert_eq!(fresh_orders.len(), reference_orders.len(), "{name}");
         for ((fresh_path, fresh_keys), (reference_path, reference_keys)) in
             fresh_orders.iter().zip(&reference_orders)

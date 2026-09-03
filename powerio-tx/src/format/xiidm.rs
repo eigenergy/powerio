@@ -251,6 +251,32 @@ impl ActivePowerControlVersion {
     }
 }
 
+/// The extension namespaces the mapping reads, with the extension name and
+/// version that name each one.
+///
+/// XIIDM states an extension's version in its namespace URI; JIIDM states it
+/// in the root `extensionVersions` array instead, and PowSybl refuses an
+/// extension element whose version that array does not name. The two spellings
+/// meet here, so a namespace is added in one place.
+const MAPPED_EXTENSION_NAMESPACES: [(&str, &str, &str); 4] = [
+    (
+        "activePowerControl",
+        "1.0",
+        ACTIVE_POWER_CONTROL_NAMESPACE_V1_0,
+    ),
+    (
+        "activePowerControl",
+        "1.1",
+        ACTIVE_POWER_CONTROL_NAMESPACE_V1_1,
+    ),
+    (
+        "activePowerControl",
+        "1.2",
+        ACTIVE_POWER_CONTROL_NAMESPACE_V1_2,
+    ),
+    ("slackTerminal", "1.5", SLACK_TERMINAL_NAMESPACE),
+];
+
 /// Whether an element inside an `<extension>` is one the mapping reads. Every
 /// other extension child is counted as unmapped and skipped.
 fn is_mapped_extension_child(tag: &str, namespace: Option<&str>) -> bool {
@@ -1184,17 +1210,22 @@ impl JsonWalker<'_> {
     /// control namespace when the document names a version the reader maps,
     /// otherwise a PowSybl extension namespace the mapping does not read.
     fn extension_namespace(&self, name: &str) -> String {
-        let version = self
-            .extension_versions
-            .get(name)
-            .map_or("1.2", String::as_str);
-        if name == "activePowerControl" {
-            match version {
-                "1.0" => return ACTIVE_POWER_CONTROL_NAMESPACE_V1_0.to_owned(),
-                "1.1" => return ACTIVE_POWER_CONTROL_NAMESPACE_V1_1.to_owned(),
-                "1.2" => return ACTIVE_POWER_CONTROL_NAMESPACE_V1_2.to_owned(),
-                _ => {}
-            }
+        let stated = self.extension_versions.get(name).map(String::as_str);
+        let version = stated.unwrap_or("1.2");
+        if let Some((_, _, namespace)) = MAPPED_EXTENSION_NAMESPACES
+            .iter()
+            .find(|(extension, mapped, _)| *extension == name && *mapped == version)
+        {
+            return (*namespace).to_owned();
+        }
+        // A document that states no version for an extension the mapping reads
+        // still names its own namespace, which is the version PowerIO writes.
+        if stated.is_none()
+            && let Some((_, _, namespace)) = MAPPED_EXTENSION_NAMESPACES
+                .iter()
+                .find(|(extension, _, _)| *extension == name)
+        {
+            return (*namespace).to_owned();
         }
         format!(
             "{EXTENSION_NAMESPACE_PREFIX}{name}/{}",
@@ -1254,6 +1285,11 @@ impl JsonWalker<'_> {
         }
         let in_extension = tag == "extension";
         for (key, value) in fields {
+            // The root's own version fields are read before the walk, not as
+            // elements of the network.
+            if root && (key == "version" || key == "extensionVersions") {
+                continue;
+            }
             let child_namespace = if in_extension {
                 Some(self.extension_namespace(key))
             } else {
@@ -4004,18 +4040,19 @@ fn build_network(parsed: &ParsedXiidm, diagnostics: &mut Diagnostics) -> Result<
             );
             continue;
         };
-        if reference_bus.is_none() {
-            reference_bus = Some(bus);
-            set_bus_kind(&mut buses, bus, BusType::Ref);
-        } else if reference_bus != Some(bus) {
-            diagnostics.push(
+        match reference_bus {
+            None => {
+                reference_bus = Some(bus);
+                set_bus_kind(&mut buses, bus, BusType::Ref);
+            }
+            Some(reference) if reference != bus => diagnostics.push(
                 &codes::READ_XIIDM_VALUE_DEFAULTED,
                 format!(
-                    "slackTerminal on voltage level `{}` names a second reference bus {bus}; the balanced calculation view states one reference bus and keeps bus {}",
+                    "slackTerminal on voltage level `{}` names a second reference bus {bus}; the balanced calculation view states one reference bus and keeps bus {reference}",
                     slack.voltage_level,
-                    reference_bus.expect("checked present")
                 ),
-            );
+            ),
+            Some(_) => {}
         }
     }
     for generator in &generators {
@@ -6854,21 +6891,6 @@ fn format_error(message: impl Into<String>) -> Error {
     }
 }
 
-/// The nominal voltage XIIDM states for a bus whose source case declares none.
-///
-/// XIIDM states impedances in ohms and voltages in kV, so every voltage level
-/// carries a positive nominal voltage; a case that works only in per unit (a
-/// MATPOWER bus row with `BASE_KV = 0`) states none. One substituted kilovolt
-/// keeps every derived ohm, siemens, and kV value finite, and preserves the
-/// per-unit model exactly, because a reader divides by the same nominal voltage
-/// the writer multiplied by.
-const SUBSTITUTE_NOMINAL_KV: f64 = 1.0;
-
-/// Whether a bus states a nominal voltage XIIDM can carry.
-fn states_nominal_voltage(bus: &Bus) -> bool {
-    bus.base_kv.is_finite() && bus.base_kv > 0.0
-}
-
 /// Whether a DC line states the converter model XIIDM requires.
 fn states_converter_model(line: &Hvdc) -> bool {
     line.resistance_ohm.is_some()
@@ -6898,6 +6920,9 @@ fn substitute_converter_model(network: &mut BalancedNetwork) -> Vec<String> {
         .iter()
         .map(|bus| (bus.id, bus.base_kv))
         .collect::<HashMap<_, _>>();
+    // A station identity shares the network's identity space, which XIIDM
+    // indexes as one namespace.
+    let mut used = network.component_ids_in_use();
     let mut messages = Vec::new();
     for line in network.hvdc_mut() {
         if states_converter_model(line) {
@@ -6909,7 +6934,7 @@ fn substitute_converter_model(network: &mut BalancedNetwork) -> Vec<String> {
                 .get(&line.from)
                 .copied()
                 .filter(|value| value.is_finite() && *value > 0.0)
-                .unwrap_or(SUBSTITUTE_NOMINAL_KV)
+                .unwrap_or(super::SUBSTITUTE_NOMINAL_KV)
         });
         let current_ka = line.pf / nominal_v;
         if line.resistance_ohm.is_none() {
@@ -6946,10 +6971,19 @@ fn substitute_converter_model(network: &mut BalancedNetwork) -> Vec<String> {
         } else {
             HvdcConvertersMode::Side1RectifierSide2Inverter
         });
+        let mut station_identity = |side: u8| -> String {
+            let mut candidate = format!("{id}-converter{side}");
+            let mut bump = 2;
+            while !used.insert(candidate.clone()) {
+                candidate = format!("{id}-converter{side}-{bump}");
+                bump += 1;
+            }
+            candidate
+        };
         let station =
-            |side: u8, loss_factor_percent: f64, setpoint_kv: f64| -> Result<HvdcConverter> {
+            |identity: &str, loss_factor_percent: f64, setpoint_kv: f64| -> Result<HvdcConverter> {
                 Ok(HvdcConverter {
-                    component: component_id("hvdc_converter", &format!("{id}-{side}"))?,
+                    component: component_id("hvdc_converter", identity)?,
                     kind: HvdcConverterKind::Vsc,
                     loss_factor_percent,
                     voltage_regulator_on: Some(true),
@@ -6962,10 +6996,12 @@ fn substitute_converter_model(network: &mut BalancedNetwork) -> Vec<String> {
         let from_kv = nominal_voltage.get(&line.from).copied().unwrap_or(1.0);
         let to_kv = nominal_voltage.get(&line.to).copied().unwrap_or(1.0);
         if line.converter1.is_none() {
-            line.converter1 = station(1, loss_factor_percent, line.vf * from_kv).ok();
+            let identity = station_identity(1);
+            line.converter1 = station(&identity, loss_factor_percent, line.vf * from_kv).ok();
         }
         if line.converter2.is_none() {
-            line.converter2 = station(2, 0.0, line.vt * to_kv).ok();
+            let identity = station_identity(2);
+            line.converter2 = station(&identity, 0.0, line.vt * to_kv).ok();
         }
     }
     messages
@@ -7707,25 +7743,23 @@ impl<'a> XiidmWriteIndex<'a> {
 }
 
 pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
-    let unstated_nominal_voltage = network
-        .buses()
-        .iter()
-        .filter(|bus| !states_nominal_voltage(bus))
-        .map(|bus| bus.id.to_string())
-        .collect::<Vec<_>>();
+    let unstated_nominal_voltage = super::unstated_nominal_voltage(network);
+    let unbounded_reactive_limits = super::unbounded_reactive_limits(network);
     let mut prepared_network = None;
     let mut converter_model_losses = Vec::new();
     if has_missing_component_ids(network)
-        || !unstated_nominal_voltage.is_empty()
+        || unstated_nominal_voltage.is_some()
+        || unbounded_reactive_limits > 0
         || !network.hvdc().iter().all(states_converter_model)
     {
         let mut prepared = network.clone();
         prepared.assign_missing_component_ids();
         for bus in prepared.buses_mut() {
-            if !states_nominal_voltage(bus) {
-                bus.base_kv = SUBSTITUTE_NOMINAL_KV;
+            if !super::states_nominal_voltage(bus) {
+                bus.base_kv = super::SUBSTITUTE_NOMINAL_KV;
             }
         }
+        super::substitute_unbounded_reactive_limits(&mut prepared);
         converter_model_losses = substitute_converter_model(&mut prepared);
         prepared_network = Some(prepared);
     }
@@ -7735,23 +7769,20 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
         message: format!("network validation failed before XIIDM emission: {error}"),
     })?;
     let mut diagnostics = Diagnostics::new();
-    if !unstated_nominal_voltage.is_empty() {
-        let shown = unstated_nominal_voltage
-            .iter()
-            .take(5)
-            .map(String::as_str)
-            .collect::<Vec<_>>()
-            .join(", ");
-        let ellipsis = if unstated_nominal_voltage.len() > 5 {
-            ", ..."
-        } else {
-            ""
-        };
+    if unbounded_reactive_limits > 0 {
         diagnostics.push(
             &codes::EMIT_XIIDM.value_substituted,
             format!(
-                "{} bus(es) state no nominal voltage; an XIIDM voltage level requires one, so each was written at {SUBSTITUTE_NOMINAL_KV} kV, on which the ohm, siemens, and kV values are computed: bus {shown}{ellipsis}",
-                unstated_nominal_voltage.len(),
+                "{unbounded_reactive_limits} unbounded reactive limit(s) written as the largest finite double: an XIIDM `minMaxReactiveLimits` states minQ and maxQ as numbers and has no spelling for an absent bound, which is how PowSybl states one"
+            ),
+        );
+    }
+    if let Some((count, buses)) = &unstated_nominal_voltage {
+        diagnostics.push(
+            &codes::EMIT_XIIDM.value_substituted,
+            format!(
+                "{count} bus(es) state no nominal voltage; an XIIDM voltage level requires one, so each was written at {} kV, on which the ohm, siemens, and kV values are computed: bus {buses}",
+                super::SUBSTITUTE_NOMINAL_KV,
             ),
         );
     }
@@ -8069,17 +8100,14 @@ fn close_element(
         let extension_versions = open
             .namespaces
             .iter()
-            .filter_map(|namespace| {
-                let version = match namespace.as_str() {
-                    ACTIVE_POWER_CONTROL_NAMESPACE_V1_0 => "1.0",
-                    ACTIVE_POWER_CONTROL_NAMESPACE_V1_1 => "1.1",
-                    ACTIVE_POWER_CONTROL_NAMESPACE_V1_2 => "1.2",
-                    _ => return None,
-                };
+            .filter_map(|declared| {
+                let (name, version, _) = MAPPED_EXTENSION_NAMESPACES
+                    .iter()
+                    .find(|(_, _, namespace)| *namespace == declared.as_str())?;
                 Some(JsonOut::Object(vec![
                     (
                         "extensionName".to_owned(),
-                        JsonOut::Scalar(json_string("activePowerControl")),
+                        JsonOut::Scalar(json_string(name)),
                     ),
                     ("version".to_owned(), JsonOut::Scalar(json_string(version))),
                 ]))
@@ -9376,20 +9404,60 @@ fn diagnose_xiidm_dc_terminal(
 }
 
 #[allow(clippy::too_many_lines)]
+/// The components a repeated loss applies to, as a diagnostic spells them: at
+/// most five, then an ellipsis. One finding per lost field reads; one finding
+/// per element buries the field under the inventory.
+fn diagnosed_components(components: &[String]) -> String {
+    let shown = components
+        .iter()
+        .take(EXACT_ASSIGNMENT_DIAGNOSTIC_LIMIT)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if components.len() > EXACT_ASSIGNMENT_DIAGNOSTIC_LIMIT {
+        format!("{shown}, ...")
+    } else {
+        shown
+    }
+}
+
 fn diagnose_xiidm_projection(
     detailed: &DetailedConnectivity,
     diagnostics: &mut Diagnostics,
 ) -> Result<()> {
+    // A node breaker voltage level states connectivity through switch
+    // positions: a disconnected terminal is one whose switches to the busbar
+    // are open. A level with no switch has no position to open, so a terminal
+    // recorded as disconnected there is emitted at its node like any other.
+    let node_breaker_levels_with_switches = detailed
+        .switches
+        .iter()
+        .map(|switch| &switch.voltage_level)
+        .collect::<HashSet<_>>();
+    let unstated_disconnections = detailed
+        .terminals
+        .iter()
+        .filter(|terminal| {
+            terminal.node.is_some()
+                && !terminal.connected
+                && !node_breaker_levels_with_switches.contains(&terminal.voltage_level)
+        })
+        .count();
+    if unstated_disconnections > 0 {
+        diagnostics.push(
+            &codes::EMIT_XIIDM.field_dropped,
+            format!(
+                "{unstated_disconnections} disconnected terminal(s) sit in a node breaker voltage level with no switch; XIIDM states a node breaker disconnection as an open switch position, so they were emitted connected"
+            ),
+        );
+    }
     let metadata_by_component = detailed
         .component_metadata
         .iter()
         .map(|metadata| (&metadata.component, metadata))
         .collect::<HashMap<_, _>>();
-    for terminal in &detailed.terminals {
-        let Some(component) = terminal.component.as_ref() else {
-            continue;
-        };
-        let has_metadata = metadata_by_component
+    let states_metadata = |component: &ComponentId| {
+        metadata_by_component
             .get(component)
             .is_some_and(|metadata| {
                 metadata.name.is_some()
@@ -9398,53 +9466,59 @@ fn diagnose_xiidm_projection(
                     || !metadata.external_identifiers.is_empty()
                     || !metadata.properties.is_empty()
                     || metadata.fictitious
-            });
+            })
+    };
+    let mut terminal_identities = Vec::new();
+    let mut terminals_with_metadata = 0;
+    for terminal in &detailed.terminals {
+        let Some(component) = terminal.component.as_ref() else {
+            continue;
+        };
+        if states_metadata(component) {
+            terminals_with_metadata += 1;
+        }
+        terminal_identities.push(format!(
+            "`{component}` on `{}` terminal {}",
+            terminal.equipment, terminal.terminal
+        ));
+    }
+    if !terminal_identities.is_empty() {
         diagnostics.push(
             &codes::EMIT_XIIDM.field_dropped,
             format!(
-                "`{}` terminal {} identity `{component}`{} has no XIIDM 1.17 representation",
-                terminal.equipment,
-                terminal.terminal,
-                if has_metadata {
-                    " and its attached metadata"
-                } else {
-                    ""
-                },
+                "{} terminal identit(ies) have no XIIDM 1.17 representation, {terminals_with_metadata} of them with attached metadata: {}",
+                terminal_identities.len(),
+                diagnosed_components(&terminal_identities),
             ),
         );
     }
+    let mut node_identities = Vec::new();
+    let mut allocated_node_numbers = 0;
+    let mut nodes_with_metadata = 0;
     for node in &detailed.connectivity_nodes {
         let xiidm_identity = node
             .node_number
             .and_then(|number| node_component_id(node.voltage_level.local_id(), number).ok());
-        let metadata = metadata_by_component.get(&node.component);
-        let has_unrepresentable_metadata = metadata.is_some_and(|metadata| {
-            metadata.name.is_some()
-                || metadata.equipment_container.is_some()
-                || !metadata.aliases.is_empty()
-                || !metadata.external_identifiers.is_empty()
-                || !metadata.properties.is_empty()
-                || metadata.fictitious
-        });
+        let has_unrepresentable_metadata = states_metadata(&node.component);
         if xiidm_identity.as_ref() != Some(&node.component) || has_unrepresentable_metadata {
-            diagnostics.push(
-                &codes::EMIT_XIIDM.field_dropped,
-                format!(
-                    "connectivity node `{}`{} is emitted only as an XIIDM local node number; its source identity{} cannot be retained",
-                    node.component,
-                    if node.node_number.is_none() {
-                        " has no source node number and receives an allocated number"
-                    } else {
-                        ""
-                    },
-                    if has_unrepresentable_metadata {
-                        " and attached metadata"
-                    } else {
-                        ""
-                    },
-                ),
-            );
+            if node.node_number.is_none() {
+                allocated_node_numbers += 1;
+            }
+            if has_unrepresentable_metadata {
+                nodes_with_metadata += 1;
+            }
+            node_identities.push(format!("`{}`", node.component));
         }
+    }
+    if !node_identities.is_empty() {
+        diagnostics.push(
+            &codes::EMIT_XIIDM.field_dropped,
+            format!(
+                "{} connectivity node identit(ies) are emitted as XIIDM local node numbers alone, {allocated_node_numbers} of them under an allocated number and {nodes_with_metadata} with attached metadata: {}",
+                node_identities.len(),
+                diagnosed_components(&node_identities),
+            ),
+        );
     }
     for tap in &detailed.tap_changers {
         let mut fields = Vec::new();
@@ -9462,25 +9536,41 @@ fn diagnose_xiidm_projection(
         }
         diagnose_xiidm_dropped_fields(&tap.transformer, &fields, diagnostics);
     }
-    for metadata in &detailed.component_metadata {
-        if !metadata.external_identifiers.is_empty() {
-            diagnostics.push(
-                &codes::EMIT_XIIDM.value_collapsed,
-                format!(
-                    "`{}` external identifiers are emitted as XIIDM aliases; XIIDM does not preserve the distinction between an alias and an external identifier",
-                    metadata.component
-                ),
-            );
-        }
-        if let Some(container) = &metadata.equipment_container {
-            diagnostics.push(
-                &codes::EMIT_XIIDM.field_dropped,
-                format!(
-                    "`{}` explicit equipment container `{container}` is expressed through XIIDM nesting where possible; the source metadata relationship is not retained",
-                    metadata.component
-                ),
-            );
-        }
+    let with_external_identifiers = detailed
+        .component_metadata
+        .iter()
+        .filter(|metadata| !metadata.external_identifiers.is_empty())
+        .map(|metadata| format!("`{}`", metadata.component))
+        .collect::<Vec<_>>();
+    if !with_external_identifiers.is_empty() {
+        diagnostics.push(
+            &codes::EMIT_XIIDM.value_collapsed,
+            format!(
+                "{} component(s) state external identifiers, emitted as XIIDM aliases: XIIDM has no attribute that tells an alias from an external identifier: {}",
+                with_external_identifiers.len(),
+                diagnosed_components(&with_external_identifiers),
+            ),
+        );
+    }
+    let with_containers = detailed
+        .component_metadata
+        .iter()
+        .filter_map(|metadata| {
+            metadata
+                .equipment_container
+                .as_ref()
+                .map(|container| format!("`{}` in `{container}`", metadata.component))
+        })
+        .collect::<Vec<_>>();
+    if !with_containers.is_empty() {
+        diagnostics.push(
+            &codes::EMIT_XIIDM.field_dropped,
+            format!(
+                "{} component(s) state an explicit equipment container, expressed through XIIDM nesting where the hierarchy allows it: XIIDM has no container attribute to state the relationship itself: {}",
+                with_containers.len(),
+                diagnosed_components(&with_containers),
+            ),
+        );
     }
     for (kind, components) in [
         (
@@ -11853,10 +11943,10 @@ fn write_hvdc_converter_stations(
                 injection_solution_attributes(index, &component, p, q)
             };
             // A station that stated a reactive capability curve keeps it: the
-            // curve is the reactive envelope over active power, and one
-            // minQ/maxQ pair states a wider envelope at every operating point
-            // but the one the pair came from. A station with no curve states
-            // the terminal's own min and max.
+            // curve states a reactive minimum and maximum per active power
+            // point, and one minQ/maxQ pair states a wider reactive range at
+            // every operating point but the one the pair came from. A station
+            // with no curve states the terminal's own min and max.
             let mut reactive_limits = String::new();
             match index.reactive_limits.get(&component).copied() {
                 Some(record) => write_reactive_limits(&record.limits, &mut reactive_limits),
@@ -12857,14 +12947,19 @@ mod tests {
         let mut diagnostics = Diagnostics::new();
         diagnose_xiidm_projection(&connectivity, &mut diagnostics).unwrap();
         let messages = diagnostics.lines().join("\n");
-        assert!(messages.contains("terminal 1 identity `terminal/terminal-mrid`"));
-        assert!(messages.contains("connectivity node `connectivity_node/node-mrid`"));
+        assert!(messages.contains("`terminal/terminal-mrid` on `load/L` terminal 1"));
+        assert!(messages.contains("terminal identit(ies) have no XIIDM 1.17 representation"));
+        assert!(messages.contains("`connectivity_node/node-mrid`"));
+        assert!(
+            messages
+                .contains("connectivity node identit(ies) are emitted as XIIDM local node numbers")
+        );
         assert!(messages.contains("tap changer identity"));
         assert!(messages.contains("neutral tap position distinct from low tap position"));
         assert!(messages.contains("normal tap position distinct from assigned tap position"));
         assert!(messages.contains("voltage step increment"));
-        assert!(messages.contains("external identifiers are emitted as XIIDM aliases"));
-        assert!(messages.contains("explicit equipment container `voltage_level/VL`"));
+        assert!(messages.contains("state external identifiers, emitted as XIIDM aliases"));
+        assert!(messages.contains("`load/L` in `voltage_level/VL`"));
 
         let mut native = DetailedConnectivity::default();
         native.connectivity_nodes.push(ConnectivityNode {
@@ -14133,9 +14228,9 @@ mod tests {
         assert!(error.to_string().contains("MISSING"), "{error}");
     }
 
-    /// A VSC converter station's reactive capability curve is the reactive
-    /// envelope over active power; one minQ/maxQ pair states a different
-    /// envelope, so the curve is written as a curve.
+    /// A VSC converter station's reactive capability curve states a reactive
+    /// minimum and maximum per active power point; one minQ/maxQ pair states a
+    /// different reactive range, so the curve is written as a curve.
     #[test]
     fn a_converter_station_reactive_capability_curve_survives_fresh_emission() {
         let source = EQUIPMENT_COVERAGE.replace(
