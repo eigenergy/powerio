@@ -1581,3 +1581,363 @@ fn texas7k_resaves_match_the_2022_aux() {
         );
     }
 }
+
+/// The reader against a local directory of PowerWorld cases, which
+/// `POWERIO_PWB_CASES` names. Every `.pwb` under it must decode, and every
+/// MATPOWER `.m` or PSS/E `.RAW` case in the same directory holding the same
+/// network in the same solved state is compared against the decode element
+/// for element. Unset, the variable skips the test; set, a binary the reader
+/// refuses fails and names the file, which is the point of running it over a
+/// corpus.
+///
+/// Pairing is by bus identity and solved state, never by file name: a text
+/// export of a case can hold a later operating point than the binary beside
+/// it, and two saves of one hour can differ only in their limits. Each
+/// quantity is compared at the text side's print quantum plus a relative term
+/// for the binary's f32 storage. The reader's documented gaps (per bus
+/// voltage limits, the slack designation, the system MVA base) are not
+/// compared, and neither is a quantity whose spelling is a property of the
+/// text format rather than of the case: PSS/E can collapse a machine's
+/// reactive limits onto its solved output, MATPOWER writes the solved bus
+/// voltage in the setpoint column and cannot tell a unity ratio transformer
+/// from a line.
+#[test]
+fn local_pwb_cases_match_their_text_siblings() {
+    let Some(root) = common::pwb_cases_root() else {
+        eprintln!("skipped: set POWERIO_PWB_CASES to a directory of PowerWorld cases");
+        return;
+    };
+    let mut files = Vec::new();
+    collect_case_files(&root, &mut files);
+    files.sort();
+
+    let mut siblings: Vec<(std::path::PathBuf, Quanta, BalancedNetwork)> = Vec::new();
+    for path in &files {
+        let quanta = match lowercase_extension(path).as_deref() {
+            Some("m") => Quanta::MATPOWER,
+            Some("raw") => Quanta::PSSE,
+            _ => continue,
+        };
+        match parse_file(path, None) {
+            Ok(parsed) => siblings.push((path.clone(), quanta, parsed.network)),
+            Err(err) => eprintln!("skipped {}: not a case ({err})", path.display()),
+        }
+    }
+
+    let (mut binaries, mut compared) = (0usize, 0usize);
+    for path in &files {
+        if lowercase_extension(path).as_deref() != Some("pwb") {
+            continue;
+        }
+        binaries += 1;
+        let bytes = std::fs::read(path).unwrap();
+        let pwb = __parse_pwb(&bytes, path.file_stem().and_then(|s| s.to_str()))
+            .unwrap_or_else(|err| panic!("{} did not decode: {err}", path.display()));
+        assert_decoded_shape(&pwb, path);
+        for (sibling, quanta, text) in &siblings {
+            if !holds_the_same_state(&pwb, text) {
+                continue;
+            }
+            compared += 1;
+            let label = format!("{} against {}", path.display(), sibling.display());
+            eprintln!("comparing {label}");
+            assert_pwb_matches_text(&pwb, text, *quanta, &label);
+        }
+    }
+    eprintln!(
+        "POWERIO_PWB_CASES: {binaries} binaries, {} text cases, {compared} compared pairs",
+        siblings.len()
+    );
+    assert!(
+        binaries == 0 || siblings.is_empty() || compared > 0,
+        "no text case under {} holds the solved state of any of its {binaries} binaries",
+        root.display()
+    );
+}
+
+/// The print quantum of each quantity in one text format, the tolerance a
+/// decode is compared at. A format prints a fixed number of decimals per
+/// column, so the quantum is a property of the format, not of the case.
+#[derive(Clone, Copy)]
+struct Quanta {
+    /// Whether the format keeps the case's own reactive limits, voltage
+    /// setpoint, and line/transformer split (see the test's own docs).
+    faithful_machine_and_device: bool,
+    vm: f64,
+    va: f64,
+    base_kv: f64,
+    power: f64,
+    impedance: f64,
+    charging: f64,
+    rating: f64,
+    tap: f64,
+    vg: f64,
+}
+
+impl Quanta {
+    const PSSE: Self = Self {
+        faithful_machine_and_device: false,
+        vm: 5.1e-6,
+        va: 5.1e-5,
+        base_kv: 5.1e-4,
+        power: 5.1e-4,
+        impedance: 5.1e-6,
+        charging: 5.1e-6,
+        rating: 5.1e-3,
+        tap: 5.1e-6,
+        vg: 5.1e-6,
+    };
+    const MATPOWER: Self = Self {
+        faithful_machine_and_device: true,
+        vm: 5.1e-8,
+        va: 5.1e-6,
+        base_kv: 5.1e-3,
+        power: 5.1e-3,
+        impedance: 5.1e-7,
+        charging: 5.1e-6,
+        rating: 5.1e-3,
+        tap: 5.1e-6,
+        vg: 5.1e-5,
+    };
+}
+
+/// Every case file under `dir`, recursively.
+fn collect_case_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_case_files(&path, out);
+        } else if path.is_file() {
+            out.push(path);
+        }
+    }
+}
+
+fn lowercase_extension(path: &Path) -> Option<String> {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_lowercase)
+}
+
+/// Whether two networks hold the same buses in the same solved state, the
+/// pairing rule. The window is far wider than any print quantum and far
+/// narrower than the spread between two operating points of one case.
+fn holds_the_same_state(pwb: &BalancedNetwork, text: &BalancedNetwork) -> bool {
+    let by_id: BTreeMap<usize, &powerio_tx::Bus> =
+        text.buses().iter().map(|b| (b.id.0, b)).collect();
+    pwb.buses().len() == by_id.len()
+        && pwb.buses().iter().all(|p| {
+            by_id
+                .get(&p.id.0)
+                .is_some_and(|t| (p.vm - t.vm).abs() <= 1e-4 && (p.va - t.va).abs() <= 1e-3)
+        })
+}
+
+/// The invariants every decode holds whatever the vintage: identified buses,
+/// every device attached to one of them, and finite values throughout.
+fn assert_decoded_shape(net: &BalancedNetwork, path: &Path) {
+    let name = path.display();
+    assert!(!net.buses().is_empty(), "{name}: no buses");
+    assert!(net.base_mva() > 0.0, "{name}: base MVA");
+    let ids: BTreeSet<usize> = net.buses().iter().map(|b| b.id.0).collect();
+    assert_eq!(ids.len(), net.buses().len(), "{name}: repeated bus id");
+    for bus in net.buses() {
+        assert!(
+            bus.vm.is_finite() && bus.vm > 0.0,
+            "{name}: bus {} vm",
+            bus.id
+        );
+        assert!(bus.va.is_finite(), "{name}: bus {} va", bus.id);
+        assert!(bus.base_kv.is_finite(), "{name}: bus {} kV", bus.id);
+    }
+    for load in net.loads() {
+        assert!(ids.contains(&load.bus.0), "{name}: load off bus");
+        assert!(
+            load.p.is_finite() && load.q.is_finite(),
+            "{name}: load power"
+        );
+    }
+    for shunt in net.shunts() {
+        assert!(ids.contains(&shunt.bus.0), "{name}: shunt off bus");
+        assert!(shunt.g.is_finite() && shunt.b.is_finite(), "{name}: shunt");
+    }
+    for machine in net.generators() {
+        assert!(ids.contains(&machine.bus.0), "{name}: generator off bus");
+        assert!(
+            machine.pg.is_finite() && machine.qg.is_finite(),
+            "{name}: dispatch"
+        );
+        assert!(machine.pmax >= machine.pmin, "{name}: generator MW limits");
+    }
+    for branch in net.branches() {
+        assert!(ids.contains(&branch.from.0), "{name}: branch off bus");
+        assert!(ids.contains(&branch.to.0), "{name}: branch off bus");
+        assert!(
+            branch.r.is_finite() && branch.x.is_finite() && branch.b.is_finite(),
+            "{name}: branch impedance"
+        );
+    }
+}
+
+/// Two readings of one case, compared element for element.
+#[allow(clippy::too_many_lines)]
+fn assert_pwb_matches_text(pwb: &BalancedNetwork, text: &BalancedNetwork, q: Quanta, label: &str) {
+    let text_bus: BTreeMap<usize, &powerio_tx::Bus> =
+        text.buses().iter().map(|b| (b.id.0, b)).collect();
+    for p in pwb.buses() {
+        let t = text_bus[&p.id.0];
+        close(
+            p.base_kv,
+            t.base_kv,
+            q.base_kv,
+            label,
+            &format!("bus {} kV", p.id),
+        );
+        assert_eq!((p.area, p.zone), (t.area, t.zone), "{label}: bus {}", p.id);
+        close(p.vm, t.vm, q.vm, label, &format!("bus {} vm", p.id));
+        close(p.va, t.va, q.va, label, &format!("bus {} va", p.id));
+        // MATPOWER has no bus name column, so a name comparison is only
+        // meaningful against a format that carries one.
+        if t.name.is_some() {
+            assert_eq!(
+                p.name.as_deref().map(str::trim),
+                t.name.as_deref().map(str::trim),
+                "{label}: bus {} name",
+                p.id
+            );
+        }
+    }
+
+    // Power per bus, not per record: a format that keeps one record per bus
+    // writes the zero ones a format that keeps only the nonzero ones omits.
+    assert_power_by_bus(
+        &power_by_bus(pwb.loads().iter().map(|l| (l.bus.0, l.p, l.q))),
+        &power_by_bus(text.loads().iter().map(|l| (l.bus.0, l.p, l.q))),
+        q.power,
+        label,
+        ("load", "P", "Q"),
+    );
+    assert_power_by_bus(
+        &power_by_bus(pwb.shunts().iter().map(|s| (s.bus.0, s.g, s.b))),
+        &power_by_bus(text.shunts().iter().map(|s| (s.bus.0, s.g, s.b))),
+        q.power,
+        label,
+        ("shunt", "G", "B"),
+    );
+
+    assert_eq!(
+        pwb.generators().len(),
+        text.generators().len(),
+        "{label}: generator count"
+    );
+    for (p, t) in pwb.generators().iter().zip(text.generators()) {
+        assert_eq!(p.bus, t.bus, "{label}: generator table order");
+        let at = format!("generator at {}", p.bus);
+        close(p.pmax, t.pmax, q.power, label, &format!("{at} pmax"));
+        close(p.pmin, t.pmin, q.power, label, &format!("{at} pmin"));
+        close(p.mbase, t.mbase, q.power, label, &format!("{at} mbase"));
+        assert_eq!(p.in_service, t.in_service, "{label}: {at} status");
+        // A format may zero the dispatch of an open machine rather than keep
+        // the last one, so only a running machine's output is comparable.
+        if p.in_service {
+            close(p.pg, t.pg, q.power, label, &format!("{at} pg"));
+            close(p.qg, t.qg, q.power, label, &format!("{at} qg"));
+        }
+        if q.faithful_machine_and_device {
+            close(p.qmax, t.qmax, q.power, label, &format!("{at} qmax"));
+            close(p.qmin, t.qmin, q.power, label, &format!("{at} qmin"));
+        } else {
+            close(p.vg, t.vg, q.vg, label, &format!("{at} vg"));
+        }
+    }
+
+    let mut text_branch: BTreeMap<(usize, usize, String), &powerio_tx::Branch> =
+        BTreeMap::default();
+    for (key, b) in branch_keys(text.branches())
+        .into_iter()
+        .zip(text.branches())
+    {
+        text_branch.insert(key, b);
+    }
+    for (key, p) in branch_keys(pwb.branches()).into_iter().zip(pwb.branches()) {
+        let t = text_branch
+            .remove(&key)
+            .unwrap_or_else(|| panic!("{label}: branch {key:?} is not in the text case"));
+        let at = format!("branch {key:?}");
+        close(p.r, t.r, q.impedance, label, &format!("{at} R"));
+        close(p.x, t.x, q.impedance, label, &format!("{at} X"));
+        close(p.b, t.b, q.charging, label, &format!("{at} B"));
+        close(p.rate_a, t.rate_a, q.rating, label, &format!("{at} rate A"));
+        close(p.rate_b, t.rate_b, q.rating, label, &format!("{at} rate B"));
+        close(p.rate_c, t.rate_c, q.rating, label, &format!("{at} rate C"));
+        close(p.shift, t.shift, q.va, label, &format!("{at} shift"));
+        // The effective ratio compares across the two spellings of an
+        // untapped branch (a stored zero and a stored one both mean one).
+        close(
+            p.calc_effective_tap(),
+            t.calc_effective_tap(),
+            q.tap,
+            label,
+            &format!("{at} tap"),
+        );
+        if !q.faithful_machine_and_device {
+            assert_eq!(
+                p.is_transformer(),
+                t.is_transformer(),
+                "{label}: {at} device"
+            );
+        }
+    }
+    assert!(
+        text_branch.is_empty(),
+        "{label}: branches only in the text case: {:?}",
+        text_branch.keys()
+    );
+}
+
+/// Equality at a print quantum, widened by the relative error of the f32
+/// storage the binary uses for most quantities.
+fn close(decoded: f64, text: f64, quantum: f64, label: &str, at: &str) {
+    let window = quantum + 1e-6 * decoded.abs().max(text.abs());
+    assert!(
+        (decoded - text).abs() <= window,
+        "{label}: {at} {decoded} vs {text} (window {window})"
+    );
+}
+
+/// Sum a `(bus, x, y)` stream per bus.
+fn power_by_bus(items: impl Iterator<Item = (usize, f64, f64)>) -> BTreeMap<usize, (f64, f64)> {
+    let mut out: BTreeMap<usize, (f64, f64)> = BTreeMap::default();
+    for (bus, x, y) in items {
+        let entry = out.entry(bus).or_default();
+        entry.0 += x;
+        entry.1 += y;
+    }
+    out
+}
+
+/// Compare per bus power totals over the buses either side holds, a bus only
+/// one side holds reading as zero power. `names` labels the element and its
+/// two components in a failure message.
+fn assert_power_by_bus(
+    left: &BTreeMap<usize, (f64, f64)>,
+    right: &BTreeMap<usize, (f64, f64)>,
+    quantum: f64,
+    label: &str,
+    names: (&str, &str, &str),
+) {
+    let (kind, first, second) = names;
+    let buses: BTreeSet<usize> = left.keys().chain(right.keys()).copied().collect();
+    for bus in buses {
+        let zero = (0.0, 0.0);
+        let (a, b) = (
+            left.get(&bus).copied().unwrap_or(zero),
+            right.get(&bus).copied().unwrap_or(zero),
+        );
+        close(a.0, b.0, quantum, label, &format!("{kind} {bus} {first}"));
+        close(a.1, b.1, quantum, label, &format!("{kind} {bus} {second}"));
+    }
+}
