@@ -23,7 +23,7 @@ fuzz_target!(|data: &[u8]| {
             continue;
         };
         let module = module.sever_source();
-        let _ = module.value.to_graph();
+        let _ = module.value().to_graph();
         for target in [
             powerio_dist::DistTargetFormat::PmdJson,
             powerio_dist::DistTargetFormat::BmopfJson,

@@ -22,7 +22,7 @@ fuzz_target!(|data: &[u8]| {
     let Ok(module) = powerio_dist::parse(source.with_format(id)) else {
         return;
     };
-    let net = &module.value;
+    let net = module.value();
     let _ = net.to_graph();
     for format in [
         powerio_dist::DistTargetFormat::PmdJson,
