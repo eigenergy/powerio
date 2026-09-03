@@ -1358,14 +1358,17 @@ fn run_serialize(
 ) -> anyhow::Result<()> {
     let module = load_module(input, from)?;
     let parse_errors = module_error_lines(&module);
-    match output {
-        Some(p) if p.as_os_str() != "-" => {
-            powerio::serialize(&module, powerio::Destination::path(p))
-                .with_context(|| format!("serializing PowerIO IR to {}", p.display()))?;
-            eprintln!("wrote {}", p.display());
-        }
-        _ => print!("{}", serialize_module_text(&module)?),
-    }
+    let text = serialize_module_text(&module)?;
+    // This command is the primary producer of PowerIO IR, so a document the
+    // deserializer refuses must not reach a file: read the document back
+    // before writing it, and name the writer rather than leaving a consumer
+    // to discover the refusal with neither the case nor the producer at hand.
+    powerio::deserialize(
+        powerio::Source::from_memory("module.pio.json", text.as_bytes().to_vec())
+            .context("creating the PowerIO IR validation source")?,
+    )
+    .context("reading back the PowerIO IR just serialized")?;
+    write_conversion_output(&text, &[], output)?;
     // The module is serialized either way — it is the record of what the reader
     // saw — but a refused include is an `Error` finding in its own document,
     // so the exit code has to say so, as `convert` does.
