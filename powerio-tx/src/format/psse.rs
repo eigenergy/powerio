@@ -1094,8 +1094,24 @@ fn write_psse_rev_inner(
         let rdc = dc_f64(&dc.extras, "psse_dc_rdc").unwrap_or(0.0);
         let vschd = dc_f64(&dc.extras, "psse_dc_vschd").unwrap_or(0.0);
         let l1_tail = dc_tail(&dc.extras, "psse_dc_control_tail", DEFAULT_CONTROL_TAIL);
-        let rect_tail = dc_tail(&dc.extras, "psse_dc_rectifier_tail", DEFAULT_CONVERTER_TAIL);
-        let inv_tail = dc_tail(&dc.extras, "psse_dc_inverter_tail", DEFAULT_CONVERTER_TAIL);
+        let (rect_tail, dropped_rectifier_bridges) =
+            dc_converter_tail(&dc.extras, "psse_dc_rectifier_tail", rev);
+        let (inv_tail, dropped_inverter_bridges) =
+            dc_converter_tail(&dc.extras, "psse_dc_inverter_tail", rev);
+        for (end, bridges) in [
+            ("rectifier", dropped_rectifier_bridges),
+            ("inverter", dropped_inverter_bridges),
+        ] {
+            if let Some(bridges) = bridges {
+                warnings.push(
+                    &codes::EMIT_PSSE.field_dropped,
+                    format!(
+                        "DC line `{}` {end} states {bridges} bridge(s) in series; a PSS/E revision 33 two-terminal DC record has no NDR/NDI column",
+                        dc.uid.as_deref().unwrap_or("<unnamed>")
+                    ),
+                );
+            }
+        }
         // SETVL in the stored mode's own unit, the exact inverse of the
         // reader's derivation: MDC 2 schedules a current, so the rectifier
         // power converts back to amps through the scheduled voltage. Every
@@ -1666,6 +1682,62 @@ fn emit_controlled_bus(
 /// replay their own tail; these defaults serve a cross-format source.
 const DEFAULT_CONVERTER_TAIL: &str =
     "1, 15.0, 5.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.5, 0.51, 0.00625, 0, 0, 0, '1', 0.0";
+
+/// Fields a two-terminal DC converter line states after the bus number in
+/// revision 33: NBR through XCAPR.
+const CONVERTER_TAIL_FIELDS_33: usize = 16;
+
+/// Where `NDR`/`NDI`, the number of bridges in series, sits in that tail from
+/// revision 34 on: after ICR and before IFR.
+const CONVERTER_TAIL_BRIDGE_INDEX: usize = 13;
+
+/// The converter tail of a two-terminal DC record at `rev`.
+///
+/// The rectifier and inverter lines state `NDR`/`NDI` from revision 34 on and
+/// have no such column in revision 33, so a tail retained from one revision
+/// carries one field more or fewer than the record being written and the
+/// column belongs at its own position, not at the end. Returns the tail and
+/// the bridge count a revision 33 record has no column for.
+fn dc_converter_tail(extras: &Extras, key: &str, rev: u32) -> (String, Option<String>) {
+    let states_bridges = rev >= 34;
+    let stated = extras
+        .get(key)
+        .and_then(Value::as_array)
+        .filter(|fields| !fields.is_empty());
+    let Some(stated) = stated else {
+        let mut fields = DEFAULT_CONVERTER_TAIL
+            .split(", ")
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        if states_bridges {
+            fields.insert(CONVERTER_TAIL_BRIDGE_INDEX, "0".to_owned());
+        }
+        return (fields.join(", "), None);
+    };
+    let mut fields = stated
+        .iter()
+        .filter_map(Value::as_str)
+        // These come from a source file's `extras` and are replayed into a
+        // record, so they go through the quoting seam like every other
+        // interpolated string: a terminator here would forge a whole DC
+        // record or a section end.
+        .map(|field| sanitize_quoted(field, NAME_FORBIDDEN, ' ').into_owned())
+        .collect::<Vec<_>>();
+    let mut dropped_bridges = None;
+    match (fields.len() > CONVERTER_TAIL_FIELDS_33, states_bridges) {
+        (true, false) => {
+            let bridges = fields.remove(CONVERTER_TAIL_BRIDGE_INDEX);
+            if bridges.trim() != "0" {
+                dropped_bridges = Some(bridges);
+            }
+        }
+        (false, true) if fields.len() == CONVERTER_TAIL_FIELDS_33 => {
+            fields.insert(CONVERTER_TAIL_BRIDGE_INDEX, "0".to_owned());
+        }
+        _ => {}
+    }
+    (fields.join(", "), dropped_bridges)
+}
 
 /// Control-line tail (everything after VSCHD) for a synthesized two-terminal DC
 /// record: compounding voltage, margin, metering code, and minimum firing data.
@@ -4423,8 +4495,23 @@ fn read_dc_line(
 /// retention; any textual difference — a real value, extra columns, even a
 /// different numeric spelling — keeps the tail, conservatively.
 fn tail_is_default(f: &[Cow<'_, str>], start: usize, default: &str) -> bool {
-    let defaults = default.split(", ").map(|t| t.trim_matches('\''));
-    f.iter().skip(start).map(Cow::as_ref).eq(defaults)
+    let defaults = default
+        .split(", ")
+        .map(|t| t.trim_matches('\''))
+        .collect::<Vec<_>>();
+    let mut tail = f.iter().skip(start).map(Cow::as_ref).collect::<Vec<_>>();
+    // Revision 34 and later state one column more in a two-terminal DC
+    // converter tail, the bridge count between ICR and IFR. A record whose
+    // bridge count is zero and whose other fields are the default states the
+    // same converter as the shorter revision 33 default, and retaining it as
+    // an extra would make every later hop report the loss of nothing.
+    if tail.len() == defaults.len() + 1
+        && default == DEFAULT_CONVERTER_TAIL
+        && tail[CONVERTER_TAIL_BRIDGE_INDEX] == "0"
+    {
+        tail.remove(CONVERTER_TAIL_BRIDGE_INDEX);
+    }
+    tail == defaults
 }
 
 /// The fields of `f` from index `start` as a JSON string array (for extras).
