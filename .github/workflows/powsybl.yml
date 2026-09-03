@@ -41,12 +41,7 @@ jobs:
         sparse-checkout: |
           cgmes/cgmes-conformity/src/main/resources/conformity/cas-2/MicroGrid/Type2_T2/CGMES_v2.4.15_MicroGridTestConfiguration_T2_Assembled_Complete_v2
           cgmes/cgmes-conformity/src/main/resources/conformity/cas-3-data-3.0.2/MicroGrid/BaseCase/MicroGrid-BaseCase-Merged
-          iidm/iidm-serde/src/test/resources/V1_12/threeWindingsTransformerToBeEstimated.xiidm
-          iidm/iidm-serde/src/test/resources/V1_13/threeWindingsTransformerToBeEstimated.xiidm
-          iidm/iidm-serde/src/test/resources/V1_14/threeWindingsTransformerToBeEstimated.xiidm
-          iidm/iidm-serde/src/test/resources/V1_15/threeWindingsTransformerToBeEstimated.xiidm
-          iidm/iidm-serde/src/test/resources/V1_16/threeWindingsTransformerToBeEstimated.xiidm
-          iidm/iidm-serde/src/test/resources/V1_17/threeWindingsTransformerToBeEstimated.xiidm
+          iidm/iidm-serde/src/test/resources
           psse/psse-converter/src/test/resources/remoteControl.xiidm
           psse/psse-converter/src/test/resources/twoTerminalDc.xiidm
           psse/psse-converter/src/test/resources/five_bus_nodeBreaker_rev35.xiidm
