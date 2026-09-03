@@ -2701,3 +2701,28 @@ def test_calculation_updates_are_constructed_from_typed_updates():
     assert powerio.CalculationUpdate(network).data_role == "network"
     assert not hasattr(powerio.CalculationUpdate, "operating_point")
     assert not hasattr(powerio.CalculationUpdate, "network")
+
+
+def test_geo_layer_is_a_module_value():
+    """A geographic document parses, serializes, and emits like any case."""
+    path = DATA / "powerworld" / "ACTIVSg200.pwd"
+    module = powerio.parse(path)
+    layer = module.value
+    assert isinstance(layer, powerio.GeoLayer)
+
+    document = layer.geojson
+    assert '"FeatureCollection"' in document
+
+    # The canonical document reads back as a layer.
+    again = powerio.parse(document.encode("utf-8"), format="geo-json")
+    assert isinstance(again.value, powerio.GeoLayer)
+
+    # PowerIO IR carries the layer.
+    ir = powerio.serialize(module)
+    text = ir.artifacts[0].data
+    assert text is not None
+    assert isinstance(powerio.deserialize(text).value, powerio.GeoLayer)
+
+    # No grid exchange format states a standalone layer.
+    with pytest.raises(powerio.PowerIOError):
+        powerio.emit(module, "matpower")

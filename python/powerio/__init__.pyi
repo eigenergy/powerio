@@ -24,6 +24,7 @@ _T = TypeVar("_T")
 __all__ = [
     "AcOpfInstance",
     "AcOpfSolution",
+    "GeoLayer",
     "AcPfInstance",
     "AcPfSolution",
     "AcScucInstance",
@@ -1037,6 +1038,11 @@ class AcPfSolution(_BalancedCalculation, _CalculationSolution):
 class DcOpfSolution(_BalancedCalculation, _CalculationSolution):
     @property
     def instance(self) -> DcOpfInstance: ...
+
+class GeoLayer(_TypedValue):
+    @property
+    def geojson(self) -> str: ...
+
 class AcOpfSolution(_BalancedCalculation, _CalculationSolution):
     @property
     def instance(self) -> AcOpfInstance: ...
