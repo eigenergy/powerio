@@ -740,8 +740,8 @@ impl From<TopologyArg> for Topology {
 // A flat dispatch: one arm per subcommand, each delegating immediately.
 #[expect(clippy::too_many_lines)]
 fn main() -> std::process::ExitCode {
-    install_tracing();
     let cli = Cli::parse();
+    install_tracing(cli.diagnostics_format);
     let _ = DIAGNOSTICS_FORMAT.set(cli.diagnostics_format);
     let result: anyhow::Result<()> = match cli.command.unwrap_or_else(default_command) {
         Command::Tui { data_dir, out_dir } => tui::run(tui::TuiOptions { data_dir, out_dir }),
@@ -1123,8 +1123,11 @@ fn run_gen_cli(
     run_gen(topology.into(), n, r_over_x, mean_x, seed, output, matrices)
 }
 
-fn install_tracing() {
+fn install_tracing(diagnostics_format: DiagnosticsFormat) {
     use tracing_subscriber::EnvFilter;
+    if diagnostics_format == DiagnosticsFormat::Json {
+        return;
+    }
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),

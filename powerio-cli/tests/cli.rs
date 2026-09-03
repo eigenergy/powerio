@@ -220,6 +220,23 @@ fn json_format_leaves_only_the_diagnostics_array_on_stderr() {
     for record in &diagnostics {
         assert_ne!(record["severity"], "error", "{record}");
     }
+
+    let bundle = std::env::temp_dir().join(format!("powerio-cli-json-bundle-{stamp}"));
+    let out = run(&[
+        "--diagnostics-format",
+        "json",
+        "dcopf",
+        case.to_str().unwrap(),
+        "-o",
+        bundle.to_str().unwrap(),
+    ]);
+    assert_success(&out);
+    assert!(bundle.is_dir(), "{} was not written", bundle.display());
+    let _ = std::fs::remove_dir_all(&bundle);
+    let diagnostics = json_diagnostics(&out);
+    for record in &diagnostics {
+        assert_ne!(record["severity"], "error", "{record}");
+    }
 }
 
 #[test]
