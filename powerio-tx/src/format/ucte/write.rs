@@ -280,7 +280,8 @@ impl NumberWriter<'_> {
         if let Some(text) = fixed(value, width) {
             return Some(text);
         }
-        let digits = i32::try_from(width - usize::from(value < 0.0)).unwrap_or(i32::MAX);
+        let digits =
+            i32::try_from(width.saturating_sub(usize::from(value < 0.0))).unwrap_or(i32::MAX);
         let limit = 10f64.powi(digits) - 1.0;
         let clamped = limit.copysign(value);
         self.losses
@@ -293,7 +294,15 @@ impl NumberWriter<'_> {
         if let Some(text) = integer(value, width) {
             return Some(text);
         }
-        let limit = 10i64.pow(width as u32 - u32::from(value < 0)) - 1;
+        // The widest magnitude the field holds: `width` digits, one of them
+        // spent on the minus sign of a negative value. A zero width leaves no
+        // digit, and a width past the 19 digits of an `i64` cannot be reached
+        // by a value that did not already fit.
+        let digits =
+            u32::try_from(width.saturating_sub(usize::from(value < 0))).unwrap_or(u32::MAX);
+        let limit = 10i64
+            .checked_pow(digits)
+            .map_or(i64::MAX, |power| power - 1);
         let clamped = if value < 0 { -limit } else { limit };
         self.losses
             .out_of_range
