@@ -83,6 +83,7 @@ from ._powerio import (
 __all__ = [
     "AcOpfInstance",
     "AcOpfSolution",
+    "GeoLayer",
     "AcPfInstance",
     "AcPfSolution",
     "AcScucInstance",
@@ -1123,7 +1124,30 @@ class AcScucSolution(_BalancedCalculation, _CalculationSolution):
         return self.module._inner._ac_scuc_solution_objective()
 
 
+class GeoLayer(_TypedValue):
+    """A standalone geographic document: element points and routes keyed by
+    element identity, in one coordinate space.
+
+    :func:`parse` returns it for the canonical ``.geo.json``, GeoJSON, aliased
+    CSV or JSON records, headerless buscoords CSV, and a PowerWorld ``.pwd``
+    display. :meth:`PioModule.emit` writes the canonical document as
+    ``geo-json``, and :func:`serialize` carries the layer through PowerIO IR.
+    Place a layer onto a case with
+    ``network.apply_geo_layer(layer.geojson)``.
+    """
+
+    @property
+    def geojson(self) -> str:
+        """The canonical ``.geo.json`` document for this layer."""
+        result = emit(self.module, "geo-json")
+        data = result.artifacts[0].data
+        assert data is not None
+        return data.decode("utf-8")
+
+
+
 _VALUE_CLASSES: dict[str, type[_TypedValue]] = {
+    "powerio.GeoLayer": GeoLayer,
     "powerio.OperatingPoint<powerio.BalancedNetwork>": OperatingPoint,
     "powerio.OperatingPoint<powerio.MulticonductorNetwork>": OperatingPoint,
     "powerio.DcPfInstance": DcPfInstance,
