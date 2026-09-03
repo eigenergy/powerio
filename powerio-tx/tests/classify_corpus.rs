@@ -20,7 +20,8 @@ const EXPECTED: &[(&str, &str, Option<&str>)] = &[
     // neither carries a case marker at top level.
     ("capi_matrix/case30_arrow_coo.json", "unknown", None),
     ("capi_matrix/case9_arrow_coo.json", "unknown", None),
-    // The BMOPF schema document describes cases; it is not one.
+    // A BMOPF schema document describes cases; it is not one.
+    ("dist/bmopf/bmopf-0.2.0.schema.json", "unknown", None),
     ("dist/bmopf/draft_bmopf_schema.json", "unknown", None),
     (
         "dist/bmopf/example_enwl_n1_f2.json",
