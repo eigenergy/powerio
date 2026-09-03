@@ -9,7 +9,7 @@
 //! only. GO Challenge 3 defines a calculation and therefore parses only
 //! through the top level `powerio::parse`, which returns its declared
 //! `AcScucInstance` or `AcScucSolution`. `.pwd` display files parse through
-//! [`parse_display`].
+//! the facade's `parse`, which returns `powerio.GeoLayer`.
 //! Each reader produces a [`BalancedNetwork`]. The top level `powerio` facade
 //! owns universal parsing and `emit`; this component crate supplies the typed
 //! transmission implementation.
@@ -104,9 +104,8 @@ pub use format::routing::{
 #[cfg(test)]
 pub(crate) use format::test_parse::{parse_file, parse_str};
 pub use format::{
-    DisplayData, DisplayFormat, EmitOptions, PwdDisplay, PwdSubstation, SOURCE_FORMAT_NAMES,
-    TargetFormat, emit, emit_with_options, parse, parse_display, parse_display_format,
-    parse_format_id, parse_target_format,
+    EmitOptions, PwdDisplay, PwdSubstation, SOURCE_FORMAT_NAMES, TargetFormat, emit,
+    emit_with_options, parse, parse_format_id, parse_target_format,
 };
 
 #[doc(hidden)]

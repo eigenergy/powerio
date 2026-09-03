@@ -3,7 +3,7 @@
 use powerio_core::{Scenario, ScenarioSet, TimePoint, TimeSeries};
 use powerio_dist::MulticonductorNetwork;
 use powerio_prob::OperatingPoint;
-use powerio_tx::BalancedNetwork;
+use powerio_tx::{BalancedNetwork, GeoLayer};
 
 /// A dynamically typed time series at the universal parser boundary.
 ///
@@ -289,6 +289,10 @@ fn require_element_type(
 pub enum PioValue {
     BalancedNetwork(BalancedNetwork),
     MulticonductorNetwork(MulticonductorNetwork),
+    /// A standalone geographic document: element points and routes keyed by
+    /// element identity, placed onto a network by
+    /// [`crate::apply_geo_layer`].
+    GeoLayer(GeoLayer),
     BalancedOperatingPoint(OperatingPoint<BalancedNetwork>),
     MulticonductorOperatingPoint(OperatingPoint<MulticonductorNetwork>),
     TimeSeries(PioTimeSeries),
@@ -317,6 +321,7 @@ impl PioValue {
         match self {
             Self::BalancedNetwork(_) => "powerio.BalancedNetwork",
             Self::MulticonductorNetwork(_) => "powerio.MulticonductorNetwork",
+            Self::GeoLayer(_) => "powerio.GeoLayer",
             Self::BalancedOperatingPoint(_) => "powerio.OperatingPoint<powerio.BalancedNetwork>",
             Self::MulticonductorOperatingPoint(_) => {
                 "powerio.OperatingPoint<powerio.MulticonductorNetwork>"
@@ -359,6 +364,7 @@ impl From<BalancedNetwork> for PioValue {
     }
 }
 value_conversion!(MulticonductorNetwork, MulticonductorNetwork);
+value_conversion!(GeoLayer, GeoLayer);
 value_conversion!(OperatingPoint<BalancedNetwork>, BalancedOperatingPoint);
 value_conversion!(
     OperatingPoint<MulticonductorNetwork>,

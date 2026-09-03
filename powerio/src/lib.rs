@@ -51,6 +51,11 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
+//! A geographic layer is a value like any other: the canonical `.geo.json`,
+//! GeoJSON, aliased CSV or JSON records, headerless buscoords CSV, and a
+//! PowerWorld `.pwd` display all parse to [`PioValue::GeoLayer`], `emit`
+//! writes one as `geo-json`, and [`apply_geo_layer`] places one onto a case.
+//!
 //! [`parse_with_options`] selects the parser explicitly and widens the
 //! directory a format may refer to further files beneath. [`Source`] and
 //! [`Destination`] remain the advanced input and output: a source carrying
@@ -72,14 +77,14 @@ use powerio_tx::format;
 pub use powerio_tx::{
     Area, BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, BranchRatingSet,
     BranchSolution, BranchSusceptanceFormula, Bus, BusId, BusType, Canvas, CoordinateSpace,
-    CoordsKind, DEFAULT_BASE_FREQUENCY, Detection, DisplayData, DisplayFormat, ElementKey, Extras,
-    GenCaps, GenCost, Generator, GeoApplyReport, GeoFeature, GeoGeometry, GeoLayer, GeoMeta,
-    GeoParsed, GeoTarget, Hvdc, Impedance, IndexCore, IndexedNetwork, JSON_CLASSES, JsonClass,
-    Load, LoadVoltageModel, Location, PwdDisplay, PwdSubstation, Selector, Shunt, ShuntBlock,
-    SolverParams, SourceFormat, Storage, Switch, SwitchedShuntControl, SwitchedShuntMode,
-    Transformer3W, TransformerControl, TransformerControlMode, Winding, apply_substation_points,
-    calc_series_admittance_of, classify_json_bytes, classify_json_text, repair_values,
-    to_geo_layer_from_pwd, to_lonlat_from_pwd_mercator,
+    CoordsKind, DEFAULT_BASE_FREQUENCY, Detection, ElementKey, Extras, GenCaps, GenCost, Generator,
+    GeoApplyReport, GeoFeature, GeoGeometry, GeoLayer, GeoMeta, GeoParsed, GeoTarget, Hvdc,
+    Impedance, IndexCore, IndexedNetwork, JSON_CLASSES, JsonClass, Load, LoadVoltageModel,
+    Location, PwdDisplay, PwdSubstation, Selector, Shunt, ShuntBlock, SolverParams, SourceFormat,
+    Storage, Switch, SwitchedShuntControl, SwitchedShuntMode, Transformer3W, TransformerControl,
+    TransformerControlMode, Winding, apply_substation_points, calc_series_admittance_of,
+    classify_json_bytes, classify_json_text, repair_values, to_geo_layer_from_pwd,
+    to_lonlat_from_pwd_mercator,
 };
 /// Balanced network records and the public network and geographic submodules.
 /// Derived indexes, normalization data, solver tables, and component error
@@ -281,18 +286,6 @@ fn directory_has_goc3_data(source: &Source) -> bool {
     })
 }
 
-/// Parse a display artifact from a source, inferring its format when `format`
-/// is `None`. Paths and memory use [`Source::open`] and
-/// [`Source::from_memory`] like case parsing.
-///
-/// # Errors
-/// The format cannot be inferred, the source cannot be acquired, or the
-/// display data is malformed.
-pub fn parse_display(source: Source, format: Option<&str>) -> Result<DisplayData> {
-    powerio_tx::parse_display(source, format)
-        .map_err(|error| Error::new(error.code(), error.to_string()).with_cause(error))
-}
-
 /// Transform the `Substation` table in PowerWorld AUX text into a geographic
 /// layer without exposing the component parser's borrowed `AuxFile` type.
 ///
@@ -431,6 +424,7 @@ pub fn parse_with_options(
         #[cfg(feature = "gridfm")]
         RoutedFamily::Gridfm => parse_gridfm(source),
         RoutedFamily::Egret => parse_egret(source),
+        RoutedFamily::Geo => parse_geo_layer(source),
         RoutedFamily::Balanced(json_class) => format::parse_with_json_class(source, json_class)
             .map(|module| module.map_value(PioValue::from)),
     }
@@ -481,6 +475,70 @@ fn parse_goc3(
         None => PioValue::from(instance),
     };
     powerio_core::PioModule::parsed(value, source, diagnostics)
+}
+
+/// Read one standalone geographic document into [`PioValue::GeoLayer`]. A
+/// PowerWorld `.pwd` display lifts into a diagram space layer with substation
+/// targets; every other supported document is already a layer. The reader's
+/// notes on records it could not use become the module's diagnostics.
+fn parse_geo_layer(
+    source: powerio_core::Source,
+) -> std::result::Result<powerio_core::PioModule<PioValue>, powerio_core::Error> {
+    let name = source.name().to_owned();
+    let declared = source.format().map(|format| format.as_str().to_owned());
+    let is_display = declared.as_deref().is_some_and(is_pwd_display_token)
+        || std::path::Path::new(&name)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("pwd"));
+
+    let buffer = match source.primary_buffer() {
+        Ok(buffer) => buffer,
+        Err(error) => return Err(error.with_source(source)),
+    };
+    let (layer, diagnostics) = if is_display {
+        match powerio_tx::format::powerworld::__parse_pwd_display(buffer.content_bytes()) {
+            Ok(display) => (powerio_tx::geo::to_geo_layer_from_pwd(&display), Vec::new()),
+            Err(error) => {
+                return Err(Error::new(error.code(), error.to_string())
+                    .with_cause(error)
+                    .with_source(source));
+            }
+        }
+    } else {
+        let text = match std::str::from_utf8(buffer.content_bytes()) {
+            Ok(text) => text,
+            Err(cause) => {
+                return Err(Error::new(
+                    &powerio_tx::diagnostics::codes::READ_GEO_NOT_TEXT,
+                    format!("a geographic layer document is not valid UTF-8: {cause}"),
+                )
+                .with_source(source));
+            }
+        };
+        match powerio_tx::geo::GeoLayer::parse(
+            text,
+            std::path::Path::new(&name)
+                .file_name()
+                .and_then(|name| name.to_str()),
+        ) {
+            Ok(parsed) => (parsed.layer, parsed.diagnostics),
+            Err(error) => {
+                return Err(Error::new(error.code(), error.to_string())
+                    .with_cause(error)
+                    .with_source(source));
+            }
+        }
+    };
+    let source = match declared {
+        Some(_) => source,
+        None => source.with_format(powerio_core::FormatId::new(if is_display {
+            "powerworld-pwd"
+        } else {
+            "geo-json"
+        })?),
+    };
+    powerio_core::PioModule::parsed(PioValue::from(layer), source, diagnostics)
 }
 
 /// PyPSA CSV dispatch: one snapshot with no series siblings is the scalar
@@ -603,6 +661,10 @@ enum RoutedFamily {
     OpfData,
     PypsaDirectory,
     Egret,
+    /// A standalone geographic document: the canonical `.geo.json`, GeoJSON,
+    /// aliased CSV or JSON records, headerless buscoords CSV, or a PowerWorld
+    /// `.pwd` display lifted into a diagram space layer.
+    Geo,
     #[cfg(feature = "gridfm")]
     Gridfm,
 }
@@ -644,6 +706,13 @@ fn routed_family(
         .and_then(|extension| extension.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
+    if source
+        .name()
+        .to_ascii_lowercase()
+        .ends_with(powerio_tx::geo::GEO_LAYER_EXTENSION)
+    {
+        return Ok(RoutedFamily::Geo);
+    }
     match extension.as_str() {
         "dss" => Ok(RoutedFamily::Distribution(Some(
             format::routing::DistributionFormat::Dss,
@@ -653,7 +722,8 @@ fn routed_family(
         // else (a nameless in-memory source above all) can still carry a
         // JSON document, so content that opens one routes by classification,
         // mirroring the balanced hub's own sniff.
-        "m" | "raw" | "aux" | "epc" | "pwb" | "pwd" | "uct" => Ok(RoutedFamily::Balanced(None)),
+        "pwd" | "geojson" => Ok(RoutedFamily::Geo),
+        "m" | "raw" | "aux" | "epc" | "pwb" | "uct" => Ok(RoutedFamily::Balanced(None)),
         _ => {
             let jsonish = source.primary_buffer().is_ok_and(|buffer| {
                 std::str::from_utf8(buffer.content_bytes()).is_ok_and(|text| {
@@ -672,6 +742,28 @@ fn routed_family(
             }
         }
     }
+}
+
+/// Whether `token` names the standalone geographic layer document.
+pub(crate) fn is_geo_layer_token(token: &str) -> bool {
+    matches!(
+        token.to_ascii_lowercase().replace(['-', '_'], "").as_str(),
+        "geojson" | "geo" | "geolayer"
+    )
+}
+
+/// Whether `token` names a PowerWorld display file, which reads as a diagram
+/// space layer.
+pub(crate) fn is_pwd_display_token(token: &str) -> bool {
+    matches!(
+        token.to_ascii_lowercase().replace(['-', '_'], "").as_str(),
+        "pwd" | "powerworldpwd" | "powerworlddisplay"
+    )
+}
+
+/// Whether `token` names a document that reads into [`PioValue::GeoLayer`].
+fn is_geo_token(token: &str) -> bool {
+    is_geo_layer_token(token) || is_pwd_display_token(token)
 }
 
 /// The family a JSON document's content markers select.
@@ -728,6 +820,9 @@ fn family_of_token(token: &str) -> RoutedFamily {
 
     if token == "model-json" {
         return RoutedFamily::Balanced(None);
+    }
+    if is_geo_token(token) {
+        return RoutedFamily::Geo;
     }
 
     if powerio_dist::parse_dist_target_format(token).is_some() {

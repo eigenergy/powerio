@@ -186,10 +186,12 @@ defaulted config value and this workspace already pairs `emit` with
 `emit_with_options`. Content in memory carries the name `<memory>`, which
 identifies no format, so a format detected from a file extension is declared
 through the options or named through `Source::from_memory`. `parse_display`,
-`DisplayData`, and `DisplayFormat` are removed: a geographic layer reads
-through `GeoLayer::read` and a PowerWorld display through `PwdDisplay::read`,
-each taking the same inputs, the way MLIR parses fragments with
-`parseAttribute` while `parseSourceFile` reads whole modules. Python and Julia
+`DisplayData`, and `DisplayFormat` are removed: a geographic layer is a module
+value, `powerio.GeoLayer`. The canonical `.geo.json`, GeoJSON, aliased CSV or
+JSON records, headerless buscoords CSV, and a PowerWorld `.pwd` display all
+parse to it, `emit` writes one as `geo-json`, PowerIO IR carries it, and
+`pio_value_geo_layer` takes it in C. Which value a format produces is data
+rather than a choice of operation, so no reading verb stands beside `parse`. Python and Julia
 keep their `format` keyword and C ABI 7 is unchanged. See
 `docs/src/migration-v1.md` for the table of replacements.
 

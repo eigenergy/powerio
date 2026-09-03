@@ -1,4 +1,4 @@
-use powerio::{CoordinateSpace, DisplayData, GeoGeometry, GeoTarget};
+use powerio::{CoordinateSpace, GeoGeometry, GeoTarget};
 
 #[test]
 fn aux_text_transforms_to_an_owned_substation_layer() {
@@ -55,16 +55,80 @@ fn aux_text_preserves_empty_and_malformed_results() {
     assert!(error.to_string().contains("line"));
 }
 
+/// A display file is a value like any other case: `parse` returns it, `emit`
+/// writes the canonical layer document, and PowerIO IR carries it.
 #[test]
-fn facade_parses_a_display_memory_source() {
-    let bytes = std::fs::read(concat!(
+fn a_display_file_parses_serializes_and_emits_as_a_layer() {
+    let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../tests/data/powerworld/ACTIVSg200.pwd"
-    ))
-    .unwrap();
-    let source = powerio::Source::from_memory("display.pwd", bytes).unwrap();
-    let DisplayData::PowerWorld(display) = powerio::parse_display(source, None).unwrap() else {
-        panic!("PWD bytes did not produce a PowerWorld display");
+    );
+    let module = powerio::parse(path).unwrap();
+    assert_eq!(module.value.type_name(), "powerio.GeoLayer");
+    let powerio::PioValue::GeoLayer(layer) = &module.value else {
+        panic!("a .pwd reads as a layer");
     };
-    assert!(!display.substations.is_empty());
+    assert!(!layer.features.is_empty());
+    assert!(matches!(
+        layer.space,
+        CoordinateSpace::Diagram { canvas: Some(_) }
+    ));
+
+    // Content in memory reaches the same value when the name states the
+    // format, and the declared format states it without a name.
+    let bytes = std::fs::read(path).unwrap();
+    let named = powerio::parse(powerio::Source::from_memory("display.pwd", bytes.clone()).unwrap())
+        .unwrap();
+    assert_eq!(named.value.type_name(), "powerio.GeoLayer");
+    let declared = powerio::parse_with_options(
+        bytes,
+        &powerio::ParseOptions::default()
+            .format("powerworld-pwd")
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(declared.value.type_name(), "powerio.GeoLayer");
+
+    // The layer travels through PowerIO IR and out as `geo-json`.
+    let ir = powerio::serialize(&module, powerio::Destination::memory("layer").unwrap()).unwrap();
+    let powerio::EmittedOutput::Memory { artifacts } = ir.into_output() else {
+        panic!("a memory destination returned path output");
+    };
+    let text = artifacts.into_iter().next().unwrap().into_bytes();
+    let decoded = powerio::deserialize(text).unwrap();
+    let powerio::PioValue::GeoLayer(decoded) = &decoded.value else {
+        panic!("PowerIO IR carries the layer");
+    };
+    assert_eq!(decoded, layer);
+
+    let written = powerio::emit(
+        &module,
+        "geo-json",
+        powerio::Destination::memory("layer").unwrap(),
+    )
+    .unwrap();
+    let powerio::EmittedOutput::Memory { artifacts } = written.into_output() else {
+        panic!("a memory destination returned path output");
+    };
+    let document = String::from_utf8(artifacts.into_iter().next().unwrap().into_bytes()).unwrap();
+    let reread = powerio::parse(
+        powerio::Source::from_memory("layer.geo.json", document.into_bytes()).unwrap(),
+    )
+    .unwrap();
+    let powerio::PioValue::GeoLayer(reread) = &reread.value else {
+        panic!("the canonical document reads back as a layer");
+    };
+    assert_eq!(reread.features.len(), layer.features.len());
+
+    // No grid exchange format states a standalone layer.
+    let refused = powerio::emit(
+        &module,
+        "matpower",
+        powerio::Destination::memory("case").unwrap(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        refused.diagnostics()[0].code(),
+        "REQUEST.EMIT.UNSUPPORTED_VALUE_TYPE"
+    );
 }

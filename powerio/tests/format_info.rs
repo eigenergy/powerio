@@ -55,19 +55,14 @@ fn common_aliases_resolve_without_exposing_component_enums() {
         ("uct", "ucte"),
         ("cdf", "ieee-cdf"),
         ("IEEE_CDF", "ieee-cdf"),
+        ("geojson", "geo-json"),
+        ("geo", "geo-json"),
+        ("pwd", "powerworld-pwd"),
     ] {
         assert_eq!(resolve_format(alias).map(|info| info.token), Some(token));
     }
 
-    for name in [
-        "",
-        "json",
-        "model-json",
-        "geojson",
-        "rawx",
-        "iidm",
-        "not-a-format",
-    ] {
+    for name in ["", "json", "model-json", "rawx", "iidm", "not-a-format"] {
         assert_eq!(resolve_format(name), None, "{name}");
     }
 }

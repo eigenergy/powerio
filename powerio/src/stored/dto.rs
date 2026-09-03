@@ -1049,6 +1049,8 @@ pub enum StoredValue {
     BalancedNetwork(Box<BalancedNetwork>),
     #[serde(rename = "powerio.MulticonductorNetwork")]
     MulticonductorNetwork(Box<MulticonductorNetwork>),
+    #[serde(rename = "powerio.GeoLayer")]
+    GeoLayer(Box<powerio_tx::GeoLayer>),
     #[serde(rename = "powerio.OperatingPoint<powerio.BalancedNetwork>")]
     BalancedOperatingPoint(StoredOperatingPoint<BalancedNetwork>),
     #[serde(rename = "powerio.OperatingPoint<powerio.MulticonductorNetwork>")]
@@ -1585,6 +1587,28 @@ fn validate_operating_point_scenario_set<N>(
     Ok(())
 }
 
+/// A layer places a finite point or route per feature, and every feature
+/// names the element it places.
+fn validate_geo_layer(layer: &powerio_tx::GeoLayer) -> Result<(), String> {
+    for (index, feature) in layer.features.iter().enumerate() {
+        let key = &feature.key;
+        if key.uid.is_none() && key.id.is_none() && key.name.is_none() && key.index.is_none() {
+            return Err(format!("geo feature {index} names no element"));
+        }
+        let finite = |point: &[f64; 2]| point.iter().all(|value| value.is_finite());
+        let placed = match &feature.geometry {
+            powerio_tx::GeoGeometry::Point(point) => finite(point),
+            powerio_tx::GeoGeometry::LineString(points) => {
+                !points.is_empty() && points.iter().all(finite)
+            }
+        };
+        if !placed {
+            return Err(format!("geo feature {index} has no finite geometry"));
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)]
 fn validate_value(value: &StoredValue) -> Result<(), String> {
     match value {
@@ -1592,6 +1616,7 @@ fn validate_value(value: &StoredValue) -> Result<(), String> {
         | StoredValue::MulticonductorNetwork(_)
         | StoredValue::AcScucInstance(_)
         | StoredValue::AcScucSolution(_) => Ok(()),
+        StoredValue::GeoLayer(layer) => validate_geo_layer(layer),
         StoredValue::BalancedOperatingPoint(point) => validate_quantities(&point.quantities, 1),
         StoredValue::MulticonductorOperatingPoint(point) => {
             validate_quantities(&point.quantities, 1)

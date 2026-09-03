@@ -18,7 +18,7 @@
 //!
 //! `.pwb` binary cases are parsed but cannot be emitted; see that module for
 //! the decoded vintages and parity evidence. `.pwd` files carry no case data,
-//! only the diagram, and enter through [`crate::parse_display`].
+//! only the diagram, and read as a diagram space layer.
 //!
 //! [`BalancedNetwork`]: crate::network::BalancedNetwork
 

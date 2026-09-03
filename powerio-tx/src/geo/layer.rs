@@ -24,30 +24,39 @@ const FMT: &str = "geo layer";
 
 /// A standalone geographic document: element points and routes in one
 /// coordinate space, keyed by element identity rather than embedded in a case.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct GeoLayer {
     /// Coordinate space of every feature.
     pub space: CoordinateSpace,
     /// Default coordinate origin, stamped into the `powerio_geo` member on write.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<CoordsKind>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub features: Vec<GeoFeature>,
 }
 
 /// One point or route in a [`GeoLayer`].
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct GeoFeature {
     pub target: GeoTarget,
     pub key: ElementKey,
     pub geometry: GeoGeometry,
     /// Endpoint bus references for a branch, the unordered fallback identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to: Option<String>,
     /// Feature origin when it differs from the layer default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<CoordsKind>,
 }
 
 /// The element family a feature places.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum GeoTarget {
     Bus,
@@ -68,7 +77,9 @@ impl GeoTarget {
 }
 
 /// Feature geometry: a point or a polyline route.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
 pub enum GeoGeometry {
     Point([f64; 2]),
     LineString(Vec<[f64; 2]>),
@@ -79,11 +90,16 @@ pub enum GeoGeometry {
 /// `(from, to)` bus pair. `index` is a positional row alias (1-based, the
 /// MATPOWER row convention) accepted on read and never written; the durable
 /// identity is the payload `uid` (`buses:3`, `branches:7`).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ElementKey {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index: Option<usize>,
 }
 

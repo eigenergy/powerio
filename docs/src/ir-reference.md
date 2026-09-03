@@ -47,6 +47,7 @@ schema definition beside it.
 |---|---|
 | `powerio.BalancedNetwork` | `BalancedNetwork` |
 | `powerio.MulticonductorNetwork` | `MulticonductorNetwork` |
+| `powerio.GeoLayer` | `GeoLayer` |
 | `powerio.OperatingPoint<powerio.BalancedNetwork>` | `StoredOperatingPoint` |
 | `powerio.OperatingPoint<powerio.MulticonductorNetwork>` | `StoredOperatingPoint2` |
 | `powerio.TimeSeries<powerio.BalancedNetwork>` | `StoredTimeSeries` |
@@ -894,6 +895,69 @@ Schema definition: `DistLocation`.
 | `x` | float | network coordinate space; longitude in geographic space | | | required |
 | `y` | float | network coordinate space; latitude in geographic space | | | required |
 | `kind` | token as `DistGeoMeta.kind`, or null | | | | null (the network default) |
+
+## powerio.GeoLayer
+
+A standalone geographic document: element points and routes in one coordinate
+space, keyed by element identity rather than embedded in a case. It is what
+the canonical `.geo.json`, GeoJSON, aliased CSV or JSON records, headerless
+buscoords CSV, and a PowerWorld `.pwd` display parse to, and
+`apply_geo_layer` places one onto a network.
+
+Schema definition: `GeoLayer`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `space` | `CoordinateSpace` | | | the space every feature's coordinates are in | required |
+| `kind` | token `source`, `synthetic`, `manual`, `derived`, or null | | | default origin of features without their own `kind` | null |
+| `features` | array of `GeoFeature` | | | | empty |
+
+`CoordinateSpace` is tagged by `space`: `geographic` states an optional
+`crs`, with x longitude and y latitude in decimal degrees and a null `crs`
+meaning EPSG:4326; `projected` states an optional `crs` for planar
+coordinates; `diagram` states an optional `canvas` for drawing coordinates
+with no earth referent; `unknown` states no further member and means the
+source declared no space.
+
+Schema definition: `Canvas`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `width` | float or null | canvas units | positive | the drawing width the source states | null |
+| `height` | float or null | canvas units | positive | the drawing height the source states | null |
+| `units` | string or null | | | the source's own name for its canvas units | null |
+
+### GeoFeature
+
+Schema definition: `GeoFeature`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `target` | token `bus`, `branch`, or `substation` | | | the element family the feature places | required |
+| `key` | `ElementKey` | | | at least one member names an element | required |
+| `geometry` | `GeoGeometry` | | | every coordinate is finite | required |
+| `from` | string or null | | | a branch's endpoint bus, the unordered fallback identity | null |
+| `to` | string or null | | | the other endpoint bus | null |
+| `kind` | token as `GeoLayer.kind`, or null | | | | null (the layer default) |
+
+`GeoGeometry` is one tagged object: `point` states one `[x, y]` position for
+a placed element, and `line_string` states an array of `[x, y]` positions for
+a route. Positions are in the layer's coordinate space, a route states at
+least one, and every coordinate is finite.
+
+### ElementKey
+
+Matching tries `uid`, then `id`, then case insensitive `name`; a branch
+additionally falls back to the unordered `(from, to)` bus pair.
+
+Schema definition: `ElementKey`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `uid` | string or null | | | the durable identity (`buses:3`, `branches:7`) | null |
+| `id` | string or null | | | the source's own element identifier | null |
+| `name` | string or null | | | matched case insensitively | null |
+| `index` | integer or null | | positive | 1-based row alias, accepted on read and never written | null |
 
 ## powerio.OperatingPoint\<N\>
 

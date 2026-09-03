@@ -2508,6 +2508,13 @@ bool pio_value_is_type(const PioValueHandle *value, const char *type_name, size_
 PioBalancedNetwork *pio_value_balanced_network(const PioValueHandle *value, PioError **error);
 
 /**
+ * Take the value as a geographic layer handle. The layer is copied out of
+ * the value, so the handle outlives the module the way
+ * `pio_geo_layer_parse` produces one.
+ */
+PioGeoLayer *pio_value_geo_layer(const PioValueHandle *value, PioError **error);
+
+/**
  * Borrow the value as a multiconductor network without serialization or copying.
  */
 PioMulticonductorNetwork *pio_value_multiconductor_network(const PioValueHandle *value,

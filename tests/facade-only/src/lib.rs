@@ -30,6 +30,9 @@ mod names_resolve_through_the_facade {
     type _DcOpfInstance = powerio::DcOpfInstance;
     type _DcOpfSolution = powerio::DcOpfSolution;
     type _MulticonductorNetwork = powerio::MulticonductorNetwork;
+    type _GeoLayer = powerio::GeoLayer;
+    type _GeoParsed = powerio::GeoParsed;
+    type _PwdDisplay = powerio::PwdDisplay;
     type _BalancedNetwork = powerio::BalancedNetwork;
 }
 
@@ -113,9 +116,9 @@ mod tests {
             "PowerIO IR is serialized, not a grid exchange format"
         );
 
-        let source =
-            powerio::Source::from_memory("display.pwd", b"not a display".to_vec()).unwrap();
-        let _: powerio::Error = powerio::parse_display(source, None).unwrap_err();
+        // A layer is a parsed value, so a malformed one fails like any case.
+        let bad = powerio::Source::from_memory("bad.geo.json", b"{".to_vec()).unwrap();
+        let _: powerio::Error = powerio::parse(bad).unwrap_err();
         let _: powerio::Error = powerio::to_geo_layer_from_aux_text(
             "DATA (Substation, [SubNum, Latitude, Longitude])\n{\n7 34 -80 99\n}\n",
         )

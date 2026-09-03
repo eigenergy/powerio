@@ -4,20 +4,25 @@ PowerIO stores coordinates when a supported source provides them. Coordinates
 are optional; parsers do not invent them, and emission to a network format
 without a coordinate representation reports the loss.
 
-PowerWorld `.pwd` files are display data rather than network cases, so they do
-not reach `parse`. Each document is read by the type it produces, taking the
-same inputs the case operations take: a file name, content already in memory,
-or a `Source`.
+A standalone geographic document is a value like any other case:
+`powerio.GeoLayer`. The canonical `.geo.json`, GeoJSON, aliased CSV or JSON
+records, headerless buscoords CSV, and a PowerWorld `.pwd` display all parse
+to it, and a `.pwd` lifts into a diagram space layer with substation targets.
 
 ```rust,ignore
-// A layer: the canonical `.geo.json`, GeoJSON, aliased CSV or JSON records,
-// headerless buscoords CSV, or a `.pwd` lifted into a diagram space layer.
-let parsed = powerio::GeoLayer::read("layer.geo.json")?;
+let module = powerio::parse("layer.geo.json")?;
+let powerio::PioValue::GeoLayer(layer) = &module.value else {
+    panic!("a layer document parses to powerio.GeoLayer");
+};
 
-// The same `.pwd` as its canvas and substation symbol table.
-let display = powerio::PwdDisplay::read("case.pwd")?;
+// A layer travels through PowerIO IR and out as the canonical document.
+powerio::serialize(&module, "layer.pio.json")?;
+powerio::emit(&module, "geo-json", "layer.geo.json")?;
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
+
+`PwdDisplay` remains available for the raw display record: the canvas, the
+save stamp, and the symbol table in diagram coordinates.
 
 ## Coordinate fields
 
@@ -165,10 +170,10 @@ aux reader promotes the substation `Latitude:1`/`Longitude:1` pair, and the
 bus's own bare `Latitude`/`Longitude` pair, into `Bus.location`; a promoted
 pair leaves extras.
 
-Rust reads a display file with `PwdDisplay::read` and the same file as a layer
-with `GeoLayer::read`. Python's `parse_display` returns
-`DisplayData(kind="powerworld", data=PwdDisplay(...))`.
-Display files do not pass through `BalancedNetwork`, module emission, or `.pio.json`.
+Rust parses a display file into `PioValue::GeoLayer`. Python's `parse_display`
+returns `DisplayData(kind="powerworld", data=PwdDisplay(...))`, the raw display
+record. A display file never becomes a `BalancedNetwork`; it becomes a layer,
+which module emission and PowerIO IR carry.
 
 ## Distribution graph projection
 

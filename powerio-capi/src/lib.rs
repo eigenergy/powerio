@@ -4488,6 +4488,31 @@ pub unsafe extern "C" fn pio_value_balanced_network(
     }
 }
 
+/// Take the value as a geographic layer handle. The layer is copied out of
+/// the value, so the handle outlives the module the way
+/// `pio_geo_layer_parse` produces one.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_value_geo_layer(
+    value: *const PioValueHandle,
+    error: *mut *mut PioError,
+) -> *mut PioGeoLayer {
+    unsafe {
+        entry(error, std::ptr::null_mut(), || {
+            let value = require_value(value)?;
+            let Some(PioValue::GeoLayer(layer)) = value.value() else {
+                return Err(boundary_error(
+                    &codes::REQUEST_CAPI_TYPE_MISMATCH,
+                    "the value is not powerio.GeoLayer",
+                ));
+            };
+            Ok(PioGeoLayer::new_raw(GeoLayerInner {
+                layer: layer.clone(),
+                diagnostics: Vec::new(),
+            }))
+        })
+    }
+}
+
 /// Borrow the value as a multiconductor network without serialization or copying.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_value_multiconductor_network(

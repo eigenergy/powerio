@@ -1749,7 +1749,7 @@ fn parse_file_dispatch_precedes_the_text_read() {
     let err = parse_file(&pwd, None).unwrap_err();
     let _ = std::fs::remove_file(&pwd);
     assert_eq!(err.category(), powerio_core::ErrorCategory::Request);
-    assert!(err.to_string().contains("parse_display"), "{err}");
+    assert!(err.to_string().contains("powerio.GeoLayer"), "{err}");
 
     // Source acquisition precedes format detection: a missing file fails as
     // an Io error before the unmapped extension is consulted, and an existing
