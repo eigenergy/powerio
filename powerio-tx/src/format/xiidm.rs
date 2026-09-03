@@ -62,6 +62,13 @@ const EQUIPMENT_NAMESPACE_PREFIX: &str = "http://www.powsybl.org/schema/iidm/equ
 /// IIDM 1.0 predates the PowSybl domain and declares the iTesla namespace.
 const ITESLA_NAMESPACE_PREFIX: &str = "http://www.itesla_project.eu/schema/iidm/";
 const EXTENSION_NAMESPACE_PREFIX: &str = "http://www.powsybl.org/schema/iidm/ext/";
+/// The SlackTerminal extension namespace family. Every published version
+/// (1.0 through 1.5) states one terminal reference, so the version selects only
+/// the schema PowSybl validates against and not the data read here.
+const SLACK_TERMINAL_NAMESPACE_PREFIX: &str =
+    "http://www.powsybl.org/schema/iidm/ext/slack_terminal/";
+/// The version PowSybl writes for IIDM 1.8 and later.
+const SLACK_TERMINAL_NAMESPACE: &str = "http://www.powsybl.org/schema/iidm/ext/slack_terminal/1_5";
 const ACTIVE_POWER_CONTROL_NAMESPACE_V1_0: &str =
     "http://www.itesla_project.eu/schema/iidm/ext/active_power_control/1_0";
 const ACTIVE_POWER_CONTROL_NAMESPACE_V1_1: &str =
@@ -244,6 +251,26 @@ impl ActivePowerControlVersion {
     }
 }
 
+/// Whether an element inside an `<extension>` is one the mapping reads. Every
+/// other extension child is counted as unmapped and skipped.
+fn is_mapped_extension_child(tag: &str, namespace: Option<&str>) -> bool {
+    match tag {
+        "activePowerControl" => ActivePowerControlVersion::from_namespace(namespace).is_some(),
+        "slackTerminal" => is_slack_terminal_namespace(namespace),
+        _ => false,
+    }
+}
+
+/// Whether a namespace URI names a version of the SlackTerminal extension.
+fn is_slack_terminal_namespace(namespace: Option<&str>) -> bool {
+    namespace
+        .and_then(|uri| uri.strip_prefix(SLACK_TERMINAL_NAMESPACE_PREFIX))
+        .and_then(|suffix| suffix.split_once('_'))
+        .is_some_and(|(major, minor)| {
+            major == "1" && !minor.is_empty() && minor.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct XiidmNamespace {
     version: XiidmVersion,
@@ -373,6 +400,14 @@ enum RawEndpoint {
 struct RawTerminalReference {
     id: String,
     terminal: u8,
+}
+
+/// One SlackTerminal extension: the voltage level it is attached to and the
+/// terminal it names as that voltage level's power flow reference.
+#[derive(Clone, Debug)]
+struct RawSlackTerminal {
+    voltage_level: String,
+    reference: RawTerminalReference,
 }
 
 #[derive(Clone, Debug)]
@@ -772,7 +807,7 @@ struct ParsedXiidm {
     dc_switches: Vec<DcSwitch>,
     voltage_source_converters: Vec<RawVoltageSourceConverter>,
     line_commutated_converters: Vec<RawLineCommutatedConverter>,
-    slack_terminal: Option<String>,
+    slack_terminals: Vec<RawSlackTerminal>,
 }
 
 pub(crate) fn parse_xiidm_source(
@@ -1358,11 +1393,10 @@ impl ParsedXiidm {
                     }
                     return Ok(());
                 }
-                let active_power_control = tag == "activePowerControl"
-                    && ActivePowerControlVersion::from_namespace(namespace).is_some();
+                let mapped_extension_child = is_mapped_extension_child(tag, namespace);
                 if self.current_extension_target.is_some()
                     && tag != "extension"
-                    && !active_power_control
+                    && !mapped_extension_child
                 {
                     if namespace.is_none_or(is_xiidm_namespace_uri) {
                         return Err(format_error(format!(
@@ -1414,8 +1448,7 @@ impl ParsedXiidm {
         }
         if self.root_seen {
             let recognized_extension = self.current_extension_target.is_some()
-                && tag == "activePowerControl"
-                && ActivePowerControlVersion::from_namespace(namespace).is_some();
+                && is_mapped_extension_child(tag, namespace);
             if !recognized_extension
                 && !self
                     .namespace
@@ -2169,7 +2202,16 @@ impl ParsedXiidm {
                 });
             }
             "property" => self.read_property(&attrs, diagnostics)?,
-            "slackTerminal" => self.slack_terminal = Some(required_text(&attrs, "id")?.to_owned()),
+            "slackTerminal" => {
+                let voltage_level = self
+                    .current_extension_target
+                    .clone()
+                    .ok_or_else(|| format_error("slackTerminal appears outside an extension"))?;
+                self.slack_terminals.push(RawSlackTerminal {
+                    voltage_level,
+                    reference: parse_terminal_reference(&attrs)?,
+                });
+            }
             "terminalRef" if self.current_tap.is_some() => {
                 let reference = parse_terminal_reference(&attrs)?;
                 let equipment = self.current_equipment()?;
@@ -3944,13 +3986,35 @@ fn build_network(parsed: &ParsedXiidm, diagnostics: &mut Diagnostics) -> Result<
         }
     }
 
-    if let Some(slack) = parsed.slack_terminal.as_deref() {
-        if let Some(bus) = generator_bus_by_id.get(slack).copied() {
-            set_bus_kind(&mut buses, bus, BusType::Ref);
-        } else {
+    // A SlackTerminal extension names the power flow reference of one voltage
+    // level, so a network with several synchronous components declares one per
+    // component. The balanced calculation view states a single reference bus:
+    // the first resolvable terminal becomes it and the rest are reported.
+    let mut reference_bus = None;
+    for slack in &parsed.slack_terminals {
+        let resolved =
+            resolve_regulating_bus(parsed, &slack.reference, &bus_builder, &voltage_levels)?;
+        let Some(bus) = resolved else {
             diagnostics.push(
                 &codes::READ_XIIDM_FIELD_UNMAPPED,
-                format!("slack terminal `{slack}` does not identify a mapped generator"),
+                format!(
+                    "slackTerminal on voltage level `{}` names terminal `{}`, which is not a mapped equipment terminal",
+                    slack.voltage_level, slack.reference.id
+                ),
+            );
+            continue;
+        };
+        if reference_bus.is_none() {
+            reference_bus = Some(bus);
+            set_bus_kind(&mut buses, bus, BusType::Ref);
+        } else if reference_bus != Some(bus) {
+            diagnostics.push(
+                &codes::READ_XIIDM_VALUE_DEFAULTED,
+                format!(
+                    "slackTerminal on voltage level `{}` names a second reference bus {bus}; the balanced calculation view states one reference bus and keeps bus {}",
+                    slack.voltage_level,
+                    reference_bus.expect("checked present")
+                ),
             );
         }
     }
@@ -6790,6 +6854,123 @@ fn format_error(message: impl Into<String>) -> Error {
     }
 }
 
+/// The nominal voltage XIIDM states for a bus whose source case declares none.
+///
+/// XIIDM states impedances in ohms and voltages in kV, so every voltage level
+/// carries a positive nominal voltage; a case that works only in per unit (a
+/// MATPOWER bus row with `BASE_KV = 0`) states none. One substituted kilovolt
+/// keeps every derived ohm, siemens, and kV value finite, and preserves the
+/// per-unit model exactly, because a reader divides by the same nominal voltage
+/// the writer multiplied by.
+const SUBSTITUTE_NOMINAL_KV: f64 = 1.0;
+
+/// Whether a bus states a nominal voltage XIIDM can carry.
+fn states_nominal_voltage(bus: &Bus) -> bool {
+    bus.base_kv.is_finite() && bus.base_kv > 0.0
+}
+
+/// Whether a DC line states the converter model XIIDM requires.
+fn states_converter_model(line: &Hvdc) -> bool {
+    line.resistance_ohm.is_some()
+        && line.nominal_voltage_kv.is_some()
+        && line.converters_mode.is_some()
+        && line.converter1.is_some()
+        && line.converter2.is_some()
+}
+
+/// Build the DC circuit XIIDM states for a DC line that states a loss model
+/// instead.
+///
+/// A MATPOWER `mpc.dcline` row states the delivered power as
+/// `pt = pf - loss0 - loss1 * pf`; IIDM states a DC line resistance, a DC
+/// nominal voltage, and one converter station per end, and derives the
+/// delivered power from them. The two agree at the stated setpoint: `loss1` is
+/// a fraction of the sending end power, which is what a converter station's
+/// `lossFactor` states as a percentage, and `loss0` is the `r * I²` loss at the
+/// setpoint current, so a resistance of `loss0 / I²` reproduces it. That fixes
+/// the resistance from the DC voltage, which the source never states, so the
+/// terminal's own nominal voltage is used.
+///
+/// Returns one message per line whose loss model does not survive.
+fn substitute_converter_model(network: &mut BalancedNetwork) -> Vec<String> {
+    let nominal_voltage = network
+        .buses()
+        .iter()
+        .map(|bus| (bus.id, bus.base_kv))
+        .collect::<HashMap<_, _>>();
+    let mut messages = Vec::new();
+    for line in network.hvdc_mut() {
+        if states_converter_model(line) {
+            continue;
+        }
+        let id = line.uid.clone().unwrap_or_else(|| "hvdc".to_owned());
+        let nominal_v = line.nominal_voltage_kv.unwrap_or_else(|| {
+            nominal_voltage
+                .get(&line.from)
+                .copied()
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .unwrap_or(SUBSTITUTE_NOMINAL_KV)
+        });
+        let current_ka = line.pf / nominal_v;
+        if line.resistance_ohm.is_none() {
+            line.resistance_ohm = Some(if current_ka == 0.0 {
+                if line.loss0 != 0.0 {
+                    messages.push(format!(
+                        "DC line `{id}` states a constant loss of {} MW at a zero power setpoint; an XIIDM DC line states loss as resistance times current squared, which is zero at zero current",
+                        line.loss0
+                    ));
+                }
+                0.0
+            } else {
+                line.loss0 / (current_ka * current_ka)
+            });
+        }
+        let mut loss_factor_percent = line.loss1 * 100.0;
+        if !(0.0..=100.0).contains(&loss_factor_percent) {
+            messages.push(format!(
+                "DC line `{id}` states a proportional loss of {}; an XIIDM converter station `lossFactor` is a percentage between 0 and 100, so it was written as {}",
+                line.loss1,
+                loss_factor_percent.clamp(0.0, 100.0)
+            ));
+            loss_factor_percent = loss_factor_percent.clamp(0.0, 100.0);
+        }
+        if !line.pt_matches_loss_model(1e-9) {
+            messages.push(format!(
+                "DC line `{id}` states a delivered power of {} MW that its own loss model does not produce; an XIIDM DC line has no field for the receiving end, which PowSybl derives from the converter loss factors and the line resistance",
+                line.pt
+            ));
+        }
+        line.nominal_voltage_kv = Some(nominal_v);
+        line.converters_mode = Some(if line.pf < 0.0 {
+            HvdcConvertersMode::Side1InverterSide2Rectifier
+        } else {
+            HvdcConvertersMode::Side1RectifierSide2Inverter
+        });
+        let station =
+            |side: u8, loss_factor_percent: f64, setpoint_kv: f64| -> Result<HvdcConverter> {
+                Ok(HvdcConverter {
+                    component: component_id("hvdc_converter", &format!("{id}-{side}"))?,
+                    kind: HvdcConverterKind::Vsc,
+                    loss_factor_percent,
+                    voltage_regulator_on: Some(true),
+                    voltage_setpoint_kv: Some(setpoint_kv),
+                    reactive_power_setpoint_mvar: None,
+                    power_factor: None,
+                    regulating_terminal: None,
+                })
+            };
+        let from_kv = nominal_voltage.get(&line.from).copied().unwrap_or(1.0);
+        let to_kv = nominal_voltage.get(&line.to).copied().unwrap_or(1.0);
+        if line.converter1.is_none() {
+            line.converter1 = station(1, loss_factor_percent, line.vf * from_kv).ok();
+        }
+        if line.converter2.is_none() {
+            line.converter2 = station(2, 0.0, line.vt * to_kv).ok();
+        }
+    }
+    messages
+}
+
 fn has_missing_component_ids(network: &BalancedNetwork) -> bool {
     network.buses().iter().any(|value| value.uid.is_none())
         || network.loads().iter().any(|value| value.uid.is_none())
@@ -7526,18 +7707,58 @@ impl<'a> XiidmWriteIndex<'a> {
 }
 
 pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
-    let prepared_network = has_missing_component_ids(network).then(|| {
+    let unstated_nominal_voltage = network
+        .buses()
+        .iter()
+        .filter(|bus| !states_nominal_voltage(bus))
+        .map(|bus| bus.id.to_string())
+        .collect::<Vec<_>>();
+    let mut prepared_network = None;
+    let mut converter_model_losses = Vec::new();
+    if has_missing_component_ids(network)
+        || !unstated_nominal_voltage.is_empty()
+        || !network.hvdc().iter().all(states_converter_model)
+    {
         let mut prepared = network.clone();
         prepared.assign_missing_component_ids();
-        prepared
-    });
+        for bus in prepared.buses_mut() {
+            if !states_nominal_voltage(bus) {
+                bus.base_kv = SUBSTITUTE_NOMINAL_KV;
+            }
+        }
+        converter_model_losses = substitute_converter_model(&mut prepared);
+        prepared_network = Some(prepared);
+    }
     let network = prepared_network.as_ref().unwrap_or(network);
     network.validate().map_err(|error| Error::Emit {
         format: FORMAT,
         message: format!("network validation failed before XIIDM emission: {error}"),
     })?;
-    validate_xiidm_hvdc_emission(network)?;
     let mut diagnostics = Diagnostics::new();
+    if !unstated_nominal_voltage.is_empty() {
+        let shown = unstated_nominal_voltage
+            .iter()
+            .take(5)
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let ellipsis = if unstated_nominal_voltage.len() > 5 {
+            ", ..."
+        } else {
+            ""
+        };
+        diagnostics.push(
+            &codes::EMIT_XIIDM.value_substituted,
+            format!(
+                "{} bus(es) state no nominal voltage; an XIIDM voltage level requires one, so each was written at {SUBSTITUTE_NOMINAL_KV} kV, on which the ohm, siemens, and kV values are computed: bus {shown}{ellipsis}",
+                unstated_nominal_voltage.len(),
+            ),
+        );
+    }
+    for message in converter_model_losses {
+        diagnostics.push(&codes::EMIT_XIIDM.field_dropped, message);
+    }
+    validate_xiidm_hvdc_emission(network)?;
     let metadata = network.case_metadata();
     let case_date = metadata.case_date.as_deref().unwrap_or_else(|| {
         diagnostics.push(
@@ -7615,9 +7836,14 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
     let active_power_control_namespace = active_power_control_namespace.then_some(format!(
         " xmlns:apc=\"{ACTIVE_POWER_CONTROL_NAMESPACE_V1_2}\""
     ));
+    let slack_terminal = slack_terminal_equipment(network);
+    let slack_terminal_namespace = slack_terminal
+        .is_some()
+        .then_some(format!(" xmlns:slt=\"{SLACK_TERMINAL_NAMESPACE}\""));
     let mut output = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<iidm:network xmlns:iidm=\"{namespace}\"{} id=\"{}\" caseDate=\"{}\" forecastDistance=\"{forecast_distance}\" sourceFormat=\"{}\" minimumValidationLevel=\"{}\">\n",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<iidm:network xmlns:iidm=\"{namespace}\"{}{} id=\"{}\" caseDate=\"{}\" forecastDistance=\"{forecast_distance}\" sourceFormat=\"{}\" minimumValidationLevel=\"{}\">\n",
         active_power_control_namespace.as_deref().unwrap_or(""),
+        slack_terminal_namespace.as_deref().unwrap_or(""),
         xml(network.name()),
         xml(case_date),
         xml(source_model_format),
@@ -7671,6 +7897,13 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
             &mut diagnostics,
         );
         write_active_power_control_extensions(network, &root_components, 2, &mut output)?;
+        write_slack_terminal_extension(
+            slack_terminal.as_ref(),
+            &index,
+            &root_components,
+            2,
+            &mut output,
+        );
         output.push_str("</iidm:network>\n");
         return Ok(TextEmission::new(output, diagnostics));
     }
@@ -7692,6 +7925,7 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
         &mut diagnostics,
     );
     write_active_power_control_extensions(network, &|_| true, 2, &mut output)?;
+    write_slack_terminal_extension(slack_terminal.as_ref(), &index, &|_| true, 2, &mut output);
     output.push_str("</iidm:network>\n");
     Ok(TextEmission::new(output, diagnostics))
 }
@@ -8719,6 +8953,13 @@ fn write_subnetwork(
         4,
         output,
     )?;
+    write_slack_terminal_extension(
+        slack_terminal_equipment(network).as_ref(),
+        index,
+        &|component| members.contains(component),
+        4,
+        output,
+    );
     output.push_str("  </iidm:network>\n");
     Ok(())
 }
@@ -8776,6 +9017,79 @@ fn write_active_power_control_extensions(
         }
     }
     Ok(())
+}
+
+/// The equipment whose terminal XIIDM states as the network's power flow
+/// reference.
+///
+/// IIDM has no bus type, so `BusType::Ref` rides PowSybl's SlackTerminal
+/// extension, which names one terminal per voltage level. PowSybl's load flow
+/// resolves that terminal's bus, so any connectable at the reference bus states
+/// the same fact; an in-service injection is preferred, and generators come
+/// first because a reference bus regulates through one.
+fn slack_terminal_equipment(network: &BalancedNetwork) -> Option<ComponentId> {
+    let reference = network
+        .buses()
+        .iter()
+        .find(|bus| bus.kind == BusType::Ref)?
+        .id;
+    let generators = network.generators().iter().map(|value| {
+        (
+            "generator",
+            value.uid.as_deref(),
+            value.bus,
+            value.in_service,
+        )
+    });
+    let storage = network
+        .storage()
+        .iter()
+        .map(|value| ("storage", value.uid.as_deref(), value.bus, value.in_service));
+    let loads = network
+        .loads()
+        .iter()
+        .map(|value| ("load", value.uid.as_deref(), value.bus, value.in_service));
+    let shunts = network
+        .shunts()
+        .iter()
+        .map(|value| ("shunt", value.uid.as_deref(), value.bus, value.in_service));
+    let mut out_of_service = None;
+    for (kind, uid, bus, in_service) in generators.chain(storage).chain(loads).chain(shunts) {
+        let Some(uid) = uid.filter(|_| bus == reference) else {
+            continue;
+        };
+        let component = component_id(kind, uid).ok()?;
+        if in_service {
+            return Some(component);
+        }
+        out_of_service = out_of_service.or(Some(component));
+    }
+    out_of_service
+}
+
+/// Write the SlackTerminal extension for the network's reference bus. Nothing
+/// is written when the reference bus hosts no emitted connectable, because the
+/// extension states a terminal.
+fn write_slack_terminal_extension(
+    slack_terminal: Option<&ComponentId>,
+    index: &XiidmWriteIndex<'_>,
+    included: &dyn Fn(&ComponentId) -> bool,
+    indent: usize,
+    output: &mut String,
+) {
+    let Some(component) = slack_terminal.filter(|component| included(component)) else {
+        return;
+    };
+    let Some(terminal) = index.terminal(component, 1) else {
+        return;
+    };
+    let parent_indent = " ".repeat(indent);
+    let child_indent = " ".repeat(indent + 2);
+    output.push_str(&format!(
+        "{parent_indent}<iidm:extension id=\"{}\">\n{child_indent}<slt:slackTerminal id=\"{}\"/>\n{parent_indent}</iidm:extension>\n",
+        xml(terminal.voltage_level.local_id()),
+        xml(component.local_id()),
+    ));
 }
 
 fn validate_active_power_control_for_emission(
@@ -11538,14 +11852,26 @@ fn write_hvdc_converter_stations(
             } else {
                 injection_solution_attributes(index, &component, p, q)
             };
+            // A station that stated a reactive capability curve keeps it: the
+            // curve is the reactive envelope over active power, and one
+            // minQ/maxQ pair states a wider envelope at every operating point
+            // but the one the pair came from. A station with no curve states
+            // the terminal's own min and max.
+            let mut reactive_limits = String::new();
+            match index.reactive_limits.get(&component).copied() {
+                Some(record) => write_reactive_limits(&record.limits, &mut reactive_limits),
+                None => reactive_limits.push_str(&format!(
+                    "        <iidm:minMaxReactiveLimits minQ=\"{}\" maxQ=\"{}\"/>\n",
+                    number(qmin),
+                    number(qmax),
+                )),
+            }
             output.push_str(&format!(
-                    "      <iidm:vscConverterStation id=\"{}\"{} lossFactor=\"{}\" voltageRegulatorOn=\"{}\"{voltage_setpoint}{reactive_power_setpoint}{terminal}{solution}>\n        <iidm:minMaxReactiveLimits minQ=\"{}\" maxQ=\"{}\"/>\n{}      </iidm:vscConverterStation>\n",
+                    "      <iidm:vscConverterStation id=\"{}\"{} lossFactor=\"{}\" voltageRegulatorOn=\"{}\"{voltage_setpoint}{reactive_power_setpoint}{terminal}{solution}>\n{reactive_limits}{}      </iidm:vscConverterStation>\n",
                     xml(&id),
                     identifiable_attributes(metadata),
                     number(loss_factor),
                     voltage_regulator_on,
-                    number(qmin),
-                    number(qmax),
                     converter
                         .regulating_terminal
                         .as_ref()
@@ -11601,10 +11927,13 @@ fn write_hvdc_lines(
             write_identifiable_children(metadata, output);
             output.push_str("  </iidm:hvdcLine>\n");
         }
-        if line.pmin < 0.0 {
+        if line.pmin != 0.0 {
             diagnostics.push(
                 &codes::EMIT_XIIDM.field_dropped,
-                format!("HVDC line `{id}` reverse power bound has no XIIDM hvdcLine attribute"),
+                format!(
+                    "HVDC line `{id}` states an active power floor of {} MW; an XIIDM hvdcLine states `maxP` alone, so the floor reads back as 0",
+                    line.pmin
+                ),
             );
         }
         if line.cost.is_some() {
@@ -13711,6 +14040,244 @@ mod tests {
         );
     }
 
+    // Reduced from PowSybl's MPL-2.0 `V1_17/slackTerminalRef.xml` shape: the
+    // extension is attached to a voltage level and names one terminal.
+    const POWSYBL_SLACK_TERMINAL: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<iidm:network xmlns:iidm="http://www.powsybl.org/schema/iidm/1_17" xmlns:slt="http://www.powsybl.org/schema/iidm/ext/slack_terminal/1_5" id="slack" caseDate="2026-01-01T00:00:00Z" forecastDistance="0" sourceFormat="test" minimumValidationLevel="STEADY_STATE_HYPOTHESIS">
+  <iidm:substation id="S">
+    <iidm:voltageLevel id="VL1" nominalV="230" topologyKind="BUS_BREAKER">
+      <iidm:busBreakerTopology><iidm:bus id="B1"/></iidm:busBreakerTopology>
+      <iidm:generator id="G1" energySource="OTHER" minP="0" maxP="200" voltageRegulatorOn="true" targetP="100" targetV="230" bus="B1" connectableBus="B1">
+        <iidm:minMaxReactiveLimits minQ="-50" maxQ="50"/>
+      </iidm:generator>
+    </iidm:voltageLevel>
+    <iidm:voltageLevel id="VL2" nominalV="230" topologyKind="BUS_BREAKER">
+      <iidm:busBreakerTopology><iidm:bus id="B2"/></iidm:busBreakerTopology>
+      <iidm:generator id="G2" energySource="OTHER" minP="0" maxP="200" voltageRegulatorOn="true" targetP="80" targetV="230" bus="B2" connectableBus="B2">
+        <iidm:minMaxReactiveLimits minQ="-50" maxQ="50"/>
+      </iidm:generator>
+      <iidm:load id="L2" loadType="UNDEFINED" p0="170" q0="30" bus="B2" connectableBus="B2"/>
+    </iidm:voltageLevel>
+  </iidm:substation>
+  <iidm:line id="LINE" r="2" x="20" g1="0" b1="0" g2="0" b2="0" bus1="B1" connectableBus1="B1" voltageLevelId1="VL1" bus2="B2" connectableBus2="B2" voltageLevelId2="VL2"/>
+  <iidm:extension id="VL2"><slt:slackTerminal id="G2"/></iidm:extension>
+</iidm:network>"#;
+
+    /// The SlackTerminal extension is the only place IIDM states a reference
+    /// bus, so reading it decides `BusType::Ref` instead of the first
+    /// generator default.
+    #[test]
+    fn slack_terminal_extension_selects_the_reference_bus() {
+        let mut diagnostics = Diagnostics::new();
+        let network = parse_xiidm_source(POWSYBL_SLACK_TERMINAL, &mut diagnostics).unwrap();
+        let reference = network
+            .buses()
+            .iter()
+            .find(|bus| bus.kind == BusType::Ref)
+            .unwrap();
+        assert_eq!(reference.uid.as_deref(), Some("B2"));
+        assert_eq!(
+            network
+                .buses()
+                .iter()
+                .filter(|bus| bus.kind == BusType::Ref)
+                .count(),
+            1
+        );
+        assert!(
+            !diagnostics
+                .records()
+                .iter()
+                .any(|record| record.message().contains("no mapped slack terminal")),
+            "a declared slack terminal is not a defaulted reference"
+        );
+    }
+
+    /// The reference bus survives a fresh emission: the writer states it as the
+    /// same extension, on the voltage level holding a connectable at that bus.
+    #[test]
+    fn the_reference_bus_survives_fresh_emission_as_a_slack_terminal() {
+        let network = parse_xiidm_source(POWSYBL_SLACK_TERMINAL, &mut Diagnostics::new()).unwrap();
+        let emission = write_xiidm(&network).unwrap();
+        assert!(
+            emission
+                .text
+                .contains(&format!("xmlns:slt=\"{SLACK_TERMINAL_NAMESPACE}\""))
+        );
+        assert!(
+            emission
+                .text
+                .contains("<iidm:extension id=\"VL2\">\n    <slt:slackTerminal id=\"G2\"/>")
+        );
+
+        let mut diagnostics = Diagnostics::new();
+        let back = parse_xiidm_source(&emission.text, &mut diagnostics).unwrap();
+        let reference = back
+            .buses()
+            .iter()
+            .find(|bus| bus.kind == BusType::Ref)
+            .unwrap();
+        assert_eq!(reference.uid.as_deref(), Some("B2"));
+    }
+
+    /// A slack terminal naming an equipment the document does not declare is a
+    /// read error, as it is in PowSybl (`TerminalRefSerDe.resolve` throws on an
+    /// identifiable that is not in the network).
+    #[test]
+    fn a_slack_terminal_naming_unknown_equipment_is_a_read_error() {
+        let source = POWSYBL_SLACK_TERMINAL.replace(
+            "<slt:slackTerminal id=\"G2\"/>",
+            "<slt:slackTerminal id=\"MISSING\"/>",
+        );
+        let error = parse_xiidm_source(&source, &mut Diagnostics::new()).unwrap_err();
+        assert!(error.to_string().contains("MISSING"), "{error}");
+    }
+
+    /// A VSC converter station's reactive capability curve is the reactive
+    /// envelope over active power; one minQ/maxQ pair states a different
+    /// envelope, so the curve is written as a curve.
+    #[test]
+    fn a_converter_station_reactive_capability_curve_survives_fresh_emission() {
+        let source = EQUIPMENT_COVERAGE.replace(
+            "<iidm:minMaxReactiveLimits minQ=\"-20\" maxQ=\"20\"/></iidm:vscConverterStation>",
+            "<iidm:reactiveCapabilityCurve><iidm:point p=\"0\" minQ=\"-20\" maxQ=\"20\"/><iidm:point p=\"100\" minQ=\"-5\" maxQ=\"5\"/></iidm:reactiveCapabilityCurve></iidm:vscConverterStation>",
+        );
+        let network = parse_xiidm_source(&source, &mut Diagnostics::new()).unwrap();
+        let emission = write_xiidm(&network).unwrap();
+        let station = emission
+            .text
+            .split("<iidm:vscConverterStation id=\"C1\"")
+            .nth(1)
+            .unwrap()
+            .split("</iidm:vscConverterStation>")
+            .next()
+            .unwrap();
+        assert!(
+            station.contains("<iidm:reactiveCapabilityCurve>"),
+            "{station}"
+        );
+        assert!(
+            station.contains("p=\"100\" minQ=\"-5\" maxQ=\"5\""),
+            "{station}"
+        );
+        assert!(!station.contains("minMaxReactiveLimits"), "{station}");
+    }
+
+    /// A per-unit only case states no bus nominal voltage, and XIIDM states
+    /// ohms and kV. One substituted kilovolt keeps every derived value finite
+    /// and returns the same per-unit model.
+    #[test]
+    fn buses_with_no_nominal_voltage_are_written_at_one_kilovolt() {
+        let mut network = BalancedNetwork::in_memory(
+            "per unit only",
+            DEFAULT_BASE_MVA,
+            vec![
+                Bus::new(BusId::new(1), BusType::Ref, 0.0),
+                Bus::new(BusId::new(2), BusType::Pq, 0.0),
+            ],
+            vec![Branch::new(BusId::new(1), BusId::new(2), 0.01, 0.1)],
+        );
+        network
+            .shunts_mut()
+            .push(Shunt::new(BusId::new(2), 0.0, 0.19));
+        network.generators_mut().push(Generator::new(BusId::new(1)));
+
+        let emission = write_xiidm(&network).unwrap();
+        assert!(
+            emission.text.contains("nominalV=\"1\""),
+            "{}",
+            emission.text
+        );
+        assert!(!emission.text.contains("NaN"), "{}", emission.text);
+        assert!(!emission.text.contains("inf"), "{}", emission.text);
+        assert!(emission.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code() == codes::EMIT_XIIDM.value_substituted.code
+                && diagnostic.message().contains("state no nominal voltage")
+        }));
+
+        let back = parse_xiidm_source(&emission.text, &mut Diagnostics::new()).unwrap();
+        assert_eq!(back.branches()[0].r, 0.01);
+        assert_eq!(back.branches()[0].x, 0.1);
+        assert_eq!(back.shunts()[0].b, 0.19);
+    }
+
+    /// A MATPOWER shaped DC line states a loss model, not a DC circuit. The
+    /// resistance and converter loss factors XIIDM states are derived from it,
+    /// so the delivered power at the stated setpoint survives.
+    #[test]
+    fn a_dc_line_loss_model_becomes_an_xiidm_converter_model() {
+        let mut network = BalancedNetwork::in_memory(
+            "dc loss model",
+            DEFAULT_BASE_MVA,
+            vec![
+                Bus::new(BusId::new(1), BusType::Ref, 345.0),
+                Bus::new(BusId::new(2), BusType::Pq, 345.0),
+            ],
+            vec![Branch::new(BusId::new(1), BusId::new(2), 0.01, 0.1)],
+        );
+        network.generators_mut().push(Generator::new(BusId::new(1)));
+        let mut line = Hvdc::new(BusId::new(1), BusId::new(2));
+        line.uid = Some("dc".to_owned());
+        line.pf = 10.0;
+        line.loss0 = 1.0;
+        line.loss1 = 0.01;
+        line.pt = Hvdc::calc_delivered_power(line.pf, line.loss0, line.loss1);
+        line.pmax = 10.0;
+        line.vf = 1.01;
+        line.vt = 1.0;
+        network.hvdc_mut().push(line);
+
+        let emission = write_xiidm(&network).unwrap();
+        assert!(
+            emission.text.contains("<iidm:hvdcLine id=\"dc\""),
+            "{}",
+            emission.text
+        );
+        assert!(
+            emission.text.contains("lossFactor=\"1\""),
+            "{}",
+            emission.text
+        );
+
+        let back = parse_xiidm_source(&emission.text, &mut Diagnostics::new()).unwrap();
+        let line = &back.hvdc()[0];
+        assert!((line.loss0 - 1.0).abs() < 1e-9, "{}", line.loss0);
+        assert!((line.loss1 - 0.01).abs() < 1e-9, "{}", line.loss1);
+        assert!((line.pt - 8.9).abs() < 1e-9, "{}", line.pt);
+        assert!((line.vf - 1.01).abs() < 1e-9, "{}", line.vf);
+    }
+
+    /// A DC line whose stated received power its own loss model does not
+    /// produce reports the field XIIDM has no place for.
+    #[test]
+    fn a_dc_line_received_power_off_its_loss_model_is_reported() {
+        let mut network = BalancedNetwork::in_memory(
+            "dc received power",
+            DEFAULT_BASE_MVA,
+            vec![
+                Bus::new(BusId::new(1), BusType::Ref, 345.0),
+                Bus::new(BusId::new(2), BusType::Pq, 345.0),
+            ],
+            vec![Branch::new(BusId::new(1), BusId::new(2), 0.01, 0.1)],
+        );
+        network.generators_mut().push(Generator::new(BusId::new(1)));
+        let mut line = Hvdc::new(BusId::new(1), BusId::new(2));
+        line.uid = Some("dc".to_owned());
+        line.pf = 2.0;
+        line.pt = 1.96;
+        line.pmax = 10.0;
+        network.hvdc_mut().push(line);
+
+        let emission = write_xiidm(&network).unwrap();
+        assert!(emission.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code() == codes::EMIT_XIIDM.field_dropped.code
+                && diagnostic.message().contains("delivered power")
+                && diagnostic
+                    .message()
+                    .contains("no field for the receiving end")
+        }));
+    }
+
     #[test]
     fn fresh_emission_rejects_constant_y_reactive_limits_on_all_xiidm_equipment() {
         let mut network = parse_xiidm_source(EQUIPMENT_COVERAGE, &mut Diagnostics::new()).unwrap();
@@ -14171,29 +14738,39 @@ mod tests {
         assert_eq!(reparsed_derived.hvdc().len(), 1);
     }
 
+    /// The DC circuit fields a source may not state are derived from the DC
+    /// line's own loss model rather than refused, and the derivation keeps the
+    /// power the line delivers.
+    #[test]
+    fn xiidm_hvdc_emission_derives_the_dc_circuit_fields_a_source_omits() {
+        let network = parse_xiidm_source(EQUIPMENT_COVERAGE, &mut Diagnostics::new()).unwrap();
+        let stated = &network.hvdc()[0];
+        let (loss0, loss1, delivered) = (stated.loss0, stated.loss1, stated.pt);
+
+        let mut without_dc_circuit = network.clone();
+        let line = &mut without_dc_circuit.hvdc_mut()[0];
+        line.nominal_voltage_kv = None;
+        line.resistance_ohm = None;
+        line.converters_mode = None;
+        line.converter1 = None;
+        line.converter2 = None;
+        let emission = write_xiidm(&without_dc_circuit).unwrap();
+        assert!(emission.text.contains("<iidm:hvdcLine id=\"DC\""));
+
+        let back = parse_xiidm_source(&emission.text, &mut Diagnostics::new()).unwrap();
+        let line = &back.hvdc()[0];
+        assert!((line.loss0 - loss0).abs() < 1e-9, "{} {loss0}", line.loss0);
+        assert!((line.loss1 - loss1).abs() < 1e-9, "{} {loss1}", line.loss1);
+        assert!(
+            (line.pt - delivered).abs() < 1e-9,
+            "{} {delivered}",
+            line.pt
+        );
+    }
+
     #[test]
     fn xiidm_hvdc_emission_refuses_missing_required_values() {
         let network = parse_xiidm_source(EQUIPMENT_COVERAGE, &mut Diagnostics::new()).unwrap();
-
-        let mut missing_nominal_voltage = network.clone();
-        missing_nominal_voltage.hvdc_mut()[0].nominal_voltage_kv = None;
-        let error = write_xiidm(&missing_nominal_voltage).unwrap_err();
-        assert!(error.to_string().contains("nominalV"));
-
-        let mut missing_resistance = network.clone();
-        missing_resistance.hvdc_mut()[0].resistance_ohm = None;
-        let error = write_xiidm(&missing_resistance).unwrap_err();
-        assert!(error.to_string().contains("`r`"));
-
-        let mut missing_mode = network.clone();
-        missing_mode.hvdc_mut()[0].converters_mode = None;
-        let error = write_xiidm(&missing_mode).unwrap_err();
-        assert!(error.to_string().contains("convertersMode"));
-
-        let mut missing_converter = network.clone();
-        missing_converter.hvdc_mut()[0].converter1 = None;
-        let error = write_xiidm(&missing_converter).unwrap_err();
-        assert!(error.to_string().contains("converterStation1"));
 
         let mut missing_regulation_flag = network.clone();
         missing_regulation_flag.hvdc_mut()[0]
