@@ -2983,7 +2983,7 @@ impl ValueInner {
     }
 
     fn value(&self) -> Option<&PioValue> {
-        let mut value = &self.owner.module.value;
+        let mut value = self.owner.module.value();
         for step in &self.steps {
             value = match (step, value) {
                 (ValueStep::TimeSeries(index), PioValue::TimeSeries(series)) => {
@@ -14471,7 +14471,7 @@ where
             &codes::REQUEST_CAPI_TYPE_MISMATCH,
             format!(
                 "{} does not accept aggregate bus active demand",
-                value.value.type_name()
+                value.value().type_name()
             ),
         )
     })?;
@@ -14494,7 +14494,7 @@ fn apply_dynamic_bus_load_active_power(
     total: ActivePower,
     allocation: LoadAllocation,
 ) -> Result<UpdateReportInner, powerio_core::Error> {
-    match &module.value {
+    match &module.value() {
         PioValue::DcPfInstance(_) => apply_bus_load_to_typed_module(
             module,
             bus,
@@ -16089,7 +16089,7 @@ mod tests {
 
     unsafe fn case9_network() -> BalancedNetwork {
         let module = unsafe { parse_case9() };
-        let network = match &unsafe { PioModule::get(module) }.unwrap().module.value {
+        let network = match &unsafe { PioModule::get(module) }.unwrap().module.value() {
             PioValue::BalancedNetwork(network) => network.clone(),
             value => panic!("expected balanced network, got {}", value.type_name()),
         };
@@ -16365,7 +16365,7 @@ mod tests {
 
     fn goc3_instance(source: Source) -> powerio_prob::AcScucInstance {
         let module = powerio::parse(source, Some("goc3-json")).unwrap();
-        let PioValue::AcScucInstance(instance) = module.value else {
+        let PioValue::AcScucInstance(instance) = module.into_value() else {
             panic!("GO Challenge 3 problem did not produce powerio.AcScucInstance");
         };
         instance
@@ -17991,7 +17991,7 @@ mod tests {
 
         unsafe {
             let module = parse_xiidm_text(HIERARCHY);
-            let mut identified_network = match &PioModule::get(module).unwrap().module.value {
+            let mut identified_network = match &PioModule::get(module).unwrap().module.value() {
                 PioValue::BalancedNetwork(network) => network.clone(),
                 value => panic!("expected balanced network, got {}", value.type_name()),
             };
@@ -18523,7 +18523,7 @@ mod tests {
             assert_eq!(point.active_power_mw, -200.0);
             assert_eq!(point.property_count, 1);
 
-            let base_network = match &PioModule::get(module).unwrap().module.value {
+            let base_network = match &PioModule::get(module).unwrap().module.value() {
                 PioValue::BalancedNetwork(network) => network.clone(),
                 value => panic!("expected balanced network, got {}", value.type_name()),
             };
@@ -19171,7 +19171,7 @@ mod tests {
                 derived_module.history().last().unwrap().name(),
                 "apply_geo_layer"
             );
-            let PioValue::BalancedNetwork(derived_network) = &derived_module.value else {
+            let PioValue::BalancedNetwork(derived_network) = &derived_module.value() else {
                 panic!("geo application changed the value type")
             };
             let derived_location = derived_network
@@ -19183,7 +19183,7 @@ mod tests {
             assert_eq!((derived_location.x, derived_location.y), (-83.743, 42.281));
 
             let original_module = &PioModule::get(source_module).unwrap().module;
-            let PioValue::BalancedNetwork(original_network) = &original_module.value else {
+            let PioValue::BalancedNetwork(original_network) = &original_module.value() else {
                 unreachable!()
             };
             assert!(
@@ -19645,7 +19645,7 @@ mod tests {
             assert!(!module.is_null(), "{}", error_text(error));
 
             let inner = PioModule::get(module).unwrap();
-            assert_eq!(inner.module.value.type_name(), "powerio.AcScucSolution");
+            assert_eq!(inner.module.value().type_name(), "powerio.AcScucSolution");
             assert_eq!(inner.module.sources().len(), 2);
 
             let value = pio_module_value(module);
@@ -19750,7 +19750,7 @@ mod tests {
                 pio_source_release(source);
                 assert!(!reparsed.is_null(), "{format}: {}", error_text(error));
                 assert_eq!(
-                    PioModule::get(reparsed).unwrap().module.value.type_name(),
+                    PioModule::get(reparsed).unwrap().module.value().type_name(),
                     "powerio.BalancedNetwork"
                 );
                 pio_module_release(reparsed);

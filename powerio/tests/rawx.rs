@@ -49,7 +49,7 @@ fn universal_parse_normalizes_rawx_metadata_and_echoes_exactly() {
         module.source().unwrap().format().unwrap().as_str(),
         "psse-rawx"
     );
-    let PioValue::BalancedNetwork(network) = &module.value else {
+    let PioValue::BalancedNetwork(network) = &module.value() else {
         panic!("RAWX did not produce a balanced network");
     };
     assert!((network.loads()[0].p - 24.0).abs() < f64::EPSILON);
@@ -89,7 +89,7 @@ fn matpower_cross_format_output_reloads_as_rawx() {
         None,
     )
     .unwrap();
-    let PioValue::BalancedNetwork(network) = &back.value else {
+    let PioValue::BalancedNetwork(network) = &back.value() else {
         panic!("RAWX did not produce a balanced network");
     };
     assert_eq!(network.buses().len(), 9);

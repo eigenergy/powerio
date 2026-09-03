@@ -11505,7 +11505,7 @@ mod tests {
             .unwrap()
             .with_format(powerio_core::FormatId::new("xiidm").unwrap());
         let module = crate::format::parse(source).unwrap();
-        let network = &module.value;
+        let network = &module.value();
         assert_eq!(
             network.case_metadata().source_model_format.as_deref(),
             Some("Réseau PowSybl")
@@ -11939,10 +11939,10 @@ mod tests {
         let source =
             powerio_core::Source::from_memory("empty.xiidm", source.as_bytes().to_vec()).unwrap();
         let module = crate::format::parse(source).unwrap();
-        assert!(module.value.buses().is_empty());
+        assert!(module.value().buses().is_empty());
         assert_eq!(
             module
-                .value
+                .value()
                 .detailed_connectivity()
                 .as_ref()
                 .unwrap()
@@ -12093,7 +12093,7 @@ mod tests {
             .unwrap()
             .with_format(powerio_core::FormatId::new("iidm").unwrap());
         let module = crate::format::parse(source).unwrap();
-        assert_eq!(module.value.source_format(), SourceFormat::Xiidm);
+        assert_eq!(module.value().source_format(), SourceFormat::Xiidm);
         assert_eq!(module.source().unwrap().format().unwrap().as_str(), "xiidm");
         assert_eq!(crate::format::parse_target_format("iidm"), None);
         assert_eq!(
@@ -12107,7 +12107,7 @@ mod tests {
         let source =
             powerio_core::Source::from_memory("case.xml", BUS_BREAKER.as_bytes().to_vec()).unwrap();
         let module = crate::format::parse(source).unwrap();
-        assert_eq!(module.value.source_format(), SourceFormat::Xiidm);
+        assert_eq!(module.value().source_format(), SourceFormat::Xiidm);
         assert_eq!(module.source().unwrap().format().unwrap().as_str(), "xiidm");
     }
 

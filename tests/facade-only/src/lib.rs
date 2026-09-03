@@ -39,10 +39,10 @@ mod tests {
     fn the_readme_example_resolves_through_the_facade_alone() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../data/case9.m");
         let module = powerio::parse(powerio::Source::open(&path).unwrap(), None).unwrap();
-        let powerio::PioValue::BalancedNetwork(network) = &module.value else {
+        let powerio::PioValue::BalancedNetwork(network) = &module.value() else {
             panic!(
                 "expected a balanced network, found {}",
-                module.value.type_name()
+                module.value().type_name()
             );
         };
         assert!(!network.buses().is_empty());
@@ -57,7 +57,7 @@ mod tests {
             powerio::deserialize(powerio::Source::from_memory("module.pio.json", bytes).unwrap())
                 .unwrap();
         assert!(matches!(
-            &decoded.value,
+            &decoded.value(),
             powerio::PioValue::BalancedNetwork(_)
         ));
     }

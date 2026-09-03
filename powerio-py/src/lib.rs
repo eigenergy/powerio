@@ -358,7 +358,7 @@ pub struct PyBalancedNetwork {
 
 impl PyBalancedNetwork {
     fn inner(&self) -> &BalancedNetwork {
-        &self.module.value
+        self.module.value()
     }
 
     fn diagnostics(&self) -> &[powerio_core::Diagnostic] {
@@ -412,7 +412,7 @@ fn core_open_pyerr(path: &std::path::Path, error: &powerio_core::Error) -> PyErr
 /// Wrap a parsed module as a `PyBalancedNetwork`, building the index core once
 /// and keeping the reader's findings on the handle.
 fn case_from_module(module: powerio_core::PioModule<BalancedNetwork>) -> PyBalancedNetwork {
-    let core = IndexCore::build(&module.value);
+    let core = IndexCore::build(module.value());
     PyBalancedNetwork { core, module }
 }
 
@@ -1213,7 +1213,7 @@ struct PyMulticonductorNetwork {
 
 impl PyMulticonductorNetwork {
     fn inner(&self) -> &powerio_dist::MulticonductorNetwork {
-        &self.module.value
+        self.module.value()
     }
 
     fn from_module(module: powerio_core::PioModule<powerio_dist::MulticonductorNetwork>) -> Self {
@@ -3219,7 +3219,7 @@ impl PyPioModule {
     }
 
     fn ac_scuc_instance(&self) -> PyResult<&powerio::AcScucInstance> {
-        match &self.module()?.value {
+        match &self.module()?.value() {
             powerio::PioValue::AcScucInstance(instance) => Ok(instance),
             other => Err(PyTypeError::new_err(format!(
                 "{} is not an AC security constrained unit commitment instance",
@@ -3229,7 +3229,7 @@ impl PyPioModule {
     }
 
     fn ac_scuc_solution(&self) -> PyResult<&powerio::AcScucSolution> {
-        match &self.module()?.value {
+        match &self.module()?.value() {
             powerio::PioValue::AcScucSolution(solution) => Ok(solution),
             other => Err(PyTypeError::new_err(format!(
                 "{} is not an AC security constrained unit commitment solution",
@@ -3239,7 +3239,7 @@ impl PyPioModule {
     }
 
     fn balanced_calculation_network(&self) -> PyResult<&powerio::BalancedNetwork> {
-        let value = &self.module()?.value;
+        let value = &self.module()?.value();
         match value {
             powerio::PioValue::DcPfInstance(instance) => Ok(instance.network()),
             powerio::PioValue::AcPfInstance(instance) => Ok(instance.network()),
@@ -3260,7 +3260,7 @@ impl PyPioModule {
     }
 
     fn multiconductor_calculation_network(&self) -> PyResult<&powerio::MulticonductorNetwork> {
-        let value = &self.module()?.value;
+        let value = &self.module()?.value();
         match value {
             powerio::PioValue::McAcPfInstance(instance) => Ok(instance.network()),
             powerio::PioValue::McAcOpfInstance(instance) => Ok(instance.network()),
@@ -3279,7 +3279,7 @@ fn collection_values(values: &Bound<'_, PyList>) -> PyResult<Vec<powerio::PioVal
         .iter()
         .map(|value| {
             let module = value.extract::<PyRef<'_, PyPioModule>>()?;
-            Ok(module.module()?.value.clone())
+            Ok(module.module()?.value().clone())
         })
         .collect()
 }
@@ -3343,7 +3343,7 @@ macro_rules! apply_typed_updates {
         let mut typed = module_with_records($source, $value.clone())?;
         let report = powerio_prob::apply_updates(&mut typed, $updates)
             .map_err(|error| core_error_pyerr(&error))?;
-        let updated_value = $wrap(typed.value.clone());
+        let updated_value = $wrap(typed.value().clone());
         let updated = module_with_records(&typed, updated_value)?;
         Ok((updated, report))
     }};
@@ -3356,7 +3356,7 @@ fn apply_operating_point_updates(
     powerio_core::PioModule<powerio::PioValue>,
     powerio_prob::UpdateReport,
 )> {
-    match &source.value {
+    match &source.value() {
         powerio::PioValue::BalancedNetwork(value) => {
             apply_typed_updates!(source, value, updates, powerio::PioValue::BalancedNetwork)
         }
@@ -3392,7 +3392,7 @@ fn apply_network_updates(
     powerio_core::PioModule<powerio::PioValue>,
     powerio_prob::UpdateReport,
 )> {
-    match &source.value {
+    match &source.value() {
         powerio::PioValue::BalancedNetwork(value) => {
             apply_typed_updates!(source, value, updates, powerio::PioValue::BalancedNetwork)
         }
@@ -3416,7 +3416,7 @@ fn apply_calculation_updates(
     powerio_core::PioModule<powerio::PioValue>,
     powerio_prob::UpdateReport,
 )> {
-    match &source.value {
+    match &source.value() {
         powerio::PioValue::DcPfInstance(value) => {
             apply_typed_updates!(source, value, updates, powerio::PioValue::DcPfInstance)
         }
@@ -3473,12 +3473,12 @@ fn apply_bus_load_active_power_to_module(
                 allocation,
             )
             .map_err(|error| core_error_pyerr(&error))?;
-            let updated = module_with_records(&typed, $wrap(typed.value.clone()))?;
+            let updated = module_with_records(&typed, $wrap(typed.value().clone()))?;
             Ok((updated, report))
         }};
     }
 
-    match &source.value {
+    match &source.value() {
         powerio::PioValue::DcPfInstance(value) => {
             apply_to!(value, powerio::PioValue::DcPfInstance)
         }
@@ -3507,7 +3507,7 @@ fn apply_update_batch(
 )> {
     match batch {
         PyUpdateBatch::Empty => Ok((
-            module_with_records(source, source.value.clone())?,
+            module_with_records(source, source.value().clone())?,
             powerio_prob::UpdateReport::default(),
         )),
         PyUpdateBatch::OperatingPoint(updates) => apply_operating_point_updates(source, updates),
@@ -3563,13 +3563,13 @@ fn apply_collection_entry_updates(
     powerio_core::PioModule<powerio::PioValue>,
     powerio_prob::UpdateReport,
 )> {
-    let mut parent_value = source.value.clone();
+    let mut parent_value = source.value().clone();
     let entry_value =
         collection_update_target_mut(&mut parent_value, time_index, scenario_id)?.clone();
     let entry_module = module_with_records(source, entry_value)?;
     let (updated_entry, report) = apply_update_batch(&entry_module, batch)?;
     *collection_update_target_mut(&mut parent_value, time_index, scenario_id)? =
-        updated_entry.value.clone();
+        updated_entry.value().clone();
     let updated_parent = module_with_records(&updated_entry, parent_value)?;
     Ok((updated_parent, report))
 }
@@ -3848,7 +3848,7 @@ impl PyPioModule {
 
     /// The exact typed instance solved by a calculation solution.
     fn _calculation_solution_instance(&self) -> PyResult<Self> {
-        let value = match &self.module()?.value {
+        let value = match &self.module()?.value() {
             powerio::PioValue::DcPfSolution(solution) => {
                 powerio::PioValue::DcPfInstance(solution.instance().clone())
             }
@@ -3941,7 +3941,7 @@ impl PyPioModule {
     /// callers use `isinstance(module.value, ...)`.
     #[getter]
     fn _type_name(&self) -> PyResult<String> {
-        Ok(self.module()?.value.type_name().to_owned())
+        Ok(self.module()?.value().type_name().to_owned())
     }
 
     /// The module's diagnostics, in encounter order.
@@ -4010,7 +4010,7 @@ impl PyPioModule {
     }
 
     fn _time_series_len(&self) -> PyResult<usize> {
-        let powerio::PioValue::TimeSeries(series) = &self.module()?.value else {
+        let powerio::PioValue::TimeSeries(series) = &self.module()?.value() else {
             return Err(PowerIODataError::new_err(
                 "the module value is not a TimeSeries",
             ));
@@ -4019,7 +4019,7 @@ impl PyPioModule {
     }
 
     fn _time_series_points(&self) -> PyResult<Vec<(String, Option<f64>)>> {
-        let powerio::PioValue::TimeSeries(series) = &self.module()?.value else {
+        let powerio::PioValue::TimeSeries(series) = &self.module()?.value() else {
             return Err(PowerIODataError::new_err(
                 "the module value is not a TimeSeries",
             ));
@@ -4037,7 +4037,7 @@ impl PyPioModule {
     }
 
     fn _time_series_get(&self, index: usize) -> PyResult<Self> {
-        let powerio::PioValue::TimeSeries(series) = &self.module()?.value else {
+        let powerio::PioValue::TimeSeries(series) = &self.module()?.value() else {
             return Err(PowerIODataError::new_err(
                 "the module value is not a TimeSeries",
             ));
@@ -4049,7 +4049,7 @@ impl PyPioModule {
     }
 
     fn _scenario_entries(&self) -> PyResult<Vec<(String, Option<f64>)>> {
-        let powerio::PioValue::ScenarioSet(scenarios) = &self.module()?.value else {
+        let powerio::PioValue::ScenarioSet(scenarios) = &self.module()?.value() else {
             return Err(PowerIODataError::new_err(
                 "the module value is not a ScenarioSet",
             ));
@@ -4061,7 +4061,7 @@ impl PyPioModule {
     }
 
     fn _scenario_get(&self, id: &str) -> PyResult<Self> {
-        let powerio::PioValue::ScenarioSet(scenarios) = &self.module()?.value else {
+        let powerio::PioValue::ScenarioSet(scenarios) = &self.module()?.value() else {
             return Err(PowerIODataError::new_err(
                 "the module value is not a ScenarioSet",
             ));
@@ -4106,7 +4106,7 @@ impl PyPioModule {
     #[pyo3(signature = (base_mva=100.0))]
     fn lower_to_balanced(&self, base_mva: f64) -> PyResult<Self> {
         let source = self.module()?;
-        let powerio::PioValue::MulticonductorNetwork(network) = &source.value else {
+        let powerio::PioValue::MulticonductorNetwork(network) = &source.value() else {
             let Err(error) = powerio::transform::to_balanced_report(
                 source,
                 powerio::transform::MulticonductorToBalancedOptions {
@@ -4165,10 +4165,10 @@ impl PyPioModule {
     /// The balanced network value as a network handle (cheap table share).
     fn as_balanced_network(&self) -> PyResult<PyBalancedNetwork> {
         let module = self.module()?;
-        let powerio::PioValue::BalancedNetwork(network) = &module.value else {
+        let powerio::PioValue::BalancedNetwork(network) = &module.value() else {
             return Err(PowerIODataError::new_err(format!(
                 "the module carries a {} value; as_balanced_network takes a balanced network",
-                module.value.type_name()
+                module.value().type_name()
             )));
         };
         Ok(case_from_module(module_with_records(
@@ -4180,11 +4180,11 @@ impl PyPioModule {
     /// The multiconductor network value as a network handle.
     fn as_multiconductor_network(&self) -> PyResult<PyMulticonductorNetwork> {
         let module = self.module()?;
-        let powerio::PioValue::MulticonductorNetwork(network) = &module.value else {
+        let powerio::PioValue::MulticonductorNetwork(network) = &module.value() else {
             return Err(PowerIODataError::new_err(format!(
                 "the module carries a {} value; as_multiconductor_network takes a \
                  multiconductor network",
-                module.value.type_name()
+                module.value().type_name()
             )));
         };
         Ok(PyMulticonductorNetwork::from_module(module_with_records(
@@ -4197,7 +4197,7 @@ impl PyPioModule {
         match &self.module {
             Some(module) => format!(
                 "PioModule(value={}, diagnostics={}, history={})",
-                module.value.type_name(),
+                module.value().type_name(),
                 module.diagnostics.len(),
                 module.history().len()
             ),

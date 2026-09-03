@@ -119,7 +119,7 @@ fn current_ir_round_trips_with_records_and_nonfinite_bounds() {
     assert_eq!(raw["value"]["data"]["buses"][1]["vmax"], "Infinity");
 
     let back = deserialize_module_text(&text).unwrap();
-    let PioValue::BalancedNetwork(network) = &back.value else {
+    let PioValue::BalancedNetwork(network) = &back.value() else {
         panic!("wrong kind");
     };
     assert_eq!(network.buses().len(), 2);
@@ -373,7 +373,7 @@ fn operating_point_series_round_trips_typed() {
     let module = PioModule::new(PioValue::from(series));
     let text = serialize_module_text(&module).unwrap();
     let back = deserialize_module_text(&text).unwrap();
-    let PioValue::TimeSeries(series) = &back.value else {
+    let PioValue::TimeSeries(series) = &back.value() else {
         panic!("wrong kind");
     };
     assert_eq!(series.len(), 2);
@@ -429,7 +429,7 @@ fn multiconductor_network_round_trips() {
     let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(raw["value"]["type"], "powerio.MulticonductorNetwork");
     let back = deserialize_module_text(&text).unwrap();
-    let PioValue::MulticonductorNetwork(network) = &back.value else {
+    let PioValue::MulticonductorNetwork(network) = &back.value() else {
         panic!("wrong kind");
     };
     assert_eq!(network.buses().len(), 1);
@@ -456,7 +456,7 @@ fn balanced_network_time_series_round_trips() {
         "powerio.TimeSeries<powerio.BalancedNetwork>"
     );
     let back = deserialize_module_text(&text).unwrap();
-    let PioValue::TimeSeries(series) = &back.value else {
+    let PioValue::TimeSeries(series) = &back.value() else {
         panic!("wrong kind");
     };
     assert_eq!(series.len(), 2);
@@ -483,7 +483,7 @@ fn balanced_network_scenario_set_round_trips() {
         "powerio.ScenarioSet<powerio.BalancedNetwork>"
     );
     let back = deserialize_module_text(&text).unwrap();
-    let PioValue::ScenarioSet(set) = &back.value else {
+    let PioValue::ScenarioSet(set) = &back.value() else {
         panic!("wrong kind");
     };
     assert_eq!(set.len(), 2);

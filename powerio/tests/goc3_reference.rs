@@ -38,7 +38,7 @@ fn reference_paths(root: &Path) -> Vec<std::path::PathBuf> {
 fn assert_benchmark_case(path: &Path) {
     let module = powerio::parse(Source::open(path).unwrap(), Some("goc3"))
         .unwrap_or_else(|error| panic!("failed to parse {}: {error}", path.display()));
-    let PioValue::AcScucInstance(instance) = &module.value else {
+    let PioValue::AcScucInstance(instance) = &module.value() else {
         panic!("{} did not produce powerio.AcScucInstance", path.display());
     };
     let name = path.file_name().unwrap().to_string_lossy();

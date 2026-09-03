@@ -55,8 +55,7 @@ fn allocation_refused(cause: TryReserveError) -> Error {
 /// `T` has no PowerIO marker bound. Dynamic parsing and stored JSON register a
 /// finite set elsewhere, while Rust applications can use any value here.
 pub struct PioModule<T> {
-    /// The typed value carried by this module.
-    pub value: T,
+    value: T,
     /// Diagnostics produced while acquiring, validating, or deriving the
     /// value.
     pub diagnostics: Vec<Diagnostic>,
@@ -86,6 +85,26 @@ impl<T> PioModule<T> {
     #[must_use]
     pub fn into_value(self) -> T {
         self.value
+    }
+
+    /// The typed value carried by this module.
+    #[must_use]
+    pub const fn value(&self) -> &T {
+        &self.value
+    }
+
+    /// The typed value, for an edit in place.
+    ///
+    /// Taking the reference drops the retained source owner and the source
+    /// map: bytes and RFC 6901 targets that describe the pre-edit value no
+    /// longer describe what the module carries, so a same format write
+    /// serializes the value instead of emitting them. Descriptors,
+    /// diagnostics, and history stay. [`PioModule::stage_edit`] is the atomic
+    /// form, which leaves the module untouched when an edit does not complete.
+    pub fn value_mut(&mut self) -> &mut T {
+        self.records.retained_source = None;
+        self.sever_value_targets();
+        &mut self.value
     }
 
     #[must_use]

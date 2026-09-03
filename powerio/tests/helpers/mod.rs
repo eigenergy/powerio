@@ -170,7 +170,7 @@ fn wrong_value_type(actual: &str, expected: &str) -> powerio_core::Error {
 fn into_balanced_module(
     module: powerio::PioModule<powerio::PioValue>,
 ) -> Result<powerio::PioModule<BalancedNetwork>, powerio_core::Error> {
-    let actual = module.value.type_name().to_owned();
+    let actual = module.value().type_name().to_owned();
     module
         .try_map_value(|value| match value {
             powerio::PioValue::BalancedNetwork(network) => Ok(network),
@@ -195,7 +195,7 @@ fn into_balanced_module(
 fn into_multiconductor_module(
     module: powerio::PioModule<powerio::PioValue>,
 ) -> Result<powerio::PioModule<powerio_dist::MulticonductorNetwork>, powerio_core::Error> {
-    let actual = module.value.type_name().to_owned();
+    let actual = module.value().type_name().to_owned();
     module
         .try_map_value(|value| match value {
             powerio::PioValue::MulticonductorNetwork(network) => Ok(network),

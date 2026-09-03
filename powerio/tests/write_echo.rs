@@ -38,7 +38,7 @@ fn a_time_series_kind_echoes_its_retained_source_on_a_same_format_write() {
     let module = powerio::parse(source, None).unwrap();
     assert!(
         matches!(
-            &module.value,
+            &module.value(),
             PioValue::TimeSeries(series)
                 if series.element_type() == "powerio.BalancedNetwork"
         ),
@@ -104,7 +104,7 @@ fn memory_text(result: &powerio_core::EmitResult) -> &str {
 fn model_json_emits_matpower_semantically_instead_of_echoing_json() {
     let case = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case9.m");
     let original = powerio::parse(Source::open(case).unwrap(), None).expect("case9 parses");
-    let PioValue::BalancedNetwork(network) = &original.value else {
+    let PioValue::BalancedNetwork(network) = &original.value() else {
         panic!("case9 must produce a balanced network");
     };
     let model_json = network.to_json().expect("model JSON serializes");
@@ -178,7 +178,7 @@ fn a_pypsa_network_time_series_emits_its_complete_directory_byte_exactly() {
     let module = powerio::parse(Source::open(&source_dir).unwrap(), Some("pypsa-csv"))
         .expect("the PyPSA series parses");
     assert!(matches!(
-        &module.value,
+        &module.value(),
         PioValue::TimeSeries(series)
             if series.element_type() == "powerio.BalancedNetwork"
     ));
@@ -226,7 +226,7 @@ fn a_gridfm_scenario_set_emits_its_complete_directory_byte_exactly() {
     let module = powerio::parse(Source::open(source_root.path()).unwrap(), Some("gridfm"))
         .expect("the GridFM dataset parses");
     assert!(matches!(
-        &module.value,
+        &module.value(),
         PioValue::ScenarioSet(set)
             if set.element_type() == "powerio.BalancedNetwork"
     ));
@@ -247,4 +247,34 @@ fn a_gridfm_scenario_set_emits_its_complete_directory_byte_exactly() {
         .expect("same format directory emission succeeds");
     assert!(result.diagnostics().is_empty());
     assert_eq!(memory_directory(&result), expected);
+}
+
+#[test]
+fn an_edit_in_place_stops_the_echo_and_serializes_the_value() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case9.m");
+    let original = std::fs::read_to_string(path).unwrap();
+    let mut module = powerio::parse(Source::open(path).unwrap(), Some("matpower")).unwrap();
+    assert!(module.source().is_some(), "the parse retains its source");
+
+    let PioValue::BalancedNetwork(network) = module.value_mut() else {
+        panic!("case9 must parse as a balanced network");
+    };
+    network.loads_mut()[0].p = 12345.0;
+    assert!(
+        module.source().is_none(),
+        "taking the value for an edit drops the retained source"
+    );
+
+    let result = emit(&module, "matpower", Destination::memory("out.m").unwrap()).unwrap();
+    let text = memory_text(&result);
+    assert_ne!(
+        text, original,
+        "a same format write serializes the edited value"
+    );
+    assert!(text.contains("12345"), "the edit reaches the written case");
+    assert_ne!(
+        result.fidelity(),
+        powerio_core::Fidelity::ExactSameFormat,
+        "an edited module cannot claim its source bytes"
+    );
 }

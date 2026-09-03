@@ -243,8 +243,8 @@ pub fn to_balanced_report(
     module: &powerio_core::PioModule<crate::PioValue>,
     options: MulticonductorToBalancedOptions,
 ) -> Result<MulticonductorToBalancedReport, powerio_core::Error> {
-    let crate::PioValue::MulticonductorNetwork(net) = &module.value else {
-        return Err(wrong_kind_error(&module.value));
+    let crate::PioValue::MulticonductorNetwork(net) = &module.value() else {
+        return Err(wrong_kind_error(module.value()));
     };
     Ok(to_balanced_network_report(net, options))
 }
@@ -275,7 +275,7 @@ pub fn to_balanced(
         Box<MulticonductorToBalancedError>,
     ),
 > {
-    let crate::PioValue::MulticonductorNetwork(net) = &module.value else {
+    let crate::PioValue::MulticonductorNetwork(net) = &module.value() else {
         let error = MulticonductorToBalancedError::new(
             options,
             &[Diagnostic::of(
@@ -283,7 +283,7 @@ pub fn to_balanced(
                 format!(
                     "the module carries a {} value; the balanced lowering takes a \
                      multiconductor network",
-                    module.value.type_name()
+                    module.value().type_name()
                 ),
             )],
         );
@@ -349,12 +349,12 @@ fn derive_balanced_calculation<I>(
     output_type: &'static str,
     build: impl FnOnce(BalancedNetwork) -> Result<I, powerio_core::Error>,
 ) -> Result<powerio_core::PioModule<I>, powerio_core::Error> {
-    if !matches!(module.value, crate::PioValue::BalancedNetwork(_)) {
+    if !matches!(module.value(), crate::PioValue::BalancedNetwork(_)) {
         return Err(powerio_core::Error::new(
             &codes::REQUEST_MODULE_WRONG_MODEL_KIND,
             format!(
                 "{operation} requires powerio.BalancedNetwork; the module contains {}",
-                module.value.type_name()
+                module.value().type_name()
             ),
         ));
     }
@@ -380,12 +380,12 @@ fn derive_multiconductor_calculation<I>(
     output_type: &'static str,
     build: impl FnOnce(MulticonductorNetwork) -> Result<I, powerio_core::Error>,
 ) -> Result<powerio_core::PioModule<I>, powerio_core::Error> {
-    if !matches!(module.value, crate::PioValue::MulticonductorNetwork(_)) {
+    if !matches!(module.value(), crate::PioValue::MulticonductorNetwork(_)) {
         return Err(powerio_core::Error::new(
             &codes::REQUEST_MODULE_WRONG_MODEL_KIND,
             format!(
                 "{operation} requires powerio.MulticonductorNetwork; the module contains {}",
-                module.value.type_name()
+                module.value().type_name()
             ),
         ));
     }
@@ -421,7 +421,7 @@ pub fn apply_geo_layer(
     module: &powerio_core::PioModule<crate::PioValue>,
     layer: &GeoLayer,
 ) -> Result<(powerio_core::PioModule<crate::PioValue>, GeoApplyReport), powerio_core::Error> {
-    let type_name = match &module.value {
+    let type_name = match &module.value() {
         crate::PioValue::BalancedNetwork(_) => "powerio.BalancedNetwork",
         crate::PioValue::MulticonductorNetwork(_) => "powerio.MulticonductorNetwork",
         value => {
@@ -482,7 +482,7 @@ pub fn apply_geo_layer(
 pub fn to_dc_pf_instance(
     module: &powerio_core::PioModule<crate::PioValue>,
 ) -> Result<powerio_core::PioModule<powerio_prob::DcPfInstance>, powerio_core::Error> {
-    if matches!(module.value, crate::PioValue::DcPfInstance(_)) {
+    if matches!(module.value(), crate::PioValue::DcPfInstance(_)) {
         return Ok(module.clone().map_value(|value| match value {
             crate::PioValue::DcPfInstance(instance) => instance,
             _ => unreachable!("the value type was checked before extraction"),
@@ -500,7 +500,7 @@ pub fn to_dc_pf_instance(
 pub fn to_ac_pf_instance(
     module: &powerio_core::PioModule<crate::PioValue>,
 ) -> Result<powerio_core::PioModule<powerio_prob::AcPfInstance>, powerio_core::Error> {
-    if matches!(module.value, crate::PioValue::AcPfInstance(_)) {
+    if matches!(module.value(), crate::PioValue::AcPfInstance(_)) {
         return Ok(module.clone().map_value(|value| match value {
             crate::PioValue::AcPfInstance(instance) => instance,
             _ => unreachable!("the value type was checked before extraction"),
@@ -519,7 +519,7 @@ pub fn to_ac_pf_instance(
 pub fn to_dc_opf_instance(
     module: &powerio_core::PioModule<crate::PioValue>,
 ) -> Result<powerio_core::PioModule<powerio_prob::DcOpfInstance>, powerio_core::Error> {
-    if matches!(module.value, crate::PioValue::DcOpfInstance(_)) {
+    if matches!(module.value(), crate::PioValue::DcOpfInstance(_)) {
         return Ok(module.clone().map_value(|value| match value {
             crate::PioValue::DcOpfInstance(instance) => instance,
             _ => unreachable!("the value type was checked before extraction"),
@@ -538,7 +538,7 @@ pub fn to_dc_opf_instance(
 pub fn to_ac_opf_instance(
     module: &powerio_core::PioModule<crate::PioValue>,
 ) -> Result<powerio_core::PioModule<powerio_prob::AcOpfInstance>, powerio_core::Error> {
-    if matches!(module.value, crate::PioValue::AcOpfInstance(_)) {
+    if matches!(module.value(), crate::PioValue::AcOpfInstance(_)) {
         return Ok(module.clone().map_value(|value| match value {
             crate::PioValue::AcOpfInstance(instance) => instance,
             _ => unreachable!("the value type was checked before extraction"),
@@ -557,7 +557,7 @@ pub fn to_ac_opf_instance(
 pub fn to_mc_ac_pf_instance(
     module: &powerio_core::PioModule<crate::PioValue>,
 ) -> Result<powerio_core::PioModule<powerio_prob::McAcPfInstance>, powerio_core::Error> {
-    if matches!(module.value, crate::PioValue::McAcPfInstance(_)) {
+    if matches!(module.value(), crate::PioValue::McAcPfInstance(_)) {
         return Ok(module.clone().map_value(|value| match value {
             crate::PioValue::McAcPfInstance(instance) => instance,
             _ => unreachable!("the value type was checked before extraction"),
@@ -576,7 +576,7 @@ pub fn to_mc_ac_pf_instance(
 pub fn to_mc_ac_opf_instance(
     module: &powerio_core::PioModule<crate::PioValue>,
 ) -> Result<powerio_core::PioModule<powerio_prob::McAcOpfInstance>, powerio_core::Error> {
-    if matches!(module.value, crate::PioValue::McAcOpfInstance(_)) {
+    if matches!(module.value(), crate::PioValue::McAcOpfInstance(_)) {
         return Ok(module.clone().map_value(|value| match value {
             crate::PioValue::McAcOpfInstance(instance) => instance,
             _ => unreachable!("the value type was checked before extraction"),

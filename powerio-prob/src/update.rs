@@ -547,7 +547,7 @@ where
     T: BalancedCalculationInstance,
 {
     let total_mw = require_nonnegative(total.megawatts_value()?, "bus active demand")?;
-    let network = module.value.network();
+    let network = module.value().network();
     if !network.buses().iter().any(|candidate| candidate.id == bus) {
         return Err(Error::new(
             &codes::VALIDATE_UPDATE_COMPONENT_UNKNOWN,
@@ -2382,8 +2382,8 @@ mod tests {
     fn module_update_records_exact_changes_and_invalidates_retained_bytes() {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case9.m");
         let mut module = powerio_tx::parse(Source::open(path).unwrap()).unwrap();
-        let load_id = module.value.loads()[0].uid.clone().unwrap();
-        let previous = module.value.loads()[0].p;
+        let load_id = module.value().loads()[0].uid.clone().unwrap();
+        let previous = module.value().loads()[0].p;
         assert!(module.source().is_some());
 
         let update = OperatingPointUpdate::LoadActivePower {
@@ -2393,7 +2393,7 @@ mod tests {
         };
         let report = apply_updates(&mut module, std::slice::from_ref(&update)).unwrap();
         assert_eq!(report.changes().len(), 1);
-        assert_number_eq(module.value.loads()[0].p, previous + 1.0);
+        assert_number_eq(module.value().loads()[0].p, previous + 1.0);
         assert!(module.source().is_none());
         assert_eq!(module.producer().name(), "powerio");
         assert_eq!(module.history().len(), 1);
@@ -2424,8 +2424,8 @@ mod tests {
     fn no_op_module_update_keeps_retained_bytes_and_history() {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case9.m");
         let mut module = powerio_tx::parse(Source::open(path).unwrap()).unwrap();
-        let load_id = module.value.loads()[0].uid.clone().unwrap();
-        let current = module.value.loads()[0].p;
+        let load_id = module.value().loads()[0].uid.clone().unwrap();
+        let current = module.value().loads()[0].p;
         let report = apply_updates(
             &mut module,
             &[OperatingPointUpdate::LoadActivePower {
@@ -2484,7 +2484,7 @@ mod tests {
         )
         .unwrap();
 
-        let network = module.value.network();
+        let network = module.value().network();
         let active_power = |uid: &str| {
             network
                 .loads()
@@ -2522,7 +2522,7 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.info().unwrap().code, "VALIDATE.UPDATE.VALUE_INVALID");
-        assert_number_eq(module.value.network().loads()[0].p, 0.0);
+        assert_number_eq(module.value().network().loads()[0].p, 0.0);
         assert!(module.history().is_empty());
     }
 
@@ -2548,7 +2548,7 @@ mod tests {
         .unwrap();
 
         let active_power = module
-            .value
+            .value()
             .network()
             .loads()
             .iter()

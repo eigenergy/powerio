@@ -1045,7 +1045,7 @@ fn emit_text(
     if let Some(text) = echo_text(module, format) {
         return Ok(TextEmission::faithful(text));
     }
-    let mut conv = emit_value_text(&module.value, format).map_err(core_error)?;
+    let mut conv = emit_value_text(module.value(), format).map_err(core_error)?;
     warn_psse_downgrade(module, format, &mut conv);
     Ok(conv)
 }
@@ -1231,9 +1231,9 @@ pub fn emit_with_options(
     }
     if format == TargetFormat::Cgmes {
         let (working, mut diagnostics) = if options.is_default() {
-            (module.value.clone(), Vec::new())
+            (module.value().clone(), Vec::new())
         } else {
-            apply_emit_cost_policy(&module.value, options).map_err(core_error)?
+            apply_emit_cost_policy(module.value(), options).map_err(core_error)?
         };
         let (artifacts, format_diagnostics) = cgmes::artifacts(&working).map_err(core_error)?;
         diagnostics.extend(format_diagnostics.into_records());
@@ -1282,11 +1282,11 @@ pub fn __emit_pypsa_csv_with_options(
         (None, Vec::new())
     } else {
         let (network, diagnostics) =
-            apply_emit_cost_policy(&module.value, options).map_err(core_error)?;
+            apply_emit_cost_policy(module.value(), options).map_err(core_error)?;
         (Some(network), diagnostics)
     };
     let (artifacts, format_diagnostics) =
-        pypsa::pypsa_csv_artifacts(working.as_ref().unwrap_or(&module.value));
+        pypsa::pypsa_csv_artifacts(working.as_ref().unwrap_or(module.value()));
     diagnostics.extend(format_diagnostics);
     let artifacts = artifacts
         .into_iter()
@@ -1318,7 +1318,7 @@ fn emit_text_with_options(
         return emit_text(module, format);
     }
     let (working, policy_warnings) =
-        apply_emit_cost_policy(&module.value, options).map_err(core_error)?;
+        apply_emit_cost_policy(module.value(), options).map_err(core_error)?;
     let mut conv = emit_value_text(&working, format).map_err(core_error)?;
     conv.prepend(policy_warnings);
     Ok(conv)
@@ -1409,9 +1409,11 @@ fn warn_psse_downgrade(
         .source()
         .and_then(|source| source.primary_buffer().ok())
         .and_then(|buffer| String::from_utf8(buffer.content_bytes().to_vec()).ok());
-    if let (TargetFormat::Psse { rev }, SourceFormat::Psse, Some(src)) =
-        (format, module.value.source_format(), source_text.as_deref())
-    {
+    if let (TargetFormat::Psse { rev }, SourceFormat::Psse, Some(src)) = (
+        format,
+        module.value().source_format(),
+        source_text.as_deref(),
+    ) {
         if let Ok(src_rev) = psse::header_rev(src)
             && src_rev > rev
         {
@@ -2072,7 +2074,7 @@ mpc.branch = [
                     mpc.branch = [];\n";
         let source = powerio_core::Source::from_memory("case.m", case.as_bytes().to_vec()).unwrap();
         let module = parse(source.with_format(parse_format_id("matpower").unwrap())).unwrap();
-        assert_eq!(module.value.buses().len(), 1);
+        assert_eq!(module.value().buses().len(), 1);
         assert!(module.diagnostics.is_empty(), "{:?}", module.diagnostics);
         let echo = emit_text(&module, TargetFormat::Matpower).unwrap();
         assert_eq!(echo.text, case, "the echo reproduces the mark exactly");

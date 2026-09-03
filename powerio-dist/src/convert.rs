@@ -469,7 +469,7 @@ pub(crate) fn emit_text_with_options(
     {
         return TextEmission::faithful(text);
     }
-    emit_value_text_with_options(&module.value, format, options)
+    emit_value_text_with_options(module.value(), format, options)
 }
 
 /// The retained source text when emitting `module` back to its source format:
@@ -481,7 +481,7 @@ fn echo_text(
 ) -> Option<String> {
     let source = module.source()?;
     let buffer = source.primary_buffer().ok()?;
-    if !target.matches(*module.value.source_format()) {
+    if !target.matches(*module.value().source_format()) {
         return None;
     }
     let text = std::str::from_utf8(buffer.bytes()).ok()?;

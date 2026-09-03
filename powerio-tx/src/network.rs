@@ -6376,7 +6376,7 @@ mod tests {
         // The recorded path: repair the module, read the history entry.
         let module = powerio_core::PioModule::new(net);
         let module = repair_values(module).unwrap();
-        let net = &module.value;
+        let net = &module.value();
         close(net.buses()[0].vm, 1.0);
         close(net.buses()[1].va, 0.0);
         close(net.generators()[0].mbase, 100.0); // → base_mva

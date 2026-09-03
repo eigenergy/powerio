@@ -16,7 +16,7 @@
 //! ```no_run
 //! let source = powerio::Source::open("case9.m")?;
 //! let module = powerio::parse(source, None)?;
-//! match &module.value {
+//! match module.value() {
 //!     powerio::PioValue::BalancedNetwork(network) => {
 //!         println!("{} buses", network.buses().len());
 //!     }
@@ -669,7 +669,7 @@ mod tests {
     }
 
     fn assert_value_type(module: &powerio_core::PioModule<PioValue>, expected: &str) {
-        assert_eq!(module.value.type_name(), expected);
+        assert_eq!(module.value().type_name(), expected);
     }
 
     #[test]
@@ -733,8 +733,11 @@ mod tests {
         ] {
             let source = Source::from_memory(name, bytes.clone()).unwrap();
             let module = super::parse(source, format).unwrap();
-            let PioValue::BalancedNetwork(network) = &module.value else {
-                panic!("expected BalancedNetwork, got {}", module.value.type_name());
+            let PioValue::BalancedNetwork(network) = &module.value() else {
+                panic!(
+                    "expected BalancedNetwork, got {}",
+                    module.value().type_name()
+                );
             };
             assert_eq!(
                 network.case_metadata().source_model_format.as_deref(),
@@ -762,10 +765,10 @@ mod tests {
             "New Circuit.c basekv=12.47 bus1=src\n",
         ))
         .expect("dss parses");
-        let PioValue::MulticonductorNetwork(network) = &module.value else {
+        let PioValue::MulticonductorNetwork(network) = &module.value() else {
             panic!(
                 "expected multiconductor network, got {}",
-                module.value.type_name()
+                module.value().type_name()
             );
         };
         assert_eq!(network.name().as_deref(), Some("c"));
@@ -825,7 +828,7 @@ mod tests {
         let module = parse(memory("goc3_small.json", &text)).expect("goc3 parses");
         assert_value_type(&module, "powerio.AcScucInstance");
         assert!(module.source().is_some());
-        let PioValue::AcScucInstance(instance) = &module.value else {
+        let PioValue::AcScucInstance(instance) = &module.value() else {
             unreachable!();
         };
         assert_eq!(instance.network().buses().len(), 2);
@@ -840,10 +843,10 @@ mod tests {
             .with_named_buffer("solution.json", solution.into_bytes())
             .unwrap();
         let module = parse(source).expect("problem and solution parse together");
-        let PioValue::AcScucSolution(solution) = &module.value else {
+        let PioValue::AcScucSolution(solution) = &module.value() else {
             panic!(
                 "expected AC SCUC solution, got {}",
-                module.value.type_name()
+                module.value().type_name()
             );
         };
         assert_eq!(solution.instance().network().buses().len(), 2);
@@ -881,8 +884,11 @@ mod tests {
     fn opfdata_parses_to_an_ac_opf_solution() {
         let text = fixture("../tests/data/opfdataset/example_0.json");
         let module = parse(memory("example_0.json", &text)).expect("opfdata parses");
-        let PioValue::AcOpfSolution(solution) = &module.value else {
-            panic!("expected AC OPF solution, got {}", module.value.type_name());
+        let PioValue::AcOpfSolution(solution) = &module.value() else {
+            panic!(
+                "expected AC OPF solution, got {}",
+                module.value().type_name()
+            );
         };
         assert_eq!(
             module
@@ -1014,7 +1020,7 @@ mod tests {
         let module = parse(powerio_core::Source::open(dir.path()).unwrap()).expect("series parses");
         assert_value_type(&module, "powerio.TimeSeries<powerio.BalancedNetwork>");
         assert!(module.source().is_some());
-        let PioValue::TimeSeries(series) = &module.value else {
+        let PioValue::TimeSeries(series) = &module.value() else {
             unreachable!();
         };
         assert_eq!(series.len(), 2);
@@ -1042,7 +1048,7 @@ mod tests {
             &module,
             "powerio.TimeSeries<powerio.OperatingPoint<powerio.BalancedNetwork>>",
         );
-        let PioValue::TimeSeries(series) = &module.value else {
+        let PioValue::TimeSeries(series) = &module.value() else {
             unreachable!();
         };
         let PioValue::BalancedOperatingPoint(later) = series.get(1).unwrap() else {
@@ -1145,7 +1151,7 @@ mod tests {
             parse(powerio_core::Source::open(out.path()).unwrap()).expect("dataset parses");
         assert_value_type(&module, "powerio.ScenarioSet<powerio.BalancedNetwork>");
         assert!(module.source().is_some());
-        let PioValue::ScenarioSet(set) = &module.value else {
+        let PioValue::ScenarioSet(set) = &module.value() else {
             unreachable!();
         };
         assert_eq!(set.len(), 2);

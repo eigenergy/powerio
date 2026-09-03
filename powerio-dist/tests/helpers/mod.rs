@@ -162,7 +162,7 @@ fn from_module(module: powerio_core::PioModule<MulticonductorNetwork>) -> Parsed
         warnings: powerio_dist::diagnostics::render_diagnostics(&module.diagnostics),
         diagnostics: module.diagnostics.clone(),
         source,
-        network: module.value.clone(),
+        network: module.value().clone(),
         module,
     }
 }

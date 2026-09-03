@@ -722,7 +722,7 @@ fn dist_convert_leg(
     out.warnings
         .extend(powerio_core::render_diagnostics(&parsed.diagnostics));
     let before = invariants::distribution_core(source);
-    let after = invariants::distribution_core(&parsed.value);
+    let after = invariants::distribution_core(parsed.value());
     if before != after {
         out.core_changed = Some(dist_core_delta(&before, &after));
     }
@@ -850,7 +850,7 @@ fn convert_leg(
     };
     out.warnings
         .extend(powerio_core::render_diagnostics(&parsed.diagnostics));
-    fill_invariants(&mut out, source, &parsed.value);
+    fill_invariants(&mut out, source, parsed.value());
     out
 }
 

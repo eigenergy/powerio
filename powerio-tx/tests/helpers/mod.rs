@@ -183,7 +183,7 @@ fn declared(source: Source, from: Option<&str>) -> Result<Source, powerio_core::
 fn module_to_parsed(module: powerio_core::PioModule<BalancedNetwork>) -> Parsed {
     Parsed {
         diagnostics: module.diagnostics.clone(),
-        network: module.value.clone(),
+        network: module.value().clone(),
         module,
     }
 }

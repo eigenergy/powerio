@@ -39,7 +39,7 @@ pub fn emit_module(module: &PioModule<PioValue>) -> Result<String> {
             name: module.producer().name().to_string(),
             version: module.producer().version().to_string(),
         },
-        value: encode_value(&module.value)?,
+        value: encode_value(module.value())?,
         sources: module.sources().iter().map(encode_source).collect(),
         source_map: module
             .source_map()
@@ -2575,7 +2575,7 @@ mod collection_ir_tests {
         assert_eq!(raw["version"], dto::SCHEMA_VERSION);
         assert_eq!(raw["value"]["type"], expected_type);
         let decoded = read_module(&text).unwrap();
-        assert_eq!(decoded.value.type_name(), expected_type);
+        assert_eq!(decoded.value().type_name(), expected_type);
         assert_eq!(emit_module(&decoded).unwrap(), text);
     }
 
@@ -2705,7 +2705,7 @@ mod collection_ir_tests {
         );
 
         let decoded = read_module(&text).unwrap();
-        let PioValue::TimeSeries(series) = &decoded.value else {
+        let PioValue::TimeSeries(series) = &decoded.value() else {
             panic!("expected an operating point time series");
         };
         let PioValue::BalancedOperatingPoint(first) = series.get(0).unwrap() else {

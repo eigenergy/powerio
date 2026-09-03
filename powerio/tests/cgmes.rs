@@ -18,7 +18,7 @@ fn facade_emits_and_parses_a_cgmes_profile_directory() {
 
     let parsed = parse(Source::open(&directory).unwrap(), None)
         .expect("the emitted CGMES profile directory parses");
-    let PioValue::BalancedNetwork(network) = &parsed.value else {
+    let PioValue::BalancedNetwork(network) = &parsed.value() else {
         panic!("CGMES must produce a balanced network");
     };
     assert_eq!(network.buses().len(), 9);

@@ -106,7 +106,7 @@ fn a_permuted_identity_list_is_refused() {
     // The unpermuted document round trips and each identity reads its own
     // value back.
     let module = deserialize_module_text(&series_module_json().to_string()).unwrap();
-    let PioValue::TimeSeries(series) = &module.value else {
+    let PioValue::TimeSeries(series) = &module.value() else {
         panic!("wrong kind");
     };
     let PioValue::BalancedOperatingPoint(point0) = series.get(0).unwrap() else {
@@ -147,7 +147,7 @@ fn the_switch_position_survives_the_round_trip() {
         "the stored document must carry the switch quantity"
     );
     let back = deserialize_module_text(&text).unwrap();
-    let PioValue::TimeSeries(series) = &back.value else {
+    let PioValue::TimeSeries(series) = &back.value() else {
         panic!("wrong kind");
     };
     let PioValue::BalancedOperatingPoint(point0) = series.get(0).unwrap() else {
@@ -469,7 +469,7 @@ fn a_nested_network_that_fails_validation_is_refused_per_kind() {
         Some("goc3-json"),
     )
     .unwrap();
-    let PioValue::AcScucInstance(instance) = module.value else {
+    let PioValue::AcScucInstance(instance) = module.value() else {
         panic!("GO Challenge 3 problem did not produce powerio.AcScucInstance");
     };
     let broken_instance = powerio_prob::AcScucInstance::new(

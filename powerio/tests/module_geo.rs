@@ -32,7 +32,7 @@ fn a_geo_layer_derives_a_new_network_module() {
         Some("powerio.BalancedNetwork")
     );
 
-    let powerio::PioValue::BalancedNetwork(placed_network) = &placed.value else {
+    let powerio::PioValue::BalancedNetwork(placed_network) = &placed.value() else {
         panic!("the transformation changed the network type")
     };
     let location = placed_network
@@ -43,7 +43,7 @@ fn a_geo_layer_derives_a_new_network_module() {
         .unwrap();
     assert_eq!((location.x, location.y), (-83.743, 42.281));
 
-    let powerio::PioValue::BalancedNetwork(original_network) = &module.value else {
+    let powerio::PioValue::BalancedNetwork(original_network) = &module.value() else {
         unreachable!()
     };
     assert!(

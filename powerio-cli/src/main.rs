@@ -1311,10 +1311,10 @@ fn parse_gridfm_scenario(
     let module = powerio::parse(source, Some("gridfm"))
         .with_context(|| format!("parsing gridfm dataset {}", input.display()))?;
     let scenario_id = scenario.to_string();
-    let powerio::PioValue::ScenarioSet(scenarios) = &module.value else {
+    let powerio::PioValue::ScenarioSet(scenarios) = &module.value() else {
         anyhow::bail!(
             "gridfm produced {}; expected powerio.ScenarioSet<powerio.BalancedNetwork>",
-            module.value.type_name()
+            module.value().type_name()
         );
     };
     let value = scenarios
@@ -1339,11 +1339,11 @@ fn run_summary(input: &Path, from: Option<FormatArg>, scenario: i64) -> anyhow::
             match parse_family_case(input, from)? {
                 FamilyCase::Distribution(module) => {
                     let diagnostics = powerio_core::render_diagnostics(&module.diagnostics);
-                    distribution_summary_json(&module.value, &diagnostics)
+                    distribution_summary_json(module.value(), &diagnostics)
                 }
                 FamilyCase::Transmission(module) => {
                     let diagnostics = powerio_core::render_diagnostics(&module.diagnostics);
-                    transmission_summary_json(&module.value, &diagnostics)
+                    transmission_summary_json(module.value(), &diagnostics)
                 }
             }
         };
@@ -1599,7 +1599,7 @@ fn convert_parsed_module(
     output: Option<&Path>,
     gen_cost_options: &GenCostCliOptions<'_>,
 ) -> anyhow::Result<()> {
-    match &module.value {
+    match &module.value() {
         powerio::PioValue::BalancedNetwork(_) => {
             let module = module.map_value(|value| match value {
                 powerio::PioValue::BalancedNetwork(network) => network,
@@ -1885,13 +1885,13 @@ fn run_geo_extract(
             for w in powerio_core::render_diagnostics(&module.diagnostics) {
                 eprintln!("{w}");
             }
-            powerio::dist_geo::to_dist_geo_layer(&module.value)
+            powerio::dist_geo::to_dist_geo_layer(module.value())
         }
         FamilyCase::Transmission(module) => {
             for w in powerio_core::render_diagnostics(&module.diagnostics) {
                 eprintln!("{w}");
             }
-            module.value.to_geo_layer()
+            module.value().to_geo_layer()
         }
     };
     if layer.features.is_empty() {
@@ -1951,7 +1951,7 @@ fn run_geo_apply(
                     )
                 })?,
                 None => placed
-                    .value
+                    .value()
                     .source_format()
                     .map(|f| f.name().parse())
                     .transpose()?
@@ -1984,12 +1984,12 @@ fn run_geo_apply(
                 })?,
                 None => powerio_tx::format::parse_target_format(&format!(
                     "{:?}",
-                    placed.value.source_format()
+                    placed.value().source_format()
                 ))
                 .ok_or_else(|| {
                     anyhow::anyhow!(
                         "`{:?}` has no write target; pass --to to choose one",
-                        placed.value.source_format()
+                        placed.value().source_format()
                     )
                 })?,
             };
@@ -2171,7 +2171,7 @@ fn balanced_case(
 /// Other values are rejected instead of guessing a projection.
 fn ir_family_case(input: &Path) -> anyhow::Result<FamilyCase> {
     let module = deserialize_module(input)?;
-    match &module.value {
+    match &module.value() {
         powerio::PioValue::BalancedNetwork(_) => {
             let module = module.map_value(|value| match value {
                 powerio::PioValue::BalancedNetwork(network) => network,
@@ -2323,7 +2323,7 @@ mod tests {
     fn summary_json_matches_canonical_transmission_shape() {
         let parsed = crate::module_io::load_balanced_module(data("case9.m"), None).unwrap();
         let diagnostics = powerio_core::render_diagnostics(&parsed.diagnostics);
-        let value = transmission_summary_json(&parsed.value, &diagnostics);
+        let value = transmission_summary_json(parsed.value(), &diagnostics);
         assert_eq!(value["schema"], "powerio.summary");
         assert_eq!(value[powerio::version::VERSION_KEY], powerio::VERSION);
         assert_eq!(value["domain"], "transmission");
@@ -2357,7 +2357,7 @@ mod tests {
             crate::module_io::load_balanced_module(data("opfdataset/example_0.json"), None)
                 .unwrap();
         assert_eq!(
-            parsed.value.source_format(),
+            parsed.value().source_format(),
             powerio_matrix::SourceFormat::DeepMindOpfDataJson
         );
     }
@@ -2370,7 +2370,7 @@ mod tests {
         )
         .unwrap();
         let diagnostics = powerio_core::render_diagnostics(&net.diagnostics);
-        let value = distribution_summary_json(&net.value, &diagnostics);
+        let value = distribution_summary_json(net.value(), &diagnostics);
         assert_eq!(value["schema"], "powerio.summary");
         assert_eq!(value[powerio::version::VERSION_KEY], powerio::VERSION);
         assert_eq!(value["domain"], "distribution");
@@ -2414,8 +2414,8 @@ mod tests {
         .unwrap();
         match parse_family_case(&egret, None).unwrap() {
             FamilyCase::Transmission(parsed) => {
-                assert_eq!(parsed.value.buses().len(), 9);
-                assert_eq!(parsed.value.name(), "myegret");
+                assert_eq!(parsed.value().buses().len(), 9);
+                assert_eq!(parsed.value().name(), "myegret");
             }
             FamilyCase::Distribution(_) => panic!("egret JSON classified as distribution"),
         }
@@ -2436,7 +2436,7 @@ mod tests {
         )
         .unwrap();
         match parse_family_case(&dist, None).unwrap() {
-            FamilyCase::Distribution(net) => assert_eq!(net.value.buses().len(), 1),
+            FamilyCase::Distribution(net) => assert_eq!(net.value().buses().len(), 1),
             FamilyCase::Transmission(_) => panic!("BMOPF JSON classified as transmission"),
         }
     }
@@ -2472,7 +2472,7 @@ mod tests {
 
         match super::ir_family_case(&path).unwrap() {
             super::FamilyCase::Transmission(parsed) => {
-                assert_eq!(parsed.value.buses().len(), 9);
+                assert_eq!(parsed.value().buses().len(), 9);
             }
             super::FamilyCase::Distribution(_) => panic!("case9 is transmission"),
         }
@@ -2510,7 +2510,7 @@ mod tests {
         );
         let module = deserialize_module(&text);
         assert!(matches!(
-            &module.value,
+            &module.value(),
             powerio::PioValue::BalancedNetwork(_)
         ));
     }
@@ -2527,7 +2527,7 @@ mod tests {
         let text = std::fs::read_to_string(&output).unwrap();
         let module = deserialize_module(&text);
         assert!(matches!(
-            &module.value,
+            &module.value(),
             powerio::PioValue::BalancedNetwork(_)
         ));
 
@@ -2601,10 +2601,10 @@ mpc.branch = [
         assert!(text.contains("\"angmin\": \"NaN\""), "{text}");
         assert!(text.contains("\"angmax\": \"Infinity\""), "{text}");
         let module = deserialize_module(&text);
-        let powerio::PioValue::BalancedNetwork(network) = &module.value else {
+        let powerio::PioValue::BalancedNetwork(network) = &module.value() else {
             panic!(
                 "expected a balanced network, found {}",
-                module.value.type_name()
+                module.value().type_name()
             );
         };
         assert!(network.branches()[0].angmin.is_nan());

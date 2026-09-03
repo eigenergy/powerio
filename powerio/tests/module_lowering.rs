@@ -31,7 +31,7 @@ fn transformation_names_share_one_report_and_sever_the_source_echo() {
     let options = MulticonductorToBalancedOptions::default();
 
     let report: MulticonductorToBalancedReport = to_balanced_report(&module, options).unwrap();
-    let PioValue::MulticonductorNetwork(network) = &module.value else {
+    let PioValue::MulticonductorNetwork(network) = &module.value() else {
         panic!("wrong kind");
     };
     assert_eq!(report, to_balanced_network_report(network, options));
@@ -40,7 +40,7 @@ fn transformation_names_share_one_report_and_sever_the_source_echo() {
     assert!(!direct.network.buses().is_empty());
 
     let transformed = to_balanced(module, options).unwrap();
-    assert!(matches!(transformed.value, PioValue::BalancedNetwork(_)));
+    assert!(matches!(transformed.value(), PioValue::BalancedNetwork(_)));
     assert!(
         transformed.source().is_none(),
         "a changed value must not retain bytes for same format echo"
@@ -68,7 +68,7 @@ fn stale_targets_are_severed_and_every_diagnostic_survives() {
     let input_count = module.diagnostics.len();
 
     let lowered = to_balanced(module, MulticonductorToBalancedOptions::default()).unwrap();
-    assert!(matches!(lowered.value, PioValue::BalancedNetwork(_)));
+    assert!(matches!(lowered.value(), PioValue::BalancedNetwork(_)));
     // Every input diagnostic survives, plus the pass's own findings.
     assert!(lowered.diagnostics.len() >= input_count);
     for id in ["keep-1", "keep-2", "keep-3"] {
@@ -160,7 +160,7 @@ fn hostile_element_names_normalize_into_the_history_notes() {
 fn mismatched_winding_ratings_convert_the_resistance_base() {
     let module = parse_mc_module(TWO_WINDING_DSS);
     let lowered = to_balanced(module, MulticonductorToBalancedOptions::default()).unwrap();
-    let PioValue::BalancedNetwork(network) = &lowered.value else {
+    let PioValue::BalancedNetwork(network) = &lowered.value() else {
         panic!("wrong kind");
     };
     let branch = network
@@ -222,7 +222,10 @@ fn a_module_at_a_record_cap_is_refused_intact() {
         "{error:?}"
     );
     assert_eq!(returned.diagnostics.len(), before, "module unchanged");
-    assert!(matches!(returned.value, PioValue::MulticonductorNetwork(_)));
+    assert!(matches!(
+        returned.value(),
+        PioValue::MulticonductorNetwork(_)
+    ));
 
     // The history cap binds the same way.
     let full_history = {

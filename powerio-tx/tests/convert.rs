@@ -2543,7 +2543,7 @@ fn nameless_json_text_sniffs_like_a_json_file() {
     let model = net.to_json().unwrap();
     let source = powerio_core::Source::from_memory("<memory>", model.into_bytes()).unwrap();
     let parsed = powerio_tx::parse(source).expect("nameless model JSON parses");
-    assert_eq!(parsed.value.buses().len(), 14);
+    assert_eq!(parsed.value().buses().len(), 14);
 
     let pm = emit_module(
         &powerio_core::PioModule::new(net),
@@ -2553,8 +2553,11 @@ fn nameless_json_text_sniffs_like_a_json_file() {
     .text;
     let source = powerio_core::Source::from_memory("<memory>", pm.into_bytes()).unwrap();
     let parsed = powerio_tx::parse(source).expect("nameless PowerModels JSON parses");
-    assert_eq!(parsed.value.buses().len(), 14);
-    assert_eq!(parsed.value.source_format(), SourceFormat::PowerModelsJson);
+    assert_eq!(parsed.value().buses().len(), 14);
+    assert_eq!(
+        parsed.value().source_format(),
+        SourceFormat::PowerModelsJson
+    );
 
     let source = powerio_core::Source::from_memory("<memory>", b"not a case".to_vec()).unwrap();
     let error = powerio_tx::parse(source).unwrap_err();

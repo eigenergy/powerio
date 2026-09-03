@@ -1141,7 +1141,7 @@ struct DistParsed {
 fn dist_module_to_parsed(module: powerio_core::PioModule<MulticonductorNetwork>) -> DistParsed {
     DistParsed {
         warnings: powerio_dist::diagnostics::render_diagnostics(&module.diagnostics),
-        network: module.value.clone(),
+        network: module.value().clone(),
         module,
     }
 }
@@ -1277,7 +1277,7 @@ fn ir_preserves_network(net: BalancedNetwork) -> Result<(), String> {
     let before = transmission_value(&net);
     let module = powerio_core::PioModule::new(powerio::PioValue::BalancedNetwork(net));
     let back = ir_round_trip(&module)?;
-    let powerio::PioValue::BalancedNetwork(net_back) = &back.value else {
+    let powerio::PioValue::BalancedNetwork(net_back) = &back.value() else {
         return Err("the module came back with a different value kind".to_owned());
     };
     let after = transmission_value(net_back);

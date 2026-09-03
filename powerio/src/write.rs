@@ -187,7 +187,7 @@ fn unsupported_type(module: &PioModule<PioValue>, format: &str) -> Error {
         &codes::REQUEST_EMIT_UNSUPPORTED_VALUE_TYPE,
         format!(
             "a {} module cannot be emitted as {format}; serialize writes PowerIO IR",
-            module.value.type_name()
+            module.value().type_name()
         ),
     )
 }
@@ -683,30 +683,30 @@ fn emit_network_or_calculation(
     format: &str,
     destination: Destination,
 ) -> Result<EmitResult, Error> {
-    if matches!(module.value, PioValue::AcScucInstance(_)) && is_goc3(format) {
+    if matches!(module.value(), PioValue::AcScucInstance(_)) && is_goc3(format) {
         return Err(unsupported_type(module, format));
     }
-    if let Some(network) = balanced_calculation_network(&module.value) {
+    if let Some(network) = balanced_calculation_network(module.value()) {
         return emit_balanced_network(
             module,
             network,
             format,
             destination,
             false,
-            vec![calculation_data_omitted(module.value.type_name(), format)],
+            vec![calculation_data_omitted(module.value().type_name(), format)],
         );
     }
-    if let Some(network) = multiconductor_calculation_network(&module.value) {
+    if let Some(network) = multiconductor_calculation_network(module.value()) {
         return emit_multiconductor_network(
             module,
             network.clone(),
             format,
             destination,
             false,
-            vec![calculation_data_omitted(module.value.type_name(), format)],
+            vec![calculation_data_omitted(module.value().type_name(), format)],
         );
     }
-    match &module.value {
+    match &module.value() {
         PioValue::BalancedNetwork(network) => {
             emit_balanced_network(module, network, format, destination, true, Vec::new())
         }
@@ -742,7 +742,7 @@ fn emit_balanced_solution_network(
         format,
         destination,
         false,
-        vec![solution_data_omitted(module.value.type_name(), format)],
+        vec![solution_data_omitted(module.value().type_name(), format)],
     )
 }
 
@@ -758,7 +758,7 @@ fn emit_multiconductor_solution_network(
         format,
         destination,
         false,
-        vec![solution_data_omitted(module.value.type_name(), format)],
+        vec![solution_data_omitted(module.value().type_name(), format)],
     )
 }
 
@@ -767,7 +767,7 @@ fn emit_solution(
     format: &str,
     destination: Destination,
 ) -> Result<EmitResult, Error> {
-    match &module.value {
+    match &module.value() {
         PioValue::DcPfSolution(solution) => emit_balanced_solution_network(
             module,
             &network_with_dc_pf_solution(solution),
@@ -837,7 +837,7 @@ fn emit_dynamic(
     // retained source exactly. A derived module has no retained source, so a
     // solved result never falls through to stale input bytes here.
     if !matches!(
-        &module.value,
+        &module.value(),
         PioValue::BalancedNetwork(_) | PioValue::MulticonductorNetwork(_)
     ) && let Some(bytes) = echo_retained_source(module, format)
     {
@@ -853,7 +853,7 @@ fn emit_dynamic(
         );
     }
 
-    match &module.value {
+    match &module.value() {
         PioValue::BalancedNetwork(_)
         | PioValue::MulticonductorNetwork(_)
         | PioValue::BalancedOperatingPoint(_)

@@ -24,19 +24,19 @@ fn balanced_modules_derive_each_balanced_calculation_instance() {
 
     let dc_pf = powerio::transform::to_dc_pf_instance(&source).unwrap();
     check_records(&dc_pf, "powerio.DcPfInstance");
-    assert_eq!(dc_pf.value.network().buses().len(), 9);
+    assert_eq!(dc_pf.value().network().buses().len(), 9);
 
     let ac_pf = powerio::transform::to_ac_pf_instance(&source).unwrap();
     check_records(&ac_pf, "powerio.AcPfInstance");
-    assert_eq!(ac_pf.value.network().buses().len(), 9);
+    assert_eq!(ac_pf.value().network().buses().len(), 9);
 
     let dc_opf = powerio::transform::to_dc_opf_instance(&source).unwrap();
     check_records(&dc_opf, "powerio.DcOpfInstance");
-    assert_eq!(dc_opf.value.network().generators().len(), 3);
+    assert_eq!(dc_opf.value().network().generators().len(), 3);
 
     let ac_opf = powerio::transform::to_ac_opf_instance(&source).unwrap();
     check_records(&ac_opf, "powerio.AcOpfInstance");
-    assert_eq!(ac_opf.value.network().generators().len(), 3);
+    assert_eq!(ac_opf.value().network().generators().len(), 3);
 
     assert!(source.source().is_some(), "the input module remains usable");
 }
@@ -62,7 +62,7 @@ fn an_already_typed_instance_is_extracted_without_reconstruction() {
     let dynamic = dc_pf.map_value(powerio::PioValue::from);
     let extracted = powerio::transform::to_dc_pf_instance(&dynamic).unwrap();
     assert_eq!(extracted.history().len(), history_len);
-    assert_eq!(extracted.value.network().buses().len(), 9);
+    assert_eq!(extracted.value().network().buses().len(), 9);
 
     let ac_pf = powerio::transform::to_ac_pf_instance(&source).unwrap();
     let history_len = ac_pf.history().len();
@@ -75,7 +75,7 @@ fn an_already_typed_instance_is_extracted_without_reconstruction() {
     let dynamic = dc_opf.map_value(powerio::PioValue::from);
     let extracted = powerio::transform::to_dc_opf_instance(&dynamic).unwrap();
     assert_eq!(extracted.history().len(), history_len);
-    assert_eq!(extracted.value.network().generators().len(), 3);
+    assert_eq!(extracted.value().network().generators().len(), 3);
 
     let ac_opf = powerio::transform::to_ac_opf_instance(&source).unwrap();
     let history_len = ac_opf.history().len();

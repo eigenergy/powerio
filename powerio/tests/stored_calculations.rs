@@ -70,7 +70,7 @@ fn round_trip(value: PioValue, label: &str) -> String {
     let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(raw["value"]["type"], type_name);
     let back = deserialize(&text).unwrap();
-    assert_eq!(back.value.type_name(), type_name);
+    assert_eq!(back.value().type_name(), type_name);
     assert_eq!(
         serialize(&back).unwrap(),
         text,
@@ -140,7 +140,7 @@ fn ac_pf_instance_round_trip_keeps_explicit_bus_specifications() {
         "ac_pf_instance_explicit_specifications",
     );
     let back = deserialize(&text).unwrap();
-    let PioValue::AcPfInstance(back) = &back.value else {
+    let PioValue::AcPfInstance(back) = &back.value() else {
         panic!("expected an AC PF instance");
     };
     assert_eq!(back.specifications(), specifications);
@@ -198,7 +198,7 @@ fn three_winding_terminal_powers_round_trip_on_every_balanced_solution() {
     .unwrap();
     let text = round_trip(PioValue::DcPfSolution(dc_pf), "dc_pf_three_winding_power");
     let back = deserialize(&text).unwrap();
-    let PioValue::DcPfSolution(back) = &back.value else {
+    let PioValue::DcPfSolution(back) = &back.value() else {
         panic!("expected a DC PF solution");
     };
     assert_eq!(
@@ -224,7 +224,7 @@ fn three_winding_terminal_powers_round_trip_on_every_balanced_solution() {
         "dc_opf_three_winding_power",
     );
     let back = deserialize(&text).unwrap();
-    let PioValue::DcOpfSolution(back) = &back.value else {
+    let PioValue::DcOpfSolution(back) = &back.value() else {
         panic!("expected a DC OPF solution");
     };
     assert_eq!(
@@ -249,7 +249,7 @@ fn three_winding_terminal_powers_round_trip_on_every_balanced_solution() {
     .unwrap();
     let text = round_trip(PioValue::AcPfSolution(pf), "ac_pf_three_winding_power");
     let back = deserialize(&text).unwrap();
-    let PioValue::AcPfSolution(back) = &back.value else {
+    let PioValue::AcPfSolution(back) = &back.value() else {
         panic!("expected an AC PF solution");
     };
     assert_eq!(
@@ -277,7 +277,7 @@ fn three_winding_terminal_powers_round_trip_on_every_balanced_solution() {
     .unwrap();
     let text = round_trip(PioValue::AcOpfSolution(opf), "ac_opf_three_winding_power");
     let back = deserialize(&text).unwrap();
-    let PioValue::AcOpfSolution(back) = &back.value else {
+    let PioValue::AcOpfSolution(back) = &back.value() else {
         panic!("expected an AC OPF solution");
     };
     assert_eq!(
@@ -302,7 +302,7 @@ fn three_winding_terminal_powers_round_trip_on_every_balanced_solution() {
         "socwr_three_winding_power",
     );
     let back = deserialize(&text).unwrap();
-    let PioValue::SocwrOpfSolution(back) = &back.value else {
+    let PioValue::SocwrOpfSolution(back) = &back.value() else {
         panic!("expected a SOCWR OPF solution");
     };
     assert_eq!(
@@ -448,7 +448,7 @@ fn every_branch_susceptance_formula_round_trips_under_its_own_name() {
         let text = round_trip(PioValue::DcOpfInstance(instance), "dc_opf_instance");
         let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
         let back = deserialize(&text).unwrap();
-        let PioValue::DcOpfInstance(back) = &back.value else {
+        let PioValue::DcOpfInstance(back) = &back.value() else {
             panic!("expected the dc_opf_instance kind");
         };
         assert_eq!(
@@ -488,7 +488,7 @@ fn residuals_round_trip_every_nonfinite_value() {
     let module = PioModule::new(PioValue::DcOpfSolution(solution));
     let text = serialize(&module).unwrap();
     let back = deserialize(&text).unwrap();
-    let PioValue::DcOpfSolution(back) = &back.value else {
+    let PioValue::DcOpfSolution(back) = &back.value() else {
         panic!("expected the dc_opf_solution kind");
     };
 
@@ -520,7 +520,7 @@ fn residuals_round_trip_every_nonfinite_value() {
     let module = PioModule::new(PioValue::DcOpfSolution(unstated));
     let text = serialize(&module).unwrap();
     let back = deserialize(&text).unwrap();
-    let PioValue::DcOpfSolution(back) = &back.value else {
+    let PioValue::DcOpfSolution(back) = &back.value() else {
         panic!("expected the dc_opf_solution kind");
     };
     assert_eq!(back.residuals().max_active_power_mismatch, None);
@@ -565,7 +565,7 @@ fn every_termination_kind_round_trips() {
         let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(raw["value"]["data"]["termination"]["kind"], name);
         let back = deserialize(&text).unwrap();
-        let PioValue::DcOpfSolution(back) = &back.value else {
+        let PioValue::DcOpfSolution(back) = &back.value() else {
             panic!("expected the dc_opf_solution kind");
         };
         assert_eq!(back.termination(), &termination);
@@ -596,7 +596,7 @@ fn opf_economic_outputs_round_trip() {
     .unwrap();
     let text = round_trip(PioValue::DcOpfSolution(solution), "dc_opf_solution");
     let back = deserialize(&text).unwrap();
-    let PioValue::DcOpfSolution(back) = &back.value else {
+    let PioValue::DcOpfSolution(back) = &back.value() else {
         panic!("expected the dc_opf_solution kind");
     };
     assert_eq!(back.bus_active_power_marginals(), Some(&[10.31, 12.05][..]));
@@ -637,7 +637,7 @@ fn opf_economic_outputs_round_trip() {
     .unwrap();
     let text = round_trip(PioValue::AcOpfSolution(solution), "ac_opf_solution");
     let back = deserialize(&text).unwrap();
-    let PioValue::AcOpfSolution(back) = &back.value else {
+    let PioValue::AcOpfSolution(back) = &back.value() else {
         panic!("expected the ac_opf_solution kind");
     };
     assert_eq!(back.bus_active_power_marginals(), Some(&[11.2, 11.9][..]));
@@ -698,7 +698,7 @@ fn the_multiconductor_series_round_trips() {
         "multiconductor operating point series",
     );
     let back = deserialize(&text).unwrap();
-    let PioValue::TimeSeries(series) = &back.value else {
+    let PioValue::TimeSeries(series) = &back.value() else {
         panic!("wrong kind");
     };
     assert_eq!(series.len(), 2);
@@ -717,7 +717,7 @@ fn the_scuc_pair_round_trips_from_the_goc3_fixture() {
     let doc = round_trip(PioValue::AcScucInstance(instance), "ac_scuc_instance");
 
     let back = deserialize(&doc).unwrap();
-    let PioValue::AcScucInstance(instance) = &back.value else {
+    let PioValue::AcScucInstance(instance) = &back.value() else {
         panic!("wrong kind");
     };
     let mut network_outputs = ScucNetworkOutputs::default();
@@ -751,7 +751,7 @@ fn goc3_instance() -> powerio_prob::AcScucInstance {
         Some("goc3-json"),
     )
     .unwrap();
-    let PioValue::AcScucInstance(instance) = module.value else {
+    let PioValue::AcScucInstance(instance) = module.into_value() else {
         panic!("GO Challenge 3 problem did not produce powerio.AcScucInstance");
     };
     instance
@@ -857,7 +857,7 @@ fn every_scuc_output_series_round_trips_under_its_exported_name() {
     assert_eq!(wire_devices, expected);
 
     let back = deserialize(&text).unwrap();
-    let PioValue::AcScucSolution(solution) = &back.value else {
+    let PioValue::AcScucSolution(solution) = &back.value() else {
         panic!("wrong kind");
     };
     assert_eq!(*solution.network_outputs(), network_outputs);

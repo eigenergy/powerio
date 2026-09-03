@@ -51,7 +51,7 @@ fn raw_generator_id_and_tail_survive_ir_and_fresh_output_for_revisions_33_to_35(
         .unwrap()
         .with_format(FormatId::new(format).unwrap());
         let module = parse(source, None).unwrap();
-        let PioValue::BalancedNetwork(network) = &module.value else {
+        let PioValue::BalancedNetwork(network) = &module.value() else {
             panic!("PSS/E RAW did not produce a balanced network");
         };
         let generator = &network.generators()[0];
@@ -130,7 +130,7 @@ fn raw_generator_id_and_tail_survive_ir_and_fresh_output_for_revisions_33_to_35(
             None,
         )
         .unwrap();
-        let PioValue::BalancedNetwork(reparsed) = &reparsed.value else {
+        let PioValue::BalancedNetwork(reparsed) = &reparsed.value() else {
             panic!("fresh PSS/E RAW did not produce a balanced network");
         };
         assert_eq!(reparsed.generators().len(), 1);

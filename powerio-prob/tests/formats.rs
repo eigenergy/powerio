@@ -85,7 +85,7 @@ fn goc3_parses_to_the_scuc_instance() {
     let module = decode_goc3_problem(memory("goc3_small.json", &text)).unwrap();
     // The module retains the source it parsed.
     assert!(module.source().is_some());
-    let instance = &module.value;
+    let instance = module.value();
 
     // The reusable electrical model is stored once.
     assert_eq!(instance.network().buses().len(), 2);
@@ -114,7 +114,7 @@ fn goc3_reports_each_known_optional_field_that_only_retained_source_preserves() 
     ))
     .unwrap();
     assert!(
-        !module.value.network().buses()[0]
+        !module.value().network().buses()[0]
             .extras
             .contains_key("con_loss_factor")
     );
@@ -248,7 +248,7 @@ fn goc3_development_fields_must_be_objects() {
 fn goc3_network_extraction_reports_the_discard() {
     let text = fixture("tests/data/goc3_small.json");
     let module = decode_goc3_problem(memory("goc3_small.json", &text)).unwrap();
-    let (_opf, diagnostics) = module.value.to_dc_opf().unwrap();
+    let (_opf, diagnostics) = module.value().to_dc_opf().unwrap();
     assert!(
         diagnostics
             .iter()
@@ -296,7 +296,7 @@ fn goc3_solution_uses_the_instance_identity_and_time_axis() {
         &serde_json::to_string(&goc3_output()).unwrap(),
     );
     let solution = __parse_goc3_output_buffer(
-        std::sync::Arc::new(instance.value),
+        std::sync::Arc::new(instance.value().clone()),
         &source.primary_buffer().unwrap(),
     )
     .unwrap();
@@ -327,7 +327,7 @@ fn goc3_solution_rejects_unknown_devices_and_wrong_time_lengths() {
         serde_json::json!("missing");
     let source = memory("unknown.json", &serde_json::to_string(&unknown).unwrap());
     let error = __parse_goc3_output_buffer(
-        std::sync::Arc::new(instance.value.clone()),
+        std::sync::Arc::new(instance.value().clone()),
         &source.primary_buffer().unwrap(),
     )
     .unwrap_err();
@@ -340,7 +340,7 @@ fn goc3_solution_rejects_unknown_devices_and_wrong_time_lengths() {
         &serde_json::to_string(&wrong_length).unwrap(),
     );
     let error = __parse_goc3_output_buffer(
-        std::sync::Arc::new(instance.value),
+        std::sync::Arc::new(instance.value().clone()),
         &source.primary_buffer().unwrap(),
     )
     .unwrap_err();
@@ -379,7 +379,7 @@ fn goc3_output_rejects_missing_unknown_and_nonbinary_fields() {
         let source = memory(name, &serde_json::to_string(&document).unwrap());
         assert!(
             __parse_goc3_output_buffer(
-                std::sync::Arc::new(instance.value.clone()),
+                std::sync::Arc::new(instance.value().clone()),
                 &source.primary_buffer().unwrap(),
             )
             .is_err(),
@@ -400,7 +400,7 @@ fn goc3_output_emission_uses_the_official_fields_and_round_trips() {
         &serde_json::to_string(&goc3_output()).unwrap(),
     );
     let solution = __parse_goc3_output_buffer(
-        std::sync::Arc::new(instance.value),
+        std::sync::Arc::new(instance.value().clone()),
         &source.primary_buffer().unwrap(),
     )
     .unwrap();
@@ -440,7 +440,7 @@ fn goc3_output_emission_requires_complete_matching_instance_tables() {
         &fixture("tests/data/goc3_small.json"),
     ))
     .unwrap()
-    .value;
+    .into_value();
     let cases: [(&str, ScucInputMutation, &str); 5] = [
         (
             "missing-device",
@@ -505,7 +505,7 @@ fn scuc_solution_rejects_wrong_row_widths_and_nonfinite_values() {
         &fixture("tests/data/goc3_small.json"),
     ))
     .unwrap()
-    .value;
+    .into_value();
     let periods = instance.inputs().interval_durations.len();
 
     let mut wrong_width = powerio_prob::ScucNetworkOutputs::default();

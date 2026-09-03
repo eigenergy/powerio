@@ -35,7 +35,7 @@
 //! let source = Source::from_memory("example.m", src.as_bytes().to_vec())?
 //!     .with_format(parse_format_id("matpower")?);
 //! let module = parse(source)?;
-//! assert_eq!(module.value.buses().len(), 2);
+//! assert_eq!(module.value().buses().len(), 2);
 //! # Ok::<(), powerio_core::Error>(())
 //! ```
 
