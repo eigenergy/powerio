@@ -4,10 +4,20 @@ PowerIO stores coordinates when a supported source provides them. Coordinates
 are optional; parsers do not invent them, and emission to a network format
 without a coordinate representation reports the loss.
 
-PowerWorld `.pwd` files are display data rather than network cases. Parse them
-with `parse_display` rather than the network parser. Paths use `Source::open`.
-A Rust application that already owns the bytes uses `Source::from_memory` and
-passes that source to the same `parse_display` operation.
+PowerWorld `.pwd` files are display data rather than network cases, so they do
+not reach `parse`. Each document is read by the type it produces, taking the
+same inputs the case operations take: a file name, content already in memory,
+or a `Source`.
+
+```rust,ignore
+// A layer: the canonical `.geo.json`, GeoJSON, aliased CSV or JSON records,
+// headerless buscoords CSV, or a `.pwd` lifted into a diagram space layer.
+let parsed = powerio::GeoLayer::read("layer.geo.json")?;
+
+// The same `.pwd` as its canvas and substation symbol table.
+let display = powerio::PwdDisplay::read("case.pwd")?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
 
 ## Coordinate fields
 
@@ -155,7 +165,8 @@ aux reader promotes the substation `Latitude:1`/`Longitude:1` pair, and the
 bus's own bare `Latitude`/`Longitude` pair, into `Bus.location`; a promoted
 pair leaves extras.
 
-Rust and Python use `parse_display`. Python returns
+Rust reads a display file with `PwdDisplay::read` and the same file as a layer
+with `GeoLayer::read`. Python's `parse_display` returns
 `DisplayData(kind="powerworld", data=PwdDisplay(...))`.
 Display files do not pass through `BalancedNetwork`, module emission, or `.pio.json`.
 

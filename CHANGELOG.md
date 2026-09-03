@@ -172,6 +172,27 @@ read only: `emit` to `ieee-cdf` is refused. The vendored IEEE 14 and 30 bus
 cases are checked against `case14.m` and `case30.m`, and the PowSybl gate
 compares every public IEEE CDF case with PyPowSybl's own CDF importer.
 
+**One `parse`, one `emit`, and no display sibling.** `parse`, `emit`,
+`serialize`, and `deserialize` take their input or output through
+`powerio_core::IntoSource` and `powerio_core::IntoDestination`, implemented for
+a file or directory name in every spelling a caller holds one, for content
+already in memory, and for a built `Source` or `Destination`. The ordinary read
+is `powerio::parse("case.raw")?` with one call and one failure point, following
+`mlir::parseSourceFile(filename, block, config)` and
+`llvm::object::createBinary`, which autodetects the file type. The optional
+format argument every caller wrote as `None` is gone: optional configuration is
+`ParseOptions`, passed to `parse_with_options`, as MLIR and LLVM pass a
+defaulted config value and this workspace already pairs `emit` with
+`emit_with_options`. Content in memory carries the name `<memory>`, which
+identifies no format, so a format detected from a file extension is declared
+through the options or named through `Source::from_memory`. `parse_display`,
+`DisplayData`, and `DisplayFormat` are removed: a geographic layer reads
+through `GeoLayer::read` and a PowerWorld display through `PwdDisplay::read`,
+each taking the same inputs, the way MLIR parses fragments with
+`parseAttribute` while `parseSourceFile` reads whole modules. Python and Julia
+keep their `format` keyword and C ABI 7 is unchanged. See
+`docs/src/migration-v1.md` for the table of replacements.
+
 ## 0.10.0
 
 PowerIO 0.10 is the public beta of the 1.0 API. API corrections may land before 1.0.0 as downstream integrations exercise the new design.

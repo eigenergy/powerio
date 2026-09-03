@@ -12,8 +12,7 @@ feeder = parse("IEEE13Nodeckt.dss")   # PioModule{MulticonductorNetwork}
 ```
 
 ```rust,ignore
-let source = powerio::Source::open("case9.m")?;
-let module = powerio::parse(source, None)?;   // PioModule<PioValue>
+let module = powerio::parse("case9.m")?;   // PioModule<PioValue>
 match &module.value {
     powerio::PioValue::BalancedNetwork(network) => {
         println!("{} buses", network.buses().len());

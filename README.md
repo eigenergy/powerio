@@ -39,15 +39,14 @@ Install the command line program with `cargo install powerio-cli`.
 Rust:
 
 ```rust,ignore
-use powerio::{Destination, PioValue};
+use powerio::PioValue;
 
-let source = powerio::Source::open("case9.m")?;
-let module = powerio::parse(source, None)?;
+let module = powerio::parse("case9.m")?;
 let PioValue::BalancedNetwork(network) = &module.value else {
     panic!("expected a balanced network");
 };
 assert_eq!(network.buses().len(), 9);
-powerio::emit(&module, "matpower", Destination::path("copy.m"))?;
+powerio::emit(&module, "matpower", "copy.m")?;
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 

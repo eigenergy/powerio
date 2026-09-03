@@ -5,18 +5,36 @@ ABI break. The
 changes remove duplicate operations and expose the same concepts in Rust,
 Python, Julia, and C.
 
-## Parse one `Source`
+## One `parse`, one `emit`
 
-Every grid exchange format enters through `parse`.
+Every grid exchange format enters through `parse`, which acquires the input
+itself. A file or directory name, content already in memory, and a `Source`
+carrying named buffers all reach the same operation.
 
 ```rust,ignore
-let source = powerio::Source::open("case9.m")?;
-let module = powerio::parse(source, None)?;
+let module = powerio::parse("case9.m")?;
+let module = powerio::parse(case_directory)?;
+let module = powerio::parse(bytes)?;
 
-let source = powerio::Source::from_memory("case9.m", bytes)?;
-let module = powerio::parse(source, Some("matpower"))?;
+// Content in memory carries the name `<memory>`, which identifies no format,
+// so a format read from a file extension is declared or named.
+let module = powerio::parse_with_options(
+    bytes,
+    &powerio::ParseOptions::default().format("matpower")?,
+)?;
+let module = powerio::parse(powerio::Source::from_memory("case9.m", bytes)?)?;
 # Ok::<(), powerio::Error>(())
 ```
+
+| 0.10 | 1.0 |
+|---|---|
+| `parse(Source::open(path)?, None)` | `parse(path)` |
+| `parse(source, Some(format))` | `parse_with_options(source, &ParseOptions::default().format(format)?)` |
+| `emit(&module, format, Destination::path(path))` | `emit(&module, format, path)` |
+| `serialize(&module, Destination::path(path))` | `serialize(&module, path)` |
+| `deserialize(Source::open(path)?)` | `deserialize(path)` |
+| `parse_display(source, from)` | `GeoLayer::read(input)`, or `PwdDisplay::read(input)` for a `.pwd` canvas |
+| `DisplayData`, `DisplayFormat` | removed; each document is read by the type it produces |
 
 Python accepts a path, file object, or bytes-like object. A `str` names a
 path; use `io.StringIO` for text already in memory.
