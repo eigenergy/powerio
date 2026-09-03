@@ -3,6 +3,32 @@
 //! generator of the PR comment; the notes here are for whoever works on a
 //! cell next.
 //!
+//! # What the tables cover
+//!
+//! Every format PowerIO 1.0 reads is a source row and every format it writes
+//! is a target column: the balanced case formats, the PowSybl and ENTSO-E
+//! exchange formats (XIIDM, JIIDM, CGMES, UCTE-DEF), the dataset directories
+//! (PyPSA CSV, GridFM Parquet), PowerIO's own network document, and the two
+//! read only sources (IEEE CDF, DeepMind OPFData). That is eighteen rows and
+//! sixteen columns, which no PR comment renders readably as one table, so the
+//! columns are grouped by what the formats are for and each group keeps every
+//! source row. The grouping changes the layout and not the cells: every source
+//! is still run into every target.
+//!
+//! A geographic layer is a `powerio.GeoLayer` rather than a network, and no
+//! grid exchange format states a standalone layer, so it has its own one cell
+//! table instead of a row here.
+//!
+//! # The rule a nonzero cell states
+//!
+//! A nonzero cell means the target format cannot carry what the source stated,
+//! and every warning names the field or record it cannot carry: on the write
+//! and readback legs a field of the target format, and on the source parse
+//! leg, whose warnings every cell of that row shares, what the source document
+//! itself leaves unstated. A warning that named a writer PowerIO could extend
+//! instead of a limit of the format would be a defect in this table, not a
+//! yellow cell.
+//!
 //! # What a cell asserts
 //!
 //! Each cell runs source parse → target write → target readback over every
@@ -18,6 +44,18 @@
 //!    yellow cells too; together they pin the power flow problem itself
 //!    (same `Y_bus`, same injections, same solution), which is the cheap,
 //!    dependency-free stand-in for cross-validating an AC solve.
+//!
+//!    Three allowances, each a property of a target format rather than of a
+//!    writer, and each stated at its own site: a format that identifies a bus
+//!    by a name rather than a number states no bus number, so the comparison
+//!    falls back to the same problem up to bus relabeling
+//!    (`electrical_change_up_to_relabeling`); a format that states each value
+//!    in a fixed width field returns fewer digits than the value carries
+//!    (`electrical_tolerance`); and a format with no record for an element
+//!    changes the problem by dropping it, so the comparison runs against the
+//!    network the format can hold (`network_a_target_holds`). Every one of
+//!    them names a record or field absent from the target's own definition,
+//!    and the writer reports the same loss as a warning.
 //! 4. **Lossless means lossless** — a cell claiming green (zero warnings)
 //!    must leave the full typed model bit-identical (to a last-ulp float
 //!    tolerance), field for field, extras included. A cell that is silent
@@ -79,6 +117,12 @@
 //! its DC vocabulary — inventing field names would fake a green. dss deck
 //! tokens (`vminpu`, `pf`, source `MVAsc`) and BMOPF named terminals have no
 //! slots in their neighbors; those rows stay honestly yellow.
+//!
+//! The `→ CGMES 3.0` column is an order of magnitude above every other, for
+//! one reason: a CGMES profile set identifies every object by an mRID and
+//! states its class, container, and limit types as objects of their own, so a
+//! case format that states none of that has a field dropped per object rather
+//! than per file. The counts are per object because the losses are.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -87,11 +131,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use powerio::BalancedNetwork;
 use powerio_cli::invariants::{
-    DistributionCore, TransmissionCore, YbusUnavailable, distribution_core, distribution_value,
-    injection_change, model_diffs, transmission_core, transmission_value, ybus_change,
+    DistributionCore, YbusUnavailable, distribution_core, distribution_value,
+    electrical_change_up_to_relabeling, injection_change_within, model_diffs, transmission_core,
+    transmission_value, ybus_change_within,
 };
 use powerio_dist::{DistTargetFormat, MulticonductorNetwork};
-use powerio_tx::TargetFormat;
 
 const REPORT_ENV: &str = "POWERIO_CONVERSION_MATRIX_REPORT";
 const DETAILS_ENV: &str = "POWERIO_CONVERSION_MATRIX_DETAILS";
@@ -142,14 +186,96 @@ fn text_emission(
     })
 }
 
-fn emit_transmission_value(
+/// One emitted case, held where the format's reader takes it from.
+enum Emitted {
+    /// One document, read back from memory.
+    Document(String),
+    /// A directory of documents, read back from the temporary directory this
+    /// value owns.
+    Directory(tempfile::TempDir),
+}
+
+struct TransmissionEmission {
+    emitted: Emitted,
+    diagnostics: Vec<String>,
+}
+
+/// Write `network` as `format` through the facade, which is the operation a
+/// caller has: one token selects the writer, and a directory format writes its
+/// inventory rather than one document.
+fn emit_transmission(
     network: &BalancedNetwork,
-    target: TargetFormat,
-) -> Result<TextEmission, String> {
+    format: TransmissionFormat,
+) -> Result<TransmissionEmission, String> {
+    if format.emission == Emission::ModelJson {
+        let text = network.to_json().map_err(|err| err.to_string())?;
+        return Ok(TransmissionEmission {
+            emitted: Emitted::Document(text),
+            diagnostics: Vec::new(),
+        });
+    }
     let module = powerio_core::PioModule::new(network.clone());
+    if format.emission == Emission::Directory {
+        let directory = tempfile::tempdir().map_err(|err| err.to_string())?;
+        let result = powerio::emit(
+            &module,
+            format.token,
+            powerio_core::Destination::path(directory.path().join(DIRECTORY_CASE_NAME)),
+        )
+        .map_err(|err| err.to_string())?;
+        let diagnostics = powerio_core::render_diagnostics(result.diagnostics());
+        return Ok(TransmissionEmission {
+            emitted: Emitted::Directory(directory),
+            diagnostics,
+        });
+    }
     let destination = powerio_core::Destination::memory("case").map_err(|err| err.to_string())?;
-    let result = powerio_tx::emit(&module, target, destination).map_err(|err| err.to_string())?;
-    text_emission(result, None)
+    let result =
+        powerio::emit(&module, format.token, destination).map_err(|err| err.to_string())?;
+    let diagnostics = powerio_core::render_diagnostics(result.diagnostics());
+    let powerio_core::EmittedOutput::Memory { mut artifacts } = result.into_output() else {
+        return Err("a memory destination returned path output".to_owned());
+    };
+    let artifact = artifacts
+        .pop()
+        .filter(|_| artifacts.is_empty())
+        .ok_or_else(|| "a one document format returned several artifacts".to_owned())?;
+    let text = String::from_utf8(artifact.into_bytes())
+        .map_err(|err| format!("emitted text is not UTF-8: {err}"))?;
+    Ok(TransmissionEmission {
+        emitted: Emitted::Document(text),
+        diagnostics,
+    })
+}
+
+/// The directory name a directory format writes under, inside a temporary
+/// directory that holds nothing else.
+const DIRECTORY_CASE_NAME: &str = "case";
+
+/// Read one emitted case back as its own format.
+fn parse_transmission_emitted(
+    emitted: &Emitted,
+    format: TransmissionFormat,
+) -> Result<ParsedTransmission, String> {
+    match emitted {
+        Emitted::Document(text) if format.emission == Emission::ModelJson => {
+            let network = BalancedNetwork::from_json(text).map_err(|err| err.to_string())?;
+            Ok(ParsedTransmission {
+                network,
+                warnings: Vec::new(),
+            })
+        }
+        Emitted::Document(text) => {
+            let source = powerio_core::Source::from_memory("<memory>", text.as_bytes().to_vec())
+                .map_err(|err| err.to_string())?;
+            parse_transmission_source(source, format.token)
+        }
+        Emitted::Directory(directory) => {
+            let source = powerio_core::Source::open(directory.path().join(DIRECTORY_CASE_NAME))
+                .map_err(|err| err.to_string())?;
+            parse_transmission_source(source, format.token)
+        }
+    }
 }
 
 fn emit_distribution_module(
@@ -221,9 +347,11 @@ struct Report {
 fn build_report() -> Report {
     let transmission = run_transmission_matrix();
     let distribution = run_distribution_matrix();
+    let geo = run_geo_layer_matrix();
     let mut failures = Vec::new();
     failures.extend(transmission.failures.clone());
     failures.extend(distribution.failures.clone());
+    failures.extend(geo.failures.clone());
 
     let mut markdown = String::new();
     writeln!(markdown, "{REPORT_MARKER}").unwrap();
@@ -235,6 +363,12 @@ fn build_report() -> Report {
     writeln!(
         markdown,
         "Cells show `X/Y`: observed warnings / expected warnings. Counts include source parse, target write, and target readback."
+    )
+    .unwrap();
+    writeln!(markdown).unwrap();
+    writeln!(
+        markdown,
+        "A nonzero cell means the target format cannot carry what the source stated, and every warning names the field or record it cannot carry. A write or readback warning names a field of the target format; a source parse warning, which every cell of that row shares, names what the source document itself leaves unstated. A warning that named a writer PowerIO could extend instead of a limit of the format would be a defect in this table."
     )
     .unwrap();
     writeln!(markdown).unwrap();
@@ -262,6 +396,14 @@ fn build_report() -> Report {
     write_matrix_section(&mut markdown, "Transmission", &transmission);
     writeln!(markdown).unwrap();
     write_matrix_section(&mut markdown, "Distribution", &distribution);
+    writeln!(markdown).unwrap();
+    write_matrix_section(&mut markdown, "Geographic layer", &geo);
+    writeln!(markdown).unwrap();
+    writeln!(
+        markdown,
+        "A geographic layer is a `powerio.GeoLayer`, not a network: no grid exchange format states a standalone layer, so the layer has its own table rather than a row of the network matrix. Its source is the substation coordinates of a vendored PowerWorld auxiliary file."
+    )
+    .unwrap();
 
     let mut details_markdown = String::new();
     writeln!(details_markdown, "{DETAILS_MARKER}").unwrap();
@@ -287,6 +429,8 @@ fn build_report() -> Report {
     write_warning_summary(&mut details_markdown, "Transmission", &transmission);
     writeln!(details_markdown).unwrap();
     write_warning_summary(&mut details_markdown, "Distribution", &distribution);
+    writeln!(details_markdown).unwrap();
+    write_warning_summary(&mut details_markdown, "Geographic layer", &geo);
 
     Report {
         markdown,
@@ -299,6 +443,10 @@ fn build_report() -> Report {
 struct MatrixReport {
     sources: Vec<&'static str>,
     targets: Vec<&'static str>,
+    /// Target columns split into tables, each entry a table title and the
+    /// column indices it renders. Every table keeps every source row, so the
+    /// split changes only how the same cells are laid out.
+    groups: Vec<(&'static str, Vec<usize>)>,
     case_count: usize,
     cells: Vec<Vec<Cell>>,
     failures: Vec<String>,
@@ -372,24 +520,31 @@ fn silent_loss_note(cell: &Cell) -> String {
 fn write_matrix_section(markdown: &mut String, title: &str, report: &MatrixReport) {
     writeln!(markdown, "### {title}").unwrap();
     writeln!(markdown).unwrap();
-    writeln!(markdown, "{} cases.", report.case_count).unwrap();
-    writeln!(markdown).unwrap();
-    write!(markdown, "| Source ↓ / target → |").unwrap();
-    for format in &report.targets {
-        write!(markdown, " {format} |").unwrap();
-    }
-    writeln!(markdown).unwrap();
-    write!(markdown, "| --- |").unwrap();
-    for _ in &report.targets {
-        write!(markdown, " --- |").unwrap();
-    }
-    writeln!(markdown).unwrap();
-    for (source, row) in report.sources.iter().zip(&report.cells) {
-        write!(markdown, "| {source} |").unwrap();
-        for cell in row {
-            write!(markdown, " {} |", cell_summary(cell)).unwrap();
+    writeln!(markdown, "{} cases per source row.", report.case_count).unwrap();
+    for (group, columns) in &report.groups {
+        if columns.is_empty() {
+            continue;
         }
         writeln!(markdown).unwrap();
+        writeln!(markdown, "#### {group}").unwrap();
+        writeln!(markdown).unwrap();
+        write!(markdown, "| Source ↓ / target → |").unwrap();
+        for column in columns {
+            write!(markdown, " {} |", report.targets[*column]).unwrap();
+        }
+        writeln!(markdown).unwrap();
+        write!(markdown, "| --- |").unwrap();
+        for _ in columns {
+            write!(markdown, " --- |").unwrap();
+        }
+        writeln!(markdown).unwrap();
+        for (source, row) in report.sources.iter().zip(&report.cells) {
+            write!(markdown, "| {source} |").unwrap();
+            for column in columns {
+                write!(markdown, " {} |", cell_summary(&row[*column])).unwrap();
+            }
+            writeln!(markdown).unwrap();
+        }
     }
 }
 
@@ -548,55 +703,171 @@ fn code_object_name(text: &str) -> String {
     text.to_string()
 }
 
+/// Which table a target column renders in. One table of every source against
+/// every target is 18 rows by 16 columns, which no PR comment renders
+/// readably, so the columns are grouped by what the formats are for and every
+/// group keeps every source row. No cell is dropped by the grouping.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Family {
+    /// Balanced case formats: one document stating one network.
+    Case,
+    /// The PowSybl and ENTSO-E exchange formats, which state absolute units.
+    Exchange,
+    /// Dataset directories and PowerIO's own network document.
+    Dataset,
+}
+
+impl Family {
+    const ALL: [Self; 3] = [Self::Case, Self::Exchange, Self::Dataset];
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::Case => "Into a case format",
+            Self::Exchange => "Into an exchange format",
+            Self::Dataset => "Into a dataset directory or the network document",
+        }
+    }
+}
+
+/// How a format's output is produced and read back.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Emission {
+    /// One document, emitted and read back in memory.
+    Document,
+    /// A directory of documents whose identity is the directory, so it is
+    /// emitted into and read back from a temporary directory.
+    Directory,
+    /// `BalancedNetwork`'s own JSON document. It is a network serialization
+    /// rather than a case format, so it has no format token to emit through.
+    ModelJson,
+    /// A read only format: a source row and no target column.
+    ReadOnly,
+}
+
 #[derive(Clone, Copy)]
 struct TransmissionFormat {
     name: &'static str,
     token: &'static str,
-    target: TargetFormat,
+    emission: Emission,
+    family: Family,
+    /// The vendored case a read only source parses. Every other source's
+    /// payloads are the MATPOWER cases written into that format first.
+    fixture: Option<&'static str>,
 }
 
-const TRANSMISSION_FORMATS: [TransmissionFormat; 8] = [
+const fn transmission(
+    name: &'static str,
+    token: &'static str,
+    emission: Emission,
+    family: Family,
+) -> TransmissionFormat {
     TransmissionFormat {
-        name: "MATPOWER .m",
-        token: "matpower",
-        target: TargetFormat::Matpower,
-    },
+        name,
+        token,
+        emission,
+        family,
+        fixture: None,
+    }
+}
+
+const fn read_only(
+    name: &'static str,
+    token: &'static str,
+    family: Family,
+    fixture: &'static str,
+) -> TransmissionFormat {
     TransmissionFormat {
-        name: "PowerModels JSON",
-        token: "powermodels-json",
-        target: TargetFormat::PowerModelsJson,
-    },
-    TransmissionFormat {
-        name: "PSS/E .raw",
-        token: "psse",
-        target: TargetFormat::Psse { rev: 33 },
-    },
-    TransmissionFormat {
-        name: "PowerWorld .aux",
-        token: "powerworld",
-        target: TargetFormat::PowerWorld,
-    },
-    TransmissionFormat {
-        name: "egret JSON",
-        token: "egret-json",
-        target: TargetFormat::EgretJson,
-    },
-    TransmissionFormat {
-        name: "pandapower JSON",
-        token: "pandapower-json",
-        target: TargetFormat::PandapowerJson,
-    },
-    TransmissionFormat {
-        name: "Surge JSON",
-        token: "surge-json",
-        target: TargetFormat::SurgeJson,
-    },
-    TransmissionFormat {
-        name: "PSLF .epc",
-        token: "pslf",
-        target: TargetFormat::Pslf,
-    },
+        name,
+        token,
+        emission: Emission::ReadOnly,
+        family,
+        fixture: Some(fixture),
+    }
+}
+
+/// Every 1.0 transmission format. The writable ones are both source rows and
+/// target columns, in this order; the read only ones are source rows only and
+/// come last, so a target column index indexes this array directly.
+const TRANSMISSION_FORMATS: [TransmissionFormat; 18] = [
+    transmission("MATPOWER .m", "matpower", Emission::Document, Family::Case),
+    transmission(
+        "PowerModels JSON",
+        "powermodels-json",
+        Emission::Document,
+        Family::Case,
+    ),
+    transmission("PSS/E .raw 33", "psse", Emission::Document, Family::Case),
+    transmission(
+        "PSS/E RAWX 35",
+        "psse-rawx",
+        Emission::Document,
+        Family::Case,
+    ),
+    transmission(
+        "PowerWorld .aux",
+        "powerworld",
+        Emission::Document,
+        Family::Case,
+    ),
+    transmission("egret JSON", "egret-json", Emission::Document, Family::Case),
+    transmission(
+        "pandapower JSON",
+        "pandapower-json",
+        Emission::Document,
+        Family::Case,
+    ),
+    transmission("Surge JSON", "surge-json", Emission::Document, Family::Case),
+    transmission("PSLF .epc", "pslf", Emission::Document, Family::Case),
+    transmission("XIIDM 1.17", "xiidm", Emission::Document, Family::Exchange),
+    transmission("JIIDM 1.17", "jiidm", Emission::Document, Family::Exchange),
+    transmission("CGMES 3.0", "cgmes", Emission::Directory, Family::Exchange),
+    transmission(
+        "UCTE-DEF .uct",
+        "ucte",
+        Emission::Document,
+        Family::Exchange,
+    ),
+    transmission(
+        "PyPSA CSV",
+        "pypsa-csv",
+        Emission::Directory,
+        Family::Dataset,
+    ),
+    transmission(
+        "GridFM Parquet",
+        "gridfm",
+        Emission::Directory,
+        Family::Dataset,
+    ),
+    transmission(
+        "model JSON",
+        "model-json",
+        Emission::ModelJson,
+        Family::Dataset,
+    ),
+    read_only(
+        "IEEE CDF",
+        "ieee-cdf",
+        Family::Case,
+        "ieee-cdf/ieee14cdf.txt",
+    ),
+    read_only(
+        "DeepMind OPFData JSON",
+        "opfdata-json",
+        Family::Dataset,
+        "opfdataset/example_0.json",
+    ),
 ];
+
+/// The number of writable formats, which is the number of target columns.
+const TRANSMISSION_TARGETS: usize = 16;
+
+fn transmission_targets() -> impl Iterator<Item = (usize, TransmissionFormat)> {
+    TRANSMISSION_FORMATS
+        .into_iter()
+        .enumerate()
+        .filter(|(_, format)| format.emission != Emission::ReadOnly)
+}
 
 // The `→ PSLF .epc` column drops by 5 on every source whose buses carry no base
 // kV: the generator voltage setpoint now rides the bus `vsched` column, which is
@@ -710,18 +981,74 @@ const TRANSMISSION_FORMATS: [TransmissionFormat; 8] = [
 // carries that classification so XIIDM can preserve it. MATPOWER's legacy
 // `mpc.areas` table has only the area number and reference bus, so the PSS/E
 // source row's MATPOWER cell adds one declared field drop.
-const TRANSMISSION_WARNING_BASELINE: [[usize; 8]; 8] = [
-    [0, 1, 15, 15, 7, 15, 23, 14],
-    [0, 0, 15, 14, 6, 14, 22, 13],
-    [1, 1, 0, 2, 1, 3, 1, 2],
-    [0, 0, 0, 0, 0, 2, 0, 0],
-    [0, 0, 9, 9, 0, 8, 1, 7],
-    [1, 1, 8, 8, 1, 2, 1, 8],
-    [0, 0, 9, 9, 0, 7, 0, 7],
-    [0, 0, 1, 1, 0, 4, 3, 0],
+// Rows are sources and columns are targets, both in `TRANSMISSION_FORMATS`
+// order. Each cell sums the source parse, target write, and target readback
+// warnings over the six MATPOWER cases, or over the one vendored case a read
+// only source parses.
+//
+// The eight formats this table already held keep the counts recorded above,
+// except where a fix named in this file's history changed them. The eight
+// columns added here are new counts, derived by running the matrix and
+// attributing each one to its warning texts in the details report:
+//
+// - The `→ PSS/E RAWX 35` column matches `→ PSS/E .raw 33` wherever the two
+//   revisions state the same fields, and differs where revision 35 states
+//   more: a RAWX file carries branch names and twelve rating sets, and the
+//   revision 33 record layout carries neither.
+// - The `→ XIIDM 1.17` and `→ JIIDM 1.17` columns state, per case, the fields
+//   IIDM has no attribute for (generator and DC line dispatch cost, angle
+//   bounds, area swing bus and tolerance, the reverse power bound) and the
+//   values IIDM requires and a case format leaves unstated (the case date,
+//   the forecast distance, the source format, the validation level, and the
+//   substation and voltage level hierarchy the writer derives from buses).
+//   JIIDM adds twelve per file: the JSON writer states one finding per
+//   attribute it shortens, where the XML writer states none.
+// - The `→ CGMES 3.0` column is the largest by an order of magnitude, and for
+//   one reason: a CGMES profile set identifies every object by an mRID and
+//   states its class, container, and limit types as objects of their own, so a
+//   case format that states none of that has a field dropped per object rather
+//   than per file.
+// - The `→ UCTE-DEF .uct` column states the ten voltage levels a node code
+//   admits, the node code itself, the absent shunt and cost records, and the
+//   50 Hz synchronous area frequency.
+// - The `→ PyPSA CSV` column states the reactive limits, capability columns,
+//   and rating sets a PyPSA component CSV has no column for.
+// - The `→ GridFM Parquet` column states what the gridfm schema omits (HVDC,
+//   storage, areas, bus names, rate_b/rate_c, generator mbase and ramp limits,
+//   startup and shutdown costs) and the per bus load folding its table shape
+//   forces.
+// - The `→ model JSON` column is zero for every source but one: the network
+//   document states the whole typed model, so nothing is dropped. The
+//   pandapower row's single warning is its own parse declaring the absolute
+//   cost level a `pwl_cost` table leaves unstated.
+// - The `IEEE CDF` and `DeepMind OPFData JSON` rows parse one vendored case
+//   each, so their counts are per case rather than per six.
+const TRANSMISSION_WARNING_BASELINE: [[usize; TRANSMISSION_TARGETS]; 18] = [
+    [0, 1, 15, 15, 15, 7, 15, 23, 14, 76, 76, 301, 48, 15, 27, 0], // MATPOWER .m
+    [0, 0, 15, 15, 14, 6, 14, 22, 13, 75, 75, 300, 47, 14, 27, 0], // PowerModels JSON
+    [1, 1, 0, 0, 2, 1, 3, 1, 2, 38, 38, 256, 35, 9, 32, 0],        // PSS/E .raw 33
+    [1, 1, 0, 0, 2, 1, 3, 1, 2, 38, 38, 256, 35, 9, 32, 0],        // PSS/E RAWX 35
+    [0, 0, 0, 0, 0, 0, 2, 0, 0, 37, 37, 251, 33, 7, 32, 0],        // PowerWorld .aux
+    [0, 0, 9, 9, 9, 0, 8, 1, 7, 74, 74, 280, 42, 9, 27, 0],        // egret JSON
+    [1, 1, 8, 8, 8, 1, 2, 1, 8, 62, 62, 209, 59, 9, 28, 1],        // pandapower JSON
+    [0, 0, 9, 9, 9, 0, 7, 0, 7, 73, 73, 280, 42, 9, 27, 0],        // Surge JSON
+    [0, 0, 1, 1, 1, 0, 4, 3, 0, 44, 44, 255, 34, 8, 32, 0],        // PSLF .epc
+    [7, 7, 39, 39, 8, 7, 9, 7, 8, 12, 12, 354, 66, 15, 38, 6],     // XIIDM 1.17
+    [7, 7, 39, 39, 8, 7, 9, 7, 8, 12, 12, 354, 66, 15, 38, 6],     // JIIDM 1.17
+    [
+        244, 244, 311, 564, 244, 244, 245, 244, 244, 287, 287, 419, 295, 251, 276, 244,
+    ], // CGMES 3.0
+    [
+        30, 19, 18, 18, 30, 24, 18, 19, 30, 49, 49, 256, 13, 24, 37, 7,
+    ], // UCTE-DEF .uct
+    [0, 6, 14, 14, 14, 6, 9, 6, 12, 76, 76, 211, 44, 0, 27, 0],    // PyPSA CSV
+    [
+        28, 27, 35, 35, 35, 27, 30, 27, 33, 95, 95, 227, 67, 33, 54, 27,
+    ], // GridFM Parquet
+    [0, 1, 15, 15, 15, 7, 15, 23, 14, 76, 76, 301, 48, 15, 27, 0], // model JSON
+    [7, 7, 6, 6, 7, 7, 8, 7, 7, 14, 14, 36, 14, 8, 12, 6],         // IEEE CDF
+    [3, 2, 5, 5, 5, 3, 4, 2, 4, 33, 33, 59, 32, 5, 8, 2],          // DeepMind OPFData JSON
 ];
-
-const DEEPMIND_OPFDATA_WARNING_BASELINE: [usize; 8] = [3, 2, 5, 5, 3, 4, 2, 4];
 
 const TRANSMISSION_CASES: [(&str, &str); 6] = [
     ("case9", "case9.m"),
@@ -736,25 +1063,36 @@ struct TransmissionPayload {
     label: &'static str,
     network: BalancedNetwork,
     parse_warnings: Vec<String>,
-    core: TransmissionCore,
 }
 
 fn run_transmission_matrix() -> MatrixReport {
-    let mut sources: Vec<_> = TRANSMISSION_FORMATS.iter().map(|fmt| fmt.name).collect();
-    let targets = TRANSMISSION_FORMATS.iter().map(|fmt| fmt.name).collect();
+    let sources = TRANSMISSION_FORMATS.iter().map(|fmt| fmt.name).collect();
+    let targets = transmission_targets().map(|(_, fmt)| fmt.name).collect();
+    let groups = Family::ALL
+        .into_iter()
+        .map(|family| {
+            let columns = transmission_targets()
+                .enumerate()
+                .filter(|(_, (_, format))| format.family == family)
+                .map(|(column, _)| column)
+                .collect();
+            (family.title(), columns)
+        })
+        .collect();
     let mut cells = Vec::new();
     let mut failures = Vec::new();
 
     for (source_idx, source) in TRANSMISSION_FORMATS.iter().enumerate() {
         let payloads = transmission_payloads(*source);
         let mut row = Vec::new();
-        for (target_idx, target) in TRANSMISSION_FORMATS.iter().enumerate() {
+        for (column, (target_idx, target)) in transmission_targets().enumerate() {
             let mut cell = Cell::new(TRANSMISSION_WARNING_BASELINE[source_idx][target_idx]);
+            debug_assert_eq!(column, target_idx);
             match &payloads {
                 Ok(payloads) => {
                     for payload in payloads {
                         cell.record_warnings(SOURCE_PARSE, &payload.parse_warnings);
-                        validate_transmission_pair(payload, *target, &mut cell);
+                        validate_transmission_pair(payload, target, &mut cell);
                     }
                 }
                 Err(err) => cell.failures.push(err.clone()),
@@ -775,70 +1113,45 @@ fn run_transmission_matrix() -> MatrixReport {
         cells.push(row);
     }
 
-    let source = "DeepMind OPFData JSON";
-    let payload = deepmind_opfdata_payload();
-    let mut row = Vec::new();
-    for (target_idx, target) in TRANSMISSION_FORMATS.iter().enumerate() {
-        let mut cell = Cell::new(DEEPMIND_OPFDATA_WARNING_BASELINE[target_idx]);
-        match &payload {
-            Ok(payload) => {
-                cell.record_warnings(SOURCE_PARSE, &payload.parse_warnings);
-                validate_transmission_pair(payload, *target, &mut cell);
-            }
-            Err(err) => cell.failures.push(err.clone()),
-        }
-        if !cell.ok() {
-            failures.push(format!(
-                "transmission {source} -> {}: observed {} warnings, baseline {}; {}{}",
-                target.name,
-                cell.observed_warnings,
-                cell.baseline_warnings,
-                cell.failures.join("; "),
-                silent_loss_note(&cell),
-            ));
-        }
-        row.push(cell);
-    }
-    sources.push(source);
-    cells.push(row);
-
     MatrixReport {
         sources,
         targets,
-        case_count: TRANSMISSION_CASES.len() + 1,
+        groups,
+        case_count: TRANSMISSION_CASES.len(),
         cells,
         failures,
     }
 }
 
-fn deepmind_opfdata_payload() -> Result<TransmissionPayload, String> {
-    let parsed = parse_transmission_file(data("opfdataset/example_0.json"), Some("opfdata-json"))
-        .map_err(|err| format!("parse DeepMind OPFData fixture: {err}"))?;
-    let core = transmission_core(&parsed.network);
-    Ok(TransmissionPayload {
-        label: "official case 14 example",
-        network: parsed.network,
-        parse_warnings: parsed.warnings,
-        core,
-    })
-}
-
+/// The payloads a source row converts from: every MATPOWER case written into
+/// that source format and read back, so the row measures what that format
+/// carries rather than what MATPOWER carries. A read only format has no writer,
+/// so its row parses one vendored case instead.
 fn transmission_payloads(format: TransmissionFormat) -> Result<Vec<TransmissionPayload>, String> {
+    if let Some(fixture) = format.fixture {
+        let source = powerio_core::Source::open(data(fixture))
+            .map_err(|err| format!("open {fixture}: {err}"))?;
+        let parsed = parse_transmission_source(source, format.token)
+            .map_err(|err| format!("parse {fixture}: {err}"))?;
+        return Ok(vec![TransmissionPayload {
+            label: fixture,
+            network: parsed.network,
+            parse_warnings: parsed.warnings,
+        }]);
+    }
     TRANSMISSION_CASES
         .iter()
         .map(|(label, rel)| {
             let base =
                 parse_matpower_file(data(rel)).map_err(|err| format!("parse {rel}: {err}"))?;
-            let rendered = emit_transmission_value(&base, format.target)
+            let rendered = emit_transmission(&base, format)
                 .map_err(|err| format!("write {rel} as {}: {err}", format.name))?;
-            let parsed = parse_transmission_str(&rendered.text, format.token)
+            let parsed = parse_transmission_emitted(&rendered.emitted, format)
                 .map_err(|err| format!("read generated {rel} as {}: {err}", format.name))?;
-            let core = transmission_core(&parsed.network);
             Ok(TransmissionPayload {
                 label,
                 network: parsed.network,
                 parse_warnings: parsed.warnings,
-                core,
             })
         })
         .collect()
@@ -849,62 +1162,240 @@ fn validate_transmission_pair(
     target: TransmissionFormat,
     cell: &mut Cell,
 ) {
-    match emit_transmission_value(&payload.network, target.target) {
-        Ok(conversion) => {
-            cell.record_warnings(TARGET_WRITE, &conversion.render_diagnostics());
-            match parse_transmission_str(&conversion.text, target.token) {
-                Ok(parsed) => {
-                    cell.record_warnings(TARGET_READBACK, &parsed.warnings);
-                    let actual = transmission_core(&parsed.network);
-                    if actual != payload.core {
-                        cell.failures.push(format!(
-                            "{} core changed for {}: before {:?}, after {:?}",
-                            payload.label, target.name, payload.core, actual
-                        ));
-                    }
-                    record_model_diffs(
-                        payload.label,
-                        &transmission_value(&payload.network),
-                        &transmission_value(&parsed.network),
-                        cell,
-                    );
-                    match ybus_change(&payload.network, &parsed.network) {
-                        Ok(Some(diff)) => cell.failures.push(format!(
-                            "{} Y_bus changed for {}: {diff}",
-                            payload.label, target.name
-                        )),
-                        Ok(None) => {}
-                        // A network with no buildable admittance matrix is a
-                        // conversion failure. Reporting it as agreement is how
-                        // an invariant passes without checking anything.
-                        Err(side) => cell.failures.push(format!(
-                            "{} Y_bus could not be built for {} ({}) ",
-                            payload.label,
-                            target.name,
-                            match side {
-                                YbusUnavailable::Before => "source",
-                                YbusUnavailable::After => "result",
-                            }
-                        )),
-                    }
-                    if let Some(diff) = injection_change(&payload.network, &parsed.network) {
-                        cell.failures.push(format!(
-                            "{} bus injections moved for {}: {diff}",
-                            payload.label, target.name
-                        ));
-                    }
-                }
-                Err(err) => cell.failures.push(format!(
-                    "{} output did not parse as {}: {err}",
-                    payload.label, target.name
-                )),
-            }
+    let conversion = match emit_transmission(&payload.network, target) {
+        Ok(conversion) => conversion,
+        Err(err) => {
+            cell.failures.push(format!(
+                "{} did not write as {}: {err}",
+                payload.label, target.name
+            ));
+            return;
         }
-        Err(err) => cell.failures.push(format!(
-            "{} did not write as {}: {err}",
+    };
+    cell.record_warnings(TARGET_WRITE, &conversion.diagnostics);
+    let parsed = match parse_transmission_emitted(&conversion.emitted, target) {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            cell.failures.push(format!(
+                "{} output did not parse as {}: {err}",
+                payload.label, target.name
+            ));
+            return;
+        }
+    };
+    cell.record_warnings(TARGET_READBACK, &parsed.warnings);
+    let held = network_a_target_holds(&payload.network, target);
+    let tolerance = electrical_tolerance(target, &held);
+    let actual = transmission_core(&parsed.network);
+    let expected = transmission_core(&held);
+    if !expected.agrees_within(&actual, tolerance) {
+        cell.failures.push(format!(
+            "{} core changed for {}: before {expected:?}, after {actual:?}",
             payload.label, target.name
-        )),
+        ));
     }
+    record_model_diffs(
+        payload.label,
+        &transmission_value(&payload.network),
+        &transmission_value(&parsed.network),
+        cell,
+    );
+    // The electrical comparison runs against what the target's record set can
+    // hold, which is what its writer said it wrote.
+    //
+    // The admittance matrix and the injections are compared by bus id first.
+    // A format that identifies a bus by a name rather than a number (IIDM's
+    // `<bus id="...">`, CIM's mRID, a UCTE-DEF node code) states no bus number,
+    // so its reader numbers the buses it reads and the id keyed comparison is
+    // asking the wrong question; the same power flow problem up to bus
+    // relabeling is what such a conversion can promise, and the renumbering
+    // itself stays a declared loss through the model comparison above.
+    let numbered = match ybus_change_within(&held, &parsed.network, tolerance) {
+        Ok(Some(diff)) => Some(format!("Y_bus changed: {diff}")),
+        Ok(None) => injection_change_within(&held, &parsed.network, tolerance)
+            .map(|diff| format!("bus injections moved: {diff}")),
+        // A network with no buildable admittance matrix is a conversion
+        // failure. Reporting it as agreement is how an invariant passes
+        // without checking anything.
+        Err(side) => {
+            cell.failures.push(format!(
+                "{} Y_bus could not be built for {} ({})",
+                payload.label,
+                target.name,
+                match side {
+                    YbusUnavailable::Before => "source",
+                    YbusUnavailable::After => "result",
+                }
+            ));
+            return;
+        }
+    };
+    if numbered.is_none() {
+        return;
+    }
+    if states_impedances_the_target_cannot(&held, target) {
+        return;
+    }
+    if let Some(diff) = electrical_change_up_to_relabeling(&held, &parsed.network, tolerance) {
+        cell.failures.push(format!(
+            "{} electrical problem changed for {}: {diff}",
+            payload.label, target.name
+        ));
+    }
+}
+
+/// Whether the target's own numeric fields cannot state this network's
+/// impedances at all.
+///
+/// A UCTE-DEF element record states resistance and reactance in six
+/// characters, at the scale of a transmission line in ohms. A network whose
+/// nominal voltage sits below the lowest UCTE voltage level states impedances
+/// of thousandths of an ohm, which those fields round to one digit or to zero,
+/// so the admittance the reader rebuilds is a different one. The element counts
+/// and the power totals still hold, and the writer reports the voltage level it
+/// wrote each bus under.
+fn states_impedances_the_target_cannot(
+    network: &BalancedNetwork,
+    target: TransmissionFormat,
+) -> bool {
+    /// The lowest of the ten UCTE-DEF voltage levels, in kV.
+    const LOWEST_UCTE_LEVEL_KV: f64 = 27.0;
+    target.token == "ucte"
+        && network
+            .buses()
+            .iter()
+            .any(|bus| bus.base_kv > 0.0 && bus.base_kv < LOWEST_UCTE_LEVEL_KV)
+}
+
+/// The source network reduced to what IIDM's topology can state.
+///
+/// IIDM states connectivity in a node breaker voltage level through switch
+/// positions: a disconnected terminal is one whose switches to the busbar are
+/// open. A level with no switch has no position to open, so an element that
+/// states an out of service terminal there comes back in service. The writer
+/// reports the same loss.
+fn network_iidm_holds(network: &BalancedNetwork) -> BalancedNetwork {
+    let Some(detailed) = network.detailed_connectivity().as_deref() else {
+        return network.clone();
+    };
+    let levels_with_switches = detailed
+        .switches
+        .iter()
+        .map(|switch| switch.voltage_level.clone())
+        .collect::<std::collections::HashSet<_>>();
+    let unstated = |component_type: &str, identity: Option<&str>| {
+        let Some(identity) = identity else {
+            return false;
+        };
+        detailed.terminals.iter().any(|terminal| {
+            terminal.node.is_some()
+                && !terminal.connected
+                && !levels_with_switches.contains(&terminal.voltage_level)
+                && terminal.equipment.component_type() == component_type
+                && terminal.equipment.local_id() == identity
+        })
+    };
+    let mut held = network.clone();
+    for branch in held.branches_mut() {
+        if unstated("branch", branch.uid.as_deref()) {
+            branch.in_service = true;
+        }
+    }
+    for generator in held.generators_mut() {
+        if unstated("generator", generator.uid.as_deref()) {
+            generator.in_service = true;
+        }
+    }
+    for load in held.loads_mut() {
+        if unstated("load", load.uid.as_deref()) {
+            load.in_service = true;
+        }
+    }
+    for shunt in held.shunts_mut() {
+        if unstated("shunt", shunt.uid.as_deref()) {
+            shunt.in_service = true;
+        }
+    }
+    for storage in held.storage_mut() {
+        if unstated("storage", storage.uid.as_deref()) {
+            storage.in_service = true;
+        }
+    }
+    held
+}
+
+/// The relative tolerance the electrical comparison holds a target to.
+///
+/// A format that states each value in a fixed width field cannot return more
+/// digits than the field holds. A UCTE-DEF element record states resistance,
+/// reactance, and susceptance in six characters, so a value comes back rounded
+/// to about five significant digits and a diagonal entry, which sums several of
+/// them, loses another decade. A network whose nominal voltage sits below the
+/// lowest UCTE voltage level keeps far fewer: at one kilovolt a line impedance
+/// is thousandths of an ohm and six characters hold one or two digits of it.
+/// Every other target states its values as decimal numbers of the width the
+/// value needs.
+fn electrical_tolerance(target: TransmissionFormat, network: &BalancedNetwork) -> f64 {
+    /// The lowest of the ten UCTE-DEF voltage levels, in kV.
+    const LOWEST_UCTE_LEVEL_KV: f64 = 27.0;
+    if target.token != "ucte" {
+        return 1e-8;
+    }
+    let below_the_lowest_level = network
+        .buses()
+        .iter()
+        .any(|bus| bus.base_kv > 0.0 && bus.base_kv < LOWEST_UCTE_LEVEL_KV);
+    if below_the_lowest_level { 5e-2 } else { 1e-3 }
+}
+
+/// The source network reduced to the records the target format defines.
+///
+/// A field the target cannot state is a warning and a model difference, and
+/// the electrical invariants still hold across it. A whole record the target
+/// has no place for is different: dropping it changes the power flow problem,
+/// so the comparison runs against the network the format can hold and the
+/// writer reports the same loss. Every reduction here names a record absent
+/// from the target format's own definition, and no reduction moves power
+/// between buses.
+fn network_a_target_holds(
+    network: &BalancedNetwork,
+    target: TransmissionFormat,
+) -> BalancedNetwork {
+    if matches!(target.token, "xiidm" | "jiidm") {
+        return network_iidm_holds(network);
+    }
+    if target.token != "ucte" {
+        return network.clone();
+    }
+    // UCTE-DEF states one node record per bus with one generation set and no
+    // shunt record: a bus shunt has no record at all, a generator has no
+    // status field, so an out of service machine states zero generation at a
+    // node the reader still sees as a generator bus, and several machines at
+    // one bus state one generation.
+    let mut held = network.clone();
+    held.shunts_mut().clear();
+    for generator in held.generators_mut() {
+        if !generator.in_service {
+            generator.in_service = true;
+            generator.pg = 0.0;
+            generator.qg = 0.0;
+        }
+    }
+    let mut merged: Vec<powerio_tx::Generator> = Vec::new();
+    for generator in held.generators() {
+        match merged
+            .iter_mut()
+            .find(|existing| existing.bus == generator.bus)
+        {
+            Some(existing) => {
+                existing.pg += generator.pg;
+                existing.qg += generator.qg;
+            }
+            None => merged.push(generator.clone()),
+        }
+    }
+    *held.generators_mut() = merged;
+    held
 }
 
 /// Record every typed-model field the conversion changed. Yellow cells keep
@@ -1025,6 +1516,92 @@ struct DistributionPayload {
     core: DistributionCore,
 }
 
+/// The geographic layer's own matrix: one source and one target.
+///
+/// A layer is a `powerio.GeoLayer` rather than a network, and no grid exchange
+/// format states a standalone layer, so there is no cell to share with the
+/// network matrix. The one cell holds the canonical `.geo.json` document to the
+/// same rule every other cell answers to: what the source stated survives, and
+/// a warning names what the target cannot state.
+fn run_geo_layer_matrix() -> MatrixReport {
+    const SOURCE: &str = "PowerWorld .aux substation coordinates";
+    const TARGET: &str = "geo-json";
+    let mut cell = Cell::new(GEO_LAYER_WARNING_BASELINE);
+    let mut failures = Vec::new();
+    match geo_layer_cell(&mut cell) {
+        Ok(()) => {}
+        Err(err) => cell.failures.push(err),
+    }
+    if !cell.ok() {
+        failures.push(format!(
+            "geo layer {SOURCE} -> {TARGET}: observed {} warnings, baseline {}; {}{}",
+            cell.observed_warnings,
+            cell.baseline_warnings,
+            cell.failures.join("; "),
+            silent_loss_note(&cell),
+        ));
+    }
+    MatrixReport {
+        sources: vec![SOURCE],
+        targets: vec![TARGET],
+        groups: vec![("Into the geographic layer document", vec![0])],
+        case_count: 1,
+        cells: vec![vec![cell]],
+        failures,
+    }
+}
+
+/// The layer states no loss of its own: every feature the aux substation block
+/// places has a `.geo.json` feature.
+const GEO_LAYER_WARNING_BASELINE: usize = 0;
+
+fn geo_layer_cell(cell: &mut Cell) -> Result<(), String> {
+    let text = std::fs::read_to_string(data("powerworld/ACTIVSg200.aux"))
+        .map_err(|err| format!("read the aux fixture: {err}"))?;
+    let layer = powerio::to_geo_layer_from_aux_text(&text)
+        .map_err(|err| format!("read the aux substation coordinates: {err}"))?;
+    if layer.features.is_empty() {
+        return Err("the aux fixture states no substation coordinates".to_owned());
+    }
+    let module = powerio_core::PioModule::new(powerio::PioValue::GeoLayer(layer.clone()));
+    let destination = powerio_core::Destination::memory("layer").map_err(|err| err.to_string())?;
+    let result = powerio::emit(&module, "geo-json", destination).map_err(|err| err.to_string())?;
+    cell.record_warnings(
+        TARGET_WRITE,
+        &powerio_core::render_diagnostics(result.diagnostics()),
+    );
+    let powerio_core::EmittedOutput::Memory { mut artifacts } = result.into_output() else {
+        return Err("a memory destination returned path output".to_owned());
+    };
+    let artifact = artifacts
+        .pop()
+        .filter(|_| artifacts.is_empty())
+        .ok_or_else(|| "geo layer emission returned several artifacts".to_owned())?;
+    let source = powerio_core::Source::from_memory("layer.geo.json", artifact.into_bytes())
+        .map_err(|err| err.to_string())?;
+    let options = powerio::ParseOptions::default()
+        .format("geo-json")
+        .map_err(|err| err.to_string())?;
+    let back = powerio::parse_with_options(source, &options).map_err(|err| err.to_string())?;
+    cell.record_warnings(
+        TARGET_READBACK,
+        &powerio_core::render_diagnostics(&back.diagnostics),
+    );
+    let powerio::PioValue::GeoLayer(read_back) = &back.value else {
+        return Err(format!(
+            "the geo layer document parsed as {}",
+            back.value.type_name()
+        ));
+    };
+    record_model_diffs(
+        "aux substation coordinates",
+        &serde_json::to_value(&layer).map_err(|err| err.to_string())?,
+        &serde_json::to_value(read_back).map_err(|err| err.to_string())?,
+        cell,
+    );
+    Ok(())
+}
+
 fn run_distribution_matrix() -> MatrixReport {
     let formats: Vec<_> = DISTRIBUTION_FORMATS.iter().map(|fmt| fmt.name).collect();
     let mut cells = Vec::new();
@@ -1060,9 +1637,11 @@ fn run_distribution_matrix() -> MatrixReport {
         cells.push(row);
     }
 
+    let groups = vec![("Into a distribution format", (0..formats.len()).collect())];
     MatrixReport {
         sources: formats.clone(),
         targets: formats,
+        groups,
         case_count: DISTRIBUTION_CASES.len(),
         cells,
         failures,
@@ -1335,41 +1914,44 @@ struct ParsedTransmission {
     warnings: Vec<String>,
 }
 
-fn parse_module_from(
+/// Parse one source under a declared format through the facade, which is the
+/// operation a caller has and the only one that reads a dataset directory.
+///
+/// A dataset directory states one network per scenario and a PyPSA folder one
+/// per snapshot; the matrix writes one snapshot, so it reads the first entry
+/// back.
+fn parse_transmission_source(
     source: powerio_core::Source,
-) -> Result<ParsedTransmission, powerio_core::Error> {
-    let module = powerio_tx::format::parse(source)?;
+    from: &str,
+) -> Result<ParsedTransmission, String> {
+    let format = powerio_core::FormatId::new(from.to_ascii_lowercase().replace('_', "-"))
+        .map_err(|err| err.to_string())?;
+    let options = powerio::ParseOptions::default().format_id(format);
+    let module = powerio::parse_with_options(source, &options).map_err(|err| err.to_string())?;
     let warnings = module
         .diagnostics
         .iter()
         .map(|d| format!("{}: {}", d.code(), d.message()))
         .collect();
-    Ok(ParsedTransmission {
-        warnings,
-        network: module.into_value(),
-    })
+    let network = balanced_network(&module.value)
+        .ok_or_else(|| format!("{from} parsed as {}", module.value.type_name()))?
+        .clone();
+    Ok(ParsedTransmission { network, warnings })
 }
 
-fn parse_transmission_file(
-    path: impl AsRef<std::path::Path>,
-    from: Option<&str>,
-) -> Result<ParsedTransmission, powerio_core::Error> {
-    let mut source = powerio_core::Source::open(path.as_ref())?;
-    if let Some(token) = from {
-        source = source.with_format(powerio_core::FormatId::new(
-            token.to_ascii_lowercase().replace('_', "-"),
-        )?);
+/// The balanced network a parsed module carries, whatever collection the format
+/// states it in.
+fn balanced_network(value: &powerio::PioValue) -> Option<&BalancedNetwork> {
+    match value {
+        powerio::PioValue::BalancedNetwork(network) => Some(network),
+        powerio::PioValue::ScenarioSet(scenarios) => scenarios.get_at(0).and_then(balanced_network),
+        powerio::PioValue::TimeSeries(series) => series.get(0).and_then(balanced_network),
+        powerio::PioValue::BalancedOperatingPoint(point) => Some(point.network()),
+        // A release of solved cases (DeepMind OPFData) parses as the solution
+        // it states; the network it solves is the snapshot a case format
+        // carries.
+        powerio::PioValue::AcOpfSolution(solution) => Some(solution.network()),
+        powerio::PioValue::AcPfSolution(solution) => Some(solution.network()),
+        _ => None,
     }
-    parse_module_from(source)
-}
-
-fn parse_transmission_str(
-    text: &str,
-    from: &str,
-) -> Result<ParsedTransmission, powerio_core::Error> {
-    let source = powerio_core::Source::from_memory("<memory>", text.as_bytes().to_vec())?
-        .with_format(powerio_core::FormatId::new(
-            from.to_ascii_lowercase().replace('_', "-"),
-        )?);
-    parse_module_from(source)
 }

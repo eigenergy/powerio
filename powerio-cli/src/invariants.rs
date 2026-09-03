@@ -115,92 +115,131 @@ impl std::fmt::Display for InjectionChange {
     }
 }
 
-/// `after` with its bus numbers restated as `before`'s, in bus table order, or
-/// `None` when the two already agree or the tables differ in length.
-///
-/// A format that identifies a bus by a name rather than a number (IIDM's
-/// `<bus id="...">`, CIM's mRID) states no bus number, so a reader numbers the
-/// buses it finds and those numbers are a fresh calculation view rather than
-/// the source's. What the conversion does state is the order: each writer emits
-/// the buses in table order and each reader numbers them in the order it reads
-/// them. Relabeling by position therefore compares the network the source
-/// described rather than two numberings of it.
-///
-/// The relabeling is not a licence to lose identity: `id`, `uid`, and `name`
-/// are typed fields, so the model comparison reports every change and a cell
-/// claiming zero warnings fails on it.
-#[must_use]
-pub fn relabel_buses_in_table_order(
-    before: &BalancedNetwork,
-    after: &BalancedNetwork,
-) -> Option<BalancedNetwork> {
-    if before.buses().len() != after.buses().len() {
-        return None;
-    }
-    let renumbering: BTreeMap<powerio_tx::BusId, powerio_tx::BusId> = after
-        .buses()
-        .iter()
-        .zip(before.buses())
-        .filter(|(after, before)| after.id != before.id)
-        .map(|(after, before)| (after.id, before.id))
-        .collect();
-    if renumbering.is_empty() {
-        return None;
-    }
-    let renumbered = |bus: powerio_tx::BusId| renumbering.get(&bus).copied().unwrap_or(bus);
-    let mut out = after.clone();
-    for bus in out.buses_mut() {
-        bus.id = renumbered(bus.id);
-    }
-    for branch in out.branches_mut() {
-        branch.from = renumbered(branch.from);
-        branch.to = renumbered(branch.to);
-        if let Some(control) = branch.control.as_mut() {
-            control.controlled_bus = control.controlled_bus.map(renumbered);
-        }
-    }
-    for switch in out.switches_mut() {
-        switch.from = renumbered(switch.from);
-        switch.to = renumbered(switch.to);
-    }
-    for load in out.loads_mut() {
-        load.bus = renumbered(load.bus);
-    }
-    for shunt in out.shunts_mut() {
-        shunt.bus = renumbered(shunt.bus);
-        if let Some(control) = shunt.control.as_mut() {
-            control.control_bus = control.control_bus.map(renumbered);
-        }
-    }
-    for compensator in out.static_var_compensators_mut() {
-        compensator.bus = renumbered(compensator.bus);
-    }
-    for generator in out.generators_mut() {
-        generator.bus = renumbered(generator.bus);
-        generator.regulated_bus = generator.regulated_bus.map(renumbered);
-    }
-    for line in out.hvdc_mut() {
-        line.from = renumbered(line.from);
-        line.to = renumbered(line.to);
-    }
-    for storage in out.storage_mut() {
-        storage.bus = renumbered(storage.bus);
-    }
-    for area in out.areas_mut() {
-        area.slack_bus = area.slack_bus.map(renumbered);
-    }
-    for transformer in out.transformers_3w_mut() {
-        for winding in &mut transformer.windings {
-            winding.bus = renumbered(winding.bus);
-            if let Some(control) = winding.control.as_mut() {
-                control.controlled_bus = control.controlled_bus.map(renumbered);
-            }
-        }
-    }
-    Some(out)
+/// One bus row of the relabeling-free electrical digest: the bus's own
+/// admittance and its injections.
+#[derive(Debug, Clone, PartialEq)]
+struct BusRow {
+    diagonal: (f64, f64),
+    injections: [f64; 4],
 }
 
-/// Why a `Y_bus` comparison produced no answer.
+/// The electrical problem compared up to bus relabeling, for a target format
+/// that states no bus number.
+///
+/// Every bus contributes its diagonal admittance and its four injection
+/// columns, every branch its off-diagonal admittance, and the two collections
+/// are compared as sorted multisets. That is the power flow problem itself: an
+/// admittance that changed, an injection that moved to a bus with different
+/// neighbours, or an element that vanished all show up, while a renumbering
+/// alone does not. Two buses carrying identical rows are interchangeable, and
+/// exchanging them is the same power flow problem.
+///
+/// Returns the first row that disagrees, in the digest's own order.
+#[must_use]
+pub fn electrical_change_up_to_relabeling(
+    before: &BalancedNetwork,
+    after: &BalancedNetwork,
+    tolerance: f64,
+) -> Option<String> {
+    // Where every bus states a nominal voltage, the digest holds physical
+    // admittance: a format that admits only a fixed set of voltage levels
+    // writes a 345 kV case under the 330 kV level, and the per-unit values move
+    // with the base while the network does not. Where a bus states none, the
+    // writer divided by the same substituted nominal voltage the reader
+    // multiplies back, so the per-unit values are the comparable ones.
+    let physical = [before, after].iter().all(|net| {
+        net.buses()
+            .iter()
+            .all(|bus| bus.base_kv.is_finite() && bus.base_kv > 0.0)
+    });
+    let digest = |net: &BalancedNetwork| -> Option<(Vec<BusRow>, Vec<(f64, f64)>)> {
+        let nominal = net
+            .buses()
+            .iter()
+            .map(|bus| (bus.id.0, bus.base_kv))
+            .collect::<BTreeMap<_, _>>();
+        let scale = |from: usize, to: usize| -> f64 {
+            if !physical {
+                return 1.0;
+            }
+            let voltage = |bus: usize| nominal.get(&bus).copied().unwrap_or(1.0);
+            net.base_mva() / (voltage(from) * voltage(to))
+        };
+        let view = powerio_matrix::IndexedNetwork::new(net);
+        let parts =
+            powerio_matrix::calc_admittance_matrix(&view, &powerio_matrix::BuildOptions::default())
+                .ok()?;
+        let mut entries = BTreeMap::<(usize, usize), (f64, f64)>::new();
+        for (value, (i, j)) in &parts.g {
+            entries
+                .entry((view.bus_id(i).0, view.bus_id(j).0))
+                .or_insert((0.0, 0.0))
+                .0 = *value;
+        }
+        for (value, (i, j)) in &parts.b {
+            entries
+                .entry((view.bus_id(i).0, view.bus_id(j).0))
+                .or_insert((0.0, 0.0))
+                .1 = *value;
+        }
+        let injections = per_bus(net, true);
+        let mut rows = Vec::new();
+        let mut off_diagonal = Vec::new();
+        for ((from, to), value) in entries {
+            let value = (value.0 * scale(from, to), value.1 * scale(from, to));
+            if from == to {
+                rows.push(BusRow {
+                    diagonal: value,
+                    injections: injections.get(&from).copied().unwrap_or_default(),
+                });
+            } else {
+                off_diagonal.push(value);
+            }
+        }
+        let key = |value: &(f64, f64)| (value.0.to_bits(), value.1.to_bits());
+        rows.sort_by_key(|row| (key(&row.diagonal), row.injections.map(f64::to_bits)));
+        off_diagonal.sort_by_key(key);
+        Some((rows, off_diagonal))
+    };
+    let (before_rows, before_off) = digest(before)?;
+    let (after_rows, after_off) = digest(after)?;
+    if before_rows.len() != after_rows.len() {
+        return Some(format!(
+            "{} bus admittance row(s) became {}",
+            before_rows.len(),
+            after_rows.len()
+        ));
+    }
+    if before_off.len() != after_off.len() {
+        return Some(format!(
+            "{} off-diagonal admittance entr(ies) became {}",
+            before_off.len(),
+            after_off.len()
+        ));
+    }
+    for (before, after) in before_rows.iter().zip(&after_rows) {
+        let moved = beyond_tol(before.diagonal.0, after.diagonal.0, tolerance)
+            || beyond_tol(before.diagonal.1, after.diagonal.1, tolerance)
+            || before
+                .injections
+                .iter()
+                .zip(&after.injections)
+                .any(|(before, after)| beyond_tol(*before, *after, tolerance));
+        if moved {
+            return Some(format!("bus row {before:?} became {after:?}"));
+        }
+    }
+    for (before, after) in before_off.iter().zip(&after_off) {
+        if beyond_tol(before.0, after.0, tolerance) || beyond_tol(before.1, after.1, tolerance) {
+            return Some(format!(
+                "off-diagonal admittance {before:?} became {after:?}"
+            ));
+        }
+    }
+    None
+}
+
+/// Why a `Y_bus` comparison produced no answer./// Why a `Y_bus` comparison produced no answer.
 ///
 /// Distinguished from "the matrices agree" on purpose: a network the matrix
 /// builder refuses is a conversion failure, and reporting it as agreement is
@@ -240,6 +279,22 @@ pub enum YbusUnavailable {
 pub fn ybus_change(
     before: &BalancedNetwork,
     after: &BalancedNetwork,
+) -> Result<Option<YbusChange>, YbusUnavailable> {
+    ybus_change_within(before, after, ELECTRICAL_TOL)
+}
+
+/// [`ybus_change`] under a stated relative tolerance, for a format that states
+/// each value in a fixed width field and so cannot return more digits than the
+/// field holds.
+///
+/// # Errors
+///
+/// Returns [`YbusUnavailable`] when either side has no buildable admittance
+/// matrix.
+pub fn ybus_change_within(
+    before: &BalancedNetwork,
+    after: &BalancedNetwork,
+    tolerance: f64,
 ) -> Result<Option<YbusChange>, YbusUnavailable> {
     let nominal = |net: &BalancedNetwork| -> BTreeMap<usize, f64> {
         net.buses()
@@ -281,7 +336,7 @@ pub fn ybus_change(
         let (gb, bb) = b.get(key).copied().unwrap_or((0.0, 0.0));
         let scale = base_ratio(key.0) * base_ratio(key.1);
         let (gb, bb) = (gb * scale, bb * scale);
-        if beyond_tol(ga, gb, ELECTRICAL_TOL) || beyond_tol(ba, bb, ELECTRICAL_TOL) {
+        if beyond_tol(ga, gb, tolerance) || beyond_tol(ba, bb, tolerance) {
             return Ok(Some(YbusChange {
                 from_bus: key.0,
                 to_bus: key.1,
@@ -315,11 +370,29 @@ pub fn injection_change(
     before: &BalancedNetwork,
     after: &BalancedNetwork,
 ) -> Option<InjectionChange> {
-    let change = first_moved(&per_bus(before, true), &per_bus(after, true), AC_INJECTIONS)?;
+    injection_change_within(before, after, ELECTRICAL_TOL)
+}
+
+/// [`injection_change`] under a stated relative tolerance, for a format that
+/// states each value in a fixed width field and so cannot return more digits
+/// than the field holds.
+#[must_use]
+pub fn injection_change_within(
+    before: &BalancedNetwork,
+    after: &BalancedNetwork,
+    tolerance: f64,
+) -> Option<InjectionChange> {
+    let change = first_moved(
+        &per_bus(before, true),
+        &per_bus(after, true),
+        AC_INJECTIONS,
+        tolerance,
+    )?;
     let status_only = first_moved(
         &per_bus(before, false),
         &per_bus(after, false),
         AC_INJECTIONS,
+        tolerance,
     )
     .is_none();
     Some(InjectionChange {
@@ -414,11 +487,13 @@ pub fn dc_terminal_change(
         &per_bus_dc(before, true),
         &per_bus_dc(after, true),
         DC_TERMINALS,
+        ELECTRICAL_TOL,
     )?;
     let status_only = first_moved(
         &per_bus_dc(before, false),
         &per_bus_dc(after, false),
         DC_TERMINALS,
+        ELECTRICAL_TOL,
     )
     .is_none();
     Some(InjectionChange {
@@ -436,12 +511,13 @@ fn first_moved<const N: usize>(
     a: &BTreeMap<usize, [f64; N]>,
     b: &BTreeMap<usize, [f64; N]>,
     quantities: [Injection; N],
+    tolerance: f64,
 ) -> Option<InjectionChange> {
     for key in a.keys().chain(b.keys().filter(|k| !a.contains_key(*k))) {
         let x = a.get(key).copied().unwrap_or([0.0; N]);
         let y = b.get(key).copied().unwrap_or([0.0; N]);
         for (i, quantity) in quantities.into_iter().enumerate() {
-            if beyond_tol(x[i], y[i], ELECTRICAL_TOL) {
+            if beyond_tol(x[i], y[i], tolerance) {
                 return Some(InjectionChange {
                     bus: *key,
                     quantity,
@@ -522,6 +598,28 @@ pub struct TransmissionCore {
 
 fn milli(x: f64) -> i64 {
     (x * 1e3).round() as i64
+}
+
+impl TransmissionCore {
+    /// Whether two cores state the same case under a relative tolerance on the
+    /// power totals.
+    ///
+    /// Element counts are compared exactly. A format that states each value in
+    /// a fixed width field returns fewer digits than the total carries, so the
+    /// totals are compared within `tolerance`.
+    #[must_use]
+    pub fn agrees_within(&self, other: &Self, tolerance: f64) -> bool {
+        let totals = |core: &Self| [core.load_p, core.load_q, core.gen_p, core.base_mva];
+        self.buses == other.buses
+            && self.branches == other.branches
+            && self.generators == other.generators
+            && self.loads == other.loads
+            && self.shunts == other.shunts
+            && totals(self)
+                .into_iter()
+                .zip(totals(other))
+                .all(|(before, after)| !beyond_tol(before as f64, after as f64, tolerance))
+    }
 }
 
 #[must_use]
