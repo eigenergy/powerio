@@ -78,7 +78,7 @@ fn common_aliases_resolve_without_exposing_component_enums() {
 #[test]
 fn gridfm_emission_without_the_feature_names_the_feature() {
     let source = powerio::Source::open("../tests/data/case9.m").unwrap();
-    let module = powerio::parse(source, None).unwrap();
+    let module = powerio::parse(source).unwrap();
     let dir = std::env::temp_dir().join(format!("powerio-gridfm-absent-{}", std::process::id()));
     let error = powerio::emit(&module, "gridfm", powerio::Destination::path(&dir)).unwrap_err();
     let message = error.to_string();

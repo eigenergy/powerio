@@ -10,7 +10,11 @@ fn memory_source(name: &str, text: &str) -> Source {
 }
 
 fn parse_failure(name: &str, text: &str, format: &str) -> Error {
-    powerio::parse(memory_source(name, text), Some(format)).expect_err("the case is malformed")
+    powerio::parse_with_options(
+        memory_source(name, text),
+        &powerio::ParseOptions::default().format(format).unwrap(),
+    )
+    .expect_err("the case is malformed")
 }
 
 /// The one span of the diagnostic that ended the operation.
@@ -138,8 +142,11 @@ fn a_psse_warning_covers_the_multi_line_record_it_came_from() {
         "{TRANSFORMER_LINE_1}\n{TRANSFORMER_LINE_2}\n{TRANSFORMER_LINE_3}\n{TRANSFORMER_LINE_4}"
     );
     let text = raw_after_buses(&format!("{record}\n"));
-    let module: PioModule<PioValue> =
-        powerio::parse(memory_source("warn.raw", &text), Some("psse")).unwrap();
+    let module: PioModule<PioValue> = powerio::parse_with_options(
+        memory_source("warn.raw", &text),
+        &powerio::ParseOptions::default().format("psse").unwrap(),
+    )
+    .unwrap();
     let substituted: Vec<_> = module
         .diagnostics
         .iter()

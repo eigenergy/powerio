@@ -8,31 +8,62 @@
 //! dynamic value boundary: [`PioValue`], [`parse`], [`emit`], [`serialize`],
 //! and [`deserialize`].
 //!
-//! [`parse`] compiles one [`Source`] into `PioModule<PioValue>`, routing to
-//! whichever built in family claims it.
-//! Inspect the value with ordinary enum matching and emit the module without
-//! discarding its source or diagnostics:
+//! [`parse`] compiles one input into `PioModule<PioValue>`, routing to
+//! whichever built in family claims it. Inspect the value with ordinary enum
+//! matching and emit the module without discarding its input or diagnostics:
 //!
 //! ```no_run
-//! let source = powerio::Source::open("case9.m")?;
-//! let module = powerio::parse(source, None)?;
+//! let module = powerio::parse("case9.m")?;
 //! match module.value() {
 //!     powerio::PioValue::BalancedNetwork(network) => {
 //!         println!("{} buses", network.buses().len());
 //!     }
 //!     other => println!("parsed {}", other.type_name()),
 //! }
-//! powerio::emit(
-//!     &module,
-//!     "matpower",
-//!     powerio::Destination::path("copy.m"),
-//! )?;
+//! powerio::emit(&module, "matpower", "copy.m")?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
-//! Files, directories, and memory buffers all enter through [`Source`], so
-//! the operation does not multiply into path-, text-, and byte-specific
-//! parse verbs.
+//! A file name, a directory name, and content already in memory all reach the
+//! same operation, so it does not multiply into name-, text-, and
+//! byte-specific verbs:
+//!
+//! ```no_run
+//! let from_file = powerio::parse("case9.m")?;
+//! let from_directory = powerio::parse("pypsa_case/")?;
+//! let from_memory = powerio::parse(std::fs::read("case9.egret.json")?)?;
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! Content in memory carries the name `<memory>`, which identifies no format,
+//! so a format detected from a file extension rather than from the document
+//! itself is either declared or named:
+//!
+//! ```no_run
+//! let declared = powerio::parse_with_options(
+//!     std::fs::read("case9.m")?,
+//!     &powerio::ParseOptions::default().format("matpower")?,
+//! )?;
+//! let named = powerio::parse(powerio::Source::from_memory(
+//!     "case9.m",
+//!     std::fs::read("case9.m")?,
+//! )?)?;
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! [`parse_with_options`] selects the parser explicitly and widens the
+//! directory a format may refer to further files beneath. [`Source`] and
+//! [`Destination`] remain the advanced input and output: a source carrying
+//! named buffers for a multi-file case in memory, and a memory destination
+//! with its artifact root name.
+//!
+//! ```no_run
+//! let module = powerio::parse_with_options(
+//!     "case.data",
+//!     &powerio::ParseOptions::default().format("psse")?,
+//! )?;
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 /// The facade version recorded on producers and stored modules.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -282,6 +313,44 @@ pub use powerio_prob::OperatingPoint;
 mod value;
 pub use value::{PioScenarioSet, PioTimeSeries, PioValue};
 
+/// Optional configuration for [`parse_with_options`]. Every field defaults to
+/// inference, so [`ParseOptions::default`] is what [`parse`] uses.
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
+pub struct ParseOptions {
+    /// The parser selected by its stable format token rather than inferred
+    /// from the input's name and content.
+    pub format: Option<powerio_core::FormatId>,
+    /// The directory beneath which a format may refer to further files,
+    /// widening the default of the input file's own directory.
+    pub acquisition_root: Option<std::path::PathBuf>,
+}
+
+impl ParseOptions {
+    /// Select the parser by its stable format token.
+    ///
+    /// # Errors
+    /// `REQUEST.FORMAT.INVALID_ID` when the token is not a format identifier.
+    pub fn format(mut self, format: &str) -> std::result::Result<Self, powerio_core::Error> {
+        self.format = Some(powerio_core::FormatId::new(format)?);
+        Ok(self)
+    }
+
+    /// Select the parser by an already validated format identity.
+    #[must_use]
+    pub fn format_id(mut self, format: powerio_core::FormatId) -> Self {
+        self.format = Some(format);
+        self
+    }
+
+    /// Permit acquisition of files a format refers to beneath `root`.
+    #[must_use]
+    pub fn acquisition_root(mut self, root: impl Into<std::path::PathBuf>) -> Self {
+        self.acquisition_root = Some(root.into());
+        self
+    }
+}
+
 /// Parse one source into a compiled module of whichever built in family
 /// claims it. Balanced network formats produce
 /// [`PioValue::BalancedNetwork`]; network only distribution formats (OpenDSS
@@ -294,10 +363,18 @@ pub use value::{PioScenarioSet, PioTimeSeries, PioValue};
 /// its row identities and time axis come from the problem. DeepMind OPFData
 /// JSON, which explicitly represents a solved AC OPF, produces
 /// [`PioValue::AcOpfSolution`]. The parser's findings are the module's
-/// diagnostics and the source is retained for the byte exact same format tier
-/// of [`emit`].
+/// diagnostics, and the module keeps the original input, so writing the same
+/// format again returns the original file content.
 ///
-/// The family comes from the source's declared format when one was selected,
+/// The input is a file or directory name, content already in memory, or a
+/// [`powerio_core::Source`] carrying named buffers or a widened acquisition
+/// root. [`parse_with_options`] selects the parser explicitly. Content in
+/// memory carries the name [`powerio_core::MEMORY_SOURCE_NAME`], which
+/// identifies no format, so a format detected from a file extension rather
+/// than from the document itself is either declared through the options or
+/// named through [`powerio_core::Source::from_memory`].
+///
+/// The family comes from the input's declared format when one was selected,
 /// and otherwise from the name and content: a `.dss` extension routes to the
 /// distribution parser, a `.json` document routes by its top level markers
 /// ([`format::routing::classify_json_text`]), a name with no recognized
@@ -314,11 +391,28 @@ pub use value::{PioScenarioSet, PioTimeSeries, PioValue};
 /// The routed family's failure, carrying its findings and the retained
 /// source.
 pub fn parse(
-    mut source: powerio_core::Source,
-    format: Option<&str>,
+    input: impl powerio_core::IntoSource,
 ) -> std::result::Result<powerio_core::PioModule<PioValue>, powerio_core::Error> {
-    if let Some(format) = format {
-        source = source.with_format(powerio_core::FormatId::new(format)?);
+    parse_with_options(input, &ParseOptions::default())
+}
+
+/// Parse one input under `options`, which selects the parser explicitly or
+/// widens the directory a format may refer to further files beneath.
+/// [`parse`] is this operation with the default options.
+///
+/// # Errors
+/// The input cannot be acquired, the format cannot be selected, or the routed
+/// family fails, each carrying its own diagnostic code.
+pub fn parse_with_options(
+    input: impl powerio_core::IntoSource,
+    options: &ParseOptions,
+) -> std::result::Result<powerio_core::PioModule<PioValue>, powerio_core::Error> {
+    let mut source = input.into_source()?;
+    if let Some(root) = &options.acquisition_root {
+        source = source.with_acquisition_root(root.clone())?;
+    }
+    if let Some(format) = &options.format {
+        source = source.with_format(format.clone());
     }
     match routed_family(&source)? {
         RoutedFamily::Goc3 => parse_goc3(source),
@@ -665,7 +759,14 @@ mod tests {
     fn parse(
         source: powerio_core::Source,
     ) -> std::result::Result<powerio_core::PioModule<PioValue>, powerio_core::Error> {
-        super::parse(source, None)
+        super::parse(source)
+    }
+
+    fn options(format: Option<&str>) -> ParseOptions {
+        match format {
+            Some(format) => ParseOptions::default().format(format).unwrap(),
+            None => ParseOptions::default(),
+        }
     }
 
     fn assert_value_type(module: &powerio_core::PioModule<PioValue>, expected: &str) {
@@ -696,16 +797,18 @@ mod tests {
                     mpc.gen = [1 0 0 10 -10 1 100 1 10 0;];\n\
                     mpc.branch = [];\n";
 
-        let detected =
-            super::parse(memory("inline-case.m", case), None).expect("name detects MATPOWER");
+        let detected = super::parse(memory("inline-case.m", case)).expect("name detects MATPOWER");
         assert_eq!(detected.source().unwrap().name(), "inline-case.m");
         assert_eq!(
             detected.source().unwrap().format().map(FormatId::as_str),
             Some("matpower")
         );
 
-        let declared = super::parse(memory("consumer-input", case), Some("matpower"))
-            .expect("declared MATPOWER");
+        let declared = super::parse_with_options(
+            memory("consumer-input", case),
+            &ParseOptions::default().format("matpower").unwrap(),
+        )
+        .expect("declared MATPOWER");
         let source = declared.source().expect("source retained");
         assert_eq!(source.name(), "consumer-input");
         assert_eq!(source.format().map(FormatId::as_str), Some("matpower"));
@@ -732,12 +835,9 @@ mod tests {
             ("memory", Some("xiidm")),
         ] {
             let source = Source::from_memory(name, bytes.clone()).unwrap();
-            let module = super::parse(source, format).unwrap();
-            let PioValue::BalancedNetwork(network) = &module.value() else {
-                panic!(
-                    "expected BalancedNetwork, got {}",
-                    module.value().type_name()
-                );
+            let module = super::parse_with_options(source, &options(format)).unwrap();
+            let PioValue::BalancedNetwork(network) = &module.value else {
+                panic!("expected BalancedNetwork, got {}", module.value.type_name());
             };
             assert_eq!(
                 network.case_metadata().source_model_format.as_deref(),

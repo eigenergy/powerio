@@ -7,7 +7,7 @@ use std::io::{Cursor, Write};
 #[test]
 fn facade_emits_and_parses_a_cgmes_profile_directory() {
     let matpower = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case9.m");
-    let module = parse(Source::open(matpower).unwrap(), None).expect("case9 parses");
+    let module = parse(Source::open(matpower).unwrap()).expect("case9 parses");
     let root = tempfile::tempdir().unwrap();
     let directory = root.path().join("case9-cgmes");
     let result = emit(&module, "cgmes", Destination::path(&directory))
@@ -19,7 +19,7 @@ fn facade_emits_and_parses_a_cgmes_profile_directory() {
     };
     assert_eq!(artifacts.len(), 4);
 
-    let parsed = parse(Source::open(&directory).unwrap(), None)
+    let parsed = parse(Source::open(&directory).unwrap())
         .expect("the emitted CGMES profile directory parses");
     let PioValue::BalancedNetwork(network) = &parsed.value() else {
         panic!("CGMES must produce a balanced network");
@@ -44,7 +44,7 @@ fn facade_calculates_node_breaker_buses_without_a_tp_profile() {
         env!("CARGO_MANIFEST_DIR"),
         "/../tests/data/cgmes/node-breaker"
     );
-    let module = parse(Source::open(directory).unwrap(), None)
+    let module = parse(Source::open(directory).unwrap())
         .expect("a node breaker EQ and SSH set parses without TP");
     let PioValue::BalancedNetwork(network) = &module.value() else {
         panic!("CGMES must produce a balanced network");
@@ -86,7 +86,7 @@ fn facade_calculates_node_breaker_buses_without_a_tp_profile() {
         writer.write_all(artifact.bytes()).unwrap();
     }
     let zip_bytes = writer.finish().unwrap().into_inner();
-    let reparsed = parse(Source::from_memory("fresh.zip", zip_bytes).unwrap(), None)
+    let reparsed = parse(Source::from_memory("fresh.zip", zip_bytes).unwrap())
         .expect("the fresh profile set, now with TP, parses");
     let PioValue::BalancedNetwork(reparsed_network) = &reparsed.value() else {
         panic!("CGMES must produce a balanced network");
@@ -109,7 +109,7 @@ fn facade_calculates_node_breaker_buses_without_a_tp_profile() {
 #[test]
 fn facade_echoes_one_cgmes_zip_without_repacking_it() {
     let matpower = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case9.m");
-    let module = parse(Source::open(matpower).unwrap(), None).expect("case9 parses");
+    let module = parse(Source::open(matpower).unwrap()).expect("case9 parses");
     let fresh = emit(&module, "cgmes", Destination::memory("profiles").unwrap())
         .expect("case9 emits CGMES profiles");
     let EmittedOutput::Memory { artifacts } = fresh.into_output() else {
@@ -127,11 +127,8 @@ fn facade_echoes_one_cgmes_zip_without_repacking_it() {
         writer.write_all(artifact.bytes()).unwrap();
     }
     let zip_bytes = writer.finish().unwrap().into_inner();
-    let parsed = parse(
-        Source::from_memory("profiles.zip", zip_bytes.clone()).unwrap(),
-        None,
-    )
-    .expect("the CGMES ZIP parses");
+    let parsed = parse(Source::from_memory("profiles.zip", zip_bytes.clone()).unwrap())
+        .expect("the CGMES ZIP parses");
     let exact = emit(&parsed, "cgmes", Destination::memory("copy.zip").unwrap())
         .expect("the unchanged CGMES ZIP emits");
     assert_eq!(exact.layout(), OutputLayout::File);

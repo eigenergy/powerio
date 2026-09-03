@@ -1,8 +1,7 @@
 //! PowerIO IR serialization and deserialization.
 
 use powerio_core::{
-    ArtifactPath, Destination, Diagnostic, EmitResult, Error, Fidelity, MemoryArtifact, PioModule,
-    Source,
+    ArtifactPath, Diagnostic, EmitResult, Error, Fidelity, MemoryArtifact, PioModule,
 };
 
 use crate::PioValue;
@@ -39,22 +38,32 @@ pub fn generate_ir_schema() -> schemars::Schema {
 /// # Errors
 /// The module cannot be represented by the current IR schema, or the
 /// destination refuses the artifact.
-pub fn serialize<T>(module: &PioModule<T>, destination: Destination) -> Result<EmitResult, Error>
+pub fn serialize<T>(
+    module: &PioModule<T>,
+    output: impl powerio_core::IntoDestination,
+) -> Result<EmitResult, Error>
 where
     T: Clone + Into<PioValue>,
 {
     let module = module.clone().map_value(Into::into);
     let text = crate::stored::emit_module(&module)?;
     let artifact = MemoryArtifact::new(ArtifactPath::new("module.pio.json")?, text.into_bytes());
-    destination.__commit_artifacts(false, Fidelity::Canonical, vec![artifact], Vec::new())
+    output.into_destination()?.__commit_artifacts(
+        false,
+        Fidelity::Canonical,
+        vec![artifact],
+        Vec::new(),
+    )
 }
 
-/// Deserialize one PowerIO IR source.
+/// Deserialize one PowerIO IR input: a file name, content in memory, or a
+/// [`powerio_core::Source`].
 ///
 /// # Errors
 /// The source is not one UTF-8 IR document, or its schema is unsupported or
 /// invalid.
-pub fn deserialize(source: Source) -> Result<PioModule<PioValue>, Error> {
+pub fn deserialize(input: impl powerio_core::IntoSource) -> Result<PioModule<PioValue>, Error> {
+    let source = input.into_source()?;
     let buffer = source.primary_buffer()?;
     let text = std::str::from_utf8(buffer.content_bytes()).map_err(|cause| {
         Error::new(

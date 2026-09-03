@@ -36,7 +36,7 @@ fn unmapped_official_fields_remain_diagnosed_after_ir_and_fresh_emission() {
     let source = Source::from_memory("unmapped.xiidm", UNMAPPED_FIELDS.as_bytes().to_vec())
         .unwrap()
         .with_format(FormatId::new("xiidm").unwrap());
-    let module = parse(source, None).unwrap();
+    let module = parse(source).unwrap();
     let field_diagnostics = module
         .diagnostics
         .iter()

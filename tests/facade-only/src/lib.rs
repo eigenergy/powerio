@@ -35,11 +35,48 @@ mod names_resolve_through_the_facade {
 
 #[cfg(test)]
 mod tests {
+    /// A file name and content in memory reach `parse`, and a file name
+    /// reaches `emit`, without naming `Source` or `Destination`.
+    #[test]
+    fn the_common_operations_need_no_input_or_output_type() {
+        let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../data");
+        let path = data.join("case9.m");
+        let from_name = powerio::parse(&path).unwrap();
+
+        // A document that identifies itself parses from content alone.
+        let self_identifying = std::fs::read(data.join("egret/case9.json")).unwrap();
+        assert_eq!(
+            powerio::parse(self_identifying).unwrap().value.type_name(),
+            from_name.value.type_name()
+        );
+
+        // A format read from a file extension needs the format declared,
+        // since content in memory carries no extension.
+        let content = std::fs::read(&path).unwrap();
+        let declared = powerio::parse_with_options(
+            content,
+            &powerio::ParseOptions::default().format("matpower").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(declared.value.type_name(), from_name.value.type_name());
+
+        let out = std::env::temp_dir().join(format!(
+            "powerio-facade-{}.m",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        powerio::emit(&from_name, "matpower", &out).unwrap();
+        assert!(out.is_file());
+        let _ = std::fs::remove_file(&out);
+    }
+
     #[test]
     fn the_readme_example_resolves_through_the_facade_alone() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../data/case9.m");
-        let module = powerio::parse(powerio::Source::open(&path).unwrap(), None).unwrap();
-        let powerio::PioValue::BalancedNetwork(network) = &module.value() else {
+        let module = powerio::parse(&path).unwrap();
+        let powerio::PioValue::BalancedNetwork(network) = &module.value else {
             panic!(
                 "expected a balanced network, found {}",
                 module.value().type_name()
@@ -53,9 +90,7 @@ mod tests {
             panic!("a memory destination returned path output");
         };
         let bytes = artifacts.into_iter().next().unwrap().into_bytes();
-        let decoded =
-            powerio::deserialize(powerio::Source::from_memory("module.pio.json", bytes).unwrap())
-                .unwrap();
+        let decoded = powerio::deserialize(bytes).unwrap();
         assert!(matches!(
             &decoded.value(),
             powerio::PioValue::BalancedNetwork(_)
@@ -67,8 +102,8 @@ mod tests {
     /// glob re-exports under the same name.
     #[test]
     fn powerio_error_is_the_type_parse_returns() {
-        let bad = powerio::Source::from_memory("<memory>", b"not a case file".to_vec()).unwrap();
-        let _: powerio::Error = powerio::parse(bad, None).unwrap_err();
+        let _: powerio::Error = powerio::parse(b"not a case file").unwrap_err();
+        let _: powerio::Error = powerio::parse("no-such-case.m").unwrap_err();
     }
 
     #[test]

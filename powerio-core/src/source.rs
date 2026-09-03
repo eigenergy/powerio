@@ -1599,6 +1599,83 @@ mod platform {
     }
 }
 
+/// The name a source built from content in memory carries when the caller
+/// supplies none. Format detection and diagnostics read it, so content whose
+/// name carries meaning goes through [`Source::from_memory`] instead.
+pub const MEMORY_SOURCE_NAME: &str = "<memory>";
+
+/// One input a read operation can acquire.
+///
+/// A string or path names a file or directory to open. A byte buffer is
+/// content already in memory, named [`MEMORY_SOURCE_NAME`]. A [`Source`]
+/// passes through, so a source carrying named buffers or a widened
+/// acquisition root reaches the same operations as a file name.
+///
+/// Implement it for a type of your own to reach the same operations. It
+/// carries this one method and gains no further required method: options
+/// belong to the operation, not to the input.
+pub trait IntoSource {
+    /// Acquire the input.
+    ///
+    /// # Errors
+    /// The file or directory cannot be acquired, or the in-memory name is
+    /// invalid.
+    fn into_source(self) -> Result<Source, Error>;
+}
+
+impl IntoSource for Source {
+    fn into_source(self) -> Result<Source, Error> {
+        Ok(self)
+    }
+}
+
+impl IntoSource for &Source {
+    fn into_source(self) -> Result<Source, Error> {
+        Ok(self.clone())
+    }
+}
+
+/// Names a file or directory to open.
+macro_rules! into_source_by_name {
+    ($($input:ty),* $(,)?) => {
+        $(
+            impl IntoSource for $input {
+                fn into_source(self) -> Result<Source, Error> {
+                    Source::open(PathBuf::from(self))
+                }
+            }
+        )*
+    };
+}
+
+into_source_by_name!(&str, &String, String, &Path, &PathBuf, PathBuf);
+
+/// Content already in memory.
+macro_rules! into_source_by_content {
+    ($($input:ty => $bytes:expr),* $(,)?) => {
+        $(
+            impl IntoSource for $input {
+                fn into_source(self) -> Result<Source, Error> {
+                    let bytes: Arc<[u8]> = $bytes(self);
+                    Source::from_memory(MEMORY_SOURCE_NAME, bytes)
+                }
+            }
+        )*
+    };
+}
+
+into_source_by_content!(
+    &[u8] => Arc::<[u8]>::from,
+    Vec<u8> => Arc::<[u8]>::from,
+    Arc<[u8]> => std::convert::identity,
+);
+
+impl<const N: usize> IntoSource for &[u8; N] {
+    fn into_source(self) -> Result<Source, Error> {
+        Source::from_memory(MEMORY_SOURCE_NAME, Arc::<[u8]>::from(self.as_slice()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};

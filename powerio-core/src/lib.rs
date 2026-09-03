@@ -28,14 +28,15 @@ pub use diagnostic::{
 pub use error::Error;
 pub use module::{PioModule, StagedEdit};
 pub use output::{
-    ArtifactPath, Destination, EmitResult, EmittedOutput, Fidelity, MemoryArtifact, OutputLayout,
+    ArtifactPath, Destination, EmitResult, EmittedOutput, Fidelity, IntoDestination,
+    MemoryArtifact, OutputLayout,
 };
 pub use records::{
     DiagnosticId, Digest, DigestAlgorithm, HistoryEntry, HistoryId, HistoryKind, Producer,
     SourceDescriptor, SourceId, SourceMapEntry, SourceRelation, SourceSpan,
 };
 pub use scenario::{SCENARIO_PROBABILITY_TOLERANCE, Scenario, ScenarioId, ScenarioSet};
-pub use source::{FormatId, Source, SourceBuffer};
+pub use source::{FormatId, IntoSource, MEMORY_SOURCE_NAME, Source, SourceBuffer};
 pub use time_series::{TimePoint, TimeSeries};
 
 /// Decode time record limits, shared by every PowerIO wire.

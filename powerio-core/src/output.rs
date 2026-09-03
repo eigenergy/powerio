@@ -814,6 +814,43 @@ fn remove_staging(path: &Path, directory: bool) -> std::io::Result<()> {
     }
 }
 
+/// One output a write operation can produce.
+///
+/// A string or path names the file or directory to write. A [`Destination`]
+/// passes through, which is how a memory destination and its artifact root
+/// name reach the same operations as a file name.
+///
+/// Implement it for a type of your own to reach the same operations. It
+/// carries this one method and gains no further required method: options
+/// belong to the operation, not to the output.
+pub trait IntoDestination {
+    /// Resolve the output.
+    ///
+    /// # Errors
+    /// The output cannot be named.
+    fn into_destination(self) -> Result<Destination, Error>;
+}
+
+impl IntoDestination for Destination {
+    fn into_destination(self) -> Result<Destination, Error> {
+        Ok(self)
+    }
+}
+
+macro_rules! into_destination_by_name {
+    ($($output:ty),* $(,)?) => {
+        $(
+            impl IntoDestination for $output {
+                fn into_destination(self) -> Result<Destination, Error> {
+                    Ok(Destination::path(PathBuf::from(self)))
+                }
+            }
+        )*
+    };
+}
+
+into_destination_by_name!(&str, &String, String, &Path, &PathBuf, PathBuf);
+
 #[cfg(test)]
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};

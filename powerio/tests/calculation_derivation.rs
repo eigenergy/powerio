@@ -2,7 +2,11 @@ use powerio::{HistoryKind, Source};
 
 fn network_module() -> powerio::PioModule<powerio::PioValue> {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case9.m");
-    powerio::parse(Source::open(path).unwrap(), Some("matpower")).unwrap()
+    powerio::parse_with_options(
+        Source::open(path).unwrap(),
+        &powerio::ParseOptions::default().format("matpower").unwrap(),
+    )
+    .unwrap()
 }
 
 fn check_records<T>(module: &powerio::PioModule<T>, output_type: &str) {
@@ -90,7 +94,11 @@ fn an_already_typed_multiconductor_instance_is_extracted_without_reconstruction(
         env!("CARGO_MANIFEST_DIR"),
         "/../tests/data/dist/bmopf/example_ieee13.json"
     );
-    let source = powerio::parse(Source::open(path).unwrap(), Some("bmopf")).unwrap();
+    let source = powerio::parse_with_options(
+        Source::open(path).unwrap(),
+        &powerio::ParseOptions::default().format("bmopf").unwrap(),
+    )
+    .unwrap();
 
     let pf = powerio::transform::to_mc_ac_pf_instance(&source).unwrap();
     let history_len = pf.history().len();

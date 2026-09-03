@@ -42,7 +42,11 @@ fn network_document(network: &BalancedNetwork) -> serde_json::Value {
 /// through PowerIO IR removes the input file content kept for same format
 /// emission, so the writer rebuilds the document from the typed value.
 fn emit_fresh(source: powerio::Source, from: &str, to: &str) -> String {
-    let module = powerio::parse(source, Some(from)).unwrap();
+    let module = powerio::parse_with_options(
+        source,
+        &powerio::ParseOptions::default().format(from).unwrap(),
+    )
+    .unwrap();
     let module = deserialize_module_text(&serialize_module_text(&module).unwrap()).unwrap();
     let emitted = powerio::emit(&module, to, Destination::memory("fresh").unwrap()).unwrap();
     let EmittedOutput::Memory { mut artifacts } = emitted.into_output() else {
@@ -226,7 +230,7 @@ fn bare_json_is_classified_as_jiidm() {
     let parsed = load_balanced_memory_named(&text, "jiidm", Some("network.json")).unwrap();
     assert_eq!(parsed.network.source_format(), SourceFormat::Jiidm);
     let source = powerio::Source::from_memory("network.json", text.into_bytes()).unwrap();
-    let module = powerio::parse(source, None).unwrap();
+    let module = powerio::parse(source).unwrap();
     assert_eq!(
         module
             .source()

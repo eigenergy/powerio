@@ -14,6 +14,6 @@ fuzz_target!(|data: &[u8]| {
         let Ok(id) = powerio_core::FormatId::new("matpower") else {
             return;
         };
-        let _ = powerio::parse(source.with_format(id), None);
+        let _ = powerio::parse(source.with_format(id));
     }
 });

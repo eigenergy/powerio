@@ -3518,7 +3518,13 @@ pub unsafe extern "C" fn pio_parse(
                 boundary_error(&codes::BIND_CAPI_NULL_HANDLE, "PioSource must not be NULL")
             })?;
             let format = optional_str(format, format_len, "format")?;
-            powerio::parse(source.clone(), format)
+            let mut options = powerio::ParseOptions::default();
+            if let Some(format) = format {
+                options = options
+                    .format(format)
+                    .map_err(|failure| error_from_core(&failure))?;
+            }
+            powerio::parse_with_options(source.clone(), &options)
                 .map(module_handle)
                 .map_err(|failure| error_from_core(&failure))
         })
@@ -16364,8 +16370,14 @@ mod tests {
     }
 
     fn goc3_instance(source: Source) -> powerio_prob::AcScucInstance {
-        let module = powerio::parse(source, Some("goc3-json")).unwrap();
-        let PioValue::AcScucInstance(instance) = module.into_value() else {
+        let module = powerio::parse_with_options(
+            source,
+            &powerio::ParseOptions::default()
+                .format("goc3-json")
+                .unwrap(),
+        )
+        .unwrap();
+        let PioValue::AcScucInstance(instance) = module.value else {
             panic!("GO Challenge 3 problem did not produce powerio.AcScucInstance");
         };
         instance

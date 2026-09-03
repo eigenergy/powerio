@@ -3,7 +3,11 @@
 #[test]
 fn a_geo_layer_derives_a_new_network_module() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case9.m");
-    let module = powerio::parse(powerio::Source::open(path).unwrap(), Some("matpower")).unwrap();
+    let module = powerio::parse_with_options(
+        powerio::Source::open(path).unwrap(),
+        &powerio::ParseOptions::default().format("matpower").unwrap(),
+    )
+    .unwrap();
     assert!(module.source().is_some());
 
     let layer = powerio::GeoLayer {
@@ -60,7 +64,11 @@ fn a_geo_layer_derives_a_new_network_module() {
 #[test]
 fn geo_application_refuses_non_network_values() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case9.m");
-    let network = powerio::parse(powerio::Source::open(path).unwrap(), Some("matpower")).unwrap();
+    let network = powerio::parse_with_options(
+        powerio::Source::open(path).unwrap(),
+        &powerio::ParseOptions::default().format("matpower").unwrap(),
+    )
+    .unwrap();
     let instance = powerio::to_dc_pf_instance(&network)
         .unwrap()
         .map_value(Into::into);

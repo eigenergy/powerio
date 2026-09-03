@@ -374,6 +374,17 @@ impl PyBalancedNetwork {
     }
 }
 
+/// The parse options a binding builds from its optional `format` argument.
+fn parse_options(format: Option<&str>) -> PyResult<powerio::ParseOptions> {
+    let mut options = powerio::ParseOptions::default();
+    if let Some(format) = format {
+        options = options
+            .format(format)
+            .map_err(|error| core_error_pyerr(&error))?;
+    }
+    Ok(options)
+}
+
 fn core_error_pyerr(error: &powerio_core::Error) -> PyErr {
     // Parse and Data map onto their subclasses so callers see one error
     // taxonomy whichever Rust layer raised the failure.
@@ -3694,7 +3705,7 @@ impl PyPioModule {
     fn _parse_path(path: &str, format: Option<&str>) -> PyResult<Self> {
         let source = powerio_core::Source::open(Path::new(path))
             .map_err(|error| core_open_pyerr(Path::new(path), &error))?;
-        powerio::parse(source, format)
+        powerio::parse_with_options(source, &parse_options(format)?)
             .map(|module| Self {
                 module: Some(module),
             })
@@ -3707,7 +3718,7 @@ impl PyPioModule {
     fn _parse_memory(data: &[u8], name: &str, format: Option<&str>) -> PyResult<Self> {
         let source = powerio_core::Source::from_memory(name, data.to_vec())
             .map_err(|error| core_error_pyerr(&error))?;
-        powerio::parse(source, format)
+        powerio::parse_with_options(source, &parse_options(format)?)
             .map(|module| Self {
                 module: Some(module),
             })

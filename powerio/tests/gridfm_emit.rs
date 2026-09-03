@@ -5,7 +5,11 @@ use powerio::{Destination, EmittedOutput, Source};
 #[test]
 fn universal_emit_writes_gridfm_as_one_directory_inventory() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case9.m");
-    let module = powerio::parse(Source::open(path).unwrap(), Some("matpower")).unwrap();
+    let module = powerio::parse_with_options(
+        Source::open(path).unwrap(),
+        &powerio::ParseOptions::default().format("matpower").unwrap(),
+    )
+    .unwrap();
     let result = powerio::emit(
         &module,
         "gridfm",
