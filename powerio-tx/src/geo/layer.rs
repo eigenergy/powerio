@@ -36,7 +36,8 @@ pub struct GeoLayer {
     pub features: Vec<GeoFeature>,
 }
 
-/// One point or route in a [`GeoLayer`].
+/// One point or route in a [`GeoLayer`]. The key names its element, or a
+/// branch without a key states both endpoint bus references as its identity.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct GeoFeature {

@@ -424,12 +424,11 @@ case stores zero shunt MW and the reader sets G = 0.
 
 ## The .pwd display format: substation coordinates
 
-`.pwd` files are display artifacts, not network cases, so `parse` rejects
-them with a pointer to the display API. Construct a file or memory `Source`
-and pass it to `parse_display`. The display result
-is `DisplayData::PowerWorld(PwdDisplay { canvas_width, canvas_height,
-stamp, substations })`; Python returns `DisplayData("powerworld",
-PwdDisplay(...))`.
+`.pwd` files are display artifacts rather than network cases. The top-level
+facade's `parse` operation reads one into `PioValue::GeoLayer`; the layer can
+then travel through PowerIO IR and the ordinary module emission path. Python's
+raw-display compatibility helper `parse_display` returns
+`DisplayData("powerworld", PwdDisplay(...))`.
 
 The `.pwd` decoder reads one subset of the display file, the substation
 symbols, established by differential analysis of seven files spanning the

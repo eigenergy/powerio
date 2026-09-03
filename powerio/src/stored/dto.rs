@@ -1588,11 +1588,16 @@ fn validate_operating_point_scenario_set<N>(
 }
 
 /// A layer places a finite point or route per feature, and every feature
-/// names the element it places.
+/// names the element it places or a branch's two endpoint buses.
 fn validate_geo_layer(layer: &powerio_tx::GeoLayer) -> Result<(), String> {
     for (index, feature) in layer.features.iter().enumerate() {
         let key = &feature.key;
-        if key.uid.is_none() && key.id.is_none() && key.name.is_none() && key.index.is_none() {
+        let named =
+            key.uid.is_some() || key.id.is_some() || key.name.is_some() || key.index.is_some();
+        let endpoint_pair = feature.target == powerio_tx::GeoTarget::Branch
+            && feature.from.is_some()
+            && feature.to.is_some();
+        if !named && !endpoint_pair {
             return Err(format!("geo feature {index} names no element"));
         }
         let finite = |point: &[f64; 2]| point.iter().all(|value| value.is_finite());

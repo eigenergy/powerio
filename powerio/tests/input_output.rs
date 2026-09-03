@@ -110,22 +110,19 @@ fn a_declared_format_overrides_detection() {
 fn an_acquisition_root_widens_where_includes_may_live() {
     let root = data("dist/opendss/include_root");
     let master = root.join("nested/master.dss");
-    if !master.is_file() {
-        return;
-    }
     // Without the wider root the include above the master's own directory is
     // refused; with it the case reads whole.
-    let refused = powerio::parse(&master);
+    let refused = powerio::parse(&master).unwrap();
     let allowed =
         powerio::parse_with_options(&master, &ParseOptions::default().acquisition_root(&root));
     assert!(allowed.is_ok(), "{:?}", allowed.err());
     assert!(
-        refused.is_err()
-            || refused
-                .unwrap()
-                .diagnostics
-                .iter()
-                .any(|d| d.code().starts_with("READ.DSS"))
+        refused
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code() == "READ.DSS.INCLUDE_REFUSED"),
+        "{:?}",
+        refused.diagnostics
     );
 }
 

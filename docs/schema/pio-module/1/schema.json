@@ -6241,7 +6241,7 @@
       "type": "string"
     },
     "GeoFeature": {
-      "description": "One point or route in a [`GeoLayer`].",
+      "description": "One point or route in a [`GeoLayer`]. The key names its element, or a\nbranch without a key states both endpoint bus references as its identity.",
       "properties": {
         "from": {
           "description": "Endpoint bus references for a branch, the unordered fallback identity.",

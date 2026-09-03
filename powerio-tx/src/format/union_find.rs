@@ -53,9 +53,9 @@ mod tests {
     fn a_long_chain_of_joins_resolves_without_recursion() {
         const LEN: usize = 500_000;
         let mut union = UnionFind::new(LEN);
-        // Joining each node to the one after it is the order that builds the
-        // deepest chain under this merge rule.
-        for value in (0..LEN - 1).rev() {
+        // Joining each new root to the preceding node in increasing order
+        // grows the parent chain by one on every call.
+        for value in 0..LEN - 1 {
             union.union(value + 1, value);
         }
         let root = union.find(0);

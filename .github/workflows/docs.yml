@@ -50,7 +50,7 @@ jobs:
     - name: Build docs
       env:
         RUSTDOCFLAGS: "-D warnings"
-      run: cargo doc --no-deps --all-features -p powerio -p powerio-core -p powerio-matrix -p powerio-prob -p powerio-dist -p powerio-capi -p powerio-py
+      run: cargo doc --no-deps --all-features -p powerio -p powerio-core -p powerio-tx -p powerio-matrix -p powerio-prob -p powerio-dist -p powerio-capi -p powerio-py
     - name: Build Python API docs
       run: |
         python -m pip install --upgrade pip

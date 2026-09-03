@@ -934,7 +934,7 @@ Schema definition: `GeoFeature`.
 | field | type | unit | sign | invariant | if absent |
 |---|---|---|---|---|---|
 | `target` | token `bus`, `branch`, or `substation` | | | the element family the feature places | required |
-| `key` | `ElementKey` | | | at least one member names an element | required |
+| `key` | `ElementKey` | | | at least one member names an element, unless a branch states both endpoints | required |
 | `geometry` | `GeoGeometry` | | | every coordinate is finite | required |
 | `from` | string or null | | | a branch's endpoint bus, the unordered fallback identity | null |
 | `to` | string or null | | | the other endpoint bus | null |

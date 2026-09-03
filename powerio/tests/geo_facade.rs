@@ -55,6 +55,34 @@ fn aux_text_preserves_empty_and_malformed_results() {
     assert!(error.to_string().contains("line"));
 }
 
+#[test]
+fn a_branch_endpoint_pair_is_a_durable_geo_identity() {
+    let layer = powerio::GeoLayer {
+        space: CoordinateSpace::Geographic { crs: None },
+        kind: None,
+        features: vec![powerio::GeoFeature {
+            target: GeoTarget::Branch,
+            key: powerio::ElementKey::default(),
+            geometry: GeoGeometry::LineString(vec![[0.0, 0.0], [1.0, 1.0]]),
+            from: Some("1".to_owned()),
+            to: Some("2".to_owned()),
+            kind: None,
+        }],
+    };
+    let module = powerio::PioModule::new(powerio::PioValue::GeoLayer(layer.clone()));
+    let emission = powerio::serialize(&module, powerio::Destination::memory("layer").unwrap())
+        .expect("the endpoint pair is a complete branch identity");
+    let powerio::EmittedOutput::Memory { artifacts } = emission.into_output() else {
+        panic!("a memory destination returned path output");
+    };
+    let decoded = powerio::deserialize(artifacts.into_iter().next().unwrap().into_bytes())
+        .expect("the emitted endpoint pair remains valid");
+    let powerio::PioValue::GeoLayer(decoded_layer) = decoded.value() else {
+        panic!("the stored value is not a geographic layer");
+    };
+    assert_eq!(decoded_layer, &layer);
+}
+
 /// A display file is a value like any other case: `parse` returns it, `emit`
 /// writes the canonical layer document, and PowerIO IR carries it.
 #[test]

@@ -95,8 +95,8 @@ escape hatch.
 
 Coordinates also arrive and leave as files of their own: a `Buscoords` CSV
 next to a DSS master, a GeoJSON export from a GIS tool, a layout computed by a
-renderer. The container is `GeoLayer`, surfaced as `DisplayData::Geo` beside
-the PowerWorld `.pwd` display path.
+renderer. The container is `GeoLayer`, returned as `PioValue::GeoLayer` by the
+Rust facade's universal `parse` operation.
 
 The canonical form is a GeoJSON FeatureCollection with one foreign
 member, suggested extension `.geo.json`:
@@ -150,9 +150,10 @@ $ powerio geo convert buscoords.csv -o case.geo.json
 
 ## PowerWorld display files
 
-The `.pwd` reader returns `DisplayData::PowerWorld` with a `PwdDisplay`: canvas
-dimensions, a timestamp, and substation symbols with number, name, and diagram
-coordinates.
+The `.pwd` reader returns a diagram-space `GeoLayer` whose features place the
+decoded substations. Python also retains the raw-display compatibility helper
+`parse_display`, which returns `DisplayData(kind="powerworld", data=PwdDisplay(...))`
+with canvas dimensions, a timestamp, and substation symbols.
 
 Four facade helpers connect it to the geo model. `to_geo_layer_from_pwd` lifts
 the substation symbols into a diagram space `GeoLayer` (also reachable as
@@ -170,10 +171,9 @@ aux reader promotes the substation `Latitude:1`/`Longitude:1` pair, and the
 bus's own bare `Latitude`/`Longitude` pair, into `Bus.location`; a promoted
 pair leaves extras.
 
-Rust parses a display file into `PioValue::GeoLayer`. Python's `parse_display`
-returns `DisplayData(kind="powerworld", data=PwdDisplay(...))`, the raw display
-record. A display file never becomes a `BalancedNetwork`; it becomes a layer,
-which module emission and PowerIO IR carry.
+Rust parses a display file into `PioValue::GeoLayer`. A display file never
+becomes a `BalancedNetwork`; it becomes a layer, which module emission and
+PowerIO IR carry.
 
 ## Distribution graph projection
 

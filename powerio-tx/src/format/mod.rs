@@ -9,13 +9,12 @@
 //! IEEE Common Data Format are input
 //! only. GO Challenge 3 defines a calculation rather than a bare network, so
 //! its implementation is private to the `powerio` facade's typed parser.
-//! PowerWorld `.pwd` displays
-//! use the display API. Case input and
+//! PowerWorld `.pwd` displays read through the top-level `powerio::parse` as a
+//! `powerio.GeoLayer`. Case input and
 //! output formats meet here, so adding a format that supports emission is one module plus
 //! one hub registration.
 //! [`parse`] compiles a retained source into a typed module, detecting the
-//! format from the source name and content; [`parse_display`] parses
-//! display artifacts such as PowerWorld `.pwd`. [`emit`] emits a parsed
+//! format from the source name and content. [`emit`] emits a parsed
 //! module through a destination and echoes the retained source for a same
 //! format target.
 //! Non-finite numeric values, such as MATPOWER `Inf`/`NaN` angle limits, are
