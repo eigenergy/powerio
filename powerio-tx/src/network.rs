@@ -572,6 +572,11 @@ pub(crate) fn calc_reactive_limits_at_active_power(
                     "{owner} reactiveCapabilityCurve has fewer than two points"
                 ));
             }
+            if !active_power_mw.is_finite() {
+                return Err(format!(
+                    "{owner} reactiveCapabilityCurve cannot be evaluated at a nonfinite active power"
+                ));
+            }
             let mut points = curve.points.iter().collect::<Vec<_>>();
             points
                 .sort_by(|first, second| first.active_power_mw.total_cmp(&second.active_power_mw));
@@ -6400,5 +6405,31 @@ mod tests {
     fn validate_values_is_empty_for_a_clean_network() {
         let net = BalancedNetwork::in_memory("t", 100.0, vec![bus(1), bus(2)], Vec::new());
         assert!(net.validate_values().is_empty());
+    }
+
+    #[test]
+    fn capability_curve_rejects_a_nonfinite_active_power() {
+        let limits = ReactiveLimits::CapabilityCurve(ReactiveCapabilityCurve {
+            curve_style: CurveStyle::StraightLineYValues,
+            properties: BTreeMap::new(),
+            points: vec![
+                ReactiveCapabilityCurvePoint {
+                    active_power_mw: 0.0,
+                    minimum_reactive_power_mvar: -10.0,
+                    maximum_reactive_power_mvar: 10.0,
+                    properties: BTreeMap::new(),
+                },
+                ReactiveCapabilityCurvePoint {
+                    active_power_mw: 100.0,
+                    minimum_reactive_power_mvar: -5.0,
+                    maximum_reactive_power_mvar: 5.0,
+                    properties: BTreeMap::new(),
+                },
+            ],
+        });
+
+        let error = calc_reactive_limits_at_active_power("generator 1", &limits, f64::NAN)
+            .expect_err("NaN must not be used to index a capability curve");
+        assert!(error.contains("nonfinite active power"), "{error}");
     }
 }
