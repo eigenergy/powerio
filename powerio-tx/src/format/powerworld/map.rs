@@ -14,8 +14,8 @@ use crate::diagnostics::codes::EMIT_POWERWORLD as F;
 use crate::diagnostics::{Diagnostics, codes};
 use crate::format::{TextEmission, sanitize_quoted, warn_extra_branch_rating_sets};
 use crate::network::{
-    BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, Extras, Generator,
-    GeneratorEnergySource, Load, LoadVoltageModel, Shunt, SourceFormat,
+    BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, Extras, GenCost,
+    Generator, GeneratorEnergySource, Load, LoadVoltageModel, Shunt, SourceFormat,
 };
 use crate::{Error, Result};
 
@@ -30,6 +30,17 @@ const NAME_FORBIDDEN: &[char] = &['"'];
 /// PowerWorld reader produces the same extras.
 pub(super) const LINE_CIRCUIT: &str = "LineCircuit";
 pub(super) const BRANCH_DEVICE_TYPE: &str = "BranchDeviceType";
+/// The `Gen` fields a vendored PowerWorld export states a generator's fuel
+/// input-output curve and fuel price in.
+const GEN_COST_MODEL: &str = "GenCostModel";
+const GEN_FUEL_COST: &str = "GenFuelCost";
+const GEN_FIXED_COST: &str = "GenFixedCost";
+const GEN_IO_B: &str = "GenIOB";
+const GEN_IO_C: &str = "GenIOC";
+const GEN_IO_D: &str = "GenIOD";
+/// Coefficients a cubic input-output curve holds: the constant plus three
+/// powers of MW.
+const GEN_IO_COEFFICIENTS: usize = 4;
 
 // ---- Reader -----------------------------------------------------------------
 
@@ -609,7 +620,7 @@ fn read_gen(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Generator> {
         vg: f_alias(r, &["GenVoltSet", "VoltSet"], 1.0)?,
         mbase: f_alias(r, &["GenMVABase", "MVABase"], 100.0)?,
         in_service: on_alias(r, &["GenStatus", "Status"])?,
-        cost: None,
+        cost: read_gen_cost(r)?,
         caps: Default::default(),
         voltage_regulation_on: true,
         regulating_terminal: None,
@@ -617,6 +628,31 @@ fn read_gen(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Generator> {
         active_power_control: None,
         uid: None,
     })
+}
+
+/// The generator input-output curve as a polynomial cost in currency per hour.
+///
+/// A PowerWorld `Gen` row states the curve as a cubic in MBtu/hr
+/// (`GenFixedCost` plus `GenIOB`, `GenIOC`, and `GenIOD` on the first three
+/// powers of MW) together with the fuel cost per MBtu, so the product is the
+/// cost curve. The four slots are read as four coefficients, highest order
+/// first, which is the polynomial shape the row states.
+fn read_gen_cost(r: &Row) -> Result<Option<GenCost>> {
+    let Some(model) = first(r, &[GEN_COST_MODEL]) else {
+        return Ok(None);
+    };
+    if !model.trim_matches('"').trim().eq_ignore_ascii_case("cubic") {
+        return Ok(None);
+    }
+    let fuel = f_or(r, GEN_FUEL_COST, 1.0)?;
+    let coefficients = [GEN_IO_D, GEN_IO_C, GEN_IO_B, GEN_FIXED_COST]
+        .iter()
+        .map(|key| f_or(r, key, 0.0).map(|value| value * fuel))
+        .collect::<Result<Vec<f64>>>()?;
+    if coefficients.iter().all(|value| *value == 0.0) {
+        return Ok(None);
+    }
+    Ok(Some(GenCost::new(2, 0.0, 0.0, coefficients)))
 }
 
 fn read_branch(
@@ -752,6 +788,12 @@ pub(crate) fn write_powerworld(net: &BalancedNetwork) -> TextEmission {
     // writes `""` for the odd bus without a point; the reader leaves those
     // unpromoted.
     let write_locations = net.buses().iter().any(|b| b.location.is_some());
+    // The input-output curve columns appear only when a generator states a
+    // polynomial cost; a case with no cost data writes the plain Gen row.
+    let write_gen_cost = net
+        .generators()
+        .iter()
+        .any(|g| g.cost.as_ref().is_some_and(|cost| cost.model == 2));
     block(
         &mut s,
         "Bus",
@@ -832,10 +874,14 @@ pub(crate) fn write_powerworld(net: &BalancedNetwork) -> TextEmission {
     block(
         &mut s,
         "Gen",
-        "[BusNum, GenID, GenMW, GenMVR, GenMWMax, GenMWMin, GenMVRMax, GenMVRMin, GenVoltSet, GenMVABase, GenStatus]",
+        if write_gen_cost {
+            "[BusNum, GenID, GenMW, GenMVR, GenMWMax, GenMWMin, GenMVRMax, GenMVRMin, GenVoltSet, GenMVABase, GenStatus, GenCostModel, GenFuelCost, GenFixedCost, GenIOB, GenIOC, GenIOD]"
+        } else {
+            "[BusNum, GenID, GenMW, GenMVR, GenMWMax, GenMWMin, GenMVRMax, GenMVRMin, GenVoltSet, GenMVABase, GenStatus]"
+        },
         |rows| {
             for (i, g) in net.generators().iter().enumerate() {
-                rows.push(format!(
+                let mut row = format!(
                     "{} \"{}\" {} {} {} {} {} {} {} {} \"{}\"",
                     g.bus,
                     i + 1,
@@ -848,7 +894,31 @@ pub(crate) fn write_powerworld(net: &BalancedNetwork) -> TextEmission {
                     n(g.vg),
                     n(g.mbase),
                     status(g.in_service)
-                ));
+                );
+                if write_gen_cost {
+                    // Highest order last in the row: the constant rides
+                    // GenFixedCost and the three powers of MW ride
+                    // GenIOB/GenIOC/GenIOD, at a unit fuel price so the
+                    // input-output curve is the cost curve itself.
+                    let mut coefficients = [0.0f64; GEN_IO_COEFFICIENTS];
+                    if let Some(cost) = g.cost.as_ref().filter(|cost| cost.model == 2) {
+                        for (slot, value) in coefficients
+                            .iter_mut()
+                            .zip(cost.coeffs.iter().rev().take(GEN_IO_COEFFICIENTS))
+                        {
+                            *slot = *value;
+                        }
+                    }
+                    let _ = write!(
+                        row,
+                        " \"Cubic\" 1 {} {} {} {}",
+                        n(coefficients[0]),
+                        n(coefficients[1]),
+                        n(coefficients[2]),
+                        n(coefficients[3])
+                    );
+                }
+                rows.push(row);
             }
         },
     );
@@ -896,24 +966,76 @@ pub(crate) fn write_powerworld(net: &BalancedNetwork) -> TextEmission {
         },
     );
 
-    if net.generators().iter().any(|g| g.cost.is_some()) {
-        warnings.push(
-            &F.field_dropped,
-            "generator cost curves dropped: not written to PowerWorld .aux",
-        );
+    // A polynomial cost rides the input-output curve columns. What the row has
+    // no field for is stated per field.
+    let piecewise_costs = net
+        .generators()
+        .iter()
+        .filter(|g| g.cost.as_ref().is_some_and(|cost| cost.model != 2))
+        .count();
+    if piecewise_costs > 0 {
+        warnings.push(&F.field_dropped, format!(
+            "{piecewise_costs} piecewise generator cost curve(s) dropped: a PowerWorld .aux Gen row states its cost as a cubic input-output curve and has no breakpoint field"
+        ));
+    }
+    let long_costs = net
+        .generators()
+        .iter()
+        .filter(|g| {
+            g.cost
+                .as_ref()
+                .is_some_and(|cost| cost.model == 2 && cost.coeffs.len() > GEN_IO_COEFFICIENTS)
+        })
+        .count();
+    if long_costs > 0 {
+        warnings.push(&F.value_truncated, format!(
+            "{long_costs} generator cost curve(s) truncated to a cubic: a PowerWorld .aux Gen row states GenFixedCost, GenIOB, GenIOC, and GenIOD and no higher power of MW"
+        ));
+    }
+    let commitment_costs = net
+        .generators()
+        .iter()
+        .filter(|g| {
+            g.cost
+                .as_ref()
+                .is_some_and(|cost| cost.startup != 0.0 || cost.shutdown != 0.0)
+        })
+        .count();
+    if commitment_costs > 0 {
+        warnings.push(&F.field_dropped, format!(
+            "{commitment_costs} generator startup and shutdown cost(s) dropped: a PowerWorld .aux Gen row states a running cost curve and no commitment cost"
+        ));
+    }
+    // A cost curve with fewer than four coefficients reads back padded with
+    // leading zeros, which states the same cost at every MW but not the same
+    // coefficient count.
+    let padded_costs = net
+        .generators()
+        .iter()
+        .filter(|g| {
+            g.cost
+                .as_ref()
+                .is_some_and(|cost| cost.model == 2 && cost.coeffs.len() < GEN_IO_COEFFICIENTS)
+        })
+        .count();
+    if padded_costs > 0 {
+        warnings.push(&F.value_defaulted, format!(
+            "{padded_costs} generator cost curve(s) read back as four coefficients: a PowerWorld .aux Gen row states GenFixedCost, GenIOB, GenIOC, and GenIOD and no coefficient count, so a shorter curve returns padded with leading zeros"
+        ));
     }
     if !net.hvdc().is_empty() {
         warnings.push(
             &F.record_dropped,
             format!(
-                "{} dcline(s) dropped: PowerWorld HVDC not modeled",
+                "{} dcline(s) dropped: a PowerWorld DC line is a separate object family, and no vendored \
+                 .aux export states its field names, so writing one would invent a vocabulary",
                 net.hvdc().len()
             ),
         );
     }
     if !net.transformers_3w().is_empty() {
         warnings.push(&F.record_dropped, format!(
-            "{} 3-winding transformer(s) dropped: the PowerWorld .aux writer emits no 3-winding record",
+            "{} 3-winding transformer(s) dropped: a PowerWorld .aux Branch row states two terminals, so a three winding record needs the star bus and three branches a projection would synthesize",
             net.transformers_3w().len()
         ));
     }
@@ -924,14 +1046,16 @@ pub(crate) fn write_powerworld(net: &BalancedNetwork) -> TextEmission {
     {
         warnings.push(
             &F.field_dropped,
-            "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band",
+            "emergency voltage band(s) (EVHI/EVLO) dropped: a PowerWorld .aux Bus row states one BusVMax/BusVMin pair",
         );
     }
     if !net.storage().is_empty() {
         warnings.push(
             &F.record_dropped,
             format!(
-                "{} storage unit(s) dropped: PowerWorld storage not modeled",
+                "{} storage unit(s) dropped: a PowerWorld energy storage object is a separate object family, \
+                 and no vendored .aux export states its field names, so writing one would invent \
+                 a vocabulary",
                 net.storage().len()
             ),
         );
@@ -947,7 +1071,7 @@ pub(crate) fn write_powerworld(net: &BalancedNetwork) -> TextEmission {
         .count();
     if voltage_loads > 0 {
         warnings.push(&F.field_dropped, format!(
-            "{voltage_loads} voltage dependent load model(s) dropped: PowerWorld Load records carry static MW/MVR only"
+            "{voltage_loads} voltage dependent load model(s) dropped: a PowerWorld .aux Load row states constant MW/MVR, constant current, and constant impedance components and no exponential model or model nominal voltage"
         ));
     }
     let terminal_charging = net
@@ -957,7 +1081,7 @@ pub(crate) fn write_powerworld(net: &BalancedNetwork) -> TextEmission {
         .count();
     if terminal_charging > 0 {
         warnings.push(&F.value_collapsed, format!(
-            "{terminal_charging} branch terminal admittance record(s) collapsed to total susceptance: PowerWorld aux branch rows written here cannot carry conductance or asymmetric terminal charging"
+            "{terminal_charging} branch terminal admittance record(s) collapsed to total susceptance: a PowerWorld .aux Branch row states one LineC and no terminal conductance"
         ));
     }
     let current_ratings = net
@@ -967,7 +1091,7 @@ pub(crate) fn write_powerworld(net: &BalancedNetwork) -> TextEmission {
         .count();
     if current_ratings > 0 {
         warnings.push(&F.field_dropped, format!(
-            "{current_ratings} branch current rating record(s) dropped: PowerWorld aux branch rows written here carry MVA ratings only"
+            "{current_ratings} branch current rating record(s) dropped: a PowerWorld .aux Branch row states its ratings in MVA through LineAMVA, LineBMVA, and LineCMVA"
         ));
     }
     warn_extra_branch_rating_sets(&F, "PowerWorld .aux", net, &mut warnings);
@@ -990,19 +1114,19 @@ pub(crate) fn write_powerworld(net: &BalancedNetwork) -> TextEmission {
         .count();
     if branch_solutions > 0 {
         warnings.push(&F.field_dropped, format!(
-            "{branch_solutions} branch solution value set(s) dropped: PowerWorld aux result fields are not written"
+            "{branch_solutions} branch solution value set(s) dropped: a PowerWorld .aux flow field is a case result, and no vendored .aux export states its field names, so writing one would invent a vocabulary"
         ));
     }
     if net.branches().iter().any(Branch::has_angle_limits) {
         warnings.push(
             &F.field_dropped,
-            "branch angle limits (angmin/angmax) dropped: not written to PowerWorld .aux",
+            "branch angle limits (angmin/angmax) dropped: a PowerWorld .aux Branch row states no angle difference limit",
         );
     }
     if net.generators().iter().any(Generator::has_caps) {
         warnings.push(
             &F.field_dropped,
-            "generator ramp/capability columns dropped: not written to PowerWorld .aux",
+            "generator ramp/capability columns dropped: a PowerWorld .aux Gen row states no reactive capability curve point, and its ramp rate fields are named by no vendored export",
         );
     }
     if nonfinite {
