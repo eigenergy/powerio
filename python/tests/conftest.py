@@ -10,7 +10,7 @@ DATA = Path(__file__).resolve().parents[2] / "tests" / "data"
 
 @pytest.fixture
 def time_series_powerio_ir() -> str:
-    """A version 1 module containing two balanced operating points."""
+    """A serialized module containing two balanced operating points."""
     network_module = json.loads(powerio.serialize(powerio.parse(DATA / "case9.m")).text)
     return json.dumps(
         {

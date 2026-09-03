@@ -224,6 +224,7 @@ def test_about_reports_exact_tool_list():
     about = server._about_tool()
     assert about["powerio_version"] == powerio.__version__
     assert about["module_schema"]["name"] == "powerio.module"
+    assert about["module_schema"]["version"] == powerio.__version__
     assert "parse" in about["tools"]
     assert "export_state" not in about["tools"]
 

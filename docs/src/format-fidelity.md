@@ -98,8 +98,8 @@ bash evals/validation/run_validation.sh
 
 The oracle tools (PowerModels.jl, egret, ExaPowerIO.jl, pandapower, PyPSA) are
 benchmark scoped: they are declared only in `evals/validation/Project.toml` and
-`evals/validation/requirements.txt`, and the powerio package itself has no
-dependency on them.
+`evals/validation/requirements.txt`; no PowerIO release artifact depends on
+them.
 `evals/validation/run_validation.sh` requires the Python oracles to import in the
 selected Python 3.11+ environment; a missing PyPSA, pandapower, or egret import
 is a setup failure.

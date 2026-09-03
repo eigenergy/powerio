@@ -1,16 +1,32 @@
 # Changelog
 
-## 1.0.0 (unreleased)
+## 0.11.0 (unreleased)
 
-PowerIO 1.0 has four representation operations: `parse`, `emit`, `serialize`,
+PowerIO 0.11 is the stabilization release for the API developed through the
+0.10 beta. It has four representation operations: `parse`, `emit`, `serialize`,
 and `deserialize`. Paths, streams, and memory enter through `Source`; separate
 file, text, and byte parsing functions are gone. `PioModule<T>` stores the
 value, diagnostics, sources, provenance, and history. Rust matches `PioValue`,
 Python uses `isinstance`, Julia uses multiple dispatch, and C uses structural
 type names and typed borrowed accessors.
 
-PowerIO IR has one document shape: `"schema": "powerio.module"` and
-`"version": 1`. The 0.10 beta document readers and upgrade code are removed.
+PowerIO IR is the only PowerIO-owned JSON document. The standalone
+`BalancedNetwork::to_json`, `from_json`, and `to_json_with_diagnostics`
+operations and the `model-json` classifier family are removed. A bare object
+shaped like a `BalancedNetwork` is neither PowerIO IR nor a grid exchange
+format; wrap the value in `PioModule` and call `serialize`.
+
+This release deliberately remains pre-1.0 because public Rust signatures still
+expose types from the pre-1.0 `sprs` and `petgraph` crates. The 0.11.x line is
+reserved for compatible bug fixes, performance improvements, and additive
+work; an unavoidable breaking public API change moves to 0.12. PowerIO 1.0
+follows a downstream stabilization cycle and an explicit decision about those
+public dependency boundaries.
+
+PowerIO IR has one current document shape: `"schema": "powerio.module"` and
+`"version": "0.11.0"`. Beginning with this release, its version equals the
+`powerio` crate version. Readers and upgrade code for earlier documents are
+removed.
 C ABI 7 is the only C ABI and contains no aliases for earlier ABI generations.
 
 `BalancedNetwork` and `MulticonductorNetwork` are the two electrical network
@@ -59,7 +75,7 @@ PowSybl XIIDM 1.12 through 1.17 and CIM CGMES 2.4.15 and 3.0 now parse and
 emit through `BalancedNetwork`; fresh output uses XIIDM 1.17 and CGMES 3.0.
 The CGMES reader and writer build on Mohamed Numair's original contribution;
 `evals/powsybl/cgmes-contribution-audit.md` records how each part of that work
-appears in 1.0.
+appears in 0.11.
 The source neutral model retains detailed bus breaker and node breaker
 connectivity, hierarchy, terminals, switches, operational limits, tap changer
 steps and controls, reactive limits, external identities, aliases, AC and DC
@@ -193,7 +209,7 @@ parse to it, `emit` writes one as `geo-json`, PowerIO IR carries it, and
 `pio_value_geo_layer` takes it in C. Which value a format produces is data
 rather than a choice of operation, so no reading verb stands beside `parse`. Python and Julia
 keep their `format` keyword and C ABI 7 is unchanged. See
-`docs/src/migration-v1.md` for the table of replacements.
+`docs/src/migration-0.11.md` for the table of replacements.
 
 ## 0.10.0
 
@@ -201,9 +217,10 @@ PowerIO 0.10 is the public beta of the 1.0 API. API corrections may land before 
 
 `powerio::parse(source)` returns `PioModule<PioValue>`. The value is a balanced network, multiconductor network, time series, scenario set, problem instance, or solution. DOE GO Challenge 3 JSON produces `AcScucInstance`, BMOPF JSON produces `McAcOpfInstance`, and DeepMind OPFData JSON produces `AcOpfSolution`. PyPSA snapshot axes, Egret time keys, and GridFM scenarios remain typed.
 
-`.pio.json` stores one module with schema `powerio.module/1`. The beta document
-contains the typed value, source descriptions, source map, diagnostics,
-history, and extensions. Its reader and API are not part of PowerIO 1.0.
+`.pio.json` stores one module with `"schema": "powerio.module"` and
+`"version": 1`. The beta document contains the typed value, source
+descriptions, source map, diagnostics, history, and extensions. Its reader and
+API are not part of the current PowerIO IR.
 
 `powerio-core` defines sources, diagnostics, and modules. `powerio-tx` and `powerio-dist` define the two network families. `powerio-prob` defines problem instances and solutions. `powerio-matrix` builds sparse matrices and graph data. The `powerio` crate provides format dispatch and the combined public API.
 
@@ -369,8 +386,8 @@ Row provenance from the normalize pass, a PYPOWER bridge, `null` for a nonfinite
 
 Text-writer hardening, JSON reader fidelity, a document-version report
 over the C ABI, and a release gate that tests the Julia binding before any
-binary ships. No breaking changes: every 0.8.0 API, format token, and wire
-version is unchanged.
+binary ships. No breaking changes: every 0.8.0 API, format token, and serialized
+document is unchanged.
 
 **Security.** The psse, pslf, powerworld, and OpenDSS writers replace a
 line terminator inside any quoted or free-text field. A name that held a
@@ -685,10 +702,10 @@ several gaps in that model.
 
 ## 0.7.1
 
-- The SCOPF wire conversion is structural (#252): every struct reaching
-  the wire classifies its fields (index, renamed, value) through an exhaustive
+- The SCOPF serialization conversion is structural (#252): every serialized
+  struct classifies its fields (index, renamed, value) through an exhaustive
   destructure, so a new field fails to compile until classified and a value
-  field reusing an index name is never renumbered. Wire output is unchanged.
+  field reusing an index name is never renumbered. Serialized output is unchanged.
 - GOC3 parses once per read (#250): the reader hands its parsed document
   forward as `Parsed::document`, and the package boundary derives the
   operating point series from it instead of reparsing the retained text.
@@ -746,7 +763,7 @@ several gaps in that model.
   assign zone indices from the same document order as the reserve rows
   (sorted order previously crossed `n_p`/`n_q` between the two tables and
   diverged from `src/goc3.jl` past nine zones); a GOC3 branch with
-  `r = x = 0` is rejected by name instead of writing NaN into the wire
+  `r = x = 0` is rejected by name instead of writing NaN into the serialized
   rows; a missing `device_type` defaults to `producer`, the balanced
   reader's rule; the AC instance folds self-loop branch admittance into
   the bus shunt vectors, matching `build_ybus`; both instance builders
@@ -853,10 +870,11 @@ several gaps in that model.
 ## 0.6.0
 
 - Breaking (#175): `ElementRef.row` is `Option<usize>`, the honest form of the
-  0.5.1 wire semantics. `None` addresses by identity alone (refs built with
-  `by_source_uid`); the private wire-presence shim (`wire_row()`) is gone, and
-  `row` itself says whether the wire carried one. The `.pio.json` wire format
-  is unchanged. The other break collected in #175, keyed-object addressing for
+  0.5.1 serialized semantics. `None` addresses by identity alone (refs built
+  with `by_source_uid`); the private presence shim (`wire_row()`) is gone, and
+  `row` itself says whether the serialized document carried one. The
+  `.pio.json` format is unchanged. The other break collected in #175,
+  keyed-object addressing for
   multiconductor operating point updates, needs design and moves to the 1.0
   window (#196).
 - C ABI: the package payload extraction inverses land as additive symbols (no
@@ -914,9 +932,9 @@ several gaps in that model.
   agree with the resolved row, unknown or duplicated identities are rejected
   (at materialization and by `pio_package_validate` via the
   `VALIDATE.PACKAGE.OPERATING_IDENTITY` pass), and `row` may be omitted on the
-  wire (`ElementRef::by_source_uid`). Tables without uids keep the pre-0.5.1
+  document (`ElementRef::by_source_uid`). Tables without uids keep the pre-0.5.1
   row-only semantics, so existing packages materialize as before. Provenance
-  cleanup paths now come from the resolved row, not the wire row.
+  cleanup paths now come from the resolved row, not the serialized row.
 - Python: network table dicts expose `uid`; unknown identities raise
   `ValueError` from `Package.materialize_operating_point`. C ABI: no signature
   changes; materialization reports identity failures through `errbuf`.

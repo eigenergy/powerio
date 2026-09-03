@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PowerIO 1.0 ships exactly ABI 7. This gate checks the ABI number, rejects
+# PowerIO 0.11 ships exactly ABI 7. This gate checks the ABI number, rejects
 # removed beta entry points, and checks a paired PowerIO.jl checkout when one
 # is available.
 set -euo pipefail

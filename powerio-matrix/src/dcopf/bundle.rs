@@ -254,7 +254,7 @@ fn emit_prepared(
         synthesized_gen_costs: options.metadata.cost_report.synthesized,
         patched_gen_costs: options.metadata.cost_report.patched,
         // The manifest lists the operator files it describes; it does not
-        // list itself, matching the wire form consumers already read.
+        // list itself, matching the manifest shape consumers already read.
         files: inventory
             .iter()
             .map(|(name, _)| (*name).to_string())

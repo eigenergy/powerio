@@ -5,12 +5,12 @@
 //!
 //! # What the tables cover
 //!
-//! Every format PowerIO 1.0 reads is a source row and every format it writes
-//! is a target column: the balanced case formats, the PowSybl and ENTSO-E
-//! exchange formats (XIIDM, JIIDM, CGMES, UCTE-DEF), the dataset directories
-//! (PyPSA CSV, GridFM Parquet), PowerIO's own network document, and the three
-//! read only sources (PSS/E RAW revision 32, IEEE CDF, GO Challenge 3, and
-//! DeepMind OPFData). That is twenty rows and sixteen columns, which no PR
+//! The transmission matrix has a source row for every supported output plus
+//! four read-only source rows. Its target columns cover the balanced case
+//! formats, the PowSybl and ENTSO-E exchange formats (XIIDM, JIIDM, CGMES,
+//! UCTE-DEF), and the dataset directories (PyPSA CSV and GridFM Parquet). The
+//! read-only rows cover PSS/E RAW revision 32, IEEE CDF, GO Challenge 3, and
+//! DeepMind OPFData. That is nineteen rows and fifteen columns, which no PR
 //! comment renders readably as one table, so the columns are grouped by what
 //! the formats are for and each group keeps every source row. The grouping
 //! changes the layout and not the cells: every source is still run into every
@@ -215,13 +215,6 @@ fn emit_transmission(
     network: &BalancedNetwork,
     format: TransmissionFormat,
 ) -> Result<TransmissionEmission, String> {
-    if format.emission == Emission::ModelJson {
-        let text = network.to_json().map_err(|err| err.to_string())?;
-        return Ok(TransmissionEmission {
-            emitted: Emitted::Document(text),
-            diagnostics: Vec::new(),
-        });
-    }
     let module = powerio_core::PioModule::new(network.clone());
     if format.emission == Emission::Directory {
         let directory = tempfile::tempdir().map_err(|err| err.to_string())?;
@@ -266,13 +259,6 @@ fn parse_transmission_emitted(
     format: TransmissionFormat,
 ) -> Result<ParsedTransmission, String> {
     match emitted {
-        Emitted::Document(text) if format.emission == Emission::ModelJson => {
-            let network = BalancedNetwork::from_json(text).map_err(|err| err.to_string())?;
-            Ok(ParsedTransmission {
-                network,
-                warnings: Vec::new(),
-            })
-        }
         Emitted::Document(text) => {
             let source = powerio_core::Source::from_memory("<memory>", text.as_bytes().to_vec())
                 .map_err(|err| err.to_string())?;
@@ -405,7 +391,7 @@ fn build_report() -> Report {
     writeln!(markdown).unwrap();
     write_matrix_section(&mut markdown, "Distribution", &distribution);
     writeln!(markdown).unwrap();
-    write_matrix_section(&mut markdown, "Geographic layer", &geo);
+    write_matrix_section(&mut markdown, "Geographic Layer", &geo);
     writeln!(markdown).unwrap();
     writeln!(
         markdown,
@@ -438,7 +424,7 @@ fn build_report() -> Report {
     writeln!(details_markdown).unwrap();
     write_warning_summary(&mut details_markdown, "Distribution", &distribution);
     writeln!(details_markdown).unwrap();
-    write_warning_summary(&mut details_markdown, "Geographic layer", &geo);
+    write_warning_summary(&mut details_markdown, "Geographic Layer", &geo);
 
     Report {
         markdown,
@@ -571,7 +557,7 @@ fn cell_summary(cell: &Cell) -> String {
 }
 
 fn write_warning_summary(markdown: &mut String, title: &str, report: &MatrixReport) {
-    writeln!(markdown, "#### {title} Warning Details").unwrap();
+    writeln!(markdown, "### {title} Warning Details").unwrap();
     writeln!(markdown).unwrap();
     writeln!(
         markdown,
@@ -621,7 +607,8 @@ fn write_cell_details(markdown: &mut String, cell: &Cell) {
     }
     let omitted = warnings.len().saturating_sub(MAX_WARNING_DETAILS_PER_PAIR);
     if omitted > 0 {
-        details.push(format!("{omitted} more warning texts"));
+        let noun = if omitted == 1 { "text" } else { "texts" };
+        details.push(format!("{omitted} more warning {noun}"));
     }
 
     if details.is_empty() {
@@ -712,7 +699,7 @@ fn code_object_name(text: &str) -> String {
 }
 
 /// Which table a target column renders in. One table of every source against
-/// every target is 20 rows by 16 columns, which no PR comment renders
+/// every target is 19 rows by 15 columns, which no PR comment renders
 /// readably, so the columns are grouped by what the formats are for and every
 /// group keeps every source row. No cell is dropped by the grouping.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -721,7 +708,7 @@ enum Family {
     Case,
     /// The PowSybl and ENTSO-E exchange formats, which state absolute units.
     Exchange,
-    /// Dataset directories and PowerIO's own network document.
+    /// Dataset directories.
     Dataset,
 }
 
@@ -732,7 +719,7 @@ impl Family {
         match self {
             Self::Case => "Into a case format",
             Self::Exchange => "Into an exchange format",
-            Self::Dataset => "Into a dataset directory or the network document",
+            Self::Dataset => "Into a dataset directory",
         }
     }
 }
@@ -745,9 +732,6 @@ enum Emission {
     /// A directory of documents whose identity is the directory, so it is
     /// emitted into and read back from a temporary directory.
     Directory,
-    /// `BalancedNetwork`'s own JSON document. It is a network serialization
-    /// rather than a case format, so it has no format token to emit through.
-    ModelJson,
     /// A read only format: a source row and no target column.
     ReadOnly,
 }
@@ -793,10 +777,10 @@ const fn read_only(
     }
 }
 
-/// Every 1.0 transmission format. The writable ones are both source rows and
+/// Every 0.11 transmission format. The writable ones are both source rows and
 /// target columns, in this order; the read only ones are source rows only and
 /// come last, so a target column index indexes this array directly.
-const TRANSMISSION_FORMATS: [TransmissionFormat; 20] = [
+const TRANSMISSION_FORMATS: [TransmissionFormat; 19] = [
     transmission("MATPOWER .m", "matpower", Emission::Document, Family::Case),
     transmission(
         "PowerModels JSON",
@@ -847,12 +831,6 @@ const TRANSMISSION_FORMATS: [TransmissionFormat; 20] = [
         Emission::Directory,
         Family::Dataset,
     ),
-    transmission(
-        "model JSON",
-        "model-json",
-        Emission::ModelJson,
-        Family::Dataset,
-    ),
     read_only(
         "PSS/E .raw 32",
         "psse",
@@ -880,7 +858,7 @@ const TRANSMISSION_FORMATS: [TransmissionFormat; 20] = [
 ];
 
 /// The number of writable formats, which is the number of target columns.
-const TRANSMISSION_TARGETS: usize = 16;
+const TRANSMISSION_TARGETS: usize = 15;
 
 fn transmission_targets() -> impl Iterator<Item = (usize, TransmissionFormat)> {
     TRANSMISSION_FORMATS
@@ -1037,10 +1015,6 @@ fn transmission_targets() -> impl Iterator<Item = (usize, TransmissionFormat)> {
 //   storage, areas, bus names, rate_b/rate_c, generator mbase and ramp limits,
 //   startup and shutdown costs) and the per bus load folding its table shape
 //   forces.
-// - The `→ model JSON` column is zero for every source but one: the network
-//   document states the whole typed model, so nothing is dropped. The
-//   pandapower row's single warning is its own parse declaring the absolute
-//   cost level a `pwl_cost` table leaves unstated.
 // - The `IEEE CDF`, `GO Challenge 3 JSON`, and `DeepMind OPFData JSON` rows
 //   parse one vendored case each, so their counts are per case rather than per
 //   six.
@@ -1095,31 +1069,26 @@ fn transmission_targets() -> impl Iterator<Item = (usize, TransmissionFormat)> {
 //   contain switched shunt controls, so the XIIDM, JIIDM, and CGMES source
 //   rows each add two warnings in the MATPOWER column rather than silently
 //   discarding the control records.
-const TRANSMISSION_WARNING_BASELINE: [[usize; TRANSMISSION_TARGETS]; 20] = [
-    [0, 1, 15, 15, 18, 7, 15, 23, 14, 76, 76, 64, 48, 15, 27, 0], // MATPOWER .m
-    [0, 0, 15, 15, 17, 6, 14, 22, 13, 75, 75, 63, 47, 14, 27, 0], // PowerModels JSON
-    [1, 1, 0, 0, 2, 1, 3, 1, 2, 38, 38, 19, 35, 9, 32, 0],        // PSS/E .raw 33
-    [1, 1, 0, 0, 2, 1, 3, 1, 2, 38, 38, 19, 35, 9, 32, 0],        // PSS/E RAWX 35
-    [1, 0, 6, 6, 0, 0, 8, 0, 6, 60, 60, 37, 39, 13, 32, 0],       // PowerWorld .aux
-    [0, 0, 9, 9, 12, 0, 8, 1, 7, 74, 74, 43, 42, 9, 27, 0],       // egret JSON
-    [1, 1, 8, 8, 9, 1, 2, 1, 8, 62, 62, 43, 59, 9, 28, 1],        // pandapower JSON
-    [0, 0, 9, 9, 12, 0, 7, 0, 7, 73, 73, 43, 42, 9, 27, 0],       // Surge JSON
-    [0, 0, 1, 1, 1, 0, 4, 3, 0, 44, 44, 18, 34, 8, 32, 0],        // PSLF .epc
-    [9, 7, 39, 39, 8, 7, 9, 7, 8, 12, 12, 191, 66, 15, 38, 6],    // XIIDM 1.17
-    [9, 7, 39, 39, 8, 7, 9, 7, 8, 12, 12, 191, 66, 15, 38, 6],    // JIIDM 1.17
-    [9, 7, 74, 327, 7, 7, 8, 7, 7, 50, 50, 19, 58, 14, 39, 7],    // CGMES 3.0
-    [
-        25, 19, 13, 13, 25, 19, 13, 19, 25, 49, 49, 26, 13, 19, 37, 7,
-    ], // UCTE-DEF .uct
-    [0, 6, 14, 14, 14, 6, 9, 6, 12, 76, 76, 45, 44, 0, 27, 0],    // PyPSA CSV
-    [
-        28, 27, 35, 35, 35, 27, 30, 27, 33, 95, 95, 64, 67, 33, 54, 27,
-    ], // GridFM Parquet
-    [0, 1, 15, 15, 18, 7, 15, 23, 14, 76, 76, 64, 48, 15, 27, 0], // model JSON
-    [4, 3, 2, 2, 3, 3, 4, 3, 5, 16, 16, 11, 10, 5, 8, 2],         // PSS/E .raw 32
-    [7, 7, 6, 6, 7, 7, 8, 7, 7, 14, 14, 10, 14, 8, 12, 6],        // IEEE CDF
-    [5, 4, 7, 7, 8, 4, 7, 4, 6, 9, 9, 9, 14, 8, 7, 1],            // GO Challenge 3 JSON
-    [3, 2, 5, 5, 5, 3, 4, 2, 4, 33, 33, 10, 32, 5, 8, 2],         // DeepMind OPFData JSON
+const TRANSMISSION_WARNING_BASELINE: [[usize; TRANSMISSION_TARGETS]; 19] = [
+    [0, 1, 15, 15, 18, 7, 15, 23, 14, 76, 76, 64, 48, 15, 27], // MATPOWER .m
+    [0, 0, 15, 15, 17, 6, 14, 22, 13, 75, 75, 63, 47, 14, 27], // PowerModels JSON
+    [1, 1, 0, 0, 2, 1, 3, 1, 2, 38, 38, 19, 35, 9, 32],        // PSS/E .raw 33
+    [1, 1, 0, 0, 2, 1, 3, 1, 2, 38, 38, 19, 35, 9, 32],        // PSS/E RAWX 35
+    [1, 0, 6, 6, 0, 0, 8, 0, 6, 60, 60, 37, 39, 13, 32],       // PowerWorld .aux
+    [0, 0, 9, 9, 12, 0, 8, 1, 7, 74, 74, 43, 42, 9, 27],       // egret JSON
+    [1, 1, 8, 8, 9, 1, 2, 1, 8, 62, 62, 43, 59, 9, 28],        // pandapower JSON
+    [0, 0, 9, 9, 12, 0, 7, 0, 7, 73, 73, 43, 42, 9, 27],       // Surge JSON
+    [0, 0, 1, 1, 1, 0, 4, 3, 0, 44, 44, 18, 34, 8, 32],        // PSLF .epc
+    [9, 7, 39, 39, 8, 7, 9, 7, 8, 12, 12, 191, 66, 15, 38],    // XIIDM 1.17
+    [9, 7, 39, 39, 8, 7, 9, 7, 8, 12, 12, 191, 66, 15, 38],    // JIIDM 1.17
+    [9, 7, 74, 327, 7, 7, 8, 7, 7, 50, 50, 19, 58, 14, 39],    // CGMES 3.0
+    [25, 19, 13, 13, 25, 19, 13, 19, 25, 49, 49, 26, 13, 19, 37], // UCTE-DEF .uct
+    [0, 6, 14, 14, 14, 6, 9, 6, 12, 76, 76, 45, 44, 0, 27],    // PyPSA CSV
+    [28, 27, 35, 35, 35, 27, 30, 27, 33, 95, 95, 64, 67, 33, 54], // GridFM Parquet
+    [4, 3, 2, 2, 3, 3, 4, 3, 5, 16, 16, 11, 10, 5, 8],         // PSS/E .raw 32
+    [7, 7, 6, 6, 7, 7, 8, 7, 7, 14, 14, 10, 14, 8, 12],        // IEEE CDF
+    [5, 4, 7, 7, 8, 4, 7, 4, 6, 9, 9, 9, 14, 8, 7],            // GO Challenge 3 JSON
+    [3, 2, 5, 5, 5, 3, 4, 2, 4, 33, 33, 10, 32, 5, 8],         // DeepMind OPFData JSON
 ];
 
 const TRANSMISSION_CASES: [(&str, &str); 6] = [
@@ -1909,12 +1878,10 @@ fn core_survives(
 /// source format.
 ///
 /// The matrix above measures what survives a case format hop; this measures
-/// what survives powerio's own document, which must be everything. It is the
-/// per fixture lossless signal, over the same corpus the matrix walks rather
-/// than over synthetic fixtures: a serde rename, a dropped `serde(default)`,
-/// or a field that fails to serialize shows up on the first case that carries
-/// it. The model JSON leg is checked alongside, since the module carries the
-/// same payload under `model.balanced_network`.
+/// what survives PowerIO IR, which must be everything. It is the per-fixture
+/// lossless signal over the same corpus the matrix walks rather than over
+/// synthetic fixtures: a serde rename, a dropped `serde(default)`, or a field
+/// that fails to serialize shows up on the first case that carries it.
 #[test]
 fn every_fixture_round_trips_through_ir() {
     let mut failures: Vec<String> = Vec::new();
@@ -1929,9 +1896,6 @@ fn every_fixture_round_trips_through_ir() {
         };
         for payload in payloads {
             let where_ = format!("{} as {}", payload.label, format.name);
-            if let Err(err) = model_json_echoes(&payload.network) {
-                failures.push(format!("{where_}: {err}"));
-            }
             if let Err(err) = ir_preserves_network(payload.network) {
                 failures.push(format!("{where_}: {err}"));
             }
@@ -1957,19 +1921,6 @@ fn every_fixture_round_trips_through_ir() {
     }
 
     assert!(failures.is_empty(), "{}", failures.join("\n"));
-}
-
-/// A balanced network survives a model JSON write and readback unchanged.
-fn model_json_echoes(net: &BalancedNetwork) -> Result<(), String> {
-    let text = net
-        .to_json()
-        .map_err(|err| format!("model JSON write: {err}"))?;
-    let back =
-        BalancedNetwork::from_json(&text).map_err(|err| format!("model JSON readback: {err}"))?;
-    if transmission_value(&back) != transmission_value(net) {
-        return Err("model JSON changed the model".to_owned());
-    }
-    Ok(())
 }
 
 /// A balanced network survives PowerIO IR serialization and deserialization

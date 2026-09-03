@@ -1,4 +1,4 @@
-//! Wave 0 allocation, peak memory, and wall time baseline for PowerIO 1.0.
+//! Wave 0 allocation, peak memory, and wall time baseline for PowerIO 0.11.
 //!
 //! Not part of the workspace. It links the current crates by path and reports
 //! deterministic allocation counts so later branches have a real "before".

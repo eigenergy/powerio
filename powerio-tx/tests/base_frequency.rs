@@ -112,17 +112,19 @@ fn dropped_frequency_warns_for_formats_without_a_field() {
     }
 }
 
-/// The JSON transport carries the field, and JSON written before it existed
-/// (without the key) deserializes to the 60 Hz default.
+/// Serde carries the field, and stored data written before it existed (without
+/// the key) deserializes to the 60 Hz default.
 #[test]
-fn json_transport_round_trips_and_defaults() {
+fn serde_round_trips_and_defaults() {
     let raw = "0, 100.00, 33, 0, 0, 50.00 / x\nCASE\nCOMMENT\n\
         1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9\n\
         0 / END OF BUS DATA, BEGIN LOAD DATA\nQ\n";
     let net = parse_psse(raw).unwrap();
-    let json = net.to_json().unwrap();
+    let json = serde_json::to_string(&net).unwrap();
     assert_eq!(
-        BalancedNetwork::from_json(&json).unwrap().base_frequency(),
+        serde_json::from_str::<BalancedNetwork>(&json)
+            .unwrap()
+            .base_frequency(),
         50.0
     );
 
@@ -132,7 +134,7 @@ fn json_transport_round_trips_and_defaults() {
         v.as_object_mut().unwrap().remove("base_frequency");
         v
     };
-    let restored = BalancedNetwork::from_json(&without.to_string()).unwrap();
+    let restored: BalancedNetwork = serde_json::from_value(without).unwrap();
     assert_eq!(restored.base_frequency(), DEFAULT_BASE_FREQUENCY);
 }
 

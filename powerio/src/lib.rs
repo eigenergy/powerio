@@ -73,6 +73,15 @@
 /// The facade version recorded on producers and stored modules.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// The discriminator written in every current PowerIO IR document.
+pub const IR_SCHEMA_NAME: &str = "powerio.module";
+
+/// The current PowerIO IR schema version.
+///
+/// Beginning with PowerIO 0.11.0, the schema version is the `powerio` crate
+/// version. The C ABI is versioned independently.
+pub const IR_SCHEMA_VERSION: &str = VERSION;
+
 use powerio_tx::format;
 pub use powerio_tx::{
     Area, BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, BranchRatingSet,
@@ -375,10 +384,8 @@ impl ParseOptions {
 /// extension) routes the same way, and every other name routes to
 /// the balanced network hub, whose own detection and refusals apply.
 ///
-/// Bare model JSON, the network serialization, decodes to
-/// [`PioValue::BalancedNetwork`] like any other balanced source. PowerIO IR is
-/// not a grid exchange format: [`parse`] refuses it and [`deserialize`] reads
-/// the PowerIO 1.0 IR.
+/// PowerIO IR is not a grid exchange format: [`parse`] refuses it and
+/// [`deserialize`] reads the current PowerIO IR document.
 ///
 /// # Errors
 /// The routed family's failure, carrying its findings and the retained
@@ -815,12 +822,12 @@ fn json_family(
             &codes::REQUEST_PARSE_POWERIO_IR,
             "PowerIO IR is not a grid exchange format; call deserialize(source)",
         )),
-        // The balanced hub's own JSON detection carries the refusal
-        // wording for unrecognized or ambiguous documents, and decodes bare
-        // model JSON itself; it gets this classification so it never
-        // re-derives it from the same bytes.
-        JsonClass::Case(Detection::Known(_) | Detection::Ambiguous | Detection::Unknown)
-        | JsonClass::ModelJson => Ok(RoutedFamily::Balanced(Some(class))),
+        // The balanced hub owns the refusal wording for unrecognized or
+        // ambiguous documents. Pass the classification through so it does not
+        // inspect the same bytes twice.
+        JsonClass::Case(Detection::Known(_) | Detection::Ambiguous | Detection::Unknown) => {
+            Ok(RoutedFamily::Balanced(Some(class)))
+        }
     }
 }
 
@@ -829,9 +836,6 @@ fn json_family(
 fn family_of_token(token: &str) -> RoutedFamily {
     use format::TargetFormat;
 
-    if token == "model-json" {
-        return RoutedFamily::Balanced(None);
-    }
     if is_geo_token(token) {
         return RoutedFamily::Geo;
     }
@@ -1005,17 +1009,13 @@ mod tests {
     }
 
     #[test]
-    fn bare_model_json_parses_to_a_balanced_network() {
-        use powerio_tx::{Bus, BusId, BusType};
-        let network = powerio_tx::BalancedNetwork::in_memory(
-            "transport",
-            100.0,
-            vec![Bus::new(BusId(1), BusType::Ref, 230.0)],
-            vec![],
-        );
-        let json = network.to_json().expect("network serializes");
-        let module = parse(memory("net.json", &json)).expect("model json parses");
-        assert_value_type(&module, "powerio.BalancedNetwork");
+    fn a_bare_network_object_is_not_powerio_ir_or_a_case_format() {
+        let error = parse(memory(
+            "net.json",
+            r#"{"name":"network","base_mva":100.0,"buses":[],"branches":[]}"#,
+        ))
+        .expect_err("an unmarked network object must not parse");
+        assert!(error.to_string().contains("cannot infer JSON format"));
     }
 
     #[test]
@@ -1161,27 +1161,15 @@ mod tests {
 
     #[test]
     fn nameless_json_text_routes_by_content() {
-        use powerio_tx::{Bus, BusId, BusType};
         // An in-memory source has no extension, so the family comes
-        // from the document's own markers: a calculation defining format, a
-        // distribution format, and bare model JSON all dispatch the same way
-        // they would from a `.json` file.
+        // from the document's own markers. Calculation and distribution
+        // formats dispatch the same way they would from a `.json` file.
         let goc3 = fixture("../powerio-prob/tests/data/goc3_small.json");
         let module = parse(memory("<memory>", &goc3)).expect("nameless goc3 parses");
         assert_value_type(&module, "powerio.AcScucInstance");
 
         let module = parse(memory("<memory>", BMOPF_TINY)).expect("nameless bmopf parses");
         assert_value_type(&module, "powerio.MulticonductorNetwork");
-
-        let network = powerio_tx::BalancedNetwork::in_memory(
-            "transport",
-            100.0,
-            vec![Bus::new(BusId(1), BusType::Ref, 230.0)],
-            vec![],
-        );
-        let json = network.to_json().expect("network serializes");
-        let module = parse(memory("<memory>", &json)).expect("nameless model json parses");
-        assert_value_type(&module, "powerio.BalancedNetwork");
     }
 
     #[test]

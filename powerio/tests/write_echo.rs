@@ -101,43 +101,6 @@ fn memory_text(result: &powerio_core::EmitResult) -> &str {
 }
 
 #[test]
-fn model_json_emits_matpower_semantically_instead_of_echoing_json() {
-    let case = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case9.m");
-    let original = powerio::parse(Source::open(case).unwrap()).expect("case9 parses");
-    let PioValue::BalancedNetwork(network) = &original.value() else {
-        panic!("case9 must produce a balanced network");
-    };
-    let model_json = network.to_json().expect("model JSON serializes");
-    let source = Source::from_memory("network.json", model_json.as_bytes().to_vec()).unwrap();
-    let module = powerio::parse_with_options(
-        source,
-        &powerio::ParseOptions::default()
-            .format("model-json")
-            .unwrap(),
-    )
-    .expect("declared model JSON parses");
-    assert_eq!(
-        module
-            .source()
-            .and_then(Source::format)
-            .map(powerio_core::FormatId::as_str),
-        Some("model-json")
-    );
-
-    let result = emit(&module, "matpower", Destination::memory("case.m").unwrap())
-        .expect("model JSON emits MATPOWER");
-    let matpower = memory_text(&result);
-    assert!(matpower.contains("mpc.baseMVA"), "{matpower}");
-    assert_ne!(matpower, model_json);
-    let source = Source::from_memory("roundtrip.m", matpower.as_bytes().to_vec()).unwrap();
-    powerio::parse_with_options(
-        source,
-        &powerio::ParseOptions::default().format("matpower").unwrap(),
-    )
-    .expect("emitted MATPOWER parses");
-}
-
-#[test]
 fn serialized_module_emits_matpower_semantically_and_reserializes_exactly() {
     let case = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case9.m");
     let original = powerio::parse(Source::open(case).unwrap()).expect("case9 parses");

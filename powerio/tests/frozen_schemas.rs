@@ -1,9 +1,10 @@
-//! The committed PowerIO 1.0 IR schema matches the implementation.
+//! The committed current PowerIO IR schema matches the implementation, and
+//! the historical schema archive remains intact.
 
 mod helpers;
 use helpers::serialize_module_text;
 
-fn current_ir_version() -> u64 {
+fn current_ir_version() -> String {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case9.m");
     let module = powerio::parse_with_options(
         powerio::Source::open(path).unwrap(),
@@ -12,13 +13,13 @@ fn current_ir_version() -> u64 {
     .unwrap();
     let text = serialize_module_text(&module).unwrap();
     let document: serde_json::Value = serde_json::from_str(&text).unwrap();
-    document["version"].as_u64().unwrap()
+    document["version"].as_str().unwrap().to_owned()
 }
 
-/// PowerIO 1.0 publishes one IR schema. Extra schema directories are stale
-/// prerelease artifacts, not supported document generations.
+/// The directory is one PowerIO IR history, not separate package and module
+/// schema families.
 #[test]
-fn the_schema_directory_contains_only_powerio_1() {
+fn the_schema_directory_contains_the_documented_powerio_ir_history() {
     fn collect_files(root: &std::path::Path, path: &std::path::Path, out: &mut Vec<String>) {
         for entry in std::fs::read_dir(path).unwrap() {
             let entry = entry.unwrap();
@@ -40,7 +41,41 @@ fn the_schema_directory_contains_only_powerio_1() {
     let mut files = Vec::new();
     collect_files(root, root, &mut files);
     files.sort();
-    assert_eq!(files, ["README.md", "pio-module/1/schema.json"]);
+    assert_eq!(
+        files,
+        [
+            "README.md",
+            "pio-module/0.1/schema.json",
+            "pio-module/0.10.0/schema.json",
+            "pio-module/0.11.0/schema.json",
+            "pio-module/0.2/schema.json",
+            "pio-module/0.9/schema.json",
+        ]
+    );
+}
+
+/// Historical files preserve the identifiers that appeared in the checked-in
+/// schemas for those releases, even though the archive now presents them as
+/// one PowerIO IR lineage.
+#[test]
+fn historical_schemas_preserve_their_original_identifiers() {
+    for (version, expected_id) in [
+        ("0.1", "https://powerio.dev/schema/pio-package/0.1"),
+        ("0.2", "https://powerio.dev/schema/pio-package/0.2"),
+        (
+            "0.9",
+            "https://powerio.dev/schema/pio-package/0.9/schema.json",
+        ),
+        (
+            "0.10.0",
+            "https://powerio.dev/schema/pio-module/1/schema.json",
+        ),
+    ] {
+        let path = format!("../docs/schema/pio-module/{version}/schema.json");
+        let text = std::fs::read_to_string(path).unwrap();
+        let schema: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(schema["$id"], expected_id, "historical schema {version}");
+    }
 }
 
 /// The document for this build's PowerIO IR version is committed.

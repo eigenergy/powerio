@@ -119,12 +119,6 @@ fn classify_case_json(text: &str, path: &Path) -> anyhow::Result<DetectedFormat>
              in Python)",
             path.display()
         ),
-        JsonClass::ModelJson => anyhow::bail!(
-            "{} is bare powerio model JSON, which is not a case format; read it with \
-             the bindings' from_json (powerio.from_json in Python, from_json in Julia, \
-             pio_balanced_network_from_json in C)",
-            path.display()
-        ),
         JsonClass::Case(Detection::Ambiguous) => anyhow::bail!(
             "ambiguous JSON markers in {}; pass --from to choose a format",
             path.display()

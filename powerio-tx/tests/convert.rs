@@ -302,10 +302,11 @@ fn rich_writer_warnings_cover_simple_formats() {
 }
 
 #[test]
-fn extra_branch_rating_sets_survive_model_json() {
+fn extra_branch_rating_sets_survive_serde_round_trip() {
     let net = rich_audit_network();
 
-    let back = BalancedNetwork::from_json(&net.to_json().unwrap()).unwrap();
+    let text = serde_json::to_string(&net).unwrap();
+    let back: BalancedNetwork = serde_json::from_str(&text).unwrap();
 
     assert_eq!(back.branches()[0].rating_sets.len(), 1);
     assert_eq!(back.branches()[0].rating_sets[0].name, "RATE4");
@@ -803,7 +804,7 @@ fn powermodels_preserves_rich_branch_and_switch_fields() {
 }
 
 #[test]
-fn rich_powermodels_typed_fields_survive_json_transport() {
+fn rich_powermodels_typed_fields_survive_round_trip() {
     let json = r#"{
         "name": "rich-all",
         "baseMVA": 100.0,
@@ -2358,7 +2359,7 @@ fn slackless_network_conversion_warns_for_power_flow_targets() {
 
 #[test]
 #[allow(clippy::float_cmp)]
-fn model_json_carries_non_finite_values_as_string_spellings() {
+fn network_serde_carries_non_finite_values_as_string_spellings() {
     // JSON has no Inf/NaN literal: powerio spells them "Infinity",
     // "-Infinity", "NaN" and reads either a number or a spelling back, so a
     // network with legitimate Inf limits round trips instead of degrading to
@@ -2366,37 +2367,17 @@ fn model_json_carries_non_finite_values_as_string_spellings() {
     let mut net = parse_matpower_file(data("case9.m")).unwrap();
     net.branches_mut()[2].angmax = f64::INFINITY;
     net.buses_mut()[0].vm = f64::NAN;
-    let (text, diagnostics) = net.to_json_with_diagnostics().unwrap();
-    assert!(
-        diagnostics.is_empty(),
-        "a faithful write reports nothing: {diagnostics:?}"
-    );
+    let text = serde_json::to_string(&net).unwrap();
     assert!(text.contains(r#""angmax":"Infinity""#), "{text}");
     assert!(text.contains(r#""vm":"NaN""#), "{text}");
 
-    let back = BalancedNetwork::from_json(&text).expect("string spellings read back");
+    let back: BalancedNetwork = serde_json::from_str(&text).expect("string spellings read back");
     assert_eq!(back.branches()[2].angmax, f64::INFINITY);
     assert!(back.buses()[0].vm.is_nan());
 
     let invalid = text.replace(r#""angmax":"Infinity""#, r#""angmax":null"#);
-    let err = BalancedNetwork::from_json(&invalid).expect_err("null must be refused");
+    let err = serde_json::from_str::<BalancedNetwork>(&invalid).expect_err("null must be refused");
     assert!(err.to_string().contains("cannot be null"), "got: {err}");
-}
-
-#[test]
-fn model_json_round_trips_through_core_api() {
-    // to_json -> from_json at the core level (the C ABI test covers the same
-    // path over FFI). case30 carries loads, shunts, and gen costs.
-    let net = parse_matpower_file(data("case30.m")).unwrap();
-    let (text, diagnostics) = net.to_json_with_diagnostics().unwrap();
-    assert!(diagnostics.is_empty(), "model JSON writes no records");
-    let back = BalancedNetwork::from_json(&text).unwrap();
-    assert_eq!(back.buses().len(), net.buses().len());
-    assert_eq!(back.branches().len(), net.branches().len());
-    assert_eq!(back.generators().len(), net.generators().len());
-    // Bit-exact: the snapshot is lossless, so even the sign of a zero survives.
-    assert_eq!(back.base_mva().to_bits(), net.base_mva().to_bits());
-    assert_eq!(back.source_format(), net.source_format());
 }
 
 #[test]
@@ -2522,26 +2503,12 @@ fn generator_cost_csv_patches_validate_index_and_bus() {
 }
 
 #[test]
-fn model_json_file_parses_to_the_network_it_serializes() {
-    // Model JSON written to disk carries the generic .json extension. It is
-    // the network serialization rather than a case format, and the sniffer
-    // routes it through `from_json`, so parsing it returns the same network.
+fn a_bare_network_object_is_not_a_case_format() {
     let net = parse_matpower_file(data("case14.m")).unwrap();
-    let text = net.to_json().unwrap();
-    let path = std::env::temp_dir().join(format!(
-        "powerio_model_json_sniff_{}.json",
-        std::process::id()
-    ));
-    std::fs::write(&path, &text).unwrap();
-    let parsed = parse_file(&path, None);
-    std::fs::remove_file(&path).ok();
-    let sniffed = parsed.expect("model JSON parses").network;
-    assert_eq!(sniffed.buses().len(), 14);
-    assert_eq!(sniffed.source_format(), SourceFormat::Matpower);
-
-    let back = BalancedNetwork::from_json(&text).unwrap();
-    assert_eq!(back.buses().len(), 14);
-    assert_eq!(back.source_format(), SourceFormat::Matpower);
+    let text = serde_json::to_string(&net).unwrap();
+    let source = powerio_core::Source::from_memory("network.json", text.into_bytes()).unwrap();
+    let error = powerio_tx::parse(source).expect_err("an unmarked object must not parse");
+    assert!(error.to_string().contains("cannot infer JSON format"));
 }
 
 #[test]
@@ -2549,20 +2516,13 @@ fn the_retired_powerio_json_token_gets_guidance() {
     let err = parse_str("x", "powerio-json").unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("unknown or unsupported case format"), "{msg}");
-    assert!(!msg.contains("model-json"), "{msg}");
 }
 
 #[test]
 fn nameless_json_text_sniffs_like_a_json_file() {
-    // An in-memory source has no extension to state, so a JSON document is
-    // sniffed from the content: model JSON and a known case format both
-    // parse, and non-JSON text keeps the extension refusal.
+    // An in-memory source has no extension to state, so a JSON case document
+    // is detected from its content. Non-JSON text keeps the extension refusal.
     let net = parse_matpower_file(data("case14.m")).unwrap();
-
-    let model = net.to_json().unwrap();
-    let source = powerio_core::Source::from_memory("<memory>", model.into_bytes()).unwrap();
-    let parsed = powerio_tx::parse(source).expect("nameless model JSON parses");
-    assert_eq!(parsed.value().buses().len(), 14);
 
     let pm = emit_module(
         &powerio_core::PioModule::new(net),

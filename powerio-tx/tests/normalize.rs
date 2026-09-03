@@ -563,11 +563,11 @@ fn parse_str_matches_parse_file() {
         let mut from_text = parse_str(&text, "matpower").unwrap().network;
         // The only legitimate difference is the network name, which `parse_file`
         // derives from the file stem and `parse_str` cannot (it has no path).
-        *from_text.name_mut() = from_path.name().clone(); // to_json skips the retained source, so equal JSON means field-for-field
-        // equal tables.
+        *from_text.name_mut() = from_path.name().clone();
+        // Serde skips the retained source, so equal values mean equal tables.
         assert_eq!(
-            from_path.to_json().unwrap(),
-            from_text.to_json().unwrap(),
+            serde_json::to_value(&from_path).unwrap(),
+            serde_json::to_value(&from_text).unwrap(),
             "{case}: parse_str disagrees with parse_file"
         );
     }

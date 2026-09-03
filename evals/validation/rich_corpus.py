@@ -94,8 +94,9 @@ def rel_display(root_label: str, root: Path, path: Path) -> str:
     return f"{root_label}/{rel.as_posix()}"
 
 
-def count_features(case) -> dict[str, int]:
-    data = json.loads(case.to_json())
+def count_features(module) -> dict[str, int]:
+    document = json.loads(powerio.serialize(module).text)
+    data = document["value"]["data"]
     branches = data.get("branches", [])
     loads = data.get("loads", [])
     storage = data.get("storage", [])
@@ -150,7 +151,7 @@ def scan_one(root_label: str, root: Path, path: Path, fmt: str) -> Row:
         return row
 
     row.warnings = sum(d.severity == "warning" for d in module.diagnostics)
-    for key, value in count_features(case).items():
+    for key, value in count_features(module).items():
         setattr(row, key, value)
     return row
 

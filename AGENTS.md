@@ -32,8 +32,8 @@ current source, tests, release notes, and direct maintainer decisions.
   **not** depend on the transmission network crate; it shares `powerio-core`.
   BMOPF network decoding lives here; callers construct an `McAcPfInstance` or
   `McAcOpfInstance` explicitly through `powerio-prob`.
-- **`powerio`**: the 1.0 entry facade. It owns `PioValue`, universal format
-  dispatch, the version 1 PowerIO IR schema, and public re-exports. The
+- **`powerio`**: the top-level entry facade. It owns `PioValue`, universal format
+  dispatch, the current PowerIO IR schema, and public re-exports. The
   retired `powerio-pkg` and `powerio-diag` boundaries must not be recreated.
 - **`powerio-cli`**: the `powerio` binary: the clap CLI and the ratatui TUI
   over the `powerio` facade and its component crates.
@@ -46,7 +46,7 @@ current source, tests, release notes, and direct maintainer decisions.
   `pio_module_serialize` and `pio_module_deserialize`. ABI 7 contains no older
   ABI aliases.
 
-`BalancedNetwork` and `MulticonductorNetwork` are the two reusable electrical network types. The normalized solver tables and dense row arrays are internal compiler data, hidden from the documented surface; `IndexedNetwork` stays a public derived index view in 1.0 because matrix calculations and downstream consumers take it directly.
+`BalancedNetwork` and `MulticonductorNetwork` are the two reusable electrical network types. The normalized solver tables and dense row arrays are internal compiler data, hidden from the documented surface; `IndexedNetwork` stays a public derived index view in 0.11 because matrix calculations and downstream consumers take it directly.
 
 Formats. MATPOWER `.m`, PowerModels JSON, PSS/E `.raw` (v32 read, v33/34/35),
 PowerWorld `.aux`, PSLF `.epc`, Egret JSON, pandapower JSON, PyPSA CSV directories,
@@ -56,10 +56,9 @@ official output JSON. PowerWorld `.pwb` is a parse only binary input with no
 emitter, and the IEEE Common Data Format (`ieee-cdf`, a `.txt` or `.cdf` file
 detected by its title card) is a parse only text input with no emitter.
 PowerWorld `.pwd` display files use the display API. GridFM Parquet
-directories parse and emit through directory helpers. PowerIO network JSON
-moves through `BalancedNetwork::to_json`/`from_json`; it is a network serialization
-rather than a case format, so 0.9 removed the last `powerio-json` token from
-every surface and a bare `.json` holding it classifies as `model-json`.
+directories parse and emit through directory helpers. PowerIO IR is the only
+PowerIO-owned JSON representation; standalone `BalancedNetwork` JSON is not a
+case format or a supported serialization surface.
 OpenDSS `.dss` and PMD engineering JSON meet at `powerio-dist`'s
 `MulticonductorNetwork`. BMOPF JSON produces `MulticonductorNetwork`; callers
 construct a calculation instance explicitly after parsing.
@@ -237,10 +236,10 @@ powerio-dist/                 # multiconductor distribution model (no powerio de
 ├── src/convert.rs           # parse/emit + structured diagnostics
 └── src/{graph,geo,diagnostics,error}.rs
 
-powerio/                      # 1.0 facade, PioValue, dispatch, PowerIO IR, re-exports
+powerio/                      # facade, PioValue, dispatch, PowerIO IR, re-exports
 ├── src/value.rs             # PioValue and structural type names
 ├── src/dispatch.rs          # source classification and component parser routing
-└── src/stored/              # exact version 1 PowerIO IR DTOs
+└── src/stored/              # exact current PowerIO IR DTOs
 
 powerio-cli/                  # the `powerio` binary (CLI + TUI)
 ├── src/main.rs              # clap CLI: tui/batch/gen/verify/dcopf/sensitivities/
@@ -298,10 +297,10 @@ fuzz/                        # libFuzzer targets (detached workspace; see fuzz/R
   meet at `BalancedNetwork`; conductor resolved formats meet at
   `MulticonductorNetwork`. Format enums are nonexhaustive and bindings use
   stable names rather than integer positions.
-- **JSON transport.** `BalancedNetwork::to_json`/`from_json` is the structured
-  network transport used inside the Rust format layer. It has no grid exchange
-  format token. Stored modules move through `serialize` and `deserialize` as
-  PowerIO IR. Runtime retained source bytes on `PioModule` are not serialized.
+- **PowerIO IR.** Stored modules move through `serialize` and `deserialize`.
+  Runtime retained source bytes on `PioModule` are not serialized. A bare JSON
+  object shaped like `BalancedNetwork` is neither PowerIO IR nor a grid
+  exchange format and must not be accepted as one.
 - **Bindings stay typed and lazy.** C calls `pio_module_value`, checks the exact
   structural type, and requests an owner rooted typed handle. Python reads
   `module.value`; Julia dispatches on `PioModule{T}`. Typed access does not
@@ -312,9 +311,9 @@ fuzz/                        # libFuzzer targets (detached workspace; see fuzz/R
   durable source map, diagnostic, and history records. Retained source is run
   time data and is not serialized. `TimeSeries<T>` and `ScenarioSet<T>` belong
   in the typed value rather than common module fields and compose as
-  `ScenarioSet<TimeSeries<T>>`. PowerIO 1.0 reads and writes only
-  `powerio.module` version 1. Collection indexing must not serialize or clone
-  the network.
+  `ScenarioSet<TimeSeries<T>>`. PowerIO 0.11 reads and writes only
+  `powerio.module` version `0.11.0`. Collection indexing must not serialize or
+  clone the network.
 - **Bus IDs.** MATPOWER 1 based; `IndexedNetwork::bus_index(id)` is the only mapping into dense `[0, n)`. Don't clamp out of range; return `Error::UnknownBus`.
 - **`BR_B` is already per unit.** Never divide by `base_mva` again.
 - **`tap == 0` ⇒ `tap = 1`.** Use `Branch::effective_tap()`.

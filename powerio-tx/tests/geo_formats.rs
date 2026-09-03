@@ -173,7 +173,7 @@ fn formats_without_geometry_report_dropped_locations() {
 }
 
 #[test]
-fn locations_and_routes_survive_the_model_snapshot() {
+fn locations_and_routes_survive_serde_round_trip() {
     let mut net = parse_file(data("powerworld/ACTIVSg200.aux"), None)
         .unwrap()
         .network;
@@ -189,7 +189,8 @@ fn locations_and_routes_survive_the_model_snapshot() {
             kind: None,
         },
     ]);
-    let back = powerio_tx::BalancedNetwork::from_json(&net.to_json().unwrap()).unwrap();
+    let text = serde_json::to_string(&net).unwrap();
+    let back: powerio_tx::BalancedNetwork = serde_json::from_str(&text).unwrap();
     assert_eq!(back.buses()[0].location, net.buses()[0].location);
     assert_eq!(back.branches()[0].route, net.branches()[0].route);
     assert_eq!(back.geo(), net.geo());

@@ -45,10 +45,10 @@ pub(crate) fn emit_pmd_json_text(net: &MulticonductorNetwork) -> TextEmission {
 /// Upper bound on the conductor counts this writer expands quadratically:
 /// the switch series and shunt matrices and the voltage source Thevenin
 /// matrices are all sized from a terminal map, a linear model array. The
-/// readers cap the same quantity on their way in, but a `MulticonductorNetwork` can
-/// also arrive without those caps (the model JSON C entry point
-/// deserializes one unchecked), and a linear-size model could otherwise
-/// demand O(n²) memory here. No physical element comes near this bound.
+/// readers cap the same quantity on their way in, but callers can construct a
+/// `MulticonductorNetwork` without those caps, and a linear-size model could
+/// otherwise demand O(n²) memory here. No physical element comes near this
+/// bound.
 const MAX_DIM: usize = 64;
 
 struct Writer {

@@ -1737,7 +1737,6 @@ fn transmission_summary_json(
         "model": "balanced",
         "name": net.name(),
         "source_format": net.source_format().name(),
-        "json_format": "model-json",
         "base_mva": net.base_mva(),
         "elements": {
             "buses": net.buses().len(),
@@ -2684,7 +2683,6 @@ mod tests {
         assert_eq!(value[powerio::version::VERSION_KEY], powerio::VERSION);
         assert_eq!(value["domain"], "transmission");
         assert_eq!(value["model"], "balanced");
-        assert_eq!(value["json_format"], "model-json");
         assert_eq!(value["elements"]["buses"], 9);
         assert_eq!(value["topology"]["connected_components"], 1);
     }
@@ -2851,8 +2849,8 @@ mod tests {
         let input = data("case9.m");
         let (text, _) = serialize_input(&input, None).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(doc["schema"], "powerio.module");
-        assert_eq!(doc["version"], 1);
+        assert_eq!(doc["schema"], powerio::IR_SCHEMA_NAME);
+        assert_eq!(doc["version"], powerio::IR_SCHEMA_VERSION);
         assert_eq!(doc["value"]["type"], "powerio.BalancedNetwork");
         assert_eq!(doc["value"]["data"]["buses"].as_array().unwrap().len(), 9);
         let sources = doc["sources"].as_array().unwrap();

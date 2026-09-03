@@ -29,4 +29,4 @@ report = to_balanced_report(feeder)         # ready plus assumptions, losses, an
 balanced = to_balanced(feeder)              # PioModule{BalancedNetwork}
 ```
 
-Multiconductor admittance matrices build directly from the multiconductor network, without this transformation, through `powerio_matrix::calc_multiconductor_admittance_matrix`. This entry point is Rust only in 1.0: there is no C ABI entry point yet, so no Python or Julia binding exists either.
+Multiconductor admittance matrices build directly from the multiconductor network, without this transformation, through `powerio_matrix::calc_multiconductor_admittance_matrix`. This entry point is Rust only in 0.11: there is no C ABI entry point yet, so no Python or Julia binding exists either.

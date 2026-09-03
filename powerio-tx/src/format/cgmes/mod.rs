@@ -1622,7 +1622,8 @@ mod tests {
         detailed.terminals.push(terminal);
         network.validate().unwrap();
 
-        let network = BalancedNetwork::from_json(&network.to_json().unwrap()).unwrap();
+        let network: BalancedNetwork =
+            serde_json::from_str(&serde_json::to_string(&network).unwrap()).unwrap();
         for version in [CgmesVersion::V2_4_15, CgmesVersion::V3_0] {
             let output = write::write_cgmes(&network, version).unwrap();
             let equipment = output

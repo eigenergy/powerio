@@ -2,13 +2,14 @@
 
 A `.pio.json` file serializes one `PioModule<PioValue>`: one typed value with
 its diagnostics, producer, sources, source mappings, history, and extensions.
-PowerIO 1.0 defines one document shape:
+Beginning with PowerIO v0.11.0, the document version equals the `powerio` crate
+version. The current document shape begins:
 
 ```json
 {
   "schema": "powerio.module",
-  "version": 1,
-  "producer": { "name": "powerio", "version": "1.0.0" },
+  "version": "0.11.0",
+  "producer": { "name": "powerio", "version": "0.11.0" },
   "value": {
     "type": "powerio.BalancedNetwork",
     "data": {}
@@ -16,13 +17,15 @@ PowerIO 1.0 defines one document shape:
 }
 ```
 
-Use `serialize` to produce it and `deserialize` to read it. This is the only
-PowerIO IR document shape.
+Use `serialize` to produce it and `deserialize` to read it. PowerIO v0.11.0
+reads the v0.11.0 document shape.
 
 The generated JSON Schema is checked in at
-`docs/schema/pio-module/1/schema.json` and served from
-`https://powerio.dev/schema/pio-module/1/schema.json`. The checked in schema,
+`docs/schema/pio-module/0.11.0/schema.json` and served from
+`https://powerio.dev/schema/pio-module/0.11.0/schema.json`. The checked-in schema,
 the serializer, and the deserializer are tested from the same Rust types.
+`docs/schema/README.md` records the earlier `pio-package` and
+`powerio.module` documents as one history.
 
 ## PowerIO IR is not a grid exchange format
 
@@ -122,5 +125,7 @@ than allocation failures or truncated results.
 
 ## Schema changes
 
-The version number belongs to the PowerIO IR document, not the Rust memory
-layout and not a grid exchange format. PowerIO 1.0 writes and reads version 1.
+The version belongs to the PowerIO IR document, not the Rust memory layout, a
+grid exchange format, or the C ABI. PowerIO v0.11.0 writes and reads document
+version `0.11.0`. Historical schemas document what earlier releases produced;
+they do not add implicit compatibility to the deserializer.

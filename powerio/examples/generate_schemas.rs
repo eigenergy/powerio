@@ -23,12 +23,17 @@ mod generate {
             .nth(1)
             .map_or_else(|| PathBuf::from("docs/schema"), PathBuf::from);
 
-        // PowerIO 1.0 IR has one schema and one integer version.
+        // Since 0.11.0, the IR schema version is the `powerio` crate version.
+        let relative_path = format!("pio-module/{}", powerio::IR_SCHEMA_VERSION);
+        let id = format!(
+            "https://powerio.dev/schema/pio-module/{}/schema.json",
+            powerio::IR_SCHEMA_VERSION
+        );
         write_schema(
             serde_json::to_value(powerio::generate_ir_schema())?,
             &out,
-            "pio-module/1",
-            "https://powerio.dev/schema/pio-module/1/schema.json",
+            &relative_path,
+            &id,
             &[],
         )?;
 

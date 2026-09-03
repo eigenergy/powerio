@@ -51,11 +51,11 @@ impl IndexCore {
     ///
     /// # Correctness
     /// Bus ids must be unique; a duplicate collapses two buses onto one dense
-    /// index and silently corrupts every aggregate. The format readers and
-    /// [`BalancedNetwork::from_json`](crate::BalancedNetwork::from_json) run
-    /// [`BalancedNetwork::validate`](crate::BalancedNetwork::validate) before this, so a parsed
-    /// or JSON-sourced network always satisfies it; a hand-built [`BalancedNetwork`] must
-    /// call `validate` itself. Backstopped here by a `debug_assert`.
+    /// index and silently corrupts every aggregate. Format readers run
+    /// [`BalancedNetwork::validate`](crate::BalancedNetwork::validate) before
+    /// this, so a parsed network satisfies it; a hand-built
+    /// [`BalancedNetwork`] must call `validate` itself. Backstopped here by a
+    /// `debug_assert`.
     #[must_use]
     pub fn build(net: &BalancedNetwork) -> Self {
         let n = net.buses().len();

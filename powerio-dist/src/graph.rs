@@ -244,9 +244,8 @@ impl GraphBuilder {
     fn add_transformer_edges(&mut self, transformer: &DistTransformer) {
         // One edge per winding pair, so the winding count expands
         // quadratically. Every reader caps it at the same bound, but a
-        // `MulticonductorNetwork` can also arrive without those caps (the model JSON
-        // C entry point deserializes one unchecked). No physical
-        // transformer comes near it.
+        // callers can construct a `MulticonductorNetwork` without those caps.
+        // No physical transformer comes near it.
         let n_windings = transformer.windings.len().min(MAX_WINDING_PAIRS_DIM);
         for (from_idx, to_idx) in pair_keys(n_windings) {
             let Some(from_winding) = transformer.windings.get(from_idx) else {
@@ -567,8 +566,8 @@ mod tests {
     #[test]
     fn transformer_edge_expansion_is_bounded() {
         // One edge per winding pair. Every reader caps the winding count,
-        // but the model JSON C entry point deserializes a `MulticonductorNetwork`
-        // unchecked, so a linear-size model must not force quadratic work.
+        // but callers can construct a `MulticonductorNetwork` without those
+        // caps, so a linear-size model must not force quadratic work.
         let n = 4000;
         let windings: Vec<DistWinding> = (0..n)
             .map(|i| {

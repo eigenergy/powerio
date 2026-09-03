@@ -59,7 +59,6 @@ const EXPECTED: &[(&str, &str, Option<&str>)] = &[
         "transmission",
         Some("pandapower-json"),
     ),
-    ("model-json/case30_v4.json", "model-json", None),
     // PyPSA sidecars: a coordinate reference system string and an empty
     // metadata object, both beside the CSV folder that carries the case.
     ("pypsa/example/crs.json", "unknown", None),
@@ -178,17 +177,17 @@ fn every_json_fixture_classifies_as_stated() {
 /// while those paths stay public.
 #[test]
 fn classifier_and_diagnostic_types_are_crate_root_exports() {
-    let class = powerio_tx::classify_json_text(r#"{"schema":"powerio.module","version":1}"#);
+    let class = powerio_tx::classify_json_text(r#"{"schema":"powerio.module","version":"0.11.0"}"#);
     assert!(matches!(class, powerio_tx::JsonClass::Module));
     assert!(matches!(
-        powerio_tx::classify_json_bytes(b"{\"schema\":\"powerio.module\",\"version\":1}"),
+        powerio_tx::classify_json_bytes(b"{\"schema\":\"powerio.module\",\"version\":\"0.11.0\"}",),
         powerio_tx::JsonClass::Module
     ));
     assert!(matches!(
         powerio_tx::classify_json_text("not json"),
         powerio_tx::JsonClass::Case(powerio_tx::Detection::Unknown)
     ));
-    assert_eq!(powerio_tx::JSON_CLASSES.len(), 6);
+    assert_eq!(powerio_tx::JSON_CLASSES.len(), 5);
     let severity = powerio_tx::DiagnosticSeverity::Warning;
     assert!(severity < powerio_tx::DiagnosticSeverity::Error);
     let code_of: fn(&powerio_tx::Diagnostic) -> &str = powerio_tx::Diagnostic::code;

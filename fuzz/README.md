@@ -2,8 +2,8 @@
 
 libFuzzer harnesses for the readers that take untrusted input: `matpower`,
 `psse`, `pslf`, and `powerworld_aux` feed memory sources to the corresponding
-readers; `model_json` feeds the balanced model JSON reader; `pwb` and `pwd`
-feed the PowerWorld binary decoders raw bytes; `dss` feeds the distribution
+readers; `pwb` and `pwd` feed the PowerWorld binary decoders raw bytes; `dss`
+feeds the distribution
 family's tokenizer. The remaining JSON formats
 (PowerModels, egret, pandapower) ride serde_json rather than a hand-written
 tokenizer, so the harnesses cover every hand-rolled reader. The invariant

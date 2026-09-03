@@ -42,37 +42,6 @@ fn validate_rejects_dangling_branch_endpoint() {
 }
 
 #[test]
-fn from_json_rejects_dangling_reference() {
-    // to_json does not validate, so a hand-built (or hand-edited) invalid network
-    // serializes fine; from_json must reject it on the way back in, since the
-    // C ABI and Julia bridge ride on this transport.
-    let bad = BalancedNetwork::in_memory(
-        "bad",
-        100.0,
-        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
-        vec![branch(1, 99)],
-    );
-    let json = bad.to_json().unwrap();
-    assert!(matches!(
-        BalancedNetwork::from_json(&json),
-        Err(Error::FormatRead { .. })
-    ));
-}
-
-#[test]
-fn from_json_rejects_zero_bus_network() {
-    // A bus-less network is content-free; read_source rejects it for every parse
-    // path, and from_json (the JSON transport) must reject it too so the guard is
-    // universal rather than skippable through the C ABI / Julia bridge.
-    let empty = BalancedNetwork::in_memory("empty", 100.0, vec![], vec![]);
-    let json = empty.to_json().unwrap();
-    assert!(matches!(
-        BalancedNetwork::from_json(&json),
-        Err(Error::FormatRead { .. })
-    ));
-}
-
-#[test]
 fn psse_rejects_malformed_numeric_field() {
     // The pristine fixture parses; corrupting one numeric field (a bus voltage
     // magnitude) must error rather than silently default it — a present-but-

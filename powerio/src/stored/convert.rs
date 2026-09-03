@@ -1,4 +1,4 @@
-//! The one bridge between a runtime module and PowerIO 1.0 IR.
+//! The one bridge between a runtime module and PowerIO IR.
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -27,14 +27,14 @@ fn with_component_ids(mut network: crate::BalancedNetwork) -> crate::BalancedNet
     network
 }
 
-/// Serialize one runtime module to the PowerIO 1.0 IR document.
+/// Serialize one runtime module to the current PowerIO IR document.
 ///
 /// # Errors
 /// A value whose stored form cannot be produced, or a serialization failure.
 pub fn emit_module(module: &PioModule<PioValue>) -> Result<String> {
     let stored = StoredModule {
-        schema: dto::SCHEMA_NAME.to_string(),
-        version: dto::SCHEMA_VERSION,
+        schema: crate::IR_SCHEMA_NAME.to_string(),
+        version: crate::IR_SCHEMA_VERSION.to_string(),
         producer: dto::Producer {
             name: module.producer().name().to_string(),
             version: module.producer().version().to_string(),
@@ -58,7 +58,7 @@ pub fn emit_module(module: &PioModule<PioValue>) -> Result<String> {
     serde_json::to_string_pretty(&stored).map_err(|error| invalid(error.to_string()))
 }
 
-/// Decode one PowerIO 1.0 IR document. Other schemas and versions are refused.
+/// Decode one current PowerIO IR document. Other schemas and versions are refused.
 ///
 /// # Errors
 /// An unsupported schema or version, or an invalid document.
@@ -66,8 +66,10 @@ pub fn read_module(text: &str) -> Result<PioModule<PioValue>> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let header: dto::StoredHeader =
         serde_json::from_str(text).map_err(|error| invalid(error.to_string()))?;
-    match (header.schema.as_deref(), header.version) {
-        (Some(dto::SCHEMA_NAME), Some(dto::SCHEMA_VERSION)) => {
+    match (header.schema.as_deref(), header.version.as_ref()) {
+        (Some(crate::IR_SCHEMA_NAME), Some(serde_json::Value::String(version)))
+            if version == crate::IR_SCHEMA_VERSION =>
+        {
             let stored: StoredModule =
                 serde_json::from_str(text).map_err(|error| invalid(error.to_string()))?;
             dto::validate(&stored).map_err(invalid)?;
@@ -77,12 +79,19 @@ pub fn read_module(text: &str) -> Result<PioModule<PioValue>> {
             &codes::READ_MODULE_UNSUPPORTED,
             format!(
                 "unsupported stored module `{schema}` version {}",
-                version.map_or_else(|| "<none>".to_string(), |v| v.to_string())
+                version.map_or_else(
+                    || "<none>".to_string(),
+                    |value| {
+                        value
+                            .as_str()
+                            .map_or_else(|| value.to_string(), str::to_owned)
+                    },
+                )
             ),
         )),
         (None, _) => Err(powerio_core::Error::new(
             &codes::READ_MODULE_UNSUPPORTED,
-            "the document is not PowerIO 1.0 IR",
+            "the document is not PowerIO IR",
         )),
     }
 }
@@ -2577,7 +2586,7 @@ mod collection_ir_tests {
         assert_eq!(value.type_name(), expected_type);
         let text = emit_module(&PioModule::new(value)).unwrap();
         let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(raw["version"], dto::SCHEMA_VERSION);
+        assert_eq!(raw["version"], crate::IR_SCHEMA_VERSION);
         assert_eq!(raw["value"]["type"], expected_type);
         let decoded = read_module(&text).unwrap();
         assert_eq!(decoded.value().type_name(), expected_type);

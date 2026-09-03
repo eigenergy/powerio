@@ -182,22 +182,15 @@ pub fn parse_distribution_format(name: &str) -> Option<DistributionFormat> {
     }
 }
 
-/// Top level classification of bare JSON text: a `.pio.json` package, bare
-/// model JSON, or a case document with its format detection. The package and
-/// model JSON outcomes live in the classifier's result rather than in separate
-/// predicates, so every consumer handles them, and one header read answers
-/// every question instead of a full document parse per question.
+/// Top level classification of bare JSON text: a PowerIO IR document or a case
+/// document with its format detection. One header read answers every question
+/// instead of requiring a full document parse per question.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JsonClass {
     /// A `.pio.json` stored module document. The stored document is not a
     /// converter boundary format, so it stays out of [`SourceFormat`];
     /// callers route it to the stored module reader instead of a case parser.
     Module,
-    /// Bare [`BalancedNetwork`](crate::BalancedNetwork) model JSON, written by
-    /// `to_json` and read by `from_json`. powerio authors it, so it is not a
-    /// case format and stays out of [`SourceFormat`]; callers route it to
-    /// those two methods instead of a case parser.
-    ModelJson,
     /// A case document and its format detection.
     Case(Detection<JsonFormat>),
 }
@@ -207,14 +200,12 @@ pub enum JsonClass {
 /// its optional `:<format>` tail, the Python `classify_json_text` status, and
 /// the Julia family symbol.
 ///
-/// Spellings are permanent and a family is never removed or redefined. A new
-/// family appends to this list and gets a changelog line, so a consumer that
-/// dispatches a file picker on it keeps working.
-pub const JSON_CLASSES: [&str; 6] = [
+/// Consumers can read this list rather than hard-code the classifier's output
+/// vocabulary.
+pub const JSON_CLASSES: [&str; 5] = [
     "transmission",
     "distribution",
     "module",
-    "model-json",
     "ambiguous",
     "unknown",
 ];
@@ -226,7 +217,6 @@ impl JsonClass {
     pub fn family(self) -> &'static str {
         match self {
             Self::Module => "module",
-            Self::ModelJson => "model-json",
             Self::Case(Detection::Known(format)) => match format.domain() {
                 Domain::Transmission => "transmission",
                 Domain::Distribution => "distribution",
@@ -237,12 +227,10 @@ impl JsonClass {
     }
 }
 
-/// Classify a JSON document: a `.pio.json` stored module, bare model JSON, or a case
-/// document across the transmission and distribution domains.
+/// Classify a JSON document: a PowerIO IR module or a case document across the
+/// transmission and distribution domains.
 ///
 /// PowerIO IR is recognized by its `schema: "powerio.module"` header.
-/// Model JSON is recognized by `buses` beside another network key, which the
-/// case formats spell differently (PowerModels writes `bus`, not `buses`).
 /// For a case, Unknown means there is no recognized top level marker, and
 /// Ambiguous means the document contains strong markers from both domains, so
 /// the caller must ask the user for an explicit format.
@@ -434,16 +422,6 @@ struct JsonHeader {
     solution: Option<SolutionHeader>,
     #[serde(default, deserialize_with = "maybe_object")]
     metadata: Option<MetadataHeader>,
-    #[serde(default, deserialize_with = "present")]
-    buses: bool,
-    #[serde(default, deserialize_with = "present")]
-    branches: bool,
-    #[serde(default, deserialize_with = "present")]
-    base_mva: bool,
-    #[serde(default, deserialize_with = "present")]
-    loads: bool,
-    #[serde(default, deserialize_with = "present")]
-    generators: bool,
     #[serde(default, deserialize_with = "present", rename = "baseMVA")]
     base_mva_camel: bool,
     #[serde(default, deserialize_with = "present")]
@@ -499,8 +477,6 @@ impl JsonHeader {
                 .metadata
                 .as_ref()
                 .is_some_and(|metadata| metadata.objective);
-        let is_model_json =
-            self.buses && (self.branches || self.base_mva || self.loads || self.generators);
         let is_power_models = self.base_mva_camel || self.branch || self.r#gen || self.gencost;
         let transmission = is_pandapower
             || is_egret
@@ -508,7 +484,6 @@ impl JsonHeader {
             || is_rawx
             || is_surge
             || is_opfdata
-            || is_model_json
             || is_power_models;
 
         let is_pmd = self.data_model;
@@ -518,19 +493,6 @@ impl JsonHeader {
 
         match (transmission, distribution) {
             (true, true) => JsonClass::Case(Detection::Ambiguous),
-            // Model JSON is answered inside the transmission arm rather than
-            // ahead of it, so a document carrying distribution markers too is
-            // still reported as ambiguous instead of being claimed here.
-            (true, false)
-                if is_model_json
-                    && !is_pandapower
-                    && !is_egret
-                    && !is_goc3
-                    && !is_surge
-                    && !is_opfdata =>
-            {
-                JsonClass::ModelJson
-            }
             (true, false) => JsonClass::Case(Detection::Known(SourceFormat::Transmission(
                 if is_pandapower {
                     TransmissionFormat::PandapowerJson
@@ -570,7 +532,7 @@ mod tests {
     #[test]
     fn classifies_powerio_ir() {
         assert_eq!(
-            classify_json_text(r#"{"schema":"powerio.module","version":1}"#),
+            classify_json_text(r#"{"schema":"powerio.module","version":"0.11.0"}"#),
             JsonClass::Module
         );
         assert_eq!(
@@ -632,17 +594,10 @@ mod tests {
     }
 
     #[test]
-    fn classifies_model_json() {
+    fn a_bare_network_object_is_not_a_case_or_powerio_ir() {
         assert_eq!(
             classify_json_text(r#"{"base_mva":100.0,"buses":[],"branches":[]}"#),
-            JsonClass::ModelJson
-        );
-        assert_eq!(JsonClass::ModelJson.family(), "model-json");
-        // Distribution markers beside the model keys are still ambiguous:
-        // the model JSON arm must not claim a document it cannot read.
-        assert_eq!(
-            classify_json_text(r#"{"base_mva":100.0,"buses":[],"linecode":{}}"#),
-            JsonClass::Case(Detection::Ambiguous)
+            JsonClass::Case(Detection::Unknown)
         );
     }
 
@@ -650,7 +605,6 @@ mod tests {
     fn every_family_is_in_the_closed_set() {
         for class in [
             JsonClass::Module,
-            JsonClass::ModelJson,
             JsonClass::Case(Detection::Ambiguous),
             JsonClass::Case(Detection::Unknown),
             JsonClass::Case(Detection::Known(SourceFormat::Transmission(
@@ -829,7 +783,7 @@ mod tests {
         );
         assert_eq!(
             classify_json_bytes(b"{\"base_mva\":100.0,\"buses\":[],\"branches\":[]}"),
-            JsonClass::ModelJson
+            JsonClass::Case(Detection::Unknown)
         );
         assert_eq!(
             classify_json_bytes(b"{\"baseMVA\":100.0,\"bus\":{}\xff}"),

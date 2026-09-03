@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Keep the PowerIO 1.0 public vocabulary and operation names exact.
+# Keep the PowerIO 0.11 public vocabulary and operation names exact.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -7,7 +7,7 @@ public_paths=(
   README.md
   CONTRIBUTING.md
   AGENTS.md
-  docs/release-notes/1.0.0-draft.md
+  docs/release-notes/0.11.0-draft.md
   docs/src
   python/powerio
   powerio/README.md
@@ -59,9 +59,9 @@ current_docs=(
   docs/src/cli-mcp.md
   docs/src/corpus-harness.md
   docs/src/pio-json-schema.md
-  docs/src/scope-v1.md
-  docs/src/final-v1-api-cleanup.md
-  docs/release-notes/1.0.0-draft.md
+  docs/src/scope-0.11.md
+  docs/src/api-0.11.md
+  docs/release-notes/0.11.0-draft.md
   powerio/README.md
   powerio-core/README.md
   powerio-tx/README.md
@@ -109,8 +109,8 @@ if hits=$(rg -n "$retired" "${surface_paths[@]}" 2>/dev/null); then
   exit 1
 fi
 
-# Retired diagnostic namespaces must not return. PowerIO 1.0 has one IR
-# reader and no exceptions for prerelease documents.
+# Retired diagnostic namespaces must not return. PowerIO IR has one current
+# reader and no exceptions for earlier documents.
 if hits=$(rg -n '\bLOWER\.[A-Z_]+' "${public_paths[@]}" 2>/dev/null); then
   echo "retired diagnostic namespace:"
   echo "$hits"

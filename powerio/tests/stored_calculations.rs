@@ -822,7 +822,7 @@ fn full_scuc_outputs(
 }
 
 /// Every output series the runtime structs define survives the round trip,
-/// field by field, and the wire spells exactly the series vocabulary the
+/// field by field, and the document spells exactly the series vocabulary the
 /// defining crate exports.
 #[test]
 fn every_scuc_output_series_round_trips_under_its_exported_name() {
@@ -839,7 +839,7 @@ fn every_scuc_output_series_round_trips_under_its_exported_name() {
     let text = serialize(&PioModule::new(PioValue::AcScucSolution(solution))).unwrap();
 
     let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
-    let wire_network: Vec<&str> = raw["value"]["data"]["network_outputs"]
+    let serialized_network_outputs: Vec<&str> = raw["value"]["data"]["network_outputs"]
         .as_object()
         .unwrap()
         .keys()
@@ -847,8 +847,8 @@ fn every_scuc_output_series_round_trips_under_its_exported_name() {
         .collect();
     let mut expected: Vec<&str> = powerio_prob::SCUC_NETWORK_OUTPUT_SERIES.to_vec();
     expected.sort_unstable();
-    assert_eq!(wire_network, expected);
-    let wire_devices: Vec<&str> = raw["value"]["data"]["device_outputs"]
+    assert_eq!(serialized_network_outputs, expected);
+    let serialized_device_outputs: Vec<&str> = raw["value"]["data"]["device_outputs"]
         .as_object()
         .unwrap()
         .keys()
@@ -856,7 +856,7 @@ fn every_scuc_output_series_round_trips_under_its_exported_name() {
         .collect();
     let mut expected: Vec<&str> = powerio_prob::SCUC_DEVICE_OUTPUT_SERIES.to_vec();
     expected.sort_unstable();
-    assert_eq!(wire_devices, expected);
+    assert_eq!(serialized_device_outputs, expected);
 
     let back = deserialize(&text).unwrap();
     let PioValue::AcScucSolution(solution) = &back.value() else {

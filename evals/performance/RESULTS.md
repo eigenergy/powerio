@@ -313,7 +313,7 @@ bash evals/validation/run_validation.sh                          # correctness m
 
 The oracle tools are benchmark scoped: PowerModels.jl and ExaPowerIO.jl in
 `evals/validation/Project.toml`, pandapower, PyPSA, and egret in `evals/validation/requirements.txt`.
-None is a dependency of the powerio package or wheel.
+None is a dependency of a published PowerIO crate or the Python wheel.
 
 Versions for the run above: Julia 1.12.6 with PowerModels 0.21.6, ExaPowerIO
 0.3.0, BenchmarkTools 1.8.0 (`evals/validation/Project.toml` / `Manifest.toml`);

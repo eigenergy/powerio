@@ -4,7 +4,7 @@ This page defines every structural value type the PowerIO IR carries, field
 by field: the type of each field, its unit, its sign convention, the
 invariant the deserializer or the constructors hold it to, and what a reader
 supplies when the field is absent. The generated schema at
-`docs/schema/pio-module/1/schema.json` is the machine form of the same
+`docs/schema/pio-module/0.11.0/schema.json` is the machine form of the same
 definitions. `powerio/tests/ir_reference.rs` reads this page and checks, in
 both directions, that each table names exactly the fields the schema defines
 for its definition, so the two cannot drift apart.

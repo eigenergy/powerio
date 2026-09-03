@@ -77,7 +77,7 @@ mod tests {
             Objective::network_generator_cost().with_term(ObjectiveTerm::ActivePowerDispatchCost);
         assert_eq!(objective.terms().len(), 2);
         assert_eq!(objective.terms()[0], ObjectiveTerm::NetworkGeneratorCost);
-        let wire = serde_json::to_value(&objective).unwrap();
-        assert_eq!(wire["terms"][1]["term"], "active_power_dispatch_cost");
+        let serialized = serde_json::to_value(&objective).unwrap();
+        assert_eq!(serialized["terms"][1]["term"], "active_power_dispatch_cost");
     }
 }

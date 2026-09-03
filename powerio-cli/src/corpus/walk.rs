@@ -58,9 +58,7 @@ pub(super) const LEDGER_FILE: &str = "ledger.json";
 /// `pypsa-csv` and `gridfm` are directories and `pwb` is read only, so none of
 /// them can be a step. `goc3` and `opfdata` write only by echoing a retained
 /// source, which a walk clears at the first hop, so they would write an empty
-/// document. model JSON is the model transport rather than a case format
-/// and is lossless by construction, so it would dilute the sample with steps
-/// that cannot fail.
+/// document.
 pub const ALPHABET: [&str; 10] = [
     "matpower",
     "psse",

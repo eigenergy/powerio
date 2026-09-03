@@ -47,8 +47,8 @@ const fn info(
 /// Resolve a format token or common alias to facade owned metadata.
 ///
 /// This includes transmission and distribution grid exchange formats and the
-/// standalone geographic layer document. PowerIO IR and bare model JSON are
-/// not grid exchange formats and therefore are not returned here.
+/// standalone geographic layer document. PowerIO IR is not a grid exchange
+/// format and therefore is not returned here.
 ///
 #[must_use]
 pub fn resolve_format(name: &str) -> Option<FormatInfo> {
@@ -139,6 +139,5 @@ mod tests {
         assert_eq!(resolve_format("not-a-format"), None);
         assert_eq!(resolve_format("json"), None);
         assert_eq!(resolve_format("pio-json"), None);
-        assert_eq!(resolve_format("model-json"), None);
     }
 }

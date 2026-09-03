@@ -39,13 +39,13 @@ pub use scenario::{SCENARIO_PROBABILITY_TOLERANCE, Scenario, ScenarioId, Scenari
 pub use source::{FormatId, IntoSource, MEMORY_SOURCE_NAME, Source, SourceBuffer};
 pub use time_series::{TimePoint, TimeSeries};
 
-/// Decode time record limits, shared by every PowerIO wire.
+/// Decode time record limits, shared by every PowerIO serialization.
 ///
-/// The stored `.pio.json` record wire and the core record wire must refuse the
-/// same hostile inputs: every sequence, map, and string is bounded while it is
-/// decoded, before the full collection has been retained. The helpers here run
-/// inside serde visitors (`#[serde(deserialize_with = ...)]`), so the only
-/// transient allocation is the JSON scanner's own token buffer.
+/// Stored `.pio.json` records and core records must refuse the same hostile
+/// inputs: every sequence, map, and string is bounded while it is decoded,
+/// before the full collection has been retained. The helpers here run inside
+/// serde visitors (`#[serde(deserialize_with = ...)]`), so the only transient
+/// allocation is the JSON scanner's own token buffer.
 pub mod limits {
     pub use crate::bounded::{BoundedStr, TruncatedStr, bounded_json_map, bounded_vec};
     pub use crate::validation::{

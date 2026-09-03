@@ -23,7 +23,10 @@ mpc.branch = [1 2 0.01 0.1 0 250 250 250 0 0 1 -30 30; 2 3 0.02 0.2 0 250 250 25
 def main() -> None:
     versions = powerio.versions()
     assert powerio.__version__ == versions["powerio_version"], versions
-    assert versions["module_schema"] == {"name": "powerio.module", "version": 1}, versions
+    assert versions["module_schema"] == {
+        "name": "powerio.module",
+        "version": powerio.__version__,
+    }, versions
 
     module = powerio.parse(
         io.StringIO(CASE),
@@ -37,7 +40,8 @@ def main() -> None:
     document = powerio.serialize(module).text
     assert document is not None
     decoded = json.loads(document)
-    assert decoded["schema"] == "powerio.module" and decoded["version"] == 1
+    assert decoded["schema"] == "powerio.module"
+    assert decoded["version"] == powerio.__version__
     # Deterministic release: the stored document is byte stable.
     assert (
         powerio.serialize(powerio.deserialize(document.encode())).text == document

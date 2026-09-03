@@ -265,7 +265,7 @@ fn canonical_write_round_trips_space_kind_and_keys() {
 }
 
 #[test]
-fn provenance_stamping_survives_the_wire() {
+fn provenance_stamping_survives_serialization() {
     // A consumer exporting a hand layout stamps `kind = manual`.
     let mut layer = small_network().to_geo_layer();
     layer.features.push(powerio_tx::GeoFeature {

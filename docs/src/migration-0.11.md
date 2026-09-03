@@ -1,9 +1,9 @@
-# From the 1.0 beta to 1.0
+# From 0.10 to 0.11
 
-PowerIO 0.10.0 was the public 1.0 beta. PowerIO 1.0 makes the final source and
-ABI break. The
-changes remove duplicate operations and expose the same concepts in Rust,
-Python, Julia, and C.
+PowerIO 0.10.0 was the public beta for the candidate 1.0 API. PowerIO 0.11
+makes the next source and ABI break. The changes remove duplicate operations
+and expose the same concepts in Rust, Python, Julia, and C. The 0.11.x line is
+then compatibility focused; another unavoidable public break moves to 0.12.
 
 ## One `parse`, one `emit`
 
@@ -26,13 +26,15 @@ let module = powerio::parse(powerio::Source::from_memory("case9.m", bytes)?)?;
 # Ok::<(), powerio::Error>(())
 ```
 
-| 0.10 | 1.0 |
+| 0.10 | 0.11 |
 |---|---|
 | `parse(Source::open(path)?, None)` | `parse(path)` |
 | `parse(source, Some(format))` | `parse_with_options(source, &ParseOptions::default().format(format)?)` |
 | `emit(&module, format, Destination::path(path))` | `emit(&module, format, path)` |
 | `serialize(&module, Destination::path(path))` | `serialize(&module, path)` |
 | `deserialize(Source::open(path)?)` | `deserialize(path)` |
+| `network.to_json()` | `serialize(&PioModule::new(network), destination)` |
+| `BalancedNetwork::from_json(text)` | `deserialize(Source::from_memory("module.pio.json", text)?)?.value` |
 | `parse_display(source, from)` | `parse(input)`, which returns `PioValue::GeoLayer` |
 | `DisplayData`, `DisplayFormat` | removed; a layer is the value `powerio.GeoLayer` |
 | a layer written by hand | `emit(&module, "geo-json", path)` |
@@ -108,9 +110,9 @@ formats.
 
 Use `serialize` and `deserialize` for PowerIO IR. `.pio.json` is not a grid
 exchange format and is absent from format discovery. Both operations use the
-single PowerIO 1.0 document shape: `"schema": "powerio.module"` and
-`"version": 1`. Documents produced by the beta are not PowerIO 1.0 IR and
-must be regenerated from their original power system data.
+PowerIO IR v0.11.0 document shape: `"schema": "powerio.module"` and
+`"version": "0.11.0"`. Earlier documents must be regenerated from their
+original power system data.
 
 The following 0.10 names are removed:
 
@@ -119,6 +121,8 @@ The following 0.10 names are removed:
 - `write_file`
 - `to_format`
 - module JSON read and write names
+- `BalancedNetwork::to_json`, `from_json`, and `to_json_with_diagnostics`
+- the `model-json` JSON classification family
 - the `pio-json` format token
 
 `to_*` remains available for a genuine in-memory semantic transformation.
@@ -186,7 +190,7 @@ tap adjusted reactance, or reactance only equation.
 
 ## Calculation instances and solutions
 
-PowerIO 1.0 registers the following calculation pairs:
+PowerIO 0.11 registers the following calculation pairs:
 
 ```text
 DcPfInstance       DcPfSolution
@@ -206,7 +210,7 @@ Instance fields use `initial_point`, not the catch-all beta name.
 
 ## C ABI 7
 
-PowerIO 1.0 replaces ABI 6 with ABI 7. ABI 7 has no ABI 4, 5, or 6 aliases and
+PowerIO 0.11 replaces ABI 6 with ABI 7. ABI 7 has no ABI 4, 5, or 6 aliases and
 does not reuse removed table IDs. Sources, destinations, modules, typed values,
 collections, diagnostics, artifacts, sparse matrices, and vectors use opaque
 reference counted handles. Every buffer carries an explicit length. Borrowed
@@ -215,9 +219,9 @@ typed handles keep their module owner alive.
 PowerIO.jl moves to ABI 7 in the same release. Julia packages should depend on
 PowerIO.jl rather than call the C ABI directly.
 
-## Inputs accepted by 1.0
+## Inputs accepted by 0.11
 
 PowerIO accepts documented aliases for names defined by external formats, such
 as `rawx` for the canonical `psse-rawx` format token. Those aliases identify
 the same third party format; they do not preserve a prerelease PowerIO API or
-IR shape. There are no prerelease source or document aliases in 1.0.
+IR shape. There are no beta source or document aliases in 0.11.

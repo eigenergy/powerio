@@ -1,7 +1,8 @@
 # PowerIO guide
 
-PowerIO 1.0 incorporates the API corrections found while exercising the 0.10
-beta with external solver consumers.
+PowerIO 0.11 incorporates the API corrections found while exercising the 0.10
+beta with external solver consumers. It is the stabilization line for the
+candidate 1.0 API.
 
 PowerIO parses power system data into typed values, transforms those values, emits supported formats, and builds sparse matrices and graph data for solvers and analysis code. One call reads any supported file or case directory:
 
@@ -38,5 +39,5 @@ Supported sources: MATPOWER, PSS/E RAW revisions 32 through 35, PSS/E RAWX 35, P
 
 Operations exposed on more than one surface use the same value types, format
 names, diagnostic codes, signs, and units. [Rust, Python, Julia, and C](languages.md)
-maps actual coverage; [1.0 Scope and Known Limits](scope-v1.md) lists
+maps actual coverage; [0.11 Scope and Known Limits](scope-0.11.md) lists
 surface specific limits.

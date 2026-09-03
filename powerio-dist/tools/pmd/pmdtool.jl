@@ -1,7 +1,7 @@
 # PMD oracle for powerio-dist.
 #
 # Usage:
-#   julia pmdtool.jl dss2json input.dss output.json   # ENGINEERING model JSON
+#   julia pmdtool.jl dss2json input.dss output.json   # PMD ENGINEERING JSON
 #   julia pmdtool.jl check input.json                 # parse_file must accept it
 #
 # Set PIO_PMD_PATH to develop a local PowerModelsDistribution clone instead of

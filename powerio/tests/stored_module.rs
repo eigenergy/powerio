@@ -113,8 +113,8 @@ fn current_ir_round_trips_with_records_and_nonfinite_bounds() {
 
     // The exact top level identity and the stored nonfinite spelling.
     let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(raw["schema"], "powerio.module");
-    assert_eq!(raw["version"], 1);
+    assert_eq!(raw["schema"], powerio::IR_SCHEMA_NAME);
+    assert_eq!(raw["version"], powerio::IR_SCHEMA_VERSION);
     assert_eq!(raw["value"]["type"], "powerio.BalancedNetwork");
     assert_eq!(raw["value"]["data"]["buses"][1]["vmax"], "Infinity");
 
@@ -403,15 +403,28 @@ fn unknown_semantic_fields_are_refused() {
 }
 
 #[test]
-fn only_powerio_module_version_one_is_accepted() {
-    for version in [0, 2, 3] {
-        let text = format!(r#"{{"schema": "powerio.module", "version": {version}}}"#);
+fn only_the_current_powerio_ir_version_is_accepted() {
+    for version in ["0.10.0", "0.11.1", "1.0.0"] {
+        let text = serde_json::json!({
+            "schema": powerio::IR_SCHEMA_NAME,
+            "version": version,
+        })
+        .to_string();
         let error = deserialize_module_text(&text).unwrap_err().to_string();
         assert!(error.contains(&format!("version {version}")), "{error}");
     }
-    let error = deserialize_module_text(r#"{"schema": "someone.else", "version": 1}"#)
+
+    let error = deserialize_module_text(r#"{"schema": "powerio.module", "version": 1}"#)
         .unwrap_err()
         .to_string();
+    assert!(error.contains("version 1"), "{error}");
+
+    let text = serde_json::json!({
+        "schema": "someone.else",
+        "version": powerio::IR_SCHEMA_VERSION,
+    })
+    .to_string();
+    let error = deserialize_module_text(&text).unwrap_err().to_string();
     assert!(error.contains("someone.else"), "{error}");
 }
 

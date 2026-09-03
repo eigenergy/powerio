@@ -90,10 +90,10 @@ const BMOPF_DELTA_ROLLS_EXTRA: &str = "bmopf_delta_rolls";
 /// Upper bound on the model-driven dimensions this writer expands
 /// quadratically: the winding count feeding the `x_sc` pair table and the
 /// conductor count an absent matrix is materialized at as zeros. The BMOPF
-/// and DSS readers cap the same quantities at 64 on their way in, but a
-/// `MulticonductorNetwork` can also arrive without those caps (the model JSON C entry
-/// point deserializes one unchecked), and a linear-size model could otherwise
-/// demand O(n²) memory here. No physical element comes near this bound.
+/// and DSS readers cap the same quantities at 64 on their way in, but callers
+/// can construct a `MulticonductorNetwork` without those caps, and a
+/// linear-size model could otherwise demand O(n²) memory here. No physical
+/// element comes near this bound.
 const MAX_DIM: usize = 64;
 
 const TRANSFORMER_NO_LOAD_ALLOWED_EXTRAS: [&str; 5] = [
@@ -3327,9 +3327,8 @@ mod tests {
         );
     }
 
-    /// A model built without the reader caps (the model JSON C entry point
-    /// deserializes one unchecked) must not force quadratic allocation out of
-    /// linear-size input.
+    /// A model built without the reader caps must not force quadratic
+    /// allocation out of linear-size input.
     #[test]
     fn oversized_model_dimensions_are_clamped_not_expanded() {
         use crate::model::{

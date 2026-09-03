@@ -4,8 +4,8 @@
 //! JSON has no `Inf`/`NaN` literal. A nonfinite `f64` is written as one of
 //! three strings — `"Infinity"`, `"-Infinity"`, `"NaN"` — and a float
 //! position reads back either a number or one of those spellings, so every
-//! value the library holds round trips through model JSON and the
-//! `.pio.json` document. Readers legitimately produce nonfinite values (an
+//! value the library holds round trips through PowerIO IR. Readers
+//! legitimately produce nonfinite values (an
 //! absent reactive limit is `Inf` in MATPOWER, PowerModels, pandapower, and
 //! PyPSA), so the transport must carry them or refuse real cases. The
 //! The mechanism is a pair of forwarding wrappers threaded through serde:
@@ -15,8 +15,8 @@
 //! pass through untouched because interception is keyed on the *type* being
 //! an `f64`, never on a string's content. `BalancedNetwork`'s `Serialize`
 //! and `Deserialize` impls route through the wrappers, so the spelling holds
-//! on every serialization route (model JSON, the `.pio.json` payload, the C
-//! ABI), including serde's internal buffering for tagged enums. Interception
+//! when a network is stored inside PowerIO IR, including serde's internal
+//! buffering for tagged enums. Interception
 //! applies only to human readable formats: a binary serializer receives the
 //! plain `f64`.
 
@@ -29,11 +29,11 @@ use serde::ser::{
 };
 use serde::{Deserializer, Serialize, Serializer};
 
-/// The spelling of `f64::INFINITY` in model JSON.
+/// The JSON spelling of `f64::INFINITY`.
 pub const INFINITY: &str = "Infinity";
-/// The spelling of `f64::NEG_INFINITY` in model JSON.
+/// The JSON spelling of `f64::NEG_INFINITY`.
 pub const NEG_INFINITY: &str = "-Infinity";
-/// The spelling of `f64::NAN` in model JSON.
+/// The JSON spelling of `f64::NAN`.
 pub const NAN: &str = "NaN";
 
 fn spell(v: f64) -> &'static str {

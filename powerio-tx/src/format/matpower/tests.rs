@@ -418,7 +418,8 @@ fn piecewise_gencost_constructor_counts_breakpoints() {
     assert_eq!(cost.ncost, 2);
     assert_eq!(cost.coeffs, vec![0.0, 0.0, 1.0, 1.0]);
 
-    let restored = BalancedNetwork::from_json(&net.to_json().unwrap()).unwrap();
+    let restored: BalancedNetwork =
+        serde_json::from_str(&serde_json::to_string(&net).unwrap()).unwrap();
     let restored_cost = restored.generators()[0].cost.as_ref().unwrap();
     assert_eq!(restored_cost.ncost, 2);
     assert_eq!(restored_cost.coeffs, vec![0.0, 0.0, 1.0, 1.0]);

@@ -3741,80 +3741,6 @@ impl BalancedNetwork {
         net
     }
 
-    /// Serialize the structured tables to model JSON. The C ABI and language
-    /// bindings use this representation. The retained `source` text is
-    /// excluded (see the field's `#[serde(skip)]`), so the byte-exact echo
-    /// stays on the same-format write path; a [`from_json`](BalancedNetwork::from_json)
-    /// round-trip reproduces every field except `source`, which returns `None`.
-    ///
-    /// JSON has no `Inf`/`NaN` literal: a nonfinite field is written as
-    /// `"Infinity"`, `"-Infinity"`, or `"NaN"`. The reader accepts a number or
-    /// one of those spellings at every floating point position.
-    ///
-    /// # Errors
-    /// A `serde_json` serialization failure (none arise from this model today).
-    pub fn to_json(&self) -> crate::Result<String> {
-        let mut network = self.clone();
-        network.assign_missing_component_ids();
-        serde_json::to_string(&network).map_err(|e| Error::FormatRead {
-            format: "JSON",
-            message: e.to_string(),
-        })
-    }
-
-    /// [`to_json`](BalancedNetwork::to_json) plus the fidelity records the
-    /// write produced. The write is faithful today — a nonfinite value spells
-    /// itself as a string and reads back — so the record list is empty; the
-    /// channel stays because it is the shape a write-side finding arrives
-    /// through, and a caller wired to it needs no change when one appears.
-    ///
-    /// # Errors
-    /// A `serde_json` serialization failure (none arise from this model today).
-    pub fn to_json_with_diagnostics(
-        &self,
-    ) -> crate::Result<(String, Vec<crate::diagnostics::Diagnostic>)> {
-        let text = self.to_json()?;
-        Ok((text, Vec::new()))
-    }
-
-    /// Rebuild a `BalancedNetwork` from JSON produced by [`to_json`](BalancedNetwork::to_json).
-    ///
-    /// A float position accepts a number or the nonfinite spellings
-    /// `"Infinity"`, `"-Infinity"`, or `"NaN"`.
-    ///
-    /// Validates the result (AC buses or physical DC equipment, unique bus ids,
-    /// and no dangling AC references)
-    /// before returning, so the JSON transport (the C ABI and Julia bridge ride
-    /// on it) can't hand back a network the file readers would have rejected
-    /// (the same no-buses guard `read_source` applies to every parse path).
-    pub fn from_json(text: &str) -> crate::Result<BalancedNetwork> {
-        // Tolerate a leading UTF-8 byte order mark, as the format readers do.
-        let text = text.trim_start_matches('\u{feff}');
-        let mut net: BalancedNetwork =
-            serde_json::from_str(text).map_err(|e| Error::FormatRead {
-                format: "JSON",
-                message: e.to_string(),
-            })?;
-        net.assign_missing_component_ids();
-        net.check_references("JSON")?;
-        let has_dc_equipment = net
-            .detailed_connectivity()
-            .as_ref()
-            .is_some_and(|detailed| {
-                !detailed.dc_nodes.is_empty()
-                    || !detailed.dc_grounds.is_empty()
-                    || !detailed.dc_lines.is_empty()
-                    || !detailed.dc_switches.is_empty()
-            });
-        if net.buses().is_empty() && !has_dc_equipment {
-            return Err(Error::FormatRead {
-                format: "JSON",
-                message: "case has no buses or DC equipment".into(),
-            });
-        }
-        Ok(net)
-    }
-
     /// Whether this is a normalized (per-unit, radian, filtered)
     /// derived product from [`to_normalized`](BalancedNetwork::to_normalized), rather
     /// than a raw network at the file's unit basis. Unit-sensitive code that
@@ -4036,9 +3962,9 @@ impl BalancedNetwork {
     }
 
     /// Check structural integrity: bus ids are unique and every element
-    /// references an existing bus. The file readers and [`from_json`](BalancedNetwork::from_json)
-    /// run this; a `BalancedNetwork` built by hand (or mutated, e.g. by a scenario
-    /// generator) should call it before handing the network to
+    /// references an existing bus. File readers run this; a `BalancedNetwork`
+    /// built by hand (or mutated, e.g. by a scenario generator) should call it
+    /// before handing the network to
     /// [`IndexedNetwork`](crate::IndexedNetwork), whose dense indexing assumes it.
     pub fn validate(&self) -> crate::Result<()> {
         self.check_references("network")
@@ -5072,6 +4998,10 @@ impl BalancedNetwork {
 mod tests {
     use super::*;
 
+    fn serde_round_trip(network: &BalancedNetwork) -> BalancedNetwork {
+        serde_json::from_str(&serde_json::to_string(network).unwrap()).unwrap()
+    }
+
     fn close(actual: f64, expected: f64) {
         assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
     }
@@ -5634,7 +5564,7 @@ mod tests {
         assert_eq!(network.branches()[0].uid.as_deref(), Some("10-20-2"));
         assert_eq!(network.branches()[1].uid.as_deref(), Some("10-20"));
 
-        let restored = BalancedNetwork::from_json(&network.to_json().unwrap()).unwrap();
+        let restored = serde_round_trip(&network);
         assert_eq!(restored.loads()[0].uid, network.loads()[0].uid);
         assert_eq!(restored.branches()[0].uid, network.branches()[0].uid);
     }
@@ -5909,24 +5839,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn model_json_text_keeps_bom_and_model_validation() {
-        let net = BalancedNetwork::in_memory("text", 100.0, vec![bus(1)], Vec::new());
-        let json = net.to_json().expect("serialize model JSON");
-        let with_bom = format!("\u{feff}{json}");
-        let back = BalancedNetwork::from_json(&with_bom).expect("read BOM prefixed JSON");
-        assert_eq!(back.name(), "text");
-        assert_eq!(back.buses().len(), 1);
-
-        let empty = net
-            .to_json()
-            .expect("serialize model JSON")
-            .replace(&serde_json::to_string(&net.buses()).unwrap(), "[]");
-        let error = BalancedNetwork::from_json(&empty)
-            .expect_err("the text API must keep no-bus validation");
-        assert!(error.to_string().contains("case has no buses"), "{error}");
-    }
-
     fn winding(b: usize) -> Winding {
         Winding {
             bus: BusId(b),
@@ -5993,13 +5905,13 @@ mod tests {
     }
 
     #[test]
-    fn three_winding_transformer_survives_json_transport() {
+    fn three_winding_transformer_survives_serde_round_trip() {
         let mut net =
             BalancedNetwork::in_memory("t", 100.0, vec![bus(1), bus(2), bus(3)], Vec::new());
         net.transformers_3w_mut().push(transformer_3w());
         net.validate().unwrap();
 
-        let back = BalancedNetwork::from_json(&net.to_json().unwrap()).unwrap();
+        let back = serde_round_trip(&net);
         assert_eq!(back.transformers_3w().len(), 1);
         close(back.transformers_3w()[0].z[1].x, 0.20);
         assert_eq!(back.transformers_3w()[0].windings[2].bus, BusId(3));
@@ -6165,13 +6077,13 @@ mod tests {
     }
 
     #[test]
-    fn transformer_control_survives_json_transport() {
+    fn transformer_control_survives_serde_round_trip() {
         let mut net =
             BalancedNetwork::in_memory("t", 100.0, vec![bus(1), bus(2), bus(3)], Vec::new());
         net.branches_mut().push(regulating_branch(3));
         net.validate().unwrap();
 
-        let back = BalancedNetwork::from_json(&net.to_json().unwrap()).unwrap();
+        let back = serde_round_trip(&net);
         let c = back.branches()[0].control.as_ref().unwrap();
         assert_eq!(c.mode, TransformerControlMode::Voltage);
         assert_eq!(c.controlled_bus, Some(BusId(3)));
@@ -6319,32 +6231,30 @@ mod tests {
         );
         net.generators_mut().push(g);
 
-        let text = net.to_json().unwrap();
+        let text = serde_json::to_string(&net).unwrap();
         assert!(text.contains(r#""vm":"NaN""#), "{text}");
         assert!(text.contains(r#""x":"Infinity""#), "{text}");
         assert!(text.contains(r#""ramp_30":"Infinity""#), "{text}");
 
-        let back = BalancedNetwork::from_json(&text).unwrap();
+        let back: BalancedNetwork = serde_json::from_str(&text).unwrap();
         assert!(back.buses()[0].vm.is_nan());
         assert_eq!(back.branches()[0].x, f64::INFINITY);
         assert_eq!(back.generators()[0].caps[8], Some(f64::INFINITY));
 
-        // Second write is byte stable, and the empty diagnostics channel
-        // reflects that nothing was dropped.
-        assert_eq!(back.to_json().unwrap(), text);
-        let (_, diagnostics) = net.to_json_with_diagnostics().unwrap();
-        assert!(diagnostics.is_empty());
+        // A second serialization is byte stable.
+        assert_eq!(serde_json::to_string(&back).unwrap(), text);
     }
 
     #[test]
     fn a_null_at_a_float_position_is_rejected() {
         let net = BalancedNetwork::in_memory("nf", 100.0, vec![bus(1), bus(2)], Vec::new());
-        let text = net
-            .to_json()
+        let text = serde_json::to_string(&net)
             .unwrap()
             .replacen("\"vm\":1.0", "\"vm\":null", 1);
         assert!(text.contains("\"vm\":null"), "fixture edit failed: {text}");
-        let err = BalancedNetwork::from_json(&text).unwrap_err().to_string();
+        let err = serde_json::from_str::<BalancedNetwork>(&text)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("cannot be null"), "{err}");
     }
 
@@ -6398,13 +6308,13 @@ mod tests {
     }
 
     #[test]
-    fn switched_shunt_control_survives_json_transport() {
+    fn switched_shunt_control_survives_serde_round_trip() {
         let mut net =
             BalancedNetwork::in_memory("t", 100.0, vec![bus(1), bus(2), bus(3)], Vec::new());
         net.shunts_mut().push(switched_shunt(3));
         net.validate().unwrap();
 
-        let back = BalancedNetwork::from_json(&net.to_json().unwrap()).unwrap();
+        let back = serde_round_trip(&net);
         let c = back.shunts()[0].control.as_ref().unwrap();
         assert_eq!(c.mode, SwitchedShuntMode::Discrete);
         assert_eq!(c.control_bus, Some(BusId(3)));

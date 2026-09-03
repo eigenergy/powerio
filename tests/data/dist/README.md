@@ -73,7 +73,7 @@ constructor defaults, including omitted load voltage bounds.
 
 ## pmd/
 
-ENGINEERING model JSON generated from the fixtures above with
+PMD ENGINEERING JSON generated from the fixtures above with
 PowerModelsDistribution v0.16.0 (lanl-ansi/PowerModelsDistribution.jl,
 commit 87dc18b0) via the committed oracle:
 

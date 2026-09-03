@@ -75,7 +75,12 @@ fn convert_reads_a_case_from_stdin_with_a_declared_format() {
     let out = run_with_stdin(&["serialize", "-", "--from", "matpower"], &case);
     assert_success(&out);
     let document: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(document["schema"], "powerio.module", "{document}");
+    assert_eq!(document["schema"], powerio::IR_SCHEMA_NAME, "{document}");
+    assert_eq!(
+        document["version"],
+        powerio::IR_SCHEMA_VERSION,
+        "{document}"
+    );
     assert_eq!(
         document["value"]["type"], "powerio.BalancedNetwork",
         "{document}"
@@ -660,7 +665,8 @@ fn serialize_refuses_an_existing_output_file() {
     assert_success(&out);
     let text = std::fs::read_to_string(&fresh).unwrap();
     let value: serde_json::Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(value["schema"], "powerio.module");
+    assert_eq!(value["schema"], powerio::IR_SCHEMA_NAME);
+    assert_eq!(value["version"], powerio::IR_SCHEMA_VERSION);
     assert_eq!(value["producer"]["version"], powerio::VERSION);
     let _ = std::fs::remove_file(&fresh);
 

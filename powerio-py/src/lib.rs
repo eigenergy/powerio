@@ -1668,8 +1668,8 @@ fn versions_json() -> PyResult<String> {
         powerio::version::VERSION_KEY: powerio::VERSION,
         "bmopf_schema": powerio_dist_bmopf_schema(),
         "module_schema": {
-            "name": "powerio.module",
-            "version": 1,
+            "name": powerio::IR_SCHEMA_NAME,
+            "version": powerio::IR_SCHEMA_VERSION,
         },
     });
     serde_json::to_string(&doc).map_err(serialize_pyerr)
@@ -4221,11 +4221,9 @@ impl PyPioModule {
 ///
 /// `status` is `known` for a case document, or the classification family
 /// itself for the outcomes that are not one: `module` (PowerIO IR),
-/// `model-json` (bare balanced model JSON, read with
-/// `powerio.from_json`), `ambiguous`, or `unknown`. `domain` is
-/// `transmission` or `distribution`, and both it and `format` are set only
-/// when `status` is `known`. `json_classes()` returns the closed set of
-/// families.
+/// `ambiguous`, or `unknown`. `domain` is `transmission` or `distribution`,
+/// and both it and `format` are set only when `status` is `known`.
+/// `json_classes()` returns the closed set of families.
 #[pyfunction]
 fn classify_json_text(text: &str) -> (String, Option<String>, Option<String>) {
     let class = classify_balanced_json_text(text);
@@ -4240,7 +4238,7 @@ fn classify_json_text(text: &str) -> (String, Option<String>, Option<String>) {
 }
 
 /// The closed set of JSON classification families, in the spelling every
-/// powerio surface uses. A new family appends to it; a spelling never changes.
+/// PowerIO surface uses.
 #[pyfunction]
 fn json_classes() -> Vec<String> {
     powerio_tx::JSON_CLASSES

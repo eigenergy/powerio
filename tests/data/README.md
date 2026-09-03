@@ -67,8 +67,8 @@ Core revision 32 cases whose source paths, license, and digests are listed in
 are renderings of the MATPOWER cases above (plus a small dcline case) in
 egret's ModelData schema.
 
-Everything else in this tree (`model-json/`, `capi_matrix/`,
-`angle_bounds_clamp.m`, and the other unlisted fixtures) is original to this
+Everything else in this tree (`capi_matrix/`, `angle_bounds_clamp.m`, and the
+other unlisted fixtures) is original to this
 repository under its code license.
 
 ## `large/` (not committed)

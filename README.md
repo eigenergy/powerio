@@ -8,8 +8,10 @@
   >
 </p>
 
-PowerIO 1.0 incorporates the API corrections found while exercising the 0.10
-beta with external solver consumers. It parses power system data into typed
+PowerIO 0.11 incorporates the API corrections found while exercising the 0.10
+beta with external solver consumers. It is the stabilization line for the
+candidate 1.0 API: 0.11.x is reserved for compatible fixes, performance
+improvements, and additive work. PowerIO parses power system data into typed
 values, emits supported formats, and builds sparse matrices and graph data.
 
 A parse returns a `PioModule`: one typed value plus its sources, diagnostics,

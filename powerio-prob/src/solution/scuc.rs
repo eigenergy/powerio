@@ -74,9 +74,9 @@ pub struct ScucDeviceOutputs {
 }
 
 /// Every stored series of [`ScucNetworkOutputs`], one name per field. The
-/// stored wire and this list stay in agreement through the exhaustive
+/// serialized fields and this list stay in agreement through the exhaustive
 /// destructure test below: adding a field breaks the build until the name
-/// lands here and on the wire.
+/// lands here and in the stored document.
 pub const SCUC_NETWORK_OUTPUT_SERIES: [&str; 10] = [
     "bus_vm",
     "bus_va",

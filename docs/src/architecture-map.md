@@ -10,6 +10,6 @@ What the picture is drawn to show: the facade does not force a consumer to depen
 
 ## Data flow
 
-![The PowerIO data flow: a Source of named immutable bytes enters parse, which produces a PioModule holding the typed value, retained source, diagnostics, and history; time series and scenario sets expose owner rooted typed entries through indexing and iteration; to_balanced derives a balanced module from a multiconductor module with reported assumptions and losses; calc operations return matrices and vectors with element mappings; emit produces grid exchange formats; serialize and deserialize connect the module to PowerIO IR version 1.](assets/dataflow.svg)
+![The PowerIO data flow: a Source of named immutable bytes enters parse, which produces a PioModule holding the typed value, retained source, diagnostics, and history; time series and scenario sets expose owner rooted typed entries through indexing and iteration; to_balanced derives a balanced module from a multiconductor module with reported assumptions and losses; calc operations return matrices and vectors with element mappings; emit produces grid exchange formats; serialize and deserialize connect the module to PowerIO IR version 0.11.0.](assets/dataflow.svg)
 
 Every arrow out of the module is an explicit operation returning diagnostics; nothing transforms as a side effect of something else.

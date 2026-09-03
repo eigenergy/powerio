@@ -23,7 +23,7 @@ pub fn serialize_diagnostics(diagnostics: &[Diagnostic]) -> Result<String, Error
     })
 }
 
-/// Generate the JSON Schema for the PowerIO 1.0 IR document.
+/// Generate the JSON Schema for this build's PowerIO IR document.
 #[cfg(feature = "schema")]
 #[must_use]
 pub fn generate_ir_schema() -> schemars::Schema {

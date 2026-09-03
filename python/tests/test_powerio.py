@@ -533,7 +533,7 @@ def test_balanced_network_module_builds_typed_calculation_instances():
         assert isinstance(module.value, value_type)
         document = json.loads(powerio.serialize(module).text)
         assert document["schema"] == "powerio.module"
-        assert document["version"] == 1
+        assert document["version"] == powerio.__version__
         assert document["value"]["type"] == structural_type
         assert document["history"][-1]["kind"] == "transform"
 
@@ -799,7 +799,7 @@ def test_parse_goc3_problem_and_solution_with_one_parse(tmp_path):
     assert solution._inner._type_name == "powerio.AcScucSolution"
     document = json.loads(powerio.serialize(solution).text)
     assert document["schema"] == "powerio.module"
-    assert document["version"] == 1
+    assert document["version"] == powerio.__version__
     assert document["value"]["type"] == "powerio.AcScucSolution"
 
     emitted = json.loads(powerio.emit(solution, "goc3-json").text)
@@ -1085,9 +1085,9 @@ def test_pio_module_emit_uses_dynamic_writer(tmp_path):
     assert json.loads(solved_text)["value"]["type"] == "powerio.AcOpfSolution"
 
 
-def test_deserialize_rejects_non_v1_powerio_ir():
+def test_deserialize_rejects_a_different_powerio_ir_version():
     document = json.loads(powerio.serialize(powerio.parse(DATA / "case9.m")).text)
-    document["version"] = 2
+    document["version"] = "0.11.1"
 
     with pytest.raises(powerio.PowerIOError) as failure:
         powerio.deserialize(io.StringIO(json.dumps(document)))

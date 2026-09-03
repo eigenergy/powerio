@@ -1,6 +1,6 @@
 # BMOPF 0.2.0 design notes
 
-Research record for the BMOPF 0.2.0 work of the PowerIO 1.0 release. It states
+Research record for the BMOPF 0.2.0 work of the PowerIO 0.11 release. It states
 what the IEEE PES Task Force on Benchmarking Multiconductor OPF has accepted,
 what remains proposal, where the archived 0.2.0 material lives, what PowerIO
 already implements, and what the release plan still needs.

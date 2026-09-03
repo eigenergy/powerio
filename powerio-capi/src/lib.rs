@@ -16001,7 +16001,10 @@ pub unsafe extern "C" fn pio_schema_report(error: *mut *mut PioError) -> *mut Pi
             serde_json::to_string(&serde_json::json!({
                 "powerio_version": powerio::VERSION,
                 "abi": PIO_ABI_VERSION,
-                "powerio_ir": { "schema": "powerio.module", "version": 1 },
+                "powerio_ir": {
+                    "schema": powerio::IR_SCHEMA_NAME,
+                    "version": powerio::IR_SCHEMA_VERSION
+                },
                 "bmopf_schema": powerio_dist::BMOPF_SCHEMA_VERSION,
                 "features": {
                     "arrow": cfg!(feature = "arrow"),
@@ -16419,8 +16422,8 @@ mod tests {
             let parsed: serde_json::Value =
                 serde_json::from_str(&view_text(pio_string_view(report))).unwrap();
             assert_eq!(parsed["abi"], 7);
-            assert_eq!(parsed["powerio_ir"]["schema"], "powerio.module");
-            assert_eq!(parsed["powerio_ir"]["version"], 1);
+            assert_eq!(parsed["powerio_ir"]["schema"], powerio::IR_SCHEMA_NAME);
+            assert_eq!(parsed["powerio_ir"]["version"], powerio::IR_SCHEMA_VERSION);
             assert_eq!(
                 parsed["bmopf_schema"],
                 serde_json::json!(powerio_dist::BMOPF_SCHEMA_VERSION)

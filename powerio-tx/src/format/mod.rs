@@ -343,8 +343,8 @@ fn is_ieee_cdf_name(name: &str) -> bool {
 /// guidance to the typed facade parser), Surge JSON
 /// (`format: "surge-json"`), OPFData (`grid`, `solution`, and `metadata`), and
 /// PowerModels JSON (`baseMVA`, `branch`, `gen`, or `gencost`). JSON matching
-/// model JSON markers (`buses` plus a network key), distribution markers,
-/// ambiguous markers, or no known markers returns [`Error::UnknownFormat`].
+/// distribution markers, ambiguous markers, or no known markers returns
+/// [`Error::UnknownFormat`].
 /// Declare a format on the source to force a parser. PowerWorld `.pwb` is a
 /// binary input only format; PSLF `.epc` is text and supports emission. Returns
 /// the typed module: the network value, the parser's findings, and the retained
@@ -385,15 +385,13 @@ pub fn parse_with_json_class(
     source: powerio_core::Source,
     json_class: Option<routing::JsonClass>,
 ) -> std::result::Result<PioModule<BalancedNetwork>, powerio_core::Error> {
-    // Resolve the physical JSON transport once. In particular, model JSON
-    // carries the network's semantic origin inside the serialized value, but
-    // those bytes are model JSON rather than that origin's case format.
+    // Classify JSON once so the facade can pass the answer through without a
+    // second scan over the same bytes.
     let json_class = json_class.or_else(|| {
         let buffer = source.primary_buffer().ok()?;
         let text = std::str::from_utf8(buffer.content_bytes()).ok()?;
         Some(routing::classify_json_text(text))
     });
-    let is_model_json = matches!(json_class, Some(routing::JsonClass::ModelJson));
     let is_rawx = source
         .format()
         .and_then(|format| parse_target_format(format.as_str()))
@@ -462,12 +460,7 @@ pub fn parse_with_json_class(
             } else if source.format().is_some() {
                 source
             } else {
-                let format = if is_model_json {
-                    "model-json"
-                } else {
-                    network.source_format().name()
-                };
-                match powerio_core::FormatId::new(format) {
+                match powerio_core::FormatId::new(network.source_format().name()) {
                     Ok(format) => source.with_format(format),
                     Err(_) => source,
                 }
@@ -549,10 +542,6 @@ fn parse_to_network(
     }) || (from.is_none() && cgmes::looks_like_profile_set(source))
     {
         return cgmes::parse_source(source, warnings);
-    }
-    if from.is_some_and(|format| format == "model-json") {
-        let buffer = primary(source)?;
-        return BalancedNetwork::from_json(source_text(&buffer)?);
     }
     // PowerWorld `.pwb` is binary and read only; dispatch it before the text
     // read. `from` accepts "pwb" for files with a different extension.
@@ -683,13 +672,9 @@ fn parse_to_network(
         // of running the same classification a second time. `unwrap_or_else`
         // only classifies here when nothing did yet, so a caller with no
         // hint (every direct `parse` caller) behaves exactly as before.
-        None => match json_class.unwrap_or_else(|| routing::classify_json_text(text)) {
-            // The network serialization is not a case format, but it parses:
-            // a bare model JSON document decodes through `from_json` and
-            // routes to `BalancedNetwork` like any other balanced source.
-            JsonClass::ModelJson => return BalancedNetwork::from_json(text),
-            class => json_target_from_class(class)?,
-        },
+        None => {
+            json_target_from_class(json_class.unwrap_or_else(|| routing::classify_json_text(text)))?
+        }
     };
     read_source(text, fmt, stem, warnings)
 }
@@ -941,19 +926,13 @@ fn unknown_source_format(name: &str) -> Error {
     Error::UnknownFormat(format!("{name}; accepted names: {SOURCE_FORMAT_NAMES}"))
 }
 
-/// The case format a JSON classification selects; the shapes that are not
-/// case formats are refused with the surface that reads them named. Model
-/// JSON never reaches this from `parse`, which decodes it directly.
+/// The case format a JSON classification selects; PowerIO IR and unrecognized
+/// shapes are refused with guidance for the caller.
 fn json_target_from_class(class: JsonClass) -> Result<TargetFormat> {
     match class {
         JsonClass::Module => Err(Error::UnknownFormat(
             "JSON is PowerIO IR; decode it with `deserialize` rather than the \
              grid exchange format parser"
-                .into(),
-        )),
-        JsonClass::ModelJson => Err(Error::UnknownFormat(
-            "JSON is bare powerio model JSON, which is not a case format; read it with \
-             `BalancedNetwork::from_json` in Rust or serialize a complete PowerIO module"
                 .into(),
         )),
         JsonClass::Case(Detection::Known(DetectedFormat::Transmission(format))) => {
@@ -1640,11 +1619,12 @@ pub(super) fn warn_dropped_areas(
 ) {
     if !writes_bus_area {
         if !net.areas().is_empty() {
+            let count = net.areas().len();
+            let noun = if count == 1 { "record" } else { "records" };
             warnings.push(
                 &family.areas_dropped,
                 format!(
-                    "{} area record(s) dropped: {target} writes neither an area table nor a bus area number",
-                    net.areas().len()
+                    "{count} area {noun} dropped: {target} writes neither an area table nor a bus area number"
                 ),
             );
         }
@@ -1674,23 +1654,29 @@ pub(super) fn warn_dropped_areas(
     if fields.is_empty() {
         return;
     }
+    let total = net.areas().len();
+    let stated = net
+        .areas()
+        .iter()
+        .filter(|area| {
+            area.slack_bus.is_some()
+                || area.net_interchange != 0.0
+                || area.tolerance != 0.0
+                || area.name.is_some()
+                || area.uid.is_some()
+                || area.area_type.is_some()
+        })
+        .count();
+    let (subject, verb) = if total == 1 {
+        ("the area record".to_owned(), "states")
+    } else {
+        (format!("{stated} of {total} area records"), "state")
+    };
     warnings.push(
         &family.areas_dropped,
         format!(
-            "{} of {} area record(s) state {}: a {target} bus row carries the area number and \
-             {target} has no record for an area's own attributes",
-            net.areas()
-                .iter()
-                .filter(|area| {
-                    area.slack_bus.is_some()
-                        || area.net_interchange != 0.0
-                        || area.tolerance != 0.0
-                        || area.name.is_some()
-                        || area.uid.is_some()
-                        || area.area_type.is_some()
-                })
-                .count(),
-            net.areas().len(),
+            "{subject} {verb} {}: {target} bus rows carry the area number, but {target} has no \
+             record for the area's attributes",
             fields.into_iter().collect::<Vec<_>>().join(", ")
         ),
     );

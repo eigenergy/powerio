@@ -12,7 +12,7 @@ cbindgen --config powerio-capi/cbindgen.toml --crate powerio-capi \
 `scripts/capi-header-regen.sh` checks the generated header against the checked
 in file. Do not edit it by hand.
 
-ABI 7 is the only C surface in PowerIO 1.0. Symbols from ABI 4, 5, and 6 are
+ABI 7 is the only C surface in PowerIO 0.11. Symbols from ABI 4, 5, and 6 are
 not aliases and are not exported. A caller must compare `pio_abi_version()`
 with `PIO_ABI_VERSION` before using the library.
 
@@ -90,8 +90,9 @@ pio_destination_release(destination);
 ```
 
 `pio_module_serialize` writes PowerIO IR. `pio_module_deserialize` reads it.
-The IR header is `"schema": "powerio.module"` and `"version": 1`; ABI 7 does
-not expose prerelease document readers or module JSON aliases.
+The IR header is `"schema": "powerio.module"` and
+`"version": "0.11.0"`; ABI 7 does not expose readers for earlier document
+versions or module JSON aliases.
 
 ## Collections, updates, and calculations
 

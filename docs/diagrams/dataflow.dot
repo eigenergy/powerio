@@ -17,7 +17,7 @@ digraph powerio_dataflow {
     transform [label = "to_balanced\nmulticonductor → balanced\n(explicit, lossy, reported)"];
     matrices [label = "calc_*\nmatrix or vector\nwith element mappings"];
     emit [label = "emit\nsame format: byte exact\ncross format: reported losses"];
-    stored [label = "PowerIO IR\npowerio.module, version 1"];
+    stored [label = "PowerIO IR\npowerio.module, version 0.11.0"];
 
     source -> parse -> module;
     module -> access [label = "collection value"];

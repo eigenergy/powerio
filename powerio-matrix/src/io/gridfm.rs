@@ -691,7 +691,7 @@ fn build_gridfm_batch_inner(
         synthesized_gen_costs: cost_report.synthesized,
         patched_gen_costs: cost_report.patched,
         // The manifest lists the table files it describes; it does not list
-        // itself, matching the wire form consumers already read.
+        // itself, matching the manifest shape consumers already read.
         files: inventory
             .iter()
             .map(|(name, _)| (*name).to_string())

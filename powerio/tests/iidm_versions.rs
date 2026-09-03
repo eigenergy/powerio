@@ -26,15 +26,14 @@ fn fixture(version: &str, name: &str) -> PathBuf {
 }
 
 fn network_document(network: &BalancedNetwork) -> serde_json::Value {
-    let mut document: serde_json::Value =
-        serde_json::from_str(&network.to_json().unwrap()).unwrap();
+    let mut document = serde_json::to_value(network).unwrap();
     // The encoding a network came from is the one field an XML and a JSON
     // document of the same network state differently.
     document
         .as_object_mut()
         .unwrap()
         .remove("source_format")
-        .expect("model JSON names the source format");
+        .expect("the serialized network names the source format");
     document
 }
 

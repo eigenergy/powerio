@@ -1,7 +1,8 @@
-# PowerIO 1.0 API
+# PowerIO 0.11 API
 
-PowerIO 0.10 was the public beta. PowerIO 1.0 keeps the useful domain types and
-removes the beta operations that named the same action several ways.
+PowerIO 0.10 was the public beta. PowerIO 0.11 keeps the useful domain types
+and removes the beta operations that named the same action several ways. It is
+the candidate 1.0 API under a compatibility-focused stabilization cycle.
 
 The public path is:
 
@@ -88,9 +89,9 @@ changes and whether energized connectivity changed.
 
 ## PowerIO IR and C ABI
 
-PowerIO 1.0 reads and writes one IR shape:
-`"schema": "powerio.module"`, `"version": 1`. It has no prerelease document
-reader or source alias.
+PowerIO IR version `0.11.0` has one shape:
+`"schema": "powerio.module"`, `"version": "0.11.0"`. It has no reader for
+earlier document versions or source alias.
 
 C ABI 7 is the only exported ABI. It has no ABI 4, 5, or 6 symbol aliases. All
 values use opaque reference counted handles, explicit buffer lengths, one

@@ -61,7 +61,7 @@ fn dist_layer_extracts_and_applies_by_name() {
     assert_eq!(route.key.name.as_deref(), Some("l1"));
     assert_eq!(route.from.as_deref(), Some("sourcebus"));
 
-    // The canonical wire form round trips into a fresh parse of the same
+    // The canonical serialized form round trips into a fresh parse of the same
     // master, matching case insensitively on the OpenDSS names.
     let round = GeoLayer::parse(&layer.to_geojson(), None)
         .expect("reparse")

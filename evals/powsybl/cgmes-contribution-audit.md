@@ -8,12 +8,12 @@ Mohamed Numair implemented the first CGMES reader and writer on
 - [`11163b32faf87dbe8a64a94a388a771e36c6df8f`](https://github.com/eigenergy/powerio/commit/11163b32faf87dbe8a64a94a388a771e36c6df8f)
   added CGMES output.
 
-The PowerIO 1.0 implementation incorporates that work. This audit records how
+The PowerIO 0.11 implementation incorporates that work. This audit records how
 each part of the two commits appears in the final code.
 
 ## Reader
 
-| Original behavior | PowerIO 1.0 status |
+| Original behavior | PowerIO 0.11 status |
 |---|---|
 | Detect CGMES 2.4.15 from CIM16 namespaces, including observed vendor URI years | **Retained.** The reader accepts CIM16 spellings and records the detected release. |
 | Detect CGMES 3.0 from the CIM100 namespace | **Retained.** |
@@ -41,10 +41,10 @@ each part of the two commits appears in the final code.
 
 ## Writer
 
-| Original behavior | PowerIO 1.0 status |
+| Original behavior | PowerIO 0.11 status |
 |---|---|
 | Write deterministic EQ, TP, SSH, and SV sets for CGMES 2.4.15 and 3.0 | **Deliberately replaced at the public dispatcher.** PowerIO reads both releases and fresh public `emit` writes CGMES 3.0. The internal writer still exercises both encodings in tests. This avoids two public output tokens for one format. |
-| Export `read_cgmes_dir`, `write_cgmes_dir`, `CgmesFiles`, and `write_cgmes` from the `powerio` crate; CLI tokens `--to cgmes3`, `--to cgmes-3`, and `--from cim-xml` | **Deliberately replaced.** PowerIO 1.0 has one `parse` and one `emit` operation and one `cgmes` format token in Rust, C, Python, Julia, and the CLI. The writer types stay private to the format module. |
+| Export `read_cgmes_dir`, `write_cgmes_dir`, `CgmesFiles`, and `write_cgmes` from the `powerio` crate; CLI tokens `--to cgmes3`, `--to cgmes-3`, and `--from cim-xml` | **Deliberately replaced.** PowerIO 0.11 has one `parse` and one `emit` operation and one `cgmes` format token in Rust, C, Python, Julia, and the CLI. The writer types stay private to the format module. |
 | Write a fixed `md:Model.modelingAuthoritySet` of `http://powerio.dev/cgmes` | **Retained.** Fresh headers carry the same PowerIO authority; the reader reports the source authority it does not retain. |
 | Create a minimal region, substation, and voltage level hierarchy for a bus branch source | **Retained and improved.** Existing hierarchy and detailed connectivity are authoritative. Missing hierarchy is derived deterministically, and partial detailed data is completed without dropping balanced buses. |
 | Write terminals and TP nodes for each balanced component | **Retained and improved.** Stable source identities are used where valid. Missing equipment, terminal, topology, and containment mRIDs use deterministic UUIDv5 values. |
@@ -58,7 +58,7 @@ each part of the two commits appears in the final code.
 
 ## Tests and fixtures
 
-| Original choice | PowerIO 1.0 status |
+| Original choice | PowerIO 0.11 status |
 |---|---|
 | Hand written `micro30` CGMES 3.0 profiles with value by value assertions | **Deliberately replaced.** Small synthetic unit cases cover the same electrical equations and a wider set of records without carrying a second fixture tree. |
 | CIGRE MV and `sample_grid_switches` copied from cimpy at `ac400d43c015afc4ac58e7e833b91fcba6f32812`, Apache-2.0 | **Deliberately replaced.** They were license clean, but the final tests use generated cases and a pinned PowSybl Core checkout with broader CGMES coverage. No behavior depended on deleting them. |

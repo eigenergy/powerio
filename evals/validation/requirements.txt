@@ -1,5 +1,5 @@
 # Python oracle dependencies for the validation harness. These are benchmark-only
-# tools, NOT dependencies of the powerio package or wheel. Install them into the
+# tools, NOT dependencies of a published PowerIO crate or the Python wheel. Install them into the
 # same virtualenv that holds the powerio wheel:
 #
 #   .venv/bin/python -m pip install -r evals/validation/requirements.txt

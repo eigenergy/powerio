@@ -26,14 +26,14 @@ PowerIO's design borrows from LLVM and MLIR where their problems genuinely overl
 
 **Shared operations instead of per format switches.** The parse and emission dispatchers route once, at the facade; matrix calculations, serializers, and inspectors consume the concrete typed values, so a new format adds one parser and one serializer rather than a case in every consumer.
 
-**Analysis caches.** Factorizations and prepared solver arrays are derived data behind the public results, invalidated when their inputs change, the way pass manager analyses are; `IndexedNetwork`, the derived index view, stays public in 1.0 because downstream consumers build matrices through it directly.
+**Analysis caches.** Factorizations and prepared solver arrays are derived data behind the public results, invalidated when their inputs change, the way pass manager analyses are; `IndexedNetwork`, the derived index view, stays public in 0.11 because downstream consumers build matrices through it directly.
 
 **Registries checked mechanically where tables drift.** Structural type names, format tokens, diagnostic codes, and drawn architecture edges are each held to one source by a CI gate, which is the maintainable slice of MLIR's declarative dialect definitions.
 
-**Serialization specified apart from memory.** `.pio.json` version 1 has an explicit schema and validation rules; the Rust structs never derive the public document layout. PowerIO 1.0 reads and writes only that final shape, and [PowerIO IR reference](ir-reference.md) defines every structural type of that shape field by field, the way the MLIR language reference defines its types; a test holds the page to the generated schema.
+**Serialization specified apart from memory.** `.pio.json` version `0.11.0` has an explicit schema and validation rules; the Rust structs never derive the public document layout. PowerIO v0.11.0 reads and writes only that shape, and [PowerIO IR reference](ir-reference.md) defines every structural type of that shape field by field, the way the MLIR language reference defines its types; a test holds the page to the generated schema.
 
 **Scrutiny proportional to permanence.** A new core concept (a value family or common module record) needs a registered structural type name, an exact IR representation, and binding coverage. A new format adapter needs none of that.
 
 ## Not adopted
 
-PowerIO 1.0 has no SSA values, no generic operation tree, no region nesting, no global context, no open runtime dialect registry, no generic pass manager, and no bytecode. The existing Rust types state power system data more directly than an operation tree would, and none of those mechanisms has a PowerIO use with measured benefit. Public names stay power system names: a bus is a bus, a lowering names its concrete result, and no Rust struct is renamed an operation to resemble MLIR. A `PioContext` would be justified only by measured interning or shared allocation needs, and none has appeared.
+PowerIO 0.11 has no SSA values, no generic operation tree, no region nesting, no global context, no open runtime dialect registry, no generic pass manager, and no bytecode. The existing Rust types state power system data more directly than an operation tree would, and none of those mechanisms has a PowerIO use with measured benefit. Public names stay power system names: a bus is a bus, a lowering names its concrete result, and no Rust struct is renamed an operation to resemble MLIR. A `PioContext` would be justified only by measured interning or shared allocation needs, and none has appeared.

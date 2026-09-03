@@ -1,36 +1,29 @@
-//! Schema checks for the balanced network JSON document.
+//! Serde checks for `BalancedNetwork` as embedded in a PowerIO IR value.
 //!
-//! Version 1 writes canonical source format names and stable component IDs. It
-//! does not carry the prerelease C ABI snapshots forward as a second wire
-//! format. Additive fields keep their Serde defaults so a reader can accept a
-//! version 1 document written by a newer PowerIO build.
-
-use std::path::Path;
+//! PowerIO IR is the public document. These tests pin the nested network data
+//! that its facade-owned DTO currently serializes.
 
 use powerio_tx::{
     BalancedNetwork, Branch, Bus, BusId, BusType, CoordinateSpace, CoordsKind, GenCaps, Generator,
     GeoMeta, Location, SourceFormat, TerminalReference,
 };
 
-fn prerelease_snapshot() -> String {
-    let path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/model-json/case30_v4.json");
-    std::fs::read_to_string(&path).expect("the committed v4 golden snapshot must exist")
+fn serialize_network(network: &BalancedNetwork) -> String {
+    let mut network = network.clone();
+    network.assign_missing_component_ids();
+    serde_json::to_string(&network).unwrap()
+}
+
+fn deserialize_network(text: &str) -> BalancedNetwork {
+    serde_json::from_str(text).unwrap()
 }
 
 #[test]
-fn prerelease_source_format_spelling_is_not_a_version_1_document() {
-    let error = BalancedNetwork::from_json(&prerelease_snapshot())
-        .expect_err("the prerelease enum spelling must not define a second wire format");
-    assert!(error.to_string().contains("unknown variant `Matpower`"));
-}
-
-#[test]
-fn snapshot_ignores_unknown_fields_and_defaults_omitted_caps() {
-    // Build a minimal valid net, drop it to JSON, then mutate the JSON so it looks
-    // like a snapshot from a different schema vintage and confirm it still parses.
+fn nested_network_ignores_unknown_fields_and_defaults_omitted_caps() {
+    // Build a minimal valid network, mutate its serialized fields, and confirm
+    // the nested IR value keeps its additive defaults.
     let net = small_net();
-    let mut v: serde_json::Value = serde_json::from_str(&net.to_json().unwrap()).unwrap();
+    let mut v: serde_json::Value = serde_json::from_str(&serialize_network(&net)).unwrap();
 
     // (a) an unknown future top-level field is ignored (deny_unknown_fields off).
     v["future_field_v5"] = serde_json::json!("ignored");
@@ -41,8 +34,7 @@ fn snapshot_ignores_unknown_fields_and_defaults_omitted_caps() {
     generator.remove("regulating_terminal");
 
     let text = serde_json::to_string(&v).unwrap();
-    let parsed = BalancedNetwork::from_json(&text)
-        .expect("an unknown field and an omitted caps must still parse");
+    let parsed = deserialize_network(&text);
     assert_eq!(parsed.generators().len(), 1);
     assert!(
         !parsed.generators()[0].has_caps(),
@@ -53,7 +45,7 @@ fn snapshot_ignores_unknown_fields_and_defaults_omitted_caps() {
 }
 
 #[test]
-fn generator_voltage_control_survives_snapshot_round_trip() {
+fn generator_voltage_control_survives_serde_round_trip() {
     let mut net = small_net();
     let reference: TerminalReference = serde_json::from_value(serde_json::json!({
         "equipment": {
@@ -67,7 +59,7 @@ fn generator_voltage_control_survives_snapshot_round_trip() {
     net.generators_mut()[0].regulated_bus = Some(BusId(2));
     net.generators_mut()[0].regulating_terminal = Some(reference.clone());
 
-    let parsed = BalancedNetwork::from_json(&net.to_json().unwrap()).unwrap();
+    let parsed = deserialize_network(&serialize_network(&net));
     let generator = &parsed.generators()[0];
     assert!(!generator.voltage_regulation_on);
     assert_eq!(generator.regulated_bus, Some(BusId(2)));
@@ -98,30 +90,30 @@ fn small_net() -> BalancedNetwork {
 }
 
 #[test]
-fn component_ids_survive_snapshot_roundtrip_and_are_assigned_when_absent() {
+fn component_ids_survive_serde_roundtrip_and_are_assigned_when_absent() {
     let mut net = small_net();
     net.generators_mut()[0].uid = Some("gen-a".to_owned());
 
-    let v: serde_json::Value = serde_json::from_str(&net.to_json().unwrap()).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&serialize_network(&net)).unwrap();
     assert_eq!(v["generators"][0]["uid"], serde_json::json!("gen-a"));
     let bus_uid = v["buses"][0]["uid"]
         .as_str()
         .expect("version 1 serialization assigns a stable component ID");
     assert!(!bus_uid.is_empty());
 
-    let parsed = BalancedNetwork::from_json(&serde_json::to_string(&v).unwrap()).unwrap();
+    let parsed = deserialize_network(&serde_json::to_string(&v).unwrap());
     assert_eq!(parsed.generators()[0].uid.as_deref(), Some("gen-a"));
     assert_eq!(parsed.buses()[0].uid.as_deref(), Some(bus_uid));
 }
 
 #[test]
-fn geo_fields_roundtrip_and_stay_off_the_wire_when_absent() {
+fn geo_fields_roundtrip_and_are_omitted_when_absent() {
     let net = small_net();
-    let text = net.to_json().unwrap();
+    let text = serialize_network(&net);
     assert!(!text.contains(r#""geo""#));
     assert!(!text.contains(r#""location""#));
-    let parsed = BalancedNetwork::from_json(&text).unwrap();
-    assert_eq!(parsed.to_json().unwrap(), text);
+    let parsed = deserialize_network(&text);
+    assert_eq!(serialize_network(&parsed), text);
 
     let v: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert!(v.get("geo").is_none());
@@ -138,7 +130,7 @@ fn geo_fields_roundtrip_and_stay_off_the_wire_when_absent() {
         kind: None,
     });
 
-    let v: serde_json::Value = serde_json::from_str(&with_geo.to_json().unwrap()).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&serialize_network(&with_geo)).unwrap();
     assert_eq!(
         v["geo"],
         serde_json::json!({"space": "geographic", "kind": "source"})
@@ -146,7 +138,7 @@ fn geo_fields_roundtrip_and_stay_off_the_wire_when_absent() {
     assert_eq!(v["buses"][0]["location"]["x"], serde_json::json!(-80.0));
     assert_eq!(v["buses"][0]["location"]["y"], serde_json::json!(35.0));
 
-    let parsed = BalancedNetwork::from_json(&serde_json::to_string(&v).unwrap()).unwrap();
+    let parsed = deserialize_network(&serde_json::to_string(&v).unwrap());
     assert_eq!(parsed.geo(), with_geo.geo());
     assert_eq!(parsed.buses()[0].location, with_geo.buses()[0].location);
 }

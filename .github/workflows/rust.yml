@@ -97,7 +97,7 @@ jobs:
         if [ -n "$(git status --porcelain -- docs/schema)" ]; then
           git status --porcelain -- docs/schema
           git diff -- docs/schema
-          echo "docs/schema does not match the PowerIO 1.0 IR" >&2
+          echo "docs/schema does not contain the generated current PowerIO IR schema" >&2
           exit 1
         fi
     - name: Check generated BMOPF examples

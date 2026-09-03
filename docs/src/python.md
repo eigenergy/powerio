@@ -114,9 +114,10 @@ powerio.serialize(module, "case.pio.json")
 same_module = powerio.deserialize(ir.artifacts[0].data)
 ```
 
-The IR header is `"schema": "powerio.module"` and `"version": 1`. PowerIO
-1.0 does not accept prerelease document shapes. PowerIO IR is not a grid
-exchange format and is absent from format discovery.
+The IR header is `"schema": "powerio.module"` and
+`"version": "0.11.0"`. PowerIO v0.11.0 does not accept earlier document
+versions. PowerIO IR is not a grid exchange format and is absent from format
+discovery.
 
 ## Collections
 

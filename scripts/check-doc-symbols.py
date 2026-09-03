@@ -17,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs" / "src"
-HISTORY_PAGES = {"migration-v1.md"}
+HISTORY_PAGES = {"migration-0.11.md"}
 
 def fail(page: Path, message: str) -> None:
     print(f"{page.relative_to(ROOT)}: {message}", file=sys.stderr)

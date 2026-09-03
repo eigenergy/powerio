@@ -1,4 +1,4 @@
-//! Decode time limits on the PowerIO IR wire. Hostile documents are refused
+//! Decode time limits on PowerIO IR. Hostile documents are refused
 //! at their stated bounds, and record decode scales past six figure counts.
 
 use powerio::{BalancedNetwork, PioValue};
@@ -212,13 +212,13 @@ fn expect_refused(raw: &serde_json::Value) {
     );
 }
 
-/// DESER-007: every bounded sequence, map, and string on the record wire is
+/// DESER-007: every bounded sequence, map, and string in a stored record is
 /// refused one element or byte past its limit and accepted exactly at it.
 #[test]
 // One deliberate sweep over the whole limit table; splitting it would
 // scatter the boundary pairs.
 #[allow(clippy::too_many_lines)]
-fn record_wire_bounds_refuse_past_and_accept_at_each_limit() {
+fn record_document_bounds_refuse_past_and_accept_at_each_limit() {
     let span = |source: &str| serde_json::json!({"source": source, "byte_start": 0, "byte_end": 1});
     let source = |id: &str| serde_json::json!({"id": id, "name": "case.m", "byte_length": 64});
     let diagnostic = |id: String| {
@@ -490,7 +490,7 @@ fn a_nested_network_that_fails_validation_is_refused_per_kind() {
 
 #[test]
 fn a_decoded_network_that_fails_validation_is_refused() {
-    // A branch naming an undeclared bus passes the wire decode but fails the
+    // A branch naming an undeclared bus passes document decoding but fails the
     // model's own validation; the stored read refuses it instead of yielding
     // the value.
     let mut net = small_network();

@@ -62,7 +62,7 @@ fn common_aliases_resolve_without_exposing_component_enums() {
         assert_eq!(resolve_format(alias).map(|info| info.token), Some(token));
     }
 
-    for name in ["", "json", "model-json", "rawx", "iidm", "not-a-format"] {
+    for name in ["", "json", "rawx", "iidm", "not-a-format"] {
         assert_eq!(resolve_format(name), None, "{name}");
     }
 }

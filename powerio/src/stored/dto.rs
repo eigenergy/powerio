@@ -1,4 +1,4 @@
-//! Exact data types for the PowerIO 1.0 IR. Runtime types do not derive this
+//! Exact data types for PowerIO IR. Runtime types do not derive this
 //! layout; the mapping in [`super::convert`] is the one bridge.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -14,9 +14,6 @@ use powerio_dist::MulticonductorNetwork;
 
 #[cfg(feature = "schema")]
 use schemars::JsonSchema;
-
-pub const SCHEMA_NAME: &str = "powerio.module";
-pub const SCHEMA_VERSION: u32 = 1;
 
 /// JSON has no nonfinite number literals. PowerIO spells them as
 /// `"Infinity"`, `"-Infinity"`, or `"NaN"` instead of turning valid open
@@ -100,9 +97,9 @@ pub struct Producer {
     pub version: String,
 }
 
-// Decode time bounds: every sequence, map, and string on the version 1 record
-// wire is refused or truncated at its limit while it is decoded, before the
-// full collection has been retained, matching the core record wire.
+// Decode time bounds: every sequence, map, and string in a PowerIO IR record is
+// refused or truncated at its limit while it is decoded, before the full
+// collection has been retained, matching the core record representation.
 fn bounded_identifier<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
     limits::BoundedStr {
         what: "record identifier",
@@ -566,7 +563,7 @@ pub struct StoredOperatingPointScenarioSet<N> {
     pub scenarios: Vec<StoredOperatingPointScenario>,
 }
 
-/// The PowerIO 1.0 objective vocabulary.
+/// The PowerIO objective vocabulary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(rename_all = "snake_case", tag = "term", deny_unknown_fields)]
@@ -848,7 +845,7 @@ pub struct AcOpfSolution {
     pub branch_to_limit_multiplier: Option<Vec<StoredF64>>,
 }
 
-/// Primal values of a SOCWR relaxation result on the PowerIO 1.0 wire.
+/// Primal values of a serialized SOCWR relaxation result.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -875,7 +872,7 @@ pub struct SocwrOpfValues {
     pub three_winding_transformer_terminal_powers: Vec<ThreeWindingTransformerTerminalPower>,
 }
 
-/// Optional dual values of a SOCWR relaxation result on the PowerIO 1.0 wire.
+/// Optional dual values of a serialized SOCWR relaxation result.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -1039,7 +1036,7 @@ pub struct AcScucSolution {
     pub objective: Option<StoredF64>,
 }
 
-/// PowerIO 1.0 value representation. The discriminator is the canonical
+/// PowerIO IR value representation. The discriminator is the canonical
 /// structural type name used by every dynamic boundary.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
@@ -1254,7 +1251,7 @@ pub enum HistoryKind {
     Solve,
 }
 
-/// PowerIO 1.0 history record. Input and output identify structural types,
+/// PowerIO IR history record. Input and output identify structural types,
 /// not a parallel value registry.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
@@ -1294,11 +1291,14 @@ pub struct HistoryEntry {
 pub struct StoredModule {
     #[cfg_attr(
         feature = "schema",
-        schemars(extend("const" = "powerio.module"))
+        schemars(extend("const" = crate::IR_SCHEMA_NAME))
     )]
     pub schema: String,
-    #[cfg_attr(feature = "schema", schemars(extend("const" = 1)))]
-    pub version: u32,
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("const" = crate::IR_SCHEMA_VERSION))
+    )]
+    pub version: String,
     pub producer: Producer,
     pub value: StoredValue,
     #[serde(
@@ -1355,7 +1355,7 @@ pub(super) struct StoredHeader {
     #[serde(default)]
     pub(super) schema: Option<String>,
     #[serde(default)]
-    pub(super) version: Option<u32>,
+    pub(super) version: Option<serde_json::Value>,
 }
 
 /// Structural validation of one decoded document: identities, digests,

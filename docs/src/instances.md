@@ -40,7 +40,7 @@ retains both files and its diagnostics.
 
 Rust selects a DC branch formula with
 `with_branch_susceptance_formula(formula)` and reads it with
-`branch_susceptance_formula()`. Stored `powerio.module/1` documents retain the
+`branch_susceptance_formula()`. PowerIO IR v0.11.0 documents retain the
 field `branch_susceptance_formula`. Its value is a
 `BranchSusceptanceFormula` such as `series_susceptance`.
 

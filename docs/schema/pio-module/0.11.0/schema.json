@@ -6494,7 +6494,7 @@
     },
     "HistoryEntry": {
       "additionalProperties": false,
-      "description": "PowerIO 1.0 history record. Input and output identify structural types,\nnot a parallel value registry.",
+      "description": "PowerIO IR history record. Input and output identify structural types,\nnot a parallel value registry.",
       "properties": {
         "assumptions": {
           "items": {
@@ -8708,7 +8708,7 @@
       "type": "object"
     },
     "ObjectiveTerm": {
-      "description": "The PowerIO 1.0 objective vocabulary.",
+      "description": "The PowerIO objective vocabulary.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -11227,7 +11227,7 @@
     },
     "SocwrOpfDuals": {
       "additionalProperties": false,
-      "description": "Optional dual values of a SOCWR relaxation result on the PowerIO 1.0 wire.",
+      "description": "Optional dual values of a serialized SOCWR relaxation result.",
       "properties": {
         "branch_from_thermal_limit_multiplier": {
           "items": {
@@ -11309,7 +11309,7 @@
     },
     "SocwrOpfValues": {
       "additionalProperties": false,
-      "description": "Primal values of a SOCWR relaxation result on the PowerIO 1.0 wire.",
+      "description": "Primal values of a serialized SOCWR relaxation result.",
       "properties": {
         "branch_from_active_power": {
           "items": {
@@ -12687,7 +12687,7 @@
       "type": "object"
     },
     "StoredValue": {
-      "description": "PowerIO 1.0 value representation. The discriminator is the canonical\nstructural type name used by every dynamic boundary.",
+      "description": "PowerIO IR value representation. The discriminator is the canonical\nstructural type name used by every dynamic boundary.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -15745,7 +15745,7 @@
       "type": "object"
     }
   },
-  "$id": "https://powerio.dev/schema/pio-module/1/schema.json",
+  "$id": "https://powerio.dev/schema/pio-module/0.11.0/schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -15788,10 +15788,8 @@
       "$ref": "#/$defs/StoredValue"
     },
     "version": {
-      "const": 1,
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer"
+      "const": "0.11.0",
+      "type": "string"
     }
   },
   "required": [

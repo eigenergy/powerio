@@ -45,7 +45,7 @@ PY
 
 schema=$(python3 - <<'PY'
 import json
-with open('docs/schema/pio-module/1/schema.json', encoding='utf-8') as handle:
+with open('docs/schema/pio-module/0.11.0/schema.json', encoding='utf-8') as handle:
     document = json.load(handle)
 branches = document['$defs']['StoredValue']['oneOf']
 names = sorted(branch['properties']['type']['const'] for branch in branches)

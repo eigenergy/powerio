@@ -1,4 +1,4 @@
-//! Malformed input fuzzing of the sole PowerIO 1.0 IR reader through the
+//! Malformed input fuzzing of the current PowerIO IR reader through the
 //! public operations: exact header and typed DTO decoding plus reference
 //! validation. A document that deserializes must also serialize, and the
 //! serialized document must deserialize again: a reader accepting a document

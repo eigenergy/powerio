@@ -1,10 +1,11 @@
-# PowerIO 1.0 design record
+# Candidate PowerIO 1.0 design record
 
 These four documents record the design that led to the PowerIO 0.10 beta and
-the 1.0 release. They are dated design records, not current API authority: the
-released source, tests, the [1.0 API surface](../src/final-v1-api-cleanup.md),
-the [migration guide](../src/migration-v1.md), and the changelog state the
-shipped API. Read them for the reasoning behind a public name or meaning.
+the candidate 1.0 API now shipped for stabilization in 0.11. They are dated
+design records, not current API authority: the released source, tests, the
+[0.11 API surface](../src/api-0.11.md), the
+[migration guide](../src/migration-0.11.md), and the changelog state the shipped
+API. Read them for the reasoning behind a public name or meaning.
 
 1. [Terminology](v1-terminology.md) fixes the public words and names.
 2. [Rationale](v1-rationale.md) explains the alternatives and why the selected
@@ -15,6 +16,6 @@ shipped API. Read them for the reasoning behind a public name or meaning.
    solution, matrix, writer, crate, ABI, and binding semantics.
 
 The record was written against the 0.10 beta. Where it names a beta operation
-or type that 1.0 removed, the migration guide lists the replacement. The
+or type that 0.11 removed, the migration guide lists the replacement. The
 compiling prototype crates and the issue audit that accompanied the record were
 working evidence for that period and are kept only in the repository history.
