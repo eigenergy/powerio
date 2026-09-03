@@ -115,6 +115,91 @@ impl std::fmt::Display for InjectionChange {
     }
 }
 
+/// `after` with its bus numbers restated as `before`'s, in bus table order, or
+/// `None` when the two already agree or the tables differ in length.
+///
+/// A format that identifies a bus by a name rather than a number (IIDM's
+/// `<bus id="...">`, CIM's mRID) states no bus number, so a reader numbers the
+/// buses it finds and those numbers are a fresh calculation view rather than
+/// the source's. What the conversion does state is the order: each writer emits
+/// the buses in table order and each reader numbers them in the order it reads
+/// them. Relabeling by position therefore compares the network the source
+/// described rather than two numberings of it.
+///
+/// The relabeling is not a licence to lose identity: `id`, `uid`, and `name`
+/// are typed fields, so the model comparison reports every change and a cell
+/// claiming zero warnings fails on it.
+#[must_use]
+pub fn relabel_buses_in_table_order(
+    before: &BalancedNetwork,
+    after: &BalancedNetwork,
+) -> Option<BalancedNetwork> {
+    if before.buses().len() != after.buses().len() {
+        return None;
+    }
+    let renumbering: BTreeMap<powerio_tx::BusId, powerio_tx::BusId> = after
+        .buses()
+        .iter()
+        .zip(before.buses())
+        .filter(|(after, before)| after.id != before.id)
+        .map(|(after, before)| (after.id, before.id))
+        .collect();
+    if renumbering.is_empty() {
+        return None;
+    }
+    let renumbered = |bus: powerio_tx::BusId| renumbering.get(&bus).copied().unwrap_or(bus);
+    let mut out = after.clone();
+    for bus in out.buses_mut() {
+        bus.id = renumbered(bus.id);
+    }
+    for branch in out.branches_mut() {
+        branch.from = renumbered(branch.from);
+        branch.to = renumbered(branch.to);
+        if let Some(control) = branch.control.as_mut() {
+            control.controlled_bus = control.controlled_bus.map(renumbered);
+        }
+    }
+    for switch in out.switches_mut() {
+        switch.from = renumbered(switch.from);
+        switch.to = renumbered(switch.to);
+    }
+    for load in out.loads_mut() {
+        load.bus = renumbered(load.bus);
+    }
+    for shunt in out.shunts_mut() {
+        shunt.bus = renumbered(shunt.bus);
+        if let Some(control) = shunt.control.as_mut() {
+            control.control_bus = control.control_bus.map(renumbered);
+        }
+    }
+    for compensator in out.static_var_compensators_mut() {
+        compensator.bus = renumbered(compensator.bus);
+    }
+    for generator in out.generators_mut() {
+        generator.bus = renumbered(generator.bus);
+        generator.regulated_bus = generator.regulated_bus.map(renumbered);
+    }
+    for line in out.hvdc_mut() {
+        line.from = renumbered(line.from);
+        line.to = renumbered(line.to);
+    }
+    for storage in out.storage_mut() {
+        storage.bus = renumbered(storage.bus);
+    }
+    for area in out.areas_mut() {
+        area.slack_bus = area.slack_bus.map(renumbered);
+    }
+    for transformer in out.transformers_3w_mut() {
+        for winding in &mut transformer.windings {
+            winding.bus = renumbered(winding.bus);
+            if let Some(control) = winding.control.as_mut() {
+                control.controlled_bus = control.controlled_bus.map(renumbered);
+            }
+        }
+    }
+    Some(out)
+}
+
 /// Why a `Y_bus` comparison produced no answer.
 ///
 /// Distinguished from "the matrices agree" on purpose: a network the matrix
@@ -126,12 +211,27 @@ pub enum YbusUnavailable {
     After,
 }
 
-/// The admittance matrix, entry for entry by bus id pair.
+/// The admittance matrix, entry for entry by bus id pair, on one voltage base.
 ///
 /// Warnings account for *dropped* data, never for corrupted electrics, so this
 /// holds on yellow cells too. A format may relocate admittance (pandapower
 /// rides MATPOWER transformer charging as bus shunts) or restate it in other
 /// units, but `Y_bus` is where all of those spellings meet.
+///
+/// A format that states impedances in ohms rather than per unit carries its own
+/// bus nominal voltages, and some of those formats admit only a fixed set: a
+/// UCTE-DEF node code names one of ten voltage levels, so a 345 kV case is
+/// written under the 330 kV level and reads back per unit on 330 kV. The
+/// physical network is the same; only the per-unit reference moved. Each entry
+/// is therefore compared after the standard change of base, scaling the result
+/// entry by `V_before(i) * V_before(j) / (V_after(i) * V_after(j))`, which is
+/// exactly 1 whenever both sides state the same nominal voltage. A bus with no
+/// positive nominal voltage on either side contributes a unit ratio, because a
+/// writer that substitutes one nominal voltage divides by the same value the
+/// reader multiplies back.
+///
+/// A silent base change is still a loss: `base_kv` is a typed field, so the
+/// model comparison reports it and a cell claiming zero warnings fails on it.
 ///
 /// # Errors
 ///
@@ -141,6 +241,21 @@ pub fn ybus_change(
     before: &BalancedNetwork,
     after: &BalancedNetwork,
 ) -> Result<Option<YbusChange>, YbusUnavailable> {
+    let nominal = |net: &BalancedNetwork| -> BTreeMap<usize, f64> {
+        net.buses()
+            .iter()
+            .filter(|bus| bus.base_kv.is_finite() && bus.base_kv > 0.0)
+            .map(|bus| (bus.id.0, bus.base_kv))
+            .collect()
+    };
+    let nominal_before = nominal(before);
+    let nominal_after = nominal(after);
+    let base_ratio = |bus: usize| -> f64 {
+        match (nominal_before.get(&bus), nominal_after.get(&bus)) {
+            (Some(before), Some(after)) => before / after,
+            _ => 1.0,
+        }
+    };
     let entries = |net: &BalancedNetwork| -> Option<BTreeMap<(usize, usize), (f64, f64)>> {
         let view = powerio_matrix::IndexedNetwork::new(net);
         let parts =
@@ -164,6 +279,8 @@ pub fn ybus_change(
     for key in a.keys().chain(b.keys().filter(|k| !a.contains_key(*k))) {
         let (ga, ba) = a.get(key).copied().unwrap_or((0.0, 0.0));
         let (gb, bb) = b.get(key).copied().unwrap_or((0.0, 0.0));
+        let scale = base_ratio(key.0) * base_ratio(key.1);
+        let (gb, bb) = (gb * scale, bb * scale);
         if beyond_tol(ga, gb, ELECTRICAL_TOL) || beyond_tol(ba, bb, ELECTRICAL_TOL) {
             return Ok(Some(YbusChange {
                 from_bus: key.0,
