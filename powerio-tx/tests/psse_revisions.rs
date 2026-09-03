@@ -119,10 +119,10 @@ fn transformer_control_round_trips_at_v34_and_v35() {
     }
 }
 
-fn close(actual: f64, expected: f64, what: &str) {
+fn close(actual: f64, expected: f64, _what: &str) {
     assert!(
         (actual - expected).abs() < 1e-9,
-        "{what}: {actual} != {expected}"
+        "the parsed value differs from the fixture"
     );
 }
 
