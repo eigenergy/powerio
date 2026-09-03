@@ -46,12 +46,23 @@ const fn info(
 
 /// Resolve a format token or common alias to facade owned metadata.
 ///
-/// This includes transmission and distribution grid exchange formats.
-/// PowerIO IR, bare model JSON, and display artifacts are not grid exchange
-/// formats and therefore are not returned here.
+/// This includes transmission and distribution grid exchange formats and the
+/// standalone geographic layer document. PowerIO IR and bare model JSON are
+/// not grid exchange formats and therefore are not returned here.
 ///
 #[must_use]
 pub fn resolve_format(name: &str) -> Option<FormatInfo> {
+    if crate::is_geo_layer_token(name) {
+        return Some(info(
+            "geo-json",
+            Some(powerio_tx::geo::GEO_LAYER_EXTENSION),
+            false,
+            true,
+        ));
+    }
+    if crate::is_pwd_display_token(name) {
+        return Some(info("powerworld-pwd", Some("pwd"), false, false));
+    }
     if let Some(format) = powerio_tx::format::parse_target_format(name) {
         let is_cgmes = format == powerio_tx::TargetFormat::Cgmes;
         return Some(info(

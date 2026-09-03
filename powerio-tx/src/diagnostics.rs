@@ -327,6 +327,8 @@ pub mod codes {
             "a geo layer row could not be read and was skipped";
         READ_GEO_NOTES_TRUNCATED = "READ.GEO.NOTES_TRUNCATED", Warning,
             "the geo reader stopped recording notes at its budget";
+        READ_GEO_NOT_TEXT = "READ.GEO.NOT_TEXT", Error,
+            "a geographic layer document is not valid UTF-8 text", category = Parse;
 
         READ_IO_FAILED = "READ.IO.FAILED", Error,
             "the case file could not be read", category = Io;

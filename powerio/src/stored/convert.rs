@@ -97,6 +97,7 @@ fn encode_value(value: &PioValue) -> Result<dto::StoredValue> {
         PioValue::MulticonductorNetwork(network) => {
             dto::StoredValue::MulticonductorNetwork(Box::new(network.clone()))
         }
+        PioValue::GeoLayer(layer) => dto::StoredValue::GeoLayer(Box::new(layer.clone())),
         PioValue::BalancedOperatingPoint(point) => {
             dto::StoredValue::BalancedOperatingPoint(encode_balanced_point(point)?)
         }
@@ -1470,6 +1471,9 @@ fn validate_decoded_networks(value: &PioValue) -> Result<()> {
     match value {
         PioValue::BalancedNetwork(network) => balanced(network),
         PioValue::MulticonductorNetwork(network) => multiconductor(network),
+        // A layer carries no network to validate; its own rules run in the
+        // stored document validator.
+        PioValue::GeoLayer(_) => Ok(()),
         PioValue::BalancedOperatingPoint(point) => balanced(point.network()),
         PioValue::MulticonductorOperatingPoint(point) => multiconductor(point.network()),
         PioValue::TimeSeries(series) => series
@@ -1763,6 +1767,7 @@ fn decode_value(value: dto::StoredValue) -> Result<PioValue> {
         dto::StoredValue::MulticonductorNetwork(network) => {
             PioValue::MulticonductorNetwork(*network)
         }
+        dto::StoredValue::GeoLayer(layer) => PioValue::GeoLayer(*layer),
         dto::StoredValue::BalancedOperatingPoint(point) => {
             PioValue::BalancedOperatingPoint(decode_balanced_point(point)?)
         }

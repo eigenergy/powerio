@@ -33,8 +33,9 @@ let module = powerio::parse(powerio::Source::from_memory("case9.m", bytes)?)?;
 | `emit(&module, format, Destination::path(path))` | `emit(&module, format, path)` |
 | `serialize(&module, Destination::path(path))` | `serialize(&module, path)` |
 | `deserialize(Source::open(path)?)` | `deserialize(path)` |
-| `parse_display(source, from)` | `GeoLayer::read(input)`, or `PwdDisplay::read(input)` for a `.pwd` canvas |
-| `DisplayData`, `DisplayFormat` | removed; each document is read by the type it produces |
+| `parse_display(source, from)` | `parse(input)`, which returns `PioValue::GeoLayer` |
+| `DisplayData`, `DisplayFormat` | removed; a layer is the value `powerio.GeoLayer` |
+| a layer written by hand | `emit(&module, "geo-json", path)` |
 
 Python accepts a path, file object, or bytes-like object. A `str` names a
 path; use `io.StringIO` for text already in memory.

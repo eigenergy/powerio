@@ -219,74 +219,6 @@ impl FromStr for TargetFormat {
     }
 }
 
-/// A display artifact format. These files are not power network cases and do
-/// not parse to [`BalancedNetwork`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum DisplayFormat {
-    /// PowerWorld oneline display `.pwd`.
-    PowerWorld,
-    /// The standalone geographic document ([`crate::geo::GeoLayer`]):
-    /// canonical `.geo.json`, read tolerantly from GeoJSON, aliased CSV/JSON
-    /// records, and headerless buscoords CSV.
-    GeoJson,
-}
-
-impl DisplayFormat {
-    /// Conventional file extension for this display format (no leading dot).
-    #[must_use]
-    pub fn extension(self) -> &'static str {
-        match self {
-            DisplayFormat::PowerWorld => "pwd",
-            DisplayFormat::GeoJson => crate::geo::GEO_LAYER_EXTENSION,
-        }
-    }
-
-    /// Human-readable format name for diagnostics.
-    #[must_use]
-    pub fn label(self) -> &'static str {
-        match self {
-            DisplayFormat::PowerWorld => "PowerWorld .pwd",
-            DisplayFormat::GeoJson => "geo layer",
-        }
-    }
-
-    /// Canonical API token for this format.
-    #[must_use]
-    pub fn token(self) -> &'static str {
-        match self {
-            DisplayFormat::PowerWorld => "powerworld-display",
-            DisplayFormat::GeoJson => "geojson",
-        }
-    }
-}
-
-impl fmt::Display for DisplayFormat {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.token())
-    }
-}
-
-impl FromStr for DisplayFormat {
-    type Err = Error;
-
-    fn from_str(name: &str) -> Result<Self> {
-        parse_display_format(name).ok_or_else(|| Error::UnknownFormat(name.to_string()))
-    }
-}
-
-/// Map a display format name to a [`DisplayFormat`], or `None` if unrecognized.
-/// Accepts `pwd`, `powerworld-pwd`, and `powerworld-display`; `geojson`,
-/// `geo-json`, and `geo` name the geographic layer.
-#[must_use]
-pub fn parse_display_format(name: &str) -> Option<DisplayFormat> {
-    Some(match name.to_ascii_lowercase().as_str() {
-        "pwd" | "powerworld-pwd" | "powerworld-display" => DisplayFormat::PowerWorld,
-        "geojson" | "geo-json" | "geo" => DisplayFormat::GeoJson,
-        _ => return None,
-    })
-}
-
 /// Map a format name (with the common aliases) to a [`TargetFormat`], or `None`
 /// if unrecognized. Accepts `matpower`/`m`, `powermodels-json`/`powermodels`/`pm`,
 /// `egret-json`/`egret`, `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`,
@@ -347,33 +279,10 @@ fn parse_source_target_format(name: &str) -> Option<TargetFormat> {
     }
 }
 
-/// Output of a display parse. PowerWorld `.pwd` produces
-/// [`DisplayData::PowerWorld`]; a geographic sidecar produces
-/// [`DisplayData::Geo`].
-#[derive(Debug, Clone, PartialEq)]
-#[non_exhaustive]
-pub enum DisplayData {
-    /// PowerWorld oneline display data.
-    PowerWorld(PwdDisplay),
-    /// A standalone geographic layer.
-    Geo(crate::geo::GeoLayer),
-}
-
-impl DisplayData {
-    /// The display format represented by this value.
-    #[must_use]
-    pub fn format(&self) -> DisplayFormat {
-        match self {
-            DisplayData::PowerWorld(_) => DisplayFormat::PowerWorld,
-            DisplayData::Geo(_) => DisplayFormat::GeoJson,
-        }
-    }
-}
-
 fn display_file_guidance() -> Error {
     Error::UnknownFormat(
         "a PowerWorld .pwd is display data, not a BalancedNetwork case; \
-         use parse_display(Source::open(path)?, None)"
+         `powerio::parse` reads it as powerio.GeoLayer"
             .into(),
     )
 }
@@ -387,71 +296,13 @@ fn describe_extension(extension: Option<&str>) -> String {
     }
 }
 
-/// Parse display data from one [`powerio_core::Source`], choosing the parser
-/// from `from`, the source's declared format, or its name. A `.pwd` extension
-/// selects PowerWorld display data.
-///
-/// # Errors
-/// [`Error::UnknownFormat`] if `from` is unrecognized or the extension cannot
-/// be mapped; [`Error::Io`] if the file cannot be read; the parser's own
-/// [`Error`] on malformed input.
-#[allow(
-    clippy::needless_pass_by_value,
-    reason = "display parsing takes ownership of Source like the main parse operation"
-)]
-pub fn parse_display(source: powerio_core::Source, from: Option<&str>) -> Result<DisplayData> {
-    let path = std::path::Path::new(source.name());
-    let declared = from.or_else(|| source.format().map(powerio_core::FormatId::as_str));
-    let fmt = match declared {
-        Some(f) => parse_display_format(f).ok_or_else(|| Error::UnknownFormat(f.to_string()))?,
-        None => match path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(str::to_ascii_lowercase)
-            .as_deref()
-        {
-            Some("pwd") => DisplayFormat::PowerWorld,
-            Some("geojson") => DisplayFormat::GeoJson,
-            // `.geo.json` is the canonical layer name; a bare `.json` stays
-            // ambiguous (it is usually a case file).
-            Some("json")
-                if path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| {
-                        name.to_ascii_lowercase()
-                            .ends_with(crate::geo::GEO_LAYER_EXTENSION)
-                    }) =>
-            {
-                DisplayFormat::GeoJson
-            }
-            other => {
-                return Err(Error::UnknownFormat(format!(
-                    "cannot infer display format from file with {}; \
-                     pass an explicit display format",
-                    describe_extension(other)
-                )));
-            }
-        },
-    };
-    let buffer = source
-        .primary_buffer()
-        .map_err(|error| Error::Io(std::io::Error::other(error)))?;
-    let bytes = buffer.content_bytes();
-    match fmt {
-        DisplayFormat::PowerWorld => Ok(DisplayData::PowerWorld(powerworld::__parse_pwd_display(
-            bytes,
-        )?)),
-        DisplayFormat::GeoJson => {
-            let text = std::str::from_utf8(bytes).map_err(|error| Error::FormatRead {
-                format: "geo layer",
-                message: format!("not valid UTF-8: {error}"),
-            })?;
-            Ok(DisplayData::Geo(
-                crate::geo::GeoLayer::parse(text, path.file_name().and_then(|n| n.to_str()))?.layer,
-            ))
-        }
-    }
+/// Whether `name` selects a display or layer document rather than a case
+/// format. The facade routes such a name to `powerio.GeoLayer`.
+fn is_display_format_name(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().replace(['-', '_'], "").as_str(),
+        "pwd" | "powerworldpwd" | "powerworlddisplay" | "geojson" | "geo" | "geolayer"
+    )
 }
 
 /// Whether a format name means a PyPSA CSV folder. PyPSA folders are directory
@@ -769,7 +620,7 @@ fn parse_to_network(
     }
     let fmt_hint = match from {
         Some(f) => {
-            if parse_display_format(f).is_some() {
+            if is_display_format_name(f) {
                 return Err(display_file_guidance());
             }
             Some(parse_source_target_format(f).ok_or_else(|| unknown_source_format(f))?)

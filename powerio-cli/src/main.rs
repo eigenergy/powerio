@@ -2199,18 +2199,15 @@ fn run_geo_extract(
             .and_then(|e| e.to_str())
             .is_some_and(|e| e.eq_ignore_ascii_case("pwd"))
     {
-        let source = powerio_core::Source::open(input)
-            .with_context(|| format!("reading {}", input.display()))?;
-        let display = powerio_tx::format::parse_display(source, None)
-            .with_context(|| format!("reading {}", input.display()))?;
-        let powerio::DisplayData::PowerWorld(display) = display else {
+        let module =
+            powerio::parse(input).with_context(|| format!("reading {}", input.display()))?;
+        let powerio::PioValue::GeoLayer(layer) = module.value else {
             fail_with!(
                 VALIDATE_CLI_INPUT_LACKS_DATA,
-                "{} did not parse as a .pwd display",
+                "{} did not read as a display file",
                 input.display()
             );
         };
-        let layer = powerio::geo::to_geo_layer_from_pwd(&display);
         if layer.features.is_empty() {
             fail_with!(
                 VALIDATE_CLI_INPUT_LACKS_DATA,

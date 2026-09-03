@@ -661,6 +661,42 @@ fn emit_goc3_solution(
     )
 }
 
+/// Write one geographic layer as the canonical `.geo.json` document. No grid
+/// exchange format states a standalone layer, so any other target is refused
+/// by value type.
+fn emit_geo_layer(
+    layer: &powerio_tx::GeoLayer,
+    format: &str,
+    destination: Destination,
+) -> Result<EmitResult, Error> {
+    if !crate::is_geo_layer_token(format) {
+        return Err(if known_format_name(format) {
+            Error::new(
+                &codes::REQUEST_EMIT_UNSUPPORTED_VALUE_TYPE,
+                format!(
+                    "{format} states a grid case, not powerio.GeoLayer; write a layer as `geo-json` or place it onto a case with apply_geo_layer"
+                ),
+            )
+        } else {
+            unknown_format(format)
+        });
+    }
+    let text = layer
+        .to_geojson_checked()
+        .map_err(|error| Error::new(error.code(), error.to_string()).with_cause(error))?;
+    let artifact = powerio_core::MemoryArtifact::new(
+        powerio_core::ArtifactPath::new(powerio_tx::geo::GEO_LAYER_EXTENSION)
+            .expect("static name is a valid artifact path"),
+        text.into_bytes(),
+    );
+    destination.__commit_artifacts(
+        false,
+        powerio_core::Fidelity::Canonical,
+        vec![artifact],
+        Vec::new(),
+    )
+}
+
 fn balanced_calculation_network(value: &PioValue) -> Option<&BalancedNetwork> {
     match value {
         PioValue::DcPfInstance(instance) => Some(instance.network()),
@@ -857,7 +893,11 @@ fn emit_dynamic(
         );
     }
 
-    match &module.value() {
+    if let PioValue::GeoLayer(layer) = &module.value {
+        return emit_geo_layer(layer, format, destination);
+    }
+
+    match &module.value {
         PioValue::BalancedNetwork(_)
         | PioValue::MulticonductorNetwork(_)
         | PioValue::BalancedOperatingPoint(_)

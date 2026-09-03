@@ -8,7 +8,7 @@ use powerio_core::Source;
 use powerio_tx::format::powerworld::__parse_aux;
 use powerio_tx::{
     BalancedNetwork, Bus, BusId, BusType, CoordinateSpace, CoordsKind, GeoGeometry, GeoLayer,
-    GeoTarget, Location, apply_substation_points, parse_display, to_geo_layer_from_aux_substations,
+    GeoTarget, Location, apply_substation_points, to_geo_layer_from_aux_substations,
     to_geo_layer_from_pwd, to_lonlat_from_pwd_mercator,
 };
 
@@ -365,10 +365,9 @@ fn a_layer_that_matches_nothing_still_counts_the_unlocated_model() {
 #[test]
 fn pwd_promotes_to_a_diagram_layer_and_joins_on_subnum() {
     let source = Source::open("../tests/data/powerworld/ACTIVSg200.pwd").unwrap();
-    let display = parse_display(source, None).expect("parse .pwd display");
-    let powerio_tx::DisplayData::PowerWorld(display) = display else {
-        panic!("expected PowerWorld display data");
-    };
+    let buffer = source.primary_buffer().unwrap();
+    let display = powerio_tx::format::powerworld::__parse_pwd_display(buffer.content_bytes())
+        .expect("read .pwd display");
     let layer = to_geo_layer_from_pwd(&display);
     assert_eq!(layer, to_geo_layer_from_pwd(&display));
     assert!(matches!(
@@ -499,10 +498,9 @@ fn a_substation_join_counts_the_buses_it_leaves_unplaced() {
 #[test]
 fn pwd_mercator_inverse_lands_near_the_aux_coordinates() {
     let source = Source::open("../tests/data/powerworld/ACTIVSg200.pwd").unwrap();
-    let display = parse_display(source, None).expect("parse .pwd display");
-    let powerio_tx::DisplayData::PowerWorld(display) = display else {
-        panic!("expected PowerWorld display data");
-    };
+    let buffer = source.primary_buffer().unwrap();
+    let display = powerio_tx::format::powerworld::__parse_pwd_display(buffer.content_bytes())
+        .expect("read .pwd display");
     // Substation 1 (CREVE COEUR) sits at 40.642116, -89.59956 in the aux
     // export; the auto generated diagram is Mercator scaled by K.
     let substation = display

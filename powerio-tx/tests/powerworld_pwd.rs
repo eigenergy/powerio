@@ -17,22 +17,10 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use powerio_core::Source;
+use powerio_tx::PwdSubstation;
 use powerio_tx::format::powerworld::{
     __parse_aux, __parse_pwd, __parse_pwd_display, __parse_pwd_file,
 };
-use powerio_tx::{DisplayData, PwdDisplay, PwdSubstation, parse_display};
-
-fn parse_display_path(path: &Path, format: Option<&str>) -> powerio_tx::Result<DisplayData> {
-    parse_display(Source::open(path).unwrap(), format)
-}
-
-fn parse_display_memory(bytes: &[u8], format: &str) -> powerio_tx::Result<DisplayData> {
-    parse_display(
-        Source::from_memory("display.pwd", bytes.to_vec()).unwrap(),
-        Some(format),
-    )
-}
 
 /// (number, name, latitude, longitude) per aux Substation row. Handles both
 /// naming vocabularies (classic SubNum/SubName, 2022 Number/Name).
@@ -78,13 +66,6 @@ fn join(pwd: &[PwdSubstation], aux: &[(u32, String, f64, f64)]) -> Vec<(f64, f64
             (s.x, s.y, a.2, a.3)
         })
         .collect()
-}
-
-fn powerworld_display(data: DisplayData) -> PwdDisplay {
-    match data {
-        DisplayData::PowerWorld(display) => display,
-        _ => unreachable!("v0.2.2 only has PowerWorld display data"),
-    }
 }
 
 /// Pearson r² between paired samples.
@@ -136,8 +117,7 @@ fn pwd_display_metadata_and_file_helper_match_byte_parser() {
     let display = __parse_pwd_display(&bytes).unwrap();
     let from_file = __parse_pwd_file(&path).unwrap();
     let legacy = __parse_pwd(&bytes).unwrap();
-    let generic_file = powerworld_display(parse_display_path(&path, None).unwrap());
-    let generic_bytes = powerworld_display(parse_display_memory(&bytes, "pwd").unwrap());
+    let by_file = __parse_pwd_file(&path).unwrap();
 
     assert_eq!(display.canvas_width, 200);
     assert_eq!(display.canvas_height, 200);
@@ -145,28 +125,23 @@ fn pwd_display_metadata_and_file_helper_match_byte_parser() {
     assert_eq!(display.substations.len(), 111);
     assert_eq!(from_file, display);
     assert_eq!(legacy, display.substations);
-    assert_eq!(generic_file, display);
-    assert_eq!(generic_bytes, display);
+    assert_eq!(by_file, display);
 }
 
+/// The symbol table lifts into a diagram space layer with one feature per
+/// substation, which is what the facade's `parse` returns for a `.pwd`.
 #[test]
-fn display_api_accepts_powerworld_aliases() {
+fn a_display_file_lifts_into_a_diagram_layer() {
     let path = common::powerworld_vendored("ACTIVSg200.pwd");
-    let bytes = fs::read(&path).unwrap();
-    let expected = powerworld_display(parse_display_path(&path, None).unwrap());
-
-    for alias in ["pwd", "powerworld-pwd", "powerworld-display"] {
-        assert_eq!(
-            powerworld_display(parse_display_path(&path, Some(alias)).unwrap()),
-            expected,
-            "file alias {alias}"
-        );
-        assert_eq!(
-            powerworld_display(parse_display_memory(&bytes, alias).unwrap()),
-            expected,
-            "byte alias {alias}"
-        );
-    }
+    let display = __parse_pwd_file(&path).unwrap();
+    let layer = powerio_tx::geo::to_geo_layer_from_pwd(&display);
+    assert_eq!(layer.features.len(), display.substations.len());
+    let powerio_tx::geo::CoordinateSpace::Diagram { canvas } = &layer.space else {
+        panic!("a display file places symbols in diagram space");
+    };
+    let canvas = canvas.as_ref().expect("the display states its canvas");
+    assert_eq!(canvas.width, Some(f64::from(display.canvas_width)));
+    assert_eq!(canvas.height, Some(f64::from(display.canvas_height)));
 }
 
 #[test]
@@ -179,7 +154,7 @@ fn pwd_is_not_a_network_case() {
         Some("powerworld-display"),
     ] {
         let err = parse_file(&path, from).unwrap_err().to_string();
-        assert!(err.contains("parse_display"), "{err}");
+        assert!(err.contains("powerio.GeoLayer"), "{err}");
     }
 }
 

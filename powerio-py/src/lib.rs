@@ -21,7 +21,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
 use sprs::CsMat;
 
-use powerio::{BalancedNetwork, BranchSusceptanceFormula, DisplayData, PwdDisplay};
+use powerio::{BalancedNetwork, BranchSusceptanceFormula, PwdDisplay};
 use powerio_matrix::DcOperators;
 use powerio_matrix::matrix::{
     BuildOptions, Scheme, SensitivityOptions, SensitivitySolver, calc_adjacency_matrix,
@@ -458,16 +458,6 @@ fn pwd_display_to_dict<'py>(py: Python<'py>, display: &PwdDisplay) -> PyResult<B
     }
     d.set_item("substations", PyList::new(py, rows)?)?;
     Ok(d)
-}
-
-fn display_data_to_py<'py>(py: Python<'py>, display: DisplayData) -> PyResult<Bound<'py, PyAny>> {
-    match display {
-        DisplayData::PowerWorld(display) => {
-            let payload = pwd_display_to_dict(py, &display)?;
-            Ok(("powerworld", payload).into_pyobject(py)?.into_any())
-        }
-        _ => Err(PowerIOError::new_err("unsupported display data kind")),
-    }
 }
 
 fn active_power_control_to_py<'py>(
@@ -1205,10 +1195,20 @@ fn parse_display<'py>(
     path: &str,
     from_: Option<&str>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let path = std::path::Path::new(path);
-    let source = powerio_core::Source::open(path).map_err(|error| core_open_pyerr(path, &error))?;
-    let display = powerio_tx::parse_display(source, from_).map_err(core_pyerr)?;
-    display_data_to_py(py, display)
+    if let Some(from_) = from_
+        && !matches!(
+            from_.to_ascii_lowercase().replace(['-', '_'], "").as_str(),
+            "pwd" | "powerworldpwd" | "powerworlddisplay"
+        )
+    {
+        return Err(PowerIOError::new_err(format!(
+            "unsupported display format: {from_}"
+        )));
+    }
+    let display = powerio_tx::format::powerworld::__parse_pwd_file(std::path::Path::new(path))
+        .map_err(core_pyerr)?;
+    let payload = pwd_display_to_dict(py, &display)?;
+    Ok(("powerworld", payload).into_pyobject(py)?.into_any())
 }
 
 /// Low-level handle around a parsed multiconductor distribution network in

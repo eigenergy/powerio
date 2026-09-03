@@ -2351,6 +2351,85 @@
       ],
       "type": "string"
     },
+    "CoordinateSpace": {
+      "description": "Coordinate space for locations in a network.",
+      "oneOf": [
+        {
+          "description": "x = longitude and y = latitude in decimal degrees. `None` means EPSG:4326.",
+          "properties": {
+            "crs": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "space": {
+              "const": "geographic",
+              "type": "string"
+            }
+          },
+          "required": [
+            "space"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Planar coordinates, with the CRS named when known.",
+          "properties": {
+            "crs": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "space": {
+              "const": "projected",
+              "type": "string"
+            }
+          },
+          "required": [
+            "space"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Drawing coordinates with no earth referent.",
+          "properties": {
+            "canvas": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Canvas"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "space": {
+              "const": "diagram",
+              "type": "string"
+            }
+          },
+          "required": [
+            "space"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The source did not declare a coordinate space.",
+          "properties": {
+            "space": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "space"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "CoordsKind": {
       "description": "Coordinate origin.",
       "enum": [
@@ -5746,6 +5825,38 @@
       ],
       "type": "object"
     },
+    "ElementKey": {
+      "description": "Element identity for one feature. Matching tries `uid`, then `id`, then\ncase insensitive `name`; branches additionally fall back to the unordered\n`(from, to)` bus pair. `index` is a positional row alias (1-based, the\nMATPOWER row convention) accepted on read and never written; the durable\nidentity is the payload `uid` (`buses:3`, `branches:7`).",
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "index": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uid": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "EquipmentReactiveLimits": {
       "description": "Reactive limits retained for equipment whose balanced calculation row\ncarries only the limits evaluated at its current active power assignment.",
       "properties": {
@@ -6129,6 +6240,148 @@
       ],
       "type": "string"
     },
+    "GeoFeature": {
+      "description": "One point or route in a [`GeoLayer`].",
+      "properties": {
+        "from": {
+          "description": "Endpoint bus references for a branch, the unordered fallback identity.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "geometry": {
+          "$ref": "#/$defs/GeoGeometry"
+        },
+        "key": {
+          "$ref": "#/$defs/ElementKey"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CoordsKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Feature origin when it differs from the layer default."
+        },
+        "target": {
+          "$ref": "#/$defs/GeoTarget"
+        },
+        "to": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "target",
+        "key",
+        "geometry"
+      ],
+      "type": "object"
+    },
+    "GeoGeometry": {
+      "description": "Feature geometry: a point or a polyline route.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "point": {
+              "items": {
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            }
+          },
+          "required": [
+            "point"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "line_string": {
+              "items": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "format": "double",
+                      "type": "number"
+                    },
+                    {
+                      "enum": [
+                        "Infinity",
+                        "-Infinity",
+                        "NaN"
+                      ],
+                      "type": "string"
+                    }
+                  ]
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "line_string"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "GeoLayer": {
+      "description": "A standalone geographic document: element points and routes in one\ncoordinate space, keyed by element identity rather than embedded in a case.",
+      "properties": {
+        "features": {
+          "items": {
+            "$ref": "#/$defs/GeoFeature"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CoordsKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Default coordinate origin, stamped into the `powerio_geo` member on write."
+        },
+        "space": {
+          "$ref": "#/$defs/CoordinateSpace",
+          "description": "Coordinate space of every feature."
+        }
+      },
+      "required": [
+        "space"
+      ],
+      "type": "object"
+    },
     "GeoMeta": {
       "description": "Network level coordinate metadata.",
       "oneOf": [
@@ -6221,6 +6474,23 @@
         }
       },
       "type": "object"
+    },
+    "GeoTarget": {
+      "description": "The element family a feature places.",
+      "oneOf": [
+        {
+          "enum": [
+            "bus",
+            "branch"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "substation",
+          "description": "PowerWorld substations, joined onto buses through the `SubNum` extras\nkey by [`super::apply_substation_points`].",
+          "type": "string"
+        }
+      ]
     },
     "HistoryEntry": {
       "additionalProperties": false,
@@ -12444,6 +12714,23 @@
             },
             "type": {
               "const": "powerio.MulticonductorNetwork",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/GeoLayer"
+            },
+            "type": {
+              "const": "powerio.GeoLayer",
               "type": "string"
             }
           },
