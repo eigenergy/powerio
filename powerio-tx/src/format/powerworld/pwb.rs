@@ -23,14 +23,17 @@
 //!
 //! Known limits, documented rather than guessed:
 //!
-//! - Status bytes: the 483 era generator record is the one located,
-//!   validated status (bit 0 of the byte one past the f32 block, checked
-//!   against the open machines an aux export of the same case states). No
-//!   other out of service encoding is located, so every other device reads as in
-//!   service. That is a limit of the decoding, not a property of the data: a
-//!   425 era file can hold open machines its `.aux` twin states and this
-//!   reader cannot see. `parse_pwb_with_warnings` reports the limit;
-//!   `parse_pwb` discards the warning.
+//! - Status bytes: the generator status is located wherever the record
+//!   carries the validated status tail (a zero byte, then bit 0 of the
+//!   status byte, then GenRMPCT as an f32) one past the f32 block. Every
+//!   483 era record carries it, and so do the 425 era records of writers
+//!   that emit it, checked against the open machines the paired `.aux` or
+//!   `.raw` export of the same case states. A 425 era table whose records
+//!   put something else there keeps no located status, so its machines read
+//!   as in service; that is a limit of the decoding, not a property of the
+//!   data. `parse_pwb_with_warnings` reports the limit when it applies;
+//!   `parse_pwb` discards the warning. No other device status is located,
+//!   so every other device reads as in service.
 //!   The load record's post ID byte, once treated as a status, is 0x00 in
 //!   the 425 era files and 0x01 in the 2021 era ones with every load Closed
 //!   in both, so it is no status byte; the 425 era generator, the shunt,
@@ -188,10 +191,10 @@ pub fn parse_pwb(bytes: &[u8], name_hint: Option<&str>) -> Result<BalancedNetwor
 
 /// As [`parse_pwb`], reporting what the decoded layout cannot state.
 ///
-/// The one that bites is generator service status. Only the 483 era record has
-/// a located, validated status byte; the 425 era record's is unlocated, so
-/// every machine in such a file reads as in service and nothing in the model
-/// says the reader could not tell.
+/// The one that bites is generator service status. It is located only when the
+/// accepted generator table carries the validated status tail; without it every
+/// machine in the file reads as in service and nothing in the model says the
+/// reader could not tell.
 ///
 /// # Errors
 ///
@@ -210,18 +213,15 @@ pub(crate) fn parse_pwb_collecting(
     name_hint: Option<&str>,
     warnings: &mut crate::diagnostics::Diagnostics,
 ) -> Result<BalancedNetwork> {
-    let net = parse_pwb_inner(bytes, name_hint)?;
-    // Headers admitting only the 425 era generator record: their status byte
-    // is unlocated (see the module docs), so the reader has no choice but to
-    // read every machine as running. A 508 file may carry either record, and
-    // which one matched is not observable here, so it is left unstated rather
-    // than guessed at.
-    if matches!(expect_header(bytes)?, 338 | 368 | 425) && !net.generators().is_empty() {
+    let (net, status) = parse_pwb_inner(bytes, name_hint)?;
+    // A generator table whose records carry no status tail leaves the reader
+    // no choice but to read every machine as running (see the module docs).
+    if status == GenStatus::Unlocated && !net.generators().is_empty() {
         warnings.push(
             &crate::diagnostics::codes::READ_POWERWORLD_VALUE_DEFAULTED,
             format!(
-                "{} generator(s) read as in service: this .pwb vintage's generator status byte is \
-             not located, so an open machine is indistinguishable from a closed one",
+                "{} generator(s) read as in service: this .pwb generator record carries no status \
+             tail, so an open machine is indistinguishable from a closed one",
                 net.generators().len()
             ),
         );
@@ -229,7 +229,7 @@ pub(crate) fn parse_pwb_collecting(
     Ok(net)
 }
 
-fn parse_pwb_inner(bytes: &[u8], name_hint: Option<&str>) -> Result<BalancedNetwork> {
+fn parse_pwb_inner(bytes: &[u8], name_hint: Option<&str>) -> Result<(BalancedNetwork, GenStatus)> {
     let header_constant = expect_header(bytes)?;
     reject_unsupported_vintage(bytes)?;
     // The header constant pins the generator record layout wherever the
@@ -312,34 +312,47 @@ fn parse_pwb_inner(bytes: &[u8], name_hint: Option<&str>) -> Result<BalancedNetw
                     .flatten()
             })
     });
-    found.unwrap_or_else(|| {
-        if budget.exhausted() || budget.retention_exhausted() {
-            return Err(Error::FormatRead {
-                format: FMT,
-                message: "table search exceeded its work budget; the bytes are not a \
+    found.map_or_else(
+        || {
+            if budget.exhausted() || budget.retention_exhausted() {
+                return Err(Error::FormatRead {
+                    format: FMT,
+                    message: "table search exceeded its work budget; the bytes are not a \
                               decodable .pwb layout"
-                    .into(),
-            });
-        }
-        Err(Error::FormatRead {
-            format: FMT,
-            message: "no table chain matches the validated .pwb layouts \
+                        .into(),
+                });
+            }
+            Err(Error::FormatRead {
+                format: FMT,
+                message: "no table chain matches the validated .pwb layouts \
                           (buses, loads, generators, shunts, branches in sequence)"
-                .into(),
-        })
-    })
+                    .into(),
+            })
+        },
+        |(status, net)| net.map(|net| (net, status)),
+    )
 }
 
 /// Which generator record layouts the header constant admits (see
 /// [`parse_pwb`]): the 425/508 era bus + ID shape (`plain`), the 2021 era
 /// regulated bus shape (`reg`, [`read_gen_reg_record`]), and the 554 shape
 /// whose regulated bus record omits the presence byte (`simple_reg`,
-/// [`read_gen_reg_simple_record`]).
+/// [`read_gen_reg_simple_record`]). A `plain` record reports whether it
+/// carried the status tail, and [`resolve_plain_gen_status`] reads the status
+/// only when every record of the table did.
 #[derive(Clone, Copy)]
 struct GenVariants {
     plain: bool,
     reg: bool,
     simple_reg: bool,
+}
+
+/// Whether the accepted generator table carried a located service status.
+/// [`parse_pwb_collecting`] reports the gap when it did not.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GenStatus {
+    Decoded,
+    Unlocated,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -383,7 +396,7 @@ fn search_table_chain(
     device_glue: DeviceGlue,
     wide_bus_glue: bool,
     budget: &SearchBudget,
-) -> Option<Result<BalancedNetwork>> {
+) -> Option<(GenStatus, Result<BalancedNetwork>)> {
     // A count word can be forged by record interiors and the case
     // description, so table location is a depth first search: a candidate at
     // any stage is kept only if every later table parses behind it. The
@@ -450,6 +463,7 @@ fn search_table_chain(
                 })
                 .into_iter()
                 .flatten()
+                .map(|c| (c, GenStatus::Decoded))
                 .chain(
                     gen_variants
                         .simple_reg
@@ -466,7 +480,8 @@ fn search_table_chain(
                             )
                         })
                         .into_iter()
-                        .flatten(),
+                        .flatten()
+                        .map(|c| (c, GenStatus::Decoded)),
                 )
                 .chain(
                     gen_variants
@@ -484,9 +499,10 @@ fn search_table_chain(
                             )
                         })
                         .into_iter()
-                        .flatten(),
+                        .flatten()
+                        .map(|(rows, end)| resolve_plain_gen_status(rows, end)),
                 );
-            for (generators, g_end) in gen_candidates {
+            for ((generators, g_end), gen_status) in gen_candidates {
                 if gen_table_continues(bytes, g_end, &bus_ids, gen_variants, budget) {
                     continue;
                 }
@@ -503,6 +519,7 @@ fn search_table_chain(
                         keep_best_chain(
                             &mut best,
                             chain_score(&loads, &bus_shunts, &branches, &generators),
+                            gen_status,
                             checked_network(
                                 name_hint,
                                 buses.clone(),
@@ -546,7 +563,7 @@ fn search_table_chain(
                         branches,
                         generators.clone(),
                     );
-                    keep_best_chain(&mut best, score, net);
+                    keep_best_chain(&mut best, score, gen_status, net);
                 }
                 if let Some(branches) = find_branch_table(
                     bytes,
@@ -560,6 +577,7 @@ fn search_table_chain(
                     keep_best_chain(
                         &mut best,
                         chain_score(&loads, &bus_shunts, &branches, &generators),
+                        gen_status,
                         checked_network(
                             name_hint,
                             buses.clone(),
@@ -572,30 +590,56 @@ fn search_table_chain(
                 }
             }
         }
-        if let Some((_, net)) = best {
-            return Some(net);
+        if let Some((_, status, net)) = best {
+            return Some((status, net));
         }
     }
     None
 }
 
-/// Keep the table chain with the largest decoded electrical core.
+/// Resolve the service status of a plain generator table. The 425 era record
+/// carries the status tail on every record or on none, by writer: eighteen
+/// files of one corpus carry it and ACTIVSg200 puts other bytes there. A
+/// table that carries it on every record is read with its decoded status; any
+/// other table reads every machine as in service, which is what the reader
+/// can state about those bytes.
+fn resolve_plain_gen_status(
+    rows: Vec<(Generator, bool)>,
+    end: usize,
+) -> ((Vec<Generator>, usize), GenStatus) {
+    if rows.iter().all(|(_, tail)| *tail) {
+        let gens = rows.into_iter().map(|(machine, _)| machine).collect();
+        return ((gens, end), GenStatus::Decoded);
+    }
+    let gens = rows
+        .into_iter()
+        .map(|(mut machine, _)| {
+            machine.in_service = true;
+            machine
+        })
+        .collect();
+    ((gens, end), GenStatus::Unlocated)
+}
+
+/// Keep the table chain with the largest decoded electrical core, together
+/// with whether its generator table carried a located service status.
 fn keep_best_chain(
-    best: &mut Option<(usize, Result<BalancedNetwork>)>,
+    best: &mut Option<(usize, GenStatus, Result<BalancedNetwork>)>,
     score: usize,
+    status: GenStatus,
     net: Result<BalancedNetwork>,
 ) {
     let candidate_ok = net.is_ok();
     let replace = match best.as_ref() {
         None => true,
-        Some((best_score, best_net)) => match (best_net.is_ok(), candidate_ok) {
+        Some((best_score, _, best_net)) => match (best_net.is_ok(), candidate_ok) {
             (false, true) => true,
             (true, false) => false,
             _ => score > *best_score,
         },
     };
     if replace {
-        *best = Some((score, net));
+        *best = Some((score, status, net));
     }
 }
 
@@ -1368,8 +1412,10 @@ fn read_load_record(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Load, usi
     read_device_head(b, at, bus_ids, read_load)
 }
 
-/// Probe one plain generator record using the shared device head.
-fn read_gen_record(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Generator, usize)> {
+/// Probe one plain generator record using the shared device head. The bool is
+/// whether the record carried the validated status tail (see
+/// [`resolve_plain_gen_status`]).
+fn read_gen_record(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<((Generator, bool), usize)> {
     read_device_head(b, at, bus_ids, read_gen)
 }
 
@@ -1505,7 +1551,7 @@ fn read_load(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Load> {
 /// one; the voltage setpoint and MVA base ranges anchor the choice, and a
 /// record that puts implausible values at every offset is a loud error, not
 /// a generator.
-fn read_gen(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Generator> {
+fn read_gen(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<(Generator, bool)> {
     let record_start = c.pos - (4 + 1) - id.len(); // u32 bus + the ID length byte
     let mut chosen = None;
     // +12 extends the observed set to two character IDs in a 2018 era
@@ -1524,9 +1570,17 @@ fn read_gen(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Generator> {
         return Err("generator record does not match the validated layouts");
     };
     c.pos = end;
-    // The status byte is unlocated within the flag bytes of this era's
-    // record; every available machine is Closed (see the module docs).
-    Ok(gen_from_block(bus, &v, true))
+    // Some writers of this era follow the f32 block with the same status tail
+    // the 2021 era regulated record carries. When it is there the status is
+    // decoded; when it is not, the record reads as in service and the table
+    // level check in `resolve_plain_gen_status` keeps a chance match from
+    // opening a running machine.
+    let mut tail = Cur { b: c.b, pos: end };
+    if let Ok((machine, pos)) = read_gen_reg_tail(&mut tail, bus.0, &v) {
+        c.pos = pos;
+        return Ok((machine, true));
+    }
+    Ok((gen_from_block(bus, &v, true), false))
 }
 
 /// The eight consecutive f32 per unit values both generator record eras
@@ -2144,10 +2198,20 @@ mod tests {
     #[test]
     fn best_chain_prefers_valid_chain_over_higher_scoring_error() {
         let mut best = None;
-        keep_best_chain(&mut best, 100, Err(unsupported_vintage("bad candidate")));
-        keep_best_chain(&mut best, 1, Ok(empty_network("valid")));
+        keep_best_chain(
+            &mut best,
+            100,
+            GenStatus::Unlocated,
+            Err(unsupported_vintage("bad candidate")),
+        );
+        keep_best_chain(
+            &mut best,
+            1,
+            GenStatus::Unlocated,
+            Ok(empty_network("valid")),
+        );
 
-        let (_, net) = best.unwrap();
+        let (_, _, net) = best.unwrap();
         assert!(net.is_ok());
     }
 

@@ -360,8 +360,25 @@ anchored at +9 or +10 (2016/2017 exports; the gap varies per record) or +11
 GenVoltSet (p.u., scale 1), GenMVABase (MVA, scale 1), MWMax, MWMin. The
 voltage setpoint and MVA base ranges pick the anchor per record. In the
 2018 file also verified: GenRMPCT at +53, GenZR/GenZX as f64 near
-+147/+193. Record length varies with embedded strings; the status byte is
-unlocated within the flag bytes (every machine in these files is Closed).
++147/+193. Record length varies with embedded strings.
+
+Some writers of this era follow the f32 block with the same status tail the
+2021 era regulated record carries: a zero byte at block +32, the status byte
+at block +33 (9 in service, 8 open, bit 0 the service bit), then GenRMPCT as
+an f32 at block +34. Eighteen of the twenty saves of the bit 2 clear corpus
+carry it on every record of their generator tables, always with GenRMPCT
+100.0. The decoded status is 5 open machines in two of those saves, 12 in one,
+13 in one, and none in the other fourteen, and on all twelve of them that have
+a PSS/E or MATPOWER export of the same case it matches the open machine set
+that export states. The remaining two saves, and ACTIVSg200, put 21 at block
++32 and unrelated bytes after it, so the tail is a per writer property, not a
+per era one. The reader
+therefore reads the status only when every record of the accepted table
+carries the tail; any other table reads every machine as in service and
+`parse_pwb_with_warnings` says so. Reading the status changes the derived bus
+kind: a bus whose only machine is open becomes PQ, where a PSS/E or MATPOWER
+export of the same case keeps the bus type PV, because PowerWorld stores no
+bus type and the reader derives it from the closed machines.
 
 ### Generator record, 2021 era (validated on 731 ×3 + 1058 ×2 machines of five files)
 
@@ -438,12 +455,13 @@ case stores zero shunt MW and the reader sets G = 0.
 
 ### Open questions (inventoried, not guessed)
 
-- Status bytes: the 2021 era generator status is located and validated
-  (bit 0 of the byte one past the f32 block, against 94 open machines);
-  every other device in every available case is Closed/in service, so no
-  other status offset is validated and those devices read as in service.
-  Whether the older era generator records carry the same byte after their
-  block is untested for the open state (no 425 era case has one).
+- Status bytes: the generator status is located and validated wherever the
+  record carries the status tail (bit 0 of the byte one past the f32 block,
+  against 94 open machines in the 2021 era files and 35 in the 425 era files
+  that carry the tail). What the 425 era writers that put other bytes there
+  store instead is undecoded, so those machines read as in service. Every
+  other device in every available case is Closed/in service, so no other
+  status offset is validated and those devices read as in service.
 - The meaning of the bit 4 tail lists (u32 count, then 9 byte entries
   observed as u8 = 3, u32 number, u32 = 1) and of the constant u32 12 tag
   in branch records.
