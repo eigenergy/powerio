@@ -8,12 +8,23 @@
 //! Every format PowerIO 1.0 reads is a source row and every format it writes
 //! is a target column: the balanced case formats, the PowSybl and ENTSO-E
 //! exchange formats (XIIDM, JIIDM, CGMES, UCTE-DEF), the dataset directories
-//! (PyPSA CSV, GridFM Parquet), PowerIO's own network document, and the two
-//! read only sources (IEEE CDF, DeepMind OPFData). That is eighteen rows and
-//! sixteen columns, which no PR comment renders readably as one table, so the
-//! columns are grouped by what the formats are for and each group keeps every
-//! source row. The grouping changes the layout and not the cells: every source
-//! is still run into every target.
+//! (PyPSA CSV, GridFM Parquet), PowerIO's own network document, and the three
+//! read only sources (IEEE CDF, GO Challenge 3, DeepMind OPFData). That is
+//! nineteen rows and sixteen columns, which no PR comment renders readably as
+//! one table, so the columns are grouped by what the formats are for and each
+//! group keeps every source row. The grouping changes the layout and not the
+//! cells: every source is still run into every target.
+//!
+//! Two parse only inputs are named here rather than run. A revision 32 `.raw`
+//! row is the next one to land, and both vendored version 32 exports currently
+//! fail three checks rather than reporting a loss: the XIIDM and JIIDM cells
+//! fail to read back because the writer takes its detailed connectivity path
+//! for a network whose detailed record states no voltage level and emits no
+//! hierarchy at all; the MATPOWER, pandapower, GridFM, and UCTE cells change
+//! the element counts (a shunt, a generator, a branch). A `.pwb` row waits on
+//! the same vintage work: the export this repository vendors states no located
+//! bus type, so the case reaches a dataset target with no reference bus and
+//! cannot be written at all.
 //!
 //! A geographic layer is a `powerio.GeoLayer` rather than a network, and no
 //! grid exchange format states a standalone layer, so it has its own one cell
@@ -788,7 +799,7 @@ const fn read_only(
 /// Every 1.0 transmission format. The writable ones are both source rows and
 /// target columns, in this order; the read only ones are source rows only and
 /// come last, so a target column index indexes this array directly.
-const TRANSMISSION_FORMATS: [TransmissionFormat; 18] = [
+const TRANSMISSION_FORMATS: [TransmissionFormat; 19] = [
     transmission("MATPOWER .m", "matpower", Emission::Document, Family::Case),
     transmission(
         "PowerModels JSON",
@@ -850,6 +861,12 @@ const TRANSMISSION_FORMATS: [TransmissionFormat; 18] = [
         "ieee-cdf",
         Family::Case,
         "ieee-cdf/ieee14cdf.txt",
+    ),
+    read_only(
+        "GO Challenge 3 JSON",
+        "goc3-json",
+        Family::Case,
+        "goc3/goc3_small.json",
     ),
     read_only(
         "DeepMind OPFData JSON",
@@ -1021,33 +1038,74 @@ fn transmission_targets() -> impl Iterator<Item = (usize, TransmissionFormat)> {
 //   document states the whole typed model, so nothing is dropped. The
 //   pandapower row's single warning is its own parse declaring the absolute
 //   cost level a `pwl_cost` table leaves unstated.
-// - The `IEEE CDF` and `DeepMind OPFData JSON` rows parse one vendored case
-//   each, so their counts are per case rather than per six.
-const TRANSMISSION_WARNING_BASELINE: [[usize; TRANSMISSION_TARGETS]; 18] = [
-    [0, 1, 15, 15, 15, 7, 15, 23, 14, 76, 76, 301, 48, 15, 27, 0], // MATPOWER .m
-    [0, 0, 15, 15, 14, 6, 14, 22, 13, 75, 75, 300, 47, 14, 27, 0], // PowerModels JSON
-    [1, 1, 0, 0, 2, 1, 3, 1, 2, 38, 38, 256, 35, 9, 32, 0],        // PSS/E .raw 33
-    [1, 1, 0, 0, 2, 1, 3, 1, 2, 38, 38, 256, 35, 9, 32, 0],        // PSS/E RAWX 35
-    [0, 0, 0, 0, 0, 0, 2, 0, 0, 37, 37, 251, 33, 7, 32, 0],        // PowerWorld .aux
-    [0, 0, 9, 9, 9, 0, 8, 1, 7, 74, 74, 280, 42, 9, 27, 0],        // egret JSON
-    [1, 1, 8, 8, 8, 1, 2, 1, 8, 62, 62, 209, 59, 9, 28, 1],        // pandapower JSON
-    [0, 0, 9, 9, 9, 0, 7, 0, 7, 73, 73, 280, 42, 9, 27, 0],        // Surge JSON
-    [0, 0, 1, 1, 1, 0, 4, 3, 0, 44, 44, 255, 34, 8, 32, 0],        // PSLF .epc
-    [7, 7, 39, 39, 8, 7, 9, 7, 8, 12, 12, 354, 66, 15, 38, 6],     // XIIDM 1.17
-    [7, 7, 39, 39, 8, 7, 9, 7, 8, 12, 12, 354, 66, 15, 38, 6],     // JIIDM 1.17
+// - The `IEEE CDF`, `GO Challenge 3 JSON`, and `DeepMind OPFData JSON` rows
+//   parse one vendored case each, so their counts are per case rather than per
+//   six.
+//
+// The counts below are the same table after the per format warning review, and
+// every delta is attributed to one of these changes:
+//
+// - A CGMES document set whose FullModel states this writer's own modeling
+//   authority was produced by fresh emission, so its header identity, version,
+//   creation time, and dependency references, and the containers, limit types,
+//   islands, and subordinate mRIDs in its body, are values the writer
+//   synthesized and not data a source case stated. Reporting them as unmapped
+//   made every conversion through CGMES declare a loss of something never
+//   stated. That is the whole of the `→ CGMES 3.0` column's collapse (301 to
+//   64 on the MATPOWER row) and of the `CGMES 3.0` row's (244 to 7 on the
+//   MATPOWER cell). A third party set, whose authority differs, still reports
+//   every one of them.
+// - `rate_b` and `rate_c` are written as CGMES temporary limits admissible for
+//   twenty minutes and one minute, the durations the reference importer
+//   assigns those two ratings, instead of a TATL and a tripping current. A
+//   tripping current states a protection setting rather than an admissible
+//   loading, and the reader canonicalized it back to a TATL and said so once
+//   per limit: 74 per `→ CGMES 3.0` cell.
+// - The UCTE reader no longer keeps a second copy of a permanent current limit
+//   in `current_ratings`: `rate_a` in MVA and the same limit in ampere through
+//   the element's own voltage are one fact, and the writer divides by the
+//   voltage the reader multiplied by. That is −5 on eight cells of the
+//   `UCTE-DEF .uct` row and −71 on its CGMES cell, all of them a target
+//   reporting the drop of a restatement.
+// - A PowerWorld `.aux` Gen row states a generator's cost as a cubic
+//   input-output curve (`GenCostModel`, `GenFuelCost`, `GenFixedCost`,
+//   `GenIOB`, `GenIOC`, `GenIOD`), the vocabulary the vendored export states,
+//   so a polynomial cost now survives a conversion into aux at a unit fuel
+//   price. The `→ PowerWorld .aux` column pays +3 per cell for what the row
+//   still has no field for (a piecewise curve, a startup and shutdown cost,
+//   and the coefficient count a four slot curve returns padded), and the
+//   `PowerWorld .aux` source row pays honestly for the data it now carries:
+//   +6 wherever the target has no cost field, +23 on XIIDM and JIIDM, which
+//   report it per generator, and +1 on MATPOWER, where the dcline case's two
+//   piecewise rows do not survive the aux hop and `mpc.gencost` is
+//   all-or-nothing.
+// - `GO Challenge 3 JSON` is a new source row. A problem statement parses as
+//   the security constrained commitment it states, and the row runs the
+//   network that problem is stated on into every target.
+const TRANSMISSION_WARNING_BASELINE: [[usize; TRANSMISSION_TARGETS]; 19] = [
+    [0, 1, 15, 15, 18, 7, 15, 23, 14, 76, 76, 64, 48, 15, 27, 0], // MATPOWER .m
+    [0, 0, 15, 15, 17, 6, 14, 22, 13, 75, 75, 63, 47, 14, 27, 0], // PowerModels JSON
+    [1, 1, 0, 0, 2, 1, 3, 1, 2, 38, 38, 19, 35, 9, 32, 0],        // PSS/E .raw 33
+    [1, 1, 0, 0, 2, 1, 3, 1, 2, 38, 38, 19, 35, 9, 32, 0],        // PSS/E RAWX 35
+    [1, 0, 6, 6, 0, 0, 8, 0, 6, 60, 60, 37, 39, 13, 32, 0],       // PowerWorld .aux
+    [0, 0, 9, 9, 12, 0, 8, 1, 7, 74, 74, 43, 42, 9, 27, 0],       // egret JSON
+    [1, 1, 8, 8, 9, 1, 2, 1, 8, 62, 62, 43, 59, 9, 28, 1],        // pandapower JSON
+    [0, 0, 9, 9, 12, 0, 7, 0, 7, 73, 73, 43, 42, 9, 27, 0],       // Surge JSON
+    [0, 0, 1, 1, 1, 0, 4, 3, 0, 44, 44, 18, 34, 8, 32, 0],        // PSLF .epc
+    [7, 7, 39, 39, 8, 7, 9, 7, 8, 12, 12, 191, 66, 15, 38, 6],    // XIIDM 1.17
+    [7, 7, 39, 39, 8, 7, 9, 7, 8, 12, 12, 191, 66, 15, 38, 6],    // JIIDM 1.17
+    [7, 7, 74, 327, 7, 7, 8, 7, 7, 50, 50, 19, 58, 14, 39, 7],    // CGMES 3.0
     [
-        244, 244, 311, 564, 244, 244, 245, 244, 244, 287, 287, 419, 295, 251, 276, 244,
-    ], // CGMES 3.0
-    [
-        30, 19, 18, 18, 30, 24, 18, 19, 30, 49, 49, 256, 13, 24, 37, 7,
+        25, 19, 13, 13, 25, 19, 13, 19, 25, 49, 49, 26, 13, 19, 37, 7,
     ], // UCTE-DEF .uct
-    [0, 6, 14, 14, 14, 6, 9, 6, 12, 76, 76, 211, 44, 0, 27, 0],    // PyPSA CSV
+    [0, 6, 14, 14, 14, 6, 9, 6, 12, 76, 76, 45, 44, 0, 27, 0],    // PyPSA CSV
     [
-        28, 27, 35, 35, 35, 27, 30, 27, 33, 95, 95, 227, 67, 33, 54, 27,
+        28, 27, 35, 35, 35, 27, 30, 27, 33, 95, 95, 64, 67, 33, 54, 27,
     ], // GridFM Parquet
-    [0, 1, 15, 15, 15, 7, 15, 23, 14, 76, 76, 301, 48, 15, 27, 0], // model JSON
-    [7, 7, 6, 6, 7, 7, 8, 7, 7, 14, 14, 36, 14, 8, 12, 6],         // IEEE CDF
-    [3, 2, 5, 5, 5, 3, 4, 2, 4, 33, 33, 59, 32, 5, 8, 2],          // DeepMind OPFData JSON
+    [0, 1, 15, 15, 18, 7, 15, 23, 14, 76, 76, 64, 48, 15, 27, 0], // model JSON
+    [7, 7, 6, 6, 7, 7, 8, 7, 7, 14, 14, 10, 14, 8, 12, 6],        // IEEE CDF
+    [5, 4, 7, 7, 8, 4, 7, 4, 6, 9, 9, 9, 14, 8, 7, 1],            // GO Challenge 3 JSON
+    [3, 2, 5, 5, 5, 3, 4, 2, 4, 33, 33, 10, 32, 5, 8, 2],         // DeepMind OPFData JSON
 ];
 
 const TRANSMISSION_CASES: [(&str, &str); 6] = [
@@ -1587,10 +1645,10 @@ fn geo_layer_cell(cell: &mut Cell) -> Result<(), String> {
         TARGET_READBACK,
         &powerio_core::render_diagnostics(&back.diagnostics),
     );
-    let powerio::PioValue::GeoLayer(read_back) = &back.value else {
+    let powerio::PioValue::GeoLayer(read_back) = &back.value() else {
         return Err(format!(
             "the geo layer document parsed as {}",
-            back.value.type_name()
+            back.value().type_name()
         ));
     };
     record_model_diffs(
@@ -1933,8 +1991,8 @@ fn parse_transmission_source(
         .iter()
         .map(|d| format!("{}: {}", d.code(), d.message()))
         .collect();
-    let network = balanced_network(&module.value)
-        .ok_or_else(|| format!("{from} parsed as {}", module.value.type_name()))?
+    let network = balanced_network(module.value())
+        .ok_or_else(|| format!("{from} parsed as {}", module.value().type_name()))?
         .clone();
     Ok(ParsedTransmission { network, warnings })
 }
@@ -1952,6 +2010,10 @@ fn balanced_network(value: &powerio::PioValue) -> Option<&BalancedNetwork> {
         // carries.
         powerio::PioValue::AcOpfSolution(solution) => Some(solution.network()),
         powerio::PioValue::AcPfSolution(solution) => Some(solution.network()),
+        // A problem statement (GO Challenge 3) parses as the calculation it
+        // states; the network it commits units on is the snapshot a case
+        // format carries.
+        powerio::PioValue::AcScucInstance(instance) => Some(instance.network()),
         _ => None,
     }
 }

@@ -123,6 +123,11 @@ struct BusRow {
     injections: [f64; 4],
 }
 
+/// The relabeling-free electrical digest: one row per bus and one conductance
+/// and susceptance pair per off-diagonal admittance entry, both sorted so a
+/// renumbering does not change them.
+type ElectricalDigest = (Vec<BusRow>, Vec<(f64, f64)>);
+
 /// The electrical problem compared up to bus relabeling, for a target format
 /// that states no bus number.
 ///
@@ -152,7 +157,7 @@ pub fn electrical_change_up_to_relabeling(
             .iter()
             .all(|bus| bus.base_kv.is_finite() && bus.base_kv > 0.0)
     });
-    let digest = |net: &BalancedNetwork| -> Option<(Vec<BusRow>, Vec<(f64, f64)>)> {
+    let digest = |net: &BalancedNetwork| -> Option<ElectricalDigest> {
         let nominal = net
             .buses()
             .iter()

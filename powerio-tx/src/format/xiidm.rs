@@ -14290,10 +14290,20 @@ mod tests {
                 && diagnostic.message().contains("state no nominal voltage")
         }));
 
+        // The reader divides by the same substituted nominal voltage the
+        // writer multiplied by, so the per unit values return unchanged up to
+        // the last bit of the two conversions.
         let back = parse_xiidm_source(&emission.text, &mut Diagnostics::new()).unwrap();
-        assert_eq!(back.branches()[0].r, 0.01);
-        assert_eq!(back.branches()[0].x, 0.1);
-        assert_eq!(back.shunts()[0].b, 0.19);
+        for (returned, stated) in [
+            (back.branches()[0].r, 0.01),
+            (back.branches()[0].x, 0.1),
+            (back.shunts()[0].b, 0.19),
+        ] {
+            assert!(
+                (returned - stated).abs() <= 1e-12 * stated.abs(),
+                "{returned} is not {stated}"
+            );
+        }
     }
 
     /// A MATPOWER shaped DC line states a loss model, not a DC circuit. The
