@@ -440,7 +440,7 @@ fn inline_line_impedance_round_trips() {
     }"#;
     let net = parse_pmd_str(text).unwrap();
     let l = &net.lines()[0];
-    assert_eq!(l.linecode, "ln1_z");
+    assert_eq!(l.linecode.as_deref(), Some("ln1_z"));
     assert_eq!(l.extras.get("pmd_inline"), Some(&serde_json::json!(true)));
     // Inline ratings belong to the materialized linecode, not the line.
     assert!(l.i_max.is_none() && l.s_max.is_none());
@@ -619,10 +619,10 @@ fn inline_linecode_collision_with_document_linecode() {
     assert!(names.contains("foo_z") && names.contains("foo_z2"));
 
     let foo = net.lines().iter().find(|l| l.name == "foo").unwrap();
-    assert_eq!(foo.linecode, "foo_z2");
+    assert_eq!(foo.linecode.as_deref(), Some("foo_z2"));
     assert!((net.linecode("foo_z2").unwrap().r_series[0][0] - 0.111).abs() < 1e-15);
     let bar = net.lines().iter().find(|l| l.name == "bar").unwrap();
-    assert_eq!(bar.linecode, "foo_z");
+    assert_eq!(bar.linecode.as_deref(), Some("foo_z"));
     assert!((net.linecode("foo_z").unwrap().r_series[0][0] - 0.5).abs() < 1e-15);
 
     // The BMOPF projection keys linecodes by name; line foo must carry its

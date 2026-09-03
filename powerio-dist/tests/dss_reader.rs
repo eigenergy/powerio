@@ -146,7 +146,7 @@ fn ieee13_matches_the_engine_bus_map() {
     // ohm/m; length = 2000*0.3048 m. Product must match the engine.
     let line = net.lines().iter().find(|l| l.name == "650632").unwrap();
     assert!((line.length - 2000.0 * 0.3048).abs() < 1e-9);
-    let code = net.linecode(&line.linecode).unwrap();
+    let code = net.linecode(line.linecode.as_deref().unwrap()).unwrap();
     let r11_total = code.r_series[0][0] * line.length;
     assert!((r11_total - 0.3465 * 2000.0 / 5280.0).abs() < 1e-9);
 
@@ -214,7 +214,7 @@ fn defaults_materialize_with_provenance() {
     // the constructor default, materialized and recorded.
     let line = net.lines().iter().find(|l| l.name == "l_default").unwrap();
     assert!((line.length - 1.0).abs() < 1e-12);
-    let code = net.linecode(&line.linecode).unwrap();
+    let code = net.linecode(line.linecode.as_deref().unwrap()).unwrap();
     // Sequence defaults: diag (2*0.058 + 0.1784)/3, off diag (0.1784-0.058)/3.
     assert!((code.r_series[0][0] - 0.098_133_333_333_333_33).abs() < 1e-12);
     assert!((code.r_series[0][1] - 0.040_133_333_333_333_33).abs() < 1e-12);

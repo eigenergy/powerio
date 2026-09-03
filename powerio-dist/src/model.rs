@@ -165,7 +165,14 @@ pub struct DistLine {
     pub bus_to: String,
     pub terminal_map_from: Vec<String>,
     pub terminal_map_to: Vec<String>,
-    pub linecode: String,
+    /// Resolved impedance data for this line.
+    ///
+    /// `None` means that the source described impedance through a mechanism
+    /// PowerIO retained but did not calculate, such as OpenDSS conductor
+    /// geometry. Analysis and cross-format emission must refuse that state;
+    /// it must never be replaced by an electrical default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linecode: Option<String>,
     /// Meters. A `null` reads as NaN: a BMOPF line without a length (#268).
     #[serde(with = "crate::nonfinite::nan_scalar")]
     #[cfg_attr(
@@ -216,7 +223,30 @@ impl DistLine {
             bus_to: bus_to.into(),
             terminal_map_from,
             terminal_map_to,
-            linecode: linecode.into(),
+            linecode: Some(linecode.into()),
+            length,
+            route: None,
+            i_max: None,
+            s_max: None,
+            extras: Extras::new(),
+        }
+    }
+
+    pub(crate) fn new_unresolved(
+        name: impl Into<String>,
+        bus_from: impl Into<String>,
+        bus_to: impl Into<String>,
+        terminal_map_from: Vec<String>,
+        terminal_map_to: Vec<String>,
+        length: f64,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            bus_from: bus_from.into(),
+            bus_to: bus_to.into(),
+            terminal_map_from,
+            terminal_map_to,
+            linecode: None,
             length,
             route: None,
             i_max: None,
@@ -1163,12 +1193,9 @@ pub(crate) fn warn_defaulted_frequency(
     }
 }
 
-/// Push a warning for every dangling or empty cross-reference. Bus and
-/// linecode references are bare strings, a reader leaves an empty string
-/// where the field is missing, and the graph projection synthesizes a
-/// phantom bus for any unresolved id (the empty string included) — so a
-/// typo or an absent field would otherwise parse cleanly into a
-/// topologically wrong network. Comparison is ASCII case insensitive,
+/// Push a finding for every dangling or empty cross-reference. Bus references
+/// are bare strings; line impedance is explicitly absent when a source
+/// construct has not been lowered. Comparison is ASCII case insensitive,
 /// matching [`MulticonductorNetwork::bus`] and [`MulticonductorNetwork::linecode`].
 /// The unresolved bus and linecode references of a network, as one message
 /// per finding: the same walk the reader's warning pass runs, exposed so a
@@ -1260,16 +1287,21 @@ pub(crate) fn warn_unresolved_references(
         }
     }
     for l in net.lines() {
-        if l.linecode.is_empty() {
-            warnings.push(format!(
-                "line {}: `linecode` reference is empty or missing",
-                l.name
-            ));
-        } else if !linecodes.contains(&l.linecode.to_ascii_lowercase()) {
-            warnings.push(format!(
-                "line {}: references undefined linecode `{}`",
-                l.name, l.linecode
-            ));
+        match l.linecode.as_deref() {
+            None | Some("") => diags.push(
+                &crate::diagnostics::codes::VALIDATE_MULTICONDUCTOR_IMPEDANCE_UNRESOLVED,
+                format!(
+                    "line {}: impedance is unresolved (`linecode` is absent)",
+                    l.name
+                ),
+            ),
+            Some(linecode) if !linecodes.contains(&linecode.to_ascii_lowercase()) => {
+                warnings.push(format!(
+                    "line {}: references undefined linecode `{linecode}`",
+                    l.name
+                ));
+            }
+            Some(_) => {}
         }
     }
     for message in warnings {

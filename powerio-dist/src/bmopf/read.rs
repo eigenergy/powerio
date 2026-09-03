@@ -1045,7 +1045,7 @@ impl Reader<'_> {
                 bus_to: string(o.get("bus_to")),
                 terminal_map_from: strings(o.get("terminal_map_from")),
                 terminal_map_to: strings(o.get("terminal_map_to")),
-                linecode,
+                linecode: Some(linecode),
                 length,
                 route: None,
                 i_max: floats(o.get("i_max")),

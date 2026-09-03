@@ -806,9 +806,19 @@ impl Writer {
         if !net.lines().is_empty() {
             let mut lines = Map::new();
             for l in net.lines() {
+                let Some(linecode) = l.linecode.as_deref() else {
+                    self.warn(
+                        &C::EMIT_MULTICONDUCTOR_IMPEDANCE_UNRESOLVED,
+                        format!(
+                            "line {} omitted from BMOPF output: its impedance is unresolved",
+                            l.name
+                        ),
+                    );
+                    continue;
+                };
                 let mut o = Map::new();
                 o.insert("length".into(), self.num(l.length, "line length"));
-                o.insert("linecode".into(), json!(l.linecode));
+                o.insert("linecode".into(), json!(linecode));
                 o.insert("bus_from".into(), json!(l.bus_from));
                 o.insert("bus_to".into(), json!(l.bus_to));
                 o.insert("terminal_map_from".into(), json!(l.terminal_map_from));

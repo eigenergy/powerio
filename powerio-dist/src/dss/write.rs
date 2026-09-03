@@ -1125,11 +1125,11 @@ impl DssWriter {
             ) else {
                 continue;
             };
-            let Some(code) = net
-                .linecodes()
-                .iter()
-                .find(|c| c.name.eq_ignore_ascii_case(&l.linecode))
-            else {
+            let Some(code) = net.linecodes().iter().find(|c| {
+                l.linecode
+                    .as_deref()
+                    .is_some_and(|linecode| c.name.eq_ignore_ascii_case(linecode))
+            }) else {
                 continue;
             };
             if code.n_conductors != l.terminal_map_from.len()
@@ -1221,6 +1221,16 @@ impl DssWriter {
     fn lines(&mut self, net: &MulticonductorNetwork) {
         for l in net.lines() {
             self.check_name("line", &l.name);
+            let Some(linecode) = l.linecode.as_deref() else {
+                self.warn(
+                    &C::EMIT_MULTICONDUCTOR_IMPEDANCE_UNRESOLVED,
+                    format!(
+                        "line {} omitted from OpenDSS output: its impedance is unresolved",
+                        l.name
+                    ),
+                );
+                continue;
+            };
             // #307: with an agreed return conductor before the end and a
             // matching permuted linecode emitted, the node lists and the
             // matrices move together; otherwise the order warning stands.
@@ -1233,7 +1243,7 @@ impl DssWriter {
                 )
                 .filter(|_| {
                     net.linecodes().iter().any(|c| {
-                        c.name.eq_ignore_ascii_case(&l.linecode)
+                        c.name.eq_ignore_ascii_case(linecode)
                             && c.n_conductors == l.terminal_map_from.len()
                     })
                 });
@@ -1242,7 +1252,7 @@ impl DssWriter {
                 let perm = return_permutation(k, l.terminal_map_from.len());
                 map_from = permute_names(&l.terminal_map_from, &perm);
                 map_to = permute_names(&l.terminal_map_to, &perm);
-                code_name = format!("{}_ret{k}", l.linecode);
+                code_name = format!("{linecode}_ret{k}");
                 self.warn(
                     &C::EMIT_DSS_VALUE_SUBSTITUTED,
                     format!(
@@ -1268,7 +1278,7 @@ impl DssWriter {
                 );
                 map_from = l.terminal_map_from.clone();
                 map_to = l.terminal_map_to.clone();
-                code_name = l.linecode.clone();
+                code_name = linecode.to_owned();
             }
             let phases = l.terminal_map_from.len();
             let mut s = format!(
@@ -3254,7 +3264,7 @@ mod tests {
             bus_to: "a=b".into(),
             terminal_map_from: strings(&["1"]),
             terminal_map_to: strings(&["1"]),
-            linecode: "lc".into(),
+            linecode: Some("lc".into()),
             length: 1.0,
             route: None,
             i_max: None,
@@ -3284,7 +3294,7 @@ mod tests {
                 bus_to: "b2".into(),
                 terminal_map_from: strings(&["1", "2", "3"]),
                 terminal_map_to: strings(&["1", "2", "3"]),
-                linecode: "lc".into(),
+                linecode: Some("lc".into()),
                 length: 1.0,
                 route: None,
                 i_max: Some(vec![400.0, 300.0, 200.0]),
@@ -3318,7 +3328,7 @@ mod tests {
                 bus_to: "b2".into(),
                 terminal_map_from: strings(&["1"]),
                 terminal_map_to: strings(&["1"]),
-                linecode: "lc".into(),
+                linecode: Some("lc".into()),
                 length: 1.0,
                 route: None,
                 i_max: Some(vec![400.0]),

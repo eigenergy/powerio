@@ -601,7 +601,7 @@ impl Reader<'_> {
                 bus_to: string(o.get("t_bus")),
                 terminal_map_from: ints_as_strings(o.get("f_connections")),
                 terminal_map_to: ints_as_strings(o.get("t_connections")),
-                linecode,
+                linecode: Some(linecode),
                 length: o.get("length").map_or(f64::NAN, |v| restore("length", v)),
                 route: None,
                 i_max,

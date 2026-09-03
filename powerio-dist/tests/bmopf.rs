@@ -2483,11 +2483,14 @@ fn synthesized_inline_linecode_never_shadows_a_declared_one() {
     // The declared code keeps its name and its impedance.
     assert_eq!(series("LC"), 9.0f64.to_bits());
     let user = net.lines().iter().find(|l| l.name == "user").unwrap();
-    assert_eq!(series(&user.linecode), 9.0f64.to_bits());
+    assert_eq!(series(user.linecode.as_deref().unwrap()), 9.0f64.to_bits());
     // The inline line takes a suffixed name and keeps its own impedance.
     let inline = net.lines().iter().find(|l| l.name == "lc").unwrap();
-    assert_eq!(inline.linecode, "lc_");
-    assert_eq!(series(&inline.linecode), 1.0f64.to_bits());
+    assert_eq!(inline.linecode.as_deref(), Some("lc_"));
+    assert_eq!(
+        series(inline.linecode.as_deref().unwrap()),
+        1.0f64.to_bits()
+    );
     assert!(
         net.warnings
             .iter()
@@ -2786,7 +2789,7 @@ fn inline_impedance_is_not_scaled_by_a_descriptive_length() {
     );
     let net = parse_bmopf_str(&text).unwrap();
     let line = &net.lines()[0];
-    let code = net.linecode(&line.linecode).unwrap();
+    let code = net.linecode(line.linecode.as_deref().unwrap()).unwrap();
     assert_eq!(line.length.to_bits(), 1.0f64.to_bits());
     assert_eq!(
         (code.r_series[0][0] * line.length).to_bits(),
@@ -3209,7 +3212,7 @@ fn an_inline_line_rating_is_not_repeated_on_its_synthetic_linecode() {
     let code = net
         .linecodes()
         .iter()
-        .find(|c| c.name == line.linecode)
+        .find(|c| Some(c.name.as_str()) == line.linecode.as_deref())
         .expect("synthetic linecode");
 
     assert_eq!(

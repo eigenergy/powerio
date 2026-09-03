@@ -538,6 +538,16 @@ impl Writer {
             let mut lines = Map::new();
             let linecodes_by_name = linecodes_by_name(net);
             for l in net.lines() {
+                let Some(linecode) = l.linecode.as_deref() else {
+                    self.warn(
+                        &C::EMIT_MULTICONDUCTOR_IMPEDANCE_UNRESOLVED,
+                        format!(
+                            "line {} omitted from PMD output: its impedance is unresolved",
+                            l.name
+                        ),
+                    );
+                    continue;
+                };
                 let mut o = Map::new();
                 o.insert("f_bus".into(), json!(l.bus_from.to_lowercase()));
                 o.insert("t_bus".into(), json!(l.bus_to.to_lowercase()));
@@ -555,7 +565,7 @@ impl Writer {
                 // its impedance, the dss2eng shape for rmatrix defined
                 // lines: matrices on the line, no linecode key.
                 let inline = l.extras.get("pmd_inline").and_then(Value::as_bool) == Some(true);
-                let lc = linecodes_by_name.get(l.linecode.to_ascii_lowercase().as_str());
+                let lc = linecodes_by_name.get(linecode.to_ascii_lowercase().as_str());
                 match lc.copied() {
                     Some(c) if inline => {
                         insert_impedance_matrices(&mut o, c, net.base_frequency());
@@ -569,11 +579,10 @@ impl Writer {
                     _ => {
                         if inline {
                             self.warn(&C::EMIT_PMD_VALUE_SUBSTITUTED, format!(
-                                "{what}: linecode `{}` is missing; emitted the reference instead of inline impedance",
-                                l.linecode
+                                "{what}: linecode `{linecode}` is missing; emitted the reference instead of inline impedance"
                             ));
                         }
-                        o.insert("linecode".into(), json!(l.linecode.to_lowercase()));
+                        o.insert("linecode".into(), json!(linecode.to_lowercase()));
                     }
                 }
                 Self::line_ratings(&mut o, l);
@@ -1173,7 +1182,11 @@ fn inlined_codes(net: &MulticonductorNetwork) -> BTreeSet<String> {
         let mut refs = net
             .lines()
             .iter()
-            .filter(|l| l.linecode.eq_ignore_ascii_case(&c.name))
+            .filter(|l| {
+                l.linecode
+                    .as_deref()
+                    .is_some_and(|linecode| linecode.eq_ignore_ascii_case(&c.name))
+            })
             .peekable();
         if refs.peek().is_some()
             && refs.all(|l| l.extras.get("pmd_inline").and_then(Value::as_bool) == Some(true))

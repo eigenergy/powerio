@@ -105,10 +105,22 @@ pub fn network_from_raw(
         bus_order: Vec::new(),
         linecode_units: BTreeMap::new(),
         linecode_nconds: BTreeMap::new(),
+        line_geometry_shapes: BTreeMap::new(),
+        line_spacing_shapes: BTreeMap::new(),
         xycurves: BTreeMap::new(),
         regulated: BTreeSet::new(),
         vars: &raw.vars,
     };
+
+    // Geometry properties set a Line's conductor shape when they are applied.
+    // Index the final geometry objects before lines, just as linecodes are
+    // indexed before their references below.
+    for obj in raw.of_class("linegeometry") {
+        rd.remember_line_geometry(obj);
+    }
+    for obj in raw.of_class("linespacing") {
+        rd.remember_line_spacing(obj);
+    }
 
     for (name, value) in &raw.options {
         // Set option names resolve by first match in the engine's option
@@ -214,13 +226,9 @@ pub fn network_from_raw(
         .net
         .lines()
         .iter()
-        .filter(|l| !known.contains(&l.linecode.to_ascii_lowercase()))
-        .map(|l| {
-            format!(
-                "line {} references unknown linecode `{}`",
-                l.name, l.linecode
-            )
-        })
+        .filter_map(|l| l.linecode.as_deref().map(|linecode| (l, linecode)))
+        .filter(|(_, linecode)| !known.contains(&linecode.to_ascii_lowercase()))
+        .map(|(l, linecode)| format!("line {} references unknown linecode `{}`", l.name, linecode))
         .collect();
     for message in missing {
         rd.diags.push(
@@ -371,6 +379,10 @@ struct Reader<'a> {
     /// `linecode=` sets the line's phase count in the engine
     /// (Line.cpp FetchLineCode), exactly like `phases=`.
     linecode_nconds: BTreeMap<String, usize>,
+    /// LineGeometry name (lowercase) -> phase/conductor shape after `reduce`.
+    line_geometry_shapes: BTreeMap<String, LineShape>,
+    /// LineSpacing name (lowercase) -> stated phase/conductor shape.
+    line_spacing_shapes: BTreeMap<String, LineShape>,
     xycurves: BTreeMap<String, XyCurveRaw>,
     /// Transformer names (lowercase) a regcontrol targets, for the BMOPF
     /// regulator subtype classification pass.
@@ -473,6 +485,36 @@ impl Reader<'_> {
         if !fields.contains(&field) {
             fields.push(field);
         }
+    }
+
+    fn remember_line_geometry(&mut self, obj: &RawObject) {
+        let props = Props::new(obj);
+        let phases = self.usize_or(&props, "nphases", "linegeometry", &obj.name, 3);
+        let conductors = self.usize_or(&props, "nconds", "linegeometry", &obj.name, 3);
+        let reduced = props.get("reduce").is_some_and(Value::to_bool);
+        let shape = if reduced {
+            LineShape::balanced(phases)
+        } else {
+            LineShape {
+                phases: phases.min(conductors),
+                conductors,
+            }
+        };
+        self.line_geometry_shapes
+            .insert(obj.name.to_ascii_lowercase(), shape);
+    }
+
+    fn remember_line_spacing(&mut self, obj: &RawObject) {
+        let props = Props::new(obj);
+        let phases = self.usize_or(&props, "nphases", "linespacing", &obj.name, 3);
+        let conductors = self.usize_or(&props, "nconds", "linespacing", &obj.name, 3);
+        self.line_spacing_shapes.insert(
+            obj.name.to_ascii_lowercase(),
+            LineShape {
+                phases: phases.min(conductors),
+                conductors,
+            },
+        );
     }
 
     fn f64_prop(&mut self, p: Option<&Value>) -> Option<f64> {
@@ -851,47 +893,25 @@ impl Reader<'_> {
 
     // One block per object field; splitting it would scatter a list that
     // reads end to end.
-    #[expect(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines)] // one Line record replays shape and impedance assignments in order
     fn line(&mut self, obj: &RawObject) {
         let props = Props::new(obj);
-        // `linecode=` assigns the line's phase count from the code
-        // (Line.cpp FetchLineCode) exactly like `phases=`; properties
-        // apply in order, so the later of the two wins. Bus node lists
-        // materialize after the whole script parses (MakeBusList), so
-        // they always see the final count regardless of where the bus
-        // properties sit.
-        let explicit = self.usize_prop(props.get("phases"));
-        let from_code = props.get("linecode").and_then(|c| {
-            self.linecode_nconds
-                .get(&c.text.to_ascii_lowercase())
-                .copied()
-        });
-        let linecode_last = obj
-            .props
-            .iter()
-            .rev()
-            .find_map(|p| match p.name.as_deref() {
-                Some("phases") => Some(false),
-                Some("linecode") => Some(true),
-                _ => None,
-            })
-            .unwrap_or(false);
-        let phases = match (explicit, from_code) {
-            (Some(_), Some(n)) if linecode_last => n,
-            (Some(p), _) => p,
-            (None, Some(n)) => n,
-            (None, None) => dd::line::PHASES,
-        };
+        // `phases=`, `linecode=`, and `geometry=` each set the Line's
+        // shape when applied. Replay them in source order. This matters for
+        // both four-wire and one-wire SWER geometries: treating either as the
+        // three-phase Line default fabricates topology before a writer runs.
+        let shape = self.line_shape(obj);
+        let _ = props.get("phases");
+        let phases = shape.phases;
         let spec1 = bus_spec(props.get("bus1"), "");
         let spec2 = bus_spec(props.get("bus2"), "");
-        // A line has no neutral conductor of its own: nconds == phases.
-        let map_from = self.terminals(&spec1, phases, phases, phases);
-        let map_to = self.terminals(&spec2, phases, phases, phases);
+        let map_from = self.terminals(&spec1, phases, shape.conductors, shape.conductors);
+        let map_to = self.terminals(&spec2, phases, shape.conductors, shape.conductors);
 
         let is_switch = props.get("switch").is_some_and(super::lex::Value::to_bool);
         if is_switch {
             let amps = self.f64_or(&props, "emergamps", "line", &obj.name, dd::line::EMERGAMPS);
-            let i_max = Some(vec![amps; phases]);
+            let i_max = Some(vec![amps; shape.conductors]);
             let mut extras = extras_from_leftovers(&props);
             // OpenDSS replaces a switch line's impedance with fixed dummy
             // values; record anything written so nothing drops silently.
@@ -931,26 +951,36 @@ impl Reader<'_> {
         // per line length unit, so the raw length preserves the Z·length
         // product.
         let mut malformed: Vec<(&'static str, String)> = Vec::new();
-        let (linecode, length_factor, synthesized) = if let Some(code) = props.get("linecode") {
-            let lc_units_m = self
-                .linecode_units
-                .get(&code.text.to_ascii_lowercase())
-                .copied()
-                .flatten();
-            let factor = match (lc_units_m, line_units_m) {
-                (Some(_), Some(lf)) => lf,
-                (Some(lcf), None) => lcf,
-                (None, _) => 1.0,
-            };
-            (code.text.clone(), factor, false)
-        } else {
-            let factor = line_units_m.unwrap_or(1.0);
-            let (code, bad) = self.synthesize_linecode(&props, phases, factor, &obj.name);
-            malformed = bad;
-            (code, factor, true)
+        let (linecode, length_factor, synthesized) = match Self::line_impedance_source(obj) {
+            LineImpedanceSource::LineCode(code) => {
+                let _ = props.get("linecode");
+                let lc_units_m = self
+                    .linecode_units
+                    .get(&code.to_ascii_lowercase())
+                    .copied()
+                    .flatten();
+                let factor = match (lc_units_m, line_units_m) {
+                    (Some(_), Some(lf)) => lf,
+                    (Some(lcf), None) => lcf,
+                    (None, _) => 1.0,
+                };
+                (Some(code), factor, false)
+            }
+            LineImpedanceSource::Geometry => {
+                let factor = line_units_m.unwrap_or(1.0);
+                self.warn_unresolved_geometry(&obj.name);
+                (None, factor, false)
+            }
+            LineImpedanceSource::Inline => {
+                let factor = line_units_m.unwrap_or(1.0);
+                let (code, bad) =
+                    self.synthesize_linecode(&props, shape.conductors, factor, &obj.name);
+                malformed = bad;
+                (Some(code), factor, true)
+            }
         };
 
-        let (i_max, raw_emergamps) = self.line_rating(&props, phases, synthesized);
+        let (i_max, raw_emergamps) = self.line_rating(&props, shape.conductors, synthesized);
         let mut extras = extras_from_leftovers(&props);
         if let Some(u) = length_units {
             extras.insert("units".into(), u.into());
@@ -961,19 +991,99 @@ impl Reader<'_> {
         for (key, text) in malformed {
             extras.insert(key.to_string(), text.into());
         }
-        self.net.lines_mut().push(DistLine {
-            name: obj.name.clone(),
-            bus_from: spec1.name,
-            bus_to: spec2.name,
-            terminal_map_from: map_from,
-            terminal_map_to: map_to,
-            linecode,
-            length: length * length_factor,
-            route: None,
-            i_max,
-            s_max: None,
-            extras,
-        });
+        let length = length * length_factor;
+        let mut line = match linecode {
+            Some(linecode) => DistLine::new(
+                &obj.name,
+                &spec1.name,
+                &spec2.name,
+                map_from,
+                map_to,
+                linecode,
+                length,
+            ),
+            None => DistLine::new_unresolved(
+                &obj.name,
+                &spec1.name,
+                &spec2.name,
+                map_from,
+                map_to,
+                length,
+            ),
+        };
+        line.i_max = i_max;
+        line.extras = extras;
+        self.net.lines_mut().push(line);
+    }
+
+    /// Replay the OpenDSS properties that replace a Line's phase/conductor
+    /// shape. Unknown references leave the previous shape intact, matching an
+    /// engine assignment that cannot fetch the named object.
+    fn line_shape(&mut self, obj: &RawObject) -> LineShape {
+        let mut shape = LineShape::balanced(dd::line::PHASES);
+        for prop in &obj.props {
+            match prop.name.as_deref() {
+                Some("phases") => {
+                    if let Some(n) = self.usize_prop(Some(&prop.value)) {
+                        shape = LineShape::balanced(n);
+                    }
+                }
+                Some("linecode") => {
+                    if let Some(&n) = self
+                        .linecode_nconds
+                        .get(&prop.value.text.to_ascii_lowercase())
+                    {
+                        shape = LineShape::balanced(n);
+                    }
+                }
+                Some("geometry") => {
+                    if let Some(&geometry) = self
+                        .line_geometry_shapes
+                        .get(&prop.value.text.to_ascii_lowercase())
+                    {
+                        shape = geometry;
+                    }
+                }
+                Some("spacing") => {
+                    if let Some(&spacing) = self
+                        .line_spacing_shapes
+                        .get(&prop.value.text.to_ascii_lowercase())
+                    {
+                        shape = spacing;
+                    }
+                }
+                Some("wires" | "cncables" | "tscables") => {
+                    let conductors = prop.value.to_string_list(Some(self.vars)).len();
+                    if conductors > 0 {
+                        shape.conductors = conductors.min(MAX_COUNT);
+                        shape.phases = shape.phases.min(shape.conductors);
+                    }
+                }
+                _ => {}
+            }
+        }
+        shape
+    }
+
+    /// The last impedance-defining assignment controls the Line. Geometry,
+    /// spacing, and conductor/cable lists require OpenDSS line-constant math;
+    /// they must not fall through to the unrelated factory R/X defaults.
+    fn line_impedance_source(obj: &RawObject) -> LineImpedanceSource {
+        let mut source = LineImpedanceSource::Inline;
+        for prop in &obj.props {
+            source = match prop.name.as_deref() {
+                Some("linecode") => LineImpedanceSource::LineCode(prop.value.text.clone()),
+                Some("geometry" | "spacing" | "wires" | "cncables" | "tscables") => {
+                    LineImpedanceSource::Geometry
+                }
+                Some(
+                    "rmatrix" | "xmatrix" | "cmatrix" | "r1" | "x1" | "r0" | "x0" | "c1" | "c0"
+                    | "b1" | "b0",
+                ) => LineImpedanceSource::Inline,
+                _ => continue,
+            };
+        }
+        source
     }
 
     /// The line's own `i_max`, and the raw `emergamps` token to keep in extras.
@@ -1054,6 +1164,19 @@ impl Reader<'_> {
             extras: Extras::new(),
         });
         (name, z.malformed)
+    }
+
+    /// Record the deferred calculation without inventing an impedance
+    /// reference. The line carries `None`, which analysis and cross-format
+    /// writers handle as an explicit unresolved state.
+    fn warn_unresolved_geometry(&mut self, line_name: &str) {
+        self.warn(
+            &C::READ_DSS_IMPEDANCE_UNRESOLVED,
+            format!(
+                "line {line_name}: conductor geometry is retained, but its impedance is not \
+                 calculated; no linecode or electrical values were fabricated"
+            ),
+        );
     }
 
     // ----- load ----------------------------------------------------------
@@ -2470,6 +2593,27 @@ struct SeriesImpedance {
     malformed: Vec<(&'static str, String)>,
 }
 
+#[derive(Clone, Copy)]
+struct LineShape {
+    phases: usize,
+    conductors: usize,
+}
+
+impl LineShape {
+    const fn balanced(n: usize) -> Self {
+        Self {
+            phases: n,
+            conductors: n,
+        }
+    }
+}
+
+enum LineImpedanceSource {
+    LineCode(String),
+    Geometry,
+    Inline,
+}
+
 #[derive(Clone)]
 struct WindingRaw {
     bus: Option<BusSpec>,
@@ -2578,7 +2722,7 @@ mod tests {
              New Line.l1 bus1=a.1 bus2=b.1 phases=1 linecode=lc{line_tail}"
         ));
         let line = net.lines().iter().find(|l| l.name == "l1").unwrap();
-        let code = net.linecode(&line.linecode).unwrap();
+        let code = net.linecode(line.linecode.as_deref().unwrap()).unwrap();
         (code.r_series[0][0], line.length)
     }
 
@@ -2616,7 +2760,7 @@ mod tests {
              New Line.l1 bus1=a.1 bus2=b.1 phases=1 length=0.5 units=km r1=0.5 x1=0.2 c1=3",
         );
         let line = net.lines().iter().find(|l| l.name == "l1").unwrap();
-        let code = net.linecode(&line.linecode).unwrap();
+        let code = net.linecode(line.linecode.as_deref().unwrap()).unwrap();
         assert!((line.length - 500.0).abs() < 1e-9);
         assert!((code.r_series[0][0] * line.length - 0.25).abs() < 1e-12);
         assert!((code.x_series[0][0] * line.length - 0.1).abs() < 1e-12);

@@ -66,6 +66,11 @@ pub mod codes {
             "the reader stopped following includes at the nesting depth limit";
         READ_DSS_LINECODE_UNKNOWN = "READ.DSS.LINECODE_UNKNOWN", Warning,
             "a line names a linecode the case does not declare";
+        /// Geometry-backed impedance remains in retained OpenDSS input but is
+        /// absent from the typed network until line constants are calculated.
+        /// Severity `Error`: electrical analysis of that network is unsafe.
+        READ_DSS_IMPEDANCE_UNRESOLVED = "READ.DSS.IMPEDANCE_UNRESOLVED", Error,
+            "a line's retained conductor geometry has not been lowered to impedance matrices";
 
         // EMIT.DSS: what the canonical dss writer cannot state.
         EMIT_DSS_FIELD_DROPPED = "EMIT.DSS.FIELD_DROPPED", Warning,
@@ -230,6 +235,12 @@ pub mod codes {
             "a line polyline was dropped because the target has no polyline field";
         EMIT_MULTICONDUCTOR_SIDECAR_DROPPED = "EMIT.MULTICONDUCTOR.SIDECAR_DROPPED", Warning,
             "a companion file the case text refers to was not written";
+        EMIT_MULTICONDUCTOR_IMPEDANCE_UNRESOLVED =
+            "EMIT.MULTICONDUCTOR.IMPEDANCE_UNRESOLVED", Error,
+            "a line with unresolved impedance was omitted instead of receiving fabricated electrical values";
+        VALIDATE_MULTICONDUCTOR_IMPEDANCE_UNRESOLVED =
+            "VALIDATE.MULTICONDUCTOR.IMPEDANCE_UNRESOLVED", Error,
+            "a line has no resolved impedance and cannot be used for electrical analysis";
 
         // Failures.
         READ_DIST_IO_FAILED = "READ.DIST.IO_FAILED", Error,
