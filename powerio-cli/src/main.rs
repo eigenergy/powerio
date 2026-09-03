@@ -58,7 +58,7 @@ enum Command {
     /// Launch the interactive TUI (default if no subcommand is given).
     Tui {
         /// Directory scanned recursively for case files (.m, .raw, .aux,
-        /// .epc, .pwb, .cdf, .json, .dss).
+        /// .epc, .pwb, .uct, .cdf, .json, .dss).
         #[arg(short, long)]
         data_dir: Option<PathBuf>,
         /// Default output directory for batch exports.

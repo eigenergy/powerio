@@ -187,10 +187,12 @@ fn lines(text: &str) -> impl Iterator<Item = Line<'_>> {
 /// first column or the columns hold only blanks.
 fn field(line: &str, columns: Columns) -> Option<&str> {
     let (start, end) = columns;
-    if line.len() < start {
-        return None;
-    }
-    let slice = line.get(start - 1..end.min(line.len()))?;
+    let start = line.char_indices().nth(start - 1)?.0;
+    let end = line
+        .char_indices()
+        .nth(end)
+        .map_or(line.len(), |(offset, _)| offset);
+    let slice = &line[start..end];
     let trimmed = slice.trim();
     (!trimmed.is_empty()).then_some(trimmed)
 }
@@ -1788,5 +1790,6 @@ mod tests {
         assert_eq!(field("ab", (3, 4)), None);
         assert_eq!(field("abcd", (2, 3)), Some("bc"));
         assert_eq!(field("a   ", (2, 4)), None);
+        assert_eq!(field("aücd", (2, 3)), Some("üc"));
     }
 }
