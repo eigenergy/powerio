@@ -23,15 +23,18 @@
 //!
 //! Known limits, documented rather than guessed:
 //!
-//! - Status bytes: the generator status is located wherever the record
-//!   carries the validated status tail (a zero byte, then bit 0 of the
-//!   status byte, then GenRMPCT as an f32) one past the f32 block. Every
-//!   483 era record carries it, and so do the 425 era records of writers
-//!   that emit it, checked against the open machines the paired `.aux` or
-//!   `.raw` export of the same case states. A 425 era table whose records
-//!   put something else there keeps no located status, so its machines read
-//!   as in service; that is a limit of the decoding, not a property of the
-//!   data. `parse_pwb_with_warnings` reports the limit when it applies;
+//! - Status bytes: the generator status is located when a table carries the
+//!   validated status tail (a zero byte, then bit 0 of the status byte, then
+//!   GenRMPCT as an f32) one past the f32 block on every record. Every 483
+//!   era record carries it, and so do the 425 era records of writers that
+//!   emit it, checked against the open machines the paired `.aux` or `.raw`
+//!   export of the same case states. Whether the tail is there is a property
+//!   of the writer, so the table is walked twice, once requiring it and once
+//!   consuming none, rather than probed per record: a chance match on one
+//!   record would move where the next record is looked for. A 425 era table
+//!   that puts something else there keeps no located status, so its machines
+//!   read as in service; that is a limit of the decoding, not a property of
+//!   the data. `parse_pwb_with_warnings` reports the limit when it applies;
 //!   `parse_pwb` discards the warning. No other device status is located,
 //!   so every other device reads as in service.
 //!   The load record's post ID byte, once treated as a status, is 0x00 in
@@ -337,9 +340,10 @@ fn parse_pwb_inner(bytes: &[u8], name_hint: Option<&str>) -> Result<(BalancedNet
 /// [`parse_pwb`]): the 425/508 era bus + ID shape (`plain`), the 2021 era
 /// regulated bus shape (`reg`, [`read_gen_reg_record`]), and the 554 shape
 /// whose regulated bus record omits the presence byte (`simple_reg`,
-/// [`read_gen_reg_simple_record`]). A `plain` record reports whether it
-/// carried the status tail, and [`resolve_plain_gen_status`] reads the status
-/// only when every record of the table did.
+/// [`read_gen_reg_simple_record`]). A `plain` table is walked twice, once
+/// requiring the status tail on every record ([`read_gen_record_tailed`]) and
+/// once consuming none ([`read_gen_record_plain`]), so the tail is decided for
+/// the table rather than per record.
 #[derive(Clone, Copy)]
 struct GenVariants {
     plain: bool,
@@ -417,7 +421,8 @@ fn search_table_chain(
         // The device and branch runs validate bus references, so their
         // caches are scoped to one bus table candidate.
         let load_runs = RefCell::new(HashMap::new());
-        let gen_runs = RefCell::new(HashMap::new());
+        let gen_tailed_runs = RefCell::new(HashMap::new());
+        let gen_plain_runs = RefCell::new(HashMap::new());
         let gen_reg_runs = RefCell::new(HashMap::new());
         let gen_reg_simple_runs = RefCell::new(HashMap::new());
         let shunt_runs = RefCell::new(HashMap::new());
@@ -491,8 +496,27 @@ fn search_table_chain(
                                 bytes,
                                 l_end..l_end.saturating_add(RESYNC_WINDOW),
                                 &bus_ids,
-                                read_gen_record,
-                                &gen_runs,
+                                read_gen_record_tailed,
+                                &gen_tailed_runs,
+                                device_glue.plain_gen,
+                                38,
+                                budget,
+                            )
+                        })
+                        .into_iter()
+                        .flatten()
+                        .map(|c| (c, GenStatus::Decoded)),
+                )
+                .chain(
+                    gen_variants
+                        .plain
+                        .then(|| {
+                            device_table_candidates(
+                                bytes,
+                                l_end..l_end.saturating_add(RESYNC_WINDOW),
+                                &bus_ids,
+                                read_gen_record_plain,
+                                &gen_plain_runs,
                                 device_glue.plain_gen,
                                 32,
                                 budget,
@@ -500,7 +524,7 @@ fn search_table_chain(
                         })
                         .into_iter()
                         .flatten()
-                        .map(|(rows, end)| resolve_plain_gen_status(rows, end)),
+                        .map(|c| (c, GenStatus::Unlocated)),
                 );
             for ((generators, g_end), gen_status) in gen_candidates {
                 if gen_table_continues(bytes, g_end, &bus_ids, gen_variants, budget) {
@@ -597,30 +621,6 @@ fn search_table_chain(
     None
 }
 
-/// Resolve the service status of a plain generator table. The 425 era record
-/// carries the status tail on every record or on none, by writer: eighteen
-/// files of one corpus carry it and ACTIVSg200 puts other bytes there. A
-/// table that carries it on every record is read with its decoded status; any
-/// other table reads every machine as in service, which is what the reader
-/// can state about those bytes.
-fn resolve_plain_gen_status(
-    rows: Vec<(Generator, bool)>,
-    end: usize,
-) -> ((Vec<Generator>, usize), GenStatus) {
-    if rows.iter().all(|(_, tail)| *tail) {
-        let gens = rows.into_iter().map(|(machine, _)| machine).collect();
-        return ((gens, end), GenStatus::Decoded);
-    }
-    let gens = rows
-        .into_iter()
-        .map(|(mut machine, _)| {
-            machine.in_service = true;
-            machine
-        })
-        .collect();
-    ((gens, end), GenStatus::Unlocated)
-}
-
 /// Keep the table chain with the largest decoded electrical core, together
 /// with whether its generator table carried a located service status.
 fn keep_best_chain(
@@ -632,9 +632,15 @@ fn keep_best_chain(
     let candidate_ok = net.is_ok();
     let replace = match best.as_ref() {
         None => true,
-        Some((best_score, _, best_net)) => match (best_net.is_ok(), candidate_ok) {
+        Some((best_score, best_status, best_net)) => match (best_net.is_ok(), candidate_ok) {
             (false, true) => true,
             (true, false) => false,
+            // Both plain generator readers accept a table whose records all
+            // carry the tail, so equal scores are decided by the status: the
+            // located one states what the other cannot.
+            _ if score == *best_score => {
+                *best_status == GenStatus::Unlocated && status == GenStatus::Decoded
+            }
             _ => score > *best_score,
         },
     };
@@ -680,7 +686,10 @@ fn gen_table_continues(
     (after..after.saturating_add(RESYNC_WINDOW).min(bytes.len()))
         .take_while(|_| budget.tick())
         .any(|p| {
-            (variants.plain && read_gen_record(bytes, p, bus_ids).is_ok())
+            // The plain reader accepts a record whether or not a tail
+            // follows it, since it consumes none, so it answers for both
+            // plain writers.
+            (variants.plain && read_gen_record_plain(bytes, p, bus_ids).is_ok())
                 || (variants.reg && read_gen_reg_record(bytes, p, bus_ids).is_ok())
                 || (variants.simple_reg && read_gen_reg_simple_record(bytes, p, bus_ids).is_ok())
         })
@@ -1392,7 +1401,7 @@ fn read_device_head<T>(
     b: &[u8],
     at: usize,
     bus_ids: &BusIdSet,
-    read: fn(&mut Cur, BusId, &[u8]) -> Probe<T>,
+    read: impl Fn(&mut Cur, BusId, &[u8]) -> Probe<T>,
 ) -> Probe<(T, usize)> {
     let mut c = Cur { b, pos: at };
     let bus = c.u32()? as usize;
@@ -1412,11 +1421,17 @@ fn read_load_record(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Load, usi
     read_device_head(b, at, bus_ids, read_load)
 }
 
-/// Probe one plain generator record using the shared device head. The bool is
-/// whether the record carried the validated status tail (see
-/// [`resolve_plain_gen_status`]).
-fn read_gen_record(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<((Generator, bool), usize)> {
-    read_device_head(b, at, bus_ids, read_gen)
+/// Probe one plain generator record whose writer emits the status tail: the
+/// record must carry it, so a table accepted through this reader carries a
+/// decoded status on every machine.
+fn read_gen_record_tailed(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Generator, usize)> {
+    read_device_head(b, at, bus_ids, |c, bus, id| read_gen(c, bus, id, true))
+}
+
+/// Probe one plain generator record whose writer emits no status tail: the
+/// record ends at the f32 block and its machine reads as in service.
+fn read_gen_record_plain(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Generator, usize)> {
+    read_device_head(b, at, bus_ids, |c, bus, id| read_gen(c, bus, id, false))
 }
 
 /// Probe one switched shunt record using the shared device head.
@@ -1551,7 +1566,7 @@ fn read_load(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Load> {
 /// one; the voltage setpoint and MVA base ranges anchor the choice, and a
 /// record that puts implausible values at every offset is a loud error, not
 /// a generator.
-fn read_gen(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<(Generator, bool)> {
+fn read_gen(c: &mut Cur, bus: BusId, id: &[u8], require_tail: bool) -> Probe<Generator> {
     let record_start = c.pos - (4 + 1) - id.len(); // u32 bus + the ID length byte
     let mut chosen = None;
     // +12 extends the observed set to two character IDs in a 2018 era
@@ -1571,16 +1586,20 @@ fn read_gen(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<(Generator, bool)> {
     };
     c.pos = end;
     // Some writers of this era follow the f32 block with the same status tail
-    // the 2021 era regulated record carries. When it is there the status is
-    // decoded; when it is not, the record reads as in service and the table
-    // level check in `resolve_plain_gen_status` keeps a chance match from
-    // opening a running machine.
-    let mut tail = Cur { b: c.b, pos: end };
-    if let Ok((machine, pos)) = read_gen_reg_tail(&mut tail, bus.0, &v) {
-        c.pos = pos;
-        return Ok((machine, true));
+    // the 2021 era regulated record carries. Whether the tail is there is a
+    // property of the writer, so it is decided for the whole table by which
+    // reader walks it, not per record: a table walked as tailed requires the
+    // tail on every record and fails otherwise, and a table walked as plain
+    // never consumes it. Probing per record would let bytes that happen to
+    // match the tail consume six bytes on one record and not its neighbours,
+    // and the next record's resync scan starts from the previous record's
+    // end, so a chance match would move the accepted table itself.
+    if !require_tail {
+        return Ok(gen_from_block(bus, &v, true));
     }
-    Ok((gen_from_block(bus, &v, true), false))
+    let (machine, pos) = read_gen_reg_tail(c, bus.0, &v)?;
+    c.pos = pos;
+    Ok(machine)
 }
 
 /// The eight consecutive f32 per unit values both generator record eras
@@ -2153,6 +2172,60 @@ fn read_legacy_branch_tail(c: &mut Cur<'_>, tail_start: usize) -> Probe<(&'stati
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One plain generator record: `bus`, a two character ID, two flag
+    /// bytes, then the eight f32 block at +9. `tail` appends the validated
+    /// status tail, whose status byte the caller chooses.
+    fn gen_record(tail: Option<u8>) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.push(2);
+        bytes.extend_from_slice(b"G1");
+        bytes.extend_from_slice(&[0, 0]);
+        for value in [10.0f32, 0.0, 50.0, -50.0, 1.0, 100.0, 80.0, 0.0] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        if let Some(status) = tail {
+            bytes.push(0);
+            bytes.push(status);
+            bytes.extend_from_slice(&50.0f32.to_le_bytes());
+        }
+        bytes.extend_from_slice(&[0xff; 8]);
+        bytes
+    }
+
+    /// The tail is the writer's property, so it is decided for the whole
+    /// table by which reader walks it. The plain reader ends every record at
+    /// the f32 block whatever follows, which keeps the next record's resync
+    /// scan starting from the same place; the tailed reader refuses a record
+    /// without the tail, so a table it accepts carries the status on every
+    /// machine.
+    #[test]
+    fn the_generator_status_tail_is_a_table_decision_not_a_per_record_probe() {
+        let ids = BusIdSet::Bitmap(vec![0b10]);
+        let block_end = 9 + 32;
+
+        let plain = gen_record(None);
+        let tailed = gen_record(Some(0x09));
+
+        for bytes in [&plain, &tailed] {
+            let (machine, end) = read_gen_record_plain(bytes, 0, &ids).unwrap();
+            assert_eq!(end, block_end, "the plain reader consumes no tail");
+            assert!(machine.in_service, "an unlocated status reads as closed");
+        }
+
+        assert!(
+            read_gen_record_tailed(&plain, 0, &ids).is_err(),
+            "the tailed reader refuses a record that carries no tail"
+        );
+        let (machine, end) = read_gen_record_tailed(&tailed, 0, &ids).unwrap();
+        assert_eq!(end, block_end + 6, "the tailed reader consumes the tail");
+        assert!(machine.in_service, "status bit 0 set is a closed machine");
+
+        let open = gen_record(Some(0x08));
+        let (machine, _) = read_gen_record_tailed(&open, 0, &ids).unwrap();
+        assert!(!machine.in_service, "status bit 0 clear is an open machine");
+    }
 
     #[test]
     fn the_retention_ceiling_kills_runs_and_reports_exhaustion() {
