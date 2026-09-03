@@ -309,3 +309,32 @@ fn rejects_non_display_inputs() {
     assert_eq!(display.stamp, 0xa83c);
     assert!(display.substations.is_empty());
 }
+
+/// A display header can carry a canvas title, which shifts the per file
+/// stamp past the title text: the fixed offset an untitled save puts it at
+/// then holds title bytes and reads as a zero stamp, and the reader refused
+/// such a file as unrecognized. The same save with a title inserted decodes
+/// to the same substations, since the stamp is only an anchor and every
+/// drawing record repeats it.
+#[test]
+fn a_titled_display_header_finds_the_stamp_past_its_title() {
+    let bytes = fs::read(common::powerworld_vendored("ACTIVSg200.pwd")).unwrap();
+    let untitled = __parse_pwd(&bytes).unwrap();
+    assert!(!untitled.is_empty());
+
+    let title = b"CANVAS";
+    let mut titled = Vec::with_capacity(bytes.len() + title.len());
+    titled.extend_from_slice(&bytes[..10]);
+    titled.extend_from_slice(&u16::try_from(title.len()).unwrap().to_le_bytes());
+    titled.extend_from_slice(&bytes[12..14]);
+    titled.extend_from_slice(title);
+    titled.extend_from_slice(&bytes[14..]);
+
+    assert_eq!(__parse_pwd(&titled).unwrap(), untitled);
+    let display = __parse_pwd_display(&titled).unwrap();
+    let plain = __parse_pwd_display(&bytes).unwrap();
+    assert_eq!(
+        (display.canvas_width, display.canvas_height),
+        (plain.canvas_width, plain.canvas_height)
+    );
+}

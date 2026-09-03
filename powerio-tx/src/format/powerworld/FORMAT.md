@@ -501,12 +501,20 @@ June 2016 through 2022 writer eras. Every other drawing object type (buses,
 branch pies, transmission lines, field labels), the palettes, fonts,
 layers, and the substation record style tails stay undecoded.
 
-Header: u32 = 50, two u16 canvas dimensions, then a fixed shape block. The
-u32 at offset 22 is a per file stamp that every drawing object record
-repeats at +18 — the anchor the record scan keys on. A correction to the
-earlier probe notes: the type name list behind "Previous Select By
-Criteria Set Used" in 2017+ saves is the object type list of that dialog's
-last use (UI state), not a registry of the record types in the file
+Header: u32 = 50, two u16 canvas dimensions, a u16 = 10070, then an optional
+canvas title (a u16 length at offset 10, a zero u16, the text) and eight zero
+bytes, then a per file stamp that every drawing object record repeats at +18,
+then a u32 = 10105. The stamp is the anchor the record scan keys on. Every
+earlier probed save carries no title, which puts the stamp at offset 22, so
+the reader read it there; a titled save puts title text at 22 instead, which
+reads as a zero stamp, and the reader refused such a file as an unrecognized
+header. The 10105 word one past the stamp pins which of the two positions
+holds it, so a titled save now parses. A header that does not have the title
+shape reads offset 22 unchanged.
+
+A correction to the earlier probe notes: the type name list behind "Previous
+Select By Criteria Set Used" in 2017+ saves is the object type list of that
+dialog's last use (UI state), not a registry of the record types in the file
 (ACTIVSg200.pwd lists only DisplaySubstation yet draws eight plus types);
 the decoder takes nothing from it, and the June 2016 save has none.
 
