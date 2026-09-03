@@ -2205,18 +2205,34 @@ mod tests {
         }
     }
 
+    /// A CGMES BaseVoltage states a positive nominal voltage and a per-unit
+    /// only case states none, so the substituted kilovolt is declared. It is
+    /// the value PowSybl's own MATPOWER importer uses for a bus row with
+    /// `BASE_KV = 0`, and it returns the same per-unit model because a reader
+    /// divides by the same nominal voltage the writer multiplied by.
     #[test]
-    fn emission_rejects_unknown_voltage_bases_instead_of_inventing_one_kv() {
-        let mut invalid_bus = network();
-        invalid_bus.buses_mut()[0].base_kv = 0.0;
-        let error = write::write_cgmes(&invalid_bus, CgmesVersion::V3_0).unwrap_err();
-        assert!(error.to_string().contains("bus 1"));
-        assert!(error.to_string().contains("base_kv 0"));
+    fn emission_substitutes_and_declares_an_unstated_voltage_base() {
+        let mut unstated_bus = network();
+        unstated_bus.buses_mut()[0].base_kv = 0.0;
+        let files = write::write_cgmes(&unstated_bus, CgmesVersion::V3_0).unwrap();
+        let messages = files
+            .warnings
+            .iter()
+            .map(|record| record.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(
-            error
-                .to_string()
-                .contains("requires an exact positive voltage base")
+            messages.contains("1 bus(es) state no nominal voltage"),
+            "{messages}"
         );
+        assert!(messages.contains("bus 1"), "{messages}");
+        let eq = files
+            .files
+            .iter()
+            .find(|(name, _)| name.contains("_EQ"))
+            .map(|(_, text)| text.as_str())
+            .unwrap();
+        assert!(eq.contains("<cim:BaseVoltage.nominalVoltage>1</cim:BaseVoltage.nominalVoltage>"));
 
         let mut missing_topological_node_base = detailed_network();
         let detailed = Arc::make_mut(

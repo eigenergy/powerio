@@ -3788,16 +3788,23 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             "network validation failed before CGMES emission: {error}"
         ))
     })?;
-    if let Some(bus) = net
-        .buses()
-        .iter()
-        .find(|bus| !bus.base_kv.is_finite() || bus.base_kv <= 0.0)
-    {
-        return Err(emission_error(format!(
-            "bus {} has nonpositive or nonfinite base_kv {}; CGMES emission requires an exact positive voltage base",
-            bus.id, bus.base_kv
-        )));
-    }
+    // A CGMES BaseVoltage states a positive nominal voltage, and a per-unit
+    // only case states none. The substitution keeps the per-unit model exact,
+    // and the diagnostic below names the buses it applied to.
+    let unstated_nominal_voltage = crate::format::unstated_nominal_voltage(net);
+    let unbounded_reactive_limits = crate::format::unbounded_reactive_limits(net);
+    let prepared =
+        (unstated_nominal_voltage.is_some() || unbounded_reactive_limits > 0).then(|| {
+            let mut prepared = net.clone();
+            for bus in prepared.buses_mut() {
+                if !crate::format::states_nominal_voltage(bus) {
+                    bus.base_kv = crate::format::SUBSTITUTE_NOMINAL_KV;
+                }
+            }
+            crate::format::substitute_unbounded_reactive_limits(&mut prepared);
+            prepared
+        });
+    let net = prepared.as_ref().unwrap_or(net);
     if let Some(level) = net.detailed_connectivity().as_deref().and_then(|detailed| {
         detailed
             .voltage_levels
@@ -3816,6 +3823,23 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         p,
         warnings: CgmesDiagnostics::new(&codes::EMIT_CGMES.record_dropped),
     };
+    if unbounded_reactive_limits > 0 {
+        w.warnings.push_as(
+            &codes::EMIT_CGMES.value_substituted,
+            format!(
+                "{unbounded_reactive_limits} unbounded reactive limit(s) written as the largest finite double: a CGMES SynchronousMachine states minQ and maxQ as numbers and has no spelling for an absent bound, which is how PowSybl states one"
+            ),
+        );
+    }
+    if let Some((count, buses)) = &unstated_nominal_voltage {
+        w.warnings.push_as(
+            &codes::EMIT_CGMES.value_substituted,
+            format!(
+                "{count} bus(es) state no nominal voltage; a CGMES BaseVoltage requires one, so each was written at {} kV, on which the ohm, siemens, and kV values are computed: bus {buses}",
+                crate::format::SUBSTITUTE_NOMINAL_KV,
+            ),
+        );
+    }
     let detailed = net.detailed_connectivity().as_deref();
     let retained_metadata = retained_identified_metadata(detailed, &mut w.warnings);
     if let Some(detailed) = detailed {
@@ -4571,11 +4595,12 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         eq.open("Terminal", &id, false);
         eq.reference("Terminal.ConductingEquipment", owner);
         eq.text("ACDCTerminal.sequenceNumber", seq);
-        if record.is_none_or(|record| {
+        let states_connectivity_node = record.is_none_or(|record| {
             detailed.is_none_or(|detailed| {
                 terminal_uses_connectivity_node(detailed, record, project_mixed_topology)
             })
-        }) {
+        });
+        if states_connectivity_node {
             eq.reference(
                 "Terminal.ConnectivityNode",
                 &connectivity_node_mrid(detailed, record, bus, project_mixed_topology),
@@ -4583,7 +4608,13 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         }
         eq.close("Terminal");
         let terminal_connected = record.map_or(connected, |value| value.connected);
-        if terminal_connected {
+        // A terminal that states no connectivity node states its topological
+        // node even while disconnected. The TP profile groups the connected
+        // terminals, but an equipment whose terminals name no node at all
+        // states no location and no reader can place it; the switching state
+        // rides `ACDCTerminal.connected`, `Equipment.inService`, and
+        // `SvStatus.inService` instead.
+        if terminal_connected || !states_connectivity_node {
             tp.open("Terminal", &id, true);
             tp.reference(
                 "Terminal.TopologicalNode",
@@ -6758,6 +6789,15 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 );
             }
         }
+        // A group id that names one group in the document identifies it, and
+        // a CGMES source's group ids are its own mRIDs. An id that repeats
+        // names none of them on its own: XIIDM states one selected group name
+        // per branch, so a network read from XIIDM has the same name on every
+        // one, and the derived mRID takes the equipment and terminal with it.
+        let mut group_id_uses = HashMap::<&str, usize>::new();
+        for group in &detailed.operational_limit_groups {
+            *group_id_uses.entry(group.id.as_str()).or_default() += 1;
+        }
         for group in &detailed.operational_limit_groups {
             let Some(owner) = equipment_mrid(net, Some(detailed), &group.equipment) else {
                 w.warnings.push(format!(
@@ -6773,11 +6813,12 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 ));
                 continue;
             }
-            let set = mrid_or(
-                "source_limit_set",
-                &format!("{}:{}:{}", group.equipment, group.terminal, group.id),
-                Some(&group.id),
-            );
+            let identity = if group_id_uses.get(group.id.as_str()) == Some(&1) {
+                group.id.clone()
+            } else {
+                format!("{}:{}:{}", group.equipment, group.terminal, group.id)
+            };
+            let set = mrid_or("source_limit_set", &identity, Some(&identity));
             let mut emits = group.current_limits.is_some();
             if v3 {
                 emits |=

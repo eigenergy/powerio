@@ -803,6 +803,89 @@ pub(crate) fn id_from_f64(
     }
 }
 
+/// The nominal voltage a writer states for a bus whose source case declares
+/// none.
+///
+/// XIIDM and CGMES state impedances in ohms and voltages in kV, so every
+/// voltage level carries a positive nominal voltage; a case that works only in
+/// per unit (a MATPOWER bus row with `BASE_KV = 0`) states none. One
+/// substituted kilovolt keeps every derived ohm, siemens, and kV value finite
+/// and returns the same per-unit model, because a reader divides by the same
+/// nominal voltage the writer multiplied by.
+pub(crate) const SUBSTITUTE_NOMINAL_KV: f64 = 1.0;
+
+/// Whether a bus states a nominal voltage an absolute unit format can carry.
+pub(crate) fn states_nominal_voltage(bus: &crate::network::Bus) -> bool {
+    bus.base_kv.is_finite() && bus.base_kv > 0.0
+}
+
+/// The ids of the buses that state no nominal voltage, as the diagnostic
+/// spells them: at most five, then an ellipsis.
+pub(crate) fn unstated_nominal_voltage(network: &BalancedNetwork) -> Option<(usize, String)> {
+    let ids = network
+        .buses()
+        .iter()
+        .filter(|bus| !states_nominal_voltage(bus))
+        .map(|bus| bus.id.to_string())
+        .collect::<Vec<_>>();
+    if ids.is_empty() {
+        return None;
+    }
+    let shown = ids.iter().take(5).map(String::as_str).collect::<Vec<_>>();
+    let ellipsis = if ids.len() > shown.len() { ", ..." } else { "" };
+    Some((ids.len(), format!("{}{ellipsis}", shown.join(", "))))
+}
+
+/// How many reactive limits state no bound.
+///
+/// A format that states no reactive limits at all (a PyPSA generator CSV) is
+/// read as unbounded, and an absolute unit format states each limit as a
+/// number.
+pub(crate) fn unbounded_reactive_limits(network: &BalancedNetwork) -> usize {
+    let generators = network
+        .generators()
+        .iter()
+        .flat_map(|generator| [generator.qmin, generator.qmax]);
+    let storage = network
+        .storage()
+        .iter()
+        .flat_map(|storage| [storage.qmin, storage.qmax]);
+    let hvdc = network
+        .hvdc()
+        .iter()
+        .flat_map(|line| [line.qminf, line.qmaxf, line.qmint, line.qmaxt]);
+    generators
+        .chain(storage)
+        .chain(hvdc)
+        .filter(|value| value.is_infinite())
+        .count()
+}
+
+/// Replace an unbounded reactive limit with the largest finite double, which
+/// is how PowSybl states an unbounded limit
+/// (`MinMaxReactiveLimitsImpl(-Double.MAX_VALUE, Double.MAX_VALUE)`).
+pub(crate) fn substitute_unbounded_reactive_limits(network: &mut BalancedNetwork) {
+    fn bound(value: &mut f64) {
+        if value.is_infinite() {
+            *value = value.signum() * f64::MAX;
+        }
+    }
+    for generator in network.generators_mut() {
+        bound(&mut generator.qmin);
+        bound(&mut generator.qmax);
+    }
+    for storage in network.storage_mut() {
+        bound(&mut storage.qmin);
+        bound(&mut storage.qmax);
+    }
+    for line in network.hvdc_mut() {
+        bound(&mut line.qminf);
+        bound(&mut line.qmaxf);
+        bound(&mut line.qmint);
+        bound(&mut line.qmaxt);
+    }
+}
+
 /// Reject a case with neither an AC calculation view nor physical DC equipment.
 /// XIIDM 1.17 permits a network containing only DC nodes and equipment, while
 /// the other balanced formats still need at least one bus.
