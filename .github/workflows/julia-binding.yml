@@ -22,10 +22,10 @@ name: Julia binding
 on:
   push:
     branches: [ "main" ]
-    paths: [ "powerio/**", "powerio-capi/**", "powerio-matrix/**", "powerio-dist/**", "powerio-prob/**", ".github/workflows/julia-binding.yml" ]
+    paths: [ "powerio/**", "powerio-core/**", "powerio-tx/**", "powerio-capi/**", "powerio-matrix/**", "powerio-dist/**", "powerio-prob/**", ".github/workflows/julia-binding.yml" ]
   # No branch filter: stacked PRs must run this too (see rust.yml).
   pull_request:
-    paths: [ "powerio/**", "powerio-capi/**", "powerio-matrix/**", "powerio-dist/**", "powerio-prob/**", ".github/workflows/julia-binding.yml" ]
+    paths: [ "powerio/**", "powerio-core/**", "powerio-tx/**", "powerio-capi/**", "powerio-matrix/**", "powerio-dist/**", "powerio-prob/**", ".github/workflows/julia-binding.yml" ]
 
 # One run per workflow per branch. A force push to a stacked pull request
 # otherwise leaves the superseded run going: it finishes, it fails or it

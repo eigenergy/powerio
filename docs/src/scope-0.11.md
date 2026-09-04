@@ -43,7 +43,7 @@ and PowerIO.jl. The independently checked boundaries are:
 
 | Boundary | Value at 0.11 | Checked where | Moves when |
 |---|---|---|---|
-| PowerIO release | 0.11.0 | manifests, `powerio.versions()`, `build_info` | every release |
+| PowerIO release | 0.11.0 | manifests, `powerio.versions()`, `pio_version` | every release |
 | C ABI | 7 | `pio_abi_version` handshake at load | an existing C signature or documented behavior changes |
 | PowerIO IR | 0.11.0 | the stored document header | every release, matching the `powerio` crate version; a build reads its compatible line up to its own version |
 | matrix Arrow tables | append only, no separate number | the Arrow catalog report, stamped with the PowerIO release version | an existing table's identity or column order would change (a removed table's id is burned, never reused) |

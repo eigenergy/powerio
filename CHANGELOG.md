@@ -25,10 +25,14 @@ public dependency boundaries.
 
 PowerIO IR has one document shape per release: `"schema": "powerio.module"`
 and `"version"` equal to the `powerio` crate version, beginning with
-`"0.11.0"`. A build reads every document a compatible release no newer than
-itself wrote, so 0.11.x documents stay readable across the line, and it refuses
-a newer document or a 0.10 document with the version named. Readers and upgrade
-code for earlier document generations are removed.
+`"0.11.0"`. A build reads every document a SemVer compatible release no newer
+than itself wrote, so a 0.11.x build reads the documents of every 0.11.x
+release up to its own, and it refuses a newer document or a 0.10 document with
+the version named. Readers and upgrade code for earlier document generations
+are removed.
+`powerio::IR_SCHEMA_NAME` re-exports `powerio_core::IR_SCHEMA_NAME`, so the
+document discriminator has one definition, and `powerio::IR_SCHEMA_ID` names
+the `$id` of the JSON Schema this build writes against.
 C ABI 7 is the only C ABI and contains no aliases for earlier ABI generations.
 
 `BalancedNetwork` and `MulticonductorNetwork` are the two electrical network

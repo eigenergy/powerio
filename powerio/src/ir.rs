@@ -16,9 +16,9 @@ pub(crate) fn ir_version_is_readable(version: &str) -> bool {
 }
 
 /// Whether a document stating `version` was written by a PowerIO release
-/// later than this build, so that upgrading is what makes it readable. An
-/// unreadable document that is not newer came from an earlier line and has to
-/// be regenerated instead.
+/// later than this build, so that upgrading is what makes it readable. Every
+/// other unreadable document — an earlier line, or a spelling no release
+/// wrote — has to be regenerated instead.
 pub(crate) fn ir_version_is_newer(version: &str) -> bool {
     match (
         parse_version(version),
@@ -30,28 +30,34 @@ pub(crate) fn ir_version_is_newer(version: &str) -> bool {
 }
 
 /// A document written by `document` is readable by a build at `reader` when
-/// the two versions are SemVer compatible and the reader is not the older.
+/// both sit on one compatible line and the reader is not the older.
 fn readable_by(document: &str, reader: &str) -> bool {
-    let (Some((major, minor, patch)), Some((reader_major, reader_minor, reader_patch))) =
-        (parse_version(document), parse_version(reader))
-    else {
+    let (Some(document), Some(reader)) = (parse_version(document), parse_version(reader)) else {
         return false;
     };
-    if major != reader_major {
-        return false;
-    }
-    if major == 0 {
-        minor == reader_minor && patch <= reader_patch
-    } else {
-        (minor, patch) <= (reader_minor, reader_patch)
+    compatible_line(document) == compatible_line(reader) && document <= reader
+}
+
+/// The releases a version promises compatibility with, as Cargo resolves it:
+/// the major line from 1.0 on, the `0.y` line below that, and at `0.0.z`
+/// nothing but itself, where every patch may break the one before.
+fn compatible_line((major, minor, patch): (u64, u64, u64)) -> (u64, u64, u64) {
+    match (major, minor) {
+        (0, 0) => (0, 0, patch),
+        (0, minor) => (0, minor, 0),
+        (major, _) => (major, 0, 0),
     }
 }
 
-/// `MAJOR.MINOR.PATCH` as numbers. A prerelease, a build tag, or any other
-/// spelling is not a released PowerIO version and reads as none.
+/// `MAJOR.MINOR.PATCH` as numbers. A prerelease, a build tag, a leading zero,
+/// or any other spelling is not a released PowerIO version and reads as none.
 fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
     fn number(part: &str) -> Option<u64> {
-        (!part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+        // A leading zero is not SemVer, and the published schema pins `version`
+        // to one spelling, so accepting `0.11.00` would read as current a
+        // document that validating against the schema rejects.
+        let digits = !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
+        (digits && (part == "0" || !part.starts_with('0')))
             .then(|| part.parse().ok())
             .flatten()
     }
@@ -189,6 +195,10 @@ mod tests {
         assert!(!readable_by("1.3.0", "1.2.1"));
         assert!(!readable_by("0.11.0", "1.0.0"));
         assert!(!readable_by("2.0.0", "1.0.0"));
+        // Below 0.1 every patch is its own line, as Cargo resolves `^0.0.z`.
+        assert!(readable_by("0.0.2", "0.0.2"));
+        assert!(!readable_by("0.0.1", "0.0.2"));
+        assert!(!readable_by("0.0.2", "0.0.1"));
     }
 
     #[test]
@@ -203,6 +213,11 @@ mod tests {
             "",
             " 0.11.0",
             "0.11.+1",
+            // A leading zero is not SemVer, and the schema's `version` const
+            // names one spelling, so the reader may not accept a second.
+            "0.11.00",
+            "00.11.0",
+            "0.011.0",
         ] {
             assert!(!readable_by(spelling, "0.11.0"), "{spelling:?}");
         }

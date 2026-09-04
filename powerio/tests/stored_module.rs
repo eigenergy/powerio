@@ -403,10 +403,10 @@ fn unknown_semantic_fields_are_refused() {
 }
 
 /// The refusal names the version found and says what to do: a document from
-/// a newer build on this build's own line needs that newer PowerIO; a
-/// document from another line, or one that is not PowerIO IR, is regenerated.
+/// any later PowerIO release needs that newer build; a document from an
+/// earlier line, or one that is not PowerIO IR, is regenerated.
 #[test]
-fn only_compatible_powerio_ir_versions_are_accepted() {
+fn an_unreadable_powerio_ir_version_is_refused_with_the_remedy() {
     let header = |version: serde_json::Value| {
         serde_json::json!({ "schema": powerio::IR_SCHEMA_NAME, "version": version }).to_string()
     };
@@ -457,6 +457,7 @@ fn only_compatible_powerio_ir_versions_are_accepted() {
     .to_string();
     let error = deserialize_module_text(&text).unwrap_err().to_string();
     assert!(error.contains("someone.else"), "{error}");
+    assert!(error.contains("regenerate this one"), "{error}");
 }
 
 // ---- the remaining promoted kinds round trip ---------------------------------

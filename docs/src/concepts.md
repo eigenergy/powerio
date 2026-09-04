@@ -155,5 +155,6 @@ support. It describes formats; value types are named by `PioValue` and its
 language counterparts.
 
 PowerIO IR is separate: `serialize` and `deserialize` preserve PowerIO types
-and module records. It has one 1.0 document shape and is absent from grid
-exchange format discovery.
+and module records. It has one document shape per release, which a build reads
+back across its own compatible line, and is absent from grid exchange format
+discovery.

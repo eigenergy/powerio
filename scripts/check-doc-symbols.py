@@ -4,7 +4,7 @@ exist on the surfaces that ship. A rendered page with a dead symbol fails.
 
 Checked shapes:
 - C symbols (`pio_*`) in active pages exist in the installed header; the
-  1.0 beta migration inventory may name removed ones.
+  0.10-to-0.11 migration inventory may name removed ones.
 - CLI invocations in shell fences use real subcommands.
 - Julia identifiers in julia fences that PowerIO.jl exports; needs POWERIO_JL
   naming a checkout, else skipped.

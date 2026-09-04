@@ -109,8 +109,8 @@ if hits=$(rg -n "$retired" "${surface_paths[@]}" 2>/dev/null); then
   exit 1
 fi
 
-# Retired diagnostic namespaces must not return. PowerIO IR has one current
-# reader and no exceptions for earlier documents.
+# Retired diagnostic namespaces must not return. PowerIO IR has one reader,
+# which reads only its own compatible release line.
 if hits=$(rg -n '\bLOWER\.[A-Z_]+' "${public_paths[@]}" 2>/dev/null); then
   echo "retired diagnostic namespace:"
   echo "$hits"

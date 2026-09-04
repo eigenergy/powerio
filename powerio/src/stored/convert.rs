@@ -101,10 +101,10 @@ fn is_readable(schema: &str, version: &str) -> bool {
     schema == crate::IR_SCHEMA_NAME && crate::ir::ir_version_is_readable(version)
 }
 
-/// The refusal for a header naming a schema or version this build does not
-/// read. It states what was found and what to do about it: a document a newer
-/// compatible PowerIO wrote needs that newer reader; anything else is
-/// regenerated from its source data.
+/// The refusal for a schema or version this build does not read. It states
+/// what was found and what to do about it: a document a later PowerIO release
+/// wrote needs that newer reader; anything else is regenerated from its
+/// source data.
 fn unsupported(schema: &str, version: &str) -> powerio_core::Error {
     let this = crate::IR_SCHEMA_VERSION;
     let guidance = if schema == crate::IR_SCHEMA_NAME && crate::ir::ir_version_is_newer(version) {

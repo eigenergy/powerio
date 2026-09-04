@@ -80,8 +80,8 @@ pub use powerio_core::IR_SCHEMA_NAME;
 ///
 /// Beginning with PowerIO 0.11.0, the IR version is the `powerio` crate
 /// version, and [`deserialize`] reads every document a SemVer compatible
-/// build no newer than this one wrote: the same major version, and on the
-/// `0.y` line the same minor version, with a patch no later than this build's.
+/// build no newer than this one wrote: the same major version from 1.0 on,
+/// and on the `0.y` line that is the same minor version as well.
 /// PowerIO 0.11.3 reads the documents of 0.11.0 through 0.11.3 and refuses
 /// 0.10.0, 0.12.0, and 0.11.4, naming the version it found. The compatible
 /// line therefore stays additive, and an older build never misreads a newer
