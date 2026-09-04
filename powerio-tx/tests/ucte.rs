@@ -693,18 +693,11 @@ FNODE111 FNODE221 1 0 400.0 220.0 500.0 0.5000 20.000 0.000000 0.0000 1000\n\
     let phase_only = &phase_only.value().branches()[0];
     // Ratio 1.1 from the phase part; dy = 3 * 2 % at 90 degrees.
     let dy = 0.06_f64;
-    assert!(
-        (both.shift - dy.atan2(1.1).to_degrees()).abs() < 1e-9,
-        "{}",
-        both.shift
-    );
+    // The values are not formatted into the failure text: CodeQL follows
+    // the branch's `uid` into every field and reports the message as a log.
+    assert!((both.shift - dy.atan2(1.1).to_degrees()).abs() < 1e-9);
     let expected_ratio = dy.hypot(1.1) / 1.1;
-    assert!(
-        (both.tap / phase_only.tap - expected_ratio).abs() < 1e-9,
-        "{} vs {}",
-        both.tap,
-        phase_only.tap
-    );
+    assert!((both.tap / phase_only.tap - expected_ratio).abs() < 1e-9);
 }
 
 /// A branch carrying a shift and a voltage control writes both parts of one
@@ -738,8 +731,8 @@ fn a_shift_beside_a_voltage_control_round_trips() {
     assert!(fresh.text.contains("SYMM"), "{}", fresh.text);
     let reread = parse_ucte_text("both.uct", &fresh.text);
     let branch = &reread.value().branches()[0];
-    assert!((branch.shift - 5.0).abs() < 1e-3, "{}", branch.shift);
-    assert!((branch.tap - 1.05).abs() < 1e-3, "{}", branch.tap);
+    assert!((branch.shift - 5.0).abs() < 1e-3);
+    assert!((branch.tap - 1.05).abs() < 1e-3);
     assert!(
         branch
             .control
