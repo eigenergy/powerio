@@ -14,9 +14,11 @@ CI denies clippy warnings and requires Rust code formatted for edition 2024.
 The clippy script covers the feature combinations used by CI, including the
 Python extension and optional C surfaces.
 
-Python bindings: `maturin develop` against `powerio-py`, then
-`pytest python/tests`. See the
-[Python guide](https://eigenergy.github.io/powerio/guide/python.html).
+Python bindings: build a wheel from the repository root with
+`maturin build --release -o dist`, install it into a virtual environment, and
+run `pytest python/tests`. An editable install is shadowed by the `powerio/`
+crate directory when pytest runs from the root. See
+[Testing and release checks](https://eigenergy.github.io/powerio/guide/contributor-workflow.html).
 
 ## C ABI changes
 
@@ -34,8 +36,8 @@ is what catches a reordered argument, a changed type, or a struct field, and
 runs once. A breaking change to an existing `pio_*` signature bumps
 `PIO_ABI_VERSION` (in `powerio-capi/src/lib.rs`; the header `#define` follows
 from regeneration) and requires a lockstep PowerIO.jl release targeting the new
-version. Additive symbols don't bump it. The history is in
-`powerio-capi/README.md`.
+version. Additive symbols don't bump it. The changelog records each ABI
+generation.
 
 ## Releasing
 
@@ -43,11 +45,15 @@ The release version lives in `[workspace.package]` and the workspace dependency
 pins in `[workspace.dependencies]`. Update them together; the next Cargo command
 updates `Cargo.lock`. Then:
 
-1. Merge the bump, tag the commit `vX.Y.Z`, push the tag. The release-binaries
-   workflow builds the C ABI tarballs and stages a draft GitHub release.
+1. Merge the bump with a `CHANGELOG.md` section headed exactly `## X.Y.Z`,
+   tag the commit `vX.Y.Z`, and push the tag. The release-binaries workflow
+   checks the tag against the workspace version and that heading, builds the
+   C ABI tarballs, and stages a draft GitHub release whose body is that
+   section.
 2. Publish the draft release. The release event fires the PyPI publish
-   (python.yml) and the crates.io publish (crates.yml: powerio-core, powerio,
-   powerio-dist, powerio-matrix, powerio-prob, powerio-cli, in dependency order). Both deploy
+   (python.yml) and the crates.io publish (crates.yml: powerio-core,
+   powerio-tx, powerio-dist, powerio-prob, powerio-matrix, powerio, and
+   powerio-cli, in dependency order). Both deploy
    through reviewer protected environments (`pypi`, `crates-io`; the protection
    lives in the repo settings). PyPI skips already-uploaded files and crates.io
    skips versions already in the index, so a partial failure is recovered by

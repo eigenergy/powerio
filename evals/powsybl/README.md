@@ -409,6 +409,6 @@ beside it. Decompress it before running the check.
 | Source counts | all 29 pinned table counts matched |
 | Field comparison | 29 tables, 445,332 row identities, 2,514,145 field values, no differences |
 | Validation | source and fresh both stop at load `HASTI3CD1` (`p0 is invalid`); the results match |
-| Diagnostics | `READ.XIIDM.VALUE_DEFAULTED` 10, `READ.XIIDM.VERSION.COMPATIBILITY` 3, `READ.XIIDM.CALCULATION_VIEW` 2; identical in the stored IR and the emission log |
+| Diagnostics | `READ.XIIDM.VALUE_DEFAULTED` 10, `READ.XIIDM.VERSION_COMPATIBILITY` 3, `READ.XIIDM.CALCULATION_VIEW` 2; identical in the stored IR and the emission log |
 | Failures | none |
 | Wall time | parse and serialize 231.1 s, deserialize and emit 21.7 s, PyPowSybl load 1.1 s source and 1.1 s fresh, total 255.0 s (debug build) |

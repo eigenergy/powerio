@@ -11,7 +11,7 @@ to it, and a `.pwd` lifts into a diagram space layer with substation targets.
 
 ```rust,ignore
 let module = powerio::parse("layer.geo.json")?;
-let powerio::PioValue::GeoLayer(layer) = &module.value else {
+let powerio::PioValue::GeoLayer(layer) = module.value() else {
     panic!("a layer document parses to powerio.GeoLayer");
 };
 
@@ -88,8 +88,8 @@ removes the raw keys from `extras`. Emission uses `location`.
 
 MATPOWER, PSS/E, PowerModels, egret, PSLF, and Surge carry no geometry.
 Emitting a located case to one of them reports the dropped locations, the same
-behavior `base_frequency` has; `powerio geo extract` writes the sidecar as the
-escape hatch.
+behavior `base_frequency` has; `powerio geo extract` writes the coordinates
+as a separate layer document instead.
 
 ## The geographic document
 
@@ -139,7 +139,7 @@ counts plus `unlocated_buses` and `unlocated_branches`, the elements that
 carry no geometry when the pass ends. The two together tell a layer that
 matched nothing from a model that needed nothing; `report.require_located()`
 is the strict caller's one line check. The multiconductor equivalents attach
-through `powerio::dist_geo` (`dist_geo_layer`, `apply_dist_geo_layer`). The CLI
+through `powerio::dist_geo` (`to_dist_geo_layer`, `apply_dist_geo_layer`). The CLI
 wraps the same surface:
 
 ```console

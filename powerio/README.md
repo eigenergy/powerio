@@ -1,8 +1,8 @@
 # powerio
 
-The PowerIO entry facade. `cargo add powerio` is the complete compiler: it
-re-exports the component crates and owns the dynamic value boundary, universal
-format dispatch, and the `.pio.json` stored document.
+The PowerIO entry facade. `cargo add powerio` is the complete surface: it
+re-exports the component crates and owns `PioValue`, format dispatch, and
+PowerIO IR.
 
 The component crates are usable on their own: `powerio-core` (sources,
 diagnostics, errors, modules), `powerio-tx` (the balanced transmission model

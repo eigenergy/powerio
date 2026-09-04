@@ -8,51 +8,46 @@
   >
 </p>
 
-PowerIO 0.11 incorporates the API corrections found while exercising the 0.10
-beta with external solver consumers. It is the stabilization line for the
-candidate 1.0 API: 0.11.x is reserved for compatible fixes, performance
-improvements, and additive work. PowerIO parses power system data into typed
-values, emits supported formats, and builds sparse matrices and graph data.
+PowerIO reads power system data into typed values, writes those values back
+out in the formats other tools read, and builds the sparse matrices and graph
+data that solvers consume. The core is Rust. The Python package, the Julia
+package [PowerIO.jl](https://github.com/eigenergy/PowerIO.jl), and the C ABI
+expose the same operations under the same names.
 
-A parse returns a `PioModule`: one typed value plus its sources, diagnostics,
-source map, and history. The value can be a network, calculation instance,
-solution, time series, or scenario set.
+A parse returns a `PioModule`: one typed value together with its sources,
+diagnostics, source map, and history. The value is a network, a calculation
+instance, a solution, a time series, a scenario set, or a geographic layer,
+depending on what the source declares.
 
 ## Install
 
 ```sh
-cargo add powerio
-pip install powerio
+cargo add powerio                 # parsing, emission, PowerIO IR
+cargo add powerio -F matrix       # and sparse matrices, sensitivities, graph data
+pip install powerio               # pip install 'powerio[all]' adds SciPy, NetworkX, Polars
 julia -e 'using Pkg; Pkg.add("PowerIO")'
+cargo install powerio-cli         # the powerio command
 ```
-
-Optional Python dependencies are installed separately:
-
-```sh
-pip install 'powerio[matrix]'
-pip install 'powerio[graph]'
-pip install 'powerio[all]'
-```
-
-Install the command line program with `cargo install powerio-cli`.
 
 ## Parse and emit
 
 Rust:
 
 ```rust,ignore
-use powerio::PioValue;
-
 let module = powerio::parse("case9.m")?;
-let PioValue::BalancedNetwork(network) = &module.value else {
+let powerio::PioValue::BalancedNetwork(network) = module.value() else {
     panic!("expected a balanced network");
 };
 assert_eq!(network.buses().len(), 9);
-powerio::emit(&module, "matpower", "copy.m")?;
+powerio::emit(&module, "matpower", "copy.m")?;   // the source bytes, unchanged
+let result = powerio::emit(&module, "psse", "case9.raw")?;
+for finding in result.diagnostics() {
+    eprintln!("{}", finding.code());                // what PSS/E cannot carry
+}
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-Python uses the value's concrete type:
+Python:
 
 ```python
 import powerio
@@ -60,26 +55,24 @@ import powerio
 module = powerio.parse("case9.m")
 network = module.value
 assert isinstance(network, powerio.BalancedNetwork)
-module.diagnostics                 # native diagnostic records
-powerio.emit(module, "matpower", "copy.m")  # byte exact same format emission
+module.diagnostics                          # the reader's findings
+powerio.emit(module, "matpower", "copy.m")  # the source bytes, unchanged
+result = powerio.emit(module, "psse")       # text in memory plus findings
 ```
 
-Pass a file object for text already in memory and a bytes-like object for
-binary data. A Python `str` names a path.
-
-Julia uses multiple dispatch on the typed value:
+Julia:
 
 ```julia
 using PowerIO
 
-module_ = parse("case9.m")          # PioModule{BalancedNetwork}
-network = module_.value
-length(network.buses)               # 9
+module_ = parse("case9.m")            # PioModule{BalancedNetwork}
+net = module_.value
+length(net.buses)                     # 9
 module_.diagnostics
 emit(module_, "matpower", "copy.m")
 ```
 
-The command line interface uses the same parsers and emitters:
+Command line:
 
 ```sh
 powerio convert case9.m --to psse -o case9.raw
@@ -88,79 +81,79 @@ powerio verify case9.m --kind bdoubleprime
 powerio sensitivities case9.m -o out
 ```
 
-An unchanged module emits its source format byte for byte. Cross format
-conversion keeps what the destination can represent and returns a diagnostic
-for each loss. `serialize` writes PowerIO IR and `deserialize` reads it. The IR
-does not replace grid exchange formats such as MATPOWER, PSS/E, or OpenDSS.
+Writing an unchanged module back to its own format reproduces the source byte
+for byte. Writing another format keeps what that format can state and reports
+each loss as a diagnostic with a stable code. `serialize` and `deserialize`
+move PowerIO IR, the JSON document that carries a complete module between
+PowerIO consumers; it is not a grid exchange format.
 
-## Supported values and formats
+## Formats
 
-Balanced network formats:
+| Format | Token | Read | Write |
+|---|---|---|---|
+| MATPOWER `.m` | `matpower` | yes | yes |
+| PSS/E RAW | `psse`, `psse34`, `psse35` | revisions 32 to 35 | 33, 34, 35 |
+| PSS/E RAWX | `psse-rawx` | revision 35 | 35 |
+| PowSybl XIIDM | `xiidm` | 1.0 to 1.17 | 1.17 |
+| PowSybl JIIDM | `jiidm` | 1.0 to 1.17 | 1.17 |
+| CIM CGMES profile set | `cgmes` | 2.4.15, 3.0 | 3.0 |
+| ENTSO-E UCTE-DEF `.uct` | `ucte` | 2003.09.01, 2007.05.01 | 2007.05.01 |
+| PowerWorld `.aux` | `powerworld` | yes | yes |
+| PowerWorld `.pwb` | `pwb` | yes | no |
+| PowerWorld `.pwd` display | `powerworld-pwd` | as a geographic layer | no |
+| GE PSLF `.epc` | `pslf` | yes | yes |
+| IEEE Common Data Format | `ieee-cdf` | yes | no |
+| PowerModels JSON | `powermodels-json` | yes | yes |
+| Egret JSON | `egret-json` | yes | yes |
+| pandapower JSON | `pandapower-json` | yes | yes |
+| PyPSA CSV directory | `pypsa-csv` | yes | yes |
+| Surge JSON | `surge-json` | yes | yes |
+| GridFM Parquet directory | `gridfm` | yes | yes |
+| DOE GO Challenge 3 JSON | `goc3-json` | problem, or problem with solution | a complete solution |
+| DeepMind OPFData JSON | `opfdata-json` | yes | no |
+| OpenDSS `.dss` | `dss` | yes | yes |
+| PowerModelsDistribution engineering JSON | `pmd-json` | yes | yes |
+| BMOPF JSON | `bmopf-json` | 0.1.0, 0.2.0 | 0.2.0 |
+| Geographic layer `.geo.json` | `geo-json` | yes | yes |
 
-- MATPOWER `.m`
-- PSS/E `.raw` revisions 32 through 35; fresh output uses 33, 34, or 35
-- PSS/E RAWX JSON revision 35
-- PowSybl XIIDM XML and JIIDM JSON 1.0 through 1.17; fresh output uses 1.17
-- CIM CGMES 2.4.15 and 3.0 profile sets; fresh output uses CGMES 3.0
-- ENTSO-E UCTE-DEF `.uct` revisions 2003.09.01 and 2007.05.01; fresh output uses 2007.05.01
-- PowerWorld `.aux`; `.pwb` is read only and `.pwd` uses the display API
-- GE PSLF `.epc`
-- IEEE Common Data Format (`ieee-cdf`), read only
-- PowerModels JSON
-- Egret JSON
-- pandapower JSON
-- PyPSA CSV directories
-- Surge JSON
+Balanced transmission formats parse to `BalancedNetwork`; OpenDSS, PMD, and
+BMOPF parse to `MulticonductorNetwork`. A GO Challenge 3 problem parses to
+`AcScucInstance`, a problem with its solution to `AcScucSolution`, an OPFData
+file to `AcOpfSolution`, a GridFM dataset to `ScenarioSet<BalancedNetwork>`,
+and a PyPSA directory with several snapshots to a `TimeSeries`. The
+[format guide](https://eigenergy.github.io/powerio/guide/format-fidelity.html)
+states what each reader keeps, what each writer reports, and how each is
+checked against its reference implementation.
 
-Multiconductor distribution formats:
-
-- OpenDSS `.dss`
-- PowerModelsDistribution engineering JSON
-- IEEE BMOPF JSON
-
-Calculation and dataset inputs:
-
-- a DOE GO Challenge 3 problem data file produces `AcScucInstance`; the problem together with its matching solution data produces `AcScucSolution`, and complete solutions emit the official solution JSON shape
-- DeepMind OPFData JSON produces `AcOpfSolution`
-- GridFM Parquet produces `ScenarioSet<BalancedNetwork>`
-- Supported PyPSA and Egret profiles can produce typed time series
-
-[Formats and Fidelity](docs/src/format-fidelity.md) lists
-the supported profile and write behavior for every format.
-
-## Package structure
+## Packages
 
 ```text
-powerio-core     Source, PioModule, diagnostics, time series, and output types
-powerio-tx       balanced transmission model, parsers, and emitters
-powerio-dist     multiconductor distribution model and format support
-powerio-prob     operating points, calculation instances, and solutions
-powerio-matrix   sparse matrices, sensitivities, and graph data
-powerio          entry facade, dynamic values, dispatch, and PowerIO IR
-powerio-capi     C ABI for C, C++, Julia, and other bindings
-powerio-py       native extension for the Python package
-powerio-cli      command line interface and terminal interface
+powerio-core     Source, PioModule, diagnostics, time series, scenario sets, destinations
+powerio-tx       BalancedNetwork and the balanced format readers and writers
+powerio-dist     MulticonductorNetwork and the OpenDSS, PMD, and BMOPF converters
+powerio-prob     operating points, updates, calculation instances, and solutions
+powerio-matrix   sparse matrices, sensitivities, the DC OPF bundle, and graph data
+powerio          the facade: PioValue, parse, emit, serialize, deserialize
+powerio-cli      the powerio command and its terminal interface
+powerio-py       the extension behind the Python package
+powerio-capi     C ABI 7 for C, C++, Julia, and other bindings
 ```
 
-`powerio-tx` and `powerio-dist` are independent and share `powerio-core`.
-`powerio-prob` is matrix free. `powerio-matrix` depends on the component crates,
-and the `powerio` facade provides the combined entry point without defining a
-preferred universal power system format.
+`powerio-tx` and `powerio-dist` share `powerio-core` and nothing else, so a
+distribution consumer pulls no transmission code. `powerio-prob` is matrix
+free. The `powerio` facade re-exports the component crates, and
+`powerio-matrix` behind its `matrix` feature.
 
 ## Documentation
 
-- [Guide](docs/src/README.md)
-- [Core concepts](docs/src/concepts.md)
-- [PowerIO intermediate representations](docs/src/architecture.md)
-- [Matrices and signs](docs/src/matrices.md)
-- [Rust, Python, Julia, and C](docs/src/languages.md)
-- [Python API](docs/src/python.md)
-- [C ABI](docs/src/capi.md)
+- [Guide](https://eigenergy.github.io/powerio/guide/)
+- [Core concepts](https://eigenergy.github.io/powerio/guide/concepts.html)
+- [Formats and fidelity](https://eigenergy.github.io/powerio/guide/format-fidelity.html)
+- [Matrices and graphs](https://eigenergy.github.io/powerio/guide/matrices.html)
+- [Rust, Python, Julia, and C](https://eigenergy.github.io/powerio/guide/languages.html)
+- [Rust API reference](https://eigenergy.github.io/powerio/powerio/)
 - [PowerIO.jl](https://eigenergy.github.io/PowerIO.jl)
-
-Migration notes, retired names, ABI history, internal crate rules, performance
-evidence, and release checks are under Developer Guides.
 
 ## License
 
-PowerIO is available under either the Apache License 2.0 or the MIT License.
+Apache License 2.0 or MIT License, at your option.

@@ -1,15 +1,11 @@
 # powerio-cli
 
-The `powerio` command converts formats, exports matrices and GridFM Parquet
-datasets, writes DC OPF bundles, generates synthetic cases, writes `.pio.json`
-documents, verifies matrices, and opens a ratatui interface.
-Transmission conversion covers MATPOWER, PSS/E RAW 32 through 35 input with
-fresh 33 through 35 output, PSS/E RAWX
-35, PowSybl XIIDM and JIIDM 1.0 through 1.17 input with fresh 1.17 output, CIM CGMES
-2.4.15 and 3.0, PowerWorld AUX, PSLF,
-PowerModels JSON, egret JSON, pandapower JSON, PyPSA CSV folders, GOC3 JSON,
-Surge JSON, and GridFM reads. Distribution conversion covers OpenDSS, PMD JSON,
-and BMOPF JSON.
+The `powerio` command converts formats, summarizes cases, writes PowerIO IR,
+exports matrices and GridFM Parquet datasets, writes DC OPF bundles and
+sensitivities, generates synthetic cases, extracts and applies geographic
+layers, runs the private corpus harness, and opens a terminal interface.
+It reads and writes every format in the
+[format table](https://github.com/eigenergy/powerio#formats).
 
 ```
 powerio convert tests/data/case14.m --to psse -o case14.raw

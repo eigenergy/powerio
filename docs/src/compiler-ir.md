@@ -20,7 +20,7 @@ PowerIO's design borrows from LLVM and MLIR where their problems genuinely overl
 
 **Typed representations at more than one abstraction level.** The value families span reusable networks, calculation instances, and solutions the way a compiler holds IR at several levels; nothing forces the richer levels through the poorer ones.
 
-**Explicit transformations with testable boundaries.** Every transformation names its input and output types, returns diagnostics, and refuses what it cannot represent. Balanced lowering exposes `to_balanced_report` so callers can inspect its assumptions and refusals before transforming a value. Nothing rewrites as a side effect. Format loss diagnostics belong to the `EmitResult` returned by `emit`.
+**Explicit transformations with testable boundaries.** Every transformation names its input and output types, returns diagnostics, and refuses what it cannot represent. Balanced lowering exposes `powerio::transform::to_balanced_report` so callers can inspect its assumptions and refusals before transforming a value. Nothing rewrites as a side effect. Format loss diagnostics belong to the `EmitResult` returned by `emit`.
 
 **Verification at representation boundaries.** Parsers and transformations verify what they produce and report findings rather than repairing silently; repairs are explicit operations that leave history records.
 

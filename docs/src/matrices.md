@@ -1,14 +1,14 @@
-# Matrix outputs and conventions
+# Matrices and graphs
 
 `powerio-matrix` calculates sparse matrices and graph data from parsed
 networks. Every numerical result carries the element mappings needed to read
 its rows and columns: source bus identifiers are not dense indices, and the
 dense `[0, n)` space exists only inside results that state their own mapping.
 
-`powerio-prob` owns the calculation instances (matrix free by design), and
-the matrix crate projects them into sparse operators. The DC OPF bundle schema is in
-[the DC OPF bundle guide](https://eigenergy.github.io/powerio/guide/dcopf-bundle.html). Calculation API detail is in the
-[crate docs](https://eigenergy.github.io/powerio/powerio_matrix/).
+`powerio-prob` owns the calculation instances and stays matrix free; the
+matrix crate projects them into sparse operators. The DC OPF bundle files are
+defined in [DC OPF bundle](dcopf-bundle.md). The Rust API is documented in the
+[crate reference](https://eigenergy.github.io/powerio/powerio_matrix/).
 
 ## Capabilities
 
@@ -29,6 +29,8 @@ the matrix crate projects them into sparse operators. The DC OPF bundle schema i
 | solver branch flow matrix | \\(m \times n\\) | `calc_solver_branch_flow_matrix` | positive solver susceptance magnitudes times \\(C^\mathsf{T}\\); internal solver data |
 | PTDF | \\(m \times n\\) | `calc_ptdf` | routes through `Auto` solver selection; `calc_ptdf_lodf_with_options` exposes the choice |
 | LODF | \\(m \times m\\) | `calc_lodf` | routes through `Auto` solver selection; option based builds can prune small output entries |
+| AC power flow Jacobian | \\(2n \times 2n\\) | `calc_power_flow_jacobian` | polar or rectangular voltage coordinates |
+| multiconductor admittance | conductor by conductor | `calc_multiconductor_admittance_matrix` | from a `MulticonductorNetwork`; Rust only in 0.11 |
 | adjacency | \\(n \times n\\) | `calc_adjacency_matrix` | sparse graph adjacency |
 | petgraph graph | n/a | `IndexedNetwork::to_petgraph` | `UnGraph<usize, usize>` |
 
@@ -46,9 +48,9 @@ be large. The sparse path requires positive finite internal factor weights
 reference coverage is checked; the dense path handles nonsingular indefinite
 cases.
 Every connected component must contain at least one reference bus. The DC OPF
-instance bundle (\\(A\\), \\(b\\), \\(L\\), costs, bounds, thermal limits,
-\\(C_g\\)) is produced by `powerio-prob` and documented in
-[the DC OPF bundle guide](https://eigenergy.github.io/powerio/guide/dcopf-bundle.html).
+bundle (\\(A\\), \\(b\\), \\(L\\), costs, bounds, thermal limits,
+\\(C_g\\)) is prepared from a `DcOpfInstance` and documented in
+[DC OPF bundle](dcopf-bundle.md).
 
 `Bp` and `Bpp` are the fast decoupled power flow matrices from MATPOWER
 `makeB`. Solvers reduce `Bp` to PV+PQ buses for active power mismatch to voltage
@@ -69,7 +71,8 @@ second public incidence API.
 
 ## GridFM datasets
 
-The GridFM export is a Parquet dataset under `<case>/raw/` with `bus_data`,
+GridFM reading and writing need the `gridfm` cargo feature, which the CLI and
+the Python wheel carry. The export is a Parquet dataset under `<case>/raw/` with `bus_data`,
 `gen_data`, `branch_data`, and `y_bus_data`. A single parsed case writes one
 scenario. A scenario batch row stacks snapshots that share the same element set
 and uses the `scenario` column as the key. Batch construction requires unique
@@ -146,8 +149,8 @@ edit has none of these findings.
   \\(A_s=A_{pm}^\mathsf{T}\\). It uses the positive factor weight \\(w=-b\\),
   so its sparse matrix is
   \\(L=A_s \operatorname{diag}(w) A_s^\mathsf{T}=-B\\). The two
-  orientations have separate names because transposing an incidence matrix
-  silently is not acceptable at a language boundary.
+  orientations carry separate names so that no language boundary transposes
+  an incidence matrix silently.
 
   The default `SeriesSusceptance` uses \\(b = -x/(r^2 + x^2)\\), so it reads the
   whole series impedance, plus the phase shift
@@ -159,8 +162,7 @@ edit has none of these findings.
 
   `ReactanceOnly` is the textbook \\(b = -1/x\\) with resistance, taps, and
   shifts ignored. The resulting \\(-B\\) matches MATPOWER `Bp` under
-  `Scheme::Xb` when phase shifts are zero. Reproducing a published result needs
-  it exactly as written, so it stays.
+  `Scheme::Xb` when phase shifts are zero.
 
 ## Output
 

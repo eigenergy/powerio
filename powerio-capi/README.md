@@ -22,6 +22,11 @@ scripts/capi-header-parity.sh
 scripts/capi-smoke.sh
 ```
 
+ABI 7 exports one fixed symbol set. The `gridfm` cargo feature adds GridFM
+Parquet support behind the same entry points; the other feature names the
+release build passes gate nothing. `pio_schema_report` states what a library
+was built with.
+
 ## Parse, inspect, and emit
 
 ```c
@@ -73,7 +78,8 @@ int main(void) {
 ```
 
 Use `pio_source_from_memory` for text or binary memory. A `PioSource` is the
-only parse input. `pio_parse` is the only grid exchange parse operation.
+parse input, and `pio_parse` is the grid exchange parse operation;
+`pio_geo_layer_parse` reads a geographic layer from text held in memory.
 For DOE GO Challenge 3, a directory containing the problem file parses to an
 `AcScucInstance`; add the matching solution file to that directory and the same
 call parses an `AcScucSolution`.

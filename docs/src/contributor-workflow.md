@@ -1,9 +1,7 @@
 # Testing and release checks
 
-Keep changes reviewable. A numerical semantics change needs tests and a short
-reason in code or docs. A performance change needs before and after
-measurements. A documentation change should link to evidence instead of
-expanding the README into a second manual.
+A numerical semantics change needs tests and a short reason in code or docs.
+A performance change needs before and after measurements.
 
 ## Baseline checks
 
@@ -11,17 +9,20 @@ expanding the README into a second manual.
 
 Point `POWERIO_JL` at a PowerIO.jl checkout to include the Julia binding suite against the freshly built library, or set `POWERIO_JL_OPTIONAL=1` to run without one.
 
-The Python binding tests need a wheel built into a virtual environment:
+The Python binding tests need a wheel built into a virtual environment. Build
+it from the repository root, where `pyproject.toml` lives:
 
 ```sh
 python3 -m venv .venv && source .venv/bin/activate
 pip install maturin pytest
-(cd powerio-py && maturin build -o ../dist)
+maturin build --release -o dist
 pip install dist/*.whl
 python -m pytest python/tests
 ```
 
-Install the built wheel; an editable install (`maturin develop`) is shadowed by the repo root `powerio/` crate directory.
+Install the built wheel. An editable install (`maturin develop`) is shadowed
+by the `powerio/` crate directory at the repository root when pytest runs
+from there.
 
 ## Route changes
 
@@ -60,12 +61,12 @@ bash scripts/ci-clippy.sh capi-release
 cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,prob
 scripts/capi-header-parity.sh
 scripts/capi-smoke.sh
-POWERIO_CAPI=$PWD/target/release/libpowerio_capi.dylib \
-  julia --project=../PowerIO.jl -e 'using Pkg; Pkg.test()'
+POWERIO_CAPI=$PWD/target/release/libpowerio_capi.so \
+  julia --project=../PowerIO.jl -e 'using Pkg; Pkg.test()'   # .dylib on macOS
 cargo bench -p powerio-matrix --bench matrix -- 'matrix_bprime|matrix_ybus|dcopf_'
 (cd evals/performance/asv && ../../../.venv/bin/asv check -E existing:../../../.venv/bin/python)
 (cd evals/performance/asv && ../../../.venv/bin/asv run --quick --show-stderr -E existing:../../../.venv/bin/python --dry-run)
-for target in matpower psse pslf json_classify powerworld_aux pwb pwd; do
+for target in $(cd fuzz && ls fuzz_targets | sed 's/\.rs$//'); do
   cargo +nightly fuzz run "$target" -- -runs=1
 done
 bash evals/validation/run_validation.sh
@@ -85,7 +86,7 @@ checks on a PowerIO `AcScucSolution` output document. Surge has no external
 validator in this harness; its Rust parser, writer, routing, stored module, and
 round trip tests provide its current evidence. What the independent checks
 prove, per format, is in the
-[format fidelity chapter](https://eigenergy.github.io/powerio/guide/format-fidelity.html).
+[format chapter](format-fidelity.md).
 
 The gates do not prove every source format field is lossless. Known losses are
 part of the public behavior and surface as warnings.
@@ -116,10 +117,11 @@ cd evals/performance/asv
 
 Do not update generated benchmark tables by hand. Update the snapshot
 environment described in the
-[performance guide](https://eigenergy.github.io/powerio/guide/performance.html)
+[performance page](performance.md)
 when publishing new numbers: commit, tree cleanliness, machine, OS, toolchain,
 Python stack, Julia stack, commands, fixtures, and optional local data.
 
 Broad local corpora stay local. Pass them through documented environment
-variables or `--root` flags, review the reports under `evals/validation/results/`, and
-do not commit corpus paths or generated outputs.
+variables or `--root` flags, review the reports the run writes under
+`evals/validation/results/`, and do not commit corpus paths or generated
+outputs.
