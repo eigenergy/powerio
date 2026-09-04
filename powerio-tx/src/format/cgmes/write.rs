@@ -6947,7 +6947,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
 
     for limit_type in &limit_types_used {
         let id = det_mrid("limittype", limit_type.label);
-        limit_doc.open("OperationalLimitType", &id, false);
+        limit_doc.named("OperationalLimitType", &id, limit_type.label);
         limit_doc.enumeration(
             "OperationalLimitType.direction",
             w.p.cim_ns,
@@ -6985,7 +6985,11 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         limit_doc.close("OperationalLimitType");
     }
     for value in source_limit_types {
-        limit_doc.open("OperationalLimitType", &value.id, false);
+        limit_doc.named(
+            "OperationalLimitType",
+            &value.id,
+            if value.infinite { "PATL" } else { "TATL" },
+        );
         limit_doc.enumeration(
             "OperationalLimitType.direction",
             w.p.cim_ns,

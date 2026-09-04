@@ -550,7 +550,7 @@ mod tests {
             .nth(1)
             .and_then(|text| text.split("</cim:OperationalLimitType>").next())
             .expect("a positive rate_a emits one limit type");
-        assert!(!permanent.contains("<cim:IdentifiedObject.name>"));
+        assert!(permanent.contains("<cim:IdentifiedObject.name>patl</"));
         assert!(!permanent.contains("acceptableDuration"), "{permanent}");
     }
 

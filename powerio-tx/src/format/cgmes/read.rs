@@ -5530,7 +5530,10 @@ fn synthesized_unmapped_property(class: &str, property: &str) -> bool {
     matches!(
         (class, property),
         ("GeneratingUnit", "Equipment.inService")
-            | ("OperationalLimitType", "OperationalLimitType.direction")
+            | (
+                "OperationalLimitType",
+                "IdentifiedObject.name" | "OperationalLimitType.direction"
+            )
             | (
                 "LinearShuntCompensator",
                 "ShuntCompensator.nomU" | "ShuntCompensator.normalSections"

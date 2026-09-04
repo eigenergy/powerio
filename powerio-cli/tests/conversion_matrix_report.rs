@@ -1073,11 +1073,12 @@ fn transmission_targets() -> impl Iterator<Item = (usize, TransmissionFormat)> {
 //   internal per-unit normalization without reporting a missing source datum.
 //   XIIDM emission reports a non-100 MVA IR base because conversion then
 //   changes the chosen normalization.
-// - A generated CGMES set omits names for operational-limit helper objects
-//   whose identities and names are derived output structure. Typed
-//   operational limit groups retain the loading values, durations, and names
-//   that affect the model. Third-party helper metadata still produces a
-//   diagnostic when no typed field can retain it.
+// - Generated CGMES operational-limit helper objects do not become source
+//   metadata on readback. Limit type objects keep the PATL or TATL name common
+//   importers require, while generated limit set objects omit an unrepresented
+//   display name. Typed groups retain loading values, durations, and names.
+//   Third-party helper metadata still produces a diagnostic when no typed
+//   field can retain it.
 // - CGMES retains every source Substation. XIIDM and JIIDM require the voltage
 //   levels at both transformer ends to share one substation, so their writers
 //   join only the output container groups and report that target-specific

@@ -217,11 +217,13 @@ parse warning that hides the cause.
   identity. Tap changer tables, tap controls and table points, reactive curve
   points, and individual limit values retain their electrical values and
   relationships but receive deterministic subordinate mRIDs on fresh emission.
-  PowerIO-generated operational-limit helper objects omit unrepresented names,
-  so their deterministic output structure does not become source metadata on
-  readback. A third-party subordinate identity or field without a typed record
-  still receives a diagnostic. The source neutral limit model retains permanent
-  and temporary limits. Fresh output therefore uses PATL and TATL; parsing
+  PowerIO-generated operational-limit helper objects do not become source
+  metadata on readback. Limit type objects keep the PATL or TATL name required
+  by common CGMES importers, while generated limit set objects omit an
+  unrepresented display name. A third-party subordinate identity or field
+  without a typed record still receives a diagnostic. The source neutral limit
+  model retains permanent and temporary limits. Fresh output therefore uses
+  PATL and TATL; parsing
   reports PATLT or TCT substitution and any fractional duration rounded to whole
   seconds. CGMES input retains every source `Substation`, including distinct
   substations joined by a transformer. XIIDM and JIIDM emission joins only the
