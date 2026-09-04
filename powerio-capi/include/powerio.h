@@ -2290,6 +2290,11 @@ PioModule *pio_parse(const PioSource *source,
 
 /**
  * Deserialize one PowerIO IR source.
+ *
+ * A document names the PowerIO release that wrote it, which
+ * `pio_schema_report` reports for this library. This library reads the
+ * documents of its own compatible release line no newer than itself and
+ * refuses any other through `error`, naming the version it found.
  */
 PioModule *pio_module_deserialize(const PioSource *source, PioError **error);
 

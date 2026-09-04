@@ -3532,6 +3532,11 @@ pub unsafe extern "C" fn pio_parse(
 }
 
 /// Deserialize one PowerIO IR source.
+///
+/// A document names the PowerIO release that wrote it, which
+/// `pio_schema_report` reports for this library. This library reads the
+/// documents of its own compatible release line no newer than itself and
+/// refuses any other through `error`, naming the version it found.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_deserialize(
     source: *const PioSource,
