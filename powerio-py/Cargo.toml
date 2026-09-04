@@ -19,9 +19,9 @@ crate-type = ["cdylib"]
 # Opt-in so `cargo test`/`cargo check -p powerio-py` don't link libpython.
 # maturin turns it on via pyproject `[tool.maturin] features`.
 extension-module = ["pyo3/extension-module"]
-# Compile in the gridfm-datakit Parquet writer (`Network.write_gridfm`,
-# `write_gridfm_batch`). The PyPI build enables this; custom local builds can
-# omit it when they need only parse/write/convert and sparse matrices.
+# Compile in the GridFM Parquet emitter behind `emit(module, "gridfm", ...)`.
+# The PyPI build enables this; custom local builds can omit it when they need
+# only parse, emit, and sparse matrices.
 gridfm = ["powerio-matrix/gridfm", "powerio/gridfm"]
 
 [dependencies]

@@ -191,6 +191,13 @@ crates.
 
 ### Bindings
 
+- The C header states the mutation contract: `pio_apply_updates` and
+  `pio_apply_bus_load_active_power` invalidate plain view structs read from the
+  module handle and require exclusive access to it. Handle payloads are
+  checked `Send + Sync` at compile time, bus specification readers return a
+  range error instead of panicking, and the unit and field name getters in C
+  and Python return `unknown` for a variant the build does not name instead of
+  aborting.
 - C ABI 7 replaces ABI 6 with no aliases for earlier generations and no
   Arrow export. Sources, destinations, modules, typed values, collections,
   diagnostics, artifacts, matrices, and vectors use opaque reference counted

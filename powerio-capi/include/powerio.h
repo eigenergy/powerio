@@ -12,7 +12,12 @@
  * Each opaque handle has retain and release functions. A child value,
  * network, collection entry, or artifact keeps its owner alive. Concurrent
  * immutable access is allowed; releasing one raw handle concurrently with a
- * call that uses that same raw handle is caller error.
+ * call that uses that same raw handle is caller error. pio_apply_updates and
+ * pio_apply_bus_load_active_power need exclusive access to their PioModule
+ * handle for the duration of the call, and they invalidate every plain
+ * Pio*View struct previously read from that handle; owner rooted handles
+ * stay valid. Every pointer a caller passes must be aligned for its type and
+ * must address at most PTRDIFF_MAX bytes.
  *
  * Every fallible operation reports through PioError **. A NULL error
  * parameter discards the error. Branch on pio_error_code, not on message
@@ -4085,8 +4090,12 @@ void pio_calculation_update_release(PioCalculationUpdate *update);
 /**
  * Apply a complete typed update batch atomically.
  *
- * Existing borrowed views keep the pre-update module alive. The module handle
- * detaches by copy on write before a successful change.
+ * Owner rooted handles obtained before the call (values, networks, collection
+ * entries, artifacts) keep the pre-update module alive. Plain view structs read
+ * from this module handle (`PioStringView`, `PioModuleSourceView`, history and
+ * source map views) are invalidated by a successful call and must be read
+ * again. The caller must hold exclusive access to `module` for the duration of
+ * the call: no concurrent call of any kind on this handle, including retain.
  */
 PioUpdateReport *pio_apply_updates(PioModule *module,
                                    const PioCalculationUpdate *const *updates,
@@ -4095,6 +4104,9 @@ PioUpdateReport *pio_apply_updates(PioModule *module,
 
 /**
  * Replace aggregate active demand at one bus using the named allocation rule.
+ *
+ * The view invalidation and exclusivity contract of `pio_apply_updates`
+ * applies.
  */
 PioUpdateReport *pio_apply_bus_load_active_power(PioModule *module,
                                                  size_t bus_id,
