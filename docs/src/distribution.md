@@ -24,7 +24,7 @@ result.diagnostics
 
 There is no implicit conversion between the multiconductor and balanced models. The balanced positive sequence equivalent is an explicit transformation that states its assumptions (voltage bases per zone, phase aggregation, switch merging) and refuses what it cannot state:
 
-```rust
+```rust,ignore
 let report = to_balanced_report(feeder)?;   // ready plus assumptions, losses, and diagnostics
 let balanced = to_balanced(feeder)?;        // PioModule<BalancedNetwork>
 ```
