@@ -121,13 +121,20 @@ history records, extension data, collection lengths, identity lengths, and
 nested value depth. Limit failures use structured PowerIO diagnostics rather
 than allocation failures or truncated results.
 
-## Schema changes
+## Generations
 
-The integer version belongs to the PowerIO IR document, not the Rust memory
-layout, PowerIO release, a grid exchange format, or the C ABI. It changes only
-when the serialized representation changes. `producer.version` records the
-PowerIO release that wrote the document. PowerIO 0.11 reads generation `2` and
-refuses any other identity or generation with what it found; compatibility
-with another generation requires an explicit reader or upgrade path.
-Historical schemas document what earlier releases produced but do not add
-compatibility to the deserializer.
+The integer `version` is the generation of the serialized representation. It
+belongs to the document, not to the Rust memory layout, the PowerIO release,
+a grid exchange format, or the C ABI, and it changes only when the
+representation changes. `producer.version` records the release that wrote the
+document; the reader reports it and never consults it for compatibility.
+
+A generation bump inside one minor release line ships with a reader for the
+generation it replaces, so every 0.11.x release reads every generation any
+0.11.x release wrote. `powerio::IR_VERSION` is the generation a build writes
+and `powerio::IR_MIN_VERSION` the oldest it reads. In 0.11 both are `2`. A
+refused document names the identity, generation, and producer it states and
+the remedy: a later generation needs a newer PowerIO, and an earlier identity
+or generation has to be regenerated from its source data.
+[`docs/schema/README.md`](https://github.com/eigenergy/powerio/blob/main/docs/schema/README.md)
+is the ledger of every generation and the archive of every published schema.

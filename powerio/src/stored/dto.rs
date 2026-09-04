@@ -1376,14 +1376,17 @@ impl fmt::Display for StoredVersion {
     }
 }
 
-/// The two header fields the reader dispatches on, read from a document that
-/// did not decode as the current shape.
+/// The header fields a refusal names, read from a document that did not
+/// decode as the current shape: the two the reader dispatches on, and the
+/// producer record in whatever shape the document states it.
 #[derive(Debug, Deserialize)]
 pub(super) struct StoredHeader {
     #[serde(default)]
     pub(super) schema: Option<String>,
     #[serde(default)]
     pub(super) version: Option<StoredVersion>,
+    #[serde(default)]
+    pub(super) producer: Option<serde_json::Value>,
 }
 
 /// Structural validation of one decoded document: identities, digests,

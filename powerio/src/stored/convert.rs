@@ -76,19 +76,21 @@ pub fn read_module(text: &str) -> Result<PioModule<PioValue>> {
         }
         Ok(stored) => {
             let version = dto::StoredVersion::Integer(stored.version);
-            return Err(unsupported(&stored.schema, Some(&version)));
+            let producer = format!("{} {}", stored.producer.name, stored.producer.version);
+            return Err(unsupported(&stored.schema, Some(&version), Some(&producer)));
         }
         Err(error) => error,
     };
     let header: dto::StoredHeader =
         serde_json::from_str(text).map_err(|error| invalid(error.to_string()))?;
+    let producer = header.producer.as_ref().and_then(describe_producer);
     match (header.schema.as_deref(), header.version) {
         (Some(schema), Some(dto::StoredVersion::Integer(version)))
             if is_readable(schema, version) =>
         {
             Err(invalid(decode_error.to_string()))
         }
-        (Some(schema), version) => Err(unsupported(schema, version.as_ref())),
+        (Some(schema), version) => Err(unsupported(schema, version.as_ref(), producer.as_deref())),
         (None, _) => Err(powerio_core::Error::new(
             &codes::READ_MODULE_UNSUPPORTED,
             "the document is not PowerIO IR",
@@ -97,11 +99,30 @@ pub fn read_module(text: &str) -> Result<PioModule<PioValue>> {
 }
 
 fn is_readable(schema: &str, version: u64) -> bool {
-    schema == crate::IR_SCHEMA_NAME && version == crate::IR_VERSION
+    schema == crate::IR_SCHEMA_NAME
+        && (crate::IR_MIN_VERSION..=crate::IR_VERSION).contains(&version)
 }
 
-/// The refusal for an identity or generation this build does not read.
-fn unsupported(schema: &str, version: Option<&dto::StoredVersion>) -> powerio_core::Error {
+/// The producer a document states, as a refusal names it: `name version`
+/// when both are strings, either one alone, or nothing.
+fn describe_producer(producer: &serde_json::Value) -> Option<String> {
+    let name = producer.get("name").and_then(serde_json::Value::as_str);
+    let version = producer.get("version").and_then(serde_json::Value::as_str);
+    match (name, version) {
+        (Some(name), Some(version)) => Some(format!("{name} {version}")),
+        (Some(name), None) => Some(name.to_owned()),
+        (None, Some(version)) => Some(format!("version {version}")),
+        (None, None) => None,
+    }
+}
+
+/// The refusal for an identity or generation this build does not read. It
+/// names what the document states, producer included, and the remedy.
+fn unsupported(
+    schema: &str,
+    version: Option<&dto::StoredVersion>,
+    producer: Option<&str>,
+) -> powerio_core::Error {
     let guidance = if schema == crate::IR_SCHEMA_NAME
         && version
             .and_then(dto::StoredVersion::as_integer)
@@ -109,16 +130,26 @@ fn unsupported(schema: &str, version: Option<&dto::StoredVersion>) -> powerio_co
     {
         "upgrade PowerIO to a release that supports this later IR generation".to_owned()
     } else {
+        let reads = if crate::IR_MIN_VERSION == crate::IR_VERSION {
+            format!("generation {}", crate::IR_VERSION)
+        } else {
+            format!(
+                "generations {} through {}",
+                crate::IR_MIN_VERSION,
+                crate::IR_VERSION
+            )
+        };
         format!(
-            "this build reads `{}` generation {}; regenerate this document from its source data",
-            crate::IR_SCHEMA_NAME,
-            crate::IR_VERSION
+            "this build reads `{}` {reads}; regenerate this document from its source data",
+            crate::IR_SCHEMA_NAME
         )
     };
     let version = version.map_or_else(|| "<none>".to_owned(), ToString::to_string);
+    let written_by =
+        producer.map_or_else(String::new, |producer| format!(" written by {producer}"));
     powerio_core::Error::new(
         &codes::READ_MODULE_UNSUPPORTED,
-        format!("unsupported stored module `{schema}` version {version}: {guidance}"),
+        format!("unsupported stored module `{schema}` version {version}{written_by}: {guidance}"),
     )
 }
 

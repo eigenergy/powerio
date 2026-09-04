@@ -47,9 +47,9 @@ fn the_schema_directory_contains_the_documented_powerio_ir_history() {
         [
             "README.md",
             "pio-ir/0.1/schema.json",
-            "pio-ir/0.10.0/schema.json",
             "pio-ir/0.2/schema.json",
             "pio-ir/0.9/schema.json",
+            "pio-ir/1/schema.json",
             CURRENT_SCHEMA,
         ]
     );
@@ -72,7 +72,7 @@ fn historical_schemas_preserve_their_original_identifiers() {
             "https://powerio.dev/schema/pio-package/0.9/schema.json",
         ),
         (
-            "pio-ir/0.10.0/schema.json",
+            "pio-ir/1/schema.json",
             "https://powerio.dev/schema/pio-module/1/schema.json",
         ),
     ] {

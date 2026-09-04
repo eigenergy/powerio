@@ -18,6 +18,18 @@ fi
 
 workspace_version=$(grep -oE '^version = "[0-9]+\.[0-9]+\.[0-9]+"' Cargo.toml | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
 ir_version=$(grep -oE 'pub const IR_VERSION: u64 = [0-9]+' powerio/src/lib.rs | grep -oE '[0-9]+$')
+ir_min_version=$(grep -oE 'pub const IR_MIN_VERSION: u64 = [0-9]+' powerio/src/lib.rs | grep -oE '[0-9]+$')
+if [ "$ir_min_version" -gt "$ir_version" ]; then
+    echo "IR_MIN_VERSION $ir_min_version is later than IR_VERSION $ir_version" >&2
+    exit 1
+fi
+# Every generation the reader accepts has its schema archived.
+for generation in $(seq "$ir_min_version" "$ir_version"); do
+    if [ ! -f "docs/schema/pio-ir/$generation/schema.json" ]; then
+        echo "docs/schema/pio-ir/$generation/schema.json is not checked in for a readable generation" >&2
+        exit 1
+    fi
+done
 # The generated schema is what a consumer validates a document against, so it
 # is the artifact that states the IR identity: CI regenerates it from the Rust
 # constants, and this gate reads the identity back out of it.
@@ -82,7 +94,7 @@ fi
 grep -q "PowerIO $workspace_version release notes" "docs/release-notes/$workspace_version-draft.md" \
     || { echo "the release notes draft title does not state $workspace_version" >&2; exit 1; }
 
-echo "release identity OK: ABI $rust_abi, PowerIO IR $schema_name/$ir_version, workspace $workspace_version, tag v$workspace_version"
+echo "release identity OK: ABI $rust_abi, PowerIO IR $schema_name/$ir_version (reads $ir_min_version through $ir_version), workspace $workspace_version, tag v$workspace_version"
 
 # The Arrow payload goldens embed the producing build's powerio_version; a
 # renumber that misses one fails the golden comparisons later. Stored

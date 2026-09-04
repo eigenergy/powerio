@@ -78,10 +78,26 @@ pub const IR_SCHEMA_NAME: &str = "pio-ir";
 
 /// The PowerIO IR generation this build writes.
 ///
-/// The generation changes only when the serialized representation changes;
-/// it is independent of the PowerIO release and C ABI versions. The producer
-/// record identifies the PowerIO release that wrote a document.
+/// The generation is an integer that advances only when the serialized
+/// representation changes. It is independent of the PowerIO release, which
+/// the `producer` record of a document names, and of the C ABI version.
+///
+/// | Generation | First release | Change |
+/// |---|---|---|
+/// | 1 | v0.10.0 | the `PioModule` serialization, under the identity `powerio.module` |
+/// | 2 | v0.11.0 | the identity `pio-ir`; the producer release recorded apart from the generation; retained source bytes left out |
+///
+/// A bump within one minor release line ships with a reader for the
+/// generation it replaces, so every release of the line reads every
+/// generation the line wrote. [`IR_MIN_VERSION`] is the oldest generation
+/// this build reads.
 pub const IR_VERSION: u64 = 2;
+
+/// The oldest PowerIO IR generation this build reads.
+///
+/// The floor rises only at a minor release boundary. In 0.11 it equals
+/// [`IR_VERSION`].
+pub const IR_MIN_VERSION: u64 = 2;
 
 /// The `$id` of the JSON Schema for the documents this build writes, which is
 /// also the address the schema is served from.
