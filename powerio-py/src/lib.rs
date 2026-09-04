@@ -1136,9 +1136,6 @@ impl PyBalancedNetwork {
         let report = inner.apply_geo_layer(&parsed.layer);
         let mut diagnostics = self.diagnostics().to_vec();
         diagnostics.extend(parsed.diagnostics);
-        // Locations never move buses, so the cached index stays valid.
-        let core = self.core.clone();
-        let _ = core;
         Ok((
             case_from_parts(inner, diagnostics),
             geo_report_dict(py, &report)?,
@@ -1896,7 +1893,15 @@ impl From<&powerio_prob::ScucReactiveCapability> for PyScucReactiveCapability {
                 slope_min: Some(*slope_min),
                 slope_max: Some(*slope_max),
             },
-            _ => unreachable!("unrecognized ScucReactiveCapability value"),
+            _ => Self {
+                kind: "unknown",
+                reactive_power_at_zero_active_power: std::option::Option::None,
+                reactive_power_at_zero_active_power_min: std::option::Option::None,
+                reactive_power_at_zero_active_power_max: std::option::Option::None,
+                slope: std::option::Option::None,
+                slope_min: std::option::Option::None,
+                slope_max: std::option::Option::None,
+            },
         }
     }
 }
@@ -1994,7 +1999,7 @@ impl PyScucDevice {
         match self.inner.kind {
             powerio_prob::ScucDeviceKind::Producer => "producer",
             powerio_prob::ScucDeviceKind::Consumer => "consumer",
-            _ => unreachable!("unrecognized ScucDeviceKind value"),
+            _ => "unknown",
         }
     }
 
@@ -2681,7 +2686,7 @@ impl PyActivePower {
         match self.inner.unit() {
             powerio_prob::ActivePowerUnit::Watts => "watts",
             powerio_prob::ActivePowerUnit::Megawatts => "megawatts",
-            _ => unreachable!("all active power units have Python spellings"),
+            _ => "unknown",
         }
     }
 
@@ -2727,7 +2732,7 @@ impl PyReactivePower {
         match self.inner.unit() {
             powerio_prob::ReactivePowerUnit::Vars => "vars",
             powerio_prob::ReactivePowerUnit::Megavars => "megavars",
-            _ => unreachable!("all reactive power units have Python spellings"),
+            _ => "unknown",
         }
     }
 
@@ -2773,7 +2778,7 @@ impl PyApparentPower {
         match self.inner.unit() {
             powerio_prob::ApparentPowerUnit::VoltAmperes => "volt_amperes",
             powerio_prob::ApparentPowerUnit::MegavoltAmperes => "megavolt_amperes",
-            _ => unreachable!("all apparent power units have Python spellings"),
+            _ => "unknown",
         }
     }
 
@@ -2795,7 +2800,7 @@ fn operating_update_field(update: &powerio_prob::OperatingPointUpdate) -> &'stat
         U::TransformerTapRatio { .. } => "transformer_tap_ratio",
         U::TransformerPhaseShift { .. } => "transformer_phase_shift",
         U::SwitchClosed { .. } => "switch_closed",
-        _ => unreachable!("all operating point updates have Python spellings"),
+        _ => "unknown",
     }
 }
 
@@ -2979,7 +2984,7 @@ impl PyNetworkUpdate {
     fn field(&self) -> &'static str {
         match self.inner {
             powerio_prob::NetworkUpdate::BranchThermalRating { .. } => "branch_thermal_rating",
-            _ => unreachable!("all network updates have Python spellings"),
+            _ => "unknown",
         }
     }
 
@@ -3023,7 +3028,7 @@ impl PyCalculationUpdate {
         match self.inner {
             powerio_prob::CalculationUpdate::OperatingPoint(_) => "operating_point",
             powerio_prob::CalculationUpdate::Network(_) => "network",
-            _ => unreachable!("all calculation updates have Python spellings"),
+            _ => "unknown",
         }
     }
 
@@ -3046,7 +3051,7 @@ fn updated_field_name(field: powerio_prob::UpdatedField) -> &'static str {
         F::TransformerTapRatio => "transformer_tap_ratio",
         F::TransformerPhaseShift => "transformer_phase_shift",
         F::SwitchClosed => "switch_closed",
-        _ => unreachable!("all updated fields have Python spellings"),
+        _ => "unknown",
     }
 }
 

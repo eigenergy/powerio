@@ -2155,6 +2155,10 @@ pub struct PioScucContingencyComponentView {
 
 // ---- shared handle machinery ----------------------------------------------
 
+/// Every handle payload must be shareable across threads: the header lets
+/// callers move and retain handles from any thread.
+const fn assert_send_sync<T: Send + Sync>() {}
+
 #[repr(transparent)]
 struct HandleBox<T> {
     inner: Arc<T>,
@@ -2193,6 +2197,7 @@ macro_rules! opaque_handle {
         $(#[$doc])*
         #[repr(transparent)]
         pub struct $name(HandleBox<$inner>);
+        const _: () = assert_send_sync::<$inner>();
 
         #[allow(dead_code)]
         impl $name {
@@ -5777,7 +5782,18 @@ pub unsafe extern "C" fn pio_dc_pf_instance_bus_specification_at(
                     format!("DC bus specification index {index} is out of range"),
                 )
             })?;
-            let bus_id = instance.network().buses()[index].id.0;
+            let bus_id = instance
+                .network()
+                .buses()
+                .get(index)
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                        format!("bus specification index {index} has no bus"),
+                    )
+                })?
+                .id
+                .0;
             let (kind, net_active_power_mw, voltage_angle_degrees) = match *specification {
                 powerio_prob::DcBusSpecification::NetActivePower { p_mw } => {
                     ("net_active_power", p_mw, 0.0)
@@ -5845,7 +5861,18 @@ pub unsafe extern "C" fn pio_ac_pf_instance_bus_specification_at(
                     format!("AC bus specification index {index} is out of range"),
                 )
             })?;
-            let bus_id = instance.network().buses()[index].id.0;
+            let bus_id = instance
+                .network()
+                .buses()
+                .get(index)
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                        format!("bus specification index {index} has no bus"),
+                    )
+                })?
+                .id
+                .0;
             let (kind, p, q, vm, va) = match *specification {
                 powerio_prob::AcBusSpecification::Pq { p, q } => ("pq", p, q, 0.0, 0.0),
                 powerio_prob::AcBusSpecification::Pv { p, vm } => ("pv", p, 0.0, vm, 0.0),
@@ -14079,7 +14106,7 @@ pub unsafe extern "C" fn pio_active_power_unit(power: *const PioActivePower) -> 
         PioStringView::new(match power.unit() {
             ActivePowerUnit::Watts => "watts",
             ActivePowerUnit::Megawatts => "megawatts",
-            _ => unreachable!("unsupported active power unit from this PowerIO build"),
+            _ => "unknown",
         })
     })
 }
@@ -14117,7 +14144,7 @@ pub unsafe extern "C" fn pio_reactive_power_unit(power: *const PioReactivePower)
         PioStringView::new(match power.unit() {
             ReactivePowerUnit::Vars => "vars",
             ReactivePowerUnit::Megavars => "megavars",
-            _ => unreachable!("unsupported reactive power unit from this PowerIO build"),
+            _ => "unknown",
         })
     })
 }
@@ -14155,7 +14182,7 @@ pub unsafe extern "C" fn pio_apparent_power_unit(power: *const PioApparentPower)
         PioStringView::new(match power.unit() {
             ApparentPowerUnit::VoltAmperes => "volt_amperes",
             ApparentPowerUnit::MegavoltAmperes => "megavolt_amperes",
-            _ => unreachable!("unsupported apparent power unit from this PowerIO build"),
+            _ => "unknown",
         })
     })
 }
@@ -14755,8 +14782,12 @@ unsafe fn module_make_mut<'a>(
 
 /// Apply a complete typed update batch atomically.
 ///
-/// Existing borrowed views keep the pre-update module alive. The module handle
-/// detaches by copy on write before a successful change.
+/// Owner rooted handles obtained before the call (values, networks, collection
+/// entries, artifacts) keep the pre-update module alive. Plain view structs read
+/// from this module handle (`PioStringView`, `PioModuleSourceView`, history and
+/// source map views) are invalidated by a successful call and must be read
+/// again. The caller must hold exclusive access to `module` for the duration of
+/// the call: no concurrent call of any kind on this handle, including retain.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_apply_updates(
     module: *mut PioModule,
@@ -14796,6 +14827,9 @@ pub unsafe extern "C" fn pio_apply_updates(
 }
 
 /// Replace aggregate active demand at one bus using the named allocation rule.
+///
+/// The view invalidation and exclusivity contract of `pio_apply_updates`
+/// applies.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_apply_bus_load_active_power(
     module: *mut PioModule,
@@ -14884,7 +14918,7 @@ fn updated_field_name(field: UpdatedField) -> &'static str {
         UpdatedField::TransformerTapRatio => "transformer_tap_ratio",
         UpdatedField::TransformerPhaseShift => "transformer_phase_shift",
         UpdatedField::SwitchClosed => "switch_closed",
-        _ => unreachable!("unsupported updated field from this PowerIO build"),
+        _ => "unknown",
     }
 }
 
