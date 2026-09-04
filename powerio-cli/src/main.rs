@@ -1655,7 +1655,7 @@ fn parse_gridfm_scenario(
             value.type_name()
         );
     };
-    Ok((network.clone(), module.diagnostics.clone()))
+    Ok((network.clone(), module.diagnostics().to_vec()))
 }
 
 fn run_summary(input: &Path, from: Option<FormatArg>, scenario: i64) -> anyhow::Result<()> {
@@ -1671,11 +1671,11 @@ fn run_summary(input: &Path, from: Option<FormatArg>, scenario: i64) -> anyhow::
         } else {
             match parse_family_case(input, from)? {
                 FamilyCase::Distribution(module) => {
-                    let diagnostics = powerio_core::render_diagnostics(&module.diagnostics);
+                    let diagnostics = powerio_core::render_diagnostics(module.diagnostics());
                     distribution_summary_json(module.value(), &diagnostics)
                 }
                 FamilyCase::Transmission(module) => {
-                    let diagnostics = powerio_core::render_diagnostics(&module.diagnostics);
+                    let diagnostics = powerio_core::render_diagnostics(module.diagnostics());
                     transmission_summary_json(module.value(), &diagnostics)
                 }
             }
@@ -1690,8 +1690,8 @@ fn run_serialize(
     from: Option<FormatArg>,
 ) -> anyhow::Result<()> {
     let module = load_module(input, from)?;
-    report_diagnostics(&module.diagnostics);
-    let parse_errors = parse_error_count(&module.diagnostics);
+    report_diagnostics(module.diagnostics());
+    let parse_errors = parse_error_count(module.diagnostics());
     let text = serialize_module_text(&module)?;
     // This command is the primary producer of PowerIO IR, so a document the
     // deserializer refuses must not reach a file: read the document back
@@ -1775,7 +1775,7 @@ fn serialize_input(input: &Path, from: Option<FormatArg>) -> anyhow::Result<(Str
 #[cfg(test)]
 fn module_error_lines(module: &powerio_core::PioModule<powerio::PioValue>) -> Vec<String> {
     module
-        .diagnostics
+        .diagnostics()
         .iter()
         .filter(|d| d.severity() >= powerio_core::DiagnosticSeverity::Error)
         .map(|d| format!("{}: {}", d.code(), d.message()))
@@ -2010,7 +2010,7 @@ fn convert_balanced_module(
             powerio_core::Destination::path(output),
         )
         .with_context(|| format!("emitting PyPSA CSV folder {}", output.display()))?;
-        return finish_path_emission(&module.diagnostics, &result, output);
+        return finish_path_emission(module.diagnostics(), &result, output);
     }
     if to == FormatArg::Cgmes {
         let Some(output) = output else {
@@ -2032,7 +2032,7 @@ fn convert_balanced_module(
             powerio_core::Destination::path(output),
         )
         .with_context(|| format!("emitting CGMES to {}", output.display()))?;
-        return finish_path_emission(&module.diagnostics, &result, output);
+        return finish_path_emission(module.diagnostics(), &result, output);
     }
     let target = to.transmission().ok_or_else(|| {
         failure!(
@@ -2044,7 +2044,7 @@ fn convert_balanced_module(
     })?;
     let emission = module_io::emit_balanced_module(module, target, &options)
         .with_context(|| format!("emitting {target}"))?;
-    finish_memory_emission(&module.diagnostics, &emission, output)
+    finish_memory_emission(module.diagnostics(), &emission, output)
 }
 
 fn convert_multiconductor_module(
@@ -2062,7 +2062,7 @@ fn convert_multiconductor_module(
     })?;
     let emission = module_io::emit_multiconductor_module(module, target)
         .with_context(|| format!("emitting {}", target.name()))?;
-    finish_memory_emission(&module.diagnostics, &emission, output)
+    finish_memory_emission(module.diagnostics(), &emission, output)
 }
 
 fn convert_typed_module(
@@ -2098,11 +2098,11 @@ fn convert_typed_module(
             powerio_core::Destination::path(output),
         )
         .with_context(|| format!("emitting {} to {}", format.token, output.display()))?;
-        return finish_path_emission(&module.diagnostics, &result, output);
+        return finish_path_emission(module.diagnostics(), &result, output);
     }
     let emission = module_io::emit_module(module, format.token)
         .with_context(|| format!("emitting {}", format.token))?;
-    finish_memory_emission(&module.diagnostics, &emission, output)
+    finish_memory_emission(module.diagnostics(), &emission, output)
 }
 
 fn finish_memory_emission(
@@ -2288,11 +2288,11 @@ fn run_geo_extract(
     }
     let layer = match parse_family_case(input, from)? {
         FamilyCase::Distribution(module) => {
-            report_diagnostics(&module.diagnostics);
+            report_diagnostics(module.diagnostics());
             powerio::dist_geo::to_dist_geo_layer(module.value())
         }
         FamilyCase::Transmission(module) => {
-            report_diagnostics(&module.diagnostics);
+            report_diagnostics(module.diagnostics());
             module.value().to_geo_layer()
         }
     };
@@ -2336,7 +2336,7 @@ fn run_geo_apply(
     report_diagnostics(&parsed.diagnostics);
     let (text, sidecars, diagnostics) = match parse_family_case(input, from)? {
         FamilyCase::Distribution(module) => {
-            report_diagnostics(&module.diagnostics);
+            report_diagnostics(module.diagnostics());
             let dynamic = module.map_value(powerio::PioValue::from);
             let (placed, report) = powerio::apply_geo_layer(&dynamic, &parsed.layer)?;
             report_geo_apply(&report);
@@ -2369,7 +2369,7 @@ fn run_geo_apply(
             (emission.text, emission.sidecars, emission.diagnostics)
         }
         FamilyCase::Transmission(module) => {
-            report_diagnostics(&module.diagnostics);
+            report_diagnostics(module.diagnostics());
             let dynamic = module.map_value(powerio::PioValue::from);
             let (placed, report) = powerio::apply_geo_layer(&dynamic, &parsed.layer)?;
             report_geo_apply(&report);
@@ -2532,8 +2532,8 @@ fn convert_to_cgmes(
             ),
         }
     };
-    let parse_errors = parse_error_count(&module.diagnostics);
-    report_diagnostics(&module.diagnostics);
+    let parse_errors = parse_error_count(module.diagnostics());
+    report_diagnostics(module.diagnostics());
     let options = gen_cost_options.emit_options()?;
     let result = powerio_tx::emit_with_options(
         &module,
@@ -2568,7 +2568,7 @@ fn balanced_case(
 ) -> anyhow::Result<powerio_matrix::BalancedNetwork> {
     match parse_family_case(input, from)? {
         FamilyCase::Transmission(module) => {
-            report_diagnostics(&module.diagnostics);
+            report_diagnostics(module.diagnostics());
             Ok(module.into_value())
         }
         FamilyCase::Distribution(_) => Err(cli_failure(
@@ -2717,7 +2717,7 @@ fn read_network(
     reject_nontransmission_from(from)?;
     let parsed = module_io::load_balanced_module(input, from.map(FormatArg::name))
         .with_context(|| format!("reading {}", input.display()))?;
-    report_diagnostics(&parsed.diagnostics);
+    report_diagnostics(parsed.diagnostics());
     Ok(parsed.into_value())
 }
 
@@ -2750,7 +2750,7 @@ mod tests {
     #[test]
     fn summary_json_matches_canonical_transmission_shape() {
         let parsed = crate::module_io::load_balanced_module(data("case9.m"), None).unwrap();
-        let diagnostics = powerio_core::render_diagnostics(&parsed.diagnostics);
+        let diagnostics = powerio_core::render_diagnostics(parsed.diagnostics());
         let value = transmission_summary_json(parsed.value(), &diagnostics);
         assert_eq!(value["schema"], "powerio.summary");
         assert_eq!(value[powerio::version::VERSION_KEY], powerio::VERSION);
@@ -2796,7 +2796,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let diagnostics = powerio_core::render_diagnostics(&net.diagnostics);
+        let diagnostics = powerio_core::render_diagnostics(net.diagnostics());
         let value = distribution_summary_json(net.value(), &diagnostics);
         assert_eq!(value["schema"], "powerio.summary");
         assert_eq!(value[powerio::version::VERSION_KEY], powerio::VERSION);

@@ -118,7 +118,7 @@ impl McAcPfInstance {
                 .map(|(_, value)| value.clone())
         };
         let mut control_modes = Vec::new();
-        for object in network.untyped() {
+        for object in network.untyped_objects() {
             match object.class.to_ascii_lowercase().as_str() {
                 "regcontrol" => {
                     if let Some(transformer) = controlled_element(object, "transformer") {

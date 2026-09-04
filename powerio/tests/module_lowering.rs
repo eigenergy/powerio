@@ -68,24 +68,24 @@ fn stale_targets_are_severed_and_every_diagnostic_survives() {
         {"id": "keep-3", "severity": "error", "code": "READ.TEST.LAST", "message": "kept"}
     ]);
     let module = deserialize_module_text(&raw.to_string()).unwrap();
-    assert_eq!(module.diagnostics.len(), 3);
-    let input_count = module.diagnostics.len();
+    assert_eq!(module.diagnostics().len(), 3);
+    let input_count = module.diagnostics().len();
 
     let lowered = to_balanced(module, MulticonductorToBalancedOptions::default()).unwrap();
     assert!(matches!(lowered.value(), PioValue::BalancedNetwork(_)));
     // Every input diagnostic survives, plus the pass's own findings.
-    assert!(lowered.diagnostics.len() >= input_count);
+    assert!(lowered.diagnostics().len() >= input_count);
     for id in ["keep-1", "keep-2", "keep-3"] {
         assert!(
             lowered
-                .diagnostics
+                .diagnostics()
                 .iter()
                 .any(|d| d.id().is_some_and(|i| i.as_str() == id)),
             "diagnostic {id} was dropped"
         );
     }
     // The stale target is severed, so the lowered module still writes.
-    assert!(lowered.diagnostics.iter().all(|d| d.target().is_none()));
+    assert!(lowered.diagnostics().iter().all(|d| d.target().is_none()));
     let text = serialize_module_text(&lowered).unwrap();
     assert!(text.contains("READ.TEST.TARGETED"));
 }
@@ -204,7 +204,7 @@ fn a_module_at_a_record_cap_is_refused_intact() {
     // back unchanged, whichever cap binds.
     let full_diagnostics = {
         let mut module = parse_mc_module(TWO_WINDING_DSS);
-        let room = powerio_core::limits::MAX_MODULE_DIAGNOSTICS - module.diagnostics.len();
+        let room = powerio_core::limits::MAX_MODULE_DIAGNOSTICS - module.diagnostics().len();
         let filler = powerio_core::Diagnostic::new(
             powerio_core::DiagnosticCode::new("READ.CASE.FILLER").unwrap(),
             powerio_core::DiagnosticSeverity::Note,
@@ -215,7 +215,7 @@ fn a_module_at_a_record_cap_is_refused_intact() {
         }
         module
     };
-    let before = full_diagnostics.diagnostics.len();
+    let before = full_diagnostics.diagnostics().len();
     let (returned, error) =
         to_balanced(full_diagnostics, MulticonductorToBalancedOptions::default()).unwrap_err();
     assert!(
@@ -225,7 +225,7 @@ fn a_module_at_a_record_cap_is_refused_intact() {
             .any(|d| d.code() == "TRANSFORM.MULTI_TO_BALANCED.RECORD_CAP"),
         "{error:?}"
     );
-    assert_eq!(returned.diagnostics.len(), before, "module unchanged");
+    assert_eq!(returned.diagnostics().len(), before, "module unchanged");
     assert!(matches!(
         returned.value(),
         PioValue::MulticonductorNetwork(_)

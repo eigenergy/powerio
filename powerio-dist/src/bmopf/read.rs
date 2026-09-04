@@ -520,7 +520,7 @@ impl Reader<'_> {
         // linecode the document declares. Read the declared table first, then
         // skip it in the loop.
         if let Some(Value::Object(items)) = doc.get("linecode") {
-            self.linecodes(items);
+            self.line_codes(items);
         }
         // `ibr` and `control_profile` can also arrive under `extras`, and the
         // reader keeps whichever copy it reads first. Key order alone decides
@@ -584,7 +584,7 @@ impl Reader<'_> {
                         format!("top level `{other}` is outside the schema; kept untyped"),
                     );
                     for (name, v) in items {
-                        self.net.untyped_mut().push(UntypedObject {
+                        self.net.untyped_objects_mut().push(UntypedObject {
                             class: other.to_string(),
                             name: name.clone(),
                             props: vec![(None, v.to_string())],
@@ -982,7 +982,7 @@ impl Reader<'_> {
         }
     }
 
-    fn linecodes(&mut self, items: &Map<String, Value>) {
+    fn line_codes(&mut self, items: &Map<String, Value>) {
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
             // Conductor count is the widest matrix present; absent matrices
@@ -1017,7 +1017,7 @@ impl Reader<'_> {
                     &["R_series", "X_series", "G_from", "G_to", "B_from", "B_to"],
                 ),
             };
-            self.net.linecodes_mut().push(code);
+            self.net.line_codes_mut().push(code);
         }
     }
 
@@ -1027,7 +1027,7 @@ impl Reader<'_> {
         // declared linecode that differs only in case.
         let mut taken: std::collections::BTreeSet<String> = self
             .net
-            .linecodes()
+            .line_codes()
             .iter()
             .map(|c| c.name.to_ascii_lowercase())
             .collect();
@@ -1142,7 +1142,7 @@ impl Reader<'_> {
                 ),
             );
         }
-        self.net.linecodes_mut().push(DistLineCode {
+        self.net.line_codes_mut().push(DistLineCode {
             name: name.clone(),
             n_conductors: n,
             r_series: r,

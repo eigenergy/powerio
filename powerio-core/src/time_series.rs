@@ -104,11 +104,6 @@ impl<T> TimeSeries<T> {
         self.time_points.get(index)
     }
 
-    #[must_use]
-    pub fn value(&self, index: usize) -> Option<&T> {
-        self.get(index)
-    }
-
     pub fn iter(&self) -> impl ExactSizeIterator<Item = (&TimePoint, &T)> {
         self.time_points.iter().zip(self.values.iter())
     }
@@ -212,10 +207,10 @@ mod tests {
         ];
         let values = vec![String::from("a"), String::from("b")];
         let series = TimeSeries::new(points, values).unwrap();
-        let value_pointer = series.value(1).unwrap().as_ptr();
+        let value_pointer = series.get(1).unwrap().as_ptr();
         assert_eq!(series.entry(1).unwrap().0.label(), "t1");
         assert_eq!(series.iter().count(), 2);
-        assert_eq!(series.value(1).unwrap().as_ptr(), value_pointer);
+        assert_eq!(series.get(1).unwrap().as_ptr(), value_pointer);
     }
 
     #[test]

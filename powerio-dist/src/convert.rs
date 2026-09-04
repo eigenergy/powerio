@@ -919,7 +919,7 @@ mod tests {
             .unwrap()
             .with_format(powerio_core::FormatId::new("dss").unwrap());
         let module = parse(source).unwrap();
-        let lines = crate::diagnostics::render_diagnostics(&module.diagnostics);
+        let lines = crate::diagnostics::render_diagnostics(module.diagnostics());
         assert!(
             lines.iter().any(|w| w.contains("furlong")),
             "parse diagnostics stay on PioModule: {lines:?}"

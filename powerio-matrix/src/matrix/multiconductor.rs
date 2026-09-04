@@ -352,7 +352,7 @@ pub fn calc_multiconductor_admittance_matrix(
 
     let linecode_of = |name: &str| {
         network
-            .linecodes()
+            .line_codes()
             .iter()
             .find(|linecode| linecode.name == name)
     };

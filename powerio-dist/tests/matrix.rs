@@ -576,13 +576,13 @@ fn assert_projection_eq(
 /// at most one rounding per direction.
 fn assert_linecodes_close(a: &MulticonductorNetwork, b: &MulticonductorNetwork, what: &str) {
     assert_eq!(
-        a.linecodes().len(),
-        b.linecodes().len(),
+        a.line_codes().len(),
+        b.line_codes().len(),
         "{what}: linecodes"
     );
     let close = |x: f64, y: f64| (x - y).abs() <= 1e-12 * x.abs().max(y.abs()).max(1e-300);
-    let mut xs: Vec<_> = a.linecodes().iter().collect();
-    let mut ys: Vec<_> = b.linecodes().iter().collect();
+    let mut xs: Vec<_> = a.line_codes().iter().collect();
+    let mut ys: Vec<_> = b.line_codes().iter().collect();
     xs.sort_by_key(|c| c.name.to_ascii_lowercase());
     ys.sort_by_key(|c| c.name.to_ascii_lowercase());
     for (x, y) in xs.iter().zip(&ys) {

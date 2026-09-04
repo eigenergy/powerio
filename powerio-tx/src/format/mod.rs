@@ -2114,7 +2114,7 @@ pub(crate) mod test_parse {
     ) -> std::result::Result<TestParsed, powerio_core::Error> {
         let source = declared(powerio_core::Source::open(path.as_ref())?, from)?;
         parse(source).map(|module| TestParsed {
-            diagnostics: module.diagnostics.clone(),
+            diagnostics: module.diagnostics().to_vec(),
             network: module.into_value(),
         })
     }
@@ -2128,7 +2128,7 @@ pub(crate) mod test_parse {
             Some(from),
         )?;
         parse(source).map(|module| TestParsed {
-            diagnostics: module.diagnostics.clone(),
+            diagnostics: module.diagnostics().to_vec(),
             network: module.into_value(),
         })
     }
@@ -2340,7 +2340,11 @@ mpc.branch = [
         let source = powerio_core::Source::from_memory("case.m", case.as_bytes().to_vec()).unwrap();
         let module = parse(source.with_format(parse_format_id("matpower").unwrap())).unwrap();
         assert_eq!(module.value().buses().len(), 1);
-        assert!(module.diagnostics.is_empty(), "{:?}", module.diagnostics);
+        assert!(
+            module.diagnostics().is_empty(),
+            "{:?}",
+            module.diagnostics()
+        );
         let echo = emit_text(&module, TargetFormat::Matpower).unwrap();
         assert_eq!(echo.text, case, "the echo reproduces the mark exactly");
     }

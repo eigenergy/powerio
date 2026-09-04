@@ -526,11 +526,11 @@ fn short_revision32_record_is_reported_with_its_span() {
         let source = Source::from_memory("short.raw", text.as_bytes().to_vec()).unwrap();
         let module = powerio_tx::parse(source).unwrap();
         let reported: Vec<_> = module
-            .diagnostics
+            .diagnostics()
             .iter()
             .filter(|diagnostic| diagnostic.code() == "READ.PSSE.VALUE_DEFAULTED")
             .collect();
-        assert_eq!(reported.len(), 2, "{:?}", module.diagnostics);
+        assert_eq!(reported.len(), 2, "{:?}", module.diagnostics());
         for (diagnostic, record) in reported
             .iter()
             .zip(["1,'B1          ',230.0,3,1,1,1", "2,'1 ',1,1,1,10.0"])

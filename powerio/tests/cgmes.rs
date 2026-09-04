@@ -51,7 +51,7 @@ fn facade_calculates_node_breaker_buses_without_a_tp_profile() {
     };
     assert_eq!(network.buses().len(), 3);
     let remark = module
-        .diagnostics
+        .diagnostics()
         .iter()
         .find(|diagnostic| diagnostic.code() == "READ.CGMES.TOPOLOGY_CALCULATED")
         .expect("the calculated topology is reported");
@@ -100,7 +100,7 @@ fn facade_calculates_node_breaker_buses_without_a_tp_profile() {
     assert_eq!(reparsed_uids, uids);
     assert!(
         reparsed
-            .diagnostics
+            .diagnostics()
             .iter()
             .all(|diagnostic| diagnostic.code() != "READ.CGMES.TOPOLOGY_CALCULATED")
     );

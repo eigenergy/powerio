@@ -421,11 +421,11 @@ fn pvsystem_and_invcontrol_type_to_ibr_profile() {
     assert_eq!(vv.p_min_for_q, Some(10.0));
     assert_eq!(vv.p_min_for_q_max, Some(50.0));
     assert!(
-        net.untyped()
+        net.untyped_objects()
             .iter()
             .all(|o| !matches!(o.class.as_str(), "pvsystem" | "xycurve" | "invcontrol")),
         "{:?}",
-        net.untyped()
+        net.untyped_objects()
     );
 }
 
@@ -459,7 +459,11 @@ fn grounding_reactor_types_as_an_inductive_shunt() {
     assert!((sh.b[0][0] - expected).abs() < 1e-12, "{}", sh.b[0][0]);
     assert_eq!(sh.g[0][0], 0.0);
     // No silent loss: nothing falls through to the untyped layer.
-    assert!(net.untyped().is_empty(), "{:?}", net.untyped());
+    assert!(
+        net.untyped_objects().is_empty(),
+        "{:?}",
+        net.untyped_objects()
+    );
 }
 
 #[test]
@@ -493,7 +497,7 @@ fn grounding_impedance_reactors_type_as_conductive_shunts() {
     );
     assert_eq!(net.shunts().len(), 3, "{:?}", net.warnings);
     assert!(
-        net.untyped()
+        net.untyped_objects()
             .iter()
             .all(|o| !o.class.eq_ignore_ascii_case("reactor"))
     );
@@ -534,7 +538,7 @@ fn grounding_reactor_bus2_uses_the_dss_fill_rule() {
         "New Circuit.c basekv=4.16\n\
          New Reactor.rz bus1=b2.1.2.3 bus2=b2.0 phases=3 r=3 x=4\n",
     );
-    assert!(net.untyped().iter().any(|o| o.name == "rz"));
+    assert!(net.untyped_objects().iter().any(|o| o.name == "rz"));
     assert!(net.shunts().iter().all(|s| s.name != "rz"));
     assert!(
         net.warnings
@@ -555,7 +559,7 @@ fn grounding_reactor_bus2_uses_the_dss_fill_rule() {
 fn default_phase_single_terminal_reactor_preserves_physical_neutral() {
     let net = parse("micro/neutral_grounding_reactor.dss");
     assert!(
-        net.untyped()
+        net.untyped_objects()
             .iter()
             .all(|o| !o.name.eq_ignore_ascii_case("source_neutral")),
         "{:?}",
@@ -602,7 +606,7 @@ fn zero_impedance_grounding_reactor_stays_untyped() {
     let net = parse_dss_str(
         "New Circuit.c basekv=4.16\nNew Reactor.rz bus1=b2.1 bus2=b2.0 phases=1 r=0 x=0\n",
     );
-    assert!(net.untyped().iter().any(|o| o.name == "rz"));
+    assert!(net.untyped_objects().iter().any(|o| o.name == "rz"));
     assert!(net.shunts().iter().all(|s| s.name != "rz"));
     assert!(net.warnings.iter().any(|w| w.contains("zero impedance")));
 }
@@ -616,7 +620,7 @@ fn grounding_reactor_with_unparseable_rx_stays_untyped() {
         "New Circuit.c basekv=4.16\n\
          New Reactor.rz bus1=b2.1 bus2=b2.0 phases=1 r=notanumber x=4\n",
     );
-    assert!(net.untyped().iter().any(|o| o.name == "rz"));
+    assert!(net.untyped_objects().iter().any(|o| o.name == "rz"));
     assert!(net.shunts().iter().all(|s| s.name != "rz"));
     assert!(
         net.warnings
@@ -635,7 +639,7 @@ fn delta_capacitor_and_reactor_type_as_shunt_matrices() {
     );
     assert_eq!(net.shunts().len(), 2, "{:?}", net.warnings);
     assert!(
-        net.untyped()
+        net.untyped_objects()
             .iter()
             .all(|o| o.name != "capd" && o.name != "rxd")
     );
@@ -656,7 +660,7 @@ fn series_and_non_ground_impedance_reactors_stay_untyped() {
     let net = parse_dss_str(
         "New Circuit.c basekv=4.16\nNew Reactor.rs bus1=b2 bus2=b3 phases=3 kvar=900 kv=4.16\n",
     );
-    assert!(net.untyped().iter().any(|o| o.name == "rs"));
+    assert!(net.untyped_objects().iter().any(|o| o.name == "rs"));
     assert!(net.shunts().iter().all(|s| s.name != "rs"));
     assert!(
         net.warnings
@@ -666,7 +670,7 @@ fn series_and_non_ground_impedance_reactors_stay_untyped() {
     // Impedance form without an explicit ground return is not a shunt.
     let net =
         parse_dss_str("New Circuit.c basekv=4.16\nNew Reactor.rz bus1=b2 phases=3 r=0.1 x=5\n");
-    assert!(net.untyped().iter().any(|o| o.name == "rz"));
+    assert!(net.untyped_objects().iter().any(|o| o.name == "rz"));
     assert!(
         net.warnings
             .iter()
@@ -679,7 +683,7 @@ fn series_and_non_ground_impedance_reactors_stay_untyped() {
          New Reactor.rmod bus1=b2 phases=3 kvar=900 kv=4.16 parallel=yes rp=1000\n",
     );
     assert!(net.shunts().iter().any(|s| s.name == "rmod"));
-    assert!(net.untyped().iter().all(|o| o.name != "rmod"));
+    assert!(net.untyped_objects().iter().all(|o| o.name != "rmod"));
 }
 
 /// A case whose include redirects to itself twice expands into a binary tree
@@ -926,7 +930,7 @@ fn calculation_constructs_are_named_outside_the_static_profile() {
         "{rendered:?}"
     );
     // Retained, not interpreted: the objects survive for exact writing.
-    assert_eq!(parsed.untyped().len(), 3);
+    assert_eq!(parsed.untyped_objects().len(), 3);
     // The solve command is preserved without execution.
     assert!(parsed.commands().iter().any(|(verb, _)| verb == "solve"));
 }

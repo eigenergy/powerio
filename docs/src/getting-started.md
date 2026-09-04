@@ -48,7 +48,7 @@ let powerio::PioValue::BalancedNetwork(network) = module.value() else {
     panic!("expected a balanced network");
 };
 println!("{} buses", network.buses().len());
-for finding in &module.diagnostics {
+for finding in module.diagnostics() {
     eprintln!("{}: {}", finding.code(), finding.message());
 }
 powerio::emit(&module, "matpower", "copy.m")?;      // the source bytes, unchanged

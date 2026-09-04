@@ -428,7 +428,7 @@ fn read_case(path: &Path) -> std::result::Result<Case, Unreadable> {
     };
     let balanced_error = match catch_panic(|| crate::module_io::load_balanced_module(path, None)) {
         Ok(Ok(parsed)) => {
-            let rendered = powerio_core::render_diagnostics(&parsed.diagnostics);
+            let rendered = powerio_core::render_diagnostics(parsed.diagnostics());
             return Ok(Case::Balanced(Box::new(parsed.into_value()), rendered));
         }
         Err(message) => return Err(unreadable(message, true)),
@@ -436,7 +436,7 @@ fn read_case(path: &Path) -> std::result::Result<Case, Unreadable> {
     };
     match catch_panic(|| crate::module_io::load_multiconductor_module(path, None)) {
         Ok(Ok(parsed)) => {
-            let warnings = powerio_core::render_diagnostics(&parsed.diagnostics);
+            let warnings = powerio_core::render_diagnostics(parsed.diagnostics());
             Ok(Case::Multiconductor(
                 Box::new(parsed.into_value()),
                 warnings,
@@ -722,7 +722,7 @@ fn dist_convert_leg(
     // the transmission leg counts them; without this a loss the reader states
     // on re-parse was graded undeclared.
     out.warnings
-        .extend(powerio_core::render_diagnostics(&parsed.diagnostics));
+        .extend(powerio_core::render_diagnostics(parsed.diagnostics()));
     let before = invariants::distribution_core(source);
     let after = invariants::distribution_core(parsed.value());
     if before != after {
@@ -851,7 +851,7 @@ fn convert_leg(
         }
     };
     out.warnings
-        .extend(powerio_core::render_diagnostics(&parsed.diagnostics));
+        .extend(powerio_core::render_diagnostics(parsed.diagnostics()));
     fill_invariants(&mut out, source, parsed.value());
     out
 }

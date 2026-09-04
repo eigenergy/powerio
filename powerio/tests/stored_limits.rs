@@ -61,7 +61,7 @@ fn six_figure_record_counts_decode_within_the_ceiling() {
     let module = deserialize_module_text(&text).unwrap();
     let elapsed = started.elapsed();
     assert_eq!(module.sources().len(), COUNT);
-    assert_eq!(module.diagnostics.len(), COUNT);
+    assert_eq!(module.diagnostics().len(), COUNT);
     assert!(
         elapsed < std::time::Duration::from_secs(5),
         "decode took {elapsed:?}"
@@ -268,7 +268,7 @@ fn record_document_bounds_refuse_past_and_accept_at_each_limit() {
     noisy["message"] = serde_json::json!("m".repeat(65_537));
     raw["diagnostics"] = serde_json::json!([noisy]);
     let module = deserialize_module_text(&raw.to_string()).unwrap();
-    assert!(module.diagnostics[0].message().len() <= 16_384);
+    assert!(module.diagnostics()[0].message().len() <= 16_384);
 
     // Diagnostic target bytes: one past the bound is refused while decoding.
     let mut raw = base_module_json();
@@ -538,6 +538,6 @@ fn six_figure_unidentified_diagnostics_encode_within_the_ceiling() {
         "encode took {elapsed:?}"
     );
     let back = deserialize_module_text(&text).unwrap();
-    assert_eq!(back.diagnostics.len(), COUNT);
+    assert_eq!(back.diagnostics().len(), COUNT);
     assert_eq!(serialize_module_text(&back).unwrap(), text);
 }

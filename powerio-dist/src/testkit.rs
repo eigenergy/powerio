@@ -53,8 +53,8 @@ fn from_module(module: powerio_core::PioModule<MulticonductorNetwork>) -> Parsed
         Some(Arc::new(text.to_owned()))
     });
     Parsed {
-        warnings: crate::diagnostics::render_diagnostics(&module.diagnostics),
-        diagnostics: module.diagnostics.clone(),
+        warnings: crate::diagnostics::render_diagnostics(module.diagnostics()),
+        diagnostics: module.diagnostics().to_vec(),
         source,
         network: module.value().clone(),
         module,

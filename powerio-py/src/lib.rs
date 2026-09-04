@@ -362,7 +362,7 @@ impl PyBalancedNetwork {
     }
 
     fn diagnostics(&self) -> &[powerio_core::Diagnostic] {
-        &self.module.diagnostics
+        self.module.diagnostics()
     }
 
     fn dc_operators(&self, formula: &str) -> PyResult<DcOperators> {
@@ -645,12 +645,7 @@ impl PyBalancedNetwork {
         IndexedNetwork::with_core(self.inner(), &self.core).is_radial()
     }
 
-    #[getter]
-    fn n_connected_components(&self) -> usize {
-        IndexedNetwork::with_core(self.inner(), &self.core).calc_island_count()
-    }
-
-    /// Power system terminology for `n_connected_components`.
+    /// The number of connected components, in power system terminology.
     #[getter]
     fn n_islands(&self) -> usize {
         IndexedNetwork::with_core(self.inner(), &self.core).calc_island_count()
@@ -670,20 +665,6 @@ impl PyBalancedNetwork {
     /// case that kept the file's multiple references).
     fn reference_bus_indices(&self) -> Vec<usize> {
         IndexedNetwork::with_core(self.inner(), &self.core).reference_bus_indices()
-    }
-
-    /// The star-lowered network: each in-service 3-winding transformer replaced
-    /// by its star bus and three branches. This is the space `bprime`, `ybus`,
-    /// `is_radial`, `n_connected_components` and `reference_bus_indices` are
-    /// computed over, while `buses` and `branches` mirror the case file. The
-    /// two differ only for a case that carries such a transformer; otherwise
-    /// this returns the same tables.
-    fn lowered(&self) -> PyBalancedNetwork {
-        let view = IndexedNetwork::with_core(self.inner(), &self.core);
-        let inner = view.network().clone();
-        let core = IndexCore::build(&inner);
-        let _ = core;
-        case_from_parts(inner, self.diagnostics().to_vec())
     }
 
     // --- tables (the format-neutral BalancedNetwork, as dict rows) --------------
@@ -1278,7 +1259,7 @@ impl PyMulticonductorNetwork {
     }
 
     fn n_line_codes(&self) -> usize {
-        self.inner().linecodes().len()
+        self.inner().line_codes().len()
     }
 
     fn n_switches(&self) -> usize {
@@ -1318,7 +1299,7 @@ impl PyMulticonductorNetwork {
     }
 
     fn n_untyped_objects(&self) -> usize {
-        self.inner().untyped().len()
+        self.inner().untyped_objects().len()
     }
 
     // --- complete read-only tables ------------------------------------
@@ -3180,7 +3161,7 @@ fn module_with_records<S, T>(
         out.add_source_map_entry(entry.clone())
             .map_err(|error| core_error_pyerr(&error))?;
     }
-    for diagnostic in &module.diagnostics {
+    for diagnostic in module.diagnostics() {
         out.add_diagnostic(diagnostic.clone())
             .map_err(|error| core_error_pyerr(&error))?;
     }
@@ -3942,7 +3923,7 @@ impl PyPioModule {
     fn diagnostics(&self) -> PyResult<Vec<PyDiagnostic>> {
         Ok(self
             .module()?
-            .diagnostics
+            .diagnostics()
             .iter()
             .map(PyDiagnostic::from)
             .collect())
@@ -4191,7 +4172,7 @@ impl PyPioModule {
             Some(module) => format!(
                 "PioModule(value={}, diagnostics={}, history={})",
                 module.value().type_name(),
-                module.diagnostics.len(),
+                module.diagnostics().len(),
                 module.history().len()
             ),
             None => "PioModule(<consumed>)".to_owned(),
@@ -4383,8 +4364,11 @@ mod tests {
         assert_eq!(copied.producer(), source.producer());
         assert_eq!(copied.sources(), source.sources());
         assert_eq!(copied.source_map(), source.source_map());
-        assert_eq!(copied.diagnostics.len(), source.diagnostics.len());
-        assert_eq!(copied.diagnostics[0].code(), source.diagnostics[0].code());
+        assert_eq!(copied.diagnostics().len(), source.diagnostics().len());
+        assert_eq!(
+            copied.diagnostics()[0].code(),
+            source.diagnostics()[0].code()
+        );
         assert_eq!(copied.history(), source.history());
         assert_eq!(copied.extensions(), source.extensions());
         assert_eq!(

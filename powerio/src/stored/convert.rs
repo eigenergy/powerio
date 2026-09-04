@@ -46,7 +46,7 @@ pub fn emit_module(module: &PioModule<PioValue>) -> Result<String> {
             .iter()
             .map(encode_map_entry)
             .collect::<Result<_>>()?,
-        diagnostics: encode_diagnostics(&module.diagnostics),
+        diagnostics: encode_diagnostics(module.diagnostics()),
         history: module
             .history()
             .iter()

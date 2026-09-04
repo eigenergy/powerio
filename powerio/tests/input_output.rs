@@ -118,11 +118,11 @@ fn an_acquisition_root_widens_where_includes_may_live() {
     assert!(allowed.is_ok(), "{:?}", allowed.err());
     assert!(
         refused
-            .diagnostics
+            .diagnostics()
             .iter()
             .any(|diagnostic| diagnostic.code() == "READ.DSS.INCLUDE_REFUSED"),
         "{:?}",
-        refused.diagnostics
+        refused.diagnostics()
     );
 }
 

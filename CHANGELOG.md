@@ -33,6 +33,16 @@ crates.
   `geo-json`, PowerIO IR carries it, and `pio_value_geo_layer` reads it in C.
 - `TimeSeries<T>` and `ScenarioSet<T>` use ordinary collection operations.
   An entry is the contained value or a view rooted in the owning module.
+- `PioModule::diagnostics()` is an accessor beside `value()`, `producer()`,
+  `sources()`, and `history()`; the field is private, and `add_diagnostic`
+  remains the checked way to record one. `TimeSeries::value(index)` is
+  removed in favor of `get(index)`.
+- `MulticonductorNetwork::line_codes()` and `untyped_objects()` replace
+  `linecodes()` and `untyped()`, matching the C, Python, and Julia table
+  names. PowerIO IR keys are unchanged.
+- Python `TimeSeries` is a `collections.abc.Sequence` and `ScenarioSet` a
+  `collections.abc.Mapping`, so `index`, `count`, `items`, `values`, and
+  `get` work on them.
 - `OperatingPointUpdate`, `NetworkUpdate`, and `CalculationUpdate` target
   stable component identities with absolute values and explicit units.
   `apply_updates` validates the whole batch before changing anything and

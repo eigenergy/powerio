@@ -428,7 +428,7 @@ impl Writer {
             doc.insert("terminal_conventions".into(), tc);
         }
         self.buses(net, &mut doc);
-        self.linecodes(net, &mut doc);
+        self.line_codes(net, &mut doc);
 
         self.branches(net, &mut doc);
         self.injections(net, &mut doc);
@@ -512,10 +512,10 @@ impl Writer {
         doc.insert("bus".into(), Value::Object(buses));
     }
 
-    fn linecodes(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
-        if !net.linecodes().is_empty() {
+    fn line_codes(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
+        if !net.line_codes().is_empty() {
             let mut codes = Map::new();
-            for c in net.linecodes() {
+            for c in net.line_codes() {
                 let mut o = Map::new();
                 // The schema requires R_series_1_1 and X_series_1_1; an
                 // empty matrix would drop them and invalidate the output.
@@ -639,7 +639,7 @@ impl Writer {
     }
 
     fn warn_unemitted_untyped(&mut self, net: &MulticonductorNetwork) {
-        for u in net.untyped() {
+        for u in net.untyped_objects() {
             if Self::is_emitted_untyped(u) {
                 continue;
             }
@@ -677,7 +677,7 @@ impl Writer {
         extras: &mut Map<String, Value>,
     ) {
         self.clear_non_table_extras_slots(net, extras);
-        for u in net.untyped() {
+        for u in net.untyped_objects() {
             let subtype = u.class.strip_prefix("transformer.");
             if subtype.is_none() && !RAW_BMOPF_EXTRAS_TABLES.contains(&u.class.as_str()) {
                 continue;
@@ -779,7 +779,7 @@ impl Writer {
         extras: &mut Map<String, Value>,
     ) {
         let classes: BTreeSet<&str> = net
-            .untyped()
+            .untyped_objects()
             .iter()
             .map(|u| u.class.as_str())
             .filter(|class| RAW_BMOPF_EXTRAS_TABLES.contains(class))
@@ -3340,7 +3340,7 @@ mod tests {
         // would materialize dim x dim zeros for X.
         let mut lc = DistLineCode::new("big", Vec::new(), Vec::new());
         lc.r_series = vec![Vec::new(); 100_000];
-        net.linecodes_mut().push(lc);
+        net.line_codes_mut().push(lc);
         // Same shape for a shunt's G/B pair.
         net.shunts_mut().push(DistShunt::new(
             "big",

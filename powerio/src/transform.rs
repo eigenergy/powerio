@@ -303,7 +303,7 @@ pub fn to_balanced(
     // before the value is consumed, so the additions below hold by
     // construction and a cap-edge input is refused with its module intact.
     let diagnostics_room =
-        powerio_core::limits::MAX_MODULE_DIAGNOSTICS.saturating_sub(module.diagnostics.len());
+        powerio_core::limits::MAX_MODULE_DIAGNOSTICS.saturating_sub(module.diagnostics().len());
     let history_room =
         powerio_core::limits::MAX_MODULE_HISTORY_ENTRIES.saturating_sub(module.history().len());
     if diagnostics.len() > diagnostics_room || history_room == 0 {
@@ -2556,7 +2556,7 @@ fn classify_transformer<'net>(
 }
 
 fn check_untyped_objects(net: &MulticonductorNetwork, report: &mut MulticonductorToBalancedReport) {
-    for (i, obj) in net.untyped().iter().enumerate() {
+    for (i, obj) in net.untyped_objects().iter().enumerate() {
         report.diagnostics.push(
             Diagnostic::of(
                 &codes::TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_OBJECT,
