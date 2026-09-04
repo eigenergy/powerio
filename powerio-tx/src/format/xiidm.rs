@@ -12066,10 +12066,9 @@ fn terminal_attributes_for_bus(
     if let Some(node) = index
         .connectivity_node_by_calculated_bus
         .get(&(level.component.clone(), bus))
+        && let Some(number) = index.node_number(&node.component)
     {
-        if let Some(number) = index.node_number(&node.component) {
-            return format!(" node=\"{number}\"");
-        }
+        return format!(" node=\"{number}\"");
     }
     String::new()
 }

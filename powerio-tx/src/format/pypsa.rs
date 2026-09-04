@@ -447,16 +447,16 @@ fn read_pypsa_csv_static(
             ));
         }
     }
-    if let Some(table) = folder.optional("stores.csv")? {
-        if !table.rows.is_empty() {
-            warnings.push(
-                &codes::READ_PYPSA_TABLE_UNSUPPORTED,
-                format!(
-                    "stores.csv ignored ({} rows): PyPSA stores are not mapped",
-                    table.rows.len()
-                ),
-            );
-        }
+    if let Some(table) = folder.optional("stores.csv")?
+        && !table.rows.is_empty()
+    {
+        warnings.push(
+            &codes::READ_PYPSA_TABLE_UNSUPPORTED,
+            format!(
+                "stores.csv ignored ({} rows): PyPSA stores are not mapped",
+                table.rows.len()
+            ),
+        );
     }
 
     // A real PyPSA export can carry its data in time series siblings
@@ -504,7 +504,7 @@ fn read_pypsa_csv_static(
         geo: super::geographic_meta(&buses),
         case_metadata: crate::network::CaseMetadata::default(),
         detailed_connectivity: None,
-        generated_uids: Default::default(),
+        generated_uids: std::sync::Arc::default(),
         buses: buses.into(),
         loads: loads.into(),
         shunts: shunts.into(),

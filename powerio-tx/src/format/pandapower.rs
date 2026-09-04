@@ -763,16 +763,16 @@ pub(crate) fn parse_pandapower_source(
         if !looks_like_frame {
             continue;
         }
-        if let Ok(Some(frame)) = read_frame(obj, key) {
-            if !frame.data.is_empty() {
-                warnings.push(
-                    &codes::READ_PANDAPOWER_TABLE_UNSUPPORTED,
-                    format!(
-                        "`{key}` table ignored ({} rows): not mapped",
-                        frame.data.len()
-                    ),
-                );
-            }
+        if let Ok(Some(frame)) = read_frame(obj, key)
+            && !frame.data.is_empty()
+        {
+            warnings.push(
+                &codes::READ_PANDAPOWER_TABLE_UNSUPPORTED,
+                format!(
+                    "`{key}` table ignored ({} rows): not mapped",
+                    frame.data.len()
+                ),
+            );
         }
     }
 
@@ -783,7 +783,7 @@ pub(crate) fn parse_pandapower_source(
         geo: super::geographic_meta(&buses),
         case_metadata: crate::network::CaseMetadata::default(),
         detailed_connectivity: None,
-        generated_uids: Default::default(),
+        generated_uids: std::sync::Arc::default(),
         buses: buses.into(),
         loads: loads.into(),
         shunts: shunts.into(),
@@ -866,16 +866,16 @@ fn warn_nonempty_table(
     reason: &str,
     warnings: &mut Diagnostics,
 ) -> Result<()> {
-    if let Some(frame) = read_frame(obj, name)? {
-        if !frame.data.is_empty() {
-            warnings.push(
-                &codes::READ_PANDAPOWER_TABLE_UNSUPPORTED,
-                format!(
-                    "`{name}` table ignored ({} rows): {reason}",
-                    frame.data.len()
-                ),
-            );
-        }
+    if let Some(frame) = read_frame(obj, name)?
+        && !frame.data.is_empty()
+    {
+        warnings.push(
+            &codes::READ_PANDAPOWER_TABLE_UNSUPPORTED,
+            format!(
+                "`{name}` table ignored ({} rows): {reason}",
+                frame.data.len()
+            ),
+        );
     }
     Ok(())
 }
@@ -3552,7 +3552,7 @@ mod tests {
             geo: None,
             case_metadata: crate::network::CaseMetadata::default(),
             detailed_connectivity: None,
-            generated_uids: Default::default(),
+            generated_uids: std::sync::Arc::default(),
             buses: buses.into(),
             loads: Vec::new().into(),
             shunts: Vec::new().into(),

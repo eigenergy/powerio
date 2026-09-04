@@ -530,8 +530,8 @@ fn search_table_chain(
                 if gen_table_continues(bytes, g_end, &bus_ids, gen_variants, budget) {
                     continue;
                 }
-                if !bus_shunts.is_empty() {
-                    if let Some(branches) = find_branch_table(
+                if !bus_shunts.is_empty()
+                    && let Some(branches) = find_branch_table(
                         bytes,
                         g_end,
                         &bus_ids,
@@ -539,21 +539,21 @@ fn search_table_chain(
                         &branch_runs,
                         branch_count_can_include_trailer,
                         budget,
-                    ) {
-                        keep_best_chain(
-                            &mut best,
-                            chain_score(&loads, &bus_shunts, &branches, &generators),
-                            gen_status,
-                            checked_network(
-                                name_hint,
-                                buses.clone(),
-                                loads.clone(),
-                                bus_shunts.clone(),
-                                branches,
-                                generators.clone(),
-                            ),
-                        );
-                    }
+                    )
+                {
+                    keep_best_chain(
+                        &mut best,
+                        chain_score(&loads, &bus_shunts, &branches, &generators),
+                        gen_status,
+                        checked_network(
+                            name_hint,
+                            buses.clone(),
+                            loads.clone(),
+                            bus_shunts.clone(),
+                            branches,
+                            generators.clone(),
+                        ),
+                    );
                 }
                 for (shunts, s_end) in device_table_candidates(
                     bytes,
@@ -732,7 +732,7 @@ fn checked_network(
         geo: None,
         case_metadata: crate::network::CaseMetadata::default(),
         detailed_connectivity: None,
-        generated_uids: Default::default(),
+        generated_uids: std::sync::Arc::default(),
         buses: buses.into(),
         loads: loads.into(),
         shunts: shunts.into(),
@@ -2253,7 +2253,7 @@ mod tests {
             geo: None,
             case_metadata: crate::network::CaseMetadata::default(),
             detailed_connectivity: None,
-            generated_uids: Default::default(),
+            generated_uids: std::sync::Arc::default(),
             buses: Vec::new().into(),
             loads: Vec::new().into(),
             shunts: Vec::new().into(),

@@ -247,23 +247,23 @@ pub(crate) fn parse_cimxml(text: &str) -> Result<CimDocument> {
             (_, Event::End(_)) => {
                 match depth {
                     3 => {
-                        if let Some(prop) = current_prop.take() {
-                            if !prop.is_empty() {
-                                if current_prop_nested && in_header {
-                                    if let Some(header) = header.as_mut() {
-                                        header.nested_properties.push(prop);
-                                    }
-                                    prop_text.clear();
-                                } else {
-                                    let value = std::mem::take(&mut prop_text);
-                                    push_prop(
-                                        in_header,
-                                        &mut header,
-                                        &mut current,
-                                        prop,
-                                        PropValue::Text(value.trim().to_string()),
-                                    );
+                        if let Some(prop) = current_prop.take()
+                            && !prop.is_empty()
+                        {
+                            if current_prop_nested && in_header {
+                                if let Some(header) = header.as_mut() {
+                                    header.nested_properties.push(prop);
                                 }
+                                prop_text.clear();
+                            } else {
+                                let value = std::mem::take(&mut prop_text);
+                                push_prop(
+                                    in_header,
+                                    &mut header,
+                                    &mut current,
+                                    prop,
+                                    PropValue::Text(value.trim().to_string()),
+                                );
                             }
                         }
                         current_prop_nested = false;

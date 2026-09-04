@@ -3741,7 +3741,7 @@ impl BalancedNetwork {
             geo: None,
             case_metadata: CaseMetadata::default(),
             detailed_connectivity: None,
-            generated_uids: Default::default(),
+            generated_uids: std::sync::Arc::default(),
             buses: Vec::new().into(),
             loads: Vec::new().into(),
             shunts: Vec::new().into(),
@@ -4569,7 +4569,7 @@ impl BalancedNetwork {
                                 "topology switch `{}` references unknown bus breaker bus `{bus}`",
                                 switch.component
                             )));
-                        };
+                        }
                         if voltage_level_topology.get(&switch.voltage_level)
                             == Some(&TopologyKind::NodeBreaker)
                         {
@@ -4585,7 +4585,7 @@ impl BalancedNetwork {
                                 "topology switch `{}` references unknown connectivity node `{node}`",
                                 switch.component
                             )));
-                        };
+                        }
                         if voltage_level_topology.get(&switch.voltage_level)
                             == Some(&TopologyKind::BusBreaker)
                         {

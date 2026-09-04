@@ -494,7 +494,7 @@ pub(crate) fn parse_powermodels_json_source(
         geo: None,
         case_metadata: crate::network::CaseMetadata::default(),
         detailed_connectivity: None,
-        generated_uids: Default::default(),
+        generated_uids: std::sync::Arc::default(),
         buses: sorted_rows(document.bus, |row| row.index)
             .into_iter()
             .map(|(_, row)| read_bus(row, ascale))
@@ -818,14 +818,15 @@ fn read_branch(
         // The `transformer` flag decides the type, so this rule drops a
         // non-unit tap on an untagged branch. Warn about the drop. Taps of
         // 1 and 0 both mean no off-nominal ratio and stay quiet.
-        if let Some(raw) = row.tap {
-            if raw != 0.0 && raw != 1.0 {
-                discarded.push(format!(
-                    "`{key}` ({} -> {}) tap {raw}",
-                    row.f_bus.unwrap_or(0),
-                    row.t_bus.unwrap_or(0),
-                ));
-            }
+        if let Some(raw) = row.tap
+            && raw != 0.0
+            && raw != 1.0
+        {
+            discarded.push(format!(
+                "`{key}` ({} -> {}) tap {raw}",
+                row.f_bus.unwrap_or(0),
+                row.t_bus.unwrap_or(0),
+            ));
         }
         0.0
     };

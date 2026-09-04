@@ -2445,14 +2445,13 @@ pub(crate) fn encode_diagnostics(diagnostics: &[Diagnostic]) -> Vec<dto::Diagnos
             let id = if let Some(id) = diagnostic.id() {
                 id.as_str().to_owned()
             } else {
-                let minted = loop {
+                loop {
                     let candidate = format!("d{next}");
                     next += 1;
                     if !used.contains(candidate.as_str()) {
                         break candidate;
                     }
-                };
-                minted
+                }
             };
             encode_diagnostic(id, diagnostic)
         })

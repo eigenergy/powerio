@@ -77,10 +77,10 @@ pub(crate) fn parse_pslf_source(
     let mut branches = Vec::new();
     for rec in doc.records("branch data") {
         let branch = read_branch(rec)?;
-        if let Some(threshold) = jump {
-            if branch.x.abs() <= threshold {
-                near_jump += 1;
-            }
+        if let Some(threshold) = jump
+            && branch.x.abs() <= threshold
+        {
+            near_jump += 1;
         }
         branches.push(branch);
     }
@@ -123,7 +123,7 @@ pub(crate) fn parse_pslf_source(
         geo: None,
         case_metadata: crate::network::CaseMetadata::default(),
         detailed_connectivity: None,
-        generated_uids: Default::default(),
+        generated_uids: std::sync::Arc::default(),
         buses: buses.into(),
         loads: loads.into(),
         shunts: shunts.into(),
@@ -180,10 +180,9 @@ impl EpcDocument {
             if toks
                 .first()
                 .is_some_and(|tok| tok.eq_ignore_ascii_case("sbase"))
+                && let Some(base) = toks.get(1).and_then(|tok| tok.parse::<f64>().ok())
             {
-                if let Some(base) = toks.get(1).and_then(|tok| tok.parse::<f64>().ok()) {
-                    return base;
-                }
+                return base;
             }
         }
         warnings.push(

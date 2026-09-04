@@ -90,12 +90,12 @@ fn psse_extra_rating_values(
     let mut deferred = Vec::new();
 
     for rating in &branch.rating_sets {
-        if let Some(slot) = psse_extra_rating_slot(&rating.name) {
-            if !used[slot] {
-                values[slot] = rating.rate_mva;
-                used[slot] = true;
-                continue;
-            }
+        if let Some(slot) = psse_extra_rating_slot(&rating.name)
+            && !used[slot]
+        {
+            values[slot] = rating.rate_mva;
+            used[slot] = true;
+            continue;
         }
         deferred.push(rating);
     }
@@ -2319,7 +2319,7 @@ fn parse_psse_source_inner(
         geo: None,
         case_metadata: crate::network::CaseMetadata::default(),
         detailed_connectivity: None,
-        generated_uids: Default::default(),
+        generated_uids: std::sync::Arc::default(),
         buses: buses.into(),
         loads: loads.into(),
         shunts: shunts.into(),
@@ -3415,10 +3415,10 @@ fn read_load(f: &[Cow<'_, str>], raw_rev: u32, warnings: &mut Diagnostics) -> Re
             extras.insert("psse_flagstatus".into(), Value::from(flag));
         }
     }
-    if raw_rev >= 35 {
-        if let Some(loadtype) = f.get(17).map(|s| s.trim()).filter(|s| !s.is_empty()) {
-            extras.insert("psse_loadtype".into(), Value::String(loadtype.to_string()));
-        }
+    if raw_rev >= 35
+        && let Some(loadtype) = f.get(17).map(|s| s.trim()).filter(|s| !s.is_empty())
+    {
+        extras.insert("psse_loadtype".into(), Value::String(loadtype.to_string()));
     }
     let scal = int_at(f, 12, 1)?;
     // LOADTYPE is the revision 35 trailing field; earlier layouts end before it.

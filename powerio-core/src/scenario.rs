@@ -125,16 +125,16 @@ impl<T> ScenarioSet<T> {
             .iter()
             .filter(|scenario| scenario.probability.is_some())
             .count();
-        if probability_count != 0 && probability_count != scenarios.len() {
-            if let Some(missing) = scenarios
+        if probability_count != 0
+            && probability_count != scenarios.len()
+            && let Some(missing) = scenarios
                 .iter()
                 .find(|scenario| scenario.probability.is_none())
-            {
-                return Err(Error::new(
-                    &crate::codes::VALIDATE_SCENARIO_MISSING_PROBABILITY,
-                    format!("scenario `{}` has no probability", missing.id),
-                ));
-            }
+        {
+            return Err(Error::new(
+                &crate::codes::VALIDATE_SCENARIO_MISSING_PROBABILITY,
+                format!("scenario `{}` has no probability", missing.id),
+            ));
         }
 
         if probability_count != 0 {

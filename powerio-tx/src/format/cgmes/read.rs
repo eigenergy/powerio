@@ -989,10 +989,10 @@ pub(crate) fn read_cgmes_documents_into(
     for (name, text) in documents {
         let doc = parse_cimxml(&text)?;
         for ns in &doc.cim_namespaces {
-            if let Some(version) = CgmesVersion::from_namespace(ns) {
-                if !versions.contains(&version) {
-                    versions.push(version);
-                }
+            if let Some(version) = CgmesVersion::from_namespace(ns)
+                && !versions.contains(&version)
+            {
+                versions.push(version);
             }
         }
         warn_full_model_fields(&name, doc.header.as_ref(), warnings);
@@ -4582,10 +4582,11 @@ fn read_machines(
             generator.active_power_control = generating_unit_active_power_control(store, unit)?;
         }
         apply_regulation(mapper, id, &mut generator)?;
-        if let Some(priority) = mapper.store.f(id, "SynchronousMachine.referencePriority") {
-            if priority > 0.0 && best.is_none_or(|(p0, _)| priority < p0) {
-                best = Some((priority, bus));
-            }
+        if let Some(priority) = mapper.store.f(id, "SynchronousMachine.referencePriority")
+            && priority > 0.0
+            && best.is_none_or(|(p0, _)| priority < p0)
+        {
+            best = Some((priority, bus));
         }
         if largest.is_none_or(|(s, _)| generator.mbase > s) {
             largest = Some((generator.mbase, bus));
@@ -4886,15 +4887,15 @@ fn selected_sections(mapper: &mut Mapper<'_>, id: &str, default: f64) -> usize {
     let store = mapper.store;
     let assigned = store.f(id, "ShuntCompensator.sections");
     let observed = sv_sections(store, id);
-    if let (Some(assigned), Some(observed)) = (assigned, observed) {
-        if (assigned - observed).abs() > f64::EPSILON {
-            mapper.warnings.push_as(
+    if let (Some(assigned), Some(observed)) = (assigned, observed)
+        && (assigned - observed).abs() > f64::EPSILON
+    {
+        mapper.warnings.push_as(
                 &codes::READ_CGMES_FIELD_UNMAPPED,
                 format!(
                     "`SvShuntCompensatorSections.sections` for `{id}` is {observed} while the SSH `ShuntCompensator.sections` assignment is {assigned}; the shunt keeps the SSH assignment and the state variable count is not retained"
                 ),
             );
-        }
     }
     assigned
         .or(observed)

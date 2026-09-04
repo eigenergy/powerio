@@ -1262,10 +1262,9 @@ fn source_vm_nom(extras: &Extras, v_nom: &[f64]) -> Option<Value> {
     if let Some(kv) = raw
         .as_f64()
         .or_else(|| raw.as_str().and_then(|s| s.parse().ok()))
+        && v_nom.iter().all(|v| same_voltage(*v, kv * 1e3))
     {
-        if v_nom.iter().all(|v| same_voltage(*v, kv * 1e3)) {
-            return Some(json!(kv));
-        }
+        return Some(json!(kv));
     }
     let vals: Vec<f64> = raw
         .as_array()?

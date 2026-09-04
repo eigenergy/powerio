@@ -1213,7 +1213,7 @@ pub(crate) fn parse_ieee_cdf_source(
             ..CaseMetadata::default()
         },
         detailed_connectivity: None,
-        generated_uids: Default::default(),
+        generated_uids: std::sync::Arc::default(),
         buses: tables.buses.into(),
         loads: tables.loads.into(),
         shunts: tables.shunts.into(),

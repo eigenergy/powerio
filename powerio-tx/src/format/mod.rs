@@ -1382,10 +1382,10 @@ pub(super) fn allocate_circuit_id<K: Ord + Clone>(
     used: &mut std::collections::BTreeMap<K, std::collections::BTreeSet<String>>,
 ) -> String {
     let taken = used.entry(key).or_default();
-    if let Some(id) = preferred {
-        if taken.insert(id.to_owned()) {
-            return id.to_owned();
-        }
+    if let Some(id) = preferred
+        && taken.insert(id.to_owned())
+    {
+        return id.to_owned();
     }
     let mut n = 1u32;
     loop {
@@ -1417,18 +1417,16 @@ fn warn_psse_downgrade(
         format,
         module.value().source_format(),
         source_text.as_deref(),
-    ) {
-        if let Ok(src_rev) = psse::header_rev(src)
-            && src_rev > rev
-        {
-            conv.push(
+    ) && let Ok(src_rev) = psse::header_rev(src)
+        && src_rev > rev
+    {
+        conv.push(
                 &codes::EMIT_PSSE_DOWNGRADED,
                 format!(
                     "PSS/E source is revision {src_rev} but the emission target is revision {rev}; \
                      the older layout drops fields the source carried (emit as psse{src_rev} to keep them)"
                 ),
             );
-        }
     }
 }
 
@@ -1889,10 +1887,8 @@ fn warn_missing_reference(net: &BalancedNetwork, format: TargetFormat, conv: &mu
             | TargetFormat::Pslf
             | TargetFormat::SurgeJson
     );
-    if needs_ref {
-        if let Some(message) = missing_reference_warning(net) {
-            conv.push(&format.emit_family().reference_missing, message);
-        }
+    if needs_ref && let Some(message) = missing_reference_warning(net) {
+        conv.push(&format.emit_family().reference_missing, message);
     }
 }
 
@@ -1967,10 +1963,10 @@ pub(crate) fn set_bus_kind(
     bus: BusId,
     kind: BusType,
 ) {
-    if let Some(&idx) = bus_pos.get(&bus) {
-        if buses[idx].kind != BusType::Isolated {
-            buses[idx].kind = kind;
-        }
+    if let Some(&idx) = bus_pos.get(&bus)
+        && buses[idx].kind != BusType::Isolated
+    {
+        buses[idx].kind = kind;
     }
 }
 

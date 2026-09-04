@@ -113,6 +113,12 @@ crates.
   their one substation rule requires it and report the change. The reader
   and writer build on Mohamed Numair's contribution, audited in
   `evals/powsybl/cgmes-contribution-audit.md`.
+- The CGMES and XIIDM readers scale with the model: the CGMES object store
+  is indexed by class and by reference, and the XIIDM reader groups its
+  records by voltage level once. Both XML readers resolve the predefined
+  entities and character references in element text, so a name containing
+  `&` reads back from the writer's own output. JIIDM emission reports under
+  `EMIT.JIIDM`.
 - ENTSO-E UCTE-DEF 2003.09.01 and 2007.05.01 parse and emit under the token
   `ucte`; fresh output uses 2007.05.01. A bus whose name is not a UCTE node
   code receives a derived code and an `EMIT.UCTE.VALUE_SUBSTITUTED` warning.
