@@ -7206,7 +7206,7 @@ pub(super) fn validate_rdf_graph(files: &[(String, String)]) -> Result<()> {
                             ))
                         })?;
                         let (attribute_namespace, attribute_local_name) =
-                            reader.resolve_attribute(attribute.key);
+                            reader.resolver().resolve_attribute(attribute.key);
                         if !matches!(
                             attribute_namespace,
                             ResolveResult::Bound(ref value) if value.as_ref() == RDF_NS
@@ -7214,7 +7214,7 @@ pub(super) fn validate_rdf_graph(files: &[(String, String)]) -> Result<()> {
                             continue;
                         }
                         let value = attribute
-                            .decode_and_unescape_value(reader.decoder())
+                            .decoded_and_normalized_value(quick_xml::XmlVersion::Implicit1_0, reader.decoder())
                             .map_err(|error| {
                                 emission_error(format!(
                                     "generated CGMES file `{name}` has an invalid RDF attribute value: {error}"

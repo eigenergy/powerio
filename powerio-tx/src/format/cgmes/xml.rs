@@ -312,7 +312,7 @@ fn rdf_identity_attr<R>(
 ) -> Result<Option<String>> {
     for attr in start.attributes() {
         let attr = attr.map_err(xml_err)?;
-        let (namespace, local) = reader.resolve_attribute(attr.key);
+        let (namespace, local) = reader.resolver().resolve_attribute(attr.key);
         if is_rdf_attribute(&namespace, local.as_ref(), b"about")
             || is_rdf_attribute(&namespace, local.as_ref(), b"ID")
         {
@@ -331,7 +331,7 @@ fn read_object<R>(
     let mut definition = false;
     for attr in start.attributes() {
         let attr = attr.map_err(xml_err)?;
-        let (namespace, local) = reader.resolve_attribute(attr.key);
+        let (namespace, local) = reader.resolver().resolve_attribute(attr.key);
         if is_rdf_attribute(&namespace, local.as_ref(), b"ID") {
             definition = true;
             id = normalize_id(&String::from_utf8_lossy(&attr.value));
@@ -375,7 +375,7 @@ fn resource_attr<R>(
 ) -> Result<Option<String>> {
     for attr in start.attributes() {
         let attr = attr.map_err(xml_err)?;
-        let (namespace, local) = reader.resolve_attribute(attr.key);
+        let (namespace, local) = reader.resolver().resolve_attribute(attr.key);
         if is_rdf_attribute(&namespace, local.as_ref(), b"resource") {
             return Ok(Some(normalize_id(&String::from_utf8_lossy(&attr.value))));
         }
