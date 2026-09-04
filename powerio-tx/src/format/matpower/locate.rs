@@ -11,25 +11,42 @@ use super::tokens;
 /// A line's text with its `\n`/`\r\n` terminator trimmed off (`str::lines`
 /// semantics) given a `split_inclusive('\n')` piece.
 #[inline]
-fn trim_eol(piece: &str) -> &str {
+pub(super) fn trim_eol(piece: &str) -> &str {
     piece
         .strip_suffix('\n')
         .map_or(piece, |s| s.strip_suffix('\r').unwrap_or(s))
 }
 
-/// Locate each `mpc.<field> = <rhs>;` assignment's text, borrowing `(field, full)`
-/// slices from `content` in source order. For a numeric `[ … ]` matrix it scans
-/// for the closing `]` directly — numeric bodies never nest brackets — and uses
-/// the quote-aware depth FSM only for `{ … }` cell arrays (whose strings may hold
-/// `]`/`}`). Infallible: an unclosed block runs to EOF and
-/// [`super::matlab::for_each_matrix_row`] reports the truncation.
+/// One `mpc.<field> = ...;` assignment: its field name, its complete text,
+/// and the byte offset of that text within the source.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Assignment<'a> {
+    pub(crate) field: &'a str,
+    pub(crate) text: &'a str,
+    pub(crate) start: usize,
+}
+
+impl Assignment<'_> {
+    /// The half open byte range of the assignment text within the source.
+    pub(crate) fn range(&self) -> (usize, usize) {
+        (self.start, self.start + self.text.len())
+    }
+}
+
+/// Locate each `mpc.<field> = <rhs>;` assignment's text, borrowing the field
+/// name and the complete assignment from `content` in source order. For a
+/// numeric `[ ... ]` matrix it scans for the closing `]` directly (numeric
+/// bodies never nest brackets) and uses the quote-aware depth FSM only for
+/// `{ ... }` cell arrays (whose strings may hold `]`/`}`). Infallible: an
+/// unclosed block runs to EOF and [`super::matlab::for_each_matrix_row`]
+/// reports the truncation.
 ///
 /// One forward pass over `content.split_inclusive('\n')` with a running byte
-/// offset — no materialized `Vec` of every line (which on a 56 MB / 192k-bus case
-/// is tens of MB written before a single field is found). A multi-line block
-/// consumes following lines from the same iterator, so the next assignment starts
-/// after the block's closing line.
-pub(crate) fn locate_assignments(content: &str) -> Vec<(&str, &str)> {
+/// offset, so no `Vec` of every line is materialized (which on a 56 MB /
+/// 192k-bus case is tens of MB written before a single field is found). A
+/// multi-line block consumes following lines from the same iterator, so the
+/// next assignment starts after the block's closing line.
+pub(crate) fn locate_assignments(content: &str) -> Vec<Assignment<'_>> {
     let mut out = Vec::new();
     let mut off = 0usize;
     let mut lines = content.split_inclusive('\n');
@@ -65,7 +82,11 @@ pub(crate) fn locate_assignments(content: &str) -> Vec<(&str, &str)> {
                     depth += net_bracket_depth(tokens::comment_split(l).0);
                 }
             }
-            out.push((field, &content[start..end]));
+            out.push(Assignment {
+                field,
+                text: &content[start..end],
+                start,
+            });
         }
     }
     out
@@ -155,8 +176,8 @@ mod tests {
     fn located<'a>(src: &'a str, field: &str) -> Option<&'a str> {
         locate_assignments(src)
             .into_iter()
-            .find(|(f, _)| *f == field)
-            .map(|(_, full)| full)
+            .find(|assignment| assignment.field == field)
+            .map(|assignment| assignment.text)
     }
 
     #[test]
@@ -169,7 +190,7 @@ mod tests {
                    mpc.branch = [\n\t1\t2\t0.1;\n];\n";
         let fields: Vec<&str> = locate_assignments(src)
             .into_iter()
-            .map(|(f, _)| f)
+            .map(|assignment| assignment.field)
             .collect();
         assert_eq!(fields, vec!["baseMVA", "bus", "branch"]);
         assert_eq!(located(src, "baseMVA"), Some("mpc.baseMVA = 100;"));
@@ -177,6 +198,21 @@ mod tests {
         assert!(bus.starts_with("mpc.bus = ["));
         assert!(bus.ends_with("];"));
         assert!(bus.contains("2\t1"));
+    }
+
+    #[test]
+    fn each_assignment_records_its_byte_offset_in_the_source() {
+        let src =
+            "% header\nmpc.baseMVA = 100;\r\nmpc.bus = [\n\t1\t3;\n];\nmpc.branch = [1 2 0.1];\n";
+        for assignment in locate_assignments(src) {
+            let (start, end) = assignment.range();
+            assert_eq!(&src[start..end], assignment.text, "{}", assignment.field);
+        }
+        let branch = locate_assignments(src)
+            .into_iter()
+            .find(|assignment| assignment.field == "branch")
+            .unwrap();
+        assert_eq!(branch.start, src.find("mpc.branch").unwrap());
     }
 
     #[test]
@@ -201,7 +237,7 @@ mod tests {
         let src = "mpc.bus_name = {\n\t'Bus ]1';\n\t'Bus 2';\n};\nmpc.baseMVA = 100;\n";
         let fields: Vec<&str> = locate_assignments(src)
             .into_iter()
-            .map(|(f, _)| f)
+            .map(|assignment| assignment.field)
             .collect();
         assert_eq!(fields, vec!["bus_name", "baseMVA"]);
         assert!(located(src, "bus_name").unwrap().contains("Bus 2"));
@@ -213,7 +249,7 @@ mod tests {
         let src = "% mpc.bus = [fake];\nmpc.baseMVA = 100;\n";
         let fields: Vec<&str> = locate_assignments(src)
             .into_iter()
-            .map(|(f, _)| f)
+            .map(|assignment| assignment.field)
             .collect();
         assert_eq!(fields, vec!["baseMVA"]);
     }

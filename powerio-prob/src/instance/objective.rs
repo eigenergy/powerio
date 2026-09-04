@@ -18,9 +18,9 @@ pub enum ObjectiveTerm {
     /// The generator cost curves the network states, summed over the in
     /// service generators the instance dispatches.
     NetworkGeneratorCost,
-    /// The per phase cost references a multiconductor calculation record
-    /// states (the BMOPF objective).
-    NetworkPerPhaseCost,
+    /// Active power dispatch costs on the resources represented by a
+    /// multiconductor calculation record (the BMOPF objective).
+    ActivePowerDispatchCost,
 }
 
 /// The complete typed objective of one OPF instance: a sum of terms.
@@ -45,12 +45,11 @@ impl Objective {
         }
     }
 
-    /// The default multiconductor OPF objective: the per phase cost
-    /// references the calculation record states.
+    /// The default multiconductor OPF objective: active power dispatch cost.
     #[must_use]
-    pub fn network_per_phase_cost() -> Self {
+    pub fn active_power_dispatch_cost() -> Self {
         Self {
-            terms: vec![ObjectiveTerm::NetworkPerPhaseCost],
+            terms: vec![ObjectiveTerm::ActivePowerDispatchCost],
         }
     }
 
@@ -75,10 +74,10 @@ mod tests {
     #[test]
     fn an_objective_states_its_terms_in_order() {
         let objective =
-            Objective::network_generator_cost().with_term(ObjectiveTerm::NetworkPerPhaseCost);
+            Objective::network_generator_cost().with_term(ObjectiveTerm::ActivePowerDispatchCost);
         assert_eq!(objective.terms().len(), 2);
         assert_eq!(objective.terms()[0], ObjectiveTerm::NetworkGeneratorCost);
-        let wire = serde_json::to_value(&objective).unwrap();
-        assert_eq!(wire["terms"][1]["term"], "network_per_phase_cost");
+        let serialized = serde_json::to_value(&objective).unwrap();
+        assert_eq!(serialized["terms"][1]["term"], "active_power_dispatch_cost");
     }
 }

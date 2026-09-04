@@ -16,7 +16,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::network::{
     BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, GEN_EXTRA_KEYS, GenCost,
-    Generator, Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat, Storage, Switch, Transformer3W,
+    Generator, Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat, StaticVarCompensator, Storage,
+    Switch, Transformer3W, TransformerControl, TransformerControlMode,
 };
 use crate::{Error, Result};
 
@@ -27,6 +28,40 @@ pub(crate) const DEG_TO_RAD: f64 = std::f64::consts::PI / 180.0;
 /// Radians → degrees, the inverse of [`DEG_TO_RAD`], used when reading a per-unit
 /// source back into the neutral degree model.
 pub(crate) const RAD_TO_DEG: f64 = 180.0 / std::f64::consts::PI;
+
+fn norm_transformer_control(
+    control: &mut TransformerControl,
+    base_mva: f64,
+    map: &HashMap<BusId, BusId>,
+) {
+    control.controlled_bus = control
+        .controlled_bus
+        .and_then(|controlled_bus| remap(map, controlled_bus));
+    // Siemens defines RMA/RMI as phase shift angles only for |COD| 3 and 5.
+    // The values are unused for |COD| 0 and 4, so Fixed and DcLineQuantity
+    // retain their source values instead of assigning units they do not have.
+    if matches!(
+        control.mode,
+        TransformerControlMode::ActiveFlow | TransformerControlMode::AsymmetricActiveFlow
+    ) {
+        control.tap_min *= DEG_TO_RAD;
+        control.tap_max *= DEG_TO_RAD;
+    }
+    // Siemens defines VMA/VMI as Mvar for |COD| 2 and MW for |COD| 3 and 5.
+    // They are unused for |COD| 0 and 4.
+    if matches!(
+        control.mode,
+        TransformerControlMode::ReactiveFlow
+            | TransformerControlMode::ActiveFlow
+            | TransformerControlMode::AsymmetricActiveFlow
+    ) {
+        control.band_min /= base_mva;
+        control.band_max /= base_mva;
+    }
+    if let Some(angle) = &mut control.winding_connection_angle {
+        *angle *= DEG_TO_RAD;
+    }
+}
 
 /// The gen capability columns that are per-unitized (the ramp rates). The PQ-curve
 /// points (`pc1`/`pc2`/`qc*`) and `apf` stay raw, exactly as PowerModels'
@@ -59,10 +94,6 @@ impl Default for NormalizeOptions {
 
 /// Output of [`BalancedNetwork::to_normalized_with_options`].
 #[derive(Clone, Debug)]
-// Frozen 0.9 reader plumbing: the legacy09 upgrade in the powerio crate is
-// the one remaining consumer, so the type stays reachable but leaves the
-// documented surface. It goes when legacy09 retires.
-#[doc(hidden)]
 pub struct NormalizedNetwork {
     pub network: BalancedNetwork,
     /// The pass's findings as structured records.
@@ -98,6 +129,7 @@ pub struct NormalizeSourceRows {
     pub buses: Vec<Option<usize>>,
     pub loads: Vec<Option<usize>>,
     pub shunts: Vec<Option<usize>>,
+    pub static_var_compensators: Vec<Option<usize>>,
     pub branches: Vec<Option<usize>>,
     pub switches: Vec<Option<usize>>,
     pub generators: Vec<Option<usize>>,
@@ -107,24 +139,6 @@ pub struct NormalizeSourceRows {
 }
 
 impl NormalizeSourceRows {
-    /// The map for a network that is already normalized: it is its own source,
-    /// so every element maps to its own row. Positional over `net` itself —
-    /// [`Self::pad_to_lowered`] extends it to the star-lowered view.
-    pub(crate) fn identity(net: &BalancedNetwork) -> Self {
-        let ident = |n: usize| (0..n).map(Some).collect();
-        Self {
-            buses: ident(net.buses().len()),
-            loads: ident(net.loads().len()),
-            shunts: ident(net.shunts().len()),
-            branches: ident(net.branches().len()),
-            switches: ident(net.switches().len()),
-            generators: ident(net.generators().len()),
-            storage: ident(net.storage().len()),
-            hvdc: ident(net.hvdc().len()),
-            transformers_3w: ident(net.transformers_3w().len()),
-        }
-    }
-
     /// Grow the families the star lowering appends to so each length matches the
     /// lowered form of `net`. The appended entries have no source row. The
     /// lengths come from [`BalancedNetwork::lowered_lengths`], which counts them off the
@@ -309,8 +323,31 @@ fn norm_shunts(
             // filtered out, so the normalized network has no dangling reference.
             if let Some(c) = &mut shunt.control {
                 c.control_bus = c.control_bus.and_then(|b| remap(map, b));
+                for block in &mut c.blocks {
+                    block.g /= base;
+                    block.b /= base;
+                }
             }
             Some((shunt, Some(row)))
+        })
+        .unzip()
+}
+
+fn norm_static_var_compensators(
+    compensators: &[StaticVarCompensator],
+    base: f64,
+    map: &HashMap<BusId, BusId>,
+) -> (Vec<StaticVarCompensator>, Vec<Option<usize>>) {
+    compensators
+        .iter()
+        .enumerate()
+        .filter(|(_, svc)| svc.in_service)
+        .filter_map(|(row, svc)| {
+            let mut normalized = svc.clone();
+            normalized.bus = remap(map, svc.bus)?;
+            normalized.p = svc.p / base;
+            normalized.q = svc.q / base;
+            Some((normalized, Some(row)))
         })
         .unzip()
 }
@@ -334,7 +371,7 @@ fn norm_branches(
             for set in &mut branch.rating_sets {
                 set.rate_mva /= base;
             }
-            branch.tap = br.effective_tap();
+            branch.tap = br.calc_effective_tap();
             branch.shift = br.shift * DEG_TO_RAD;
             branch.angmin = br.angmin * DEG_TO_RAD;
             branch.angmax = br.angmax * DEG_TO_RAD;
@@ -348,7 +385,7 @@ fn norm_branches(
             // if its target was filtered out (out of service / isolated), so the
             // normalized network has no dangling control reference.
             if let Some(c) = &mut branch.control {
-                c.controlled_bus = c.controlled_bus.and_then(|b| remap(map, b));
+                norm_transformer_control(c, base, map);
             }
             Some((branch, Some(row)))
         })
@@ -369,6 +406,7 @@ fn validate_normalize_options(options: &NormalizeOptions) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::float_cmp)] // exact replacement accounting, not numerical equivalence
 fn clamp_angle_bounds(
     branches: &mut [Branch],
     pad: f64,
@@ -379,28 +417,16 @@ fn clamp_angle_bounds(
         let old_max = br.angmax;
         let mut changes = Vec::new();
 
-        if old_min <= -std::f64::consts::FRAC_PI_2 {
-            br.angmin = -pad;
+        let (corrected_min, corrected_max) =
+            correct_angle_difference_bounds_with_pad(old_min, old_max, pad);
+
+        if old_min != corrected_min {
+            br.angmin = corrected_min;
             changes.push(format!("angmin {old_min} -> {}", br.angmin));
         }
-        if old_max >= std::f64::consts::FRAC_PI_2 {
-            br.angmax = pad;
+        if old_max != corrected_max {
+            br.angmax = corrected_max;
             changes.push(format!("angmax {old_max} -> {}", br.angmax));
-        }
-        if old_min == 0.0 && old_max == 0.0 {
-            br.angmin = -pad;
-            br.angmax = pad;
-            changes.push(format!("angmin/angmax 0 -> [{}, {}]", br.angmin, br.angmax));
-        }
-        if !changes.is_empty() && br.angmin > br.angmax {
-            let repaired_min = br.angmin;
-            let repaired_max = br.angmax;
-            br.angmin = -pad;
-            br.angmax = pad;
-            changes.push(format!(
-                "repaired interval {repaired_min}..{repaired_max} widened to [{}, {}]",
-                br.angmin, br.angmax
-            ));
         }
 
         if !changes.is_empty() {
@@ -413,6 +439,35 @@ fn clamp_angle_bounds(
             );
         }
     }
+}
+
+/// Correct one branch angle difference interval using the same ±60 degree
+/// rule as PowerModels' `correct_voltage_angle_differences!`.
+///
+/// A lower bound at or below −90 degrees becomes −60 degrees, an upper bound
+/// at or above 90 degrees becomes 60 degrees, and the MATPOWER 0/0 spelling
+/// becomes ±60 degrees. If correcting one side would invert the interval, the
+/// result is also ±60 degrees. Inputs and outputs are radians.
+#[must_use]
+pub fn correct_angle_difference_bounds(angle_min: f64, angle_max: f64) -> (f64, f64) {
+    correct_angle_difference_bounds_with_pad(angle_min, angle_max, POWER_MODELS_ANGLE_BOUND_PAD)
+}
+
+fn correct_angle_difference_bounds_with_pad(
+    mut angle_min: f64,
+    mut angle_max: f64,
+    pad: f64,
+) -> (f64, f64) {
+    if angle_min <= -std::f64::consts::FRAC_PI_2 {
+        angle_min = -pad;
+    }
+    if angle_max >= std::f64::consts::FRAC_PI_2 {
+        angle_max = pad;
+    }
+    if angle_min == 0.0 && angle_max == 0.0 || angle_min > angle_max {
+        return (-pad, pad);
+    }
+    (angle_min, angle_max)
 }
 
 fn norm_gens(
@@ -554,6 +609,9 @@ fn norm_transformers_3w(
             let mut windings = t.windings.clone();
             for w in &mut windings {
                 w.bus = remap(map, w.bus)?;
+                if let Some(control) = &mut w.control {
+                    norm_transformer_control(control, base, map);
+                }
                 w.shift *= DEG_TO_RAD;
                 w.rate_a /= base;
                 w.rate_b /= base;
@@ -732,6 +790,8 @@ impl BalancedNetwork {
         }
         let (loads, load_rows) = norm_loads(self.loads(), base, &id_map);
         let (shunts, shunt_rows) = norm_shunts(self.shunts(), base, &id_map);
+        let (static_var_compensators, static_var_compensator_rows) =
+            norm_static_var_compensators(self.static_var_compensators(), base, &id_map);
         let (mut branches, branch_rows) = norm_branches(self.branches(), base, &id_map);
         let mut warnings = crate::diagnostics::Diagnostics::new();
         if options.clamp_angle_bounds {
@@ -747,6 +807,7 @@ impl BalancedNetwork {
             buses: bus_rows,
             loads: load_rows,
             shunts: shunt_rows,
+            static_var_compensators: static_var_compensator_rows,
             branches: branch_rows,
             switches: switch_rows,
             generators: generator_rows,
@@ -788,9 +849,13 @@ impl BalancedNetwork {
             base_mva: base,
             base_frequency: self.base_frequency(),
             geo: self.geo().clone(),
+            case_metadata: self.case_metadata().clone(),
+            detailed_connectivity: self.detailed_connectivity().clone(),
+            generated_uids: self.generated_uids().clone(),
             buses: buses.into(),
             loads: loads.into(),
             shunts: shunts.into(),
+            static_var_compensators: static_var_compensators.into(),
             branches: branches.into(),
             switches: switches.into(),
             generators: generators.into(),
@@ -824,6 +889,7 @@ impl BalancedNetwork {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::network::GeneratorEnergySource;
 
     fn approx(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9
@@ -833,6 +899,52 @@ mod tests {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../tests/data/angle_bounds_clamp.m");
         crate::parse_file(path, None).unwrap().network
+    }
+
+    #[test]
+    fn transformer_control_normalization_follows_psse_field_units_for_every_mode() {
+        // Siemens PSS/E 35.4.1 defines RMA/RMI as ratios for |COD| 1/2,
+        // degrees for |COD| 3/5, and unused for |COD| 0/4. VMA/VMI are p.u.
+        // voltage for |COD| 1, Mvar for |COD| 2, MW for |COD| 3/5, and unused
+        // for |COD| 0/4. Preserve unused values rather than inventing units.
+        let map = HashMap::from([(BusId(7), BusId(7))]);
+        let cases = [
+            (TransformerControlMode::Fixed, false, false),
+            (TransformerControlMode::Voltage, false, false),
+            (TransformerControlMode::ReactiveFlow, false, true),
+            (TransformerControlMode::ActiveFlow, true, true),
+            (TransformerControlMode::DcLineQuantity, false, false),
+            (TransformerControlMode::AsymmetricActiveFlow, true, true),
+        ];
+
+        for (mode, angle_limits, power_band) in cases {
+            let mut control = TransformerControl::new(mode);
+            control.controlled_bus = Some(BusId(7));
+            control.tap_min = -10.0;
+            control.tap_max = 20.0;
+            control.band_min = -50.0;
+            control.band_max = 75.0;
+            control.winding_connection_angle =
+                (mode == TransformerControlMode::AsymmetricActiveFlow).then_some(30.0);
+
+            norm_transformer_control(&mut control, 100.0, &map);
+
+            let tap_scale = if angle_limits { DEG_TO_RAD } else { 1.0 };
+            let band_scale = if power_band { 0.01 } else { 1.0 };
+            assert!(approx(control.tap_min, -10.0 * tap_scale), "{mode:?}");
+            assert!(approx(control.tap_max, 20.0 * tap_scale), "{mode:?}");
+            assert!(approx(control.band_min, -50.0 * band_scale), "{mode:?}");
+            assert!(approx(control.band_max, 75.0 * band_scale), "{mode:?}");
+            assert_eq!(control.controlled_bus, Some(BusId(7)), "{mode:?}");
+            if mode == TransformerControlMode::AsymmetricActiveFlow {
+                assert!(approx(
+                    control.winding_connection_angle.unwrap(),
+                    30.0 * DEG_TO_RAD
+                ));
+            } else {
+                assert_eq!(control.winding_connection_angle, None, "{mode:?}");
+            }
+        }
     }
 
     #[test]
@@ -902,7 +1014,7 @@ mod tests {
 
     #[test]
     fn to_normalized_drops_a_control_bus_whose_target_was_filtered_out() {
-        use crate::network::{Extras, SwitchedShuntControl, SwitchedShuntMode};
+        use crate::network::{Extras, ShuntBlock, SwitchedShuntControl, SwitchedShuntMode};
 
         let mkbus = |id: usize, kind: BusType| Bus {
             id: BusId(id),
@@ -922,6 +1034,7 @@ mod tests {
             extras: Extras::new(),
         };
         let branch = Branch {
+            name: None,
             from: BusId(1),
             to: BusId(2),
             r: 0.0,
@@ -957,6 +1070,7 @@ mod tests {
         );
         net.generators_mut().push(Generator {
             bus: BusId(1),
+            energy_source: GeneratorEnergySource::default(),
             pg: 10.0,
             qg: 0.0,
             pmax: 100.0,
@@ -968,7 +1082,10 @@ mod tests {
             in_service: true,
             cost: None,
             caps: Default::default(),
+            voltage_regulation_on: true,
+            regulating_terminal: None,
             regulated_bus: None,
+            active_power_control: None,
             uid: None,
         });
         // A switched shunt on bus 2 whose control bus is the (dropped) isolated bus 3.
@@ -977,13 +1094,15 @@ mod tests {
             g: 0.0,
             b: 10.0,
             in_service: true,
+            section_count: None,
             control: Some(SwitchedShuntControl {
                 mode: SwitchedShuntMode::Discrete,
                 vhigh: 1.05,
                 vlow: 0.95,
                 control_bus: Some(BusId(3)),
+                regulating_terminal: None,
                 rmpct: 100.0,
-                blocks: Vec::new(),
+                blocks: vec![ShuntBlock::with_admittance(2, 4.0, 20.0)],
             }),
             uid: None,
             extras: Extras::new(),
@@ -996,6 +1115,8 @@ mod tests {
             c.control_bus, None,
             "a control bus pointing at a filtered-out isolated bus is dropped, not left dangling"
         );
+        assert!(approx(c.blocks[0].g, 0.04));
+        assert!(approx(c.blocks[0].b, 0.2));
     }
 
     #[test]
@@ -1021,6 +1142,7 @@ mod tests {
         };
         let mkgen = |bus: usize, pmax: f64| Generator {
             bus: BusId(bus),
+            energy_source: GeneratorEnergySource::default(),
             pg: 0.0,
             qg: 0.0,
             pmax,
@@ -1032,7 +1154,10 @@ mod tests {
             in_service: true,
             cost: None,
             caps: Default::default(),
+            voltage_regulation_on: true,
+            regulating_terminal: None,
             regulated_bus: None,
+            active_power_control: None,
             uid: None,
         };
         let mut net = BalancedNetwork::in_memory("n", 100.0, vec![mkbus(1), mkbus(2)], Vec::new());

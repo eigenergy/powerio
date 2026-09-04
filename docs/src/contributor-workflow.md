@@ -32,7 +32,7 @@ Use the smallest gate set that covers the changed surface, then run the
 | --- | --- |
 | parser or writer semantics | `bash evals/validation/run_validation.sh`; format round trip tests; affected `cargo +nightly fuzz run <target> -- -runs=1` harnesses |
 | rich model fields | `bash evals/validation/run_rich_validation.sh` |
-| matrix builders | `cargo test -p powerio-matrix`; `cargo bench -p powerio-matrix --bench matrix` |
+| matrix calculations | `cargo test -p powerio-matrix`; `cargo bench -p powerio-matrix --bench matrix` |
 | problem instances or DC OPF bundles | `cargo test -p powerio-prob --no-default-features`; `cargo test -p powerio --features matrix` |
 | PowerWorld binary reader | PowerWorld parser tests plus `cargo bench -p powerio-tx --bench parse -- "parse_aux_|parse_pwb_"` |
 | C ABI | `scripts/capi-header-parity.sh`; `scripts/capi-smoke.sh`; `cargo test -p powerio-capi --no-default-features`; `cargo test -p powerio-capi --features arrow,matrix,gridfm,dist,prob`; `bash scripts/ci-clippy.sh capi-no-default`; `bash scripts/ci-clippy.sh capi-release` |
@@ -65,7 +65,7 @@ POWERIO_CAPI=$PWD/target/release/libpowerio_capi.dylib \
 cargo bench -p powerio-matrix --bench matrix -- 'matrix_bprime|matrix_ybus|dcopf_'
 (cd evals/performance/asv && ../../../.venv/bin/asv check -E existing:../../../.venv/bin/python)
 (cd evals/performance/asv && ../../../.venv/bin/asv run --quick --show-stderr -E existing:../../../.venv/bin/python --dry-run)
-for target in matpower psse pslf model_json json_classify powerworld_aux pwb pwd; do
+for target in matpower psse pslf json_classify powerworld_aux pwb pwd; do
   cargo +nightly fuzz run "$target" -- -runs=1
 done
 bash evals/validation/run_validation.sh
@@ -73,12 +73,18 @@ bash evals/validation/run_rich_validation.sh
 ```
 
 `run_validation.sh` checks the classic transmission paths against
-PowerModels.jl, ExaPowerIO.jl, egret, pandapower, and the full legacy reader to
+PowerModels.jl, ExaPowerIO.jl, egret, and pandapower to
 writer matrix; `run_rich_validation.sh` covers fields outside the MATPOWER row
 shape (branch terminal admittance, switches, current ratings, solution values,
-HVDC costs, load voltage models). GOC3 and Surge have no external oracle in
-this harness; the Rust parser, writer, routing, stored module, and round trip tests
-cover them. What the oracle legs prove, per format, is in the
+HVDC costs, load voltage models). GOC3 has a separate `goc3-reference` CI job.
+It pins the GO-3 data model, C3DataUtilities, and the D1, D2, and D3 files from
+GOC3Benchmark.jl. The job validates PowerIO's problem and solution documents
+with the GO-3 data model, parses all three benchmark problems as
+`AcScucInstance`, runs the Challenge 3 data checks on them, and runs the same
+checks on a PowerIO `AcScucSolution` output document. Surge has no external
+validator in this harness; its Rust parser, writer, routing, stored module, and
+round trip tests provide its current evidence. What the independent checks
+prove, per format, is in the
 [format fidelity chapter](https://eigenergy.github.io/powerio/guide/format-fidelity.html).
 
 The gates do not prove every source format field is lossless. Known losses are

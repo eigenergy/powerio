@@ -1,23 +1,24 @@
-//! Read and write legacy GE PSLF `.epc` power flow cases.
+//! Parse and emit legacy GE PSLF `.epc` power flow cases.
 //!
 //! EPC files contain named data sections with colon separated record bodies.
-//! The reader keeps raw physical lines plus token lists on both sides of each
+//! The parser keeps raw physical lines plus token lists on both sides of each
 //! colon, then maps the static power flow core into [`BalancedNetwork`]. Records outside
-//! that model stay in retained source text and read warnings. [`write_pslf`]
-//! inverts the reader's column layout for the cross-format write path (same
-//! format writes echo the retained source).
+//! that model stay in retained source text and parse diagnostics. [`write_pslf`]
+//! inverts the parser's column layout for cross format emission (same format
+//! emission echoes the retained source).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 
 use serde_json::{Number, Value};
 
-use super::{Conversion, sanitize_quoted, warn_extra_branch_rating_sets};
+use super::{TextEmission, sanitize_quoted, warn_extra_branch_rating_sets};
 use crate::diagnostics::codes::EMIT_PSLF as F;
 use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
-    BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, Extras, Generator, Hvdc,
-    Impedance, Load, LoadVoltageModel, Shunt, SourceFormat, Transformer3W, Winding,
+    BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, Extras, Generator,
+    GeneratorEnergySource, Hvdc, Impedance, Load, LoadVoltageModel, Shunt, SourceFormat,
+    Transformer3W, Winding,
 };
 use crate::{Error, Result};
 
@@ -29,9 +30,9 @@ const NAME_FORBIDDEN: &[char] = &['"'];
 
 /// Parse a PSLF `.epc` case into a [`BalancedNetwork`].
 ///
-/// Read warnings are available through the shared [`crate::parse_file`] /
-/// [`crate::parse_str`] entry points. This direct helper keeps the older
-/// format-module convention and returns only the typed network.
+/// Parse diagnostics are available on the module returned by the `powerio`
+/// facade's `parse` operation. This direct helper returns only the typed
+/// network.
 /// Parse retained source from the format hub.
 pub(crate) fn parse_pslf_source(
     source: &str,
@@ -120,9 +121,13 @@ pub(crate) fn parse_pslf_source(
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
         geo: None,
+        case_metadata: crate::network::CaseMetadata::default(),
+        detailed_connectivity: None,
+        generated_uids: std::collections::BTreeSet::default(),
         buses: buses.into(),
         loads: loads.into(),
         shunts: shunts.into(),
+        static_var_compensators: Vec::new().into(),
         branches: branches.into(),
         switches: Vec::new().into(),
         generators: generators.into(),
@@ -519,6 +524,7 @@ fn read_branch(rec: &Record) -> Result<Branch> {
         extras.insert("pslf_section_id".into(), string_or_number(section));
     }
     Ok(Branch {
+        name: None,
         from: BusId(req_id(&rec.lhs, 0, "branch from bus", rec)?),
         to: BusId(req_id(&rec.lhs, 3, "branch to bus", rec)?),
         r: num_at(&rec.rhs, 1, 0.0, "branch r", rec)?,
@@ -560,6 +566,7 @@ enum TransformerRecord {
 /// The `.epc` record carries the three pairwise impedances and the primary
 /// winding's ratio/ratings; the secondary and tertiary winding ratios are not
 /// represented at these column positions, so they default to nominal.
+#[allow(clippy::too_many_lines)]
 fn read_transformer(rec: &Record, base_mva: f64) -> Result<TransformerRecord> {
     let rhs1 = line_rhs(rec, 0);
     let line2 = line_tokens(rec, 1);
@@ -599,6 +606,7 @@ fn read_transformer(rec: &Record, base_mva: f64) -> Result<TransformerRecord> {
             rate_a: 0.0,
             rate_b: 0.0,
             rate_c: 0.0,
+            control: None,
         };
         let imp = |r, x| Impedance {
             r,
@@ -615,6 +623,7 @@ fn read_transformer(rec: &Record, base_mva: f64) -> Result<TransformerRecord> {
                     rate_a,
                     rate_b,
                     rate_c,
+                    control: None,
                 },
                 nominal(to),
                 nominal(BusId(tertiary)),
@@ -644,6 +653,9 @@ fn read_transformer(rec: &Record, base_mva: f64) -> Result<TransformerRecord> {
         extras.insert("pslf_tbase".into(), number_value(tbase));
     }
     Ok(TransformerRecord::TwoWinding(Branch {
+        // `lhs[8]` is the transformer record type (`xfmr`), not a component
+        // name. The two winding record has no separate name field here.
+        name: None,
         from,
         to,
         r,
@@ -724,6 +736,7 @@ fn read_generator(
     };
     Ok(Generator {
         bus,
+        energy_source: GeneratorEnergySource::default(),
         pg: num_at(&rec.rhs, 8, 0.0, "generator pgen", rec)?,
         qg: num_at(&rec.rhs, 11, 0.0, "generator qgen", rec)?,
         pmax: num_at(&rec.rhs, 9, 0.0, "generator pmax", rec)?,
@@ -735,7 +748,10 @@ fn read_generator(
         in_service: on_at(&rec.rhs, 0, true, "generator status", rec)?,
         cost: None,
         caps: Default::default(),
+        voltage_regulation_on: true,
+        regulating_terminal: None,
         regulated_bus: None,
+        active_power_control: None,
         uid: None,
     })
 }
@@ -817,6 +833,7 @@ fn read_shunt(rec: &Record, base_mva: f64) -> Result<Shunt> {
         g: g_pu * base_mva,
         b: b_pu * base_mva,
         in_service: on_at(&rec.rhs, 0, true, "shunt status", rec)?,
+        section_count: None,
         control: None,
         uid: None,
         extras,
@@ -851,6 +868,7 @@ fn read_svd(
         g: g_pu * base_mva,
         b: b_pu * base_mva,
         in_service: on_at(&rec.rhs, 0, true, "svd status", rec)?,
+        section_count: None,
         control: None,
         uid: None,
         extras,
@@ -1001,6 +1019,11 @@ fn read_dc_lines(
                     qmaxt: to.q.max(0.0),
                     loss0: 0.0,
                     loss1: 0.0,
+                    resistance_ohm: None,
+                    nominal_voltage_kv: None,
+                    converters_mode: None,
+                    converter1: None,
+                    converter2: None,
                     cost: None,
                     uid: None,
                     extras,
@@ -1211,13 +1234,13 @@ struct BusRef<'a> {
 /// not name under a `pslf_*` extras key (the ZIP load split, the per unit shunt
 /// G/B, the branch circuit id, the transformer winding base), the writer replays
 /// it; otherwise it synthesizes the column. Same-format byte-exact echo rides the
-/// retained source (see [`crate::write_as`]); this is the cross format path and
+/// retained source (see [`crate::emit`]); this is the cross format path and
 /// the fallback when the source text was dropped (e.g. after a JSON round trip).
 #[must_use]
 // A flat serializer: one stanza per EPC section; splitting it would add
 // indirection without clarity.
 #[expect(clippy::too_many_lines)]
-pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
+pub fn write_pslf(net: &BalancedNetwork) -> TextEmission {
     let mut warnings = Diagnostics::new();
     let mut nonfinite = false;
     let mut sanitized_names = 0usize;
@@ -1436,7 +1459,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
                 i32::from(br.in_service),
                 num(br.r),
                 num(br.x),
-                num(br.total_charging_b()),
+                num(br.calc_total_charging_b()),
                 num(br.rate_a),
                 num(br.rate_b),
                 num(br.rate_c),
@@ -1484,7 +1507,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
             line2[7] = num(br.rate_b);
             line2[8] = num(br.rate_c);
             line2[10] = num(br.shift);
-            line2[16] = num(br.effective_tap());
+            line2[16] = num(br.calc_effective_tap());
             let _ = writeln!(s, "{}", line2.join(" "));
         }
         for tr in net.transformers_3w() {
@@ -1666,7 +1689,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
     let with_caps = net.generators().iter().filter(|g| g.has_caps()).count();
     if with_caps > 0 {
         warnings.push(&F.field_dropped, format!(
-            "generator capability/ramp columns dropped for {with_caps} generator(s): the PSLF .epc generator records written here carry no MATPOWER capability columns"
+            "generator capability/ramp columns dropped for {with_caps} generator(s): a PSLF .epc generator record states no reactive capability curve point and no ramp column"
         ));
     }
     if net.hvdc().iter().any(|d| d.cost.is_some()) {
@@ -1693,8 +1716,8 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
         .iter()
         .filter(|b| {
             b.is_transformer()
-                && (b.terminal_charging().total_g().abs() > 1e-12
-                    || b.terminal_charging().total_b().abs() > 1e-12)
+                && (b.calc_terminal_charging().calc_total_g().abs() > 1e-12
+                    || b.calc_terminal_charging().calc_total_b().abs() > 1e-12)
         })
         .count();
     if transformer_charging > 0 {
@@ -1709,7 +1732,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
         .count();
     if current_ratings > 0 {
         warnings.push(&F.field_dropped, format!(
-            "{current_ratings} branch current rating record(s) dropped: PSLF branch records written here carry MVA ratings only"
+            "{current_ratings} branch current rating record(s) dropped: a PSLF .epc branch record states its ratings in MVA through rate1, rate2, and rate3"
         ));
     }
     warn_extra_branch_rating_sets(&F, "PSLF .epc", net, &mut warnings);
@@ -1741,7 +1764,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
         },
         &mut warnings,
     );
-    super::warn_dropped_areas(&F, "PSLF .epc", net, &mut warnings);
+    super::warn_dropped_areas(&F, "PSLF .epc", true, net, &mut warnings);
     let branch_solutions = net
         .branches()
         .iter()
@@ -1749,7 +1772,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
         .count();
     if branch_solutions > 0 {
         warnings.push(&F.field_dropped, format!(
-            "{branch_solutions} branch solution value set(s) dropped: PSLF solved flow fields are not written"
+            "{branch_solutions} branch solution value set(s) dropped: a PSLF .epc branch record states impedance, taps, and ratings and no solved flow"
         ));
     }
     // The generator record this writer emits regulates the unit's own terminal, so
@@ -1824,7 +1847,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
         );
     }
 
-    Conversion::new(s, warnings)
+    TextEmission::new(s, warnings)
 }
 
 /// Neutral bus kind -> PSLF bus type code (inverse of [`pslf_bus_type`]).
@@ -2147,6 +2170,7 @@ end
             Vec::new(),
         );
         net.branches_mut().push(Branch {
+            name: None,
             from: BusId(1),
             to: BusId(2),
             r: 0.01,
@@ -2172,11 +2196,11 @@ end
 
         let conv = write_pslf(&net);
         assert!(
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("transformer charging admittance")),
             "{:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
     }
 

@@ -5,9 +5,9 @@ use helpers::*;
 
 use std::path::PathBuf;
 
-use powerio_matrix::matrix::{BuildOptions, MatrixStats, sddm_check};
+use powerio_matrix::matrix::{BuildOptions, MatrixStats, check_sddm};
 use powerio_matrix::{
-    IndexedNetwork, MatrixKind, build_kind, ground_at_each, matrix_stats_for_kind,
+    IndexedNetwork, MatrixKind, calc_matrix, calc_matrix_stats_for_kind, ground_at_each,
 };
 use serde::{Deserialize, Serialize};
 use sprs::CsMat;
@@ -106,8 +106,8 @@ fn solver_records() -> Vec<SolverMatrixRecord> {
         let refs = view.reference_bus_indices();
 
         for &(kind, matrix_name) in MATRICES {
-            let matrix = build_kind(&view, kind, &opts).unwrap();
-            let stats = matrix_stats_for_kind(&matrix, &view, kind, &opts);
+            let matrix = calc_matrix(&view, kind, &opts).unwrap();
+            let stats = calc_matrix_stats_for_kind(&matrix, &view, kind, &opts);
             let full_spd = is_spd(&matrix);
             let grounded = (kind == MatrixKind::BPrime).then(|| ground_at_each(&matrix, &refs));
             let grounded_spd = grounded.as_ref().map(is_spd);
@@ -149,12 +149,12 @@ fn record(
         condition_estimate,
         skipped_zero_impedance: stats.skipped_zero_impedance,
         skipped_zero_impedance_branches: stats.skipped_zero_impedance_branches.clone(),
-        sddm: sddm_check(matrix),
+        sddm: check_sddm(matrix),
         symmetric: is_symmetric(matrix),
         max_abs_row_sum: max_abs_row_sum(matrix),
         full_spd,
         grounded_spd,
-        solver_input: solver_input_note(matrix_name, sddm_check(matrix), full_spd, grounded_spd),
+        solver_input: solver_input_note(matrix_name, check_sddm(matrix), full_spd, grounded_spd),
     }
 }
 

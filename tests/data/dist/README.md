@@ -8,18 +8,28 @@ are pinned exactly as committed; do not reformat or re-encode them.
 Draft BMOPF schema and example networks from the IEEE PES Task Force on
 Benchmarking Multiconductor OPF.
 
-- Example source: <https://github.com/frederikgeth/bmopf-report>, commit
-  `3a786e16c761981951f1deab72fd28624577dda6`, directory
-  `draft_schema_and_networks/network_examples/`.
-- Schema source: same commit, with the matrix key, stale `$id`, and switch
-  `i_max` corrections from `june26-report-updates`
-  (`72ae3e672784c81f7f75f3283e0138cb70e6ebaa`) applied on top.
+- Source: <https://github.com/distribution-system-opt/bmopf-resources>, commit
+  `f2e368470a5012dd264d1f5a2f867867fb926615`. The schema comes from
+  `draft_schema_and_networks/draft_bmopf_schema.json` and the two examples from
+  `draft_schema_and_networks/network_examples/`, all three unchanged with
+  nothing applied on top.
 - `draft_bmopf_schema.json` sha256
-  `1868a7cb599d7bc348dbdae5c406d569fc1c568212828ef9b3cbcbdb616f8603`
+  `a74f4d2be151e4b250a47a1730445301c093572fce8de609e9af15b76c67ef73`
 - `example_ieee13.json` sha256
-  `dec886d0fcde8bb82ef3d4567d04c08eced87a84d30a041385cac97a936dd757`
+  `48707ea839c20032c88df715587e50d097637cd0cc8a17b2d213d4591eea8bc7`
 - `example_enwl_n1_f2.json` sha256
-  `082660cc835419a8335f1afca43ee89eea61216d4120ebe8b171b01550afb0d8`
+  `24d2c054b70b5e09d179f785cb09ff90cddbf73c859756154e9eb604782b69f1`
+- The released schemas live in
+  <https://github.com/distribution-system-opt/dsopt-schema>. `draft_bmopf_schema.json`
+  is the 0.1.0 draft the two examples validate against, kept beside them.
+- `bmopf-0.2.0.schema.json` is the 0.2.0 proposal, from
+  <https://github.com/distribution-system-opt/dsopt-schema> at commit
+  `202b7b59ae3ea97b81cded0b6d428234f6c536c2` on branch
+  `propose-bmopf-0.2.0`, unchanged. sha256
+  `2744afb88a036783a6d22f5e830fe254321a6a68e203d31c6ff2e084d27b20cc`. It is
+  the version the writer targets by default, so the writer's output is
+  validated against it; the proposal is CC BY 4.0. Re-vendor it when that
+  proposal changes.
 
 ## opendss/
 
@@ -63,7 +73,7 @@ constructor defaults, including omitted load voltage bounds.
 
 ## pmd/
 
-ENGINEERING model JSON generated from the fixtures above with
+PMD ENGINEERING JSON generated from the fixtures above with
 PowerModelsDistribution v0.16.0 (lanl-ansi/PowerModelsDistribution.jl,
 commit 87dc18b0) via the committed oracle:
 
@@ -82,3 +92,8 @@ Each directory carries its own license file next to the data it covers:
 from the upstream distribution), `micro/License.md` (CC BY 4.0), and
 `pmd/License.md` (derivatives carry their sources' licenses). The repository
 code license does not apply to vendored data.
+
+The two BMOPF examples carry different licenses, so `bmopf/License.md` states
+each one: `example_enwl_n1_f2.json` is CC BY 4.0 from the CSIRO Data Collection
+release it derives from, and `example_ieee13.json` is governed by the OpenDSS
+distribution license in `opendss/License.txt`.

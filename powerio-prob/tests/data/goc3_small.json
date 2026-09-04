@@ -1,5 +1,8 @@
 {
  "network": {
+  "general": {
+   "base_norm_mva": 100.0
+  },
   "bus": [
    {
     "uid": "bus_00",
@@ -10,7 +13,12 @@
     ],
     "reactive_reserve_uids": [
      "rzr_00"
-    ]
+    ],
+    "base_nom_volt": 230.0,
+    "initial_status": {
+     "vm": 1.0,
+     "va": 0.0
+    }
    },
    {
     "uid": "bus_01",
@@ -21,7 +29,12 @@
     ],
     "reactive_reserve_uids": [
      "rzr_00"
-    ]
+    ],
+    "base_nom_volt": 230.0,
+    "initial_status": {
+     "vm": 1.0,
+     "va": 0.0
+    }
    }
   ],
   "shunt": [
@@ -29,7 +42,12 @@
     "uid": "sh_00",
     "bus": "bus_00",
     "gs": 0.0,
-    "bs": 3.0
+    "bs": 3.0,
+    "step_lb": 0,
+    "step_ub": 4,
+    "initial_status": {
+     "step": 1
+    }
    }
   ],
   "ac_line": [
@@ -99,7 +117,12 @@
     "qdc_fr_lb": -1.0,
     "qdc_to_lb": -1.0,
     "qdc_fr_ub": 1.0,
-    "qdc_to_ub": 1.0
+    "qdc_to_ub": 1.0,
+    "initial_status": {
+     "pdc_fr": 0.0,
+     "qdc_fr": 0.0,
+     "qdc_to": 0.0
+    }
    }
   ],
   "simple_dispatchable_device": [
@@ -110,8 +133,17 @@
     "initial_status": {
      "on_status": 1,
      "p": 10.0,
-     "q": 0.0
+     "q": 0.0,
+     "accu_down_time": 0.0,
+     "accu_up_time": 4.0
     },
+    "startups_ub": [
+     [
+      0.0,
+      2.0,
+      1
+     ]
+    ],
     "energy_req_ub": [
      [
       0.0,
@@ -127,6 +159,8 @@
      ]
     ],
     "on_cost": 1.0,
+    "in_service_time_lb": 1.0,
+    "down_time_lb": 1.0,
     "startup_cost": 2.0,
     "shutdown_cost": 3.0,
     "p_ramp_up_ub": 1.0,
@@ -152,11 +186,16 @@
     "initial_status": {
      "on_status": 1,
      "p": 4.0,
-     "q": 0.0
+     "q": 0.0,
+     "accu_down_time": 0.0,
+     "accu_up_time": 2.0
     },
+    "startups_ub": [],
     "energy_req_ub": [],
     "energy_req_lb": [],
     "on_cost": 1.0,
+    "in_service_time_lb": 0.0,
+    "down_time_lb": 0.0,
     "startup_cost": 2.0,
     "shutdown_cost": 3.0,
     "p_ramp_up_ub": 1.0,
@@ -216,6 +255,14 @@
   "simple_dispatchable_device": [
    {
     "uid": "sd_00",
+    "on_status_ub": [
+     1,
+     1
+    ],
+    "on_status_lb": [
+     1,
+     0
+    ],
     "cost": [
      [
       [
@@ -289,6 +336,14 @@
    },
    {
     "uid": "sd_01",
+    "on_status_ub": [
+     1,
+     1
+    ],
+    "on_status_lb": [
+     0,
+     0
+    ],
     "cost": [
      [
       [
@@ -402,12 +457,11 @@
      "dc_00"
     ]
    },
-   {
-    "uid": "ctg_02",
-    "components": [
-     "acl_00",
-     "xf_00"
-    ]
+    {
+      "uid": "ctg_02",
+      "components": [
+        "xf_00"
+      ]
    }
   ]
  }

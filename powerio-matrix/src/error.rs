@@ -1,7 +1,7 @@
 //! Failures the matrix and dataset builders raise.
 //!
 //! [`Error`] carries what this crate constructs and wraps [`powerio_tx::Error`]
-//! for everything the hub raises underneath, so `?` moves a hub failure across
+//! for everything the transmission model raises underneath, so `?` moves that failure across
 //! the boundary without restating it. A caller that only wants the coarse
 //! split reads [`Error::category`], which is the same taxonomy the hub uses.
 
@@ -16,11 +16,11 @@ use crate::diagnostics::codes;
 pub enum Error {
     /// A failure from the balanced model, its readers, or its writers.
     #[error(transparent)]
-    Core(#[from] powerio_tx::Error),
+    Transmission(#[from] powerio_tx::Error),
 
     /// An underlying I/O failure this crate raised itself.
     ///
-    /// One the hub raised arrives as [`Error::Core`] wrapping
+    /// One the transmission model raised arrives as [`Error::Transmission`] wrapping
     /// `powerio_tx::Error::Io`, so a caller telling I/O apart from the rest reads
     /// [`Error::category`] rather than matching this variant.
     #[error(transparent)]
@@ -44,6 +44,9 @@ pub enum Error {
 
     #[error("unsupported OPF objective: {reason}")]
     UnsupportedOpfObjective { reason: String },
+
+    #[error("unsupported AC power flow bus specification")]
+    UnsupportedAcPfSpecification,
 
     #[error("{family} constraint selection names unknown identity `{identity}`")]
     UnknownConstraintIdentity {
@@ -131,8 +134,8 @@ pub enum Error {
     },
 
     #[error(
-        "gridfm snapshot {index} doesn't match the first snapshot's element set: {reason}; \
-         a scenario batch shares one base element set (same bus/branch/gen counts and bus-id order)"
+        "gridfm snapshot {index} doesn't align with the scenario batch: {reason}; \
+         a batch requires unique scenario ids, one system base, and fixed bus/branch/gen row identities"
     )]
     ScenarioShapeMismatch {
         /// 0-based position of the offending snapshot in the batch (independent
@@ -151,13 +154,14 @@ impl Error {
     #[must_use]
     pub fn code(&self) -> &'static DiagnosticInfo {
         match self {
-            Error::Core(inner) => inner.code(),
+            Error::Transmission(inner) => inner.code(),
             Error::Commit(inner) => inner.info().unwrap_or(&codes::EMIT_MTX_FAILED),
             Error::Io(_) => &codes::READ_MATRIX_IO_FAILED,
             Error::DimensionMismatch { .. } | Error::ShapeMismatch { .. } => {
                 &codes::BUILD_MATRIX_SHAPE_MISMATCH
             }
             Error::UnsupportedOpfObjective { .. } => &codes::BUILD_OPF_OBJECTIVE_UNSUPPORTED,
+            Error::UnsupportedAcPfSpecification => &codes::BUILD_AC_PF_SPECIFICATION_UNSUPPORTED,
             Error::UnknownConstraintIdentity { .. } => {
                 &codes::BUILD_OPF_CONSTRAINT_IDENTITY_UNKNOWN
             }
@@ -196,13 +200,14 @@ impl Error {
     pub fn category(&self) -> powerio_tx::ErrorCategory {
         use powerio_tx::ErrorCategory as C;
         match self {
-            Error::Core(inner) => inner.category(),
+            Error::Transmission(inner) => inner.category(),
             Error::Commit(inner) => inner.category(),
             Error::Io(_) => C::Io,
             // A well-formed case that cannot satisfy a requested operation.
             Error::DimensionMismatch { .. }
             | Error::ShapeMismatch { .. }
             | Error::UnsupportedOpfObjective { .. }
+            | Error::UnsupportedAcPfSpecification
             | Error::UnknownConstraintIdentity { .. }
             | Error::DuplicateElementIdentity { .. }
             | Error::SingularNetwork
@@ -279,8 +284,7 @@ impl std::fmt::Display for ElementCounts {
 }
 
 /// Why a gridfm scenario snapshot doesn't line up with the first snapshot's
-/// base element set (the row-stack keeps every table schema-consistent by
-/// requiring the same element counts and bus-id ordering across snapshots).
+/// batch (the row stack uses each table's row number as element identity).
 ///
 /// This enum is `#[non_exhaustive]`; downstream matches must include a wildcard
 /// arm.
@@ -295,6 +299,14 @@ pub enum ScenarioMismatch {
     /// Counts match, but the buses are listed in a different order (so the dense
     /// bus index wouldn't mean the same bus across snapshots).
     BusOrder,
+    /// A branch row has a different endpoint pair or component identity.
+    BranchOrder,
+    /// A generator row has a different bus or component identity.
+    GeneratorOrder,
+    /// The snapshot uses a different system power base.
+    BaseMva,
+    /// Another snapshot already uses this scenario id.
+    DuplicateScenarioId { scenario: i64, first_index: usize },
 }
 
 impl std::fmt::Display for ScenarioMismatch {
@@ -306,6 +318,22 @@ impl std::fmt::Display for ScenarioMismatch {
             Self::BusOrder => {
                 write!(f, "counts match but the bus ids are in a different order")
             }
+            Self::BranchOrder => write!(
+                f,
+                "counts match but branch endpoints or identities differ by row"
+            ),
+            Self::GeneratorOrder => write!(
+                f,
+                "counts match but generator buses or identities differ by row"
+            ),
+            Self::BaseMva => write!(f, "base_mva differs from the first snapshot"),
+            Self::DuplicateScenarioId {
+                scenario,
+                first_index,
+            } => write!(
+                f,
+                "scenario id {scenario} is already used by snapshot {first_index}"
+            ),
         }
     }
 }

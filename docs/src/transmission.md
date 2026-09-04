@@ -1,16 +1,16 @@
 # Transmission Networks
 
-A balanced network is the positive sequence transmission model. MATPOWER, PSS/E, PowerWorld AUX and PWB, PSLF EPC, PowerModels JSON, Egret JSON, pandapower JSON, Surge JSON, and the PyPSA CSV electrical profile all parse to it, so one workflow serves every balanced source and a new format needs one parser rather than pairwise converters.
+A balanced network is the positive sequence transmission model. MATPOWER, PSS/E, PowerWorld AUX and PWB, PSLF EPC, the IEEE Common Data Format, PowerModels JSON, Egret JSON, pandapower JSON, Surge JSON, and the PyPSA CSV electrical profile all parse to it, so one workflow serves every balanced source and a new format needs one parser rather than pairwise converters.
 
 ```julia
 using PowerIO
-case = parse_file("case118.m")     # PioModule{BalancedNetwork}
+case = parse("case118.m")          # PioModule{BalancedNetwork}
 net = case.value
-n_buses(net)                       # 118
-net.data.branches[1]               # element tables: buses, branches, generators, …
+length(net.buses)                  # 118
+net.branches[1]                    # element tables: buses, branches, generators, and the rest
 ```
 
-The network keeps what the source states: element inventory, terminal connections, impedances, ratings, generator capability bounds and cost curves, and the stored operating state. Ratings and costs stay on the network as reusable data; selecting which bounds a calculation enforces happens when an instance is constructed, so one parsed case serves power flow, DC OPF, and AC OPF without reparsing ([Problem Instances and Solutions](instances.md)).
+The network keeps what the source states: element inventory, terminal connections, impedances, ratings, generator capability bounds and cost curves, and the source/default operating assignment. Ratings and costs stay on the network as reusable data; selecting which bounds a calculation enforces happens when an instance is constructed, so one parsed case serves power flow, DC OPF, and AC OPF without reparsing ([Problem Instances and Solutions](instances.md)).
 
 Conventions the accessors hold to:
 
@@ -21,13 +21,15 @@ Conventions the accessors hold to:
 Writing an unchanged parsed module back to its own format is byte exact, comments and field layout included. Converting to another balanced format keeps everything the target can represent and reports the rest:
 
 ```julia
-write_file(case, "copy.m")                     # byte exact echo
-text, findings = to_format(net, "psse")        # conversion + reported losses
-for finding in findings
+emit(case, "matpower", "copy.m")               # byte exact echo
+result = emit(case, "psse")                     # conversion + reported losses
+for finding in result.diagnostics
     println(finding.code, ": ", finding.message)
 end
 ```
 
-The `convert` one call form parses and writes without keeping a handle: `convert_file("case118.m", "powermodels-json")` in Julia and Python, `powerio convert` on the command line.
+Library callers compose `parse` and `emit`, keeping the module and its
+diagnostics available between the operations. The command line keeps the one
+call `powerio convert` form.
 
 Matrix construction from a balanced network is its own chapter: [Matrices and Graphs](matrices.md).

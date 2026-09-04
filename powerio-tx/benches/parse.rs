@@ -1,8 +1,8 @@
 //! Parse + round-trip throughput. Run with `cargo bench --bench parse`.
 //!
 //! Three groups, all in-process micro-benchmarks over the vendored fixtures:
-//! - `parse_*` / `write_*` / `roundtrip_*`: the MATPOWER hot path. Parse time
-//!   is dominated by the field-finding scan over the source text; `write`
+//! - `parse_*` / `emit_*` / `roundtrip_*`: the MATPOWER hot path. Parse time
+//!   is dominated by the field-finding scan over the source text; `emit`
 //!   echoes the retained source. The large pegase case is the headline number
 //!   for the "fastest parser" claim.
 //! - `parse_<format>_*`: the non-MATPOWER readers (PowerModels JSON, PSS/E,
@@ -21,7 +21,7 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use powerio_tx::{TargetFormat, write_matpower, write_network};
+use powerio_tx::TargetFormat;
 
 const CASES: &[&str] = &["case57", "case118", "case2869pegase"];
 
@@ -30,7 +30,7 @@ fn src(case: &str) -> String {
 }
 
 fn parse_named(text: &str, from: &str) -> powerio_tx::network::BalancedNetwork {
-    let source = powerio_core::Source::from_bytes("case", text.as_bytes().to_vec())
+    let source = powerio_core::Source::from_memory("case", text.as_bytes().to_vec())
         .unwrap()
         .with_format(powerio_core::FormatId::new(from).unwrap());
     powerio_tx::parse(source).unwrap().into_value()
@@ -39,12 +39,32 @@ fn parse_named(text: &str, from: &str) -> powerio_tx::network::BalancedNetwork {
 /// Parse with no declared format: a `.json` name, routed by the content
 /// classifier rather than a stated token.
 fn parse_sniffed(text: &str) -> powerio_tx::network::BalancedNetwork {
-    let source = powerio_core::Source::from_bytes("case.json", text.as_bytes().to_vec()).unwrap();
+    let source = powerio_core::Source::from_memory("case.json", text.as_bytes().to_vec()).unwrap();
     powerio_tx::parse(source).unwrap().into_value()
 }
 
 fn parse_case(text: &str) -> powerio_tx::network::BalancedNetwork {
     parse_named(text, "matpower")
+}
+
+fn emit_text(network: &powerio_tx::network::BalancedNetwork, target: TargetFormat) -> String {
+    let module = powerio_core::PioModule::new(network.clone());
+    let result = powerio_tx::emit(
+        &module,
+        target,
+        powerio_core::Destination::memory("case").unwrap(),
+    )
+    .unwrap();
+    let powerio_core::EmittedOutput::Memory { mut artifacts } = result.into_output() else {
+        unreachable!("memory destination returns memory output");
+    };
+    String::from_utf8(
+        artifacts
+            .pop()
+            .expect("text emission has one artifact")
+            .into_bytes(),
+    )
+    .expect("case text is UTF-8")
 }
 
 fn bench_parse(c: &mut Criterion) {
@@ -60,11 +80,11 @@ fn bench_roundtrip(c: &mut Criterion) {
     for case in CASES {
         let s = src(case);
         let parsed = parse_case(&s);
-        c.bench_function(&format!("write_{case}"), |b| {
-            b.iter(|| write_matpower(black_box(&parsed)));
+        c.bench_function(&format!("emit_{case}"), |b| {
+            b.iter(|| emit_text(black_box(&parsed), TargetFormat::Matpower));
         });
         c.bench_function(&format!("roundtrip_{case}"), |b| {
-            b.iter(|| write_matpower(&parse_case(black_box(&s))));
+            b.iter(|| emit_text(&parse_case(black_box(&s)), TargetFormat::Matpower));
         });
     }
 }
@@ -84,7 +104,7 @@ fn bench_parse_formats(c: &mut Criterion) {
     for (name, fmt) in FORMATS {
         // Convert once outside the timed loop; `parse_str` runs the same
         // owned-source reader the file path does.
-        let text = write_network(&net, *fmt).unwrap().text;
+        let text = emit_text(&net, *fmt);
         // A reader that can't re-read its own writer would make the timing
         // meaningless, so fail loudly here rather than benchmark an error path.
         let _ = parse_named(&text, name);
@@ -101,9 +121,7 @@ fn bench_parse_formats(c: &mut Criterion) {
 fn bench_parse_sniffed_json(c: &mut Criterion) {
     let case = "case118";
     let net = parse_case(&src(case));
-    let text = write_network(&net, TargetFormat::PowerModelsJson)
-        .unwrap()
-        .text;
+    let text = emit_text(&net, TargetFormat::PowerModelsJson);
     let _ = parse_sniffed(&text);
     c.bench_function(&format!("parse_sniffed_powermodels-json_{case}"), |b| {
         b.iter(|| parse_sniffed(black_box(&text)));
@@ -156,7 +174,7 @@ fn bench_powerworld_pwb(c: &mut Criterion) {
     }
     for (name, bytes) in &pwb_jobs {
         c.bench_function(name, |b| {
-            b.iter(|| powerio_tx::format::powerworld::parse_pwb(black_box(bytes), None).unwrap());
+            b.iter(|| powerio_tx::format::powerworld::__parse_pwb(black_box(bytes), None).unwrap());
         });
     }
 }
@@ -169,7 +187,7 @@ fn bench_powerworld_pwd(c: &mut Criterion) {
         return;
     };
     c.bench_function("parse_pwd_activsg200", |b| {
-        b.iter(|| powerio_tx::format::powerworld::parse_pwd(black_box(&bytes)).unwrap());
+        b.iter(|| powerio_tx::format::powerworld::__parse_pwd(black_box(&bytes)).unwrap());
     });
 }
 

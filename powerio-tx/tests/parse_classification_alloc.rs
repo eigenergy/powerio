@@ -12,6 +12,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use powerio_tx::TargetFormat;
 
+mod helpers;
+use helpers::emit_value;
+
 struct CountingAlloc;
 
 static TOTAL_BYTES: AtomicUsize = AtomicUsize::new(0);
@@ -51,7 +54,7 @@ fn powermodels_json_text() -> String {
     let net = powerio_tx::parse(powerio_core::Source::open(path).unwrap())
         .unwrap()
         .into_value();
-    powerio_tx::write_network(&net, TargetFormat::PowerModelsJson)
+    emit_value(&net, TargetFormat::PowerModelsJson)
         .unwrap()
         .text
 }
@@ -61,7 +64,7 @@ fn undeclared_json_parsing_costs_close_to_a_declared_parse() {
     let text = powermodels_json_text();
 
     let declared_bytes = measure_allocated(|| {
-        let source = powerio_core::Source::from_bytes("case", text.as_bytes().to_vec())
+        let source = powerio_core::Source::from_memory("case", text.as_bytes().to_vec())
             .unwrap()
             .with_format(powerio_core::FormatId::new("powermodels-json").unwrap());
         let parsed = powerio_tx::parse(source).unwrap();
@@ -70,7 +73,7 @@ fn undeclared_json_parsing_costs_close_to_a_declared_parse() {
 
     let undeclared_bytes = measure_allocated(|| {
         let source =
-            powerio_core::Source::from_bytes("case.json", text.as_bytes().to_vec()).unwrap();
+            powerio_core::Source::from_memory("case.json", text.as_bytes().to_vec()).unwrap();
         let parsed = powerio_tx::parse(source).unwrap();
         std::hint::black_box(&parsed);
     });

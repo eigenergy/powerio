@@ -22,10 +22,10 @@ name: Julia binding
 on:
   push:
     branches: [ "main" ]
-    paths: [ "powerio/**", "powerio-capi/**", "powerio-matrix/**", "powerio-dist/**", "powerio-prob/**", ".github/workflows/julia-binding.yml" ]
+    paths: [ "powerio/**", "powerio-core/**", "powerio-tx/**", "powerio-capi/**", "powerio-matrix/**", "powerio-dist/**", "powerio-prob/**", ".github/workflows/julia-binding.yml" ]
   # No branch filter: stacked PRs must run this too (see rust.yml).
   pull_request:
-    paths: [ "powerio/**", "powerio-capi/**", "powerio-matrix/**", "powerio-dist/**", "powerio-prob/**", ".github/workflows/julia-binding.yml" ]
+    paths: [ "powerio/**", "powerio-core/**", "powerio-tx/**", "powerio-capi/**", "powerio-matrix/**", "powerio-dist/**", "powerio-prob/**", ".github/workflows/julia-binding.yml" ]
 
 # One run per workflow per branch. A force push to a stacked pull request
 # otherwise leaves the superseded run going: it finishes, it fails or it
@@ -172,11 +172,11 @@ jobs:
         version: '1'
     - uses: julia-actions/cache@v3
       if: steps.powerio-jl.outputs.available == 'true'
-    # Every pio_* symbol the paired binding names must be exported by this
-    # head; the same script's monotonicity clause runs in rust.yml.
-    - name: Companion symbol coverage
+    # Every pio_* entry point named by the paired binding must be declared by
+    # ABI 7.
+    - name: ABI 7 companion coverage
       if: steps.powerio-jl.outputs.available == 'true'
-      run: POWERIO_JL=PowerIO.jl bash scripts/capi-export-monotonicity.sh
+      run: POWERIO_JL=PowerIO.jl bash scripts/check-capi-v7.sh
     # PowerIO.jl's ccall tests skip themselves when the cdylib is absent.
     # POWERIO_CAPI points them at the library just built.
     - name: Test PowerIO.jl against the built library
@@ -190,4 +190,4 @@ jobs:
         cargo build -p powerio-capi --release --no-default-features --features dist --target-dir target/no-prob
         POWERIO_CAPI="${{ github.workspace }}/target/no-prob/release/libpowerio_capi.so" \
           julia --project=PowerIO.jl -e \
-          'using PowerIO; @assert !has_feature("prob"); @assert !prob_available(); @assert !features().prob'
+          'using PowerIO; @assert library_available(); @assert abi_version() == 7; module_ = parse("PowerIO.jl/test/data/case9.m"); @assert module_.value isa BalancedNetwork'

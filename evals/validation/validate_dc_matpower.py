@@ -1,21 +1,21 @@
 """Independent MATPOWER makeBdc oracle.
 
-Checks powerio's DC surface — dc_data susceptance/shift/shift injection and
-weighted_laplacian — against MATPOWER's own makeBdc, plus one PTDF spot check
-against makePTDF. The case is read with matpowercaseframes (pinned in
+Checks PowerIO's incidence, bus and branch susceptance matrices, phase shift
+injection, branch flow, weighted Laplacian, and PTDF against MATPOWER's own
+makeBdc and makePTDF. The case is read with matpowercaseframes (pinned in
 evals/validation/requirements.txt), not powerio, and the formulas below are
 transcribed from the published MATPOWER source rather than derived from
 powerio's incidence or susceptance construction, so a bug shared between the
 reader and the matrix builder cannot cancel out in this comparison.
 
 Fixtures: case118.m and case30.m exercise the base comparison (susceptance,
-shift, shift injection, weighted_laplacian, one PTDF check); their identity
-mapping is MATPOWER's own BUS_I bus order and a `branches:<i>` row order that
-dc_data reports directly, so no separate reindexing table is needed. Neither
-case has a phase shifting transformer, so the shift sign is only exercised on
-a real sized grid with shifters: tests/data/large/case13659pegase.m or
+shift, shift injection, weighted Laplacian, one PTDF check). Matrix rows use
+the input order of in-service branches and columns use the parsed BUS_I order;
+the oracle checks both mappings before comparing values. Neither small case
+has a phase shifting transformer, so the shift sign is also exercised on a
+real sized grid with shifters: tests/data/large/case13659pegase.m or
 case_ACTIVSg10k.m (gitignored; fetch with evals/validation/fetch_cases.sh).
-PTDF is skipped on that case — forming the dense n x n sensitivity matrix
+PTDF is skipped on that case because forming the dense n x n sensitivity matrix
 for 10000+ buses is not worth the wall time here, and the makeBdc/shift
 checks alone are what the large case is for.
 
@@ -23,8 +23,8 @@ Every quantity is asserted at ABS_TOL below; the largest error observed
 while writing this oracle was 3e-13, three orders of magnitude inside the
 gate.
 
-Sign trap: powerio's weighted_laplacian('matpower') equals +Bbus from
-makeBdc, not -Bbus. makeBdc's b = stat / x / tap, and for an ordinary
+Sign trap: PowerIO's weighted Laplacian with `tap_adjusted_reactance` equals
++Bbus from makeBdc, not -Bbus. makeBdc's b = stat / x / tap, and for an ordinary
 positive reactance branch that is already a positive quantity; only the
 public series susceptance (the PowerModels convention, checked above it)
 carries the sign flip -imag(1/(r+jx)). The diagonal is printed as an
@@ -120,24 +120,51 @@ def compare(path: str, want_ptdf: bool = True) -> list[str]:
     print(f"\n===== {path}")
     cf = CaseFrames(path)
     mp = matpower_dc(cf)
-    net = powerio.parse(path).as_balanced_network()
+    module = powerio.parse(path)
+    net = module.value
 
-    pio_bus_ids = np.array([int(s) for s in net.dc_data()["bus_ids"]])
+    pio_bus_ids = np.array([int(bus["id"]) for bus in net.buses])
     if not np.array_equal(pio_bus_ids, mp["bus_i"]):
         failures.append("bus axis differs from MATPOWER's BUS_I order")
         return failures
     print(f"  bus axis matches ({len(pio_bus_ids)} buses)")
 
+    idx = np.flatnonzero(mp["keep"])
+    active_branches = [branch for branch in net.branches if branch["in_service"]]
+    pio_from = np.array([int(branch["from_id"]) for branch in active_branches])
+    pio_to = np.array([int(branch["to_id"]) for branch in active_branches])
+    expected_from = mp["bus_i"][mp["f"][idx]]
+    expected_to = mp["bus_i"][mp["t"][idx]]
+    if not (
+        np.array_equal(pio_from, expected_from)
+        and np.array_equal(pio_to, expected_to)
+    ):
+        failures.append("active branch axis differs from MATPOWER branch order")
+        return failures
+    print(f"  branch axis matches ({len(idx)} in-service branches)")
+
     for pio_formula, formula_b in [
         ("tap_adjusted_reactance", mp["b"]),
         ("series_susceptance", None),
     ]:
-        d = net.dc_data(pio_formula)
-        rows = d["row_ids"]
-        idx = np.array([int(r.split(":")[1]) for r in rows])  # branches:<i>
-        sus = np.asarray(d["susceptance"], float)
-        sh = np.asarray(d["shift"], float)
-        inj = np.asarray(d["shift_injection"], float)
+        incidence = net.calc_incidence_matrix(pio_formula).toarray()
+        branch_susceptances = np.asarray(
+            net.calc_branch_susceptances(pio_formula), float
+        )
+        branch_matrix = net.calc_branch_flow_matrix(pio_formula).toarray()
+        bus_matrix = net.calc_bus_susceptance_matrix(pio_formula).toarray()
+        branch_shift_injection = np.asarray(
+            net.calc_branch_phase_shift_injection(pio_formula), float
+        )
+        bus_shift_injection = np.asarray(
+            net.calc_bus_phase_shift_injection(pio_formula), float
+        )
+        branch_flow = np.asarray(
+            net.calc_branch_flow_dc(np.zeros(mp["nb"]), pio_formula), float
+        )
+        bus_injection = np.asarray(
+            net.calc_bus_injection_dc(np.zeros(mp["nb"]), pio_formula), float
+        )
         if formula_b is None:
             r = cf.branch["BR_R"].astype(float).to_numpy()
             x = cf.branch["BR_X"].astype(float).to_numpy()
@@ -145,49 +172,86 @@ def compare(path: str, want_ptdf: bool = True) -> list[str]:
         else:
             series_b = formula_b
         exp_b = -series_b[idx]  # PowerModels sign = -MATPOWER b
-        db = np.max(np.abs(sus - exp_b) / np.maximum(1.0, np.abs(exp_b)))
-        exp_sh = mp["shift"][idx] * np.pi / 180.0
-        dsh = np.max(np.abs(sh - exp_sh)) if len(sh) else 0.0
-        # bus injection: MATPOWER Pbusinj with the SAME b the formula uses
-        Pfinj = series_b[idx] * (-exp_sh)
-        Pbus = np.zeros(mp["nb"])
-        np.add.at(Pbus, np.asarray(d["from_indices"], int), Pfinj)
-        np.add.at(Pbus, np.asarray(d["to_indices"], int), -Pfinj)
-        dinj = np.max(np.abs(inj - Pbus))
-        nshift = int((np.abs(sh) > 0).sum())
-        print(
-            f"  {pio_formula:<24} rows={len(rows):<6} omitted={len(d['omitted_ids']):<4} "
-            f"shifted={nshift:<4} max|Pbusinj|={np.max(np.abs(Pbus)):.4f}  "
-            f"max rel db={db:.3e}  max dshift={dsh:.3e}  max dPbusinj={dinj:.3e}"
+        expected_incidence = mp["Cft"][idx, :].toarray()
+        expected_branch_matrix = exp_b[:, None] * expected_incidence
+        expected_bus_matrix = expected_incidence.T @ expected_branch_matrix
+        dinc = np.max(np.abs(incidence - expected_incidence))
+        dbf = np.max(np.abs(branch_matrix - expected_branch_matrix))
+        dbus = np.max(np.abs(bus_matrix - expected_bus_matrix))
+        db = np.max(
+            np.abs(branch_susceptances - exp_b) / np.maximum(1.0, np.abs(exp_b))
         )
-        if db >= ABS_TOL:
-            failures.append(f"{pio_formula}: susceptance diff {db:.3e} >= {ABS_TOL:.0e}")
-        if dsh >= ABS_TOL:
-            failures.append(f"{pio_formula}: shift diff {dsh:.3e} >= {ABS_TOL:.0e}")
-        if dinj >= ABS_TOL:
+        exp_shift = mp["shift"][idx] * np.pi / 180.0
+        expected_branch_flow = exp_b * exp_shift
+        expected_injection = expected_incidence.T @ expected_branch_flow
+        dbranchshift = np.max(
+            np.abs(branch_shift_injection - expected_branch_flow)
+        )
+        dbusshift = np.max(np.abs(bus_shift_injection - expected_injection))
+        dflow = np.max(np.abs(branch_flow - expected_branch_flow))
+        dbusinj = np.max(np.abs(bus_injection - expected_injection))
+        nshift = int((np.abs(exp_shift) > 0).sum())
+        print(
+            f"  {pio_formula:<24} rows={len(idx):<6} shifted={nshift:<4} "
+            f"dA={dinc:.3e} dBf={dbf:.3e} dB={dbus:.3e} "
+            f"db={db:.3e} dPbranchShift={dbranchshift:.3e} "
+            f"dPbusShift={dbusshift:.3e} dflow={dflow:.3e} "
+            f"dPbus={dbusinj:.3e}"
+        )
+        if dinc >= ABS_TOL:
             failures.append(
-                f"{pio_formula}: shift injection diff {dinj:.3e} >= {ABS_TOL:.0e}"
+                f"{pio_formula}: incidence diff {dinc:.3e} >= {ABS_TOL:.0e}"
+            )
+        if dbf >= ABS_TOL:
+            failures.append(
+                f"{pio_formula}: branch matrix diff {dbf:.3e} >= {ABS_TOL:.0e}"
+            )
+        if dbus >= ABS_TOL:
+            failures.append(
+                f"{pio_formula}: bus matrix diff {dbus:.3e} >= {ABS_TOL:.0e}"
+            )
+        if db >= ABS_TOL:
+            failures.append(
+                f"{pio_formula}: susceptance diff {db:.3e} >= {ABS_TOL:.0e}"
+            )
+        if dflow >= ABS_TOL:
+            failures.append(
+                f"{pio_formula}: branch flow diff {dflow:.3e} >= {ABS_TOL:.0e}"
+            )
+        if dbranchshift >= ABS_TOL:
+            failures.append(
+                f"{pio_formula}: branch shift injection diff {dbranchshift:.3e} >= {ABS_TOL:.0e}"
+            )
+        if dbusshift >= ABS_TOL:
+            failures.append(
+                f"{pio_formula}: bus shift injection diff {dbusshift:.3e} >= {ABS_TOL:.0e}"
+            )
+        if dbusinj >= ABS_TOL:
+            failures.append(
+                f"{pio_formula}: bus injection diff {dbusinj:.3e} >= {ABS_TOL:.0e}"
             )
 
     # Sign trap: see the module docstring. makeBdc's b is already positive,
     # so the matpower formula's weighted Laplacian equals +Bbus, not -Bbus.
-    L = net.weighted_laplacian("matpower").toarray()
+    L = net.calc_weighted_laplacian("tap_adjusted_reactance").toarray()
     dL = np.max(np.abs(L - mp["Bbus"].toarray()))
     diag_positive = bool((np.diag(L) > 0).all())
     print(
-        f"  weighted_laplacian('matpower') vs +makeBdc Bbus: max abs diff = {dL:.3e}"
+        "  calc_weighted_laplacian('tap_adjusted_reactance') vs +makeBdc Bbus: "
+        f"max abs diff = {dL:.3e}"
         f"   (diag>0: {diag_positive})"
     )
     if dL >= ABS_TOL:
-        failures.append(f"weighted_laplacian: diff {dL:.3e} >= {ABS_TOL:.0e}")
+        failures.append(f"weighted Laplacian: diff {dL:.3e} >= {ABS_TOL:.0e}")
 
     if want_ptdf:
         H = matpower_ptdf(mp)
-        P = net.ptdf("matpower").toarray()
-        d = net.dc_data("tap_adjusted_reactance")
-        idx = np.array([int(r.split(":")[1]) for r in d["row_ids"]])
+        P = net.calc_ptdf("tap_adjusted_reactance").toarray()
         dP = np.max(np.abs(P - H[idx, :]))
-        print(f"  ptdf('matpower') vs makePTDF: max abs diff = {dP:.3e}  shape {P.shape}")
+        print(
+            "  calc_ptdf('tap_adjusted_reactance') vs makePTDF: "
+            f"max abs diff = {dP:.3e}  shape {P.shape}"
+        )
         if dP >= ABS_TOL:
             failures.append(f"ptdf: diff {dP:.3e} >= {ABS_TOL:.0e}")
 
@@ -206,7 +270,7 @@ def main() -> int:
         want_ptdf = not any(tag in path for tag in ("13659", "10k", "SyntheticUSA"))
         try:
             failures = compare(path, want_ptdf=want_ptdf)
-        except Exception as err:  # noqa: BLE001
+        except Exception as err:
             failures = [str(err)]
         mark = "ok" if not failures else "FAIL"
         append_result(path, "dc_makebdc", mark)

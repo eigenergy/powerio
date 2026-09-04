@@ -16,7 +16,6 @@ mod generate {
         path::{Path, PathBuf},
     };
 
-    use schemars::{JsonSchema, schema_for};
     use serde_json::json;
 
     pub(super) fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -24,59 +23,28 @@ mod generate {
             .nth(1)
             .map_or_else(|| PathBuf::from("docs/schema"), PathBuf::from);
 
-        // The stored module document: one integer version, its own lineage.
-        // The retired `pio-package` lineage stays committed and frozen under
-        // `docs/schema/`; its writer is gone, so nothing regenerates it.
-        write_schema::<powerio::stored::StoredModuleV1>(
-            &out,
-            &format!("pio-module/{}", powerio::stored::SCHEMA_VERSION),
-            &format!(
-                "https://powerio.dev/schema/pio-module/{}/schema.json",
-                powerio::stored::SCHEMA_VERSION
-            ),
-            &[],
-        )?;
-
-        Ok(())
+        // The schema lives at the version this build writes, and its `$id` is
+        // the address that directory is served from.
+        write_schema(
+            serde_json::to_value(powerio::generate_ir_schema())?,
+            &out.join("pio-ir")
+                .join(powerio::IR_VERSION.to_string())
+                .join("schema.json"),
+            powerio::IR_SCHEMA_ID,
+        )
     }
 
-    fn write_schema<T: JsonSchema>(
-        out: &Path,
-        rel: &str,
+    fn write_schema(
+        mut schema: serde_json::Value,
+        path: &Path,
         id: &str,
-        also_required: &[&str],
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut schema = serde_json::to_value(schema_for!(T))?;
         spell_nonfinite_floats(&mut schema)?;
         let root = schema
             .as_object_mut()
             .ok_or("schemars returned a non-object schema root")?;
         root.insert("$id".to_owned(), json!(id));
 
-        let properties = root
-            .get("properties")
-            .and_then(serde_json::Value::as_object)
-            .ok_or("schemars returned a root with no properties")?;
-        // A name that no longer exists would silently demand a field the
-        // document cannot carry, so it is an error rather than a no-op.
-        if let Some(missing) = also_required
-            .iter()
-            .find(|name| !properties.contains_key(**name))
-        {
-            return Err(format!("`{missing}` is required but is not a property of {rel}").into());
-        }
-        let required = root
-            .entry("required")
-            .or_insert_with(|| json!([]))
-            .as_array_mut()
-            .ok_or("schemars returned a non-array `required`")?;
-        for name in also_required {
-            if !required.iter().any(|value| value == name) {
-                required.push(json!(name));
-            }
-        }
-
-        let path = out.join(rel).join("schema.json");
         fs::create_dir_all(path.parent().ok_or("schema path has no parent")?)?;
         let mut text = serde_json::to_string_pretty(&schema)?;
         text.push('\n');
@@ -84,12 +52,9 @@ mod generate {
         Ok(())
     }
 
-    /// Every document powerio authors spells a nonfinite float as
-    /// `"Infinity"`, `"-Infinity"`, or `"NaN"` (`crate::legacy_diag::nonfinite`),
-    /// so every float position in the schema accepts a string spelling
-    /// beside the number. Fields whose number arm already admits `null`
-    /// (the multiconductor bounds) keep it: that is the read side leniency
-    /// for documents a pre-0.9 writer emitted.
+    /// Every PowerIO IR document spells a nonfinite float as `"Infinity"`,
+    /// `"-Infinity"`, or `"NaN"`, so each float position in the schema accepts
+    /// one of those strings beside a number.
     fn spell_nonfinite_floats(
         schema: &mut serde_json::Value,
     ) -> Result<(), Box<dyn std::error::Error>> {

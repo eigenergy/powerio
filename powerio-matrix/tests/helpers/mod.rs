@@ -9,7 +9,6 @@ use powerio_core::{FormatId, Source};
 use powerio_tx::BalancedNetwork;
 
 use powerio_tx::Diagnostic;
-pub use powerio_tx::write_network;
 
 /// The old parse output shape: the typed network plus the reader's findings.
 #[derive(Debug)]
@@ -19,7 +18,7 @@ pub struct Parsed {
 }
 
 impl Parsed {
-    pub fn rendered_diagnostics(&self) -> Vec<String> {
+    pub fn render_diagnostics(&self) -> Vec<String> {
         powerio_tx::diagnostics::render_diagnostics(&self.diagnostics)
     }
 }
@@ -35,7 +34,7 @@ fn declared(source: Source, from: Option<&str>) -> Result<Source, powerio_core::
 
 fn module_to_parsed(module: powerio_core::PioModule<BalancedNetwork>) -> Parsed {
     Parsed {
-        diagnostics: module.diagnostics().to_vec(),
+        diagnostics: module.diagnostics.clone(),
         network: module.into_value(),
     }
 }
@@ -67,7 +66,7 @@ pub fn parse_str_with_name(
 ) -> Result<Parsed, powerio_core::Error> {
     let name = name_hint.map_or_else(|| "<memory>".to_owned(), std::string::ToString::to_string);
     let source = declared(
-        Source::from_bytes(name, text.as_bytes().to_vec())?,
+        Source::from_memory(name, text.as_bytes().to_vec())?,
         Some(from),
     )?;
     powerio_tx::parse(source).map(module_to_parsed)
@@ -83,7 +82,7 @@ pub fn parse_bytes_with_name(
     name_hint: Option<&str>,
 ) -> Result<Parsed, powerio_core::Error> {
     let name = name_hint.map_or_else(|| "<memory>".to_owned(), std::string::ToString::to_string);
-    let source = declared(Source::from_bytes(name, bytes.to_vec())?, Some(from))?;
+    let source = declared(Source::from_memory(name, bytes.to_vec())?, Some(from))?;
     powerio_tx::parse(source).map(module_to_parsed)
 }
 

@@ -6,6 +6,11 @@
 
 use serde::Deserialize;
 
+// The top-level facade owns PowerIO IR. This private routing marker lets the
+// lower-level JSON classifier recognize the stable identity without making
+// `powerio-core` own the stored representation.
+const POWERIO_IR_SCHEMA: &str = "pio-ir";
+
 /// A classification result that can be known, absent, or unsafe to choose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Detection<T> {
@@ -39,6 +44,7 @@ pub enum TransmissionFormat {
     Psse,
     Psse34,
     Psse35,
+    PsseRawx,
     PowerWorld,
     PandapowerJson,
     PypsaCsv,
@@ -48,6 +54,12 @@ pub enum TransmissionFormat {
     Goc3Json,
     SurgeJson,
     DeepMindOpfDataJson,
+    Xiidm,
+    Jiidm,
+    Cgmes,
+    Ucte,
+    /// The IEEE Common Data Format, a read only fixed column text case.
+    IeeeCdf,
 }
 
 impl TransmissionFormat {
@@ -59,6 +71,7 @@ impl TransmissionFormat {
             Self::Psse => "psse",
             Self::Psse34 => "psse34",
             Self::Psse35 => "psse35",
+            Self::PsseRawx => "psse-rawx",
             Self::PowerWorld => "powerworld",
             Self::PandapowerJson => "pandapower-json",
             Self::PypsaCsv => "pypsa-csv",
@@ -68,6 +81,11 @@ impl TransmissionFormat {
             Self::Goc3Json => "goc3-json",
             Self::SurgeJson => "surge-json",
             Self::DeepMindOpfDataJson => "opfdata-json",
+            Self::Xiidm => "xiidm",
+            Self::Jiidm => "jiidm",
+            Self::Cgmes => "cgmes",
+            Self::Ucte => "ucte",
+            Self::IeeeCdf => "ieee-cdf",
         }
     }
 }
@@ -117,16 +135,16 @@ pub type JsonFormat = SourceFormat;
 
 /// Resolve a source format name or common alias.
 pub fn classify_format_name(name: &str) -> Detection<SourceFormat> {
-    if let Some(format) = transmission_format_from_name(name) {
+    if let Some(format) = parse_transmission_format(name) {
         return Detection::Known(SourceFormat::Transmission(format));
     }
-    if let Some(format) = distribution_format_from_name(name) {
+    if let Some(format) = parse_distribution_format(name) {
         return Detection::Known(SourceFormat::Distribution(format));
     }
     Detection::Unknown
 }
 
-pub fn transmission_format_from_name(name: &str) -> Option<TransmissionFormat> {
+pub fn parse_transmission_format(name: &str) -> Option<TransmissionFormat> {
     let key = canonical_key(name);
     match key.as_str() {
         "matpower" | "m" => Some(TransmissionFormat::Matpower),
@@ -135,6 +153,7 @@ pub fn transmission_format_from_name(name: &str) -> Option<TransmissionFormat> {
         "psse" | "psse33" | "raw" | "raw33" => Some(TransmissionFormat::Psse),
         "psse34" | "raw34" => Some(TransmissionFormat::Psse34),
         "psse35" | "raw35" => Some(TransmissionFormat::Psse35),
+        "psserawx" | "rawx" => Some(TransmissionFormat::PsseRawx),
         "powerworld" | "aux" => Some(TransmissionFormat::PowerWorld),
         "pandapowerjson" | "pandapower" | "pp" => Some(TransmissionFormat::PandapowerJson),
         "pypsacsv" | "pypsa" => Some(TransmissionFormat::PypsaCsv),
@@ -143,6 +162,11 @@ pub fn transmission_format_from_name(name: &str) -> Option<TransmissionFormat> {
         "gridfm" => Some(TransmissionFormat::Gridfm),
         "goc3" | "goc3json" | "go3" | "gochallenge3" | "c3" => Some(TransmissionFormat::Goc3Json),
         "surge" | "surgejson" => Some(TransmissionFormat::SurgeJson),
+        "xiidm" | "iidm" => Some(TransmissionFormat::Xiidm),
+        "jiidm" => Some(TransmissionFormat::Jiidm),
+        "cgmes" => Some(TransmissionFormat::Cgmes),
+        "ucte" | "uct" | "uctedef" => Some(TransmissionFormat::Ucte),
+        "ieeecdf" | "cdf" => Some(TransmissionFormat::IeeeCdf),
         "opfdata"
         | "opfdatajson"
         | "deepmindopfdata"
@@ -153,7 +177,7 @@ pub fn transmission_format_from_name(name: &str) -> Option<TransmissionFormat> {
     }
 }
 
-pub fn distribution_format_from_name(name: &str) -> Option<DistributionFormat> {
+pub fn parse_distribution_format(name: &str) -> Option<DistributionFormat> {
     let key = canonical_key(name);
     match key.as_str() {
         "dss" | "opendss" => Some(DistributionFormat::Dss),
@@ -163,22 +187,15 @@ pub fn distribution_format_from_name(name: &str) -> Option<DistributionFormat> {
     }
 }
 
-/// Top level classification of bare JSON text: a `.pio.json` package, bare
-/// model JSON, or a case document with its format detection. The package and
-/// model JSON outcomes live in the classifier's result rather than in separate
-/// predicates, so every consumer handles them, and one header read answers
-/// every question instead of a full document parse per question.
+/// Top level classification of bare JSON text: a PowerIO IR document or a case
+/// document with its format detection. One header read answers every question
+/// instead of requiring a full document parse per question.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JsonClass {
     /// A `.pio.json` stored module document. The stored document is not a
     /// converter boundary format, so it stays out of [`SourceFormat`];
     /// callers route it to the stored module reader instead of a case parser.
     Module,
-    /// Bare [`BalancedNetwork`](crate::BalancedNetwork) model JSON, written by
-    /// `to_json` and read by `from_json`. powerio authors it, so it is not a
-    /// case format and stays out of [`SourceFormat`]; callers route it to
-    /// those two methods instead of a case parser.
-    ModelJson,
     /// A case document and its format detection.
     Case(Detection<JsonFormat>),
 }
@@ -188,14 +205,14 @@ pub enum JsonClass {
 /// its optional `:<format>` tail, the Python `classify_json_text` status, and
 /// the Julia family symbol.
 ///
-/// Spellings are permanent and a family is never removed or redefined. A new
-/// family appends to this list and gets a changelog line, so a consumer that
-/// dispatches a file picker on it keeps working.
-pub const JSON_CLASSES: [&str; 6] = [
+/// A consumer may cache this set. A spelling never changes, a new family is
+/// appended within a release line, and a family leaves only in a breaking
+/// release that records the removal in the changelog and the migration guide,
+/// as 0.11 recorded `model-json`.
+pub const JSON_CLASSES: [&str; 5] = [
     "transmission",
     "distribution",
     "module",
-    "model-json",
     "ambiguous",
     "unknown",
 ];
@@ -207,7 +224,6 @@ impl JsonClass {
     pub fn family(self) -> &'static str {
         match self {
             Self::Module => "module",
-            Self::ModelJson => "model-json",
             Self::Case(Detection::Known(format)) => match format.domain() {
                 Domain::Transmission => "transmission",
                 Domain::Distribution => "distribution",
@@ -218,34 +234,28 @@ impl JsonClass {
     }
 }
 
-/// Classify a JSON document: a `.pio.json` stored module, bare model JSON, or a case
-/// document across the transmission and distribution domains.
+/// Classify a JSON document: a PowerIO IR module or a case document across the
+/// transmission and distribution domains.
 ///
-/// A package is recognized by a top level `model_kind` of `"balanced"` or
-/// `"multiconductor"` plus a `model` key (the released 0.9 shape), or by the
-/// version 1 stored module's own `schema: "powerio.module"` header; the value
-/// check keeps a case document that happens to carry those key names from
-/// being misrouted.
-/// Model JSON is recognized by `buses` beside another network key, which the
-/// case formats spell differently (PowerModels writes `bus`, not `buses`).
+/// PowerIO IR is recognized by its `schema: "pio-ir"` header.
 /// For a case, Unknown means there is no recognized top level marker, and
 /// Ambiguous means the document contains strong markers from both domains, so
 /// the caller must ask the user for an explicit format.
 pub fn classify_json_text(text: &str) -> JsonClass {
+    // PowSybl JIIDM opens with its `version` key, the same test PowSybl's
+    // importer applies; no other JSON case format starts that way.
+    if super::xiidm::looks_like_jiidm(text) {
+        return JsonClass::Case(Detection::Known(SourceFormat::Transmission(
+            TransmissionFormat::Jiidm,
+        )));
+    }
     // Windows tooling saves JSON with a UTF-8 byte order mark, which
     // serde_json rejects; strip it so a BOM never hides the format.
     let Ok(header) = serde_json::from_str::<JsonHeader>(text.trim_start_matches('\u{feff}')) else {
         return JsonClass::Case(Detection::Unknown);
     };
-    if matches!(
-        header.model_kind.as_deref(),
-        Some("balanced" | "multiconductor")
-    ) && header.model
-    {
-        return JsonClass::Module;
-    }
-    // The version 1 stored module names itself in its header.
-    if header.schema.as_deref() == Some("powerio.module") {
+    // PowerIO IR names itself in its header.
+    if header.schema.as_deref() == Some(POWERIO_IR_SCHEMA) {
         return JsonClass::Module;
     }
     header.classify()
@@ -347,7 +357,10 @@ impl<'de> Deserialize<'de> for NetworkField {
 }
 
 #[derive(Default, Deserialize)]
+#[expect(clippy::struct_excessive_bools)]
 struct NetworkHeader {
+    #[serde(default, deserialize_with = "present")]
+    caseid: bool,
     #[serde(default, deserialize_with = "present")]
     simple_dispatchable_device: bool,
     #[serde(default, deserialize_with = "present")]
@@ -391,10 +404,6 @@ struct MetadataHeader {
 #[derive(Default, Deserialize)]
 struct JsonHeader {
     #[serde(default, deserialize_with = "maybe_str")]
-    model_kind: Option<String>,
-    #[serde(default, deserialize_with = "present")]
-    model: bool,
-    #[serde(default, deserialize_with = "maybe_str")]
     schema: Option<String>,
     #[serde(default, deserialize_with = "maybe_str", rename = "_class")]
     pandapower_class: Option<String>,
@@ -407,6 +416,8 @@ struct JsonHeader {
     #[serde(default, deserialize_with = "present")]
     time_series_input: bool,
     #[serde(default, deserialize_with = "present")]
+    time_series_output: bool,
+    #[serde(default, deserialize_with = "present")]
     reliability: bool,
     #[serde(default, deserialize_with = "maybe_str")]
     format: Option<String>,
@@ -418,16 +429,6 @@ struct JsonHeader {
     solution: Option<SolutionHeader>,
     #[serde(default, deserialize_with = "maybe_object")]
     metadata: Option<MetadataHeader>,
-    #[serde(default, deserialize_with = "present")]
-    buses: bool,
-    #[serde(default, deserialize_with = "present")]
-    branches: bool,
-    #[serde(default, deserialize_with = "present")]
-    base_mva: bool,
-    #[serde(default, deserialize_with = "present")]
-    loads: bool,
-    #[serde(default, deserialize_with = "present")]
-    generators: bool,
     #[serde(default, deserialize_with = "present", rename = "baseMVA")]
     base_mva_camel: bool,
     #[serde(default, deserialize_with = "present")]
@@ -462,10 +463,12 @@ impl JsonHeader {
     fn classify(&self) -> JsonClass {
         let is_pandapower = self.pandapower_class.as_deref() == Some("pandapowerNet");
         let is_egret = self.elements && self.system;
-        let is_goc3 = (self.time_series_input || self.reliability)
-            && (self.network.header.simple_dispatchable_device
-                || self.network.header.ac_line
-                || self.network.header.two_winding_transformer);
+        let is_goc3 = self.time_series_output
+            || ((self.time_series_input || self.reliability)
+                && (self.network.header.simple_dispatchable_device
+                    || self.network.header.ac_line
+                    || self.network.header.two_winding_transformer));
+        let is_rawx = self.network.header.caseid;
         let is_surge = self.format.as_deref() == Some("surge-json")
             && self.schema_version
             && self.network.present;
@@ -481,15 +484,13 @@ impl JsonHeader {
                 .metadata
                 .as_ref()
                 .is_some_and(|metadata| metadata.objective);
-        let is_model_json =
-            self.buses && (self.branches || self.base_mva || self.loads || self.generators);
         let is_power_models = self.base_mva_camel || self.branch || self.r#gen || self.gencost;
         let transmission = is_pandapower
             || is_egret
             || is_goc3
+            || is_rawx
             || is_surge
             || is_opfdata
-            || is_model_json
             || is_power_models;
 
         let is_pmd = self.data_model;
@@ -499,24 +500,13 @@ impl JsonHeader {
 
         match (transmission, distribution) {
             (true, true) => JsonClass::Case(Detection::Ambiguous),
-            // Model JSON is answered inside the transmission arm rather than
-            // ahead of it, so a document carrying distribution markers too is
-            // still reported as ambiguous instead of being claimed here.
-            (true, false)
-                if is_model_json
-                    && !is_pandapower
-                    && !is_egret
-                    && !is_goc3
-                    && !is_surge
-                    && !is_opfdata =>
-            {
-                JsonClass::ModelJson
-            }
             (true, false) => JsonClass::Case(Detection::Known(SourceFormat::Transmission(
                 if is_pandapower {
                     TransmissionFormat::PandapowerJson
                 } else if is_egret {
                     TransmissionFormat::EgretJson
+                } else if is_rawx {
+                    TransmissionFormat::PsseRawx
                 } else if is_goc3 {
                     TransmissionFormat::Goc3Json
                 } else if is_surge {
@@ -547,19 +537,21 @@ mod tests {
     };
 
     #[test]
-    fn classifies_package() {
+    fn classifies_powerio_ir() {
         assert_eq!(
-            classify_json_text(
-                r#"{"model_kind":"multiconductor","model":{"kind":"multiconductor"}}"#
-            ),
+            classify_json_text(r#"{"schema":"pio-ir","version":2}"#),
             JsonClass::Module
         );
-        assert_eq!(
-            classify_json_text(r#"{"model_kind":"balanced","model":{}}"#),
-            JsonClass::Module
-        );
-        // A payload alone is not a package, and neither is a case document,
-        // even one that carries the package key names with case-file values.
+        // Routing is the schema name's job alone. Every PowerIO IR generation
+        // reaches the deserializer, which owns the version rule and can then
+        // name the version it refuses.
+        for version in ["1", "3", r#""0.11.0""#, "null"] {
+            assert_eq!(
+                classify_json_text(&format!(r#"{{"schema":"pio-ir","version":{version}}}"#)),
+                JsonClass::Module,
+                "version {version}"
+            );
+        }
         assert_eq!(
             classify_json_text(r#"{"buses":[],"linecodes":[]}"#),
             JsonClass::Case(Detection::Unknown)
@@ -619,17 +611,10 @@ mod tests {
     }
 
     #[test]
-    fn classifies_model_json() {
+    fn a_bare_network_object_is_not_a_case_or_powerio_ir() {
         assert_eq!(
             classify_json_text(r#"{"base_mva":100.0,"buses":[],"branches":[]}"#),
-            JsonClass::ModelJson
-        );
-        assert_eq!(JsonClass::ModelJson.family(), "model-json");
-        // Distribution markers beside the model keys are still ambiguous:
-        // the model JSON arm must not claim a document it cannot read.
-        assert_eq!(
-            classify_json_text(r#"{"base_mva":100.0,"buses":[],"linecode":{}}"#),
-            JsonClass::Case(Detection::Ambiguous)
+            JsonClass::Case(Detection::Unknown)
         );
     }
 
@@ -637,7 +622,6 @@ mod tests {
     fn every_family_is_in_the_closed_set() {
         for class in [
             JsonClass::Module,
-            JsonClass::ModelJson,
             JsonClass::Case(Detection::Ambiguous),
             JsonClass::Case(Detection::Unknown),
             JsonClass::Case(Detection::Known(SourceFormat::Transmission(
@@ -684,13 +668,38 @@ mod tests {
                 TransmissionFormat::Goc3Json
             )))
         );
+        assert_eq!(
+            classify_json_text(r#"{"time_series_output":{"bus":[]}}"#),
+            JsonClass::Case(Detection::Known(SourceFormat::Transmission(
+                TransmissionFormat::Goc3Json
+            )))
+        );
+    }
+
+    #[test]
+    fn classifies_rawx_and_normalizes_its_alias() {
+        assert_eq!(
+            classify_json_text(
+                r#"{"network":{"caseid":{"fields":["rev"],"data":[35]},"bus":{"fields":[],"data":[]}}}"#
+            ),
+            JsonClass::Case(Detection::Known(SourceFormat::Transmission(
+                TransmissionFormat::PsseRawx
+            )))
+        );
+        for alias in ["psse-rawx", "rawx", "PSSERAWX"] {
+            assert_eq!(
+                super::parse_transmission_format(alias),
+                Some(TransmissionFormat::PsseRawx)
+            );
+        }
+        assert_eq!(TransmissionFormat::PsseRawx.name(), "psse-rawx");
     }
 
     #[test]
     fn resolves_goc3_aliases() {
         for alias in ["goc3-json", "goc3", "go3", "go-challenge-3", "c3"] {
             assert_eq!(
-                super::transmission_format_from_name(alias),
+                super::parse_transmission_format(alias),
                 Some(TransmissionFormat::Goc3Json),
                 "{alias}"
             );
@@ -710,10 +719,22 @@ mod tests {
     }
 
     #[test]
+    fn resolves_ieee_cdf_aliases() {
+        for alias in ["ieee-cdf", "ieee_cdf", "IEEECDF", "cdf"] {
+            assert_eq!(
+                super::parse_transmission_format(alias),
+                Some(TransmissionFormat::IeeeCdf),
+                "{alias}"
+            );
+        }
+        assert_eq!(TransmissionFormat::IeeeCdf.name(), "ieee-cdf");
+    }
+
+    #[test]
     fn resolves_surge_aliases() {
         for alias in ["surge-json", "surge", "surgejson"] {
             assert_eq!(
-                super::transmission_format_from_name(alias),
+                super::parse_transmission_format(alias),
                 Some(TransmissionFormat::SurgeJson),
                 "{alias}"
             );
@@ -752,7 +773,7 @@ mod tests {
             "gridopt",
         ] {
             assert_eq!(
-                super::transmission_format_from_name(alias),
+                super::parse_transmission_format(alias),
                 Some(TransmissionFormat::DeepMindOpfDataJson),
                 "{alias}"
             );
@@ -779,7 +800,7 @@ mod tests {
         );
         assert_eq!(
             classify_json_bytes(b"{\"base_mva\":100.0,\"buses\":[],\"branches\":[]}"),
-            JsonClass::ModelJson
+            JsonClass::Case(Detection::Unknown)
         );
         assert_eq!(
             classify_json_bytes(b"{\"baseMVA\":100.0,\"bus\":{}\xff}"),
@@ -805,17 +826,7 @@ mod tests {
 
     /// A key's presence check is true even when its value is JSON `null`;
     /// only a genuinely absent key is absent. Pins the header deserializer
-    /// against the shortcut that would otherwise treat a `null` value the
-    /// same as a missing key.
-    #[test]
-    fn a_null_valued_marker_key_still_counts_as_present() {
-        assert_eq!(
-            classify_json_text(r#"{"model_kind":"balanced","model":null}"#),
-            JsonClass::Module
-        );
-    }
-
-    /// A string marker (`schema`, `model_kind`, `_class`, `format`) whose
+    /// A string marker (`schema`, `_class`, `format`) whose
     /// value is not a string carries no marker from that key, matching
     /// `serde_json::Value::as_str`'s permissive read; classification still
     /// proceeds over the document's other markers instead of erroring.

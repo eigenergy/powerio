@@ -1,7 +1,7 @@
 # IEEE cases in BMOPF JSON
 
-Reference encodings of IEEE distribution test cases in the draft IEEE PES BMOPF
-schema 0.1.0, produced by `powerio-dist`. They validate against that schema and
+Reference encodings of IEEE distribution test cases in BMOPF schema 0.2.0,
+produced by `powerio-dist`. They validate against that schema and
 exercise parsers and data profilers such as `BMOPFTools.jl`. Regenerate them
 rather than editing by hand.
 
@@ -22,7 +22,7 @@ cargo run -p powerio-dist --example regen_bmopf_examples -- --check
 ```
 
 Every document validates against the vendored schema
-(`tests/data/dist/bmopf/draft_bmopf_schema.json`), and the writer reports each
+(`tests/data/dist/bmopf/bmopf-0.2.0.schema.json`), and the writer reports each
 field the schema cannot carry as a fidelity warning on stderr, so nothing drops
 silently. The dss reader materializes every OpenDSS class default explicitly, so
 the output is fully explicit, and writing back to `.dss` reproduces the source
@@ -31,7 +31,7 @@ byte for byte.
 Each document carries a top level `meta` block. `meta.case_study_generator`
 names the writing tool and version, and `meta.$schema` pins the schema identity.
 The block is deterministic (no timestamp) so output stays byte stable. Per phase
-generator `cost` is an array, as schema 0.1.0 requires.
+generator `cost` is an array, as schema 0.2.0 requires.
 
 ## Source provenance
 

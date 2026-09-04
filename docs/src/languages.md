@@ -1,31 +1,89 @@
 # Rust, Python, Julia, and C
 
-The shared operations use one set of stable strings. The table maps each
-concept to its spelling on four language surfaces; surface specific operations
-and limits are listed in [1.0 Scope and Known Limits](scope-v1.md).
-Each language follows its own conventions for errors, ownership, and dispatch.
+The four language surfaces use the same operations and power system types:
 
-| Concept | Rust | Python | Julia | C ABI |
+```text
+source -> parse -> PioModule<T> -> calculation or update -> emit
+                         |
+                         +-> serialize -> PowerIO IR
+```
+
+`parse` and `emit` handle grid exchange representations. `serialize` and
+`deserialize` handle PowerIO IR. `calc_*` names a derived matrix or vector.
+`to_*` is reserved for an in-memory transformation to another semantic type.
+
+| Meaning | Rust | Python | Julia | C ABI 7 |
 |---|---|---|---|---|
-| parse a source | `parse(Source::open(path)?)` → `PioModule<PioValue>` | `powerio.parse(path)` → `PioModule` | `parse_file(path)` → `PioModule{T}` | `pio_parse_file` → `PioModule *` |
-| parse named bytes | `parse(Source::from_bytes(name, bytes)?)` | `powerio.parse(bytes)` | `parse_bytes(bytes; name)` | `pio_parse_bytes` |
-| the value kind | `module.value().kind().as_str()` | `module.kind` | `kind(m)` (or the type parameter) | `pio_module_kind` |
-| typed narrowing | `try_into_typed::<T>(module)` (consuming, recoverable) | `value_type=` assertion + `module.value` | the `PioModule{T}` type itself; `m.value` | `pio_module_balanced_network`, `pio_module_multiconductor_network` |
-| diagnostics | `module.diagnostics()` → `&[Diagnostic]` | `module.diagnostics()` → native records | `diagnostics(m)` → `Vector{Diagnostic}` | `pio_module_diagnostics` → `PioDiagnostics *` |
-| failure | `Err(Error)` carrying diagnostics | raised `PowerIOError` family | thrown `PowerIOCError` with records | NULL/-1 + `PioError *` out |
-| same format write | `write_module_str(&module, fmt)` | `module.value.to_format(to)` / `.write_file(path, to)` | `write_str(m; format)` / `write_file` | `pio_module_write_str` / `_write_file` |
-| convert one call | `convert_file` | `powerio.convert_file` | `convert_file` | `pio_convert_file` |
-| stored document | `stored::write_module` / facade parse | `PioModule.from_json` / `to_json` | `write_json(m)` / `parse_file` | `pio_module_write_json` / `_read_json` |
-| state selection | `select` module ops | `module.export_state(...)` (zero based) | `select_state(m; time=…)` (one based) | `pio_module_export_state` (zero based) |
-| balanced lowering | `transform::lower_module_to_balanced` | `module.to_balanced()` | `lower_to_balanced(m)` | `pio_module_lower_to_balanced` |
-| DC branch data | `powerio_tx::dc_network_data()` | `net.dc_data()` | `dc_data` + `BorrowedVector` views | `pio_dc_data_*` spans |
-| feature probe | Cargo features | `powerio.features()` | `has_feature`, `features()` | `pio_has_feature`, `pio_build_info` |
+| name a file | pass the name to `parse` | pass a path object to `parse` | pass a path string to `parse` | `pio_source_open` |
+| acquire memory | `Source::from_memory(name, bytes)` | pass a file or bytes-like object | pass `IO` or `AbstractVector{UInt8}` | `pio_source_from_memory` |
+| parse | `parse(input)`, `parse_with_options(input, &options)` | `parse(source, format=..., name=...)` | `parse(source; format=..., name=...)` | `pio_parse` |
+| module value | `module.value` | `module.value` | `module.value` | `pio_module_value` |
+| module diagnostics | `module.diagnostics` | `module.diagnostics` | `module.diagnostics` | `pio_module_diagnostics` |
+| emit a format | `emit(&module, format, destination)` | `emit(module, format, destination=None)` | `emit(module, format, destination=nothing)` | `pio_emit` |
+| serialize IR | `serialize(&module, destination)` | `serialize(module, destination=None)` | `serialize(module, destination=nothing)` | `pio_module_serialize` |
+| deserialize IR | `deserialize(source)` | `deserialize(source)` | `deserialize(source)` | `pio_module_deserialize` |
+| apply updates | `apply_updates` | `apply_updates` | `apply_updates!` | `pio_apply_updates` |
 
-The differences are deliberate, and small:
+Rust matches `PioValue` enum cases through `module.value`. Python uses
+`isinstance`. Julia dispatches on `PioModule{T}` and concrete value types. C
+uses canonical structural type names, an exact type predicate, and owner
+rooted typed accessors. None of the four surfaces has an ordinal value kind
+enum or a typed narrowing wrapper.
 
-- Rust owns and moves: narrowing consumes the dynamic module and hands it back on mismatch. Python and Julia share: the typed value and the module co-own the same native data, and finalizers or reference counts release it.
-- Index bases follow the language: element identifiers are the source's own everywhere, dense positions are zero based at the C and Python boundary and one based in Julia's `select_state`, each stated in its documentation.
-- Errors follow the language: `Result` in Rust, exceptions in Python and Julia, status plus `PioError` handles in C. All four carry the same coded records, except Python's `FileNotFoundError` for a missing file, which carries none (the deliberate Python idiom for a bad path).
-- Borrowed numerical views (`C` spans, Julia `BorrowedVector`, Python buffer views) stay valid until their owner releases; `copy` produces an ordinary mutable array.
+Only Rust and C have a `Source` type. Both need an explicit owner for acquired
+bytes: a Rust caller must say who holds the buffers a parse reads and when they
+are released, and a C caller must pair every acquisition with a release call,
+so `Source` makes that ownership visible at the call site. Python and Julia
+values already carry the same information. A path, an open file object, or a
+bytes-like object states where the bytes come from, and the interpreter owns
+and frees them, so `parse` takes those values directly and derives the source
+name from the path or the `name` argument. A `Source` class in Python or Julia
+would restate Rust ownership mechanics without adding information.
 
-The C page ([C ABI](capi.md)) and the Python page ([Python API](python.md)) carry each surface's full story; PowerIO.jl documents Julia at [eigenergy.github.io/PowerIO.jl](https://eigenergy.github.io/PowerIO.jl). The CLI and MCP server expose overlapping subsets over their own boundaries: [CLI and MCP](cli-mcp.md).
+Formats made of related files use the same `parse` operation. For GO Challenge
+3, a directory containing only the problem returns `AcScucInstance`; adding
+the matching solution file makes it return `AcScucSolution` in all four
+languages.
+
+## Collections
+
+`TimeSeries<T>` and `ScenarioSet<T>` contain typed entries.
+
+| Language | Operations |
+|---|---|
+| Rust | `len`, `iter`, checked `get` |
+| Python | `len`, iteration, `series[index]`, `scenarios[id]` |
+| Julia | `length`, iteration, 1-based `getindex` |
+| C | zero-based length and entry access; scenario ID lookup |
+
+An entry is the contained value or an owner rooted view. Collection indexing
+does not serialize, expand, or copy a complete network.
+
+## Calculations
+
+The matrix and vector names agree across languages:
+
+```text
+calc_incidence_matrix
+calc_branch_susceptances
+calc_bus_susceptance_matrix
+calc_branch_flow_matrix
+calc_branch_phase_shift_injection
+calc_bus_phase_shift_injection
+calc_branch_flow_dc
+calc_bus_injection_dc
+```
+
+Rust and C use zero-based sparse matrix positions. Python sparse matrices use
+SciPy's zero-based positions. Julia presents 1-based indices. Stable PowerIO
+component IDs and source identifiers do not change at a language boundary.
+
+## Errors and ownership
+
+Rust returns `Result`. Python raises `PowerIOError` subclasses. Julia throws a
+`PowerIOError` carrying structured diagnostics. C returns a documented failure
+value and writes one `PioError *` through its error output.
+
+Python and Julia wrappers keep native owners alive for borrowed typed views. C
+callers retain and release opaque handles explicitly. These ownership details
+do not change the data types or operation names.

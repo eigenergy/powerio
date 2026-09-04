@@ -12,7 +12,7 @@ use powerio_dist::{
     Configuration, DistBus, DistCapacitor, DistLine, DistLineCode, DistShunt, DistSwitch,
     DistTransformer, DistWinding, DistWindingConn, MulticonductorNetwork, VoltageSource,
 };
-use powerio_matrix::{NodeRef, build_multiconductor_admittance};
+use powerio_matrix::{NodeRef, calc_multiconductor_admittance_matrix};
 
 fn dense(matrix: &powerio_matrix::SparseMatrix) -> Vec<Vec<f64>> {
     let mut out = vec![vec![0.0; matrix.cols()]; matrix.rows()];
@@ -36,7 +36,7 @@ fn grounded_terminals_and_terminal_zero_are_not_unknowns() {
     net.buses_mut().push(a);
     net.buses_mut().push(DistBus::new("b", strings(&["1"])));
 
-    let system = build_multiconductor_admittance(&net).unwrap();
+    let system = calc_multiconductor_admittance_matrix(&net).unwrap();
     let index = system.index();
     assert_eq!(index.len(), 2, "a.1 and b.1 only");
     assert_eq!(index.resolve("a", "1"), Some(NodeRef::Node(0)));
@@ -65,7 +65,7 @@ fn a_single_conductor_line_stamps_its_hand_inverted_admittance() {
         10.0,
     ));
 
-    let system = build_multiconductor_admittance(&net).unwrap();
+    let system = calc_multiconductor_admittance_matrix(&net).unwrap();
     let g = dense(system.conductance());
     let b = dense(system.susceptance());
     for (matrix, diagonal, off) in [(&g, 0.02, -0.02), (&b, -0.04, 0.04)] {
@@ -103,7 +103,7 @@ fn a_two_conductor_line_matches_the_hand_inverse_and_shunt_halves() {
         1.0,
     ));
 
-    let system = build_multiconductor_admittance(&net).unwrap();
+    let system = calc_multiconductor_admittance_matrix(&net).unwrap();
     let b = dense(system.susceptance());
     // Node order: a.1, a.2, b.1, b.2.
     let y11 = -2.0 / 3.0;
@@ -140,7 +140,7 @@ fn a_closed_switch_merges_nodes_and_an_open_one_does_not() {
     net.switches_mut().push(closed);
     net.switches_mut().push(open);
 
-    let system = build_multiconductor_admittance(&net).unwrap();
+    let system = calc_multiconductor_admittance_matrix(&net).unwrap();
     let index = system.index();
     // a.1 and b.1 are one exact node; c.1 is its own.
     assert_eq!(index.len(), 2);
@@ -167,7 +167,7 @@ fn a_wye_capacitor_stamps_its_nameplate_susceptance() {
         1000.0,
     ));
 
-    let system = build_multiconductor_admittance(&net).unwrap();
+    let system = calc_multiconductor_admittance_matrix(&net).unwrap();
     let b = dense(system.susceptance());
     let per_phase = 100.0 / (1000.0 / 3f64.sqrt()).powi(2);
     for phase in 0..3 {
@@ -191,7 +191,7 @@ fn shunt_matrices_stamp_verbatim() {
         vec![vec![1.0, -0.25], vec![-0.25, 2.0]],
         vec![vec![0.5, 0.0], vec![0.0, 0.75]],
     ));
-    let system = build_multiconductor_admittance(&net).unwrap();
+    let system = calc_multiconductor_admittance_matrix(&net).unwrap();
     let g = dense(system.conductance());
     let b = dense(system.susceptance());
     assert!((g[0][0] - 1.0).abs() < 1e-15);
@@ -218,7 +218,7 @@ fn sources_and_ideal_transformers_enter_the_augmented_system() {
         1,
     ));
 
-    let system = build_multiconductor_admittance(&net).unwrap();
+    let system = calc_multiconductor_admittance_matrix(&net).unwrap();
     let index = system.index();
     let augmented = system.augmented();
     assert_eq!(augmented.labels.len(), 2, "one source row, one ratio row");
@@ -279,7 +279,7 @@ fn unsupported_stamps_are_structured_diagnostics() {
         vec![1.0, 1.0, 1.0],
         1,
     ));
-    let system = build_multiconductor_admittance(&net).unwrap();
+    let system = calc_multiconductor_admittance_matrix(&net).unwrap();
     assert!(
         system
             .diagnostics()
@@ -310,7 +310,7 @@ fn axis_mappings_survive_source_row_reordering() {
         if reversed {
             net.buses_mut().reverse();
         }
-        build_multiconductor_admittance(&net).unwrap()
+        calc_multiconductor_admittance_matrix(&net).unwrap()
     };
     let forward = build(false);
     let reversed = build(true);
@@ -334,11 +334,11 @@ fn a_parsed_micro_feeder_assembles_end_to_end() {
     let dss = "New Circuit.c basekv=12.47 pu=1 phases=3 bus1=a\n\
                New Line.l1 bus1=a.1.2.3 bus2=b.1.2.3 phases=3 r1=0.1 x1=0.2 length=1 units=km\n\
                New Load.ld bus1=b.1.2.3 phases=3 conn=wye kv=7.2 kw=30 kvar=9\n";
-    let source = powerio_core::Source::from_bytes("<memory>", dss.as_bytes().to_vec())
+    let source = powerio_core::Source::from_memory("<memory>", dss.as_bytes().to_vec())
         .unwrap()
         .with_format(powerio_core::FormatId::new("dss").unwrap());
     let net = powerio_dist::parse(source).unwrap().into_value();
-    let system = build_multiconductor_admittance(&net).unwrap();
+    let system = calc_multiconductor_admittance_matrix(&net).unwrap();
     assert!(system.index().len() >= 6, "three phases at two buses");
     assert!(system.susceptance().nnz() > 0);
     // The source anchors the system through the augmented rows.

@@ -18,7 +18,7 @@ fuzz_target!(|data: &[u8]| {
     if std::str::from_utf8(main).is_err() {
         return;
     }
-    let Ok(mut source) = powerio_core::Source::from_bytes("main.dss", main.to_vec()) else {
+    let Ok(mut source) = powerio_core::Source::from_memory("main.dss", main.to_vec()) else {
         return;
     };
     for (i, chunk) in parts.take(8).enumerate() {
@@ -33,6 +33,9 @@ fuzz_target!(|data: &[u8]| {
     let Ok(module) = powerio_dist::parse(source.with_format(id)) else {
         return;
     };
-    let net = module.value();
-    let _ = powerio_dist::write_dss(net);
+    let module = module.sever_source();
+    let Ok(destination) = powerio_core::Destination::memory("fuzz") else {
+        return;
+    };
+    let _ = powerio_dist::emit(&module, powerio_dist::DistTargetFormat::Dss, destination);
 });

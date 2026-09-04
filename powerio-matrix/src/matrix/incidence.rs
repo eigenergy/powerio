@@ -1,69 +1,60 @@
-//! DC network primitives: the signed incidence matrix `A`, branch
-//! susceptances `b`, the flow map `B Aᵀ`, and the phase shift injection.
+//! Internal DC solver factors: the signed bus by branch incidence matrix and
+//! positive branch weights.
 //!
 //! Edge orientation is fixed to MATPOWER's from→to: column `e` of `A` has
 //! `+1` at the from bus (tail) and `−1` at the to bus (head). Columns run
-//! over in-service branches in `case.branches` order; `branch_of_col` maps a
-//! column back to its source branch index.
+//! over the accepted in-service branches in `case.branches` order.
 
 use sprs::CsMat;
 
-pub use powerio_tx::DcConvention;
+use powerio_tx::BranchSusceptanceFormula;
 
 use crate::Result;
 use crate::indexed::IndexedNetwork;
 use crate::matrix::triplet::CooBuilder;
 
-use super::{BuildOptions, ZeroImpedanceSkips};
+use super::BuildOptions;
 
-/// The incidence factorization of a case under one DC convention.
+/// The incidence factorization used by sensitivity builders.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
-pub struct IncidenceParts {
+pub(crate) struct IncidenceParts {
     /// Signed incidence `A`, shape `n × m`.
-    pub a: CsMat<f64>,
+    pub(crate) a: CsMat<f64>,
     /// Positive Laplacian edge weights `b_e`, length `m`: the factor weight
     /// a sparse solver uses (`|b|` of the PowerModels susceptance). The
     /// signed susceptance lives on the DC operator surface.
-    pub b: Vec<f64>,
-    /// Phase shift bus injection, length `n`. All zeros unless the selected
-    /// convention carries shifts and the case has a phase shifter.
-    pub p_shift: Vec<f64>,
-    /// Column `k` → index into `case.branches`.
-    pub branch_of_col: Vec<usize>,
-    /// In-service branch rows skipped because their DC denominator is zero.
-    pub skipped_zero_impedance: ZeroImpedanceSkips,
+    pub(crate) b: Vec<f64>,
 }
 
 impl IncidenceParts {
     #[inline]
-    pub fn n(&self) -> usize {
+    pub(crate) fn n(&self) -> usize {
         self.a.rows()
     }
 
     #[inline]
-    pub fn m(&self) -> usize {
+    pub(crate) fn m(&self) -> usize {
         self.a.cols()
     }
 }
 
-/// Build `A`, `b`, the phase shift injection, and the column→branch map.
+/// Build the internal bus by branch incidence factor and positive weights.
 ///
 /// Self-loops (from == to) are dropped. A branch whose reactance is too small
 /// to divide by has no DC susceptance the Laplacian can carry; it is skipped
 /// when `opts.skip_zero_impedance` is true and rejected with
 /// [`powerio_tx::Error::ZeroImpedance`] when it is false. A tap ratio under the same bound
 /// is [`powerio_tx::Error::DegenerateTap`] either way, as it is in Y_bus.
-pub fn build_incidence(
+pub(crate) fn build_incidence(
     case: &IndexedNetwork,
-    conv: DcConvention,
+    formula: BranchSusceptanceFormula,
     opts: &BuildOptions,
 ) -> Result<IncidenceParts> {
     let n = case.n();
 
     // Pass 1: resolve and filter, fixing the column order.
     let mut cols: Vec<Column> = Vec::new();
-    let mut skipped_zero_impedance = Vec::new();
     for (idx, br) in case.in_service_branches() {
         let i = case
             .bus_index(br.from)
@@ -82,79 +73,51 @@ pub fn build_incidence(
         // formula never reads cannot reject a branch (#324): the reciprocal
         // rules bound the reactance, and the series formula bounds the whole
         // impedance magnitude.
-        let degenerate = match conv {
-            DcConvention::SeriesSusceptance => {
+        let degenerate = match formula {
+            BranchSusceptanceFormula::SeriesSusceptance => {
                 br.r.hypot(br.x) < crate::matrix::MIN_DIVISIBLE_MAGNITUDE
             }
             _ => br.x.abs() < crate::matrix::MIN_DIVISIBLE_MAGNITUDE,
         };
         if i == j || degenerate {
-            if i != j && degenerate {
-                if !opts.skip_zero_impedance {
-                    return Err(powerio_tx::Error::ZeroImpedance { row: idx }.into());
-                }
-                skipped_zero_impedance.push(idx);
+            if i != j && degenerate && !opts.skip_zero_impedance {
+                return Err(powerio_tx::Error::ZeroImpedance { row: idx }.into());
             }
             continue;
         }
         // Only `TapAdjustedReactance` divides by the tap, so only it can be
         // bounded or rejected by one (#324); the other formulas never read
         // the value.
-        let tap = if conv.reads_tap() {
-            br.divisible_tap(idx)?
+        let tap = if formula.reads_tap() {
+            br.calc_divisible_tap(idx)?
         } else {
             1.0
         };
         // The incidence parts carry the internal positive factor weight (the
         // Laplacian edge weight a sparse solver factors); public PowerModels
         // sign results are the DC operator surface's to emit.
-        let b_e = conv.solver_edge_weight(br.r, br.x, tap);
+        let b_e = formula.calc_solver_edge_weight(br.r, br.x, tap);
         // A NaN reactance slips past the guard above and poisons the whole
         // Laplacian.
         if !b_e.is_finite() {
             return Err(powerio_tx::Error::NonFiniteSusceptance { row: idx }.into());
         }
-        // angle_radians, not to_radians: a normalized network's shift is
-        // already in radians, so converting again would double-scale it.
-        let shift_rad = if conv.includes_phase_shifts() {
-            case.angle_radians(br.shift)
-        } else {
-            0.0
-        };
-        cols.push(Column {
-            i,
-            j,
-            b_e,
-            shift_rad,
-            branch: idx,
-        });
+        cols.push(Column { i, j, b_e });
     }
 
     // Pass 2: assemble.
     let m = cols.len();
     let mut a = CooBuilder::with_capacity_rect(n, m, 2 * m);
     let mut b = Vec::with_capacity(m);
-    let mut p_shift = vec![0.0; n];
-    let mut branch_of_col = Vec::with_capacity(m);
     for (k, col) in cols.iter().enumerate() {
         a.add(col.i, k, 1.0);
         a.add(col.j, k, -1.0);
         b.push(col.b_e);
-        branch_of_col.push(col.branch);
-        if col.shift_rad != 0.0 {
-            // MATPOWER makeBdc: Pbusinj = (Cf − Ct)ᵀ (b ⊙ (−shift)). Column k
-            // of (Cf − Ct) is e_from − e_to.
-            p_shift[col.i] -= col.b_e * col.shift_rad;
-            p_shift[col.j] += col.b_e * col.shift_rad;
-        }
     }
 
     Ok(IncidenceParts {
         a: a.finish_csr(),
         b,
-        p_shift,
-        branch_of_col,
-        skipped_zero_impedance: ZeroImpedanceSkips::new(skipped_zero_impedance),
     })
 }
 
@@ -162,12 +125,10 @@ struct Column {
     i: usize,
     j: usize,
     b_e: f64,
-    shift_rad: f64,
-    branch: usize,
 }
 
 /// Sparse diagonal matrix from `values` (square, `len × len`).
-pub fn diagonal(values: &[f64]) -> CsMat<f64> {
+pub fn calc_diagonal(values: &[f64]) -> CsMat<f64> {
     let n = values.len();
     let mut d = CooBuilder::with_capacity(n, n);
     for (k, &v) in values.iter().enumerate() {
@@ -177,20 +138,24 @@ pub fn diagonal(values: &[f64]) -> CsMat<f64> {
 }
 
 /// `B = diag(b)`, shape `m × m`.
-pub fn susceptance_diag(b: &[f64]) -> CsMat<f64> {
-    diagonal(b)
+pub fn calc_susceptance_diagonal(b: &[f64]) -> CsMat<f64> {
+    calc_diagonal(b)
 }
 
-/// The angle dependent flow map `B Aᵀ`, shape `m × n`, over the internal
-/// positive factor weights.
+/// Calculate the branch flow matrix used by solver preparations,
+/// `Diagonal(w) * Aᵀ`, shape `m × n`, where `w` contains positive factor
+/// weights.
 ///
 /// A complete affine branch flow also adds `-b * shift`; problem
 /// preparations expose that term through
-/// `DcOpfPreparation::branch_flow_offset`. In the public PowerModels sign
+/// `DcOpfPreparation::calc_branch_flow_offset`. In the public PowerModels sign
 /// spelling the same flow is `p_branch = -Bf va + b .* shift` with negated
 /// susceptances.
-pub fn build_flow_map(a: &CsMat<f64>, b: &[f64]) -> CsMat<f64> {
-    let d = susceptance_diag(b);
-    let at = a.transpose_view().to_csr();
-    &d * &at
+pub(crate) fn calc_solver_branch_flow_matrix(
+    bus_branch_incidence: &CsMat<f64>,
+    susceptance_magnitude: &[f64],
+) -> CsMat<f64> {
+    let diagonal = calc_susceptance_diagonal(susceptance_magnitude);
+    let transpose = bus_branch_incidence.transpose_view().to_csr();
+    &diagonal * &transpose
 }

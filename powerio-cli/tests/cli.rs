@@ -14,6 +14,272 @@ fn run(args: &[&str]) -> Output {
     Command::new(bin()).args(args).output().unwrap()
 }
 
+/// Run the binary with `stdin` piped in.
+fn run_with_stdin(args: &[&str], stdin: &[u8]) -> Output {
+    use std::io::Write as _;
+    use std::process::Stdio;
+    let mut child = Command::new(bin())
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(stdin).unwrap();
+    child.wait_with_output().unwrap()
+}
+
+/// The one JSON array of diagnostic records that `--diagnostics-format json`
+/// leaves on stderr; anything else on stderr fails the test.
+fn json_diagnostics(out: &Output) -> Vec<serde_json::Value> {
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let lines: Vec<&str> = stderr.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines.len(), 1, "stderr is not one JSON line:\n{stderr}");
+    serde_json::from_str(lines[0]).unwrap_or_else(|error| panic!("{error}:\n{stderr}"))
+}
+
+const IR_DIAGNOSTIC_FIELDS: [&str; 9] = [
+    "id",
+    "severity",
+    "code",
+    "message",
+    "target",
+    "spans",
+    "related",
+    "details",
+    "suggested_action",
+];
+
+#[test]
+fn convert_reads_a_case_from_stdin_with_a_declared_format() {
+    let case = std::fs::read(repo_file("tests/data/case9.m")).unwrap();
+    let out = run_with_stdin(
+        &[
+            "convert", "-", "--from", "matpower", "--to", "psse", "-o", "-",
+        ],
+        &case,
+    );
+    assert_success(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("powerio export: case9"), "{stdout}");
+    assert!(
+        stdout.contains("/ powerio export") || stdout.contains("BEGIN"),
+        "{stdout}"
+    );
+
+    let out = run_with_stdin(&["summary", "-", "--from", "matpower"], &case);
+    assert_success(&out);
+    let summary: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(summary["elements"]["buses"], 9, "{summary}");
+
+    let out = run_with_stdin(&["serialize", "-", "--from", "matpower"], &case);
+    assert_success(&out);
+    let document: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(document["schema"], powerio::IR_SCHEMA_NAME, "{document}");
+    assert_eq!(document["version"], powerio::IR_VERSION, "{document}");
+    assert_eq!(
+        document["value"]["type"], "powerio.BalancedNetwork",
+        "{document}"
+    );
+}
+
+#[test]
+fn stdin_without_a_declared_format_is_a_request_failure() {
+    let case = std::fs::read(repo_file("tests/data/case9.m")).unwrap();
+    let out = run_with_stdin(&["convert", "-", "--to", "psse", "-o", "-"], &case);
+    assert_failure(&out);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("REQUEST.CLI.FORMAT_REQUIRED"), "{stderr}");
+    assert!(stderr.contains("--from"), "{stderr}");
+    assert!(out.stdout.is_empty(), "nothing is written on failure");
+
+    let out = run_with_stdin(
+        &[
+            "convert", "-", "--from", "gridfm", "--to", "psse", "-o", "-",
+        ],
+        &case,
+    );
+    assert_eq!(out.status.code(), Some(2));
+}
+
+#[test]
+fn an_unknown_format_is_a_usage_failure() {
+    let case = repo_file("tests/data/case9.m");
+    let out = run(&[
+        "convert",
+        case.to_str().unwrap(),
+        "--to",
+        "not-a-format",
+        "-o",
+        "-",
+    ]);
+    assert_eq!(out.status.code(), Some(2));
+    let out = run(&[
+        "convert",
+        case.to_str().unwrap(),
+        "--from",
+        "not-a-format",
+        "--to",
+        "psse",
+        "-o",
+        "-",
+    ]);
+    assert_eq!(out.status.code(), Some(2));
+}
+
+#[test]
+fn a_missing_input_exits_with_the_io_status_and_json_records() {
+    let out = run(&[
+        "--diagnostics-format",
+        "json",
+        "convert",
+        "does-not-exist.m",
+        "--to",
+        "psse",
+        "-o",
+        "-",
+    ]);
+    assert_eq!(out.status.code(), Some(3));
+    let diagnostics = json_diagnostics(&out);
+    let record = &diagnostics[0];
+    assert_eq!(record["code"], "READ.IO.OPEN", "{record}");
+    assert_eq!(record["severity"], "error", "{record}");
+    let primary_id = record["id"].as_str().unwrap().to_owned();
+    assert!(
+        record["message"]
+            .as_str()
+            .unwrap()
+            .contains("does-not-exist.m"),
+        "{record}"
+    );
+    // The operating system's reason is a note that names the primary record.
+    let notes: Vec<&serde_json::Value> = diagnostics
+        .iter()
+        .filter(|d| d["severity"] == "note")
+        .collect();
+    assert!(
+        notes.iter().any(|note| {
+            note["message"]
+                .as_str()
+                .unwrap()
+                .contains("No such file or directory")
+        }),
+        "{diagnostics:?}"
+    );
+    for note in &notes {
+        assert_eq!(note["code"], "READ.IO.OPEN", "{note}");
+        assert_eq!(note["related"], serde_json::json!([primary_id]), "{note}");
+    }
+    // Every record has the IR schema's fields and no other.
+    for record in &diagnostics {
+        for key in record.as_object().unwrap().keys() {
+            assert!(
+                IR_DIAGNOSTIC_FIELDS.contains(&key.as_str()),
+                "unexpected field {key} in {record}"
+            );
+        }
+    }
+    // The flag is global: it is accepted after the subcommand too.
+    let out = run(&[
+        "convert",
+        "does-not-exist.m",
+        "--to",
+        "psse",
+        "-o",
+        "-",
+        "--diagnostics-format",
+        "json",
+    ]);
+    assert_eq!(out.status.code(), Some(3));
+    assert_eq!(json_diagnostics(&out)[0]["code"], "READ.IO.OPEN");
+}
+
+#[test]
+fn json_format_leaves_only_the_diagnostics_array_on_stderr() {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let output = std::env::temp_dir().join(format!("powerio-cli-json-{stamp}.raw"));
+    let case = repo_file("tests/data/case9.m");
+    let out = run(&[
+        "--diagnostics-format",
+        "json",
+        "convert",
+        case.to_str().unwrap(),
+        "--to",
+        "psse",
+        "-o",
+        output.to_str().unwrap(),
+    ]);
+    assert_success(&out);
+    assert!(output.is_file(), "{} was not written", output.display());
+    let _ = std::fs::remove_file(&output);
+    // No `wrote <path>` line: stderr is the array alone, even when it is empty.
+    let diagnostics = json_diagnostics(&out);
+    for record in &diagnostics {
+        assert_ne!(record["severity"], "error", "{record}");
+    }
+
+    let bundle = std::env::temp_dir().join(format!("powerio-cli-json-bundle-{stamp}"));
+    let out = run(&[
+        "--diagnostics-format",
+        "json",
+        "dcopf",
+        case.to_str().unwrap(),
+        "-o",
+        bundle.to_str().unwrap(),
+    ]);
+    assert_success(&out);
+    assert!(bundle.is_dir(), "{} was not written", bundle.display());
+    let _ = std::fs::remove_dir_all(&bundle);
+    let diagnostics = json_diagnostics(&out);
+    for record in &diagnostics {
+        assert_ne!(record["severity"], "error", "{record}");
+    }
+}
+
+#[test]
+fn a_malformed_case_exits_with_the_parse_status() {
+    let out = run_with_stdin(
+        &[
+            "--diagnostics-format",
+            "json",
+            "convert",
+            "-",
+            "--from",
+            "matpower",
+            "--to",
+            "psse",
+            "-o",
+            "-",
+        ],
+        b"function mpc = broken\nmpc.bus = [\n\t1\t3\n",
+    );
+    assert_eq!(out.status.code(), Some(4));
+    let diagnostics = json_diagnostics(&out);
+    assert!(!diagnostics.is_empty(), "{diagnostics:?}");
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d["code"].as_str().unwrap().starts_with("PARSE.") && d["severity"] == "error"),
+        "{diagnostics:?}"
+    );
+
+    // Without the flag the same failure renders the readable lines.
+    let out = run_with_stdin(
+        &[
+            "convert", "-", "--from", "matpower", "--to", "psse", "-o", "-",
+        ],
+        b"function mpc = broken\nmpc.bus = [\n\t1\t3\n",
+    );
+    assert_eq!(out.status.code(), Some(4));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.starts_with("Error: "), "{stderr}");
+    assert!(stderr.contains("PARSE."), "{stderr}");
+}
+
 fn assert_success(out: &Output) {
     assert!(
         out.status.success(),
@@ -65,6 +331,142 @@ fn convert_to_stdout_keeps_text_on_stdout() {
 }
 
 #[test]
+fn convert_goc3_problem_and_solution_source_emits_official_solution() {
+    let source = repo_file("tests/data/goc3");
+    let out = run(&[
+        "convert",
+        source.to_str().unwrap(),
+        "--to",
+        "goc3-json",
+        "-o",
+        "-",
+    ]);
+    assert_success(&out);
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let output = &value["time_series_output"];
+    assert!(
+        output.is_object(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(output["bus"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        output["simple_dispatchable_device"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn convert_goc3_solution_without_problem_reports_missing_problem() {
+    let solution = repo_file("tests/data/goc3/goc3_small_solution.json");
+    let out = run(&[
+        "convert",
+        solution.to_str().unwrap(),
+        "--to",
+        "goc3-json",
+        "-o",
+        "-",
+    ]);
+    assert_failure(&out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("requires the matching problem file"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn convert_goc3_problem_to_matpower_uses_the_typed_instance() {
+    let problem = repo_file("tests/data/goc3/goc3_small.json");
+    let out = run(&[
+        "convert",
+        problem.to_str().unwrap(),
+        "--from",
+        "goc3",
+        "--to",
+        "matpower",
+        "-o",
+        "-",
+    ]);
+    assert_success(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stdout.contains("mpc.bus = ["), "{stdout}");
+    assert!(stderr.contains("EMIT.CALCULATION.DATA_OMITTED"), "{stderr}");
+    assert!(stderr.contains("powerio.AcScucInstance"), "{stderr}");
+}
+
+#[test]
+fn convert_goc3_problem_and_solution_source_emits_cgmes_network() {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let output = std::env::temp_dir().join(format!("powerio-cli-goc3-cgmes-{stamp}"));
+    let source = repo_file("tests/data/goc3");
+    let out = run(&[
+        "convert",
+        source.to_str().unwrap(),
+        "--to",
+        "cgmes",
+        "-o",
+        output.to_str().unwrap(),
+    ]);
+    assert_success(&out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("EMIT.SOLUTION.DATA_OMITTED"), "{stderr}");
+    assert!(stderr.contains("powerio.AcScucSolution"), "{stderr}");
+
+    let names: Vec<_> = std::fs::read_dir(&output)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names.len(), 4, "{names:?}");
+    assert!(names.iter().any(|name| name.ends_with("_EQ.xml")));
+    assert!(names.iter().any(|name| name.ends_with("_TP.xml")));
+    assert!(names.iter().any(|name| name.ends_with("_SSH.xml")));
+    assert!(names.iter().any(|name| name.ends_with("_SV.xml")));
+    std::fs::remove_dir_all(output).unwrap();
+}
+
+#[test]
+fn convert_goc3_solution_ir_uses_the_same_typed_path() {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let ir = std::env::temp_dir().join(format!("powerio-cli-goc3-{stamp}.pio.json"));
+    let source = repo_file("tests/data/goc3");
+    let serialized = run(&[
+        "serialize",
+        source.to_str().unwrap(),
+        "-o",
+        ir.to_str().unwrap(),
+    ]);
+    assert_success(&serialized);
+
+    let converted = run(&[
+        "convert",
+        ir.to_str().unwrap(),
+        "--to",
+        "matpower",
+        "-o",
+        "-",
+    ]);
+    assert_success(&converted);
+    let stdout = String::from_utf8_lossy(&converted.stdout);
+    let stderr = String::from_utf8_lossy(&converted.stderr);
+    assert!(stdout.contains("mpc.bus = ["), "{stdout}");
+    assert!(stderr.contains("EMIT.SOLUTION.DATA_OMITTED"), "{stderr}");
+    assert!(stderr.contains("powerio.AcScucSolution"), "{stderr}");
+
+    std::fs::remove_file(ir).unwrap();
+}
+
+#[test]
 fn convert_refuses_an_existing_text_output() {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -104,6 +506,78 @@ fn convert_refuses_an_existing_text_output() {
     let _ = std::fs::remove_file(&fresh);
 
     let _ = std::fs::remove_file(out_path);
+}
+
+#[test]
+fn convert_writes_a_cgmes_profile_directory() {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let output = std::env::temp_dir().join(format!("powerio-cli-cgmes-{stamp}"));
+    let case = repo_file("tests/data/case9.m");
+    let out = run(&[
+        "convert",
+        case.to_str().unwrap(),
+        "--to",
+        "cgmes",
+        "-o",
+        output.to_str().unwrap(),
+    ]);
+    assert_success(&out);
+    let names: Vec<_> = std::fs::read_dir(&output)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names.len(), 4, "{names:?}");
+    assert!(names.iter().any(|name| name.ends_with("_EQ.xml")));
+    assert!(names.iter().any(|name| name.ends_with("_TP.xml")));
+    assert!(names.iter().any(|name| name.ends_with("_SSH.xml")));
+    assert!(names.iter().any(|name| name.ends_with("_SV.xml")));
+    std::fs::remove_dir_all(output).unwrap();
+}
+
+#[test]
+fn convert_writes_jiidm_and_reads_it_back() {
+    let case = repo_file("tests/data/case9.m");
+    let out = run(&[
+        "convert",
+        case.to_str().unwrap(),
+        "--to",
+        "jiidm",
+        "-o",
+        "-",
+    ]);
+    assert_success(&out);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.starts_with("{\n  \"version\" : \"1.17\","), "{text}");
+    let out = run_with_stdin(&["summary", "-", "--from", "jiidm"], text.as_bytes());
+    assert_success(&out);
+    let summary = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        summary.contains("\"source_format\": \"jiidm\""),
+        "{summary}"
+    );
+    assert!(summary.contains("\"buses\": 9"), "{summary}");
+}
+
+#[test]
+fn convert_reserves_iidm_and_rawx_for_input() {
+    let case = repo_file("tests/data/case9.m");
+    for (input_spelling, canonical) in [("iidm", "xiidm"), ("rawx", "psse-rawx")] {
+        let out = run(&[
+            "convert",
+            case.to_str().unwrap(),
+            "--to",
+            input_spelling,
+            "-o",
+            "-",
+        ]);
+        assert_failure(&out);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains("accepted for input only"), "{stderr}");
+        assert!(stderr.contains(canonical), "{stderr}");
+    }
 }
 
 #[test]
@@ -155,7 +629,7 @@ fn summary_routes_json_inputs_through_the_classifier() {
 }
 
 #[test]
-fn package_refuses_an_existing_output_file() {
+fn serialize_refuses_an_existing_output_file() {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -167,7 +641,7 @@ fn package_refuses_an_existing_output_file() {
     // An existing entry at the output is refused and keeps its bytes; a
     // fresh path commits.
     let out = run(&[
-        "module",
+        "serialize",
         case.to_str().unwrap(),
         "-o",
         out_path.to_str().unwrap(),
@@ -179,7 +653,7 @@ fn package_refuses_an_existing_output_file() {
 
     let fresh = std::env::temp_dir().join(format!("powerio-cli-package-fresh-{stamp}.pio.json"));
     let out = run(&[
-        "module",
+        "serialize",
         case.to_str().unwrap(),
         "-o",
         fresh.to_str().unwrap(),
@@ -187,7 +661,8 @@ fn package_refuses_an_existing_output_file() {
     assert_success(&out);
     let text = std::fs::read_to_string(&fresh).unwrap();
     let value: serde_json::Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(value["schema"], "powerio.module");
+    assert_eq!(value["schema"], powerio::IR_SCHEMA_NAME);
+    assert_eq!(value["version"], powerio::IR_VERSION);
     assert_eq!(value["producer"]["version"], powerio::VERSION);
     let _ = std::fs::remove_file(&fresh);
 
@@ -259,6 +734,8 @@ fn sensitivities_write_solver_metadata() {
         out_dir.to_str().unwrap(),
         "--solver",
         "sparse",
+        "--formula",
+        "reactance-only",
         "--drop-tolerance",
         "1e-10",
     ]);
@@ -277,6 +754,8 @@ fn sensitivities_write_solver_metadata() {
     )
     .unwrap();
     assert_eq!(meta["case"], "case9");
+    assert_eq!(meta["branch_susceptance_formula"], "reactance_only");
+    assert!(meta.get("convention").is_none());
     assert_eq!(meta["sensitivity"]["requested_solver"], "sparse");
     assert_eq!(meta["sensitivity"]["solver_path"], "sparse_cholesky");
     assert_eq!(meta["sensitivity"]["drop_tolerance"], 1e-10);
@@ -578,10 +1057,10 @@ fn convert_exits_nonzero_on_an_include_refused_through_a_symbolic_link() {
 }
 
 #[test]
-fn package_exits_nonzero_on_a_refused_include() {
-    // The package carries the same `Error` finding convert fails on,
+fn serialize_exits_nonzero_on_a_refused_include() {
+    // PowerIO IR carries the same `Error` finding convert fails on,
     // so the module subcommand has to fail with it too — otherwise a script
-    // gating on the exit code accepts a package built from a truncated network.
+    // gating on the exit code accepts IR built from a truncated network.
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     let case_dir = dir.join("case");
@@ -600,7 +1079,7 @@ fn package_exits_nonzero_on_a_refused_include() {
     let out_path = dir.join("out.pio.json");
 
     let out = run(&[
-        "module",
+        "serialize",
         master.to_str().unwrap(),
         "-o",
         out_path.to_str().unwrap(),
@@ -613,7 +1092,7 @@ fn package_exits_nonzero_on_a_refused_include() {
     );
     assert!(
         out_path.is_file(),
-        "the package must still be written for inspection"
+        "the PowerIO IR must still be serialized for inspection"
     );
 }
 

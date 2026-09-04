@@ -13,9 +13,7 @@ mod helpers;
 #[allow(unused_imports)]
 use helpers::*;
 
-use powerio_tx::{
-    BalancedNetwork, DEFAULT_BASE_FREQUENCY, TargetFormat, write_pandapower_json, write_psse,
-};
+use powerio_tx::{BalancedNetwork, DEFAULT_BASE_FREQUENCY, TargetFormat};
 
 /// A 50 Hz PSS/E header round-trips: the reader takes `BASFRQ`, the writer emits
 /// it, and a second read recovers it.
@@ -30,7 +28,7 @@ fn psse_base_frequency_round_trips() {
     let net = parse_psse(raw).unwrap();
     assert_eq!(net.base_frequency(), 50.0);
 
-    let text = write_psse(&net).text;
+    let text = emit_psse(&net).text;
     let reparsed = parse_psse(&text).unwrap();
     assert_eq!(reparsed.base_frequency(), 50.0);
 }
@@ -65,7 +63,7 @@ fn pandapower_f_hz_round_trips_with_line_charging() {
     *net.base_frequency_mut() = 50.0;
     let b0 = net.branches()[0].b;
 
-    let pp = write_pandapower_json(&net).text;
+    let pp = emit_pandapower_json(&net).text;
     let back = parse_pandapower_json(&pp).unwrap().network;
 
     assert_eq!(back.base_frequency(), 50.0);
@@ -91,50 +89,43 @@ fn dropped_frequency_warns_for_formats_without_a_field() {
         TargetFormat::EgretJson,
         TargetFormat::PowerWorld,
     ] {
-        let conv = write_network(&net, target).unwrap();
+        let conv = emit_value(&net, target).unwrap();
         assert!(
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("frequency")),
             "{target:?} should warn that it drops the 50 Hz label, got {:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
     }
     // PSS/E and pandapower carry it, so no frequency warning there.
     for target in [TargetFormat::Psse { rev: 33 }, TargetFormat::PandapowerJson] {
-        let conv = write_network(&net, target).unwrap();
+        let conv = emit_value(&net, target).unwrap();
         assert!(
             !conv
-                .rendered_diagnostics()
+                .render_diagnostics()
                 .iter()
                 .any(|w| w.contains("frequency")),
             "{target:?} carries the frequency and should not warn, got {:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
     }
 }
 
-/// The JSON transport carries the field, and JSON written before it existed
-/// (without the key) deserializes to the 60 Hz default.
+/// Serde carries the field, and stored data written before it existed (without
+/// the key) deserializes to the 60 Hz default.
 #[test]
-fn json_transport_round_trips_and_defaults() {
+fn serde_round_trips_and_defaults() {
     let raw = "0, 100.00, 33, 0, 0, 50.00 / x\nCASE\nCOMMENT\n\
         1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9\n\
         0 / END OF BUS DATA, BEGIN LOAD DATA\nQ\n";
     let net = parse_psse(raw).unwrap();
-    let json = net.to_json().unwrap();
-    assert_eq!(
-        BalancedNetwork::from_json(&json).unwrap().base_frequency(),
-        50.0
-    );
+    assert_eq!(serde_round_trip(&net).base_frequency(), 50.0);
 
     // A JSON document with no base_frequency key falls back to the default.
-    let without: serde_json::Value = {
-        let mut v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        v.as_object_mut().unwrap().remove("base_frequency");
-        v
-    };
-    let restored = BalancedNetwork::from_json(&without.to_string()).unwrap();
+    let mut without = serde_json::to_value(&net).unwrap();
+    without.as_object_mut().unwrap().remove("base_frequency");
+    let restored: BalancedNetwork = serde_json::from_value(without).unwrap();
     assert_eq!(restored.base_frequency(), DEFAULT_BASE_FREQUENCY);
 }
 

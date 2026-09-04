@@ -151,14 +151,16 @@ quantum, dispatch and branch values likewise. `powerio/tests/`
 
 ## The .pwb binary format (decode evidence)
 
-Established by differential analysis of three lawfully obtained files, no
+Established by differential analysis of lawfully obtained files, no
 PowerWorld software involved: ACTIVSg200.pwb (Simulator 20 era, June 2018,
 same snapshot as the vendored aux), Texas2000_June2016.pwb (June 2016, same
 day as its paired aux export), and ACTIV_SG_2000_v19.pwb (April 2017, validated
 against the published ACTIVSg2000 case with the snapshot deltas pinned in
-the parity test). Every claim below was verified by value match against a
-the paired export on every record unless noted. Offsets are from the field listed;
-integers and floats are little endian.
+the parity test), widened later by the TAMU repository sets, the Texas7k
+saves, and a local corpus of twenty saves whose MATPOWER `.m` and PSS/E
+`.RAW` exports cover most of the same cases. Every claim below was verified
+by value match against a paired export on every record unless noted. Offsets
+are from the field listed; integers and floats are little endian.
 
 ### Header (identical prefix in all three files)
 
@@ -214,8 +216,11 @@ The flag word is a field presence bitmask. Bit 5 set marks the Simulator 20
 era record family (clear on the 2016 era family), bit 4 set marks the count
 prefixed list in the record tail, bit 0 clear means one extra u16 before the
 nominal kV (the generator buses: 49 such records in ACTIVSg200, which has 49
-generators). The head layout through the solved voltage is identical across
-every observed flag word; the tails differ.
+generators). Bit 1 is set on every record of every file in the corpus, and it
+is the reader's only required base bit; bit 2 was also required until a later
+corpus showed whole tables with it clear (below). The head layout through the
+solved voltage is identical across every observed flag word; the tails
+differ.
 
 | file | flag words seen |
 |---|---|
@@ -244,6 +249,41 @@ entries (1341 bytes) on one record, past the bounded resync window, so a
 bit 4 bus record extends the scan to the buffer end exactly as a bit 4
 branch record does. The 39 bus sample case (header 425) shows no
 recognized bus record layout at all in a 44 KiB file.
+
+### Bus record flag words with bit 2 clear (header 425 and 537)
+
+A later corpus of twenty saves adds the first family with bit 2 clear and
+bits 12 and 13 set. Its 5000 bus records carry six flag words, and no others:
+
+| flag word | bits set beyond 1, 12, 13 | records |
+|---|---|---|
+| 0x3002 | none | 42 |
+| 0x3003 | 0 | 208 |
+| 0x3022 | 5 | 10 |
+| 0x3062 | 5, 6 | 646 |
+| 0x3162 | 5, 6, 8 | 142 |
+| 0x3163 | 0, 5, 6, 8 | 3952 |
+
+Bit 0 is clear on the generator buses exactly as in the older families, and
+bit 5, which selects the tail family, is clear over one whole table and set
+over the other nineteen, so this vintage writes both tails. The head layout
+is unchanged, and the whole table decodes: consecutive bus numbers from 1,
+each name the decimal spelling of its own number, nominal kV drawn from
+345/230/138/69/14, area and zone 1, one shared bus label, and the solved
+voltage pair as two f64. Every one of those fields matches the PSS/E `.RAW`
+and MATPOWER `.m` exports of the same case at their print quanta (the `.RAW`
+prints the magnitude at five decimals and the angle at four, the `.m` at
+seven and five).
+
+Bit 2's own field is not in the decoded head, so the reader's mask moved it
+into the presence set: the accept rule is now bit 1 set with every other bit
+outside `0x3575` clear. Bit 2 stays in the record family key, which keeps a
+bit 2 clear table from chaining with a bit 2 set one.
+
+Nineteen of the twenty saves carry header constant 425 and one carries 537,
+and both write the 425 era generator record, which makes 537 the second
+constant after 508 observed with either generator record shape. The reader
+therefore tries both shapes in sequence under 537.
 
 An earlier draft of this section read the Texas7k generator table as "the
 leading u32 equals the aux BusNum on roughly three quarters of the
@@ -320,8 +360,25 @@ anchored at +9 or +10 (2016/2017 exports; the gap varies per record) or +11
 GenVoltSet (p.u., scale 1), GenMVABase (MVA, scale 1), MWMax, MWMin. The
 voltage setpoint and MVA base ranges pick the anchor per record. In the
 2018 file also verified: GenRMPCT at +53, GenZR/GenZX as f64 near
-+147/+193. Record length varies with embedded strings; the status byte is
-unlocated within the flag bytes (every machine in these files is Closed).
++147/+193. Record length varies with embedded strings.
+
+Some writers of this era follow the f32 block with the same status tail the
+2021 era regulated record carries: a zero byte at block +32, the status byte
+at block +33 (9 in service, 8 open, bit 0 the service bit), then GenRMPCT as
+an f32 at block +34. Eighteen of the twenty saves of the bit 2 clear corpus
+carry it on every record of their generator tables, always with GenRMPCT
+100.0. The decoded status is 5 open machines in two of those saves, 12 in one,
+13 in one, and none in the other fourteen, and on all twelve of them that have
+a PSS/E or MATPOWER export of the same case it matches the open machine set
+that export states. The remaining two saves, and ACTIVSg200, put 21 at block
++32 and unrelated bytes after it, so the tail is a per writer property, not a
+per era one. The reader
+therefore reads the status only when every record of the accepted table
+carries the tail; any other table reads every machine as in service and
+`parse_pwb_with_warnings` says so. Reading the status changes the derived bus
+kind: a bus whose only machine is open becomes PQ, where a PSS/E or MATPOWER
+export of the same case keeps the bus type PV, because PowerWorld stores no
+bus type and the reader derives it from the closed machines.
 
 ### Generator record, 2021 era (validated on 731 ×3 + 1058 ×2 machines of five files)
 
@@ -398,12 +455,13 @@ case stores zero shunt MW and the reader sets G = 0.
 
 ### Open questions (inventoried, not guessed)
 
-- Status bytes: the 2021 era generator status is located and validated
-  (bit 0 of the byte one past the f32 block, against 94 open machines);
-  every other device in every available case is Closed/in service, so no
-  other status offset is validated and those devices read as in service.
-  Whether the older era generator records carry the same byte after their
-  block is untested for the open state (no 425 era case has one).
+- Status bytes: the generator status is located and validated wherever the
+  record carries the status tail (bit 0 of the byte one past the f32 block,
+  against 94 open machines in the 2021 era files and 35 in the 425 era files
+  that carry the tail). What the 425 era writers that put other bytes there
+  store instead is undecoded, so those machines read as in service. Every
+  other device in every available case is Closed/in service, so no other
+  status offset is validated and those devices read as in service.
 - The meaning of the bit 4 tail lists (u32 count, then 9 byte entries
   observed as u8 = 3, u32 number, u32 = 1) and of the constant u32 12 tag
   in branch records.
@@ -419,19 +477,23 @@ case stores zero shunt MW and the reader sets G = 0.
   fills two characters or parses either way).
 - Table glue blocks between count and first record (the v21 resave's bus
   and generator glues carry 52 and 86 bytes including string metadata).
+- Per bus voltage limits: still undecoded. The bit 2 clear corpus is the
+  first one holding two saves of one case that differ only in the limits
+  (0.92/1.06 on load buses and 0.98/1.10 on generator buses in one,
+  0.95/1.04 and 1.00/1.06 in the other), and no f32 at any fixed offset from
+  either the bus record start or the decoded head end tracks them across
+  both saves, so they are not stored in the bus record at a constant offset.
+  Buses keep the 1.1/0.9 defaults.
 - Substation, area/zone names, contingency tables: present after the
   branches, undecoded in this pass.
 
 ## The .pwd display format: substation coordinates
 
-`.pwd` files are display artifacts, not network cases, so `parse_file`
-rejects them with a pointer to the display API. Use
-`parse_display_file(path, None)` / `parse_display_bytes(bytes, "pwd")` for
-the generic surface, or the lower level PowerWorld helpers
-`parse_pwd_file`, `parse_pwd_display`, and `parse_pwd`. The display result
-is `DisplayData::PowerWorld(PwdDisplay { canvas_width, canvas_height,
-stamp, substations })`; Python returns `DisplayData("powerworld",
-PwdDisplay(...))`.
+`.pwd` files are display artifacts rather than network cases. The top-level
+facade's `parse` operation reads one into `PioValue::GeoLayer`; the layer can
+then travel through PowerIO IR and the ordinary module emission path. Python's
+raw-display compatibility helper `parse_display` returns
+`DisplayData("powerworld", PwdDisplay(...))`.
 
 The `.pwd` decoder reads one subset of the display file, the substation
 symbols, established by differential analysis of seven files spanning the
@@ -439,12 +501,20 @@ June 2016 through 2022 writer eras. Every other drawing object type (buses,
 branch pies, transmission lines, field labels), the palettes, fonts,
 layers, and the substation record style tails stay undecoded.
 
-Header: u32 = 50, two u16 canvas dimensions, then a fixed shape block. The
-u32 at offset 22 is a per file stamp that every drawing object record
-repeats at +18 — the anchor the record scan keys on. A correction to the
-earlier probe notes: the type name list behind "Previous Select By
-Criteria Set Used" in 2017+ saves is the object type list of that dialog's
-last use (UI state), not a registry of the record types in the file
+Header: u32 = 50, two u16 canvas dimensions, a u16 = 10070, then an optional
+canvas title (a u16 length at offset 10, a zero u16, the text) and eight zero
+bytes, then a per file stamp that every drawing object record repeats at +18,
+then a u32 = 10105. The stamp is the anchor the record scan keys on. Every
+earlier probed save carries no title, which puts the stamp at offset 22, so
+the reader read it there; a titled save puts title text at 22 instead, which
+reads as a zero stamp, and the reader refused such a file as an unrecognized
+header. The 10105 word one past the stamp pins which of the two positions
+holds it, so a titled save now parses. A header that does not have the title
+shape reads offset 22 unchanged.
+
+A correction to the earlier probe notes: the type name list behind "Previous
+Select By Criteria Set Used" in 2017+ saves is the object type list of that
+dialog's last use (UI state), not a registry of the record types in the file
 (ACTIVSg200.pwd lists only DisplaySubstation yet draws eight plus types);
 the decoder takes nothing from it, and the June 2016 save has none.
 

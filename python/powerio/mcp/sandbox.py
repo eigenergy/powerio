@@ -1,24 +1,22 @@
 """Filesystem containment policy for MCP servers that expose powerio.
 
 The powerio MCP server accepts local paths and ``file://`` URIs for its
-``path`` and ``out_path`` arguments, and confines every read and write to the
+``path`` and ``destination`` arguments, and confines every read and write to the
 directories named by ``POWERIO_MCP_ALLOWED_ROOTS`` (an ``os.pathsep``
 separated list). This module is the policy on its own: it imports nothing but
 the standard library, so a server built on a different MCP SDK, or on no SDK
 at all, can apply the same rules. Use :func:`checked_path` for one file,
 :func:`checked_read_tree` before a directory reader, and
+:func:`staged_file_write` for a file writer, and
 :func:`staged_directory_write` for a directory writer.
 
-Two legacy single root spellings are still read, in this order after the
-primary variable: ``POWERIO_MCP_ROOT``, then ``POWERIO_MCP_ALLOWED_ROOT``, an
-alternate legacy spelling. The first variable that is set and non-empty wins;
-the others are ignored rather than merged. With none of the three set the
-policy is off and every path is allowed.
+When the variable is unset or empty, the policy is off and every path is
+allowed.
 
     >>> from powerio.mcp.sandbox import checked_path
     >>> checked_path("case9.m", purpose="path")            # doctest: +SKIP
     '/data/case9.m'
-    >>> checked_path(out, purpose="out_path", for_write=True)  # doctest: +SKIP
+    >>> checked_path(out, purpose="destination", for_write=True)  # doctest: +SKIP
     '/data/out.raw'
 """
 
@@ -35,12 +33,8 @@ from urllib.parse import unquote, urlparse
 ALLOWED_ROOTS_ENV = "POWERIO_MCP_ALLOWED_ROOTS"
 """Primary variable: an ``os.pathsep`` separated list of allowed roots."""
 
-LEGACY_ROOT_ENVS = ("POWERIO_MCP_ROOT", "POWERIO_MCP_ALLOWED_ROOT")
-"""Legacy single root spellings, read in order when the primary is unset."""
-
 __all__ = [
     "ALLOWED_ROOTS_ENV",
-    "LEGACY_ROOT_ENVS",
     "PathNotAllowed",
     "admitting_root",
     "allowed_roots",
@@ -50,6 +44,7 @@ __all__ = [
     "checked_read_tree",
     "decode_local_path",
     "staged_directory_write",
+    "staged_file_write",
 ]
 
 _T = TypeVar("_T")
@@ -58,19 +53,12 @@ _T = TypeVar("_T")
 class PathNotAllowed(ValueError):
     """The path gate refused a value: outside the allowed roots, a remote
     URI, or a non-local file URI.
-
-    Subclasses :class:`ValueError`, which is what every refusal site
-    raised before this type existed.
     """
 
 
 def allowed_roots() -> tuple[Path, ...]:
     """Roots the policy confines paths to, empty when the policy is off."""
-    raw = ""
-    for name in (ALLOWED_ROOTS_ENV,) + LEGACY_ROOT_ENVS:
-        raw = os.environ.get(name) or ""
-        if raw:
-            break
+    raw = os.environ.get(ALLOWED_ROOTS_ENV) or ""
     if not raw:
         return ()
     roots = []
@@ -165,9 +153,7 @@ def check_allowed_path(
     admitting_root(path, for_write=for_write, purpose=purpose)
 
 
-def checked_path(
-    value: str, *, purpose: str = "path", for_write: bool = False
-) -> str:
+def checked_path(value: str, *, purpose: str = "path", for_write: bool = False) -> str:
     """Decode a tool argument and confine it to the allowed roots.
 
     Returns the decoded path as a string, ready to hand to a powerio reader or
@@ -184,7 +170,9 @@ def _inside(path: Path, root: Path) -> bool:
     return path == root or root in path.parents
 
 
-def _check_tree_target(path: Path, root: Path | None, *, purpose: str) -> os.stat_result:
+def _check_tree_target(
+    path: Path, root: Path | None, *, purpose: str
+) -> os.stat_result:
     """Resolve one read-tree entry and return its followed stat record."""
     try:
         resolved = path.resolve(strict=True)
@@ -251,9 +239,13 @@ def _plain_tree(root: Path, *, purpose: str) -> tuple[list[Path], list[Path]]:
     try:
         root_info = root.lstat()
     except OSError as exc:
-        raise PathNotAllowed(f"cannot inspect `{purpose}` directory {root}: {exc}") from exc
+        raise PathNotAllowed(
+            f"cannot inspect `{purpose}` directory {root}: {exc}"
+        ) from exc
     if stat.S_ISLNK(root_info.st_mode) or not stat.S_ISDIR(root_info.st_mode):
-        raise PathNotAllowed(f"`{purpose}` must be a real directory, not a link or file")
+        raise PathNotAllowed(
+            f"`{purpose}` must be a real directory, not a link or file"
+        )
 
     directories: list[Path] = []
     files: list[Path] = []
@@ -306,6 +298,8 @@ def _rebase_writer_result(result: _T, staging: Path, output: Path) -> _T:
         return value
 
     rebased = dict(result)
+    if "path" in rebased:
+        rebased["path"] = rebase(rebased["path"])
     if "dir" in rebased:
         rebased["dir"] = rebase(rebased["dir"])
     if "files" in rebased and isinstance(rebased["files"], list):
@@ -313,8 +307,58 @@ def _rebase_writer_result(result: _T, staging: Path, output: Path) -> _T:
     return cast(_T, rebased)
 
 
+def staged_file_write(
+    destination: str, overwrite: bool, write: Callable[[str], _T]
+) -> _T:
+    """Write one file privately, then install it at ``destination``.
+
+    The writer receives a nonexistent sibling path because PowerIO emitters
+    refuse collisions. The staged output must be one regular file. With
+    ``overwrite=False``, a hard link installs it without replacing a target
+    created concurrently. With ``overwrite=True``, ``os.replace`` performs one
+    atomic replacement. Links, directories, and special files are refused as
+    both staged output and existing destinations.
+    """
+    output = Path(os.path.abspath(destination))
+    parent = output.parent
+    if not parent.is_dir():
+        raise PathNotAllowed(
+            f"cannot resolve `destination`: parent does not exist: {parent}"
+        )
+    check_allowed_path(output, for_write=True, purpose="destination")
+
+    if os.path.lexists(output):
+        mode = output.lstat().st_mode
+        if not stat.S_ISREG(mode):
+            raise ValueError(f"destination is not a regular file: {output}")
+        if not overwrite:
+            raise ValueError(
+                f"refusing to overwrite existing file: {output}; pass overwrite=true"
+            )
+
+    workspace = Path(tempfile.mkdtemp(prefix=f".{output.name}.stage-", dir=parent))
+    staging = workspace / "out"
+    try:
+        result = write(str(staging))
+        if not os.path.lexists(staging) or not stat.S_ISREG(staging.lstat().st_mode):
+            raise ValueError(f"file writer did not produce one regular file: {staging}")
+        if overwrite:
+            os.replace(staging, output)
+        else:
+            try:
+                os.link(staging, output, follow_symlinks=False)
+            except FileExistsError as exc:
+                raise ValueError(
+                    f"refusing to overwrite existing file: {output}; pass overwrite=true"
+                ) from exc
+            staging.unlink()
+        return _rebase_writer_result(result, staging, output)
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
+
+
 def staged_directory_write(
-    out_path: str, overwrite: bool, write: Callable[[str], _T]
+    destination: str, overwrite: bool, write: Callable[[str], _T]
 ) -> _T:
     """Run a directory writer privately, preflight it, then install it.
 
@@ -329,11 +373,13 @@ def staged_directory_write(
     As with the read-tree preflight, callers needing protection from a hostile
     concurrent process must also use an operating-system sandbox.
     """
-    output = Path(os.path.abspath(out_path))
+    output = Path(os.path.abspath(destination))
     parent = output.parent
     if not parent.is_dir():
-        raise PathNotAllowed(f"cannot resolve `out_path`: parent does not exist: {parent}")
-    check_allowed_path(output, for_write=True, purpose="out_path")
+        raise PathNotAllowed(
+            f"cannot resolve `destination`: parent does not exist: {parent}"
+        )
+    check_allowed_path(output, for_write=True, purpose="destination")
 
     workspace = Path(tempfile.mkdtemp(prefix=f".{output.name}.stage-", dir=parent))
     staging_installed = False
@@ -348,7 +394,7 @@ def staged_directory_write(
         result = write(str(staging))
         staged_dirs, staged_files = _plain_tree(staging, purpose="staged output")
         for relative in [*staged_dirs, *staged_files]:
-            check_allowed_path(output / relative, purpose="out_path")
+            check_allowed_path(output / relative, purpose="destination")
 
         if not os.path.lexists(output):
             os.replace(staging, output)
@@ -356,12 +402,14 @@ def staged_directory_write(
             shutil.rmtree(workspace, ignore_errors=True)
             return _rebase_writer_result(result, staging, output)
 
-        existing_dirs, existing_files = _plain_tree(output, purpose="out_path")
+        existing_dirs, existing_files = _plain_tree(output, purpose="destination")
         existing_dir_set = set(existing_dirs)
         existing_file_set = set(existing_files)
         for relative in staged_dirs:
             if relative in existing_file_set:
-                raise ValueError(f"cannot replace file with directory: {output / relative}")
+                raise ValueError(
+                    f"cannot replace file with directory: {output / relative}"
+                )
         for relative in staged_files:
             target = output / relative
             if relative in existing_dir_set:

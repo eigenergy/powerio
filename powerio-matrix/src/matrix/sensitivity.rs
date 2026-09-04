@@ -19,10 +19,12 @@
 use sprs::CsMat;
 
 use crate::indexed::IndexedNetwork;
-use crate::matrix::BuildOptions;
-use crate::matrix::incidence::{DcConvention, IncidenceParts, build_flow_map, build_incidence};
-use crate::matrix::laplacian::{Grounding, build_weighted_laplacian, ground_with};
+use crate::matrix::laplacian::{Grounding, calc_weighted_laplacian, ground_with};
 use crate::matrix::triplet::CooBuilder;
+use crate::matrix::{
+    BranchSusceptanceFormula, BuildOptions, IncidenceParts, build_incidence,
+    calc_solver_branch_flow_matrix,
+};
 use crate::{Error, Result};
 
 /// Entries below this magnitude are dropped from the emitted sparse matrices.
@@ -67,7 +69,6 @@ pub enum SensitivitySolver {
     /// Dense grounded factorization. Handles nonsingular indefinite cases.
     Dense,
     /// Sparse Cholesky, factored once and reused across every right hand side.
-    #[serde(alias = "iterative")]
     Sparse,
 }
 
@@ -78,7 +79,6 @@ pub enum SensitivitySolver {
 pub enum SensitivitySolverPath {
     DenseCholesky,
     DenseInverse,
-    #[serde(alias = "iterative_cg")]
     SparseCholesky,
 }
 
@@ -96,8 +96,8 @@ impl SensitivitySolverPath {
 /// Options for PTDF/LODF builders that expose solver choice and output pruning.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct SensitivityOptions {
-    /// DC branch susceptance convention.
-    pub convention: DcConvention,
+    /// Formula used to calculate each DC branch susceptance.
+    pub formula: BranchSusceptanceFormula,
     /// Solver selection policy.
     pub solver: SensitivitySolver,
     /// Entries with absolute value at or below this value are omitted from the
@@ -111,7 +111,7 @@ pub struct SensitivityOptions {
 impl Default for SensitivityOptions {
     fn default() -> Self {
         Self {
-            convention: DcConvention::default(),
+            formula: BranchSusceptanceFormula::default(),
             solver: SensitivitySolver::Auto,
             drop_tolerance: PRUNE,
             auto_dense_threshold: DEFAULT_AUTO_DENSE_THRESHOLD,
@@ -134,20 +134,20 @@ impl SensitivityOptions {
 
     /// Return the concrete solver selected for a reduced grounded dimension,
     /// assuming a square problem. Prefer
-    /// [`Self::selected_solver_for_shape`], which also sees the branch count
+    /// [`Self::select_solver_for_shape`], which also sees the branch count
     /// the dense PTDF and LODF are sized by.
-    pub fn selected_solver_for_reduced_dimension(
+    pub fn select_solver_for_reduced_dimension(
         &self,
         reduced_dimension: usize,
     ) -> SensitivitySolver {
-        self.selected_solver_for_shape(reduced_dimension, reduced_dimension, reduced_dimension)
+        self.select_solver_for_shape(reduced_dimension, reduced_dimension, reduced_dimension)
     }
 
     /// Return the concrete solver selected for a problem shape. `Auto` takes
     /// the dense path while both the reduced dimension and the predicted
     /// dense footprint stay within their ceilings, so a wide case (few buses,
     /// many branches) no longer picks a path that would ask for tens of GB.
-    pub fn selected_solver_for_shape(
+    pub fn select_solver_for_shape(
         &self,
         reduced_dimension: usize,
         branches: usize,
@@ -203,9 +203,9 @@ pub struct SensitivityMatrixMetadata {
 /// the whole reference set (`reference_bus_indices`), one row/column per slack.
 /// One reference per island handles disconnected networks; several references
 /// within one island fixes all of those bus angles to zero.
-pub fn build_ptdf(case: &IndexedNetwork, conv: DcConvention) -> Result<CsMat<f64>> {
+pub fn calc_ptdf(case: &IndexedNetwork, formula: BranchSusceptanceFormula) -> Result<CsMat<f64>> {
     let options = SensitivityOptions {
-        convention: conv,
+        formula,
         ..SensitivityOptions::default()
     };
     Ok(build_parts(case, &options, Want::Ptdf)?.into_ptdf().0)
@@ -214,9 +214,9 @@ pub fn build_ptdf(case: &IndexedNetwork, conv: DcConvention) -> Result<CsMat<f64
 /// LODF (`m × m`): pre-outage flow on branch `k` redistributes onto branch `l`
 /// with factor `LODF[l, k]`. Diagonal is `−1`. A branch whose outage islands
 /// the network (denominator `≈ 0`) gets a zero column.
-pub fn build_lodf(case: &IndexedNetwork, conv: DcConvention) -> Result<CsMat<f64>> {
+pub fn calc_lodf(case: &IndexedNetwork, formula: BranchSusceptanceFormula) -> Result<CsMat<f64>> {
     let options = SensitivityOptions {
-        convention: conv,
+        formula,
         ..SensitivityOptions::default()
     };
     Ok(build_parts(case, &options, Want::Lodf)?.into_lodf().0)
@@ -226,13 +226,13 @@ pub fn build_lodf(case: &IndexedNetwork, conv: DcConvention) -> Result<CsMat<f64
 /// matrix factorization. When a caller needs both for the same case (the
 /// `sensitivities` bundle), this factors the grounded DC bus susceptance
 /// matrix once instead of paying the factorization twice across separate
-/// [`build_ptdf`]/[`build_lodf`] calls.
-pub fn build_ptdf_lodf(
+/// [`calc_ptdf`]/[`calc_lodf`] calls.
+pub fn calc_ptdf_lodf(
     case: &IndexedNetwork,
-    conv: DcConvention,
+    formula: BranchSusceptanceFormula,
 ) -> Result<(CsMat<f64>, CsMat<f64>)> {
     let options = SensitivityOptions {
-        convention: conv,
+        formula,
         ..SensitivityOptions::default()
     };
     let ((ptdf, _), (lodf, _)) = build_parts(case, &options, Want::Both)?.into_both();
@@ -240,7 +240,7 @@ pub fn build_ptdf_lodf(
 }
 
 /// PTDF and LODF with solver selection, drop tolerance, and output metadata.
-pub fn build_ptdf_lodf_with_options(
+pub fn calc_ptdf_lodf_with_options(
     case: &IndexedNetwork,
     options: &SensitivityOptions,
 ) -> Result<SensitivityMatrices> {
@@ -309,11 +309,11 @@ fn build_parts(
     options.validate()?;
     case.check_reference_coverage()?;
     let refs = case.reference_bus_indices();
-    let inc = build_incidence(case, options.convention, &BuildOptions::default())?;
+    let inc = build_incidence(case, options.formula, &BuildOptions::default())?;
     let g = Grounding::new(&refs);
     let reduced_dimension = inc.n().saturating_sub(g.len());
 
-    match options.selected_solver_for_shape(reduced_dimension, inc.m(), inc.n()) {
+    match options.select_solver_for_shape(reduced_dimension, inc.m(), inc.n()) {
         SensitivitySolver::Dense => {
             let (dense, m, n, solver_path) = ptdf_dense_with_path(&inc, &refs)?;
             let ptdf = (want != Want::Lodf)
@@ -329,7 +329,7 @@ fn build_parts(
         }
         SensitivitySolver::Sparse => {
             ensure_sparse_solver_eligible(&inc)?;
-            let lr = ground_with(&build_weighted_laplacian(&inc.a, &inc.b), &g);
+            let lr = ground_with(&calc_weighted_laplacian(&inc.a, &inc.b), &g);
             let llt = SparseLlt::factor(&lr)?;
             let ptdf = if want == Want::Lodf {
                 None
@@ -358,7 +358,7 @@ fn build_parts(
                 reduced_dimension,
             })
         }
-        SensitivitySolver::Auto => unreachable!("selected_solver_for_shape resolves Auto"),
+        SensitivitySolver::Auto => unreachable!("select_solver_for_shape resolves Auto"),
     }
 }
 
@@ -371,11 +371,11 @@ pub(crate) fn for_each_ptdf_lodf_entry(
     options.validate()?;
     case.check_reference_coverage()?;
     let refs = case.reference_bus_indices();
-    let inc = build_incidence(case, options.convention, &BuildOptions::default())?;
+    let inc = build_incidence(case, options.formula, &BuildOptions::default())?;
     let reduced_dimension = inc.n().saturating_sub(Grounding::new(&refs).len());
 
     let (solver_path, ptdf, lodf) =
-        match options.selected_solver_for_shape(reduced_dimension, inc.m(), inc.n()) {
+        match options.select_solver_for_shape(reduced_dimension, inc.m(), inc.n()) {
             SensitivitySolver::Dense => {
                 let (dense, m, n, solver_path) = ptdf_dense_with_path(&inc, &refs)?;
                 let (ptdf, ptdf_dropped) =
@@ -395,14 +395,14 @@ pub(crate) fn for_each_ptdf_lodf_entry(
             SensitivitySolver::Sparse => {
                 ensure_sparse_solver_eligible(&inc)?;
                 let g = Grounding::new(&refs);
-                let lr = ground_with(&build_weighted_laplacian(&inc.a, &inc.b), &g);
+                let lr = ground_with(&calc_weighted_laplacian(&inc.a, &inc.b), &g);
                 let llt = SparseLlt::factor(&lr)?;
                 let ptdf = sparse_ptdf_entries(&inc, &g, &llt, options, ptdf_entry)?;
                 let lodf = sparse_lodf_entries(&inc, &g, &llt, options, lodf_entry)?;
                 (SensitivitySolverPath::SparseCholesky, ptdf, lodf)
             }
             SensitivitySolver::Auto => {
-                unreachable!("selected_solver_for_reduced_dimension resolves Auto")
+                unreachable!("select_solver_for_reduced_dimension resolves Auto")
             }
         };
 
@@ -508,17 +508,17 @@ fn ptdf_dense_with_path(
     let nr = n - g.len();
 
     // Reduced grounded DC bus susceptance matrix: ABA_refs.
-    let lr = ground_with(&build_weighted_laplacian(&inc.a, &inc.b), &g);
+    let lr = ground_with(&calc_weighted_laplacian(&inc.a, &inc.b), &g);
     let dense_lr = densify(&lr, nr);
 
     // Minv (n × n) is the reduced inverse padded with a zero row/col at every
     // grounded bus, so each reference's PTDF column comes out zero.
-    // PTDF = (B Aᵀ) · Minv: each nonzero of the flow map scatters a scaled
+    // PTDF = (B Aᵀ) · Minv: each nonzero of the branch flow matrix scatters a scaled
     // Minv row into a PTDF row. Grouping the flow nonzeros by reduced column
     // up front names exactly which Minv rows the scatter reads, so the
     // factored path below produces each of those rows once by a back-solve
     // instead of materializing the whole inverse.
-    let flow = build_flow_map(&inc.a, &inc.b); // m × n
+    let flow = calc_solver_branch_flow_matrix(&inc.a, &inc.b); // m × n
     let mut rows_used: Vec<Vec<(usize, f64)>> = vec![Vec::new(); nr];
     for (&w, (l, c)) in flow.iter() {
         // Minv row at a slack is 0.
@@ -1187,8 +1187,12 @@ mod auto_policy_tests {
         // Below the crossover the dense factorization's constant factors win.
         let o = SensitivityOptions::default();
         assert_eq!(
-            o.selected_solver_for_shape(118, 186, 118),
+            o.select_solver_for_shape(118, 186, 118),
             SensitivitySolver::Dense
+        );
+        assert_eq!(
+            o.select_solver_for_shape(118, 186, 118),
+            o.select_solver_for_shape(118, 186, 118)
         );
     }
 
@@ -1198,7 +1202,7 @@ mod auto_policy_tests {
         // network graph, while the dense path would factor a 2868² matrix.
         let o = SensitivityOptions::default();
         assert_eq!(
-            o.selected_solver_for_shape(2868, 4582, 2869),
+            o.select_solver_for_shape(2868, 4582, 2869),
             SensitivitySolver::Sparse
         );
     }
@@ -1213,7 +1217,7 @@ mod auto_policy_tests {
         assert!(nr <= o.auto_dense_threshold);
         assert!(dense_footprint_bytes(nr, m, n) > AUTO_DENSE_MEMORY_BUDGET);
         assert_eq!(
-            o.selected_solver_for_shape(nr, m, n),
+            o.select_solver_for_shape(nr, m, n),
             SensitivitySolver::Sparse
         );
     }
@@ -1225,15 +1229,24 @@ mod auto_policy_tests {
                 solver,
                 ..SensitivityOptions::default()
             };
-            assert_eq!(o.selected_solver_for_shape(1, 1, 1), solver);
-            assert_eq!(o.selected_solver_for_shape(99_999, 99_999, 99_999), solver);
+            assert_eq!(o.select_solver_for_shape(1, 1, 1), solver);
+            assert_eq!(o.select_solver_for_shape(99_999, 99_999, 99_999), solver);
         }
+    }
+
+    #[test]
+    fn serialized_options_use_formula_and_no_retired_solver_aliases() {
+        let value = serde_json::to_value(SensitivityOptions::default()).unwrap();
+        assert!(value.get("formula").is_some());
+        assert!(value.get("convention").is_none());
+        assert!(serde_json::from_str::<SensitivitySolver>(r#""iterative""#).is_err());
+        assert!(serde_json::from_str::<super::SensitivitySolverPath>(r#""iterative_cg""#).is_err());
     }
 
     #[test]
     fn the_footprint_saturates_instead_of_overflowing() {
         assert_eq!(
-            SensitivityOptions::default().selected_solver_for_shape(
+            SensitivityOptions::default().select_solver_for_shape(
                 usize::MAX,
                 usize::MAX,
                 usize::MAX

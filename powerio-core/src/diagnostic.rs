@@ -409,6 +409,13 @@ impl Diagnostic {
     }
 
     pub fn with_span(mut self, span: SourceSpan) -> Result<Self, Error> {
+        self.add_span(span)?;
+        Ok(self)
+    }
+
+    /// Attach one source span to a finding already built, under the same
+    /// count limit the decoder enforces.
+    pub(crate) fn add_span(&mut self, span: SourceSpan) -> Result<(), Error> {
         if self.spans.len() >= crate::validation::MAX_DIAGNOSTIC_SPANS {
             return Err(record_too_large(
                 "source spans",
@@ -416,7 +423,30 @@ impl Diagnostic {
             ));
         }
         self.spans.push(span);
-        Ok(self)
+        Ok(())
+    }
+
+    pub(crate) fn prefix_target(&mut self, prefix: &str) -> Result<(), Error> {
+        let Some(target) = self.target.take() else {
+            return Ok(());
+        };
+        self.set_target(format!("{prefix}{target}"))
+    }
+
+    pub(crate) fn remap_span_sources(
+        &mut self,
+        mut remap: impl FnMut(&crate::SourceId) -> crate::SourceId,
+    ) -> Result<(), Error> {
+        let mut spans = Vec::with_capacity(self.spans.len());
+        for span in &self.spans {
+            spans.push(SourceSpan::new(
+                remap(span.source()),
+                span.byte_start(),
+                span.byte_end(),
+            )?);
+        }
+        self.spans = spans;
+        Ok(())
     }
 
     pub fn with_related(mut self, related: DiagnosticId) -> Result<Self, Error> {

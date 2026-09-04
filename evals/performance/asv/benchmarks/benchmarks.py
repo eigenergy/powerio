@@ -22,15 +22,15 @@ CASE = str(Path(__file__).resolve().parents[4] / "tests" / "data" / "case2869peg
 
 class Parse:
     def time_parse(self):
-        powerio.parse(CASE, value_type=powerio.BalancedNetwork)
+        powerio.parse(CASE)
 
 
 class Matrices:
     def setup(self):
-        self.case = powerio.parse(CASE, value_type=powerio.BalancedNetwork).value
+        self.case = powerio.parse(CASE).value
 
     def time_ybus(self):
-        self.case.ybus()
+        self.case.calc_admittance_matrix()
 
     def time_bprime(self):
-        self.case.bprime()
+        self.case.calc_bprime_matrix()

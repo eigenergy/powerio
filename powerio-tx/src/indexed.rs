@@ -51,11 +51,11 @@ impl IndexCore {
     ///
     /// # Correctness
     /// Bus ids must be unique; a duplicate collapses two buses onto one dense
-    /// index and silently corrupts every aggregate. The format readers and
-    /// [`BalancedNetwork::from_json`](crate::BalancedNetwork::from_json) run
-    /// [`BalancedNetwork::validate`](crate::BalancedNetwork::validate) before this, so a parsed
-    /// or JSON-sourced network always satisfies it; a hand-built [`BalancedNetwork`] must
-    /// call `validate` itself. Backstopped here by a `debug_assert`.
+    /// index and silently corrupts every aggregate. Format readers run
+    /// [`BalancedNetwork::validate`](crate::BalancedNetwork::validate) before
+    /// this, so a parsed network satisfies it; a hand-built
+    /// [`BalancedNetwork`] must call `validate` itself. Backstopped here by a
+    /// `debug_assert`.
     #[must_use]
     pub fn build(net: &BalancedNetwork) -> Self {
         let n = net.buses().len();
@@ -185,7 +185,7 @@ impl<'n> IndexedNetwork<'n> {
     /// [`to_normalized`](BalancedNetwork::to_normalized) form, so the matrix comes out
     /// the same.
     #[inline]
-    pub fn angle_radians(&self, angle: f64) -> f64 {
+    pub fn to_radians(&self, angle: f64) -> f64 {
         if self.net.is_normalized() {
             angle
         } else {
@@ -308,7 +308,7 @@ impl<'n> IndexedNetwork<'n> {
     }
 
     /// Number of connected components in the in-service topology.
-    pub fn n_connected_components(&self) -> usize {
+    pub fn calc_island_count(&self) -> usize {
         petgraph::algo::connected_components(&self.to_petgraph())
     }
 
@@ -317,7 +317,7 @@ impl<'n> IndexedNetwork<'n> {
     /// isolated bus is its own component. Labels are representative indices in
     /// `[0, n)`, not a dense `[0, k)` range — use them for equality grouping
     /// (e.g. checking every island carries a reference bus to ground).
-    pub fn connected_component_labels(&self) -> Vec<usize> {
+    pub fn calc_island_labels(&self) -> Vec<usize> {
         let mut uf = petgraph::unionfind::UnionFind::new(self.n());
         for (_, br) in self.in_service_branches() {
             if let (Some(i), Some(j)) = (self.bus_index(br.from), self.bus_index(br.to)) {
@@ -334,7 +334,7 @@ impl<'n> IndexedNetwork<'n> {
     /// singular. With one reference in a single island it reduces to the
     /// single slack requirement. Reports the count of ungrounded components.
     pub fn check_reference_coverage(&self) -> Result<()> {
-        let labels = self.connected_component_labels();
+        let labels = self.calc_island_labels();
         // Mark each component (by its representative index in `[0, n)`) that holds
         // a reference. A Vec<bool> keyed by label avoids hashing and uses one
         // flat allocation.
@@ -362,8 +362,8 @@ impl<'n> IndexedNetwork<'n> {
         g.edge_count() == g.node_count().saturating_sub(n_components)
     }
 
-    /// One-shot topological diagnostic.
-    pub fn connectivity_report(&self) -> ConnectivityReport {
+    /// Calculate a one-shot topological diagnostic.
+    pub fn calc_connectivity_report(&self) -> ConnectivityReport {
         let g = self.to_petgraph();
         let n_components = petgraph::algo::connected_components(&g);
         let isolated: Vec<usize> = g
@@ -457,6 +457,7 @@ mod tests {
             g: 0.2,
             b: 0.4,
             in_service: true,
+            section_count: None,
             control: None,
             uid: None,
             extras: Extras::new(),
@@ -466,6 +467,7 @@ mod tests {
             g: 0.1,
             b: 0.3,
             in_service: true,
+            section_count: None,
             control: None,
             uid: None,
             extras: Extras::new(),
@@ -493,6 +495,7 @@ mod tests {
             rate_a: 0.0,
             rate_b: 0.0,
             rate_c: 0.0,
+            control: None,
         };
         let imp = Impedance {
             r: 0.0,
@@ -534,7 +537,7 @@ mod tests {
 
         let view = IndexedNetwork::new(&net);
         assert_eq!(view.n(), 4, "three buses plus the synthetic star point");
-        assert_eq!(view.n_connected_components(), 1);
+        assert_eq!(view.calc_island_count(), 1);
         view.check_reference_coverage().unwrap();
 
         // The star bus is the last dense index; its susceptance is the magnetizing
@@ -571,7 +574,7 @@ mod tests {
         // No star bus is synthesized for an out-of-service transformer, so the
         // three buses stay as three islands (no spurious star point).
         assert_eq!(view.n(), 3);
-        assert_eq!(view.n_connected_components(), 3);
+        assert_eq!(view.calc_island_count(), 3);
     }
 
     #[test]

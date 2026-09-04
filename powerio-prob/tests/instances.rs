@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use powerio_core::{Source, TimePoint};
 use powerio_prob::{
-    AcBusSpecification, AcOpfInstance, AcPfInstance, BalancedStateBuilder, DcOpfInstance,
+    AcBusSpecification, AcOpfInstance, AcPfInstance, BalancedOperatingPointBuilder, DcOpfInstance,
     DcPfInstance, DcPfSolution, McAcOpfInstance, McAcPfInstance, McAcPfSolution, ObjectiveTerm,
     Termination, merge_zero_impedance_buses,
 };
@@ -24,7 +24,7 @@ fn dss_network() -> powerio_dist::MulticonductorNetwork {
     let dss = "New Circuit.c basekv=12.47 pu=1 phases=3 bus1=a\n\
                New Line.l1 bus1=a.1.2.3 bus2=b.1.2.3 phases=3 r1=0.1 x1=0.2 length=1 units=km\n\
                New Load.ld bus1=b.1.2.3 phases=3 conn=wye kv=7.2 kw=30 kvar=9\n";
-    let source = Source::from_bytes("<memory>", dss.as_bytes().to_vec())
+    let source = Source::from_memory("<memory>", dss.as_bytes().to_vec())
         .unwrap()
         .with_format(powerio_core::FormatId::new("dss").unwrap());
     powerio_dist::parse(source).unwrap().into_value()
@@ -160,7 +160,7 @@ fn the_objective_edit_never_copies_the_shared_network() {
     let bus_ptr = net.buses().as_ptr();
     let instance = DcOpfInstance::from_network(net)
         .unwrap()
-        .with_objective_term(ObjectiveTerm::NetworkPerPhaseCost);
+        .with_objective_term(ObjectiveTerm::ActivePowerDispatchCost);
     assert_eq!(instance.objective().terms().len(), 2);
     assert_eq!(instance.network().buses().as_ptr(), bus_ptr);
     let (pf, diagnostics) = instance.to_dc_pf().unwrap();
@@ -169,19 +169,25 @@ fn the_objective_edit_never_copies_the_shared_network() {
 }
 
 #[test]
-fn replacing_an_opf_network_preserves_problem_semantics_and_rebinds_initial_state() {
+fn replacing_an_opf_network_preserves_problem_semantics_and_rebinds_initial_point() {
     let net = case9();
-    let initial =
-        BalancedStateBuilder::new(net.clone(), vec![TimePoint::new("initial", None).unwrap()])
-            .branch_in_service(vec![1.0; net.branches().len()])
-            .build()
-            .unwrap()
-            .values()[0]
-            .clone();
+    let first_branch_id = net.branches()[0]
+        .uid
+        .clone()
+        .expect("parsed components have persistent identities");
+    let initial = BalancedOperatingPointBuilder::new(
+        net.clone(),
+        vec![TimePoint::new("initial", None).unwrap()],
+    )
+    .branch_in_service(vec![true; net.branches().len()])
+    .build()
+    .unwrap()
+    .values()[0]
+        .clone();
     let instance = DcOpfInstance::from_network(net.clone())
         .unwrap()
-        .with_objective_term(ObjectiveTerm::NetworkPerPhaseCost)
-        .with_initial_state(initial);
+        .with_objective_term(ObjectiveTerm::ActivePowerDispatchCost)
+        .with_initial_point(initial);
 
     let mut edited = net;
     edited.branches_mut()[0].rate_a += 25.0;
@@ -192,11 +198,11 @@ fn replacing_an_opf_network_preserves_problem_semantics_and_rebinds_initial_stat
         (replaced.network().branches()[0].rate_a - edited.branches()[0].rate_a).abs()
             < f64::EPSILON
     );
-    let rebound = replaced.initial_state().unwrap();
+    let rebound = replaced.initial_point().unwrap();
     assert!(
         (rebound.network().branches()[0].rate_a - edited.branches()[0].rate_a).abs() < f64::EPSILON
     );
-    assert_eq!(rebound.branch_in_service("branches:0"), Some(true));
+    assert_eq!(rebound.branch_in_service(&first_branch_id), Some(true));
 }
 
 #[test]
@@ -213,6 +219,7 @@ fn several_solutions_share_one_immutable_instance() {
         vec![1.0; buses],
         vec![2.0; branches],
         vec![-2.0; branches],
+        Vec::new(),
     )
     .unwrap()
     .with_producer("solver-a");
@@ -223,6 +230,7 @@ fn several_solutions_share_one_immutable_instance() {
         vec![1.5; buses],
         vec![3.0; branches],
         vec![-3.0; branches],
+        Vec::new(),
     )
     .unwrap();
 
@@ -259,6 +267,7 @@ fn dimensionally_inconsistent_solutions_are_refused() {
         vec![1.0; buses],
         vec![2.0; branches],
         vec![-2.0; branches],
+        Vec::new(),
     )
     .unwrap_err();
     assert_eq!(

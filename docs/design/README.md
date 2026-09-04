@@ -1,9 +1,21 @@
-# Design records
+# Candidate PowerIO 1.0 design record
 
-Proposals that were argued in full and then not built, kept for the reasoning rather than the conclusion. Nothing here describes shipped behavior, and nothing here is published in the book — `docs/src/` is the book, and a page under it is a promise about the library as it stands.
+These four documents record the design that led to the PowerIO 0.10 beta and
+the candidate 1.0 API now shipped for stabilization in 0.11. They are dated
+design records, not current API authority: the released source, tests, the
+[0.11 API surface](../src/api-0.11.md), the
+[migration guide](../src/migration-0.11.md), and the changelog state the shipped
+API. Read them for the reasoning behind a public name or meaning.
 
-A record earns a place here when a later version will have to decide the same question again. Delete one once its question is settled.
+1. [Terminology](v1-terminology.md) fixes the public words and names.
+2. [Rationale](v1-rationale.md) explains the alternatives and why the selected
+   API won.
+3. [Ontology](v1-ontology.md) fixes the public value types, source profiles,
+   and allowed transformations.
+4. [Architecture](v1-architecture.md) fixes ownership, schema, instance,
+   solution, matrix, writer, crate, ABI, and binding semantics.
 
-| record | written | status |
-|---|---|---|
-| [ABI 5 rewrite study](abi-v5-rewrite-study.md) | 2026-08 | not shipped; the pieces worth revisiting are noted at its head |
+The record was written against the 0.10 beta. Where it names a beta operation
+or type that 0.11 removed, the migration guide lists the replacement. The
+compiling prototype crates and the issue audit that accompanied the record were
+working evidence for that period and are kept only in the repository history.

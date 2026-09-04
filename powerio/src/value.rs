@@ -1,101 +1,302 @@
-//! The dynamic value boundary: [`PioValue`], its [`PioValueKind`] register,
-//! and the checked narrowing back to a concrete module.
+//! The dynamic Rust boundary for values produced by universal parsing.
 
-use std::fmt;
-
-use powerio_core::PioModule;
+use powerio_core::{Scenario, ScenarioSet, TimePoint, TimeSeries};
 use powerio_dist::MulticonductorNetwork;
-use powerio_tx::BalancedNetwork;
+use powerio_prob::OperatingPoint;
+use powerio_tx::{BalancedNetwork, GeoLayer};
 
-/// The register of built in dynamic value kinds, one per [`PioValue`]
-/// variant. The string spelling is permanent and shared by every surface:
-/// Rust, C, Python, Julia, and the stored `.pio.json` document.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum PioValueKind {
-    BalancedNetwork,
-    MulticonductorNetwork,
-    BalancedNetworkTimeSeries,
-    BalancedOperatingPointTimeSeries,
-    MulticonductorOperatingPointTimeSeries,
-    BalancedNetworkScenarioSet,
-    DcPfInstance,
-    AcPfInstance,
-    DcOpfInstance,
-    AcOpfInstance,
-    McAcPfInstance,
-    McAcOpfInstance,
-    AcScucInstance,
-    DcPfSolution,
-    AcPfSolution,
-    DcOpfSolution,
-    AcOpfSolution,
-    McAcPfSolution,
-    McAcOpfSolution,
-    AcScucSolution,
+/// A dynamically typed time series at the universal parser boundary.
+///
+/// Typed Rust code uses `TimeSeries<T>` directly. This wrapper preserves the
+/// element type for empty collections and lets C and PowerIO IR report the
+/// same structural type name without a flattened collection registry.
+#[derive(Clone, Debug)]
+pub struct PioTimeSeries {
+    element_type: Box<str>,
+    type_name: Box<str>,
+    values: TimeSeries<PioValue>,
 }
 
-impl PioValueKind {
-    /// The kind's permanent string identifier.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::BalancedNetwork => "balanced_network",
-            Self::BalancedNetworkTimeSeries => "balanced_network_time_series",
-            Self::BalancedOperatingPointTimeSeries => "balanced_operating_point_time_series",
-            Self::MulticonductorOperatingPointTimeSeries => {
-                "multiconductor_operating_point_time_series"
-            }
-            Self::BalancedNetworkScenarioSet => "balanced_network_scenario_set",
-            Self::MulticonductorNetwork => "multiconductor_network",
-            Self::DcPfInstance => "dc_pf_instance",
-            Self::AcPfInstance => "ac_pf_instance",
-            Self::DcOpfInstance => "dc_opf_instance",
-            Self::AcOpfInstance => "ac_opf_instance",
-            Self::McAcPfInstance => "mc_ac_pf_instance",
-            Self::McAcOpfInstance => "mc_ac_opf_instance",
-            Self::AcScucInstance => "ac_scuc_instance",
-            Self::DcPfSolution => "dc_pf_solution",
-            Self::AcPfSolution => "ac_pf_solution",
-            Self::DcOpfSolution => "dc_opf_solution",
-            Self::AcOpfSolution => "ac_opf_solution",
-            Self::McAcPfSolution => "mc_ac_pf_solution",
-            Self::McAcOpfSolution => "mc_ac_opf_solution",
-            Self::AcScucSolution => "ac_scuc_solution",
+impl PioTimeSeries {
+    fn from_typed<T>(element_type: &'static str, values: TimeSeries<T>) -> Self
+    where
+        T: Clone + Into<PioValue>,
+    {
+        let values = values.map_values(Into::into);
+        debug_assert!(
+            values
+                .values()
+                .iter()
+                .all(|value| value.type_name() == element_type)
+        );
+        Self {
+            element_type: element_type.into(),
+            type_name: format!("powerio.TimeSeries<{element_type}>").into_boxed_str(),
+            values,
         }
     }
-}
 
-impl fmt::Display for PioValueKind {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
+    /// Construct the dynamic form from values that already crossed the
+    /// universal parser boundary.
+    ///
+    /// Typed Rust code should use [`TimeSeries<T>`] and its ordinary
+    /// [`From`] conversion. This constructor exists for dynamic language
+    /// bindings. An empty input has no value from which to infer `T` and is
+    /// rejected.
+    pub fn from_values(
+        time_points: Vec<TimePoint>,
+        values: Vec<PioValue>,
+    ) -> Result<Self, powerio_core::Error> {
+        let Some(first) = values.first() else {
+            return Err(powerio_core::Error::new(
+                &crate::codes::VALIDATE_COLLECTION_EMPTY,
+                "a time series needs at least one value to infer its element type",
+            ));
+        };
+        let element_type = first.type_name().to_owned();
+        if !is_time_series_element_type(&element_type) {
+            return Err(powerio_core::Error::new(
+                &crate::codes::VALIDATE_COLLECTION_ELEMENT_TYPE,
+                format!("PowerIO IR does not define a time series of `{element_type}`"),
+            ));
+        }
+        require_element_type(&values, &element_type)?;
+        let values = TimeSeries::new(time_points, values)?;
+        Ok(Self {
+            type_name: format!("powerio.TimeSeries<{element_type}>").into_boxed_str(),
+            element_type: element_type.into_boxed_str(),
+            values,
+        })
+    }
+
+    #[must_use]
+    pub fn element_type(&self) -> &str {
+        &self.element_type
+    }
+
+    #[must_use]
+    pub fn type_name(&self) -> &str {
+        &self.type_name
+    }
+
+    #[must_use]
+    pub fn time_points(&self) -> &[TimePoint] {
+        self.values.time_points()
+    }
+
+    #[must_use]
+    pub fn get(&self, index: usize) -> Option<&PioValue> {
+        self.values.get(index)
+    }
+
+    /// Mutably borrow one entry through the collection's copy on write
+    /// storage.
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut PioValue> {
+        self.values.get_mut(index)
+    }
+
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (&TimePoint, &PioValue)> {
+        self.values.iter()
+    }
+
+    /// Iterate over mutable entries through one copy on write split.
+    pub fn iter_mut(&mut self) -> impl ExactSizeIterator<Item = (&TimePoint, &mut PioValue)> {
+        self.values.iter_mut()
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    pub(crate) fn values(&self) -> &TimeSeries<PioValue> {
+        &self.values
     }
 }
 
-/// The dynamic form of a compiled value: the finite set of built in concrete
-/// types a parse can produce, discovered at run time through
-/// [`PioValue::kind`]. `PioModule<PioValue>` is what [`crate::parse`]
-/// returns; a caller that expects one concrete type narrows with
-/// [`try_into_typed`]. Application defined types stay typed Rust
-/// (`PioModule<MyValue>`) and never enter this enum.
-#[derive(Debug)]
+/// A dynamically typed scenario set at the universal parser boundary.
+/// Typed Rust code uses `ScenarioSet<T>` directly.
+#[derive(Clone, Debug)]
+pub struct PioScenarioSet {
+    element_type: Box<str>,
+    type_name: Box<str>,
+    values: ScenarioSet<PioValue>,
+}
+
+impl PioScenarioSet {
+    fn from_typed<T>(element_type: &'static str, values: ScenarioSet<T>) -> Self
+    where
+        T: Clone + Into<PioValue>,
+    {
+        let values = values.map_values(Into::into);
+        debug_assert!(
+            values
+                .iter()
+                .all(|scenario| scenario.value().type_name() == element_type)
+        );
+        Self {
+            element_type: element_type.into(),
+            type_name: format!("powerio.ScenarioSet<{element_type}>").into_boxed_str(),
+            values,
+        }
+    }
+
+    /// Construct the dynamic form from scenarios that already crossed the
+    /// universal parser boundary.
+    ///
+    /// Typed Rust code should use [`ScenarioSet<T>`] and its ordinary
+    /// [`From`] conversion. An empty input has no value from which to infer
+    /// `T` and is rejected.
+    pub fn from_scenarios(scenarios: Vec<Scenario<PioValue>>) -> Result<Self, powerio_core::Error> {
+        let Some(first) = scenarios.first() else {
+            return Err(powerio_core::Error::new(
+                &crate::codes::VALIDATE_COLLECTION_EMPTY,
+                "a scenario set needs at least one value to infer its element type",
+            ));
+        };
+        let element_type = first.value().type_name().to_owned();
+        if !is_scenario_element_type(&element_type) {
+            return Err(powerio_core::Error::new(
+                &crate::codes::VALIDATE_COLLECTION_ELEMENT_TYPE,
+                format!("PowerIO IR does not define a scenario set of `{element_type}`"),
+            ));
+        }
+        require_element_type(
+            &scenarios
+                .iter()
+                .map(|scenario| scenario.value().clone())
+                .collect::<Vec<_>>(),
+            &element_type,
+        )?;
+        let values = ScenarioSet::new(scenarios)?;
+        Ok(Self {
+            type_name: format!("powerio.ScenarioSet<{element_type}>").into_boxed_str(),
+            element_type: element_type.into_boxed_str(),
+            values,
+        })
+    }
+
+    #[must_use]
+    pub fn element_type(&self) -> &str {
+        &self.element_type
+    }
+
+    #[must_use]
+    pub fn type_name(&self) -> &str {
+        &self.type_name
+    }
+
+    #[must_use]
+    pub fn get(&self, id: &str) -> Option<&PioValue> {
+        self.values.get(id)
+    }
+
+    /// Mutably borrow one entry by scenario ID through copy on write.
+    pub fn get_mut(&mut self, id: &str) -> Option<&mut PioValue> {
+        self.values.get_mut(id)
+    }
+
+    #[must_use]
+    pub fn get_at(&self, position: usize) -> Option<&PioValue> {
+        self.values.get_at(position)
+    }
+
+    /// Mutably borrow one entry by insertion position through copy on write.
+    pub fn get_at_mut(&mut self, position: usize) -> Option<&mut PioValue> {
+        self.values.get_at_mut(position)
+    }
+
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &Scenario<PioValue>> {
+        self.values.iter()
+    }
+
+    /// Iterate over mutable scenario entries through one copy on write split.
+    pub fn iter_mut(&mut self) -> impl ExactSizeIterator<Item = &mut Scenario<PioValue>> {
+        self.values.iter_mut()
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    pub(crate) fn values(&self) -> &ScenarioSet<PioValue> {
+        &self.values
+    }
+}
+
+const BALANCED_NETWORK_TYPE: &str = "powerio.BalancedNetwork";
+const MULTICONDUCTOR_NETWORK_TYPE: &str = "powerio.MulticonductorNetwork";
+const BALANCED_OPERATING_POINT_TYPE: &str = "powerio.OperatingPoint<powerio.BalancedNetwork>";
+const MULTICONDUCTOR_OPERATING_POINT_TYPE: &str =
+    "powerio.OperatingPoint<powerio.MulticonductorNetwork>";
+
+fn is_time_series_element_type(type_name: &str) -> bool {
+    matches!(
+        type_name,
+        BALANCED_NETWORK_TYPE
+            | MULTICONDUCTOR_NETWORK_TYPE
+            | BALANCED_OPERATING_POINT_TYPE
+            | MULTICONDUCTOR_OPERATING_POINT_TYPE
+    )
+}
+
+fn is_scenario_element_type(type_name: &str) -> bool {
+    is_time_series_element_type(type_name)
+        || matches!(
+            type_name,
+            "powerio.TimeSeries<powerio.BalancedNetwork>"
+                | "powerio.TimeSeries<powerio.MulticonductorNetwork>"
+                | "powerio.TimeSeries<powerio.OperatingPoint<powerio.BalancedNetwork>>"
+                | "powerio.TimeSeries<powerio.OperatingPoint<powerio.MulticonductorNetwork>>"
+        )
+}
+
+fn require_element_type(
+    values: &[PioValue],
+    element_type: &str,
+) -> Result<(), powerio_core::Error> {
+    if let Some(value) = values
+        .iter()
+        .find(|value| value.type_name() != element_type)
+    {
+        return Err(powerio_core::Error::new(
+            &crate::codes::VALIDATE_COLLECTION_ELEMENT_TYPE,
+            format!(
+                "collection starts with `{element_type}` but also contains `{}`",
+                value.type_name()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// A value produced by PowerIO's universal parser or decoded from PowerIO IR.
+/// Application values remain ordinary `PioModule<T>` values.
+#[derive(Clone, Debug)]
 #[non_exhaustive]
-// The exact 20 variants are the architecture's fixed dynamic surface; the
-// larger calculation values stay unboxed because the enum is a transport
-// wrapper moved whole, never stored in bulk.
 #[allow(clippy::large_enum_variant)]
 pub enum PioValue {
     BalancedNetwork(BalancedNetwork),
     MulticonductorNetwork(MulticonductorNetwork),
-    /// One balanced network per time point, static tables shared.
-    BalancedNetworkTimeSeries(powerio_core::TimeSeries<BalancedNetwork>),
-    /// One fixed balanced network under an operating point per time point.
-    BalancedOperatingPointTimeSeries(powerio_prob::BalancedOperatingPoints),
-    /// One fixed multiconductor network under an operating point per time
-    /// point.
-    MulticonductorOperatingPointTimeSeries(powerio_prob::MulticonductorOperatingPoints),
-    /// One balanced network per scenario, shared element tables.
-    BalancedNetworkScenarioSet(powerio_core::ScenarioSet<BalancedNetwork>),
+    /// A standalone geographic document: element points and routes keyed by
+    /// element identity, placed onto a network by
+    /// [`crate::apply_geo_layer`].
+    GeoLayer(GeoLayer),
+    BalancedOperatingPoint(OperatingPoint<BalancedNetwork>),
+    MulticonductorOperatingPoint(OperatingPoint<MulticonductorNetwork>),
+    TimeSeries(PioTimeSeries),
+    ScenarioSet(PioScenarioSet),
     DcPfInstance(powerio_prob::DcPfInstance),
     AcPfInstance(powerio_prob::AcPfInstance),
     DcOpfInstance(powerio_prob::DcOpfInstance),
@@ -107,137 +308,47 @@ pub enum PioValue {
     AcPfSolution(powerio_prob::AcPfSolution),
     DcOpfSolution(powerio_prob::DcOpfSolution),
     AcOpfSolution(powerio_prob::AcOpfSolution),
+    SocwrOpfSolution(powerio_prob::solution::SocwrOpfSolution),
     McAcPfSolution(powerio_prob::McAcPfSolution),
     McAcOpfSolution(powerio_prob::McAcOpfSolution),
     AcScucSolution(powerio_prob::AcScucSolution),
 }
 
 impl PioValue {
+    /// Canonical structural type name used by C and PowerIO IR.
     #[must_use]
-    pub fn kind(&self) -> PioValueKind {
+    pub fn type_name(&self) -> &str {
         match self {
-            Self::BalancedNetwork(_) => PioValueKind::BalancedNetwork,
-            Self::MulticonductorNetwork(_) => PioValueKind::MulticonductorNetwork,
-            Self::BalancedNetworkTimeSeries(_) => PioValueKind::BalancedNetworkTimeSeries,
-            Self::BalancedOperatingPointTimeSeries(_) => {
-                PioValueKind::BalancedOperatingPointTimeSeries
+            Self::BalancedNetwork(_) => "powerio.BalancedNetwork",
+            Self::MulticonductorNetwork(_) => "powerio.MulticonductorNetwork",
+            Self::GeoLayer(_) => "powerio.GeoLayer",
+            Self::BalancedOperatingPoint(_) => "powerio.OperatingPoint<powerio.BalancedNetwork>",
+            Self::MulticonductorOperatingPoint(_) => {
+                "powerio.OperatingPoint<powerio.MulticonductorNetwork>"
             }
-            Self::MulticonductorOperatingPointTimeSeries(_) => {
-                PioValueKind::MulticonductorOperatingPointTimeSeries
-            }
-            Self::BalancedNetworkScenarioSet(_) => PioValueKind::BalancedNetworkScenarioSet,
-            Self::DcPfInstance(_) => PioValueKind::DcPfInstance,
-            Self::AcPfInstance(_) => PioValueKind::AcPfInstance,
-            Self::DcOpfInstance(_) => PioValueKind::DcOpfInstance,
-            Self::AcOpfInstance(_) => PioValueKind::AcOpfInstance,
-            Self::McAcPfInstance(_) => PioValueKind::McAcPfInstance,
-            Self::McAcOpfInstance(_) => PioValueKind::McAcOpfInstance,
-            Self::AcScucInstance(_) => PioValueKind::AcScucInstance,
-            Self::DcPfSolution(_) => PioValueKind::DcPfSolution,
-            Self::AcPfSolution(_) => PioValueKind::AcPfSolution,
-            Self::DcOpfSolution(_) => PioValueKind::DcOpfSolution,
-            Self::AcOpfSolution(_) => PioValueKind::AcOpfSolution,
-            Self::McAcPfSolution(_) => PioValueKind::McAcPfSolution,
-            Self::McAcOpfSolution(_) => PioValueKind::McAcOpfSolution,
-            Self::AcScucSolution(_) => PioValueKind::AcScucSolution,
+            Self::TimeSeries(series) => series.type_name(),
+            Self::ScenarioSet(scenarios) => scenarios.type_name(),
+            Self::DcPfInstance(_) => "powerio.DcPfInstance",
+            Self::AcPfInstance(_) => "powerio.AcPfInstance",
+            Self::DcOpfInstance(_) => "powerio.DcOpfInstance",
+            Self::AcOpfInstance(_) => "powerio.AcOpfInstance",
+            Self::McAcPfInstance(_) => "powerio.McAcPfInstance",
+            Self::McAcOpfInstance(_) => "powerio.McAcOpfInstance",
+            Self::AcScucInstance(_) => "powerio.AcScucInstance",
+            Self::DcPfSolution(_) => "powerio.DcPfSolution",
+            Self::AcPfSolution(_) => "powerio.AcPfSolution",
+            Self::DcOpfSolution(_) => "powerio.DcOpfSolution",
+            Self::AcOpfSolution(_) => "powerio.AcOpfSolution",
+            Self::SocwrOpfSolution(_) => "powerio.SocwrOpfSolution",
+            Self::McAcPfSolution(_) => "powerio.McAcPfSolution",
+            Self::McAcOpfSolution(_) => "powerio.McAcOpfSolution",
+            Self::AcScucSolution(_) => "powerio.AcScucSolution",
         }
     }
 }
 
-/// The recoverable failure of [`try_into_typed`]: the expectation did not
-/// match the parsed kind. The original dynamic module rides along untouched,
-/// so the caller can inspect the actual kind and take the other route.
-#[derive(Debug)]
-pub struct ValueKindMismatch {
-    expected: PioValueKind,
-    module: PioModule<PioValue>,
-}
-
-impl ValueKindMismatch {
-    #[must_use]
-    pub fn expected(&self) -> PioValueKind {
-        self.expected
-    }
-
-    #[must_use]
-    pub fn actual(&self) -> PioValueKind {
-        self.module.value().kind()
-    }
-
-    /// The dynamic module the narrowing was attempted on, unchanged.
-    #[must_use]
-    pub fn into_module(self) -> PioModule<PioValue> {
-        self.module
-    }
-}
-
-impl fmt::Display for ValueKindMismatch {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "expected `{}`, found `{}`",
-            self.expected.as_str(),
-            self.actual().as_str()
-        )
-    }
-}
-
-impl std::error::Error for ValueKindMismatch {}
-
-mod private {
-    pub trait Sealed {}
-}
-
-/// Internal connection between one built in concrete type and its dynamic
-/// [`PioValue`] variant. Implementations are closed because adding one also
-/// adds a stored and binding value kind. `PioModule<T>` itself has no such
-/// bound.
-#[doc(hidden)]
-pub trait FromPioValue: private::Sealed + Sized {
-    const KIND: PioValueKind;
-    // Boxing the failure would allocate and violate the recoverable no-copy
-    // narrowing rule; the caller gets the original value back by value.
-    #[allow(clippy::result_large_err)]
-    fn try_from_pio_value(value: PioValue) -> Result<Self, PioValue>;
-}
-
-/// Check the dynamic kind and move the value and module records into a typed
-/// module. Successful narrowing moves the value, the retained source owner,
-/// and the common records without allocation.
-///
-/// # Errors
-/// [`ValueKindMismatch`] when the module holds another kind; it owns the
-/// original dynamic module.
-// Boxing the failure would allocate and violate the recoverable no-copy
-// narrowing rule; the caller gets the original dynamic module back by value.
-#[allow(clippy::result_large_err)]
-pub fn try_into_typed<T: FromPioValue>(
-    module: PioModule<PioValue>,
-) -> Result<PioModule<T>, ValueKindMismatch> {
-    match module.__try_map_value(T::try_from_pio_value) {
-        Ok(module) => Ok(module),
-        Err(module) => Err(ValueKindMismatch {
-            expected: T::KIND,
-            module,
-        }),
-    }
-}
-
-macro_rules! typed_module {
-    ($ty:ty, $variant:ident, $kind:ident) => {
-        impl private::Sealed for $ty {}
-
-        impl FromPioValue for $ty {
-            const KIND: PioValueKind = PioValueKind::$kind;
-
-            fn try_from_pio_value(value: PioValue) -> Result<Self, PioValue> {
-                match value {
-                    PioValue::$variant(value) => Ok(value),
-                    value => Err(value),
-                }
-            }
-        }
-
+macro_rules! value_conversion {
+    ($ty:ty, $variant:ident) => {
         impl From<$ty> for PioValue {
             fn from(value: $ty) -> Self {
                 Self::$variant(value)
@@ -246,67 +357,96 @@ macro_rules! typed_module {
     };
 }
 
-typed_module!(BalancedNetwork, BalancedNetwork, BalancedNetwork);
-typed_module!(
-    MulticonductorNetwork,
-    MulticonductorNetwork,
-    MulticonductorNetwork
+impl From<BalancedNetwork> for PioValue {
+    fn from(mut value: BalancedNetwork) -> Self {
+        value.assign_missing_component_ids();
+        Self::BalancedNetwork(value)
+    }
+}
+value_conversion!(MulticonductorNetwork, MulticonductorNetwork);
+value_conversion!(GeoLayer, GeoLayer);
+value_conversion!(OperatingPoint<BalancedNetwork>, BalancedOperatingPoint);
+value_conversion!(
+    OperatingPoint<MulticonductorNetwork>,
+    MulticonductorOperatingPoint
 );
-typed_module!(
-    powerio_core::TimeSeries<BalancedNetwork>,
-    BalancedNetworkTimeSeries,
-    BalancedNetworkTimeSeries
+value_conversion!(powerio_prob::DcPfInstance, DcPfInstance);
+value_conversion!(powerio_prob::AcPfInstance, AcPfInstance);
+value_conversion!(powerio_prob::DcOpfInstance, DcOpfInstance);
+value_conversion!(powerio_prob::AcOpfInstance, AcOpfInstance);
+value_conversion!(powerio_prob::McAcPfInstance, McAcPfInstance);
+value_conversion!(powerio_prob::McAcOpfInstance, McAcOpfInstance);
+value_conversion!(powerio_prob::AcScucInstance, AcScucInstance);
+value_conversion!(powerio_prob::DcPfSolution, DcPfSolution);
+value_conversion!(powerio_prob::AcPfSolution, AcPfSolution);
+value_conversion!(powerio_prob::DcOpfSolution, DcOpfSolution);
+value_conversion!(powerio_prob::AcOpfSolution, AcOpfSolution);
+value_conversion!(powerio_prob::solution::SocwrOpfSolution, SocwrOpfSolution);
+value_conversion!(powerio_prob::McAcPfSolution, McAcPfSolution);
+value_conversion!(powerio_prob::McAcOpfSolution, McAcOpfSolution);
+value_conversion!(powerio_prob::AcScucSolution, AcScucSolution);
+
+macro_rules! time_series_conversion {
+    ($ty:ty, $name:literal) => {
+        impl From<TimeSeries<$ty>> for PioValue {
+            fn from(value: TimeSeries<$ty>) -> Self {
+                Self::TimeSeries(PioTimeSeries::from_typed($name, value))
+            }
+        }
+    };
+}
+
+time_series_conversion!(BalancedNetwork, "powerio.BalancedNetwork");
+time_series_conversion!(MulticonductorNetwork, "powerio.MulticonductorNetwork");
+time_series_conversion!(
+    OperatingPoint<BalancedNetwork>,
+    "powerio.OperatingPoint<powerio.BalancedNetwork>"
 );
-typed_module!(
-    powerio_prob::BalancedOperatingPoints,
-    BalancedOperatingPointTimeSeries,
-    BalancedOperatingPointTimeSeries
+time_series_conversion!(
+    OperatingPoint<MulticonductorNetwork>,
+    "powerio.OperatingPoint<powerio.MulticonductorNetwork>"
 );
-typed_module!(
-    powerio_core::ScenarioSet<BalancedNetwork>,
-    BalancedNetworkScenarioSet,
-    BalancedNetworkScenarioSet
+
+macro_rules! scenario_set_conversion {
+    ($ty:ty, $name:literal) => {
+        impl From<ScenarioSet<$ty>> for PioValue {
+            fn from(value: ScenarioSet<$ty>) -> Self {
+                Self::ScenarioSet(PioScenarioSet::from_typed($name, value))
+            }
+        }
+    };
+}
+
+scenario_set_conversion!(BalancedNetwork, "powerio.BalancedNetwork");
+scenario_set_conversion!(MulticonductorNetwork, "powerio.MulticonductorNetwork");
+scenario_set_conversion!(
+    OperatingPoint<BalancedNetwork>,
+    "powerio.OperatingPoint<powerio.BalancedNetwork>"
 );
-typed_module!(
-    powerio_prob::MulticonductorOperatingPoints,
-    MulticonductorOperatingPointTimeSeries,
-    MulticonductorOperatingPointTimeSeries
+scenario_set_conversion!(
+    OperatingPoint<MulticonductorNetwork>,
+    "powerio.OperatingPoint<powerio.MulticonductorNetwork>"
 );
-typed_module!(powerio_prob::DcPfInstance, DcPfInstance, DcPfInstance);
-typed_module!(powerio_prob::AcPfInstance, AcPfInstance, AcPfInstance);
-typed_module!(powerio_prob::DcOpfInstance, DcOpfInstance, DcOpfInstance);
-typed_module!(powerio_prob::AcOpfInstance, AcOpfInstance, AcOpfInstance);
-typed_module!(powerio_prob::McAcPfInstance, McAcPfInstance, McAcPfInstance);
-typed_module!(
-    powerio_prob::McAcOpfInstance,
-    McAcOpfInstance,
-    McAcOpfInstance
+scenario_set_conversion!(
+    TimeSeries<BalancedNetwork>,
+    "powerio.TimeSeries<powerio.BalancedNetwork>"
 );
-typed_module!(powerio_prob::AcScucInstance, AcScucInstance, AcScucInstance);
-typed_module!(powerio_prob::DcPfSolution, DcPfSolution, DcPfSolution);
-typed_module!(powerio_prob::AcPfSolution, AcPfSolution, AcPfSolution);
-typed_module!(powerio_prob::DcOpfSolution, DcOpfSolution, DcOpfSolution);
-typed_module!(powerio_prob::AcOpfSolution, AcOpfSolution, AcOpfSolution);
-typed_module!(powerio_prob::McAcPfSolution, McAcPfSolution, McAcPfSolution);
-typed_module!(
-    powerio_prob::McAcOpfSolution,
-    McAcOpfSolution,
-    McAcOpfSolution
+scenario_set_conversion!(
+    TimeSeries<MulticonductorNetwork>,
+    "powerio.TimeSeries<powerio.MulticonductorNetwork>"
 );
-typed_module!(powerio_prob::AcScucSolution, AcScucSolution, AcScucSolution);
+scenario_set_conversion!(
+    TimeSeries<OperatingPoint<BalancedNetwork>>,
+    "powerio.TimeSeries<powerio.OperatingPoint<powerio.BalancedNetwork>>"
+);
+scenario_set_conversion!(
+    TimeSeries<OperatingPoint<MulticonductorNetwork>>,
+    "powerio.TimeSeries<powerio.OperatingPoint<powerio.MulticonductorNetwork>>"
+);
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn narrowing_moves_the_value_and_records_without_allocation() {
-        let network = small_balanced();
-        let bus_ptr = network.buses().as_ptr();
-        let module = PioModule::new(PioValue::from(network));
-        let typed: PioModule<BalancedNetwork> = try_into_typed(module).unwrap();
-        assert_eq!(typed.value().buses().as_ptr(), bus_ptr);
-    }
 
     fn small_balanced() -> BalancedNetwork {
         use powerio_tx::{Bus, BusId, BusType};
@@ -319,27 +459,47 @@ mod tests {
     }
 
     #[test]
-    fn a_mismatch_returns_the_dynamic_module() {
-        let module = PioModule::new(PioValue::from(MulticonductorNetwork::new()));
-        let error = try_into_typed::<BalancedNetwork>(module).unwrap_err();
-        assert_eq!(error.expected(), PioValueKind::BalancedNetwork);
-        assert_eq!(error.actual(), PioValueKind::MulticonductorNetwork);
+    fn rust_uses_enum_matching_and_structural_names() {
+        let value = PioValue::from(small_balanced());
+        assert!(matches!(value, PioValue::BalancedNetwork(_)));
+        assert_eq!(value.type_name(), "powerio.BalancedNetwork");
+    }
+
+    #[test]
+    fn collections_keep_generic_structural_names() {
+        let series = TimeSeries::new(
+            vec![TimePoint::new("now", None).unwrap()],
+            vec![small_balanced()],
+        )
+        .unwrap();
+        let value = PioValue::from(series);
+        let PioValue::TimeSeries(series) = &value else {
+            unreachable!();
+        };
+        assert_eq!(series.len(), 1);
         assert_eq!(
-            error.to_string(),
-            "expected `balanced_network`, found `multiconductor_network`"
-        );
-        assert_eq!(
-            error.into_module().value().kind(),
-            PioValueKind::MulticonductorNetwork
+            value.type_name(),
+            "powerio.TimeSeries<powerio.BalancedNetwork>"
         );
     }
 
     #[test]
-    fn kind_strings_are_the_stored_spellings() {
-        assert_eq!(PioValueKind::BalancedNetwork.as_str(), "balanced_network");
+    fn scenario_sets_compose_with_time_series() {
+        let series = TimeSeries::new(
+            vec![TimePoint::new("now", None).unwrap()],
+            vec![small_balanced()],
+        )
+        .unwrap();
+        let set = ScenarioSet::new(vec![Scenario::new(
+            powerio_core::ScenarioId::new("base").unwrap(),
+            None,
+            series,
+        )])
+        .unwrap();
+        let value = PioValue::from(set);
         assert_eq!(
-            PioValueKind::MulticonductorNetwork.as_str(),
-            "multiconductor_network"
+            value.type_name(),
+            "powerio.ScenarioSet<powerio.TimeSeries<powerio.BalancedNetwork>>"
         );
     }
 }

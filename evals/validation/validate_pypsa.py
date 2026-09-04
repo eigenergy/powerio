@@ -28,13 +28,14 @@ RTOL = 1e-6
 
 
 def check_case(path: Path) -> str:
-    case = powerio.parse(path, value_type=powerio.BalancedNetwork).value
+    module = powerio.parse(path)
+    case = module.value
     # The folder writer refuses an existing target, so the output is a fresh
     # child of the temporary directory.
     tmp = Path(tempfile.mkdtemp(prefix=f"powerio-pypsa-{path.stem}-")) / "pypsa"
     problems = []
     try:
-        case.write_pypsa_csv_folder(tmp)
+        powerio.emit(module, "pypsa-csv", tmp)
         net = pypsa.Network()
         net.import_from_csv_folder(tmp)
 
@@ -42,8 +43,10 @@ def check_case(path: Path) -> str:
             problems.append(f"bus count {len(net.buses)} != {case.n_buses}")
         if len(net.lines) + len(net.transformers) != case.n_branches:
             problems.append(f"branch count {len(net.lines) + len(net.transformers)} != {case.n_branches}")
-        if len(net.generators) != case.n_gens:
-            problems.append(f"generator count {len(net.generators)} != {case.n_gens}")
+        if len(net.generators) != case.n_generators:
+            problems.append(
+                f"generator count {len(net.generators)} != {case.n_generators}"
+            )
         if len(net.loads) != case.n_loads:
             problems.append(f"load count {len(net.loads)} != {case.n_loads}")
 
@@ -173,4 +176,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

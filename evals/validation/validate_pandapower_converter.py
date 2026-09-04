@@ -25,8 +25,9 @@ YTOL_REL = 1e-7
 
 
 def check_case(path: Path) -> str:
-    case = powerio.parse(path, value_type=powerio.BalancedNetwork).value
-    conv = case.to_format("pandapower-json")
+    module = powerio.parse(path)
+    case = module.value
+    conv = powerio.emit(module, "pandapower-json")
     net = from_json_string(conv.text)
 
     problems = []
@@ -34,8 +35,10 @@ def check_case(path: Path) -> str:
         problems.append(f"bus count {len(net.bus)} != {case.n_buses}")
     if len(net.line) + len(net.trafo) != case.n_branches:
         problems.append(f"branch count {len(net.line) + len(net.trafo)} != {case.n_branches}")
-    if len(net.gen) + len(net.ext_grid) != case.n_gens:
-        problems.append(f"generator count {len(net.gen) + len(net.ext_grid)} != {case.n_gens}")
+    if len(net.gen) + len(net.ext_grid) != case.n_generators:
+        problems.append(
+            f"generator count {len(net.gen) + len(net.ext_grid)} != {case.n_generators}"
+        )
     if len(net.load) != case.n_loads:
         problems.append(f"load count {len(net.load)} != {case.n_loads}")
     # The writer maps MATPOWER transformer line charging b onto one bus shunt
@@ -57,7 +60,7 @@ def check_case(path: Path) -> str:
         try:
             pp.runpp(net, init="flat", calculate_voltage_angles=True, numba=False)
             y_pp = net._ppc["internal"]["Ybus"]
-            y_pio = case.ybus().tocsr()
+            y_pio = case.calc_admittance_matrix().tocsr()
             y_pp = y_pp.tocsr()
             if y_pp.shape != y_pio.shape:
                 problems.append(f"ybus shape {y_pp.shape} != {y_pio.shape}")

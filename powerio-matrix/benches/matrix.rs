@@ -5,21 +5,22 @@
 //! file answers whether the sparse builders themselves changed.
 //!
 //! The benches hold `b = 1/x` so a timing series stays comparable across the
-//! 0.9.0 convention change.
+//! 0.9.0 branch susceptance formula change.
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use powerio_matrix::matrix::{
-    BuildOptions, DcConvention, build_adjacency, build_bdoubleprime, build_bprime, build_flow_map,
-    build_incidence, build_lacpf, build_ptdf_lodf, build_weighted_laplacian, build_ybus,
-    ground_at_each,
+    BranchSusceptanceFormula, BuildOptions, calc_adjacency_matrix, calc_admittance_matrix,
+    calc_bdoubleprime_matrix, calc_bprime_matrix, calc_lacpf_matrix, calc_ptdf_lodf,
+    calc_weighted_laplacian, ground_at_each,
 };
 use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
-use powerio_matrix::{BalancedNetwork, IndexedNetwork};
+use powerio_matrix::{BalancedNetwork, DcOperators, IndexedNetwork};
+use powerio_prob::DcPfInstance;
 
 fn parse_matpower(text: &str) -> Result<BalancedNetwork, powerio_core::Error> {
-    let source = powerio_core::Source::from_bytes("case.m", text.as_bytes().to_vec())?
+    let source = powerio_core::Source::from_memory("case.m", text.as_bytes().to_vec())?
         .with_format(powerio_core::FormatId::new("matpower")?);
-    powerio_matrix::parse(source).map(powerio_core::PioModule::into_value)
+    powerio_tx::parse(source).map(powerio_core::PioModule::into_value)
 }
 use std::hint::black_box;
 use std::path::Path;
@@ -48,19 +49,19 @@ fn bench_matrix_builders(c: &mut Criterion) {
         let opts = BuildOptions::default();
 
         c.bench_function(&format!("matrix_bprime_{case}"), |b| {
-            b.iter(|| build_bprime(black_box(&view), black_box(&opts)).unwrap());
+            b.iter(|| calc_bprime_matrix(black_box(&view), black_box(&opts)).unwrap());
         });
         c.bench_function(&format!("matrix_bdoubleprime_{case}"), |b| {
-            b.iter(|| build_bdoubleprime(black_box(&view), black_box(&opts)).unwrap());
+            b.iter(|| calc_bdoubleprime_matrix(black_box(&view), black_box(&opts)).unwrap());
         });
         c.bench_function(&format!("matrix_ybus_{case}"), |b| {
-            b.iter(|| build_ybus(black_box(&view), black_box(&opts)).unwrap());
+            b.iter(|| calc_admittance_matrix(black_box(&view), black_box(&opts)).unwrap());
         });
         c.bench_function(&format!("matrix_lacpf_{case}"), |b| {
-            b.iter(|| build_lacpf(black_box(&view), black_box(&opts)).unwrap());
+            b.iter(|| calc_lacpf_matrix(black_box(&view), black_box(&opts)).unwrap());
         });
         c.bench_function(&format!("matrix_adjacency_{case}"), |b| {
-            b.iter(|| build_adjacency(black_box(&view)).unwrap());
+            b.iter(|| calc_adjacency_matrix(black_box(&view)).unwrap());
         });
     }
 }
@@ -68,32 +69,33 @@ fn bench_matrix_builders(c: &mut Criterion) {
 fn bench_dcopf_parts(c: &mut Criterion) {
     let net = network("case118");
     let view = IndexedNetwork::new(&net);
+    let instance = DcPfInstance::from_network(net.clone())
+        .unwrap()
+        .with_branch_susceptance_formula(BranchSusceptanceFormula::ReactanceOnly);
+    let operators = DcOperators::build(&instance).unwrap();
 
     c.bench_function("dcopf_incidence_case118", |b| {
-        b.iter(|| {
-            build_incidence(
-                black_box(&view),
-                black_box(DcConvention::ReactanceOnly),
-                black_box(&BuildOptions::default()),
-            )
-            .unwrap()
-        });
+        b.iter(|| black_box(&operators).calc_incidence_matrix());
     });
 
-    let incidence =
-        build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
+    let incidence = operators.calc_incidence_matrix().transpose_view().to_csr();
+    let weights = operators
+        .calc_branch_susceptances()
+        .iter()
+        .map(|value| -*value)
+        .collect::<Vec<_>>();
     c.bench_function("dcopf_laplacian_case118", |b| {
-        b.iter(|| build_weighted_laplacian(black_box(&incidence.a), black_box(&incidence.b)));
+        b.iter(|| calc_weighted_laplacian(black_box(&incidence), black_box(&weights)));
     });
     let refs = view.reference_bus_indices();
     c.bench_function("dcopf_grounded_laplacian_case118", |b| {
         b.iter(|| {
-            let l = build_weighted_laplacian(&incidence.a, &incidence.b);
+            let l = calc_weighted_laplacian(&incidence, &weights);
             ground_at_each(black_box(&l), black_box(&refs))
         });
     });
-    c.bench_function("dcopf_flow_map_case118", |b| {
-        b.iter(|| build_flow_map(black_box(&incidence.a), black_box(&incidence.b)));
+    c.bench_function("dcopf_branch_flow_matrix_case118", |b| {
+        b.iter(|| black_box(&operators).calc_branch_flow_matrix());
     });
 }
 
@@ -102,7 +104,11 @@ fn bench_dense_sensitivities(c: &mut Criterion) {
     let view = IndexedNetwork::new(&net);
     c.bench_function("sensitivity_ptdf_lodf_case118", |b| {
         b.iter(|| {
-            build_ptdf_lodf(black_box(&view), black_box(DcConvention::ReactanceOnly)).unwrap()
+            calc_ptdf_lodf(
+                black_box(&view),
+                black_box(BranchSusceptanceFormula::ReactanceOnly),
+            )
+            .unwrap()
         });
     });
 }

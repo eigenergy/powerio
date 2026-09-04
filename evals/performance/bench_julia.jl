@@ -122,24 +122,27 @@ function write_speed_julia(path, rows, matrix_rows)
     println("wrote $path ($(length(rows)) rows)")
 end
 
+# Release the network handle now rather than at finalization so a benchmark
+# loop does not accumulate live networks between garbage collections.
 function free_network!(net)
     net === nothing && return
-    h = getfield(net, :handle)
-    h === nothing || h.ptr == C_NULL || finalize(h)
+    finalize(getfield(net, :handle))
     return
 end
 
+# Parse and materialize the bus, branch, generator, and load tables as Julia
+# structs: the cost of reading every element through the typed views.
 function powerio_jl_materialize_data(path)
-    net = PowerIO.parse_file(path).value
+    net = PowerIO.parse(path).value
     try
-        return net.data
+        return (collect(net.buses), collect(net.branches), collect(net.generators), collect(net.loads))
     finally
         free_network!(net)
     end
 end
 
 println(rpad("case", 20), rpad("PowerIO.jl", 24), rpad("ExaPowerIO", 24),
-        rpad("PowerModels", 24), rpad("Rust C ABI", 24), rpad("net.data", 24),
+        rpad("PowerModels", 24), rpad("Rust C ABI", 24), rpad("elements", 24),
         "buses (PowerIO / ExaPowerIO)")
 for (name, f, run_pm_parse, _run_pm_ybus) in CASES
     if !isfile(f)
@@ -147,11 +150,11 @@ for (name, f, run_pm_parse, _run_pm_ybus) in CASES
         continue
     end
 
-    h = pio_parse_file(f); nbuses = pio_n_buses(h); nbranch = pio_n_branches(h); pio_free(h)
+    h = powerio_parse_balanced(f); nbuses = powerio_bus_count(h); nbranch = powerio_branch_count(h); powerio_release!(h)
     samples = nbuses > 30_000 ? 5 : 30
 
     netref = Ref{Any}(nothing)
-    bj = @benchmark $netref[] = PowerIO.parse_file($f).value teardown = (free_network!($netref[]); $netref[] = nothing) samples = samples evals = 1
+    bj = @benchmark $netref[] = PowerIO.parse($f).value teardown = (free_network!($netref[]); $netref[] = nothing) samples = samples evals = 1
     pj = trial_stats(bj)
 
     data = nothing
@@ -163,7 +166,7 @@ for (name, f, run_pm_parse, _run_pm_ybus) in CASES
     end
 
     href = Ref{Ptr{Cvoid}}(C_NULL)
-    bc = @benchmark $href[] = pio_parse_file($f) teardown = (pio_free($href[])) samples = samples evals = 1
+    bc = @benchmark $href[] = powerio_parse_balanced($f) teardown = (powerio_release!($href[])) samples = samples evals = 1
     rust_c = trial_stats(bc)
 
     ed = exapowerio_parse_matpower(f)
@@ -200,21 +203,18 @@ end
 
 println()
 println(rpad("case", 20), rpad("PowerIO.jl Ybus", 24), rpad("Exa Ybus", 24),
-        rpad("Rust C ABI", 24), rpad("PM Ybus", 24), "nnz rows")
+        rpad("PM Ybus", 24), "nnz rows")
 for (name, f, _run_pm_parse, run_pm_ybus) in CASES
     if !isfile(f)
         continue
     end
 
-    h = pio_parse_file(f); nbuses = pio_n_buses(h); nbranch = pio_n_branches(h); pio_free(h)
+    h = powerio_parse_balanced(f); nbuses = powerio_bus_count(h); nbranch = powerio_branch_count(h); powerio_release!(h)
     samples = nbuses > 30_000 ? 5 : 30
 
-    nnz_rows = powerio_parse_ybus_arrow(f)
+    nnz_rows = SparseArrays.nnz(PowerIO.calc_admittance_matrix(f).matrix)
     bp = @benchmark PowerIO.calc_admittance_matrix($f) samples = samples evals = 1
     pio = trial_stats(bp)
-
-    braw = @benchmark powerio_parse_ybus_arrow($f) samples = samples evals = 1
-    raw = trial_stats(braw)
 
     be = @benchmark exapowerio_parse_ybus($f) samples = samples evals = 1
     exa = trial_stats(be)
@@ -232,14 +232,11 @@ for (name, f, _run_pm_parse, run_pm_ybus) in CASES
     end
 
     println(rpad(name, 20), rpad(show_stat(pio), 24), rpad(show_stat(exa), 24),
-            rpad(show_stat(raw), 24), rpad(pm_display, 24), nnz_rows)
+            rpad(pm_display, 24), nnz_rows)
     push!(matrix_jrows, (case = name, buses = nbuses, branches = nbranch,
                          powerio_jl_ybus_ms = pio.ms,
                          powerio_jl_ybus_std_ms = pio.std_ms,
                          powerio_jl_ybus_n = pio.n,
-                         rust_c_abi_ybus_arrow_ms = raw.ms,
-                         rust_c_abi_ybus_arrow_std_ms = raw.std_ms,
-                         rust_c_abi_ybus_arrow_n = raw.n,
                          exapowerio_ybus_ms = exa.ms,
                          exapowerio_ybus_std_ms = exa.std_ms,
                          exapowerio_ybus_n = exa.n,

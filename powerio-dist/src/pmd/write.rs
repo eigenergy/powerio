@@ -15,27 +15,27 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value, json};
 
-use crate::convert::Conversion;
+use crate::convert::TextEmission;
 use crate::diagnostics::codes as C;
 use crate::geo::CoordinateSpace;
 use crate::model::{
-    Configuration, DistBus, DistLine, DistLineCode, DistLoadVoltageModel, DistTransformer,
-    DistWinding, DistWindingConn, Extras, Mat, MulticonductorNetwork, VoltageSource,
+    ConductorMatrix, Configuration, DistBus, DistLine, DistLineCode, DistLoadVoltageModel,
+    DistTransformer, DistWinding, DistWindingConn, Extras, MulticonductorNetwork, VoltageSource,
 };
 
-/// Writes the ENGINEERING document.
+/// Emits the ENGINEERING document.
 ///
 /// # Panics
 ///
 /// Never in practice: the document is maps, strings, finite numbers, and
 /// nulls, which always serialize.
-pub fn write_pmd_json(net: &MulticonductorNetwork) -> Conversion {
+pub(crate) fn emit_pmd_json_text(net: &MulticonductorNetwork) -> TextEmission {
     let mut w = Writer {
         warnings: crate::diagnostics::Diagnostics::new(),
         renamed_terminals: renamed_terminals(net),
     };
     let doc = w.document(net);
-    Conversion::new(
+    TextEmission::new(
         serde_json::to_string_pretty(&doc).expect("maps and finite numbers") + "\n",
         Vec::new(),
         w.warnings,
@@ -45,10 +45,10 @@ pub fn write_pmd_json(net: &MulticonductorNetwork) -> Conversion {
 /// Upper bound on the conductor counts this writer expands quadratically:
 /// the switch series and shunt matrices and the voltage source Thevenin
 /// matrices are all sized from a terminal map, a linear model array. The
-/// readers cap the same quantity on their way in, but a `MulticonductorNetwork` can
-/// also arrive without those caps (the model JSON C entry point
-/// deserializes one unchecked), and a linear-size model could otherwise
-/// demand O(n²) memory here. No physical element comes near this bound.
+/// readers cap the same quantity on their way in, but callers can construct a
+/// `MulticonductorNetwork` without those caps, and a linear-size model could
+/// otherwise demand O(n²) memory here. No physical element comes near this
+/// bound.
 const MAX_DIM: usize = 64;
 
 struct Writer {
@@ -176,7 +176,9 @@ fn all_terminal_names(net: &MulticonductorNetwork) -> impl Iterator<Item = &str>
 /// stamps. Wye nameplate voltage is line to line with the neutral mapped
 /// last; delta couples successive phase pairs; single phase spans its two
 /// terminals.
-fn capacitor_susceptance(c: &crate::model::DistCapacitor) -> std::result::Result<Mat, String> {
+fn capacitor_susceptance(
+    c: &crate::model::DistCapacitor,
+) -> std::result::Result<ConductorMatrix, String> {
     let finite_positive = |v: f64| v.is_finite() && v > 0.0;
     if !finite_positive(c.v_nom) || !c.q_rated.is_finite() {
         return Err("nameplate q_rated or v_nom is missing or nonpositive".into());
@@ -223,7 +225,7 @@ fn capacitor_susceptance(c: &crate::model::DistCapacitor) -> std::result::Result
     Ok(bs)
 }
 
-fn matrix(m: &Mat) -> Value {
+fn matrix(m: &ConductorMatrix) -> Value {
     let n = m.len();
     let cols: Vec<Value> = (0..n)
         .map(|j| {
@@ -237,7 +239,7 @@ fn matrix(m: &Mat) -> Value {
     Value::Array(cols)
 }
 
-fn zero_matrix(n: usize) -> Mat {
+fn zero_matrix(n: usize) -> ConductorMatrix {
     vec![vec![0.0; n]; n]
 }
 
@@ -249,7 +251,7 @@ fn shunt_is_delta(extras: &Extras) -> bool {
         .is_some_and(|t| t.to_ascii_lowercase().starts_with('d') || t.eq_ignore_ascii_case("ll"))
 }
 
-fn scale(m: &Mat, k: f64) -> Mat {
+fn scale(m: &ConductorMatrix, k: f64) -> ConductorMatrix {
     m.iter()
         .map(|row| row.iter().map(|v| v * k).collect())
         .collect()
@@ -1208,7 +1210,7 @@ fn insert_impedance_matrices(o: &mut Map<String, Value>, c: &DistLineCode, base_
 /// (the same math the reference dss2eng inherits): sequence impedances from
 /// the short circuit levels, then self/mutual phase values filled over all
 /// conductors including the neutral.
-fn thevenin(vs: &VoltageSource, n_cond: usize) -> (Mat, Mat) {
+fn thevenin(vs: &VoltageSource, n_cond: usize) -> (ConductorMatrix, ConductorMatrix) {
     let get = |key: &str| Writer::extras_f64(&vs.extras, key);
     let basekv = get("basekv").unwrap_or_else(|| {
         // Reconstruct from the magnitude when basekv was defaulted.

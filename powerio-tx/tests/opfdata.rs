@@ -10,9 +10,7 @@ use helpers::*;
 
 use std::path::{Path, PathBuf};
 
-use powerio_tx::{
-    BalancedNetwork, BranchCharging, BusId, BusType, SourceFormat, TargetFormat, convert_file,
-};
+use powerio_tx::{BalancedNetwork, BranchCharging, BusId, BusType, SourceFormat, TargetFormat};
 use serde_json::Value;
 
 fn fixture() -> PathBuf {
@@ -99,13 +97,13 @@ fn parses_official_schema_complete_solved_snapshot() {
     assert_close(transformer.rate_a, 141.0);
 
     assert_eq!(
-        parsed.rendered_diagnostics().len(),
+        parsed.render_diagnostics().len(),
         2,
         "{:?}",
-        parsed.rendered_diagnostics()
+        parsed.render_diagnostics()
     );
-    assert!(parsed.rendered_diagnostics()[0].contains("solver initial values"));
-    assert!(parsed.rendered_diagnostics()[1].contains("synthesized IDs"));
+    assert!(parsed.render_diagnostics()[0].contains("solver initial values"));
+    assert!(parsed.render_diagnostics()[1].contains("synthesized IDs"));
 }
 
 #[test]
@@ -128,14 +126,22 @@ fn detects_aliases_and_echoes_the_official_source_exactly() {
     }
 
     let parsed = parse_file(fixture(), None).unwrap();
-    let echo = parsed.to_format(TargetFormat::DeepMindOpfDataJson).unwrap();
+    let echo = parsed.emit(TargetFormat::DeepMindOpfDataJson).unwrap();
     assert_eq!(echo.text, source);
-    assert!(echo.rendered_diagnostics().is_empty());
+    assert!(echo.render_diagnostics().is_empty());
 }
 
 #[test]
 fn converts_to_classical_json_and_matpower_with_fidelity_warnings() {
-    let power_models = convert_file(fixture(), TargetFormat::PowerModelsJson, None).unwrap();
+    let parsed = parse_file(fixture(), None).unwrap();
+    assert!(
+        parsed
+            .render_diagnostics()
+            .iter()
+            .any(|warning| warning.contains("solver initial values"))
+    );
+
+    let power_models = parsed.emit(TargetFormat::PowerModelsJson).unwrap();
     let back = parse_str(&power_models.text, "powermodels-json")
         .unwrap()
         .network;
@@ -143,19 +149,14 @@ fn converts_to_classical_json_and_matpower_with_fidelity_warnings() {
     assert_eq!(back.generators().len(), 5);
     assert_eq!(back.branches().len(), 20);
     assert_close(back.generators()[0].pg, 286.070_948_069_333_44);
-    assert!(
-        power_models
-            .rendered_diagnostics()
-            .iter()
-            .any(|warning| warning.contains("solver initial values"))
-    );
+    assert!(power_models.render_diagnostics().is_empty());
 
-    let matpower = convert_file(fixture(), TargetFormat::Matpower, None).unwrap();
+    let matpower = parsed.emit(TargetFormat::Matpower).unwrap();
     assert!(matpower.text.contains("mpc.bus"));
     assert!(matpower.text.contains("mpc.gencost"));
     assert!(
         matpower
-            .rendered_diagnostics()
+            .render_diagnostics()
             .iter()
             .any(|warning| warning.contains("branch solution value"))
     );
@@ -163,7 +164,7 @@ fn converts_to_classical_json_and_matpower_with_fidelity_warnings() {
 
 #[test]
 fn opfdata_target_without_retained_source_is_unsupported() {
-    let err = write_network(
+    let err = emit_value(
         &BalancedNetwork::new("memory", 100.0),
         TargetFormat::DeepMindOpfDataJson,
     )
@@ -219,7 +220,7 @@ fn accepts_variable_fulltop_and_n_minus_one_element_counts() {
     assert_eq!(parsed.network.branches().len(), 19);
     assert!(
         !parsed
-            .rendered_diagnostics()
+            .render_diagnostics()
             .iter()
             .any(|w| w.contains("objective"))
     );
@@ -258,7 +259,7 @@ fn accepts_variable_fulltop_and_n_minus_one_element_counts() {
     assert_eq!(parsed.network.branches().len(), 20);
     assert!(
         !parsed
-            .rendered_diagnostics()
+            .render_diagnostics()
             .iter()
             .any(|w| w.contains("objective"))
     );
@@ -279,7 +280,7 @@ fn maps_general_quadratic_costs_from_per_unit_to_mw() {
     assert_close(cost.coeffs[2], 3.0);
     assert!(
         !parsed
-            .rendered_diagnostics()
+            .render_diagnostics()
             .iter()
             .any(|w| w.contains("objective"))
     );
@@ -294,17 +295,17 @@ fn retains_published_schema_extensions_and_warns_on_projection() {
     let parsed = parse_str(&source, "opfdata").unwrap();
     assert!(
         parsed
-            .rendered_diagnostics()
+            .render_diagnostics()
             .iter()
             .any(|warning| warning.contains("`dataset_revision`"))
     );
     assert!(
         parsed
-            .rendered_diagnostics()
+            .render_diagnostics()
             .iter()
             .any(|warning| warning.contains("`metadata.solver`"))
     );
-    let echo = parsed.to_format(TargetFormat::DeepMindOpfDataJson).unwrap();
+    let echo = parsed.emit(TargetFormat::DeepMindOpfDataJson).unwrap();
     assert_eq!(echo.text, source);
 }
 
@@ -358,7 +359,7 @@ fn warns_when_objective_does_not_match_and_guides_unsupported_inputs() {
     let parsed = parse_str(&wrong_objective, "opfdata").unwrap();
     assert!(
         parsed
-            .rendered_diagnostics()
+            .render_diagnostics()
             .iter()
             .any(|warning| warning.contains("metadata.objective"))
     );

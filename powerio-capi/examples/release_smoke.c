@@ -1,62 +1,50 @@
-/* Runtime probe for the five packaged release libraries. */
+/* Runtime probe for packaged ABI 7 libraries. */
 #include "powerio.h"
 
 #include <stdio.h>
 #include <string.h>
 
-#define CHECK(condition, message)                                              \
-    do {                                                                       \
-        if (!(condition)) {                                                    \
-            fprintf(stderr, "release smoke: %s\n", (message));               \
-            return 1;                                                          \
-        }                                                                      \
+#define CHECK(condition, message)                                \
+    do {                                                         \
+        if (!(condition)) {                                      \
+            fprintf(stderr, "release probe: %s\n", (message)); \
+            return 1;                                            \
+        }                                                        \
     } while (0)
+
+static int view_equals(PioStringView view, const char *text) {
+    size_t len = strlen(text);
+    return view.len == len && view.data != NULL && memcmp(view.data, text, len) == 0;
+}
 
 int main(int argc, char **argv) {
     CHECK(argc == 2, "expected release version argument");
-    CHECK(strcmp(pio_version(), argv[1]) == 0, "library version mismatch");
-    CHECK(pio_abi_version() == PIO_ABI_VERSION, "core ABI mismatch");
+    CHECK(view_equals(pio_version(), argv[1]), "library version mismatch");
+    CHECK(pio_abi_version() == PIO_ABI_VERSION, "ABI mismatch");
+    CHECK(PIO_ABI_VERSION == 7, "release probe is not ABI 7");
 
-    const char *features[] = {"arrow", "matrix", "gridfm", "dist", "prob"};
-    for (size_t i = 0; i < sizeof features / sizeof features[0]; i++) {
-        CHECK(pio_has_feature(features[i]) == 1, "required release feature missing");
-    }
-
-    char *schemas = pio_schema_versions_json();
-    CHECK(schemas != NULL, "schema version report missing");
-    CHECK(strstr(schemas, "powerio_version") != NULL, "schema report has no release version");
-    pio_string_release(schemas);
-
-    char *build = pio_build_info();
-    CHECK(build != NULL, "build report missing");
-    CHECK(strstr(build, argv[1]) != NULL, "build report has the wrong release version");
-    for (size_t i = 0; i < sizeof features / sizeof features[0]; i++) {
-        CHECK(strstr(build, features[i]) != NULL, "build report omits a release feature");
-    }
-    pio_string_release(build);
-
-    /* Exercise one representative entry point for each additive feature and
-     * the module surface itself. */
     PioError *error = NULL;
-    char *arrow = pio_arrow_catalog_json(&error);
-    CHECK(arrow != NULL, "arrow catalog missing");
-    pio_string_release(arrow);
+    PioString *schema = pio_schema_report(&error);
+    CHECK(schema != NULL, "schema report missing");
+    PioStringView schema_text = pio_string_view(schema);
+    CHECK(schema_text.data != NULL && schema_text.len != 0, "schema report is empty");
+    pio_string_release(schema);
 
-    PioModule *missing = pio_parse_file("release-smoke-missing.m", NULL, &error);
-    CHECK(missing == NULL && error != NULL,
-          "a missing case must fail with a structured error");
-    CHECK(pio_error_code(error) != NULL, "structured error carries a code");
-    pio_error_release(error);
-    error = NULL;
+    const char dss[] = "new circuit.probe basekv=12.47 bus1=src.1.2.3\n";
+    PioSource *source = pio_source_from_memory(
+        "probe.dss", 9, (const uint8_t *)dss, sizeof dss - 1, &error);
+    CHECK(source != NULL, "memory source failed");
+    PioModule *module = pio_parse(source, "dss", 3, &error);
+    pio_source_release(source);
+    CHECK(module != NULL, "distribution parse failed");
+    PioValueHandle *value = pio_module_value(module);
+    CHECK(value != NULL, "parsed value missing");
+    CHECK(view_equals(pio_value_type_name(value), "powerio.MulticonductorNetwork"),
+          "distribution structural type mismatch");
+    pio_value_release(value);
+    pio_module_release(module);
 
-    const char *dss = "new circuit.probe basekv=12.47 bus1=src.1.2.3\n";
-    PioModule *feeder = pio_parse_str("probe.dss", dss, "dss", &error);
-    CHECK(feeder != NULL, "distribution parse through the release library failed");
-    CHECK(strcmp(pio_module_kind(feeder), "multiconductor_network") == 0,
-          "distribution kind mismatch");
-    pio_module_release(feeder);
-
-    printf("powerio %s; ABI %u; release features OK\n",
-           pio_version(), pio_abi_version());
+    printf("powerio %.*s; ABI %u\n", (int)pio_version().len, pio_version().data,
+           pio_abi_version());
     return 0;
 }

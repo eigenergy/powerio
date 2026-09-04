@@ -9,20 +9,25 @@
 //! equations, solvers, settings, or initial points, and
 //! `solution.clone()` duplicates neither its instance nor its network.
 //!
-//! The seven solutions are [`DcPfSolution`], [`AcPfSolution`],
-//! [`DcOpfSolution`], [`AcOpfSolution`], [`McAcPfSolution`],
-//! [`McAcOpfSolution`], and [`AcScucSolution`].
+//! The registered solutions include [`DcPfSolution`], [`AcPfSolution`],
+//! [`DcOpfSolution`], [`AcOpfSolution`], [`SocwrOpfSolution`],
+//! [`McAcPfSolution`], [`McAcOpfSolution`], and [`AcScucSolution`].
 
 mod balanced;
 mod multiconductor;
 mod scuc;
+mod socwr;
 
-pub use balanced::{AcOpfSolution, AcPfSolution, DcOpfSolution, DcPfSolution, GeneratorDispatch};
+pub use balanced::{
+    AcOpfSolution, AcPfSolution, DcOpfSolution, DcPfSolution, GeneratorDispatch,
+    ThreeWindingTransformerTerminalActivePower, ThreeWindingTransformerTerminalPower,
+};
 pub use multiconductor::{McAcOpfSolution, McAcPfSolution};
 pub use scuc::{
     AcScucSolution, SCUC_DEVICE_OUTPUT_SERIES, SCUC_NETWORK_OUTPUT_SERIES, ScucDeviceOutputs,
     ScucNetworkOutputs,
 };
+pub use socwr::{SocwrOpfDuals, SocwrOpfSolution, SocwrOpfValues};
 
 use serde::{Deserialize, Serialize};
 

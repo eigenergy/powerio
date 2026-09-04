@@ -1,0 +1,2 @@
+New Circuit.include_root basekv=12.47 pu=1 phases=3 bus1=source
+New LineCode.shared nphases=3 r1=0.1 x1=0.2 r0=0.3 x0=0.4 units=km

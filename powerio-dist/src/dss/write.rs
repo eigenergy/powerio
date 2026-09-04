@@ -16,12 +16,12 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use crate::convert::{Conversion, ConversionSidecar};
+use crate::convert::{TextEmission, TextSidecar};
 use crate::diagnostics::codes as C;
 use crate::model::{
-    ActivePowerReference, Configuration, ControlVoltageReference, DistBus, DistControlProfile,
-    DistIbr, DistLineCode, DistLoad, DistLoadVoltageModel, DistTransformer, DistWinding,
-    DistWindingConn, Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation, Mat,
+    ActivePowerReference, ConductorMatrix, Configuration, ControlVoltageReference, DistBus,
+    DistControlProfile, DistIbr, DistLineCode, DistLoad, DistLoadVoltageModel, DistTransformer,
+    DistWinding, DistWindingConn, Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation,
     MulticonductorNetwork, ReactivePowerReference, VoltVarControl, VoltWattControl,
 };
 
@@ -31,7 +31,7 @@ use super::{lex, prop};
 /// Options for canonical OpenDSS output.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
-pub struct DssWriteOptions {
+pub struct DssEmitOptions {
     /// Default voltage validity band emitted on loads that do not already
     /// carry `vminpu` / `vmaxpu` extras.
     pub default_load_voltage_bounds: Option<DssLoadVoltageBounds>,
@@ -40,7 +40,7 @@ pub struct DssWriteOptions {
     pub buscoords_filename: Option<String>,
 }
 
-impl Default for DssWriteOptions {
+impl Default for DssEmitOptions {
     fn default() -> Self {
         Self {
             default_load_voltage_bounds: Some(DssLoadVoltageBounds::default()),
@@ -66,16 +66,17 @@ impl Default for DssLoadVoltageBounds {
     }
 }
 
-/// Writes canonical `.dss` text from the model.
-pub fn write_dss(net: &MulticonductorNetwork) -> Conversion {
-    write_dss_with_options(net, &DssWriteOptions::default())
+/// Emits canonical `.dss` text from the model.
+#[cfg(test)]
+pub(crate) fn emit_dss_text(net: &MulticonductorNetwork) -> TextEmission {
+    emit_dss_text_with_options(net, &DssEmitOptions::default())
 }
 
-/// Writes canonical `.dss` text from the model with explicit options.
-pub fn write_dss_with_options(
+/// Emits canonical `.dss` text from the model with explicit options.
+pub(crate) fn emit_dss_text_with_options(
     net: &MulticonductorNetwork,
-    options: &DssWriteOptions,
-) -> Conversion {
+    options: &DssEmitOptions,
+) -> TextEmission {
     let mut w = DssWriter {
         out: String::new(),
         sidecars: Vec::new(),
@@ -94,14 +95,14 @@ pub fn write_dss_with_options(
         kv_estimate: estimate_bus_kv(net),
     };
     w.network(net);
-    Conversion::new(w.out, w.sidecars, w.warnings)
+    TextEmission::new(w.out, w.sidecars, w.warnings)
 }
 
 struct DssWriter {
     out: String,
-    sidecars: Vec<ConversionSidecar>,
+    sidecars: Vec<TextSidecar>,
     warnings: crate::diagnostics::Diagnostics,
-    options: DssWriteOptions,
+    options: DssEmitOptions,
     /// Bus id (lowercase) → perfectly grounded terminal names.
     grounded: BTreeMap<String, Vec<String>>,
     /// Bus id (lowercase) → ordered terminal names.
@@ -720,7 +721,7 @@ impl DssWriter {
 
     /// Lower triangle matrix text. Rows shorter than the triangle pad
     /// with 0 instead of panicking, and the padding is reported.
-    fn matrix_arg(&mut self, m: &Mat, what: &str) -> String {
+    fn matrix_arg(&mut self, m: &ConductorMatrix, what: &str) -> String {
         let mut short = false;
         let rows: Vec<String> = m
             .iter()
@@ -1028,7 +1029,7 @@ impl DssWriter {
             return;
         }
         self.line_out(&format!("Buscoords {path_out}"));
-        self.sidecars.push(ConversionSidecar { path, text });
+        self.sidecars.push(TextSidecar { path, text });
     }
 
     fn sources(&mut self, net: &MulticonductorNetwork) {
@@ -1165,7 +1166,7 @@ impl DssWriter {
             let _ = write!(s, " xmatrix={xm}");
             // cmatrix in nF per meter: each half is omega C / 2, so
             // C_nF = 2 b / (omega 1e-9).
-            let c_nf: Mat = c
+            let c_nf: ConductorMatrix = c
                 .b_from
                 .iter()
                 .map(|row| row.iter().map(|b| 2.0 * b / omega_nf).collect())
@@ -2738,11 +2739,11 @@ fn active_reference(reference: ActivePowerReference) -> &'static str {
     }
 }
 
-fn has_nonzero(m: &Mat) -> bool {
+fn has_nonzero(m: &ConductorMatrix) -> bool {
     m.iter().flatten().any(|&v| v != 0.0)
 }
 
-fn has_off_diagonal(m: &Mat) -> bool {
+fn has_off_diagonal(m: &ConductorMatrix) -> bool {
     m.iter()
         .enumerate()
         .any(|(i, row)| row.iter().enumerate().any(|(j, &v)| i != j && v != 0.0))
@@ -2756,7 +2757,7 @@ fn return_permutation(k: usize, n: usize) -> Vec<usize> {
 /// Symmetric densified read of a possibly lower triangular matrix, permuted:
 /// entry `(i, j)` of the result is the stated `(perm[i], perm[j])` value,
 /// read from either triangle.
-fn permute_symmetric(m: &Mat, perm: &[usize]) -> Mat {
+fn permute_symmetric(m: &ConductorMatrix, perm: &[usize]) -> ConductorMatrix {
     let at = |i: usize, j: usize| {
         m.get(i)
             .and_then(|row| row.get(j))
@@ -2781,11 +2782,11 @@ fn permute_padded(v: &[f64], perm: &[usize]) -> Vec<f64> {
         .collect()
 }
 
-fn diag_at(m: &Mat, i: usize) -> f64 {
+fn diag_at(m: &ConductorMatrix, i: usize) -> f64 {
     m.get(i).and_then(|row| row.get(i)).copied().unwrap_or(0.0)
 }
 
-fn matrix_scale(m: &Mat) -> f64 {
+fn matrix_scale(m: &ConductorMatrix) -> f64 {
     m.iter().flatten().fold(0.0_f64, |acc, &v| acc.max(v.abs()))
 }
 
@@ -2793,7 +2794,11 @@ fn close(a: f64, b: f64, scale: f64) -> bool {
     (a - b).abs() <= 1e-12_f64.max(scale * 1e-9)
 }
 
-fn first_diag_admittance(g: &Mat, b: &Mat, phases: usize) -> Option<(f64, f64)> {
+fn first_diag_admittance(
+    g: &ConductorMatrix,
+    b: &ConductorMatrix,
+    phases: usize,
+) -> Option<(f64, f64)> {
     (0..phases.max(1)).find_map(|i| {
         let gi = diag_at(g, i);
         let bi = diag_at(b, i);
@@ -2801,7 +2806,13 @@ fn first_diag_admittance(g: &Mat, b: &Mat, phases: usize) -> Option<(f64, f64)> 
     })
 }
 
-fn uniform_diag_admittance(g: &Mat, b: &Mat, phases: usize, g0: f64, b0: f64) -> bool {
+fn uniform_diag_admittance(
+    g: &ConductorMatrix,
+    b: &ConductorMatrix,
+    phases: usize,
+    g0: f64,
+    b0: f64,
+) -> bool {
     let scale = matrix_scale(g)
         .max(matrix_scale(b))
         .max(g0.abs())
@@ -2816,11 +2827,11 @@ fn shunt_stashed_delta(sh: &crate::model::DistShunt) -> bool {
         .is_some_and(|t| t.to_ascii_lowercase().starts_with('d') || t.eq_ignore_ascii_case("ll"))
 }
 
-fn mat_at(m: &Mat, i: usize, j: usize) -> f64 {
+fn mat_at(m: &ConductorMatrix, i: usize, j: usize) -> f64 {
     m.get(i).and_then(|row| row.get(j)).copied().unwrap_or(0.0)
 }
 
-fn looks_like_delta_shunt(b: &Mat, terminals: usize, phases: usize) -> bool {
+fn looks_like_delta_shunt(b: &ConductorMatrix, terminals: usize, phases: usize) -> bool {
     if terminals < 2 || !has_off_diagonal(b) {
         return false;
     }
@@ -2828,7 +2839,7 @@ fn looks_like_delta_shunt(b: &Mat, terminals: usize, phases: usize) -> bool {
     delta_branch_susceptance(b, &edges, terminals).is_some()
 }
 
-fn delta_branch_abs(b: &Mat, edges: &[(usize, usize)]) -> Option<f64> {
+fn delta_branch_abs(b: &ConductorMatrix, edges: &[(usize, usize)]) -> Option<f64> {
     if edges.is_empty() {
         return None;
     }
@@ -2849,7 +2860,11 @@ fn delta_branch_abs(b: &Mat, edges: &[(usize, usize)]) -> Option<f64> {
     Some(total / edges.len() as f64)
 }
 
-fn delta_branch_susceptance(b: &Mat, edges: &[(usize, usize)], terminals: usize) -> Option<f64> {
+fn delta_branch_susceptance(
+    b: &ConductorMatrix,
+    edges: &[(usize, usize)],
+    terminals: usize,
+) -> Option<f64> {
     if terminals < 2 || edges.is_empty() {
         return None;
     }
@@ -3057,7 +3072,7 @@ mod tests {
     }
 
     fn terminal_order_diagnostics(
-        out: &crate::convert::Conversion,
+        out: &crate::convert::TextEmission,
     ) -> Vec<&crate::diagnostics::Diagnostic> {
         out.diagnostics
             .iter()
@@ -3066,8 +3081,8 @@ mod tests {
     }
 
     fn roundtrip(net: &MulticonductorNetwork) -> (String, String) {
-        let first = write_dss(net);
-        let second = write_dss(&parse_dss_str(&first.text));
+        let first = emit_dss_text(net);
+        let second = emit_dss_text(&parse_dss_str(&first.text));
         (first.text, second.text)
     }
 
@@ -3082,7 +3097,7 @@ mod tests {
             loads: vec![load],
             ..MulticonductorNetworkTables::default()
         });
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         let line = out.text.lines().find(|l| l.contains("Load.ld")).unwrap();
         assert!(line.contains("vminpu=0"), "{line}");
         assert!(line.contains("vmaxpu=2"), "{line}");
@@ -3101,7 +3116,7 @@ mod tests {
             loads: vec![load],
             ..MulticonductorNetworkTables::default()
         });
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         let line = out.text.lines().find(|l| l.contains("Load.ld")).unwrap();
         assert!(line.contains("vminpu=0.8"), "{line}");
         assert!(line.contains("vmaxpu=1.2"), "{line}");
@@ -3118,11 +3133,11 @@ mod tests {
             loads: vec![load],
             ..MulticonductorNetworkTables::default()
         });
-        let options = DssWriteOptions {
+        let options = DssEmitOptions {
             default_load_voltage_bounds: None,
-            ..DssWriteOptions::default()
+            ..DssEmitOptions::default()
         };
-        let out = write_dss_with_options(&net, &options);
+        let out = emit_dss_text_with_options(&net, &options);
         let line = out.text.lines().find(|l| l.contains("Load.ld")).unwrap();
         assert!(!line.contains("vminpu="), "{line}");
         assert!(!line.contains("vmaxpu="), "{line}");
@@ -3164,13 +3179,13 @@ mod tests {
             loads: vec![load],
             ..MulticonductorNetworkTables::default()
         });
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         let line = out.text.lines().find(|l| l.contains("Load.ld")).unwrap();
         assert!(line.contains("phases=2 conn=delta"), "{line}");
         // The stash must not double emit through the extras tail.
         assert_eq!(line.matches("phases=").count(), 1, "{line}");
         assert!(
-            !out.rendered_diagnostics()
+            !out.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("2 or 3 phase"))
         );
@@ -3186,15 +3201,15 @@ mod tests {
             loads: vec![load_on("sb", &["1", "2", "3"], Configuration::Delta)],
             ..MulticonductorNetworkTables::default()
         });
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         let line = out.text.lines().find(|l| l.contains("Load.ld")).unwrap();
         assert!(line.contains("phases=3 conn=delta"), "{line}");
         assert!(
-            out.rendered_diagnostics()
+            out.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("2 or 3 phase")),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
     }
 
@@ -3217,7 +3232,7 @@ mod tests {
             loads: vec![two_wire, stashed],
             ..MulticonductorNetworkTables::default()
         });
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         let l1 = out.text.lines().find(|l| l.contains("Load.ld ")).unwrap();
         assert!(l1.contains("phases=1 conn=delta"), "{l1}");
         let l2 = out.text.lines().find(|l| l.contains("Load.ld2 ")).unwrap();
@@ -3238,14 +3253,14 @@ mod tests {
             loads: vec![load],
             ..MulticonductorNetworkTables::default()
         });
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         let hits = |needle: &str| {
-            out.rendered_diagnostics()
+            out.render_diagnostics()
                 .iter()
                 .any(|w| w.contains(needle) && w.contains("cannot represent"))
         };
-        assert!(hits("load 1"), "{:?}", out.rendered_diagnostics());
-        assert!(hits("my circuit"), "{:?}", out.rendered_diagnostics());
+        assert!(hits("load 1"), "{:?}", out.render_diagnostics());
+        assert!(hits("my circuit"), "{:?}", out.render_diagnostics());
         // The bad bus id warns at its bus_ref emission site.
         let mut net2 = net.clone();
         net2.lines_mut().push(DistLine {
@@ -3261,13 +3276,13 @@ mod tests {
             s_max: None,
             extras: Extras::new(),
         });
-        let out2 = write_dss(&net2);
+        let out2 = emit_dss_text(&net2);
         assert!(
-            out2.rendered_diagnostics()
+            out2.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("a=b") && w.contains("cannot represent")),
             "{:?}",
-            out2.rendered_diagnostics()
+            out2.render_diagnostics()
         );
     }
 
@@ -3293,15 +3308,15 @@ mod tests {
             }],
             ..MulticonductorNetworkTables::default()
         });
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         let line = out.text.lines().find(|l| l.contains("Line.l1 ")).unwrap();
         assert!(line.contains("emergamps=400"), "{line}");
         assert!(
-            out.rendered_diagnostics()
+            out.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("line l1") && w.contains("not equal on all phases")),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
     }
 
@@ -3327,22 +3342,22 @@ mod tests {
             }],
             ..MulticonductorNetworkTables::default()
         });
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         let line = out.text.lines().find(|l| l.contains("Line.l1 ")).unwrap();
         assert!(line.contains("emergamps=400"), "{line}");
         assert!(
-            !out.rendered_diagnostics()
+            !out.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("line l1") && w.contains("i_max")),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
         assert!(
-            out.rendered_diagnostics()
+            out.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("line l1") && w.contains("s_max") && w.contains("dropped")),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
     }
 
@@ -3404,13 +3419,13 @@ mod tests {
             loads: vec![load],
             ..MulticonductorNetworkTables::default()
         });
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         assert!(
-            out.rendered_diagnostics()
+            out.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("@kv") && w.contains("does not parse")),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
         // The estimate substitutes: 2400*sqrt(3)/1e3 line to line.
         let line = out.text.lines().find(|l| l.contains("Load.ld")).unwrap();
@@ -3430,7 +3445,7 @@ mod tests {
                    Set VoltageBases=[12.47]\n\
                    Calcvoltagebases\n\
                    Solve\n";
-        let out = write_dss(&parse_dss_str(src));
+        let out = emit_dss_text(&parse_dss_str(src));
         assert!(out.text.contains("Set mode=snapshot"), "{}", out.text);
         assert!(out.text.contains("Set controlmode=OFF"), "{}", out.text);
         // The writer derives these; the stored options must not double them.
@@ -3439,19 +3454,19 @@ mod tests {
         assert_eq!(out.text.matches("DefaultBaseFrequency").count(), 1);
         assert!(!out.text.to_lowercase().contains("disable"));
         assert!(
-            out.rendered_diagnostics()
+            out.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("disable Line.l1") && w.contains("not regenerated")),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
         // Solve and Calcvoltagebases re-derive; no warning claims they drop.
         assert!(
-            !out.rendered_diagnostics()
+            !out.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("`solve`"))
         );
-        let again = write_dss(&parse_dss_str(&out.text));
+        let again = emit_dss_text(&parse_dss_str(&out.text));
         assert_eq!(out.text, again.text);
     }
 
@@ -3468,13 +3483,13 @@ mod tests {
         let (first, second) = roundtrip(&net);
         let line = first.lines().find(|l| l.contains("Load.ld")).unwrap();
         assert!(line.contains("bus1=b1.1.0"), "{line}");
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         assert!(
-            out.rendered_diagnostics()
+            out.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("`a`") && w.contains("position")),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
         assert_eq!(first, second);
     }
@@ -3490,14 +3505,14 @@ mod tests {
             sources: vec![vs],
             ..MulticonductorNetworkTables::default()
         });
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         assert!(!out.text.contains("z1="), "{}", out.text);
         assert!(
-            out.rendered_diagnostics()
+            out.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("`xs` is missing")),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
     }
 
@@ -3521,21 +3536,21 @@ mod tests {
             switches: vec![sw],
             ..MulticonductorNetworkTables::default()
         });
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         assert!(!out.text.contains("r0="), "{}", out.text);
         assert!(
-            out.rendered_diagnostics()
+            out.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("pmd_rs") && w.contains("not a numeric matrix")),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
         assert!(
-            out.rendered_diagnostics()
+            out.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("i_max is empty")),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
     }
 
@@ -3594,21 +3609,17 @@ mod tests {
             transformers: vec![t],
             ..MulticonductorNetworkTables::default()
         });
-        let out = write_dss(&net); // must not panic
+        let out = emit_dss_text(&net); // must not panic
         assert!(out.text.contains("rmatrix=(1 | 0.5 0)"), "{}", out.text);
         assert!(out.text.contains("xhl=0"), "{}", out.text);
-        let has = |needle: &str| {
-            out.rendered_diagnostics()
-                .iter()
-                .any(|w| w.contains(needle))
-        };
+        let has = |needle: &str| out.render_diagnostics().iter().any(|w| w.contains(needle));
         assert!(
             has("shorter than the lower triangle"),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
-        assert!(has("xsc_pct is empty"), "{:?}", out.rendered_diagnostics());
-        assert!(has("i_max is empty"), "{:?}", out.rendered_diagnostics());
+        assert!(has("xsc_pct is empty"), "{:?}", out.render_diagnostics());
+        assert!(has("i_max is empty"), "{:?}", out.render_diagnostics());
     }
 
     #[test]
@@ -3632,7 +3643,7 @@ mod tests {
             capacitors: vec![cap],
             ..MulticonductorNetworkTables::default()
         });
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         let line = out
             .text
             .lines()
@@ -3642,11 +3653,11 @@ mod tests {
         assert!(line.contains("kv=4.16"), "{line}");
         assert!(line.contains("phases=3"), "{line}");
         assert!(
-            !out.rendered_diagnostics()
+            !out.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("dropped")),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
 
         // And it comes back: the reader lowers a dss Capacitor to a shunt B
@@ -3685,7 +3696,7 @@ mod tests {
             loads: vec![unbalanced, balanced],
             ..MulticonductorNetworkTables::default()
         });
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         let loads: Vec<&str> = out
             .text
             .lines()
@@ -3739,7 +3750,7 @@ mod tests {
             loads: vec![l],
             ..MulticonductorNetworkTables::default()
         });
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         let loads: Vec<&str> = out
             .text
             .lines()
@@ -3762,7 +3773,7 @@ mod tests {
 
     #[test]
     fn misordered_grounded_returns_reorder_when_nothing_is_indexed() {
-        let out = write_dss(&terminal_order_network(&["p1", "n", "p2"]));
+        let out = emit_dss_text(&terminal_order_network(&["p1", "n", "p2"]));
         let diagnostics = terminal_order_diagnostics(&out);
 
         // The four element classes and the switch carry no conductor indexed
@@ -3780,7 +3791,7 @@ mod tests {
             .iter()
             .filter(|d| d.message().contains("moved last"))
             .count();
-        assert_eq!(reordered, 5, "{:?}", out.rendered_diagnostics());
+        assert_eq!(reordered, 5, "{:?}", out.render_diagnostics());
 
         for expected in [
             "New Capacitor.cap bus1=lv.1.3.0 ",
@@ -3806,13 +3817,13 @@ mod tests {
             vec![vec![1.0], vec![0.2, 2.0], vec![0.3, 0.4, 3.0]],
             vec![vec![10.0], vec![0.0, 20.0], vec![0.0, 0.0, 30.0]],
         ));
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
 
         assert_eq!(
             terminal_order_diagnostics(&out).len(),
             0,
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
         // The line references the permuted copy and both node lists move the
         // return last.
@@ -3848,14 +3859,14 @@ mod tests {
         // errors stand for the line and the switch.
         net.lines_mut()[0].terminal_map_to = strings(&["n", "p1", "p2"]);
         net.switches_mut()[0].terminal_map_to = strings(&["n", "p1", "p2"]);
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         let diagnostics = terminal_order_diagnostics(&out);
         assert!(
             diagnostics
                 .iter()
                 .any(|d| d.details()["class"] == "switch" && d.details()["endpoint"] == "bus2"),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
         assert!(
             out.text.contains("New Line.sw1 bus1=lv.1.0.3 "),
@@ -3866,7 +3877,7 @@ mod tests {
 
     #[test]
     fn grounded_return_last_needs_no_terminal_order_diagnostic() {
-        let out = write_dss(&terminal_order_network(&["p1", "p2", "n"]));
+        let out = emit_dss_text(&terminal_order_network(&["p1", "p2", "n"]));
         assert!(
             terminal_order_diagnostics(&out).is_empty(),
             "{:?}",
@@ -3896,7 +3907,7 @@ mod tests {
             loads: vec![l],
             ..MulticonductorNetworkTables::default()
         });
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         let loads: Vec<&str> = out
             .text
             .lines()
@@ -3940,7 +3951,7 @@ mod tests {
             loads: vec![l],
             ..MulticonductorNetworkTables::default()
         });
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         assert_eq!(
             out.text.lines().filter(|l| l.contains("New Load.")).count(),
             1,
@@ -3948,11 +3959,11 @@ mod tests {
             out.text
         );
         assert!(
-            out.rendered_diagnostics()
+            out.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("addresses 2") && w.contains("loses them")),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
     }
 
@@ -3991,7 +4002,7 @@ mod tests {
             transformers: vec![t],
             ..MulticonductorNetworkTables::default()
         });
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         let line = out
             .text
             .lines()
@@ -4002,11 +4013,11 @@ mod tests {
         // node order fault: the two halves are series additive.
         assert!(line.contains("buses=(sb.1.0, lv.1.0, lv.0.3)"), "{line}");
         assert!(
-            out.rendered_diagnostics()
+            out.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("collapsed secondary")),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
     }
 
@@ -4030,7 +4041,7 @@ mod tests {
             loads: vec![l],
             ..MulticonductorNetworkTables::default()
         });
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         assert_eq!(
             out.text.lines().filter(|l| l.contains("New Load.")).count(),
             1,
@@ -4038,11 +4049,11 @@ mod tests {
             out.text
         );
         assert!(
-            out.rendered_diagnostics()
+            out.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("per phase power on a delta load")),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
     }
 
@@ -4067,7 +4078,7 @@ mod tests {
             shunts: vec![sh],
             ..MulticonductorNetworkTables::default()
         });
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         let kv = 2400.0 * 3f64.sqrt() / 1e3;
         let v_phase = kv * 1e3 / 3f64.sqrt();
         let expected = b_phase * v_phase * v_phase * 2.0 / 1e3;
@@ -4105,7 +4116,7 @@ mod tests {
             shunts: vec![sh],
             ..MulticonductorNetworkTables::default()
         });
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         let line = out
             .text
             .lines()
@@ -4137,7 +4148,7 @@ mod tests {
             shunts: vec![sh],
             ..MulticonductorNetworkTables::default()
         });
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         let line = out
             .text
             .lines()
@@ -4181,7 +4192,7 @@ mod tests {
             shunts: vec![sh],
             ..MulticonductorNetworkTables::default()
         });
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         let line = out
             .text
             .lines()
@@ -4189,11 +4200,11 @@ mod tests {
             .unwrap_or_else(|| panic!("no capacitor emitted in:\n{}", out.text));
         assert!(line.contains("phases=3 conn=delta"), "{line}");
         assert!(
-            !out.rendered_diagnostics()
+            !out.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("off diagonal")),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
     }
 
@@ -4220,7 +4231,7 @@ mod tests {
             shunts: vec![sh],
             ..MulticonductorNetworkTables::default()
         });
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         let line = out
             .text
             .lines()
@@ -4228,11 +4239,11 @@ mod tests {
             .unwrap_or_else(|| panic!("no capacitor emitted in:\n{}", out.text));
         assert!(line.contains("conn=wye"), "{line}");
         assert!(
-            out.rendered_diagnostics()
+            out.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("off diagonal")),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
     }
 
@@ -4262,7 +4273,7 @@ mod tests {
             shunts: vec![sh],
             ..MulticonductorNetworkTables::default()
         });
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         let line = out
             .text
             .lines()
@@ -4270,11 +4281,11 @@ mod tests {
             .unwrap_or_else(|| panic!("no capacitor emitted in:\n{}", out.text));
         assert!(line.contains("conn=delta"), "{line}");
         assert!(
-            out.rendered_diagnostics()
+            out.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("no scalar capacitor expression")),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
     }
 
@@ -4288,7 +4299,7 @@ mod tests {
                    Set qux=[a ) b]\n\
                    Solve\n";
         let net = parse_dss_str(src);
-        let first = write_dss(&net);
+        let first = emit_dss_text(&net);
         for line in [
             "Set foo=(a!b)",
             "Set bar=((abc)",
@@ -4303,11 +4314,11 @@ mod tests {
         }
         assert!(
             !first
-                .rendered_diagnostics()
+                .render_diagnostics()
                 .iter()
                 .any(|w| w.contains("emitted as written")),
             "{:?}",
-            first.rendered_diagnostics()
+            first.render_diagnostics()
         );
         // The reader strips the wrapper back off...
         let reparsed = parse_dss_str(&first.text);
@@ -4323,7 +4334,7 @@ mod tests {
         assert_eq!(opt("baz"), Some("x ] y"));
         assert_eq!(opt("qux"), Some("a ) b"));
         // ...and the second write picks the same wrapper from the bare value.
-        let second = write_dss(&reparsed);
+        let second = emit_dss_text(&reparsed);
         assert_eq!(first.text, second.text);
     }
 
@@ -4371,16 +4382,16 @@ mod tests {
             ..MulticonductorNetworkTables::default()
         });
         net.options_mut().push(("foo".into(), bad.into()));
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         assert!(out.text.contains(&format!("Set foo={bad}")), "{}", out.text);
         assert!(out.text.contains(&format!("daily={bad}")), "{}", out.text);
         let warned = |needle: &str| {
-            out.rendered_diagnostics()
+            out.render_diagnostics()
                 .iter()
                 .any(|w| w.contains(needle) && w.contains("emitted as written"))
         };
-        assert!(warned("option `foo`"), "{:?}", out.rendered_diagnostics());
-        assert!(warned("`daily`"), "{:?}", out.rendered_diagnostics());
+        assert!(warned("option `foo`"), "{:?}", out.render_diagnostics());
+        assert!(warned("`daily`"), "{:?}", out.render_diagnostics());
     }
 
     #[test]
@@ -4390,7 +4401,7 @@ mod tests {
         let net = parse_dss_str(dss);
         let load = &net.loads()[0];
         assert_eq!(load.extras.get("daily").and_then(|v| v.as_str()), Some(""));
-        let w1 = write_dss(&net).text;
+        let w1 = emit_dss_text(&net).text;
         let again = parse_dss_str(&w1);
         let load2 = &again.loads()[0];
         assert_eq!(load2.extras.get("daily").and_then(|v| v.as_str()), Some(""));
@@ -4398,7 +4409,7 @@ mod tests {
             load2.extras.get("duty").and_then(|v| v.as_str()),
             Some("sh")
         );
-        assert_eq!(w1, write_dss(&again).text);
+        assert_eq!(w1, emit_dss_text(&again).text);
     }
 
     #[test]
@@ -4410,7 +4421,7 @@ mod tests {
                    Set ca=600\nSet default=2.5\nsolve\n";
         let net = parse_dss_str(dss);
         assert!((net.base_frequency() - 60.0).abs() < 1e-12);
-        let out = write_dss(&net).text;
+        let out = emit_dss_text(&net).text;
         assert!(out.contains("Set ca=600"), "{out}");
         assert!(out.contains("Set default=2.5"), "{out}");
     }
@@ -4426,7 +4437,7 @@ mod tests {
                    Solve\n";
         let net = parse_dss_str(src);
         assert!((net.base_frequency() - 50.0).abs() < 1e-12);
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         assert!(
             out.text.contains("Set DefaultBaseFrequency=50"),
             "{}",
@@ -4449,7 +4460,7 @@ mod tests {
         );
         assert!(!out.text.contains("Set volt="), "{}", out.text);
         assert!(!out.text.contains("Set defaultb="), "{}", out.text);
-        let second = write_dss(&parse_dss_str(&out.text));
+        let second = emit_dss_text(&parse_dss_str(&out.text));
         assert_eq!(out.text, second.text);
     }
 
@@ -4466,14 +4477,14 @@ mod tests {
             sources: vec![vs],
             ..MulticonductorNetworkTables::default()
         });
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         for key in ["basekv", "pu", "angle"] {
             assert!(
-                out.rendered_diagnostics()
+                out.render_diagnostics()
                     .iter()
                     .any(|w| w.contains(&format!("{key} extra")) && w.contains("does not parse")),
                 "{key}: {:?}",
-                out.rendered_diagnostics()
+                out.render_diagnostics()
             );
         }
         // The derived values substitute.
@@ -4498,13 +4509,13 @@ mod tests {
         assert!(line.contains("phases=3"), "{line}");
         assert!(line.contains("bus1=sb.1.2.3.0"), "{line}");
         assert_eq!(first, second);
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         assert!(
-            out.rendered_diagnostics()
+            out.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("phases=3") && w.contains("positive")),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
     }
 
@@ -4543,7 +4554,7 @@ mod tests {
             ..MulticonductorNetworkTables::default()
         });
 
-        let out = write_dss(&net).text;
+        let out = emit_dss_text(&net).text;
         let circuit = out.lines().find(|l| l.starts_with("New Circuit")).unwrap();
         assert!(circuit.contains("bus1=Bx.1.2.3.0"), "{circuit}");
         assert!(
@@ -4572,7 +4583,7 @@ mod tests {
             sources: vec![vs],
             ..MulticonductorNetworkTables::default()
         });
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         let line = out.text.lines().find(|l| l.contains("Circuit.")).unwrap();
         assert!(line.contains("phases=3"), "{line}");
         assert_eq!(line.matches("phases=").count(), 1, "{line}");
@@ -4601,35 +4612,35 @@ mod tests {
             loads: vec![load],
             ..MulticonductorNetworkTables::default()
         });
-        let first = write_dss(&net);
+        let first = emit_dss_text(&net);
         let hits = |warnings: &[String], name: &str| {
             warnings
                 .iter()
                 .any(|w| w.contains(name) && w.contains("materializes a grounded neutral"))
         };
         assert!(
-            hits(&first.rendered_diagnostics(), "vsource source"),
+            hits(&first.render_diagnostics(), "vsource source"),
             "{:?}",
-            first.rendered_diagnostics()
+            first.render_diagnostics()
         );
         assert!(
-            hits(&first.rendered_diagnostics(), "load ld"),
+            hits(&first.render_diagnostics(), "load ld"),
             "{:?}",
-            first.rendered_diagnostics()
+            first.render_diagnostics()
         );
-        let second = write_dss(&parse_dss_str(&first.text));
+        let second = emit_dss_text(&parse_dss_str(&first.text));
         assert_ne!(first.text, second.text);
         assert!(
-            !hits(&second.rendered_diagnostics(), "vsource"),
+            !hits(&second.render_diagnostics(), "vsource"),
             "{:?}",
-            second.rendered_diagnostics()
+            second.render_diagnostics()
         );
         assert!(
-            !hits(&second.rendered_diagnostics(), "load"),
+            !hits(&second.render_diagnostics(), "load"),
             "{:?}",
-            second.rendered_diagnostics()
+            second.render_diagnostics()
         );
-        let third_write = write_dss(&parse_dss_str(&second.text));
+        let third_write = emit_dss_text(&parse_dss_str(&second.text));
         assert_eq!(second.text, third_write.text);
     }
 
@@ -4662,7 +4673,7 @@ mod tests {
             generators: vec![g],
             ..MulticonductorNetworkTables::default()
         });
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
         let line = out
             .text
             .lines()
@@ -4701,12 +4712,12 @@ mod tests {
             ..MulticonductorNetworkTables::default()
         });
 
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
 
         assert!(
-            out.rendered_diagnostics().is_empty(),
+            out.render_diagnostics().is_empty(),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
         let line = out
             .text
@@ -4767,12 +4778,12 @@ mod tests {
             ..MulticonductorNetworkTables::default()
         });
 
-        let out = write_dss(&net);
+        let out = emit_dss_text(&net);
 
         assert!(
-            out.rendered_diagnostics().is_empty(),
+            out.render_diagnostics().is_empty(),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
         let pv = out
             .text

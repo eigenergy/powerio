@@ -17,14 +17,16 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use powerio_tx::format::powerworld::{parse_aux, parse_pwd, parse_pwd_display, parse_pwd_file};
-use powerio_tx::{DisplayData, PwdDisplay, PwdSubstation, parse_display_bytes, parse_display_file};
+use powerio_tx::PwdSubstation;
+use powerio_tx::format::powerworld::{
+    __parse_aux, __parse_pwd, __parse_pwd_display, __parse_pwd_file,
+};
 
 /// (number, name, latitude, longitude) per aux Substation row. Handles both
 /// naming vocabularies (classic SubNum/SubName, 2022 Number/Name).
 fn aux_substations(path: &Path) -> Vec<(u32, String, f64, f64)> {
     let text = fs::read_to_string(path).unwrap();
-    let aux = parse_aux(&text).unwrap();
+    let aux = __parse_aux(&text).unwrap();
     let sub = aux
         .data_of("Substation")
         .next()
@@ -66,13 +68,6 @@ fn join(pwd: &[PwdSubstation], aux: &[(u32, String, f64, f64)]) -> Vec<(f64, f64
         .collect()
 }
 
-fn powerworld_display(data: DisplayData) -> PwdDisplay {
-    match data {
-        DisplayData::PowerWorld(display) => display,
-        _ => unreachable!("v0.2.2 only has PowerWorld display data"),
-    }
-}
-
 /// Pearson r² between paired samples.
 fn r_squared(pairs: &[(f64, f64)]) -> f64 {
     let n = pairs.len() as f64;
@@ -107,7 +102,8 @@ fn assert_projection_fit(joined: &[(f64, f64, f64, f64)], floor: f64, label: &st
 /// and name, coordinates correlated with the aux geography.
 #[test]
 fn activsg200_pwd_matches_its_aux_sibling() {
-    let pwd = parse_pwd(&fs::read(common::powerworld_vendored("ACTIVSg200.pwd")).unwrap()).unwrap();
+    let pwd =
+        __parse_pwd(&fs::read(common::powerworld_vendored("ACTIVSg200.pwd")).unwrap()).unwrap();
     assert_eq!(pwd.len(), 111);
     let aux = aux_substations(&common::powerworld_vendored("ACTIVSg200.aux"));
     let joined = join(&pwd, &aux);
@@ -118,11 +114,10 @@ fn activsg200_pwd_matches_its_aux_sibling() {
 fn pwd_display_metadata_and_file_helper_match_byte_parser() {
     let path = common::powerworld_vendored("ACTIVSg200.pwd");
     let bytes = fs::read(&path).unwrap();
-    let display = parse_pwd_display(&bytes).unwrap();
-    let from_file = parse_pwd_file(&path).unwrap();
-    let legacy = parse_pwd(&bytes).unwrap();
-    let generic_file = powerworld_display(parse_display_file(&path, None).unwrap());
-    let generic_bytes = powerworld_display(parse_display_bytes(&bytes, "pwd").unwrap());
+    let display = __parse_pwd_display(&bytes).unwrap();
+    let from_file = __parse_pwd_file(&path).unwrap();
+    let legacy = __parse_pwd(&bytes).unwrap();
+    let by_file = __parse_pwd_file(&path).unwrap();
 
     assert_eq!(display.canvas_width, 200);
     assert_eq!(display.canvas_height, 200);
@@ -130,28 +125,23 @@ fn pwd_display_metadata_and_file_helper_match_byte_parser() {
     assert_eq!(display.substations.len(), 111);
     assert_eq!(from_file, display);
     assert_eq!(legacy, display.substations);
-    assert_eq!(generic_file, display);
-    assert_eq!(generic_bytes, display);
+    assert_eq!(by_file, display);
 }
 
+/// The symbol table lifts into a diagram space layer with one feature per
+/// substation, which is what the facade's `parse` returns for a `.pwd`.
 #[test]
-fn display_api_accepts_powerworld_aliases() {
+fn a_display_file_lifts_into_a_diagram_layer() {
     let path = common::powerworld_vendored("ACTIVSg200.pwd");
-    let bytes = fs::read(&path).unwrap();
-    let expected = powerworld_display(parse_display_file(&path, None).unwrap());
-
-    for alias in ["pwd", "powerworld-pwd", "powerworld-display"] {
-        assert_eq!(
-            powerworld_display(parse_display_file(&path, Some(alias)).unwrap()),
-            expected,
-            "file alias {alias}"
-        );
-        assert_eq!(
-            powerworld_display(parse_display_bytes(&bytes, alias).unwrap()),
-            expected,
-            "byte alias {alias}"
-        );
-    }
+    let display = __parse_pwd_file(&path).unwrap();
+    let layer = powerio_tx::geo::to_geo_layer_from_pwd(&display);
+    assert_eq!(layer.features.len(), display.substations.len());
+    let powerio_tx::geo::CoordinateSpace::Diagram { canvas } = &layer.space else {
+        panic!("a display file places symbols in diagram space");
+    };
+    let canvas = canvas.as_ref().expect("the display states its canvas");
+    assert_eq!(canvas.width, Some(f64::from(display.canvas_width)));
+    assert_eq!(canvas.height, Some(f64::from(display.canvas_height)));
 }
 
 #[test]
@@ -164,7 +154,7 @@ fn pwd_is_not_a_network_case() {
         Some("powerworld-display"),
     ] {
         let err = parse_file(&path, from).unwrap_err().to_string();
-        assert!(err.contains("parse_display_file"), "{err}");
+        assert!(err.contains("powerio.GeoLayer"), "{err}");
     }
 }
 
@@ -179,7 +169,7 @@ fn texas2000_june2016_pwd_matches_its_aux_sibling() {
         eprintln!("skipped: run benchmarks/fetch_powerworld.sh");
         return;
     };
-    let pwd = parse_pwd(&fs::read(pwd_path).unwrap()).unwrap();
+    let pwd = __parse_pwd(&fs::read(pwd_path).unwrap()).unwrap();
     assert_eq!(pwd.len(), 1500);
     let joined = join(&pwd, &aux_substations(&aux_path));
     // The 2016 writer projected with a different transform (linear in
@@ -197,7 +187,7 @@ fn activsg2000_v19_pwd_decodes() {
         eprintln!("skipped: run benchmarks/fetch_powerworld.sh");
         return;
     };
-    let pwd = parse_pwd(&fs::read(path).unwrap()).unwrap();
+    let pwd = __parse_pwd(&fs::read(path).unwrap()).unwrap();
     assert_eq!(pwd.len(), 1250);
 }
 
@@ -242,7 +232,7 @@ fn local_corpus_pwd_siblings_match_their_auxes() {
             eprintln!("skipped {label}: no .pwd/.aux siblings next to the export");
             continue;
         }
-        let pwd = parse_pwd(&fs::read(pwd_path).unwrap()).unwrap();
+        let pwd = __parse_pwd(&fs::read(pwd_path).unwrap()).unwrap();
         assert_eq!(pwd.len(), *count, "{label}");
         let joined = join(&pwd, &aux_substations(&aux_path));
         assert_projection_fit(&joined, *floor, label);
@@ -276,13 +266,13 @@ fn corrupt_display_files_never_panic() {
         .step_by(stride)
         .chain(pwd.len().saturating_sub(48)..pwd.len())
     {
-        let _ = parse_pwd(&pwd[..len]);
+        let _ = __parse_pwd(&pwd[..len]);
     }
     let mut copy = pwd.clone();
     for i in (0..pwd.len()).step_by(stride) {
         for byte in [0x00, 0xff] {
             copy[i] = byte;
-            let _ = parse_pwd(&copy);
+            let _ = __parse_pwd(&copy);
         }
         copy[i] = pwd[i];
     }
@@ -294,13 +284,13 @@ fn corrupt_display_files_never_panic() {
 #[test]
 fn rejects_non_display_inputs() {
     let pwb = fs::read(common::powerworld_vendored("ACTIVSg200.pwb")).unwrap();
-    let err = parse_pwd(&pwb).unwrap_err().to_string();
+    let err = __parse_pwd(&pwb).unwrap_err().to_string();
     assert!(
         err.contains("not a recognized PowerWorld display file"),
         "{err}"
     );
 
-    let err = parse_pwd(&[0u8; 16]).unwrap_err().to_string();
+    let err = __parse_pwd(&[0u8; 16]).unwrap_err().to_string();
     assert!(
         err.contains("not a recognized PowerWorld display file"),
         "{err}"
@@ -313,9 +303,38 @@ fn rejects_non_display_inputs() {
     headless.extend_from_slice(&[0u8; 14]);
     headless.extend_from_slice(&0xa83cu32.to_le_bytes()); // stamp at offset 22
     headless.extend_from_slice(&[0u8; 4096]);
-    let display = parse_pwd_display(&headless).unwrap();
+    let display = __parse_pwd_display(&headless).unwrap();
     assert_eq!(display.canvas_width, 200);
     assert_eq!(display.canvas_height, 200);
     assert_eq!(display.stamp, 0xa83c);
     assert!(display.substations.is_empty());
+}
+
+/// A display header can carry a canvas title, which shifts the per file
+/// stamp past the title text: the fixed offset an untitled save puts it at
+/// then holds title bytes and reads as a zero stamp, and the reader refused
+/// such a file as unrecognized. The same save with a title inserted decodes
+/// to the same substations, since the stamp is only an anchor and every
+/// drawing record repeats it.
+#[test]
+fn a_titled_display_header_finds_the_stamp_past_its_title() {
+    let bytes = fs::read(common::powerworld_vendored("ACTIVSg200.pwd")).unwrap();
+    let untitled = __parse_pwd(&bytes).unwrap();
+    assert!(!untitled.is_empty());
+
+    let title = b"CANVAS";
+    let mut titled = Vec::with_capacity(bytes.len() + title.len());
+    titled.extend_from_slice(&bytes[..10]);
+    titled.extend_from_slice(&u16::try_from(title.len()).unwrap().to_le_bytes());
+    titled.extend_from_slice(&bytes[12..14]);
+    titled.extend_from_slice(title);
+    titled.extend_from_slice(&bytes[14..]);
+
+    assert_eq!(__parse_pwd(&titled).unwrap(), untitled);
+    let display = __parse_pwd_display(&titled).unwrap();
+    let plain = __parse_pwd_display(&bytes).unwrap();
+    assert_eq!(
+        (display.canvas_width, display.canvas_height),
+        (plain.canvas_width, plain.canvas_height)
+    );
 }

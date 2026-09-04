@@ -90,15 +90,14 @@ jobs:
     - uses: dtolnay/rust-toolchain@stable
     - uses: Swatinem/rust-cache@v2
     - name: Check generated JSON schemas
-      # `git status --porcelain` rather than `git diff`: a version bump moves
-      # the lineage, so the generator writes a NEW directory, and a diff of
-      # tracked files reports nothing while the document goes uncommitted.
+      # `git status --porcelain` catches both an edited schema and an
+      # accidentally untracked schema file.
       run: |
         cargo run -p powerio --example generate_schemas --features schema -- docs/schema
         if [ -n "$(git status --porcelain -- docs/schema)" ]; then
           git status --porcelain -- docs/schema
           git diff -- docs/schema
-          echo "docs/schema is stale or missing this build's lineage; commit it" >&2
+          echo "docs/schema does not contain the generated current PowerIO IR schema" >&2
           exit 1
         fi
     - name: Check generated BMOPF examples
@@ -232,10 +231,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v6
-      with:
-        # The export monotonicity gate compares this head against its stack
-        # parent, which a shallow clone cannot reach.
-        fetch-depth: 0
     - uses: dtolnay/rust-toolchain@stable
       with:
         components: clippy
@@ -247,25 +242,16 @@ jobs:
     # of sync with include/powerio.h.
     - name: Header symbol parity
       run: bash scripts/capi-header-parity.sh
-    # The abi-v6 removed-surface enumeration must equal the v0.9.0 -> current
-    # header set difference; this job's full-history checkout has the tag.
-    - name: Removed surface enumeration
-      run: bash scripts/capi-removed-surface.sh
-    - name: ABI delta and necessity
-      run: python3 scripts/abi-delta.py
-    - name: Value kind parity
-      run: bash scripts/check-value-kinds.sh
+    - name: ABI 7 surface
+      run: POWERIO_JL_OPTIONAL=1 bash scripts/check-capi-v7.sh
+    - name: Structural value type parity
+      run: bash scripts/check-value-types.sh
     - name: Diagnostic parity
       run: bash scripts/check-diagnostic-parity.sh
     # Doc comments render verbatim into powerio.h; check they agree with the
     # signatures, table ids, and ownership verbs they describe.
     - name: Doc comment integrity
       run: python3 scripts/capi-doc-integrity.py
-    # A declared entry point may leave the header only on a head that raises
-    # PIO_ABI_VERSION. This job has no PowerIO.jl checkout; the companion
-    # clause runs in julia-binding.yml, which has both trees.
-    - name: Export monotonicity
-      run: POWERIO_JL_OPTIONAL=1 bash scripts/capi-export-monotonicity.sh
     # Symbol parity compares names only. Regenerating and diffing catches what
     # names can't: a reordered argument, a changed type, a struct field. cbindgen
     # gates optional features behind #ifdef, so one run covers every feature set

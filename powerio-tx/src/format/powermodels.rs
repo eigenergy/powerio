@@ -4,9 +4,9 @@
 //! PowerModels itself exports: powers are divided by `baseMVA`, angles are in
 //! radians, and gen cost coefficients are rescaled to the per-unit basis (a
 //! polynomial term `p^j` by `baseMVA^j`, a piecewise curve's MW breakpoints by
-//! `1/baseMVA`). Because the data already declares per unit, `parse_file(out.json)`
-//! reads it with PowerModels' default `validate = true` without rerunning
-//! `make_per_unit!`, so it lands on the same network as `parse_file(case.m)`.
+//! `1/baseMVA`). Because the data already declares per unit, PowerModels reads
+//! it with its default `validate = true` without rerunning `make_per_unit!`, so
+//! it lands on the same network as the original MATPOWER case.
 //! Loads and shunts are first-class on the `BalancedNetwork`; branch terminal admittance
 //! writes as PowerModels' `g_fr`/`b_fr`/`g_to`/`b_to` fields, with MATPOWER
 //! `BR_B` expanded only when no richer terminal model is present. `transformer`
@@ -28,19 +28,19 @@ use super::decode::{
     lenient_bool, lenient_f64, lenient_flag, lenient_i64, lenient_string, lenient_table,
     lenient_u64, sorted_rows,
 };
-use super::{Conversion, finish, jnum, warn_extra_branch_rating_sets};
+use super::{TextEmission, finish, jnum, warn_extra_branch_rating_sets};
 use crate::diagnostics::codes::EMIT_POWERMODELS as F;
 use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
     BalancedNetwork, BalancedNetworkTables, Branch, BranchCharging, BranchCurrentRatings,
-    BranchSolution, Bus, BusId, BusType, GEN_EXTRA_KEYS, GenCost, Generator, Hvdc, Load,
-    LoadVoltageModel, Shunt, SourceFormat, Storage, Switch,
+    BranchSolution, Bus, BusId, BusType, GEN_EXTRA_KEYS, GenCost, Generator, GeneratorEnergySource,
+    Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat, Storage, Switch,
 };
 use crate::normalize::{self, GEN_PU_KEYS};
 use crate::{Error, Result};
 
 #[must_use]
-pub fn write_powermodels_json(net: &BalancedNetwork) -> Conversion {
+pub fn write_powermodels_json(net: &BalancedNetwork) -> TextEmission {
     let mut warnings = Diagnostics::new();
 
     // Per-unit write factors, the exact inverse of the reader's pscale/ascale:
@@ -107,7 +107,7 @@ pub fn write_powermodels_json(net: &BalancedNetwork) -> Conversion {
             net.transformers_3w().len()
         ));
     }
-    super::warn_dropped_areas(&F, "PowerModels JSON", net, &mut warnings);
+    super::warn_dropped_areas(&F, "PowerModels JSON", true, net, &mut warnings);
     let voltage_loads = net
         .loads()
         .iter()
@@ -187,12 +187,12 @@ fn branch_obj(br: &Branch, idx: usize, p: f64, a: f64) -> Value {
     m.insert("t_bus".into(), Value::from(br.to.0 as u64));
     m.insert("br_r".into(), jnum(br.r));
     m.insert("br_x".into(), jnum(br.x));
-    let charging = br.terminal_charging();
+    let charging = br.calc_terminal_charging();
     m.insert("b_fr".into(), jnum(charging.b_fr));
     m.insert("b_to".into(), jnum(charging.b_to));
     m.insert("g_fr".into(), jnum(charging.g_fr));
     m.insert("g_to".into(), jnum(charging.g_to));
-    m.insert("tap".into(), jnum(br.effective_tap()));
+    m.insert("tap".into(), jnum(br.calc_effective_tap()));
     m.insert("shift".into(), jnum(br.shift * a));
     m.insert("br_status".into(), status_int(br.in_service));
     m.insert("angmin".into(), jnum(br.angmin * a));
@@ -492,6 +492,9 @@ pub(crate) fn parse_powermodels_json_source(
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
         geo: None,
+        case_metadata: crate::network::CaseMetadata::default(),
+        detailed_connectivity: None,
+        generated_uids: std::collections::BTreeSet::default(),
         buses: sorted_rows(document.bus, |row| row.index)
             .into_iter()
             .map(|(_, row)| read_bus(row, ascale))
@@ -507,6 +510,7 @@ pub(crate) fn parse_powermodels_json_source(
             .map(|(_, row)| read_shunt(row, pscale))
             .collect::<Vec<_>>()
             .into(),
+        static_var_compensators: Vec::new().into(),
         branches: read_branches(document.branch, pscale, ascale, warnings).into(),
         switches: sorted_rows(document.switch, |row| row.index)
             .into_iter()
@@ -688,6 +692,7 @@ fn read_shunt(row: ShuntRow, pscale: f64) -> Shunt {
         g: row.gs.unwrap_or(0.0) * pscale,
         b: row.bs.unwrap_or(0.0) * pscale,
         in_service: row.status.unwrap_or(true),
+        section_count: None,
         control: None,
         uid: None,
         extras: row.extras,
@@ -827,6 +832,7 @@ fn read_branch(
     let b_fr = row.b_fr.unwrap_or(0.0);
     let b_to = row.b_to.unwrap_or(0.0);
     Branch {
+        name: None,
         from: BusId(row.f_bus.unwrap_or(0) as usize),
         to: BusId(row.t_bus.unwrap_or(0) as usize),
         r: row.br_r.unwrap_or(0.0),
@@ -961,6 +967,7 @@ fn read_gen(row: &GenRow, pscale: f64, base_mva: f64, per_unit: bool) -> Generat
     let cost = row.cost.read(base_mva, per_unit);
     Generator {
         bus: BusId(row.gen_bus.unwrap_or(0) as usize),
+        energy_source: GeneratorEnergySource::default(),
         pg: row.pg.unwrap_or(0.0) * pscale,
         qg: row.qg.unwrap_or(0.0) * pscale,
         // The writer emits an unbounded limit (±Inf) as JSON null; read a missing
@@ -974,7 +981,10 @@ fn read_gen(row: &GenRow, pscale: f64, base_mva: f64, per_unit: bool) -> Generat
         in_service: row.gen_status.unwrap_or(true),
         cost,
         caps,
+        voltage_regulation_on: true,
+        regulating_terminal: None,
         regulated_bus: None,
+        active_power_control: None,
         uid: None,
     }
 }
@@ -1143,6 +1153,11 @@ fn read_hvdc(row: DclineRow, pscale: f64, base_mva: f64, per_unit: bool) -> Hvdc
         qmaxt: row.qmaxt.unwrap_or(f64::INFINITY) * pscale,
         loss0: row.loss0.unwrap_or(0.0) * pscale,
         loss1: row.loss1.unwrap_or(0.0),
+        resistance_ohm: None,
+        nominal_voltage_kv: None,
+        converters_mode: None,
+        converter1: None,
+        converter2: None,
         cost,
         uid: None,
         extras: row.extras,
@@ -1216,6 +1231,7 @@ fn read_storage(row: StorageRow, pscale: f64) -> Storage {
         p_loss: row.p_loss.unwrap_or(0.0) * pscale,
         q_loss: row.q_loss.unwrap_or(0.0) * pscale,
         in_service: row.status.unwrap_or(true),
+        active_power_control: None,
         uid: None,
         extras: row.extras,
     }

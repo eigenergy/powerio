@@ -4,15 +4,10 @@
 //! JSON has no `Inf`/`NaN` literal. A nonfinite `f64` is written as one of
 //! three strings — `"Infinity"`, `"-Infinity"`, `"NaN"` — and a float
 //! position reads back either a number or one of those spellings, so every
-//! value the library holds round trips through model JSON and the
-//! `.pio.json` document. Readers legitimately produce nonfinite values (an
+//! value the library holds round trips through PowerIO IR. Readers
+//! legitimately produce nonfinite values (an
 //! absent reactive limit is `Inf` in MATPOWER, PowerModels, pandapower, and
 //! PyPSA), so the transport must carry them or refuse real cases. The
-//! multiconductor bound fields additionally accept the `null` a pre-0.9
-//! writer emitted, restored by field role (see `powerio-dist`'s `nonfinite`
-//! module); that leniency is read side only — writes spell strings
-//! everywhere.
-//!
 //! The mechanism is a pair of forwarding wrappers threaded through serde:
 //! [`NonFiniteSer`] intercepts `serialize_f64`/`serialize_f32`, and
 //! [`NonFiniteDe`] intercepts `deserialize_f64`/`deserialize_f32`, each
@@ -20,8 +15,8 @@
 //! pass through untouched because interception is keyed on the *type* being
 //! an `f64`, never on a string's content. `BalancedNetwork`'s `Serialize`
 //! and `Deserialize` impls route through the wrappers, so the spelling holds
-//! on every serialization route (model JSON, the `.pio.json` payload, the C
-//! ABI), including serde's internal buffering for tagged enums. Interception
+//! when a network is stored inside PowerIO IR, including serde's internal
+//! buffering for tagged enums. Interception
 //! applies only to human readable formats: a binary serializer receives the
 //! plain `f64`.
 
@@ -34,11 +29,11 @@ use serde::ser::{
 };
 use serde::{Deserializer, Serialize, Serializer};
 
-/// The spelling of `f64::INFINITY` in model JSON.
+/// The JSON spelling of `f64::INFINITY`.
 pub const INFINITY: &str = "Infinity";
-/// The spelling of `f64::NEG_INFINITY` in model JSON.
+/// The JSON spelling of `f64::NEG_INFINITY`.
 pub const NEG_INFINITY: &str = "-Infinity";
-/// The spelling of `f64::NAN` in model JSON.
+/// The JSON spelling of `f64::NAN`.
 pub const NAN: &str = "NaN";
 
 fn spell(v: f64) -> &'static str {
@@ -446,8 +441,7 @@ impl<'de, D: Deserializer<'de>> Deserializer<'de> for NonFiniteDe<D> {
     }
 }
 
-/// At a float position: numbers forward, the three spellings convert, and
-/// `null` gets the message that names the pre-0.9 spelling.
+/// At a float position, numbers forward and the three spellings convert.
 struct NumOrSpelling<V>(V);
 
 impl<'de, V: Visitor<'de>> Visitor<'de> for NumOrSpelling<V> {
@@ -482,9 +476,8 @@ impl<'de, V: Visitor<'de>> Visitor<'de> for NumOrSpelling<V> {
 
     fn visit_unit<E: de::Error>(self) -> Result<V::Value, E> {
         Err(de::Error::custom(
-            "a number is null; powerio 0.9.0 spells a nonfinite value \"Infinity\", \
-             \"-Infinity\", or \"NaN\", and a document written before 0.9.0 spelled it null \
-             — regenerate the document",
+            "a floating point value cannot be null; use a number, \"Infinity\", \
+             \"-Infinity\", or \"NaN\"",
         ))
     }
 
@@ -755,11 +748,14 @@ mod tests {
     }
 
     #[test]
-    fn a_null_at_a_float_position_names_the_old_spelling() {
+    fn a_null_at_a_float_position_names_the_accepted_values() {
         let err =
             from_json(r#"{"qmax":null,"qmin":0.0,"opt":null,"list":[],"name":"","extras":null}"#)
                 .unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("before 0.9.0"), "{msg}");
+        assert!(msg.contains("cannot be null"), "{msg}");
+        assert!(msg.contains("\"Infinity\""), "{msg}");
+        assert!(msg.contains("\"-Infinity\""), "{msg}");
+        assert!(msg.contains("\"NaN\""), "{msg}");
     }
 }

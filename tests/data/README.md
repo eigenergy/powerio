@@ -30,7 +30,7 @@ retrieval date.
 
 One solved case-14 example from DeepMind's OPFData `dataset_release_1`
 (CC BY 4.0, (c) 2024 DeepMind Technologies Limited). See
-`opfdataset/README.md` for the format contract, source archive, and hash.
+`opfdataset/README.md` for the format specification, source archive, and hash.
 
 ## `dist/`
 
@@ -44,15 +44,31 @@ cases. Provenance and per-directory licenses in `dist/README.md`.
 Tool generated fixtures with regeneration scripts and license notes in their
 own READMEs (`pandapower/README.md`, `pypsa/README.md`).
 
+## `cgmes/`
+
+Hand written CGMES documents original to this repository under its code
+license. `cgmes/node-breaker/` is a CGMES 2.4.15 EQ and SSH set without a TP
+profile; `cgmes/node-breaker/README.md` describes its equipment and the
+calculated buses it exercises. No ENTSO-E conformity data is vendored.
+
+## `ieee-cdf/`
+
+The IEEE 14 and 30 bus test cases in the IEEE Common Data Format, copied
+without edits from PowSybl Core (MPL-2.0), which carries the University of
+Washington archive files. Source path, checksums, and the archive quirk in
+the 30 bus file are in `ieee-cdf/README.md`.
+
 ## `psse/` and `egret/`
 
 Original to this repository: the PSS/E RAW files are hand written minimal
-cases (their title lines say what each exercises), and the egret JSON files
+cases (their title lines say what each exercises), except the two PowSybl
+Core revision 32 cases whose source paths, license, and digests are listed in
+`psse/README.md`; the egret JSON files
 are renderings of the MATPOWER cases above (plus a small dcline case) in
 egret's ModelData schema.
 
-Everything else in this tree (`model-json/`, `capi_matrix/`,
-`angle_bounds_clamp.m`, and the other unlisted fixtures) is original to this
+Everything else in this tree (`capi_matrix/`, `angle_bounds_clamp.m`, and the
+other unlisted fixtures) is original to this
 repository under its code license.
 
 ## `large/` (not committed)

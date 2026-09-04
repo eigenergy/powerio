@@ -14,19 +14,19 @@
 use serde_json::{Map, Value};
 
 use super::decode::lenient_table;
-use super::{Conversion, finish, jnum, warn_extra_branch_rating_sets};
+use super::{TextEmission, finish, jnum, warn_extra_branch_rating_sets};
 use crate::diagnostics::Diagnostics;
 use crate::diagnostics::codes::EMIT_EGRET as F;
 use crate::network::{
     BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, Extras, GenCost,
-    Generator, Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat,
+    Generator, GeneratorEnergySource, Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat,
 };
 use crate::{Error, Result};
 
 const FMT: &str = "egret JSON";
 
 #[must_use]
-pub fn write_egret_json(net: &BalancedNetwork) -> Conversion {
+pub fn write_egret_json(net: &BalancedNetwork) -> TextEmission {
     let mut warnings = Diagnostics::new();
 
     let mut bus = Map::new();
@@ -57,7 +57,7 @@ pub fn write_egret_json(net: &BalancedNetwork) -> Conversion {
     let with_caps = net.generators().iter().filter(|g| g.has_caps()).count();
     if with_caps > 0 {
         warnings.push(&F.field_dropped, format!(
-            "generator capability/ramp columns dropped for {with_caps} generator(s): the egret generator records written here carry none"
+            "generator capability/ramp columns dropped for {with_caps} generator(s): an egret generator dictionary states no reactive capability curve point and no MATPOWER ramp column"
         ));
     }
 
@@ -97,12 +97,12 @@ pub fn write_egret_json(net: &BalancedNetwork) -> Conversion {
 }
 
 fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
-    super::warn_dropped_areas(&F, "egret JSON", net, warnings);
+    super::warn_dropped_areas(&F, "egret JSON", true, net, warnings);
     if !net.transformers_3w().is_empty() {
         warnings.push(
             &F.record_dropped,
             format!(
-                "{} 3-winding transformer(s) dropped: the egret writer emits no 3-winding record",
+                "{} 3-winding transformer(s) dropped: an egret branch dictionary states two buses, so a three winding record needs the star bus and three branches a projection would synthesize",
                 net.transformers_3w().len()
             ),
         );
@@ -114,14 +114,14 @@ fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
     {
         warnings.push(
             &F.field_dropped,
-            "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band",
+            "emergency voltage band(s) (EVHI/EVLO) dropped: an egret bus dictionary states one v_min/v_max pair",
         );
     }
     if !net.storage().is_empty() {
         warnings.push(
             &F.record_dropped,
             format!(
-                "{} storage unit(s) dropped: egret storage mapping not implemented",
+                "{} storage unit(s) dropped: an egret storage dictionary states an energy capacity and charge and discharge efficiencies, which the balanced storage record does not state",
                 net.storage().len()
             ),
         );
@@ -157,7 +157,7 @@ fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
         .count();
     if current_ratings > 0 {
         warnings.push(&F.field_dropped, format!(
-            "{current_ratings} branch current rating record(s) dropped: egret branch records carry MVA ratings only"
+            "{current_ratings} branch current rating record(s) dropped: an egret branch dictionary states its rating in MVA"
         ));
     }
     warn_extra_branch_rating_sets(&F, "egret JSON", net, warnings);
@@ -168,7 +168,7 @@ fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
         .count();
     if branch_solutions > 0 {
         warnings.push(&F.field_dropped, format!(
-            "{branch_solutions} branch solution value set(s) dropped: egret branch result fields are not written"
+            "{branch_solutions} branch solution value set(s) dropped: an egret branch dictionary states case data, and its flow fields belong to a solution the ModelData holds separately"
         ));
     }
 }
@@ -235,13 +235,19 @@ fn branch_obj(br: &Branch) -> Value {
     m.insert("to_bus".into(), Value::String(br.to.to_string()));
     m.insert("resistance".into(), jnum(br.r));
     m.insert("reactance".into(), jnum(br.x));
-    m.insert("charging_susceptance".into(), jnum(br.total_charging_b()));
+    m.insert(
+        "charging_susceptance".into(),
+        jnum(br.calc_total_charging_b()),
+    );
     m.insert("in_service".into(), Value::Bool(br.in_service));
     m.insert("angle_diff_min".into(), jnum(br.angmin));
     m.insert("angle_diff_max".into(), jnum(br.angmax));
     if br.is_transformer() {
         m.insert("branch_type".into(), Value::String("transformer".into()));
-        m.insert("transformer_tap_ratio".into(), jnum(br.effective_tap()));
+        m.insert(
+            "transformer_tap_ratio".into(),
+            jnum(br.calc_effective_tap()),
+        );
         m.insert("transformer_phase_shift".into(), jnum(br.shift));
     } else {
         m.insert("branch_type".into(), Value::String("line".into()));
@@ -470,9 +476,13 @@ fn build_from_document(document: Document, name_hint: Option<&str>) -> Result<Ba
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
         geo: None,
+        case_metadata: crate::network::CaseMetadata::default(),
+        detailed_connectivity: None,
+        generated_uids: std::collections::BTreeSet::default(),
         buses: buses.into(),
         loads: loads.into(),
         shunts: shunts.into(),
+        static_var_compensators: Vec::new().into(),
         branches: branches.into(),
         switches: Vec::new().into(),
         generators: generators.into(),
@@ -970,6 +980,7 @@ fn read_shunt(row: ShuntRow) -> Result<Shunt> {
         g: num_cell(row.gs.as_ref(), "gs", 0.0)?,
         b: num_cell(row.bs.as_ref(), "bs", 0.0)?,
         in_service: bool_cell(row.in_service.as_ref(), "in_service", true)?,
+        section_count: None,
         control: None,
         uid: None,
         extras: row.extras,
@@ -1013,6 +1024,7 @@ struct BranchRow {
 fn read_branch(row: BranchRow) -> Result<Branch> {
     let is_xf = row.branch_type.as_ref().and_then(Value::as_str) == Some("transformer");
     Ok(Branch {
+        name: None,
         from: id_cell(row.from_bus.as_ref(), "from_bus")?,
         to: id_cell(row.to_bus.as_ref(), "to_bus")?,
         r: num_cell(row.resistance.as_ref(), "resistance", 0.0)?,
@@ -1097,6 +1109,7 @@ fn read_gen(row: &GenRow) -> Result<Generator> {
     };
     Ok(Generator {
         bus: id_cell(row.bus.as_ref(), "bus")?,
+        energy_source: GeneratorEnergySource::default(),
         pg: num_cell(row.pg.as_ref(), "pg", 0.0)?,
         qg: num_cell(row.qg.as_ref(), "qg", 0.0)?,
         pmax: num_cell(row.p_max.as_ref(), "p_max", 0.0)?,
@@ -1108,7 +1121,10 @@ fn read_gen(row: &GenRow) -> Result<Generator> {
         in_service: bool_cell(row.in_service.as_ref(), "in_service", true)?,
         cost,
         caps: Default::default(),
+        voltage_regulation_on: true,
+        regulating_terminal: None,
         regulated_bus: None,
+        active_power_control: None,
         uid: None,
     })
 }
@@ -1172,6 +1188,11 @@ fn read_dc_branch(row: DcBranchRow) -> Result<Hvdc> {
         qmaxt: num_cell(row.qmaxt.as_ref(), "qmaxt", 0.0)?,
         loss0: num_cell(row.loss0.as_ref(), "loss0", 0.0)?,
         loss1: num_cell(row.loss_factor.as_ref(), "loss_factor", 0.0)?,
+        resistance_ohm: None,
+        nominal_voltage_kv: None,
+        converters_mode: None,
+        converter1: None,
+        converter2: None,
         cost: None,
         uid: None,
         extras: row.extras,

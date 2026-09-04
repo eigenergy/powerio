@@ -94,8 +94,9 @@ def rel_display(root_label: str, root: Path, path: Path) -> str:
     return f"{root_label}/{rel.as_posix()}"
 
 
-def count_features(case) -> dict[str, int]:
-    data = json.loads(case.to_json())
+def count_features(module) -> dict[str, int]:
+    document = json.loads(powerio.serialize(module).text)
+    data = document["value"]["data"]
     branches = data.get("branches", [])
     loads = data.get("loads", [])
     storage = data.get("storage", [])
@@ -129,14 +130,15 @@ def count_features(case) -> dict[str, int]:
 
 def parse_case(path: Path, fmt: str):
     if fmt == "pypsa-csv-folder":
-        return powerio.parse(str(path), "pypsa-csv", value_type=powerio.BalancedNetwork).value
-    return powerio.parse(str(path), value_type=powerio.BalancedNetwork).value
+        return powerio.parse(path, format="pypsa-csv")
+    return powerio.parse(path)
 
 
 def scan_one(root_label: str, root: Path, path: Path, fmt: str) -> Row:
     row = Row(root=root_label, path=rel_display(root_label, root, path), format=fmt, status="ok", message="")
     try:
-        case = parse_case(path, fmt)
+        module = parse_case(path, fmt)
+        case = module.value
     except Exception as exc:  # noqa: BLE001 - report corpus parser failures
         row.message = f"{type(exc).__name__}: {exc}".replace("\n", " ")[:500]
         if fmt == "json" and (
@@ -148,8 +150,8 @@ def scan_one(root_label: str, root: Path, path: Path, fmt: str) -> Row:
             row.status = "FAIL"
         return row
 
-    row.warnings = len(getattr(case, "read_warnings", []))
-    for key, value in count_features(case).items():
+    row.warnings = sum(d.severity == "warning" for d in module.diagnostics)
+    for key, value in count_features(module).items():
         setattr(row, key, value)
     return row
 

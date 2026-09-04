@@ -2,8 +2,9 @@
 //! artifacts, PyPSA folder inventories, and the no-replace collision refusal.
 
 mod helpers;
+use helpers::emit_pypsa_csv_folder;
 
-use powerio_core::{Destination, WrittenOutput};
+use powerio_core::{Destination, EmittedOutput};
 use powerio_tx::TargetFormat;
 
 fn case9() -> powerio_core::PioModule<powerio_tx::BalancedNetwork> {
@@ -19,9 +20,9 @@ fn a_path_write_echoes_the_source_into_the_named_file() {
     let module = case9();
     let dir = tempfile::tempdir().unwrap();
     let target = dir.path().join("out.m");
-    let result = powerio_tx::write(&module, TargetFormat::Matpower, Destination::path(&target))
+    let result = powerio_tx::emit(&module, TargetFormat::Matpower, Destination::path(&target))
         .expect("write commits");
-    let WrittenOutput::Path { root, artifacts } = result.output() else {
+    let EmittedOutput::Path { root, artifacts } = result.output() else {
         panic!("path destination returns path output");
     };
     assert_eq!(root, &target);
@@ -41,7 +42,7 @@ fn an_existing_target_is_refused_and_kept() {
     let dir = tempfile::tempdir().unwrap();
     let target = dir.path().join("out.m");
     std::fs::write(&target, b"keep me").unwrap();
-    let error = powerio_tx::write(&module, TargetFormat::Matpower, Destination::path(&target))
+    let error = powerio_tx::emit(&module, TargetFormat::Matpower, Destination::path(&target))
         .expect_err("collision refuses");
     assert!(error.to_string().contains("exists"), "{error}");
     assert_eq!(std::fs::read(&target).unwrap(), b"keep me");
@@ -50,13 +51,13 @@ fn an_existing_target_is_refused_and_kept() {
 #[test]
 fn a_memory_write_returns_the_named_artifact() {
     let module = case9();
-    let result = powerio_tx::write(
+    let result = powerio_tx::emit(
         &module,
         TargetFormat::Matpower,
         Destination::memory("case9.m").unwrap(),
     )
     .expect("memory write commits");
-    let WrittenOutput::Memory { artifacts } = result.output() else {
+    let EmittedOutput::Memory { artifacts } = result.output() else {
         panic!("memory destination returns memory output");
     };
     assert_eq!(artifacts.len(), 1);
@@ -69,9 +70,9 @@ fn a_pypsa_folder_write_commits_the_whole_inventory() {
     let module = case9();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("case9-pypsa");
-    let result = powerio_tx::write_pypsa_csv(&module, Destination::path(&root))
+    let result = powerio_tx::__emit_pypsa_csv(&module, Destination::path(&root))
         .expect("folder write commits");
-    let WrittenOutput::Path { artifacts, .. } = result.output() else {
+    let EmittedOutput::Path { artifacts, .. } = result.output() else {
         panic!("path destination returns path output");
     };
     assert!(artifacts.iter().any(|p| p.ends_with("network.csv")));
@@ -82,8 +83,7 @@ fn a_pypsa_folder_write_commits_the_whole_inventory() {
     }
     // The folder inventory matches the streaming writer's, file for file.
     let stream_dir = dir.path().join("streamed");
-    let streamed =
-        powerio_tx::write_pypsa_csv_folder(module.value(), &stream_dir).expect("streaming write");
+    let streamed = emit_pypsa_csv_folder(module.value(), &stream_dir).expect("streaming write");
     let mut committed: Vec<_> = artifacts
         .iter()
         .map(|p| p.file_name().unwrap().to_owned())

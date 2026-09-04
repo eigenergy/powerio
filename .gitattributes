@@ -24,3 +24,9 @@ tests/data/dist/** linguist-vendored
 # test (which normalizes only the read side) fails. The PSS/E `.raw` fixtures are
 # intentionally CRLF (the format's native DOS line ending) and stay CRLF. #72.
 tests/data/** -text
+
+# UCTE-DEF uses fixed columns and meaningful trailing padding.
+tests/data/ucte/*.uct -whitespace
+
+# IEEE CDF uses fixed columns and meaningful trailing padding.
+tests/data/ieee-cdf/*.txt -whitespace

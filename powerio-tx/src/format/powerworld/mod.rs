@@ -1,6 +1,6 @@
-//! Read and write PowerWorld auxiliary `.aux` files.
+//! Parse and emit PowerWorld auxiliary `.aux` files.
 //!
-//! The reader is layered. [`parse_aux`] parses any auxiliary file into the
+//! The implementation is layered. The AUX grammar decoder produces the
 //! generic [`AuxFile`] — every `DATA` and `SCRIPT` section, with field lists,
 //! value rows, and `SUBDATA` blocks intact — and knows the grammar from the
 //! official format guide: legacy and concise headers, comma delimited (CSV)
@@ -9,17 +9,16 @@
 //! mapping consumes the power flow core types (Bus, Load, Shunt, Gen,
 //! Branch) by field name, so column order and extra columns don't matter.
 //! Object types outside the core stay reachable through [`aux_sections`] and
-//! survive the same format round trip byte for byte via the retained source
-//! (see [`crate::write_as`]).
+//! survive the same format round trip byte for byte when the parsed module is
+//! passed to [`crate::emit`].
 //!
-//! The writer emits `DATA (Object, [fields]) { … }` blocks for the core
+//! The serializer emits `DATA (Object, [fields]) { … }` blocks for the core
 //! types, values in MW/MVAr/degrees, status as `Closed`/`Open`. Generator
-//! cost, HVDC, and storage are not represented and are reported on write.
+//! cost, HVDC, and storage are not represented and are reported on emission.
 //!
-//! `.pwb` binary cases are read (never written) by [`parse_pwb`]; see that
-//! module for the decoded vintages and the parity evidence. `.pwd` display
-//! files carry no case data, only the diagram; [`parse_pwd_file`] and
-//! [`parse_pwd`] read the decoded substation coordinates.
+//! `.pwb` binary cases are parsed but cannot be emitted; see that module for
+//! the decoded vintages and parity evidence. `.pwd` files carry no case data,
+//! only the diagram, and read as a diagram space layer.
 //!
 //! [`BalancedNetwork`]: crate::network::BalancedNetwork
 
@@ -32,15 +31,23 @@ mod pwd;
 #[cfg(test)]
 mod tests;
 
-pub use auxiliary::{
-    AuxFile, AuxObject, AuxRow, AuxScript, AuxSection, AuxSubData, parse_aux, write_aux,
-};
+pub use auxiliary::{AuxFile, AuxObject, AuxRow, AuxScript, AuxSection, AuxSubData};
 
-pub use map::{aux_sections, write_powerworld};
+pub use map::aux_sections;
+pub(crate) use map::write_powerworld;
 pub use objects::{Contingency, contingencies, rating_set_names};
 pub(crate) use pwb::parse_pwb_collecting;
-pub use pwb::{parse_pwb, parse_pwb_with_warnings};
-pub use pwd::{PwdDisplay, PwdSubstation, parse_pwd, parse_pwd_display, parse_pwd_file};
+pub use pwd::{PwdDisplay, PwdSubstation};
+
+#[doc(hidden)]
+pub use auxiliary::{emit_aux as __emit_aux, parse_aux as __parse_aux};
+#[doc(hidden)]
+pub use pwb::{parse_pwb as __parse_pwb, parse_pwb_with_warnings as __parse_pwb_with_warnings};
+#[doc(hidden)]
+pub use pwd::{
+    parse_pwd as __parse_pwd, parse_pwd_display as __parse_pwd_display,
+    parse_pwd_file as __parse_pwd_file,
+};
 
 use crate::network::Extras;
 

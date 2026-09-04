@@ -5,52 +5,110 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use powerio_dist::{ConversionSidecar, DistTargetFormat, Error, MulticonductorNetwork};
+use powerio_dist::{DistTargetFormat, Error, MulticonductorNetwork};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sidecar {
+    pub path: String,
+    pub text: String,
+}
 
 /// The old conversion output shape, with rendered warnings materialized.
 #[derive(Debug, Clone)]
 pub struct Conv {
     pub text: String,
-    pub sidecars: Vec<ConversionSidecar>,
+    pub sidecars: Vec<Sidecar>,
     pub warnings: Vec<String>,
     pub diagnostics: Vec<powerio_dist::Diagnostic>,
 }
 
-impl From<powerio_dist::Conversion> for Conv {
-    fn from(conv: powerio_dist::Conversion) -> Self {
-        Self {
-            warnings: conv.rendered_diagnostics(),
-            text: conv.text,
-            sidecars: conv.sidecars,
-            diagnostics: conv.diagnostics,
+fn emit_module_with_options(
+    module: &powerio_core::PioModule<MulticonductorNetwork>,
+    target: DistTargetFormat,
+    options: &powerio_dist::EmitOptions,
+) -> Result<Conv, powerio_core::Error> {
+    let result = powerio_dist::emit_with_options(
+        module,
+        target,
+        options,
+        powerio_core::Destination::memory("out")?,
+    )?;
+    let diagnostics = result.diagnostics().to_vec();
+    let warnings = powerio_dist::diagnostics::render_diagnostics(&diagnostics);
+    let powerio_core::EmittedOutput::Memory { artifacts } = result.into_output() else {
+        unreachable!("memory destination returns memory output");
+    };
+    let mut text = None;
+    let mut sidecars = Vec::new();
+    for artifact in artifacts {
+        let path = artifact.name().as_str().to_owned();
+        let content = String::from_utf8(artifact.into_bytes()).expect("format text is UTF-8");
+        if (target == DistTargetFormat::Dss && path.ends_with("case.dss"))
+            || target != DistTargetFormat::Dss
+        {
+            text = Some(content);
+        } else {
+            sidecars.push(Sidecar {
+                path: path.trim_start_matches("out/").to_owned(),
+                text: content,
+            });
         }
     }
+    Ok(Conv {
+        text: text.expect("emission has a primary artifact"),
+        sidecars,
+        warnings,
+        diagnostics,
+    })
 }
 
-pub fn write_dss(net: &MulticonductorNetwork) -> Conv {
-    powerio_dist::write_dss(net).into()
+pub fn emit_value(net: &MulticonductorNetwork, target: DistTargetFormat) -> Conv {
+    emit_module_with_options(
+        &powerio_core::PioModule::new(net.clone()),
+        target,
+        &powerio_dist::EmitOptions::default(),
+    )
+    .unwrap()
 }
 
-pub fn write_dss_with_options(
+pub fn emit_dss(net: &MulticonductorNetwork) -> Conv {
+    emit_value(net, DistTargetFormat::Dss)
+}
+
+pub fn emit_dss_with_options(
     net: &MulticonductorNetwork,
-    options: &powerio_dist::DssWriteOptions,
+    options: &powerio_dist::DssEmitOptions,
 ) -> Conv {
-    powerio_dist::write_dss_with_options(net, options).into()
+    let mut emit_options = powerio_dist::EmitOptions::default();
+    emit_options.dss = options.clone();
+    emit_module_with_options(
+        &powerio_core::PioModule::new(net.clone()),
+        DistTargetFormat::Dss,
+        &emit_options,
+    )
+    .unwrap()
 }
 
-pub fn write_bmopf_json(net: &MulticonductorNetwork) -> Conv {
-    powerio_dist::write_bmopf_json(net).into()
+pub fn emit_bmopf_json(net: &MulticonductorNetwork) -> Conv {
+    emit_value(net, DistTargetFormat::BmopfJson)
 }
 
-pub fn write_bmopf_json_with_options(
+pub fn emit_bmopf_json_with_options(
     net: &MulticonductorNetwork,
-    options: powerio_dist::BmopfWriteOptions,
+    options: powerio_dist::BmopfEmitOptions,
 ) -> Conv {
-    powerio_dist::write_bmopf_json_with_options(net, &options).into()
+    let mut emit_options = powerio_dist::EmitOptions::default();
+    emit_options.bmopf = options;
+    emit_module_with_options(
+        &powerio_core::PioModule::new(net.clone()),
+        DistTargetFormat::BmopfJson,
+        &emit_options,
+    )
+    .unwrap()
 }
 
-pub fn write_pmd_json(net: &MulticonductorNetwork) -> Conv {
-    powerio_dist::write_pmd_json(net).into()
+pub fn emit_pmd_json(net: &MulticonductorNetwork) -> Conv {
+    emit_value(net, DistTargetFormat::PmdJson)
 }
 
 /// The old parse output shape: the typed network with the reader's findings
@@ -83,13 +141,14 @@ impl std::ops::DerefMut for Parsed {
 impl Parsed {
     /// Write through the module: a same format target echoes the retained
     /// source bytes exactly.
-    pub fn to_format(&self, target: DistTargetFormat) -> Conv {
-        powerio_dist::write_as(&self.module, target).into()
+    pub fn emit(&self, target: DistTargetFormat) -> Conv {
+        emit_module_with_options(&self.module, target, &powerio_dist::EmitOptions::default())
+            .unwrap()
     }
 
     /// Write from the typed value, bypassing the echo tier.
-    pub fn to_canonical_format(&self, target: DistTargetFormat) -> Conv {
-        powerio_dist::write_network(&self.network, target).into()
+    pub fn emit_value(&self, target: DistTargetFormat) -> Conv {
+        emit_value(&self.network, target)
     }
 }
 
@@ -100,8 +159,8 @@ fn from_module(module: powerio_core::PioModule<MulticonductorNetwork>) -> Parsed
         Some(Arc::new(text.to_owned()))
     });
     Parsed {
-        warnings: powerio_dist::diagnostics::render_diagnostics(module.diagnostics()),
-        diagnostics: module.diagnostics().to_vec(),
+        warnings: powerio_dist::diagnostics::render_diagnostics(&module.diagnostics),
+        diagnostics: module.diagnostics.clone(),
         source,
         network: module.value().clone(),
         module,
@@ -117,7 +176,7 @@ fn declared(
         Some(token) => {
             // The old entries settled the format before any work; keep the
             // error shape.
-            if powerio_dist::dist_target_from_name(token).is_none() {
+            if powerio_dist::parse_dist_target_format(token).is_none() {
                 return Err(Error::UnknownFormat(token.to_string()));
             }
             let id = powerio_core::FormatId::new(token.to_ascii_lowercase().replace('_', "-"))
@@ -136,7 +195,7 @@ fn core_to_dist(error: &powerio_core::Error) -> Error {
 
 pub fn parse_str(text: &str, from: &str) -> Result<Parsed, Error> {
     let source = declared(
-        powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())
+        powerio_core::Source::from_memory("<memory>", text.as_bytes().to_vec())
             .map_err(|error| core_to_dist(&error))?,
         Some(from),
     )?;
@@ -147,7 +206,7 @@ pub fn parse_str(text: &str, from: &str) -> Result<Parsed, Error> {
 
 pub fn parse_bytes(bytes: &[u8], from: &str) -> Result<Parsed, Error> {
     let source = declared(
-        powerio_core::Source::from_bytes("<memory>", bytes.to_vec())
+        powerio_core::Source::from_memory("<memory>", bytes.to_vec())
             .map_err(|error| core_to_dist(&error))?,
         Some(from),
     )?;
@@ -158,7 +217,7 @@ pub fn parse_bytes(bytes: &[u8], from: &str) -> Result<Parsed, Error> {
 
 pub fn parse_file(path: impl AsRef<Path>, from: Option<&str>) -> Result<Parsed, Error> {
     if let Some(token) = from
-        && powerio_dist::dist_target_from_name(token).is_none()
+        && powerio_dist::parse_dist_target_format(token).is_none()
     {
         return Err(Error::UnknownFormat(token.to_string()));
     }
@@ -217,11 +276,16 @@ pub fn parse_pmd_file(path: impl AsRef<Path>) -> Result<Parsed, Error> {
 /// writer's.
 pub fn convert_str(text: &str, to: DistTargetFormat, from: &str) -> Result<Conv, Error> {
     let source = declared(
-        powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())
+        powerio_core::Source::from_memory("<memory>", text.as_bytes().to_vec())
             .map_err(|error| core_to_dist(&error))?,
         Some(from),
     )?;
-    powerio_dist::convert_source(source, to)
-        .map(Conv::from)
-        .map_err(|error| core_to_dist(&error))
+    let module = powerio_dist::parse(source).map_err(|error| core_to_dist(&error))?;
+    let mut conv = emit_module_with_options(&module, to, &powerio_dist::EmitOptions::default())
+        .map_err(|error| core_to_dist(&error))?;
+    let mut diagnostics = module.diagnostics.clone();
+    diagnostics.append(&mut conv.diagnostics);
+    conv.warnings = powerio_dist::diagnostics::render_diagnostics(&diagnostics);
+    conv.diagnostics = diagnostics;
+    Ok(conv)
 }

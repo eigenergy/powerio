@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use powerio_tx::{
     BusId, BusType, Error, Generator, IndexedNetwork, NormalizeOptions, Shunt, SourceFormat,
-    Storage, TargetFormat,
+    Storage, TargetFormat, TerminalReference,
 };
 
 const DEG_TO_RAD: f64 = std::f64::consts::PI / 180.0;
@@ -68,6 +68,28 @@ fn per_unit_and_radians_on_case9() {
 }
 
 #[test]
+fn normalization_preserves_generator_voltage_control_identity() {
+    let mut raw = parse_matpower_file(data("case9.m")).unwrap();
+    let reference: TerminalReference = serde_json::from_value(serde_json::json!({
+        "equipment": {
+            "component_type": "load",
+            "local_id": "remote-load"
+        },
+        "terminal": 1
+    }))
+    .unwrap();
+    raw.generators_mut()[0].voltage_regulation_on = false;
+    raw.generators_mut()[0].regulating_terminal = Some(reference.clone());
+    raw.generators_mut()[0].regulated_bus = Some(BusId(5));
+
+    let normalized = raw.to_normalized().unwrap();
+    let generator = &normalized.generators()[0];
+    assert!(!generator.voltage_regulation_on);
+    assert_eq!(generator.regulating_terminal, Some(reference));
+    assert_eq!(generator.regulated_bus, Some(BusId(5)));
+}
+
+#[test]
 fn per_unit_shunts_on_case30() {
     let raw = parse_matpower_file(data("case30.m")).unwrap();
     let base = raw.base_mva();
@@ -114,7 +136,7 @@ fn no_false_write_back() {
 
     // Writing it serializes the per-unit/radian model, so it must NOT echo the
     // raw MATPOWER bytes.
-    let out = write_network(&n, TargetFormat::Matpower).unwrap();
+    let out = emit_value(&n, TargetFormat::Matpower).unwrap();
     assert_ne!(
         out.text.trim_end(),
         src.replace("\r\n", "\n").trim_end(),
@@ -136,20 +158,20 @@ fn warns_when_writing_normalized_lines_as_transformers() {
             .all(|b| approx(b.tap, 1.0) && approx(b.shift, 0.0))
     );
 
-    let out = write_network(&n, TargetFormat::Psse { rev: 33 }).unwrap();
+    let out = emit_value(&n, TargetFormat::Psse { rev: 33 }).unwrap();
     assert!(
-        out.rendered_diagnostics()
+        out.render_diagnostics()
             .iter()
             .any(|w| w.contains("line/transformer label is not preserved")),
         "expected a normalized line/transformer fidelity warning, got {:?}",
-        out.rendered_diagnostics()
+        out.render_diagnostics()
     );
 
     // A raw network keeps lines at tap 0, so the warning must not fire for it.
-    let raw_out = write_network(&raw, TargetFormat::Psse { rev: 33 }).unwrap();
+    let raw_out = emit_value(&raw, TargetFormat::Psse { rev: 33 }).unwrap();
     assert!(
         !raw_out
-            .rendered_diagnostics()
+            .render_diagnostics()
             .iter()
             .any(|w| w.contains("line/transformer label is not preserved")),
         "raw network must not trigger the normalized-tap warning"
@@ -541,11 +563,11 @@ fn parse_str_matches_parse_file() {
         let mut from_text = parse_str(&text, "matpower").unwrap().network;
         // The only legitimate difference is the network name, which `parse_file`
         // derives from the file stem and `parse_str` cannot (it has no path).
-        *from_text.name_mut() = from_path.name().clone(); // to_json skips the retained source, so equal JSON means field-for-field
-        // equal tables.
+        *from_text.name_mut() = from_path.name().clone();
+        // Serde skips the retained source, so equal values mean equal tables.
         assert_eq!(
-            from_path.to_json().unwrap(),
-            from_text.to_json().unwrap(),
+            serde_json::to_value(&from_path).unwrap(),
+            serde_json::to_value(&from_text).unwrap(),
             "{case}: parse_str disagrees with parse_file"
         );
     }
@@ -766,11 +788,6 @@ fn source_rows_cover_the_magnetizing_shunt_the_lowering_appends() {
     assert_eq!(rows.shunts, [Some(0), None]);
     assert_eq!(rows.buses.len(), view.n());
     assert_eq!(rows.branches.len(), view.branches().len());
-
-    // The tables read provenance by position across the lowered view, so the
-    // padding has to hold for them too.
-    let tables = raw.to_normalized_solver_tables().unwrap();
-    assert_eq!(tables.index.shunt_source_rows, [Some(0), None]);
 }
 
 const EPC_3W: &str = r#"title

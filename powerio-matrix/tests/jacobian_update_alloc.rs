@@ -10,7 +10,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use powerio_matrix::{BalancedNetwork, VoltageCoordinates, calc_power_flow_jacobian};
-use powerio_prob::{AcPfInstance, BalancedStateBuilder, OperatingPoint};
+use powerio_prob::{AcPfInstance, BalancedOperatingPointBuilder, OperatingPoint};
 
 struct CountingAlloc;
 
@@ -37,7 +37,7 @@ static ALLOCATOR: CountingAlloc = CountingAlloc;
 
 fn case(name: &str) -> BalancedNetwork {
     let path = format!("{}/../tests/data/{name}", env!("CARGO_MANIFEST_DIR"));
-    powerio_matrix::parse(powerio_core::Source::open(path).unwrap())
+    powerio_tx::parse(powerio_core::Source::open(path).unwrap())
         .unwrap()
         .into_value()
 }
@@ -53,7 +53,7 @@ fn operating_point(net: &BalancedNetwork, seed: &str) -> OperatingPoint<Balanced
     let va: Vec<f64> = (0..n)
         .map(|k| (2.0 * (k as f64) / (n as f64)).to_radians())
         .collect();
-    let series = BalancedStateBuilder::new(
+    let series = BalancedOperatingPointBuilder::new(
         net.clone(),
         vec![powerio_core::TimePoint::new(seed, None).unwrap()],
     )
@@ -61,7 +61,7 @@ fn operating_point(net: &BalancedNetwork, seed: &str) -> OperatingPoint<Balanced
     .bus_voltage_angles(va)
     .build()
     .unwrap();
-    let (_, point) = series.get(0).unwrap();
+    let point = series.get(0).unwrap();
     point.clone()
 }
 

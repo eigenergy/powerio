@@ -1,44 +1,160 @@
 # Core Concepts
 
-Five concepts carry the whole API: the module, the value families, diagnostics, sources, and format profiles. Every language exposes them under the same names.
+PowerIO uses LLVM and MLIR vocabulary for transport and structure and power
+system vocabulary for electrical meaning. The same types and operations appear
+in Rust, C, Python, Julia, PowerIO IR, and MCP tools.
 
 ## The module
 
-Every successful parse returns a module: `PioModule<T>` in Rust, `PioModule{T}` in Julia, `PioModule` in Python and C. A module holds exactly one typed value beside the records that explain it: the source it was parsed from, the reader's diagnostics, and the history of operations that produced the current value. Because the module keeps the source, writing it back to the same format reproduces the input byte for byte, and diagnostics can point at byte ranges of the actual file.
+`PioModule<T>` contains one typed value and the records needed to understand
+how it was produced:
 
-The typed value is the data you work with. In Rust and Julia the module's type parameter names it, so ordinary dispatch and type assertions work; in Python and C the module reports its kind as a stable string.
+```text
+PioModule<T>
+├── value: T
+├── diagnostics
+├── producer
+├── sources and source mappings
+├── history
+└── extensions
+```
 
-## The value families
+Rust, Python, and Julia expose `value` and `diagnostics` as fields or
+properties. C exposes borrowed accessors because its values are opaque.
+Diagnostics belong to the module, not to the contained network or solution.
 
-The kind strings are permanent identifiers, shared by every language, the stored document, and the MCP tools.
+The module can retain source bytes at run time so unchanged same format
+emission is byte exact. Those bytes are not part of serialized PowerIO IR.
 
-| Kind | What the source declared |
+## Electrical values
+
+```text
+T
+├── BalancedNetwork
+├── MulticonductorNetwork
+├── OperatingPoint<BalancedNetwork>
+├── OperatingPoint<MulticonductorNetwork>
+├── TimeSeries<T>
+├── ScenarioSet<T>
+├── ScenarioSet<TimeSeries<T>>
+├── *PfInstance / *PfSolution
+├── *OpfInstance / *OpfSolution
+└── *ScucInstance / *ScucSolution
+```
+
+| Type | Meaning |
 |---|---|
-| `balanced_network` | a balanced positive sequence transmission network |
-| `multiconductor_network` | a conductor level distribution network |
-| `balanced_network_time_series` | a network whose inputs vary over declared time points |
-| `balanced_operating_point_time_series` | a fixed network with a complete electrical state per time point |
-| `multiconductor_operating_point_time_series` | complete sampled multiconductor states over time |
-| `balanced_network_scenario_set` | named alternative networks over shared element identities |
-| `dc_pf_instance` … `ac_scuc_instance` | the input of one named calculation (seven families) |
-| `dc_pf_solution` … `ac_scuc_solution` | the result of one named calculation, sharing its instance (seven families) |
+| `BalancedNetwork` | A self contained balanced electrical case: equipment identities, terminals, physical parameters, ratings, limits, costs, and the source/default operating assignment. |
+| `MulticonductorNetwork` | The corresponding conductor resolved distribution model. |
+| `OperatingPoint<N>` | A possibly partial alternate electrical assignment over fixed equipment identities. It makes no claim of completeness or power flow feasibility. |
+| `TimeSeries<T>` | Values of one type ordered in time. |
+| `ScenarioSet<T>` | Named alternatives of one type, optionally with probabilities and with no implied time order. |
+| `*Instance` | A calculation definition assigning fixed inputs, unknowns, bounds, objectives, horizon, contingencies, and formulation choices. |
+| `*Solution` | Computed quantities plus formulation identity, termination, validity claims, residuals, multipliers, and objective or bound. |
 
-The two network types stay distinct. `BalancedNetwork` is the balanced positive sequence transmission model that MATPOWER, PSS/E, PowerModels JSON, and the other balanced formats meet at. `MulticonductorNetwork` is the conductor level distribution model that OpenDSS and PMD engineering JSON meet at, with per conductor impedance matrices, terminal maps, and grounding. Neither is a subtype of the other, and converting a multiconductor network to its balanced equivalent is an explicit lossy lowering that reports its assumptions.
+The two network types are peers. `BalancedNetwork` is where MATPOWER, PSS/E,
+PowerModels JSON, and the other balanced formats meet.
+`MulticonductorNetwork` is where OpenDSS, PowerModelsDistribution engineering
+JSON, and BMOPF meet. Neither is a subtype of the other. An explicit
+transformation can calculate a balanced positive sequence equivalent from a
+multiconductor network and reports every assumption and loss.
 
-An instance is the complete input for one named calculation and contains or shares its network. A solution is the result of one calculation and contains or shares the instance it solves. A source parses to an instance or solution only when it declares that calculation: a MATPOWER case carries ratings and costs several calculations can use, so it stays a network; a BMOPF file defines a multiconductor AC OPF, so it parses to `mc_ac_opf_instance`.
+## Networks and operating points
 
-`TimeSeries<T>` is an ordered sequence of complete values of one type; the element type states what varies. `ScenarioSet<T>` is a set of named alternatives with no implied order. Selecting one entry shares the base network's data; nothing reparses or copies numerical tables.
+An operating point can override demand, setpoints, dispatch, voltages,
+injections, equipment service status, switch positions, transformer taps,
+phase shifts, and corresponding multiconductor controls. Missing quantities
+resolve to the network's source/default assignment.
+
+An operating point cannot change equipment identities or terminals, physical
+parameters such as impedance, ratings or limits, costs or objectives,
+commitment and reserve structure, horizon structure, or the equipment set. A
+scenario that changes those values contains a network or calculation instance
+instead.
+
+Topology means electrical connectivity:
+
+```text
+declared terminals
++ equipment service status
++ switch positions
+= calculated energized topology
+```
+
+Tap and phase shift changes affect equations, not connectivity. Impedance,
+rating, and cost changes are not operating point changes.
+
+## Collections
+
+Collections compose without flattened public type names:
+
+```text
+TimeSeries<BalancedNetwork>
+TimeSeries<MulticonductorNetwork>
+TimeSeries<OperatingPoint<BalancedNetwork>>
+TimeSeries<OperatingPoint<MulticonductorNetwork>>
+
+ScenarioSet<BalancedNetwork>
+ScenarioSet<MulticonductorNetwork>
+ScenarioSet<OperatingPoint<BalancedNetwork>>
+ScenarioSet<OperatingPoint<MulticonductorNetwork>>
+ScenarioSet<TimeSeries<T>>
+```
+
+Each operating point entry can contain a different sparse set of overrides.
+It roots the shared base network without duplicating network tables. A time
+series of networks or calculation instances can contain complete values when
+their physical or calculation data differs.
+
+## Calculation instances and solutions
+
+PowerIO separates reusable network data, calculation inputs, and calculated
+results. A MATPOWER case stays a `BalancedNetwork`; a caller explicitly
+constructs `DcPfInstance`, `AcPfInstance`, `DcOpfInstance`, or
+`AcOpfInstance`. A solver consumes that typed instance and returns the
+corresponding typed solution module.
+
+`SocwrOpfSolution` is a PowerModels SOCWR relaxation result and objective lower
+bound. It is not labeled `AcOpfSolution` unless voltage recovery and AC
+residual checks support that claim.
 
 ## Diagnostics
 
-Every operation reports findings as structured diagnostics, never as bare strings. A diagnostic has a stable dotted code (`READ.DSS.INCLUDE_BUDGET`), one of four severities (`error`, `warning`, `remark`, `note`), a message, and, where they apply, a target naming the element or construct, byte spans into the retained source, related records, and a suggested action. Branch on the code; the message is explanation, under no stability promise.
+Every operation reports structured `Diagnostic` records: a stable dotted
+code, severity (`error`, `warning`, `remark`, or `note`), message, and, where
+available, a target, source byte spans, related records, and a suggested
+action. Branch on the code, never on the rendered message.
 
-A successful parse keeps its findings on the module. A failed operation raises the language's error carrying the same records. A module can hold an error severity finding and still be usable: the reader represented the value, and the finding says what is wrong with it.
+Successful operations keep their diagnostics on the returned module or
+result. Failed operations return or throw the language's structured PowerIO
+error.
 
-## Sources and formats
+## Sources and grid exchange formats
 
-A parse reads a source: one or more named immutable byte buffers, acquired from a file, a directory, or memory. The format is detected from the name and content; passing a format name overrides detection for ambiguous or mislabeled input without changing anything else about the parse. Format names are stable lowercase strings (`matpower`, `psse`, `opendss`, `pypsa-csv`), the same in every language, the CLI, and MCP.
+A `Source` owns one or more named immutable byte buffers acquired from a file,
+directory, or memory. Rust and C callers build it themselves, because those
+languages need an explicit owner for acquired bytes. In Python and Julia a
+path, an open file object, or a bytes-like value plays that role directly,
+since the value already states where the bytes come from and the interpreter
+owns them; [Rust, Python, Julia, and C](languages.md) explains the split.
+`parse` detects a grid exchange format from the source name and content
+unless the caller supplies a format.
 
-## Format profiles
+`emit` produces one supported format and returns an `EmitResult`. Its
+artifact inventory is the list of artifacts the emission produced: one entry
+per file, each with its name and either its bytes, for a memory destination,
+or its path, after a filesystem commit. A single file format produces one
+artifact; a directory format such as PyPSA CSV, GridFM, or CGMES produces
+one per file. The result also states the layout (one file or a directory),
+the fidelity (an exact same format echo of retained source bytes, or
+canonical fresh output), and the emission diagnostics, which report any loss.
 
-For each format, PowerIO documents the portion it supports: the profile. Every field inside the profile becomes typed data or produces a diagnostic saying why it cannot be represented. Data outside the profile stays in the retained source, so writing the same format back loses nothing, and converting to another format reports what the target cannot carry. PowerIO does not claim complete support for a format when it supports one profile of it; [Formats and Fidelity](format-fidelity.md) states each profile.
+`resolve_format` maps accepted third party spellings to a canonical token and
+reports its conventional filename suffix, output layout, and fresh emission
+support. It describes formats; value types are named by `PioValue` and its
+language counterparts.
+
+PowerIO IR is separate: `serialize` and `deserialize` preserve PowerIO types
+and module records. Its integer generation changes with the serialized
+representation rather than with each release, and it is absent from grid
+exchange format discovery.

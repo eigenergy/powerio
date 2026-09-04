@@ -183,7 +183,7 @@ fn slack(quantized: i64) -> i64 {
 /// elements are in service.
 ///
 /// Bucketing is deliberately loose — topology and demand — so that a case and
-/// its variants land together and get compared. That looseness is wrong for
+/// its derived cases land together and get compared. That looseness is wrong for
 /// the sibling leg, which asks whether two *readers* disagree: a base case and
 /// its pglib derivative differ in generator limits for honest reasons, and
 /// reporting that as a reader disagreement buries the real findings.
@@ -192,7 +192,7 @@ fn slack(quantized: i64) -> i64 {
 /// which machines are open are the same data, and the disagreement about
 /// status is exactly the finding the sibling leg exists to raise.
 #[must_use]
-pub fn same_data(a: &BalancedNetwork, b: &BalancedNetwork) -> bool {
+pub fn same_case_data(a: &BalancedNetwork, b: &BalancedNetwork) -> bool {
     let branches = |net: &BalancedNetwork| {
         let mut v: Vec<[i64; 5]> = net
             .branches()
@@ -202,7 +202,7 @@ pub fn same_data(a: &BalancedNetwork, b: &BalancedNetwork) -> bool {
                     quantize(br.r, IMPEDANCE_QUANTUM),
                     quantize(br.x, IMPEDANCE_QUANTUM),
                     quantize(br.b, IMPEDANCE_QUANTUM),
-                    quantize(br.effective_tap(), IMPEDANCE_QUANTUM),
+                    quantize(br.calc_effective_tap(), IMPEDANCE_QUANTUM),
                     quantize(br.shift, IMPEDANCE_QUANTUM),
                 ]
             })

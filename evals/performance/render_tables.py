@@ -47,8 +47,8 @@ SPEED_HEADER = (
     "| --- | --- | --- | --- | --- | --- | --- |"
 )
 SPEED_YBUS_HEADER = (
-    "| case | buses / branches | PowerIO.jl Ybus | ExaPowerIO.jl Ybus | Rust C ABI Arrow | PowerModels.jl Ybus |\n"
-    "| --- | --- | --- | --- | --- | --- |"
+    "| case | buses / branches | PowerIO.jl Ybus | ExaPowerIO.jl Ybus | PowerModels.jl Ybus |\n"
+    "| --- | --- | --- | --- | --- |"
 )
 PANDA_HEADER = (
     "| case | powerio parse | powerio parse + Y_bus + Bp | matpowercaseframes (pandapower's `.m` reader) |\n"
@@ -167,7 +167,7 @@ def julia_ybus_rows(rows, cases):
     lines = [
         f"| {r['case']} | {r['buses']} / {r['branches']} | "
         f"{timing(r, 'powerio_jl_ybus_ms')} | {timing(r, 'exapowerio_ybus_ms')} | "
-        f"{timing(r, 'rust_c_abi_ybus_arrow_ms')} | {timing(r, 'powermodels_ybus_ms')} |"
+        f"{timing(r, 'powermodels_ybus_ms')} |"
         for r in selected
     ]
     return "\n".join(lines), []

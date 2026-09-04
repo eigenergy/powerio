@@ -1,11 +1,10 @@
-//! The `.pio.json` version 1 wire: one stored document version, decoded by
-//! exact typed DTOs after header dispatch. Runtime types never derive this
+//! Exact data types for PowerIO IR. Runtime types do not derive this
 //! layout; the mapping in [`super::convert`] is the one bridge.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use serde::de::{DeserializeSeed, Visitor};
+use serde::de::{DeserializeSeed, Error as _, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use powerio_core::limits;
@@ -16,12 +15,9 @@ use powerio_dist::MulticonductorNetwork;
 #[cfg(feature = "schema")]
 use schemars::JsonSchema;
 
-pub const SCHEMA_NAME: &str = "powerio.module";
-pub const SCHEMA_VERSION: u32 = 1;
-
-/// JSON has no nonfinite number literals. PowerIO keeps the spellings already
-/// shipped by 0.9 (`"Infinity"`, `"-Infinity"`, `"NaN"`) instead of turning
-/// valid open bounds into `null`; `null` is not a number.
+/// JSON has no nonfinite number literals. PowerIO spells them as
+/// `"Infinity"`, `"-Infinity"`, or `"NaN"` instead of turning valid open
+/// bounds into `null`; `null` is not a number.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StoredF64(pub f64);
 
@@ -96,14 +92,14 @@ impl JsonSchema for StoredF64 {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct ProducerV1 {
+pub struct Producer {
     pub name: String,
     pub version: String,
 }
 
-// Decode time bounds: every sequence, map, and string on the version 1 record
-// wire is refused or truncated at its limit while it is decoded, before the
-// full collection has been retained, matching the core record wire.
+// Decode time bounds: every sequence, map, and string in a PowerIO IR record is
+// refused or truncated at its limit while it is decoded, before the full
+// collection has been retained, matching the core record representation.
 fn bounded_identifier<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
     limits::BoundedStr {
         what: "record identifier",
@@ -235,19 +231,19 @@ fn bounded_extensions<'de, D: Deserializer<'de>>(
 
 fn bounded_diagnostic_spans<'de, D: Deserializer<'de>>(
     deserializer: D,
-) -> Result<Vec<SourceSpanV1>, D::Error> {
+) -> Result<Vec<SourceSpan>, D::Error> {
     limits::bounded_vec(deserializer, "source spans", limits::MAX_DIAGNOSTIC_SPANS)
 }
 
 fn bounded_map_spans<'de, D: Deserializer<'de>>(
     deserializer: D,
-) -> Result<Vec<SourceSpanV1>, D::Error> {
+) -> Result<Vec<SourceSpan>, D::Error> {
     limits::bounded_vec(deserializer, "source spans", limits::MAX_SOURCE_MAP_SPANS)
 }
 
 fn bounded_related<'de, D: Deserializer<'de>>(
     deserializer: D,
-) -> Result<Vec<DiagnosticIdV1>, D::Error> {
+) -> Result<Vec<DiagnosticId>, D::Error> {
     limits::bounded_vec(
         deserializer,
         "related diagnostics",
@@ -261,13 +257,13 @@ fn bounded_notes<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<Strin
 
 fn bounded_sources<'de, D: Deserializer<'de>>(
     deserializer: D,
-) -> Result<Vec<SourceDescriptorV1>, D::Error> {
+) -> Result<Vec<SourceDescriptor>, D::Error> {
     limits::bounded_vec(deserializer, "sources", limits::MAX_MODULE_SOURCES)
 }
 
 fn bounded_source_map<'de, D: Deserializer<'de>>(
     deserializer: D,
-) -> Result<Vec<SourceMapEntryV1>, D::Error> {
+) -> Result<Vec<SourceMapEntry>, D::Error> {
     limits::bounded_vec(
         deserializer,
         "source map entries",
@@ -277,13 +273,13 @@ fn bounded_source_map<'de, D: Deserializer<'de>>(
 
 fn bounded_diagnostics<'de, D: Deserializer<'de>>(
     deserializer: D,
-) -> Result<Vec<DiagnosticV1>, D::Error> {
+) -> Result<Vec<Diagnostic>, D::Error> {
     limits::bounded_vec(deserializer, "diagnostics", limits::MAX_MODULE_DIAGNOSTICS)
 }
 
 fn bounded_history<'de, D: Deserializer<'de>>(
     deserializer: D,
-) -> Result<Vec<HistoryEntryV1>, D::Error> {
+) -> Result<Vec<HistoryEntry>, D::Error> {
     limits::bounded_vec(
         deserializer,
         "history entries",
@@ -291,204 +287,376 @@ fn bounded_history<'de, D: Deserializer<'de>>(
     )
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
-#[serde(transparent)]
-pub struct SourceIdV1(#[serde(deserialize_with = "bounded_identifier")] pub String);
+const MAX_STORED_COLLECTION_ENTRIES: usize = 65_536;
+const MAX_STORED_OPERATING_POINT_QUANTITIES: usize = 64;
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
-#[serde(transparent)]
-pub struct DiagnosticIdV1(#[serde(deserialize_with = "bounded_identifier")] pub String);
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
-#[serde(transparent)]
-pub struct HistoryIdV1(#[serde(deserialize_with = "bounded_identifier")] pub String);
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct TimePointV1 {
-    pub label: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub duration: Option<DurationV1>,
+fn bounded_collection_entries<'de, T: Deserialize<'de>, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<T>, D::Error> {
+    limits::bounded_vec(
+        deserializer,
+        "collection entries",
+        MAX_STORED_COLLECTION_ENTRIES,
+    )
 }
+
+fn bounded_operating_point_identities<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<StoredIdentity>, D::Error> {
+    limits::bounded_vec(
+        deserializer,
+        "operating point identities",
+        MAX_STORED_COLLECTION_ENTRIES,
+    )
+}
+
+fn bounded_operating_point_values<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<StoredF64>, D::Error> {
+    limits::bounded_vec(
+        deserializer,
+        "operating point values",
+        MAX_STORED_COLLECTION_ENTRIES,
+    )
+}
+
+fn bounded_three_winding_transformer_terminal_powers<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<ThreeWindingTransformerTerminalPower>, D::Error> {
+    limits::bounded_vec(
+        deserializer,
+        "three winding transformer terminal powers",
+        MAX_STORED_COLLECTION_ENTRIES,
+    )
+}
+
+fn bounded_three_winding_transformer_terminal_active_powers<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<ThreeWindingTransformerTerminalActivePower>, D::Error> {
+    limits::bounded_vec(
+        deserializer,
+        "three winding transformer terminal active powers",
+        MAX_STORED_COLLECTION_ENTRIES,
+    )
+}
+
+fn bounded_optional_values<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<StoredF64>>, D::Error> {
+    struct OptionalValues;
+
+    impl<'de> Visitor<'de> for OptionalValues {
+        type Value = Option<Vec<StoredF64>>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a bounded value vector or null")
+        }
+
+        fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_some<D2: Deserializer<'de>>(
+            self,
+            deserializer: D2,
+        ) -> Result<Self::Value, D2::Error> {
+            bounded_operating_point_values(deserializer).map(Some)
+        }
+    }
+
+    deserializer.deserialize_option(OptionalValues)
+}
+
+fn bounded_operating_point_quantities<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BTreeMap<String, StoredQuantity>, D::Error> {
+    struct Quantities;
+
+    impl<'de> Visitor<'de> for Quantities {
+        type Value = BTreeMap<String, StoredQuantity>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                formatter,
+                "at most {MAX_STORED_OPERATING_POINT_QUANTITIES} operating point quantities"
+            )
+        }
+
+        fn visit_map<A: serde::de::MapAccess<'de>>(
+            self,
+            mut access: A,
+        ) -> Result<Self::Value, A::Error> {
+            let mut quantities = BTreeMap::new();
+            while let Some(name) = access.next_key_seed(limits::BoundedStr {
+                what: "operating point quantity name",
+                max_bytes: limits::MAX_IDENTIFIER_BYTES,
+            })? {
+                if quantities.len() == MAX_STORED_OPERATING_POINT_QUANTITIES {
+                    return Err(A::Error::custom(format!(
+                        "a stored operating point carries more than \
+                         {MAX_STORED_OPERATING_POINT_QUANTITIES} quantities"
+                    )));
+                }
+                let value = access.next_value::<StoredQuantity>()?;
+                if quantities.insert(name.clone(), value).is_some() {
+                    return Err(A::Error::custom(format!(
+                        "duplicate operating point quantity `{name}`"
+                    )));
+                }
+            }
+            Ok(quantities)
+        }
+    }
+
+    deserializer.deserialize_map(Quantities)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(transparent)]
+pub struct SourceId(#[serde(deserialize_with = "bounded_identifier")] pub String);
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(transparent)]
+pub struct DiagnosticId(#[serde(deserialize_with = "bounded_identifier")] pub String);
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(transparent)]
+pub struct HistoryId(#[serde(deserialize_with = "bounded_identifier")] pub String);
 
 /// A stored duration: unsigned seconds plus a nanosecond remainder below one
 /// billion, exactly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct DurationV1 {
+pub struct Duration {
     pub secs: u64,
     pub nanos: u32,
 }
 
-/// One state quantity's dense columns: the resolved identity order, then the
-/// point major values (`time_points.len() × identities.len()`).
+/// A bounded stable component identity.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(transparent)]
+pub struct StoredIdentity(#[serde(deserialize_with = "bounded_identifier")] pub String);
+
+/// One bounded time point.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct StoredQuantityV1 {
-    pub identities: Vec<String>,
+pub struct TimePoint {
+    #[serde(deserialize_with = "bounded_identifier")]
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration: Option<Duration>,
+}
+
+/// One operating point quantity. Both dimensions are bounded while
+/// decoding, before the vectors are retained.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct StoredQuantity {
+    #[serde(deserialize_with = "bounded_operating_point_identities")]
+    pub identities: Vec<StoredIdentity>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub values: Vec<StoredF64>,
 }
 
+/// One scalar operating point and the network whose identities and defaults
+/// it uses.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct BalancedOperatingPointTimeSeriesV1 {
-    pub network: Box<BalancedNetwork>,
-    pub time_points: Vec<TimePointV1>,
-    /// Quantity name → dense columns, the balanced instantaneous vocabulary.
-    pub quantities: BTreeMap<String, StoredQuantityV1>,
+pub struct StoredOperatingPoint<N> {
+    pub network: Box<N>,
+    #[serde(deserialize_with = "bounded_operating_point_quantities")]
+    pub quantities: BTreeMap<String, StoredQuantity>,
 }
 
+/// Ordered complete values of one registered type.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct BalancedNetworkTimeSeriesV1 {
-    pub time_points: Vec<TimePointV1>,
-    pub values: Vec<BalancedNetwork>,
+#[serde(
+    deny_unknown_fields,
+    bound(serialize = "T: Serialize", deserialize = "T: Deserialize<'de>")
+)]
+pub struct StoredTimeSeries<T> {
+    #[serde(deserialize_with = "bounded_collection_entries")]
+    pub time_points: Vec<TimePoint>,
+    #[serde(deserialize_with = "bounded_collection_entries")]
+    pub values: Vec<T>,
 }
 
+/// A time series of operating points. The shared network is absent only for
+/// an empty series, whose outer structural type still preserves the element
+/// type.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct BalancedNetworkScenarioV1 {
+pub struct StoredOperatingPointTimeSeries<N> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network: Option<Box<N>>,
+    #[serde(deserialize_with = "bounded_collection_entries")]
+    pub time_points: Vec<TimePoint>,
+    #[serde(deserialize_with = "bounded_collection_entries")]
+    pub values: Vec<StoredOperatingPointAssignment>,
+}
+
+/// One named scenario whose value has the type fixed by the outer structural
+/// discriminator.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(
+    deny_unknown_fields,
+    bound(serialize = "T: Serialize", deserialize = "T: Deserialize<'de>")
+)]
+pub struct StoredScenario<T> {
+    #[serde(deserialize_with = "bounded_identifier")]
     pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub probability: Option<StoredF64>,
-    pub value: BalancedNetwork,
+    pub value: T,
 }
 
+/// Named alternatives of one registered type.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(
+    deny_unknown_fields,
+    bound(serialize = "T: Serialize", deserialize = "T: Deserialize<'de>")
+)]
+pub struct StoredScenarioSet<T> {
+    #[serde(deserialize_with = "bounded_collection_entries")]
+    pub scenarios: Vec<StoredScenario<T>>,
+}
+
+/// One operating point scenario. The network is stored once on the enclosing
+/// set because all alternatives assign values over the same identities.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct BalancedNetworkScenarioSetV1 {
-    pub scenarios: Vec<BalancedNetworkScenarioV1>,
-}
-
-/// One stored operating point: the state quantities of a single point,
-/// keyed by the instantaneous vocabulary, each with its resolved identity
-/// order and one row of values.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct StoredOperatingPointV1 {
-    pub quantities: BTreeMap<String, StoredQuantityV1>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct MulticonductorOperatingPointTimeSeriesV1 {
-    pub network: Box<MulticonductorNetwork>,
-    pub time_points: Vec<TimePointV1>,
-    /// Quantity name → dense columns, the multiconductor instantaneous
-    /// vocabulary.
-    pub quantities: BTreeMap<String, StoredQuantityV1>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct DcPfInstanceV1 {
-    pub network: Box<BalancedNetwork>,
-    /// The selected branch susceptance formula's stable name.
-    pub approximation: String,
+pub struct StoredOperatingPointScenario {
+    #[serde(deserialize_with = "bounded_identifier")]
+    pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub initial_state: Option<StoredOperatingPointV1>,
+    pub probability: Option<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_quantities")]
+    pub quantities: BTreeMap<String, StoredQuantity>,
 }
 
+/// A scenario set of operating points. The shared network is absent only for
+/// an empty set.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct AcPfInstanceV1 {
-    pub network: Box<BalancedNetwork>,
+pub struct StoredOperatingPointScenarioSet<N> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub initial_state: Option<StoredOperatingPointV1>,
+    pub network: Option<Box<N>>,
+    #[serde(deserialize_with = "bounded_collection_entries")]
+    pub scenarios: Vec<StoredOperatingPointScenario>,
 }
 
-/// One typed objective term, mirroring `powerio_prob::ObjectiveTerm` with its
-/// weight wrapped for the nonfinite spelling: an internally tagged enum's
-/// derived `Deserialize` re-decodes its variant from a buffered generic
-/// value rather than the deserializer callers pass in, so wrapping the whole
-/// document's deserializer (as [`StoredModuleV1`] does for every plain
-/// struct field) never reaches this `f64`.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+/// The PowerIO objective vocabulary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(rename_all = "snake_case", tag = "term", deny_unknown_fields)]
-pub enum ObjectiveTermV1 {
+pub enum ObjectiveTerm {
     NetworkGeneratorCost,
-    NetworkPerPhaseCost,
-    /// Read only compatibility for 0.10 documents. The runtime removes this
-    /// term and records `READ.MODULE.OBJECTIVE_TERM_RETIRED` because the token
-    /// did not define a portable quantity or unit.
-    DifferentiabilityRegularization {
-        weight: StoredF64,
-    },
+    ActivePowerDispatchCost,
 }
 
-/// The complete typed objective, mirroring `powerio_prob::Objective`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct ObjectiveV1 {
+pub struct Objective {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub terms: Vec<ObjectiveTermV1>,
+    pub terms: Vec<ObjectiveTerm>,
+}
+
+/// One calculation initial operating point. Its network
+/// is the enclosing instance's network.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct StoredOperatingPointAssignment {
+    #[serde(deserialize_with = "bounded_operating_point_quantities")]
+    pub quantities: BTreeMap<String, StoredQuantity>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct DcOpfInstanceV1 {
+pub struct DcPfInstance {
     pub network: Box<BalancedNetwork>,
     pub approximation: String,
-    /// The typed objective the instance states, in the calculation crate's
-    /// own serialization.
-    pub objective: ObjectiveV1,
-    pub constraints: powerio_prob::ActiveConstraints,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub initial_state: Option<StoredOperatingPointV1>,
+    pub initial_point: Option<StoredOperatingPointAssignment>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct AcOpfInstanceV1 {
+pub struct AcPfInstance {
     pub network: Box<BalancedNetwork>,
-    pub objective: ObjectiveV1,
+    pub specifications: Vec<powerio_prob::AcBusSpecification>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initial_point: Option<StoredOperatingPointAssignment>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct DcOpfInstance {
+    pub network: Box<BalancedNetwork>,
+    pub approximation: String,
+    pub objective: Objective,
     pub constraints: powerio_prob::ActiveConstraints,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub initial_state: Option<StoredOperatingPointV1>,
+    pub initial_point: Option<StoredOperatingPointAssignment>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct McAcPfInstanceV1 {
+pub struct AcOpfInstance {
+    pub network: Box<BalancedNetwork>,
+    pub objective: Objective,
+    pub constraints: powerio_prob::ActiveConstraints,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initial_point: Option<StoredOperatingPointAssignment>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct McAcPfInstance {
     pub network: Box<MulticonductorNetwork>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub initial_state: Option<StoredOperatingPointV1>,
+    pub initial_point: Option<StoredOperatingPointAssignment>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct McAcOpfInstanceV1 {
+pub struct McAcOpfInstance {
     pub network: Box<MulticonductorNetwork>,
-    pub objective: ObjectiveV1,
+    pub objective: Objective,
     pub constraints: powerio_prob::MulticonductorActiveConstraints,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub initial_state: Option<StoredOperatingPointV1>,
+    pub initial_point: Option<StoredOperatingPointAssignment>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct AcScucInstanceV1 {
+pub struct AcScucInstance {
     pub network: Box<BalancedNetwork>,
     /// The complete SCUC inputs, in the calculation crate's own
     /// serialization, typed through this document's schema.
@@ -499,156 +667,316 @@ pub struct AcScucInstanceV1 {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct GeneratorDispatchV1 {
+pub struct GeneratorDispatch {
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub p_mw: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub q_mvar: Vec<StoredF64>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct DcPfSolutionV1 {
-    pub instance: DcPfInstanceV1,
-    pub termination: powerio_prob::Termination,
-    pub residuals: powerio_prob::Residuals,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub producer: Option<String>,
-    pub bus_voltage_angle: Vec<StoredF64>,
-    pub bus_active_injection: Vec<StoredF64>,
-    pub branch_from_active_flow: Vec<StoredF64>,
-    pub branch_to_active_flow: Vec<StoredF64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub generator_dispatch: Option<GeneratorDispatchV1>,
+pub struct ThreeWindingTransformerTerminalPower {
+    pub p_mw: [StoredF64; 3],
+    pub q_mvar: [StoredF64; 3],
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ThreeWindingTransformerTerminalActivePower {
+    pub p_mw: [StoredF64; 3],
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct AcPfSolutionV1 {
-    pub instance: AcPfInstanceV1,
+pub struct DcPfSolution {
+    pub instance: DcPfInstance,
     pub termination: powerio_prob::Termination,
     pub residuals: powerio_prob::Residuals,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub producer: Option<String>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
+    pub bus_voltage_angle: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
+    pub bus_active_injection: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
+    pub branch_from_active_flow: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
+    pub branch_to_active_flow: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_three_winding_transformer_terminal_active_powers")]
+    pub three_winding_transformer_terminal_active_powers:
+        Vec<ThreeWindingTransformerTerminalActivePower>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generator_dispatch: Option<GeneratorDispatch>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AcPfSolution {
+    pub instance: AcPfInstance,
+    pub termination: powerio_prob::Termination,
+    pub residuals: powerio_prob::Residuals,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub producer: Option<String>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub bus_voltage_magnitude: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub bus_voltage_angle: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub bus_active_injection: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub bus_reactive_injection: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub branch_from_active_flow: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub branch_from_reactive_flow: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub branch_to_active_flow: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub branch_to_reactive_flow: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_three_winding_transformer_terminal_powers")]
+    pub three_winding_transformer_terminal_powers: Vec<ThreeWindingTransformerTerminalPower>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub generator_dispatch: Option<GeneratorDispatchV1>,
+    pub generator_dispatch: Option<GeneratorDispatch>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct DcOpfSolutionV1 {
-    pub instance: DcOpfInstanceV1,
+pub struct DcOpfSolution {
+    pub instance: DcOpfInstance,
     pub termination: powerio_prob::Termination,
     pub residuals: powerio_prob::Residuals,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub producer: Option<String>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub bus_voltage_angle: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub bus_active_injection: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub branch_from_active_flow: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub branch_to_active_flow: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub generator_active_power: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_three_winding_transformer_terminal_active_powers")]
+    pub three_winding_transformer_terminal_active_powers:
+        Vec<ThreeWindingTransformerTerminalActivePower>,
     pub objective: StoredF64,
-    /// Read only 0.10 name for the active demand marginal.
-    #[serde(default, skip_serializing)]
-    pub bus_price: Option<Vec<StoredF64>>,
-    /// Optimal objective derivative per added MW of demand, by bus.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "bounded_optional_values",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub bus_active_power_marginal: Option<Vec<StoredF64>>,
-    /// Read only 0.10 signed thermal dual (`from - to`). The 1.x reader splits
-    /// it into the two directional multiplier columns.
-    #[serde(default, skip_serializing)]
-    pub branch_flow_dual: Option<Vec<StoredF64>>,
-    /// Nonnegative multiplier on the from-side thermal bound, by branch.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "bounded_optional_values",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub branch_from_limit_multiplier: Option<Vec<StoredF64>>,
-    /// Nonnegative multiplier on the to-side thermal bound, by branch.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "bounded_optional_values",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub branch_to_limit_multiplier: Option<Vec<StoredF64>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct AcOpfSolutionV1 {
-    pub instance: AcOpfInstanceV1,
+pub struct AcOpfSolution {
+    pub instance: AcOpfInstance,
     pub termination: powerio_prob::Termination,
     pub residuals: powerio_prob::Residuals,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub producer: Option<String>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub bus_voltage_magnitude: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub bus_voltage_angle: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub bus_active_injection: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub bus_reactive_injection: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub branch_from_active_flow: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub branch_from_reactive_flow: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub branch_to_active_flow: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub branch_to_reactive_flow: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub generator_active_power: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub generator_reactive_power: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_three_winding_transformer_terminal_powers")]
+    pub three_winding_transformer_terminal_powers: Vec<ThreeWindingTransformerTerminalPower>,
     pub objective: StoredF64,
-    /// Read only 0.10 name for the active demand marginal.
-    #[serde(default, skip_serializing)]
-    pub bus_active_price: Option<Vec<StoredF64>>,
-    /// Optimal objective derivative per added MW of demand, by bus.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "bounded_optional_values",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub bus_active_power_marginal: Option<Vec<StoredF64>>,
-    /// Read only 0.10 name for the reactive demand marginal.
-    #[serde(default, skip_serializing)]
-    pub bus_reactive_price: Option<Vec<StoredF64>>,
-    /// Optimal objective derivative per added MVAr of demand, by bus.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "bounded_optional_values",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub bus_reactive_power_marginal: Option<Vec<StoredF64>>,
-    /// Nonnegative multiplier on the from-terminal apparent power bound.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "bounded_optional_values",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub branch_from_limit_multiplier: Option<Vec<StoredF64>>,
-    /// Nonnegative multiplier on the to-terminal apparent power bound.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "bounded_optional_values",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub branch_to_limit_multiplier: Option<Vec<StoredF64>>,
 }
 
+/// Primal values of a serialized SOCWR relaxation result.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct McAcPfSolutionV1 {
-    pub instance: McAcPfInstanceV1,
+pub struct SocwrOpfValues {
+    #[serde(deserialize_with = "bounded_operating_point_values")]
+    pub bus_voltage_magnitude_squared: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
+    pub branch_voltage_product_real: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
+    pub branch_voltage_product_imaginary: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
+    pub generator_active_power: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
+    pub generator_reactive_power: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
+    pub branch_from_active_power: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
+    pub branch_from_reactive_power: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
+    pub branch_to_active_power: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
+    pub branch_to_reactive_power: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_three_winding_transformer_terminal_powers")]
+    pub three_winding_transformer_terminal_powers: Vec<ThreeWindingTransformerTerminalPower>,
+}
+
+/// Optional dual values of a serialized SOCWR relaxation result.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct SocwrOpfDuals {
+    #[serde(
+        default,
+        deserialize_with = "bounded_optional_values",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub bus_active_power_marginal: Option<Vec<StoredF64>>,
+    #[serde(
+        default,
+        deserialize_with = "bounded_optional_values",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub bus_reactive_power_marginal: Option<Vec<StoredF64>>,
+    #[serde(
+        default,
+        deserialize_with = "bounded_optional_values",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub branch_from_thermal_limit_multiplier: Option<Vec<StoredF64>>,
+    #[serde(
+        default,
+        deserialize_with = "bounded_optional_values",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub branch_to_thermal_limit_multiplier: Option<Vec<StoredF64>>,
+}
+
+/// A PowerModels SOCWR relaxation result. Its objective is explicitly a lower
+/// bound, not an AC feasible objective value.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct SocwrOpfSolution {
+    pub instance: AcOpfInstance,
     pub termination: powerio_prob::Termination,
     pub residuals: powerio_prob::Residuals,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub producer: Option<String>,
+    pub values: SocwrOpfValues,
+    #[serde(default)]
+    pub duals: SocwrOpfDuals,
+    pub objective_lower_bound: StoredF64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct McAcPfSolution {
+    pub instance: McAcPfInstance,
+    pub termination: powerio_prob::Termination,
+    pub residuals: powerio_prob::Residuals,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub producer: Option<String>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub terminal_voltage_magnitude: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub terminal_voltage_angle: Vec<StoredF64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "bounded_optional_values",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub terminal_current_magnitude: Option<Vec<StoredF64>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "bounded_optional_values",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub terminal_active_power: Option<Vec<StoredF64>>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub source_active_injection: Vec<StoredF64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct McAcOpfSolutionV1 {
-    pub instance: McAcOpfInstanceV1,
+pub struct McAcOpfSolution {
+    pub instance: McAcOpfInstance,
     pub termination: powerio_prob::Termination,
     pub residuals: powerio_prob::Residuals,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub producer: Option<String>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub terminal_voltage_magnitude: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub terminal_voltage_angle: Vec<StoredF64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "bounded_optional_values",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub terminal_current_magnitude: Option<Vec<StoredF64>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "bounded_optional_values",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub terminal_active_power: Option<Vec<StoredF64>>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub source_active_injection: Vec<StoredF64>,
+    #[serde(deserialize_with = "bounded_operating_point_values")]
     pub generator_active_power: Vec<StoredF64>,
     pub objective: StoredF64,
 }
@@ -656,14 +984,14 @@ pub struct McAcOpfSolutionV1 {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct ScucNetworkOutputsV1 {
+pub struct ScucNetworkOutputs {
     pub bus_vm: Vec<Vec<StoredF64>>,
     pub bus_va: Vec<Vec<StoredF64>>,
-    pub shunt_step: Vec<Vec<StoredF64>>,
-    pub ac_line_on_status: Vec<Vec<StoredF64>>,
+    pub shunt_step: Vec<Vec<i64>>,
+    pub ac_line_on_status: Vec<Vec<bool>>,
     pub transformer_tm: Vec<Vec<StoredF64>>,
     pub transformer_ta: Vec<Vec<StoredF64>>,
-    pub transformer_on_status: Vec<Vec<StoredF64>>,
+    pub transformer_on_status: Vec<Vec<bool>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dc_line_pdc_fr: Vec<Vec<StoredF64>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -675,8 +1003,10 @@ pub struct ScucNetworkOutputsV1 {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct ScucDeviceOutputsV1 {
-    pub on_status: Vec<Vec<StoredF64>>,
+pub struct ScucDeviceOutputs {
+    pub on_status: Vec<Vec<bool>>,
+    pub startup_status: Vec<Vec<bool>>,
+    pub shutdown_status: Vec<Vec<bool>>,
     pub p_on: Vec<Vec<StoredF64>>,
     pub q: Vec<Vec<StoredF64>>,
     pub p_reg_res_up: Vec<Vec<StoredF64>>,
@@ -684,7 +1014,9 @@ pub struct ScucDeviceOutputsV1 {
     pub p_syn_res: Vec<Vec<StoredF64>>,
     pub p_nsyn_res: Vec<Vec<StoredF64>>,
     pub p_ramp_res_up_online: Vec<Vec<StoredF64>>,
+    pub p_ramp_res_up_offline: Vec<Vec<StoredF64>>,
     pub p_ramp_res_down_online: Vec<Vec<StoredF64>>,
+    pub p_ramp_res_down_offline: Vec<Vec<StoredF64>>,
     pub q_res_up: Vec<Vec<StoredF64>>,
     pub q_res_down: Vec<Vec<StoredF64>>,
 }
@@ -692,108 +1024,125 @@ pub struct ScucDeviceOutputsV1 {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct AcScucSolutionV1 {
-    pub instance: AcScucInstanceV1,
+pub struct AcScucSolution {
+    pub instance: AcScucInstance,
     pub termination: powerio_prob::Termination,
     pub residuals: powerio_prob::Residuals,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub producer: Option<String>,
-    pub network_outputs: ScucNetworkOutputsV1,
-    pub device_outputs: ScucDeviceOutputsV1,
+    pub network_outputs: ScucNetworkOutputs,
+    pub device_outputs: ScucDeviceOutputs,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub objective: Option<StoredF64>,
 }
 
-/// The tagged value DTO. `data` is a typed record, never an untyped JSON
-/// catchall; the network payloads are the typed serializations the network
-/// crates own (which carry the nonfinite spellings themselves).
+/// PowerIO IR value representation. The discriminator is the canonical
+/// structural type name used by every dynamic boundary.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
-#[serde(
-    deny_unknown_fields,
-    tag = "kind",
-    content = "data",
-    rename_all = "snake_case"
-)]
-pub enum StoredValueV1 {
+#[serde(deny_unknown_fields, tag = "type", content = "data")]
+pub enum StoredValue {
+    #[serde(rename = "powerio.BalancedNetwork")]
     BalancedNetwork(Box<BalancedNetwork>),
+    #[serde(rename = "powerio.MulticonductorNetwork")]
     MulticonductorNetwork(Box<MulticonductorNetwork>),
-    BalancedNetworkTimeSeries(BalancedNetworkTimeSeriesV1),
-    BalancedOperatingPointTimeSeries(BalancedOperatingPointTimeSeriesV1),
-    MulticonductorOperatingPointTimeSeries(MulticonductorOperatingPointTimeSeriesV1),
-    BalancedNetworkScenarioSet(BalancedNetworkScenarioSetV1),
-    DcPfInstance(DcPfInstanceV1),
-    AcPfInstance(AcPfInstanceV1),
-    DcOpfInstance(DcOpfInstanceV1),
-    AcOpfInstance(AcOpfInstanceV1),
-    McAcPfInstance(McAcPfInstanceV1),
-    McAcOpfInstance(McAcOpfInstanceV1),
-    AcScucInstance(AcScucInstanceV1),
-    DcPfSolution(Box<DcPfSolutionV1>),
-    AcPfSolution(Box<AcPfSolutionV1>),
-    DcOpfSolution(Box<DcOpfSolutionV1>),
-    AcOpfSolution(Box<AcOpfSolutionV1>),
-    McAcPfSolution(Box<McAcPfSolutionV1>),
-    McAcOpfSolution(Box<McAcOpfSolutionV1>),
-    AcScucSolution(Box<AcScucSolutionV1>),
-}
-
-impl StoredValueV1 {
-    /// The permanent kind identifier the tag serializes.
-    #[must_use]
-    pub fn kind(&self) -> &'static str {
-        match self {
-            Self::BalancedNetwork(_) => "balanced_network",
-            Self::MulticonductorNetwork(_) => "multiconductor_network",
-            Self::BalancedNetworkTimeSeries(_) => "balanced_network_time_series",
-            Self::BalancedOperatingPointTimeSeries(_) => "balanced_operating_point_time_series",
-            Self::MulticonductorOperatingPointTimeSeries(_) => {
-                "multiconductor_operating_point_time_series"
-            }
-            Self::BalancedNetworkScenarioSet(_) => "balanced_network_scenario_set",
-            Self::DcPfInstance(_) => "dc_pf_instance",
-            Self::AcPfInstance(_) => "ac_pf_instance",
-            Self::DcOpfInstance(_) => "dc_opf_instance",
-            Self::AcOpfInstance(_) => "ac_opf_instance",
-            Self::McAcPfInstance(_) => "mc_ac_pf_instance",
-            Self::McAcOpfInstance(_) => "mc_ac_opf_instance",
-            Self::AcScucInstance(_) => "ac_scuc_instance",
-            Self::DcPfSolution(_) => "dc_pf_solution",
-            Self::AcPfSolution(_) => "ac_pf_solution",
-            Self::DcOpfSolution(_) => "dc_opf_solution",
-            Self::AcOpfSolution(_) => "ac_opf_solution",
-            Self::McAcPfSolution(_) => "mc_ac_pf_solution",
-            Self::McAcOpfSolution(_) => "mc_ac_opf_solution",
-            Self::AcScucSolution(_) => "ac_scuc_solution",
-        }
-    }
+    #[serde(rename = "powerio.GeoLayer")]
+    GeoLayer(Box<powerio_tx::GeoLayer>),
+    #[serde(rename = "powerio.OperatingPoint<powerio.BalancedNetwork>")]
+    BalancedOperatingPoint(StoredOperatingPoint<BalancedNetwork>),
+    #[serde(rename = "powerio.OperatingPoint<powerio.MulticonductorNetwork>")]
+    MulticonductorOperatingPoint(StoredOperatingPoint<MulticonductorNetwork>),
+    #[serde(rename = "powerio.TimeSeries<powerio.BalancedNetwork>")]
+    BalancedNetworkTimeSeries(StoredTimeSeries<BalancedNetwork>),
+    #[serde(rename = "powerio.TimeSeries<powerio.MulticonductorNetwork>")]
+    MulticonductorNetworkTimeSeries(StoredTimeSeries<MulticonductorNetwork>),
+    #[serde(rename = "powerio.TimeSeries<powerio.OperatingPoint<powerio.BalancedNetwork>>")]
+    BalancedOperatingPointTimeSeries(StoredOperatingPointTimeSeries<BalancedNetwork>),
+    #[serde(rename = "powerio.TimeSeries<powerio.OperatingPoint<powerio.MulticonductorNetwork>>")]
+    MulticonductorOperatingPointTimeSeries(StoredOperatingPointTimeSeries<MulticonductorNetwork>),
+    #[serde(rename = "powerio.ScenarioSet<powerio.BalancedNetwork>")]
+    BalancedNetworkScenarioSet(StoredScenarioSet<BalancedNetwork>),
+    #[serde(rename = "powerio.ScenarioSet<powerio.MulticonductorNetwork>")]
+    MulticonductorNetworkScenarioSet(StoredScenarioSet<MulticonductorNetwork>),
+    #[serde(rename = "powerio.ScenarioSet<powerio.OperatingPoint<powerio.BalancedNetwork>>")]
+    BalancedOperatingPointScenarioSet(StoredOperatingPointScenarioSet<BalancedNetwork>),
+    #[serde(rename = "powerio.ScenarioSet<powerio.OperatingPoint<powerio.MulticonductorNetwork>>")]
+    MulticonductorOperatingPointScenarioSet(StoredOperatingPointScenarioSet<MulticonductorNetwork>),
+    #[serde(rename = "powerio.ScenarioSet<powerio.TimeSeries<powerio.BalancedNetwork>>")]
+    BalancedNetworkTimeSeriesScenarioSet(StoredScenarioSet<StoredTimeSeries<BalancedNetwork>>),
+    #[serde(rename = "powerio.ScenarioSet<powerio.TimeSeries<powerio.MulticonductorNetwork>>")]
+    MulticonductorNetworkTimeSeriesScenarioSet(
+        StoredScenarioSet<StoredTimeSeries<MulticonductorNetwork>>,
+    ),
+    #[serde(
+        rename = "powerio.ScenarioSet<powerio.TimeSeries<powerio.OperatingPoint<powerio.BalancedNetwork>>>"
+    )]
+    BalancedOperatingPointTimeSeriesScenarioSet(
+        StoredScenarioSet<StoredOperatingPointTimeSeries<BalancedNetwork>>,
+    ),
+    #[serde(
+        rename = "powerio.ScenarioSet<powerio.TimeSeries<powerio.OperatingPoint<powerio.MulticonductorNetwork>>>"
+    )]
+    MulticonductorOperatingPointTimeSeriesScenarioSet(
+        StoredScenarioSet<StoredOperatingPointTimeSeries<MulticonductorNetwork>>,
+    ),
+    #[serde(rename = "powerio.DcPfInstance")]
+    DcPfInstance(DcPfInstance),
+    #[serde(rename = "powerio.AcPfInstance")]
+    AcPfInstance(AcPfInstance),
+    #[serde(rename = "powerio.DcOpfInstance")]
+    DcOpfInstance(DcOpfInstance),
+    #[serde(rename = "powerio.AcOpfInstance")]
+    AcOpfInstance(AcOpfInstance),
+    #[serde(rename = "powerio.McAcPfInstance")]
+    McAcPfInstance(McAcPfInstance),
+    #[serde(rename = "powerio.McAcOpfInstance")]
+    McAcOpfInstance(McAcOpfInstance),
+    #[serde(rename = "powerio.AcScucInstance")]
+    AcScucInstance(AcScucInstance),
+    #[serde(rename = "powerio.DcPfSolution")]
+    DcPfSolution(Box<DcPfSolution>),
+    #[serde(rename = "powerio.AcPfSolution")]
+    AcPfSolution(Box<AcPfSolution>),
+    #[serde(rename = "powerio.DcOpfSolution")]
+    DcOpfSolution(Box<DcOpfSolution>),
+    #[serde(rename = "powerio.AcOpfSolution")]
+    AcOpfSolution(Box<AcOpfSolution>),
+    #[serde(rename = "powerio.SocwrOpfSolution")]
+    SocwrOpfSolution(Box<SocwrOpfSolution>),
+    #[serde(rename = "powerio.McAcPfSolution")]
+    McAcPfSolution(Box<McAcPfSolution>),
+    #[serde(rename = "powerio.McAcOpfSolution")]
+    McAcOpfSolution(Box<McAcOpfSolution>),
+    #[serde(rename = "powerio.AcScucSolution")]
+    AcScucSolution(Box<AcScucSolution>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct SourceDescriptorV1 {
-    pub id: SourceIdV1,
+pub struct SourceDescriptor {
+    pub id: SourceId,
     pub name: String,
     pub byte_length: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub digest: Option<DigestV1>,
+    pub digest: Option<Digest>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(rename_all = "snake_case")]
-pub enum DigestAlgorithmV1 {
+pub enum DigestAlgorithm {
     Sha256,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct DigestV1 {
-    pub algorithm: DigestAlgorithmV1,
+pub struct Digest {
+    pub algorithm: DigestAlgorithm,
     /// Lowercase hexadecimal, without a prefix.
     pub value: String,
 }
@@ -801,8 +1150,8 @@ pub struct DigestV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct SourceSpanV1 {
-    pub source: SourceIdV1,
+pub struct SourceSpan {
+    pub source: SourceId,
     pub byte_start: u64,
     pub byte_end: u64,
 }
@@ -810,7 +1159,7 @@ pub struct SourceSpanV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(rename_all = "snake_case")]
-pub enum SourceRelationV1 {
+pub enum SourceRelation {
     Exact,
     Defaulted,
     Inferred,
@@ -825,24 +1174,24 @@ pub enum SourceRelationV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct SourceMapEntryV1 {
+pub struct SourceMapEntry {
     /// RFC 6901 pointer into `value.data`.
     #[serde(deserialize_with = "bounded_target")]
     pub target: String,
-    pub relation: SourceRelationV1,
+    pub relation: SourceRelation,
     /// Empty only for `defaulted`, `synthetic`, or `transformed`.
     #[serde(
         default,
         deserialize_with = "bounded_map_spans",
         skip_serializing_if = "Vec::is_empty"
     )]
-    pub spans: Vec<SourceSpanV1>,
+    pub spans: Vec<SourceSpan>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(rename_all = "snake_case")]
-pub enum SeverityV1 {
+pub enum Severity {
     Error,
     Warning,
     Remark,
@@ -852,9 +1201,9 @@ pub enum SeverityV1 {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct DiagnosticV1 {
-    pub id: DiagnosticIdV1,
-    pub severity: SeverityV1,
+pub struct Diagnostic {
+    pub id: DiagnosticId,
+    pub severity: Severity,
     #[serde(deserialize_with = "bounded_code")]
     pub code: String,
     #[serde(deserialize_with = "truncated_message")]
@@ -870,13 +1219,13 @@ pub struct DiagnosticV1 {
         deserialize_with = "bounded_diagnostic_spans",
         skip_serializing_if = "Vec::is_empty"
     )]
-    pub spans: Vec<SourceSpanV1>,
+    pub spans: Vec<SourceSpan>,
     #[serde(
         default,
         deserialize_with = "bounded_related",
         skip_serializing_if = "Vec::is_empty"
     )]
-    pub related: Vec<DiagnosticIdV1>,
+    pub related: Vec<DiagnosticId>,
     #[serde(
         default,
         deserialize_with = "bounded_opt_action",
@@ -894,29 +1243,28 @@ pub struct DiagnosticV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(rename_all = "snake_case")]
-pub enum HistoryKindV1 {
+pub enum HistoryKind {
     Parse,
-    Upgrade,
     Transform,
     Edit,
     Repair,
+    Solve,
 }
 
-/// Describes an operation that produced the current value. Not a replay
-/// program; replayable revisions require their own typed value.
+/// PowerIO IR history record. Input and output identify structural types,
+/// not a parallel value registry.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct HistoryEntryV1 {
-    pub id: HistoryIdV1,
-    pub kind: HistoryKindV1,
-    /// Stable registered operation name.
+pub struct HistoryEntry {
+    pub id: HistoryId,
+    pub kind: HistoryKind,
     #[serde(deserialize_with = "bounded_name")]
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_kind: Option<String>,
+    pub input_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_kind: Option<String>,
+    pub output_type: Option<String>,
     #[serde(
         default,
         deserialize_with = "bounded_parameters",
@@ -940,36 +1288,43 @@ pub struct HistoryEntryV1 {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields, remote = "Self")]
-pub struct StoredModuleV1 {
+pub struct StoredModule {
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("const" = crate::IR_SCHEMA_NAME))
+    )]
     pub schema: String,
-    pub version: u32,
-    pub producer: ProducerV1,
-    pub value: StoredValueV1,
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("const" = crate::IR_VERSION))
+    )]
+    pub version: u64,
+    pub producer: Producer,
+    pub value: StoredValue,
     #[serde(
         default,
         deserialize_with = "bounded_sources",
         skip_serializing_if = "Vec::is_empty"
     )]
-    pub sources: Vec<SourceDescriptorV1>,
+    pub sources: Vec<SourceDescriptor>,
     #[serde(
         default,
         deserialize_with = "bounded_source_map",
         skip_serializing_if = "Vec::is_empty"
     )]
-    pub source_map: Vec<SourceMapEntryV1>,
+    pub source_map: Vec<SourceMapEntry>,
     #[serde(
         default,
         deserialize_with = "bounded_diagnostics",
         skip_serializing_if = "Vec::is_empty"
     )]
-    pub diagnostics: Vec<DiagnosticV1>,
+    pub diagnostics: Vec<Diagnostic>,
     #[serde(
         default,
         deserialize_with = "bounded_history",
         skip_serializing_if = "Vec::is_empty"
     )]
-    pub history: Vec<HistoryEntryV1>,
-    /// Nonsemantic third party annotations. Keys must be namespaced.
+    pub history: Vec<HistoryEntry>,
     #[serde(
         default,
         deserialize_with = "bounded_extensions",
@@ -978,62 +1333,102 @@ pub struct StoredModuleV1 {
     pub extensions: BTreeMap<String, serde_json::Value>,
 }
 
-// Same mechanism as the two network models and NetworkPackage: the whole
-// document, including `value`'s powerio-prob calculation payloads (whose own
-// f64/Option<f64> fields, defined outside this crate, are not individually
-// wrapped in StoredF64), spells a nonfinite float as a string, so nothing
-// this crate writes ever refuses to read back.
-impl Serialize for StoredModuleV1 {
+impl Serialize for StoredModule {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        StoredModuleV1::serialize(
+        StoredModule::serialize(
             self,
             powerio_core::__implementation::nonfinite::NonFiniteSer(serializer),
         )
     }
 }
 
-impl<'de> Deserialize<'de> for StoredModuleV1 {
+impl<'de> Deserialize<'de> for StoredModule {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        StoredModuleV1::deserialize(powerio_core::__implementation::nonfinite::NonFiniteDe(
+        StoredModule::deserialize(powerio_core::__implementation::nonfinite::NonFiniteDe(
             deserializer,
         ))
     }
 }
 
+/// The `version` a document states, kept as written so a refusal can name it.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub(super) enum StoredVersion {
+    Integer(u64),
+    Other(serde_json::Value),
+}
+
+impl StoredVersion {
+    pub(super) fn as_integer(&self) -> Option<u64> {
+        match self {
+            Self::Integer(version) => Some(*version),
+            Self::Other(_) => None,
+        }
+    }
+}
+
+impl fmt::Display for StoredVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Integer(version) => version.fmt(f),
+            Self::Other(value) => value.fmt(f),
+        }
+    }
+}
+
+/// The two header fields the reader dispatches on, read from a document that
+/// did not decode as the current shape.
 #[derive(Debug, Deserialize)]
 pub(super) struct StoredHeader {
     #[serde(default)]
     pub(super) schema: Option<String>,
     #[serde(default)]
-    pub(super) version: Option<u32>,
-    /// The 0.9 legacy shape identifies itself by this field instead.
-    #[serde(default)]
-    pub(super) powerio_version: Option<String>,
+    pub(super) version: Option<StoredVersion>,
 }
 
 /// Structural validation of one decoded document: identities, digests,
 /// spans, pointers, relation rules, namespaced extensions, and value shapes.
-pub fn validate(module: &StoredModuleV1) -> Result<(), String> {
+pub fn validate(module: &StoredModule) -> Result<(), String> {
     validate_value(&module.value)?;
+    validate_records(
+        &module.value,
+        &module.sources,
+        &module.source_map,
+        &module.diagnostics,
+        module
+            .history
+            .iter()
+            .map(|entry| (entry.id.0.as_str(), entry.name.as_str())),
+        &module.extensions,
+    )
+}
+
+fn validate_records<'a, V: Serialize>(
+    value: &V,
+    module_sources: &[SourceDescriptor],
+    source_map: &[SourceMapEntry],
+    module_diagnostics: &[Diagnostic],
+    module_history: impl IntoIterator<Item = (&'a str, &'a str)>,
+    extensions: &BTreeMap<String, serde_json::Value>,
+) -> Result<(), String> {
     // Pointer existence checks re-inflate the value only when something
     // actually targets it.
-    let needs_targets = !module.source_map.is_empty()
-        || module
-            .diagnostics
+    let needs_targets = !source_map.is_empty()
+        || module_diagnostics
             .iter()
             .any(|diagnostic| diagnostic.target.is_some());
     // One generic representation, borrowed by every target check: the tagged
     // value serializes with its `data` key, so targets resolve under a `/data`
     // prefix instead of cloning the subtree out.
     let stored_value = if needs_targets {
-        Some(serde_json::to_value(&module.value).map_err(|error| error.to_string())?)
+        Some(serde_json::to_value(value).map_err(|error| error.to_string())?)
     } else {
         None
     };
     let value_data = stored_value.as_ref();
 
     let mut sources = BTreeMap::new();
-    for source in &module.sources {
+    for source in module_sources {
         nonempty("source id", &source.id.0)?;
         if sources
             .insert(source.id.0.clone(), source.byte_length)
@@ -1054,7 +1449,7 @@ pub fn validate(module: &StoredModuleV1) -> Result<(), String> {
     }
 
     let mut diagnostics = BTreeSet::new();
-    for diagnostic in &module.diagnostics {
+    for diagnostic in module_diagnostics {
         nonempty("diagnostic id", &diagnostic.id.0)?;
         if !diagnostics.insert(diagnostic.id.0.as_str()) {
             return Err(format!("duplicate diagnostic id `{}`", diagnostic.id.0));
@@ -1062,7 +1457,7 @@ pub fn validate(module: &StoredModuleV1) -> Result<(), String> {
         validate_target(diagnostic.target.as_deref(), value_data)?;
         validate_spans(&diagnostic.spans, &sources)?;
     }
-    for diagnostic in &module.diagnostics {
+    for diagnostic in module_diagnostics {
         for related in &diagnostic.related {
             if !diagnostics.contains(related.0.as_str()) {
                 return Err(format!(
@@ -1073,14 +1468,12 @@ pub fn validate(module: &StoredModuleV1) -> Result<(), String> {
         }
     }
 
-    for entry in &module.source_map {
+    for entry in source_map {
         validate_target(Some(&entry.target), value_data)?;
         validate_spans(&entry.spans, &sources)?;
         let empty_allowed = matches!(
             entry.relation,
-            SourceRelationV1::Defaulted
-                | SourceRelationV1::Synthetic
-                | SourceRelationV1::Transformed
+            SourceRelation::Defaulted | SourceRelation::Synthetic | SourceRelation::Transformed
         );
         if entry.spans.is_empty() && !empty_allowed {
             return Err(format!(
@@ -1091,15 +1484,15 @@ pub fn validate(module: &StoredModuleV1) -> Result<(), String> {
     }
 
     let mut history = BTreeSet::new();
-    for entry in &module.history {
-        nonempty("history id", &entry.id.0)?;
-        if !history.insert(entry.id.0.as_str()) {
-            return Err(format!("duplicate history id `{}`", entry.id.0));
+    for (id, name) in module_history {
+        nonempty("history id", id)?;
+        if !history.insert(id) {
+            return Err(format!("duplicate history id `{id}`"));
         }
-        nonempty("history operation name", &entry.name)?;
+        nonempty("history operation name", name)?;
     }
 
-    for namespace in module.extensions.keys() {
+    for namespace in extensions.keys() {
         if namespace.starts_with('.') || !namespace.contains('.') {
             return Err(format!("extension key `{namespace}` is not namespaced"));
         }
@@ -1110,122 +1503,7 @@ pub fn validate(module: &StoredModuleV1) -> Result<(), String> {
 
 // One arm per stored kind, as in the decoder.
 #[allow(clippy::too_many_lines)]
-fn validate_value(value: &StoredValueV1) -> Result<(), String> {
-    let points: &[TimePointV1] = match value {
-        StoredValueV1::BalancedNetworkTimeSeries(series) => {
-            if series.time_points.len() != series.values.len() {
-                return Err(format!(
-                    "balanced network time series has {} values for {} time points",
-                    series.values.len(),
-                    series.time_points.len()
-                ));
-            }
-            if series.time_points.is_empty() {
-                return Err("a time series needs at least one time point".to_owned());
-            }
-            &series.time_points
-        }
-        StoredValueV1::BalancedOperatingPointTimeSeries(series) => {
-            if series.time_points.is_empty() {
-                return Err("a time series needs at least one time point".to_owned());
-            }
-            for (name, quantity) in &series.quantities {
-                let expected = series
-                    .time_points
-                    .len()
-                    .checked_mul(quantity.identities.len())
-                    .ok_or_else(|| format!("quantity `{name}` dimensions overflow"))?;
-                if quantity.values.len() != expected {
-                    return Err(format!(
-                        "quantity `{name}` has {} values; expected {expected}",
-                        quantity.values.len()
-                    ));
-                }
-            }
-            &series.time_points
-        }
-        StoredValueV1::BalancedNetworkScenarioSet(set) => {
-            let mut ids = BTreeSet::new();
-            for scenario in &set.scenarios {
-                nonempty("scenario id", &scenario.id)?;
-                if !ids.insert(scenario.id.as_str()) {
-                    return Err(format!("duplicate scenario id `{}`", scenario.id));
-                }
-            }
-            return Ok(());
-        }
-        StoredValueV1::MulticonductorOperatingPointTimeSeries(series) => {
-            if series.time_points.is_empty() {
-                return Err("a time series needs at least one time point".to_owned());
-            }
-            for (name, quantity) in &series.quantities {
-                let expected = series
-                    .time_points
-                    .len()
-                    .checked_mul(quantity.identities.len())
-                    .ok_or_else(|| format!("quantity `{name}` dimensions overflow"))?;
-                if quantity.values.len() != expected {
-                    return Err(format!(
-                        "quantity `{name}` has {} values; expected {expected}",
-                        quantity.values.len()
-                    ));
-                }
-            }
-            &series.time_points
-        }
-        StoredValueV1::DcPfInstance(instance) => {
-            validate_stored_point(instance.initial_state.as_ref())?;
-            return Ok(());
-        }
-        StoredValueV1::AcPfInstance(instance) => {
-            validate_stored_point(instance.initial_state.as_ref())?;
-            return Ok(());
-        }
-        StoredValueV1::DcOpfInstance(instance) => {
-            validate_stored_point(instance.initial_state.as_ref())?;
-            return Ok(());
-        }
-        StoredValueV1::AcOpfInstance(instance) => {
-            validate_stored_point(instance.initial_state.as_ref())?;
-            return Ok(());
-        }
-        StoredValueV1::McAcPfInstance(instance) => {
-            validate_stored_point(instance.initial_state.as_ref())?;
-            return Ok(());
-        }
-        StoredValueV1::McAcOpfInstance(instance) => {
-            validate_stored_point(instance.initial_state.as_ref())?;
-            return Ok(());
-        }
-        StoredValueV1::DcPfSolution(solution) => {
-            validate_stored_point(solution.instance.initial_state.as_ref())?;
-            return Ok(());
-        }
-        StoredValueV1::AcPfSolution(solution) => {
-            validate_stored_point(solution.instance.initial_state.as_ref())?;
-            return Ok(());
-        }
-        StoredValueV1::DcOpfSolution(solution) => {
-            validate_stored_point(solution.instance.initial_state.as_ref())?;
-            return Ok(());
-        }
-        StoredValueV1::AcOpfSolution(solution) => {
-            validate_stored_point(solution.instance.initial_state.as_ref())?;
-            return Ok(());
-        }
-        StoredValueV1::McAcPfSolution(solution) => {
-            validate_stored_point(solution.instance.initial_state.as_ref())?;
-            return Ok(());
-        }
-        StoredValueV1::McAcOpfSolution(solution) => {
-            validate_stored_point(solution.instance.initial_state.as_ref())?;
-            return Ok(());
-        }
-        StoredValueV1::AcScucInstance(_) | StoredValueV1::AcScucSolution(_) => return Ok(()),
-        StoredValueV1::BalancedNetwork(_) | StoredValueV1::MulticonductorNetwork(_) => {
-            return Ok(());
-        }
-    };
+fn validate_time_points(points: &[TimePoint]) -> Result<(), String> {
     for point in points {
         nonempty("time point label", &point.label)?;
         if let Some(duration) = point.duration
@@ -1240,25 +1518,221 @@ fn validate_value(value: &StoredValueV1) -> Result<(), String> {
     Ok(())
 }
 
-/// One stored operating point: each quantity carries exactly one row over
-/// its identities.
-fn validate_stored_point(point: Option<&StoredOperatingPointV1>) -> Result<(), String> {
-    let Some(point) = point else {
-        return Ok(());
-    };
-    for (name, quantity) in &point.quantities {
-        if quantity.values.len() != quantity.identities.len() {
+fn validate_quantities(
+    quantities: &BTreeMap<String, StoredQuantity>,
+    rows: usize,
+) -> Result<(), String> {
+    for (name, quantity) in quantities {
+        nonempty("operating point quantity name", name)?;
+        let expected = rows
+            .checked_mul(quantity.identities.len())
+            .ok_or_else(|| format!("quantity `{name}` dimensions overflow"))?;
+        if quantity.values.len() != expected {
             return Err(format!(
-                "stored operating point quantity `{name}` has {} values for {} identities",
-                quantity.values.len(),
-                quantity.identities.len()
+                "operating point quantity `{name}` has {} values; expected {expected}",
+                quantity.values.len()
             ));
+        }
+        for identity in &quantity.identities {
+            nonempty("operating point identity", &identity.0)?;
         }
     }
     Ok(())
 }
 
-fn validate_spans(spans: &[SourceSpanV1], sources: &BTreeMap<String, u64>) -> Result<(), String> {
+fn validate_time_series<T>(series: &StoredTimeSeries<T>) -> Result<(), String> {
+    if series.time_points.len() != series.values.len() {
+        return Err(format!(
+            "time series has {} values for {} time points",
+            series.values.len(),
+            series.time_points.len()
+        ));
+    }
+    validate_time_points(&series.time_points)
+}
+
+fn validate_operating_point_series<N>(
+    series: &StoredOperatingPointTimeSeries<N>,
+) -> Result<(), String> {
+    validate_time_points(&series.time_points)?;
+    if series.time_points.len() != series.values.len() {
+        return Err(format!(
+            "operating point time series has {} values for {} time points",
+            series.values.len(),
+            series.time_points.len()
+        ));
+    }
+    if series.time_points.is_empty() {
+        if series.network.is_some() {
+            return Err("an empty operating point time series cannot carry a network".to_string());
+        }
+        return Ok(());
+    }
+    if series.network.is_none() {
+        return Err("a nonempty operating point time series needs its base network".to_string());
+    }
+    for point in &series.values {
+        validate_quantities(&point.quantities, 1)?;
+    }
+    Ok(())
+}
+
+fn validate_scenario_set<T>(
+    set: &StoredScenarioSet<T>,
+    mut validate_value: impl FnMut(&T) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut ids = BTreeSet::new();
+    for scenario in &set.scenarios {
+        nonempty("scenario id", &scenario.id)?;
+        if !ids.insert(scenario.id.as_str()) {
+            return Err(format!("duplicate scenario id `{}`", scenario.id));
+        }
+        validate_value(&scenario.value)?;
+    }
+    Ok(())
+}
+
+fn validate_operating_point_scenario_set<N>(
+    set: &StoredOperatingPointScenarioSet<N>,
+) -> Result<(), String> {
+    if set.scenarios.is_empty() {
+        if set.network.is_some() {
+            return Err("an empty operating point scenario set cannot carry a network".to_string());
+        }
+        return Ok(());
+    }
+    if set.network.is_none() {
+        return Err("a nonempty operating point scenario set needs its base network".to_string());
+    }
+    let mut ids = BTreeSet::new();
+    for scenario in &set.scenarios {
+        nonempty("scenario id", &scenario.id)?;
+        if !ids.insert(scenario.id.as_str()) {
+            return Err(format!("duplicate scenario id `{}`", scenario.id));
+        }
+        validate_quantities(&scenario.quantities, 1)?;
+    }
+    Ok(())
+}
+
+/// A layer places a finite point or route per feature, and every feature
+/// names the element it places or a branch's two endpoint buses.
+fn validate_geo_layer(layer: &powerio_tx::GeoLayer) -> Result<(), String> {
+    for (index, feature) in layer.features.iter().enumerate() {
+        let key = &feature.key;
+        let named =
+            key.uid.is_some() || key.id.is_some() || key.name.is_some() || key.index.is_some();
+        let endpoint_pair = feature.target == powerio_tx::GeoTarget::Branch
+            && feature.from.is_some()
+            && feature.to.is_some();
+        if !named && !endpoint_pair {
+            return Err(format!("geo feature {index} names no element"));
+        }
+        let finite = |point: &[f64; 2]| point.iter().all(|value| value.is_finite());
+        let placed = match &feature.geometry {
+            powerio_tx::GeoGeometry::Point(point) => finite(point),
+            powerio_tx::GeoGeometry::LineString(points) => {
+                !points.is_empty() && points.iter().all(finite)
+            }
+        };
+        if !placed {
+            return Err(format!("geo feature {index} has no finite geometry"));
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_lines)]
+fn validate_value(value: &StoredValue) -> Result<(), String> {
+    match value {
+        StoredValue::BalancedNetwork(_)
+        | StoredValue::MulticonductorNetwork(_)
+        | StoredValue::AcScucInstance(_)
+        | StoredValue::AcScucSolution(_) => Ok(()),
+        StoredValue::GeoLayer(layer) => validate_geo_layer(layer),
+        StoredValue::BalancedOperatingPoint(point) => validate_quantities(&point.quantities, 1),
+        StoredValue::MulticonductorOperatingPoint(point) => {
+            validate_quantities(&point.quantities, 1)
+        }
+        StoredValue::BalancedNetworkTimeSeries(series) => validate_time_series(series),
+        StoredValue::MulticonductorNetworkTimeSeries(series) => validate_time_series(series),
+        StoredValue::BalancedOperatingPointTimeSeries(series) => {
+            validate_operating_point_series(series)
+        }
+        StoredValue::MulticonductorOperatingPointTimeSeries(series) => {
+            validate_operating_point_series(series)
+        }
+        StoredValue::BalancedNetworkScenarioSet(set) => validate_scenario_set(set, |_| Ok(())),
+        StoredValue::MulticonductorNetworkScenarioSet(set) => {
+            validate_scenario_set(set, |_| Ok(()))
+        }
+        StoredValue::BalancedOperatingPointScenarioSet(set) => {
+            validate_operating_point_scenario_set(set)
+        }
+        StoredValue::MulticonductorOperatingPointScenarioSet(set) => {
+            validate_operating_point_scenario_set(set)
+        }
+        StoredValue::BalancedNetworkTimeSeriesScenarioSet(set) => {
+            validate_scenario_set(set, validate_time_series)
+        }
+        StoredValue::MulticonductorNetworkTimeSeriesScenarioSet(set) => {
+            validate_scenario_set(set, validate_time_series)
+        }
+        StoredValue::BalancedOperatingPointTimeSeriesScenarioSet(set) => {
+            validate_scenario_set(set, validate_operating_point_series)
+        }
+        StoredValue::MulticonductorOperatingPointTimeSeriesScenarioSet(set) => {
+            validate_scenario_set(set, validate_operating_point_series)
+        }
+        StoredValue::DcPfInstance(instance) => {
+            validate_stored_assignment(instance.initial_point.as_ref())
+        }
+        StoredValue::AcPfInstance(instance) => {
+            validate_stored_assignment(instance.initial_point.as_ref())
+        }
+        StoredValue::DcOpfInstance(instance) => {
+            validate_stored_assignment(instance.initial_point.as_ref())
+        }
+        StoredValue::AcOpfInstance(instance) => {
+            validate_stored_assignment(instance.initial_point.as_ref())
+        }
+        StoredValue::McAcPfInstance(instance) => {
+            validate_stored_assignment(instance.initial_point.as_ref())
+        }
+        StoredValue::McAcOpfInstance(instance) => {
+            validate_stored_assignment(instance.initial_point.as_ref())
+        }
+        StoredValue::DcPfSolution(solution) => {
+            validate_stored_assignment(solution.instance.initial_point.as_ref())
+        }
+        StoredValue::AcPfSolution(solution) => {
+            validate_stored_assignment(solution.instance.initial_point.as_ref())
+        }
+        StoredValue::DcOpfSolution(solution) => {
+            validate_stored_assignment(solution.instance.initial_point.as_ref())
+        }
+        StoredValue::AcOpfSolution(solution) => {
+            validate_stored_assignment(solution.instance.initial_point.as_ref())
+        }
+        StoredValue::SocwrOpfSolution(solution) => {
+            validate_stored_assignment(solution.instance.initial_point.as_ref())
+        }
+        StoredValue::McAcPfSolution(solution) => {
+            validate_stored_assignment(solution.instance.initial_point.as_ref())
+        }
+        StoredValue::McAcOpfSolution(solution) => {
+            validate_stored_assignment(solution.instance.initial_point.as_ref())
+        }
+    }
+}
+
+fn validate_stored_assignment(
+    point: Option<&StoredOperatingPointAssignment>,
+) -> Result<(), String> {
+    point.map_or(Ok(()), |point| validate_quantities(&point.quantities, 1))
+}
+
+fn validate_spans(spans: &[SourceSpan], sources: &BTreeMap<String, u64>) -> Result<(), String> {
     for span in spans {
         let Some(byte_length) = sources.get(span.source.0.as_str()) else {
             return Err(format!("unknown source id `{}`", span.source.0));
@@ -1318,4 +1792,37 @@ fn nonempty(what: &str, value: &str) -> Result<(), String> {
         return Err(format!("{what} cannot be empty"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod decode_bound_tests {
+    use super::*;
+
+    #[test]
+    fn collection_entries_are_refused_at_the_decode_bound() {
+        let values = vec!["0"; MAX_STORED_COLLECTION_ENTRIES + 1].join(",");
+        let text = format!(r#"{{"time_points":[],"values":[{values}]}}"#);
+        let error = serde_json::from_str::<StoredTimeSeries<u8>>(&text).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("more than 65536 collection entries"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn operating_point_quantity_names_are_refused_at_the_decode_bound() {
+        let quantities = (0..=MAX_STORED_OPERATING_POINT_QUANTITIES)
+            .map(|index| format!(r#""q{index}":{{"identities":[],"values":[]}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let text = format!(r#"{{"network":null,"quantities":{{{quantities}}}}}"#);
+        let error =
+            serde_json::from_str::<StoredOperatingPoint<serde_json::Value>>(&text).unwrap_err();
+        assert!(
+            error.to_string().contains("more than 64 quantities"),
+            "{error}"
+        );
+    }
 }

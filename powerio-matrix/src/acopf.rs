@@ -5,16 +5,16 @@
 
 use serde::{Deserialize, Serialize};
 
-use powerio_prob::{AcOpfInstance, ReferenceBuses};
+use powerio_prob::{AcBusSpecification, AcOpfInstance, AcPfInstance, ReferenceBuses};
 use powerio_tx::{BalancedNetwork, BusId, IndexedNetwork};
 
 use crate::dcopf::{Units, limits, nodal};
-use crate::{Error, PiecewiseLinearCost, PreparedObjective, Result};
+use crate::{AnalysisBranchSource, Error, PiecewiseLinearCost, PreparedObjective, Result};
 
 /// Assembly choices that select the numerical content derived from an AC
 /// instance without changing the instance itself. There is no convention
 /// field: the branch pi model always carries taps, shifts, and charging.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct AcOpfAssemblyOptions {
     /// Power and cost scaling of the derived arrays.
@@ -29,6 +29,20 @@ pub struct AcOpfAssemblyOptions {
     /// states. If false, `rate_a <= 0` reaches `s_max` as zero, which reads
     /// as unlimited.
     pub synthesize_unrated_limits: bool,
+    /// Apply PowerModels' ±60 degree correction to unconstrained or unusable
+    /// branch angle difference intervals in the prepared arrays.
+    pub correct_angle_difference_bounds: bool,
+}
+
+impl Default for AcOpfAssemblyOptions {
+    fn default() -> Self {
+        Self {
+            units: Units::default(),
+            skip_zero_impedance: false,
+            synthesize_unrated_limits: false,
+            correct_angle_difference_bounds: true,
+        }
+    }
 }
 
 impl AcOpfAssemblyOptions {
@@ -49,6 +63,147 @@ impl AcOpfAssemblyOptions {
         self.synthesize_unrated_limits = synthesize;
         self
     }
+
+    #[must_use]
+    pub const fn with_correct_angle_difference_bounds(mut self, correct: bool) -> Self {
+        self.correct_angle_difference_bounds = correct;
+        self
+    }
+}
+
+/// Assembly choices for an AC power flow instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AcPfAssemblyOptions {
+    /// Power and admittance scaling of the prepared values.
+    pub units: Units,
+    /// Skip non-self-loop branches with `r² + x² = 0`.
+    pub skip_zero_impedance: bool,
+    /// Apply PowerModels' ±60 degree correction to unconstrained or unusable
+    /// branch angle difference intervals in the prepared arrays.
+    pub correct_angle_difference_bounds: bool,
+}
+
+impl Default for AcPfAssemblyOptions {
+    fn default() -> Self {
+        Self {
+            units: Units::default(),
+            skip_zero_impedance: false,
+            correct_angle_difference_bounds: true,
+        }
+    }
+}
+
+impl AcPfAssemblyOptions {
+    #[must_use]
+    pub const fn with_units(mut self, units: Units) -> Self {
+        self.units = units;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_skip_zero_impedance(mut self, skip: bool) -> Self {
+        self.skip_zero_impedance = skip;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_correct_angle_difference_bounds(mut self, correct: bool) -> Self {
+        self.correct_angle_difference_bounds = correct;
+        self
+    }
+}
+
+/// One AC power flow bus specification in preparation units.
+///
+/// This has the same cases as [`AcBusSpecification`], but active and
+/// reactive power use the preparation's selected [`Units`] and reference
+/// angles are radians. The builder converts the caller's exact case and
+/// values; it never derives a replacement from the network bus type.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+#[non_exhaustive]
+pub enum PreparedAcBusSpecification {
+    Pq { p: f64, q: f64 },
+    Pv { p: f64, vm: f64 },
+    Reference { vm: f64, va: f64 },
+    Isolated,
+}
+
+/// Bus values needed to start and evaluate an AC power flow.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct AcPfBusData {
+    /// Nodal reactive demand in the selected power unit. Synthetic transformer
+    /// star buses carry zero.
+    pub q_d: Vec<f64>,
+    /// Nodal shunt conductance in the selected admittance unit.
+    pub g_s: Vec<f64>,
+    /// Nodal shunt susceptance in the selected admittance unit.
+    pub b_s: Vec<f64>,
+    /// Initial voltage magnitude, per unit.
+    pub initial_vm: Vec<f64>,
+    /// Initial voltage angle, radians.
+    pub initial_va: Vec<f64>,
+}
+
+/// Generator data used by PV to PQ reactive limit handling.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct AcPfGeneratorData {
+    pub identities: Vec<String>,
+    /// Generator column to dense bus index.
+    pub bus_of_gen: Vec<usize>,
+    /// Generator column to row in the star-lowered analysis network.
+    pub analysis_rows: Vec<usize>,
+    /// Generator column to source generator row.
+    pub source_rows: Vec<Option<usize>>,
+    /// Initial reactive output in the selected power unit.
+    pub qg: Vec<f64>,
+    pub qmax: Vec<f64>,
+    pub qmin: Vec<f64>,
+}
+
+/// Matrix free AC power flow input on the branch pi model.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct AcPfPreparation {
+    pub name: String,
+    pub n_buses: usize,
+    pub n_source_generators: usize,
+    pub n_source_branches: usize,
+    pub base_mva: f64,
+    pub units: Units,
+    pub skip_zero_impedance: bool,
+    /// Whether PowerModels' angle difference correction was applied.
+    pub correct_angle_difference_bounds: bool,
+    /// Dense bus index to external bus ID.
+    pub bus_ids: Vec<BusId>,
+    /// Dense bus index to row in the star-lowered analysis network.
+    pub bus_analysis_rows: Vec<usize>,
+    /// Dense bus index to source bus row. A synthetic transformer star bus has
+    /// no source row; a source bus specified as isolated has no dense row.
+    pub bus_source_rows: Vec<Option<usize>>,
+    /// Bus specifications in dense bus order. A synthetic transformer star
+    /// bus is a zero injection PQ junction. Source rows specified as isolated
+    /// are absent from the numerical rows but remain on the `AcPfInstance`.
+    pub specifications: Vec<PreparedAcBusSpecification>,
+    pub reference_buses: ReferenceBuses,
+    pub buses: AcPfBusData,
+    pub generators: AcPfGeneratorData,
+    pub branches: AcBranchData,
+}
+
+impl AcPfPreparation {
+    #[must_use]
+    pub fn n_generators(&self) -> usize {
+        self.generators.qg.len()
+    }
+
+    #[must_use]
+    pub fn n_branches(&self) -> usize {
+        self.branches.g.len()
+    }
 }
 
 /// Bus data in dense bus order.
@@ -60,18 +215,21 @@ pub struct AcBusData {
     /// Nodal reactive demand in the selected power unit.
     pub q_d: Vec<f64>,
     /// Nodal shunt conductance in the selected admittance unit. Includes the
-    /// folded pi model stamp of any self-loop branch, matching `build_ybus`.
+    /// folded pi model stamp of any self-loop branch, matching `calc_admittance_matrix`.
     pub g_s: Vec<f64>,
     /// Nodal shunt susceptance in the selected admittance unit. Includes the
-    /// folded pi model stamp of any self-loop branch, matching `build_ybus`.
+    /// folded pi model stamp of any self-loop branch, matching `calc_admittance_matrix`.
     pub b_s: Vec<f64>,
     /// Voltage magnitude lower bound, per unit.
     pub vm_min: Vec<f64>,
     /// Voltage magnitude upper bound, per unit.
     pub vm_max: Vec<f64>,
-    /// Case voltage magnitude, per unit: the raw initial guess, zero when the
-    /// source has none.
-    pub vm: Vec<f64>,
+    /// Initial voltage magnitude, per unit. The case voltage is used when the
+    /// instance does not supply an override.
+    pub initial_vm: Vec<f64>,
+    /// Initial voltage angle, radians. The case angle is used when the
+    /// instance does not supply an override.
+    pub initial_va: Vec<f64>,
     /// Whether the instance activates each bus's voltage magnitude bounds.
     pub voltage_bound_active: Vec<bool>,
 }
@@ -108,9 +266,9 @@ pub struct AcBranchData {
     pub angle_max: Vec<f64>,
     /// Branch column to row in the star-lowered analysis network.
     pub analysis_rows: Vec<usize>,
-    /// Branch column to source branch row. Synthetic winding branches have no
-    /// source row.
-    pub source_rows: Vec<Option<usize>>,
+    /// Source component for each analysis branch column. Lowered transformer
+    /// windings remain mapped to their typed transformer row and winding.
+    pub analysis_sources: Vec<AnalysisBranchSource>,
     /// Analysis branch rows omitted because `r² + x² = 0`.
     pub skipped_zero_impedance: Vec<usize>,
     /// Whether the instance activates each apparent power limit.
@@ -156,8 +314,41 @@ pub struct AcGeneratorData {
     pub capability_active: Vec<bool>,
 }
 
+/// Storage data in active storage column order.
+///
+/// Power, energy, ratings, reactive limits, and fixed losses use the
+/// preparation's selected [`Units`]. Efficiencies, impedance, and service
+/// status are dimensionless. Out of service storage and storage attached to
+/// an isolated bus are omitted, matching the other prepared element tables.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct AcStorageData {
+    /// Stable storage identity aligned with every following column.
+    pub identities: Vec<String>,
+    /// Storage column to dense bus index.
+    pub bus_of_storage: Vec<usize>,
+    /// Storage column to source storage row.
+    pub source_rows: Vec<usize>,
+    pub p: Vec<f64>,
+    pub q: Vec<f64>,
+    pub energy: Vec<f64>,
+    pub energy_rating: Vec<f64>,
+    pub charge_rating: Vec<f64>,
+    pub discharge_rating: Vec<f64>,
+    pub charge_efficiency: Vec<f64>,
+    pub discharge_efficiency: Vec<f64>,
+    pub s_max: Vec<f64>,
+    pub qmin: Vec<f64>,
+    pub qmax: Vec<f64>,
+    pub r: Vec<f64>,
+    pub x: Vec<f64>,
+    pub p_loss: Vec<f64>,
+    pub q_loss: Vec<f64>,
+    pub in_service: Vec<bool>,
+}
+
 /// Generator data in dense bus order, aggregated over the generators at each
-/// bus. See [`AcOpfPreparation::nodal_generator_data`].
+/// bus. See [`AcOpfPreparation::calc_nodal_generator_data`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct NodalAcGeneratorData {
@@ -199,6 +390,8 @@ pub struct AcOpfPreparation {
     pub skip_zero_impedance: bool,
     /// Whether absent source ratings were replaced with synthesized limits.
     pub synthesize_unrated_limits: bool,
+    /// Whether PowerModels' angle difference correction was applied.
+    pub correct_angle_difference_bounds: bool,
     /// Dense bus index to external bus ID.
     pub bus_ids: Vec<BusId>,
     /// Dense bus index to row in the star-lowered analysis network.
@@ -209,6 +402,7 @@ pub struct AcOpfPreparation {
     pub reference_buses: ReferenceBuses,
     pub buses: AcBusData,
     pub generators: AcGeneratorData,
+    pub storage: AcStorageData,
     pub branches: AcBranchData,
 }
 
@@ -223,6 +417,11 @@ impl AcOpfPreparation {
         self.branches.g.len()
     }
 
+    #[must_use]
+    pub fn n_storage(&self) -> usize {
+        self.storage.identities.len()
+    }
+
     /// Project generator cost and bounds to bus space.
     ///
     /// The bounds at a bus are the sum of the generator bounds, which is the
@@ -232,7 +431,7 @@ impl AcOpfPreparation {
     /// with generator space only while the split stays inside the bound of
     /// each generator. A bus with one generator keeps that generator's own
     /// coefficients.
-    pub fn nodal_generator_data(&self) -> Result<NodalAcGeneratorData> {
+    pub fn calc_nodal_generator_data(&self) -> Result<NodalAcGeneratorData> {
         let n = self.n_buses;
         let generators = &self.generators;
         if let Some(gen_index) = generators.piecewise_linear.iter().position(Option::is_some) {
@@ -260,10 +459,10 @@ impl AcOpfPreparation {
     /// The result is not clamped to `[vm_min, vm_max]`; feasibility repair is
     /// solver preparation and stays downstream.
     #[must_use]
-    pub fn vm_setpoints(&self) -> Vec<f64> {
+    pub fn calc_vm_setpoints(&self) -> Vec<f64> {
         let mut vm: Vec<f64> = self
             .buses
-            .vm
+            .initial_vm
             .iter()
             .map(|&value| if value > 0.0 { value } else { 1.0 })
             .collect();
@@ -293,7 +492,165 @@ pub fn build_ac_opf_preparation(
     let objective = crate::opf::compile_objective(instance.objective())?;
     let mut preparation = preparation_from_view(&view, *options, objective)?;
     apply_instance_semantics(&mut preparation, instance.network(), instance.constraints())?;
+    if let Some(point) = instance.initial_point() {
+        let (power_scale, _) = options.units.power_scales(preparation.base_mva);
+        for (dense, bus) in preparation.bus_ids.iter().copied().enumerate() {
+            if let Some(value) = point.bus_voltage_magnitude(bus) {
+                preparation.buses.initial_vm[dense] = value;
+            }
+            if let Some(value) = point.bus_voltage_angle(bus) {
+                preparation.buses.initial_va[dense] = value;
+            }
+        }
+        for (generator, identity) in preparation.generators.identities.iter().enumerate() {
+            if let Some(value) = point.generator_active_power(identity) {
+                preparation.generators.pg[generator] = value * power_scale;
+            }
+            if let Some(value) = point.generator_reactive_power(identity) {
+                preparation.generators.qg[generator] = value * power_scale;
+            }
+            if let Some(value) = point.generator_voltage_setpoint(identity) {
+                preparation.generators.vg[generator] = value;
+            }
+        }
+    }
     Ok(preparation)
+}
+
+/// Derive the complete matrix free AC power flow arrays from an instance.
+/// The caller's bus specifications remain authoritative. Network bus types
+/// are used only by `AcPfInstance::from_network` when it creates those
+/// specifications; this function does not infer them again.
+///
+/// # Errors
+/// A specification layout that leaves an energized component without a
+/// reference bus, or a branch pi model that cannot be assembled.
+pub fn build_ac_pf_preparation(
+    instance: &AcPfInstance,
+    options: &AcPfAssemblyOptions,
+) -> Result<AcPfPreparation> {
+    let source = instance.network();
+    let mut analysis_network = source.clone();
+    for (bus, specification) in analysis_network
+        .buses_mut()
+        .iter_mut()
+        .zip(instance.specifications())
+    {
+        bus.kind = match specification {
+            AcBusSpecification::Pq { .. } => powerio_tx::BusType::Pq,
+            AcBusSpecification::Pv { .. } => powerio_tx::BusType::Pv,
+            AcBusSpecification::Reference { .. } => powerio_tx::BusType::Ref,
+            AcBusSpecification::Isolated => powerio_tx::BusType::Isolated,
+            _ => return Err(Error::UnsupportedAcPfSpecification),
+        };
+    }
+
+    let view = IndexedNetwork::new(&analysis_network);
+    let mut common = preparation_from_view(
+        &view,
+        AcOpfAssemblyOptions {
+            units: options.units,
+            skip_zero_impedance: options.skip_zero_impedance,
+            synthesize_unrated_limits: false,
+            correct_angle_difference_bounds: options.correct_angle_difference_bounds,
+        },
+        PreparedObjective::Feasibility,
+    )?;
+    apply_source_mappings(&mut common, source);
+
+    let (power_scale, _) = options.units.power_scales(view.per_unit_base());
+    let specifications = common
+        .bus_source_rows
+        .iter()
+        .map(|source_row| match source_row {
+            Some(row) => prepare_bus_specification(
+                instance.specifications()[*row],
+                power_scale,
+                source.is_normalized(),
+            ),
+            None => Ok(PreparedAcBusSpecification::Pq { p: 0.0, q: 0.0 }),
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut initial_vm = common.buses.initial_vm.clone();
+    let mut initial_va = common
+        .bus_analysis_rows
+        .iter()
+        .map(|&row| view.to_radians(view.network().buses()[row].va))
+        .collect::<Vec<_>>();
+    if let Some(point) = instance.initial_point() {
+        for (dense, bus) in common.bus_ids.iter().copied().enumerate() {
+            if common.bus_source_rows[dense].is_none() {
+                continue;
+            }
+            if let Some(value) = point.bus_voltage_magnitude(bus) {
+                initial_vm[dense] = value;
+            }
+            if let Some(value) = point.bus_voltage_angle(bus) {
+                initial_va[dense] = value;
+            }
+        }
+    }
+
+    Ok(AcPfPreparation {
+        name: common.name,
+        n_buses: common.n_buses,
+        n_source_generators: common.n_source_generators,
+        n_source_branches: common.n_source_branches,
+        base_mva: common.base_mva,
+        units: common.units,
+        skip_zero_impedance: common.skip_zero_impedance,
+        correct_angle_difference_bounds: common.correct_angle_difference_bounds,
+        bus_ids: common.bus_ids,
+        bus_analysis_rows: common.bus_analysis_rows,
+        bus_source_rows: common.bus_source_rows,
+        specifications,
+        reference_buses: common.reference_buses,
+        buses: AcPfBusData {
+            q_d: common.buses.q_d,
+            g_s: common.buses.g_s,
+            b_s: common.buses.b_s,
+            initial_vm,
+            initial_va,
+        },
+        generators: AcPfGeneratorData {
+            identities: common.generators.identities,
+            bus_of_gen: common.generators.bus_of_gen,
+            analysis_rows: common.generators.analysis_rows,
+            source_rows: common.generators.source_rows,
+            qg: common.generators.qg,
+            qmax: common.generators.qmax,
+            qmin: common.generators.qmin,
+        },
+        branches: common.branches,
+    })
+}
+
+fn prepare_bus_specification(
+    specification: AcBusSpecification,
+    power_scale: f64,
+    source_is_normalized: bool,
+) -> Result<PreparedAcBusSpecification> {
+    Ok(match specification {
+        AcBusSpecification::Pq { p, q } => PreparedAcBusSpecification::Pq {
+            p: p * power_scale,
+            q: q * power_scale,
+        },
+        AcBusSpecification::Pv { p, vm } => PreparedAcBusSpecification::Pv {
+            p: p * power_scale,
+            vm,
+        },
+        AcBusSpecification::Reference { vm, va } => PreparedAcBusSpecification::Reference {
+            vm,
+            va: if source_is_normalized {
+                va
+            } else {
+                va.to_radians()
+            },
+        },
+        AcBusSpecification::Isolated => PreparedAcBusSpecification::Isolated,
+        _ => return Err(Error::UnsupportedAcPfSpecification),
+    })
 }
 
 /// Build the matrix free AC OPF arrays from an indexed network view.
@@ -377,10 +734,63 @@ fn preparation_from_view(
         qg.push(generator.qg * p_scale);
         vg.push(generator.vg);
     }
-    if cost_q.is_empty() {
-        return Err(Error::NoGenerators);
-    }
 
+    let mut storage_identities = Vec::new();
+    let mut bus_of_storage = Vec::new();
+    let mut storage_source_rows = Vec::new();
+    let mut storage_p = Vec::new();
+    let mut storage_q = Vec::new();
+    let mut storage_energy = Vec::new();
+    let mut storage_energy_rating = Vec::new();
+    let mut storage_charge_rating = Vec::new();
+    let mut storage_discharge_rating = Vec::new();
+    let mut storage_charge_efficiency = Vec::new();
+    let mut storage_discharge_efficiency = Vec::new();
+    let mut storage_s_max = Vec::new();
+    let mut storage_qmin = Vec::new();
+    let mut storage_qmax = Vec::new();
+    let mut storage_r = Vec::new();
+    let mut storage_x = Vec::new();
+    let mut storage_p_loss = Vec::new();
+    let mut storage_q_loss = Vec::new();
+    let mut storage_in_service = Vec::new();
+    for (source_row, storage) in case.network().storage().iter().enumerate() {
+        if !storage.in_service {
+            continue;
+        }
+        let analysis_bus = case
+            .bus_index(storage.bus)
+            .ok_or(powerio_tx::Error::UnknownBus {
+                bus_id: storage.bus,
+                element_index: source_row,
+            })?;
+        let Some(bus) = active_buses.dense_by_analysis[analysis_bus] else {
+            continue;
+        };
+        storage_identities.push(crate::opf::row_identity(
+            storage.uid.as_deref(),
+            "storage",
+            source_row,
+        ));
+        bus_of_storage.push(bus);
+        storage_source_rows.push(source_row);
+        storage_p.push(storage.ps * p_scale);
+        storage_q.push(storage.qs * p_scale);
+        storage_energy.push(storage.energy * p_scale);
+        storage_energy_rating.push(storage.energy_rating * p_scale);
+        storage_charge_rating.push(storage.charge_rating * p_scale);
+        storage_discharge_rating.push(storage.discharge_rating * p_scale);
+        storage_charge_efficiency.push(storage.charge_efficiency);
+        storage_discharge_efficiency.push(storage.discharge_efficiency);
+        storage_s_max.push(storage.thermal_rating * p_scale);
+        storage_qmin.push(storage.qmin * p_scale);
+        storage_qmax.push(storage.qmax * p_scale);
+        storage_r.push(storage.r);
+        storage_x.push(storage.x);
+        storage_p_loss.push(storage.p_loss * p_scale);
+        storage_q_loss.push(storage.q_loss * p_scale);
+        storage_in_service.push(storage.in_service);
+    }
     let mut g_s: Vec<f64> = active_buses
         .analysis_rows
         .iter()
@@ -431,22 +841,22 @@ fn preparation_from_view(
         ) else {
             continue;
         };
-        let Some((series_g, series_b)) = branch.series_admittance(source_row)? else {
+        let Some((series_g, series_b)) = branch.calc_series_admittance(source_row)? else {
             if options.skip_zero_impedance {
                 skipped_zero_impedance.push(source_row);
                 continue;
             }
             return Err(powerio_tx::Error::ZeroImpedance { row: source_row }.into());
         };
-        let charging = branch.terminal_charging();
+        let charging = branch.calc_terminal_charging();
         if from == to {
             // A self-loop is not a flow element; its whole pi model stamp
-            // lands on the bus diagonal, exactly as `build_ybus` folds it.
+            // lands on the bus diagonal, exactly as `calc_admittance_matrix` folds it.
             // With t = tap·e^{jθ}: Yff + Yft + Ytf + Ytt
             //   = (y + y_fr)/tap² + (y + y_to) − y·2cos(θ)/tap.
-            let tap = branch.divisible_tap(source_row)?;
+            let tap = branch.calc_divisible_tap(source_row)?;
             let tap_squared = tap * tap;
-            let cross = 2.0 * case.angle_radians(branch.shift).cos() / tap;
+            let cross = 2.0 * case.to_radians(branch.shift).cos() / tap;
             g_s[from] += ((series_g + charging.g_fr) / tap_squared + (series_g + charging.g_to)
                 - series_g * cross)
                 * y_scale;
@@ -468,14 +878,19 @@ fn preparation_from_view(
         b_fr.push(charging.b_fr * y_scale);
         g_to.push(charging.g_to * y_scale);
         b_to.push(charging.b_to * y_scale);
-        let amin = case.angle_radians(branch.angmin);
-        let amax = case.angle_radians(branch.angmax);
-        tap.push(branch.divisible_tap(source_row)?);
-        shift.push(case.angle_radians(branch.shift));
+        let source_amin = case.to_radians(branch.angmin);
+        let source_amax = case.to_radians(branch.angmax);
+        let (amin, amax) = if options.correct_angle_difference_bounds {
+            powerio_tx::correct_angle_difference_bounds(source_amin, source_amax)
+        } else {
+            (source_amin, source_amax)
+        };
+        tap.push(branch.calc_divisible_tap(source_row)?);
+        shift.push(case.to_radians(branch.shift));
         s_max.push(thermal.of(
             branch,
-            amin,
-            amax,
+            source_amin,
+            source_amax,
             &network.buses()[from_analysis],
             &network.buses()[to_analysis],
         ));
@@ -486,14 +901,15 @@ fn preparation_from_view(
 
     let mut vm_min = Vec::with_capacity(n_buses);
     let mut vm_max = Vec::with_capacity(n_buses);
-    let mut vm = Vec::with_capacity(n_buses);
+    let mut initial_vm = Vec::with_capacity(n_buses);
+    let mut initial_va = Vec::with_capacity(n_buses);
     for &analysis_row in &active_buses.analysis_rows {
         let bus = &network.buses()[analysis_row];
         vm_min.push(bus.vmin);
         vm_max.push(bus.vmax);
-        vm.push(bus.vm);
+        initial_vm.push(bus.vm);
+        initial_va.push(case.to_radians(bus.va));
     }
-
     let n_active_generators = cost_q.len();
     let n_active_branches = g.len();
     let p_d = active_buses
@@ -518,6 +934,7 @@ fn preparation_from_view(
         objective,
         skip_zero_impedance: options.skip_zero_impedance,
         synthesize_unrated_limits: options.synthesize_unrated_limits,
+        correct_angle_difference_bounds: options.correct_angle_difference_bounds,
         bus_ids: active_buses.bus_ids,
         bus_analysis_rows,
         bus_source_rows,
@@ -529,7 +946,8 @@ fn preparation_from_view(
             b_s,
             vm_min,
             vm_max,
-            vm,
+            initial_vm,
+            initial_va,
             voltage_bound_active: vec![true; n_buses],
         },
         generators: AcGeneratorData {
@@ -550,6 +968,27 @@ fn preparation_from_view(
             vg,
             capability_active: vec![true; n_active_generators],
         },
+        storage: AcStorageData {
+            identities: storage_identities,
+            bus_of_storage,
+            source_rows: storage_source_rows,
+            p: storage_p,
+            q: storage_q,
+            energy: storage_energy,
+            energy_rating: storage_energy_rating,
+            charge_rating: storage_charge_rating,
+            discharge_rating: storage_discharge_rating,
+            charge_efficiency: storage_charge_efficiency,
+            discharge_efficiency: storage_discharge_efficiency,
+            s_max: storage_s_max,
+            qmin: storage_qmin,
+            qmax: storage_qmax,
+            r: storage_r,
+            x: storage_x,
+            p_loss: storage_p_loss,
+            q_loss: storage_q_loss,
+            in_service: storage_in_service,
+        },
         branches: AcBranchData {
             identities: branch_identities,
             from_bus,
@@ -566,7 +1005,11 @@ fn preparation_from_view(
             angle_min,
             angle_max,
             analysis_rows: branch_rows.clone(),
-            source_rows: branch_rows.into_iter().map(Some).collect(),
+            analysis_sources: branch_rows
+                .iter()
+                .copied()
+                .map(|row| AnalysisBranchSource::Branch { row })
+                .collect(),
             skipped_zero_impedance,
             thermal_limit_active: vec![true; n_active_branches],
             angle_bound_active: vec![true; n_active_branches],
@@ -652,6 +1095,11 @@ fn apply_instance_semantics(
         &preparation.branches.identities,
     )?;
 
+    apply_source_mappings(preparation, source);
+    Ok(())
+}
+
+fn apply_source_mappings(preparation: &mut AcOpfPreparation, source: &BalancedNetwork) {
     preparation.n_source_generators = source.generators().len();
     preparation.n_source_branches = source.branches().len();
     preparation.bus_source_rows = preparation
@@ -665,11 +1113,11 @@ fn apply_instance_semantics(
         .iter()
         .map(|&row| (row < source.generators().len()).then_some(row))
         .collect();
-    preparation.branches.source_rows = preparation
+    let analysis_sources = crate::opf::analysis_branch_sources(source);
+    preparation.branches.analysis_sources = preparation
         .branches
         .analysis_rows
         .iter()
-        .map(|&row| (row < source.branches().len()).then_some(row))
+        .map(|&row| analysis_sources[row])
         .collect();
-    Ok(())
 }

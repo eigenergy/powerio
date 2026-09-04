@@ -1,10 +1,10 @@
-//! The distribution module write through a destination: single file JSON,
+//! Distribution module emission through a destination: single file JSON,
 //! the dss directory inventory with its Buscoords sidecar, and the memory
 //! form.
 
 mod helpers;
 
-use powerio_core::{Destination, WrittenOutput};
+use powerio_core::{Destination, EmittedOutput};
 use powerio_dist::DistTargetFormat;
 
 const LOCATED: &str = "New Circuit.c basekv=12.47 pu=1 phases=3 bus1=a\n\
@@ -13,30 +13,30 @@ SetBusXY bus=a x=-80 y=35\n\
 SetBusXY b -80.5 35.25\n";
 
 fn module(text: &str) -> powerio_core::PioModule<powerio_dist::MulticonductorNetwork> {
-    let source = powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())
+    let source = powerio_core::Source::from_memory("<memory>", text.as_bytes().to_vec())
         .unwrap()
         .with_format(powerio_core::FormatId::new("dss").unwrap());
     powerio_dist::parse(source).expect("dss parses")
 }
 
-/// A located module whose dss write is canonical (no same format echo), so
+/// A located module whose dss emission is canonical (no same format echo), so
 /// the coordinates leave through the Buscoords sidecar.
 fn located_canonical() -> powerio_core::PioModule<powerio_dist::MulticonductorNetwork> {
     module(LOCATED).sever_source()
 }
 
 #[test]
-fn a_json_write_commits_the_named_file() {
+fn a_json_emission_commits_the_named_file() {
     let module = module(LOCATED);
     let dir = tempfile::tempdir().unwrap();
     let target = dir.path().join("case.json");
-    let result = powerio_dist::write(
+    let result = powerio_dist::emit(
         &module,
         DistTargetFormat::BmopfJson,
         Destination::path(&target),
     )
-    .expect("write commits");
-    let WrittenOutput::Path { artifacts, .. } = result.output() else {
+    .expect("emission commits");
+    let EmittedOutput::Path { artifacts, .. } = result.output() else {
         panic!("path destination returns path output");
     };
     assert_eq!(artifacts, &vec![target.clone()]);
@@ -46,13 +46,13 @@ fn a_json_write_commits_the_named_file() {
 }
 
 #[test]
-fn a_dss_write_commits_the_case_and_its_sidecar_under_the_root() {
+fn a_dss_emission_commits_the_case_and_its_sidecar_under_the_root() {
     let module = located_canonical();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("out");
-    let result = powerio_dist::write(&module, DistTargetFormat::Dss, Destination::path(&root))
-        .expect("write commits");
-    let WrittenOutput::Path { artifacts, .. } = result.output() else {
+    let result = powerio_dist::emit(&module, DistTargetFormat::Dss, Destination::path(&root))
+        .expect("emission commits");
+    let EmittedOutput::Path { artifacts, .. } = result.output() else {
         panic!("path destination returns path output");
     };
     assert!(artifacts.iter().any(|p| p.ends_with("case.dss")));
@@ -70,15 +70,15 @@ fn a_dss_write_commits_the_case_and_its_sidecar_under_the_root() {
 }
 
 #[test]
-fn a_memory_dss_write_returns_the_inventory() {
+fn a_memory_dss_emission_returns_the_inventory() {
     let module = located_canonical();
-    let result = powerio_dist::write(
+    let result = powerio_dist::emit(
         &module,
         DistTargetFormat::Dss,
         Destination::memory("out").unwrap(),
     )
-    .expect("memory write commits");
-    let WrittenOutput::Memory { artifacts } = result.output() else {
+    .expect("memory emission commits");
+    let EmittedOutput::Memory { artifacts } = result.output() else {
         panic!("memory destination returns memory output");
     };
     assert!(

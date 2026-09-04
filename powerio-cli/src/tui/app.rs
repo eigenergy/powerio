@@ -11,9 +11,9 @@ use std::time::Instant;
 
 use sprs::CsMat;
 
-use powerio_matrix::matrix::{MatrixStats, sddm_check};
-use powerio_matrix::network::BalancedNetwork;
-use powerio_matrix::pipeline::{MatrixKind, RhsKind, matrix_stats_for_kind};
+use powerio::BalancedNetwork;
+use powerio_matrix::matrix::{MatrixStats, check_sddm};
+use powerio_matrix::pipeline::{MatrixKind, RhsKind, calc_matrix_stats_for_kind};
 use powerio_matrix::synth::{SynthSpec, Topology};
 
 use super::log_pane::LogBuf;
@@ -268,9 +268,9 @@ impl App {
         let view = powerio_matrix::IndexedNetwork::new(&case);
         let mut matrices = BTreeMap::new();
         for &kind in MatrixKind::ALL {
-            let mat = powerio_matrix::build_kind(&view, kind, &opts)?;
-            let stats = matrix_stats_for_kind(&mat, &view, kind, &opts);
-            let sddm = sddm_check(&mat);
+            let mat = powerio_matrix::calc_matrix(&view, kind, &opts)?;
+            let stats = calc_matrix_stats_for_kind(&mat, &view, kind, &opts);
+            let sddm = check_sddm(&mat);
             matrices.insert(
                 MatrixKindOrd::from_kind(kind),
                 MatrixCell {

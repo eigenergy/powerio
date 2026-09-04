@@ -2,7 +2,7 @@
 //! `.dss`, PowerModelsDistribution ENGINEERING
 //! JSON ("PMD JSON"), and the draft JSON schema of the IEEE PES Task Force on
 //! Benchmarking Multiconductor OPF ("BMOPF JSON",
-//! <https://github.com/frederikgeth/bmopf-report>).
+//! <https://github.com/distribution-system-opt/dsopt-schema>).
 //!
 //! The model uses wire coordinates: string bus IDs, ordered terminal names,
 //! explicit grounding, terminal maps on every element, SI units, and radians.
@@ -12,18 +12,25 @@
 //! ```no_run
 //! let source = powerio_core::Source::open("feeder.dss")?;
 //! let module = powerio_dist::parse(source)?;
-//! for line in powerio_dist::diagnostics::render_diagnostics(module.diagnostics()) {
+//! for line in powerio_dist::diagnostics::render_diagnostics(&module.diagnostics) {
 //!     eprintln!("parse: {line}");
 //! }
-//! let conv = powerio_dist::write_as(&module, powerio_dist::DistTargetFormat::PmdJson);
+//! let emitted = powerio_dist::emit(
+//!     &module,
+//!     powerio_dist::DistTargetFormat::PmdJson,
+//!     powerio_core::Destination::memory("feeder.pmd.json")?,
+//! )?;
+//! for line in powerio_dist::diagnostics::render_diagnostics(emitted.diagnostics()) {
+//!     eprintln!("emit: {line}");
+//! }
 //! # Ok::<(), powerio_core::Error>(())
 //! ```
 //!
 //! # Fidelity rules
 //!
-//! Writing to the retained source format returns the original bytes. Cross
-//! format conversion writes from the typed model and reports fields the target
-//! cannot represent in [`Conversion::diagnostics`]. The DSS reader expands OpenDSS
+//! Emitting to the retained source format returns the original bytes. Cross
+//! format emission uses the typed model and reports fields the target cannot
+//! represent through [`powerio_core::EmitResult::diagnostics`]. The DSS reader expands OpenDSS
 //! class defaults into explicit model values and records them in
 //! [`MulticonductorNetwork::defaulted`]. BMOPF output includes those values.
 //! The per fixture results live in `docs/conversion-matrix.md`.
@@ -34,9 +41,9 @@
 //! representation: Rust's `Display` for `.dss`, serde_json (ryu) for both
 //! JSON formats. The readers parse with serde_json's `float_roundtrip`
 //! feature, so a parse of canonical output recovers the exact bit pattern
-//! and canonical writes are idempotent. JSON cannot carry `Inf`/`NaN`: the
-//! PMD writer emits `null` (PMD restores the value from the field name
-//! suffix), and the BMOPF writer emits `0` with a warning, since the schema
+//! and canonical emissions are idempotent. JSON cannot carry `Inf`/`NaN`: the
+//! PMD emitter uses `null` (PMD restores the value from the field name
+//! suffix), and the BMOPF emitter uses `0` with a warning, since the schema
 //! requires numbers. The byte exact echo tier is unaffected; it never
 //! reformats.
 
@@ -49,21 +56,17 @@ pub mod error;
 pub mod geo;
 pub mod graph;
 pub mod model;
-pub(crate) mod nonfinite;
 pub mod pmd;
 #[cfg(test)]
 pub(crate) mod testkit;
 
-pub use bmopf::{
-    BMOPF_SCHEMA_ID, BMOPF_SCHEMA_VERSION, BmopfWriteOptions, write_bmopf_json,
-    write_bmopf_json_with_options,
-};
+pub use bmopf::{BMOPF_SCHEMA_ID, BMOPF_SCHEMA_VERSION, BmopfEmitOptions, BmopfProfile};
 pub use convert::{
-    Conversion, ConversionSidecar, DistTargetFormat, classify_distribution_json, convert_source,
-    dist_target_from_name, parse, write, write_as, write_network,
+    DistTargetFormat, EmitOptions, classify_distribution_json, emit, emit_with_options, parse,
+    parse_dist_target_format,
 };
 pub use diagnostics::{Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticStage};
-pub use dss::{DssLoadVoltageBounds, DssWriteOptions, write_dss, write_dss_with_options};
+pub use dss::{DssEmitOptions, DssLoadVoltageBounds};
 pub use error::{Error, Result};
 pub use geo::{CoordinateSpace, DistCanvas, DistCoordsKind, DistGeoMeta, DistLocation};
 pub use graph::{
@@ -71,11 +74,10 @@ pub use graph::{
     DistGraphEdgeKind,
 };
 pub use model::{
-    ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference, DistBus,
-    DistCapacitor, DistControlProfile, DistGenerator, DistIbr, DistLine, DistLineCode, DistLoad,
-    DistLoadVoltageModel, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, DistWinding,
-    DistWindingConn, Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation, Mat,
+    ActivePowerReference, ActivePowerUnit, ConductorMatrix, Configuration, ControlVoltageReference,
+    DistBus, DistCapacitor, DistControlProfile, DistGenerator, DistIbr, DistLine, DistLineCode,
+    DistLoad, DistLoadVoltageModel, DistShunt, DistSourceFormat, DistSwitch, DistTransformer,
+    DistWinding, DistWindingConn, Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation,
     MulticonductorNetwork, PowerFactorControl, ReactivePowerReference, ReactivePowerUnit,
-    UntypedObject, VoltVarControl, VoltWattControl, VoltageSource, unresolved_references,
+    UntypedObject, VoltVarControl, VoltWattControl, VoltageSource, find_unresolved_references,
 };
-pub use pmd::write_pmd_json;

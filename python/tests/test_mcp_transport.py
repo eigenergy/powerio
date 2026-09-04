@@ -1,12 +1,4 @@
-"""The MCP server driven over a real stdio transport.
-
-The other MCP tests call the tool functions in process, which skips the SDK's
-argument handling entirely. That gap hid a real defect: unless the annotation
-is exactly ``str``, the SDK re-parses a string argument whose text reads as
-JSON into an object before validation, so every transport argument carrying
-JSON was destroyed before the tool saw it. These tests spawn
-``python -m powerio.mcp`` and speak the protocol.
-"""
+"""Exercise the MCP server through a real stdio session."""
 
 import asyncio
 import json
@@ -22,24 +14,17 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 DATA = Path(__file__).resolve().parents[2] / "tests" / "data"
-
-# The SDK waits forever by default; a server that starts and then blocks
-# would hang the suite with nothing to fail it.
 TIMEOUT = 60.0
-
-# A payload the JSON reader must receive byte intact: a non-ASCII bus name
-# and a float a decode and re-encode cycle is prone to mangle.
-BMOPF_MALMO = '{"bus":{"Malmö":{"terminal_names":["1"],"v_max":[1e21]}}}'
 
 
 def _run(steps):
-    """Drive one stdio session; ``steps`` is an async callable on the session."""
-
     async def go():
-        params = StdioServerParameters(
-            command=sys.executable, args=["-m", "powerio.mcp"], env=dict(os.environ)
+        parameters = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "powerio.mcp"],
+            env=dict(os.environ),
         )
-        async with stdio_client(params) as (read, write):
+        async with stdio_client(parameters) as (read, write):
             async with ClientSession(
                 read, write, read_timeout_seconds=TIMEOUT
             ) as session:
@@ -54,51 +39,85 @@ def _payload(result):
     return json.loads(result.content[0].text)
 
 
-def test_the_json_transport_round_trips_over_stdio():
+def test_module_round_trip_over_stdio():
     async def steps(session):
-        parsed = _payload(await session.call_tool("parse", {"path": str(DATA / "case9.m")}))
-        assert parsed["json_format"] == "model-json"
-        return _payload(await session.call_tool("summary", {"json": parsed["json"]}))
+        parsed = _payload(
+            await session.call_tool("parse", {"path": str(DATA / "case9.m")})
+        )
+        summary = _payload(
+            await session.call_tool(
+                "summarize", {"powerio_ir": parsed["powerio_ir"]}
+            )
+        )
+        diagnostics = _payload(
+            await session.call_tool(
+                "diagnostics", {"powerio_ir": parsed["powerio_ir"]}
+            )
+        )
+        return parsed, summary, diagnostics
 
-    assert _run(steps)["elements"]["buses"] == 9
+    parsed, summary, diagnostics = _run(steps)
+    assert parsed["value_type"] == "powerio.BalancedNetwork"
+    assert summary["elements"]["buses"] == 9
+    assert diagnostics["summary"]["status"] == "ok"
 
 
-def test_the_module_transport_round_trips_over_stdio():
+def test_raw_content_reaches_parse_and_emit_over_stdio():
+    text = (DATA / "case9.m").read_text()
+
     async def steps(session):
         parsed = _payload(
             await session.call_tool(
-                "parse", {"path": str(DATA / "case9.m"), "transport": "module"}
+                "parse", {"content": text, "format": "matpower"}
             )
         )
-        module = parsed["module_json"]
-        diag = _payload(await session.call_tool("diagnostics", {"module_json": module}))
-        assert diag["schema"] == "powerio.diagnostics"
-        return _payload(await session.call_tool("summary", {"module_json": module}))
-
-    assert _run(steps)["elements"]["buses"] == 9
-
-
-def test_non_json_content_survives_the_transport():
-    async def steps(session):
-        return _payload(
+        emitted = _payload(
             await session.call_tool(
-                "convert",
+                "emit",
                 {
-                    "to_format": "psse",
-                    "content": (DATA / "case9.m").read_text(),
-                    "from_format": "matpower",
+                    "format": "matpower",
+                    "content": text,
+                    "source_format": "matpower",
                 },
             )
         )
+        return parsed, emitted
 
-    assert _run(steps)["text"].lstrip().startswith("0,")
+    parsed, emitted = _run(steps)
+    assert parsed["summary"]["elements"]["buses"] == 9
+    assert emitted["text"] == text
 
 
-def test_json_content_reaches_the_reader_byte_intact():
+def test_collection_indexing_over_stdio_does_not_create_a_network(
+    time_series_powerio_ir,
+):
     async def steps(session):
-        return _payload(await session.call_tool("parse", {"content": BMOPF_MALMO}))
+        collection = _payload(
+            await session.call_tool(
+                "summarize", {"powerio_ir": time_series_powerio_ir}
+            )
+        )
+        selected = _payload(
+            await session.call_tool(
+                "summarize",
+                {"powerio_ir": time_series_powerio_ir, "time_index": 0},
+            )
+        )
+        return collection, selected
 
-    parsed = _run(steps)
-    assert parsed["domain"] == "distribution"
-    doc = json.loads(parsed["json"])
-    assert doc["bus"]["Malmö"]["v_max"] == [1e21]
+    collection, selected = _run(steps)
+    assert collection["collection"] == "TimeSeries"
+    assert selected["value_type"] == "OperatingPoint"
+    assert "elements" not in selected
+
+
+def test_removed_collection_tools_are_not_advertised_over_stdio():
+    async def steps(session):
+        result = await session.list_tools()
+        return {tool.name for tool in result.tools}
+
+    names = _run(steps)
+    assert "summarize" in names
+    assert "list_states" not in names
+    assert "inspect_state" not in names
+    assert "export_state" not in names

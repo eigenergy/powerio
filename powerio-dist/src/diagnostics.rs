@@ -21,11 +21,6 @@ pub use powerio_core::{
 pub mod codes {
     powerio_core::diagnostic_codes! {
         // PARSE: the source text could not be decoded as given.
-        /// Retired at 1.0: the mark is retained on the source buffer and the
-        /// reader decodes a mark free slice, so nothing is removed from the
-        /// bytes and a same format echo returns them exactly.
-        PARSE_DSS_BOM_STRIPPED = "PARSE.DSS.BOM_STRIPPED", Remark,
-            "a leading UTF-8 byte order mark was removed before the reader ran", retired = "0.10.0";
         PARSE_DSS_SOURCE_MALFORMED = "PARSE.DSS.SOURCE_MALFORMED", Warning,
             "a dss command, object spec, or property assignment does not parse";
         PARSE_DIST_MALFORMED = "PARSE.DIST.MALFORMED", Error,
@@ -140,6 +135,13 @@ pub mod codes {
             "a BMOPF field outside the schema survives in extras or untyped";
         READ_BMOPF_SOURCE_MALFORMED = "READ.BMOPF.SOURCE_MALFORMED", Warning,
             "a BMOPF value is not the shape its key declares";
+        /// The document states no `meta.$schema`, so the schema version it was
+        /// written against is unknown and the reader accepts both versions.
+        READ_BMOPF_SCHEMA_ABSENT = "READ.BMOPF.SCHEMA_ABSENT", Warning,
+            "a BMOPF document states no schema, so its version is unknown";
+        /// The document states a `meta.$schema` that names no known version.
+        READ_BMOPF_SCHEMA_UNKNOWN = "READ.BMOPF.SCHEMA_UNKNOWN", Warning,
+            "a BMOPF document states a schema naming no known version";
 
         // EMIT.BMOPF: the general families beside the nineteen transformer
         // codes the writer already publishes.
@@ -234,10 +236,6 @@ pub mod codes {
         // Failures.
         READ_DIST_IO_FAILED = "READ.DIST.IO_FAILED", Error,
             "a distribution case file could not be read", category = Io;
-        /// Retired in 0.9.0: every distribution read finding now carries its
-        /// own code, so the package no longer wraps them under one catch-all.
-        READ_DIST_PARSE_WARNING = "READ.DIST.PARSE_WARNING", Warning,
-            "a distribution parse finding with no identity of its own", retired = "0.9.0";
         REQUEST_DIST_FORMAT_UNKNOWN = "REQUEST.DIST_FORMAT.UNKNOWN", Error,
             "the named distribution format is not one powerio reads",
             category = Request;

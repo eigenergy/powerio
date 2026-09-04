@@ -16,7 +16,7 @@ use crate::diagnostics::codes;
 pub enum Error {
     /// A failure from the balanced model, its readers, or its writers.
     #[error(transparent)]
-    Core(#[from] powerio_tx::Error),
+    Transmission(#[from] powerio_tx::Error),
 
     /// An underlying I/O failure reading or writing a file.
     #[error(transparent)]
@@ -29,7 +29,7 @@ impl Error {
     #[must_use]
     pub fn code(&self) -> &'static DiagnosticInfo {
         match self {
-            Error::Core(inner) => inner.code(),
+            Error::Transmission(inner) => inner.code(),
             Error::Io(_) => &codes::READ_INSTANCE_IO_FAILED,
         }
     }
@@ -42,7 +42,7 @@ impl Error {
     pub fn category(&self) -> powerio_tx::ErrorCategory {
         use powerio_tx::ErrorCategory as C;
         match self {
-            Error::Core(inner) => inner.category(),
+            Error::Transmission(inner) => inner.category(),
             Error::Io(_) => C::Io,
         }
     }

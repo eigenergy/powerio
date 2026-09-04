@@ -50,7 +50,7 @@ jobs:
     - name: Build docs
       env:
         RUSTDOCFLAGS: "-D warnings"
-      run: cargo doc --no-deps --all-features -p powerio -p powerio-core -p powerio-matrix -p powerio-prob -p powerio-dist -p powerio-capi -p powerio-py
+      run: cargo doc --no-deps --all-features -p powerio -p powerio-core -p powerio-tx -p powerio-matrix -p powerio-prob -p powerio-dist -p powerio-capi -p powerio-py
     - name: Build Python API docs
       run: |
         python -m pip install --upgrade pip
@@ -150,15 +150,14 @@ jobs:
                 <a href="guide/matrices.html">matrices</a>
                 <a href="guide/dcopf-bundle.html">DC OPF bundle</a>
                 <a href="guide/capi.html">C ABI</a>
-                <a href="guide/migration.html">migrating</a>
+                <a href="guide/migration-0.11.html">migrating</a>
                 <a href="guide/languages.html">language APIs</a>
                 <a href="guide/python.html">python</a></dd>
           </div>
           <div>
-            <dt>.pio.json format</dt>
-            <dd><a href="guide/pio-json-schema.html">field reference &amp; versioning</a>
-                <a href="guide/compiler-ir.html">compiler IR</a>
-                <a href="guide/pio-json-schema.html#pio-package">pio-package schema</a></dd>
+            <dt>PowerIO IR</dt>
+            <dd><a href="guide/pio-json-schema.html">field reference</a>
+                <a href="guide/compiler-ir.html">compiler IR</a></dd>
           </div>
           <div>
             <dt>bindings</dt>
@@ -167,11 +166,11 @@ jobs:
         </dl>
         <footer><a href="https://github.com/eigenergy/powerio">github.com/eigenergy/powerio</a></footer>
         HTML
-    # The published schema document's `$id` names a path on this site, so the
-    # path serves the machine-readable schema and redirects browsers to the
-    # format chapter. Relative targets keep the redirects working under both
-    # powerio.dev and eigenergy.github.io/powerio.
-    - name: Schema identifier pages
+    # Serve the current schema and the documented historical snapshots, with
+    # browser redirects to the single PowerIO IR chapter. Relative targets keep
+    # the redirects working under both powerio.dev and
+    # eigenergy.github.io/powerio.
+    - name: PowerIO IR schema history
       run: |
         redirect_schema_page() {
           # A redirect to a missing anchor would land at the page top; fail
@@ -190,13 +189,10 @@ jobs:
         <a href="$target">$1</a>
         HTML
         }
-        # Every lineage that has ever been published, not just the current one:
-        # a schema's $id names a path on this site and README.md promises it
-        # stays served, so a retired lineage 404ing breaks the document that
-        # already shipped quoting it.
-        for schema in docs/schema/*/*/schema.json; do
-          lineage="${schema#docs/schema/}"
-          redirect_schema_page "${lineage%/schema.json}"
+        # Every schema in the archive is served, so a release adds its
+        # directory and nothing here.
+        for schema in docs/schema/pio-ir/*/schema.json; do
+          redirect_schema_page "$(dirname "${schema#docs/schema/}")"
         done
     - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
       with:

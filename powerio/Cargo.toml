@@ -3,7 +3,7 @@ name = "powerio"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = 'Compiler infrastructure for power systems: parse, convert, validate, and lower grid models'
+description = 'Compiler infrastructure for power systems: parse, validate, transform, and emit grid models'
 readme = "README.md"
 license.workspace = true
 repository.workspace = true
@@ -19,7 +19,13 @@ all-features = true
 matrix = ["dep:powerio-matrix"]
 # The gridfm-datakit Parquet reader. Off by default so the facade pulls no
 # Arrow or Parquet into consumers that never read datasets.
-gridfm = ["dep:arrow", "dep:parquet", "dep:bytes"]
+gridfm = [
+    "dep:arrow",
+    "dep:parquet",
+    "dep:bytes",
+    "dep:powerio-matrix",
+    "powerio-matrix/gridfm",
+]
 schema = ["dep:schemars", "powerio-tx/schema", "powerio-core/schema", "powerio-dist/schema", "powerio-prob/schema"]
 
 [dependencies]
@@ -40,6 +46,7 @@ thiserror = "2"
 [dev-dependencies]
 powerio-matrix = { workspace = true, features = ["gridfm"] }
 tempfile = "3"
+zip.workspace = true
 
 [[example]]
 name = "generate_schemas"

@@ -13,7 +13,7 @@ import pytest
 from powerio.mcp import sandbox
 
 DATA = Path(__file__).resolve().parents[2] / "tests" / "data"
-ENV_NAMES = ("POWERIO_MCP_ALLOWED_ROOTS", "POWERIO_MCP_ROOT", "POWERIO_MCP_ALLOWED_ROOT")
+ENV_NAMES = ("POWERIO_MCP_ALLOWED_ROOTS",)
 
 
 @pytest.fixture(autouse=True)
@@ -62,50 +62,14 @@ def test_allowed_roots_splits_on_pathsep(monkeypatch, tmp_path):
     assert sandbox.allowed_roots() == (a.resolve(), b.resolve())
 
 
-@pytest.mark.parametrize("name", ENV_NAMES)
-def test_every_accepted_spelling_restricts_reads(monkeypatch, tmp_path, name):
+def test_configured_roots_restrict_reads(monkeypatch, tmp_path):
     inside = tmp_path / "case9.m"
     inside.write_text("x")
-    monkeypatch.setenv(name, str(tmp_path))
+    monkeypatch.setenv(sandbox.ALLOWED_ROOTS_ENV, str(tmp_path))
 
     assert sandbox.checked_path(str(inside)) == str(inside)
     with pytest.raises(ValueError, match="outside allowed MCP roots"):
         sandbox.checked_path(str(DATA / "case9.m"))
-
-
-@pytest.mark.parametrize("legacy", ENV_NAMES[1:])
-def test_the_primary_variable_wins_over_a_legacy_one(monkeypatch, tmp_path, legacy):
-    primary = tmp_path / "primary"
-    other = tmp_path / "other"
-    primary.mkdir()
-    other.mkdir()
-    monkeypatch.setenv(sandbox.ALLOWED_ROOTS_ENV, str(primary))
-    monkeypatch.setenv(legacy, str(other))
-
-    assert sandbox.allowed_roots() == (primary.resolve(),)
-    with pytest.raises(ValueError, match="outside allowed MCP roots"):
-        sandbox.checked_path(str(other / "case9.m"))
-
-
-def test_the_first_legacy_spelling_wins_over_the_alternate(monkeypatch, tmp_path):
-    first = tmp_path / "first"
-    alternate = tmp_path / "alternate"
-    first.mkdir()
-    alternate.mkdir()
-    monkeypatch.setenv("POWERIO_MCP_ROOT", str(first))
-    monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOT", str(alternate))
-
-    assert sandbox.allowed_roots() == (first.resolve(),)
-
-
-def test_an_empty_variable_falls_through_to_the_next(monkeypatch, tmp_path):
-    root = tmp_path / "root"
-    root.mkdir()
-    monkeypatch.setenv(sandbox.ALLOWED_ROOTS_ENV, "")
-    monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOT", str(root))
-
-    assert sandbox.allowed_roots() == (root.resolve(),)
-
 
 def test_decode_local_path_reads_file_uris_and_refuses_remote_schemes():
     assert sandbox.decode_local_path("case 9.m") == Path("case 9.m")
@@ -177,9 +141,7 @@ def test_admitting_root_names_the_containing_root(monkeypatch, tmp_path):
     b.mkdir()
     case = b / "case.dss"
     case.write_text("New Circuit.c\n")
-    monkeypatch.setenv(
-        sandbox.ALLOWED_ROOTS_ENV, os.pathsep.join([str(a), str(b)])
-    )
+    monkeypatch.setenv(sandbox.ALLOWED_ROOTS_ENV, os.pathsep.join([str(a), str(b)]))
     assert sandbox.admitting_root(case) == b.resolve()
     with pytest.raises(sandbox.PathNotAllowed):
         sandbox.admitting_root(tmp_path / "elsewhere.dss")
@@ -281,13 +243,34 @@ def test_staged_directory_write_refuses_collisions_before_install(tmp_path):
         sandbox.staged_directory_write(
             str(out),
             False,
-            lambda staging: _write_tree(
-                staging, {"same.csv": "new", "new.csv": "new"}
-            ),
+            lambda staging: _write_tree(staging, {"same.csv": "new", "new.csv": "new"}),
         )
 
     assert (out / "same.csv").read_text() == "old"
     assert not (out / "new.csv").exists()
+
+
+def test_staged_file_write_refuses_or_atomically_replaces(tmp_path):
+    out = tmp_path / "case.raw"
+
+    def write(value: str):
+        def run(staging: str) -> dict:
+            Path(staging).write_text(value)
+            return {"path": staging}
+
+        return run
+
+    created = sandbox.staged_file_write(str(out), False, write("first"))
+    assert created["path"] == str(out)
+    assert out.read_text() == "first"
+
+    with pytest.raises(ValueError, match="refusing to overwrite"):
+        sandbox.staged_file_write(str(out), False, write("second"))
+    assert out.read_text() == "first"
+
+    replaced = sandbox.staged_file_write(str(out), True, write("second"))
+    assert replaced["path"] == str(out)
+    assert out.read_text() == "second"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
@@ -336,4 +319,6 @@ def test_staged_directory_write_rolls_back_a_failed_swap(monkeypatch, tmp_path):
         )
 
     assert (out / "same.csv").read_text() == "old"
-    assert not [path for path in tmp_path.iterdir() if path.name.startswith(".dataset.")]
+    assert not [
+        path for path in tmp_path.iterdir() if path.name.startswith(".dataset.")
+    ]

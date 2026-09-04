@@ -1,7 +1,8 @@
 use std::fmt;
 
 use crate::{
-    Diagnostic, DiagnosticInfo, DiagnosticSeverity, ErrorCategory, Source, render_diagnostic,
+    Diagnostic, DiagnosticInfo, DiagnosticSeverity, ErrorCategory, Source, SourceSpan,
+    render_diagnostic,
 };
 
 type BoxedCause = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -75,6 +76,32 @@ impl Error {
     #[must_use]
     pub fn with_source(mut self, source: Source) -> Self {
         self.retained_source = Some(source);
+        self
+    }
+
+    /// Attach the byte range of the record that ended the operation to the
+    /// failure's error diagnostic.
+    ///
+    /// The diagnostic keeps at most `limits::MAX_DIAGNOSTIC_SPANS` spans. A
+    /// span past that limit is not attached; the refusal is recorded as a
+    /// note so the omission stays visible.
+    #[must_use]
+    pub fn with_span(mut self, span: SourceSpan) -> Self {
+        let Some(position) = self
+            .diagnostics
+            .iter()
+            .position(|diagnostic| diagnostic.severity() == DiagnosticSeverity::Error)
+        else {
+            return self;
+        };
+        if let Err(refused) = self.diagnostics[position].add_span(span) {
+            self.diagnostics.extend(
+                refused
+                    .into_diagnostics()
+                    .into_iter()
+                    .map(|diagnostic| diagnostic.with_severity(DiagnosticSeverity::Note)),
+            );
+        }
         self
     }
 
@@ -170,8 +197,40 @@ mod tests {
     }
 
     #[test]
+    fn a_span_attaches_to_the_diagnostic_that_ended_the_operation() {
+        let source = crate::SourceId::new("/input").unwrap();
+        let error = Error::new(&crate::codes::READ_IO_READ, "read failed")
+            .with_diagnostic(
+                Diagnostic::of(&crate::codes::READ_IO_READ, "context")
+                    .with_severity(DiagnosticSeverity::Note),
+            )
+            .with_span(SourceSpan::new(source.clone(), 4, 9).unwrap());
+        let spans = error.diagnostics()[0].spans();
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].source(), &source);
+        assert_eq!((spans[0].byte_start(), spans[0].byte_end()), (4, 9));
+        assert!(error.diagnostics()[1].spans().is_empty());
+
+        // Past the span limit the range is not attached and a note records
+        // the refusal, so nothing is dropped silently.
+        let mut crowded = Error::new(&crate::codes::READ_IO_READ, "read failed");
+        for _ in 0..crate::validation::MAX_DIAGNOSTIC_SPANS {
+            crowded = crowded.with_span(SourceSpan::new(source.clone(), 0, 1).unwrap());
+        }
+        let overflow = crowded.with_span(SourceSpan::new(source, 0, 1).unwrap());
+        assert_eq!(
+            overflow.diagnostics()[0].spans().len(),
+            crate::validation::MAX_DIAGNOSTIC_SPANS
+        );
+        assert_eq!(
+            overflow.diagnostics().last().unwrap().severity(),
+            DiagnosticSeverity::Note
+        );
+    }
+
+    #[test]
     fn cause_and_shared_source_are_retained() {
-        let source = Source::from_bytes("input.bin", vec![0, 255]).unwrap();
+        let source = Source::from_memory("input.bin", vec![0, 255]).unwrap();
         let byte_pointer = source.primary_buffer().unwrap().bytes().as_ptr();
         let error = Error::new(&crate::codes::READ_IO_READ, "read failed")
             .with_cause(std::io::Error::other("cause"))

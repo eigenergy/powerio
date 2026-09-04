@@ -20,13 +20,13 @@ digraph powerio_architecture {
     }
 
     "powerio-cli" [label = "powerio-cli\nCLI + TUI"];
-    "powerio-capi" [label = "powerio-capi\nC ABI 6 (Julia, C, C++)"];
+    "powerio-capi" [label = "powerio-capi\nC ABI 7 (Julia, C, C++)"];
     "powerio-py" [label = "powerio-py\nPython package + MCP"];
 
-    powerio [label = "powerio (facade)\nparse, PioValue, .pio.json,\nwrite dispatch"];
+    powerio [label = "powerio (facade)\nparse, emit, serialize, deserialize,\nPioValue"];
 
     "powerio-matrix" [label = "powerio-matrix\nsparse matrices, graph data"];
-    "powerio-prob" [label = "powerio-prob\noperating points, 7 instances,\n7 solutions"];
+    "powerio-prob" [label = "powerio-prob\noperating points, 7 instances,\n8 solutions"];
 
     "powerio-tx" [label = "powerio-tx\nBalancedNetwork\n+ balanced formats"];
     "powerio-dist" [label = "powerio-dist\nMulticonductorNetwork\n+ OpenDSS, PMD, BMOPF"];

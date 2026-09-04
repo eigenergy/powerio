@@ -1,9 +1,10 @@
-//! Read DOE GO Challenge 3 JSON input data into the transmission `BalancedNetwork`.
+//! Decode DOE GO Challenge 3 problem data for the typed calculation parser.
 //!
-//! GO Challenge 3 is a unit commitment data model. `BalancedNetwork` is a static power
-//! flow model, so this reader maps the first time interval into static generator
-//! and load bounds, retains the original JSON source, and reports the scheduling
-//! data it leaves in the source document.
+//! The GO Challenge 3 data format covers static electrical data, time varying
+//! data, contingencies, and solution data for Challenge 3 and later uses.
+//! The top level parser combines the decoded electrical network with the
+//! scheduling and contingency data. This module is not a public network
+//! parser.
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -14,19 +15,17 @@ use serde_json::{Map, Value};
 use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
     BalancedNetwork, BalancedNetworkTables, Branch, BranchCharging, BranchRatingSet, Bus, BusId,
-    BusType, Extras, GenCost, Generator, Hvdc, Load, Shunt, SourceFormat, TransformerControl,
-    TransformerControlMode,
+    BusType, Extras, GenCost, Generator, GeneratorEnergySource, Hvdc, Load, Shunt, SourceFormat,
 };
 use crate::normalize;
+use crate::{CoordinateSpace, CoordsKind, GeoMeta, Location};
 use crate::{Error, Result};
 
 const FMT: &str = "GO Challenge 3 JSON";
 
-/// GOC3 source document: the file parsed once and shared by the format's
-/// adapters (the balanced network reader here, the operating point extractor
-/// in `powerio`'s stored layer, and the SCOPF instance builder in
-/// `powerio-prob`), so
-/// section order, uid, bus ID, and device row rules have one owner.
+/// GOC3 source document shared by the balanced network reader and the AC SCUC
+/// instance builder, so section order, uid, bus ID, and device row rules have
+/// one owner.
 #[derive(Clone, Debug)]
 pub struct Goc3Document {
     root: Map<String, Value>,
@@ -62,13 +61,6 @@ impl Goc3Document {
     }
 
     #[must_use]
-    pub fn time_series_output(&self) -> Option<&Map<String, Value>> {
-        self.root
-            .get("time_series_output")
-            .and_then(Value::as_object)
-    }
-
-    #[must_use]
     pub fn reliability(&self) -> Option<&Map<String, Value>> {
         self.root.get("reliability").and_then(Value::as_object)
     }
@@ -81,39 +73,6 @@ impl Goc3Document {
     /// Read a time series input section in source document order.
     pub fn time_series_input_records(&self, name: &'static str) -> Result<Vec<Goc3Record<'_>>> {
         records(self.time_series_input()?, name)
-    }
-
-    /// Read a time series output section in source document order.
-    pub fn time_series_output_records(&self, name: &'static str) -> Result<Vec<Goc3Record<'_>>> {
-        self.time_series_output()
-            .map_or_else(|| Ok(Vec::new()), |output| records(output, name))
-    }
-
-    /// Enumerate dispatchable devices with the balanced model row assignment.
-    pub fn dispatchable_devices(&self) -> Result<Vec<Goc3DeviceRecord<'_>>> {
-        device_rows(self.network()?)
-    }
-
-    /// Map bus UIDs to the external bus IDs assigned by the balanced reader.
-    ///
-    /// Uid uniqueness is validated by the parse that produced this document
-    /// (`read_buses` rejects a duplicate bus uid), so the map here cannot
-    /// silently collapse entries; a document constructed another way has no
-    /// such guarantee.
-    pub fn bus_ids(&self) -> Result<HashMap<String, BusId>> {
-        bus_id_by_uid(&section(self.network()?, "bus")?)
-    }
-
-    /// Build the period cost curve used by the balanced reader.
-    #[must_use]
-    pub fn dispatchable_device_cost_at(
-        &self,
-        device: &Map<String, Value>,
-        time_series: Option<&Value>,
-        period: usize,
-        base_mva: f64,
-    ) -> Option<GenCost> {
-        cost_at(device, time_series, period, base_mva)
     }
 }
 
@@ -138,17 +97,23 @@ impl Goc3BusMap {
     }
 }
 
-/// Parse a GO Challenge 3 JSON input file, returning the network, the
-/// reader's findings, and the typed document the parse went through.
-///
-/// TEMPORARY: the stored operating point extraction in `powerio` consumes
-/// the document; this helper leaves with that crate when DOE GO Challenge 3
-/// parsing moves to the calculation instance types.
-pub fn parse_goc3_json(
+/// Parse the balanced network used by a complete Challenge 3 calculation
+/// instance. Scheduling and contingency data are consumed by the caller, so
+/// this path does not claim that those sections survive only in source bytes.
+#[doc(hidden)]
+pub fn parse_goc3_instance_network(
     content: &str,
 ) -> Result<(BalancedNetwork, Vec<super::Diagnostic>, Arc<Goc3Document>)> {
+    parse_goc3_json_with_reduction_diagnostics(content, false)
+}
+
+fn parse_goc3_json_with_reduction_diagnostics(
+    content: &str,
+    report_static_reduction: bool,
+) -> Result<(BalancedNetwork, Vec<super::Diagnostic>, Arc<Goc3Document>)> {
     let mut warnings = Diagnostics::new();
-    let (network, document) = parse_goc3_source(content, None, &mut warnings)?;
+    let (network, document) =
+        parse_goc3_source(content, None, &mut warnings, report_static_reduction)?;
     Ok((network, warnings.into_records(), document))
 }
 
@@ -160,6 +125,7 @@ pub(crate) fn parse_goc3_source(
     source: &str,
     name_hint: Option<&str>,
     warnings: &mut Diagnostics,
+    report_static_reduction: bool,
 ) -> Result<(BalancedNetwork, Arc<Goc3Document>)> {
     let document = Arc::new(Goc3Document::parse(source)?);
     let root = document.root();
@@ -169,13 +135,7 @@ pub(crate) fn parse_goc3_source(
         .get("general")
         .and_then(Value::as_object)
         .and_then(|general| number(general, "base_norm_mva"))
-        .unwrap_or_else(|| {
-            push_once(
-                warnings,
-                "missing `network.general.base_norm_mva`; using 100.0 MVA",
-            );
-            100.0
-        });
+        .ok_or_else(|| bad("missing required number `network.general.base_norm_mva`"))?;
     if !base_mva.is_finite() || base_mva <= 0.0 {
         return Err(Error::InvalidBaseMva { base: base_mva });
     }
@@ -194,7 +154,9 @@ pub(crate) fn parse_goc3_source(
         .unwrap_or("goc3")
         .to_owned();
 
-    warn_static_reduction(root, network, warnings);
+    if report_static_reduction {
+        warn_static_reduction(root, network, warnings);
+    }
 
     let (mut buses, bus_map) = read_buses(network)?;
     let bus_pos: HashMap<BusId, usize> = buses
@@ -206,11 +168,14 @@ pub(crate) fn parse_goc3_source(
     let device_ts = device_time_series(time_series)?;
 
     let mut branches = Vec::new();
-    branches.extend(read_branches(network, "ac_line", false, &bus_map)?);
+    branches.extend(read_branches(
+        network, "ac_line", false, base_mva, &bus_map,
+    )?);
     branches.extend(read_branches(
         network,
         "two_winding_transformer",
         true,
+        base_mva,
         &bus_map,
     )?);
 
@@ -260,10 +225,20 @@ pub(crate) fn parse_goc3_source(
         name,
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
-        geo: None,
+        geo: buses
+            .iter()
+            .any(|bus| bus.location.is_some())
+            .then_some(GeoMeta {
+                space: CoordinateSpace::Geographic { crs: None },
+                kind: Some(CoordsKind::Source),
+            }),
+        case_metadata: crate::network::CaseMetadata::default(),
+        detailed_connectivity: None,
+        generated_uids: std::collections::BTreeSet::default(),
         buses: buses.into(),
         loads: loads.into(),
         shunts: shunts.into(),
+        static_var_compensators: Vec::new().into(),
         branches: branches.into(),
         switches: Vec::new().into(),
         generators: generators.into(),
@@ -302,9 +277,47 @@ fn read_buses(network: &Map<String, Value>) -> Result<(Vec<Bus>, Goc3BusMap)> {
         let id = ids[&uid];
         by_uid.insert(uid.clone(), id);
         let initial = initial_status(obj);
+        let kind = match string(obj, "type") {
+            Some("PV") => BusType::Pv,
+            Some("Slack") => BusType::Ref,
+            Some("Not_used") => BusType::Isolated,
+            _ => BusType::Pq,
+        };
+        let location = number(obj, "longitude")
+            .zip(number(obj, "latitude"))
+            .map(|(x, y)| Location {
+                x,
+                y,
+                kind: Some(CoordsKind::Source),
+            });
+        let mut bus_extras = extras(
+            obj,
+            &[
+                "uid",
+                "base_nom_volt",
+                "vm_ub",
+                "vm_lb",
+                "initial_status",
+                // This field remains in the pinned 2022 GO-3 data model and
+                // its D1/D2/D3 files, but data format 1.1.1 removed it. The
+                // AC SCUC reader reports it instead of treating it as an
+                // electrical network attribute.
+                "con_loss_factor",
+            ],
+        );
+        if location.is_some() {
+            bus_extras.remove("longitude");
+            bus_extras.remove("latitude");
+        }
+        if matches!(
+            string(obj, "type"),
+            Some("PQ" | "PV" | "Slack" | "Not_used")
+        ) {
+            bus_extras.remove("type");
+        }
         buses.push(Bus {
             id,
-            kind: BusType::Pq,
+            kind,
             vm: initial.and_then(|s| number(s, "vm")).unwrap_or(1.0),
             va: initial.and_then(|s| number(s, "va")).unwrap_or(0.0) * normalize::RAD_TO_DEG,
             base_kv: number(obj, "base_nom_volt").unwrap_or(0.0),
@@ -316,11 +329,8 @@ fn read_buses(network: &Map<String, Value>) -> Result<(Vec<Bus>, Goc3BusMap)> {
             zone: 1,
             name: Some(uid.clone()),
             uid: Some(uid),
-            location: None,
-            extras: extras(
-                obj,
-                &["uid", "base_nom_volt", "vm_ub", "vm_lb", "initial_status"],
-            ),
+            location,
+            extras: bus_extras,
         });
     }
     Ok((buses, Goc3BusMap { by_uid }))
@@ -330,6 +340,7 @@ fn read_branches(
     network: &Map<String, Value>,
     section_name: &'static str,
     transformer: bool,
+    base_mva: f64,
     buses: &Goc3BusMap,
 ) -> Result<Vec<Branch>> {
     section(network, section_name)?
@@ -340,8 +351,12 @@ fn read_branches(
             let to = bus_ref(obj, "to_bus", buses)?;
             let initial = initial_status(obj);
             let b = number(obj, "b").unwrap_or(0.0);
-            let rate_a = number(obj, "mva_ub_nom").unwrap_or(0.0);
-            let rate_b = number(obj, "mva_ub_em").unwrap_or(rate_a);
+            let rate_a_per_unit = number(obj, "mva_ub_nom").unwrap_or(0.0);
+            let rate_b_per_unit = number(obj, "mva_ub_sht").unwrap_or(rate_a_per_unit);
+            let rate_c_per_unit = number(obj, "mva_ub_em").unwrap_or(rate_b_per_unit);
+            let rate_a = rate_a_per_unit * base_mva;
+            let rate_b = rate_b_per_unit * base_mva;
+            let rate_c = rate_c_per_unit * base_mva;
             // GO Challenge 3 puts b/2 per terminal in addition to the extra
             // g_fr/b_fr/g_to/b_to shunts (PNNL-35792 eq. 149/151).
             let charging = if number(obj, "additional_shunt").unwrap_or(0.0) == 0.0 {
@@ -368,6 +383,7 @@ fn read_branches(
                 0.0
             };
             Ok(Branch {
+                name: None,
                 from,
                 to,
                 r: number(obj, "r").unwrap_or(0.0),
@@ -376,18 +392,26 @@ fn read_branches(
                 charging: Some(charging),
                 rate_a,
                 rate_b,
-                rate_c: rate_b,
-                rating_sets: (rate_b != 0.0 && (rate_b - rate_a).abs() > f64::EPSILON)
-                    .then(|| BranchRatingSet::new("mva_ub_em", rate_b))
-                    .into_iter()
-                    .collect(),
+                rate_c,
+                rating_sets: [
+                    number(obj, "mva_ub_sht")
+                        .map(|rating| BranchRatingSet::new("mva_ub_sht", rating * base_mva)),
+                    number(obj, "mva_ub_em")
+                        .map(|rating| BranchRatingSet::new("mva_ub_em", rating * base_mva)),
+                ]
+                .into_iter()
+                .flatten()
+                .collect(),
                 current_ratings: None,
                 tap,
                 shift,
                 in_service: initial_status_flag(obj, true),
                 angmin: -360.0,
                 angmax: 360.0,
-                control: shifter_control(obj, transformer),
+                // GOC3 `ta_lb`/`ta_ub` bound the SCUC phase shift decision.
+                // They are not automatic active power flow control settings
+                // on the reusable electrical network.
+                control: None,
                 solution: None,
                 uid: item_uid(item, obj),
                 route: None,
@@ -401,6 +425,7 @@ fn read_branches(
                         "x",
                         "b",
                         "mva_ub_nom",
+                        "mva_ub_sht",
                         "mva_ub_em",
                         "initial_status",
                         "additional_shunt",
@@ -417,25 +442,6 @@ fn read_branches(
             })
         })
         .collect()
-}
-
-/// GOC3 `ta_lb`/`ta_ub` bound the phase shift decision variable: a device
-/// control range, not a bus angle difference limit, so they map to an
-/// `ActiveFlow` control block (whose tap limits carry the phase angle in
-/// degrees), never to `angmin`/`angmax`.
-fn shifter_control(obj: &Map<String, Value>, transformer: bool) -> Option<TransformerControl> {
-    if !transformer {
-        return None;
-    }
-    let lb = number(obj, "ta_lb");
-    let ub = number(obj, "ta_ub");
-    if lb.is_none() && ub.is_none() {
-        return None;
-    }
-    let mut control = TransformerControl::new(TransformerControlMode::ActiveFlow);
-    control.tap_min = lb.unwrap_or(-std::f64::consts::TAU) * normalize::RAD_TO_DEG;
-    control.tap_max = ub.unwrap_or(std::f64::consts::TAU) * normalize::RAD_TO_DEG;
-    Some(control)
 }
 
 fn read_shunts(
@@ -455,6 +461,7 @@ fn read_shunts(
                 g: number(obj, "gs").unwrap_or(0.0) * step * base_mva,
                 b: number(obj, "bs").unwrap_or(0.0) * step * base_mva,
                 in_service: step != 0.0,
+                section_count: None,
                 control: None,
                 uid: item_uid(item, obj),
                 extras: extras(
@@ -484,18 +491,22 @@ fn read_producer(
     let initial = initial_status(obj);
     Generator {
         bus,
+        energy_source: GeneratorEnergySource::default(),
         pg: initial.and_then(|s| number(s, "p")).unwrap_or(0.0) * base_mva,
         qg: initial.and_then(|s| number(s, "q")).unwrap_or(0.0) * base_mva,
         pmax: first_number(ts, "p_ub").unwrap_or(0.0) * base_mva,
         pmin: first_number(ts, "p_lb").unwrap_or(0.0) * base_mva,
         qmax: first_number(ts, "q_ub").unwrap_or(0.0) * base_mva,
         qmin: first_number(ts, "q_lb").unwrap_or(0.0) * base_mva,
-        vg: 1.0,
-        mbase: base_mva,
+        vg: number(obj, "vm_setpoint").unwrap_or(1.0),
+        mbase: number(obj, "nameplate_capacity").unwrap_or(1.0) * base_mva,
         in_service: initial_status_flag(obj, true),
         cost: cost_at(obj, ts, 0, base_mva),
         caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
+        voltage_regulation_on: true,
+        regulating_terminal: None,
         regulated_bus: None,
+        active_power_control: None,
         uid,
     }
 }
@@ -566,6 +577,11 @@ fn read_hvdc(network: &Map<String, Value>, base_mva: f64, buses: &Goc3BusMap) ->
                 qmaxt: number(obj, "qdc_to_ub").unwrap_or(0.0) * base_mva,
                 loss0: 0.0,
                 loss1: 0.0,
+                resistance_ohm: None,
+                nominal_voltage_kv: None,
+                converters_mode: None,
+                converter1: None,
+                converter2: None,
                 cost: None,
                 uid: item_uid(item, obj),
                 extras: extras(
@@ -595,7 +611,14 @@ fn assign_bus_types(
     warnings: &mut Diagnostics,
 ) {
     for bus in generator_buses {
-        super::set_bus_kind(buses, bus_pos, *bus, BusType::Pv);
+        if let Some(&index) = bus_pos.get(bus)
+            && buses[index].kind == BusType::Pq
+        {
+            buses[index].kind = BusType::Pv;
+        }
+    }
+    if buses.iter().any(|bus| bus.kind == BusType::Ref) {
+        return;
     }
     if let Some((bus, _)) = reference_candidate
         && bus_pos.contains_key(&bus)
@@ -610,29 +633,24 @@ fn assign_bus_types(
 
 /// Which payload table a simple dispatchable device row lands in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Goc3DeviceKind {
+enum Goc3DeviceKind {
     Generators,
     Loads,
 }
 
 /// One simple dispatchable device with the payload row index the parser
 /// assigns it.
-pub struct Goc3DeviceRecord<'a> {
-    pub kind: Goc3DeviceKind,
-    pub row: usize,
-    pub uid: Option<String>,
-    pub obj: &'a Map<String, Value>,
+struct Goc3DeviceRecord<'a> {
+    kind: Goc3DeviceKind,
+    uid: Option<String>,
+    obj: &'a Map<String, Value>,
 }
 
 /// Enumerate simple dispatchable devices with their generator/load row
-/// indices. Row assignment lives here and nowhere else: a consumer that
-/// addresses payload rows by index (the stored operating point extractor in
-/// `powerio`) must enumerate devices through this function so its indices
-/// match the parsed network, uid or no uid.
+/// indices. Row assignment lives here and nowhere else so the balanced network
+/// reader and SCUC instance builder agree, uid or no uid.
 fn device_rows(network: &Map<String, Value>) -> Result<Vec<Goc3DeviceRecord<'_>>> {
     let mut rows = Vec::new();
-    let mut generators = 0usize;
-    let mut loads = 0usize;
     // Time-series bounds and costs are joined back onto devices by uid
     // (`device_time_series` is last-write-wins on its map), so a repeated uid
     // would silently hand one device the other's series; reject it the way
@@ -648,15 +666,9 @@ fn device_rows(network: &Map<String, Value>) -> Result<Vec<Goc3DeviceRecord<'_>>
                 )));
             }
         }
-        let (table, row) = match string(obj, "device_type").unwrap_or("producer") {
-            "producer" => {
-                generators += 1;
-                (Goc3DeviceKind::Generators, generators - 1)
-            }
-            "consumer" => {
-                loads += 1;
-                (Goc3DeviceKind::Loads, loads - 1)
-            }
+        let kind = match string(obj, "device_type").unwrap_or("producer") {
+            "producer" => Goc3DeviceKind::Generators,
+            "consumer" => Goc3DeviceKind::Loads,
             other => {
                 return Err(bad(format!(
                     "simple_dispatchable_device `{}` has unsupported `device_type` `{other}`",
@@ -664,20 +676,14 @@ fn device_rows(network: &Map<String, Value>) -> Result<Vec<Goc3DeviceRecord<'_>>
                 )));
             }
         };
-        rows.push(Goc3DeviceRecord {
-            kind: table,
-            row,
-            uid,
-            obj,
-        });
+        rows.push(Goc3DeviceRecord { kind, uid, obj });
     }
     Ok(rows)
 }
 
 /// Piecewise marginal cost blocks for period `index`, integrated into a
-/// cumulative MATPOWER piecewise linear curve. Shared with the operating point
-/// extractor so a materialized period matches what this parser builds for the
-/// static payload.
+/// cumulative MATPOWER piecewise linear curve for the balanced network's
+/// source assignment.
 fn cost_at(
     obj: &Map<String, Value>,
     ts: Option<&Value>,
@@ -848,7 +854,7 @@ fn official_bus_suffix(uid: &str) -> Option<usize> {
 /// Map GOC3 bus uids to the same 1-based row positions `read_buses` assigns
 /// as `BusId`: the numeric `bus_<n>` suffix + 1 when every bus in `items` has
 /// one and they are unique, else the 1-based position in document order.
-/// Shared with `powerio-prob`'s GOC3 SCOPF adapter so its bus identities
+/// Shared with `powerio-prob`'s GOC3 reader so its bus identities
 /// agree with `BalancedNetwork`'s `BusId` for the same document.
 fn bus_id_by_uid(items: &[SectionItem<'_>]) -> Result<HashMap<String, BusId>> {
     let mut uids = Vec::with_capacity(items.len());
@@ -921,12 +927,6 @@ fn extras(obj: &Map<String, Value>, known: &[&str]) -> Extras {
         .collect()
 }
 
-fn push_once(warnings: &mut Diagnostics, warning: &str) {
-    if !warnings.records().iter().any(|d| d.message() == warning) {
-        warnings.push(&codes::READ_GOC3_RETAINED_SOURCE_ONLY, warning);
-    }
-}
-
 fn kind(value: &Value) -> &'static str {
     match value {
         Value::Null => "null",
@@ -987,11 +987,29 @@ mod tests {
         // unique suffix; `suffix + 1` would overflow (panic under overflow
         // checks). The bus falls back to its 1-based position instead.
         let content = format!(
-            r#"{{"network":{{"bus":[{{"uid":"bus_{}","base_nom_volt":100}}]}}}}"#,
+            r#"{{"network":{{"general":{{"base_norm_mva":100}},"bus":[{{"uid":"bus_{}","base_nom_volt":100}}]}}}}"#,
             usize::MAX
         );
-        let (network, _diagnostics, _document) = parse_goc3_json(&content).unwrap();
+        let (network, _diagnostics, _document) =
+            parse_goc3_json_with_reduction_diagnostics(&content, true).unwrap();
         assert_eq!(network.buses().len(), 1);
         assert_eq!(network.buses()[0].id, BusId(1));
+    }
+
+    #[test]
+    fn producer_nameplate_capacity_sets_machine_base() {
+        let object: Map<String, Value> = serde_json::from_str(
+            r#"{
+                "uid":"producer-1",
+                "device_type":"producer",
+                "nameplate_capacity":2.5,
+                "vm_setpoint":1.03,
+                "initial_status":{"on_status":1,"p":0.5,"q":0.1}
+            }"#,
+        )
+        .unwrap();
+        let generator = read_producer(&object, None, BusId(1), 100.0, Some("producer-1".into()));
+        assert!((generator.mbase - 250.0).abs() < f64::EPSILON);
+        assert!((generator.vg - 1.03).abs() < f64::EPSILON);
     }
 }

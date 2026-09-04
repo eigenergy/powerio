@@ -49,16 +49,11 @@ struct DcOpfMeta<'a> {
     base_mva: f64,
     dimensions: DcOpfDimensions,
     index_base: IndexBaseMeta,
-    dc_convention: powerio_tx::DcConvention,
+    branch_susceptance_formula: &'static str,
     build_options: BuildOptionsMeta,
     zero_impedance: ZeroImpedanceMeta<'a>,
     grounding: GroundingMeta<'a>,
     operators: Vec<OperatorMeta>,
-    n: usize,
-    m: usize,
-    n_gen: usize,
-    reference_buses: &'a [usize],
-    convention: powerio_tx::DcConvention,
     units: Units,
     cost_policy: MissingGenCostPolicy,
     synthesized_gen_costs: usize,
@@ -129,14 +124,14 @@ struct OperatorMeta {
 /// bundle directory.
 ///
 /// # Errors
-/// A network the selected approximation cannot assemble, or a filesystem
+/// A network the selected branch susceptance formula cannot assemble, or a filesystem
 /// refusal from the no-clobber output rules.
-pub fn write_dcopf_bundle(
+pub fn emit_dcopf_bundle(
     instance: &powerio_prob::DcOpfInstance,
     out_dir: impl AsRef<Path>,
     options: &DcOpfBundleOptions,
 ) -> Result<DcOpfOutputs> {
-    write_prepared(
+    emit_prepared(
         &super::build_dc_opf_preparation(instance, &options.assembly)?,
         out_dir,
         options,
@@ -145,15 +140,15 @@ pub fn write_dcopf_bundle(
 
 /// The writer body over the private preparation arrays.
 #[allow(clippy::too_many_lines)]
-fn write_prepared(
+fn emit_prepared(
     instance: &DcOpfPreparation,
     out_dir: impl AsRef<Path>,
     options: &DcOpfBundleOptions,
 ) -> Result<DcOpfOutputs> {
     let matrices = matrices_from_preparation(instance);
-    let nodal = instance.nodal_generator_data()?;
-    let fixed_withdrawal = instance.fixed_nodal_withdrawal();
-    let flow_offset = instance.branch_flow_offset();
+    let nodal = instance.calc_nodal_generator_data()?;
+    let fixed_withdrawal = instance.calc_fixed_nodal_withdrawal();
+    let flow_offset = instance.calc_branch_flow_offset();
     // The case name comes from source file content, so it must not steer the
     // output path. `sanitize_stem` reduces it to one safe component and
     // disambiguates names that would otherwise sanitize alike, so a batch
@@ -163,17 +158,21 @@ fn write_prepared(
         .join(format!("{}_dcopf", crate::sanitize_stem(&instance.name)));
 
     let mut inventory: Vec<(&'static str, Vec<u8>)> = Vec::new();
-    put_mat(&mut inventory, "A.mtx", &matrices.incidence)?;
+    put_mat(&mut inventory, "A.mtx", &matrices.bus_branch_incidence)?;
     put_mat(&mut inventory, "L.mtx", &matrices.laplacian)?;
     put_mat(
         &mut inventory,
         "L_grounded.mtx",
         &matrices.grounded_laplacian,
     )?;
-    put_mat(&mut inventory, "BAt.mtx", &matrices.flow_map)?;
+    put_mat(&mut inventory, "BAt.mtx", &matrices.branch_flow_matrix)?;
     put_mat(&mut inventory, "Cg.mtx", &matrices.generator_bus)?;
 
-    put_vec(&mut inventory, "b.mtx", &instance.branches.b)?;
+    put_vec(
+        &mut inventory,
+        "b.mtx",
+        &instance.branches.susceptance_magnitude,
+    )?;
     put_vec(&mut inventory, "shift.mtx", &instance.branches.shift)?;
     put_vec(&mut inventory, "flow_offset.mtx", &flow_offset)?;
     put_vec(&mut inventory, "p_shift.mtx", &instance.p_shift)?;
@@ -224,7 +223,7 @@ fn write_prepared(
             dense: 0,
             matrix_market: 1,
         },
-        dc_convention: instance.convention,
+        branch_susceptance_formula: instance.formula.formula_name(),
         build_options: BuildOptionsMeta {
             skip_zero_impedance: instance.skip_zero_impedance,
             synthesize_unrated_limits: instance.synthesize_unrated_limits,
@@ -250,17 +249,12 @@ fn write_prepared(
             instance.n_generators(),
             power_units,
         ),
-        n: instance.n_buses,
-        m: instance.n_branches(),
-        n_gen: instance.n_generators(),
-        reference_buses: instance.reference_buses.as_ref(),
-        convention: instance.convention,
         units: instance.units,
         cost_policy: options.metadata.cost_policy,
         synthesized_gen_costs: options.metadata.cost_report.synthesized,
         patched_gen_costs: options.metadata.cost_report.patched,
         // The manifest lists the operator files it describes; it does not
-        // list itself, matching the wire form consumers already read.
+        // list itself, matching the manifest shape consumers already read.
         files: inventory
             .iter()
             .map(|(name, _)| (*name).to_string())
@@ -284,9 +278,14 @@ fn write_prepared(
         .collect::<std::result::Result<Vec<_>, powerio_core::Error>>()
         .map_err(crate::Error::from)?;
     let committed = powerio_core::Destination::path(&bundle_root)
-        .__commit_artifacts(true, artifacts, Vec::new())
+        .__commit_artifacts(
+            true,
+            powerio_core::Fidelity::Canonical,
+            artifacts,
+            Vec::new(),
+        )
         .map_err(crate::Error::from)?;
-    let powerio_core::WrittenOutput::Path { root, artifacts } = committed.into_output() else {
+    let powerio_core::EmittedOutput::Path { root, artifacts } = committed.into_output() else {
         unreachable!("a path destination returns a path output")
     };
 
@@ -361,7 +360,7 @@ fn operator_meta(
             power_units,
         ),
         op(
-            "flow_map",
+            "branch_flow_matrix",
             "BAt.mtx",
             "matrix",
             m,
@@ -560,7 +559,7 @@ fn put_mat(
     name: &'static str,
     matrix: &SparseMatrix,
 ) -> Result<()> {
-    inventory.push((name, crate::io::mtx_bytes(matrix)?));
+    inventory.push((name, crate::io::to_mtx_bytes(matrix)?));
     Ok(())
 }
 
@@ -569,6 +568,6 @@ fn put_vec(
     name: &'static str,
     values: &[f64],
 ) -> Result<()> {
-    inventory.push((name, crate::io::vector_mtx_bytes(values)?));
+    inventory.push((name, crate::io::to_vector_mtx_bytes(values)?));
     Ok(())
 }

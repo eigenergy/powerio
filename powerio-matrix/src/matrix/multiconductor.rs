@@ -334,7 +334,7 @@ impl Stamper {
 /// never a silent omission or a fabricated impedance.
 #[allow(clippy::too_many_lines)] // one stamp block per element family
 #[allow(clippy::many_single_char_names)] // n and per conductor y/z/b follow the textbook stamps
-pub fn build_multiconductor_admittance(
+pub fn calc_multiconductor_admittance_matrix(
     network: &MulticonductorNetwork,
 ) -> Result<MulticonductorAdmittance> {
     let index = MulticonductorNodeIndex::build(network)?;

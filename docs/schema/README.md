@@ -1,35 +1,56 @@
-# Published JSON Schema documents
+# PowerIO IR schema history
 
-Each directory is a schema identifier path, named for the powerio lineage that
-serves it: `0.9` while the major is 0, `1` afterwards. The current one is the
-only document
-`cargo run -p powerio --example generate_schemas --features schema -- docs/schema`
-emits; `rust.yml` regenerates it on every pull request and fails on a diff. The
-path moves when and only when a document stops loading, which is the same rule
-the reader applies to `powerio_version`.
+This directory records one PowerIO IR lineage. `pio-package` and
+`powerio.module` are historical document identities, not separate schema
+families. The current identity and the archive root are both `pio-ir`.
 
-## Retired lineages are still served
+| PowerIO release | Document identity | Archived schema | Reader status |
+|---|---|---|---|
+| v0.6.1–v0.7.3 | `pio-package` lineage `0.1` | `pio-ir/0.1/schema.json` | historical only |
+| v0.8.0–v0.8.3 | `pio-package` lineage `0.2` | `pio-ir/0.2/schema.json` | historical only |
+| v0.9.0 | `pio-package` lineage `0.9` | `pio-ir/0.9/schema.json` | historical only |
+| v0.10.0 | `powerio.module`, version `1` | `pio-ir/0.10.0/schema.json` | historical only |
+| v0.11.0 | `pio-ir`, version `2` | `pio-ir/2/schema.json` | current |
 
-`pio-package/0.1/`, `pio-package/0.2/`, `pio-payload-balanced/1/`, and
-`pio-payload-multiconductor/1/` are frozen copies of what earlier releases
-published. **Do not delete them.**
+PowerIO v0.10.0 retired the `powerio-pkg` crate into the `powerio` facade and
+replaced `NetworkPackage` with the serialization of `PioModule<PioValue>`.
+That release used the document identity `powerio.module` and integer version
+`1`. PowerIO v0.11.0 gives the IR one durable identity, `pio-ir`, and advances
+the representation to generation `2`.
 
-A `.pio.json` written before v0.8.0 carries these identifiers as literal field
-values:
+The current document begins:
 
 ```json
-"schema": "https://powerio.dev/schema/pio-package/0.1",
-"payload_schema": "https://powerio.dev/schema/pio-payload-multiconductor/1",
+{
+  "schema": "pio-ir",
+  "version": 2,
+  "producer": { "name": "powerio", "version": "0.11.0" }
+}
 ```
 
-A JSON Schema `$id` is a stable identifier. A tool that validates a file
-against the URL the file declares depends on that URL staying served. The
-reader can retire a lineage; the published document stays.
+The integer `version` identifies the PowerIO IR representation. It changes
+only when that representation changes. `producer.version` separately records
+the PowerIO release that wrote a document. The C ABI remains independently
+versioned. A reader accepts generation `2`; support for any other generation
+requires an explicit reader or upgrade path.
 
-The generator never removes files. Keep these documents byte for byte; do
-not regenerate or reformat them. The `frozen_schemas` test in the powerio facade
-pins them.
+The `0.1`, `0.2`, and `0.9` files are the exact schemas frozen in the v0.9.0
+tag. The `0.10.0` file is the exact `powerio.module` schema from the v0.10.0
+tag. Their original `$id` values and field names remain as evidence of what
+those releases produced. Their presence does not make them readable by the
+current deserializer. Retired payload schemas described an older split
+representation and are intentionally excluded.
 
-## Recognizing a document
+Generate the current schema with:
 
-Two rules classify a bare JSON document. A package is a top level `model_kind` of `"balanced"` or `"multiconductor"` beside a `model` key; model JSON is `buses` beside another network key (the case formats spell it `bus`). `powerio::classify_json_text` is the reference implementation, and `powerio::JSON_CLASSES` carries the permanent family spellings; a consumer classifying a dropped file in TypeScript, Python, or Julia restates this rule.
+```text
+cargo run -p powerio --example generate_schemas --features schema -- docs/schema
+```
+
+CI regenerates `pio-ir/2/schema.json` and fails on a difference. Released
+schemas remain frozen. This separation follows MLIR bytecode's use of an
+independent integer format version and a producer string, without claiming
+LLVM or MLIR compatibility guarantees for PowerIO.
+
+- [LLVM IR backwards compatibility](https://llvm.org/docs/DeveloperPolicy.html#ir-backwards-compatibility)
+- [MLIR bytecode versioning](https://mlir.llvm.org/docs/BytecodeFormat/#versioning)

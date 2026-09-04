@@ -4,12 +4,14 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use powerio::transform::{MulticonductorToBalancedOptions, lower_multiconductor_to_balanced};
-use powerio_matrix::format::routing::{Detection, JsonClass, SourceFormat as DetectedFormat};
-use powerio_matrix::network::BalancedNetwork;
+use powerio::BalancedNetwork;
+use powerio::transform::{MulticonductorToBalancedOptions, to_balanced_network};
+use powerio_tx::format::routing::{Detection, JsonClass, SourceFormat as DetectedFormat};
 
-/// Extensions (lowercase) that identify a transmission case file.
-pub const TRANSMISSION_EXTENSIONS: &[&str] = &["m", "raw", "aux", "epc", "pwb"];
+/// Extensions (lowercase) that identify a transmission case file. `.cdf`
+/// names an IEEE CDF case; the archives' `.txt` spelling is not discovered
+/// because a text file of any kind carries that extension.
+pub const TRANSMISSION_EXTENSIONS: &[&str] = &["m", "raw", "aux", "epc", "pwb", "uct", "cdf"];
 
 /// Extensions (lowercase) that identify a distribution case file. `.pwd` is
 /// the PowerWorld display sibling with no case data and stays excluded.
@@ -20,7 +22,7 @@ const JSON_EXTENSION: &str = "json";
 
 /// Extension list for error and empty-state messages; a unit test keeps it in
 /// sync with the constants above.
-pub const CASE_EXTENSIONS_LABEL: &str = ".m, .raw, .aux, .epc, .pwb, .json, .dss";
+pub const CASE_EXTENSIONS_LABEL: &str = ".m, .raw, .aux, .epc, .pwb, .uct, .cdf, .json, .dss";
 
 /// Infer the case family from clear extensions or, for `.json`, the shared
 /// JSON shape classifier. `Some(true)` is distribution, `Some(false)` is
@@ -55,10 +57,10 @@ impl ClassifiedCase {
     }
 }
 
-/// The stored `.pio.json` document text when `input` is one, `Ok(None)` for
-/// anything else. The single file commands load these through the universal
-/// parse instead of the case classifier.
-pub fn stored_json(input: &Path) -> anyhow::Result<Option<String>> {
+/// The PowerIO IR document text when `input` is one, `Ok(None)` for anything
+/// else. Single file commands send these to `deserialize` instead of the grid
+/// exchange format classifier.
+pub fn powerio_ir_text(input: &Path) -> anyhow::Result<Option<String>> {
     let ext = input
         .extension()
         .and_then(|e| e.to_str())
@@ -69,7 +71,7 @@ pub fn stored_json(input: &Path) -> anyhow::Result<Option<String>> {
     let text = std::fs::read_to_string(input)
         .with_context(|| format!("reading JSON format markers from {}", input.display()))?;
     if matches!(
-        powerio_matrix::format::routing::classify_json_text(&text),
+        powerio_tx::format::routing::classify_json_text(&text),
         JsonClass::Module
     ) {
         return Ok(Some(text));
@@ -109,18 +111,12 @@ pub fn classified_json(input: &Path) -> anyhow::Result<Option<ClassifiedCase>> {
 /// outcomes (package, ambiguous markers, no markers) into errors
 /// that name the fix.
 fn classify_case_json(text: &str, path: &Path) -> anyhow::Result<DetectedFormat> {
-    match powerio_matrix::format::routing::classify_json_text(text) {
+    match powerio_tx::format::routing::classify_json_text(text) {
         JsonClass::Case(Detection::Known(format)) => Ok(format),
         JsonClass::Module => anyhow::bail!(
             "{} is a stored .pio.json module; `summary`, `convert`, and `matrix` \
              read it directly, and the bindings' parse loads it (powerio.parse \
              in Python)",
-            path.display()
-        ),
-        JsonClass::ModelJson => anyhow::bail!(
-            "{} is bare powerio model JSON, which is not a case format; read it with \
-             the bindings' from_json (powerio.from_json in Python, from_json in Julia, \
-             pio_balanced_network_from_json in C)",
             path.display()
         ),
         JsonClass::Case(Detection::Ambiguous) => anyhow::bail!(
@@ -213,16 +209,17 @@ pub fn load_network(path: &Path) -> anyhow::Result<LoadedCase> {
                 .with_context(|| format!("reading {}", path.display()))?;
             match classify_case_json(&text, path)? {
                 DetectedFormat::Distribution(format) => {
-                    let parsed = crate::compat::dist_parse_str(&text, format.name())
+                    let parsed = crate::module_io::load_multiconductor_memory(&text, format.name())
                         .with_context(|| format!("parse {}", path.display()))?;
                     lower_to_balanced(parsed, stem, path)
                 }
                 DetectedFormat::Transmission(format) => {
-                    let parsed = crate::compat::parse_str_with_name(&text, format.name(), stem)
-                        .with_context(|| format!("parse {}", path.display()))?;
+                    let parsed =
+                        crate::module_io::load_balanced_memory_named(&text, format.name(), stem)
+                            .with_context(|| format!("parse {}", path.display()))?;
                     Ok(LoadedCase {
-                        warnings: parsed.rendered_diagnostics(),
-                        network: parsed.network,
+                        warnings: powerio_core::render_diagnostics(&parsed.diagnostics),
+                        network: parsed.into_value(),
                     })
                 }
                 other => anyhow::bail!(
@@ -233,16 +230,16 @@ pub fn load_network(path: &Path) -> anyhow::Result<LoadedCase> {
             }
         }
         Some(ext) if DISTRIBUTION_EXTENSIONS.contains(&ext) => {
-            let parsed = crate::compat::dist_parse_file(path, None)
+            let parsed = crate::module_io::load_multiconductor_module(path, None)
                 .with_context(|| format!("parse {}", path.display()))?;
             lower_to_balanced(parsed, stem, path)
         }
         Some(ext) if TRANSMISSION_EXTENSIONS.contains(&ext) => {
-            let parsed = crate::compat::parse_file(path, None)
+            let parsed = crate::module_io::load_balanced_module(path, None)
                 .with_context(|| format!("parse {}", path.display()))?;
             Ok(LoadedCase {
-                warnings: parsed.rendered_diagnostics(),
-                network: parsed.network,
+                warnings: powerio_core::render_diagnostics(&parsed.diagnostics),
+                network: parsed.into_value(),
             })
         }
         _ => anyhow::bail!("cannot infer a case format for {}", path.display()),
@@ -255,42 +252,32 @@ pub fn load_network(path: &Path) -> anyhow::Result<LoadedCase> {
 /// lowers to the same `lowered-multiconductor` fallback and the exports
 /// overwrite each other.
 fn lower_to_balanced(
-    parsed: crate::compat::ParsedDist,
+    parsed: powerio_core::PioModule<powerio_dist::MulticonductorNetwork>,
     stem: Option<&str>,
     path: &Path,
 ) -> anyhow::Result<LoadedCase> {
-    let mut net = parsed.network;
+    let mut warnings = powerio_core::render_diagnostics(&parsed.diagnostics);
+    let mut net = parsed.into_value();
     if net.name().is_none() {
         *net.name_mut() = stem.map(str::to_owned);
     }
     let lowered =
-        lower_multiconductor_to_balanced(&net, MulticonductorToBalancedOptions::default())
-            .map_err(|e| {
-                let diagnostics = e
-                    .diagnostics
-                    .iter()
-                    .map(powerio_core::Diagnostic::message)
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                if diagnostics.is_empty() {
-                    // Diagnostics should always be present on a refusal, but
-                    // an empty list must not render a bare trailing colon.
-                    anyhow::anyhow!("lower {} to balanced: {e}", path.display())
-                } else {
-                    anyhow::anyhow!("lower {} to balanced: {diagnostics}", path.display())
-                }
-            })?;
-    let mut warnings = parsed.warnings;
-    warnings.extend(
-        (lowered.record.approximations.iter())
-            .chain(&lowered.record.dropped_fields)
-            .map(|s| {
-                format!(
-                    "{}: lowering: {s}",
-                    powerio::codes::TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_OBJECT.code
-                )
-            }),
-    );
+        to_balanced_network(&net, MulticonductorToBalancedOptions::default()).map_err(|e| {
+            let diagnostics = e
+                .diagnostics
+                .iter()
+                .map(powerio_core::Diagnostic::message)
+                .collect::<Vec<_>>()
+                .join("; ");
+            if diagnostics.is_empty() {
+                // Diagnostics should always be present on a refusal, but
+                // an empty list must not render a bare trailing colon.
+                anyhow::anyhow!("lower {} to balanced: {e}", path.display())
+            } else {
+                anyhow::anyhow!("lower {} to balanced: {diagnostics}", path.display())
+            }
+        })?;
+    warnings.extend(powerio_core::render_diagnostics(&lowered.diagnostics));
     Ok(LoadedCase {
         network: lowered.network,
         warnings,
@@ -373,9 +360,13 @@ mod tests {
             "/../tests/data/dist/micro/fourwire_linecode.dss"
         );
         let source = powerio_core::Source::open(dss).unwrap();
-        let conv = powerio_dist::convert_source(source, powerio_dist::DistTargetFormat::BmopfJson)
-            .unwrap();
-        let mut doc: serde_json::Value = serde_json::from_str(&conv.text).unwrap();
+        let module = powerio_dist::parse(source).unwrap();
+        let emission = crate::module_io::emit_multiconductor_module(
+            &module,
+            powerio_dist::DistTargetFormat::BmopfJson,
+        )
+        .unwrap();
+        let mut doc: serde_json::Value = serde_json::from_str(&emission.text).unwrap();
         doc.as_object_mut().unwrap().remove("name");
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("myfeeder.json");

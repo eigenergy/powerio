@@ -58,9 +58,7 @@ pub(super) const LEDGER_FILE: &str = "ledger.json";
 /// `pypsa-csv` and `gridfm` are directories and `pwb` is read only, so none of
 /// them can be a step. `goc3` and `opfdata` write only by echoing a retained
 /// source, which a walk clears at the first hop, so they would write an empty
-/// document. model JSON is the model transport rather than a case format
-/// and is lossless by construction, so it would dilute the sample with steps
-/// that cannot fail.
+/// document.
 pub const ALPHABET: [&str; 10] = [
     "matpower",
     "psse",
@@ -371,47 +369,60 @@ impl Net {
         }
     }
 
-    /// Write as `to` and read back, collecting both sides' warnings. A panic
+    /// Emit as `to` and read back, collecting both sides' warnings. A panic
     /// on either side comes back as a message rather than unwinding.
     fn convert(&self, to: &str, warnings: &mut Vec<String>) -> std::result::Result<Net, String> {
         match self {
             Self::Balanced(net) => {
-                let Some(target) = powerio_matrix::target_format_from_name(to) else {
+                let Some(target) = powerio_tx::format::parse_target_format(to) else {
                     return Err(format!("no writer for {to}"));
                 };
-                let written = match catch_panic(|| powerio_matrix::write_network(net, target)) {
-                    Ok(Ok(conversion)) => conversion,
-                    Ok(Err(err)) => return Err(format!("write: {err}")),
-                    Err(message) => return Err(format!("write panicked: {message}")),
+                let module = powerio_core::PioModule::new(net.clone());
+                let emission = match catch_panic(|| {
+                    crate::module_io::emit_balanced_module(
+                        &module,
+                        target,
+                        &powerio_tx::EmitOptions::default(),
+                    )
+                }) {
+                    Ok(Ok(emission)) => emission,
+                    Ok(Err(err)) => return Err(format!("emit: {err}")),
+                    Err(message) => return Err(format!("emit panicked: {message}")),
                 };
-                warnings.extend(written.rendered_diagnostics());
-                match catch_panic(|| crate::compat::parse_str(&written.text, to)) {
+                warnings.extend(emission.render_diagnostics());
+                match catch_panic(|| crate::module_io::load_balanced_memory(&emission.text, to)) {
                     Ok(Ok(parsed)) => {
-                        warnings.extend(parsed.rendered_diagnostics());
-                        Ok(Self::Balanced(parsed.network))
+                        warnings.extend(powerio_core::render_diagnostics(&parsed.diagnostics));
+                        Ok(Self::Balanced(parsed.into_value()))
                     }
                     Ok(Err(err)) => Err(format!("readback: {err}")),
                     Err(message) => Err(format!("readback panicked: {message}")),
                 }
             }
             Self::Dist(net) => {
-                let Some(target) = powerio_dist::dist_target_from_name(to) else {
+                let Some(target) = powerio_dist::parse_dist_target_format(to) else {
                     return Err(format!("no writer for {to}"));
                 };
-                let written = match catch_panic(|| powerio_dist::write_network(net, target)) {
-                    Ok(conversion) => conversion,
-                    Err(message) => return Err(format!("write panicked: {message}")),
+                let module = powerio_core::PioModule::new(net.clone());
+                let emission = match catch_panic(|| {
+                    crate::module_io::emit_multiconductor_module(&module, target)
+                }) {
+                    Ok(Ok(emission)) => emission,
+                    Ok(Err(err)) => return Err(format!("emit: {err}")),
+                    Err(message) => return Err(format!("emit panicked: {message}")),
                 };
-                warnings.extend(written.rendered_diagnostics());
+                warnings.extend(emission.render_diagnostics());
                 // A deck that pulls in other files cannot be read back from a
                 // string; see the same test in the pairwise compare.
-                if super::has_include(&written.text) {
-                    return Err("written deck redirects to include files".to_string());
+                if super::has_include(&emission.text) {
+                    return Err("emitted deck redirects to include files".to_string());
                 }
-                match catch_panic(|| crate::compat::dist_parse_str(&written.text, to)) {
+                match catch_panic(|| {
+                    crate::module_io::load_multiconductor_memory(&emission.text, to)
+                }) {
                     Ok(Ok(parsed)) => {
-                        warnings.extend(parsed.warnings.iter().cloned());
-                        Ok(Self::Dist(parsed.network))
+                        warnings.extend(powerio_core::render_diagnostics(&parsed.diagnostics));
+                        Ok(Self::Dist(parsed.into_value()))
                     }
                     Ok(Err(err)) => Err(format!("readback: {err}")),
                     Err(message) => Err(format!("readback panicked: {message}")),

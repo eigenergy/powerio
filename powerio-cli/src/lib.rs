@@ -10,6 +10,6 @@
 //! The `powerio` binary is the CLI proper; everything else about it lives in
 //! `src/main.rs`.
 
-pub(crate) mod compat;
 pub mod corpus;
 pub mod invariants;
+pub(crate) mod module_io;

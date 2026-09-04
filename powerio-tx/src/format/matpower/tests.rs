@@ -1,5 +1,101 @@
 fn parse_mpc(content: &str) -> crate::Result<crate::network::BalancedNetwork> {
-    super::parse_matpower_source(content, None)
+    let mut warnings = crate::collect::Diagnostics::new();
+    super::parse_matpower_source(content, None, &mut warnings)
+}
+
+/// Parse a case with the collector located in a source named `/input`, and
+/// return the failure with the byte range left on the collector.
+fn parse_mpc_located(content: &str) -> (crate::Error, Option<powerio_core::SourceSpan>) {
+    let mut warnings = crate::collect::Diagnostics::new();
+    warnings.locate_in(powerio_core::SourceId::new("/input").unwrap(), 0);
+    let error = super::parse_matpower_source(content, None, &mut warnings)
+        .expect_err("the case is malformed");
+    (error, warnings.record_span())
+}
+
+fn byte_range(source: &str, text: &str) -> (u64, u64) {
+    let start = source.find(text).expect("the text is in the source");
+    (start as u64, (start + text.len()) as u64)
+}
+
+#[test]
+fn a_short_row_leaves_the_row_byte_range_on_the_collector() {
+    let src = "mpc.baseMVA = 100;\nmpc.bus = [\n\t1  3  0 0 0 0 1 1.0 0 345 1 1.1 0.9;\n\t2  1  0 0;\n];\n";
+    let (error, span) = parse_mpc_located(src);
+    assert!(matches!(
+        error,
+        crate::Error::ShortRow {
+            field: "bus",
+            row: 1,
+            ..
+        }
+    ));
+    let span = span.unwrap();
+    assert_eq!(span.source().as_str(), "/input");
+    assert_eq!(
+        (span.byte_start(), span.byte_end()),
+        byte_range(src, "2  1  0 0")
+    );
+}
+
+#[test]
+fn a_malformed_token_marks_its_row_up_to_the_end_of_the_line() {
+    let src = "mpc.baseMVA = 100;\nmpc.bus = [\n\t1  3  0 0 0 0 1 1.0 0 345 1 1.1 0.9;\n\t2  1  0 abc 0 0 1 1.0 0 345 1 1.1 0.9;  % comment\n];\n";
+    let (error, span) = parse_mpc_located(src);
+    assert!(matches!(
+        error,
+        crate::Error::BadFloat {
+            field: "bus",
+            row: 1,
+            ..
+        }
+    ));
+    let span = span.unwrap();
+    assert_eq!(
+        (span.byte_start(), span.byte_end()),
+        byte_range(src, "2  1  0 abc 0 0 1 1.0 0 345 1 1.1 0.9;")
+    );
+}
+
+#[test]
+fn a_truncated_matrix_marks_the_whole_assignment() {
+    let src = "mpc.baseMVA = 100;\nmpc.bus = [\n\t1  3  0 0 0 0 1 1.0 0 345 1 1.1 0.9;\n";
+    let (error, span) = parse_mpc_located(src);
+    assert!(matches!(error, crate::Error::UnbalancedBrackets("bus")));
+    let span = span.unwrap();
+    assert_eq!(
+        (span.byte_start(), span.byte_end()),
+        byte_range(src, "mpc.bus = [\n\t1  3  0 0 0 0 1 1.0 0 345 1 1.1 0.9;")
+    );
+}
+
+#[test]
+fn a_cost_count_mismatch_marks_the_cost_table() {
+    let src = "mpc.baseMVA = 100;\nmpc.bus = [\n\t1  3  0 0 0 0 1 1.0 0 345 1 1.1 0.9;\n];\nmpc.branch = [];\nmpc.gen = [\n\t1 0 0 10 -10 1 100 1 20 0;\n];\nmpc.gencost = [\n\t2 0 0 3 0.1 1 0;\n\t2 0 0 3 0.1 1 0;\n\t2 0 0 3 0.1 1 0;\n];\n";
+    let (error, span) = parse_mpc_located(src);
+    assert!(matches!(
+        error,
+        crate::Error::GenCostCountMismatch {
+            gens: 1,
+            gencost: 3
+        }
+    ));
+    let span = span.unwrap();
+    let (start, end) = byte_range(src, "mpc.gencost = [");
+    assert_eq!(span.byte_start(), start);
+    assert!(span.byte_end() > end);
+    assert_eq!(
+        &src[span.byte_start() as usize..span.byte_end() as usize].trim_end(),
+        &src[start as usize..].trim_end()
+    );
+}
+
+#[test]
+fn a_well_formed_case_leaves_no_record_on_the_collector() {
+    let mut warnings = crate::collect::Diagnostics::new();
+    warnings.locate_in(powerio_core::SourceId::new("/input").unwrap(), 0);
+    super::parse_matpower_source(CASE_TINY, None, &mut warnings).unwrap();
+    assert_eq!(warnings.record_span(), None);
 }
 use super::write_matpower;
 use crate::indexed::IndexedNetwork;
@@ -322,7 +418,7 @@ fn piecewise_gencost_constructor_counts_breakpoints() {
     assert_eq!(cost.ncost, 2);
     assert_eq!(cost.coeffs, vec![0.0, 0.0, 1.0, 1.0]);
 
-    let restored = BalancedNetwork::from_json(&net.to_json().unwrap()).unwrap();
+    let restored = crate::network::serde_round_trip(&net);
     let restored_cost = restored.generators()[0].cost.as_ref().unwrap();
     assert_eq!(restored_cost.ncost, 2);
     assert_eq!(restored_cost.coeffs, vec![0.0, 0.0, 1.0, 1.0]);
@@ -405,9 +501,9 @@ fn zero_padded_capability_columns_are_declared() {
     net.generators_mut().push(stated);
     net.generators_mut().push(Generator::new(BusId(2)));
 
-    let warnings = crate::format::write_conversion(&net, crate::format::TargetFormat::Matpower)
+    let warnings = crate::format::emit_value_text(&net, crate::format::TargetFormat::Matpower)
         .unwrap()
-        .rendered_diagnostics();
+        .render_diagnostics();
     assert!(
         warnings.iter().any(|w| w.contains("columns 11-21")),
         "the zero padding must be declared: {warnings:?}"
@@ -417,9 +513,9 @@ fn zero_padded_capability_columns_are_declared() {
     // says nothing.
     let mut plain = net.clone();
     plain.generators_mut()[0].caps = [None; 11];
-    let warnings = crate::format::write_conversion(&plain, crate::format::TargetFormat::Matpower)
+    let warnings = crate::format::emit_value_text(&plain, crate::format::TargetFormat::Matpower)
         .unwrap()
-        .rendered_diagnostics();
+        .render_diagnostics();
     assert!(
         !warnings.iter().any(|w| w.contains("columns 11-21")),
         "nothing to disclose when no generator states caps: {warnings:?}"
@@ -445,7 +541,7 @@ fn an_out_of_service_load_does_not_become_live_demand() {
         .push(crate::network::Load::new(BusId(2), 10.0, 5.0));
 
     let conversion =
-        crate::format::write_conversion(&net, crate::format::TargetFormat::Matpower).unwrap();
+        crate::format::emit_value_text(&net, crate::format::TargetFormat::Matpower).unwrap();
     let back = parse_mpc(&conversion.text).unwrap();
     let demand: f64 = back.loads().iter().map(|l| l.p).sum();
     assert!(
@@ -454,11 +550,11 @@ fn an_out_of_service_load_does_not_become_live_demand() {
     );
     assert!(
         conversion
-            .rendered_diagnostics()
+            .render_diagnostics()
             .iter()
             .any(|w| w.contains("out of service load(s) dropped")),
         "the dropped demand must be named: {:?}",
-        conversion.rendered_diagnostics()
+        conversion.render_diagnostics()
     );
 }
 
@@ -483,23 +579,26 @@ fn areas_survive_the_canonical_round_trip() {
 }
 
 #[test]
-fn an_area_name_or_interchange_is_a_declared_drop() {
+fn area_metadata_matpower_cannot_hold_is_a_declared_drop() {
     let mut net = parse_mpc(CASE_TINY).unwrap();
     *net.source_format_mut() = SourceFormat::InMemory;
     net.areas_mut().push(crate::network::Area {
         name: Some("west".into()),
         net_interchange: 12.5,
+        uid: Some("area-west".into()),
+        area_type: Some("ControlArea".into()),
         ..crate::network::Area::new(1)
     });
 
     let conversion =
-        crate::format::write_conversion(&net, crate::format::TargetFormat::Matpower).unwrap();
+        crate::format::emit_value_text(&net, crate::format::TargetFormat::Matpower).unwrap();
     assert!(
-        conversion
-            .rendered_diagnostics()
-            .iter()
-            .any(|w| w.contains("area record(s) carry a name or interchange data")),
+        conversion.render_diagnostics().iter().any(|w| {
+            w.contains(
+                "area record(s) carry a name, source identity, classification, or interchange data",
+            )
+        }),
         "the fields mpc.areas cannot hold must be declared: {:?}",
-        conversion.rendered_diagnostics()
+        conversion.render_diagnostics()
     );
 }

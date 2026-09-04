@@ -29,6 +29,7 @@ powerio.workspace = true
 powerio-core = { workspace = true }
 powerio-matrix.workspace = true
 powerio-prob = { workspace = true }
+powerio-tx.workspace = true
 # Unconditional: the wheel always ships the distribution surface (powerio.dist);
 # only the C ABI gates it behind a feature.
 powerio-dist.workspace = true

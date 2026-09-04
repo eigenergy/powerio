@@ -1,25 +1,23 @@
-//! Write a [`BalancedNetwork`] back out as a MATPOWER `.m` file.
+//! Serialize a [`BalancedNetwork`] as MATPOWER `.m` text.
 //!
-//! When the network was read from MATPOWER text it carries its original source,
-//! and the writer echoes it verbatim — an exact round-trip that preserves every
-//! field, comment, and numeric token. A network built in memory (e.g. by
-//! `synth`) or read from another format has no MATPOWER source, so the writer
-//! falls back to canonical serialization, folding loads and shunts back onto the
-//! bus row.
+//! [`crate::emit`] echoes a parsed module's retained MATPOWER source for an exact
+//! same format round trip that preserves every field, comment, and numeric token.
+//! This serializer handles semantic emission from the typed model, folding loads
+//! and shunts back onto the bus row.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use crate::diagnostics::Diagnostics;
-use crate::format::{Conversion, warn_extra_branch_rating_sets};
+use crate::format::{TextEmission, warn_extra_branch_rating_sets};
 
-/// The MATPOWER write side family, named once for the block below.
+/// The MATPOWER emission family, named once for the block below.
 use crate::diagnostics::codes::EMIT_MATPOWER as F;
 use crate::network::{BalancedNetwork, BusId, GenCost, Generator};
 
 /// Serialize `net` to canonical MATPOWER `.m` text from the typed model. The
-/// byte exact echo of an unchanged parsed module lives on the module write
-/// path ([`crate::write_as`]); this is the semantic writer.
+/// byte exact echo of an unchanged parsed module lives on the module emission
+/// path ([`crate::emit`]); this is the semantic serializer.
 #[must_use]
 pub fn write_matpower(net: &BalancedNetwork) -> String {
     canonical(net)
@@ -27,9 +25,9 @@ pub fn write_matpower(net: &BalancedNetwork) -> String {
 
 /// MATPOWER conversion with fidelity warnings: the canonical path can't carry
 /// everything the neutral model holds, so it itemizes what it leaves out, the
-/// cross-format leg of the fidelity behavior (see [`Conversion`]).
-pub(crate) fn write_matpower_conversion(net: &BalancedNetwork) -> Conversion {
-    Conversion::new(write_matpower(net), canonical_warnings(net))
+/// cross-format leg of the fidelity behavior (see [`TextEmission`]).
+pub(crate) fn write_matpower_conversion(net: &BalancedNetwork) -> TextEmission {
+    TextEmission::new(write_matpower(net), canonical_warnings(net))
 }
 
 /// One bus name as a MATLAB single-quoted string body.
@@ -149,6 +147,29 @@ fn canonical_warnings(net: &BalancedNetwork) -> Diagnostics {
              with no status"
         ));
     }
+    let mut shunts_per_bus = BTreeMap::<BusId, usize>::new();
+    let switched_shunts = net
+        .shunts()
+        .iter()
+        .filter(|shunt| shunt.in_service)
+        .inspect(|shunt| *shunts_per_bus.entry(shunt.bus).or_default() += 1)
+        .filter(|shunt| shunt.control.is_some() || shunt.section_count.is_some())
+        .count();
+    let collapsed_buses = shunts_per_bus.values().filter(|count| **count > 1).count();
+    if switched_shunts > 0 || collapsed_buses > 0 {
+        let message = match (switched_shunts, collapsed_buses) {
+            (switched, 0) => format!(
+                "{switched} switched shunt control record(s) dropped: a MATPOWER bus row carries only the current aggregate GS/BS values"
+            ),
+            (0, buses) => format!(
+                "shunt identity on {buses} bus(es) collapsed: a MATPOWER bus row carries only one aggregate GS/BS pair"
+            ),
+            (switched, buses) => format!(
+                "{switched} switched shunt control record(s) dropped and shunt identity on {buses} bus(es) collapsed: a MATPOWER bus row carries only one aggregate GS/BS pair"
+            ),
+        };
+        warnings.push(&F.value_collapsed, message);
+    }
     warn_extra_branch_rating_sets(&F, "MATPOWER .m", net, &mut warnings);
     let branch_solutions = net
         .branches()
@@ -194,11 +215,17 @@ fn canonical_warnings(net: &BalancedNetwork) -> Diagnostics {
     let lossy_areas = net
         .areas()
         .iter()
-        .filter(|a| a.name.is_some() || a.net_interchange != 0.0 || a.tolerance != 0.0)
+        .filter(|a| {
+            a.name.is_some()
+                || a.net_interchange != 0.0
+                || a.tolerance != 0.0
+                || a.uid.is_some()
+                || a.area_type.is_some()
+        })
         .count();
     if lossy_areas > 0 {
         warnings.push(&F.field_dropped, format!(
-            "{lossy_areas} of {} area record(s) carry a name or interchange data: `mpc.areas` holds only the area number and reference bus",
+            "{lossy_areas} of {} area record(s) carry a name, source identity, classification, or interchange data: `mpc.areas` holds only the area number and reference bus",
             net.areas().len()
         ));
     }
@@ -281,7 +308,7 @@ fn canonical(net: &BalancedNetwork) -> String {
             br.to,
             br.r,
             br.x,
-            br.terminal_charging().total_b(),
+            br.calc_terminal_charging().calc_total_b(),
             br.rate_a,
             br.rate_b,
             br.rate_c,

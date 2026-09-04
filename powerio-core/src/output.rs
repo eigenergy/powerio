@@ -71,6 +71,39 @@ enum DestinationKind {
     Memory { root: ArtifactPath },
 }
 
+/// Physical shape of one completed emission.
+///
+/// Layout is independent of fidelity: both a one-file format and a directory
+/// format can be either an exact same-format echo or a canonical serialization.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutputLayout {
+    File,
+    Directory,
+}
+
+impl OutputLayout {
+    #[must_use]
+    const fn from_directory(directory: bool) -> Self {
+        if directory {
+            Self::Directory
+        } else {
+            Self::File
+        }
+    }
+}
+
+/// How an emitted artifact inventory relates to the module supplied to its
+/// writer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fidelity {
+    /// The unchanged module retained this format's source bytes and emitted
+    /// them byte for byte.
+    ExactSameFormat,
+    /// The writer serialized the typed value. Projection losses, when any,
+    /// are reported as diagnostics rather than encoded in this enum.
+    Canonical,
+}
+
 /// Owned output destination for one file, one directory, or memory artifacts.
 #[derive(Debug)]
 pub struct Destination {
@@ -109,9 +142,10 @@ impl Destination {
     pub fn __commit_artifacts(
         self,
         directory: bool,
+        fidelity: Fidelity,
         mut artifacts: Vec<MemoryArtifact>,
         diagnostics: Vec<Diagnostic>,
-    ) -> Result<WriteResult, Error> {
+    ) -> Result<EmitResult, Error> {
         validate_inventory(directory, &mut artifacts)?;
         let output = match self.kind {
             DestinationKind::Memory { root } => {
@@ -122,18 +156,20 @@ impl Destination {
                 } else {
                     artifacts[0].name = root;
                 }
-                WrittenOutput::Memory { artifacts }
+                EmittedOutput::Memory { artifacts }
             }
             DestinationKind::Path(root) => {
                 let paths = commit_path_output(&root, directory, &artifacts)?;
-                WrittenOutput::Path {
+                EmittedOutput::Path {
                     root,
                     artifacts: paths,
                 }
             }
         };
-        Ok(WriteResult {
+        Ok(EmitResult {
             output,
+            layout: OutputLayout::from_directory(directory),
+            fidelity,
             diagnostics,
         })
     }
@@ -171,7 +207,7 @@ impl MemoryArtifact {
 /// Complete inventory of output owned by the caller.
 #[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum WrittenOutput {
+pub enum EmittedOutput {
     Path {
         root: PathBuf,
         artifacts: Vec<PathBuf>,
@@ -183,15 +219,27 @@ pub enum WrittenOutput {
 
 /// Successful write output plus diagnostics emitted by the writer.
 #[derive(Debug)]
-pub struct WriteResult {
-    output: WrittenOutput,
+pub struct EmitResult {
+    output: EmittedOutput,
+    layout: OutputLayout,
+    fidelity: Fidelity,
     diagnostics: Vec<Diagnostic>,
 }
 
-impl WriteResult {
+impl EmitResult {
     #[must_use]
-    pub const fn output(&self) -> &WrittenOutput {
+    pub const fn output(&self) -> &EmittedOutput {
         &self.output
+    }
+
+    #[must_use]
+    pub const fn layout(&self) -> OutputLayout {
+        self.layout
+    }
+
+    #[must_use]
+    pub const fn fidelity(&self) -> Fidelity {
+        self.fidelity
     }
 
     #[must_use]
@@ -199,8 +247,19 @@ impl WriteResult {
         &self.diagnostics
     }
 
+    /// Add diagnostics produced by a facade before or after a family writer.
+    ///
+    /// This is an implementation hook for dispatchers that prepare a value
+    /// for a grid exchange writer. It is not part of the user facing API.
+    #[doc(hidden)]
     #[must_use]
-    pub fn into_output(self) -> WrittenOutput {
+    pub fn __with_diagnostics(mut self, diagnostics: impl IntoIterator<Item = Diagnostic>) -> Self {
+        self.diagnostics.extend(diagnostics);
+        self
+    }
+
+    #[must_use]
+    pub fn into_output(self) -> EmittedOutput {
         self.output
     }
 }
@@ -755,6 +814,43 @@ fn remove_staging(path: &Path, directory: bool) -> std::io::Result<()> {
     }
 }
 
+/// One output a write operation can produce.
+///
+/// A string or path names the file or directory to write. A [`Destination`]
+/// passes through, which is how a memory destination and its artifact root
+/// name reach the same operations as a file name.
+///
+/// A caller's own output type reaches the same operations by implementing
+/// it. It carries this one method and gains no further required method:
+/// options belong to the operation, not to the output.
+pub trait IntoDestination {
+    /// Resolve the output.
+    ///
+    /// # Errors
+    /// The output cannot be named.
+    fn into_destination(self) -> Result<Destination, Error>;
+}
+
+impl IntoDestination for Destination {
+    fn into_destination(self) -> Result<Destination, Error> {
+        Ok(self)
+    }
+}
+
+macro_rules! into_destination_by_name {
+    ($($output:ty),* $(,)?) => {
+        $(
+            impl IntoDestination for $output {
+                fn into_destination(self) -> Result<Destination, Error> {
+                    Ok(Destination::path(PathBuf::from(self)))
+                }
+            }
+        )*
+    };
+}
+
+into_destination_by_name!(&str, &String, String, &Path, &PathBuf, PathBuf);
+
 #[cfg(test)]
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -801,6 +897,7 @@ mod tests {
             .unwrap()
             .__commit_artifacts(
                 true,
+                Fidelity::Canonical,
                 vec![
                     artifact("lines.csv", b"lines"),
                     artifact("buses.csv", b"buses"),
@@ -808,7 +905,7 @@ mod tests {
                 Vec::new(),
             )
             .unwrap();
-        let WrittenOutput::Memory { artifacts } = result.into_output() else {
+        let EmittedOutput::Memory { artifacts } = result.into_output() else {
             panic!("memory output")
         };
         assert_eq!(
@@ -890,7 +987,12 @@ mod tests {
         let path = test_root("collision");
         std::fs::write(&path, b"existing").unwrap();
         let error = Destination::path(&path)
-            .__commit_artifacts(false, vec![artifact("case.m", b"new")], Vec::new())
+            .__commit_artifacts(
+                false,
+                Fidelity::Canonical,
+                vec![artifact("case.m", b"new")],
+                Vec::new(),
+            )
             .unwrap_err();
         assert_eq!(error.category(), crate::ErrorCategory::Request);
         assert_eq!(std::fs::read(&path).unwrap(), b"existing");
@@ -903,6 +1005,7 @@ mod tests {
         let result = Destination::path(&path)
             .__commit_artifacts(
                 true,
+                Fidelity::Canonical,
                 vec![
                     artifact("buses.csv", b"buses"),
                     artifact("nested/lines.csv", b"lines"),
@@ -910,7 +1013,7 @@ mod tests {
                 Vec::new(),
             )
             .unwrap();
-        let WrittenOutput::Path { root, artifacts } = result.into_output() else {
+        let EmittedOutput::Path { root, artifacts } = result.into_output() else {
             panic!("path output")
         };
         assert_eq!(root, path);
@@ -947,7 +1050,12 @@ mod tests {
         let missing = target.with_extension("missing");
         symlink(&missing, &target).unwrap();
         let error = Destination::path(&target)
-            .__commit_artifacts(false, vec![artifact("case.m", b"new")], Vec::new())
+            .__commit_artifacts(
+                false,
+                Fidelity::Canonical,
+                vec![artifact("case.m", b"new")],
+                Vec::new(),
+            )
             .unwrap_err();
         assert_eq!(error.category(), crate::ErrorCategory::Request);
         assert!(
@@ -963,12 +1071,14 @@ mod tests {
     fn duplicate_and_prefix_collisions_are_rejected_before_writing() {
         let duplicate = Destination::memory("case").unwrap().__commit_artifacts(
             true,
+            Fidelity::Canonical,
             vec![artifact("a", b"1"), artifact("a", b"2")],
             Vec::new(),
         );
         assert!(duplicate.is_err());
         let prefix = Destination::memory("case").unwrap().__commit_artifacts(
             true,
+            Fidelity::Canonical,
             vec![artifact("a", b"1"), artifact("a/b", b"2")],
             Vec::new(),
         );
@@ -989,6 +1099,7 @@ mod tests {
         ];
         let memory = Destination::memory("case").unwrap().__commit_artifacts(
             true,
+            Fidelity::Canonical,
             separated
                 .iter()
                 .map(|a| artifact(a.name().as_str(), a.bytes()))
@@ -999,7 +1110,12 @@ mod tests {
         assert_eq!(error.category(), crate::ErrorCategory::Request);
 
         let target = test_root("prefix-separated");
-        let path = Destination::path(&target).__commit_artifacts(true, separated, Vec::new());
+        let path = Destination::path(&target).__commit_artifacts(
+            true,
+            Fidelity::Canonical,
+            separated,
+            Vec::new(),
+        );
         let error = path.expect_err("the path destination refuses identically");
         assert_eq!(error.category(), crate::ErrorCategory::Request);
         // Nothing was created and no staging entry was left beside the target.
@@ -1036,6 +1152,7 @@ mod tests {
         for name in refused {
             let memory = Destination::memory("case").unwrap().__commit_artifacts(
                 true,
+                Fidelity::Canonical,
                 vec![artifact(name, b"x"), artifact("keep.csv", b"y")],
                 Vec::new(),
             );
@@ -1045,6 +1162,7 @@ mod tests {
             let target = test_root("reserved");
             let path = Destination::path(&target).__commit_artifacts(
                 true,
+                Fidelity::Canonical,
                 vec![artifact(name, b"x")],
                 Vec::new(),
             );
@@ -1055,6 +1173,7 @@ mod tests {
         // only when they are not reserved (`config`, `auxiliary`).
         let accepted = Destination::memory("case").unwrap().__commit_artifacts(
             true,
+            Fidelity::Canonical,
             vec![
                 artifact("case.dss", b"a"),
                 artifact("buscoords.csv", b"b"),
@@ -1080,17 +1199,31 @@ mod tests {
         // both the one file and the directory form.
         let one = Destination::memory("case.m")
             .unwrap()
-            .__commit_artifacts(false, vec![artifact("case.m", b"x")], Vec::new())
+            .__commit_artifacts(
+                false,
+                Fidelity::ExactSameFormat,
+                vec![artifact("case.m", b"x")],
+                Vec::new(),
+            )
             .unwrap();
-        let WrittenOutput::Memory { artifacts } = one.into_output() else {
+        assert_eq!(one.layout(), OutputLayout::File);
+        assert_eq!(one.fidelity(), Fidelity::ExactSameFormat);
+        let EmittedOutput::Memory { artifacts } = one.into_output() else {
             panic!("memory output")
         };
         assert_eq!(artifacts[0].name().as_str(), "case.m");
         let directory = Destination::memory("case")
             .unwrap()
-            .__commit_artifacts(true, vec![artifact("buses.csv", b"x")], Vec::new())
+            .__commit_artifacts(
+                true,
+                Fidelity::Canonical,
+                vec![artifact("buses.csv", b"x")],
+                Vec::new(),
+            )
             .unwrap();
-        let WrittenOutput::Memory { artifacts } = directory.into_output() else {
+        assert_eq!(directory.layout(), OutputLayout::Directory);
+        assert_eq!(directory.fidelity(), Fidelity::Canonical);
+        let EmittedOutput::Memory { artifacts } = directory.into_output() else {
             panic!("memory output")
         };
         assert_eq!(artifacts[0].name().as_str(), "case/buses.csv");

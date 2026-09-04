@@ -6,11 +6,15 @@
 use std::path::{Path, PathBuf};
 
 mod helpers;
-use helpers::{parse_bmopf_str, parse_dss_file, parse_dss_str, write_bmopf_json, write_dss};
+use helpers::{emit_bmopf_json, emit_dss, parse_bmopf_str, parse_dss_file, parse_dss_str};
 
 fn schema_validator() -> jsonschema::Validator {
     let schema_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../tests/data/dist/bmopf/draft_bmopf_schema.json");
+        .join("../tests/data/dist/bmopf")
+        .join(format!(
+            "bmopf-{}.schema.json",
+            powerio_dist::BMOPF_SCHEMA_VERSION
+        ));
     let schema: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(schema_path).unwrap()).unwrap();
     jsonschema::validator_for(&schema).expect("vendored schema compiles")
@@ -156,7 +160,7 @@ fn local_dss_corpus_converts_to_valid_bmopf() {
             }
         };
         parse_warnings += x.warnings.len();
-        let b1 = write_bmopf_json(&x);
+        let b1 = emit_bmopf_json(&x);
         write_warnings += b1.warnings.len();
         real_losses += real_network_loss(&b1.warnings);
         let Some(b1_doc) = validate_bmopf(&validator, rel, "B1", &b1.text, &mut failures) else {
@@ -169,9 +173,9 @@ fn local_dss_corpus_converts_to_valid_bmopf() {
                 continue;
             }
         };
-        let a2 = write_dss(&y);
+        let a2 = emit_dss(&y);
         let z = parse_dss_str(&a2.text);
-        let b2 = write_bmopf_json(&z);
+        let b2 = emit_bmopf_json(&z);
         let Some(b2_doc) = validate_bmopf(&validator, rel, "B2", &b2.text, &mut failures) else {
             continue;
         };

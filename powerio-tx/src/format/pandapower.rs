@@ -9,14 +9,15 @@ use std::collections::{BTreeMap, HashMap};
 use serde_json::{Map, Value};
 
 use super::{
-    Conversion, bus_kv, finish, jnum, nonzero_differs, set_bus_kind, warn_extra_branch_rating_sets,
-    zbase,
+    TextEmission, bus_kv, finish, jnum, nonzero_differs, set_bus_kind,
+    warn_extra_branch_rating_sets, zbase,
 };
 use crate::diagnostics::codes::EMIT_PANDAPOWER as F;
 use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
     BalancedNetwork, BalancedNetworkTables, Branch, BranchCharging, Bus, BusId, BusType, Extras,
-    GenCost, Generator, Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat, Storage,
+    GenCost, Generator, GeneratorEnergySource, Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat,
+    Storage,
 };
 use crate::{Error, Result};
 
@@ -233,6 +234,7 @@ pub(crate) fn parse_pandapower_source(
                 g: row.f_or("p_mw", 0.0) * step * v_ratio,
                 b: -row.f_or("q_mvar", 0.0) * step * v_ratio,
                 in_service: row.bool_or("in_service", true),
+                section_count: None,
                 control: None,
                 uid: None,
                 extras: row.extras_excluding(&[
@@ -284,6 +286,7 @@ pub(crate) fn parse_pandapower_source(
             );
             generators.push(Generator {
                 bus,
+                energy_source: GeneratorEnergySource::default(),
                 pg: row.f_or("p_mw", 0.0) * row.f_or("scaling", 1.0),
                 qg: res_gen.get(&idx).map_or(0.0, |r| r.1),
                 pmax: row.f_or("max_p_mw", row.f_or("p_mw", 0.0)),
@@ -295,7 +298,10 @@ pub(crate) fn parse_pandapower_source(
                 in_service: row.bool_or("in_service", true),
                 cost: costs.get(&(CostElement::Gen, idx)).cloned(),
                 caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
+                voltage_regulation_on: true,
+                regulating_terminal: None,
                 regulated_bus: None,
+                active_power_control: None,
                 uid: None,
             });
         }
@@ -308,6 +314,7 @@ pub(crate) fn parse_pandapower_source(
             let solved = res_ext_grid.get(&idx).copied().unwrap_or((0.0, 0.0));
             generators.push(Generator {
                 bus,
+                energy_source: GeneratorEnergySource::default(),
                 pg: solved.0,
                 qg: solved.1,
                 pmax: row.f_or("max_p_mw", f64::INFINITY),
@@ -319,7 +326,10 @@ pub(crate) fn parse_pandapower_source(
                 in_service: row.bool_or("in_service", true),
                 cost: costs.get(&(CostElement::ExtGrid, idx)).cloned(),
                 caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
+                voltage_regulation_on: true,
+                regulating_terminal: None,
                 regulated_bus: None,
+                active_power_control: None,
                 uid: None,
             });
         }
@@ -334,6 +344,7 @@ pub(crate) fn parse_pandapower_source(
             let p = row.f_or("p_mw", 0.0);
             generators.push(Generator {
                 bus,
+                energy_source: GeneratorEnergySource::default(),
                 pg: p * scale,
                 qg: row.f_or("q_mvar", 0.0) * scale,
                 pmax: row.f_or("max_p_mw", p),
@@ -345,7 +356,10 @@ pub(crate) fn parse_pandapower_source(
                 in_service: row.bool_or("in_service", true),
                 cost: costs.get(&(CostElement::Sgen, idx)).cloned(),
                 caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
+                voltage_regulation_on: false,
+                regulating_terminal: None,
                 regulated_bus: None,
+                active_power_control: None,
                 uid: None,
             });
         }
@@ -372,6 +386,7 @@ pub(crate) fn parse_pandapower_source(
                 * par;
             let g = row.f_or("g_us_per_km", 0.0) * row.f_or("length_km", 1.0) * 1e-6 * zbase * par;
             branches.push(Branch {
+                name: None,
                 from,
                 to,
                 r: row.f_or("r_ohm_per_km", 0.0) * row.f_or("length_km", 1.0) / zbase / par,
@@ -540,6 +555,7 @@ pub(crate) fn parse_pandapower_source(
             let z = row.f_or("vk_percent", 0.0).abs() * base_mva / (sn * 100.0) * z_corr;
             let x = (z * z - r * r).max(0.0).sqrt() * row.f_or("vk_percent", 0.0).signum();
             branches.push(Branch {
+                name: None,
                 from,
                 to,
                 r: r / par,
@@ -632,6 +648,7 @@ pub(crate) fn parse_pandapower_source(
                 p_loss: 0.0,
                 q_loss: 0.0,
                 in_service: row.bool_or("in_service", true),
+                active_power_control: None,
                 uid: None,
                 extras: row.extras_excluding(&[
                     "bus",
@@ -665,7 +682,7 @@ pub(crate) fn parse_pandapower_source(
                 to,
                 in_service: row.bool_or("in_service", true),
                 pf,
-                pt: Hvdc::delivered_power(pf, loss_mw, loss_percent / 100.0),
+                pt: Hvdc::calc_delivered_power(pf, loss_mw, loss_percent / 100.0),
                 qf: 0.0,
                 qt: 0.0,
                 vf: row.f_or("vm_from_pu", 1.0),
@@ -678,6 +695,11 @@ pub(crate) fn parse_pandapower_source(
                 qmaxt: row.f_or("max_q_to_mvar", f64::INFINITY),
                 loss0: loss_mw,
                 loss1: loss_percent / 100.0,
+                resistance_ohm: None,
+                nominal_voltage_kv: None,
+                converters_mode: None,
+                converter1: None,
+                converter2: None,
                 cost: None,
                 uid: None,
                 extras: row.extras_excluding(&[
@@ -759,9 +781,13 @@ pub(crate) fn parse_pandapower_source(
         base_mva,
         base_frequency: f_hz,
         geo: super::geographic_meta(&buses),
+        case_metadata: crate::network::CaseMetadata::default(),
+        detailed_connectivity: None,
+        generated_uids: std::collections::BTreeSet::default(),
         buses: buses.into(),
         loads: loads.into(),
         shunts: shunts.into(),
+        static_var_compensators: Vec::new().into(),
         branches: branches.into(),
         switches: Vec::new().into(),
         generators: generators.into(),
@@ -855,7 +881,7 @@ fn warn_nonempty_table(
 }
 
 #[must_use]
-pub fn write_pandapower_json(net: &BalancedNetwork) -> Conversion {
+pub fn write_pandapower_json(net: &BalancedNetwork) -> TextEmission {
     let mut warnings = Diagnostics::new();
     warn_pandapower_writer_losses(net, &mut warnings);
 
@@ -986,7 +1012,7 @@ fn warn_pandapower_branch_losses(net: &BalancedNetwork, warnings: &mut Diagnosti
         ));
     }
     warn_extra_branch_rating_sets(&F, "pandapower JSON", net, warnings);
-    super::warn_dropped_areas(&F, "pandapower JSON", net, warnings);
+    super::warn_dropped_areas(&F, "pandapower JSON", false, net, warnings);
     let branch_solutions = net
         .branches()
         .iter()
@@ -1407,13 +1433,13 @@ fn branch_frames(
                 net.base_mva()
             };
             let z = (br.r * br.r + br.x * br.x).sqrt();
-            let tap = br.effective_tap();
+            let tap = br.calc_effective_tap();
             let tap_delta = tap - 1.0;
             // pandapower's trafo magnetizing branch is inductive only and
             // single sided; MATPOWER's capacitive charging maps exactly onto a
             // bus shunt at each terminal instead (the from-side half sits
             // behind the tap in MATPOWER's model, hence the tap² rebase).
-            let terminal = br.terminal_charging();
+            let terminal = br.calc_terminal_charging();
             if terminal.g_fr != 0.0 || terminal.b_fr != 0.0 {
                 charging.push((
                     br.from,
@@ -1460,7 +1486,7 @@ fn branch_frames(
                 Value::Bool(br.in_service),
             ]);
         } else {
-            let terminal = br.terminal_charging();
+            let terminal = br.calc_terminal_charging();
             if br.charging.is_some()
                 && ((terminal.g_fr - terminal.g_to).abs() > f64::EPSILON
                     || (terminal.b_fr - terminal.b_to).abs() > f64::EPSILON)
@@ -1480,7 +1506,9 @@ fn branch_frames(
                 jnum(br.r * zb),
                 jnum(br.x * zb),
                 jnum(
-                    terminal.total_b() / zb / (2.0 * std::f64::consts::PI * net.base_frequency())
+                    terminal.calc_total_b()
+                        / zb
+                        / (2.0 * std::f64::consts::PI * net.base_frequency())
                         * 1e9,
                 ),
                 jnum((terminal.g_fr + terminal.g_to) / zb * 1e6),
@@ -1646,11 +1674,13 @@ fn ext_grid_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
     let mut data = Vec::new();
     // A Ref bus with no generator gets an ext_grid row so pandapower sees a
     // slack; reading the file back materializes the row as a Ref generator.
+    let mut synthesized = 0usize;
     for b in net.buses() {
         if b.kind != BusType::Ref || net.generators().iter().any(|g| g.bus == b.id) {
             continue;
         }
         index.push(Value::from(data.len() as u64));
+        synthesized += 1;
         data.push(vec![
             b.name.clone().map_or(Value::Null, Value::String),
             pp_bus(b.id),
@@ -1660,6 +1690,14 @@ fn ext_grid_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
             Value::Bool(true),
             Value::Bool(true),
         ]);
+    }
+    if synthesized > 0 {
+        warnings.push(
+            &F.value_defaulted,
+            format!(
+                "{synthesized} reference bus(es) have no generator; emitted zero-output ext_grid rows because pandapower requires a slack element, and those rows read back as generators"
+            ),
+        );
     }
     frame("ext_grid", &columns, index, data, warnings)
 }
@@ -2201,7 +2239,6 @@ fn read_pwl_costs(
     let mut reactive_rows = 0_usize;
     let mut unmapped_rows = 0_usize;
     let mut malformed_rows = 0_usize;
-    let mut read_rows = 0_usize;
     for row in frame.rows() {
         let et_raw = row.string("et").ok_or_else(|| {
             bad(format!(
@@ -2280,18 +2317,12 @@ fn read_pwl_costs(
             ncost: ranges.len() + 1,
             coeffs,
         };
-        read_rows += 1;
         if out.insert((et, element), curve).is_some() {
             return Err(bad(format!(
                 "`pwl_cost` row {}: duplicate cost for et `{et_raw}` element {element}",
                 row.label()
             )));
         }
-    }
-    if read_rows > 0 {
-        warnings.push(&codes::READ_PANDAPOWER_VALUE_INFERRED, format!(
-            "`pwl_cost`: {read_rows} piecewise curve(s) read; pandapower stores marginal cost per range only, so breakpoint costs start at zero at the first breakpoint and the absolute objective level is unstated"
-        ));
     }
     if reactive_rows > 0 {
         warnings.push(&codes::READ_PANDAPOWER_FIELD_DROPPED, format!(
@@ -2474,7 +2505,7 @@ mod tests {
     }
 
     impl Parsed {
-        fn rendered_diagnostics(&self) -> Vec<String> {
+        fn render_diagnostics(&self) -> Vec<String> {
             crate::diagnostics::render_diagnostics(&self.diagnostics)
         }
     }
@@ -2545,11 +2576,11 @@ mod tests {
 
         let conv = write_pandapower_json(&net);
         assert!(
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("negative vk_percent")),
             "the nonstandard spelling must be declared: {:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
         let back = parse_pandapower_json(&conv.text).unwrap().network;
         let b = &back.branches()[0];
@@ -3067,11 +3098,11 @@ mod tests {
         assert!((br.x - 0.1 * 1.06 * 1.06).abs() < 1e-12);
         assert!(
             !parsed
-                .rendered_diagnostics()
+                .render_diagnostics()
                 .iter()
                 .any(|w| w.contains("tap")),
             "{:?}",
-            parsed.rendered_diagnostics()
+            parsed.render_diagnostics()
         );
     }
 
@@ -3096,11 +3127,11 @@ mod tests {
         assert_eq!(parsed.network.branches()[0].tap, 1.0);
         assert!(
             !parsed
-                .rendered_diagnostics()
+                .render_diagnostics()
                 .iter()
                 .any(|w| w.contains("tap")),
             "{:?}",
-            parsed.rendered_diagnostics()
+            parsed.render_diagnostics()
         );
     }
 
@@ -3181,7 +3212,7 @@ mod tests {
             parsed.diagnostics.iter().any(|d| d.message()
                 == "`trafo`: 1 row(s) have a tabular or unrecognized tap changer; those taps were ignored"),
             "{:?}",
-            parsed.rendered_diagnostics()
+            parsed.render_diagnostics()
         );
     }
 
@@ -3262,7 +3293,7 @@ mod tests {
                 .iter()
                 .any(|d| d.message() == "`svc` table ignored (1 rows): not mapped"),
             "{:?}",
-            parsed.rendered_diagnostics()
+            parsed.render_diagnostics()
         );
     }
 
@@ -3302,11 +3333,11 @@ mod tests {
         let conv = write_pandapower_json(&net);
         assert!(
             !conv
-                .rendered_diagnostics()
+                .render_diagnostics()
                 .iter()
                 .any(|w| w.contains("non-finite")),
             "{:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
     }
 
@@ -3322,7 +3353,7 @@ mod tests {
             conv.diagnostics.iter().any(|d| d.message()
                 == "`gen`: non-finite value(s) written as null in column(s) `min_q_mvar` (1), `max_q_mvar` (1); pandapower reads them as NaN"),
             "{:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
     }
 
@@ -3366,7 +3397,7 @@ mod tests {
             assert!(
                 parsed.diagnostics.iter().any(|d| d.message() == expected),
                 "missing {expected:?} in {:?}",
-                parsed.rendered_diagnostics()
+                parsed.render_diagnostics()
             );
         }
     }
@@ -3395,7 +3426,7 @@ mod tests {
             parsed.diagnostics.iter().any(|d| d.message()
                 == "`poly_cost`: reactive cost coefficients (cq*) nonzero on 1 rows; only active power costs are read"),
             "{:?}",
-            parsed.rendered_diagnostics()
+            parsed.render_diagnostics()
         );
     }
 
@@ -3407,9 +3438,9 @@ mod tests {
         ]))
         .unwrap();
         assert!(
-            parsed.rendered_diagnostics().is_empty(),
+            parsed.render_diagnostics().is_empty(),
             "{:?}",
-            parsed.rendered_diagnostics()
+            parsed.render_diagnostics()
         );
     }
 
@@ -3444,16 +3475,16 @@ mod tests {
         ]))
         .unwrap();
         assert!(
-            parsed.rendered_diagnostics().is_empty(),
+            parsed.render_diagnostics().is_empty(),
             "{:?}",
-            parsed.rendered_diagnostics()
+            parsed.render_diagnostics()
         );
         assert!(matches!(
             &parsed.network.loads()[0].voltage_model,
             Some(LoadVoltageModel::Zip { p_constant_impedance, .. }) if *p_constant_impedance == 0.2
         ));
-        assert!(parsed.network.branches()[0].terminal_charging().g_fr > 0.0);
-        assert!(parsed.network.branches()[1].terminal_charging().b_fr < 0.0);
+        assert!(parsed.network.branches()[0].calc_terminal_charging().g_fr > 0.0);
+        assert!(parsed.network.branches()[1].calc_terminal_charging().b_fr < 0.0);
     }
 
     #[test]
@@ -3481,9 +3512,9 @@ mod tests {
         ]))
         .unwrap();
         assert!(
-            parsed.rendered_diagnostics().is_empty(),
+            parsed.render_diagnostics().is_empty(),
             "{:?}",
-            parsed.rendered_diagnostics()
+            parsed.render_diagnostics()
         );
         assert!(matches!(
             &parsed.network.loads()[0].voltage_model,
@@ -3519,9 +3550,13 @@ mod tests {
             base_mva: 100.0,
             base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
             geo: None,
+            case_metadata: crate::network::CaseMetadata::default(),
+            detailed_connectivity: None,
+            generated_uids: std::collections::BTreeSet::default(),
             buses: buses.into(),
             loads: Vec::new().into(),
             shunts: Vec::new().into(),
+            static_var_compensators: Vec::new().into(),
             branches: Vec::new().into(),
             switches: Vec::new().into(),
             generators: Vec::new().into(),
@@ -3537,6 +3572,7 @@ mod tests {
     fn test_gen(bus: usize, cost: Option<GenCost>) -> Generator {
         Generator {
             bus: BusId(bus),
+            energy_source: GeneratorEnergySource::default(),
             pg: 1.0,
             qg: 0.0,
             pmax: 2.0,
@@ -3548,13 +3584,17 @@ mod tests {
             in_service: true,
             cost,
             caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
+            voltage_regulation_on: true,
+            regulating_terminal: None,
             regulated_bus: None,
+            active_power_control: None,
             uid: None,
         }
     }
 
     fn test_branch(from: usize, to: usize, tap: f64) -> Branch {
         Branch {
+            name: None,
             from: BusId(from),
             to: BusId(to),
             r: 0.01,
@@ -3656,6 +3696,7 @@ mod tests {
     #[test]
     fn writer_zip_load_columns_round_trip() {
         let mut net = test_net(vec![test_bus(1, BusType::Ref)]);
+        net.generators_mut().push(test_gen(1, None));
         net.loads_mut().push(Load {
             bus: BusId(1),
             p: 10.0,
@@ -3678,9 +3719,9 @@ mod tests {
 
         let conv = write_pandapower_json(&net);
         assert!(
-            conv.rendered_diagnostics().is_empty(),
+            conv.render_diagnostics().is_empty(),
             "{:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
         let load = written_frame(&conv.text, "load");
         assert_eq!(col(&load, "p_mw"), vec![json!(20.0)]);
@@ -3723,7 +3764,7 @@ mod tests {
                 || d.message()
                     .starts_with("2 transformer terminal charging shunt(s) written into `shunt`")),
             "{:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
         let shunt = written_frame(&conv.text, "shunt");
         assert_eq!(shunt.data.len(), 2);
@@ -3751,7 +3792,7 @@ mod tests {
                 .message()
                 .starts_with("2 bus(es) carry no base_kv; written with vn_kv = 1")),
             "{:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
         let rt = parse_pandapower_json(&conv.text).unwrap();
         let b = &rt.network.branches()[0];
@@ -3799,6 +3840,10 @@ mod tests {
                 json!(true),
             ]
         );
+        assert!(conv.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code() == F.value_defaulted.code
+                && diagnostic.message().contains("read back as generators")
+        }));
     }
 
     #[test]
@@ -3827,7 +3872,7 @@ mod tests {
             conv.diagnostics.iter().any(|d| d.message()
                 == "1 generator costs truncated to quadratic: poly_cost carries cp0/cp1/cp2 only"),
             "{:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
     }
 
@@ -3862,13 +3907,13 @@ mod tests {
             assert!(
                 conv.diagnostics.iter().any(|d| d.message() == expected),
                 "missing {expected:?} in {:?}",
-                conv.rendered_diagnostics()
+                conv.render_diagnostics()
             );
         }
     }
 
     #[test]
-    fn pwl_cost_reads_breakpoints_and_declares_the_level() {
+    fn pwl_cost_reads_breakpoints_from_zero_level() {
         let gen_frame = pp_frame(
             &["bus", "p_mw", "slack"],
             json!([0]),
@@ -3889,14 +3934,7 @@ mod tests {
         assert_eq!(cost.model, 1);
         assert_eq!(cost.ncost, 3);
         assert_eq!(cost.coeffs, vec![0.0, 0.0, 10.0, 50.0, 20.0, 130.0]);
-        assert!(
-            parsed
-                .diagnostics
-                .iter()
-                .any(|d| d.message().contains("absolute objective level is unstated")),
-            "{:?}",
-            parsed.rendered_diagnostics()
-        );
+        assert!(parsed.diagnostics.is_empty());
     }
 
     #[test]
@@ -3953,7 +3991,7 @@ mod tests {
                 .iter()
                 .any(|d| d.message().contains("absolute objective shifts")),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
         // The shape survives; the level restarts at zero on read back.
         let again = parse_pandapower_json(&out.text).unwrap();

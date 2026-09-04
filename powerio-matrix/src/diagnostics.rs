@@ -3,7 +3,7 @@
 //! The record, the code grammar, and the severity ladder live in
 //! `powerio-core`; the entries here are the matrix, sensitivity, and dataset
 //! side of the workspace registry. A hub failure that arrives through
-//! [`crate::Error::Core`] keeps the hub's own code.
+//! [`crate::Error::Transmission`] keeps the hub's own code.
 
 pub use powerio_core::{
     Diagnostic, DiagnosticInfo, DiagnosticSeverity, check_registry, render_diagnostic,
@@ -23,17 +23,19 @@ pub mod codes {
             "an OPF element family does not have unique stable identities", category = Data;
         BUILD_OPF_NODAL_COST_UNSUPPORTED = "BUILD.OPF.NODAL_COST_UNSUPPORTED", Error,
             "a nodal quadratic projection cannot carry the prepared generator cost", category = Request;
+        BUILD_AC_PF_SPECIFICATION_UNSUPPORTED = "BUILD.AC_PF.SPECIFICATION_UNSUPPORTED", Error,
+            "the AC power flow preparation does not support a bus specification", category = Data;
         BUILD_MULTI_UNSUPPORTED_STAMP = "BUILD.MULTI.UNSUPPORTED_STAMP", Warning,
             "an element has no exact multiconductor admittance or ideal stamp and was omitted loudly";
         BUILD_SENSITIVITY_SINGULAR = "BUILD.SENSITIVITY.SINGULAR", Error,
             "the reference grounded Laplacian is singular", category = Data;
         BUILD_SENSITIVITY_INVALID_OPTION = "BUILD.SENSITIVITY.INVALID_OPTION", Error,
             "a DC sensitivity option is outside the range it is defined on", category = Data;
-        /// Retired in 1.0.0: the conjugate gradient solver this reported on
+        /// Retired in 0.11.0: the conjugate gradient solver this reported on
         /// was replaced by a sparse direct factorization, which either
         /// succeeds or reports singularity.
         BUILD_SENSITIVITY_NO_CONVERGENCE = "BUILD.SENSITIVITY.NO_CONVERGENCE", Error,
-            "the iterative DC sensitivity solve ran out of iterations", retired = "1.0.0";
+            "the iterative DC sensitivity solve ran out of iterations", retired = "0.11.0";
         BUILD_GRIDFM_EMPTY_BATCH = "BUILD.GRIDFM.EMPTY_BATCH", Error,
             "a gridfm scenario batch holds no snapshot", category = Data;
         BUILD_GRIDFM_SCENARIO_ID_OVERFLOW = "BUILD.GRIDFM.SCENARIO_ID_OVERFLOW", Error,
@@ -52,6 +54,14 @@ pub mod codes {
             "a matrix-market write failed", category = Output;
         EMIT_PARQUET_FAILED = "EMIT.PARQUET.FAILED", Error,
             "a gridfm Parquet write failed", category = Output;
+        EMIT_GRIDFM_FIELD_DROPPED = "EMIT.GRIDFM.FIELD_DROPPED", Warning,
+            "a source field has no GridFM table column";
+        EMIT_GRIDFM_VALUE_COLLAPSED = "EMIT.GRIDFM.VALUE_COLLAPSED", Warning,
+            "several source records were folded into one GridFM row";
+        EMIT_GRIDFM_VALUE_SUBSTITUTED = "EMIT.GRIDFM.VALUE_SUBSTITUTED", Warning,
+            "a source value was replaced by GridFM's indexed or fixed representation";
+        EMIT_GRIDFM_VALUE_DEFAULTED = "EMIT.GRIDFM.VALUE_DEFAULTED", Warning,
+            "a required GridFM value was derived because the source did not state it";
 
     }
 }

@@ -1,5 +1,9 @@
 # Developer Guides
 
-Material for contributors and for readers tracking PowerIO's history: migrations from earlier releases, retired names, ABI and schema history, the crate graph, the checked architecture map, the compiler infrastructure lessons behind the design, matrix internals, the evaluation corpus, performance work, and the release process.
-
-Current user documentation deliberately contains none of this: a page above this section teaches only the 1.0 surface. Anything that says "0.9", "ABI 5", or names a removed API lives here, in the changelog, or in the compatibility code that upgrades old stored documents.
+Material for contributors: the 0.11 API, crate graph, checked architecture
+map, compiler infrastructure lessons, matrix internals, evaluation corpus,
+performance work, and release checks. The changelog records older releases;
+the guide documents only the current implementation. The dated design record
+behind the candidate 1.0 API (terminology, rationale, ontology, and
+architecture) lives outside the guide at
+[`docs/design/`](https://github.com/eigenergy/powerio/tree/main/docs/design).

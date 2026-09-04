@@ -1,17 +1,12 @@
-//! Test-only compatibility wrappers keeping the unit suites on the old call
-//! shapes while they exercise the module parse surface underneath.
+//! Test harness for parser and emitter fixtures.
 #![allow(dead_code)]
 
 use std::sync::Arc;
 
-use crate::convert::{Conversion, DistTargetFormat};
+use crate::convert::{DistTargetFormat, TextEmission};
 use crate::model::MulticonductorNetwork;
 
-/// The old parse output shape: the typed network with the reader's findings
-/// riding along. Dereferences to the network so field access keeps its old
-/// spelling; `warnings` and `source` shadow the fields the network lost.
-/// Mutation through `DerefMut` edits a copy of the module's value, so the
-/// module's echo tier stays byte exact.
+/// A typed network and the reader findings used by the unit tests.
 #[derive(Debug)]
 pub(crate) struct Parsed {
     pub warnings: Vec<String>,
@@ -37,13 +32,17 @@ impl std::ops::DerefMut for Parsed {
 impl Parsed {
     /// Write through the module: a same format target echoes the retained
     /// source bytes exactly.
-    pub fn to_format(&self, target: DistTargetFormat) -> Conversion {
-        crate::convert::write_as(&self.module, target)
+    pub fn emit(&self, target: DistTargetFormat) -> TextEmission {
+        crate::convert::emit_text_with_options(
+            &self.module,
+            target,
+            &crate::convert::EmitOptions::default(),
+        )
     }
 
     /// Write from the typed value, bypassing the echo tier.
-    pub fn to_canonical_format(&self, target: DistTargetFormat) -> Conversion {
-        crate::convert::write_network(&self.network, target)
+    pub fn emit_value(&self, target: DistTargetFormat) -> TextEmission {
+        crate::convert::emit_value_text(&self.network, target)
     }
 }
 
@@ -54,8 +53,8 @@ fn from_module(module: powerio_core::PioModule<MulticonductorNetwork>) -> Parsed
         Some(Arc::new(text.to_owned()))
     });
     Parsed {
-        warnings: crate::diagnostics::render_diagnostics(module.diagnostics()),
-        diagnostics: module.diagnostics().to_vec(),
+        warnings: crate::diagnostics::render_diagnostics(&module.diagnostics),
+        diagnostics: module.diagnostics.clone(),
         source,
         network: module.value().clone(),
         module,
@@ -71,7 +70,7 @@ fn declared(
         Some(token) => {
             // The old entries settled the format before any work; keep the
             // error shape.
-            if crate::convert::dist_target_from_name(token).is_none() {
+            if crate::convert::parse_dist_target_format(token).is_none() {
                 return Err(crate::Error::UnknownFormat(token.to_string()));
             }
             let id = powerio_core::FormatId::new(token.to_ascii_lowercase().replace('_', "-"))
@@ -90,7 +89,7 @@ fn core_to_dist(error: &powerio_core::Error) -> crate::Error {
 
 pub(crate) fn parse_str(text: &str, from: &str) -> crate::Result<Parsed> {
     let source = declared(
-        powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())
+        powerio_core::Source::from_memory("<memory>", text.as_bytes().to_vec())
             .map_err(|error| core_to_dist(&error))?,
         Some(from),
     )?;
@@ -104,7 +103,7 @@ pub(crate) fn parse_file(
     from: Option<&str>,
 ) -> crate::Result<Parsed> {
     if let Some(token) = from
-        && crate::convert::dist_target_from_name(token).is_none()
+        && crate::convert::parse_dist_target_format(token).is_none()
     {
         return Err(crate::Error::UnknownFormat(token.to_string()));
     }

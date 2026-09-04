@@ -1,6 +1,6 @@
 //! The WebAssembly producer smoke: parse named in-memory bytes with no
-//! filesystem assumption, read the detected kind and the typed value, and
-//! write the byte exact echo. Runs under any wasip1 runtime:
+//! filesystem assumption, match the concrete value, and
+//! emit the byte exact echo. Runs under any wasip1 runtime:
 //!
 //!     cargo build --target wasm32-wasip1 --example wasm_smoke -p powerio
 //!     wasmtime target/wasm32-wasip1/debug/examples/wasm_smoke.wasm
@@ -9,16 +9,25 @@
 
 fn main() {
     let bytes = include_bytes!("../../tests/data/case9.m").to_vec();
-    let source = powerio_core::Source::from_bytes("case9.m", bytes.clone())
+    let source = powerio::Source::from_memory("case9.m", bytes.clone())
         .expect("named in-memory bytes acquire");
     let module = powerio::parse(source).expect("parse");
-    assert_eq!(module.value().kind().as_str(), "balanced_network");
-    let typed: powerio_core::PioModule<powerio::BalancedNetwork> =
-        powerio::try_into_typed(module).expect("narrow");
-    assert_eq!(typed.value().buses().len(), 9);
-    let dynamic = typed.map_value(powerio::PioValue::from);
-    let (echo, _findings) =
-        powerio::write_module_str(&dynamic, "matpower").expect("same format write");
-    assert_eq!(echo.as_bytes(), &bytes[..], "byte exact echo");
-    println!("wasm smoke OK: balanced_network, 9 buses, byte exact echo");
+    let powerio::PioValue::BalancedNetwork(network) = &module.value() else {
+        panic!(
+            "expected a balanced network, found {}",
+            module.value().type_name()
+        );
+    };
+    assert_eq!(network.buses().len(), 9);
+    let emitted = powerio::emit(
+        &module,
+        "matpower",
+        powerio::Destination::memory("case9.m").expect("memory destination"),
+    )
+    .expect("same format emission");
+    let powerio::EmittedOutput::Memory { artifacts } = emitted.output() else {
+        panic!("memory emission returned a path output");
+    };
+    assert_eq!(artifacts[0].bytes(), &bytes[..], "byte exact echo");
+    println!("wasm smoke OK: powerio.BalancedNetwork, 9 buses, byte exact echo");
 }

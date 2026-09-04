@@ -5,6 +5,7 @@
 //! comments inline per line, splits rows on `;`, and yields each row into a
 //! reused buffer — no whole-section copy and no `Vec<Vec<f64>>` intermediate.
 
+use crate::collect::Diagnostics;
 use crate::{Error, Result};
 
 /// The first `mpc.<field> = <scalar>` RHS (a matrix RHS is skipped), trimmed.
@@ -64,29 +65,51 @@ pub(crate) fn scalar_from_assignment(raw: &str, field: &str) -> Result<Option<f6
 
 /// Stream the rows of an `mpc.<field> = [ … ];` assignment. `assignment` is the
 /// raw (comment-bearing, possibly multi-line) source of one assignment from the
-/// document. Comments are stripped per line, rows split on `;`, tokens parsed
-/// into a reused buffer, and `f` is invoked per non-empty row — so the caller
-/// builds its typed `Vec` directly, with no `Vec<Vec<f64>>` and no whole-section
-/// comment-strip copy. `f` receives the same 0-based non-empty-row index the
-/// old `Vec<Vec<f64>>` path passed to `from_row`.
-pub(crate) fn for_each_matrix_row<F>(assignment: &str, field: &str, mut f: F) -> Result<()>
+/// document and `base` its byte offset within the source. Comments are
+/// stripped per line, rows split on `;`, tokens parsed into a reused buffer,
+/// and `f` is invoked per non-empty row, so the caller builds its typed `Vec`
+/// directly with no `Vec<Vec<f64>>` and no whole-section comment-strip copy.
+/// `f` receives the 0-based non-empty-row index.
+///
+/// Before each row reaches `f`, the row's byte range in the source (first
+/// token through last token) is the collector's current record, so a finding
+/// raised while the row is decoded carries that range and a row constructor
+/// failure leaves it on the collector. A malformed token marks the row up to
+/// the end of its line; a truncated matrix marks the whole assignment. The
+/// record is cleared once the assignment is read.
+pub(crate) fn for_each_matrix_row<F>(
+    assignment: &str,
+    base: usize,
+    field: &str,
+    warnings: &mut Diagnostics,
+    mut f: F,
+) -> Result<()>
 where
     F: FnMut(&[f64], usize) -> Result<()>,
 {
     let mut buf: Vec<f64> = Vec::with_capacity(24);
     let mut row = 0usize;
-    let mut inside = false; // have we passed the opening `[`?
-    let mut done = false; // have we hit the closing `]`?
-    for line in assignment.lines() {
+    // Byte range of the row being tokenized, relative to `assignment`.
+    let mut row_start = 0usize;
+    let mut row_end = 0usize;
+    let mut inside = false; // past the opening `[`
+    let mut done = false; // reached the closing `]`
+    let mut line_start = 0usize;
+    for piece in assignment.split_inclusive('\n') {
+        let this_line_start = line_start;
+        line_start += piece.len();
         if done {
             break;
         }
+        let line = super::locate::trim_eol(piece);
         let mut code = super::tokens::comment_split(line).0;
+        let mut code_start = this_line_start;
         if !inside {
             let Some(open) = code.find('[') else {
                 continue;
             };
             code = &code[open + 1..];
+            code_start += open + 1;
             inside = true;
         }
         // Numeric matrix bodies have no nested `[`, so the first `]` closes it.
@@ -95,10 +118,9 @@ where
             done = true;
         }
         // One byte-level pass over the line's code: `;` ends a row, ASCII
-        // whitespace separates tokens, and a trailing comma is stripped (MATPOWER
-        // rows are space/semicolon-delimited). This replaces split(';') +
-        // split_ascii_whitespace — the generic Unicode searcher was the dominant
-        // tokenizing cost — and feeds raw bytes straight to the float parser.
+        // whitespace separates tokens, and a trailing comma is stripped
+        // (MATPOWER rows are space/semicolon-delimited). Raw bytes go straight
+        // to the float parser.
         //
         // MATLAB also ends a matrix row at the line break itself unless the
         // line ends with a `...` continuation; PowerWorld's `.m` exports write
@@ -116,6 +138,7 @@ where
             let b = bytes[i];
             if b == b';' {
                 if !buf.is_empty() {
+                    warnings.enter_record(base + row_start, base + row_end);
                     f(&buf, row)?;
                     row += 1;
                     buf.clear();
@@ -138,31 +161,42 @@ where
             if tok.is_empty() {
                 continue;
             }
-            buf.push(parse_float(tok).ok_or_else(|| Error::BadFloat {
-                field: leak_field(field),
-                row,
-                value: String::from_utf8_lossy(tok).into_owned(),
-            })?);
+            if buf.is_empty() {
+                row_start = code_start + start;
+            }
+            row_end = code_start + start + tok.len();
+            let Some(value) = parse_float(tok) else {
+                warnings.enter_record(base + row_start, base + code_start + code.trim_end().len());
+                return Err(Error::BadFloat {
+                    field: leak_field(field),
+                    row,
+                    value: String::from_utf8_lossy(tok).into_owned(),
+                });
+            };
+            buf.push(value);
         }
         // End of line ends the row, unless continued with `...`.
         if !continuation && !buf.is_empty() {
+            warnings.enter_record(base + row_start, base + row_end);
             f(&buf, row)?;
             row += 1;
             buf.clear();
         }
     }
-    // Entered the matrix (`[`) but never saw the closing `]`: the assignment is
-    // truncated. The old `find_matrix` rejected this; keep that behavior rather
-    // than silently accepting a partial matrix. A closed matrix sets `done`, so
-    // a legitimate last row with no trailing `;` (handled by the flush below)
-    // does not trip this.
+    // Entered the matrix (`[`) but never saw the closing `]`: the assignment
+    // is truncated and refused rather than read as a partial matrix. A closed
+    // matrix sets `done`, so a legitimate last row with no trailing `;`
+    // (handled by the flush below) does not trip this.
     if inside && !done {
+        warnings.enter_record(base, base + assignment.len());
         return Err(Error::UnbalancedBrackets(leak_field(field)));
     }
     // A final row not terminated by `;` (e.g. the last row before `];`).
     if !buf.is_empty() {
+        warnings.enter_record(base + row_start, base + row_end);
         f(&buf, row)?;
     }
+    warnings.leave_record();
     Ok(())
 }
 

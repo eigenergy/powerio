@@ -1,12 +1,15 @@
-//! Decode time limits on the `.pio.json` version 1 wire and the 0.9 upgrade:
-//! hostile documents are refused at their stated bounds, and record decode
-//! scales past six figure counts.
+//! Decode time limits on PowerIO IR. Hostile documents are refused
+//! at their stated bounds, and record decode scales past six figure counts.
 
-use powerio::stored::{read_module, write_module};
 use powerio::{BalancedNetwork, PioValue};
 use powerio_core::{PioModule, TimePoint};
-use powerio_prob::BALANCED_STATE_QUANTITIES;
+use powerio_prob::{
+    BalancedOperatingPointBuilder, BalancedOperatingPointFlag, BalancedOperatingPointQuantity,
+};
 use powerio_tx::{Bus, BusId, BusType, Generator, Load, Switch};
+
+mod helpers;
+use helpers::{deserialize_module_text, serialize_module_text};
 
 fn small_network() -> BalancedNetwork {
     let bus1 = Bus::new(BusId(1), BusType::Ref, 345.0);
@@ -22,71 +25,6 @@ fn small_network() -> BalancedNetwork {
     network
 }
 
-/// A raw legacy 0.9 package document carrying a two period series with one
-/// load update, hand built on the frozen 0.9 wire shape (the package API that
-/// produced it is gone from this layer up; the upgrade reader still accepts
-/// the document).
-fn legacy_series_text() -> serde_json::Value {
-    serde_json::json!({
-        "powerio_version": "0.9.0",
-        "producer": {"tool": "powerio", "version": "0.9.0"},
-        "model_kind": "balanced",
-        "origin": {"kind": "in_memory"},
-        "validation": {"status": "ok", "counts": {"fatal": 0, "error": 0, "warning": 0, "info": 0, "debug": 0}},
-        "model": {
-            "kind": "balanced",
-            "balanced_network": serde_json::to_value(small_network()).unwrap(),
-        },
-        "operating_points": {
-            "time_axis": {
-                "periods": 2,
-                "duration_hours": [1.0, 1.0],
-                "labels": ["h0", "h1"],
-            },
-            "points": [
-                {"index": 0},
-                {"index": 1, "updates": [
-                    {"element": {"table": "loads", "row": 0},
-                     "fields": {"p": 75.0}}
-                ]},
-            ],
-        },
-    })
-}
-
-#[test]
-fn a_declared_period_count_no_longer_drives_sizing_or_refusal() {
-    // SEC-6: the declared `time_axis.periods` scalar costs nothing to
-    // inflate, so it no longer sizes anything or triggers the maximum by
-    // itself. Whether it understates or wildly overstates the two periods
-    // this document actually carries (two labels, two durations, two
-    // points), the decoded series is sized from those arrays alone.
-    for declared in [1_usize, 10_000_000] {
-        let mut raw = legacy_series_text();
-        raw["operating_points"]["time_axis"]["periods"] = serde_json::json!(declared);
-        let module = read_module(&raw.to_string()).unwrap();
-        let PioValue::BalancedOperatingPointTimeSeries(series) = module.value() else {
-            panic!("wrong kind");
-        };
-        assert_eq!(series.len(), 2, "declared {declared}");
-        assert_eq!(series.values()[1].load_active_power("loads:0"), Some(75.0));
-    }
-}
-
-#[test]
-fn genuinely_carrying_more_than_the_maximum_periods_is_refused() {
-    // Past the maximum in what the document actually carries (real labels,
-    // one past the bound), not merely in what it declares.
-    let mut raw = legacy_series_text();
-    let labels: Vec<String> = (0..=131_072).map(|i| format!("h{i}")).collect();
-    raw["operating_points"]["time_axis"]["labels"] = serde_json::json!(labels);
-    let error = read_module(&raw.to_string()).unwrap_err();
-    assert_eq!(
-        error.info().map(|info| info.code),
-        Some("READ.MODULE.INVALID")
-    );
-    assert!(error.to_string().contains("131072"), "{error}");
-}
 /// DESER-003: six figure record counts decode through the identity indexes.
 /// Every diagnostic's span names the last declared source, so a linear source
 /// scan per span would be quadratic and blow far past the ceiling.
@@ -94,7 +32,8 @@ fn genuinely_carrying_more_than_the_maximum_periods_is_refused() {
 fn six_figure_record_counts_decode_within_the_ceiling() {
     const COUNT: usize = 131_072;
     let module = PioModule::new(PioValue::BalancedNetwork(small_network()));
-    let mut raw: serde_json::Value = serde_json::from_str(&write_module(&module).unwrap()).unwrap();
+    let mut raw: serde_json::Value =
+        serde_json::from_str(&serialize_module_text(&module).unwrap()).unwrap();
     let mut sources = Vec::with_capacity(COUNT);
     for index in 0..COUNT {
         sources.push(serde_json::json!({
@@ -119,10 +58,10 @@ fn six_figure_record_counts_decode_within_the_ceiling() {
     let text = raw.to_string();
 
     let started = std::time::Instant::now();
-    let module = read_module(&text).unwrap();
+    let module = deserialize_module_text(&text).unwrap();
     let elapsed = started.elapsed();
     assert_eq!(module.sources().len(), COUNT);
-    assert_eq!(module.diagnostics().len(), COUNT);
+    assert_eq!(module.diagnostics.len(), COUNT);
     assert!(
         elapsed < std::time::Duration::from_secs(5),
         "decode took {elapsed:?}"
@@ -135,13 +74,12 @@ fn series_module_json() -> serde_json::Value {
         TimePoint::new("h0", None).unwrap(),
         TimePoint::new("h1", None).unwrap(),
     ];
-    let series = powerio_prob::BalancedStateBuilder::new(network, time_points)
-        .dense_by_name("bus_voltage_magnitude", vec![1.0, 1.01, 0.99, 1.02])
-        .unwrap()
+    let series = BalancedOperatingPointBuilder::new(network, time_points)
+        .bus_voltage_magnitudes(vec![1.0, 1.01, 0.99, 1.02])
         .build()
         .unwrap();
-    let module = PioModule::new(PioValue::BalancedOperatingPointTimeSeries(series));
-    serde_json::from_str(&write_module(&module).unwrap()).unwrap()
+    let module = PioModule::new(PioValue::from(series));
+    serde_json::from_str(&serialize_module_text(&module).unwrap()).unwrap()
 }
 
 /// DESER-004: a stored quantity's values bind to the identities the document
@@ -149,13 +87,13 @@ fn series_module_json() -> serde_json::Value {
 #[test]
 fn a_permuted_identity_list_is_refused() {
     let mut raw = series_module_json();
-    let quantities = &mut raw["value"]["data"]["quantities"];
+    let quantities = &mut raw["value"]["data"]["values"][0]["quantities"];
     assert_eq!(
         quantities["bus_voltage_magnitude"]["identities"],
         serde_json::json!(["1", "2"])
     );
     quantities["bus_voltage_magnitude"]["identities"] = serde_json::json!(["2", "1"]);
-    let error = read_module(&raw.to_string()).unwrap_err();
+    let error = deserialize_module_text(&raw.to_string()).unwrap_err();
     assert_eq!(
         error.info().map(|info| info.code),
         Some("READ.MODULE.INVALID")
@@ -167,28 +105,25 @@ fn a_permuted_identity_list_is_refused() {
 
     // The unpermuted document round trips and each identity reads its own
     // value back.
-    let module = read_module(&series_module_json().to_string()).unwrap();
-    let PioValue::BalancedOperatingPointTimeSeries(series) = module.value() else {
+    let module = deserialize_module_text(&series_module_json().to_string()).unwrap();
+    let PioValue::TimeSeries(series) = &module.value() else {
         panic!("wrong kind");
     };
-    assert_eq!(
-        series.values()[0].bus_voltage_magnitude(BusId(1)),
-        Some(1.0)
-    );
-    assert_eq!(
-        series.values()[0].bus_voltage_magnitude(BusId(2)),
-        Some(1.01)
-    );
-    assert_eq!(
-        series.values()[1].bus_voltage_magnitude(BusId(1)),
-        Some(0.99)
-    );
+    let PioValue::BalancedOperatingPoint(point0) = series.get(0).unwrap() else {
+        panic!("wrong element type");
+    };
+    let PioValue::BalancedOperatingPoint(point1) = series.get(1).unwrap() else {
+        panic!("wrong element type");
+    };
+    assert_eq!(point0.bus_voltage_magnitude(BusId(1)), Some(1.0));
+    assert_eq!(point0.bus_voltage_magnitude(BusId(2)), Some(1.01));
+    assert_eq!(point1.bus_voltage_magnitude(BusId(1)), Some(0.99));
 }
 
 /// DESER-005: the writer's vocabulary is the reader's, from one definition,
 /// and `switch_closed` survives the round trip.
 #[test]
-fn the_switch_state_survives_the_round_trip() {
+fn the_switch_position_survives_the_round_trip() {
     let mut network = small_network();
     network
         .switches_mut()
@@ -197,51 +132,79 @@ fn the_switch_state_survives_the_round_trip() {
         TimePoint::new("h0", None).unwrap(),
         TimePoint::new("h1", None).unwrap(),
     ];
-    let series = powerio_prob::BalancedStateBuilder::new(network, time_points)
-        .dense_by_name("switch_closed", vec![1.0, 0.0])
-        .unwrap()
+    let series = BalancedOperatingPointBuilder::new(network, time_points)
+        .switch_closed(vec![true, false])
         .build()
         .unwrap();
-    let module = PioModule::new(PioValue::BalancedOperatingPointTimeSeries(series));
-    let text = write_module(&module).unwrap();
+    let module = PioModule::new(PioValue::from(series));
+    let text = serialize_module_text(&module).unwrap();
     let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert!(
-        raw["value"]["data"]["quantities"]
+        raw["value"]["data"]["values"][0]["quantities"]
             .as_object()
             .unwrap()
             .contains_key("switch_closed"),
         "the stored document must carry the switch quantity"
     );
-    let back = read_module(&text).unwrap();
-    let PioValue::BalancedOperatingPointTimeSeries(series) = back.value() else {
+    let back = deserialize_module_text(&text).unwrap();
+    let PioValue::TimeSeries(series) = &back.value() else {
         panic!("wrong kind");
     };
-    assert_eq!(series.values()[0].switch_closed("switches:0"), Some(true));
-    assert_eq!(series.values()[1].switch_closed("switches:0"), Some(false));
-    assert_eq!(write_module(&back).unwrap(), text);
+    let PioValue::BalancedOperatingPoint(point0) = series.get(0).unwrap() else {
+        panic!("wrong element type");
+    };
+    let PioValue::BalancedOperatingPoint(point1) = series.get(1).unwrap() else {
+        panic!("wrong element type");
+    };
+    let switch_id = point0.network().switches()[0].uid.as_deref().unwrap();
+    assert_eq!(point0.switch_closed(switch_id), Some(true));
+    assert_eq!(point1.switch_closed(switch_id), Some(false));
+    assert_eq!(serialize_module_text(&back).unwrap(), text);
 }
 
-/// The exported vocabulary is exactly the set the builder accepts.
+/// The typed operating point vocabulary has the stable IR spellings.
 #[test]
-fn the_exported_vocabulary_matches_what_the_builder_accepts() {
-    let builder = powerio_prob::BalancedStateBuilder::new(
-        small_network(),
-        vec![TimePoint::new("h0", None).unwrap()],
-    );
-    for name in BALANCED_STATE_QUANTITIES {
-        assert!(builder.identity_order(name).is_ok(), "{name} not accepted");
-    }
-    assert!(builder.identity_order("bus_voltage").is_err());
-    assert_eq!(BALANCED_STATE_QUANTITIES.len(), 14);
+fn typed_operating_point_vocabulary_has_stable_names() {
+    use BalancedOperatingPointFlag as Flag;
+    use BalancedOperatingPointQuantity as Quantity;
+
+    let names: Vec<&str> = [
+        Quantity::BusVoltageMagnitude,
+        Quantity::BusVoltageAngle,
+        Quantity::BusActiveInjection,
+        Quantity::BusReactiveInjection,
+        Quantity::GeneratorActivePower,
+        Quantity::GeneratorReactivePower,
+        Quantity::GeneratorVoltageSetpoint,
+        Quantity::LoadActivePower,
+        Quantity::LoadReactivePower,
+        Quantity::BranchTapRatio,
+        Quantity::BranchPhaseShift,
+    ]
+    .into_iter()
+    .map(Quantity::name)
+    .chain(
+        [
+            Flag::GeneratorInService,
+            Flag::BranchInService,
+            Flag::SwitchClosed,
+        ]
+        .into_iter()
+        .map(Flag::name),
+    )
+    .collect();
+    assert_eq!(names.len(), 14);
+    assert!(names.contains(&"bus_voltage_magnitude"));
+    assert!(names.contains(&"switch_closed"));
 }
 
 fn base_module_json() -> serde_json::Value {
     let module = PioModule::new(PioValue::BalancedNetwork(small_network()));
-    serde_json::from_str(&write_module(&module).unwrap()).unwrap()
+    serde_json::from_str(&serialize_module_text(&module).unwrap()).unwrap()
 }
 
 fn expect_refused(raw: &serde_json::Value) {
-    let error = read_module(&raw.to_string()).unwrap_err();
+    let error = deserialize_module_text(&raw.to_string()).unwrap_err();
     assert_eq!(
         error.info().map(|info| info.code),
         Some("READ.MODULE.INVALID"),
@@ -249,13 +212,13 @@ fn expect_refused(raw: &serde_json::Value) {
     );
 }
 
-/// DESER-007: every bounded sequence, map, and string on the record wire is
+/// DESER-007: every bounded sequence, map, and string in a stored record is
 /// refused one element or byte past its limit and accepted exactly at it.
 #[test]
 // One deliberate sweep over the whole limit table; splitting it would
 // scatter the boundary pairs.
 #[allow(clippy::too_many_lines)]
-fn record_wire_bounds_refuse_past_and_accept_at_each_limit() {
+fn record_document_bounds_refuse_past_and_accept_at_each_limit() {
     let span = |source: &str| serde_json::json!({"source": source, "byte_start": 0, "byte_end": 1});
     let source = |id: &str| serde_json::json!({"id": id, "name": "case.m", "byte_length": 64});
     let diagnostic = |id: String| {
@@ -292,7 +255,7 @@ fn record_wire_bounds_refuse_past_and_accept_at_each_limit() {
     ok["code"] = serde_json::json!(long_code(255));
     raw["diagnostics"] = serde_json::json!([ok]);
     assert_eq!(long_code(255).len(), 255);
-    read_module(&raw.to_string()).unwrap();
+    deserialize_module_text(&raw.to_string()).unwrap();
     let mut raw = base_module_json();
     let mut over = diagnostic("d1".into());
     over["code"] = serde_json::json!(long_code(256));
@@ -304,8 +267,8 @@ fn record_wire_bounds_refuse_past_and_accept_at_each_limit() {
     let mut noisy = diagnostic("d1".into());
     noisy["message"] = serde_json::json!("m".repeat(65_537));
     raw["diagnostics"] = serde_json::json!([noisy]);
-    let module = read_module(&raw.to_string()).unwrap();
-    assert!(module.diagnostics()[0].message().len() <= 16_384);
+    let module = deserialize_module_text(&raw.to_string()).unwrap();
+    assert!(module.diagnostics[0].message().len() <= 16_384);
 
     // Diagnostic target bytes: one past the bound is refused while decoding.
     let mut raw = base_module_json();
@@ -320,7 +283,7 @@ fn record_wire_bounds_refuse_past_and_accept_at_each_limit() {
     let mut spanned = diagnostic("d1".into());
     spanned["spans"] = serde_json::Value::Array((0..256).map(|_| span("s1")).collect());
     raw["diagnostics"] = serde_json::json!([spanned.clone()]);
-    read_module(&raw.to_string()).unwrap();
+    deserialize_module_text(&raw.to_string()).unwrap();
     spanned["spans"] = serde_json::Value::Array((0..257).map(|_| span("s1")).collect());
     raw["diagnostics"] = serde_json::json!([spanned]);
     expect_refused(&raw);
@@ -338,7 +301,7 @@ fn record_wire_bounds_refuse_past_and_accept_at_each_limit() {
     );
     related_ok.push(lead.clone());
     raw["diagnostics"] = serde_json::Value::Array(related_ok);
-    read_module(&raw.to_string()).unwrap();
+    deserialize_module_text(&raw.to_string()).unwrap();
     lead["related"] = serde_json::Value::Array(
         (0..257)
             .map(|index| serde_json::json!(format!("r{index}")))
@@ -359,7 +322,7 @@ fn record_wire_bounds_refuse_past_and_accept_at_each_limit() {
     };
     detailed["details"] = details_at(256);
     raw["diagnostics"] = serde_json::json!([detailed.clone()]);
-    read_module(&raw.to_string()).unwrap();
+    deserialize_module_text(&raw.to_string()).unwrap();
     detailed["details"] = details_at(257);
     raw["diagnostics"] = serde_json::json!([detailed]);
     expect_refused(&raw);
@@ -375,7 +338,7 @@ fn record_wire_bounds_refuse_past_and_accept_at_each_limit() {
         }])
     };
     raw["source_map"] = map_entry(256);
-    read_module(&raw.to_string()).unwrap();
+    deserialize_module_text(&raw.to_string()).unwrap();
     raw["source_map"] = map_entry(257);
     expect_refused(&raw);
 
@@ -386,7 +349,7 @@ fn record_wire_bounds_refuse_past_and_accept_at_each_limit() {
         entry[field] =
             serde_json::Value::Array((0..256).map(|_| serde_json::json!("noted")).collect());
         raw["history"] = serde_json::json!([entry.clone()]);
-        read_module(&raw.to_string()).unwrap();
+        deserialize_module_text(&raw.to_string()).unwrap();
         entry[field] =
             serde_json::Value::Array((0..257).map(|_| serde_json::json!("noted")).collect());
         raw["history"] = serde_json::json!([entry]);
@@ -403,7 +366,7 @@ fn record_wire_bounds_refuse_past_and_accept_at_each_limit() {
     };
     entry["parameters"] = parameters_at(256);
     raw["history"] = serde_json::json!([entry.clone()]);
-    read_module(&raw.to_string()).unwrap();
+    deserialize_module_text(&raw.to_string()).unwrap();
     entry["parameters"] = parameters_at(257);
     raw["history"] = serde_json::json!([entry]);
     expect_refused(&raw);
@@ -429,7 +392,7 @@ fn module_record_counts_are_bounded() {
         )
     };
     raw["history"] = history_at(65_536);
-    read_module(&raw.to_string()).unwrap();
+    deserialize_module_text(&raw.to_string()).unwrap();
     raw["history"] = history_at(65_537);
     expect_refused(&raw);
 
@@ -444,7 +407,7 @@ fn module_record_counts_are_bounded() {
         )
     };
     raw["extensions"] = extensions_at(4_096);
-    read_module(&raw.to_string()).unwrap();
+    deserialize_module_text(&raw.to_string()).unwrap();
     raw["extensions"] = extensions_at(2_000_000);
     expect_refused(&raw);
 
@@ -485,64 +448,9 @@ fn module_record_counts_are_bounded() {
     expect_refused(&raw);
 }
 
-fn legacy_package_json() -> serde_json::Value {
-    // The released 0.9 stored layout, spelled at the JSON level: the frozen
-    // decoder is crate private, so the wire shape is the test's fixture.
-    let network = serde_json::to_value(small_network()).unwrap();
-    serde_json::json!({
-        "powerio_version": "0.9.0",
-        "producer": {"tool": "powerio", "version": "0.9.0"},
-        "model_kind": "balanced",
-        "model": {"kind": "balanced", "balanced_network": network},
-        "origin": {"kind": "in_memory"},
-        "validation": {"status": "ok", "counts": {}}
-    })
-}
-
-#[test]
-fn legacy_record_lists_are_held_to_the_module_maxima() {
-    // A released 0.9 package one element past a module maximum is refused by
-    // the same bound the version 1 wire applies, before the list is retained.
-    let mut raw = legacy_package_json();
-    raw["diagnostics"] = serde_json::Value::Array(
-        (0..262_145)
-            .map(|index| {
-                serde_json::json!({
-                    "code": "READ.CASE.NOTE",
-                    "severity": "info",
-                    "stage": "parse",
-                    "message": format!("finding {index}")
-                })
-            })
-            .collect(),
-    );
-    let error = read_module(&raw.to_string()).unwrap_err();
-    let code = error
-        .diagnostics()
-        .first()
-        .map(|d| d.code().to_owned())
-        .unwrap_or_default();
-    // The legacy decode wraps the bound refusal in its own reader code; the
-    // message names the list that hit its maximum.
-    assert!(
-        code.contains("TOO_LARGE") || code.contains("MALFORMED") || code.contains("INVALID"),
-        "refusal code: {code}"
-    );
-    assert!(error.to_string().contains("diagnostics"), "{error}");
-
-    // An accepted upgrade satisfies the write/read law the fuzz target
-    // asserts: what read_module accepts, write_module emits and read_module
-    // accepts again.
-    let module = read_module(&legacy_package_json().to_string()).unwrap();
-    let written = write_module(&module).unwrap();
-    read_module(&written).expect("written module reads back");
-}
-
 #[test]
 fn a_nested_network_that_fails_validation_is_refused_per_kind() {
-    // The gate is exhaustive over the value kinds: a rogue branch inside an
-    // instance document, a solution document, and a released 0.9 balanced
-    // document all refuse at read.
+    // A rogue branch inside a calculation instance is refused at read.
     let rogue_network_json = |mut net: powerio_tx::BalancedNetwork| {
         let mut rogue = net.branches()[0].clone();
         rogue.to = powerio_tx::BusId(9_999);
@@ -556,35 +464,33 @@ fn a_nested_network_that_fails_validation_is_refused_per_kind() {
         "/../powerio-prob/tests/data/goc3_small.json"
     );
     let text = std::fs::read_to_string(path).unwrap();
-    let module = powerio_prob::parse_goc3_instance(
-        powerio_core::Source::from_bytes("goc3_small.json", text.into_bytes()).unwrap(),
+    let module = powerio::parse_with_options(
+        powerio_core::Source::from_memory("goc3_small.json", text.into_bytes()).unwrap(),
+        &powerio::ParseOptions::default()
+            .format("goc3-json")
+            .unwrap(),
     )
     .unwrap();
-    let instance = module.value().clone();
+    let PioValue::AcScucInstance(instance) = module.value() else {
+        panic!("GO Challenge 3 problem did not produce powerio.AcScucInstance");
+    };
     let broken_instance = powerio_prob::AcScucInstance::new(
         rogue_network_json(instance.network().clone()),
         instance.inputs().clone(),
     );
     if let Ok(broken) = broken_instance {
-        let doc = write_module(&powerio_core::PioModule::new(
+        let doc = serialize_module_text(&powerio_core::PioModule::new(
             powerio::PioValue::AcScucInstance(broken),
         ))
         .unwrap();
-        let error = read_module(&doc).unwrap_err();
+        let error = deserialize_module_text(&doc).unwrap_err();
         assert!(error.to_string().contains("fails validation"), "{error}");
     }
-
-    // A released 0.9 balanced document with the same rogue branch.
-    let mut raw = legacy_package_json();
-    let network = serde_json::to_value(rogue_network_json(small_network())).unwrap();
-    raw["model"] = serde_json::json!({"kind": "balanced", "balanced_network": network});
-    let error = read_module(&raw.to_string()).unwrap_err();
-    assert!(error.to_string().contains("fails validation"), "{error}");
 }
 
 #[test]
 fn a_decoded_network_that_fails_validation_is_refused() {
-    // A branch naming an undeclared bus passes the wire decode but fails the
+    // A branch naming an undeclared bus passes document decoding but fails the
     // model's own validation; the stored read refuses it instead of yielding
     // the value.
     let mut net = small_network();
@@ -592,14 +498,14 @@ fn a_decoded_network_that_fails_validation_is_refused() {
     rogue.to = powerio_tx::BusId(9_999);
     net.branches_mut().push(rogue);
     let mut raw: serde_json::Value = serde_json::from_str(
-        &write_module(&powerio_core::PioModule::new(
+        &serialize_module_text(&powerio_core::PioModule::new(
             powerio::PioValue::BalancedNetwork(net),
         ))
         .unwrap(),
     )
     .unwrap();
     let _ = &mut raw;
-    let error = read_module(&raw.to_string()).unwrap_err();
+    let error = deserialize_module_text(&raw.to_string()).unwrap_err();
     assert!(
         error.to_string().contains("fails validation"),
         "unexpected refusal: {error}"

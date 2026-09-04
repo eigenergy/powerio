@@ -1,28 +1,28 @@
-//! These cases pin `b = 1/x`, so they name `DcConvention::ReactanceOnly`.
+//! These cases pin `b = 1/x`, so they name `BranchSusceptanceFormula::ReactanceOnly`.
 
 use approx::assert_relative_eq;
 
 use crate::indexed::IndexedNetwork;
 use crate::matrix::{
-    BuildOptions, DcConvention, MatrixStats, Scheme, build_bdoubleprime, build_bprime,
-    build_incidence, build_lacpf, build_weighted_laplacian, build_ybus, sddm_check,
-    triplet::CooBuilder,
+    BranchSusceptanceFormula, BuildOptions, MatrixStats, Scheme, build_incidence,
+    calc_admittance_matrix, calc_bdoubleprime_matrix, calc_bprime_matrix, calc_lacpf_matrix,
+    calc_weighted_laplacian, check_sddm, triplet::CooBuilder,
 };
 use crate::network::{BalancedNetwork, Branch, BranchCharging, Bus, BusId, BusType, Shunt};
-use crate::pipeline::{MatrixKind, matrix_stats_for_kind};
+use crate::pipeline::{MatrixKind, calc_matrix_stats_for_kind};
 
 #[allow(dead_code)]
 fn parse_named(text: &str, from: &str) -> BalancedNetwork {
-    let source = powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())
+    let source = powerio_core::Source::from_memory("<memory>", text.as_bytes().to_vec())
         .unwrap()
         .with_format(powerio_core::FormatId::new(from).unwrap());
-    crate::parse(source).unwrap().into_value()
+    powerio_tx::parse(source).unwrap().into_value()
 }
 
 fn parse_psse(text: &str) -> Result<BalancedNetwork, powerio_core::Error> {
-    let source = powerio_core::Source::from_bytes("case.raw", text.as_bytes().to_vec())?
+    let source = powerio_core::Source::from_memory("case.raw", text.as_bytes().to_vec())?
         .with_format(powerio_core::FormatId::new("psse")?);
-    crate::parse(source).map(powerio_core::PioModule::into_value)
+    powerio_tx::parse(source).map(powerio_core::PioModule::into_value)
 }
 
 fn bus(id: usize, kind: BusType) -> Bus {
@@ -95,12 +95,12 @@ Q
 
     let view = IndexedNetwork::new(&net);
     assert_eq!(view.n(), 4, "three buses plus the synthetic star point");
-    assert_eq!(view.n_connected_components(), 1);
+    assert_eq!(view.calc_island_count(), 1);
     // Before the star-lowering, buses 2 and 3 were ungrounded islands; now the
     // single component is grounded by the reference bus.
     view.check_reference_coverage().unwrap();
 
-    let b = build_bprime(&view, &BuildOptions::default()).unwrap();
+    let b = calc_bprime_matrix(&view, &BuildOptions::default()).unwrap();
     assert_eq!(b.rows(), 4);
     assert_eq!(b.cols(), 4);
 
@@ -114,7 +114,7 @@ Q
 fn bprime_three_bus_has_correct_structure() {
     let net = three_bus();
     let view = IndexedNetwork::new(&net);
-    let b = build_bprime(&view, &BuildOptions::default()).unwrap();
+    let b = calc_bprime_matrix(&view, &BuildOptions::default()).unwrap();
     assert_eq!(b.rows(), 3);
     assert_eq!(b.cols(), 3);
 
@@ -137,7 +137,7 @@ fn bprime_three_bus_has_correct_structure() {
 fn bprime_is_symmetric_and_laplacian() {
     let net = three_bus();
     let view = IndexedNetwork::new(&net);
-    let b = build_bprime(&view, &BuildOptions::default()).unwrap();
+    let b = calc_bprime_matrix(&view, &BuildOptions::default()).unwrap();
     let stats = MatrixStats::from_csr(&b);
     // M-matrix sign pattern, exactly singular Laplacian (diag = sum).
     assert!(stats.m_matrix_sign);
@@ -157,7 +157,7 @@ fn bprime_cancels_tap_magnitude_and_keeps_phase_shift() {
         vec![shifted],
     );
     let view = IndexedNetwork::new(&net);
-    let b = build_bprime(
+    let b = calc_bprime_matrix(
         &view,
         &BuildOptions {
             scheme: Scheme::Xb,
@@ -175,7 +175,7 @@ fn bprime_cancels_tap_magnitude_and_keeps_phase_shift() {
     assert_relative_eq!(b[[0, 1]], -2.5, max_relative = 1e-12);
     assert_relative_eq!(b[[1, 0]], -2.5, max_relative = 1e-12);
 
-    let ybus = build_ybus(&view, &BuildOptions::default())
+    let ybus = calc_admittance_matrix(&view, &BuildOptions::default())
         .unwrap()
         .b
         .to_dense();
@@ -185,9 +185,13 @@ fn bprime_cancels_tap_magnitude_and_keeps_phase_shift() {
         "Ybus keeps the transformer tap magnitude"
     );
 
-    let inc =
-        build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
-    let dc_l = build_weighted_laplacian(&inc.a, &inc.b).to_dense();
+    let inc = build_incidence(
+        &view,
+        BranchSusceptanceFormula::ReactanceOnly,
+        &BuildOptions::default(),
+    )
+    .unwrap();
+    let dc_l = calc_weighted_laplacian(&inc.a, &inc.b).to_dense();
     assert_relative_eq!(dc_l[[0, 1]], -5.0, max_relative = 1e-12);
     assert!(
         (b[[0, 1]] - dc_l[[0, 1]]).abs() > 1e-6,
@@ -206,11 +210,11 @@ fn bprime_with_phase_shift_and_resistance_is_not_sddm() {
         vec![shifted],
     );
     let view = IndexedNetwork::new(&net);
-    let b = build_bprime(&view, &BuildOptions::default()).unwrap();
+    let b = calc_bprime_matrix(&view, &BuildOptions::default()).unwrap();
     let stats = MatrixStats::from_csr(&b);
     assert!(stats.m_matrix_sign);
     assert!(stats.min_dd_margin >= -1e-12);
-    assert!(!sddm_check(&b), "asymmetric Bp must not be marked SDDM");
+    assert!(!check_sddm(&b), "asymmetric Bp must not be marked SDDM");
 }
 
 #[test]
@@ -228,10 +232,10 @@ fn bprime_ignores_bus_shunts_and_line_charging() {
 
     let base_view = IndexedNetwork::new(&base);
     let decorated_view = IndexedNetwork::new(&decorated);
-    let base_b = build_bprime(&base_view, &BuildOptions::default())
+    let base_b = calc_bprime_matrix(&base_view, &BuildOptions::default())
         .unwrap()
         .to_dense();
-    let decorated_b = build_bprime(&decorated_view, &BuildOptions::default())
+    let decorated_b = calc_bprime_matrix(&decorated_view, &BuildOptions::default())
         .unwrap()
         .to_dense();
 
@@ -264,10 +268,10 @@ fn bprime_folds_phase_shifted_self_loop_like_make_ybus() {
 
     let base_view = IndexedNetwork::new(&base);
     let loop_view = IndexedNetwork::new(&with_loop);
-    let base_bp = build_bprime(&base_view, &BuildOptions::default())
+    let base_bp = calc_bprime_matrix(&base_view, &BuildOptions::default())
         .unwrap()
         .to_dense();
-    let loop_bp = build_bprime(&loop_view, &BuildOptions::default())
+    let loop_bp = calc_bprime_matrix(&loop_view, &BuildOptions::default())
         .unwrap()
         .to_dense();
     assert_relative_eq!(loop_bp[[0, 0]] - base_bp[[0, 0]], 5.0, epsilon = 1e-12);
@@ -275,10 +279,10 @@ fn bprime_folds_phase_shifted_self_loop_like_make_ybus() {
     assert_relative_eq!(loop_bp[[1, 0]], base_bp[[1, 0]], epsilon = 1e-12);
     assert_relative_eq!(loop_bp[[1, 1]], base_bp[[1, 1]], epsilon = 1e-12);
 
-    let base_bpp = build_bdoubleprime(&base_view, &BuildOptions::default())
+    let base_bpp = calc_bdoubleprime_matrix(&base_view, &BuildOptions::default())
         .unwrap()
         .to_dense();
-    let loop_bpp = build_bdoubleprime(&loop_view, &BuildOptions::default())
+    let loop_bpp = calc_bdoubleprime_matrix(&loop_view, &BuildOptions::default())
         .unwrap()
         .to_dense();
     assert!(
@@ -300,10 +304,10 @@ fn bdoubleprime_clears_phase_shifts() {
 
     let shifted_view = IndexedNetwork::new(&shifted);
     let unshifted_view = IndexedNetwork::new(&unshifted);
-    let shifted_bpp = build_bdoubleprime(&shifted_view, &BuildOptions::default())
+    let shifted_bpp = calc_bdoubleprime_matrix(&shifted_view, &BuildOptions::default())
         .unwrap()
         .to_dense();
-    let unshifted_bpp = build_bdoubleprime(&unshifted_view, &BuildOptions::default())
+    let unshifted_bpp = calc_bdoubleprime_matrix(&unshifted_view, &BuildOptions::default())
         .unwrap()
         .to_dense();
 
@@ -313,7 +317,7 @@ fn bdoubleprime_clears_phase_shifts() {
         }
     }
 
-    let shifted_bp = build_bprime(
+    let shifted_bp = calc_bprime_matrix(
         &shifted_view,
         &BuildOptions {
             scheme: Scheme::Xb,
@@ -322,7 +326,7 @@ fn bdoubleprime_clears_phase_shifts() {
     )
     .unwrap()
     .to_dense();
-    let unshifted_bp = build_bprime(
+    let unshifted_bp = calc_bprime_matrix(
         &unshifted_view,
         &BuildOptions {
             scheme: Scheme::Xb,
@@ -353,7 +357,7 @@ fn bdoubleprime_keeps_shunts_charging_and_taps() {
         Shunt::new(BusId(2), 0.0, -20.0),
     ];
     let view = IndexedNetwork::new(&net);
-    let bpp = build_bdoubleprime(&view, &BuildOptions::default())
+    let bpp = calc_bdoubleprime_matrix(&view, &BuildOptions::default())
         .unwrap()
         .to_dense();
 
@@ -370,7 +374,7 @@ fn bprime_ignores_out_of_service() {
     let mut net = three_bus();
     net.branches_mut()[0].in_service = false;
     let view = IndexedNetwork::new(&net);
-    let b = build_bprime(&view, &BuildOptions::default()).unwrap();
+    let b = calc_bprime_matrix(&view, &BuildOptions::default()).unwrap();
     let dense = b.to_dense();
     // Bus 1 only connects via branch 1-3 (x=0.2 → 1/x=5)
     assert_relative_eq!(dense[[0, 0]], 5.0, max_relative = 1e-12);
@@ -384,7 +388,7 @@ fn xb_and_bx_disagree_when_resistance_present() {
         b.r = 0.05;
     }
     let view = IndexedNetwork::new(&net);
-    let xb = build_bprime(
+    let xb = calc_bprime_matrix(
         &view,
         &BuildOptions {
             scheme: Scheme::Xb,
@@ -392,7 +396,7 @@ fn xb_and_bx_disagree_when_resistance_present() {
         },
     )
     .unwrap();
-    let bx = build_bprime(
+    let bx = calc_bprime_matrix(
         &view,
         &BuildOptions {
             scheme: Scheme::Bx,
@@ -418,7 +422,7 @@ fn bdoubleprime_with_shunts_is_strictly_dominant() {
         Shunt::new(BusId(3), 0.0, -10.0),
     ];
     let view = IndexedNetwork::new(&net);
-    let bpp = build_bdoubleprime(&view, &BuildOptions::default()).unwrap();
+    let bpp = calc_bdoubleprime_matrix(&view, &BuildOptions::default()).unwrap();
     let stats = MatrixStats::from_csr(&bpp);
     assert!(stats.min_dd_margin > 0.0, "expected strict dominance");
 }
@@ -428,7 +432,7 @@ fn ybus_reciprocity_and_symmetry() {
     // Without taps and shifts, Y_ij == Y_ji.
     let net = three_bus();
     let view = IndexedNetwork::new(&net);
-    let parts = build_ybus(&view, &BuildOptions::default()).unwrap();
+    let parts = calc_admittance_matrix(&view, &BuildOptions::default()).unwrap();
     let g = parts.g.to_dense();
     let b = parts.b.to_dense();
     for i in 0..3 {
@@ -450,7 +454,7 @@ fn ybus_uses_asymmetric_terminal_admittance() {
         vec![branch],
     );
     let view = IndexedNetwork::new(&net);
-    let parts = build_ybus(&view, &BuildOptions::default()).unwrap();
+    let parts = calc_admittance_matrix(&view, &BuildOptions::default()).unwrap();
     let g = parts.g.to_dense();
     let b = parts.b.to_dense();
 
@@ -468,7 +472,7 @@ fn ybus_uses_asymmetric_terminal_admittance() {
 fn lacpf_block_is_2n_by_2n() {
     let net = three_bus();
     let view = IndexedNetwork::new(&net);
-    let j = build_lacpf(&view, &BuildOptions::default()).unwrap();
+    let j = calc_lacpf_matrix(&view, &BuildOptions::default()).unwrap();
     assert_eq!(j.rows(), 6);
     assert_eq!(j.cols(), 6);
 }
@@ -476,15 +480,15 @@ fn lacpf_block_is_2n_by_2n() {
 #[test]
 fn lacpf_blocks_equal_g_and_minus_b() {
     // LACPF is the 2n×2n block `[[G, -B], [-B, -G]]` from Y_bus = G + jB. Tie the
-    // four n×n quadrants to build_ybus entrywise: a sign flip or a swapped block
+    // four n×n quadrants to calc_admittance_matrix entrywise: a sign flip or a swapped block
     // (the one failure the 2n×2n shape check above cannot see) trips here.
     let net = three_bus();
     let view = IndexedNetwork::new(&net);
     let opts = BuildOptions::default();
-    let ybus = build_ybus(&view, &opts).unwrap();
+    let ybus = calc_admittance_matrix(&view, &opts).unwrap();
     let g = ybus.g.to_dense();
     let b = ybus.b.to_dense();
-    let j = build_lacpf(&view, &opts).unwrap().to_dense();
+    let j = calc_lacpf_matrix(&view, &opts).unwrap().to_dense();
     let n = 3;
     for r in 0..n {
         for c in 0..n {
@@ -510,7 +514,7 @@ fn ybus_tap_scales_from_diagonal_only() {
         vec![branch],
     );
     let view = IndexedNetwork::new(&net);
-    let b = build_ybus(&view, &BuildOptions::default())
+    let b = calc_admittance_matrix(&view, &BuildOptions::default())
         .unwrap()
         .b
         .to_dense();
@@ -528,10 +532,10 @@ fn bprime_rejects_nan_reactance() {
     let mut net = three_bus();
     net.branches_mut()[0].x = f64::NAN;
     let view = IndexedNetwork::new(&net);
-    let err = build_bprime(&view, &BuildOptions::default()).unwrap_err();
+    let err = calc_bprime_matrix(&view, &BuildOptions::default()).unwrap_err();
     assert!(matches!(
         err,
-        crate::Error::Core(powerio_tx::Error::NonFiniteSusceptance { .. })
+        crate::Error::Transmission(powerio_tx::Error::NonFiniteSusceptance { .. })
     ));
 }
 
@@ -540,17 +544,17 @@ fn ybus_rejects_nan_reactance() {
     let mut net = three_bus();
     net.branches_mut()[0].x = f64::NAN;
     let view = IndexedNetwork::new(&net);
-    let err = build_ybus(&view, &BuildOptions::default()).unwrap_err();
+    let err = calc_admittance_matrix(&view, &BuildOptions::default()).unwrap_err();
     assert!(matches!(
         err,
-        crate::Error::Core(powerio_tx::Error::NonFiniteSusceptance { .. })
+        crate::Error::Transmission(powerio_tx::Error::NonFiniteSusceptance { .. })
     ));
 }
 
 #[test]
-fn incidence_rejects_a_non_finite_reactance_under_every_convention() {
+fn incidence_rejects_a_non_finite_reactance_under_every_formula() {
     // Y_bus rejects an infinite reactance on the same handle, because
-    // `hypot(r, inf)` is infinite. The DC conventions divide instead, and
+    // `hypot(r, inf)` is infinite. The branch susceptance formulas divide instead, and
     // `1/±inf` is `0.0`: without a guard the branch joins the Laplacian as a
     // zero-weight edge, disconnecting the network with nothing to report.
     for x in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
@@ -559,23 +563,23 @@ fn incidence_rejects_a_non_finite_reactance_under_every_convention() {
         let view = IndexedNetwork::new(&net);
         assert!(
             matches!(
-                build_ybus(&view, &BuildOptions::default()),
-                Err(crate::Error::Core(
+                calc_admittance_matrix(&view, &BuildOptions::default()),
+                Err(crate::Error::Transmission(
                     powerio_tx::Error::NonFiniteSusceptance { .. }
                 ))
             ),
             "Ybus accepted x = {x}"
         );
         for conv in [
-            DcConvention::ReactanceOnly,
-            DcConvention::TapAdjustedReactance,
-            DcConvention::SeriesSusceptance,
+            BranchSusceptanceFormula::ReactanceOnly,
+            BranchSusceptanceFormula::TapAdjustedReactance,
+            BranchSusceptanceFormula::SeriesSusceptance,
         ] {
             let got = build_incidence(&view, conv, &BuildOptions::default());
             assert!(
                 matches!(
                     got,
-                    Err(crate::Error::Core(
+                    Err(crate::Error::Transmission(
                         powerio_tx::Error::NonFiniteSusceptance { row: 0 }
                     ))
                 ),
@@ -589,7 +593,7 @@ fn incidence_rejects_a_non_finite_reactance_under_every_convention() {
 #[test]
 fn incidence_rejects_a_reactance_and_tap_whose_product_overflows() {
     // Both factors are finite and both clear their own bounds, but the
-    // Matpower rule divides by their product: `1e300 * 1e300` is infinite and
+    // `TapAdjustedReactance` divides by their product: `1e300 * 1e300` is infinite and
     // `1/inf` is `0.0`, the same silent zero-weight edge.
     let mut branch = br(1, 2, 0.0, 1e300, 0.0);
     branch.tap = 1e300;
@@ -602,13 +606,13 @@ fn incidence_rejects_a_reactance_and_tap_whose_product_overflows() {
     let view = IndexedNetwork::new(&net);
     let got = build_incidence(
         &view,
-        DcConvention::TapAdjustedReactance,
+        BranchSusceptanceFormula::TapAdjustedReactance,
         &BuildOptions::default(),
     );
     assert!(
         matches!(
             got,
-            Err(crate::Error::Core(
+            Err(crate::Error::Transmission(
                 powerio_tx::Error::NonFiniteSusceptance { row: 0 }
             ))
         ),
@@ -626,19 +630,18 @@ fn zero_impedance_policy_is_shared_across_matrix_builders() {
         ..Default::default()
     };
 
-    let bprime = build_bprime(&view, &opts).unwrap();
-    let bprime_stats = matrix_stats_for_kind(&bprime, &view, MatrixKind::BPrime, &opts);
+    let bprime = calc_bprime_matrix(&view, &opts).unwrap();
+    let bprime_stats = calc_matrix_stats_for_kind(&bprime, &view, MatrixKind::BPrime, &opts);
     assert_eq!(bprime_stats.skipped_zero_impedance, 1);
     assert_eq!(bprime_stats.skipped_zero_impedance_branches, vec![0]);
 
-    let ybus = build_ybus(&view, &opts).unwrap();
-    let ybus_stats = matrix_stats_for_kind(&ybus.b, &view, MatrixKind::YbusB, &opts);
+    let ybus = calc_admittance_matrix(&view, &opts).unwrap();
+    let ybus_stats = calc_matrix_stats_for_kind(&ybus.b, &view, MatrixKind::YbusB, &opts);
     assert_eq!(ybus_stats.skipped_zero_impedance, 1);
     assert_eq!(ybus_stats.skipped_zero_impedance_branches, vec![0]);
 
-    let inc = build_incidence(&view, DcConvention::ReactanceOnly, &opts).unwrap();
-    assert_eq!(inc.skipped_zero_impedance.count, 1);
-    assert_eq!(inc.skipped_zero_impedance.branch_indices, vec![0]);
+    let inc = build_incidence(&view, BranchSusceptanceFormula::ReactanceOnly, &opts).unwrap();
+    assert_eq!(inc.m(), 0);
 }
 
 #[test]
@@ -650,20 +653,20 @@ fn zero_impedance_policy_can_error_instead_of_skipping() {
         ..Default::default()
     };
 
-    let bprime = build_bprime(&view, &opts).unwrap_err();
+    let bprime = calc_bprime_matrix(&view, &opts).unwrap_err();
     assert!(matches!(
         bprime,
-        crate::Error::Core(powerio_tx::Error::ZeroImpedance { row: 0 })
+        crate::Error::Transmission(powerio_tx::Error::ZeroImpedance { row: 0 })
     ));
-    let ybus = build_ybus(&view, &opts).unwrap_err();
+    let ybus = calc_admittance_matrix(&view, &opts).unwrap_err();
     assert!(matches!(
         ybus,
-        crate::Error::Core(powerio_tx::Error::ZeroImpedance { row: 0 })
+        crate::Error::Transmission(powerio_tx::Error::ZeroImpedance { row: 0 })
     ));
-    let inc = build_incidence(&view, DcConvention::ReactanceOnly, &opts).unwrap_err();
+    let inc = build_incidence(&view, BranchSusceptanceFormula::ReactanceOnly, &opts).unwrap_err();
     assert!(matches!(
         inc,
-        crate::Error::Core(powerio_tx::Error::ZeroImpedance { row: 0 })
+        crate::Error::Transmission(powerio_tx::Error::ZeroImpedance { row: 0 })
     ));
 }
 
@@ -681,20 +684,27 @@ fn zero_impedance_errors_by_default_across_every_build_options_builder() {
         ..Default::default()
     };
 
-    assert!(build_ybus(&view, &default_opts).is_err());
-    assert!(build_ybus(&view, &lenient).is_ok());
+    assert!(calc_admittance_matrix(&view, &default_opts).is_err());
+    assert!(calc_admittance_matrix(&view, &lenient).is_ok());
 
-    assert!(build_bprime(&view, &default_opts).is_err());
-    assert!(build_bprime(&view, &lenient).is_ok());
+    assert!(calc_bprime_matrix(&view, &default_opts).is_err());
+    assert!(calc_bprime_matrix(&view, &lenient).is_ok());
 
-    assert!(build_bdoubleprime(&view, &default_opts).is_err());
-    assert!(build_bdoubleprime(&view, &lenient).is_ok());
+    assert!(calc_bdoubleprime_matrix(&view, &default_opts).is_err());
+    assert!(calc_bdoubleprime_matrix(&view, &lenient).is_ok());
 
-    assert!(build_lacpf(&view, &default_opts).is_err());
-    assert!(build_lacpf(&view, &lenient).is_ok());
+    assert!(calc_lacpf_matrix(&view, &default_opts).is_err());
+    assert!(calc_lacpf_matrix(&view, &lenient).is_ok());
 
-    assert!(build_incidence(&view, DcConvention::ReactanceOnly, &default_opts).is_err());
-    assert!(build_incidence(&view, DcConvention::ReactanceOnly, &lenient).is_ok());
+    assert!(
+        build_incidence(
+            &view,
+            BranchSusceptanceFormula::ReactanceOnly,
+            &default_opts
+        )
+        .is_err()
+    );
+    assert!(build_incidence(&view, BranchSusceptanceFormula::ReactanceOnly, &lenient).is_ok());
 }
 
 #[test]
@@ -731,7 +741,7 @@ fn a_radial_tie_gets_a_structurally_zero_lodf_column() {
         crate::matrix::SensitivitySolver::Dense,
         crate::matrix::SensitivitySolver::Sparse,
     ] {
-        let out = crate::matrix::build_ptdf_lodf_with_options(
+        let out = crate::matrix::calc_ptdf_lodf_with_options(
             &view,
             &crate::matrix::SensitivityOptions {
                 solver,
@@ -765,7 +775,7 @@ fn a_radial_tie_gets_a_structurally_zero_lodf_column() {
 fn a_reactance_below_the_divisible_bound_is_zero_impedance() {
     // #292. `x = 1e-300` gives a finite `b = 1e300`, so every finiteness check
     // passed it and the Laplacian came out rank deficient in floating point
-    // with `sddm_check` reporting nothing.
+    // with `check_sddm` reporting nothing.
     let net = BalancedNetwork::in_memory(
         "denormal-x",
         100.0,
@@ -778,27 +788,26 @@ fn a_reactance_below_the_divisible_bound_is_zero_impedance() {
         skip_zero_impedance: true,
         ..Default::default()
     };
-    let inc = build_incidence(&view, DcConvention::ReactanceOnly, &lenient).unwrap();
-    assert_eq!(inc.skipped_zero_impedance.count, 1);
-    assert_eq!(inc.skipped_zero_impedance.branch_indices, vec![0]);
+    let inc = build_incidence(&view, BranchSusceptanceFormula::ReactanceOnly, &lenient).unwrap();
+    assert_eq!(inc.m(), 0);
 
     let strict = BuildOptions {
         skip_zero_impedance: false,
         ..Default::default()
     };
-    let err = build_incidence(&view, DcConvention::ReactanceOnly, &strict).unwrap_err();
+    let err = build_incidence(&view, BranchSusceptanceFormula::ReactanceOnly, &strict).unwrap_err();
     assert!(
         matches!(
             err,
-            crate::Error::Core(powerio_tx::Error::ZeroImpedance { row: 0 })
+            crate::Error::Transmission(powerio_tx::Error::ZeroImpedance { row: 0 })
         ),
         "{err}"
     );
-    let err = build_ybus(&view, &strict).unwrap_err();
+    let err = calc_admittance_matrix(&view, &strict).unwrap_err();
     assert!(
         matches!(
             err,
-            crate::Error::Core(powerio_tx::Error::ZeroImpedance { row: 0 })
+            crate::Error::Transmission(powerio_tx::Error::ZeroImpedance { row: 0 })
         ),
         "{err}"
     );
@@ -817,12 +826,11 @@ fn a_reactance_the_builders_can_divide_by_is_stamped_by_both() {
     let view = IndexedNetwork::new(&net);
     let opts = BuildOptions::default();
 
-    let inc = build_incidence(&view, DcConvention::ReactanceOnly, &opts).unwrap();
-    assert_eq!(inc.skipped_zero_impedance.count, 0);
+    let inc = build_incidence(&view, BranchSusceptanceFormula::ReactanceOnly, &opts).unwrap();
     assert_relative_eq!(inc.b[0], 1e100, max_relative = 1e-12);
 
-    let ybus = build_ybus(&view, &opts).unwrap();
-    let ybus_stats = matrix_stats_for_kind(&ybus.b, &view, MatrixKind::YbusB, &opts);
+    let ybus = calc_admittance_matrix(&view, &opts).unwrap();
+    let ybus_stats = calc_matrix_stats_for_kind(&ybus.b, &view, MatrixKind::YbusB, &opts);
     assert_eq!(ybus_stats.skipped_zero_impedance, 0);
     assert_relative_eq!(*ybus.b.get(0, 1).unwrap(), 1e100, max_relative = 1e-12);
 }
@@ -830,7 +838,7 @@ fn a_reactance_the_builders_can_divide_by_is_stamped_by_both() {
 #[test]
 fn a_tap_ratio_the_builders_cannot_divide_by_is_refused() {
     // #292. A tap of 1e-200 underflowed `a_norm_sqr` to zero and scattered
-    // +/-Inf into Y_bus; `Matpower` divides `b` by the same tap.
+    // +/-Inf into Y_bus; `TapAdjustedReactance` divides `b` by the same tap.
     for tap in [1e-200, f64::NAN, f64::INFINITY] {
         let mut branch = br(1, 2, 0.01, 0.1, 0.0);
         branch.tap = tap;
@@ -841,24 +849,24 @@ fn a_tap_ratio_the_builders_cannot_divide_by_is_refused() {
             vec![branch],
         );
         let view = IndexedNetwork::new(&net);
-        let err = build_ybus(&view, &BuildOptions::default()).unwrap_err();
+        let err = calc_admittance_matrix(&view, &BuildOptions::default()).unwrap_err();
         assert!(
             matches!(
                 err,
-                crate::Error::Core(powerio_tx::Error::DegenerateTap { row: 0, .. })
+                crate::Error::Transmission(powerio_tx::Error::DegenerateTap { row: 0, .. })
             ),
             "Ybus, tap {tap}: {err}"
         );
         let err = build_incidence(
             &view,
-            DcConvention::TapAdjustedReactance,
+            BranchSusceptanceFormula::TapAdjustedReactance,
             &BuildOptions::default(),
         )
         .unwrap_err();
         assert!(
             matches!(
                 err,
-                crate::Error::Core(powerio_tx::Error::DegenerateTap { row: 0, .. })
+                crate::Error::Transmission(powerio_tx::Error::DegenerateTap { row: 0, .. })
             ),
             "incidence, tap {tap}: {err}"
         );
@@ -879,11 +887,11 @@ fn an_ordinary_tap_still_builds() {
             vec![branch],
         );
         let view = IndexedNetwork::new(&net);
-        build_ybus(&view, &BuildOptions::default())
+        calc_admittance_matrix(&view, &BuildOptions::default())
             .unwrap_or_else(|e| panic!("Ybus, tap {tap}: {e}"));
         build_incidence(
             &view,
-            DcConvention::TapAdjustedReactance,
+            BranchSusceptanceFormula::TapAdjustedReactance,
             &BuildOptions::default(),
         )
         .unwrap_or_else(|e| panic!("incidence, tap {tap}: {e}"));
@@ -904,15 +912,14 @@ fn self_loop_with_zero_reactance_drops_unconditionally() {
     let view = IndexedNetwork::new(&net);
 
     let opts = BuildOptions::default();
-    let inc = build_incidence(&view, DcConvention::ReactanceOnly, &opts).unwrap();
-    assert_eq!(inc.skipped_zero_impedance.count, 0);
-    assert!(inc.skipped_zero_impedance.branch_indices.is_empty());
+    let inc = build_incidence(&view, BranchSusceptanceFormula::ReactanceOnly, &opts).unwrap();
+    assert_eq!(inc.m(), 1);
 
     let strict = BuildOptions {
         skip_zero_impedance: false,
         ..Default::default()
     };
-    build_incidence(&view, DcConvention::ReactanceOnly, &strict)
+    build_incidence(&view, BranchSusceptanceFormula::ReactanceOnly, &strict)
         .expect("a self-loop must not trip ZeroImpedance even when skip_zero_impedance is false");
 }
 

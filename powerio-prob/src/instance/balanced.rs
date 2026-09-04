@@ -12,7 +12,7 @@
 //! A power flow instance contains partial boundary specifications, never a
 //! required complete operating point: the unknown voltages, injections, and
 //! flows are what the calculation solves. A complete
-//! [`OperatingPoint`] can be supplied as an optional solver initial state.
+//! [`OperatingPoint`] can be supplied as an optional solver initial point.
 //! Zero impedance branches are preserved; a projection that cannot represent
 //! them refuses at its own boundary and
 //! [`merge_zero_impedance_buses`](super::merge_zero_impedance_buses) is the
@@ -21,7 +21,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use powerio_core::Error;
-use powerio_tx::{BalancedNetwork, BusId, BusType, DcConvention};
+use powerio_tx::{BalancedNetwork, BranchSusceptanceFormula, BusId, BusType};
 use serde::{Deserialize, Serialize};
 
 use crate::OperatingPoint;
@@ -48,6 +48,7 @@ pub enum DcBusSpecification {
 /// Powers are MW and MVAr, voltage magnitudes per unit, angles degrees, as
 /// the network states them.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case", tag = "kind")]
 #[non_exhaustive]
 pub enum AcBusSpecification {
@@ -62,13 +63,13 @@ pub enum AcBusSpecification {
 }
 
 /// The DC power flow instance: the shared network plus per bus boundary
-/// specifications and the selected DC branch approximation.
+/// specifications and the selected branch susceptance formula.
 #[derive(Clone, Debug)]
 pub struct DcPfInstance {
     network: BalancedNetwork,
     specifications: Vec<DcBusSpecification>,
-    approximation: DcConvention,
-    initial_state: Option<OperatingPoint<BalancedNetwork>>,
+    branch_susceptance_formula: BranchSusceptanceFormula,
+    initial_point: Option<OperatingPoint<BalancedNetwork>>,
 }
 
 impl DcPfInstance {
@@ -79,7 +80,8 @@ impl DcPfInstance {
     ///
     /// # Errors
     /// A network with no reference bus.
-    pub fn from_network(network: BalancedNetwork) -> Result<Self, Error> {
+    pub fn from_network(mut network: BalancedNetwork) -> Result<Self, Error> {
+        network.assign_missing_component_ids();
         require_reference(&network)?;
         let totals = aggregate_bus_elements(&network);
         let specifications = network
@@ -97,24 +99,41 @@ impl DcPfInstance {
         Ok(Self {
             network,
             specifications,
-            approximation: DcConvention::default(),
-            initial_state: None,
+            branch_susceptance_formula: BranchSusceptanceFormula::default(),
+            initial_point: None,
         })
     }
 
-    /// Select the DC branch approximation, consuming the instance. The
+    /// Select the branch susceptance formula, consuming the instance. The
     /// network handle moves; no table is copied.
     #[must_use]
-    pub fn with_approximation(mut self, approximation: DcConvention) -> Self {
-        self.approximation = approximation;
+    pub fn with_branch_susceptance_formula(mut self, formula: BranchSusceptanceFormula) -> Self {
+        self.branch_susceptance_formula = formula;
         self
     }
 
-    /// Supply an optional solver initial state.
+    /// Supply an optional solver initial point.
     #[must_use]
-    pub fn with_initial_state(mut self, state: OperatingPoint<BalancedNetwork>) -> Self {
-        self.initial_state = Some(state);
+    pub fn with_initial_point(mut self, point: OperatingPoint<BalancedNetwork>) -> Self {
+        self.initial_point = Some(point);
         self
+    }
+
+    /// Replace the network and recalculate the fixed bus specifications while
+    /// preserving the branch susceptance formula and a compatible initial
+    /// point.
+    ///
+    /// # Errors
+    /// The replacement has no reference bus or changes an identity layout used
+    /// by the initial point.
+    pub fn with_network(mut self, mut network: BalancedNetwork) -> Result<Self, Error> {
+        network.assign_missing_component_ids();
+        let mut replacement = Self::from_network(network.clone())?
+            .with_branch_susceptance_formula(self.branch_susceptance_formula);
+        if let Some(initial) = self.initial_point.take() {
+            replacement.initial_point = Some(initial.rebind_network(network)?);
+        }
+        Ok(replacement)
     }
 
     /// The network this instance calculates on. Borrowed; never a copy.
@@ -129,16 +148,16 @@ impl DcPfInstance {
         &self.specifications
     }
 
-    /// The selected DC branch approximation.
+    /// The selected branch susceptance formula.
     #[must_use]
-    pub const fn approximation(&self) -> DcConvention {
-        self.approximation
+    pub const fn branch_susceptance_formula(&self) -> BranchSusceptanceFormula {
+        self.branch_susceptance_formula
     }
 
-    /// The optional solver initial state.
+    /// The optional solver initial point.
     #[must_use]
-    pub const fn initial_state(&self) -> Option<&OperatingPoint<BalancedNetwork>> {
-        self.initial_state.as_ref()
+    pub const fn initial_point(&self) -> Option<&OperatingPoint<BalancedNetwork>> {
+        self.initial_point.as_ref()
     }
 }
 
@@ -148,10 +167,49 @@ impl DcPfInstance {
 pub struct AcPfInstance {
     network: BalancedNetwork,
     specifications: Vec<AcBusSpecification>,
-    initial_state: Option<OperatingPoint<BalancedNetwork>>,
+    initial_point: Option<OperatingPoint<BalancedNetwork>>,
 }
 
 impl AcPfInstance {
+    /// Build an AC power flow instance from explicit bus specifications.
+    /// The specification vector follows bus table order and is retained
+    /// exactly; it is not inferred again from bus types, loads, or generator
+    /// schedules.
+    ///
+    /// # Errors
+    /// The specification count differs from the bus count, or no
+    /// specification declares a reference bus.
+    pub fn new(
+        mut network: BalancedNetwork,
+        specifications: Vec<AcBusSpecification>,
+    ) -> Result<Self, Error> {
+        network.assign_missing_component_ids();
+        if specifications.len() != network.buses().len() {
+            return Err(Error::new(
+                &codes::BUILD_INSTANCE_SHAPE_MISMATCH,
+                format!(
+                    "AC power flow specifications carry {} rows; the network has {} buses",
+                    specifications.len(),
+                    network.buses().len()
+                ),
+            ));
+        }
+        if !specifications
+            .iter()
+            .any(|specification| matches!(specification, AcBusSpecification::Reference { .. }))
+        {
+            return Err(Error::new(
+                &codes::BUILD_INSTANCE_NO_REFERENCE_BUS,
+                "the AC power flow specifications state no reference (slack) bus",
+            ));
+        }
+        Ok(Self {
+            network,
+            specifications,
+            initial_point: None,
+        })
+    }
+
     /// Build the instance from the network's stated data. A PQ bus states
     /// its net injections; a PV bus its net active injection and the
     /// regulating generator's voltage setpoint; a reference bus its setpoint
@@ -161,7 +219,8 @@ impl AcPfInstance {
     /// A network with no reference bus, or conflicting active voltage
     /// controllers: two in service generators at one bus stating different
     /// voltage setpoints are refused until an explicit edit resolves them.
-    pub fn from_network(network: BalancedNetwork) -> Result<Self, Error> {
+    pub fn from_network(mut network: BalancedNetwork) -> Result<Self, Error> {
+        network.assign_missing_component_ids();
         require_reference(&network)?;
         let totals = aggregate_bus_elements(&network);
         let specifications = network
@@ -187,18 +246,29 @@ impl AcPfInstance {
                 Ok(spec)
             })
             .collect::<Result<Vec<_>, Error>>()?;
-        Ok(Self {
-            network,
-            specifications,
-            initial_state: None,
-        })
+        Self::new(network, specifications)
     }
 
-    /// Supply an optional solver initial state.
+    /// Supply an optional solver initial point.
     #[must_use]
-    pub fn with_initial_state(mut self, state: OperatingPoint<BalancedNetwork>) -> Self {
-        self.initial_state = Some(state);
+    pub fn with_initial_point(mut self, point: OperatingPoint<BalancedNetwork>) -> Self {
+        self.initial_point = Some(point);
         self
+    }
+
+    /// Replace the network and recalculate the fixed bus specifications while
+    /// preserving a compatible initial point.
+    ///
+    /// # Errors
+    /// The replacement has no reference bus, has conflicting voltage
+    /// controllers, or changes an identity layout used by the initial point.
+    pub fn with_network(mut self, mut network: BalancedNetwork) -> Result<Self, Error> {
+        network.assign_missing_component_ids();
+        let mut replacement = Self::from_network(network.clone())?;
+        if let Some(initial) = self.initial_point.take() {
+            replacement.initial_point = Some(initial.rebind_network(network)?);
+        }
+        Ok(replacement)
     }
 
     /// The network this instance calculates on. Borrowed; never a copy.
@@ -213,15 +283,15 @@ impl AcPfInstance {
         &self.specifications
     }
 
-    /// The optional solver initial state.
+    /// The optional solver initial point.
     #[must_use]
-    pub const fn initial_state(&self) -> Option<&OperatingPoint<BalancedNetwork>> {
-        self.initial_state.as_ref()
+    pub const fn initial_point(&self) -> Option<&OperatingPoint<BalancedNetwork>> {
+        self.initial_point.as_ref()
     }
 
     /// The DC power flow instance this AC problem implies: reactive data and
-    /// voltage magnitudes are discarded, and the flat voltage assumption of
-    /// the DC approximation is recorded as a diagnostic.
+    /// voltage magnitudes are discarded, and the DC model's flat voltage
+    /// assumption is recorded as a diagnostic.
     #[must_use]
     pub fn to_dc_pf(&self) -> (DcPfInstance, Vec<powerio_core::Diagnostic>) {
         let instance = DcPfInstance {
@@ -239,13 +309,13 @@ impl AcPfInstance {
                     AcBusSpecification::Isolated => DcBusSpecification::Isolated,
                 })
                 .collect(),
-            approximation: DcConvention::default(),
-            initial_state: self.initial_state.clone(),
+            branch_susceptance_formula: BranchSusceptanceFormula::default(),
+            initial_point: self.initial_point.clone(),
         };
         let diagnostics = vec![
             transform_discarded("reactive power and voltage magnitude specifications"),
             transform_assumption(
-                "the DC approximation holds every voltage magnitude at one per unit",
+                "the DC power flow model holds every voltage magnitude at one per unit",
             ),
         ];
         (instance, diagnostics)
@@ -254,14 +324,14 @@ impl AcPfInstance {
 
 /// The DC optimal power flow instance: the shared network, the typed
 /// objective, the active constraint selections, the selected DC branch
-/// approximation, and the reference conditions the network states.
+/// susceptance formula, and the reference conditions the network states.
 #[derive(Clone, Debug)]
 pub struct DcOpfInstance {
     network: BalancedNetwork,
     objective: Objective,
     constraints: ActiveConstraints,
-    approximation: DcConvention,
-    initial_state: Option<OperatingPoint<BalancedNetwork>>,
+    branch_susceptance_formula: BranchSusceptanceFormula,
+    initial_point: Option<OperatingPoint<BalancedNetwork>>,
 }
 
 impl DcOpfInstance {
@@ -275,7 +345,8 @@ impl DcOpfInstance {
     /// # Errors
     /// A network with no reference bus or no in service generator attached to
     /// a non-isolated bus.
-    pub fn from_network(network: BalancedNetwork) -> Result<Self, Error> {
+    pub fn from_network(mut network: BalancedNetwork) -> Result<Self, Error> {
+        network.assign_missing_component_ids();
         require_reference(&network)?;
         require_dispatchable(&network)?;
         let objective = default_opf_objective(&network);
@@ -283,8 +354,8 @@ impl DcOpfInstance {
             network,
             objective,
             constraints: ActiveConstraints::default(),
-            approximation: DcConvention::default(),
-            initial_state: None,
+            branch_susceptance_formula: BranchSusceptanceFormula::default(),
+            initial_point: None,
         })
     }
 
@@ -310,34 +381,35 @@ impl DcOpfInstance {
         self
     }
 
-    /// Select the DC branch approximation, consuming the instance.
+    /// Select the branch susceptance formula, consuming the instance.
     #[must_use]
-    pub fn with_approximation(mut self, approximation: DcConvention) -> Self {
-        self.approximation = approximation;
+    pub fn with_branch_susceptance_formula(mut self, formula: BranchSusceptanceFormula) -> Self {
+        self.branch_susceptance_formula = formula;
         self
     }
 
-    /// Supply an optional solver initial state.
+    /// Supply an optional solver initial point.
     #[must_use]
-    pub fn with_initial_state(mut self, state: OperatingPoint<BalancedNetwork>) -> Self {
-        self.initial_state = Some(state);
+    pub fn with_initial_point(mut self, point: OperatingPoint<BalancedNetwork>) -> Self {
+        self.initial_point = Some(point);
         self
     }
 
     /// Replace the network while preserving this instance's objective,
-    /// constraint selections, approximation, and compatible initial state.
+    /// constraint selections, branch susceptance formula, and compatible initial point.
     /// This is the checked path for a parameter edit such as a branch rating
     /// change; callers do not have to reconstruct the problem and risk
     /// dropping its semantics.
     ///
     /// # Errors
     /// The replacement has no reference bus or dispatchable generator, or it
-    /// changes an identity layout used by the initial state.
-    pub fn with_network(mut self, network: BalancedNetwork) -> Result<Self, Error> {
+    /// changes an identity layout used by the initial point.
+    pub fn with_network(mut self, mut network: BalancedNetwork) -> Result<Self, Error> {
+        network.assign_missing_component_ids();
         require_reference(&network)?;
         require_dispatchable(&network)?;
-        if let Some(initial) = self.initial_state.take() {
-            self.initial_state = Some(initial.rebind_network(network.clone())?);
+        if let Some(initial) = self.initial_point.take() {
+            self.initial_point = Some(initial.rebind_network(network.clone())?);
         }
         self.network = network;
         Ok(self)
@@ -361,16 +433,16 @@ impl DcOpfInstance {
         &self.constraints
     }
 
-    /// The selected DC branch approximation.
+    /// The selected branch susceptance formula.
     #[must_use]
-    pub const fn approximation(&self) -> DcConvention {
-        self.approximation
+    pub const fn branch_susceptance_formula(&self) -> BranchSusceptanceFormula {
+        self.branch_susceptance_formula
     }
 
-    /// The optional solver initial state.
+    /// The optional solver initial point.
     #[must_use]
-    pub const fn initial_state(&self) -> Option<&OperatingPoint<BalancedNetwork>> {
-        self.initial_state.as_ref()
+    pub const fn initial_point(&self) -> Option<&OperatingPoint<BalancedNetwork>> {
+        self.initial_point.as_ref()
     }
 
     /// The DC power flow instance for this problem's network at its stated
@@ -381,7 +453,7 @@ impl DcOpfInstance {
     /// As [`DcPfInstance::from_network`].
     pub fn to_dc_pf(&self) -> Result<(DcPfInstance, Vec<powerio_core::Diagnostic>), Error> {
         let instance = DcPfInstance::from_network(self.network.clone())?
-            .with_approximation(self.approximation);
+            .with_branch_susceptance_formula(self.branch_susceptance_formula);
         Ok((
             instance,
             vec![transform_discarded(
@@ -399,7 +471,7 @@ pub struct AcOpfInstance {
     network: BalancedNetwork,
     objective: Objective,
     constraints: ActiveConstraints,
-    initial_state: Option<OperatingPoint<BalancedNetwork>>,
+    initial_point: Option<OperatingPoint<BalancedNetwork>>,
 }
 
 impl AcOpfInstance {
@@ -413,7 +485,8 @@ impl AcOpfInstance {
     /// # Errors
     /// A network with no reference bus or no in service generator attached to
     /// a non-isolated bus.
-    pub fn from_network(network: BalancedNetwork) -> Result<Self, Error> {
+    pub fn from_network(mut network: BalancedNetwork) -> Result<Self, Error> {
+        network.assign_missing_component_ids();
         require_reference(&network)?;
         require_dispatchable(&network)?;
         let objective = default_opf_objective(&network);
@@ -421,7 +494,7 @@ impl AcOpfInstance {
             network,
             objective,
             constraints: ActiveConstraints::default(),
-            initial_state: None,
+            initial_point: None,
         })
     }
 
@@ -447,24 +520,25 @@ impl AcOpfInstance {
         self
     }
 
-    /// Supply an optional solver initial state.
+    /// Supply an optional solver initial point.
     #[must_use]
-    pub fn with_initial_state(mut self, state: OperatingPoint<BalancedNetwork>) -> Self {
-        self.initial_state = Some(state);
+    pub fn with_initial_point(mut self, point: OperatingPoint<BalancedNetwork>) -> Self {
+        self.initial_point = Some(point);
         self
     }
 
     /// Replace the network while preserving this instance's objective,
-    /// constraint selections, and compatible initial state.
+    /// constraint selections, and compatible initial point.
     ///
     /// # Errors
     /// The replacement has no reference bus or dispatchable generator, or it
-    /// changes an identity layout used by the initial state.
-    pub fn with_network(mut self, network: BalancedNetwork) -> Result<Self, Error> {
+    /// changes an identity layout used by the initial point.
+    pub fn with_network(mut self, mut network: BalancedNetwork) -> Result<Self, Error> {
+        network.assign_missing_component_ids();
         require_reference(&network)?;
         require_dispatchable(&network)?;
-        if let Some(initial) = self.initial_state.take() {
-            self.initial_state = Some(initial.rebind_network(network.clone())?);
+        if let Some(initial) = self.initial_point.take() {
+            self.initial_point = Some(initial.rebind_network(network.clone())?);
         }
         self.network = network;
         Ok(self)
@@ -488,10 +562,10 @@ impl AcOpfInstance {
         &self.constraints
     }
 
-    /// The optional solver initial state.
+    /// The optional solver initial point.
     #[must_use]
-    pub const fn initial_state(&self) -> Option<&OperatingPoint<BalancedNetwork>> {
-        self.initial_state.as_ref()
+    pub const fn initial_point(&self) -> Option<&OperatingPoint<BalancedNetwork>> {
+        self.initial_point.as_ref()
     }
 
     /// The AC power flow instance for this problem's network at its stated
@@ -526,13 +600,13 @@ impl AcOpfInstance {
             network: self.network.clone(),
             objective: self.objective.clone(),
             constraints,
-            approximation: DcConvention::default(),
-            initial_state: self.initial_state.clone(),
+            branch_susceptance_formula: BranchSusceptanceFormula::default(),
+            initial_point: self.initial_point.clone(),
         };
         let diagnostics = vec![
             transform_discarded("the voltage bound constraint selection"),
             transform_assumption(
-                "the DC approximation holds every voltage magnitude at one per unit",
+                "the DC power flow model holds every voltage magnitude at one per unit",
             ),
         ];
         (instance, diagnostics)

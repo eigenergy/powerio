@@ -261,6 +261,32 @@ fn build_vocabulary() -> BTreeSet<String> {
     if let Ok(value) = serde_json::to_value(&net) {
         collect_words(&value, &mut out);
     }
+    // Format metadata property names are keys in a source neutral string map,
+    // so the generated schema cannot enumerate them. PowerIO writes these
+    // PSS/E generator keys when retaining fields for fresh RAW/RAWX emission.
+    out.extend(
+        [
+            "psse_baslod",
+            "psse_eqid",
+            "psse_f1",
+            "psse_f2",
+            "psse_f3",
+            "psse_f4",
+            "psse_gtap",
+            "psse_o1",
+            "psse_o2",
+            "psse_o3",
+            "psse_o4",
+            "psse_rmpct",
+            "psse_rt",
+            "psse_wmod",
+            "psse_wpf",
+            "psse_xt",
+            "psse_zr",
+            "psse_zx",
+        ]
+        .map(str::to_owned),
+    );
     out
 }
 

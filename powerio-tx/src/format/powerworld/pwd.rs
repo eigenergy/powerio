@@ -21,10 +21,10 @@
 //!   terminated exactly by the next `ff ff ff ff`. The order is display
 //!   order, not case order.
 //! - The DisplaySubstation drawing records: each repeats the file's header
-//!   stamp (the u32 at offset 22) at +18, stores the position as f64 x/y at
-//!   +22/+30 with an f32 echo of both at +2/+6, and links its substation
-//!   number behind a marker byte (0x03 or 0x07 by writer era) in the style
-//!   tail. The record's type tag (the u16 at +0) varies per save, so the
+//!   stamp (the u32 past the header's optional canvas title) at +18, stores
+//!   the position as f64 x/y at +22/+30 with an f32 echo of both at +2/+6,
+//!   and links its substation number behind a marker byte (0x03 or 0x07 by
+//!   writer era) in the style tail. The record's type tag (the u16 at +0) varies per save, so the
 //!   reader keys on this structure instead: stamp echo, dual encoded
 //!   coordinates, and a link to every identity row in table order. Decoy
 //!   groups exist (field label records with the same count and plausible
@@ -49,6 +49,19 @@ const FMT: &str = "PowerWorld .pwd";
 
 /// The identity table tag behind the `ff ff ff ff` sentinel.
 const IDENTITY_TAG: [u8; 6] = [0xff, 0xff, 0xff, 0xff, 0x3d, 0x0f];
+
+/// The word every probed save writes one u32 past the header stamp. It pins
+/// which of the two candidate positions holds the stamp when a canvas title
+/// shifts it (see [`parse_pwd_header`]).
+const HEADER_TRAILER: u32 = 10105;
+
+/// Where the stamp sits when the header carries no canvas title.
+const UNTITLED_STAMP_AT: usize = 22;
+
+/// Longest canvas title the header shift accepts. Every probed save is well
+/// under it; a length past it is a corrupt or unrecognized header, not a
+/// title, so the reader falls back to the untitled position.
+const MAX_TITLE_LEN: usize = 256;
 
 /// Cap on identity record steps across every anchor in one parse. A step is one
 /// record examined; each consumes at least 13 bytes, so the largest real table
@@ -147,7 +160,7 @@ fn parse_pwd_header(bytes: &[u8]) -> Result<(u16, u16, u32)> {
     if canvas_width == 0 || canvas_height == 0 {
         return Err(pwd_err("display header canvas dimensions are zero"));
     }
-    let stamp = u32_at(bytes, 22).unwrap_or(0);
+    let stamp = header_stamp(bytes).unwrap_or(0);
     if stamp == 0 {
         return Err(pwd_err(
             "display header stamp is zero; every validated save carries a nonzero stamp the \
@@ -155,6 +168,35 @@ fn parse_pwd_header(bytes: &[u8]) -> Result<(u16, u16, u32)> {
         ));
     }
     Ok((canvas_width, canvas_height, stamp))
+}
+
+/// The per file stamp every drawing object record repeats at +18.
+///
+/// A save with no canvas title puts it at offset 22. A save with one writes a
+/// u16 length at offset 10, a zero u16, the title text, and eight zero bytes,
+/// which shifts the stamp by the title length, so offset 22 holds title text
+/// and reads as a zero stamp. The shifted position is taken only when the
+/// whole title structure validates and the word past the stamp is the trailer
+/// every probed save writes, so a header that is not this shape reads the
+/// untitled position.
+fn header_stamp(bytes: &[u8]) -> Option<u32> {
+    let title_len = usize::from(u16_at(bytes, 10)?);
+    let titled_at = UNTITLED_STAMP_AT.checked_add(title_len)?;
+    let title_is_shaped = title_len <= MAX_TITLE_LEN
+        && u16_at(bytes, 12) == Some(0)
+        && bytes
+            .get(14..14 + title_len)
+            .is_some_and(|title| title.iter().all(|&c| (0x20..0x7f).contains(&c)))
+        && bytes
+            .get(14 + title_len..UNTITLED_STAMP_AT + title_len)
+            .is_some_and(|gap| gap.iter().all(|&c| c == 0));
+    if title_is_shaped
+        && u32_at(bytes, titled_at).is_some_and(|stamp| stamp != 0)
+        && u32_at(bytes, titled_at + 4) == Some(HEADER_TRAILER)
+    {
+        return u32_at(bytes, titled_at);
+    }
+    u32_at(bytes, UNTITLED_STAMP_AT)
 }
 
 fn parse_pwd_inner(bytes: &[u8]) -> Result<PwdDisplay> {

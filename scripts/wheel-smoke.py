@@ -7,6 +7,7 @@ document writes deterministically.
 """
 
 import json
+import io
 
 import powerio
 
@@ -22,31 +23,43 @@ mpc.branch = [1 2 0.01 0.1 0 250 250 250 0 0 1 -30 30; 2 3 0.02 0.2 0 250 250 25
 def main() -> None:
     versions = powerio.versions()
     assert powerio.__version__ == versions["powerio_version"], versions
-    assert versions["module_schema"] == {"name": "powerio.module", "version": 1}, versions
+    assert versions["powerio_ir"] == {
+        "name": "pio-ir",
+        "version": 2,
+    }, versions
 
-    module = powerio.parse(CASE.encode(), "matpower", value_type=powerio.BalancedNetwork)
-    assert module.kind == "balanced_network", module.kind
+    module = powerio.parse(
+        io.StringIO(CASE),
+        name="smoke.m",
+        format="matpower",
+    )
+    assert isinstance(module.value, powerio.BalancedNetwork), type(module.value)
     net = module.value
     assert net.n_buses == 3 and net.n_branches == 3, (net.n_buses, net.n_branches)
 
-    document = module.to_json()
+    document = powerio.serialize(module).text
+    assert document is not None
     decoded = json.loads(document)
-    assert decoded["schema"] == "powerio.module" and decoded["version"] == 1
+    assert decoded["schema"] == "pio-ir"
+    assert decoded["version"] == 2
     # Deterministic release: the stored document is byte stable.
-    assert powerio.PioModule.from_json(document).to_json() == document
+    assert (
+        powerio.serialize(powerio.deserialize(document.encode())).text == document
+    )
 
-    data = net.dc_data()
-    assert data["formula"] == "series_susceptance"
-    assert len(data["susceptance"]) == 3 and len(data["bus_ids"]) == 3
+    incidence = net.calc_incidence_matrix()
+    bus_susceptance = net.calc_bus_susceptance_matrix()
+    assert incidence.shape == (3, 3), incidence.shape
+    assert bus_susceptance.shape == (3, 3), bus_susceptance.shape
 
     # The matrix path, with the `all` extra installed.
-    bprime = net.bprime()
+    bprime = net.calc_bprime_matrix()
     assert bprime.shape == (3, 3), bprime.shape
 
     print(
         "wheel smoke OK:",
         versions["powerio_version"],
-        f"module_schema={versions['module_schema']['name']}/{versions['module_schema']['version']}",
+        f"powerio_ir={versions['powerio_ir']['name']}/{versions['powerio_ir']['version']}",
     )
 
 

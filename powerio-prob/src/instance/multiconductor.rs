@@ -67,7 +67,7 @@ pub struct McAcPfInstance {
     sources: Vec<PrescribedSourceVoltage>,
     isolated_terminals: Vec<(String, String)>,
     control_modes: Vec<ActiveControlMode>,
-    initial_state: Option<OperatingPoint<MulticonductorNetwork>>,
+    initial_point: Option<OperatingPoint<MulticonductorNetwork>>,
 }
 
 impl McAcPfInstance {
@@ -139,15 +139,26 @@ impl McAcPfInstance {
             sources,
             isolated_terminals: Vec::new(),
             control_modes,
-            initial_state: None,
+            initial_point: None,
         })
     }
 
-    /// Supply an optional solver initial state.
+    /// Supply an optional solver initial point.
     #[must_use]
-    pub fn with_initial_state(mut self, state: OperatingPoint<MulticonductorNetwork>) -> Self {
-        self.initial_state = Some(state);
+    pub fn with_initial_point(mut self, point: OperatingPoint<MulticonductorNetwork>) -> Self {
+        self.initial_point = Some(point);
         self
+    }
+
+    /// Replace the network and recalculate its prescribed powers, source
+    /// voltages, and active controls while preserving a compatible initial
+    /// point.
+    pub fn with_network(mut self, network: MulticonductorNetwork) -> Result<Self, Error> {
+        let mut replacement = Self::from_network(network.clone())?;
+        if let Some(initial) = self.initial_point.take() {
+            replacement.initial_point = Some(initial.rebind_network(network)?);
+        }
+        Ok(replacement)
     }
 
     /// The network this instance calculates on. Borrowed; never a copy.
@@ -180,10 +191,10 @@ impl McAcPfInstance {
         &self.control_modes
     }
 
-    /// The optional solver initial state.
+    /// The optional solver initial point.
     #[must_use]
-    pub const fn initial_state(&self) -> Option<&OperatingPoint<MulticonductorNetwork>> {
-        self.initial_state.as_ref()
+    pub const fn initial_point(&self) -> Option<&OperatingPoint<MulticonductorNetwork>> {
+        self.initial_point.as_ref()
     }
 }
 
@@ -195,7 +206,7 @@ pub struct McAcOpfInstance {
     network: MulticonductorNetwork,
     objective: Objective,
     constraints: MulticonductorActiveConstraints,
-    initial_state: Option<OperatingPoint<MulticonductorNetwork>>,
+    initial_point: Option<OperatingPoint<MulticonductorNetwork>>,
 }
 
 impl McAcOpfInstance {
@@ -213,9 +224,9 @@ impl McAcOpfInstance {
         }
         Ok(Self {
             network,
-            objective: Objective::network_per_phase_cost(),
+            objective: Objective::active_power_dispatch_cost(),
             constraints: MulticonductorActiveConstraints::default(),
-            initial_state: None,
+            initial_point: None,
         })
     }
 
@@ -241,11 +252,27 @@ impl McAcOpfInstance {
         self
     }
 
-    /// Supply an optional solver initial state.
+    /// Supply an optional solver initial point.
     #[must_use]
-    pub fn with_initial_state(mut self, state: OperatingPoint<MulticonductorNetwork>) -> Self {
-        self.initial_state = Some(state);
+    pub fn with_initial_point(mut self, point: OperatingPoint<MulticonductorNetwork>) -> Self {
+        self.initial_point = Some(point);
         self
+    }
+
+    /// Replace the network while preserving this instance's objective,
+    /// constraint selections, and a compatible initial point.
+    pub fn with_network(mut self, network: MulticonductorNetwork) -> Result<Self, Error> {
+        if network.sources().is_empty() {
+            return Err(Error::new(
+                &codes::BUILD_INSTANCE_SHAPE_MISMATCH,
+                "the multiconductor network states no voltage source to anchor the calculation",
+            ));
+        }
+        if let Some(initial) = self.initial_point.take() {
+            self.initial_point = Some(initial.rebind_network(network.clone())?);
+        }
+        self.network = network;
+        Ok(self)
     }
 
     /// The network this instance calculates on. Borrowed; never a copy.
@@ -266,10 +293,10 @@ impl McAcOpfInstance {
         &self.constraints
     }
 
-    /// The optional solver initial state.
+    /// The optional solver initial point.
     #[must_use]
-    pub const fn initial_state(&self) -> Option<&OperatingPoint<MulticonductorNetwork>> {
-        self.initial_state.as_ref()
+    pub const fn initial_point(&self) -> Option<&OperatingPoint<MulticonductorNetwork>> {
+        self.initial_point.as_ref()
     }
 
     /// The multiconductor power flow instance for this problem's network at

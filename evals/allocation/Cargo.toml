@@ -9,6 +9,7 @@ powerio-core = { path = "../../powerio-core" }
 powerio = { path = "../../powerio" }
 powerio-dist = { path = "../../powerio-dist" }
 powerio-matrix = { path = "../../powerio-matrix" }
+powerio-tx = { path = "../../powerio-tx" }
 
 # Debug symbols in release so a regression can be attributed to a call site
 # without changing the profile the numbers were taken under.

@@ -1,5 +1,5 @@
-// The parse-to-write data flow: acquisition, parse, the typed module, the
-// explicit transformations, and writing. Nodes here are operations and data,
+// The parse-to-emit data flow: acquisition, parse, the typed module, explicit
+// transformations, calculations, emission, and PowerIO IR. Nodes are operations and data,
 // not crates, so the checker validates only its syntax and generation.
 digraph powerio_dataflow {
     rankdir = LR;
@@ -11,20 +11,20 @@ digraph powerio_dataflow {
           fontcolor = "#2d3748"];
 
     source [label = "Source\nnamed immutable bytes\n(file, directory, memory)"];
-    parse [label = "parse\nformat + kind detection"];
+    parse [label = "parse\ngrid exchange format\n+ structural type detection"];
     module [label = "PioModule<T>\nvalue + source + diagnostics\n+ history"];
-    select [label = "state selection\n(time point, scenario)"];
-    lower [label = "lowering\nmulticonductor → balanced\n(explicit, lossy, reported)"];
-    matrices [label = "matrix data\nwith element mappings"];
-    write [label = "write\nsame format: byte exact echo\ncross format: reported losses"];
-    stored [label = ".pio.json\nstored module, schema 1"];
+    access [label = "index / iterate\nTimeSeries<T>, ScenarioSet<T>\nowner rooted typed entry"];
+    transform [label = "to_balanced\nmulticonductor → balanced\n(explicit, lossy, reported)"];
+    matrices [label = "calc_*\nmatrix or vector\nwith element mappings"];
+    emit [label = "emit\nsame format: byte exact\ncross format: reported losses"];
+    stored [label = "PowerIO IR\npio-ir, generation 2"];
 
     source -> parse -> module;
-    module -> select [label = "series and sets"];
-    select -> module [style = dashed];
-    module -> lower [label = "multiconductor"];
-    lower -> module [style = dashed];
+    module -> access [label = "collection value"];
+    module -> transform [label = "multiconductor"];
+    transform -> module [style = dashed, label = "derived module"];
     module -> matrices;
-    module -> write;
-    module -> stored [dir = both];
+    module -> emit;
+    module -> stored [label = "serialize"];
+    stored -> module [label = "deserialize"];
 }

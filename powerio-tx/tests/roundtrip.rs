@@ -8,7 +8,6 @@ use helpers::*;
 use std::path::{Path, PathBuf};
 
 use powerio_tx::network::BusId;
-use powerio_tx::write_matpower;
 
 fn data_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data")
@@ -38,17 +37,17 @@ fn cases() -> Vec<PathBuf> {
 
 fn echo_matpower_file(path: &std::path::Path) -> String {
     let module = parse_module(path, Some("matpower")).unwrap();
-    powerio_tx::write_as(&module, powerio_tx::TargetFormat::Matpower)
+    emit_module(&module, powerio_tx::TargetFormat::Matpower)
         .unwrap()
         .text
 }
 
 fn echo_matpower_str(text: &str) -> String {
-    let source = powerio_core::Source::from_bytes("case.m", text.as_bytes().to_vec())
+    let source = powerio_core::Source::from_memory("case.m", text.as_bytes().to_vec())
         .unwrap()
         .with_format(powerio_core::FormatId::new("matpower").unwrap());
     let module = powerio_tx::parse(source).unwrap();
-    powerio_tx::write_as(&module, powerio_tx::TargetFormat::Matpower)
+    emit_module(&module, powerio_tx::TargetFormat::Matpower)
         .unwrap()
         .text
 }
@@ -85,7 +84,7 @@ fn round_trip_is_idempotent() {
 fn typed_data_survives_round_trip() {
     for path in cases() {
         let case = parse_matpower_file(&path).unwrap();
-        let written = write_matpower(&case);
+        let written = emit_matpower(&case);
         let reparsed = parse_matpower(&written).unwrap();
         let where_ = path.display();
         assert_eq!(reparsed.base_mva(), case.base_mva(), "{where_}: baseMVA");
@@ -127,7 +126,7 @@ fn parses_bus_names() {
             .starts_with("Bus 1")
     );
     // Names survive the round-trip.
-    let reparsed = parse_matpower(&write_matpower(&case)).unwrap();
+    let reparsed = parse_matpower(&emit_matpower(&case)).unwrap();
     assert_eq!(reparsed.buses()[0].name, case.buses()[0].name);
 }
 
@@ -141,7 +140,7 @@ fn parses_hvdc_dclines() {
     assert_eq!((dc.from, dc.to), (BusId(30), BusId(4)));
     assert_eq!(dc.pf, 10.0);
     // HVDC survives the round-trip (document passthrough).
-    let reparsed = parse_matpower(&write_matpower(&case)).unwrap();
+    let reparsed = parse_matpower(&emit_matpower(&case)).unwrap();
     assert_eq!(reparsed.hvdc().len(), case.hvdc().len());
 }
 
@@ -167,7 +166,7 @@ fn unescapes_doubled_quotes_in_bus_names() {
     assert_eq!(case.buses()[0].name.as_deref(), Some("O'Brien"));
     assert_eq!(case.buses()[1].name.as_deref(), Some("Plain"));
     // The raw `''` is preserved on round-trip regardless of the typed unescape.
-    assert!(write_matpower(&case).contains("'O''Brien'"));
+    assert!(emit_matpower(&case).contains("'O''Brien'"));
 }
 
 #[test]

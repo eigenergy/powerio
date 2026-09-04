@@ -15,12 +15,10 @@ run ./scripts/ci-clippy.sh
 run bash scripts/terminology-gate.sh
 run bash scripts/deprecated-inventory.sh --assert-empty
 run ./scripts/capi-header-parity.sh
-run bash scripts/capi-removed-surface.sh
-run python3 scripts/abi-delta.py
-run bash scripts/check-value-kinds.sh
+POWERIO_JL_OPTIONAL=1 run bash scripts/check-capi-v7.sh
+run bash scripts/check-value-types.sh
 run bash scripts/check-diagnostic-parity.sh
 run python3 scripts/capi-doc-integrity.py
-run bash scripts/capi-export-monotonicity.sh
 run python3 scripts/check-doc-symbols.py
 run python3 scripts/check-architecture-map.py
 run ./scripts/capi-header-regen.sh

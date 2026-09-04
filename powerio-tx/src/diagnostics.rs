@@ -178,18 +178,22 @@ pub mod codes {
     emit_family!(EMIT_POWERMODELS, "POWERMODELS", "PowerModels JSON");
     emit_family!(EMIT_EGRET, "EGRET", "egret JSON");
     emit_family!(EMIT_SURGE, "SURGE", "Surge JSON");
-    emit_family!(EMIT_PIO_JSON, "PIO_JSON", "the .pio.json snapshot");
+    emit_family!(EMIT_XIIDM, "XIIDM", "XIIDM 1.17 XML");
+    emit_family!(EMIT_JIIDM, "JIIDM", "JIIDM 1.17 JSON");
+    emit_family!(EMIT_CGMES, "CGMES", "CGMES 3.0");
+    emit_family!(EMIT_UCTE, "UCTE", "UCTE-DEF .uct");
+    emit_family!(EMIT_UNSUPPORTED, "UNSUPPORTED", "a read only format");
 
     powerio_core::diagnostic_codes! {
         // PARSE: the source text could not be decoded as given.
-        /// A leading UTF-8 byte order mark was removed before the reader saw
-        /// the text, so a same-format echo differs by exactly those bytes.
-        PARSE_SOURCE_BOM_STRIPPED = "PARSE.SOURCE.BOM_STRIPPED", Remark,
-            "a leading UTF-8 byte order mark was removed before the reader ran", retired = "0.10.0";
         PARSE_MATPOWER_MALFORMED = "PARSE.MATPOWER.MALFORMED", Error,
             "a MATPOWER matrix is missing, short, unparseable, or unbalanced", category = Parse;
         PARSE_SOURCE_MALFORMED = "PARSE.SOURCE.MALFORMED", Error,
             "a format reader refused the source it was given", category = Parse;
+        PARSE_GOC3_MALFORMED = "PARSE.GOC3.MALFORMED", Error,
+            "a GO Challenge 3 data file is not well formed JSON", category = Parse;
+        PARSE_XIIDM_VERSION_UNSUPPORTED = "PARSE.XIIDM.VERSION_UNSUPPORTED", Error,
+            "the XIIDM namespace names a version PowerIO has not tested", category = Parse;
 
         // READ: decoded, but not representable in the canonical model.
         READ_PSSE_FIELD_DROPPED = "READ.PSSE.FIELD_DROPPED", Warning,
@@ -204,6 +208,8 @@ pub mod codes {
             "a PSS/E section is preserved in a same-format echo only";
         READ_PSSE_RETAINED_SOURCE_ONLY = "READ.PSSE.RETAINED_SOURCE_ONLY", Remark,
             "a PSS/E field survives in extras rather than in a typed field";
+        READ_PSSE_VALUE_DEFAULTED = "READ.PSSE.VALUE_DEFAULTED", Warning,
+            "a PSS/E record ends before a field the typed model reads, so that field took its default";
 
         READ_PSLF_VALUE_DEFAULTED = "READ.PSLF.VALUE_DEFAULTED", Warning,
             "a PSLF value the model needs was not in the source and was defaulted";
@@ -218,6 +224,19 @@ pub mod codes {
 
         READ_PANDAPOWER_FIELD_DROPPED = "READ.PANDAPOWER.FIELD_DROPPED", Warning,
             "a pandapower field with no canonical home was dropped";
+        READ_CGMES_RECORD_UNMAPPED = "READ.CGMES.RECORD_UNMAPPED", Warning,
+            "a CGMES record has no representation in the balanced network model";
+        READ_CGMES_FIELD_UNMAPPED = "READ.CGMES.FIELD_UNMAPPED", Warning,
+            "a field on a mapped CGMES record has no representation in the balanced network model";
+        READ_CGMES_VALUE_DEFAULTED = "READ.CGMES.VALUE_DEFAULTED", Warning,
+            "a value absent from the CGMES profile set was defaulted";
+        READ_CGMES_VALUE_APPROXIMATED = "READ.CGMES.VALUE_APPROXIMATED", Warning,
+            "a CGMES value was represented through an explicit approximation";
+        READ_CGMES_TOPOLOGY_CALCULATED = "READ.CGMES.TOPOLOGY_CALCULATED", Remark,
+            "the set carries no TopologicalNode data, so buses were calculated from ConnectivityNodes and switch positions";
+        READ_CGMES_CONNECTIVITY_INSUFFICIENT = "READ.CGMES.CONNECTIVITY_INSUFFICIENT", Error,
+            "the set carries neither TopologicalNode data nor enough connectivity to calculate buses",
+            category = Parse;
         READ_PANDAPOWER_VALUE_INFERRED = "READ.PANDAPOWER.VALUE_INFERRED", Warning,
             "a value pandapower does not store was reconstructed on a declared convention";
         READ_PANDAPOWER_TABLE_UNSUPPORTED = "READ.PANDAPOWER.TABLE_UNSUPPORTED", Warning,
@@ -240,8 +259,22 @@ pub mod codes {
         READ_POWERMODELS_FIELD_DROPPED = "READ.POWERMODELS.FIELD_DROPPED", Warning,
             "a PowerModels field the canonical model cannot state was dropped";
 
+        READ_GOC3_AMBIGUOUS_DOCUMENTS = "READ.GOC3.AMBIGUOUS_DOCUMENTS", Error,
+            "a GO Challenge 3 source contains more than one problem or solution data file",
+            category = Parse;
+        READ_GOC3_PROBLEM_REQUIRED = "READ.GOC3.PROBLEM_REQUIRED", Error,
+            "a GO Challenge 3 solution data file requires its matching problem data file",
+            category = Parse;
+        READ_GOC3_SOURCE_UNRECOGNIZED = "READ.GOC3.SOURCE_UNRECOGNIZED", Error,
+            "a declared GO Challenge 3 source contains no problem or solution data file",
+            category = Parse;
+        READ_GOC3_INVALID_DOCUMENT = "READ.GOC3.INVALID_DOCUMENT", Error,
+            "the GO Challenge 3 document decodes but is not a valid problem or solution file",
+            category = Parse;
         READ_GOC3_VALUE_INFERRED = "READ.GOC3.VALUE_INFERRED", Warning,
             "a GO Challenge 3 value the document never states was inferred";
+        READ_GOC3_OPTIONAL_FIELD_UNTYPED = "READ.GOC3.OPTIONAL_FIELD_UNTYPED", Remark,
+            "an optional GO Challenge 3 field is retained as untyped source metadata";
         READ_GOC3_RETAINED_SOURCE_ONLY = "READ.GOC3.RETAINED_SOURCE_ONLY", Warning,
             "a GO Challenge 3 section survives in the retained source only";
 
@@ -252,13 +285,50 @@ pub mod codes {
         READ_OPFDATA_RETAINED_SOURCE_ONLY = "READ.OPFDATA.RETAINED_SOURCE_ONLY", Warning,
             "an OPFData generator's solver initial values are carried in the parsed solution instead of the network snapshot";
 
+        READ_XIIDM_FIELD_UNMAPPED = "READ.XIIDM.FIELD_UNMAPPED", Warning,
+            "an XIIDM field is not represented in the PowerIO model";
+        READ_XIIDM_ELEMENT_UNMAPPED = "READ.XIIDM.ELEMENT_UNMAPPED", Warning,
+            "an XIIDM element is not represented in the PowerIO model";
+        READ_XIIDM_CALCULATION_VIEW = "READ.XIIDM.CALCULATION_VIEW", Warning,
+            "an XIIDM value is retained in detailed connectivity but represented differently in the balanced calculation view";
+        READ_XIIDM_VALUE_DEFAULTED = "READ.XIIDM.VALUE_DEFAULTED", Warning,
+            "a PowerIO value absent from XIIDM was assigned a documented default";
+        READ_XIIDM_VERSION_COMPATIBILITY = "READ.XIIDM.VERSION.COMPATIBILITY", Remark,
+            "an older XIIDM input version was read; fresh XIIDM output uses 1.17";
+
         READ_SURGE_RETAINED_SOURCE_ONLY = "READ.SURGE.RETAINED_SOURCE_ONLY", Warning,
             "a Surge section survives in the retained source only";
+
+        READ_UCTE_VALUE_DEFAULTED = "READ.UCTE.VALUE_DEFAULTED", Warning,
+            "a UCTE-DEF value the model needs was not in the record and was defaulted";
+        READ_UCTE_VALUE_SUBSTITUTED = "READ.UCTE.VALUE_SUBSTITUTED", Warning,
+            "a UCTE-DEF value the record states could not be used as given";
+        READ_UCTE_REFERENCE_DROPPED = "READ.UCTE.REFERENCE_DROPPED", Warning,
+            "a UCTE-DEF regulation or special description names a transformer the case does not declare";
+        READ_UCTE_RECORD_IGNORED = "READ.UCTE.RECORD_IGNORED", Warning,
+            "a UCTE-DEF record names no usable electrical element and was ignored";
+        READ_UCTE_RETAINED_SOURCE_ONLY = "READ.UCTE.RETAINED_SOURCE_ONLY", Warning,
+            "a UCTE-DEF block survives in the retained source only";
+
+        PARSE_IEEE_CDF_MALFORMED = "PARSE.IEEE_CDF.MALFORMED", Error,
+            "an IEEE CDF title card or record could not be decoded", category = Parse;
+        READ_IEEE_CDF_RECORD_TRUNCATED = "READ.IEEE_CDF.RECORD_TRUNCATED", Warning,
+            "an IEEE CDF record ends before a mandatory field, which was read as zero";
+        READ_IEEE_CDF_VALUE_DEFAULTED = "READ.IEEE_CDF.VALUE_DEFAULTED", Warning,
+            "a value the balanced model needs is absent from the IEEE CDF and was defaulted";
+        READ_IEEE_CDF_VALUE_SUBSTITUTED = "READ.IEEE_CDF.VALUE_SUBSTITUTED", Warning,
+            "an IEEE CDF type or side code outside the documented set was read as the nearest documented value";
+        READ_IEEE_CDF_SOURCE_MALFORMED = "READ.IEEE_CDF.SOURCE_MALFORMED", Warning,
+            "an IEEE CDF section header, item count, terminator, record placement, or bus reference disagrees with the records";
+        READ_IEEE_CDF_RETAINED_SOURCE_ONLY = "READ.IEEE_CDF.RETAINED_SOURCE_ONLY", Remark,
+            "an IEEE CDF field or section survives in the retained source only";
 
         READ_GEO_SOURCE_MALFORMED = "READ.GEO.SOURCE_MALFORMED", Warning,
             "a geo layer row could not be read and was skipped";
         READ_GEO_NOTES_TRUNCATED = "READ.GEO.NOTES_TRUNCATED", Warning,
             "the geo reader stopped recording notes at its budget";
+        READ_GEO_NOT_TEXT = "READ.GEO.NOT_TEXT", Error,
+            "a geographic layer document is not valid UTF-8 text", category = Parse;
 
         READ_IO_FAILED = "READ.IO.FAILED", Error,
             "the case file could not be read", category = Io;
@@ -310,11 +380,6 @@ pub mod codes {
             "a balanced payload value is outside the domain the model states";
         VALIDATE_BALANCED_PAYLOAD_IDENTITY = "VALIDATE.BALANCED.PAYLOAD_IDENTITY", Error,
             "a balanced payload's uid identity does not hold";
-        /// Retired in 0.9.0: every transmission read finding now carries its
-        /// own code, so the stored document no longer wraps them under one
-        /// catch-all.
-        READ_TRANSMISSION_PARSE_WARNING = "READ.TRANSMISSION.PARSE_WARNING", Warning,
-            "a transmission parse finding with no identity of its own", retired = "0.9.0";
         VALIDATE_GEN_COST_MISSING = "VALIDATE.GEN_COST.MISSING", Error,
             "a generator carries no cost data under a policy that requires one", category = Data;
         VALIDATE_GEN_COST_NOT_A_NUMBER = "VALIDATE.GEN_COST.NOT_A_NUMBER", Error,
@@ -336,6 +401,9 @@ pub mod codes {
         REQUEST_FORMAT_WRITE_UNSUPPORTED = "REQUEST.FORMAT.WRITE_UNSUPPORTED", Error,
             "the named case format is read only and has no writer", category = Request;
 
+        EMIT_FORMAT_REQUIRED_VALUE_MISSING = "EMIT.FORMAT.REQUIRED_VALUE_MISSING", Error,
+            "the requested format requires a value the module does not contain", category = Output;
+
         // Write side codes a single target owns.
         /// The default `.raw` target is revision 33, so writing a newer source
         /// through it re-emits the older layout.
@@ -347,7 +415,7 @@ pub mod codes {
 
     /// Every write target's family, in the order [`super::registry`] reports
     /// them.
-    pub const EMIT_FAMILIES: [&EmitFamily; 10] = [
+    pub const EMIT_FAMILIES: [&EmitFamily; 14] = [
         &EMIT_MATPOWER,
         &EMIT_PSSE,
         &EMIT_PSLF,
@@ -357,7 +425,11 @@ pub mod codes {
         &EMIT_POWERMODELS,
         &EMIT_EGRET,
         &EMIT_SURGE,
-        &EMIT_PIO_JSON,
+        &EMIT_XIIDM,
+        &EMIT_JIIDM,
+        &EMIT_CGMES,
+        &EMIT_UCTE,
+        &EMIT_UNSUPPORTED,
     ];
 }
 
@@ -377,17 +449,22 @@ impl TargetFormat {
     pub fn emit_family(self) -> &'static EmitFamily {
         match self {
             TargetFormat::Matpower => &codes::EMIT_MATPOWER,
-            TargetFormat::Psse { .. } => &codes::EMIT_PSSE,
+            TargetFormat::Psse { .. } | TargetFormat::PsseRawx => &codes::EMIT_PSSE,
             TargetFormat::Pslf => &codes::EMIT_PSLF,
             TargetFormat::PandapowerJson => &codes::EMIT_PANDAPOWER,
             TargetFormat::PowerWorld => &codes::EMIT_POWERWORLD,
             TargetFormat::PowerModelsJson => &codes::EMIT_POWERMODELS,
             TargetFormat::EgretJson => &codes::EMIT_EGRET,
             TargetFormat::SurgeJson => &codes::EMIT_SURGE,
-            // Neither GOC3 nor OPFData has a writer: the request is refused
-            // before any family is consulted, and
-            // `REQUEST.FORMAT.WRITE_UNSUPPORTED` carries it.
-            TargetFormat::Goc3Json | TargetFormat::DeepMindOpfDataJson => &codes::EMIT_PIO_JSON,
+            TargetFormat::Xiidm => &codes::EMIT_XIIDM,
+            TargetFormat::Jiidm => &codes::EMIT_JIIDM,
+            TargetFormat::Cgmes => &codes::EMIT_CGMES,
+            TargetFormat::Ucte => &codes::EMIT_UCTE,
+            // This transmission layer has no GOC3 problem or OPFData writer.
+            // The facade emits a complete GOC3 solution before reaching this
+            // branch. Other requests are refused before any family is
+            // consulted, and `REQUEST.FORMAT.WRITE_UNSUPPORTED` carries it.
+            TargetFormat::Goc3Json | TargetFormat::DeepMindOpfDataJson => &codes::EMIT_UNSUPPORTED,
         }
     }
 }

@@ -22,18 +22,8 @@ use crate::{IndexCore, IndexedNetwork, SparseMatrix};
 use powerio_core::Error;
 use powerio_tx::BusId;
 
-use powerio_prob::AcPfInstance;
-use powerio_prob::OperatingPoint;
 use powerio_prob::diagnostics::codes;
-
-/// The balanced instantaneous quantity keys behind
-/// `OperatingPoint::bus_voltage_magnitude`/`bus_voltage_angle`
-/// (`powerio-prob/src/state/balanced.rs`). Not exported from that crate as
-/// named constants, so duplicated here as the literal spellings the
-/// `.pio.json` wire form (and every `powerio-prob` writer) already treats as
-/// permanent.
-const BUS_VOLTAGE_MAGNITUDE: &str = "bus_voltage_magnitude";
-const BUS_VOLTAGE_ANGLE: &str = "bus_voltage_angle";
+use powerio_prob::{AcPfInstance, BalancedOperatingPointQuantity, OperatingPoint};
 
 /// The voltage coordinate selection, the one option of the calculation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -107,7 +97,7 @@ impl PowerFlowJacobian {
         // problem, never a value update.
         if view.n() != self.bus_ids.len() {
             return Err(Error::new(
-                &codes::BUILD_STATE_IDENTITY_UNKNOWN,
+                &codes::BUILD_OPERATING_POINT_IDENTITY_UNKNOWN,
                 "the instance's lowered bus axis does not match the assembled Jacobian's",
             ));
         }
@@ -160,7 +150,7 @@ pub fn calc_power_flow_jacobian(
     // later `update` call trusts it instead (see `point_voltages`).
     let voltages = point_voltages(instance, point, &bus_ids, &view, true)?;
 
-    let parts = crate::build_ybus(
+    let parts = crate::calc_admittance_matrix(
         &view,
         &crate::BuildOptions {
             skip_zero_impedance: false,
@@ -243,71 +233,71 @@ fn point_voltages(
     // the same order; the analysis axis may extend it with the expansion's
     // star buses, whose voltages come from the lowered network below. Every
     // bus quantity's column order is `network.buses()` order (how
-    // `BalancedStateBuilder` lays the columns out), so this reads straight
-    // off `identity_order` rather than allocating a decimal spelling of
-    // every bus id to look one up at a time.
+    // `BalancedOperatingPointBuilder` lays the columns out), so this reads
+    // the typed quantity iterators rather than allocating a decimal spelling
+    // of every bus id to look one up at a time.
     let raw_buses = instance.network().buses();
-    let identities_match = |quantity: &str| -> bool {
-        point.identity_order(quantity).is_some_and(|order| {
-            order.len() == raw_buses.len()
-                && order
-                    .zip(raw_buses)
-                    .all(|(id, bus)| id.parse::<usize>().is_ok_and(|id| id == bus.id.0))
-        })
-    };
-    if validate_identities {
-        if !identities_match(BUS_VOLTAGE_MAGNITUDE) {
+    let read_bus_values = |values: powerio_prob::OperatingPointValues<'_>| {
+        if values.len() != raw_buses.len() {
             return Err(Error::new(
-                &codes::BUILD_STATE_IDENTITY_UNKNOWN,
+                &codes::BUILD_OPERATING_POINT_IDENTITY_UNKNOWN,
                 "the operating point's network does not share the instance's bus identities",
             ));
         }
-    } else {
-        debug_assert!(
-            identities_match(BUS_VOLTAGE_MAGNITUDE),
-            "operating point bus identities do not match the instance's; this pairing \
-             is checked once when the Jacobian is built and trusted on every refresh"
-        );
-    }
+        let identities_match = values
+            .clone()
+            .zip(raw_buses)
+            .all(|((id, _), bus)| id.parse::<usize>().is_ok_and(|id| id == bus.id.0));
+        if validate_identities && !identities_match {
+            return Err(Error::new(
+                &codes::BUILD_OPERATING_POINT_IDENTITY_UNKNOWN,
+                "the operating point's network does not share the instance's bus identities",
+            ));
+        } else if !validate_identities {
+            debug_assert!(
+                identities_match,
+                "operating point bus identities do not match the instance's; this pairing \
+                 is checked once when the Jacobian is built and trusted on every refresh"
+            );
+        }
+        Ok(values.map(|(_, value)| value).collect::<Vec<_>>())
+    };
 
     // Both quantities' complete columns, one bulk read each rather than one
     // string keyed lookup per bus per quantity.
-    let (Some(magnitude_column), Some(angle_column)) = (
-        point.quantity_values(BUS_VOLTAGE_MAGNITUDE),
-        point.quantity_values(BUS_VOLTAGE_ANGLE),
+    let (Some(magnitude_values), Some(angle_values)) = (
+        point.values(BalancedOperatingPointQuantity::BusVoltageMagnitude),
+        point.values(BalancedOperatingPointQuantity::BusVoltageAngle),
     ) else {
         return Err(Error::new(
-            &codes::BUILD_STATE_SHAPE_MISMATCH,
+            &codes::BUILD_OPERATING_POINT_SHAPE_MISMATCH,
             "the operating point does not state a complete complex voltage at every bus; \
              the Jacobian needs both quantities",
         ));
     };
 
     let raw_n = raw_buses.len();
-    let mut magnitude = Vec::with_capacity(bus_ids.len());
-    let mut angle = Vec::with_capacity(bus_ids.len());
-    for (idx, &bus) in bus_ids.iter().enumerate() {
-        if idx < raw_n {
-            magnitude.push(magnitude_column[idx]);
-            angle.push(angle_column[idx]);
-        } else {
-            // A star bus the three winding expansion synthesized: the point
-            // cannot state it, so its voltage comes from the lowered
-            // network's own stated values, through a checked lookup.
-            let star = view
-                .network()
-                .buses()
-                .get(idx)
-                .filter(|star| star.id == bus);
-            let Some(star) = star else {
-                return Err(Error::new(
-                    &codes::BUILD_STATE_IDENTITY_UNKNOWN,
-                    "the operating point's network does not share the instance's bus identities",
-                ));
-            };
-            magnitude.push(star.vm);
-            angle.push(view.angle_radians(star.va));
-        }
+    let mut magnitude = read_bus_values(magnitude_values)?;
+    let mut angle = read_bus_values(angle_values)?;
+    magnitude.reserve(bus_ids.len() - raw_n);
+    angle.reserve(bus_ids.len() - raw_n);
+    for (idx, &bus) in bus_ids.iter().enumerate().skip(raw_n) {
+        // A star bus the three winding expansion synthesized: the point
+        // cannot state it, so its voltage comes from the lowered network's
+        // own stated values, through a checked lookup.
+        let star = view
+            .network()
+            .buses()
+            .get(idx)
+            .filter(|star| star.id == bus);
+        let Some(star) = star else {
+            return Err(Error::new(
+                &codes::BUILD_OPERATING_POINT_IDENTITY_UNKNOWN,
+                "the operating point's network does not share the instance's bus identities",
+            ));
+        };
+        magnitude.push(star.vm);
+        angle.push(view.to_radians(star.va));
     }
     Ok(Voltages { magnitude, angle })
 }

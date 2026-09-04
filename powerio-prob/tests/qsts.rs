@@ -1,12 +1,12 @@
 //! QSTS shaped data at the dynamic boundary: a parsed feeder under an
 //! operating point per time step, the network owned once. Parsing a `.dss`
-//! script never claims a solve occurred; the state series is supplied at
+//! script never claims a solve occurred; the operating point series is supplied at
 //! this boundary by whatever produced it.
 
-use powerio_prob::state::MulticonductorStateBuilder;
+use powerio_prob::operating::MulticonductorOperatingPointBuilder;
 
 #[test]
-fn qsts_shaped_states_share_one_network() {
+fn qsts_shaped_operating_points_share_one_network() {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../tests/data/dist/opendss/ieee13/IEEE13Nodeckt.dss"
@@ -25,17 +25,15 @@ fn qsts_shaped_states_share_one_network() {
             .unwrap()
         })
         .collect();
-    let closed: Vec<f64> = (0..24)
-        .map(|hour| f64::from(u8::from(hour % 2 == 0)))
-        .collect();
-    let states = MulticonductorStateBuilder::new(network, time_points)
+    let closed: Vec<bool> = (0..24).map(|hour| hour % 2 == 0).collect();
+    let operating_points = MulticonductorOperatingPointBuilder::new(network, time_points)
         .switch_closed(closed)
         .build()
         .unwrap();
 
-    assert_eq!(states.len(), 24);
-    let first = states.values()[0].network();
-    for point in states.values() {
+    assert_eq!(operating_points.len(), 24);
+    let first = operating_points.values()[0].network();
+    for point in operating_points.values() {
         // One shared network under every point: the same table allocation,
         // never a copy per step.
         assert!(std::ptr::eq(
@@ -47,10 +45,16 @@ fn qsts_shaped_states_share_one_network() {
             point.network().lines().as_ptr()
         ));
     }
-    assert_eq!(states.values()[0].switch_closed("671692"), Some(true));
-    assert_eq!(states.values()[23].switch_closed("671692"), Some(false));
     assert_eq!(
-        states.time_points()[23].duration(),
+        operating_points.values()[0].switch_closed("671692"),
+        Some(true)
+    );
+    assert_eq!(
+        operating_points.values()[23].switch_closed("671692"),
+        Some(false)
+    );
+    assert_eq!(
+        operating_points.time_points()[23].duration(),
         Some(std::time::Duration::from_secs(3600))
     );
 }

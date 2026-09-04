@@ -30,7 +30,7 @@ pub struct MatrixMetadata {
     pub sddm: bool,
 }
 
-pub fn write_meta_json(meta: &CaseMetadata, path: impl AsRef<Path>) -> Result<()> {
+pub fn emit_meta_json(meta: &CaseMetadata, path: impl AsRef<Path>) -> Result<()> {
     super::mtx::commit_one_file(path.as_ref(), meta_json_bytes(meta)?)
 }
 

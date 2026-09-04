@@ -1,58 +1,17 @@
-//! The facade's diagnostic code registry: the stored module, upgrade,
-//! legacy 0.9 package, and multiconductor to balanced transformation
-//! entries of the workspace registry. An emission site names an entry
+//! The facade's diagnostic code registry. An emission site names an entry
 //! rather than a loose string.
 
 powerio_core::diagnostic_codes! {
+    REQUEST_PARSE_POWERIO_IR = "REQUEST.PARSE.POWERIO_IR", Error,
+        "PowerIO IR is decoded with deserialize, not parse", category = Request;
     READ_MODULE_UNSUPPORTED = "READ.MODULE.UNSUPPORTED", Error,
         "the stored module names a schema or version this build does not read", category = Request;
     READ_MODULE_INVALID = "READ.MODULE.INVALID", Error,
         "the stored module document is structurally invalid", category = Data;
-    READ_MODULE_LEGACY_STUDY = "READ.MODULE.LEGACY_STUDY", Error,
-        "a 0.9 package with a nonempty study block needs a revision materialized before upgrade", category = Request;
-    READ_MODULE_LEGACY_FIELD = "READ.MODULE.LEGACY_FIELD", Error,
-        "a 0.9 operating point update field has no state quantity", category = Data;
-    READ_MODULE_UPGRADED = "READ.MODULE.UPGRADED", Note,
-        "a released 0.9 package was upgraded one way to the stored module";
-    READ_MODULE_OBJECTIVE_TERM_RETIRED = "READ.MODULE.OBJECTIVE_TERM_RETIRED", Warning,
-        "a retired solver setting was removed from a stored OPF objective";
-    READ_MODULE_BRANCH_DUAL_SPLIT = "READ.MODULE.BRANCH_DUAL_SPLIT", Warning,
-        "a legacy signed branch dual was split into directional multipliers";
-    REQUEST_STATE_NOT_A_COLLECTION = "REQUEST.STATE.NOT_A_COLLECTION", Error,
-        "the value carries no time or scenario collection to select from",
-        category = Request;
-    REQUEST_STATE_WRONG_SELECTOR = "REQUEST.STATE.WRONG_SELECTOR", Error,
-        "the selector kind does not match what the collection keys by",
-        category = Request;
-    REQUEST_STATE_OUT_OF_RANGE = "REQUEST.STATE.OUT_OF_RANGE", Error,
-        "the requested time position is outside the collection's axis",
-        category = Request;
-    REQUEST_STATE_UNBOUND_EXPORT = "REQUEST.STATE.UNBOUND_EXPORT", Error,
-        "the selected item's static materialization is not bound yet",
-        category = Request;
-    REQUEST_STATE_UNKNOWN_SCENARIO = "REQUEST.STATE.UNKNOWN_SCENARIO", Error,
-        "the requested scenario ID is not declared by the set",
-        category = Request;
-    // READ: what a reader's own findings arrive as once the package lifts
-    // them. A reader finding keeps the code its crate gave it; these are
-    // the package's own.
-    READ_PACKAGE_OPERATING_POINTS_DROPPED = "READ.PACKAGE.OPERATING_POINTS_DROPPED", Warning,
-        "a time series could not be lifted into operating points";
-    /// Retired in 0.9.0 for a code that names its three segments.
-    READ_OPERATING_POINTS_DROPPED = "READ.OPERATING_POINTS_DROPPED", Warning,
-        "a time series could not be lifted into operating points", retired = "0.9.0";
-
-    // VALIDATE: the document's own internal consistency, nothing else.
-    // The payload level VALIDATE.BALANCED.* and VALIDATE.MULTI.* codes are
-    // declared by the network crates that own those models; this module
-    // still emits them from the payload validation profile.
-    VALIDATE_PACKAGE_STUDY_MODEL_KIND = "VALIDATE.PACKAGE.STUDY_MODEL_KIND", Error,
-        "the study block's model kind disagrees with the payload";
-    VALIDATE_PACKAGE_STUDY_IDENTITY = "VALIDATE.PACKAGE.STUDY_IDENTITY", Error,
-        "a study edit names a uid the payload does not declare";
-    VALIDATE_PACKAGE_OPERATING_IDENTITY = "VALIDATE.PACKAGE.OPERATING_IDENTITY", Error,
-        "an operating point names a uid the payload does not declare";
-
+    VALIDATE_COLLECTION_EMPTY = "VALIDATE.COLLECTION.EMPTY", Error,
+        "a dynamically constructed collection needs at least one value to infer its type", category = Data;
+    VALIDATE_COLLECTION_ELEMENT_TYPE = "VALIDATE.COLLECTION.ELEMENT_TYPE", Error,
+        "all values in a collection must have the same supported structural type", category = Data;
     // LOWER: the multiconductor to balanced pass.
     TRANSFORM_MULTI_TO_BALANCED_AMBIGUOUS_TERMINAL_MAP =
         "TRANSFORM.MULTI_TO_BALANCED.AMBIGUOUS_TERMINAL_MAP", Error,
@@ -107,11 +66,6 @@ powerio_core::diagnostic_codes! {
     TRANSFORM_MULTI_TO_BALANCED_UNKNOWN_SOURCE_BUS =
         "TRANSFORM.MULTI_TO_BALANCED.UNKNOWN_SOURCE_BUS", Error,
         "a voltage source references a bus the payload does not declare";
-    /// Retired in 1.0.0: an unrated identity switch now merges its buses,
-    /// and the remaining closed switch shapes carry their own codes.
-    TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_CLOSED_SWITCH =
-        "TRANSFORM.MULTI_TO_BALANCED.UNSUPPORTED_CLOSED_SWITCH", Error,
-        "a closed switch shape has no balanced spelling", retired = "0.10.0";
     TRANSFORM_MULTI_TO_BALANCED_RATED_CLOSED_SWITCH =
         "TRANSFORM.MULTI_TO_BALANCED.RATED_CLOSED_SWITCH", Error,
         "merging a rated closed switch would erase its flow limit";
@@ -136,46 +90,14 @@ powerio_core::diagnostic_codes! {
         category = Request;
     TRANSFORM_MULTI_TO_BALANCED_WRONG_MODEL_KIND =
         "TRANSFORM.MULTI_TO_BALANCED.WRONG_MODEL_KIND", Error,
-        "the module does not carry a multiconductor payload to lower";
+        "the module does not carry a multiconductor payload to lower",
+        category = Request;
 
     // Failures.
-    PARSE_MODULE_MALFORMED = "PARSE.MODULE.MALFORMED", Error,
-        "the document is not well formed .pio.json", category = Parse;
-    /// Retired in 0.10.0 for the module vocabulary.
-    PARSE_PACKAGE_MALFORMED = "PARSE.PACKAGE.MALFORMED", Error,
-        "the document is not well formed .pio.json", category = Parse, retired = "0.10.0";
-    PARSE_MODULE_UNSUPPORTED_VERSION = "PARSE.MODULE.UNSUPPORTED_VERSION", Error,
-        "the document comes from a lineage this build does not read", category = Parse;
-    /// Retired in 0.10.0 for the module vocabulary.
-    PARSE_PACKAGE_UNSUPPORTED_VERSION = "PARSE.PACKAGE.UNSUPPORTED_VERSION", Error,
-        "the document comes from a lineage this build does not read", category = Parse, retired = "0.10.0";
-    VALIDATE_MODULE_MODEL_KIND_MISMATCH = "VALIDATE.MODULE.MODEL_KIND_MISMATCH", Error,
-        "the document's model_kind disagrees with the payload it carries", category = Data;
-    /// Retired in 0.10.0 for the module vocabulary.
-    VALIDATE_PACKAGE_MODEL_KIND_MISMATCH = "VALIDATE.PACKAGE.MODEL_KIND_MISMATCH", Error,
-        "the document's model_kind disagrees with the payload it carries", category = Data, retired = "0.10.0";
-    REQUEST_MODULE_NO_SUCH_INDEX = "REQUEST.MODULE.NO_SUCH_INDEX", Error,
-        "the call names an operating point or study index the document does not carry",
-        category = Request;
-    /// Retired in 0.10.0 for the module vocabulary.
-    REQUEST_PACKAGE_NO_SUCH_INDEX = "REQUEST.PACKAGE.NO_SUCH_INDEX", Error,
-        "the call names an operating point or study index the document does not carry",
-        category = Request, retired = "0.10.0";
     REQUEST_MODULE_WRONG_MODEL_KIND = "REQUEST.MODULE.WRONG_MODEL_KIND", Error,
         "the call asks for a model family the document does not carry", category = Request;
-    /// Retired in 0.10.0 for the module vocabulary.
-    REQUEST_PACKAGE_WRONG_MODEL_KIND = "REQUEST.PACKAGE.WRONG_MODEL_KIND", Error,
-        "the call asks for a model family the document does not carry", category = Request, retired = "0.10.0";
-    BUILD_MODULE_PAYLOAD_FAILED = "BUILD.MODULE.PAYLOAD_FAILED", Error,
-        "the payload could not be built, applied, or serialized", category = Data;
-    /// Retired in 0.10.0 for the module vocabulary.
-    BUILD_PACKAGE_PAYLOAD_FAILED = "BUILD.PACKAGE.PAYLOAD_FAILED", Error,
-        "the payload could not be built, applied, or serialized", category = Data, retired = "0.10.0";
     EMIT_MODULE_SERIALIZE_FAILED = "EMIT.MODULE.SERIALIZE_FAILED", Error,
         "serializing the stored document to JSON failed", category = Output;
-    /// Retired in 0.10.0 for the module vocabulary.
-    EMIT_PACKAGE_SERIALIZE_FAILED = "EMIT.PACKAGE.SERIALIZE_FAILED", Error,
-        "serializing the stored document to JSON failed", category = Output, retired = "0.10.0";
 }
 
 /// Every code this crate declares.

@@ -1,61 +1,247 @@
 # Changelog
 
-## 1.0.0 (unreleased)
+## 0.11.0 (unreleased)
 
-**OPF preparation now represents the instance it receives.**
-`build_dc_opf_preparation` and `build_ac_opf_preparation` compile either the
-empty feasibility objective or the network generator cost objective. They
-preserve convex piecewise linear generator costs as breakpoints instead of
-fitting a polynomial. Malformed and nonconvex rows, and unsupported objective
-terms, return typed errors. Active constraint
-selections become masks aligned with the dense arrays, and an unknown identity
-in `ConstraintSelection::Only` is an error. Bus, generator, and branch
-identities now accompany their analysis and source row mappings. Synthetic
-three winding transformer branches use identities derived from the transformer
-identity and winding number; they have analysis rows but no source branch row.
-The nodal quadratic projection and DC OPF bundle return an error when the
-objective contains a piecewise cost they cannot represent.
+PowerIO 0.11 is the stabilization release for the API developed through the
+0.10 beta. It has four representation operations: `parse`, `emit`, `serialize`,
+and `deserialize`. Paths, streams, and memory enter through `Source`; separate
+file, text, and byte parsing functions are gone. `PioModule<T>` stores the
+value, diagnostics, sources, provenance, and history. Rust matches `PioValue`,
+Python uses `isinstance`, Julia uses multiple dispatch, and C uses structural
+type names and typed borrowed accessors.
 
-**OPF solution economics no longer assume a currency or collapse two
-constraints into one signed value.** DC and AC solutions can store the
-derivative of the declared optimal objective with respect to added active or
-reactive demand. The unit is objective units per MW or MVAr. The value is an
-LMP only when the declared objective gives it that interpretation. Thermal
-limits retain separate nonnegative multipliers for the two branch directions
-or AC terminals. The derivative with respect to a shared rating is the negative
-sum of those multipliers. Stored 0.10 price columns map to the demand marginal
-columns. A signed 0.10 DC branch dual splits by sign into the two directional
-columns and records `READ.MODULE.BRANCH_DUAL_SPLIT`.
+PowerIO IR is the only PowerIO-owned JSON document. The standalone
+`BalancedNetwork::to_json`, `from_json`, and `to_json_with_diagnostics`
+operations and the `model-json` classifier family are removed. A bare object
+shaped like a `BalancedNetwork` is neither PowerIO IR nor a grid exchange
+format; wrap the value in `PioModule` and call `serialize`.
 
-**Differentiability regularization is not a portable objective term.** It did
-not state a mathematical quantity or unit. A 0.10 stored module containing the
-retired token still reads: the term is removed and the module gains the coded
-warning `READ.MODULE.OBJECTIVE_TERM_RETIRED`. Numerical regularization belongs
-to a solver's formulation settings.
+This release deliberately remains pre-1.0 because public Rust signatures still
+expose types from the pre-1.0 `sprs` and `petgraph` crates. The 0.11.x line is
+reserved for compatible bug fixes, performance improvements, and additive
+work; an unavoidable breaking public API change moves to 0.12. PowerIO 1.0
+follows a downstream stabilization cycle and an explicit decision about those
+public dependency boundaries.
 
-**A balanced OPF instance can replace its network without losing problem
-semantics.** `DcOpfInstance::with_network` and `AcOpfInstance::with_network`
-preserve the objective, constraints, approximation, and compatible initial
-state while validating the replacement. This supports exact solutions of
-amended cases without reconstructing an instance from defaults.
+PowerIO IR uses the durable identity `"schema": "pio-ir"` and independent
+integer generation `"version": 2`. The producer record separately identifies
+the PowerIO release that wrote a document. Readers and upgrade code for
+earlier document generations are removed. `powerio::IR_SCHEMA_NAME`,
+`powerio::IR_VERSION`, and `powerio::IR_SCHEMA_ID` state the current identity.
+C ABI 7 is the only C ABI and contains no aliases for earlier ABI generations.
 
-**AC and DC assembly now agree on synthesized thermal limits.** Both public
-option types expose fluent setters for units, zero impedance handling, and
-rating synthesis, and both preparations record whether synthesis was used.
+`BalancedNetwork` and `MulticonductorNetwork` are the two electrical network
+types. `OperatingPoint<T>`, `TimeSeries<T>`, and `ScenarioSet<T>` compose over
+both. Calculation data uses explicit PF, OPF, and SCUC instance and solution
+types. `SocwrOpfSolution` records the PowerModels SOCWR relaxation and its
+objective lower bound without claiming an AC feasible solution.
+Multiconductor matrices use the descriptive Rust name `ConductorMatrix`; the
+beta abbreviation `Mat` is removed.
 
-**`Termination` gains `Infeasible` and `Unbounded`.** An optimization solver
-that proves the constraints empty or the objective unbounded no longer reports
-the catch-all `Failed`.
+`OperatingPointUpdate`, `NetworkUpdate`, and `CalculationUpdate` target stable
+component identities and absolute values with units. `apply_updates` validates
+the full batch before changing a value. `UpdateReport` lists the changed fields
+and reports whether energized connectivity changed.
 
-**The migration guide states the DC susceptance sign reversal.** 0.9's
-`branch_susceptance` returned the positive Laplacian edge weight; 0.10 and 1.0
-return the PowerModels value, negative for an inductive branch. OPF preparation
-exposes the separate positive solver weight.
+The public DC bundle and “DC branch coefficient” vocabulary are removed.
+Callers use `calc_incidence_matrix`, `calc_branch_susceptances`,
+`calc_bus_susceptance_matrix`, `calc_branch_flow_matrix`,
+`calc_branch_phase_shift_injection`, `calc_bus_phase_shift_injection`,
+`calc_branch_flow_dc`, and `calc_bus_injection_dc`. Incidence is branches by
+buses, with `+1` at the from bus and `-1` at the to bus, matching PowerModels
+and MATPOWER signs.
 
-**The facade exports complete construction vocabulary.** The DC OPF instance
-and solution pair join the AC pair at the crate root. `HistoryEntry`,
-`HistoryId`, `HistoryKind`, and `Producer` are also available through the main
-facade.
+OPF preparation preserves the instance objective, active constraints, source
+identities, and source row mappings. Convex piecewise linear costs remain
+piecewise linear. AC and DC solutions store separate nonnegative terminal
+thermal limit multipliers and objective derivatives without assuming a
+currency. `Termination` distinguishes convergence, iteration limit,
+infeasibility, unboundedness, failure, and an unreported result.
+
+Python and Julia expose `.value` and `.diagnostics`, the same four
+representation operations, ordinary collection indexing, typed updates, and
+the named `calc_*` functions. PowerIO.jl uses ABI 7 and owner rooted views;
+Julia does not encode and reparse values to inspect them.
+
+DOE GO Challenge 3 problem and solution files use the one public `parse`
+operation. A source containing the problem returns
+`PioModule<AcScucInstance>`; a directory or named memory source containing the
+problem and matching solution returns `PioModule<AcScucSolution>` and retains
+both files. A solution file alone is rejected because it contains neither the
+component definitions nor the time axis. `emit` writes a complete
+`AcScucSolution` as the official GO Challenge 3 output file; unchanged problem
+data still uses exact same format echo.
+
+PowSybl XIIDM and JIIDM 1.0 through 1.17 and CIM CGMES 2.4.15 and 3.0 now
+parse and emit through `BalancedNetwork`; fresh output uses IIDM 1.17 and
+CGMES 3.0.
+The CGMES reader and writer build on Mohamed Numair's original contribution;
+`evals/powsybl/cgmes-contribution-audit.md` records how each part of that work
+appears in 0.11.
+The source neutral model retains detailed bus breaker and node breaker
+connectivity, hierarchy, terminals, switches, operational limits, tap changer
+steps and controls, reactive limits, external identities, aliases, AC and DC
+equipment, and the operating and solution quantities those formats carry.
+The interoperability gate removes retained source bytes before writing and
+loads every fresh result with PowSybl. An external RTE 7k check compares all
+29 PyPowSybl tables without committing the 33 MB source case.
+
+PSS/E RAW 33, 34, and 35 and RAWX 35 now use one mapping for transformer
+controls and detailed connectivity. Fresh RAW 34/35 and RAWX output preserves
+AC line and transformer names, exact generator, switched shunt, and transformer
+regulated node references, and the control data for every winding of a
+3-winding transformer. The sign of `COD` records whether automatic adjustment
+is enabled without losing its control mode. `|COD| = 4` means control of a DC
+line quantity on a 2-winding transformer, and `|COD| = 5` means asymmetric
+active power flow control.
+
+The `powerio` command composes with shell pipelines. `-` as the input of
+`convert`, `summary`, `serialize`, `verify`, `dcopf`, and `sensitivities` reads
+the case from standard input with a declared `--from` format. The exit status
+follows the PowerIO error category: 2 `request`, 3 `io`, 4 `parse`, 5 `data`,
+6 `output`, and 1 for a failure without a category. Failures the command line
+raises itself carry registered `*.CLI.*` diagnostic codes.
+`--diagnostics-format json` replaces every stderr line with one JSON array of
+PowerIO IR diagnostic records covering the whole run, warnings and the failure
+alike, with each reason in a failure's cause chain as a `note` record related
+to the failure record; `powerio::serialize_diagnostics` is that encoding as a
+library function. `EMIT.MULTICONDUCTOR.SIDECAR_DROPPED`, registered but never
+raised before, is the warning `convert` reports when standard output cannot
+carry a sidecar file.
+
+PSS/E RAW revision 32 is read. Revision 32 records end before the bus voltage
+limits (`NVHI`, `NVLO`, `EVHI`, `EVLO`), the load `INTRPT` field, the
+transformer `VECGRP` field, and the winding `CNXA` field that revision 33
+added; the reader lays every record out by the header revision and defaults
+those fields, and a revision 32 record that ends before its last typed field
+is reported as `READ.PSSE.VALUE_DEFAULTED` with the record's byte range in the
+retained source. A header revision outside 32 through 35 keeps its coded
+rejection. Fresh output still uses revisions 33 through 35: no emission target
+names revision 32, so a revision 32 source written back as PSS/E produces
+fresh revision 33 text, and its unmodeled sections survive only in the
+retained source. Two PowSybl Core revision 32 cases join the fixtures under
+their MPL-2.0 license, and the PowSybl interoperability gate loads the fresh
+revision 33 output written from each.
+
+The guide gains a PowerIO IR reference (`docs/src/ir-reference.md`) that
+defines every structural value type field by field: type, unit, sign
+convention, invariant, and the value a reader takes when a field is absent;
+`powerio/tests/ir_reference.rs` holds the page to the generated schema in both
+directions. `serialize` is deterministic: one module serializes to identical
+text every time, and serializing what that text deserializes to reproduces
+it. The MATPOWER and PSS/E readers attach the byte range of the record a
+finding is about, into the retained source, to the diagnostics they raise:
+the failure that ends a read and the warnings alike. `powerio_core::Error`
+gains `with_span`, which attaches a range to the diagnostic that ended an
+operation.
+
+**IIDM 1.0 through 1.17 and JIIDM.** The PowSybl reader accepts every IIDM
+serialization version, from the iTesla namespaced 1.0 to 1.17, with each
+version's rules: busbar section voltages, inline tie lines, `targetV` ratio
+tap changers, legacy shunt and static VAR compensator attributes, and loading
+limits stated on the equipment. Each maps to the same tables as its 1.17 form.
+The new `jiidm` token reads PowSybl's JSON encoding of any of those versions
+and writes JIIDM 1.17 in PowSybl's field layout and order; a bare `.json`
+whose first key is `version` classifies as `jiidm`. `SourceFormat::Jiidm`
+names a module read from JIIDM, and `EMIT.JIIDM.*` codes report its writer.
+XIIDM output stays 1.17. The XIIDM element mapping now reads one tree
+representation produced by either the XML or JSON reader. In the PowSybl
+gate, PyPowSybl reads PowerIO's JIIDM output and PowerIO reads PyPowSybl's.
+
+CGMES sets without `TopologicalNode` data now read when their declared
+profiles describe node breaker equipment (CGMES 2.4.15 EquipmentOperation,
+or CGMES 3.0 CoreEquipment with `ConnectivityNode` data), matching PowSybl.
+The reader calculates buses as connected components of the
+`ConnectivityNode` graph joined by closed, in-service switches. SSH
+`Switch.open` takes precedence over EQ `Switch.normalOpen`. Each calculated
+bus takes the name of a busbar section on it and a UUIDv5 identity derived
+from the joined `ConnectivityNode` mRIDs, without inventing a source
+`TopologicalNode` mRID. `READ.CGMES.TOPOLOGY_CALCULATED` reports the
+calculation, and `READ.CGMES.CONNECTIVITY_INSUFFICIENT` names missing data
+when a set has neither `TopologicalNode` data nor calculable connectivity.
+Bay containers resolve to their voltage level, and a `TopologicalNode` whose
+container holds none of its `ConnectivityNode` data follows those nodes. The
+PowSybl gate compares calculated bus assignments for the MiniGrid, SmallGrid,
+and CGMES 3.0 MicroGrid node breaker sets with PyPowSybl.
+
+ENTSO-E UCTE-DEF `.uct` files read and write through `BalancedNetwork` under
+the format token `ucte` (alias `uct`). The reader accepts revisions
+2003.09.01 and 2007.05.01 and maps `##N` nodes with their `##Z` country
+groups, `##L` lines and busbar couplers, `##T` transformers, and `##R` phase
+and angle regulation. `##TT` and `##E` records remain available for same
+format emission and are reported with `READ.UCTE.RETAINED_SOURCE_ONLY` before
+other format emission. A node's 8-character code is the bus name, each
+country is an area, and cross-border `X` nodes form their own area so tie
+lines keep both ends. New output uses revision 2007.05.01; a bus whose name is
+not a UCTE node code receives a derived code and an
+`EMIT.UCTE.VALUE_SUBSTITUTED` warning. Reader findings name their records with
+source spans. The PowSybl gate loads PowerIO UCTE output from a MATPOWER case
+with PyPowSybl and compares bus and branch counts with PyPowSybl for every
+`.uct` fixture in the pinned PowSybl Core checkout.
+
+The IEEE Common Data Format parses to `BalancedNetwork` under the token
+`ieee-cdf` (alias `cdf`). A `.txt` or `.cdf` file opening with a CDF title
+card is detected without a declared format. The reader maps the title card
+MVA base and date, the bus, branch, and interchange sections, transformer
+taps, phase shifts, and regulating control blocks, and reports what the
+format does not state under `READ.IEEE_CDF.*` codes with record spans. Loss
+zone names and tie lines survive in the retained source only. The format is
+read only: `emit` to `ieee-cdf` is refused. The vendored IEEE 14 and 30 bus
+cases are checked against `case14.m` and `case30.m`, and the PowSybl gate
+compares every public IEEE CDF case with PyPowSybl's own CDF importer.
+
+GridFM Parquet reads preserve the table's `pf`, `qf`, `pt`, and `qt` branch
+flows and interpret every `cp0`, `cp1`, and `cp2` triple as the polynomial the
+dataset states, including an all-zero cost. Dense bus indices, nodal load and
+shunt totals, and unit-tap line classification are GridFM source data rather
+than reader losses. The writer reports only detected projections from a richer
+network into GridFM's fixed tables, and a GridFM-to-GridFM conversion has no
+findings. PowerIO-generated component identities carry explicit provenance in
+PowerIO IR so target writers do not report internal indexing data as a dropped
+source field. Scenario batches reject duplicate scenario ids, differing system
+bases, and misaligned bus, branch, or generator rows before writing Parquet.
+
+Exchange-format conversion keeps source structure distinct from target
+requirements. CGMES retains every source substation, including substations
+joined by a transformer; XIIDM and JIIDM join only the emitted container groups
+when their transformer representation requires one substation and report that
+hierarchy change. Generated CGMES operational-limit helper objects no longer
+create metadata churn or readback findings, and their typed values, durations,
+and names remain in operational limit groups. XIIDM, CGMES, and UCTE use 100
+MVA as the IR normalization for physical-unit input without reporting a source
+value those formats do not state. XIIDM and JIIDM emission converts impedance
+and admittance with the network's actual MVA base, preserving physical values
+when that normalization is not 100 MVA. UCTE emission widens generation bounds
+that do not contain dispatch, reports the substitution, and keeps plant type
+for an out-of-service generator. Targets without a complete exchange model
+report one grouped loss for detailed topology, case metadata, stable source
+identities, geographic metadata, and solver metadata. RAWX substation terminals
+reuse their electrical equipment rows' selected type, buses, and identifier;
+missing PSS/E node numbers are allocated before exact regulation targets are
+written, eliminating generated readback records outside the typed model.
+
+**One `parse`, one `emit`, and no display sibling.** `parse`, `emit`,
+`serialize`, and `deserialize` take their input or output through
+`powerio_core::IntoSource` and `powerio_core::IntoDestination`, implemented for
+a file or directory name in every spelling a caller holds one, for content
+already in memory, and for a built `Source` or `Destination`. The ordinary read
+is `powerio::parse("case.raw")?` with one call and one failure point, following
+`mlir::parseSourceFile(filename, block, config)` and
+`llvm::object::createBinary`, which autodetects the file type. The optional
+format argument every caller wrote as `None` is gone: optional configuration is
+`ParseOptions`, passed to `parse_with_options`, as MLIR and LLVM pass a
+defaulted config value and this workspace already pairs `emit` with
+`emit_with_options`. Content in memory carries the name `<memory>`, which
+identifies no format, so a format detected from a file extension is declared
+through the options or named through `Source::from_memory`. `parse_display`,
+`DisplayData`, and `DisplayFormat` are removed: a geographic layer is a module
+value, `powerio.GeoLayer`. The canonical `.geo.json`, GeoJSON, aliased CSV or
+JSON records, headerless buscoords CSV, and a PowerWorld `.pwd` display all
+parse to it, `emit` writes one as `geo-json`, PowerIO IR carries it, and
+`pio_value_geo_layer` takes it in C. Which value a format produces is data
+rather than a choice of operation, so no reading verb stands beside `parse`. Python and Julia
+keep their `format` keyword and C ABI 7 is unchanged. See
+`docs/src/migration-0.11.md` for the table of replacements.
 
 ## 0.10.0
 
@@ -63,7 +249,10 @@ PowerIO 0.10 is the public beta of the 1.0 API. API corrections may land before 
 
 `powerio::parse(source)` returns `PioModule<PioValue>`. The value is a balanced network, multiconductor network, time series, scenario set, problem instance, or solution. DOE GO Challenge 3 JSON produces `AcScucInstance`, BMOPF JSON produces `McAcOpfInstance`, and DeepMind OPFData JSON produces `AcOpfSolution`. PyPSA snapshot axes, Egret time keys, and GridFM scenarios remain typed.
 
-`.pio.json` stores one module with schema `powerio.module/1`. The document contains the typed value, source descriptions, source map, diagnostics, history, and extensions. The complete list of 20 value kinds is in the [0.10 release notes](docs/release-notes/0.10.0-draft.md). The one way 0.9 reader and all retired names are documented in the [migration guide](https://powerio.dev/guide/migration-v0.10.html).
+`.pio.json` stores one module with `"schema": "powerio.module"` and
+`"version": 1`. The beta document contains the typed value, source
+descriptions, source map, diagnostics, history, and extensions. Its reader and
+API are not part of the current PowerIO IR.
 
 `powerio-core` defines sources, diagnostics, and modules. `powerio-tx` and `powerio-dist` define the two network families. `powerio-prob` defines problem instances and solutions. `powerio-matrix` builds sparse matrices and graph data. The `powerio` crate provides format dispatch and the combined public API.
 
@@ -108,7 +297,7 @@ The API and C ABI that 1.0.0 ships. Everything here exists so a later change can
 
 **Seven ABI-visible JSON documents changed shape while their symbols kept their signatures.** `pio_schema_versions_json` dropped four keys. `pio_dist_capabilities_json`, `pio_arrow_catalog_json`, `pio_scopf_to_json`, `pio_package_to_json` and `pio_dist_summary_json` renamed `schema_version` to `powerio_version`, and `pio_arrow_catalog_json` also dropped the per-table `schema_version`. `pio_summary_json` gained `topology.n_buses` and `topology.n_branches`; its `counts` block stays the case file's own inventory, so a 3-winding transformer is one row there rather than the bus and three branches it lowers to. The Arrow metadata key `powerio.schema_version` is `powerio.version`. A binding built against ABI 4 passes the handshake and then reads `null` for keys it mirrors, which is why the integer moved.
 
-**A nonfinite float spells itself as a string in every document powerio authors.** JSON has no `Inf`/`NaN` literal, and through 0.8.x serde wrote a nonfinite field as `null`, which the reader refused on the way back — `powerio package` refused stock case9241pegase over seven generators whose absent reactive limit legitimately reads as `Inf`, and every consumer moving a parsed network as JSON hit the same wall. A float position now writes `"Infinity"`, `"-Infinity"`, or `"NaN"` and reads back either a number or one of those spellings, one convention across model JSON, the multiconductor payload, and the `.pio.json` envelope, so every document powerio writes reads back. The multiconductor bound fields keep accepting the `null` a pre-0.9 writer emitted, restored by field role as before; everywhere else a `null` is refused with a message naming this change. The published schema states the string arm on every float position, and `to_json_with_diagnostics` returns an empty record list — nothing degrades anymore, and the channel stays for whatever write-side finding comes next.
+**A nonfinite float spells itself as a string in every document powerio authors.** JSON has no `Inf`/`NaN` literal, and through 0.8.x serde wrote a nonfinite field as `null`, which the reader refused on the way back — `powerio package` refused stock case9241pegase over seven generators whose absent reactive limit legitimately reads as `Inf`, and every consumer moving a parsed network as JSON hit the same wall. A float position now writes `"Infinity"`, `"-Infinity"`, or `"NaN"` and reads back either a number or one of those spellings, one convention across model JSON, the multiconductor payload, and the `.pio.json` document, so every document powerio writes reads back. The multiconductor bound fields keep accepting the `null` a pre-0.9 writer emitted, restored by field role as before; everywhere else a `null` is refused with a message naming this change. The published schema states the string arm on every float position, and `to_json_with_diagnostics` returns an empty record list — nothing degrades anymore, and the channel stays for whatever write-side finding comes next.
 
 **The MCP server works over a real transport.** The mcp 2.0 SDK rewrites a string argument into a parsed object whenever its annotation is not exactly `str`, so every JSON-carrying argument (`json`, `content`, `package_json`) arrived as a dict and failed validation — a model could parse a case and could do nothing multi step with the result, and no test saw it because every test called the tool functions in process. The three arguments are bare `str = ""` now (empty means unset), a regression suite drives the server over stdio through the client SDK, and the closed argument sets advertise themselves: `json_format` and matrix `kind` carry `enum` in the tool schema, and the accepted case format names are in the tool descriptions. Errors lead with their diagnostic code instead of a prose prefix, and the Python exceptions carry the same code as a `.code` attribute. The directory writers (`pypsa-csv`, `gridfm`) fill a fresh staging directory and install it through the same containment resolution as a single file write, per target, with `overwrite=false` refusing before anything moves — they previously created children the containment policy never saw. `powerio.mcp.sandbox` exports `PathNotAllowed` so a consumer catches a containment refusal by type, and `python -m powerio.mcp` and the `powerio-mcp` console script are stated consumer entry points that do not move without a version bump.
 
@@ -119,6 +308,14 @@ The API and C ABI that 1.0.0 ships. Everything here exists so a later change can
 **An instance build refuses a concave cost row.** A negative quadratic coefficient passed through untouched for a lone generator and was silently flattened in the shared bus merge, so the same row priced a bus two ways depending on its neighbours. The readers keep the row — it is the case's data — and `powerio-prob` refuses it at the one point both builders read cost curves, with `BUILD.INSTANCE.CONCAVE_COST` naming the generator and the coefficient. A zero coefficient keeps its deliberate flat reading.
 
 **OpenDSS regulator banks reach BMOPF as the regulator subtypes.** A BMOPF document carrying `single_phase_autotransformer` or `open_delta_regulator` already round tripped verbatim through the untyped passthrough; the loss was on the OpenDSS side, where a RegControl targeted regulator emitted as a plain `single_phase` transformer and an autotransformer dropped with a diagnostic. The dss reader now classifies a single phase series regulator into the autotransformer subtype and two line to line legs spelling ABBC, BCAC or CABA into one open delta regulator, the writer emits both with the field grammar BMOPFTools defines (`EMIT.BMOPF.TRANSFORMER_OPEN_DELTA_MERGED` names the absorbed leg), and every ambiguous pattern keeps today's typing — a wrong classification is worse than a drop. A consumer integration run over the branch found the adjacent hole, also closed: a fixed tap open delta bank (two one phase Delta/Delta legs, no RegControl, an ordinary deck) had no classify arm and both legs dropped silently; the one phase arm now takes every conn pairing. The subtypes are a schema extension the BMOPF task force has not yet absorbed; the writer documentation says so next to `voltage_source.cost`, which has the same standing.
+
+**BMOPF output targets schema 0.2.0, and a document says which version it was written against.** The task force's schema now lives in its own repository, `distribution-system-opt/dsopt-schema`, with one immutable directory per version; `BmopfProfile` names a version, answers its `$id` and version string, and resolves a version from a stated `$id`. The reader resolves it from `meta.$schema` and reports `READ.BMOPF.SCHEMA_ABSENT` when a document states none and `READ.BMOPF.SCHEMA_UNKNOWN` when the value names no version. Both are warnings and both documents still parse, because the reader accepts either version whatever it finds: every class 0.2.0 declares at the top level also reads from the `extras` slot 0.1.0 files it under. What an unresolved version costs is a consumer's assumption about which layout it is looking at, so the reader names it rather than leaving it to be discovered. The historical draft schema locations of the `bmopf-report` repository resolve to 0.1.0, the only version that repository held, so the two published example networks resolve.
+
+The writer targets 0.2.0 by default and 0.1.0 through `BmopfEmitOptions::with_profile`, so nothing loses the ability to write the version the task force accepts. A 0.2.0 write states the IBR, control profile, DC and time series tables at the top level instead of under `extras`, keeps the nine transformer fields (the tap ratio and its bounds, the four winding neutral fields, the two no-load fields) in their subtype objects, spells the ratio `tap_ratio` the way the regulator subtypes do, and stamps `meta.schema_version`. A 0.1.0 write relocates the same set under `extras` and reports each move, unchanged. 0.2.0 is a proposal, opened as `distribution-system-opt/dsopt-schema#1` and not ratified; it restores the classes the task force's draft carried until July and settles the array dimension, conductor ordering, transformer current limit and ideal equipment questions the accepted text leaves open. Both schema versions are vendored under `tests/data/dist/bmopf/`, and written output is validated against the version it was written against.
+
+**The BMOPF field mapping is written down.** `docs/src/bmopf-field-mapping.md` maps every BMOPF field to its PowerIO field and unit, class by class, states the matrix and array ordering rules, lists the classes that travel retained rather than typed, and states which BMOPF fields each active constraint family and the objective term read, plus which solved value lands in which `McAcOpfSolution` column. The DC, geometry, conductor data and time series classes travel and re-emit unchanged but enter no calculation, and the page says so rather than leaving it to be found. The comparison against BMOPFTools is limited to the data that toolchain writes, its one-triangle matrix spelling and its two regulator subtypes; comparing admittance stamps, constraint activation and objective terms needs the toolchain, which is not published.
+
+**The BMOPF fixture provenance is measured rather than asserted.** `tests/data/dist/README.md` named a repository that had moved, a commit no vendored file came from, three corrections that were not applied, and three hashes no vendored file has. Measured, the three files are identical to `distribution-system-opt/bmopf-resources` at `f2e368470a5012dd264d1f5a2f867867fb926615` with nothing on top. The license file now states the two examples separately: the ENWL derivative is CC BY 4.0 from its CSIRO Data Collection release, and the IEEE 13 node derivative is governed by the OpenDSS distribution license beside it, so it is not CC BY 4.0.
 
 **Arrow `solver_storage` carries the two efficiencies.** `charge_efficiency` and `discharge_efficiency` append after `q_loss` in table 13 — `SolverStorageRow` always carried both, the storage state constraint reads both, and appending columns is exactly what the catalog's append only rule is for.
 
@@ -166,7 +363,7 @@ The API and C ABI that 1.0.0 ships. Everything here exists so a later change can
 
 **A PSS/E two-terminal DC record's received power is priced by the record itself.** The reader set `pf = pt = SETVL`; the record states the DC current (`SETVL/VSCHD`, kA at kV), which prices the line loss `I²·RDC` in MW exactly, so the inverter now receives the demand minus the line's own drop. A negative `SETVL` under `MDC = 1` is the same demand measured at the inverter, and under `MDC = 2` `SETVL` is a current demand in amps — previously read as MW. The writer emits `SETVL` in the stored mode's own unit, so a re-read lands on the same operating point. `Hvdc` values read from real PSS/E input that states a resistance and a voltage schedule change; cross-format writes synthesize `RDC = 0` and are unaffected.
 
-**The conversion matrix stops taking losses the formats don't have to take, and green cells must earn it.** Writers dropped, or warned about, data the matching reader was already prepared to take back: the canonical MATPOWER writer now emits `mpc.dcline`, `mpc.dclinecost` (the reader now reads it; a `toggle_dcline` zero-padding row reads back as no cost), `mpc.bus_name`, and the standard 21-column gen row whenever a generator carries capability columns; egret states `startup_cost`/`shutdown_cost`; pandapower gains the `dcline` table its reader has read all along, and generator reactive output rides `res_gen.q_mvar` — pandapower states solved Q as a result, not an input, so every PV machine and the slack used to read back at `qg = 0` silently. Readers stop retaining what powerio's own writers synthesize (positional circuit ids, zero load-component splits, default DC converter tails, PSLF's raw record echoes), so cross-format hops stop warning about restatements; a pandapower `max_i_ka` is one fact with `rate_a`, not two; and a costless network writing no `mpc.gencost` is the source's own shape, not a loss. The matrix harness itself now holds every cell to the admittance matrix entry for entry and the per-bus injections — the power flow problem must survive whatever a format drops — and a cell claiming zero warnings must leave the full typed model bit-identical, so suppressing a warning without carrying the data fails the gate rather than greening a cell. Green cells go from 21 to 34 of 90; every remaining warning names a field the target format has no column for.
+**The conversion matrix stops taking losses the formats don't have to take, and green cells must earn it.** Writers dropped, or warned about, data the matching reader was already prepared to take back: the canonical MATPOWER writer now emits `mpc.dcline`, `mpc.dclinecost` (the reader now reads it; a `toggle_dcline` zero-padding row reads back as no cost), `mpc.bus_name`, and the standard 21-column gen row whenever a generator carries capability columns; egret states `startup_cost`/`shutdown_cost`; pandapower gains the `dcline` table its reader has read all along, and generator reactive output rides `res_gen.q_mvar` — pandapower states solved Q as a result, not an input, so every PV machine and the slack used to read back at `qg = 0` silently. Readers stop retaining what powerio's own writers synthesize (positional circuit ids, zero load-component splits, default DC converter tails, PSLF's raw record echoes), so cross-format hops stop warning about restatements; a pandapower `max_i_ka` is one fact with `rate_a`, not two; and a costless network writing no `mpc.gencost` is the source's own shape, not a loss. The matrix harness itself now holds every cell to the admittance matrix entry for entry and the per-bus injections — the power flow problem must survive whatever a format drops — and a cell claiming zero warnings must leave the full typed model bit-identical, so suppressing a warning without carrying the data fails the gate rather than greening a cell. Every same-format transmission and distribution cell is green; every remaining warning names a source ambiguity or a field the target format cannot represent.
 
 **Every writer declares what it drops, and the two PowerWorld readers agree on one id rule** ([#330](https://github.com/eigenergy/powerio/issues/330)). The MATPOWER writer declared dropped passthrough extras; the PSS/E, PSLF and PowerWorld writers dropped them silently, and PSS/E to PowerWorld dropped the area table with no warning either. Each writer spells out the keys it replays and carries one warning with the count of elements whose extras fall outside that rule, over every family that can hold extras — buses, branches, loads, shunts, switches, storage, HVDC and 3-winding transformers. The area table gets its own line, since it is a typed field rather than a passthrough. The readers disagreed too: the pwb reader kept the padded `" 1"` circuit and the trimmed ids the aux tokenizer hands back, while the aux reader dropped the positional default, so the pwb to aux leg diffed on whitespace. Device ids and circuits are stored trimmed now, and a value equal to the positional default the writer's allocator re-derives is not retained — **a consumer reading `extras["id"]` off a pwb case finds nothing where a default used to sit.** The conversion matrix baselines do not move; over a 178 file corpus the undeclared extras and area losses go from 34 to 0.
 
@@ -221,8 +418,8 @@ Row provenance from the normalize pass, a PYPOWER bridge, `null` for a nonfinite
 
 Text-writer hardening, JSON reader fidelity, a document-version report
 over the C ABI, and a release gate that tests the Julia binding before any
-binary ships. No breaking changes: every 0.8.0 API, format token, and wire
-version is unchanged.
+binary ships. No breaking changes: every 0.8.0 API, format token, and serialized
+document is unchanged.
 
 **Security.** The psse, pslf, powerworld, and OpenDSS writers replace a
 line terminator inside any quoted or free-text field. A name that held a
@@ -537,10 +734,10 @@ several gaps in that model.
 
 ## 0.7.1
 
-- The SCOPF wire conversion is structural (#252): every struct reaching
-  the wire classifies its fields (index, renamed, value) through an exhaustive
+- The SCOPF serialization conversion is structural (#252): every serialized
+  struct classifies its fields (index, renamed, value) through an exhaustive
   destructure, so a new field fails to compile until classified and a value
-  field reusing an index name is never renumbered. Wire output is unchanged.
+  field reusing an index name is never renumbered. Serialized output is unchanged.
 - GOC3 parses once per read (#250): the reader hands its parsed document
   forward as `Parsed::document`, and the package boundary derives the
   operating point series from it instead of reparsing the retained text.
@@ -598,7 +795,7 @@ several gaps in that model.
   assign zone indices from the same document order as the reserve rows
   (sorted order previously crossed `n_p`/`n_q` between the two tables and
   diverged from `src/goc3.jl` past nine zones); a GOC3 branch with
-  `r = x = 0` is rejected by name instead of writing NaN into the wire
+  `r = x = 0` is rejected by name instead of writing NaN into the serialized
   rows; a missing `device_type` defaults to `producer`, the balanced
   reader's rule; the AC instance folds self-loop branch admittance into
   the bus shunt vectors, matching `build_ybus`; both instance builders
@@ -705,10 +902,11 @@ several gaps in that model.
 ## 0.6.0
 
 - Breaking (#175): `ElementRef.row` is `Option<usize>`, the honest form of the
-  0.5.1 wire semantics. `None` addresses by identity alone (refs built with
-  `by_source_uid`); the private wire-presence shim (`wire_row()`) is gone, and
-  `row` itself says whether the wire carried one. The `.pio.json` wire format
-  is unchanged. The other break collected in #175, keyed-object addressing for
+  0.5.1 serialized semantics. `None` addresses by identity alone (refs built
+  with `by_source_uid`); the private presence shim (`wire_row()`) is gone, and
+  `row` itself says whether the serialized document carried one. The
+  `.pio.json` format is unchanged. The other break collected in #175,
+  keyed-object addressing for
   multiconductor operating point updates, needs design and moves to the 1.0
   window (#196).
 - C ABI: the package payload extraction inverses land as additive symbols (no
@@ -732,28 +930,28 @@ several gaps in that model.
   distribution JSON exchanged with other tools.
 - C ABI: `pio_classify_str` classifies in-memory JSON by the same top level
   markers the transmission parser's `.json` sniffing uses, and recognizes
-  `.pio.json` envelopes: `transmission:<format>`, `distribution:<format>`,
+  `.pio.json` documents: `transmission:<format>`, `distribution:<format>`,
   `package`, `ambiguous`, or `unknown`, size-then-fill. Bindings can route a
   bare `.json` before choosing a parser instead of matching error text.
-- The JSON classifier reports a `.pio.json` envelope as its own outcome
+- The JSON classifier reports a `.pio.json` document as its own outcome
   (`routing::JsonClass`), so every consumer handles it: the CLI, the Python
   readers, and the Python `classify_json_text` now name the package surface
-  for an envelope instead of a generic cannot-infer error (or, for the Python
-  string reader, a MATPOWER syntax error). Envelope detection requires
+  for a document instead of a generic cannot-infer error (or, for the Python
+  string reader, a MATPOWER syntax error). Document detection requires
   `model_kind` to be `balanced` or `multiconductor`, so a case document
   carrying those key names with other values still classifies as a case, and
   classification parses the document once.
 - Directed errors at the transmission boundary: a `.dss` path, a distribution
-  `from` token (`dss`/`pmd`/`bmopf`), and a `.pio.json` envelope handed to the
+  `from` token (`dss`/`pmd`/`bmopf`), and a `.pio.json` document handed to the
   balanced parser now name the surface that reads them instead of a generic
   unknown-format message.
 
 ## 0.5.1
 
-- `.pio.json` payload schema declared (#173): new optional envelope fields
+- `.pio.json` payload schema declared (#173): new optional document fields
   `payload_schema` and `payload_schema_version` name and version the IR payload
   schema id per model kind (`pio-payload-balanced/1`,
-  `pio-payload-multiconductor/1`, both `1.0.0`), independent of the envelope
+  `pio-payload-multiconductor/1`, both `1.0.0`), independent of the document
   `schema_version` (now `0.1.1`). A reader rejects a foreign payload major;
   packages without the fields (0.5.0 and earlier) read unchanged. The JSON
   shape of `model` is untouched.
@@ -766,9 +964,9 @@ several gaps in that model.
   agree with the resolved row, unknown or duplicated identities are rejected
   (at materialization and by `pio_package_validate` via the
   `VALIDATE.PACKAGE.OPERATING_IDENTITY` pass), and `row` may be omitted on the
-  wire (`ElementRef::by_source_uid`). Tables without uids keep the pre-0.5.1
+  document (`ElementRef::by_source_uid`). Tables without uids keep the pre-0.5.1
   row-only semantics, so existing packages materialize as before. Provenance
-  cleanup paths now come from the resolved row, not the wire row.
+  cleanup paths now come from the resolved row, not the serialized row.
 - Python: network table dicts expose `uid`; unknown identities raise
   `ValueError` from `Package.materialize_operating_point`. C ABI: no signature
   changes; materialization reports identity failures through `errbuf`.
@@ -782,7 +980,7 @@ several gaps in that model.
   is gone); the Julia binding already leads with `NetworkPackage`. The `.pio.json`
   format is unchanged.
 - Python API: the seven module level `package_*` functions are replaced by the
-  `powerio.Package` handle class, which parses the envelope once and exposes
+  `powerio.Package` handle class, which parses the document once and exposes
   `model_kind`, `operating_points()`, `materialize_operating_point()`,
   `as_balanced()`/`as_multiconductor()`, `validate()`, `validation()`,
   `diagnostics()`, and the multiconductor to balanced preflight and lowering.
@@ -831,7 +1029,7 @@ several gaps in that model.
 
 ## 0.4.0
 
-- `powerio-pkg`: `.pio.json` reads now enforce the envelope compatibility rule:
+- `powerio-pkg`: `.pio.json` reads now enforce the document version rule:
   same major `schema_version` values load, while incompatible major versions
   fail before payload use. The mdBook schema page documents the rule.
 - `powerio-pkg`: balanced package output now emits source maps for stable bus,

@@ -13,7 +13,7 @@ fuzz_target!(|data: &[u8]| {
     if std::str::from_utf8(data).is_err() {
         return;
     }
-    let Ok(source) = powerio_core::Source::from_bytes("<fuzz>", data.to_vec()) else {
+    let Ok(source) = powerio_core::Source::from_memory("<fuzz>", data.to_vec()) else {
         return;
     };
     let Ok(id) = powerio_core::FormatId::new("dss") else {
@@ -23,7 +23,14 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
     let net = module.value();
-    let _ = powerio_dist::write_pmd_json(net);
-    let _ = powerio_dist::write_bmopf_json(net);
-    let _ = net.graph();
+    let _ = net.to_graph();
+    for format in [
+        powerio_dist::DistTargetFormat::PmdJson,
+        powerio_dist::DistTargetFormat::BmopfJson,
+    ] {
+        let Ok(destination) = powerio_core::Destination::memory("fuzz") else {
+            return;
+        };
+        let _ = powerio_dist::emit(&module, format, destination);
+    }
 });

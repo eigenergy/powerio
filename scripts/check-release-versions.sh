@@ -3,8 +3,8 @@
 # one story before anything publishes.
 #
 # - PIO_ABI_VERSION in the Rust source and the checked-in C header agree.
-# - The stored module schema constants (name, version) agree with the served
-#   schema directory and its $id.
+# - The generated PowerIO IR schema and the facade constants agree on the
+#   independent IR identity and generation.
 # - Every publishable crate carries the one workspace version.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -16,21 +16,41 @@ if [ "$rust_abi" != "$header_abi" ]; then
     exit 1
 fi
 
-schema_version=$(grep -oE 'pub const SCHEMA_VERSION: u32 = [0-9]+' powerio/src/stored/dto.rs | grep -oE '[0-9]+$')
-schema_name=$(grep -oE 'pub const SCHEMA_NAME: &str = "[^"]+"' powerio/src/stored/dto.rs | grep -oE '"[^"]+"$' | tr -d '"')
-if [ "$schema_name" != "powerio.module" ]; then
-    echo "unexpected stored schema name: $schema_name" >&2
-    exit 1
-fi
-if [ ! -f "docs/schema/pio-module/$schema_version/schema.json" ]; then
-    echo "docs/schema/pio-module/$schema_version/schema.json is not checked in" >&2
-    exit 1
-fi
-grep -q "\"\$id\": \"https://powerio.dev/schema/pio-module/$schema_version/schema.json\"" \
-    "docs/schema/pio-module/$schema_version/schema.json" \
-    || { echo "the served module schema \$id disagrees with SCHEMA_VERSION $schema_version" >&2; exit 1; }
-
 workspace_version=$(grep -oE '^version = "[0-9]+\.[0-9]+\.[0-9]+"' Cargo.toml | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+ir_version=$(grep -oE 'pub const IR_VERSION: u64 = [0-9]+' powerio/src/lib.rs | grep -oE '[0-9]+$')
+# The generated schema is what a consumer validates a document against, so it
+# is the artifact that states the IR identity: CI regenerates it from the Rust
+# constants, and this gate reads the identity back out of it.
+schema_path="docs/schema/pio-ir/$ir_version/schema.json"
+if [ ! -f "$schema_path" ]; then
+    echo "$schema_path is not checked in" >&2
+    exit 1
+fi
+schema_name=$(python3 - "$schema_path" "$ir_version" <<'PY'
+import json
+import sys
+
+path, version = sys.argv[1], int(sys.argv[2])
+with open(path, encoding="utf-8") as handle:
+    schema = json.load(handle)
+header = schema["properties"]
+expected_id = f"https://powerio.dev/schema/pio-ir/{version}/schema.json"
+problems = []
+if schema.get("$id") != expected_id:
+    problems.append(f"$id is {schema.get('$id')!r}, not {expected_id}")
+if header["version"].get("const") != version:
+    problems.append(f"the version constant is {header['version'].get('const')!r}, not {version!r}")
+if problems:
+    print(f"{path}: " + "; ".join(problems), file=sys.stderr)
+    sys.exit(1)
+print(header["schema"]["const"])
+PY
+) || { echo "the current PowerIO IR schema disagrees with generation $ir_version" >&2; exit 1; }
+if [ "$schema_name" != "pio-ir" ]; then
+    echo "unexpected PowerIO IR schema name: $schema_name" >&2
+    exit 1
+fi
+
 for manifest in powerio/Cargo.toml powerio-core/Cargo.toml powerio-tx/Cargo.toml \
                 powerio-dist/Cargo.toml powerio-matrix/Cargo.toml powerio-prob/Cargo.toml \
                 powerio-cli/Cargo.toml; do
@@ -62,7 +82,7 @@ fi
 grep -q "PowerIO $workspace_version release notes" "docs/release-notes/$workspace_version-draft.md" \
     || { echo "the release notes draft title does not state $workspace_version" >&2; exit 1; }
 
-echo "release identity OK: ABI $rust_abi, module schema $schema_name/$schema_version, workspace $workspace_version, tag v$workspace_version"
+echo "release identity OK: ABI $rust_abi, PowerIO IR $schema_name/$ir_version, workspace $workspace_version, tag v$workspace_version"
 
 # The Arrow payload goldens embed the producing build's powerio_version; a
 # renumber that misses one fails the golden comparisons later. Stored

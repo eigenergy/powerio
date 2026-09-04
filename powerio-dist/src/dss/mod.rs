@@ -14,6 +14,10 @@ mod rpn;
 mod write;
 
 pub use lex::{BusSpec, Param, Scanner, Value, VarMap};
-pub use raw::{BusCoord, RawCommand, RawDss, RawObject, RawProp, parse_raw_file, parse_raw_with};
-pub use read::network_from_raw;
-pub use write::{DssLoadVoltageBounds, DssWriteOptions, write_dss, write_dss_with_options};
+pub use raw::{BusCoord, RawCommand, RawDss, RawObject, RawProp};
+
+#[doc(hidden)]
+pub use raw::{__parse_raw_file, __parse_raw_with};
+pub use read::to_network_from_raw;
+pub(crate) use write::emit_dss_text_with_options;
+pub use write::{DssEmitOptions, DssLoadVoltageBounds};

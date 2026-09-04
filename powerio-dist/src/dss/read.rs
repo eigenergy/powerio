@@ -21,10 +21,10 @@ use super::raw::{RawDss, RawObject};
 use crate::error::Result;
 use crate::geo::{CoordinateSpace, DistCoordsKind, DistGeoMeta, DistLocation};
 use crate::model::{
-    ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference, DistBus,
-    DistControlProfile, DistGenerator, DistIbr, DistLine, DistLineCode, DistLoad,
+    ActivePowerReference, ActivePowerUnit, ConductorMatrix, Configuration, ControlVoltageReference,
+    DistBus, DistControlProfile, DistGenerator, DistIbr, DistLine, DistLineCode, DistLoad,
     DistLoadVoltageModel, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, DistWinding,
-    DistWindingConn, Extras, IbrPrimeMover, IbrTopology, Mat, MulticonductorNetwork,
+    DistWindingConn, Extras, IbrPrimeMover, IbrTopology, MulticonductorNetwork,
     MulticonductorNetworkTables, PowerFactorControl, ReactivePowerReference, ReactivePowerUnit,
     UntypedObject, VoltVarControl, VoltWattControl, VoltageSource, open_delta_connection,
     open_delta_pairable, pair_keys, square_from_rows, winding_phase_pair,
@@ -78,7 +78,7 @@ pub(crate) fn parse_dss_collecting(
     diags: &mut crate::collect::Diagnostics,
 ) -> Result<MulticonductorNetwork> {
     let raw = super::raw::parse_raw_from_source(source)?;
-    let (net, found) = network_from_raw(&raw);
+    let (net, found) = to_network_from_raw(&raw);
     diags.absorb(found);
     Ok(net)
 }
@@ -88,7 +88,7 @@ pub(crate) fn parse_dss_collecting(
 // One pass per object class in script order; splitting the class dispatch
 // would scatter a list that reads end to end.
 #[allow(clippy::too_many_lines)]
-pub fn network_from_raw(
+pub fn to_network_from_raw(
     raw: &RawDss,
 ) -> (MulticonductorNetwork, Vec<crate::diagnostics::Diagnostic>) {
     let mut diags = crate::collect::Diagnostics::new();
@@ -232,7 +232,7 @@ pub fn network_from_raw(
     finish_buses(rd, raw)
 }
 
-/// Materializes the accumulated bus states, ground markers, and coordinates.
+/// Builds the buses from accumulated properties, ground markers, and coordinates.
 ///
 /// Element processing records ground connections (node 0) verbatim; here
 /// each grounded bus gains an explicit perfectly grounded neutral terminal
@@ -502,7 +502,7 @@ impl Reader<'_> {
     /// codes to UNITS_NONE. Unknown codes warn.
     fn units_code(&mut self, units: Option<&str>, class: &str, name: &str) -> Option<f64> {
         let u = units?;
-        if let Some(f) = dd::unit_to_meters(u) {
+        if let Some(f) = dd::calc_meters_per_unit(u) {
             return Some(f);
         }
         if !u.to_ascii_lowercase().starts_with("no") {
@@ -714,7 +714,7 @@ impl Reader<'_> {
         c0d: f64,
     ) -> SeriesImpedance {
         let mut malformed: Vec<(&'static str, String)> = Vec::new();
-        let mut rows = |key: &'static str| -> Option<Mat> {
+        let mut rows = |key: &'static str| -> Option<ConductorMatrix> {
             let v = props.get(key)?;
             let parsed = v
                 .to_rows(Some(self.vars))
@@ -758,8 +758,8 @@ impl Reader<'_> {
             if n == 1 {
                 return vec![vec![v1]];
             }
-            // Symmetric component to phase: diag (2 z1 + z0)/3, off
-            // diagonal (z0 - z1)/3.
+            // Symmetric component to phase: diagonal (2 z1 + z0)/3,
+            // off-diagonal (z0 - z1)/3.
             let s = (2.0 * v1 + v0) / 3.0;
             let m = (v0 - v1) / 3.0;
             let mut mat = vec![vec![m; n]; n];
@@ -1068,7 +1068,7 @@ impl Reader<'_> {
     /// touching the spec. The boundary recalc (~1342) rederives kvar from
     /// kW and PF under spec 0, and PFNominal from kW and kvar under spec 1
     /// (~1352-1360). like= splices the source's boundaries in the raw
-    /// layer, matching MakeLike's copy of the recalced state.
+    /// layer, matching MakeLike's copy of the recalculated values.
     fn load_power(&mut self, obj: &RawObject) -> LoadPower {
         let mut s = LoadPower {
             kw: dd::load::KW,
@@ -2165,7 +2165,7 @@ impl Reader<'_> {
             Some((class, rest)) if class.eq_ignore_ascii_case("line") => rest,
             _ => target.as_str(),
         };
-        // The present state follows the last `action`/`state` assignment in
+        // The present setting follows the last `action`/`state` assignment in
         // source order; `normal` applies only when neither was written.
         let mut open = None;
         for p in &obj.props {
@@ -2293,7 +2293,7 @@ fn is_series_regulator(t: &DistTransformer) -> bool {
 }
 
 /// Every entry times `k`.
-fn scale_mat(m: &Mat, k: f64) -> Mat {
+fn scale_mat(m: &ConductorMatrix, k: f64) -> ConductorMatrix {
     m.iter()
         .map(|row| row.iter().map(|v| v * k).collect())
         .collect()
@@ -2357,7 +2357,7 @@ fn kvar_shunt_matrix(
     kvar: f64,
     v_ref: f64,
     b_sign: f64,
-) -> Option<Mat> {
+) -> Option<ConductorMatrix> {
     let dim = map.len();
     let mut susceptance = vec![vec![0.0; dim]; dim];
     if conn_delta {
@@ -2444,7 +2444,7 @@ fn x_pair_key(name: &str) -> Option<(usize, usize)> {
     Some((i.min(j) - 1, i.max(j) - 1))
 }
 
-/// A load's power state after the last edit boundary: the engine's
+/// A load's power assignment after the last edit boundary: the engine's
 /// (kWBase, kvarBase, PFNominal, LoadSpecType), plus which of kw/pf were
 /// ever written (for default provenance).
 struct LoadPower {
@@ -2459,9 +2459,9 @@ struct LoadPower {
 
 /// Series impedance of a linecode or inline line, per source length unit.
 struct SeriesImpedance {
-    r: Mat,
-    x: Mat,
-    c_nf: Mat,
+    r: ConductorMatrix,
+    x: ConductorMatrix,
+    c_nf: ConductorMatrix,
     /// No matrix or sequence property was written at all.
     all_default: bool,
     /// Matrix properties written but unparseable as n x n, with their raw
@@ -2735,7 +2735,7 @@ mod tests {
     fn load_like_replays_the_sources_recalced_pf() {
         // Load.a ends its New under spec 1: recalc derives
         // PFNominal = 10/sqrt(10² + 20²) = 0.4472 (kw still the constructor
-        // 10). MakeLike copies that recalced state, so b's kw=100 flips to
+        // 10). MakeLike copies those recalculated values, so b's kw=100 flips to
         // spec 0 and the end-of-edit recalc lands kvar =
         // 100·tan(acos(0.4472)) = 200, not the 53.97 a flat walk against
         // pf 0.88 would give. Confirmed against opendssdirect.

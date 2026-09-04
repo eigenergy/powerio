@@ -11,14 +11,15 @@
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
+use super::BmopfProfile;
 use crate::diagnostics::codes as C;
 use crate::error::{Error, Result};
 use crate::geo::{CoordinateSpace, DistCoordsKind, DistGeoMeta, DistLocation};
 use crate::model::{
-    ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference, DistBus,
-    DistCapacitor, DistControlProfile, DistGenerator, DistIbr, DistLine, DistLineCode, DistLoad,
-    DistLoadVoltageModel, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, DistWinding,
-    DistWindingConn, Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation, Mat,
+    ActivePowerReference, ActivePowerUnit, ConductorMatrix, Configuration, ControlVoltageReference,
+    DistBus, DistCapacitor, DistControlProfile, DistGenerator, DistIbr, DistLine, DistLineCode,
+    DistLoad, DistLoadVoltageModel, DistShunt, DistSourceFormat, DistSwitch, DistTransformer,
+    DistWinding, DistWindingConn, Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation,
     MulticonductorNetwork, MulticonductorNetworkTables, PowerFactorControl, ReactivePowerReference,
     ReactivePowerUnit, UntypedObject, VoltVarControl, VoltWattControl, VoltageSource,
     n_winding_impedance_base, n_winding_phase_count, pair_keys,
@@ -44,6 +45,7 @@ pub(crate) fn parse_bmopf_collecting(
         ..MulticonductorNetworkTables::default()
     });
     report_non_numeric_fields(&doc, diags);
+    report_schema_version(&doc, diags);
     let mut rd = Reader {
         net: &mut net,
         diagnostics: crate::diagnostics::Diagnostics::new(),
@@ -54,6 +56,46 @@ pub(crate) fn parse_bmopf_collecting(
     diags.absorb(found);
     crate::model::warn_unresolved_references(&net, diags);
     Ok(net)
+}
+
+/// Resolve the schema version the document declares, and report when it
+/// cannot be resolved.
+///
+/// `meta.$schema` is the one field that states which version a document was
+/// written against, so it is the only thing to detect from. The reader accepts
+/// both versions whatever it finds, since every class 0.2.0 adds at the top
+/// level also reads from `extras` where 0.1.0 puts it. What the version
+/// changes is what a consumer may assume: an unresolved version means the
+/// class layout of the document is not stated anywhere, and a consumer that
+/// assumes one reads a different network on the other. Both findings are
+/// warnings for that reason, not errors.
+fn report_schema_version(doc: &Map<String, Value>, diags: &mut crate::collect::Diagnostics) {
+    let stated = doc
+        .get("meta")
+        .and_then(Value::as_object)
+        .and_then(|m| m.get("$schema"))
+        .and_then(Value::as_str);
+    match stated {
+        None => diags.push(
+            &C::READ_BMOPF_SCHEMA_ABSENT,
+            format!(
+                "the document states no `meta.$schema`, so the BMOPF schema version it was \
+                 written against is unknown; both {} and {} are accepted",
+                BmopfProfile::Bmopf010.version(),
+                BmopfProfile::Bmopf020.version()
+            ),
+        ),
+        Some(id) if BmopfProfile::from_schema_id(id).is_none() => diags.push(
+            &C::READ_BMOPF_SCHEMA_UNKNOWN,
+            format!(
+                "`meta.$schema` is `{id}`, which names no known BMOPF schema version; both {} \
+                 and {} are accepted",
+                BmopfProfile::Bmopf010.version(),
+                BmopfProfile::Bmopf020.version()
+            ),
+        ),
+        Some(_) => {}
+    }
 }
 
 /// Schema 0.1.0 field names typed `number` or an array of them. Derived from
@@ -365,7 +407,7 @@ fn matrix_indices(key: &str, prefix: &str) -> Option<(usize, usize)> {
 /// transpose is not spelled is mirrored: these matrices are symmetric, and
 /// BMOPFTools' reader accepts the same one-triangle shorthand (a spelled
 /// cell always wins; both writers emit full matrices in practice).
-fn flat_matrix(o: &Map<String, Value>, prefix: &str) -> Option<Mat> {
+fn flat_matrix(o: &Map<String, Value>, prefix: &str) -> Option<ConductorMatrix> {
     let mut entries: Vec<(usize, usize, f64)> = Vec::new();
     let mut n = 0;
     for (k, v) in o {
@@ -396,7 +438,7 @@ fn flat_matrix(o: &Map<String, Value>, prefix: &str) -> Option<Mat> {
 
 /// The six linecode-shaped matrices of `o`, padded square to the widest one
 /// present; `ragged` reports a genuine size disagreement between them.
-fn linecode_matrices(o: &Map<String, Value>) -> ([Mat; 6], usize, bool) {
+fn linecode_matrices(o: &Map<String, Value>) -> ([ConductorMatrix; 6], usize, bool) {
     let mats = [
         flat_matrix(o, "R_series"),
         flat_matrix(o, "X_series"),
@@ -411,7 +453,7 @@ fn linecode_matrices(o: &Map<String, Value>) -> ([Mat; 6], usize, bool) {
 }
 
 /// Grows `m` to `n` by `n`, preserving the existing entries.
-fn pad_to(m: Mat, n: usize) -> Mat {
+fn pad_to(m: ConductorMatrix, n: usize) -> ConductorMatrix {
     if m.len() >= n {
         return m;
     }
@@ -1419,6 +1461,9 @@ impl Reader<'_> {
             "tap",
             "tap_min",
             "tap_max",
+            "tap_ratio",
+            "tap_ratio_min",
+            "tap_ratio_max",
         ];
         if !matches!(
             subtype,
@@ -1504,7 +1549,7 @@ impl Reader<'_> {
                 v_ref: v_from,
                 s_rating: s,
                 r_pct: r_from_pct,
-                tap: first_float(o.get("tap")).unwrap_or(1.0),
+                tap: first_float(o.get("tap_ratio").or_else(|| o.get("tap"))).unwrap_or(1.0),
                 r_neutral: first_float(o.get("r_neutral_from")),
                 x_neutral: first_float(o.get("x_neutral_from")),
             },
@@ -1543,9 +1588,9 @@ impl Reader<'_> {
             &mut self.diagnostics,
             &[],
         );
-        for key in ["tap_min", "tap_max"] {
-            if let Some(v) = o.get(key) {
-                extras.insert(key.into(), v.clone());
+        for (key, current) in [("tap_min", "tap_ratio_min"), ("tap_max", "tap_ratio_max")] {
+            if let Some(value) = o.get(current).or_else(|| o.get(key)) {
+                extras.insert(key.into(), value.clone());
             }
         }
         for key in ["g_no_load", "b_no_load"] {

@@ -11,7 +11,7 @@
 //! magnitudes into a findings file that may leave the machine. A shared
 //! `format!` would have forced one of those two to be wrong.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 use powerio_dist::MulticonductorNetwork;
 use powerio_matrix::BalancedNetwork;
@@ -115,6 +115,254 @@ impl std::fmt::Display for InjectionChange {
     }
 }
 
+/// One bus row of the relabeling-free electrical digest: the bus's own
+/// admittance and its injections.
+#[derive(Debug, Clone, PartialEq)]
+struct BusRow {
+    diagonal: (f64, f64),
+    injections: [f64; 4],
+}
+
+/// The relabeling-free electrical digest: one row per bus and one conductance
+/// and susceptance pair per off-diagonal admittance entry. Comparison treats
+/// both collections as tolerance-aware multisets, so a renumbering does not
+/// change them.
+type ElectricalDigest = (Vec<BusRow>, Vec<(f64, f64)>);
+
+/// Return one left-hand item that cannot participate in a complete matching.
+///
+/// The alternating-path search compares each item with the predicate instead
+/// of sorting approximate values by their exact float bits. Processing the
+/// most constrained items first keeps the ordinary case linear in the number
+/// of candidate pairs while still finding a complete matching when a greedy
+/// pairing would choose the wrong near-equal row.
+fn unmatched_multiset_item<T>(
+    before: &[T],
+    after: &[T],
+    matches: impl Fn(&T, &T) -> bool,
+) -> Option<usize> {
+    if before.len() != after.len() {
+        return Some(0);
+    }
+    let candidates = before
+        .iter()
+        .map(|before| {
+            after
+                .iter()
+                .enumerate()
+                .filter_map(|(index, after)| matches(before, after).then_some(index))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let mut order = (0..before.len()).collect::<Vec<_>>();
+    order.sort_by_key(|index| candidates[*index].len());
+
+    let mut left_match: Vec<Option<usize>> = vec![None; before.len()];
+    let mut right_match: Vec<Option<usize>> = vec![None; after.len()];
+    for root in order {
+        let mut visited_left = vec![false; before.len()];
+        let mut visited_right = vec![false; after.len()];
+        let mut parent_right = vec![None; after.len()];
+        let mut queue = VecDeque::from([root]);
+        visited_left[root] = true;
+        let mut free = None;
+        while let Some(left) = queue.pop_front() {
+            for &right in &candidates[left] {
+                if visited_right[right] {
+                    continue;
+                }
+                visited_right[right] = true;
+                parent_right[right] = Some(left);
+                if let Some(next_left) = right_match[right] {
+                    if !visited_left[next_left] {
+                        visited_left[next_left] = true;
+                        queue.push_back(next_left);
+                    }
+                } else {
+                    free = Some(right);
+                    break;
+                }
+            }
+            if free.is_some() {
+                break;
+            }
+        }
+        let Some(mut right) = free else {
+            return Some(root);
+        };
+        loop {
+            let left = parent_right[right].expect("an augmenting edge records its left endpoint");
+            let previous = left_match[left].replace(right);
+            right_match[right] = Some(left);
+            let Some(previous) = previous else {
+                break;
+            };
+            right = previous;
+        }
+    }
+    None
+}
+
+fn bus_rows_match(before: &BusRow, after: &BusRow, tolerance: f64) -> bool {
+    !beyond_tol(before.diagonal.0, after.diagonal.0, tolerance)
+        && !beyond_tol(before.diagonal.1, after.diagonal.1, tolerance)
+        && before
+            .injections
+            .iter()
+            .zip(&after.injections)
+            .all(|(before, after)| !beyond_tol(*before, *after, tolerance))
+}
+
+fn admittances_match(before: &(f64, f64), after: &(f64, f64), tolerance: f64) -> bool {
+    !beyond_tol(before.0, after.0, tolerance) && !beyond_tol(before.1, after.1, tolerance)
+}
+
+/// The electrical problem compared up to bus relabeling, for a target format
+/// that states no bus number.
+///
+/// Every bus contributes its diagonal admittance and its four injection
+/// columns, every branch its off-diagonal admittance, and the two collections
+/// are compared as sorted multisets. That is the power flow problem itself: an
+/// admittance that changed, an injection that moved to a bus with different
+/// neighbours, or an element that vanished all show up, while a renumbering
+/// alone does not. Two buses carrying rows equal within the requested tolerance
+/// are interchangeable, and exchanging them is the same power flow problem.
+///
+/// Returns the first row that disagrees, in the digest's own order.
+#[must_use]
+pub fn electrical_change_up_to_relabeling(
+    before: &BalancedNetwork,
+    after: &BalancedNetwork,
+    tolerance: f64,
+) -> Option<String> {
+    // Where every bus states a nominal voltage, the digest holds physical
+    // admittance: a format that admits only a fixed set of voltage levels
+    // writes a 345 kV case under the 330 kV level, and the per-unit values move
+    // with the base while the network does not. Where a bus states none, the
+    // writer divided by the same substituted nominal voltage the reader
+    // multiplies back, so the per-unit values are the comparable ones.
+    let physical = [before, after].iter().all(|net| {
+        net.buses()
+            .iter()
+            .all(|bus| bus.base_kv.is_finite() && bus.base_kv > 0.0)
+    });
+    let digest = |net: &BalancedNetwork| -> Option<ElectricalDigest> {
+        let nominal = net
+            .buses()
+            .iter()
+            .map(|bus| (bus.id.0, bus.base_kv))
+            .collect::<BTreeMap<_, _>>();
+        let scale = |from: usize, to: usize| -> f64 {
+            if !physical {
+                return 1.0;
+            }
+            let voltage = |bus: usize| nominal.get(&bus).copied().unwrap_or(1.0);
+            net.base_mva() / (voltage(from) * voltage(to))
+        };
+        let view = powerio_matrix::IndexedNetwork::new(net);
+        let parts =
+            powerio_matrix::calc_admittance_matrix(&view, &powerio_matrix::BuildOptions::default())
+                .ok()?;
+        let mut entries = BTreeMap::<(usize, usize), (f64, f64)>::new();
+        for (value, (i, j)) in &parts.g {
+            entries
+                .entry((view.bus_id(i).0, view.bus_id(j).0))
+                .or_insert((0.0, 0.0))
+                .0 = *value;
+        }
+        for (value, (i, j)) in &parts.b {
+            entries
+                .entry((view.bus_id(i).0, view.bus_id(j).0))
+                .or_insert((0.0, 0.0))
+                .1 = *value;
+        }
+        let injections = per_bus(net, true);
+        let mut rows = Vec::new();
+        let mut off_diagonal = Vec::new();
+        for ((from, to), value) in entries {
+            let value = (value.0 * scale(from, to), value.1 * scale(from, to));
+            if from == to {
+                rows.push(BusRow {
+                    diagonal: value,
+                    injections: injections.get(&from).copied().unwrap_or_default(),
+                });
+            } else {
+                off_diagonal.push(value);
+            }
+        }
+        Some((rows, off_diagonal))
+    };
+    let (before_rows, before_off) = digest(before)?;
+    let (after_rows, after_off) = digest(after)?;
+    if before_rows.len() != after_rows.len() {
+        return Some(format!(
+            "{} bus admittance row(s) became {}",
+            before_rows.len(),
+            after_rows.len()
+        ));
+    }
+    if before_off.len() != after_off.len() {
+        return Some(format!(
+            "{} off-diagonal admittance entr(ies) became {}",
+            before_off.len(),
+            after_off.len()
+        ));
+    }
+    if let Some(index) = unmatched_multiset_item(&before_rows, &after_rows, |before, after| {
+        bus_rows_match(before, after, tolerance)
+    }) {
+        return Some(format!(
+            "bus row {:?} has no matching result row",
+            before_rows[index]
+        ));
+    }
+    if let Some(index) = unmatched_multiset_item(&before_off, &after_off, |before, after| {
+        admittances_match(before, after, tolerance)
+    }) {
+        return Some(format!(
+            "off-diagonal admittance {:?} has no matching result entry",
+            before_off[index]
+        ));
+    }
+    None
+}
+
+#[cfg(test)]
+mod relabeling_tests {
+    use super::{BusRow, bus_rows_match, unmatched_multiset_item};
+
+    #[test]
+    fn near_equal_rows_pair_by_all_electrical_values() {
+        let before = [
+            BusRow {
+                diagonal: (1.0, 0.0),
+                injections: [0.0; 4],
+            },
+            BusRow {
+                diagonal: (1.000_001, 0.0),
+                injections: [5.0, 0.0, 0.0, 0.0],
+            },
+        ];
+        let after = [
+            BusRow {
+                diagonal: (1.0, 0.0),
+                injections: [5.0, 0.0, 0.0, 0.0],
+            },
+            BusRow {
+                diagonal: (1.000_001, 0.0),
+                injections: [0.0; 4],
+            },
+        ];
+
+        assert_eq!(
+            unmatched_multiset_item(&before, &after, |before, after| {
+                bus_rows_match(before, after, 1e-3)
+            }),
+            None
+        );
+    }
+}
+
 /// Why a `Y_bus` comparison produced no answer.
 ///
 /// Distinguished from "the matrices agree" on purpose: a network the matrix
@@ -126,12 +374,27 @@ pub enum YbusUnavailable {
     After,
 }
 
-/// The admittance matrix, entry for entry by bus id pair.
+/// The admittance matrix, entry for entry by bus id pair, on one voltage base.
 ///
 /// Warnings account for *dropped* data, never for corrupted electrics, so this
 /// holds on yellow cells too. A format may relocate admittance (pandapower
 /// rides MATPOWER transformer charging as bus shunts) or restate it in other
 /// units, but `Y_bus` is where all of those spellings meet.
+///
+/// A format that states impedances in ohms rather than per unit carries its own
+/// bus nominal voltages, and some of those formats admit only a fixed set: a
+/// UCTE-DEF node code names one of ten voltage levels, so a 345 kV case is
+/// written under the 330 kV level and reads back per unit on 330 kV. The
+/// physical network is the same; only the per-unit reference moved. Each entry
+/// is therefore compared after the standard change of base, scaling the result
+/// entry by `V_before(i) * V_before(j) / (V_after(i) * V_after(j))`, which is
+/// exactly 1 whenever both sides state the same nominal voltage. A bus with no
+/// positive nominal voltage on either side contributes a unit ratio, because a
+/// writer that substitutes one nominal voltage divides by the same value the
+/// reader multiplies back.
+///
+/// A silent base change is still a loss: `base_kv` is a typed field, so the
+/// model comparison reports it and a cell claiming zero warnings fails on it.
 ///
 /// # Errors
 ///
@@ -141,10 +404,42 @@ pub fn ybus_change(
     before: &BalancedNetwork,
     after: &BalancedNetwork,
 ) -> Result<Option<YbusChange>, YbusUnavailable> {
+    ybus_change_within(before, after, ELECTRICAL_TOL)
+}
+
+/// [`ybus_change`] under a stated relative tolerance, for a format that states
+/// each value in a fixed width field and so cannot return more digits than the
+/// field holds.
+///
+/// # Errors
+///
+/// Returns [`YbusUnavailable`] when either side has no buildable admittance
+/// matrix.
+pub fn ybus_change_within(
+    before: &BalancedNetwork,
+    after: &BalancedNetwork,
+    tolerance: f64,
+) -> Result<Option<YbusChange>, YbusUnavailable> {
+    let nominal = |net: &BalancedNetwork| -> BTreeMap<usize, f64> {
+        net.buses()
+            .iter()
+            .filter(|bus| bus.base_kv.is_finite() && bus.base_kv > 0.0)
+            .map(|bus| (bus.id.0, bus.base_kv))
+            .collect()
+    };
+    let nominal_before = nominal(before);
+    let nominal_after = nominal(after);
+    let base_ratio = |bus: usize| -> f64 {
+        match (nominal_before.get(&bus), nominal_after.get(&bus)) {
+            (Some(before), Some(after)) => before / after,
+            _ => 1.0,
+        }
+    };
     let entries = |net: &BalancedNetwork| -> Option<BTreeMap<(usize, usize), (f64, f64)>> {
         let view = powerio_matrix::IndexedNetwork::new(net);
         let parts =
-            powerio_matrix::build_ybus(&view, &powerio_matrix::BuildOptions::default()).ok()?;
+            powerio_matrix::calc_admittance_matrix(&view, &powerio_matrix::BuildOptions::default())
+                .ok()?;
         let mut map = BTreeMap::new();
         for (value, (i, j)) in &parts.g {
             map.entry((view.bus_id(i).0, view.bus_id(j).0))
@@ -163,7 +458,9 @@ pub fn ybus_change(
     for key in a.keys().chain(b.keys().filter(|k| !a.contains_key(*k))) {
         let (ga, ba) = a.get(key).copied().unwrap_or((0.0, 0.0));
         let (gb, bb) = b.get(key).copied().unwrap_or((0.0, 0.0));
-        if beyond_tol(ga, gb, ELECTRICAL_TOL) || beyond_tol(ba, bb, ELECTRICAL_TOL) {
+        let scale = base_ratio(key.0) * base_ratio(key.1);
+        let (gb, bb) = (gb * scale, bb * scale);
+        if beyond_tol(ga, gb, tolerance) || beyond_tol(ba, bb, tolerance) {
             return Ok(Some(YbusChange {
                 from_bus: key.0,
                 to_bus: key.1,
@@ -197,11 +494,29 @@ pub fn injection_change(
     before: &BalancedNetwork,
     after: &BalancedNetwork,
 ) -> Option<InjectionChange> {
-    let change = first_moved(&per_bus(before, true), &per_bus(after, true), AC_INJECTIONS)?;
+    injection_change_within(before, after, ELECTRICAL_TOL)
+}
+
+/// [`injection_change`] under a stated relative tolerance, for a format that
+/// states each value in a fixed width field and so cannot return more digits
+/// than the field holds.
+#[must_use]
+pub fn injection_change_within(
+    before: &BalancedNetwork,
+    after: &BalancedNetwork,
+    tolerance: f64,
+) -> Option<InjectionChange> {
+    let change = first_moved(
+        &per_bus(before, true),
+        &per_bus(after, true),
+        AC_INJECTIONS,
+        tolerance,
+    )?;
     let status_only = first_moved(
         &per_bus(before, false),
         &per_bus(after, false),
         AC_INJECTIONS,
+        tolerance,
     )
     .is_none();
     Some(InjectionChange {
@@ -296,11 +611,13 @@ pub fn dc_terminal_change(
         &per_bus_dc(before, true),
         &per_bus_dc(after, true),
         DC_TERMINALS,
+        ELECTRICAL_TOL,
     )?;
     let status_only = first_moved(
         &per_bus_dc(before, false),
         &per_bus_dc(after, false),
         DC_TERMINALS,
+        ELECTRICAL_TOL,
     )
     .is_none();
     Some(InjectionChange {
@@ -318,12 +635,13 @@ fn first_moved<const N: usize>(
     a: &BTreeMap<usize, [f64; N]>,
     b: &BTreeMap<usize, [f64; N]>,
     quantities: [Injection; N],
+    tolerance: f64,
 ) -> Option<InjectionChange> {
     for key in a.keys().chain(b.keys().filter(|k| !a.contains_key(*k))) {
         let x = a.get(key).copied().unwrap_or([0.0; N]);
         let y = b.get(key).copied().unwrap_or([0.0; N]);
         for (i, quantity) in quantities.into_iter().enumerate() {
-            if beyond_tol(x[i], y[i], ELECTRICAL_TOL) {
+            if beyond_tol(x[i], y[i], tolerance) {
                 return Some(InjectionChange {
                     bus: *key,
                     quantity,
@@ -406,6 +724,28 @@ fn milli(x: f64) -> i64 {
     (x * 1e3).round() as i64
 }
 
+impl TransmissionCore {
+    /// Whether two cores state the same case under a relative tolerance on the
+    /// power totals.
+    ///
+    /// Element counts are compared exactly. A format that states each value in
+    /// a fixed width field returns fewer digits than the total carries, so the
+    /// totals are compared within `tolerance`.
+    #[must_use]
+    pub fn agrees_within(&self, other: &Self, tolerance: f64) -> bool {
+        let totals = |core: &Self| [core.load_p, core.load_q, core.gen_p, core.base_mva];
+        self.buses == other.buses
+            && self.branches == other.branches
+            && self.generators == other.generators
+            && self.loads == other.loads
+            && self.shunts == other.shunts
+            && totals(self)
+                .into_iter()
+                .zip(totals(other))
+                .all(|(before, after)| !beyond_tol(before as f64, after as f64, tolerance))
+    }
+}
+
 #[must_use]
 pub fn transmission_core(net: &BalancedNetwork) -> TransmissionCore {
     TransmissionCore {
@@ -463,7 +803,7 @@ pub fn transmission_value(net: &BalancedNetwork) -> serde_json::Value {
     *net.name_mut() = String::new();
     *net.source_format_mut() = powerio_matrix::SourceFormat::Matpower;
     for br in net.branches_mut() {
-        br.charging = Some(br.terminal_charging());
+        br.charging = Some(br.calc_terminal_charging());
     }
     net.buses_mut().sort_by_key(|b| b.id);
     net.branches_mut().sort_by_key(|a| (a.from, a.to));

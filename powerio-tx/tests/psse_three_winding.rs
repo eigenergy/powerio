@@ -89,6 +89,6 @@ fn every_branch_endpoint_lands_inside_the_reported_bus_space() {
 
     // The star branches ground buses 2 and 3 through the reference bus instead
     // of leaving them as ungrounded islands.
-    assert_eq!(view.n_connected_components(), 1);
+    assert_eq!(view.calc_island_count(), 1);
     view.check_reference_coverage().unwrap();
 }

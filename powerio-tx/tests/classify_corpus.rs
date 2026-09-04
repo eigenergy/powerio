@@ -20,7 +20,8 @@ const EXPECTED: &[(&str, &str, Option<&str>)] = &[
     // neither carries a case marker at top level.
     ("capi_matrix/case30_arrow_coo.json", "unknown", None),
     ("capi_matrix/case9_arrow_coo.json", "unknown", None),
-    // The BMOPF schema document describes cases; it is not one.
+    // A BMOPF schema document describes cases; it is not one.
+    ("dist/bmopf/bmopf-0.2.0.schema.json", "unknown", None),
     ("dist/bmopf/draft_bmopf_schema.json", "unknown", None),
     (
         "dist/bmopf/example_enwl_n1_f2.json",
@@ -49,44 +50,55 @@ const EXPECTED: &[(&str, &str, Option<&str>)] = &[
     ),
     ("goc3/goc3_small.json", "transmission", Some("goc3-json")),
     (
+        "goc3/goc3_small_solution.json",
+        "transmission",
+        Some("goc3-json"),
+    ),
+    (
         "pandapower/example.json",
         "transmission",
         Some("pandapower-json"),
     ),
-    ("model-json/case30_v4.json", "model-json", None),
-    // Frozen released 0.9 packages, kept for the one way stored module upgrade.
-    // Version 1 stored module fixtures for the calculation kinds.
-    ("module-v1/ac-opf-instance.pio.json", "module", None),
-    ("module-v1/ac-opf-solution.pio.json", "module", None),
-    ("module-v1/ac-pf-instance.pio.json", "module", None),
-    ("module-v1/ac-scuc-instance.pio.json", "module", None),
-    ("module-v1/ac-scuc-solution.pio.json", "module", None),
-    ("module-v1/ac-pf-solution.pio.json", "module", None),
-    ("module-v1/dc-opf-instance.pio.json", "module", None),
-    ("module-v1/dc-opf-solution.pio.json", "module", None),
-    ("module-v1/dc-pf-instance.pio.json", "module", None),
-    ("module-v1/dc-pf-solution.pio.json", "module", None),
-    (
-        "module-v1-upgrade/v010-dc-opf-economic-output.pio.json",
-        "module",
-        None,
-    ),
-    ("module-v1/mc-ac-opf-instance.pio.json", "module", None),
-    ("module-v1/mc-ac-opf-solution.pio.json", "module", None),
-    ("module-v1/mc-ac-pf-instance.pio.json", "module", None),
-    ("module-v1/mc-ac-pf-solution.pio.json", "module", None),
-    (
-        "module-v1/mc-operating-point-series.pio.json",
-        "module",
-        None,
-    ),
-    ("package/frozen-0.9-balanced.pio.json", "module", None),
-    ("package/frozen-0.9-multiconductor.pio.json", "module", None),
-    ("package/frozen-0.9-series.pio.json", "module", None),
     // PyPSA sidecars: a coordinate reference system string and an empty
     // metadata object, both beside the CSV folder that carries the case.
     ("pypsa/example/crs.json", "unknown", None),
     ("pypsa/example/meta.json", "unknown", None),
+    // PowSybl JIIDM fixtures use JSON from IIDM 1.11 onward.
+    (
+        "xiidm/powsybl/V1_11/eurostag-tutorial1-lf.json",
+        "transmission",
+        Some("jiidm"),
+    ),
+    (
+        "xiidm/powsybl/V1_12/eurostag-tutorial1-lf.json",
+        "transmission",
+        Some("jiidm"),
+    ),
+    (
+        "xiidm/powsybl/V1_13/eurostag-tutorial1-lf.json",
+        "transmission",
+        Some("jiidm"),
+    ),
+    (
+        "xiidm/powsybl/V1_14/eurostag-tutorial1-lf.json",
+        "transmission",
+        Some("jiidm"),
+    ),
+    (
+        "xiidm/powsybl/V1_15/eurostag-tutorial1-lf.json",
+        "transmission",
+        Some("jiidm"),
+    ),
+    (
+        "xiidm/powsybl/V1_16/eurostag-tutorial1-lf.json",
+        "transmission",
+        Some("jiidm"),
+    ),
+    (
+        "xiidm/powsybl/V1_17/eurostag-tutorial1-lf.json",
+        "transmission",
+        Some("jiidm"),
+    ),
 ];
 
 fn data_root() -> PathBuf {
@@ -165,17 +177,17 @@ fn every_json_fixture_classifies_as_stated() {
 /// while those paths stay public.
 #[test]
 fn classifier_and_diagnostic_types_are_crate_root_exports() {
-    let class = powerio_tx::classify_json_text(r#"{"model_kind":"balanced","model":{}}"#);
+    let class = powerio_tx::classify_json_text(r#"{"schema":"pio-ir","version":2}"#);
     assert!(matches!(class, powerio_tx::JsonClass::Module));
     assert!(matches!(
-        powerio_tx::classify_json_bytes(b"{\"model_kind\":\"balanced\",\"model\":{}}"),
+        powerio_tx::classify_json_bytes(b"{\"schema\":\"pio-ir\",\"version\":2}",),
         powerio_tx::JsonClass::Module
     ));
     assert!(matches!(
         powerio_tx::classify_json_text("not json"),
         powerio_tx::JsonClass::Case(powerio_tx::Detection::Unknown)
     ));
-    assert_eq!(powerio_tx::JSON_CLASSES.len(), 6);
+    assert_eq!(powerio_tx::JSON_CLASSES.len(), 5);
     let severity = powerio_tx::DiagnosticSeverity::Warning;
     assert!(severity < powerio_tx::DiagnosticSeverity::Error);
     let code_of: fn(&powerio_tx::Diagnostic) -> &str = powerio_tx::Diagnostic::code;

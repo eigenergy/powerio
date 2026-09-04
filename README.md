@@ -8,10 +8,11 @@
   >
 </p>
 
-PowerIO 0.10 established the public beta of the 1.0 API. The 1.0 candidate
-applies the corrections found while building external solver consumers. It parses
-power system data into typed values, converts supported formats, and builds
-sparse matrices and graph data.
+PowerIO 0.11 incorporates the API corrections found while exercising the 0.10
+beta with external solver consumers. It is the stabilization line for the
+candidate 1.0 API: 0.11.x is reserved for compatible fixes, performance
+improvements, and additive work. PowerIO parses power system data into typed
+values, emits supported formats, and builds sparse matrices and graph data.
 
 A parse returns a `PioModule`: one typed value plus its sources, diagnostics,
 source map, and history. The value can be a network, calculation instance,
@@ -35,70 +36,76 @@ pip install 'powerio[all]'
 
 Install the command line program with `cargo install powerio-cli`.
 
-## Parse and write
+## Parse and emit
 
 Rust:
 
 ```rust,ignore
-use powerio::{BalancedNetwork, Destination, PioModule, Source};
+use powerio::PioValue;
 
-let module = powerio::parse(Source::open("case9.m")?)?;
-let module: PioModule<BalancedNetwork> = powerio::try_into_typed(module)?;
-let module = module.map_value(powerio::PioValue::from);
-powerio::write_module_as(&module, "matpower", Destination::path("copy.m"))?;
+let module = powerio::parse("case9.m")?;
+let PioValue::BalancedNetwork(network) = &module.value else {
+    panic!("expected a balanced network");
+};
+assert_eq!(network.buses().len(), 9);
+powerio::emit(&module, "matpower", "copy.m")?;
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-Python detects the kind without a type argument:
+Python uses the value's concrete type:
 
 ```python
 import powerio
 
 module = powerio.parse("case9.m")
-module.kind                         # "balanced_network"
 network = module.value
-module.diagnostics()               # native diagnostic records
-network.write_file("copy.m", "matpower")  # byte exact same format write
+assert isinstance(network, powerio.BalancedNetwork)
+module.diagnostics                 # native diagnostic records
+powerio.emit(module, "matpower", "copy.m")  # byte exact same format emission
 ```
 
-Pass `value_type=powerio.BalancedNetwork` only when the caller wants to assert
-the expected kind while parsing.
+Pass a file object for text already in memory and a bytes-like object for
+binary data. A Python `str` names a path.
 
 Julia uses multiple dispatch on the typed value:
 
 ```julia
 using PowerIO
 
-module_ = parse_file("case9.m")     # PioModule{BalancedNetwork}
+module_ = parse("case9.m")          # PioModule{BalancedNetwork}
 network = module_.value
-n_buses(network)                    # 9
-diagnostics(module_)
-write_file(module_, "copy.m")
+length(network.buses)               # 9
+module_.diagnostics
+emit(module_, "matpower", "copy.m")
 ```
 
-The command line interface uses the same readers and writers:
+The command line interface uses the same parsers and emitters:
 
 ```sh
 powerio convert case9.m --to psse -o case9.raw
-powerio module case9.m -o case9.pio.json
+powerio serialize case9.m -o case9.pio.json
 powerio verify case9.m --kind bdoubleprime
 powerio sensitivities case9.m -o out
 ```
 
-An unchanged module writes its source format byte for byte. Cross format
+An unchanged module emits its source format byte for byte. Cross format
 conversion keeps what the destination can represent and returns a diagnostic
-for each loss. `.pio.json` version 1 stores a module for exchange between
-PowerIO consumers; it does not replace domain formats such as MATPOWER,
-PSS/E, or OpenDSS.
+for each loss. `serialize` writes PowerIO IR and `deserialize` reads it. The IR
+does not replace grid exchange formats such as MATPOWER, PSS/E, or OpenDSS.
 
 ## Supported values and formats
 
 Balanced network formats:
 
 - MATPOWER `.m`
-- PSS/E `.raw` revisions 33, 34, and 35
+- PSS/E `.raw` revisions 32 through 35; fresh output uses 33, 34, or 35
+- PSS/E RAWX JSON revision 35
+- PowSybl XIIDM XML and JIIDM JSON 1.0 through 1.17; fresh output uses 1.17
+- CIM CGMES 2.4.15 and 3.0 profile sets; fresh output uses CGMES 3.0
+- ENTSO-E UCTE-DEF `.uct` revisions 2003.09.01 and 2007.05.01; fresh output uses 2007.05.01
 - PowerWorld `.aux`; `.pwb` is read only and `.pwd` uses the display API
 - GE PSLF `.epc`
+- IEEE Common Data Format (`ieee-cdf`), read only
 - PowerModels JSON
 - Egret JSON
 - pandapower JSON
@@ -113,8 +120,7 @@ Multiconductor distribution formats:
 
 Calculation and dataset inputs:
 
-- DOE GO Challenge 3 JSON produces `AcScucInstance`
-- BMOPF JSON produces `McAcOpfInstance`
+- a DOE GO Challenge 3 problem data file produces `AcScucInstance`; the problem together with its matching solution data produces `AcScucSolution`, and complete solutions emit the official solution JSON shape
 - DeepMind OPFData JSON produces `AcOpfSolution`
 - GridFM Parquet produces `ScenarioSet<BalancedNetwork>`
 - Supported PyPSA and Egret profiles can produce typed time series
@@ -126,11 +132,11 @@ the supported profile and write behavior for every format.
 
 ```text
 powerio-core     Source, PioModule, diagnostics, time series, and output types
-powerio-tx       balanced transmission model, parsers, and writers
+powerio-tx       balanced transmission model, parsers, and emitters
 powerio-dist     multiconductor distribution model and format support
 powerio-prob     operating points, calculation instances, and solutions
 powerio-matrix   sparse matrices, sensitivities, and graph data
-powerio          entry facade, dynamic values, dispatch, and .pio.json
+powerio          entry facade, dynamic values, dispatch, and PowerIO IR
 powerio-capi     C ABI for C, C++, Julia, and other bindings
 powerio-py       native extension for the Python package
 powerio-cli      command line interface and terminal interface

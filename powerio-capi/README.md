@@ -1,115 +1,143 @@
-# powerio-capi
+# PowerIO C ABI
 
-The C ABI parses power system sources into module handles, exposes typed accessors and structured diagnostics over them, converts and writes supported formats, and serves numeric tables and Arrow exports for matrix assembly. It is how every non-Rust consumer except the PyO3 Python package reaches powerio; PowerIO.jl resolves these symbols from a pinned artifact.
+ABI 7 exposes PowerIO modules, typed electrical values, diagnostics, grid
+exchange formats, PowerIO IR, updates, and DC calculations to C, C++, Julia,
+and other FFI consumers. [PowerIO.jl](https://github.com/eigenergy/PowerIO.jl)
+is the supported Julia binding.
 
-The header is [`include/powerio.h`](https://github.com/eigenergy/powerio/blob/main/powerio-capi/include/powerio.h). It is generated and checked in; its comment block states the naming, ownership, and error grammars and is authoritative where prose disagrees.
+The checked in header is `include/powerio.h`. Regenerate it after changing a
+public `pio_*` function:
 
-## Build
-
-```
-cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,prob
-# → target/release/libpowerio_capi.{so,dylib}  (cdylib)
-#   target/release/libpowerio_capi.a            (staticlib)
-```
-
-Regenerate the header after changing the ABI:
-
-```
+```sh
 cbindgen --config powerio-capi/cbindgen.toml --crate powerio-capi \
   --output powerio-capi/include/powerio.h
 ```
 
-The test suite pins the checked-in header shape. Run the core and optional surfaces before changing `powerio.h` or an exported `pio_*` function:
+Build and check the ABI with:
 
-```
-cargo test -p powerio-capi --no-default-features
-cargo test -p powerio-capi --features arrow
-cargo test -p powerio-capi --features dist
-cargo test -p powerio-capi --features arrow,matrix,gridfm,dist,prob
-bash scripts/ci-clippy.sh capi-release
+```sh
+cargo build -p powerio-capi --release
+cargo test -p powerio-capi
 scripts/capi-header-parity.sh
 scripts/capi-smoke.sh
 ```
 
-## C
+## Parse, inspect, and emit
 
 ```c
 #include "powerio.h"
 #include <stdio.h>
-#include <stdlib.h>
+#include <string.h>
 
 int main(void) {
-    /* Check the handshake before anything else. */
     if (pio_abi_version() != PIO_ABI_VERSION) return 1;
 
     PioError *error = NULL;
-    PioModule *module = pio_parse_file("case9.m", NULL, &error);
+    const char *path = "case9.m";
+    PioSource *source = pio_source_open(path, strlen(path), &error);
+    PioModule *module = pio_parse(source, NULL, 0, &error);
+    pio_source_release(source);
     if (!module) {
-        fprintf(stderr, "%s: %s\n", pio_error_code(error), pio_error_message(error));
+        PioStringView message = pio_error_message(error);
+        fprintf(stderr, "%.*s\n", (int)message.len, message.data);
         pio_error_release(error);
         return 1;
     }
 
-    /* The detected value kind is a stable string. */
-    printf("kind %s\n", pio_module_kind(module));
+    PioValueHandle *value = pio_module_value(module);
+    PioStringView type = pio_value_type_name(value);
+    printf("%.*s\n", (int)type.len, type.data);
 
-    /* The reader's findings, as structured records. */
-    PioDiagnostics *findings = pio_module_diagnostics(module, &error);
-    for (size_t i = 0; i < pio_diagnostics_len(findings); i++)
-        printf("%s %s: %s\n", pio_diagnostic_severity(findings, i),
-               pio_diagnostic_code(findings, i), pio_diagnostic_message(findings, i));
-    pio_diagnostics_release(findings);
+    PioBalancedNetwork *network =
+        pio_value_balanced_network(value, &error);
+    printf("%zu buses, %zu branches\n",
+           pio_balanced_network_bus_count(network),
+           pio_balanced_network_branch_count(network));
 
-    /* The typed value: an independently owned network handle. */
-    PioBalancedNetwork *net = pio_module_balanced_network(module, &error);
-    size_t n = pio_balanced_network_n_buses(net);
-    size_t m = pio_balanced_network_n_branches(net);
-    printf("%zu buses, %zu branches, baseMVA %g\n",
-           n, m, pio_balanced_network_base_mva(net));
+    PioDestination *destination =
+        pio_destination_memory("case9.raw", 9, &error);
+    PioEmitResult *result =
+        pio_emit(module, "psse", 4, destination, &error);
+    PioArtifact *artifact = pio_emit_result_artifact(result, 0, &error);
+    PioByteView bytes = pio_artifact_bytes(artifact);
+    /* bytes.data remains valid until artifact is released. */
 
-    /* Pull the branch table to build a susceptance matrix yourself. The
-     * extractors write up to cap entries and return the total, so a short
-     * buffer is detectable; NULL out (or cap 0) is the count query. */
-    int64_t *from = malloc(m * sizeof *from), *to = malloc(m * sizeof *to);
-    double  *x    = malloc(m * sizeof *x);
-    pio_balanced_network_branches(net, from, to, NULL, x, NULL, NULL, NULL, NULL, m);
-    /* ... assemble L = A diag(1/x) A^T from (from, to, x) ... */
-
-    /* One write operation on the module: the same format echoes byte exact,
-     * a cross format write reports its losses through the out handle. */
-    char *matpower = pio_module_write_str(module, "matpower", NULL, &error);
-    if (matpower) { /* ... byte exact MATPOWER text ... */ pio_string_release(matpower); }
-
-    PioDiagnostics *losses = NULL;
-    char *json = pio_module_write_str(module, "powermodels-json", &losses, &error);
-    if (json) { /* ... PowerModels JSON text ... */ pio_string_release(json); }
-    pio_diagnostics_release(losses);
-
-    /* One call conversion without keeping a handle. */
-    char *raw = pio_convert_file("case9.m", NULL, "psse", NULL, NULL, &error);
-    if (raw) { /* ... PSS/E text ... */ pio_string_release(raw); }
-
-    free(from); free(to); free(x);
-    pio_balanced_network_release(net);
+    pio_artifact_release(artifact);
+    pio_emit_result_release(result);
+    pio_destination_release(destination);
+    pio_balanced_network_release(network);
+    pio_value_release(value);
     pio_module_release(module);
     return 0;
 }
 ```
 
-Every handle type has a `retain`/`release` pair; `release(NULL)` is a no-op, and releasing the module never invalidates the network handle taken from it. Every fallible entry point takes a `PioError **` out parameter (NULL to ignore) and catches panics at the boundary.
+Use `pio_source_from_memory` for text or binary memory. A `PioSource` is the
+only parse input. `pio_parse` is the only grid exchange parse operation.
+For DOE GO Challenge 3, a directory containing the problem file parses to an
+`AcScucInstance`; add the matching solution file to that directory and the same
+call parses an `AcScucSolution`.
 
-## Julia
+Use `pio_emit` for every grid exchange output. A memory destination returns
+artifact bytes; a path destination writes a file or directory and returns the
+artifact inventory. PowerIO IR is separate:
 
-Use [PowerIO.jl](https://github.com/eigenergy/PowerIO.jl): `parse_file(path)` returns the typed `PioModule{T}` over this ABI, with the ownership rules held by finalizers and borrowed views that root their owner. The raw `ccall` shape it builds on is one symbol per operation, resolved with `dlsym` after the `pio_abi_version()` handshake.
+- `pio_module_serialize`
+- `pio_module_deserialize`
 
-## Balanced model JSON
+## Values and ownership
 
-For consumers that want the whole case rather than the dense table slices, `pio_balanced_network_to_json` and `pio_balanced_network_from_json` carry the entire balanced network: buses, loads, shunts, branches, generators, storage, HVDC, and extras. It is a network serialization rather than a case format; a bare `.json` holding it classifies as `model-json`.
+`pio_module_value` returns an owner rooted `PioValueHandle`.
+`pio_value_type_name` returns a canonical structural name such as
+`powerio.BalancedNetwork`, `powerio.DcOpfInstance`, or
+`powerio.TimeSeries<powerio.MulticonductorNetwork>`. Use
+`pio_value_is_type` for an exact predicate and then call the matching typed
+accessor.
 
-## The stored module
+The typed accessors cover balanced and multiconductor networks, operating
+points, PF/OPF/SCUC instances and solutions, time series, and scenario sets.
+They do not serialize or clone the value. A child handle keeps its module
+owner alive, so it remains valid after the original module handle is released.
 
-`pio_module_read_json` and `pio_module_write_json` carry the versioned `.pio.json` document for any value kind, including the one way upgrade of released 0.9 documents. State selection over series and scenario sets (`pio_module_export_state`, `pio_module_state_inventory_json`), the explicit balanced lowering (`pio_module_lower_to_balanced`), and DC branch data (`pio_dc_data_*`, feature `prob`) operate on the same handles.
+Every opaque handle has `retain` and `release` functions. Releasing `NULL` is
+a no op. Borrowed string, byte, index, and floating point views remain valid
+until their documented owner is released or mutated.
 
-## Optional features
+## Diagnostics and errors
 
-Probe at runtime with `pio_has_feature("arrow" | "matrix" | "gridfm" | "dist" | "prob")`; each symbol's own header guard states what it needs, and a build without a feature exports nothing for it. `pio_build_info` reports the build's version, ABI integer, features, foreign schema versions, and stable token sets in one JSON document.
+Diagnostics are stored on `PioModule` and read with
+`pio_module_diagnostics`. Emission diagnostics belong to `PioEmitResult`.
+Both use `PioDiagnostics` and the `pio_diagnostic_*` accessors.
+
+Every fallible operation accepts `PioError **`. Pass `NULL` only when the
+failure details are intentionally discarded. Branch on `pio_error_code`; the
+rendered message is for people.
+
+## Typed updates
+
+Construct a stable `PioComponentId`, a replacement value with an explicit
+unit, and one typed update. Wrap operating point and network updates as
+`PioCalculationUpdate` and pass the complete array to `pio_apply_updates`.
+PowerIO validates the batch before changing the module.
+
+`PioUpdateReport` lists the exact component identity, field, and optional
+terminal changed. `pio_update_report_connectivity_changed` is true only when
+electrical connectivity changed. If borrowed value handles exist, the module
+detaches by copy on write; those handles continue to refer to the pre-edit
+value.
+
+## DC calculations
+
+The public calculations return generic CSR matrix and vector handles:
+
+- `pio_calc_incidence_matrix`
+- `pio_calc_branch_susceptances`
+- `pio_calc_bus_susceptance_matrix`
+- `pio_calc_branch_flow_matrix`
+- `pio_calc_branch_phase_shift_injection`
+- `pio_calc_bus_phase_shift_injection`
+- `pio_calc_branch_flow_dc`
+- `pio_calc_bus_injection_dc`
+
+The branch susceptance formula is named explicitly as
+`series_susceptance`, `tap_adjusted_reactance`, or `reactance_only`.

@@ -5,11 +5,11 @@
 Rust:
 
 ```sh
-cargo add powerio            # parsing, conversion, .pio.json
+cargo add powerio            # parsing, emission, .pio.json
 cargo add powerio -F matrix  # + sparse matrices and graph data
 ```
 
-Python (parse, convert, and write need only the interpreter; matrices pull scipy):
+Python (parse and emit need only the interpreter; matrices pull scipy):
 
 ```sh
 pip install powerio          # or: pip install "powerio[all]"
@@ -30,18 +30,18 @@ cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,prob
 # → target/release/libpowerio_capi.{so,dylib}, header powerio-capi/include/powerio.h
 ```
 
-## Parse, inspect, write
+## Parse, inspect, emit
 
 Julia:
 
 ```julia
 using PowerIO
-case = parse_file("case9.m")
-case isa PioModule{BalancedNetwork}   # true: the kind was detected
-n_buses(case.value)                   # 9
-diagnostics(case)                     # the reader's findings, usually empty here
-write_file(case, "copy.m")            # same format: byte exact echo
-text, findings = to_format(case.value, "psse")  # cross format: text + reported losses
+case = parse("case9.m")
+case isa PioModule{BalancedNetwork}
+length(case.value.buses)              # 9
+case.diagnostics                      # the reader's findings, usually empty here
+emit(case, "matpower", "copy.m")     # same format: byte exact echo
+result = emit(case, "psse")         # another format: artifacts + diagnostics
 ```
 
 Python:
@@ -49,21 +49,25 @@ Python:
 ```python
 import powerio
 case = powerio.parse("case9.m")
-case.kind                       # "balanced_network"
 net = case.value                # BalancedNetwork
-case.diagnostics()              # native records: code, severity, message, spans
+case.diagnostics                # native records: code, severity, message, spans
+powerio.emit(case, "matpower", "copy.m")
 ```
 
 Rust:
 
 ```rust,ignore
-use powerio::Source;
-
-let module = powerio::parse(Source::open("case9.m")?)?;
-let case: powerio::PioModule<powerio::BalancedNetwork> =
-    powerio::try_into_typed(module)?;
-let (text, findings) = powerio::write_module_str(
-    &case.map_value(powerio::PioValue::from), "matpower")?;
+let module = powerio::parse("case9.m")?;
+match &module.value {
+    powerio::PioValue::BalancedNetwork(network) => {
+        println!("{} buses", network.buses().len());
+    }
+    other => println!("value type: {}", other.type_name()),
+}
+let result = powerio::emit(&module, "matpower", "copy.m")?;
+for diagnostic in result.diagnostics() {
+    eprintln!("{}", diagnostic.code());
+}
 ```
 
 Command line:

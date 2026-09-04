@@ -1,0 +1,2 @@
+Redirect ../shared.dss
+New Line.main bus1=source.1.2.3 bus2=load.1.2.3 phases=3 linecode=shared length=1 units=km

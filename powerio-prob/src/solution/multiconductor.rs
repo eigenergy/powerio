@@ -1,7 +1,7 @@
 //! The multiconductor solutions: `McAcPfSolution` and `McAcOpfSolution`.
 //!
 //! Terminal values are stored in the shared network's bus table order, each
-//! bus's terminals in its stated order — the layout the state builders use —
+//! bus's terminals in its stated order — the layout the operating point builders use —
 //! and read back by `(bus, terminal)`. Source injections are per source
 //! terminal in source table order.
 
@@ -55,7 +55,7 @@ impl TerminalIndex {
                     .is_some()
                 {
                     return Err(Error::new(
-                        &codes::BUILD_STATE_IDENTITY_UNKNOWN,
+                        &codes::BUILD_OPERATING_POINT_IDENTITY_UNKNOWN,
                         format!("bus `{}`: duplicate terminal identity `{terminal}`", row.id),
                     ));
                 }

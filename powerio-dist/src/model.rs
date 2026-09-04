@@ -4,7 +4,7 @@
 //! terminal names per bus, explicit grounding on buses, terminal maps on
 //! every element, SI units (V, W, var, ohm, S, meters) and radians. Terminal
 //! names are the OpenDSS node numbers as strings; implicit ground
-//! connections materialize as an explicit perfectly grounded neutral
+//! connections become an explicit perfectly grounded neutral
 //! terminal on the bus (named 4 on a three phase bus), the convention
 //! PowerModelsDistribution and the public BMOPF examples share.
 //!
@@ -22,7 +22,7 @@ use crate::geo::{DistGeoMeta, DistLocation};
 pub type Extras = BTreeMap<String, serde_json::Value>;
 
 /// A square matrix in conductor order, row major.
-pub type Mat = Vec<Vec<f64>>;
+pub type ConductorMatrix = Vec<Vec<f64>>;
 
 /// Where the network came from; fixes the echo tier target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,7 +37,7 @@ pub enum DistSourceFormat {
 
 impl DistSourceFormat {
     /// The canonical format name (`dss`, `pmd-json`, `bmopf-json`), accepted
-    /// back by [`crate::dist_target_from_name`].
+    /// back by [`crate::parse_dist_target_format`].
     pub fn name(self) -> &'static str {
         match self {
             DistSourceFormat::Dss => "dss",
@@ -114,19 +114,17 @@ pub struct DistLineCode {
     pub name: String,
     pub n_conductors: usize,
     /// Series impedance, ohm per meter.
-    pub r_series: Mat,
-    pub x_series: Mat,
+    pub r_series: ConductorMatrix,
+    pub x_series: ConductorMatrix,
     /// Shunt admittance halves at each end, S per meter.
-    pub g_from: Mat,
-    pub b_from: Mat,
-    pub g_to: Mat,
-    pub b_to: Mat,
-    /// Ampacity per conductor. A `null` element reads as +Inf (#268).
-    #[serde(default, with = "crate::nonfinite::upper_bounds")]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
+    pub g_from: ConductorMatrix,
+    pub b_from: ConductorMatrix,
+    pub g_to: ConductorMatrix,
+    pub b_to: ConductorMatrix,
+    /// Ampacity per conductor.
+    #[serde(default)]
     pub i_max: Option<Vec<f64>>,
-    #[serde(default, with = "crate::nonfinite::upper_bounds")]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
+    #[serde(default)]
     pub s_max: Option<Vec<f64>>,
     /// Origin of the impedance matrices (BMOPF `source`, e.g. "fem",
     /// "datasheet", "import").
@@ -137,7 +135,11 @@ pub struct DistLineCode {
 
 impl DistLineCode {
     #[must_use]
-    pub fn new(name: impl Into<String>, r_series: Mat, x_series: Mat) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        r_series: ConductorMatrix,
+        x_series: ConductorMatrix,
+    ) -> Self {
         let n_conductors = matrix_extent(&r_series).max(matrix_extent(&x_series));
         Self {
             name: name.into(),
@@ -166,12 +168,7 @@ pub struct DistLine {
     pub terminal_map_from: Vec<String>,
     pub terminal_map_to: Vec<String>,
     pub linecode: String,
-    /// Meters. A `null` reads as NaN: a BMOPF line without a length (#268).
-    #[serde(with = "crate::nonfinite::nan_scalar")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(schema_with = "crate::nonfinite::nullable_number")
-    )]
+    /// Meters.
     pub length: f64,
     /// Polyline route in the network's coordinate space (`MulticonductorNetwork.geo`),
     /// present only when a source provides intermediate geometry.
@@ -181,20 +178,9 @@ pub struct DistLine {
     pub route: Option<Vec<DistLocation>>,
     /// Per-conductor ampacity and apparent power limits, amps and VA
     /// (BMOPF schema 0.1.0 line fields, alongside the linecode's own).
-    /// A `null` element reads as +Inf (#268).
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        with = "crate::nonfinite::upper_bounds"
-    )]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub i_max: Option<Vec<f64>>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        with = "crate::nonfinite::upper_bounds"
-    )]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub s_max: Option<Vec<f64>>,
     pub extras: Extras,
 }
@@ -240,19 +226,9 @@ pub struct DistCapacitor {
     pub terminal_map: Vec<String>,
     pub configuration: Configuration,
     /// Nameplate rated reactive power of the whole bank, vars.
-    #[serde(with = "crate::nonfinite::nan_scalar")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(schema_with = "crate::nonfinite::nullable_number")
-    )]
     pub q_rated: f64,
     /// Nameplate nominal voltage, volts: line to line for the three phase
     /// configurations, across the terminals for SINGLE_PHASE.
-    #[serde(with = "crate::nonfinite::nan_scalar")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(schema_with = "crate::nonfinite::nullable_number")
-    )]
     pub v_nom: f64,
     pub extras: Extras,
 }
@@ -289,9 +265,8 @@ pub struct DistSwitch {
     pub terminal_map_from: Vec<String>,
     pub terminal_map_to: Vec<String>,
     pub open: bool,
-    /// Ampacity per conductor. A `null` element reads as +Inf (#268).
-    #[serde(default, with = "crate::nonfinite::upper_bounds")]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
+    /// Ampacity per conductor.
+    #[serde(default)]
     pub i_max: Option<Vec<f64>>,
     pub extras: Extras,
 }
@@ -431,19 +406,14 @@ pub struct DistGenerator {
     /// Setpoint, watts per phase.
     pub p_nom: Vec<f64>,
     pub q_nom: Vec<f64>,
-    /// Bounds per phase. A `null` element reads as -Inf in a lower bound
-    /// and +Inf in an upper bound: the PMD unbounded spelling (#268).
-    #[serde(default, with = "crate::nonfinite::lower_bounds")]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
+    /// Bounds per phase.
+    #[serde(default)]
     pub p_min: Option<Vec<f64>>,
-    #[serde(default, with = "crate::nonfinite::upper_bounds")]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
+    #[serde(default)]
     pub p_max: Option<Vec<f64>>,
-    #[serde(default, with = "crate::nonfinite::lower_bounds")]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
+    #[serde(default)]
     pub q_min: Option<Vec<f64>>,
-    #[serde(default, with = "crate::nonfinite::upper_bounds")]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
+    #[serde(default)]
     pub q_max: Option<Vec<f64>>,
     /// Generation cost, $/kWh per phase conductor, exactly as the source
     /// states it: one entry per phase, or a single entry for a scalar
@@ -452,19 +422,9 @@ pub struct DistGenerator {
     pub cost: Option<Vec<f64>>,
     /// Per-conductor apparent power and current limits, VA and amps (BMOPF
     /// generator fields, alongside the p/q bounds).
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        with = "crate::nonfinite::upper_bounds"
-    )]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub s_max: Option<Vec<f64>>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        with = "crate::nonfinite::upper_bounds"
-    )]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub i_max: Option<Vec<f64>>,
     pub extras: Extras,
 }
@@ -539,26 +499,19 @@ pub struct DistIbr {
     pub topology: IbrTopology,
     pub prime_mover: IbrPrimeMover,
     /// Per phase apparent power nameplate ratings, volt amperes.
-    #[serde(with = "crate::nonfinite::upper_limits")]
-    #[cfg_attr(feature = "schema", schemars(with = "Vec<Option<f64>>"))]
     pub s_max: Vec<f64>,
     /// Per conductor current limits, amperes.
-    #[serde(default, with = "crate::nonfinite::upper_bounds")]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
+    #[serde(default)]
     pub i_max: Option<Vec<f64>>,
     /// Available active power, watts.
     pub p_avail: Option<f64>,
-    #[serde(default, with = "crate::nonfinite::lower_bounds")]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
+    #[serde(default)]
     pub p_min: Option<Vec<f64>>,
-    #[serde(default, with = "crate::nonfinite::upper_bounds")]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
+    #[serde(default)]
     pub p_max: Option<Vec<f64>>,
-    #[serde(default, with = "crate::nonfinite::lower_bounds")]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
+    #[serde(default)]
     pub q_min: Option<Vec<f64>>,
-    #[serde(default, with = "crate::nonfinite::upper_bounds")]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
+    #[serde(default)]
     pub q_max: Option<Vec<f64>>,
     pub control_profile: Option<String>,
     pub voltage_aggregation: Option<IbrVoltageAggregation>,
@@ -708,8 +661,8 @@ pub struct DistShunt {
     pub bus: String,
     pub terminal_map: Vec<String>,
     /// Total siemens in conductor order.
-    pub g: Mat,
-    pub b: Mat,
+    pub g: ConductorMatrix,
+    pub b: ConductorMatrix,
     pub extras: Extras,
 }
 
@@ -719,8 +672,8 @@ impl DistShunt {
         name: impl Into<String>,
         bus: impl Into<String>,
         terminal_map: Vec<String>,
-        g: Mat,
-        b: Mat,
+        g: ConductorMatrix,
+        b: ConductorMatrix,
     ) -> Self {
         Self {
             name: name.into(),
@@ -750,25 +703,10 @@ pub struct DistWinding {
     pub terminal_map: Vec<String>,
     pub conn: DistWindingConn,
     /// Rated winding voltage, volts (line to line for 2 and 3 phase).
-    #[serde(with = "crate::nonfinite::nan_scalar")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(schema_with = "crate::nonfinite::nullable_number")
-    )]
     pub v_ref: f64,
     /// Volt amperes.
-    #[serde(with = "crate::nonfinite::nan_scalar")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(schema_with = "crate::nonfinite::nullable_number")
-    )]
     pub s_rating: f64,
     /// Winding resistance, percent of the winding base.
-    #[serde(with = "crate::nonfinite::nan_scalar")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(schema_with = "crate::nonfinite::nullable_number")
-    )]
     pub r_pct: f64,
     pub tap: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -927,11 +865,7 @@ impl MulticonductorNetwork {
 /// `source` retains the original text for the byte exact echo tier;
 /// `defaulted` records, per element (`"class.name"` key), the fields the
 /// reader materialized from format defaults rather than the source text.
-// The one owned table store behind the `MulticonductorNetwork` handle. The
-// doc string above is frozen into the generated 0.9 schema description, so
-// the handle split leaves it as it was (its `source` sentence describes the
-// 0.9 document, which the upgrade reader still accepts); the schema also
-// keeps the handle's name through the schemars rename below.
+// The one owned table store behind the `MulticonductorNetwork` handle.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(rename = "MulticonductorNetwork"))]
@@ -979,8 +913,7 @@ pub(crate) struct MulticonductorNetworkTables {
 // `remote = "Self"` turns the derived serde impls into inherent functions;
 // routing them through `powerio_core::nonfinite` spells a nonfinite float as
 // `"Infinity"`/`"-Infinity"`/`"NaN"` on every JSON route, the same convention
-// as the balanced model. The bound fields' `with` modules keep accepting the
-// `null` a pre-0.9 writer emitted (read side only).
+// as the balanced model.
 impl serde::Serialize for MulticonductorNetwork {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         MulticonductorNetworkTables::serialize(
@@ -1174,7 +1107,7 @@ pub(crate) fn warn_defaulted_frequency(
 /// per finding: the same walk the reader's warning pass runs, exposed so a
 /// decoder can refuse a document whose network fails it.
 #[must_use]
-pub fn unresolved_references(net: &MulticonductorNetwork) -> Vec<String> {
+pub fn find_unresolved_references(net: &MulticonductorNetwork) -> Vec<String> {
     let mut diags = crate::collect::Diagnostics::new();
     warn_unresolved_references(net, &mut diags);
     diags
@@ -1280,11 +1213,11 @@ pub(crate) fn warn_unresolved_references(
     }
 }
 
-fn zero_mat(n: usize) -> Mat {
+fn zero_mat(n: usize) -> ConductorMatrix {
     vec![vec![0.0; n]; n]
 }
 
-fn matrix_extent(m: &Mat) -> usize {
+fn matrix_extent(m: &ConductorMatrix) -> usize {
     m.iter().map(Vec::len).fold(m.len(), usize::max)
 }
 
@@ -1375,7 +1308,7 @@ pub(crate) fn pair_keys(n: usize) -> Vec<(usize, usize)> {
 
 /// Builds an `n`x`n` matrix from lower triangle rows (the OpenDSS matrix
 /// entry convention) or full rows; symmetric completion for the triangle.
-pub(crate) fn square_from_rows(rows: &[Vec<f64>], n: usize) -> Option<Mat> {
+pub(crate) fn square_from_rows(rows: &[Vec<f64>], n: usize) -> Option<ConductorMatrix> {
     let mut m = vec![vec![0.0; n]; n];
     if rows.len() != n {
         return None;
@@ -1427,5 +1360,20 @@ mod tests {
     fn wrong_shape_is_rejected() {
         assert!(square_from_rows(&[vec![1.0], vec![2.0]], 2).is_none());
         assert!(square_from_rows(&[vec![1.0, 2.0]], 2).is_none());
+    }
+
+    #[test]
+    fn multiconductor_json_uses_only_final_nonfinite_spellings() {
+        let mut network = MulticonductorNetwork::named("strict-ir");
+        let mut code = DistLineCode::new("lc", vec![vec![0.1]], vec![vec![0.2]]);
+        code.i_max = Some(vec![f64::INFINITY]);
+        network.linecodes_mut().push(code);
+
+        let text = serde_json::to_string(&network).unwrap();
+        assert!(text.contains(r#""i_max":["Infinity"]"#), "{text}");
+
+        let invalid = text.replace(r#""i_max":["Infinity"]"#, r#""i_max":[null]"#);
+        let error = serde_json::from_str::<MulticonductorNetwork>(&invalid).unwrap_err();
+        assert!(error.to_string().contains("cannot be null"), "{error}");
     }
 }

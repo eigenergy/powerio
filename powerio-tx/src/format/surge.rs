@@ -9,13 +9,13 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
-use super::{Conversion, finish, jnum, warn_extra_branch_rating_sets};
+use super::{TextEmission, finish, jnum, warn_extra_branch_rating_sets};
 use crate::diagnostics::codes::EMIT_SURGE as F;
 use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
     BalancedNetwork, BalancedNetworkTables, Branch, BranchCharging, BranchCurrentRatings,
-    BranchSolution, Bus, BusId, BusType, Extras, GEN_EXTRA_KEYS, GenCaps, GenCost, Generator, Hvdc,
-    Load, LoadVoltageModel, Shunt, SourceFormat, Storage,
+    BranchSolution, Bus, BusId, BusType, Extras, GEN_EXTRA_KEYS, GenCaps, GenCost, Generator,
+    GeneratorEnergySource, Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat, Storage,
 };
 use crate::normalize;
 use crate::{Error, Result};
@@ -26,7 +26,7 @@ const SCHEMA_VERSION: &str = "0.1.0";
 const EPS: f64 = 1e-12;
 
 #[must_use]
-pub fn write_surge_json(net: &BalancedNetwork) -> Conversion {
+pub fn write_surge_json(net: &BalancedNetwork) -> TextEmission {
     let mut warnings = Diagnostics::new();
     let mut network = Map::new();
 
@@ -92,7 +92,7 @@ pub fn write_surge_json(net: &BalancedNetwork) -> Conversion {
     root.insert("network".into(), Value::Object(network));
 
     warn_extra_branch_rating_sets(&F, FMT, net, &mut warnings);
-    super::warn_dropped_areas(&F, FMT, net, &mut warnings);
+    super::warn_dropped_areas(&F, FMT, true, net, &mut warnings);
     finish(&F, root, warnings)
 }
 
@@ -194,19 +194,19 @@ fn shunt_obj((i, shunt): (usize, &Shunt)) -> Value {
 }
 
 fn branch_obj((_i, branch): (usize, &Branch)) -> Value {
-    let charging = branch.terminal_charging();
+    let charging = branch.calc_terminal_charging();
     let mut obj = Map::new();
     obj.insert("from_bus".into(), Value::from(branch.from.0 as u64));
     obj.insert("to_bus".into(), Value::from(branch.to.0 as u64));
     obj.insert("circuit".into(), Value::String("1".into()));
     obj.insert("r".into(), jnum(branch.r));
     obj.insert("x".into(), jnum(branch.x));
-    obj.insert("b".into(), jnum(branch.total_charging_b()));
+    obj.insert("b".into(), jnum(branch.calc_total_charging_b()));
     obj.insert("g_shunt_from".into(), jnum(charging.g_fr));
     obj.insert("b_shunt_from".into(), jnum(charging.b_fr));
     obj.insert("g_shunt_to".into(), jnum(charging.g_to));
     obj.insert("b_shunt_to".into(), jnum(charging.b_to));
-    obj.insert("tap".into(), jnum(branch.effective_tap()));
+    obj.insert("tap".into(), jnum(branch.calc_effective_tap()));
     obj.insert("phase_shift_rad".into(), jnum(branch.shift.to_radians()));
     obj.insert("rating_a_mva".into(), jnum(branch.rate_a));
     obj.insert("rating_b_mva".into(), jnum(branch.rate_b));
@@ -280,7 +280,10 @@ fn gen_obj(
     obj.insert("gen_type".into(), Value::String("Synchronous".into()));
     obj.insert("pfr_eligible".into(), Value::Bool(true));
     obj.insert("quick_start".into(), Value::Bool(false));
-    obj.insert("voltage_regulated".into(), Value::Bool(true));
+    obj.insert(
+        "voltage_regulated".into(),
+        Value::Bool(generator.voltage_regulation_on),
+    );
     if let Some(cost) = &generator.cost {
         if let Some(cost) = cost_obj(cost, warnings) {
             obj.insert("cost".into(), cost);
@@ -564,6 +567,9 @@ pub(crate) fn parse_surge_source(
         base_mva: f_map_or(network, "base_mva", 100.0)?,
         base_frequency: f_map_or(network, "freq_hz", crate::network::DEFAULT_BASE_FREQUENCY)?,
         geo: None,
+        case_metadata: crate::network::CaseMetadata::default(),
+        detailed_connectivity: None,
+        generated_uids: std::collections::BTreeSet::default(),
         buses: buses.into(),
         loads: array_field(network, "loads", false)?
             .into_iter()
@@ -571,6 +577,7 @@ pub(crate) fn parse_surge_source(
             .collect::<Result<Vec<_>>>()?
             .into(),
         shunts: shunts.into(),
+        static_var_compensators: Vec::new().into(),
         branches: array_field(network, "branches", false)?
             .into_iter()
             .map(read_branch)
@@ -634,6 +641,7 @@ fn read_bus(value: &Value) -> Result<(Bus, Option<Shunt>)> {
             g,
             b,
             in_service: true,
+            section_count: None,
             control: None,
             uid: None,
             extras: Extras::new(),
@@ -729,6 +737,7 @@ fn read_fixed_shunt(value: &Value) -> Result<Shunt> {
         g: f_map_alias_or(obj, &["g_mw", "conductance_mw"], 0.0)?,
         b: f_map_alias_or(obj, &["b_mvar", "susceptance_mvar"], 0.0)?,
         in_service: bool_map_or(obj, "in_service", true)?,
+        section_count: None,
         control: None,
         uid: None,
         extras: Extras::new(),
@@ -747,6 +756,7 @@ fn read_branch(value: &Value) -> Result<Branch> {
     };
     let b = f_map_or(obj, "b", 0.0)?;
     Ok(Branch {
+        name: None,
         from: BusId(required_usize(obj, "from_bus")?),
         to: BusId(required_usize(obj, "to_bus")?),
         r: f_map_or(obj, "r", 0.0)?,
@@ -854,6 +864,7 @@ fn read_generator(value: &Value) -> Result<(Option<Generator>, Option<Storage>)>
 
     let generator = Generator {
         bus,
+        energy_source: GeneratorEnergySource::default(),
         pg,
         qg,
         pmax,
@@ -868,7 +879,10 @@ fn read_generator(value: &Value) -> Result<(Option<Generator>, Option<Storage>)>
             Some(value) => Some(read_cost(value)?),
         },
         caps,
+        voltage_regulation_on: bool_map_or(obj, "voltage_regulated", true)?,
+        regulating_terminal: None,
         regulated_bus: optional_usize(obj, "reg_bus")?.map(BusId),
+        active_power_control: None,
         uid: None,
     };
 
@@ -976,6 +990,7 @@ fn read_storage(
         p_loss: 0.0,
         q_loss: 0.0,
         in_service,
+        active_power_control: None,
         uid: None,
         extras: Extras::new(),
     };
@@ -1044,7 +1059,7 @@ fn read_hvdc_link(value: &Value) -> Result<Hvdc> {
         // received power, so derive it. [`Hvdc::pt`] is MATPOWER's PT column:
         // power arriving at the to end, positive, the sign every other reader
         // here stores.
-        pt: Hvdc::delivered_power(setpoint, loss0, loss1),
+        pt: Hvdc::calc_delivered_power(setpoint, loss0, loss1),
         qf: 0.0,
         qt: 0.0,
         vf: f_map_or(from_terminal, "ac_setpoint", 1.0)?,
@@ -1057,6 +1072,11 @@ fn read_hvdc_link(value: &Value) -> Result<Hvdc> {
         qmaxt: f_map_or(to_terminal, "q_max_mvar", 0.0)?,
         loss0,
         loss1,
+        resistance_ohm: None,
+        nominal_voltage_kv: None,
+        converters_mode: None,
+        converter1: None,
+        converter2: None,
         cost: None,
         uid: None,
         extras: Extras::new(),
@@ -1282,7 +1302,6 @@ fn generator_has_source_only_fields(generator: &Map<String, Value>) -> bool {
         || bool_not_default(generator, "quick_start", false)
         || bool_not_default(generator, "grid_forming", false)
         || bool_not_default(generator, "curtailable", false)
-        || bool_not_default(generator, "voltage_regulated", true)
         || generator
             .get("gen_type")
             .and_then(Value::as_str)

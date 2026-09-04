@@ -33,7 +33,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use powerio_matrix::{BalancedNetwork, TargetFormat};
+use powerio::BalancedNetwork;
+use powerio_tx::TargetFormat;
 use serde::{Deserialize, Serialize};
 
 use crate::invariants::{self, YbusUnavailable};
@@ -72,7 +73,7 @@ const SCHEMA_KEYS: [&str; 83] = [
     "leg.panic",
     "leg.failure",
     "leg.unresolved-include",
-    "sibling.variant",
+    "sibling.different-data",
     "sibling.status",
     "sibling.ybus",
     "electrical.unavailable",
@@ -139,7 +140,7 @@ const SCHEMA_KEYS: [&str; 83] = [
     "elements",
     "compared",
     "unresolved-include",
-    "variant",
+    "different_case_data",
 ];
 
 /// One readable case in the corpus, as ingest found it.
@@ -210,7 +211,9 @@ fn within(root: &Path, path: &Path) -> bool {
 /// Whether a path announces itself as a case file. Used only to decide whether
 /// a parse failure is worth reporting, never to decide whether to try.
 fn names_a_case(path: &Path) -> bool {
-    const CASE_EXTENSIONS: [&str; 8] = ["m", "raw", "rawx", "epc", "aux", "pwb", "json", "dss"];
+    const CASE_EXTENSIONS: [&str; 9] = [
+        "m", "raw", "rawx", "epc", "aux", "pwb", "uct", "json", "dss",
+    ];
     path.extension()
         .and_then(|e| e.to_str())
         .map(str::to_ascii_lowercase)
@@ -423,19 +426,22 @@ fn read_case(path: &Path) -> std::result::Result<Case, Unreadable> {
         error,
         panicked,
     };
-    let balanced_error = match catch_panic(|| crate::compat::parse_file(path, None)) {
+    let balanced_error = match catch_panic(|| crate::module_io::load_balanced_module(path, None)) {
         Ok(Ok(parsed)) => {
-            let rendered = parsed.rendered_diagnostics();
-            return Ok(Case::Balanced(Box::new(parsed.network), rendered));
+            let rendered = powerio_core::render_diagnostics(&parsed.diagnostics);
+            return Ok(Case::Balanced(Box::new(parsed.into_value()), rendered));
         }
         Err(message) => return Err(unreadable(message, true)),
         Ok(Err(err)) => err.to_string(),
     };
-    match catch_panic(|| crate::compat::dist_parse_file(path, None)) {
-        Ok(Ok(parsed)) => Ok(Case::Multiconductor(
-            Box::new(parsed.network),
-            parsed.warnings,
-        )),
+    match catch_panic(|| crate::module_io::load_multiconductor_module(path, None)) {
+        Ok(Ok(parsed)) => {
+            let warnings = powerio_core::render_diagnostics(&parsed.diagnostics);
+            Ok(Case::Multiconductor(
+                Box::new(parsed.into_value()),
+                warnings,
+            ))
+        }
         // A `.m` that failed the MATPOWER parse used to report "unknown
         // distribution format `m`": the fallback reader's refusal displaced
         // the diagnosis. When the distribution reader does not even claim the
@@ -539,12 +545,12 @@ pub struct Comparison {
     /// Serde paths that changed, already collapsed to their class.
     pub model_diffs: Vec<String>,
     pub failure: Option<String>,
-    /// Two members of one bucket that are related but not the same data: a
-    /// case and its derivative. Recorded so the run states what it declined to
-    /// compare rather than silently dropping the pair.
-    pub variant: bool,
+    /// Two members of one bucket describe related cases but contain different
+    /// limits or other declared case data.
+    pub different_case_data: bool,
     /// A written deck that pulls in other files, which a string readback
-    /// cannot resolve. Recorded for the same reason as `variant`.
+    /// cannot resolve. Recorded for the same reason as
+    /// [`different_case_data`](Self::different_case_data).
     pub unresolved_include: bool,
     /// Elements the two sides disagree about the service status of.
     pub status_changed: usize,
@@ -602,7 +608,7 @@ fn compare_transmission(bucket: &Bucket, out: &mut Vec<Comparison>) {
             continue;
         };
         for (j, other) in members.iter().enumerate() {
-            let Some(target) = powerio_matrix::target_format_from_name(&other.format) else {
+            let Some(target) = powerio_tx::format::parse_target_format(&other.format) else {
                 continue;
             };
             let via = if i == j {
@@ -619,11 +625,11 @@ fn compare_transmission(bucket: &Bucket, out: &mut Vec<Comparison>) {
             // Two files in one bucket that state different limits are a case
             // and its derivative, and their differences are honest. They are
             // still compared — a reader defect hides just as well between a
-            // case and its variant — but the pair is labelled so the severity
+            // case and its derivative — but the pair is labelled so the severity
             // says which kind of difference this is.
-            let twin = fingerprint::same_data(source, sibling);
+            let twin = fingerprint::same_case_data(source, sibling);
             let mut leg = sibling_leg(bucket, member, other, source, sibling);
-            leg.variant = !twin;
+            leg.different_case_data = !twin;
             out.push(leg);
         }
     }
@@ -643,7 +649,7 @@ fn compare_distribution(bucket: &Bucket, out: &mut Vec<Comparison>) {
             continue;
         };
         for (j, other) in members.iter().enumerate() {
-            let Some(target) = powerio_dist::dist_target_from_name(&other.format) else {
+            let Some(target) = powerio_dist::parse_dist_target_format(&other.format) else {
                 continue;
             };
             let via = if i == j {
@@ -674,16 +680,23 @@ fn dist_convert_leg(
             to_ordinal: to.ordinal,
         },
     );
-    let written = match catch_panic(|| powerio_dist::write_network(source, target)) {
-        Ok(conversion) => conversion,
+    let source_module = powerio_core::PioModule::new(source.clone());
+    let emission = match catch_panic(|| {
+        crate::module_io::emit_multiconductor_module(&source_module, target)
+    }) {
+        Ok(Ok(emission)) => emission,
+        Ok(Err(error)) => {
+            out.failure = Some(format!("emit: {error}"));
+            return out;
+        }
         Err(message) => {
-            out.failure = Some(format!("write panicked: {message}"));
+            out.failure = Some(format!("emit panicked: {message}"));
             return out;
         }
     };
-    out.warnings.extend(written.rendered_diagnostics());
+    out.warnings.extend(emission.render_diagnostics());
     let token = to.format.clone();
-    let text = written.text;
+    let text = emission.text;
     // A deck that pulls in other files cannot be read back from a string:
     // `Redirect` and `Compile` resolve against a directory, and the corpus is
     // read-only, so there is nowhere to put the written master beside its
@@ -694,7 +707,7 @@ fn dist_convert_leg(
         out.unresolved_include = true;
         return out;
     }
-    let parsed = match catch_panic(|| crate::compat::dist_parse_str(&text, &token)) {
+    let parsed = match catch_panic(|| crate::module_io::load_multiconductor_memory(&text, &token)) {
         Ok(Ok(parsed)) => parsed,
         Ok(Err(err)) => {
             out.failure = Some(format!("readback: {err}"));
@@ -708,13 +721,14 @@ fn dist_convert_leg(
     // The readback's own declarations count toward warning parity, exactly as
     // the transmission leg counts them; without this a loss the reader states
     // on re-parse was graded undeclared.
-    out.warnings.extend(parsed.warnings.iter().cloned());
+    out.warnings
+        .extend(powerio_core::render_diagnostics(&parsed.diagnostics));
     let before = invariants::distribution_core(source);
-    let after = invariants::distribution_core(&parsed.network);
+    let after = invariants::distribution_core(parsed.value());
     if before != after {
         out.core_changed = Some(dist_core_delta(&before, &after));
     }
-    let clean = parsed.network;
+    let clean = parsed.into_value();
     let diffs = invariants::model_diffs(
         &invariants::distribution_value(source),
         &invariants::distribution_value(&clean),
@@ -780,7 +794,7 @@ fn empty_comparison(bucket: &Bucket, leg: Leg) -> Comparison {
         dc_terminal: None,
         model_diffs: Vec::new(),
         failure: None,
-        variant: false,
+        different_case_data: false,
         unresolved_include: false,
         status_changed: 0,
     }
@@ -804,21 +818,28 @@ fn convert_leg(
             to_ordinal: to.ordinal,
         },
     );
-    let written = match catch_panic(|| powerio_matrix::write_network(source, target)) {
-        Ok(Ok(conversion)) => conversion,
+    let source_module = powerio_core::PioModule::new(source.clone());
+    let emission = match catch_panic(|| {
+        crate::module_io::emit_balanced_module(
+            &source_module,
+            target,
+            &powerio_tx::EmitOptions::default(),
+        )
+    }) {
+        Ok(Ok(emission)) => emission,
         Ok(Err(err)) => {
-            out.failure = Some(format!("write: {err}"));
+            out.failure = Some(format!("emit: {err}"));
             return out;
         }
         Err(message) => {
-            out.failure = Some(format!("write panicked: {message}"));
+            out.failure = Some(format!("emit panicked: {message}"));
             return out;
         }
     };
-    out.warnings.extend(written.rendered_diagnostics());
+    out.warnings.extend(emission.render_diagnostics());
     let token = to.format.clone();
-    let text = written.text;
-    let parsed = match catch_panic(|| crate::compat::parse_str(&text, &token)) {
+    let text = emission.text;
+    let parsed = match catch_panic(|| crate::module_io::load_balanced_memory(&text, &token)) {
         Ok(Ok(parsed)) => parsed,
         Ok(Err(err)) => {
             out.failure = Some(format!("readback: {err}"));
@@ -829,8 +850,9 @@ fn convert_leg(
             return out;
         }
     };
-    out.warnings.extend(parsed.rendered_diagnostics());
-    fill_invariants(&mut out, source, &parsed.network);
+    out.warnings
+        .extend(powerio_core::render_diagnostics(&parsed.diagnostics));
+    fill_invariants(&mut out, source, parsed.value());
     out
 }
 
@@ -1126,9 +1148,9 @@ fn findings_for(comparison: &Comparison, sanitizer: &Sanitizer) -> Vec<Finding> 
         );
         return out;
     }
-    if comparison.variant {
+    if comparison.different_case_data {
         push(
-            "sibling.variant",
+            "sibling.different-data",
             "declared",
             serde_json::json!({ "compared": true }),
         );
@@ -1150,7 +1172,7 @@ fn findings_for(comparison: &Comparison, sanitizer: &Sanitizer) -> Vec<Finding> 
     }
     if comparison.ybus.is_some() {
         let honest_difference = comparison.leg.via == Via::Sibling
-            && (comparison.variant || comparison.status_changed > 0);
+            && (comparison.different_case_data || comparison.status_changed > 0);
         // The changed entry's bus pair and magnitudes stay in the work
         // directory: a `Y_bus` entry is grid data. The finding states that the
         // admittance moved on this leg, which is what makes it actionable.
@@ -1171,11 +1193,11 @@ fn findings_for(comparison: &Comparison, sanitizer: &Sanitizer) -> Vec<Finding> 
     if comparison.injection.is_some() {
         // On a conversion leg powerio moved the power itself, so any move is a
         // defect. On a sibling leg the two files may honestly hold different
-        // operating points — a base case and its contingency variant sit side
+        // operating points — a base case and its contingency case sit side
         // by side in every planning archive — so a move that is only a status
         // disagreement is reported for triage rather than as a defect.
         let honest_difference = comparison.leg.via == Via::Sibling
-            && (comparison.injection_status_only || comparison.variant);
+            && (comparison.injection_status_only || comparison.different_case_data);
         push(
             if honest_difference {
                 "sibling.status"
@@ -1429,21 +1451,24 @@ mod tests {
 
     use super::{Case, read_case};
 
-    /// Every serde key of `value` outside its `extras` subtrees, where keys
-    /// are powerio's own field names rather than case data.
-    fn model_keys(value: &serde_json::Value, in_extras: bool, out: &mut BTreeSet<String>) {
+    /// Every serde key of `value` outside maps whose keys come from case data.
+    fn model_keys(value: &serde_json::Value, in_case_map: bool, out: &mut BTreeSet<String>) {
         match value {
             serde_json::Value::Array(xs) => {
                 for x in xs {
-                    model_keys(x, in_extras, out);
+                    model_keys(x, in_case_map, out);
                 }
             }
             serde_json::Value::Object(xs) => {
                 for (key, x) in xs {
-                    if !in_extras {
+                    if !in_case_map {
                         out.insert(key.clone());
                     }
-                    model_keys(x, in_extras || key == "extras", out);
+                    model_keys(
+                        x,
+                        in_case_map || matches!(key.as_str(), "extras" | "properties"),
+                        out,
+                    );
                 }
             }
             _ => {}
@@ -1452,8 +1477,8 @@ mod tests {
 
     /// The vocabulary's completeness gate: parse every fixture the readers
     /// accept, union their serde keys, and require every one to be
-    /// vocabulary. A field name outside it masks as a corpus secret the day
-    /// a real corpus teaches the same spelling.
+    /// vocabulary. Keys in `extras` and `properties` maps come from case data
+    /// and remain subject to anonymization.
     #[test]
     fn every_fixture_field_name_is_vocabulary() {
         let data = Path::new(env!("CARGO_MANIFEST_DIR"))
