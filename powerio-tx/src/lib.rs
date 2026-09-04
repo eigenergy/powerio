@@ -2,7 +2,7 @@
 //!
 //! Readers and writers cover MATPOWER `.m`, PowerModels JSON, PSS/E `.raw`,
 //! PowerWorld `.aux`, pandapower JSON, PyPSA CSV, egret JSON, PSLF `.epc`,
-//! PSS/E RAWX 35, PowSybl XIIDM 1.12 through 1.17, CIM CGMES 2.4.15 and 3.0,
+//! PSS/E RAWX 35, PowSybl XIIDM and JIIDM 1.0 through 1.17, CIM CGMES 2.4.15 and 3.0,
 //! Surge JSON,
 //! and DeepMind OPFData JSON. PowerWorld `.pwb`, OPFData files, and the IEEE
 //! Common Data Format are read

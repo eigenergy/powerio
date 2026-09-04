@@ -1,6 +1,6 @@
 //! The crate-private collector an emitting pass threads through its call tree.
 //!
-//! No public PowerIO operation accepts or returns this type, and the 1.0
+//! No public PowerIO operation accepts or returns this type, and the 0.11
 //! baseline keeps the mutable collector out of every public surface, so each
 //! emitting crate carries its own copy of this file. Keep the copies byte
 //! identical; the shared record types come from `powerio-core`.

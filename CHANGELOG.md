@@ -72,8 +72,9 @@ component definitions nor the time axis. `emit` writes a complete
 `AcScucSolution` as the official GO Challenge 3 output file; unchanged problem
 data still uses exact same format echo.
 
-PowSybl XIIDM 1.12 through 1.17 and CIM CGMES 2.4.15 and 3.0 now parse and
-emit through `BalancedNetwork`; fresh output uses XIIDM 1.17 and CGMES 3.0.
+PowSybl XIIDM and JIIDM 1.0 through 1.17 and CIM CGMES 2.4.15 and 3.0 now
+parse and emit through `BalancedNetwork`; fresh output uses IIDM 1.17 and
+CGMES 3.0.
 The CGMES reader and writer build on Mohamed Numair's original contribution;
 `evals/powsybl/cgmes-contribution-audit.md` records how each part of that work
 appears in 0.11.
