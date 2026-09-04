@@ -6,6 +6,11 @@
 
 use serde::Deserialize;
 
+// The top-level facade owns PowerIO IR. This private routing marker lets the
+// lower-level JSON classifier recognize the stable identity without making
+// `powerio-core` own the stored representation.
+const POWERIO_IR_SCHEMA: &str = "pio-ir";
+
 /// A classification result that can be known, absent, or unsafe to choose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Detection<T> {
@@ -232,7 +237,7 @@ impl JsonClass {
 /// Classify a JSON document: a PowerIO IR module or a case document across the
 /// transmission and distribution domains.
 ///
-/// PowerIO IR is recognized by its `schema: "powerio.module"` header.
+/// PowerIO IR is recognized by its `schema: "pio-ir"` header.
 /// For a case, Unknown means there is no recognized top level marker, and
 /// Ambiguous means the document contains strong markers from both domains, so
 /// the caller must ask the user for an explicit format.
@@ -250,7 +255,7 @@ pub fn classify_json_text(text: &str) -> JsonClass {
         return JsonClass::Case(Detection::Unknown);
     };
     // PowerIO IR names itself in its header.
-    if header.schema.as_deref() == Some(powerio_core::IR_SCHEMA_NAME) {
+    if header.schema.as_deref() == Some(POWERIO_IR_SCHEMA) {
         return JsonClass::Module;
     }
     header.classify()
@@ -534,17 +539,15 @@ mod tests {
     #[test]
     fn classifies_powerio_ir() {
         assert_eq!(
-            classify_json_text(r#"{"schema":"powerio.module","version":"0.11.0"}"#),
+            classify_json_text(r#"{"schema":"pio-ir","version":2}"#),
             JsonClass::Module
         );
         // Routing is the schema name's job alone. Every PowerIO IR generation
         // reaches the deserializer, which owns the version rule and can then
         // name the version it refuses.
-        for version in [r#""0.10.0""#, r#""99.0.0""#, "1", "null"] {
+        for version in ["1", "3", r#""0.11.0""#, "null"] {
             assert_eq!(
-                classify_json_text(&format!(
-                    r#"{{"schema":"powerio.module","version":{version}}}"#
-                )),
+                classify_json_text(&format!(r#"{{"schema":"pio-ir","version":{version}}}"#)),
                 JsonClass::Module,
                 "version {version}"
             );

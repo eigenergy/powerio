@@ -74,7 +74,7 @@ def test_parse_returns_powerio_ir_and_actual_value_type():
     assert parsed["value_type"] == "powerio.BalancedNetwork"
     assert "json" not in parsed and "json_format" not in parsed
     document = json.loads(parsed["powerio_ir"])
-    assert document["schema"] == "powerio.module"
+    assert document["schema"] == "pio-ir"
     module = powerio.deserialize(io.StringIO(parsed["powerio_ir"]))
     assert isinstance(module.value, powerio.BalancedNetwork)
     assert module.value.n_buses == 9
@@ -225,8 +225,8 @@ def test_about_reports_exact_tool_list():
     assert about["powerio_version"] == powerio.__version__
     # `about` passes the library's own version report through unchanged;
     # `scripts/wheel-smoke.py` owns pinning that report to the release version.
-    assert about["module_schema"] == powerio.versions()["module_schema"]
-    assert about["module_schema"]["name"] == "powerio.module"
+    assert about["powerio_ir"] == powerio.versions()["powerio_ir"]
+    assert about["powerio_ir"]["name"] == "pio-ir"
     assert "parse" in about["tools"]
     assert "export_state" not in about["tools"]
 

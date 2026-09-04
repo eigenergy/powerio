@@ -106,15 +106,15 @@
 <!-- stored -->
 <g id="node8" class="node">
 <title>stored</title>
-<path fill="#f4f6f8" stroke="#4a5568" d="M754.88,-36C754.88,-36 613.62,-36 613.62,-36 607.62,-36 601.62,-30 601.62,-24 601.62,-24 601.62,-12 601.62,-12 601.62,-6 607.62,0 613.62,0 613.62,0 754.88,0 754.88,0 760.88,0 766.88,-6 766.88,-12 766.88,-12 766.88,-24 766.88,-24 766.88,-30 760.88,-36 754.88,-36"/>
+<path fill="#f4f6f8" stroke="#4a5568" d="M724.88,-36C724.88,-36 643.62,-36 643.62,-36 637.62,-36 631.62,-30 631.62,-24 631.62,-24 631.62,-12 631.62,-12 631.62,-6 637.62,0 643.62,0 643.62,0 724.88,0 724.88,0 730.88,0 736.88,-6 736.88,-12 736.88,-12 736.88,-24 736.88,-24 736.88,-30 730.88,-36 724.88,-36"/>
 <text xml:space="preserve" text-anchor="middle" x="684.25" y="-18.8" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">PowerIO IR</text>
-<text xml:space="preserve" text-anchor="middle" x="684.25" y="-7.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">powerio.module, version 0.11.0</text>
+<text xml:space="preserve" text-anchor="middle" x="684.25" y="-7.55" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">pio&#45;ir, generation 2</text>
 </g>
 <!-- module&#45;&gt;stored -->
 <g id="edge8" class="edge">
 <title>module&#45;&gt;stored</title>
-<path fill="none" stroke="#4a5568" d="M459.04,-110.66C493.91,-91.69 547.36,-64.08 596,-45 600.32,-43.31 604.79,-41.65 609.32,-40.04"/>
-<polygon fill="#4a5568" stroke="#4a5568" points="610.21,-43.43 618.53,-36.87 607.93,-36.81 610.21,-43.43"/>
+<path fill="none" stroke="#4a5568" d="M459.04,-110.66C493.91,-91.69 547.36,-64.08 596,-45 603.8,-41.94 612.1,-38.99 620.36,-36.24"/>
+<polygon fill="#4a5568" stroke="#4a5568" points="621.27,-39.63 629.7,-33.21 619.11,-32.97 621.27,-39.63"/>
 <text xml:space="preserve" text-anchor="middle" x="546.12" y="-81.31" font-family="Helvetica,sans-Serif" font-size="9.00" fill="#2d3748">serialize</text>
 </g>
 <!-- transform&#45;&gt;module -->
@@ -127,7 +127,7 @@
 <!-- stored&#45;&gt;module -->
 <g id="edge9" class="edge">
 <title>stored&#45;&gt;module</title>
-<path fill="none" stroke="#4a5568" d="M601.5,-17.57C572.74,-20.14 540.96,-26.22 514.25,-39.25 485.11,-53.47 459.61,-80.44 442.67,-101.66"/>
+<path fill="none" stroke="#4a5568" d="M631.25,-15.99C596.5,-16.65 550.66,-21.49 514.25,-39.25 485.11,-53.47 459.61,-80.44 442.67,-101.66"/>
 <polygon fill="#4a5568" stroke="#4a5568" points="440.01,-99.38 436.66,-109.44 445.55,-103.66 440.01,-99.38"/>
 <text xml:space="preserve" text-anchor="middle" x="546.12" y="-40.45" font-family="Helvetica,sans-Serif" font-size="9.00" fill="#2d3748">deserialize</text>
 </g>

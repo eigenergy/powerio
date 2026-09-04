@@ -18,7 +18,7 @@ There is no one universal network format in this family. `BalancedNetwork` is th
 
 ## Stored documents are serializations
 
-`.pio.json` is the PowerIO IR serialization of the dynamic module. It persists any registered value type with its records using `"schema": "powerio.module"` and the `powerio` crate version, currently `"version": "0.11.0"`. The IR is the in-memory module; `.pio.json` is its stored form, separate from grid exchange formats.
+`.pio.json` is the PowerIO IR serialization of the dynamic module. It persists any registered value type with its records using `"schema": "pio-ir"` and independent integer `"version": 2`; the producer record separately names the PowerIO release. The IR is the in-memory module; `.pio.json` is its stored form, separate from grid exchange formats.
 
 ## Transformations name their input and output
 

@@ -13,10 +13,8 @@ documentation state the shipped API.
 - Byte exact same format writing, diagnosed cross format conversion, and the explicit multiconductor to balanced transformation.
 - Structured diagnostics with stable codes and native record access in every language. A diagnostic carries source spans end to end, and the MATPOWER and PSS/E readers attach the byte range of the record a finding is about; the other readers attach none yet (see Known limits).
 - Balanced matrices (Y bus, FDPF B' and B'', LACPF, incidence, DC operators, AC power flow Jacobians, PTDF and LODF), all carrying element mappings; direct multiconductor admittance assembles in Rust only this release (see Known limits).
-- One stored `.pio.json` document with `"schema": "powerio.module"` and
-  `"version"` naming the release that wrote it. A build reads the documents of
-  every compatible 0.11.x release no newer than itself; 0.10 documents are not
-  accepted.
+- One stored `.pio.json` document with `"schema": "pio-ir"` and independent
+  integer `"version": 2`; the producer record separately names the release.
 - C ABI 7, the Python package, PowerIO.jl, the `powerio` command line tool,
   and the MCP server over one set of names and types.
 
@@ -45,9 +43,9 @@ and PowerIO.jl. The independently checked boundaries are:
 |---|---|---|---|
 | PowerIO release | 0.11.0 | manifests, `powerio.versions()`, `pio_version` | every release |
 | C ABI | 7 | `pio_abi_version` handshake at load | an existing C signature or documented behavior changes |
-| PowerIO IR | 0.11.0 | the stored document header | every release, matching the `powerio` crate version; a build reads its compatible line up to its own version |
+| PowerIO IR | 2 | the stored document header | when the serialized representation changes |
 | matrix Arrow tables | append only, no separate number | the Arrow catalog report, stamped with the PowerIO release version | an existing table's identity or column order would change (a removed table's id is burned, never reused) |
-| MCP electrical data | PowerIO IR 0.11.0 | PowerIO deserialization | with the PowerIO IR schema |
+| MCP electrical data | PowerIO IR 2 | PowerIO deserialization | with the PowerIO IR generation |
 
 These answer different questions: 0.11.0 is what you install, ABI 7 is what a
 compiled consumer must match, the PowerIO IR version identifies the serialized

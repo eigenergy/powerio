@@ -1296,9 +1296,9 @@ pub struct StoredModule {
     pub schema: String,
     #[cfg_attr(
         feature = "schema",
-        schemars(extend("const" = crate::IR_SCHEMA_VERSION))
+        schemars(extend("const" = crate::IR_VERSION))
     )]
-    pub version: String,
+    pub version: u64,
     pub producer: Producer,
     pub value: StoredValue,
     #[serde(
@@ -1350,20 +1350,27 @@ impl<'de> Deserialize<'de> for StoredModule {
     }
 }
 
-/// The `version` a document states, kept as written so a refusal can name it:
-/// the string this reader compares, or whatever an earlier generation wrote
-/// there (the v0.10.0 document carried the integer `1`).
+/// The `version` a document states, kept as written so a refusal can name it.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub(super) enum StoredVersion {
-    Text(String),
+    Integer(u64),
     Other(serde_json::Value),
+}
+
+impl StoredVersion {
+    pub(super) fn as_integer(&self) -> Option<u64> {
+        match self {
+            Self::Integer(version) => Some(*version),
+            Self::Other(_) => None,
+        }
+    }
 }
 
 impl fmt::Display for StoredVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Text(text) => f.write_str(text),
+            Self::Integer(version) => version.fmt(f),
             Self::Other(value) => value.fmt(f),
         }
     }

@@ -30,7 +30,7 @@ PowerIO's design borrows from LLVM and MLIR where their problems genuinely overl
 
 **Registries checked mechanically where tables drift.** Structural type names, format tokens, diagnostic codes, and drawn architecture edges are each held to one source by a CI gate, which is the maintainable slice of MLIR's declarative dialect definitions.
 
-**Serialization specified apart from memory.** Each `.pio.json` version has an explicit schema and validation rules; the Rust structs never derive the public document layout. A build reads the documents of its compatible release line no newer than itself, the way an LLVM release reads the bitcode inside its compatibility window, and [PowerIO IR reference](ir-reference.md) defines every structural type field by field, the way the MLIR language reference defines its types; a test holds the page to the generated schema.
+**Serialization specified apart from memory.** Each `.pio.json` generation has an explicit schema and validation rules; the Rust structs never derive the public document layout. Like MLIR bytecode, the document carries an independent integer generation and a separate producer version. [PowerIO IR reference](ir-reference.md) defines every structural type field by field, the way the MLIR language reference defines its types; a test holds the page to the generated schema. PowerIO makes no LLVM or MLIR compatibility promise by analogy.
 
 **Scrutiny proportional to permanence.** A new core concept (a value family or common module record) needs a registered structural type name, an exact IR representation, and binding coverage. A new format adapter needs none of that.
 

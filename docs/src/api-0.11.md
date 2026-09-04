@@ -89,10 +89,10 @@ changes and whether energized connectivity changed.
 
 ## PowerIO IR and C ABI
 
-PowerIO IR has one shape per release: `"schema": "powerio.module"` and
-`"version"` naming the release that wrote it. A build reads the compatible
-0.11.x documents no newer than itself and has no reader for 0.10 documents and
-no source alias.
+PowerIO IR uses `"schema": "pio-ir"` and integer `"version": 2`. The
+generation is independent of the PowerIO release and C ABI; the producer
+record names the release that wrote the document. There is no reader for
+earlier generations or source alias.
 
 C ABI 7 is the only exported ABI. It has no ABI 4, 5, or 6 symbol aliases. All
 values use opaque reference counted handles, explicit buffer lengths, one

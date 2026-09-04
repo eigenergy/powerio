@@ -9,11 +9,6 @@ use crate::{
     SourceId, SourceMapEntry, SourceRelation, SourceSpan,
 };
 
-/// The `schema` discriminator every PowerIO IR document carries. The
-/// serializer writes it and the JSON classifier recognizes a document by it,
-/// so both read this one constant.
-pub const IR_SCHEMA_NAME: &str = "powerio.module";
-
 #[derive(Clone, Debug)]
 struct ModuleRecords {
     producer: Producer,

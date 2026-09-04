@@ -191,7 +191,7 @@ jobs:
         }
         # Every schema in the archive is served, so a release adds its
         # directory and nothing here.
-        for schema in docs/schema/pio-module/*/schema.json; do
+        for schema in docs/schema/pio-ir/*/schema.json; do
           redirect_schema_page "$(dirname "${schema#docs/schema/}")"
         done
     - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5

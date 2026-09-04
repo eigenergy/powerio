@@ -27,8 +27,8 @@ mod generate {
         // the address that directory is served from.
         write_schema(
             serde_json::to_value(powerio::generate_ir_schema())?,
-            &out.join("pio-module")
-                .join(powerio::IR_SCHEMA_VERSION)
+            &out.join("pio-ir")
+                .join(powerio::IR_VERSION.to_string())
                 .join("schema.json"),
             powerio::IR_SCHEMA_ID,
         )

@@ -34,7 +34,7 @@ fn with_component_ids(mut network: crate::BalancedNetwork) -> crate::BalancedNet
 pub fn emit_module(module: &PioModule<PioValue>) -> Result<String> {
     let stored = StoredModule {
         schema: crate::IR_SCHEMA_NAME.to_string(),
-        version: crate::IR_SCHEMA_VERSION.to_string(),
+        version: crate::IR_VERSION,
         producer: dto::Producer {
             name: module.producer().name().to_string(),
             version: module.producer().version().to_string(),
@@ -58,9 +58,8 @@ pub fn emit_module(module: &PioModule<PioValue>) -> Result<String> {
     serde_json::to_string_pretty(&stored).map_err(|error| invalid(error.to_string()))
 }
 
-/// Decode one PowerIO IR document. A document a compatible build no newer
-/// than this one wrote decodes directly (see [`crate::IR_SCHEMA_VERSION`]);
-/// any other schema name or version is refused with what was found named.
+/// Decode one current PowerIO IR document. Any other identity or generation
+/// is refused with what was found named.
 ///
 /// # Errors
 /// An unsupported schema or version, or an invalid document.
@@ -71,25 +70,25 @@ pub fn read_module(text: &str) -> Result<PioModule<PioValue>> {
     // is another PowerIO IR generation, a current document that is invalid,
     // or not PowerIO IR at all.
     let decode_error = match serde_json::from_str::<StoredModule>(text) {
-        Ok(stored) if is_readable(&stored.schema, &stored.version) => {
+        Ok(stored) if is_readable(&stored.schema, stored.version) => {
             dto::validate(&stored).map_err(invalid)?;
             return decode_stored(stored);
         }
-        Ok(stored) => return Err(unsupported(&stored.schema, &stored.version)),
+        Ok(stored) => {
+            let version = dto::StoredVersion::Integer(stored.version);
+            return Err(unsupported(&stored.schema, Some(&version)));
+        }
         Err(error) => error,
     };
     let header: dto::StoredHeader =
         serde_json::from_str(text).map_err(|error| invalid(error.to_string()))?;
     match (header.schema.as_deref(), header.version) {
-        (Some(schema), Some(dto::StoredVersion::Text(version)))
-            if is_readable(schema, &version) =>
+        (Some(schema), Some(dto::StoredVersion::Integer(version)))
+            if is_readable(schema, version) =>
         {
             Err(invalid(decode_error.to_string()))
         }
-        (Some(schema), version) => Err(unsupported(
-            schema,
-            &version.map_or_else(|| "<none>".to_owned(), |version| version.to_string()),
-        )),
+        (Some(schema), version) => Err(unsupported(schema, version.as_ref())),
         (None, _) => Err(powerio_core::Error::new(
             &codes::READ_MODULE_UNSUPPORTED,
             "the document is not PowerIO IR",
@@ -97,25 +96,26 @@ pub fn read_module(text: &str) -> Result<PioModule<PioValue>> {
     }
 }
 
-fn is_readable(schema: &str, version: &str) -> bool {
-    schema == crate::IR_SCHEMA_NAME && crate::ir::ir_version_is_readable(version)
+fn is_readable(schema: &str, version: u64) -> bool {
+    schema == crate::IR_SCHEMA_NAME && version == crate::IR_VERSION
 }
 
-/// The refusal for a schema or version this build does not read. It states
-/// what was found and what to do about it: a document a later PowerIO release
-/// wrote needs that newer reader; anything else is regenerated from its
-/// source data.
-fn unsupported(schema: &str, version: &str) -> powerio_core::Error {
-    let this = crate::IR_SCHEMA_VERSION;
-    let guidance = if schema == crate::IR_SCHEMA_NAME && crate::ir::ir_version_is_newer(version) {
-        format!("a PowerIO later than this build ({this}) wrote it; upgrade PowerIO to read it")
+/// The refusal for an identity or generation this build does not read.
+fn unsupported(schema: &str, version: Option<&dto::StoredVersion>) -> powerio_core::Error {
+    let guidance = if schema == crate::IR_SCHEMA_NAME
+        && version
+            .and_then(dto::StoredVersion::as_integer)
+            .is_some_and(|version| version > crate::IR_VERSION)
+    {
+        "upgrade PowerIO to a release that supports this later IR generation".to_owned()
     } else {
         format!(
-            "this build ({this}) reads `{}` documents from its own compatible release line; \
-             regenerate this one from its source data",
-            crate::IR_SCHEMA_NAME
+            "this build reads `{}` generation {}; regenerate this document from its source data",
+            crate::IR_SCHEMA_NAME,
+            crate::IR_VERSION
         )
     };
+    let version = version.map_or_else(|| "<none>".to_owned(), ToString::to_string);
     powerio_core::Error::new(
         &codes::READ_MODULE_UNSUPPORTED,
         format!("unsupported stored module `{schema}` version {version}: {guidance}"),
@@ -2612,7 +2612,7 @@ mod collection_ir_tests {
         assert_eq!(value.type_name(), expected_type);
         let text = emit_module(&PioModule::new(value)).unwrap();
         let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(raw["version"], crate::IR_SCHEMA_VERSION);
+        assert_eq!(raw["version"], crate::IR_VERSION);
         assert_eq!(raw["value"]["type"], expected_type);
         let decoded = read_module(&text).unwrap();
         assert_eq!(decoded.value().type_name(), expected_type);

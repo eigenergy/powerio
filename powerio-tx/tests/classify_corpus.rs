@@ -177,10 +177,10 @@ fn every_json_fixture_classifies_as_stated() {
 /// while those paths stay public.
 #[test]
 fn classifier_and_diagnostic_types_are_crate_root_exports() {
-    let class = powerio_tx::classify_json_text(r#"{"schema":"powerio.module","version":"0.11.0"}"#);
+    let class = powerio_tx::classify_json_text(r#"{"schema":"pio-ir","version":2}"#);
     assert!(matches!(class, powerio_tx::JsonClass::Module));
     assert!(matches!(
-        powerio_tx::classify_json_bytes(b"{\"schema\":\"powerio.module\",\"version\":\"0.11.0\"}",),
+        powerio_tx::classify_json_bytes(b"{\"schema\":\"pio-ir\",\"version\":2}",),
         powerio_tx::JsonClass::Module
     ));
     assert!(matches!(

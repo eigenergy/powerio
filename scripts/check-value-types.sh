@@ -43,8 +43,7 @@ print("\n".join(sorted(names)))
 PY
 )
 
-workspace_version=$(grep -oE '^version = "[0-9]+\.[0-9]+\.[0-9]+"' Cargo.toml | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
-schema=$(python3 - "docs/schema/pio-module/$workspace_version/schema.json" <<'PY'
+schema=$(python3 - "docs/schema/pio-ir/2/schema.json" <<'PY'
 import json
 import sys
 with open(sys.argv[1], encoding='utf-8') as handle:

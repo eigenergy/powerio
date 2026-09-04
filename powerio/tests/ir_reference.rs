@@ -11,16 +11,8 @@
 use std::collections::BTreeSet;
 
 const PAGE: &str = include_str!("../../docs/src/ir-reference.md");
-const SCHEMA_PATH: &str = concat!(
-    "docs/schema/pio-module/",
-    env!("CARGO_PKG_VERSION"),
-    "/schema.json"
-);
-const SCHEMA: &str = include_str!(concat!(
-    "../../docs/schema/pio-module/",
-    env!("CARGO_PKG_VERSION"),
-    "/schema.json"
-));
+const SCHEMA_PATH: &str = "docs/schema/pio-ir/2/schema.json";
+const SCHEMA: &str = include_str!("../../docs/schema/pio-ir/2/schema.json");
 
 /// A line beginning with this text names the definitions of the next table.
 const MARKER: &str = "Schema definition";

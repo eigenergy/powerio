@@ -311,11 +311,10 @@ fuzz/                        # libFuzzer targets (detached workspace; see fuzz/R
   durable source map, diagnostic, and history records. Retained source is run
   time data and is not serialized. `TimeSeries<T>` and `ScenarioSet<T>` belong
   in the typed value rather than common module fields and compose as
-  `ScenarioSet<TimeSeries<T>>`. PowerIO writes `powerio.module` documents at
-  its own version and reads the compatible release line no newer than itself;
-  `powerio::IR_SCHEMA_VERSION` states the rule, so a 0.11.x change to the
-  document must be additive with a default. Collection indexing must not
-  serialize or clone the network.
+  `ScenarioSet<TimeSeries<T>>`. PowerIO writes `pio-ir` generation `2`.
+  The IR generation changes only when the serialized representation changes;
+  `producer.version` separately identifies the PowerIO release. Collection
+  indexing must not serialize or clone the network.
 - **Bus IDs.** MATPOWER 1 based; `IndexedNetwork::bus_index(id)` is the only mapping into dense `[0, n)`. Don't clamp out of range; return `Error::UnknownBus`.
 - **`BR_B` is already per unit.** Never divide by `base_mva` again.
 - **`tap == 0` ⇒ `tap = 1`.** Use `Branch::effective_tap()`.

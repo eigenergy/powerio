@@ -3533,10 +3533,9 @@ pub unsafe extern "C" fn pio_parse(
 
 /// Deserialize one PowerIO IR source.
 ///
-/// A document names the PowerIO release that wrote it, which
-/// `pio_schema_report` reports for this library. This library reads the
-/// documents of its own compatible release line no newer than itself and
-/// refuses any other through `error`, naming the version it found.
+/// A document carries the independent PowerIO IR generation reported by
+/// `pio_schema_report`. This library refuses any unsupported identity or
+/// generation through `error`, naming what it found.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_deserialize(
     source: *const PioSource,
@@ -16008,7 +16007,7 @@ pub unsafe extern "C" fn pio_schema_report(error: *mut *mut PioError) -> *mut Pi
                 "abi": PIO_ABI_VERSION,
                 "powerio_ir": {
                     "schema": powerio::IR_SCHEMA_NAME,
-                    "version": powerio::IR_SCHEMA_VERSION
+                    "version": powerio::IR_VERSION
                 },
                 "bmopf_schema": powerio_dist::BMOPF_SCHEMA_VERSION,
                 "features": {
@@ -16428,7 +16427,7 @@ mod tests {
                 serde_json::from_str(&view_text(pio_string_view(report))).unwrap();
             assert_eq!(parsed["abi"], 7);
             assert_eq!(parsed["powerio_ir"]["schema"], powerio::IR_SCHEMA_NAME);
-            assert_eq!(parsed["powerio_ir"]["version"], powerio::IR_SCHEMA_VERSION);
+            assert_eq!(parsed["powerio_ir"]["version"], powerio::IR_VERSION);
             assert_eq!(
                 parsed["bmopf_schema"],
                 serde_json::json!(powerio_dist::BMOPF_SCHEMA_VERSION)

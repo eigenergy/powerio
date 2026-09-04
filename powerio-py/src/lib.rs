@@ -1667,9 +1667,9 @@ fn versions_json() -> PyResult<String> {
     let doc = serde_json::json!({
         powerio::version::VERSION_KEY: powerio::VERSION,
         "bmopf_schema": powerio_dist_bmopf_schema(),
-        "module_schema": {
+        "powerio_ir": {
             "name": powerio::IR_SCHEMA_NAME,
-            "version": powerio::IR_SCHEMA_VERSION,
+            "version": powerio::IR_VERSION,
         },
     });
     serde_json::to_string(&doc).map_err(serialize_pyerr)

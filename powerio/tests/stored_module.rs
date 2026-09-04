@@ -114,7 +114,7 @@ fn current_ir_round_trips_with_records_and_nonfinite_bounds() {
     // The exact top level identity and the stored nonfinite spelling.
     let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(raw["schema"], powerio::IR_SCHEMA_NAME);
-    assert_eq!(raw["version"], powerio::IR_SCHEMA_VERSION);
+    assert_eq!(raw["version"], powerio::IR_VERSION);
     assert_eq!(raw["value"]["type"], "powerio.BalancedNetwork");
     assert_eq!(raw["value"]["data"]["buses"][1]["vmax"], "Infinity");
 
@@ -402,47 +402,26 @@ fn unknown_semantic_fields_are_refused() {
     assert!(error.contains("surprise"), "{error}");
 }
 
-/// The refusal names the version found and says what to do: a document from
-/// any later PowerIO release needs that newer build; a document from an
-/// earlier line, or one that is not PowerIO IR, is regenerated.
+/// The refusal names the generation found and says what to do.
 #[test]
-fn an_unreadable_powerio_ir_version_is_refused_with_the_remedy() {
+fn an_unreadable_powerio_ir_generation_is_refused_with_the_remedy() {
     let header = |version: serde_json::Value| {
         serde_json::json!({ "schema": powerio::IR_SCHEMA_NAME, "version": version }).to_string()
     };
 
-    // The next patch on this build's line, whatever this build's version is.
-    let newer = {
-        let mut parts: Vec<u64> = powerio::IR_SCHEMA_VERSION
-            .split('.')
-            .map(|part| part.parse().unwrap())
-            .collect();
-        *parts.last_mut().unwrap() += 1;
-        parts
-            .iter()
-            .map(u64::to_string)
-            .collect::<Vec<_>>()
-            .join(".")
-    };
-    let error = deserialize_module_text(&header(newer.clone().into()))
+    let newer = powerio::IR_VERSION + 1;
+    let error = deserialize_module_text(&header(newer.into()))
         .unwrap_err()
         .to_string();
     assert!(error.contains(&format!("version {newer}")), "{error}");
     assert!(error.contains("upgrade PowerIO"), "{error}");
 
-    // A later release on any line takes the same upgrade advice.
-    let error = deserialize_module_text(&header("99.0.0".into()))
+    // A non-integer spelling is not a released PowerIO IR generation.
+    let error = deserialize_module_text(&header("0.11.0".into()))
         .unwrap_err()
         .to_string();
-    assert!(error.contains("version 99.0.0"), "{error}");
-    assert!(error.contains("upgrade PowerIO"), "{error}");
-
-    // An earlier line is a document shape no upgrade brings back.
-    let error = deserialize_module_text(&header("0.10.0".into()))
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("version 0.10.0"), "{error}");
-    assert!(error.contains("regenerate this one"), "{error}");
+    assert!(error.contains("version \"0.11.0\""), "{error}");
+    assert!(error.contains("regenerate this document"), "{error}");
 
     // The v0.10.0 document's integer version is named as written.
     let error = deserialize_module_text(&header(1.into()))
@@ -452,12 +431,12 @@ fn an_unreadable_powerio_ir_version_is_refused_with_the_remedy() {
 
     let text = serde_json::json!({
         "schema": "someone.else",
-        "version": powerio::IR_SCHEMA_VERSION,
+        "version": powerio::IR_VERSION,
     })
     .to_string();
     let error = deserialize_module_text(&text).unwrap_err().to_string();
     assert!(error.contains("someone.else"), "{error}");
-    assert!(error.contains("regenerate this one"), "{error}");
+    assert!(error.contains("regenerate this document"), "{error}");
 }
 
 // ---- the remaining promoted kinds round trip ---------------------------------

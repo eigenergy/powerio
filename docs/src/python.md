@@ -114,11 +114,11 @@ powerio.serialize(module, "case.pio.json")
 same_module = powerio.deserialize(ir.artifacts[0].data)
 ```
 
-The IR header is `"schema": "powerio.module"` and `"version"` equal to
-`powerio.__version__`; `powerio.versions()["module_schema"]` reports both.
-`deserialize` reads the compatible 0.11.x documents no newer than the installed
-build and refuses a newer or a 0.10 document with its version named. PowerIO IR
-is not a grid exchange format and is absent from format discovery.
+The IR header is `"schema": "pio-ir"` and integer `"version": 2`;
+`powerio.versions()["powerio_ir"]` reports both. The producer record separately
+identifies `powerio.__version__`. `deserialize` refuses an unsupported identity
+or generation with what it found. PowerIO IR is not a grid exchange format and
+is absent from format discovery.
 
 ## Collections
 

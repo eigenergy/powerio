@@ -26,7 +26,7 @@ pub use diagnostic::{
     render_diagnostics,
 };
 pub use error::Error;
-pub use module::{IR_SCHEMA_NAME, PioModule, StagedEdit};
+pub use module::{PioModule, StagedEdit};
 pub use output::{
     ArtifactPath, Destination, EmitResult, EmittedOutput, Fidelity, IntoDestination,
     MemoryArtifact, OutputLayout,

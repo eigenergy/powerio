@@ -90,11 +90,11 @@ pio_destination_release(destination);
 ```
 
 `pio_module_serialize` writes PowerIO IR. `pio_module_deserialize` reads it.
-The IR header is `"schema": "powerio.module"` and `"version"` naming the
-library release that wrote it; `pio_schema_report` reports both.
-`pio_module_deserialize` reads the compatible 0.11.x documents no newer than
-the library and refuses any other with its version named. ABI 7 exposes no
-reader for 0.10 documents and no module JSON aliases.
+The IR header is `"schema": "pio-ir"` and integer `"version": 2`;
+`pio_schema_report` reports both. The producer record separately names the
+PowerIO release. `pio_module_deserialize` refuses an unsupported identity or
+generation with what it found. ABI 7 exposes no reader for earlier generations
+and no module JSON aliases.
 
 ## Collections, updates, and calculations
 

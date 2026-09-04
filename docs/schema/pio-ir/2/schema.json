@@ -15745,7 +15745,7 @@
       "type": "object"
     }
   },
-  "$id": "https://powerio.dev/schema/pio-module/0.11.0/schema.json",
+  "$id": "https://powerio.dev/schema/pio-ir/2/schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -15769,7 +15769,7 @@
       "$ref": "#/$defs/Producer"
     },
     "schema": {
-      "const": "powerio.module",
+      "const": "pio-ir",
       "type": "string"
     },
     "source_map": {
@@ -15788,8 +15788,10 @@
       "$ref": "#/$defs/StoredValue"
     },
     "version": {
-      "const": "0.11.0",
-      "type": "string"
+      "const": 2,
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
     }
   },
   "required": [

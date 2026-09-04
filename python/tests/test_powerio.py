@@ -532,8 +532,8 @@ def test_balanced_network_module_builds_typed_calculation_instances():
         module = build()
         assert isinstance(module.value, value_type)
         document = json.loads(powerio.serialize(module).text)
-        assert document["schema"] == "powerio.module"
-        assert document["version"] == powerio.versions()["module_schema"]["version"]
+        assert document["schema"] == "pio-ir"
+        assert document["version"] == powerio.versions()["powerio_ir"]["version"]
         assert document["value"]["type"] == structural_type
         assert document["history"][-1]["kind"] == "transform"
 
@@ -798,8 +798,8 @@ def test_parse_goc3_problem_and_solution_with_one_parse(tmp_path):
         value.network_outputs.bus_vm = ()  # type: ignore[misc]
     assert solution._inner._type_name == "powerio.AcScucSolution"
     document = json.loads(powerio.serialize(solution).text)
-    assert document["schema"] == "powerio.module"
-    assert document["version"] == powerio.versions()["module_schema"]["version"]
+    assert document["schema"] == "pio-ir"
+    assert document["version"] == powerio.versions()["powerio_ir"]["version"]
     assert document["value"]["type"] == "powerio.AcScucSolution"
 
     emitted = json.loads(powerio.emit(solution, "goc3-json").text)
@@ -1085,12 +1085,9 @@ def test_pio_module_emit_uses_dynamic_writer(tmp_path):
     assert json.loads(solved_text)["value"]["type"] == "powerio.AcOpfSolution"
 
 
-def test_deserialize_rejects_a_newer_powerio_ir_version():
-    # The next patch on this build's own line: a document a newer PowerIO
-    # wrote, which this build refuses rather than misreads.
+def test_deserialize_rejects_a_newer_powerio_ir_generation():
     document = json.loads(powerio.serialize(powerio.parse(DATA / "case9.m")).text)
-    major, minor, patch = document["version"].split(".")
-    document["version"] = f"{major}.{minor}.{int(patch) + 1}"
+    document["version"] += 1
 
     with pytest.raises(powerio.PowerIOError) as failure:
         powerio.deserialize(io.StringIO(json.dumps(document)))
@@ -1136,7 +1133,7 @@ def test_typed_collection_protocols_use_contained_values(time_series_powerio_ir)
     parsed = json.loads(_emit_module(powerio.parse(DATA / "api_conformance.m")))
     network = parsed["value"]["data"]
     scenario_doc = {
-        "schema": "powerio.module",
+        "schema": "pio-ir",
         "version": parsed["version"],
         "producer": parsed["producer"],
         "value": {

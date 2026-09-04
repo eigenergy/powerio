@@ -62,7 +62,7 @@ fn bmopf_fixtures_classify_as_bmopf() {
 #[test]
 fn powerio_ir_classifies_as_module() {
     assert_eq!(
-        classify_json_text(r#"{"schema":"powerio.module","version":"0.11.0"}"#),
+        classify_json_text(r#"{"schema":"pio-ir","version":2}"#),
         JsonClass::Module
     );
 }

@@ -1,14 +1,13 @@
-# PowerIO IR {#pio-module}
+# PowerIO IR {#pio-ir}
 
 A `.pio.json` file serializes one `PioModule<PioValue>`: one typed value with
 its diagnostics, producer, sources, source mappings, history, and extensions.
-Beginning with PowerIO v0.11.0, the document version equals the `powerio` crate
-version. The current document shape begins:
+The current document shape begins:
 
 ```json
 {
-  "schema": "powerio.module",
-  "version": "0.11.0",
+  "schema": "pio-ir",
+  "version": 2,
   "producer": { "name": "powerio", "version": "0.11.0" },
   "value": {
     "type": "powerio.BalancedNetwork",
@@ -17,16 +16,14 @@ version. The current document shape begins:
 }
 ```
 
-Use `serialize` to produce it and `deserialize` to read it. A build reads the
-documents of its own compatible release line, as [Schema changes](#schema-changes)
-states.
+Use `serialize` to produce it and `deserialize` to read it.
 
 The generated JSON Schema is checked in at
-`docs/schema/pio-module/0.11.0/schema.json` and served from
-`https://powerio.dev/schema/pio-module/0.11.0/schema.json`. The checked-in schema,
+`docs/schema/pio-ir/2/schema.json` and served from
+`https://powerio.dev/schema/pio-ir/2/schema.json`. The checked-in schema,
 the serializer, and the deserializer are tested from the same Rust types.
 `docs/schema/README.md` records the earlier `pio-package` and
-`powerio.module` documents as one history.
+`powerio.module` documents as one history under `pio-ir`.
 
 ## PowerIO IR is not a grid exchange format
 
@@ -126,12 +123,11 @@ than allocation failures or truncated results.
 
 ## Schema changes
 
-The version belongs to the PowerIO IR document, not the Rust memory layout, a
-grid exchange format, or the C ABI. Since 0.11.0 it is the `powerio` release
-that wrote the document, and a build reads every document a SemVer compatible
-build no newer than itself wrote: PowerIO 0.11.3 reads the documents of 0.11.0
-through 0.11.3 and refuses 0.10.0, 0.12.0, and 0.11.4, naming the version it
-found and whether a newer PowerIO or a regenerated document is the remedy. A
-0.11.x release may therefore add a field with a default and may not remove or
-redefine one. Historical schemas document what earlier lines produced; they do
-not add compatibility to the deserializer.
+The integer version belongs to the PowerIO IR document, not the Rust memory
+layout, PowerIO release, a grid exchange format, or the C ABI. It changes only
+when the serialized representation changes. `producer.version` records the
+PowerIO release that wrote the document. PowerIO 0.11 reads generation `2` and
+refuses any other identity or generation with what it found; compatibility
+with another generation requires an explicit reader or upgrade path.
+Historical schemas document what earlier releases produced but do not add
+compatibility to the deserializer.
