@@ -5,8 +5,8 @@ use super::{
     BranchCharging, Bus, BusId, BusType, CONTROL_AREA, CROSS_BORDER_AREA, DEFAULT_POWER_LIMIT,
     DiagnosticInfo, Diagnostics, ElementId, Error, Extras, FMT, Generator, GeneratorEnergySource,
     HashMap, Load, MIN_REACTANCE_OHM, NodeCode, ORDER_CODES, PLANT_TYPES, PhaseRegulation,
-    REVISION, REVISIONS, Result, SQRT_3, SourceFormat, Switch, TransformerControl,
-    TransformerControlMode, Value, codes, country_iso, json,
+    REVISIONS, Result, SQRT_3, SourceFormat, Switch, TransformerControl, TransformerControlMode,
+    Value, codes, country_iso, json,
 };
 
 /// One data line, addressed by character column.
@@ -619,7 +619,6 @@ pub(crate) fn parse_ucte_source(
         let area_number = *area_by_letter.entry(letter).or_insert_with(|| {
             let mut area = Area::new(areas.len() + 1);
             area.name = Some(iso.to_owned());
-            area.uid = Some(iso.to_owned());
             area.area_type = Some(
                 if node.code.is_cross_border() {
                     CROSS_BORDER_AREA
@@ -775,14 +774,6 @@ pub(crate) fn parse_ucte_source(
         .collect();
     *net.switches_mut() = switches;
     *net.areas_mut() = areas;
-    reader.warnings.push_at(
-        &codes::READ_UCTE_VALUE_DEFAULTED,
-        crate::diagnostics::DiagnosticSeverity::Remark,
-        format!(
-            "UCTE-DEF {} states physical units and no system base; the balanced view uses {BASE_MVA} MVA and the {BASE_FREQUENCY} Hz synchronous area frequency",
-            revision.as_deref().unwrap_or(REVISION)
-        ),
-    );
     Ok(net)
 }
 

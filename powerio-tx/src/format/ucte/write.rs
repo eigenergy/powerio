@@ -107,6 +107,7 @@ struct Losses {
     rate_b_c: usize,
     dropped_switches: usize,
     self_loops: usize,
+    dispatch_limit_repairs: Vec<String>,
 }
 
 /// The UCTE node code of each bus, in bus table order.
@@ -518,12 +519,35 @@ pub(crate) fn write_ucte(net: &BalancedNetwork) -> Result<TextEmission> {
                 "reactive power generation",
             );
             if !generators.is_empty() {
+                let mut min_p = -sum(|g| g.pmin);
+                let mut max_p = -sum(|g| g.pmax);
+                let mut min_q = -sum(|g| g.qmin);
+                let mut max_q = -sum(|g| g.qmax);
+                let stated = (min_p, max_p, min_q, max_q);
+                if p_gen < max_p {
+                    max_p = p_gen;
+                }
+                if p_gen != 0.0 && p_gen > min_p {
+                    min_p = p_gen;
+                }
+                if q_gen < max_q {
+                    max_q = q_gen;
+                }
+                if q_gen > min_q {
+                    min_q = q_gen;
+                }
+                if stated != (min_p, max_p, min_q, max_q) {
+                    numbers.losses.dispatch_limit_repairs.push(format!(
+                        "bus {} limits P [{}, {}] and Q [{}, {}] became P [{min_p}, {max_p}] and Q [{min_q}, {max_q}] in the UCTE generation sign convention",
+                        bus.id, stated.0, stated.1, stated.2, stated.3
+                    ));
+                }
                 put_number(
                     &mut field,
                     &mut numbers,
                     65,
                     72,
-                    -sum(|g| g.pmin),
+                    min_p,
                     "minimum permissible active power generation",
                 );
                 put_number(
@@ -531,7 +555,7 @@ pub(crate) fn write_ucte(net: &BalancedNetwork) -> Result<TextEmission> {
                     &mut numbers,
                     73,
                     80,
-                    -sum(|g| g.pmax),
+                    max_p,
                     "maximum permissible active power generation",
                 );
                 put_number(
@@ -539,7 +563,7 @@ pub(crate) fn write_ucte(net: &BalancedNetwork) -> Result<TextEmission> {
                     &mut numbers,
                     81,
                     88,
-                    -sum(|g| g.qmin),
+                    min_q,
                     "minimum permissible reactive power generation",
                 );
                 put_number(
@@ -547,7 +571,7 @@ pub(crate) fn write_ucte(net: &BalancedNetwork) -> Result<TextEmission> {
                     &mut numbers,
                     89,
                     96,
-                    -sum(|g| g.qmax),
+                    max_q,
                     "maximum permissible reactive power generation",
                 );
             }
@@ -588,13 +612,16 @@ pub(crate) fn write_ucte(net: &BalancedNetwork) -> Result<TextEmission> {
                 .and_then(|text| text.chars().next())
                 .filter(|letter| PLANT_TYPES.contains(*letter))
                 .or_else(|| {
-                    generators.first().map(|g| match g.energy_source {
-                        GeneratorEnergySource::Hydro => 'H',
-                        GeneratorEnergySource::Nuclear => 'N',
-                        GeneratorEnergySource::Thermal => 'C',
-                        GeneratorEnergySource::Wind => 'W',
-                        GeneratorEnergySource::Solar | GeneratorEnergySource::Other => 'F',
-                    })
+                    net.generators()
+                        .iter()
+                        .find(|generator| generator.bus == bus.id)
+                        .map(|generator| match generator.energy_source {
+                            GeneratorEnergySource::Hydro => 'H',
+                            GeneratorEnergySource::Nuclear => 'N',
+                            GeneratorEnergySource::Thermal => 'C',
+                            GeneratorEnergySource::Wind => 'W',
+                            GeneratorEnergySource::Solar | GeneratorEnergySource::Other => 'F',
+                        })
                 });
             if let Some(letter) = plant_type {
                 field.put(127, &letter.to_string());
@@ -1070,6 +1097,16 @@ fn report_losses(net: &BalancedNetwork, losses: &Losses, warnings: &mut Diagnost
             shown.join(", ")
         }
     };
+    if !losses.dispatch_limit_repairs.is_empty() {
+        warnings.push(
+            &F.value_substituted,
+            format!(
+                "{} bus generation limit set(s) did not contain the dispatch and were widened before UCTE emission, matching UCTE consistency rules: {}",
+                losses.dispatch_limit_repairs.len(),
+                sample(&losses.dispatch_limit_repairs)
+            ),
+        );
+    }
     if !losses.derived_codes.is_empty() {
         warnings.push(
             &F.value_substituted,

@@ -584,6 +584,9 @@ pub(crate) fn pypsa_csv_artifacts(
         files.push((name, text));
     };
     let mut warnings = Diagnostics::new();
+    if let Some(message) = super::exchange_context_loss(net, "PyPSA CSV") {
+        warnings.push(&F.field_dropped, message);
+    }
     // Element tables must reference buses by the same key buses.csv is indexed
     // on, and PyPSA requires those keys to be unique for its joins. A bus is
     // keyed by its name only when the name collides with no other bus's name

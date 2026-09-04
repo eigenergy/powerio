@@ -1129,6 +1129,7 @@ pub(crate) fn emit_value_text(net: &BalancedNetwork, format: TargetFormat) -> Re
     warn_dropped_frequency(net, format, &mut conv);
     warn_dropped_locations(net, format, &mut conv);
     warn_dropped_transformer_charging(net, format, &mut conv);
+    warn_dropped_exchange_context(net, format, &mut conv);
     Ok(conv)
 }
 
@@ -1522,6 +1523,175 @@ fn warn_dropped_transformer_charging(
             ),
         );
     }
+}
+
+/// Warn when a bus-branch case format cannot carry the grid exchange context
+/// retained beside the calculation view. XIIDM, JIIDM, CGMES, and modern
+/// PSS/E topology records have their own format-specific projections; the
+/// formats selected here have no complete hierarchy or metadata model.
+fn warn_dropped_exchange_context(
+    net: &BalancedNetwork,
+    format: TargetFormat,
+    conv: &mut TextEmission,
+) {
+    if !matches!(
+        format,
+        TargetFormat::Matpower
+            | TargetFormat::PowerModelsJson
+            | TargetFormat::EgretJson
+            | TargetFormat::PowerWorld
+            | TargetFormat::PandapowerJson
+            | TargetFormat::Pslf
+            | TargetFormat::SurgeJson
+            | TargetFormat::Ucte
+    ) {
+        return;
+    }
+    if let Some(message) = exchange_context_loss(net, format.label()) {
+        conv.push(&format.emit_family().field_dropped, message);
+    }
+}
+
+/// Describe the source-neutral network context absent from a target format.
+/// One diagnostic represents one format boundary even when the detailed model
+/// contains many CIM or IIDM objects.
+#[allow(clippy::too_many_lines)] // one inventory counts every exchange-context family
+pub(super) fn exchange_context_loss(net: &BalancedNetwork, target: &str) -> Option<String> {
+    let mut dropped = Vec::new();
+    let metadata = net.case_metadata();
+    let mut metadata_fields = Vec::new();
+    if metadata.case_date.is_some() {
+        metadata_fields.push("case_date");
+    }
+    if metadata.forecast_distance.is_some() {
+        metadata_fields.push("forecast_distance");
+    }
+    if metadata.source_model_format.is_some() {
+        metadata_fields.push("source_model_format");
+    }
+    if metadata.minimum_validation_level.is_some() {
+        metadata_fields.push("minimum_validation_level");
+    }
+    if !metadata_fields.is_empty() {
+        dropped.push(format!(
+            "case metadata fields `{}`",
+            metadata_fields.join("`, `")
+        ));
+    }
+
+    if let Some(detailed) = net.detailed_connectivity().as_deref() {
+        let records = [
+            detailed.omitted_fields.len(),
+            detailed.component_metadata.len(),
+            detailed.subnetworks.len(),
+            detailed.substations.len(),
+            detailed.voltage_levels.len(),
+            detailed.bus_breaker_buses.len(),
+            detailed.calculated_buses.len(),
+            detailed.connectivity_nodes.len(),
+            detailed.busbar_sections.len(),
+            detailed.junctions.len(),
+            detailed.terminals.len(),
+            detailed.switches.len(),
+            detailed.internal_connections.len(),
+            detailed.operational_limit_groups.len(),
+            detailed.tap_changers.len(),
+            detailed.equipment_reactive_limits.len(),
+            detailed.boundary_lines.len(),
+            detailed.tie_lines.len(),
+            detailed.dc_converter_units.len(),
+            detailed.dc_topological_nodes.len(),
+            detailed.dc_nodes.len(),
+            detailed.dc_grounds.len(),
+            detailed.dc_busbars.len(),
+            detailed.dc_lines.len(),
+            detailed.dc_series_devices.len(),
+            detailed.dc_switches.len(),
+            detailed.voltage_source_converters.len(),
+            detailed.line_commutated_converters.len(),
+        ]
+        .into_iter()
+        .sum::<usize>();
+        if records > 0 {
+            dropped.push(format!(
+                "the `detailed_connectivity` hierarchy and topology ({records} record(s))"
+            ));
+        }
+    }
+
+    let source_uids = net
+        .buses()
+        .iter()
+        .filter(|value| value.uid.is_some() && !net.uid_is_generated(value.uid.as_deref()))
+        .count()
+        + net
+            .loads()
+            .iter()
+            .filter(|value| value.uid.is_some() && !net.uid_is_generated(value.uid.as_deref()))
+            .count()
+        + net
+            .shunts()
+            .iter()
+            .filter(|value| value.uid.is_some() && !net.uid_is_generated(value.uid.as_deref()))
+            .count()
+        + net
+            .static_var_compensators()
+            .iter()
+            .filter(|value| value.uid.is_some() && !net.uid_is_generated(value.uid.as_deref()))
+            .count()
+        + net
+            .branches()
+            .iter()
+            .filter(|value| value.uid.is_some() && !net.uid_is_generated(value.uid.as_deref()))
+            .count()
+        + net
+            .switches()
+            .iter()
+            .filter(|value| value.uid.is_some() && !net.uid_is_generated(value.uid.as_deref()))
+            .count()
+        + net
+            .generators()
+            .iter()
+            .filter(|value| value.uid.is_some() && !net.uid_is_generated(value.uid.as_deref()))
+            .count()
+        + net
+            .storage()
+            .iter()
+            .filter(|value| value.uid.is_some() && !net.uid_is_generated(value.uid.as_deref()))
+            .count()
+        + net
+            .hvdc()
+            .iter()
+            .filter(|value| value.uid.is_some() && !net.uid_is_generated(value.uid.as_deref()))
+            .count()
+        + net
+            .transformers_3w()
+            .iter()
+            .filter(|value| value.uid.is_some() && !net.uid_is_generated(value.uid.as_deref()))
+            .count()
+        + net
+            .areas()
+            .iter()
+            .filter(|value| value.uid.is_some())
+            .count();
+    if source_uids > 0 {
+        dropped.push(format!(
+            "{source_uids} source-assigned stable component identity value(s)"
+        ));
+    }
+    if net.geo().is_some() {
+        dropped.push("geographic coordinate reference metadata".to_owned());
+    }
+    if net.solver().is_some() {
+        dropped.push("solver and solution-control metadata".to_owned());
+    }
+    if dropped.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{target} has no complete source-neutral grid exchange context; dropped {}",
+        dropped.join(", ")
+    ))
 }
 
 pub(super) fn branch_rating_set_drop_warning(
@@ -2198,6 +2368,46 @@ mpc.branch = [
         assert_ne!(canonical.text, case);
         let reparsed = parse_str(&canonical.text, "matpower").unwrap();
         assert_eq!(reparsed.network.buses().len(), 1);
+    }
+
+    #[test]
+    fn bus_branch_formats_report_dropped_exchange_context_once() {
+        let case = "function mpc = t\n\
+                    mpc.version = '2';\n\
+                    mpc.baseMVA = 100;\n\
+                    mpc.bus = [1 3 0 0 0 0 1 1.0 0 345 1 1.1 0.9;];\n\
+                    mpc.gen = [];\n\
+                    mpc.branch = [];\n";
+        let mut net = parse_str(case, "matpower").unwrap().network;
+        *net.detailed_connectivity_mut() =
+            Some(std::sync::Arc::new(crate::DetailedConnectivity::default()));
+        assert!(exchange_context_loss(&net, "PowerModels JSON").is_none());
+
+        net.case_metadata_mut().case_date = Some("2025-01-02T03:04:05Z".into());
+        net.buses_mut()[0].uid = Some("source-bus".into());
+        let mut detailed = crate::DetailedConnectivity::default();
+        detailed.substations.push(crate::Substation {
+            component: powerio_core::ComponentId::new("substation", "source-substation").unwrap(),
+            country: None,
+            operator: None,
+            geographical_tags: Vec::new(),
+        });
+        *net.detailed_connectivity_mut() = Some(std::sync::Arc::new(detailed));
+
+        let emitted = emit_value_text(&net, TargetFormat::PowerModelsJson).unwrap();
+        let context = emitted
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.code() == "EMIT.POWERMODELS.FIELD_DROPPED"
+                    && diagnostic.message().contains("grid exchange context")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(context.len(), 1, "{:?}", emitted.render_diagnostics());
+        let message = context[0].message();
+        assert!(message.contains("case_date"), "{message}");
+        assert!(message.contains("detailed_connectivity"), "{message}");
+        assert!(message.contains("1 source-assigned"), "{message}");
     }
 
     #[test]

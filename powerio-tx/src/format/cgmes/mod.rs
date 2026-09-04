@@ -550,7 +550,7 @@ mod tests {
             .nth(1)
             .and_then(|text| text.split("</cim:OperationalLimitType>").next())
             .expect("a positive rate_a emits one limit type");
-        assert!(permanent.contains("<cim:IdentifiedObject.name>patl</"));
+        assert!(!permanent.contains("<cim:IdentifiedObject.name>"));
         assert!(!permanent.contains("acceptableDuration"), "{permanent}");
     }
 
@@ -1024,6 +1024,30 @@ mod tests {
         assert_eq!(parsed.network.branches().len(), 1);
         assert_eq!(parsed.network.loads().len(), 1);
         assert_eq!(parsed.network.generators().len(), 1);
+        assert_eq!(
+            parsed
+                .network
+                .detailed_connectivity()
+                .as_deref()
+                .unwrap()
+                .substations
+                .len(),
+            2
+        );
+        assert!(parsed.network.case_metadata().source_model_format.is_none());
+        assert!(parsed.warnings.is_empty(), "{:#?}", parsed.warnings);
+
+        let emitted_again = write::write_cgmes(&parsed.network, CgmesVersion::V3_0).unwrap();
+        let parsed_again = read::read_cgmes_documents(emitted_again.files, Some("case")).unwrap();
+        assert_eq!(
+            serde_json::to_value(&parsed.network).unwrap(),
+            serde_json::to_value(&parsed_again.network).unwrap()
+        );
+        assert!(
+            parsed_again.warnings.is_empty(),
+            "{:#?}",
+            parsed_again.warnings
+        );
     }
 
     #[test]

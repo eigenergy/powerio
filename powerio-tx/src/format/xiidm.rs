@@ -4084,11 +4084,6 @@ fn build_network(parsed: &ParsedXiidm, diagnostics: &mut Diagnostics) -> Result<
             ),
         );
     }
-    diagnostics.push(
-        &codes::READ_XIIDM_VALUE_DEFAULTED,
-        "XIIDM has no system MVA base; the balanced calculation view uses 100 MVA",
-    );
-
     let detailed = build_detailed_connectivity(
         parsed,
         &bus_builder,
@@ -7349,6 +7344,7 @@ struct XiidmWriteIndex<'a> {
     /// absent terminal power value stays absent instead of being filled from
     /// the balanced calculation view.
     supplied_detailed_connectivity: bool,
+    base_mva: f64,
     omitted_fields: HashSet<(ComponentId, OmittedFieldName)>,
     metadata: HashMap<ComponentId, &'a ComponentMetadata>,
     terminals: HashMap<(ComponentId, u8), &'a Terminal>,
@@ -7478,6 +7474,7 @@ impl<'a> XiidmWriteIndex<'a> {
 
         let mut index = Self {
             supplied_detailed_connectivity: network.detailed_connectivity().is_some(),
+            base_mva: network.base_mva(),
             omitted_fields: detailed
                 .omitted_fields
                 .iter()
@@ -7749,6 +7746,144 @@ impl<'a> XiidmWriteIndex<'a> {
     }
 }
 
+/// Project transformers whose terminal voltage levels belong to different
+/// substations into IIDM's single-substation transformer hierarchy. The
+/// balanced transformer remains unchanged; only its output containers join.
+fn collapse_cross_substation_transformers(
+    network: &BalancedNetwork,
+    detailed: &DetailedConnectivity,
+    diagnostics: &mut Diagnostics,
+) -> Option<DetailedConnectivity> {
+    let substation_indices = detailed
+        .substations
+        .iter()
+        .enumerate()
+        .map(|(index, substation)| (substation.component.clone(), index))
+        .collect::<HashMap<_, _>>();
+    let level_substations = detailed
+        .voltage_levels
+        .iter()
+        .filter_map(|level| {
+            level
+                .substation
+                .as_ref()
+                .map(|substation| (level.component.clone(), substation.clone()))
+        })
+        .collect::<HashMap<_, _>>();
+    let terminal_substations = detailed
+        .terminals
+        .iter()
+        .filter_map(|terminal| {
+            let substation = level_substations.get(&terminal.voltage_level)?;
+            Some((
+                (terminal.equipment.clone(), terminal.terminal),
+                substation.clone(),
+            ))
+        })
+        .collect::<HashMap<_, _>>();
+    let mut union = UnionFind::new(detailed.substations.len());
+    let mut joined_transformers = 0usize;
+    {
+        let mut join = |component: &ComponentId, sides: u8| {
+            let substations = (1..=sides)
+                .filter_map(|side| terminal_substations.get(&(component.clone(), side)))
+                .filter_map(|substation| substation_indices.get(substation).copied())
+                .collect::<BTreeSet<_>>();
+            if substations.len() <= 1 {
+                return false;
+            }
+            joined_transformers += 1;
+            let first = *substations
+                .first()
+                .expect("a nonempty set has a first item");
+            for other in substations.into_iter().skip(1) {
+                union.union(first, other);
+            }
+            true
+        };
+        for branch in network
+            .branches()
+            .iter()
+            .filter(|branch| branch.is_transformer())
+        {
+            if let Some(uid) = branch.uid.as_deref() {
+                for component_type in ["branch", "transformer"] {
+                    if component_id(component_type, uid).is_ok_and(|component| join(&component, 2))
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+        for transformer in network.transformers_3w() {
+            if let Some(uid) = transformer.uid.as_deref() {
+                for component_type in ["transformer_3w", "branch", "transformer"] {
+                    if component_id(component_type, uid).is_ok_and(|component| join(&component, 3))
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    if joined_transformers == 0 {
+        return None;
+    }
+
+    let mut groups = HashMap::<usize, Vec<ComponentId>>::new();
+    for (index, substation) in detailed.substations.iter().enumerate() {
+        groups
+            .entry(union.find(index))
+            .or_default()
+            .push(substation.component.clone());
+    }
+    let mut replacements = HashMap::new();
+    let mut joined_substations = 0usize;
+    let mut joined_groups = 0usize;
+    for group in groups.values().filter(|group| group.len() > 1) {
+        let representative = group
+            .iter()
+            .min()
+            .expect("a nonempty group has a representative")
+            .clone();
+        joined_groups += 1;
+        joined_substations += group.len();
+        for substation in group {
+            replacements.insert(substation.clone(), representative.clone());
+        }
+    }
+
+    let mut projected = detailed.clone();
+    projected.substations.retain(|substation| {
+        replacements
+            .get(&substation.component)
+            .is_none_or(|representative| representative == &substation.component)
+    });
+    for level in &mut projected.voltage_levels {
+        if let Some(substation) = &level.substation
+            && let Some(representative) = replacements.get(substation)
+        {
+            level.substation = Some(representative.clone());
+        }
+    }
+    for subnetwork in &mut projected.subnetworks {
+        for component in &mut subnetwork.components {
+            if let Some(representative) = replacements.get(component) {
+                component.clone_from(representative);
+            }
+        }
+        subnetwork.components.sort();
+        subnetwork.components.dedup();
+    }
+    diagnostics.push(
+        &codes::EMIT_XIIDM.value_collapsed,
+        format!(
+            "{joined_transformers} transformer(s) connect voltage levels in different substations; IIDM requires one containing substation per transformer, so {joined_substations} source substation records were joined into {joined_groups} output group(s), and each group retains one substation's fields and metadata"
+        ),
+    );
+    Some(projected)
+}
+
 pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
     let unstated_nominal_voltage = super::unstated_nominal_voltage(network);
     let unbounded_reactive_limits = super::unbounded_reactive_limits(network);
@@ -7776,6 +7911,15 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
         message: format!("network validation failed before XIIDM emission: {error}"),
     })?;
     let mut diagnostics = Diagnostics::new();
+    if (network.base_mva() - DEFAULT_BASE_MVA).abs() > 1e-9 {
+        diagnostics.push(
+            &codes::EMIT_XIIDM.value_substituted,
+            format!(
+                "system base {} MVA: XIIDM carries no MVA base, so a reparse lands per-unit values on {DEFAULT_BASE_MVA} MVA",
+                network.base_mva()
+            ),
+        );
+    }
     if unbounded_reactive_limits > 0 {
         diagnostics.push(
             &codes::EMIT_XIIDM.value_substituted,
@@ -7893,6 +8037,8 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
         .filter(|detailed| network.buses().is_empty() || !detailed.voltage_levels.is_empty())
     {
         diagnose_xiidm_projection(detailed, &mut diagnostics)?;
+        let projected = collapse_cross_substation_transformers(network, detailed, &mut diagnostics);
+        let detailed = projected.as_ref().unwrap_or(detailed);
         validate_xiidm_tap_changers(detailed)?;
         validate_xiidm_reactive_limits(detailed)?;
         validate_xiidm_dc_emission(detailed)?;
@@ -11677,7 +11823,7 @@ fn write_three_winding_transformer(
         } else {
             buses[0].base_kv
         });
-    let zbase = rated_u0 * rated_u0 / DEFAULT_BASE_MVA;
+    let zbase = rated_u0 * rated_u0 / index.base_mva;
     let star = transformer.calc_star_impedances();
     let taps: [Vec<&NetworkTapChanger>; 3] =
         std::array::from_fn(|side| transformer_tap_changers(index, &component, side as u8 + 1));
@@ -12063,8 +12209,8 @@ fn write_line(
     let metadata = index.metadata(&component);
     let from = index.bus(branch.from);
     let to = index.bus(branch.to);
-    let r = branch.r * from.base_kv * to.base_kv / DEFAULT_BASE_MVA;
-    let x = branch.x * from.base_kv * to.base_kv / DEFAULT_BASE_MVA;
+    let r = branch.r * from.base_kv * to.base_kv / index.base_mva;
+    let x = branch.x * from.base_kv * to.base_kv / index.base_mva;
     let denominator = r * r + x * x;
     let y_real = if denominator == 0.0 {
         0.0
@@ -12078,7 +12224,7 @@ fn write_line(
     };
     let charging = branch.calc_terminal_charging();
     let inverse = |shunt: f64, at: f64, other: f64, transmission: f64| {
-        shunt * DEFAULT_BASE_MVA / (at * at) - (1.0 - other / at) * transmission
+        shunt * index.base_mva / (at * at) - (1.0 - other / at) * transmission
     };
     let g1 = inverse(charging.g_fr, from.base_kv, to.base_kv, y_real);
     let b1 = inverse(charging.b_fr, from.base_kv, to.base_kv, y_imag);
@@ -12112,7 +12258,7 @@ fn write_transformer(
     let metadata = index.metadata(&component);
     let from = index.bus(branch.from);
     let to = index.bus(branch.to);
-    let zbase = to.base_kv * to.base_kv / DEFAULT_BASE_MVA;
+    let zbase = to.base_kv * to.base_kv / index.base_mva;
     let charging = branch.calc_terminal_charging();
     let taps = transformer_tap_changers(index, &component, 1);
     let rho_factor = tap_step_factor(&taps, |step| step.rho);
@@ -13036,6 +13182,42 @@ mod tests {
         assert_eq!(detailed.substations.len(), 1);
         assert_eq!(detailed.voltage_levels.len(), 2);
         assert_eq!(detailed.terminals.len(), 4);
+        assert!(
+            diagnostics
+                .records()
+                .iter()
+                .all(|diagnostic| !diagnostic.message().contains("system MVA base"))
+        );
+    }
+
+    #[test]
+    fn a_nondefault_system_base_is_reported_on_xiidm_emission() {
+        let mut network = parse_xiidm_source(BUS_BREAKER, &mut Diagnostics::new()).unwrap();
+        *network.base_mva_mut() = 50.0;
+        let emission = write_xiidm(&network).unwrap();
+        assert!(emission.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code() == "EMIT.XIIDM.VALUE_SUBSTITUTED"
+                && diagnostic.message().contains("system base 50 MVA")
+        }));
+
+        let reparsed = parse_xiidm_source(&emission.text, &mut Diagnostics::new()).unwrap();
+        let physical_ohms = |network: &BalancedNetwork| {
+            let branch = &network.branches()[0];
+            let from_kv = network
+                .buses()
+                .iter()
+                .find(|bus| bus.id == branch.from)
+                .unwrap()
+                .base_kv;
+            let to_kv = network
+                .buses()
+                .iter()
+                .find(|bus| bus.id == branch.to)
+                .unwrap()
+                .base_kv;
+            branch.r * from_kv * to_kv / network.base_mva()
+        };
+        assert_f64_close(physical_ohms(&reparsed), physical_ohms(&network));
     }
 
     #[test]
@@ -14517,6 +14699,28 @@ mod tests {
         assert_eq!(reparsed.buses().len(), network.buses().len());
         assert_eq!(reparsed.loads().len(), network.loads().len());
         assert_eq!(reparsed.generators().len(), network.generators().len());
+    }
+
+    #[test]
+    fn cross_substation_transformers_join_output_containers() {
+        let source = BUS_BREAKER.replace(
+            "    <iidm:voltageLevel id=\"VL2\"",
+            "  </iidm:substation>\n  <iidm:substation id=\"S2\">\n    <iidm:voltageLevel id=\"VL2\"",
+        );
+        let mut network = parse_xiidm_source(&source, &mut Diagnostics::new()).unwrap();
+        network.branches_mut()[0].tap = 1.1;
+
+        let emission = write_xiidm(&network).unwrap();
+        assert_eq!(emission.text.matches("<iidm:substation ").count(), 1);
+        assert!(emission.text.contains("<iidm:twoWindingsTransformer"));
+        assert!(!emission.text.contains("<iidm:line"));
+        assert!(emission.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code() == codes::EMIT_XIIDM.value_collapsed.code
+                && diagnostic.message().contains("different substations")
+        }));
+
+        let reparsed = parse_xiidm_source(&emission.text, &mut Diagnostics::new()).unwrap();
+        assert_f64_close(reparsed.branches()[0].calc_effective_tap(), 1.1);
     }
 
     #[test]

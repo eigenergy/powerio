@@ -135,9 +135,13 @@ parse warning that hides the cause.
   on the network. Fresh emission preserves detailed connectivity when present
   and allocates missing local node numbers without changing stable PowerIO
   identities. A three winding transformer whose `ratedU0` differs from
-  `ratedU1` keeps that leg impedance base for fresh emission. XIIDM states no
-  system MVA base, so the balanced calculation view
-  uses 100 MVA and reports that assumption.
+  `ratedU1` keeps that leg impedance base for fresh emission. XIIDM states
+  electrical quantities in physical units and has no system MVA base. The
+  balanced calculation view uses 100 MVA as its internal normalization without
+  reporting a missing source value. Fresh XIIDM or JIIDM emission reports a
+  non-100 MVA network base because the target cannot state that normalization;
+  impedance and admittance conversion still uses the network's actual base, so
+  physical electrical values remain unchanged.
 - **CGMES** reads 2.4.15 on CIM16 and 3.0 on CIM100. CGMES 2.4.15 uses the
   namespace `http://iec.ch/TC57/2013/CIM-schema-cim16#` with the ENTSO-E
   extension namespace `http://entsoe.eu/CIM/SchemaExtension/3/1#` (IEC TS
@@ -212,18 +216,26 @@ parse warning that hides the cause.
   Missing identities use UUIDv5 derived from the component type and stable
   identity. Tap changer tables, tap controls and table points, reactive curve
   points, and individual limit values retain their electrical values and
-  relationships but receive deterministic subordinate mRIDs on fresh emission;
-  parsing reports this identity change. The source neutral limit model retains
-  permanent and temporary limits. Fresh output therefore uses PATL and TATL;
-  parsing reports PATLT or TCT substitution and any fractional duration rounded
-  to whole seconds. Distinct same-kV `BaseVoltage` identities also receive a
-  precise collapse diagnostic before fresh output uses one voltage keyed
-  record. Busbar `VoltageLimit`
+  relationships but receive deterministic subordinate mRIDs on fresh emission.
+  PowerIO-generated operational-limit helper objects omit unrepresented names,
+  so their deterministic output structure does not become source metadata on
+  readback. A third-party subordinate identity or field without a typed record
+  still receives a diagnostic. The source neutral limit model retains permanent
+  and temporary limits. Fresh output therefore uses PATL and TATL; parsing
+  reports PATLT or TCT substitution and any fractional duration rounded to whole
+  seconds. CGMES input retains every source `Substation`, including distinct
+  substations joined by a transformer. XIIDM and JIIDM emission joins only the
+  output container groups when their one-substation transformer rule requires
+  it and reports that hierarchy change; the transformer remains a transformer
+  with the same electrical data. Distinct same-kV `BaseVoltage` identities
+  also receive a precise collapse diagnostic before fresh output uses one
+  voltage keyed record. Busbar `VoltageLimit`
   records are combined with the enclosing voltage level into the most
   restrictive valid low/high voltage range. An inconsistent pair is diagnosed
   and ignored; fresh emission writes the resulting `VoltageLevel` fields rather
   than recreating the individual `VoltageLimit` records. CGMES states physical
-  units but no system MVA base, so PowerIO uses and reports 100 MVA.
+  units but no system MVA base, so the balanced calculation view uses 100 MVA
+  as its internal normalization without reporting a missing source value.
 - **PSS/E** reads RAW revisions 32 through 35 and RAWX revision 35. RAW and
   RAWX share one electrical mapping. RAW 32 records end before the bus
   voltage limits (`NVHI`, `NVLO`, `EVHI`, `EVLO`), the load `INTRPT` field,
@@ -234,7 +246,11 @@ parse warning that hides the cause.
   RAW 34 maps its substation section. RAW
   35 and RAWX 35 map and freshly emit substations, nodes, switches, busbar
   sections, and equipment terminal references. Fresh RAW 34/35 and
-  RAWX output preserves AC line and transformer names. Explicit RAW revisions
+  RAWX output preserves AC line and transformer names. RAWX terminal rows use
+  the exact type, buses, and local identifier selected for their electrical
+  equipment row. When a source-neutral connectivity node has no PSS/E number,
+  fresh RAWX allocates a positive number within its substation before resolving
+  exact regulation targets and reports the default. Explicit RAW revisions
   outside 32 through 35, invalid system bases or frequencies, and nonfinite
   record values are rejected. Fresh output accepts only revisions 33 through
   35 and returns an error when detailed connectivity cannot form valid RAWX
@@ -301,10 +317,12 @@ parse warning that hides the cause.
   branch extras so fresh UCTE output replays them exactly. `##TT` special
   descriptions ride on the transformer extras and `##E` exchange schedules
   stay in the retained source only; both are reported with
-  `READ.UCTE.RETAINED_SOURCE_ONLY`, and the unstated system base with a
-  `READ.UCTE.VALUE_DEFAULTED` remark. Findings point at their record
-  through source spans. Fresh output writes nodes grouped by country in bus
-  order. A bus keeps its name when it is a UCTE node code; otherwise it
+  `READ.UCTE.RETAINED_SOURCE_ONLY`. UCTE states physical quantities and no
+  system MVA base, so the balanced calculation view uses 100 MVA as its
+  internal normalization without reporting a missing source value. Findings
+  point at their record through source spans. Fresh output writes nodes grouped
+  by country in bus order. A bus keeps its name when it is a UCTE node code;
+  otherwise it
   receives `<country><spot><level><busbar>`: the country letter of its
   area's ISO name, else the area number's entry in the UCTE country table in
   ISO order; the bus id in base 36 as the five character spot; the voltage
@@ -315,7 +333,11 @@ parse warning that hides the cause.
   values stay physical, so a re-read expresses them per unit on that level.
   A phase shift becomes a one step symmetrical angle regulation and a
   voltage control with a tap range becomes a phase regulation; a line
-  joining two voltage levels is written as a transformer. Shunts, HVDC,
+  joining two voltage levels is written as a transformer. UCTE requires a
+  node's generation bounds to contain its dispatch; the writer widens an
+  inconsistent interval and reports the substituted bounds. An out-of-service
+  generator contributes no dispatch but still supplies the node's plant-type
+  letter, keeping that source classification stable on readback. Shunts, HVDC,
   storage, static VAR compensators, three winding transformers, costs,
   capability columns, angle limits, voltage bands and angles, rate B and C,
   remote regulation, and a frequency other than 50 Hz are reported as

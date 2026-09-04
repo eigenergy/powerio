@@ -257,12 +257,7 @@ fn the_synthetic_case_parses_to_the_expected_counts_and_values() {
         "{:?}",
         &text[start..end]
     );
-    assert!(
-        rendered
-            .iter()
-            .any(|m| m.starts_with("READ.UCTE.VALUE_DEFAULTED") && m.contains("100 MVA")),
-        "{rendered:#?}"
-    );
+    assert!(rendered.iter().all(|m| !m.contains("system base")));
 }
 
 #[test]
@@ -272,11 +267,7 @@ fn the_2003_revision_reads_with_the_same_layout() {
     let module = parse_ucte_text("older.uct", &older);
     assert_eq!(module.value().buses().len(), 6);
     assert_eq!(module.value().branches().len(), 7);
-    assert!(
-        messages(&module)
-            .iter()
-            .any(|m| m.contains("UCTE-DEF 2003.09.01"))
-    );
+    assert!(messages(&module).iter().all(|m| !m.contains("system base")));
 }
 
 #[test]
@@ -465,6 +456,31 @@ fn fresh_output_reads_back_to_the_same_network() {
 }
 
 #[test]
+fn an_out_of_service_generator_keeps_its_plant_type() {
+    let module = powerio_tx::parse(
+        Source::open(Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/case9.m")).unwrap(),
+    )
+    .unwrap();
+    let mut network = module.value().clone();
+    let bus = network.generators()[0].bus;
+    network.generators_mut()[0].in_service = false;
+
+    let fresh = emit_value(&network, TargetFormat::Ucte).unwrap();
+    let reread = parse_ucte_text("out-of-service.uct", &fresh.text);
+
+    assert_eq!(
+        reread
+            .value()
+            .buses()
+            .iter()
+            .find(|candidate| candidate.id == bus)
+            .and_then(|candidate| candidate.extras.get("ucte_power_plant_type"))
+            .and_then(serde_json::Value::as_str),
+        Some("F")
+    );
+}
+
+#[test]
 fn a_matpower_case_writes_valid_node_codes_and_reads_back() {
     fn line(network: &BalancedNetwork) -> &powerio_tx::network::Branch {
         network
@@ -563,7 +579,21 @@ fn a_case_without_base_kv_is_written_at_the_level_nominal_voltage() {
             .any(|m| m.starts_with("EMIT.UCTE.RECORD_DROPPED: 1 shunt(s) dropped")),
         "{rendered:#?}"
     );
+    assert!(
+        rendered.iter().any(|m| {
+            m.starts_with("EMIT.UCTE.VALUE_SUBSTITUTED: 1 bus generation limit set(s)")
+                && m.contains("did not contain the dispatch")
+        }),
+        "{rendered:#?}"
+    );
     let reread = parse_ucte_text("case14.uct", &fresh.text);
+    assert!(
+        messages(&reread)
+            .iter()
+            .all(|m| !m.contains("reactive power 16.9 MVAr")),
+        "{:#?}",
+        messages(&reread)
+    );
     let net = &reread.value();
     assert_eq!(net.buses().len(), 14);
     assert_eq!(net.branches().len(), 20);

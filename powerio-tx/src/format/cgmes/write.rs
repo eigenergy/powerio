@@ -4598,12 +4598,14 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             tp.reference("ConnectivityNode.TopologicalNode", &tn);
             tp.close("ConnectivityNode");
 
-            let svv = det_mrid("svvoltage", &bus.id.to_string());
-            sv.open("SvVoltage", &svv, false);
-            sv.reference("SvVoltage.TopologicalNode", &tn);
-            sv.text("SvVoltage.v", bus.vm * bus.base_kv);
-            sv.text("SvVoltage.angle", bus.va);
-            sv.close("SvVoltage");
+            write_sv_voltage(
+                &mut sv,
+                &tn,
+                Some(bus.vm * bus.base_kv),
+                Some(bus.va),
+                false,
+                &mut w.warnings,
+            );
         }
     }
 
@@ -6515,11 +6517,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                     limit_types_used.push(limit_type);
                 }
                 let set = det_mrid("limitset", &format!("{id}:{kind}"));
-                limit_body.named(
-                    "OperationalLimitSet",
-                    &set,
-                    &format!("limits-{}-{kind}", i + 1),
-                );
+                limit_body.open("OperationalLimitSet", &set, false);
                 let source_terminal =
                     detailed.and_then(|details| detailed_terminal(details, "branch", local_id, 1));
                 limit_body.reference(
@@ -6787,11 +6785,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                         limit_types_used.push(limit_type);
                     }
                     let set = det_mrid("limitset", &format!("{id}:{end_number}:{kind}"));
-                    limit_body.named(
-                        "OperationalLimitSet",
-                        &set,
-                        &format!("limits-3w-{}-{end_number}-{kind}", i + 1),
-                    );
+                    limit_body.open("OperationalLimitSet", &set, false);
                     limit_body.reference(
                         "OperationalLimitSet.Terminal",
                         &terminal_mrid(detailed, source_terminal, &id, end_number),
@@ -6892,7 +6886,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             if !emits {
                 continue;
             }
-            limit_body.named("OperationalLimitSet", &set, &group.id);
+            limit_body.open("OperationalLimitSet", &set, false);
             let reference = TerminalReference {
                 equipment: group.equipment.clone(),
                 terminal: group.terminal,
@@ -6953,7 +6947,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
 
     for limit_type in &limit_types_used {
         let id = det_mrid("limittype", limit_type.label);
-        limit_doc.named("OperationalLimitType", &id, limit_type.label);
+        limit_doc.open("OperationalLimitType", &id, false);
         limit_doc.enumeration(
             "OperationalLimitType.direction",
             w.p.cim_ns,
@@ -6991,11 +6985,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         limit_doc.close("OperationalLimitType");
     }
     for value in source_limit_types {
-        limit_doc.named(
-            "OperationalLimitType",
-            &value.id,
-            if value.infinite { "PATL" } else { "TATL" },
-        );
+        limit_doc.open("OperationalLimitType", &value.id, false);
         limit_doc.enumeration(
             "OperationalLimitType.direction",
             w.p.cim_ns,

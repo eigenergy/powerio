@@ -2239,7 +2239,6 @@ fn read_pwl_costs(
     let mut reactive_rows = 0_usize;
     let mut unmapped_rows = 0_usize;
     let mut malformed_rows = 0_usize;
-    let mut read_rows = 0_usize;
     for row in frame.rows() {
         let et_raw = row.string("et").ok_or_else(|| {
             bad(format!(
@@ -2318,18 +2317,12 @@ fn read_pwl_costs(
             ncost: ranges.len() + 1,
             coeffs,
         };
-        read_rows += 1;
         if out.insert((et, element), curve).is_some() {
             return Err(bad(format!(
                 "`pwl_cost` row {}: duplicate cost for et `{et_raw}` element {element}",
                 row.label()
             )));
         }
-    }
-    if read_rows > 0 {
-        warnings.push(&codes::READ_PANDAPOWER_VALUE_INFERRED, format!(
-            "`pwl_cost`: {read_rows} piecewise curve(s) read; pandapower stores marginal cost per range only, so breakpoint costs start at zero at the first breakpoint and the absolute objective level is unstated"
-        ));
     }
     if reactive_rows > 0 {
         warnings.push(&codes::READ_PANDAPOWER_FIELD_DROPPED, format!(
@@ -3920,7 +3913,7 @@ mod tests {
     }
 
     #[test]
-    fn pwl_cost_reads_breakpoints_and_declares_the_level() {
+    fn pwl_cost_reads_breakpoints_from_zero_level() {
         let gen_frame = pp_frame(
             &["bus", "p_mw", "slack"],
             json!([0]),
@@ -3941,14 +3934,7 @@ mod tests {
         assert_eq!(cost.model, 1);
         assert_eq!(cost.ncost, 3);
         assert_eq!(cost.coeffs, vec![0.0, 0.0, 10.0, 50.0, 20.0, 130.0]);
-        assert!(
-            parsed
-                .diagnostics
-                .iter()
-                .any(|d| d.message().contains("absolute objective level is unstated")),
-            "{:?}",
-            parsed.render_diagnostics()
-        );
+        assert!(parsed.diagnostics.is_empty());
     }
 
     #[test]

@@ -126,11 +126,10 @@
 //! tokens (`vminpu`, `pf`, source `MVAsc`) and BMOPF named terminals have no
 //! slots in their neighbors; those rows stay honestly yellow.
 //!
-//! The `→ CGMES 3.0` column is an order of magnitude above every other, for
-//! one reason: a CGMES profile set identifies every object by an mRID and
-//! states its class, container, and limit types as objects of their own, so a
-//! case format that states none of that has a field dropped per object rather
-//! than per file. The counts are per object because the losses are.
+//! CGMES identifies every object by an mRID and states classes, containers,
+//! and limit types as objects of their own. The writer derives that required
+//! exchange context when a case format provides only a bus-branch model; the
+//! warnings that remain name source data CGMES cannot represent.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -958,14 +957,12 @@ fn transmission_targets() -> impl Iterator<Item = (usize, TransmissionFormat)> {
 // PSLF; egret lands on zero). What remains on that row is genuine: costs the
 // targets cannot carry and the one-of-three cost set MATPOWER's
 // all-or-nothing gencost drops.
-// pandapower piecewise costs map both ways (#360): a piecewise case's cost
-// now survives the into-pandapower hop as `pwl_cost` ranges. Reading that
-// payload declares the unstated absolute level once per parse, which every
-// cell of the source row counts (+1 across the row; the pandapower target
-// cell counts it twice, parse and readback), and the targets with no
-// piecewise slot declare the drop they used to get for free. The MATPOWER
-// cell nets zero: the curve it now receives replaces the cost drop it used
-// to declare.
+// pandapower piecewise costs map both ways as `pwl_cost` ranges. The format
+// states slopes over contiguous intervals and no additive objective constant;
+// the reader integrates from zero at the first breakpoint. An additive
+// constant does not change dispatch, so this canonical origin is not a
+// conversion loss. Targets without a piecewise slot report the curve they
+// cannot carry.
 //
 // The MATPOWER reader reads `mpc.areas` and the writer emits it, so the one
 // case that states an area (PGLib 5) carries it into every payload built from
@@ -999,13 +996,10 @@ fn transmission_targets() -> impl Iterator<Item = (usize, TransmissionFormat)> {
 //   values IIDM requires and a case format leaves unstated (the case date,
 //   the forecast distance, the source format, the validation level, and the
 //   substation and voltage level hierarchy the writer derives from buses).
-//   JIIDM adds twelve per file: the JSON writer states one finding per
-//   attribute it shortens, where the XML writer states none.
-// - The `→ CGMES 3.0` column is the largest by an order of magnitude, and for
-//   one reason: a CGMES profile set identifies every object by an mRID and
-//   states its class, container, and limit types as objects of their own, so a
-//   case format that states none of that has a field dropped per object rather
-//   than per file.
+//   XIIDM and JIIDM apply the same conversion diagnostics.
+// - The `→ CGMES 3.0` column reports source fields absent from CGMES. Required
+//   mRIDs, classes, containers, state records, and limit helper objects are
+//   deterministic output structure and do not count as source-data losses.
 // - The `→ UCTE-DEF .uct` column states the ten voltage levels a node code
 //   admits, the node code itself, the absent shunt and cost records, and the
 //   50 Hz synchronous area frequency.
@@ -1071,26 +1065,55 @@ fn transmission_targets() -> impl Iterator<Item = (usize, TransmissionFormat)> {
 //   contain switched shunt controls, so the XIIDM, JIIDM, and CGMES source
 //   rows each add two warnings in the MATPOWER column rather than silently
 //   discarding the control records.
+//
+// The current exchange-format baselines follow these representation rules:
+//
+// - XIIDM, CGMES, and UCTE state electrical quantities in physical units and
+//   do not state a system MVA base. Their readers use 100 MVA for the IR's
+//   internal per-unit normalization without reporting a missing source datum.
+//   XIIDM emission reports a non-100 MVA IR base because conversion then
+//   changes the chosen normalization.
+// - A generated CGMES set omits names for operational-limit helper objects
+//   whose identities and names are derived output structure. Typed
+//   operational limit groups retain the loading values, durations, and names
+//   that affect the model. Third-party helper metadata still produces a
+//   diagnostic when no typed field can retain it.
+// - CGMES retains every source Substation. XIIDM and JIIDM require the voltage
+//   levels at both transformer ends to share one substation, so their writers
+//   join only the output container groups and report that target-specific
+//   hierarchy change; transformer electrical data remains unchanged.
+// - UCTE generation bounds must contain the dispatch. Emission widens an
+//   inconsistent interval and reports the substitution once; readback then
+//   satisfies the format rule. UCTE-derived country areas use their names and
+//   classifications rather than a synthetic source identity, and an
+//   out-of-service generator still contributes its plant-type letter.
+// - Bus-branch targets and PyPSA report one grouped warning when case metadata,
+//   detailed topology, source-assigned identities, geographic metadata, or
+//   solver metadata crosses into a format without a complete exchange model.
+// - RAWX `subterm` rows use the type, buses, and local identifier selected for
+//   their electrical equipment row. Missing PSS/E node numbers are allocated
+//   before exact regulation targets are written, and that target requirement
+//   produces one grouped default diagnostic.
 const TRANSMISSION_WARNING_BASELINE: [[usize; TRANSMISSION_TARGETS]; 19] = [
-    [0, 1, 15, 15, 18, 7, 15, 23, 14, 76, 76, 64, 48, 15, 31], // MATPOWER .m
-    [0, 0, 15, 15, 17, 6, 14, 22, 13, 75, 75, 63, 47, 14, 30], // PowerModels JSON
-    [1, 1, 0, 0, 2, 1, 3, 1, 2, 38, 38, 19, 35, 9, 28],        // PSS/E .raw 33
-    [1, 1, 0, 0, 2, 1, 3, 1, 2, 38, 38, 19, 35, 9, 28],        // PSS/E RAWX 35
-    [1, 0, 6, 6, 0, 0, 8, 0, 6, 60, 60, 37, 39, 13, 27],       // PowerWorld .aux
-    [0, 0, 9, 9, 12, 0, 8, 1, 7, 74, 74, 43, 42, 9, 25],       // egret JSON
-    [1, 1, 8, 8, 9, 1, 2, 1, 8, 62, 62, 43, 59, 9, 19],        // pandapower JSON
-    [0, 0, 9, 9, 12, 0, 7, 0, 7, 73, 73, 43, 42, 9, 25],       // Surge JSON
-    [0, 0, 1, 1, 1, 0, 4, 3, 0, 44, 44, 18, 34, 8, 27],        // PSLF .epc
-    [9, 7, 39, 39, 8, 7, 9, 7, 8, 12, 12, 191, 66, 15, 59],    // XIIDM 1.17
-    [9, 7, 39, 39, 8, 7, 9, 7, 8, 12, 12, 191, 66, 15, 59],    // JIIDM 1.17
-    [9, 7, 74, 327, 7, 7, 8, 7, 7, 50, 50, 19, 58, 14, 58],    // CGMES 3.0
-    [25, 19, 13, 13, 25, 19, 13, 19, 25, 49, 49, 26, 13, 19, 43], // UCTE-DEF .uct
-    [0, 6, 14, 14, 14, 6, 9, 6, 12, 76, 76, 45, 44, 0, 15],    // PyPSA CSV
-    [6, 0, 14, 14, 14, 6, 9, 0, 12, 70, 70, 39, 46, 12, 0],    // GridFM Parquet
-    [4, 3, 2, 2, 3, 3, 4, 3, 5, 16, 16, 11, 10, 5, 12],        // PSS/E .raw 32
-    [7, 7, 6, 6, 7, 7, 8, 7, 7, 14, 14, 10, 14, 8, 11],        // IEEE CDF
-    [5, 4, 7, 7, 8, 4, 7, 4, 6, 9, 9, 9, 14, 8, 11],           // GO Challenge 3 JSON
-    [3, 2, 5, 5, 5, 3, 4, 2, 4, 33, 33, 10, 32, 5, 4],         // DeepMind OPFData JSON
+    [0, 1, 15, 15, 18, 7, 14, 23, 14, 70, 70, 57, 42, 15, 31], // MATPOWER .m
+    [0, 0, 15, 15, 17, 6, 13, 22, 13, 69, 69, 56, 41, 14, 30], // PowerModels JSON
+    [1, 1, 0, 0, 2, 1, 3, 1, 2, 32, 32, 12, 29, 9, 28],        // PSS/E .raw 33
+    [1, 1, 0, 0, 2, 1, 3, 1, 2, 32, 32, 12, 29, 9, 28],        // PSS/E RAWX 35
+    [1, 0, 6, 6, 0, 0, 8, 0, 6, 54, 54, 30, 33, 13, 27],       // PowerWorld .aux
+    [0, 0, 9, 9, 12, 0, 7, 1, 7, 68, 68, 36, 36, 9, 25],       // egret JSON
+    [0, 0, 7, 7, 8, 0, 0, 0, 7, 55, 55, 35, 52, 8, 18],        // pandapower JSON
+    [0, 0, 9, 9, 12, 0, 6, 0, 7, 67, 67, 36, 36, 9, 25],       // Surge JSON
+    [0, 0, 1, 1, 1, 0, 4, 3, 0, 38, 38, 11, 28, 8, 27],        // PSLF .epc
+    [9, 7, 33, 33, 8, 7, 9, 7, 8, 0, 0, 179, 60, 15, 53],      // XIIDM 1.17
+    [9, 7, 33, 33, 8, 7, 9, 7, 8, 0, 0, 179, 60, 15, 53],      // JIIDM 1.17
+    [8, 6, 67, 42, 6, 6, 7, 6, 6, 44, 44, 0, 51, 13, 51],      // CGMES 3.0
+    [18, 12, 6, 6, 18, 12, 6, 12, 18, 36, 36, 12, 0, 12, 36],  // UCTE-DEF .uct
+    [0, 6, 14, 14, 14, 6, 9, 6, 12, 70, 70, 38, 38, 0, 15],    // PyPSA CSV
+    [6, 0, 14, 14, 14, 6, 9, 0, 12, 64, 64, 32, 40, 12, 0],    // GridFM Parquet
+    [5, 4, 2, 2, 4, 4, 5, 4, 6, 15, 15, 9, 10, 6, 12],         // PSS/E .raw 32
+    [8, 8, 6, 6, 8, 8, 9, 8, 8, 13, 13, 8, 14, 9, 11],         // IEEE CDF
+    [6, 5, 7, 7, 9, 5, 7, 5, 7, 8, 8, 7, 14, 9, 11],           // GO Challenge 3 JSON
+    [3, 2, 5, 5, 5, 3, 4, 2, 4, 32, 32, 8, 32, 5, 4],          // DeepMind OPFData JSON
 ];
 
 const TRANSMISSION_CASES: [(&str, &str); 6] = [

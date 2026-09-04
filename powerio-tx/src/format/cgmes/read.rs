@@ -1866,14 +1866,6 @@ fn build(
             );
             50.0
         });
-    mapper.warnings.push_as(
-        &codes::READ_CGMES_VALUE_DEFAULTED,
-        format!(
-            "{}: per-unit values normalized onto a 100 MVA system base (CGMES \
-         carries none)",
-            version.label()
-        ),
-    );
     check_equipment_base_voltages(&mut mapper);
     warn_collapsed_base_voltage_identities(store, mapper.warnings);
 
@@ -1883,7 +1875,6 @@ fn build(
         .unwrap_or_else(|| "cgmes case".into());
     let mut net = BalancedNetwork::new(name, SYSTEM_MVA);
     net.case_metadata_mut().case_date = scenario_time;
-    net.case_metadata_mut().source_model_format = Some(version.label().to_string());
     *net.base_frequency_mut() = base_frequency;
     *net.buses_mut() = buses;
     *net.loads_mut() = loads;
@@ -2231,70 +2222,6 @@ fn retain_regulating_control_properties(
     }
 }
 
-/// The substation a terminal's node sits in, through its connectivity node
-/// container.
-fn terminal_substation<'a>(store: &'a Store, node: &str) -> Option<&'a str> {
-    let container = topological_node_level(store, node).or_else(|| {
-        store
-            .refv(node, "ConnectivityNode.ConnectivityNodeContainer")
-            .map(|container| resolve_container(store, container))
-    })?;
-    store.refv(container, "VoltageLevel.Substation")
-}
-
-/// Substations a `PowerTransformer` joins, mapped to one substation each.
-///
-/// CGMES contains a PowerTransformer in one substation while its terminals may
-/// reach a node in another; IIDM and XIIDM state both ends of a transformer in
-/// one substation. PowSybl's own importer resolves this the same way: "CGMES
-/// substations that are connected by transformers will be mapped to a single
-/// IIDM substation" (`NodeContainerMapping`). The first substation of each
-/// group, in definition order, represents it.
-fn substations_joined_by_transformers(mapper: &Mapper<'_>) -> HashMap<String, String> {
-    let store = mapper.store;
-    let mut representative: HashMap<String, String> = HashMap::new();
-    let mut members: HashMap<String, Vec<String>> = HashMap::new();
-    for transformer in store.of_class("PowerTransformer") {
-        let mut joined = mapper
-            .wiring
-            .terminals(transformer)
-            .iter()
-            .filter_map(|terminal| mapper.wiring.node(terminal))
-            .filter_map(|node| terminal_substation(store, node))
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        joined.dedup();
-        if joined.len() < 2 {
-            continue;
-        }
-        let root = joined
-            .iter()
-            .find_map(|substation| representative.get(substation).cloned())
-            .unwrap_or_else(|| joined[0].clone());
-        let mut group = members.remove(&root).unwrap_or_else(|| vec![root.clone()]);
-        for substation in joined {
-            let previous = representative.insert(substation.clone(), root.clone());
-            if previous.as_deref() != Some(root.as_str()) {
-                if let Some(moved) = previous.and_then(|previous| members.remove(&previous)) {
-                    for member in moved {
-                        representative.insert(member.clone(), root.clone());
-                        group.push(member);
-                    }
-                }
-                group.push(substation);
-            }
-        }
-        group.sort_unstable();
-        group.dedup();
-        for member in &group {
-            representative.insert(member.clone(), root.clone());
-        }
-        members.insert(root, group);
-    }
-    representative.retain(|substation, root| substation != root);
-    representative
-}
-
 #[allow(clippy::too_many_lines)] // one ordered pass builds every linked topology table
 fn build_detailed_connectivity(
     mapper: &mut Mapper<'_>,
@@ -2302,25 +2229,8 @@ fn build_detailed_connectivity(
     equipment_reactive_limits: Vec<EquipmentReactiveLimits>,
 ) -> Result<DetailedConnectivity> {
     let store = mapper.store;
-    let merged_substations = substations_joined_by_transformers(mapper);
-    if !merged_substations.is_empty() {
-        let mut names = merged_substations
-            .iter()
-            .map(|(substation, root)| {
-                format!("`{}` into `{}`", store.name(substation), store.name(root))
-            })
-            .collect::<Vec<_>>();
-        names.sort_unstable();
-        mapper.warnings.push(format!(
-            "{} substation(s) are joined by a transformer and were mapped to one substation, as an IIDM transformer states both ends in one substation: {}",
-            merged_substations.len(),
-            names.join(", ")
-        ));
-    }
-    let store = mapper.store;
     let substations = store
         .of_class("Substation")
-        .filter(|id| !merged_substations.contains_key(*id))
         .map(|id| {
             Ok(Substation {
                 component: component_id("substation", id)?,
@@ -2362,14 +2272,7 @@ fn build_detailed_connectivity(
                 component: component_id("voltage_level", id)?,
                 substation: store
                     .refv(id, "VoltageLevel.Substation")
-                    .map(|substation| {
-                        component_id(
-                            "substation",
-                            merged_substations
-                                .get(substation)
-                                .map_or(substation, String::as_str),
-                        )
-                    })
+                    .map(|substation| component_id("substation", substation))
                     .transpose()?,
                 nominal_kv: base,
                 low_voltage_limit_kv: store.f(id, "VoltageLevel.lowVoltageLimit"),
@@ -2671,9 +2574,18 @@ fn build_detailed_connectivity(
         }
     }
 
-    let component_metadata = store
+    terminals.sort_by(|left, right| {
+        left.equipment
+            .cmp(&right.equipment)
+            .then(left.terminal.cmp(&right.terminal))
+            .then(left.component.cmp(&right.component))
+    });
+
+    let own_output = is_own_output(store);
+    let mut component_metadata = store
         .objects
         .iter()
+        .filter(|object| !(own_output && writer_derived_component_metadata(&object.class)))
         .map(|object| {
             let mut properties = BTreeMap::new();
             if LOAD_CLASSES.contains(&object.class.as_str())
@@ -2814,8 +2726,15 @@ fn build_detailed_connectivity(
             })
         })
         .collect::<Result<Vec<_>>>()?;
+    component_metadata.sort_by(|left, right| left.component.cmp(&right.component));
 
-    let operational_limit_groups = read_operational_limit_groups(mapper, version)?;
+    let mut operational_limit_groups = read_operational_limit_groups(mapper, version)?;
+    operational_limit_groups.sort_by(|left, right| {
+        left.equipment
+            .cmp(&right.equipment)
+            .then(left.terminal.cmp(&right.terminal))
+            .then(left.id.cmp(&right.id))
+    });
     let tap_changers = read_tap_changers(mapper)?;
     let dc = read_dc_equipment(mapper, version)?;
 
@@ -5634,6 +5553,19 @@ fn synthesized_subordinate_identity(class: &str) -> bool {
             | "ReactiveCapabilityCurve"
             | "VsCapabilityCurve"
             | "CurveData"
+            | "OperationalLimitType"
+            | "CurrentLimit"
+            | "ActivePowerLimit"
+            | "ApparentPowerLimit"
+    )
+}
+
+/// Metadata for records whose semantic content is retained by operational
+/// limit groups while fresh emission derives their RDF identity.
+fn writer_derived_component_metadata(class: &str) -> bool {
+    matches!(
+        class,
+        "OperationalLimitSet"
             | "OperationalLimitType"
             | "CurrentLimit"
             | "ActivePowerLimit"
