@@ -11563,7 +11563,7 @@
         },
         {
           "const": "gridfm",
-          "description": "Read back from a gridfm-datakit Parquet dataset (the ML→classical bridge,\n`powerio-matrix`'s `read_gridfm_dataset`). A lossy, power flow complete\nreconstruction with no retained source text: original bus ids are\nsynthesized `1..n`, per element load/shunt granularity is folded to one\nsynthetic element per bus, and HVDC/storage/piecewise costs are absent.",
+          "description": "Read from a GridFM data kit Parquet dataset. The balanced network follows\nthe dataset's native dense bus indices, nodal demand and shunt totals,\nfixed quadratic costs, and branch terminal flows.",
           "type": "string"
         },
         {
