@@ -1472,15 +1472,7 @@ fn run_gridfm(
     };
     let outputs = emit_gridfm_batch(&snapshots, output, &opts)
         .with_context(|| format!("export gridfm dataset for {} scenario(s)", snapshots.len()))?;
-    if outputs.dropped_zero_impedance > 0 || outputs.degenerate_cost_gens > 0 {
-        tracing::warn!(
-            zeroed_branches = outputs.dropped_zero_impedance,
-            degenerate_cost_gens = outputs.degenerate_cost_gens,
-            missing_cost_gens = outputs.missing_cost_gens,
-            unsupported_cost_gens = outputs.unsupported_cost_gens,
-            "gridfm: some columns were zeroed; see gridfm_meta.json"
-        );
-    }
+    report_diagnostics(&outputs.diagnostics);
     tracing::info!(
         case = %nets[0].name(),
         scenarios = snapshots.len(),

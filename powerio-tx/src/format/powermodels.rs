@@ -494,6 +494,7 @@ pub(crate) fn parse_powermodels_json_source(
         geo: None,
         case_metadata: crate::network::CaseMetadata::default(),
         detailed_connectivity: None,
+        generated_uids: std::collections::BTreeSet::default(),
         buses: sorted_rows(document.bus, |row| row.index)
             .into_iter()
             .map(|(_, row)| read_bus(row, ascale))

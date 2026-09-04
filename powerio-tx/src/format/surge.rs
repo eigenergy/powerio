@@ -569,6 +569,7 @@ pub(crate) fn parse_surge_source(
         geo: None,
         case_metadata: crate::network::CaseMetadata::default(),
         detailed_connectivity: None,
+        generated_uids: std::collections::BTreeSet::default(),
         buses: buses.into(),
         loads: array_field(network, "loads", false)?
             .into_iter()

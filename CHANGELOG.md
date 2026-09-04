@@ -190,6 +190,17 @@ read only: `emit` to `ieee-cdf` is refused. The vendored IEEE 14 and 30 bus
 cases are checked against `case14.m` and `case30.m`, and the PowSybl gate
 compares every public IEEE CDF case with PyPowSybl's own CDF importer.
 
+GridFM Parquet reads preserve the table's `pf`, `qf`, `pt`, and `qt` branch
+flows and interpret every `cp0`, `cp1`, and `cp2` triple as the polynomial the
+dataset states, including an all-zero cost. Dense bus indices, nodal load and
+shunt totals, and unit-tap line classification are GridFM source data rather
+than reader losses. The writer reports only detected projections from a richer
+network into GridFM's fixed tables, and a GridFM-to-GridFM conversion has no
+findings. PowerIO-generated component identities carry explicit provenance in
+PowerIO IR so target writers do not report internal indexing data as a dropped
+source field. Scenario batches reject duplicate scenario ids, differing system
+bases, and misaligned bus, branch, or generator rows before writing Parquet.
+
 **One `parse`, one `emit`, and no display sibling.** `parse`, `emit`,
 `serialize`, and `deserialize` take their input or output through
 `powerio_core::IntoSource` and `powerio_core::IntoDestination`, implemented for

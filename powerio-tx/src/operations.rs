@@ -260,6 +260,7 @@ impl BalancedNetwork {
             geo: self.geo().clone(),
             case_metadata: self.case_metadata().clone(),
             detailed_connectivity: self.detailed_connectivity().clone(),
+            generated_uids: self.generated_uids().clone(),
             buses: buses.into(),
             loads,
             shunts: shunts.into(),

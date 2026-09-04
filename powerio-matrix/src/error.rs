@@ -134,8 +134,8 @@ pub enum Error {
     },
 
     #[error(
-        "gridfm snapshot {index} doesn't match the first snapshot's element set: {reason}; \
-         a scenario batch shares one base element set (same bus/branch/gen counts and bus-id order)"
+        "gridfm snapshot {index} doesn't align with the scenario batch: {reason}; \
+         a batch requires unique scenario ids, one system base, and fixed bus/branch/gen row identities"
     )]
     ScenarioShapeMismatch {
         /// 0-based position of the offending snapshot in the batch (independent
@@ -284,8 +284,7 @@ impl std::fmt::Display for ElementCounts {
 }
 
 /// Why a gridfm scenario snapshot doesn't line up with the first snapshot's
-/// base element set (the row-stack keeps every table schema-consistent by
-/// requiring the same element counts and bus-id ordering across snapshots).
+/// batch (the row stack uses each table's row number as element identity).
 ///
 /// This enum is `#[non_exhaustive]`; downstream matches must include a wildcard
 /// arm.
@@ -300,6 +299,14 @@ pub enum ScenarioMismatch {
     /// Counts match, but the buses are listed in a different order (so the dense
     /// bus index wouldn't mean the same bus across snapshots).
     BusOrder,
+    /// A branch row has a different endpoint pair or component identity.
+    BranchOrder,
+    /// A generator row has a different bus or component identity.
+    GeneratorOrder,
+    /// The snapshot uses a different system power base.
+    BaseMva,
+    /// Another snapshot already uses this scenario id.
+    DuplicateScenarioId { scenario: i64, first_index: usize },
 }
 
 impl std::fmt::Display for ScenarioMismatch {
@@ -311,6 +318,22 @@ impl std::fmt::Display for ScenarioMismatch {
             Self::BusOrder => {
                 write!(f, "counts match but the bus ids are in a different order")
             }
+            Self::BranchOrder => write!(
+                f,
+                "counts match but branch endpoints or identities differ by row"
+            ),
+            Self::GeneratorOrder => write!(
+                f,
+                "counts match but generator buses or identities differ by row"
+            ),
+            Self::BaseMva => write!(f, "base_mva differs from the first snapshot"),
+            Self::DuplicateScenarioId {
+                scenario,
+                first_index,
+            } => write!(
+                f,
+                "scenario id {scenario} is already used by snapshot {first_index}"
+            ),
         }
     }
 }

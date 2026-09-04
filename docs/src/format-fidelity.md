@@ -480,18 +480,26 @@ parse warning that hides the cause.
   IEEE case with PyPowSybl's own CDF importer and compares its bus, branch,
   generator, load, and shunt counts and load and generation totals with the
   PowerIO parse, then reloads fresh MATPOWER written from each case.
-- **GridFM Parquet datasets** (the `gridfm` feature) parse to a scenario set
-  of balanced networks over one shared element identity map: lossy, but each
-  scenario recovers everything a power flow needs. That is bus
-  types/voltages/limits, nodal load and shunt totals, generator dispatch and
-  bounds, branch `r/x/b/tap/shift/rate_a`/angle limits, and `baseMVA`; it
-  cannot recover original bus ids (synthesized `1..n`), per element
-  load/shunt granularity (folded one synthetic element per bus),
-  piecewise/cubic generator costs (read as none), or HVDC/storage. Because
-  the writer stores the *effective* tap, a unity ratio, zero shift
-  transformer in the source reads back as a line (the power flow is
-  identical). The losses are the module's diagnostics. The same direction
-  writer is documented in the
+- **GridFM Parquet datasets** (the `gridfm` feature, following the
+  [GridFM data kit output schema](https://gridfm.github.io/gridfm-datakit/manual/outputs/))
+  parse to a scenario set
+  of balanced networks over one shared element identity map. Each scenario
+  recovers the complete native balanced table data: bus types, voltages, and
+  limits; nodal load and shunt totals; generator dispatch, bounds, and the
+  stated `cp0`/`cp1`/`cp2` polynomial; branch
+  `r/x/b/tap/shift/rate_a`/angle limits and `pf/qf/pt/qt` terminal flows; and
+  `baseMVA`. Dense bus indices, nodal demand records, and line classification
+  for a unit tap with zero shift are GridFM source facts and do not produce
+  reader diagnostics.
+
+  Writing a richer network reports the projections into GridFM's fixed
+  tables: source bus renumbering, several loads or shunts combined at one bus,
+  metadata and equipment with no column, and costs outside the fixed
+  quadratic representation. If a branch has no stated solution, the writer
+  evaluates `pf/qf/pt/qt` from the stored bus voltages and reports that derived
+  value. Generated component identities support stable PowerIO references but
+  are not mistaken for source metadata. A native GridFM network writes without
+  findings. The writer is also documented in the
   [top level README](https://github.com/eigenergy/powerio#gridfm).
 
 ### IIDM versions

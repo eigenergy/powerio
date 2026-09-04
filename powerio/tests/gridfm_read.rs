@@ -9,7 +9,7 @@ use powerio::__gridfm::{
 };
 use powerio::{BalancedNetwork, Branch, Bus, BusId, BusType, GenCost, Generator, SourceFormat};
 use powerio_matrix::{
-    GridfmOptions, GridfmSnapshot, emit_gridfm_batch, emit_gridfm_dataset,
+    GridfmOptions, GridfmSnapshot, build_gridfm_dataset, emit_gridfm_batch, emit_gridfm_dataset,
     to_gridfm_record_batches_single,
 };
 
@@ -311,7 +311,7 @@ fn read_defaults_unusable_base_mva_to_100() {
 }
 
 #[test]
-fn read_surfaces_fidelity_warnings() {
+fn read_accepts_native_gridfm_representation_without_warnings() {
     let net = case14();
     let tables = to_gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
     let read = read_gridfm_network(
@@ -324,16 +324,58 @@ fn read_surfaces_fidelity_warnings() {
     )
     .unwrap();
     let diagnostics = diagnostic_lines(&read);
-    assert!(!diagnostics.is_empty());
     assert!(
-        diagnostics
-            .iter()
-            .any(|line| line.contains("synthesized bus ids")),
-        "expected the bus-id synthesis diagnostic, got {diagnostics:?}"
+        diagnostics.is_empty(),
+        "unexpected diagnostics: {diagnostics:?}"
     );
-    // case14 has loads and a shunt, so those folding diagnostics appear too.
-    assert!(diagnostics.iter().any(|line| line.contains("nodal load")));
-    assert!(diagnostics.iter().any(|line| line.contains("nodal shunts")));
+}
+
+#[test]
+fn native_gridfm_network_writes_without_projection_warnings() {
+    let net = case14();
+    let tables = to_gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
+    let read = read_gridfm_network(
+        &tables.bus,
+        &tables.generator,
+        &tables.branch,
+        0,
+        net.base_mva(),
+        net.name(),
+    )
+    .unwrap();
+    let dataset = build_gridfm_dataset(&read.network, 0, &GridfmOptions::default()).unwrap();
+    assert!(
+        dataset.diagnostics.is_empty(),
+        "unexpected projection diagnostics: {:?}",
+        powerio_core::render_diagnostics(&dataset.diagnostics)
+    );
+}
+
+#[test]
+fn branch_solution_round_trips_through_gridfm_flow_columns() {
+    let mut branch = branch(1, 2, 0.01, 0.1);
+    branch.solution = Some(powerio::BranchSolution::new(11.0, 2.0, -10.5, -1.5));
+    let net = BalancedNetwork::in_memory(
+        "solution",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![branch],
+    );
+    let tables = to_gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
+    let read = read_gridfm_network(
+        &tables.bus,
+        &tables.generator,
+        &tables.branch,
+        0,
+        net.base_mva(),
+        net.name(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        read.network.branches()[0].solution,
+        Some(powerio::BranchSolution::new(11.0, 2.0, -10.5, -1.5))
+    );
 }
 
 #[test]
@@ -424,13 +466,7 @@ fn read_maps_unit_tap_lines_back_to_zero() {
         read_xfmr, n_xfmr,
         "transformers must keep their off-nominal ratio"
     );
-    let diagnostics = diagnostic_lines(&read);
-    assert!(
-        diagnostics
-            .iter()
-            .any(|line| line.contains("read as lines")),
-        "expected the unit-tap diagnostic, got {diagnostics:?}"
-    );
+    assert!(diagnostic_lines(&read).is_empty());
 }
 
 #[test]
@@ -459,10 +495,7 @@ fn read_allows_a_case_with_no_generators() {
 }
 
 #[test]
-fn read_all_zero_cost_reads_as_none_with_ambiguity_warning() {
-    // A genuine zero polynomial cost writes (0,0,0), indistinguishable from a
-    // no-cost generator or a zeroed unrepresentable cost; the reader reads None
-    // and the warning describes the ambiguity (not a false "piecewise/cubic").
+fn read_all_zero_cost_as_the_stated_polynomial() {
     let mut net = BalancedNetwork::in_memory(
         "zerocost",
         100.0,
@@ -481,17 +514,11 @@ fn read_all_zero_cost_reads_as_none_with_ambiguity_warning() {
         net.name(),
     )
     .unwrap();
-    assert!(
-        read.network.generators()[0].cost.is_none(),
-        "all-zero cost should read back as None"
+    assert_eq!(
+        read.network.generators()[0].cost.as_ref().unwrap().coeffs,
+        vec![0.0, 0.0, 0.0]
     );
-    let diagnostics = diagnostic_lines(&read);
-    assert!(
-        diagnostics
-            .iter()
-            .any(|line| line.contains("read with no cost")),
-        "expected the no-cost ambiguity diagnostic, got {diagnostics:?}"
-    );
+    assert!(diagnostic_lines(&read).is_empty());
 }
 
 #[test]

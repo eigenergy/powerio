@@ -234,6 +234,29 @@ fn a_gridfm_scenario_set_emits_its_complete_directory_byte_exactly() {
     assert_eq!(memory_directory(&result), expected);
 }
 
+#[cfg(feature = "gridfm")]
+#[test]
+fn canonical_gridfm_emission_reports_detected_projection_changes() {
+    let case = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case9.m");
+    let module = powerio::parse(Source::open(case).unwrap()).expect("case9 parses");
+    let result = emit(&module, "gridfm", Destination::memory("case9").unwrap())
+        .expect("GridFM emission succeeds");
+    let diagnostics = powerio_core::render_diagnostics(result.diagnostics());
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|line| line.contains("EMIT.GRIDFM.FIELD_DROPPED") && line.contains("area, zone")),
+        "missing GridFM bus metadata diagnostic: {diagnostics:?}"
+    );
+    assert!(
+        diagnostics.iter().any(|line| {
+            line.contains("EMIT.GRIDFM.VALUE_DEFAULTED") && line.contains("no stated solution")
+        }),
+        "missing GridFM branch flow diagnostic: {diagnostics:?}"
+    );
+}
+
 #[test]
 fn an_edit_in_place_stops_the_echo_and_serializes_the_value() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case9.m");

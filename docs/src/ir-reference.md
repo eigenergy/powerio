@@ -107,6 +107,7 @@ Schema definition: `BalancedNetwork`.
 | `case_metadata` | `CaseMetadata` | | | | every member null |
 | `geo` | `GeoMeta` or null | | | | null |
 | `detailed_connectivity` | `DetailedConnectivity` or null | | | | null |
+| `generated_uids` | array of string | | | subset of component `uid` values; identifies identities PowerIO assigned because the source stated none | `[]` |
 
 ### Bus
 

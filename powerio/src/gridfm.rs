@@ -6,12 +6,13 @@
 //! `r/x/b`. The write side, which derives `y_bus_data` and the branch flows,
 //! lives in `powerio-matrix` behind its `gridfm` feature.
 //!
-//! The read is lossy but power flow complete; each rebuilt network reports
-//! what the gridfm schema could not round trip (synthesized bus ids, folded
-//! per bus load and shunt, relabeled unity ratio transformers) as structured
-//! diagnostics. Units follow datakit: `Pd, Qd, Pg, Qg` MW/MVAr, `Vm` per
-//! unit, `Va` degrees, `r, x, b` per unit, `GS, BS` divided by `base_mva`.
-//! `bus`, `from_bus`, `to_bus` are dense `[0, n)` indices.
+//! The balanced view follows GridFM's own representation: `bus`, `from_bus`,
+//! and `to_bus` are dense `[0, n)` indices; loads and shunts are nodal totals;
+//! and every branch with unit tap and zero phase shift is a line. These are
+//! source facts rather than losses, so the reader reports diagnostics only
+//! when it must replace malformed or missing input. Units follow datakit:
+//! `Pd, Qd, Pg, Qg` MW/MVAr, `Vm` per unit, `Va` degrees, `r, x, b` per unit,
+//! and `GS, BS` divided by `base_mva`.
 
 use std::path::Path;
 
@@ -19,7 +20,9 @@ use arrow::array::{Array, ArrayRef, Float64Array, Int64Array};
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
-use powerio_tx::network::{Branch, Bus, BusId, BusType, Generator, Load, Shunt, SourceFormat};
+use powerio_tx::network::{
+    Branch, BranchSolution, Bus, BusId, BusType, Generator, Load, Shunt, SourceFormat,
+};
 use powerio_tx::{BalancedNetwork, GenCost};
 
 use crate::collect::Diagnostics;
@@ -27,7 +30,7 @@ use crate::collect::Diagnostics;
 type Error = powerio_tx::Error;
 type Result<T> = std::result::Result<T, Error>;
 
-/// The reader's fidelity notes: what the gridfm schema cannot round trip.
+/// GridFM reader diagnostics.
 pub mod codes {
     powerio_core::diagnostic_codes! {
         READ_GRIDFM_FIELD_DROPPED = "READ.GRIDFM.FIELD_DROPPED", Warning,
@@ -49,8 +52,7 @@ pub struct GridfmRead {
     pub network: BalancedNetwork,
     /// The scenario id these rows came from.
     pub scenario: i64,
-    /// What the gridfm schema couldn't round-trip — synthesized bus ids, folded
-    /// per-bus load/shunt, dropped HVDC/storage, etc., as structured records.
+    /// Values replaced because required source metadata was missing or invalid.
     pub diagnostics: Vec<powerio_core::Diagnostic>,
 }
 
@@ -338,7 +340,8 @@ fn gen_columns(batches: &[RecordBatch]) -> Result<GenColumns> {
     })
 }
 
-/// Every `branch_data` column the reader uses (`Y**` / flow columns are ignored).
+/// Every `branch_data` column the reader uses. The `Y**` columns are derived
+/// from the raw branch fields and validated independently by GridFM tooling.
 struct BranchColumns {
     scenario: Vec<i64>,
     from_bus: Vec<i64>,
@@ -352,6 +355,10 @@ struct BranchColumns {
     ang_max: Vec<f64>,
     rate_a: Vec<f64>,
     status: Vec<i64>,
+    pf: Vec<f64>,
+    qf: Vec<f64>,
+    pt: Vec<f64>,
+    qt: Vec<f64>,
 }
 
 fn branch_columns(batches: &[RecordBatch]) -> Result<BranchColumns> {
@@ -368,6 +375,10 @@ fn branch_columns(batches: &[RecordBatch]) -> Result<BranchColumns> {
         ang_max: f64_col(batches, "ang_max")?,
         rate_a: f64_col(batches, "rate_a")?,
         status: i64_col(batches, "br_status")?,
+        pf: f64_col(batches, "pf")?,
+        qf: f64_col(batches, "qf")?,
+        pt: f64_col(batches, "pt")?,
+        qt: f64_col(batches, "qt")?,
     })
 }
 
@@ -386,7 +397,7 @@ fn build_network_from_columns(
     scenario: i64,
     base_mva: f64,
     name: &str,
-    mut warnings: Diagnostics,
+    warnings: Diagnostics,
 ) -> Result<GridfmRead> {
     // --- buses, loads, shunts (bus_data) ---
     let bus_rows = scenario_rows(&bus.scenario, scenario);
@@ -467,15 +478,10 @@ fn build_network_from_columns(
 
     let mut generators = Vec::with_capacity(gen_rows.len());
     for &r in &gen_rows {
-        // Any nonzero coefficient is a real polynomial cost. An all-zero triple is
-        // ambiguous in the schema — a generator with no cost, a genuine zero
-        // polynomial cost, or a piecewise/cubic+ cost the writer couldn't represent
-        // (all written as `(0, 0, 0)`) — so it reads back as `None` (see warnings).
-        let cost = if cp0[r] != 0.0 || cp1[r] != 0.0 || cp2[r] != 0.0 {
-            Some(GenCost::new(2, 0.0, 0.0, vec![cp2[r], cp1[r], cp0[r]]))
-        } else {
-            None
-        };
+        // GridFM states one quadratic polynomial per generator. A zero triple
+        // is the zero polynomial; any ambiguity introduced by a producer that
+        // used zero as a missing-value sentinel belongs to that producer.
+        let cost = Some(GenCost::new(2, 0.0, 0.0, vec![cp2[r], cp1[r], cp0[r]]));
         let mut generator = Generator::new(dense_bus_id(g_bus[r])?);
         generator.pg = p_mw[r];
         generator.qg = q_mvar[r];
@@ -493,7 +499,7 @@ fn build_network_from_columns(
         generators.push(generator);
     }
 
-    // --- branches (branch_data); Y** and pf/qf/pt/qt are ignored ---
+    // --- branches (branch_data); Y** is derived from the raw fields ---
     let br_rows = scenario_rows(&branch.scenario, scenario);
     require_scenario_block(&branch.scenario, scenario, &br_rows, "branch_data")?;
     let from_bus = &branch.from_bus;
@@ -507,6 +513,10 @@ fn build_network_from_columns(
     let ang_max = &branch.ang_max;
     let rate_a = &branch.rate_a;
     let br_status = &branch.status;
+    let pf = &branch.pf;
+    let qf = &branch.qf;
+    let pt = &branch.pt;
+    let qt = &branch.qt;
 
     let mut branches = Vec::with_capacity(br_rows.len());
     // The writer stores the *effective* tap (`Branch::calc_effective_tap`), so a line
@@ -514,13 +524,11 @@ fn build_network_from_columns(
     // line convention, otherwise every line reads as a transformer
     // (`is_transformer` keys off `tap != 0`) and a read→write to a format that
     // splits lines from transformers (PSS/E, PowerWorld) misclassifies them. A
-    // genuine unity-ratio, zero-shift transformer is electrically identical to a
-    // line and is (unavoidably) read as one.
-    let mut unit_tap_lines = 0usize;
+    // genuine unity-ratio, zero-shift transformer is not distinguished by the
+    // GridFM row and therefore is a line in the balanced view.
     for &row in &br_rows {
         let shift_v = shift[row];
         let tap_out = if tap[row] == 1.0 && shift_v == 0.0 {
-            unit_tap_lines += 1;
             0.0
         } else {
             tap[row]
@@ -538,6 +546,7 @@ fn build_network_from_columns(
         branch.in_service = br_status[row] != 0;
         branch.angmin = ang_min[row];
         branch.angmax = ang_max[row];
+        branch.solution = Some(BranchSolution::new(pf[row], qf[row], pt[row], qt[row]));
         branches.push(branch);
     }
 
@@ -549,56 +558,6 @@ fn build_network_from_columns(
     *net.generators_mut() = generators;
     *net.source_format_mut() = SourceFormat::Gridfm;
     net.validate()?;
-
-    // --- fidelity warnings: what the gridfm schema couldn't carry back ---
-    warnings.push(
-        &codes::READ_GRIDFM_VALUE_INFERRED,
-        format!(
-            "synthesized bus ids 1..={}; original bus ids are not stored in a gridfm dataset, \
-         so a written case is renumbered",
-            net.buses().len()
-        ),
-    );
-    if !net.loads().is_empty() {
-        warnings.push(
-            &codes::READ_GRIDFM_VALUE_COLLAPSED,
-            format!(
-                "folded nodal load into {} synthetic per-bus Load(s); per-load granularity is \
-             not recoverable",
-                net.loads().len()
-            ),
-        );
-    }
-    if !net.shunts().is_empty() {
-        warnings.push(
-            &codes::READ_GRIDFM_VALUE_COLLAPSED,
-            format!(
-                "folded nodal shunts into {} synthetic per-bus Shunt(s); per-shunt granularity \
-             is not recoverable",
-                net.shunts().len()
-            ),
-        );
-    }
-    if unit_tap_lines > 0 {
-        warnings.push(&codes::READ_GRIDFM_ELEMENT_RELABELED, format!(
-            "{unit_tap_lines} branch(es) had unit effective tap and no phase shift and were read \
-             as lines (raw tap 0); a unity-ratio, zero-shift transformer in the source is \
-             indistinguishable from a line and is read as one (the power flow is identical)"
-        ));
-    }
-    let no_cost_gens = net.generators().iter().filter(|g| g.cost.is_none()).count();
-    if no_cost_gens > 0 {
-        warnings.push(&codes::READ_GRIDFM_FIELD_DROPPED, format!(
-            "{no_cost_gens} generator(s) read with no cost: an all-zero cost triple in the dataset \
-             is the writer's encoding for a generator with no cost, a genuine zero polynomial \
-             cost, or a piecewise/cubic+ cost it couldn't represent — indistinguishable on read"
-        ));
-    }
-    warnings.push(
-        &codes::READ_GRIDFM_FIELD_DROPPED,
-        "HVDC, storage, areas/zones, bus names, rate_b/rate_c, generator mbase/ramp limits, \
-         and startup/shutdown costs are absent from the gridfm schema",
-    );
 
     Ok(GridfmRead {
         network: net,
@@ -625,7 +584,7 @@ fn scenario_rows(scen: &[i64], scenario: i64) -> Vec<usize> {
         .collect()
 }
 
-/// Guard a gen/branch table: empty `rows` is fine when the whole table is empty
+/// Check a gen/branch table: empty `rows` is fine when the whole table is empty
 /// (a case legitimately has no generators, or no branches), but if the table
 /// holds rows for *other* scenarios yet none for this one, the dataset is partial
 /// or corrupt and would silently yield a wrong-but-valid network — error instead.

@@ -599,20 +599,20 @@ fn emit_balanced_network(
     } else {
         #[cfg(feature = "gridfm")]
         if is_gridfm_dir(format) {
+            let mut diagnostics = diagnostics;
             let dataset = powerio_matrix::build_gridfm_dataset(
                 network,
                 0,
                 &powerio_matrix::GridfmOptions::default(),
             )
             .map_err(|error| Error::new(error.code(), error.to_string()).with_cause(error))?;
-            return destination
-                .__commit_artifacts(
-                    true,
-                    powerio_core::Fidelity::Canonical,
-                    dataset.artifacts,
-                    Vec::new(),
-                )
-                .map(|result| result.__with_diagnostics(diagnostics));
+            diagnostics.extend(dataset.diagnostics);
+            return destination.__commit_artifacts(
+                true,
+                powerio_core::Fidelity::Canonical,
+                dataset.artifacts,
+                diagnostics,
+            );
         }
         let Some(target) = powerio_tx::format::parse_target_format(format) else {
             return Err(unknown_format(format));

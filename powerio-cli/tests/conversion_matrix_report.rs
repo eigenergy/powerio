@@ -1011,10 +1011,12 @@ fn transmission_targets() -> impl Iterator<Item = (usize, TransmissionFormat)> {
 //   50 Hz synchronous area frequency.
 // - The `→ PyPSA CSV` column states the reactive limits, capability columns,
 //   and rating sets a PyPSA component CSV has no column for.
-// - The `→ GridFM Parquet` column states what the gridfm schema omits (HVDC,
-//   storage, areas, bus names, rate_b/rate_c, generator mbase and ramp limits,
-//   startup and shutdown costs) and the per bus load folding its table shape
-//   forces.
+// - The `→ GridFM Parquet` column states the detected projection into GridFM's
+//   four fixed tables: dense bus renumbering, nodal load and shunt aggregation,
+//   absent equipment and metadata fields, fixed quadratic costs, and branch
+//   flows evaluated when the source states no solution. Generated component
+//   identities are indexing data rather than source fields and do not count as
+//   a projection loss. A native GridFM network writes without findings.
 // - The `IEEE CDF`, `GO Challenge 3 JSON`, and `DeepMind OPFData JSON` rows
 //   parse one vendored case each, so their counts are per case rather than per
 //   six.
@@ -1070,25 +1072,25 @@ fn transmission_targets() -> impl Iterator<Item = (usize, TransmissionFormat)> {
 //   rows each add two warnings in the MATPOWER column rather than silently
 //   discarding the control records.
 const TRANSMISSION_WARNING_BASELINE: [[usize; TRANSMISSION_TARGETS]; 19] = [
-    [0, 1, 15, 15, 18, 7, 15, 23, 14, 76, 76, 64, 48, 15, 27], // MATPOWER .m
-    [0, 0, 15, 15, 17, 6, 14, 22, 13, 75, 75, 63, 47, 14, 27], // PowerModels JSON
-    [1, 1, 0, 0, 2, 1, 3, 1, 2, 38, 38, 19, 35, 9, 32],        // PSS/E .raw 33
-    [1, 1, 0, 0, 2, 1, 3, 1, 2, 38, 38, 19, 35, 9, 32],        // PSS/E RAWX 35
-    [1, 0, 6, 6, 0, 0, 8, 0, 6, 60, 60, 37, 39, 13, 32],       // PowerWorld .aux
-    [0, 0, 9, 9, 12, 0, 8, 1, 7, 74, 74, 43, 42, 9, 27],       // egret JSON
-    [1, 1, 8, 8, 9, 1, 2, 1, 8, 62, 62, 43, 59, 9, 28],        // pandapower JSON
-    [0, 0, 9, 9, 12, 0, 7, 0, 7, 73, 73, 43, 42, 9, 27],       // Surge JSON
-    [0, 0, 1, 1, 1, 0, 4, 3, 0, 44, 44, 18, 34, 8, 32],        // PSLF .epc
-    [9, 7, 39, 39, 8, 7, 9, 7, 8, 12, 12, 191, 66, 15, 38],    // XIIDM 1.17
-    [9, 7, 39, 39, 8, 7, 9, 7, 8, 12, 12, 191, 66, 15, 38],    // JIIDM 1.17
-    [9, 7, 74, 327, 7, 7, 8, 7, 7, 50, 50, 19, 58, 14, 39],    // CGMES 3.0
-    [25, 19, 13, 13, 25, 19, 13, 19, 25, 49, 49, 26, 13, 19, 37], // UCTE-DEF .uct
-    [0, 6, 14, 14, 14, 6, 9, 6, 12, 76, 76, 45, 44, 0, 27],    // PyPSA CSV
-    [28, 27, 35, 35, 35, 27, 30, 27, 33, 95, 95, 64, 67, 33, 54], // GridFM Parquet
-    [4, 3, 2, 2, 3, 3, 4, 3, 5, 16, 16, 11, 10, 5, 8],         // PSS/E .raw 32
-    [7, 7, 6, 6, 7, 7, 8, 7, 7, 14, 14, 10, 14, 8, 12],        // IEEE CDF
-    [5, 4, 7, 7, 8, 4, 7, 4, 6, 9, 9, 9, 14, 8, 7],            // GO Challenge 3 JSON
-    [3, 2, 5, 5, 5, 3, 4, 2, 4, 33, 33, 10, 32, 5, 8],         // DeepMind OPFData JSON
+    [0, 1, 15, 15, 18, 7, 15, 23, 14, 76, 76, 64, 48, 15, 31], // MATPOWER .m
+    [0, 0, 15, 15, 17, 6, 14, 22, 13, 75, 75, 63, 47, 14, 30], // PowerModels JSON
+    [1, 1, 0, 0, 2, 1, 3, 1, 2, 38, 38, 19, 35, 9, 28],        // PSS/E .raw 33
+    [1, 1, 0, 0, 2, 1, 3, 1, 2, 38, 38, 19, 35, 9, 28],        // PSS/E RAWX 35
+    [1, 0, 6, 6, 0, 0, 8, 0, 6, 60, 60, 37, 39, 13, 27],       // PowerWorld .aux
+    [0, 0, 9, 9, 12, 0, 8, 1, 7, 74, 74, 43, 42, 9, 25],       // egret JSON
+    [1, 1, 8, 8, 9, 1, 2, 1, 8, 62, 62, 43, 59, 9, 19],        // pandapower JSON
+    [0, 0, 9, 9, 12, 0, 7, 0, 7, 73, 73, 43, 42, 9, 25],       // Surge JSON
+    [0, 0, 1, 1, 1, 0, 4, 3, 0, 44, 44, 18, 34, 8, 27],        // PSLF .epc
+    [9, 7, 39, 39, 8, 7, 9, 7, 8, 12, 12, 191, 66, 15, 59],    // XIIDM 1.17
+    [9, 7, 39, 39, 8, 7, 9, 7, 8, 12, 12, 191, 66, 15, 59],    // JIIDM 1.17
+    [9, 7, 74, 327, 7, 7, 8, 7, 7, 50, 50, 19, 58, 14, 58],    // CGMES 3.0
+    [25, 19, 13, 13, 25, 19, 13, 19, 25, 49, 49, 26, 13, 19, 43], // UCTE-DEF .uct
+    [0, 6, 14, 14, 14, 6, 9, 6, 12, 76, 76, 45, 44, 0, 15],    // PyPSA CSV
+    [6, 0, 14, 14, 14, 6, 9, 0, 12, 70, 70, 39, 46, 12, 0],    // GridFM Parquet
+    [4, 3, 2, 2, 3, 3, 4, 3, 5, 16, 16, 11, 10, 5, 12],        // PSS/E .raw 32
+    [7, 7, 6, 6, 7, 7, 8, 7, 7, 14, 14, 10, 14, 8, 11],        // IEEE CDF
+    [5, 4, 7, 7, 8, 4, 7, 4, 6, 9, 9, 9, 14, 8, 11],           // GO Challenge 3 JSON
+    [3, 2, 5, 5, 5, 3, 4, 2, 4, 33, 33, 10, 32, 5, 4],         // DeepMind OPFData JSON
 ];
 
 const TRANSMISSION_CASES: [(&str, &str); 6] = [

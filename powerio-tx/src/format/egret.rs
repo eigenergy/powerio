@@ -478,6 +478,7 @@ fn build_from_document(document: Document, name_hint: Option<&str>) -> Result<Ba
         geo: None,
         case_metadata: crate::network::CaseMetadata::default(),
         detailed_connectivity: None,
+        generated_uids: std::collections::BTreeSet::default(),
         buses: buses.into(),
         loads: loads.into(),
         shunts: shunts.into(),

@@ -504,6 +504,7 @@ fn read_pypsa_csv_static(
         geo: super::geographic_meta(&buses),
         case_metadata: crate::network::CaseMetadata::default(),
         detailed_connectivity: None,
+        generated_uids: std::collections::BTreeSet::default(),
         buses: buses.into(),
         loads: loads.into(),
         shunts: shunts.into(),

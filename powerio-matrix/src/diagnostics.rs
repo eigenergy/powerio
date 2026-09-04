@@ -54,6 +54,14 @@ pub mod codes {
             "a matrix-market write failed", category = Output;
         EMIT_PARQUET_FAILED = "EMIT.PARQUET.FAILED", Error,
             "a gridfm Parquet write failed", category = Output;
+        EMIT_GRIDFM_FIELD_DROPPED = "EMIT.GRIDFM.FIELD_DROPPED", Warning,
+            "a source field has no GridFM table column";
+        EMIT_GRIDFM_VALUE_COLLAPSED = "EMIT.GRIDFM.VALUE_COLLAPSED", Warning,
+            "several source records were folded into one GridFM row";
+        EMIT_GRIDFM_VALUE_SUBSTITUTED = "EMIT.GRIDFM.VALUE_SUBSTITUTED", Warning,
+            "a source value was replaced by GridFM's indexed or fixed representation";
+        EMIT_GRIDFM_VALUE_DEFAULTED = "EMIT.GRIDFM.VALUE_DEFAULTED", Warning,
+            "a required GridFM value was derived because the source did not state it";
 
     }
 }

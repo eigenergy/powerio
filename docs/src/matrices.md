@@ -72,12 +72,23 @@ second public incidence API.
 The GridFM export is a Parquet dataset under `<case>/raw/` with `bus_data`,
 `gen_data`, `branch_data`, and `y_bus_data`. A single parsed case writes one
 scenario. A scenario batch row stacks snapshots that share the same element set
-and uses the `scenario` column as the key.
+and uses the `scenario` column as the key. Batch construction requires unique
+scenario ids, one system base, and matching bus, branch, and generator row
+identities. Column names and units follow the
+[GridFM data kit output schema](https://gridfm.github.io/gridfm-datakit/manual/outputs/).
 
-GridFM reads recover bus types, voltages, limits, nodal load and shunt totals,
-generator dispatch and bounds, branch parameters, and `base_mva`. They cannot
-recover source bus IDs, per element load and shunt granularity, piecewise and
-cubic costs, HVDC, or storage. These losses are returned as diagnostics.
+GridFM reads recover its complete native balanced representation: bus types,
+voltages and limits; nodal load and shunt totals; generator dispatch, bounds,
+and quadratic costs; branch parameters and terminal flows; and `base_mva`.
+Dense bus indices, nodal demand, and a fixed quadratic cost triple are facts of
+the GridFM tables, so reading them does not report a conversion loss.
+
+Writing a richer network reports each projection that GridFM requires. Those
+diagnostics cover bus renumbering, aggregation of several load or shunt
+records, omitted equipment and metadata, costs outside the fixed quadratic
+columns, and terminal flows evaluated from bus voltages when the source states
+no branch solution. A GridFM dataset read and written without an intervening
+edit has none of these findings.
 
 ## Conventions
 
