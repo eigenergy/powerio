@@ -17,7 +17,7 @@ fi
 # The tag workflow copies the CHANGELOG section headed exactly `## <version>`
 # into the draft release body; a suffix such as "(unreleased)" leaves that
 # body empty and fails the run after every platform has built.
-if ! grep -qx "## $version" CHANGELOG.md; then
+if ! grep -qxF "## $version" CHANGELOG.md; then
     echo "CHANGELOG.md needs a section headed exactly '## $version' for the release body" >&2
     exit 1
 fi
