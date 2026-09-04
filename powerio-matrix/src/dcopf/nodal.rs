@@ -86,7 +86,12 @@ fn piecewise_linear_terms(
 
     let mut power = Vec::with_capacity(cost.ncost);
     let mut value = Vec::with_capacity(cost.ncost);
-    for (point, pair) in cost.coeffs[..expected_values].chunks_exact(2).enumerate() {
+    for (point, pair) in cost.coeffs[..expected_values]
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .enumerate()
+    {
         let p = pair[0] * power_scale;
         let v = pair[1];
         if !p.is_finite() || !v.is_finite() {

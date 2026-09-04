@@ -355,7 +355,9 @@ fn cost_curve(cost: &GenCost) -> Option<Value> {
         1 => {
             let points: Vec<Value> = cost
                 .coeffs
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|pt| Value::Array(vec![jnum(pt[0]), jnum(pt[1])]))
                 .collect();
             curve.insert("cost_curve_type".into(), Value::String("piecewise".into()));

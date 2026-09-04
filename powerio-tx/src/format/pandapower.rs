@@ -1795,7 +1795,9 @@ fn pwl_cost_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Option<V
         }
         let pairs: Vec<(f64, f64)> = cost
             .coeffs
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| (pair[0], pair[1]))
             .collect();
         if pairs.len() < 2 || pairs.windows(2).any(|w| w[1].0 <= w[0].0) {
