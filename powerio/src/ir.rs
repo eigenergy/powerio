@@ -15,11 +15,18 @@ pub(crate) fn ir_version_is_readable(version: &str) -> bool {
     readable_by(version, crate::IR_SCHEMA_VERSION)
 }
 
-/// Whether a document stating `version` comes from a newer build on this
-/// build's own compatible line, so that a newer PowerIO reads it and this one
-/// does not.
-pub(crate) fn ir_version_is_newer_compatible(version: &str) -> bool {
-    version != crate::IR_SCHEMA_VERSION && readable_by(crate::IR_SCHEMA_VERSION, version)
+/// Whether a document stating `version` was written by a PowerIO release
+/// later than this build, so that upgrading is what makes it readable. An
+/// unreadable document that is not newer came from an earlier line and has to
+/// be regenerated instead.
+pub(crate) fn ir_version_is_newer(version: &str) -> bool {
+    match (
+        parse_version(version),
+        parse_version(crate::IR_SCHEMA_VERSION),
+    ) {
+        (Some(document), Some(this)) => document > this,
+        _ => false,
+    }
 }
 
 /// A document written by `document` is readable by a build at `reader` when
@@ -131,12 +138,39 @@ pub fn deserialize(input: impl powerio_core::IntoSource) -> Result<PioModule<Pio
 
 #[cfg(test)]
 mod tests {
-    use super::{ir_version_is_newer_compatible, ir_version_is_readable, readable_by};
+    use super::{ir_version_is_newer, ir_version_is_readable, readable_by};
 
     #[test]
-    fn this_build_reads_its_own_documents_and_no_newer_ones() {
+    fn this_build_reads_its_own_documents_and_is_not_newer_than_itself() {
         assert!(ir_version_is_readable(crate::IR_SCHEMA_VERSION));
-        assert!(!ir_version_is_newer_compatible(crate::IR_SCHEMA_VERSION));
+        assert!(!ir_version_is_newer(crate::IR_SCHEMA_VERSION));
+    }
+
+    /// A refusal advises an upgrade for every later release and a regenerated
+    /// document for every earlier one, on this build's line or another.
+    #[test]
+    fn a_later_release_is_newer_whatever_line_it_is_on() {
+        let (major, minor, patch) = super::parse_version(crate::IR_SCHEMA_VERSION).unwrap();
+        for (m, n, p) in [
+            (major, minor, patch + 1),
+            (major, minor + 1, 0),
+            (major + 1, 0, 0),
+        ] {
+            let later = format!("{m}.{n}.{p}");
+            assert!(ir_version_is_newer(&later), "{later}");
+        }
+        for earlier in [
+            patch.checked_sub(1).map(|p| format!("{major}.{minor}.{p}")),
+            minor.checked_sub(1).map(|n| format!("{major}.{n}.999")),
+            major.checked_sub(1).map(|m| format!("{m}.999.999")),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            assert!(!ir_version_is_newer(&earlier), "{earlier}");
+        }
+        // An unparsable version is neither, so it takes the regenerate advice.
+        assert!(!ir_version_is_newer("1"));
     }
 
     #[test]

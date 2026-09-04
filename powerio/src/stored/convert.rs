@@ -107,16 +107,15 @@ fn is_readable(schema: &str, version: &str) -> bool {
 /// regenerated from its source data.
 fn unsupported(schema: &str, version: &str) -> powerio_core::Error {
     let this = crate::IR_SCHEMA_VERSION;
-    let guidance =
-        if schema == crate::IR_SCHEMA_NAME && crate::ir::ir_version_is_newer_compatible(version) {
-            format!("a newer PowerIO than this build ({this}) wrote it; upgrade PowerIO to read it")
-        } else {
-            format!(
-                "this build ({this}) reads `{}` documents from its own compatible release line; \
-                 regenerate this one from its source data",
-                crate::IR_SCHEMA_NAME
-            )
-        };
+    let guidance = if schema == crate::IR_SCHEMA_NAME && crate::ir::ir_version_is_newer(version) {
+        format!("a PowerIO later than this build ({this}) wrote it; upgrade PowerIO to read it")
+    } else {
+        format!(
+            "this build ({this}) reads `{}` documents from its own compatible release line; \
+             regenerate this one from its source data",
+            crate::IR_SCHEMA_NAME
+        )
+    };
     powerio_core::Error::new(
         &codes::READ_MODULE_UNSUPPORTED,
         format!("unsupported stored module `{schema}` version {version}: {guidance}"),

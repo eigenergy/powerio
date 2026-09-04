@@ -430,14 +430,19 @@ fn only_compatible_powerio_ir_versions_are_accepted() {
     assert!(error.contains(&format!("version {newer}")), "{error}");
     assert!(error.contains("upgrade PowerIO"), "{error}");
 
-    // Another line, earlier or later, is another document shape.
-    for version in ["0.10.0", "99.0.0"] {
-        let error = deserialize_module_text(&header(version.into()))
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains(&format!("version {version}")), "{error}");
-        assert!(error.contains("regenerate this one"), "{error}");
-    }
+    // A later release on any line takes the same upgrade advice.
+    let error = deserialize_module_text(&header("99.0.0".into()))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("version 99.0.0"), "{error}");
+    assert!(error.contains("upgrade PowerIO"), "{error}");
+
+    // An earlier line is a document shape no upgrade brings back.
+    let error = deserialize_module_text(&header("0.10.0".into()))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("version 0.10.0"), "{error}");
+    assert!(error.contains("regenerate this one"), "{error}");
 
     // The v0.10.0 document's integer version is named as written.
     let error = deserialize_module_text(&header(1.into()))
