@@ -862,6 +862,7 @@ pub(crate) fn parse_xiidm_bytes(
     let mut encoding_checked = false;
     let mut buffer = Vec::new();
     loop {
+        let event_offset = reader.buffer_position();
         let (resolved, event) = reader
             .read_resolved_event_into(&mut buffer)
             .map_err(|error| format_error(format!("malformed XML: {error}")))?;
@@ -886,15 +887,18 @@ pub(crate) fn parse_xiidm_bytes(
                 } else {
                     attributes(&element, reader.decoder())?
                 };
-                parsed.consume(
-                    TreeEvent::Start {
-                        tag: &tag,
-                        namespace: namespace.as_deref(),
-                        attrs,
-                        empty: false,
-                    },
-                    diagnostics,
-                )?;
+                let id = attrs.get("id").cloned();
+                parsed
+                    .consume(
+                        TreeEvent::Start {
+                            tag: &tag,
+                            namespace: namespace.as_deref(),
+                            attrs,
+                            empty: false,
+                        },
+                        diagnostics,
+                    )
+                    .map_err(|error| locate(error, &tag, id.as_deref(), event_offset))?;
             }
             Event::Empty(element) => {
                 if element_depth >= MAX_XIIDM_ELEMENT_DEPTH {
@@ -908,21 +912,24 @@ pub(crate) fn parse_xiidm_bytes(
                 } else {
                     attributes(&element, reader.decoder())?
                 };
-                parsed.consume(
-                    TreeEvent::Start {
-                        tag: &tag,
-                        namespace: namespace.as_deref(),
-                        attrs,
-                        empty: true,
-                    },
-                    diagnostics,
-                )?;
+                let id = attrs.get("id").cloned();
+                parsed
+                    .consume(
+                        TreeEvent::Start {
+                            tag: &tag,
+                            namespace: namespace.as_deref(),
+                            attrs,
+                            empty: true,
+                        },
+                        diagnostics,
+                    )
+                    .map_err(|error| locate(error, &tag, id.as_deref(), event_offset))?;
             }
             Event::End(element) => {
-                parsed.consume(
-                    TreeEvent::End(&local_name(element.name().as_ref())?),
-                    diagnostics,
-                )?;
+                let tag = local_name(element.name().as_ref())?;
+                parsed
+                    .consume(TreeEvent::End(&tag), diagnostics)
+                    .map_err(|error| locate(error, &tag, None, event_offset))?;
                 element_depth = element_depth.saturating_sub(1);
             }
             Event::Text(value) => {
@@ -6916,6 +6923,22 @@ fn format_error(message: impl Into<String>) -> Error {
     Error::FormatRead {
         format: FORMAT,
         message: message.into(),
+    }
+}
+
+/// Name the element, its `id` when it states one, and the byte offset the
+/// element starts at in a read failure, so the record at fault can be found
+/// in a document of any size.
+fn locate(error: Error, tag: &str, id: Option<&str>, offset: u64) -> Error {
+    match error {
+        Error::FormatRead { format, message } => Error::FormatRead {
+            format,
+            message: match id {
+                Some(id) => format!("{message} (element `{tag}` `{id}` at byte {offset})"),
+                None => format!("{message} (element `{tag}` at byte {offset})"),
+            },
+        },
+        other => other,
     }
 }
 
@@ -14100,6 +14123,29 @@ mod tests {
             );
             assert!(error.to_string().contains(encoding), "{encoding}: {error}");
         }
+    }
+
+    #[test]
+    fn a_read_failure_names_the_element_and_its_offset() {
+        let source = BUS_BREAKER.replacen("nominalV=\"230\"", "nominalX=\"230\"", 1);
+        let error = parse_xiidm_bytes(source.as_bytes(), &mut Diagnostics::new()).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("attribute `nominalV`"), "{message}");
+        assert!(
+            message.contains("element `voltageLevel` `VL1`"),
+            "{message}"
+        );
+        let offset: usize = message
+            .rsplit("at byte ")
+            .next()
+            .and_then(|rest| rest.trim_end_matches(')').parse().ok())
+            .expect("the message ends with the byte offset");
+        assert!(
+            source[offset..]
+                .trim_start()
+                .starts_with("<iidm:voltageLevel"),
+            "{message}"
+        );
     }
 
     #[test]

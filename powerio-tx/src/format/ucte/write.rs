@@ -754,13 +754,13 @@ pub(crate) fn write_ucte(net: &BalancedNetwork) -> Result<TextEmission> {
             .filter(|u| *u > 0.0)
             .unwrap_or(to_kv);
         let regulation = transformer_regulation(branch, from_kv, numbers.losses);
-        let mut ratio_factor = 1.0;
-        if let Some(phase) = &regulation.phase {
-            ratio_factor *= 1.0 + phase.np as f64 * phase.du / 100.0;
-        }
-        if let Some(angle) = &regulation.angle {
-            ratio_factor /= angle.rho_alpha(angle.np).0;
-        }
+        let phase_ratio = regulation
+            .phase
+            .as_ref()
+            .map_or(1.0, |phase| 1.0 + phase.np as f64 * phase.du / 100.0);
+        let ratio_factor = regulation.angle.as_ref().map_or(phase_ratio, |angle| {
+            angle.ratio_alpha(angle.np, phase_ratio).0
+        });
         let rated_u2 = tap * from_kv * (rated_u1 / to_kv) / ratio_factor;
         let mut field = Field::new();
         field.put(0, &node1.text());
@@ -1008,6 +1008,27 @@ struct Regulation {
     angle: Option<AngleRegulation>,
 }
 
+/// Half the per unit voltage step of a one step symmetrical angle
+/// regulation at 90 degrees whose position 1 reads back as `shift`, given
+/// the ratio of the phase regulation written beside it. PowSybl folds that
+/// ratio into the angle formula, so the step solves
+/// `atan(c t) + atan(t) = shift` with `c = 2 / ratio - 1`; without a phase
+/// regulation `c` is 1 and the step is `tan(shift / 2)`.
+fn symmetrical_half_step(shift_degrees: f64, ratio: f64) -> f64 {
+    let target = shift_degrees.abs().to_radians();
+    let coefficient = 2.0 / ratio - 1.0;
+    let mut half = (target / 2.0).tan();
+    if coefficient <= 0.0 || !coefficient.is_finite() {
+        return half;
+    }
+    for _ in 0..8 {
+        let value = (half * coefficient).atan() + half.atan() - target;
+        let slope = coefficient / (1.0 + (half * coefficient).powi(2)) + 1.0 / (1.0 + half * half);
+        half -= value / slope;
+    }
+    half
+}
+
 /// The `##R` record of a transformer: the retained UCTE regulation when the
 /// branch carries one, else a symmetrical one step angle regulation for a
 /// phase shift and a phase regulation for a voltage control with a tap range.
@@ -1043,15 +1064,6 @@ fn transformer_regulation(branch: &Branch, from_kv: f64, losses: &mut Losses) ->
             angle: retained_angle,
         };
     }
-    let angle = (branch.shift != 0.0 && branch.shift.is_finite()).then(|| AngleRegulation {
-        du: 200.0 * (branch.shift.abs().to_radians() / 2.0).tan(),
-        theta: 90.0,
-        n: 1,
-        np: if branch.shift > 0.0 { 1 } else { -1 },
-        p: None,
-        symmetrical: true,
-        type_stated: true,
-    });
     let phase = branch.control.as_ref().and_then(|control| {
         if control.mode != TransformerControlMode::Voltage
             || control.ntp < 3
@@ -1084,6 +1096,18 @@ fn transformer_regulation(branch: &Branch, from_kv: f64, losses: &mut Losses) ->
             None
         };
         Some(PhaseRegulation { du, n, np, u })
+    });
+    let phase_ratio = phase
+        .as_ref()
+        .map_or(1.0, |phase| 1.0 + phase.np as f64 * phase.du / 100.0);
+    let angle = (branch.shift != 0.0 && branch.shift.is_finite()).then(|| AngleRegulation {
+        du: 200.0 * symmetrical_half_step(branch.shift, phase_ratio),
+        theta: 90.0,
+        n: 1,
+        np: if branch.shift > 0.0 { 1 } else { -1 },
+        p: None,
+        symmetrical: true,
+        type_stated: true,
     });
     Regulation { phase, angle }
 }

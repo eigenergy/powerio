@@ -220,16 +220,25 @@ struct AngleRegulation {
 }
 
 impl AngleRegulation {
-    /// The voltage ratio and the phase angle in degrees at tap `position`, as
-    /// PowSybl's importer computes them for a UCTE angle regulation.
-    fn rho_alpha(&self, position: i64) -> (f64, f64) {
+    /// The voltage ratio relative to the nominal tap and the phase angle in
+    /// degrees at tap `position`, as PowSybl's importer computes them.
+    /// `ratio` is the phase regulation's ratio on the same transformer, 1
+    /// without one: PowSybl folds it into the in phase component of the
+    /// regulated voltage rather than multiplying the two results.
+    fn ratio_alpha(&self, position: i64, ratio: f64) -> (f64, f64) {
         let step = position as f64 * self.du / 100.0;
         let dx = step * self.theta.to_radians().cos();
         let dy = step * self.theta.to_radians().sin();
         if self.symmetrical {
-            (1.0, 2.0 * (dy / 2.0).atan2(1.0 + dx).to_degrees())
+            let half = dy / 2.0;
+            let coefficient = 2.0 / ratio - 1.0;
+            let alpha = (half * coefficient).atan2(1.0 + dx) + half.atan2(1.0 + dx);
+            let magnitude = ratio
+                * ((1.0 + half * half * coefficient * coefficient) / (1.0 + half * half)).sqrt();
+            (magnitude, alpha.to_degrees())
         } else {
-            (1.0 / dy.hypot(1.0 + dx), dy.atan2(1.0 + dx).to_degrees())
+            let real = ratio + dx;
+            (dy.hypot(real), dy.atan2(real).to_degrees())
         }
     }
 }
@@ -273,12 +282,17 @@ mod tests {
             symmetrical: false,
             type_stated: true,
         };
-        let (rho, alpha) = asym.rho_alpha(3);
+        let (magnitude, alpha) = asym.ratio_alpha(3, 1.0);
         let step = 3.0 * 0.08;
         let dx = step * 180.1f64.to_radians().cos();
         let dy = step * 180.1f64.to_radians().sin();
-        assert!((rho - 1.0 / dy.hypot(1.0 + dx)).abs() < 1e-12);
+        assert!((magnitude - dy.hypot(1.0 + dx)).abs() < 1e-12);
         assert!((alpha - dy.atan2(1.0 + dx).to_degrees()).abs() < 1e-12);
+        // Beside a phase regulation at ratio 1.1, the in phase component
+        // starts from that ratio (PowSybl's `dxEq`).
+        let (magnitude, alpha) = asym.ratio_alpha(3, 1.1);
+        assert!((magnitude - dy.hypot(1.1 + dx)).abs() < 1e-12);
+        assert!((alpha - dy.atan2(1.1 + dx).to_degrees()).abs() < 1e-12);
         let symm = AngleRegulation {
             symmetrical: true,
             theta: 90.0,
@@ -288,8 +302,15 @@ mod tests {
             p: None,
             type_stated: true,
         };
-        let (rho, alpha) = symm.rho_alpha(-2);
-        assert!((rho - 1.0).abs() < f64::EPSILON);
+        let (magnitude, alpha) = symm.ratio_alpha(-2, 1.0);
+        assert!((magnitude - 1.0).abs() < f64::EPSILON);
         assert!((alpha - 2.0 * (-0.02f64).atan2(1.0).to_degrees()).abs() < 1e-12);
+        let (magnitude, alpha) = symm.ratio_alpha(-2, 1.05);
+        let coefficient = 2.0 / 1.05 - 1.0;
+        let expected_alpha = (-0.02_f64 * coefficient).atan2(1.0) + (-0.02_f64).atan2(1.0);
+        assert!((alpha - expected_alpha.to_degrees()).abs() < 1e-12);
+        let expected_magnitude =
+            1.05 * ((1.0 + 0.0004 * coefficient * coefficient) / 1.0004f64).sqrt();
+        assert!((magnitude - expected_magnitude).abs() < 1e-12);
     }
 }

@@ -78,6 +78,12 @@ similar_names = "allow"
 # doc_markdown flags them as missing backticks, which is noise here.
 doc_markdown = "allow"
 
+# Full DWARF made every integration test binary 100 to 460 MB, three
+# quarters of it debug info duplicated per binary. Line tables keep file and
+# line in backtraces; set CARGO_PROFILE_DEV_DEBUG=2 for a debugger session.
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.release]
 opt-level = 3
 lto = "thin"

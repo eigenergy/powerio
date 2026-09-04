@@ -1031,6 +1031,7 @@ fn apply_regulation(
     control.controlled_bus = Some(branch.from);
     control.mva_base = transformer.nominal_power.unwrap_or(0.0);
     let mut has_control = false;
+    let mut phase_ratio = 1.0;
     if let Some(phase) = phase {
         let factor = 1.0 + phase.np as f64 * phase.du / 100.0;
         if factor <= 0.0 {
@@ -1045,7 +1046,7 @@ fn apply_regulation(
                 ),
             );
         } else {
-            branch.tap *= factor;
+            phase_ratio = factor;
         }
         has_control = true;
         control.ntp = u32::try_from(2 * phase.n.unsigned_abs() + 1).unwrap_or(u32::MAX);
@@ -1062,10 +1063,11 @@ fn apply_regulation(
             json!({ "du": phase.du, "n": phase.n, "np": phase.np, "u": phase.u }),
         );
     }
+    let mut ratio = phase_ratio;
     if let Some(angle) = angle {
-        let (rho, alpha) = angle.rho_alpha(angle.np);
-        if rho.is_finite() && rho > 0.0 {
-            branch.tap /= rho;
+        let (magnitude, alpha) = angle.ratio_alpha(angle.np, phase_ratio);
+        if magnitude.is_finite() && magnitude > 0.0 {
+            ratio = magnitude;
             branch.shift = alpha;
         } else {
             reader.warn_at(
@@ -1082,8 +1084,8 @@ fn apply_regulation(
             has_control = true;
             control.ntp = u32::try_from(2 * angle.n.unsigned_abs() + 1).unwrap_or(u32::MAX);
             let n = i64::try_from(angle.n.unsigned_abs()).unwrap_or(i64::MAX);
-            control.tap_min = angle.rho_alpha(-n).1;
-            control.tap_max = angle.rho_alpha(n).1;
+            control.tap_min = angle.ratio_alpha(-n, phase_ratio).1;
+            control.tap_max = angle.ratio_alpha(n, phase_ratio).1;
             if let Some(p) = angle.p {
                 control.mode = TransformerControlMode::ActiveFlow;
                 control.enabled = false;
@@ -1103,6 +1105,7 @@ fn apply_regulation(
             }),
         );
     }
+    branch.tap = nominal_tap * ratio;
     if has_control {
         branch.control = Some(control);
     }

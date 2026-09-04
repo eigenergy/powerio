@@ -672,3 +672,78 @@ fn a_phase_shift_and_a_voltage_control_write_regulation_records() {
     assert_eq!(control.ntp, 21);
     assert!((control.band_min - 1.03).abs() < 1e-9);
 }
+
+/// A `##R` record stating both regulations folds the phase regulation's
+/// ratio into the angle formula, as PowSybl's importer does, rather than
+/// multiplying the two results.
+#[test]
+fn a_two_part_regulation_record_follows_the_reference_importer() {
+    let header = "##C 2007.05.01\n##N\n##ZFR\n\
+FNODE111 node         0 3 400.0  10.0    5.0     -20.0   0.0\n\
+FNODE221 node         0 0 400.0  10.0    5.0     0.0     0.0\n\
+##L\n##T\n\
+FNODE111 FNODE221 1 0 400.0 220.0 500.0 0.5000 20.000 0.000000 0.0000 1000\n\
+##R\n";
+    let both =
+        format!("{header}FNODE111 FNODE221 1 2.500 10 4         2.000 90.00 10 3         ASYM\n");
+    let phase_only = format!("{header}FNODE111 FNODE221 1 2.500 10 4\n");
+    let both = parse_ucte_text("both.uct", &both);
+    let phase_only = parse_ucte_text("phase.uct", &phase_only);
+    let both = &both.value().branches()[0];
+    let phase_only = &phase_only.value().branches()[0];
+    // Ratio 1.1 from the phase part; dy = 3 * 2 % at 90 degrees.
+    let dy = 0.06_f64;
+    assert!(
+        (both.shift - dy.atan2(1.1).to_degrees()).abs() < 1e-9,
+        "{}",
+        both.shift
+    );
+    let expected_ratio = dy.hypot(1.1) / 1.1;
+    assert!(
+        (both.tap / phase_only.tap - expected_ratio).abs() < 1e-9,
+        "{} vs {}",
+        both.tap,
+        phase_only.tap
+    );
+}
+
+/// A branch carrying a shift and a voltage control writes both parts of one
+/// `##R` record, and the fresh record reads back to the same tap and shift.
+#[test]
+fn a_shift_beside_a_voltage_control_round_trips() {
+    use powerio_tx::network::{Branch, Bus, Generator, TransformerControl};
+    let mut buses = vec![
+        Bus::new(BusId(1), BusType::Ref, 380.0),
+        Bus::new(BusId(2), BusType::Pq, 220.0),
+    ];
+    buses[0].name = Some("FSLACK11".into());
+    buses[1].name = Some("FTAPS_21".into());
+    let mut both = Branch::new(BusId(1), BusId(2), 0.001, 0.05);
+    both.tap = 1.05;
+    both.shift = 5.0;
+    let mut control = TransformerControl::new(TransformerControlMode::Voltage);
+    control.tap_min = 0.9;
+    control.tap_max = 1.1;
+    control.ntp = 21;
+    control.band_min = 1.02;
+    control.band_max = 1.04;
+    control.controlled_bus = Some(BusId(1));
+    both.control = Some(control);
+    let mut net = BalancedNetwork::in_memory("both", 100.0, buses, vec![both]);
+    let mut generator = Generator::new(BusId(1));
+    generator.pg = 10.0;
+    generator.pmax = 20.0;
+    net.generators_mut().push(generator);
+    let fresh = emit_value(&net, TargetFormat::Ucte).unwrap();
+    assert!(fresh.text.contains("SYMM"), "{}", fresh.text);
+    let reread = parse_ucte_text("both.uct", &fresh.text);
+    let branch = &reread.value().branches()[0];
+    assert!((branch.shift - 5.0).abs() < 1e-3, "{}", branch.shift);
+    assert!((branch.tap - 1.05).abs() < 1e-3, "{}", branch.tap);
+    assert!(
+        branch
+            .control
+            .as_ref()
+            .is_some_and(|control| control.mode == TransformerControlMode::Voltage)
+    );
+}

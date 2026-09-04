@@ -117,11 +117,15 @@ crates.
   is indexed by class and by reference, and the XIIDM reader groups its
   records by voltage level once. Both XML readers resolve the predefined
   entities and character references in element text, so a name containing
-  `&` reads back from the writer's own output. JIIDM emission reports under
-  `EMIT.JIIDM`.
+  `&` reads back from the writer's own output. An XIIDM read failure names
+  the element, its `id`, and the byte offset it starts at. JIIDM emission
+  reports under `EMIT.JIIDM`.
 - ENTSO-E UCTE-DEF 2003.09.01 and 2007.05.01 parse and emit under the token
   `ucte`; fresh output uses 2007.05.01. A bus whose name is not a UCTE node
   code receives a derived code and an `EMIT.UCTE.VALUE_SUBSTITUTED` warning.
+  A `##R` record stating both a phase and an angle regulation folds the
+  phase ratio into the angle formula as PowSybl's importer does, and fresh
+  output solves the angle step against the phase regulation beside it.
 - The IEEE Common Data Format parses under the token `ieee-cdf`; the format
   is read only.
 - PSS/E RAW revision 32 is read. Fresh output uses revisions 33 through 35;

@@ -330,7 +330,9 @@ magnetizing admittance sits on the regulated side. `##R` phase regulation
 multiplies the tap by \\(1 + n' \delta u / 100\\) and becomes a voltage
 control when it states a target; angle regulation applies the PowSybl
 asymmetrical or symmetrical formulas to the tap and the phase shift and
-becomes a disabled active flow control. Both regulations stay in the
+becomes a disabled active flow control. A record stating both folds the
+phase regulation's ratio into the angle formula, as PowSybl does, instead
+of multiplying the two results. Both regulations stay in the
 branch extras so fresh UCTE output replays them exactly. `##TT` special
 descriptions ride on the transformer extras and `##E` exchange schedules
 stay in the retained source only; both are reported with
@@ -348,8 +350,9 @@ level digit nearest its base kV (380 kV when none is stated); and busbar
 `EMIT.UCTE.VALUE_SUBSTITUTED`. A base kV that is not a UCTE level is
 written under the nearest level with a warning; ohm, kV, MW, and ampere
 values stay physical, so a re-read expresses them per unit on that level.
-A phase shift becomes a one step symmetrical angle regulation and a
-voltage control with a tap range becomes a phase regulation; a line
+A phase shift becomes a one step symmetrical angle regulation, its step
+solved against the phase regulation written beside it, and a voltage
+control with a tap range becomes a phase regulation; a line
 joining two voltage levels is written as a transformer. UCTE requires a
 node's generation bounds to contain its dispatch; the writer widens an
 inconsistent interval and reports the substituted bounds. An out-of-service
