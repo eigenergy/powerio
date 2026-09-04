@@ -22,7 +22,7 @@ series, scenario set, instance, solution.
 | acquire memory | `Source::from_memory(name, bytes)` | pass a file or bytes-like object | pass `IO` or `AbstractVector{UInt8}` | `pio_source_from_memory` |
 | parse | `parse(input)`, `parse_with_options(input, &options)` | `parse(source, format=..., name=...)` | `parse(source; format=..., name=...)` | `pio_parse` |
 | module value | `module.value()` | `module.value` | `module.value` | `pio_module_value` |
-| module diagnostics | `module.diagnostics` | `module.diagnostics` | `module.diagnostics` | `pio_module_diagnostics` |
+| module diagnostics | `module.diagnostics()` | `module.diagnostics` | `module.diagnostics` | `pio_module_diagnostics` |
 | emit a format | `emit(&module, format, destination)` | `emit(module, format, destination=None)` | `emit(module, format, destination=nothing)` | `pio_emit` |
 | serialize IR | `serialize(&module, destination)` | `serialize(module, destination=None)` | `serialize(module, destination=nothing)` | `pio_module_serialize` |
 | deserialize IR | `deserialize(source)` | `deserialize(source)` | `deserialize(source)` | `pio_module_deserialize` |
@@ -43,6 +43,30 @@ A format made of related files uses the same `parse`. For GO Challenge 3, a
 directory holding the problem file returns `AcScucInstance`; the matching
 solution file beside it makes the same call return `AcScucSolution`.
 
+## Member access
+
+Every language reaches a member the way its own users expect. The names are
+the same; only the syntax differs.
+
+| Language | A member | A table's length |
+|---|---|---|
+| Rust | accessor method: `module.value()`, `module.diagnostics()`, `network.buses()` | `network.buses().len()` |
+| Python | read only property: `module.value`, `module.diagnostics`, `network.buses` | `len(network.buses)` or `network.n_buses` |
+| Julia | property: `module.value`, `module.diagnostics`, `net.buses` | `length(net.buses)` |
+| C | one function per member: `pio_module_value`, `pio_module_diagnostics` | a `_count` function |
+
+Rust containers (`PioModule`, `BalancedNetwork`, `MulticonductorNetwork`,
+instances, and solutions) keep their fields private because they hold
+invariants: `value_mut` severs retained source bytes, and `add_diagnostic`
+rejects a duplicate identifier. Rust element records (`Bus`, `Branch`,
+`Generator`, `Load`, and the rest) are plain public structs, because struct
+literals and pattern matching are how Rust users build and read them. Python
+keeps the `n_*` counts because a table property builds one dict per row. A
+Python element is a dict keyed by the Rust field names. A Julia element is an
+immutable struct whose fields carry the C ABI names, which spell the quantity
+and unit out (`vm_pu`, `active_power_mw`). [Known limits](scope-0.11.md)
+lists the unification of those two field vocabularies.
+
 ## Collections
 
 `TimeSeries<T>` and `ScenarioSet<T>` hold typed entries.
@@ -50,7 +74,7 @@ solution file beside it makes the same call return `AcScucSolution`.
 | Language | Operations |
 |---|---|
 | Rust | `len`, `iter`, checked `get` |
-| Python | `len`, iteration, `series[index]`, `scenarios[id]` |
+| Python | `len`, iteration, `series[index]`, `scenarios[id]`; `TimeSeries` is a `Sequence` and `ScenarioSet` a `Mapping` |
 | Julia | `length`, iteration, 1-based `getindex` |
 | C | zero-based length and entry access; scenario lookup by identifier |
 

@@ -869,7 +869,7 @@ def _bind_collection_entry(
     return value
 
 
-class TimeSeries(_TypedValue):
+class TimeSeries(_TypedValue, Sequence):
     """Values of one type ordered in time."""
 
     def __init__(
@@ -907,7 +907,9 @@ class TimeSeries(_TypedValue):
     def __len__(self) -> int:
         return self.module._inner._time_series_len()
 
-    def __getitem__(self, index: int) -> Any:
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return [self[position] for position in range(*index.indices(len(self)))]
         try:
             position = _operator.index(index)
         except TypeError:
@@ -933,7 +935,7 @@ class TimeSeries(_TypedValue):
         return (self[position] for position in range(len(self)))
 
 
-class ScenarioSet(_TypedValue):
+class ScenarioSet(_TypedValue, Mapping):
     """Named alternatives of one type, with optional probabilities."""
 
     def __init__(
@@ -965,17 +967,16 @@ class ScenarioSet(_TypedValue):
     def scenarios(self) -> tuple[Scenario, ...]:
         return tuple(Scenario(*entry) for entry in self.module._inner._scenario_entries())
 
-    def keys(self) -> tuple[str, ...]:
-        return tuple(scenario.id for scenario in self.scenarios)
-
     def __len__(self) -> int:
         return len(self.scenarios)
 
     def __iter__(self):
-        return iter(self.keys())
+        return (scenario.id for scenario in self.scenarios)
 
     def __contains__(self, scenario: object) -> bool:
-        return isinstance(scenario, str) and scenario in self.keys()
+        return isinstance(scenario, str) and any(
+            entry.id == scenario for entry in self.scenarios
+        )
 
     def __getitem__(self, scenario: str) -> Any:
         if not isinstance(scenario, str):

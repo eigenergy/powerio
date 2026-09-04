@@ -11,6 +11,7 @@ import json
 import math
 import subprocess
 import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import numpy as np
@@ -1125,6 +1126,9 @@ def test_typed_collection_protocols_use_contained_values(time_series_powerio_ir)
     assert len(series) == 2
     assert all(isinstance(item, powerio.OperatingPoint) for item in series)
     assert len(series.time_points) == 2
+    assert isinstance(series, Sequence)
+    assert len(list(reversed(series))) == 2
+    assert len(series[1:]) == 1
     with pytest.raises(IndexError):
         _ = series[2]
 
@@ -1147,9 +1151,13 @@ def test_typed_collection_protocols_use_contained_values(time_series_powerio_ir)
     scenarios = _parse_module(json.dumps(scenario_doc)).value
     assert isinstance(scenarios, powerio.ScenarioSet)
     assert len(scenarios) == 2
-    assert scenarios.keys() == ("base", "peak")
+    assert tuple(scenarios.keys()) == ("base", "peak")
     assert list(scenarios) == ["base", "peak"]
     assert "peak" in scenarios and "winter" not in scenarios
+    assert isinstance(scenarios, Mapping)
+    assert [key for key, _ in scenarios.items()] == ["base", "peak"]
+    assert scenarios.get("winter") is None
+    assert len(scenarios.values()) == 2
     assert isinstance(scenarios["peak"], powerio.BalancedNetwork)
     with pytest.raises(KeyError):
         _ = scenarios["winter"]
@@ -1188,7 +1196,7 @@ def test_typed_collections_construct_without_powerio_ir():
         {"base": network, "peak": network},
         probabilities={"base": 0.6, "peak": 0.4},
     )
-    assert scenarios.keys() == ("base", "peak")
+    assert tuple(scenarios.keys()) == ("base", "peak")
     assert scenarios.scenarios == (
         powerio.Scenario("base", 0.6),
         powerio.Scenario("peak", 0.4),
