@@ -229,22 +229,47 @@ impl Goc3DataFiles {
     }
 }
 
+/// The GO Challenge 3 root keys, read without building a document tree.
+#[derive(Default, serde::Deserialize)]
+struct Goc3Roots {
+    #[serde(default)]
+    network: Option<serde::de::IgnoredAny>,
+    #[serde(default)]
+    time_series_input: Option<serde::de::IgnoredAny>,
+    #[serde(default)]
+    reliability: Option<serde::de::IgnoredAny>,
+    #[serde(default)]
+    time_series_output: Option<serde::de::IgnoredAny>,
+}
+
+impl Goc3Roots {
+    fn is_problem(&self) -> bool {
+        self.network.is_some() && self.time_series_input.is_some() && self.reliability.is_some()
+    }
+
+    fn is_solution(&self) -> bool {
+        self.time_series_output.is_some()
+    }
+}
+
+/// The GO Challenge 3 root keys of a JSON document, or `None` for a well
+/// formed document whose root is not an object.
+fn goc3_roots(buffer: &SourceBuffer) -> Result<Option<Goc3Roots>> {
+    match serde_json::from_slice::<Goc3Roots>(buffer.content_bytes()) {
+        Ok(roots) => Ok(Some(roots)),
+        Err(error) if error.classify() == serde_json::error::Category::Data => Ok(None),
+        Err(error) => Err(Error::new(
+            &powerio_tx::diagnostics::codes::PARSE_GOC3_MALFORMED,
+            format!("{}: {error}", buffer.name()),
+        )),
+    }
+}
+
 fn goc3_file_kind(buffer: &SourceBuffer) -> Result<Option<Goc3DataFileKind>> {
-    let value: serde_json::Value =
-        serde_json::from_slice(buffer.content_bytes()).map_err(|error| {
-            Error::new(
-                &powerio_tx::diagnostics::codes::PARSE_GOC3_MALFORMED,
-                format!("{}: {error}", buffer.name()),
-            )
-        })?;
-    let Some(root) = value.as_object() else {
+    let Some(roots) = goc3_roots(buffer)? else {
         return Ok(None);
     };
-    let problem = root.contains_key("network")
-        && root.contains_key("time_series_input")
-        && root.contains_key("reliability");
-    let solution = root.contains_key("time_series_output");
-    match (problem, solution) {
+    match (roots.is_problem(), roots.is_solution()) {
         (true, false) => Ok(Some(Goc3DataFileKind::Problem)),
         (false, true) => Ok(Some(Goc3DataFileKind::Solution)),
         (false, false) => Ok(None),
@@ -301,16 +326,9 @@ fn directory_has_goc3_data(source: &Source) -> bool {
                 .and_then(|extension| extension.to_str())
                 .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
                 && source.buffer(&name).is_ok_and(|buffer| {
-                    serde_json::from_slice::<serde_json::Value>(buffer.content_bytes()).is_ok_and(
-                        |value| {
-                            value.as_object().is_some_and(|root| {
-                                root.contains_key("time_series_output")
-                                    || (root.contains_key("network")
-                                        && root.contains_key("time_series_input")
-                                        && root.contains_key("reliability"))
-                            })
-                        },
-                    )
+                    goc3_roots(&buffer).is_ok_and(|roots| {
+                        roots.is_some_and(|roots| roots.is_solution() || roots.is_problem())
+                    })
                 })
         })
     })

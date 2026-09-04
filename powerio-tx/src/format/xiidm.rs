@@ -941,10 +941,17 @@ pub(crate) fn parse_xiidm_bytes(
                     parsed.consume(TreeEvent::Text(&text), diagnostics)?;
                 }
             }
-            Event::DocType(_) | Event::GeneralRef(_) => {
-                return Err(format_error(
-                    "DTD declarations and entity references are not accepted",
-                ));
+            Event::GeneralRef(reference) => {
+                // `&amp;` and the other predefined entities, and character
+                // references, are ordinary text; the writer escapes names
+                // with them, so the reader must take them back.
+                let text = crate::format::xml::resolve_general_ref(&reference).ok_or_else(|| {
+                    format_error("entity references other than the predefined XML entities are not accepted")
+                })?;
+                parsed.consume(TreeEvent::Text(&text), diagnostics)?;
+            }
+            Event::DocType(_) => {
+                return Err(format_error("DTD declarations are not accepted"));
             }
             Event::Decl(declaration) => {
                 validate_xml_encoding(Some(&declaration), reader.decoder())?;
@@ -2410,9 +2417,12 @@ impl ParsedXiidm {
 
     fn read_bus(&mut self, attrs: &Attrs, frame: &mut Frame) -> Result<()> {
         let voltage_level = self.require_voltage_level("bus")?;
+        // The bus's voltage level is the one most recently opened, so the
+        // search from the end ends at once on a well formed document.
         let topology = self
             .voltage_levels
             .iter()
+            .rev()
             .find(|value| value.id == voltage_level)
             .ok_or_else(|| format_error("bus has no declared voltage level"))?
             .topology;
@@ -4561,6 +4571,73 @@ fn report_voltage_level_group(
     }
 }
 
+/// The records of one voltage level, grouped once so the per level bus
+/// builders read their own records instead of scanning every table.
+#[derive(Default)]
+struct LevelRecords<'a> {
+    buses: Vec<&'a RawBus>,
+    switches: Vec<&'a RawSwitch>,
+    busbar_sections: Vec<&'a RawBusbarSection>,
+    internal_connections: Vec<&'a RawInternalConnection>,
+    /// Equipment terminal nodes, collected only for node breaker levels.
+    equipment_nodes: Vec<i32>,
+}
+
+impl<'a> LevelRecords<'a> {
+    fn group(parsed: &'a ParsedXiidm) -> Result<HashMap<&'a str, Self>> {
+        let mut records: HashMap<&str, Self> = HashMap::new();
+        for bus in &parsed.buses {
+            records
+                .entry(bus.voltage_level.as_str())
+                .or_default()
+                .buses
+                .push(bus);
+        }
+        for switch in &parsed.switches {
+            records
+                .entry(switch.voltage_level.as_str())
+                .or_default()
+                .switches
+                .push(switch);
+        }
+        for busbar in &parsed.busbar_sections {
+            records
+                .entry(busbar.voltage_level.as_str())
+                .or_default()
+                .busbar_sections
+                .push(busbar);
+        }
+        for connection in &parsed.internal_connections {
+            records
+                .entry(connection.voltage_level.as_str())
+                .or_default()
+                .internal_connections
+                .push(connection);
+        }
+        let node_breaker: HashSet<&str> = parsed
+            .voltage_levels
+            .iter()
+            .filter(|level| level.topology == RawTopologyKind::NodeBreaker)
+            .map(|level| level.id.as_str())
+            .collect();
+        if node_breaker.is_empty() {
+            return Ok(records);
+        }
+        for equipment in &parsed.equipment {
+            for side in 1..=equipment.kind.terminal_count() {
+                let level = equipment_voltage_level(equipment, side)?;
+                let Some(level) = node_breaker.get(level.as_str()) else {
+                    continue;
+                };
+                if let Some(node) = terminal_i32(&equipment.attrs, "node", side)? {
+                    records.entry(level).or_default().equipment_nodes.push(node);
+                }
+            }
+        }
+        Ok(records)
+    }
+}
+
 impl<'a> BusBuilder<'a> {
     fn new(parsed: &'a ParsedXiidm) -> Self {
         Self {
@@ -4575,10 +4652,13 @@ impl<'a> BusBuilder<'a> {
     }
 
     fn build(&mut self, diagnostics: &mut Diagnostics) -> Result<()> {
+        let records = LevelRecords::group(self.parsed)?;
+        let empty = LevelRecords::default();
         for level in &self.parsed.voltage_levels {
+            let records = records.get(level.id.as_str()).unwrap_or(&empty);
             match level.topology {
-                RawTopologyKind::BusBreaker => self.build_bus_breaker(level, diagnostics)?,
-                RawTopologyKind::NodeBreaker => self.build_node_breaker(level, diagnostics)?,
+                RawTopologyKind::BusBreaker => self.build_bus_breaker(level, records)?,
+                RawTopologyKind::NodeBreaker => self.build_node_breaker(level, records)?,
             }
         }
         self.report_topology_summaries(diagnostics);
@@ -4628,14 +4708,9 @@ impl<'a> BusBuilder<'a> {
     fn build_bus_breaker(
         &mut self,
         level: &RawVoltageLevel,
-        _diagnostics: &mut Diagnostics,
+        records: &LevelRecords<'_>,
     ) -> Result<()> {
-        let raw_buses: Vec<_> = self
-            .parsed
-            .buses
-            .iter()
-            .filter(|bus| bus.voltage_level == level.id)
-            .collect();
+        let raw_buses = &records.buses;
         if raw_buses.is_empty() {
             return Err(format_error(format!(
                 "bus breaker voltage level `{}` has no buses",
@@ -4652,12 +4727,7 @@ impl<'a> BusBuilder<'a> {
             .map(|(position, id)| (id.as_str(), position))
             .collect();
         let mut union = UnionFind::new(ids.len());
-        for switch in self
-            .parsed
-            .switches
-            .iter()
-            .filter(|switch| switch.voltage_level == level.id && !switch.open)
-        {
+        for switch in records.switches.iter().filter(|switch| !switch.open) {
             let (RawEndpoint::Bus(first), RawEndpoint::Bus(second)) =
                 (&switch.endpoint1, &switch.endpoint2)
             else {
@@ -4705,40 +4775,20 @@ impl<'a> BusBuilder<'a> {
     fn build_node_breaker(
         &mut self,
         level: &RawVoltageLevel,
-        _diagnostics: &mut Diagnostics,
+        records: &LevelRecords<'_>,
     ) -> Result<()> {
         let mut nodes = BTreeSet::new();
-        for bus in self
-            .parsed
-            .buses
-            .iter()
-            .filter(|bus| bus.voltage_level == level.id)
-        {
+        for bus in &records.buses {
             nodes.extend(bus.nodes.iter().copied());
         }
-        for busbar in self
-            .parsed
-            .busbar_sections
-            .iter()
-            .filter(|value| value.voltage_level == level.id)
-        {
+        for busbar in &records.busbar_sections {
             nodes.insert(busbar.node);
         }
-        for connection in self
-            .parsed
-            .internal_connections
-            .iter()
-            .filter(|value| value.voltage_level == level.id)
-        {
+        for connection in &records.internal_connections {
             nodes.insert(connection.node1);
             nodes.insert(connection.node2);
         }
-        for switch in self
-            .parsed
-            .switches
-            .iter()
-            .filter(|value| value.voltage_level == level.id)
-        {
+        for switch in &records.switches {
             if let RawEndpoint::Node(node) = switch.endpoint1 {
                 nodes.insert(node);
             }
@@ -4746,15 +4796,7 @@ impl<'a> BusBuilder<'a> {
                 nodes.insert(node);
             }
         }
-        for equipment in &self.parsed.equipment {
-            for side in 1..=equipment.kind.terminal_count() {
-                if equipment_voltage_level(equipment, side)? == level.id
-                    && let Some(node) = terminal_i32(&equipment.attrs, "node", side)?
-                {
-                    nodes.insert(node);
-                }
-            }
-        }
+        nodes.extend(records.equipment_nodes.iter().copied());
         if nodes.is_empty() {
             self.empty_node_breaker_levels.push(level.id.clone());
             return Ok(());
@@ -4766,20 +4808,10 @@ impl<'a> BusBuilder<'a> {
             .map(|(position, node)| (*node, position))
             .collect();
         let mut union = UnionFind::new(values.len());
-        for connection in self
-            .parsed
-            .internal_connections
-            .iter()
-            .filter(|value| value.voltage_level == level.id)
-        {
+        for connection in &records.internal_connections {
             union.union(index[&connection.node1], index[&connection.node2]);
         }
-        for switch in self
-            .parsed
-            .switches
-            .iter()
-            .filter(|value| value.voltage_level == level.id && !value.open)
-        {
+        for switch in records.switches.iter().filter(|value| !value.open) {
             let (RawEndpoint::Node(first), RawEndpoint::Node(second)) =
                 (&switch.endpoint1, &switch.endpoint2)
             else {
@@ -4791,12 +4823,7 @@ impl<'a> BusBuilder<'a> {
             union.union(index[first], index[second]);
         }
         let mut calculated_buses = HashMap::<usize, &RawBus>::new();
-        for bus in self
-            .parsed
-            .buses
-            .iter()
-            .filter(|bus| bus.voltage_level == level.id)
-        {
+        for bus in records.buses.iter().copied() {
             let Some(first) = bus.nodes.first() else {
                 return Err(format_error(format!(
                     "calculated bus in voltage level `{}` has no nodes",
@@ -4835,13 +4862,10 @@ impl<'a> BusBuilder<'a> {
                     // IIDM 1.0 states the calculated bus voltage on its
                     // busbar sections; every section of one bus states the
                     // same value.
-                    let legacy_voltage = self
-                        .parsed
+                    let legacy_voltage = records
                         .busbar_sections
                         .iter()
-                        .filter(|value| {
-                            value.voltage_level == level.id && group.contains(&value.node)
-                        })
+                        .filter(|value| group.contains(&value.node))
                         .find_map(|value| value.legacy_voltage);
                     RawBus {
                         id: None,
@@ -4851,11 +4875,10 @@ impl<'a> BusBuilder<'a> {
                         angle: legacy_voltage.map(|(_, angle)| angle),
                     }
                 });
-            let local_id = self
-                .parsed
+            let local_id = records
                 .busbar_sections
                 .iter()
-                .find(|value| value.voltage_level == level.id && group.contains(&value.node))
+                .find(|value| group.contains(&value.node))
                 .map_or_else(
                     || format!("{}/{}", level.id, group[0]),
                     |value| value.id.clone(),
@@ -4865,12 +4888,7 @@ impl<'a> BusBuilder<'a> {
                 self.node_map.insert((level.id.clone(), *node), id);
             }
         }
-        if self
-            .parsed
-            .buses
-            .iter()
-            .all(|bus| bus.voltage_level != level.id)
-        {
+        if records.buses.is_empty() {
             self.derived_node_breaker_levels.push(level.id.clone());
         }
         Ok(())
@@ -6311,21 +6329,21 @@ fn build_detailed_connectivity(
             })
         })
         .collect::<Result<Vec<_>>>()?;
+    let mut buses_by_level: HashMap<&str, Vec<BusId>> = HashMap::new();
+    for ((level, _), bus) in &buses.bus_map {
+        buses_by_level.entry(level.as_str()).or_default().push(*bus);
+    }
+    for ((level, _), bus) in &buses.node_map {
+        buses_by_level.entry(level.as_str()).or_default().push(*bus);
+    }
     let voltage_levels = parsed
         .voltage_levels
         .iter()
         .map(|level| {
-            let mut level_buses = buses
-                .bus_map
-                .iter()
-                .filter_map(|((vl, _), bus)| (vl == &level.id).then_some(*bus))
-                .chain(
-                    buses
-                        .node_map
-                        .iter()
-                        .filter_map(|((vl, _), bus)| (vl == &level.id).then_some(*bus)),
-                )
-                .collect::<Vec<_>>();
+            let mut level_buses = buses_by_level
+                .get(level.id.as_str())
+                .cloned()
+                .unwrap_or_default();
             level_buses.sort_unstable();
             level_buses.dedup();
             Ok(VoltageLevel {
@@ -6362,14 +6380,23 @@ fn build_detailed_connectivity(
             })
         })
         .collect::<Result<Vec<_>>>()?;
+    let source_buses: HashMap<(&str, &str), &RawBus> = parsed
+        .buses
+        .iter()
+        .filter_map(|source_bus| {
+            source_bus
+                .id
+                .as_deref()
+                .map(|id| ((source_bus.voltage_level.as_str(), id), source_bus))
+        })
+        .collect();
     let mut bus_breaker_buses = buses
         .bus_map
         .iter()
         .map(|((voltage_level, bus), calculated_bus)| {
-            let source_bus = parsed.buses.iter().find(|source_bus| {
-                source_bus.voltage_level == *voltage_level
-                    && source_bus.id.as_deref() == Some(bus.as_str())
-            });
+            let source_bus = source_buses
+                .get(&(voltage_level.as_str(), bus.as_str()))
+                .copied();
             Ok(BusBreakerBus {
                 component: component_id("bus", bus)?,
                 voltage_level: component_id("voltage_level", voltage_level)?,
@@ -8131,9 +8158,23 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
 pub(crate) fn write_jiidm(network: &BalancedNetwork) -> Result<TextEmission> {
     let emission = write_xiidm(network)?;
     let text = xiidm_to_jiidm(&emission.text)?;
+    // The findings are the XIIDM writer's, and JIIDM is that output in JSON,
+    // so each takes the JIIDM code of the same reason.
+    let xiidm = codes::EMIT_XIIDM.entries();
+    let jiidm = codes::EMIT_JIIDM.entries();
+    let diagnostics = emission
+        .diagnostics
+        .into_iter()
+        .map(
+            |diagnostic| match xiidm.iter().position(|info| info.code == diagnostic.code()) {
+                Some(at) => diagnostic.with_code(jiidm[at]),
+                None => diagnostic,
+            },
+        )
+        .collect();
     Ok(TextEmission {
         text,
-        diagnostics: emission.diagnostics,
+        diagnostics,
         fidelity: emission.fidelity,
     })
 }
@@ -8201,11 +8242,21 @@ fn xiidm_to_jiidm(xml: &str) -> Result<String> {
                     .map_err(|error| jiidm_emission_error(error.to_string()))?;
                 open.content.get_or_insert_with(String::new).push_str(&text);
             }
+            Event::GeneralRef(reference) => {
+                let open = stack.last_mut().ok_or_else(|| {
+                    jiidm_emission_error("fresh XIIDM has text outside an element")
+                })?;
+                let text =
+                    crate::format::xml::resolve_general_ref(&reference).ok_or_else(|| {
+                        jiidm_emission_error(
+                            "fresh XIIDM carries an entity reference outside the predefined set",
+                        )
+                    })?;
+                open.content.get_or_insert_with(String::new).push_str(&text);
+            }
             Event::Decl(_) | Event::Comment(_) | Event::PI(_) => {}
-            Event::DocType(_) | Event::GeneralRef(_) => {
-                return Err(jiidm_emission_error(
-                    "fresh XIIDM carries a DTD or entity reference",
-                ));
+            Event::DocType(_) => {
+                return Err(jiidm_emission_error("fresh XIIDM carries a DTD"));
             }
             Event::Eof => break,
         }
@@ -13186,6 +13237,29 @@ mod tests {
                 .iter()
                 .all(|diagnostic| !diagnostic.message().contains("system MVA base"))
         );
+    }
+
+    #[test]
+    fn escaped_element_text_reads_back_and_round_trips() {
+        // The writer escapes `&` in an alias; the reader takes the
+        // predefined entity and a character reference back as text.
+        let source = BUS_BREAKER.replacen(
+            "<iidm:minMaxReactiveLimits minQ=\"-50\" maxQ=\"50\"/>\n      </iidm:generator>",
+            "<iidm:minMaxReactiveLimits minQ=\"-50\" maxQ=\"50\"/>\n        <iidm:alias>A&amp;B&#60;C</iidm:alias>\n      </iidm:generator>",
+            1,
+        );
+        assert!(source.contains("&amp;"), "the fixture edit did not apply");
+        let network = parse_xiidm_source(&source, &mut Diagnostics::new()).unwrap();
+        let detailed = network.detailed_connectivity().as_ref().unwrap();
+        let generator = component_id("generator", "G1").unwrap();
+        let aliases = &component_metadata(detailed, &generator).unwrap().aliases;
+        assert!(
+            aliases.iter().any(|alias| alias.value == "A&B<C"),
+            "{aliases:?}"
+        );
+        let emission = write_xiidm(&network).unwrap();
+        assert!(emission.text.contains("A&amp;B&lt;C"), "{}", emission.text);
+        parse_xiidm_source(&emission.text, &mut Diagnostics::new()).unwrap();
     }
 
     #[test]

@@ -1504,8 +1504,6 @@ fn validate_records<'a, V: Serialize>(
     Ok(())
 }
 
-// One arm per stored kind, as in the decoder.
-#[allow(clippy::too_many_lines)]
 fn validate_time_points(points: &[TimePoint]) -> Result<(), String> {
     for point in points {
         nonempty("time point label", &point.label)?;

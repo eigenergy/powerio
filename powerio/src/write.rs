@@ -223,8 +223,9 @@ fn unknown_format(format: &str) -> Error {
 /// named format cannot state, and the family writer's own failure otherwise.
 ///
 /// # Panics
-/// Never on external input: the stored document's fixed artifact name is
-/// valid by construction.
+/// Never on external input: the fixed artifact names are valid by
+/// construction, and the solution columns a family writer reads are length
+/// checked by the solution constructors.
 pub fn emit<T>(
     module: &PioModule<T>,
     format: &str,

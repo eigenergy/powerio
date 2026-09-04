@@ -511,3 +511,33 @@ fn a_decoded_network_that_fails_validation_is_refused() {
         "unexpected refusal: {error}"
     );
 }
+
+/// Diagnostics a reader raises carry no id, so the writer mints one each.
+/// Minting must stay linear: a six figure list encodes well within the
+/// ceiling the decode side already holds.
+#[test]
+fn six_figure_unidentified_diagnostics_encode_within_the_ceiling() {
+    const COUNT: usize = 131_072;
+    let mut module = PioModule::new(PioValue::BalancedNetwork(small_network()));
+    let code = powerio_core::DiagnosticCode::new("READ.TEST.NOTE").unwrap();
+    for _ in 0..COUNT {
+        module
+            .add_diagnostic(powerio_core::Diagnostic::new(
+                code.clone(),
+                powerio_core::DiagnosticSeverity::Note,
+                "kept",
+            ))
+            .unwrap();
+    }
+
+    let started = std::time::Instant::now();
+    let text = serialize_module_text(&module).unwrap();
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "encode took {elapsed:?}"
+    );
+    let back = deserialize_module_text(&text).unwrap();
+    assert_eq!(back.diagnostics.len(), COUNT);
+    assert_eq!(serialize_module_text(&back).unwrap(), text);
+}

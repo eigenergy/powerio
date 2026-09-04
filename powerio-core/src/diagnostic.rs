@@ -383,6 +383,14 @@ impl Diagnostic {
         self
     }
 
+    /// The same finding under another registered code. A writer that forwards
+    /// a sibling writer's findings gives them its own family this way.
+    #[must_use]
+    pub fn with_code(mut self, info: &'static DiagnosticInfo) -> Self {
+        self.identity = DiagnosticIdentity::Registered(info);
+        self
+    }
+
     #[must_use]
     pub fn with_severity(mut self, severity: DiagnosticSeverity) -> Self {
         self.severity = severity;

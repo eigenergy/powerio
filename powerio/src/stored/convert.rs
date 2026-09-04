@@ -435,11 +435,13 @@ const BALANCED_FLAGS: [BalancedOperatingPointFlag; 3] = [
     BalancedOperatingPointFlag::SwitchClosed,
 ];
 
-const MULTICONDUCTOR_NUMERIC_QUANTITIES: [MulticonductorOperatingPointQuantity; 6] = [
+const MULTICONDUCTOR_NUMERIC_QUANTITIES: [MulticonductorOperatingPointQuantity; 8] = [
     MulticonductorOperatingPointQuantity::TerminalVoltageMagnitude,
     MulticonductorOperatingPointQuantity::TerminalVoltageAngle,
     MulticonductorOperatingPointQuantity::LoadActivePower,
     MulticonductorOperatingPointQuantity::LoadReactivePower,
+    MulticonductorOperatingPointQuantity::GeneratorActivePower,
+    MulticonductorOperatingPointQuantity::GeneratorReactivePower,
     MulticonductorOperatingPointQuantity::TransformerTap,
     MulticonductorOperatingPointQuantity::CapacitorSteps,
 ];
@@ -828,6 +830,8 @@ fn mc_dense_by_name(
         "terminal_voltage_angle" => builder.terminal_voltage_angles(values),
         "load_active_power" => builder.load_active_powers(values),
         "load_reactive_power" => builder.load_reactive_powers(values),
+        "generator_active_power" => builder.generator_active_powers(values),
+        "generator_reactive_power" => builder.generator_reactive_powers(values),
         "switch_closed" => builder.switch_closed(decode_flags(name, values)?),
         "transformer_tap" => builder.transformer_taps(values),
         "capacitor_steps" => builder.capacitor_steps(values),
@@ -952,6 +956,16 @@ fn multiconductor_identity_order(
                 load.terminal_map
                     .iter()
                     .map(move |terminal| format!("{}/{terminal}", load.name))
+            })
+            .collect(),
+        "generator_active_power" | "generator_reactive_power" => network
+            .generators()
+            .iter()
+            .flat_map(|generator| {
+                generator
+                    .terminal_map
+                    .iter()
+                    .map(move |terminal| format!("{}/{terminal}", generator.name))
             })
             .collect(),
         "switch_closed" => network
@@ -2192,9 +2206,6 @@ fn decode_ac_scuc_solution(solution: dto::AcScucSolution) -> Result<powerio_prob
     Ok(value)
 }
 
-// One arm per stored value kind; splitting the match would scatter the
-// kind-to-decoder table this function is.
-#[allow(clippy::too_many_lines)]
 fn decode_dispatch(
     dispatch: Option<&dto::GeneratorDispatch>,
 ) -> Option<powerio_prob::GeneratorDispatch> {
@@ -2417,40 +2428,35 @@ fn decode_severity(severity: dto::Severity) -> DiagnosticSeverity {
 
 /// Every diagnostic's stored form, each given an identifier: the one its
 /// runtime record already carries, or the lowest `d{n}` not already claimed
-/// by another diagnostic in this same list. Checked against every existing
-/// id (explicit or synthesized earlier in this pass) rather than derived
-/// from list position, so a diagnostic appended with no id of its own can
-/// never collide with one an external document set explicitly, and
-/// reordering the list can't make a collision appear later either.
+/// by another diagnostic in this same list. Minted ids are `d0`, `d1`, ...
+/// skipping every id the list already carries, so a diagnostic appended with
+/// no id of its own never collides with one an external document set
+/// explicitly. The counter only moves forward, so minting stays linear in
+/// the list length.
 pub(crate) fn encode_diagnostics(diagnostics: &[Diagnostic]) -> Vec<dto::Diagnostic> {
-    let mut used: HashSet<String> = diagnostics
+    let used: HashSet<&str> = diagnostics
         .iter()
-        .filter_map(|diagnostic| diagnostic.id().map(|id| id.as_str().to_owned()))
+        .filter_map(|diagnostic| diagnostic.id().map(DiagnosticId::as_str))
         .collect();
+    let mut next = 0usize;
     diagnostics
         .iter()
         .map(|diagnostic| {
             let id = if let Some(id) = diagnostic.id() {
                 id.as_str().to_owned()
             } else {
-                let minted = unused_id("d", &used);
-                used.insert(minted.clone());
+                let minted = loop {
+                    let candidate = format!("d{next}");
+                    next += 1;
+                    if !used.contains(candidate.as_str()) {
+                        break candidate;
+                    }
+                };
                 minted
             };
             encode_diagnostic(id, diagnostic)
         })
         .collect()
-}
-
-/// The lowest `{prefix}{n}` (n = 0, 1, 2, ...) not already in `used`. Always
-/// found within `used.len() + 1` tries: a finite set can only rule out that
-/// many distinct candidates, so the search below always terminates.
-#[allow(clippy::maybe_infinite_iter)]
-fn unused_id(prefix: &str, used: &HashSet<String>) -> String {
-    (0..)
-        .map(|n| format!("{prefix}{n}"))
-        .find(|candidate| !used.contains(candidate))
-        .expect("a finite used set cannot rule out every candidate")
 }
 
 fn encode_diagnostic(id: String, diagnostic: &Diagnostic) -> dto::Diagnostic {

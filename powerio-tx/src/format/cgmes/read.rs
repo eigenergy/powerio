@@ -18,7 +18,7 @@
 //! the parse warnings, never dropped silently.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 
 use powerio_core::ComponentId;
@@ -475,6 +475,15 @@ struct Merged {
 struct Store {
     objects: Vec<Merged>,
     by_id: HashMap<String, usize>,
+    /// Object positions by class, in first definition order. Built on first
+    /// use after every document is merged, so a class scan costs the size of
+    /// the class rather than the size of the store.
+    by_class: std::cell::OnceCell<HashMap<String, Vec<usize>>>,
+    /// Object positions by the target of one reference property, built on
+    /// the first lookup of that property. Reading a property through the
+    /// index marks it read on every object that states it, which is what a
+    /// scan of the whole store did.
+    by_reference: RefCell<HashMap<&'static str, HashMap<String, Vec<usize>>>>,
     /// Properties successfully read by the source neutral mapping. This lets
     /// the final diagnostic pass distinguish a mapped class from fields on
     /// that class which the mapping did not consume.
@@ -499,6 +508,10 @@ fn is_profile_extension_class(class: &str) -> bool {
 
 impl Store {
     fn merge(&mut self, doc: CimDocument) -> Result<()> {
+        // The indexes describe the store as merged so far; a further document
+        // rebuilds them on the next use.
+        self.by_class.take();
+        self.by_reference.borrow_mut().clear();
         let modeling_authority_set = doc
             .header
             .as_ref()
@@ -593,10 +606,46 @@ impl Store {
 
     /// Ids of every object of `class`, in first-definition order.
     fn of_class<'a>(&'a self, class: &'a str) -> impl Iterator<Item = &'a str> {
-        self.objects
+        let by_class = self.by_class.get_or_init(|| {
+            let mut by_class: HashMap<String, Vec<usize>> = HashMap::new();
+            for (at, object) in self.objects.iter().enumerate() {
+                by_class.entry(object.class.clone()).or_default().push(at);
+            }
+            by_class
+        });
+        by_class
+            .get(class)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
             .iter()
-            .filter(move |o| o.class == class)
-            .map(|o| o.id.as_str())
+            .map(|&at| self.objects[at].id.as_str())
+    }
+
+    /// Ids of every object whose reference property `key` names `target`,
+    /// in first definition order.
+    fn referrers(&self, key: &'static str, target: &str) -> Vec<&str> {
+        let mut indexes = self.by_reference.borrow_mut();
+        let index = indexes.entry(key).or_insert_with(|| {
+            let mut index: HashMap<String, Vec<usize>> = HashMap::new();
+            for (at, object) in self.objects.iter().enumerate() {
+                for (property_at, (name, value)) in object.props.iter().enumerate() {
+                    if name == key
+                        && let PropValue::Ref(target) = value
+                    {
+                        self.mark_read(at, property_at);
+                        index.entry(target.clone()).or_default().push(at);
+                    }
+                }
+            }
+            index
+        });
+        index
+            .get(target)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+            .iter()
+            .map(|&at| self.objects[at].id.as_str())
+            .collect()
     }
 
     fn raw_prop(&self, id: &str, key: &str) -> Option<(usize, usize, &PropValue)> {
@@ -1379,14 +1428,18 @@ fn calculated_bus_kv(store: &Store, container: &str, nodes: &[String]) -> Option
     {
         return Some(kv);
     }
-    let node_set: BTreeSet<&str> = nodes.iter().map(String::as_str).collect();
-    store
-        .of_class("Terminal")
-        .filter(|terminal| {
-            store
-                .refv(terminal, "Terminal.ConnectivityNode")
-                .is_some_and(|node| node_set.contains(node))
-        })
+    // The terminals on the bus's nodes, in store order, as a scan of every
+    // terminal would visit them.
+    let mut terminals = nodes
+        .iter()
+        .flat_map(|node| store.referrers("Terminal.ConnectivityNode", node))
+        .map(|terminal| (store.by_id[terminal], terminal))
+        .collect::<Vec<_>>();
+    terminals.sort_unstable();
+    terminals.dedup();
+    terminals
+        .into_iter()
+        .map(|(_, terminal)| terminal)
         .find_map(|terminal| {
             let equipment = store.refv(terminal, "Terminal.ConductingEquipment")?;
             let stated = store
@@ -1395,16 +1448,15 @@ fn calculated_bus_kv(store: &Store, container: &str, nodes: &[String]) -> Option
             if stated.is_some() {
                 return stated;
             }
-            store.of_class("PowerTransformerEnd").find_map(|end| {
-                (store.refv(end, "TransformerEnd.Terminal") == Some(terminal))
-                    .then(|| {
-                        store
-                            .refv(end, "TransformerEnd.BaseVoltage")
-                            .and_then(|base| store.f(base, "BaseVoltage.nominalVoltage"))
-                            .or_else(|| store.f(end, "PowerTransformerEnd.ratedU"))
-                    })
-                    .flatten()
-            })
+            store
+                .referrers("TransformerEnd.Terminal", terminal)
+                .into_iter()
+                .find_map(|end| {
+                    store
+                        .refv(end, "TransformerEnd.BaseVoltage")
+                        .and_then(|base| store.f(base, "BaseVoltage.nominalVoltage"))
+                        .or_else(|| store.f(end, "PowerTransformerEnd.ratedU"))
+                })
         })
 }
 
@@ -1998,14 +2050,13 @@ fn terminal_voltage_level<'a>(store: &'a Store, terminal: &str) -> Option<&'a st
 /// follows the nodes' container, because one bus belongs to one container.
 fn topological_node_level<'a>(store: &'a Store, topological_node: &str) -> Option<&'a str> {
     let own = topological_node_container(store, topological_node)?;
-    let mut members = store.of_class("ConnectivityNode").filter(|node| {
-        store.refv(node, "ConnectivityNode.TopologicalNode") == Some(topological_node)
-    });
-    let Some(first) = members.next() else {
+    let members = store.referrers("ConnectivityNode.TopologicalNode", topological_node);
+    let Some(first) = members.first().copied() else {
         return Some(own);
     };
-    if connectivity_node_container(store, first) == Some(own)
-        || members.any(|node| connectivity_node_container(store, node) == Some(own))
+    if members
+        .iter()
+        .any(|node| connectivity_node_container(store, node) == Some(own))
     {
         return Some(own);
     }
@@ -2115,8 +2166,8 @@ fn warn_collapsed_base_voltage_identities(store: &Store, warnings: &mut CgmesDia
 
 fn solved_voltage(store: &Store, topological_node: &str) -> (Option<f64>, Option<f64>) {
     store
-        .of_class("SvVoltage")
-        .find(|value| store.refv(value, "SvVoltage.TopologicalNode") == Some(topological_node))
+        .referrers("SvVoltage.TopologicalNode", topological_node)
+        .first()
         .map_or((None, None), |value| {
             (
                 store.f(value, "SvVoltage.v"),
@@ -2129,9 +2180,9 @@ fn sv_voltage_authority_mismatch<'a>(
     store: &'a Store,
     topological_node: &str,
 ) -> Option<(&'a str, &'a str, &'a str)> {
-    let sv_voltage = store
-        .of_class("SvVoltage")
-        .find(|value| store.refv(value, "SvVoltage.TopologicalNode") == Some(topological_node))?;
+    let sv_voltage = *store
+        .referrers("SvVoltage.TopologicalNode", topological_node)
+        .first()?;
     let sv_authority = store.modeling_authority_set(sv_voltage)?;
     let container = store.refv(
         topological_node,
@@ -2161,8 +2212,14 @@ fn boundary_equipment_authorities<'a>(
     if store.class_of(container) != Some("Line") {
         return None;
     }
-    let mut authorities = store
-        .of_class("Terminal")
+    let mut terminals = store.referrers("Terminal.TopologicalNode", topological_node);
+    for node in store.referrers("ConnectivityNode.TopologicalNode", topological_node) {
+        terminals.extend(store.referrers("Terminal.ConnectivityNode", node));
+    }
+    terminals.sort_unstable();
+    terminals.dedup();
+    let mut authorities = terminals
+        .into_iter()
         .filter(|terminal| terminal_topological_node(store, terminal) == Some(topological_node))
         .filter_map(|terminal| store.refv(terminal, "Terminal.ConductingEquipment"))
         .filter_map(|equipment| store.modeling_authority_set(equipment))
@@ -2243,6 +2300,19 @@ fn build_detailed_connectivity(
         })
         .collect::<Result<Vec<_>>>()?;
 
+    let containers_with_nodes = store
+        .of_class("ConnectivityNode")
+        .filter_map(|node| connectivity_node_container(store, node))
+        .collect::<HashSet<_>>();
+    let mut topological_nodes_by_container: HashMap<&str, Vec<&str>> = HashMap::new();
+    for node in store.of_class("TopologicalNode") {
+        if let Some(container) = topological_node_container(store, node) {
+            topological_nodes_by_container
+                .entry(container)
+                .or_default()
+                .push(node);
+        }
+    }
     let mut voltage_levels = store
         .of_class("VoltageLevel")
         .map(|id| {
@@ -2250,14 +2320,14 @@ fn build_detailed_connectivity(
                 .refv(id, "VoltageLevel.BaseVoltage")
                 .and_then(|base| store.f(base, "BaseVoltage.nominalVoltage"))
                 .unwrap_or(0.0);
-            let has_nodes = store
-                .of_class("ConnectivityNode")
-                .any(|node| connectivity_node_container(store, node) == Some(id));
+            let has_nodes = containers_with_nodes.contains(id);
             let mut buses = match mapper.topology {
-                BusSource::TopologicalNodes => store
-                    .of_class("TopologicalNode")
-                    .filter(|node| topological_node_container(store, node) == Some(id))
-                    .filter_map(|node| mapper.bus_of_node.get(node).copied())
+                BusSource::TopologicalNodes => topological_nodes_by_container
+                    .get(id)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(|node| mapper.bus_of_node.get(*node).copied())
                     .collect::<Vec<_>>(),
                 BusSource::Calculated => mapper
                     .calculated
@@ -2337,10 +2407,7 @@ fn build_detailed_connectivity(
                 ) else {
                     continue;
                 };
-                let members = store
-                    .of_class("ConnectivityNode")
-                    .filter(|node| store.refv(node, "ConnectivityNode.TopologicalNode") == Some(id))
-                    .collect::<Vec<_>>();
+                let members = store.referrers("ConnectivityNode.TopologicalNode", id);
                 if members.is_empty() {
                     continue;
                 }
@@ -3001,8 +3068,8 @@ fn read_reactive_capability_curve(
     }
     let mut points = {
         store
-            .of_class("CurveData")
-            .filter(|point| store.refv(point, "CurveData.Curve") == Some(curve))
+            .referrers("CurveData.Curve", curve)
+            .into_iter()
             .filter_map(|point| {
                 Some(ReactiveCapabilityCurvePoint {
                     active_power_mw: store.f(point, "CurveData.xvalue")?,
@@ -3113,8 +3180,9 @@ fn cgmes_2_unit_converter_rated_dc_voltage(
     let mut values = Vec::new();
     for class in ["VsConverter", "CsConverter"] {
         for converter in store
-            .of_class(class)
-            .filter(|converter| store.refv(converter, "Equipment.EquipmentContainer") == Some(unit))
+            .referrers("Equipment.EquipmentContainer", unit)
+            .into_iter()
+            .filter(|converter| store.class_of(converter) == Some(class))
         {
             let Some(value) = store.f(converter, "ACDCConverter.ratedUdc") else {
                 continue;
@@ -3881,12 +3949,11 @@ fn loading_limits(
 ) -> Option<LoadingLimits> {
     let mut result = LoadingLimits::default();
     let mut found = false;
-    for object in &store.objects {
-        if object.class != class
-            || store.refv(&object.id, "OperationalLimit.OperationalLimitSet") != Some(set)
-        {
+    for limit in store.referrers("OperationalLimit.OperationalLimitSet", set) {
+        if store.class_of(limit) != Some(class) {
             continue;
         }
+        let object = &store.objects[store.by_id[limit]];
         let Some(limit_type) = store.refv(&object.id, "OperationalLimit.OperationalLimitType")
         else {
             warnings.push(format!(
@@ -4080,8 +4147,9 @@ fn table_tap_steps(store: &Store, tap: &str, kind: TapChangerKind) -> Option<Vec
     };
     let table = store.refv(tap, table_property)?;
     let mut steps = store
-        .of_class(point_class)
-        .filter(|point| store.refv(point, point_table_property) == Some(table))
+        .referrers(point_table_property, table)
+        .into_iter()
+        .filter(|point| store.class_of(point) == Some(point_class))
         .map(|point| TapChangerStep {
             position: store
                 .f(point, "TapChangerTablePoint.step")
@@ -4699,13 +4767,11 @@ fn read_nonlinear_shunts(mapper: &mut Mapper<'_>) -> Result<Vec<Shunt>> {
         let kv2 = mapper.kv(bus).powi(2);
         let sections = selected_sections(mapper, id, 0.0);
         let mut points: Vec<_> = store
-            .of_class("NonlinearShuntCompensatorPoint")
-            .filter(|point| {
-                store.refv(
-                    point,
-                    "NonlinearShuntCompensatorPoint.NonlinearShuntCompensator",
-                ) == Some(id)
-            })
+            .referrers(
+                "NonlinearShuntCompensatorPoint.NonlinearShuntCompensator",
+                id,
+            )
+            .into_iter()
             .filter_map(|point| {
                 let number = store
                     .f(point, "NonlinearShuntCompensatorPoint.sectionNumber")?
@@ -4839,11 +4905,10 @@ fn selected_sections(mapper: &mut Mapper<'_>, id: &str, default: f64) -> usize {
 }
 
 fn sv_sections(store: &Store, shunt: &str) -> Option<f64> {
-    store.of_class("SvShuntCompensatorSections").find_map(|sv| {
-        (store.refv(sv, "SvShuntCompensatorSections.ShuntCompensator") == Some(shunt))
-            .then(|| store.f(sv, "SvShuntCompensatorSections.sections"))
-            .flatten()
-    })
+    store
+        .referrers("SvShuntCompensatorSections.ShuntCompensator", shunt)
+        .into_iter()
+        .find_map(|sv| store.f(sv, "SvShuntCompensatorSections.sections"))
 }
 
 fn read_switches(mapper: &mut Mapper<'_>) -> Vec<Switch> {
@@ -5294,11 +5359,10 @@ fn ratio_tap_factor(mapper: &Mapper<'_>, rtc: &str) -> f64 {
 }
 
 fn sv_tap_step(store: &Store, tap_changer: &str) -> Option<f64> {
-    store.of_class("SvTapStep").find_map(|sv| {
-        (store.refv(sv, "SvTapStep.TapChanger") == Some(tap_changer))
-            .then(|| store.f(sv, "SvTapStep.position"))
-            .flatten()
-    })
+    store
+        .referrers("SvTapStep.TapChanger", tap_changer)
+        .into_iter()
+        .find_map(|sv| store.f(sv, "SvTapStep.position"))
 }
 
 fn ratio_tap_changer<'a>(store: &'a Store, end: &str) -> Option<&'a str> {
@@ -5306,8 +5370,9 @@ fn ratio_tap_changer<'a>(store: &'a Store, end: &str) -> Option<&'a str> {
         .refv(end, "TransformerEnd.RatioTapChanger")
         .or_else(|| {
             store
-                .of_class("RatioTapChanger")
-                .find(|tap| store.refv(tap, "RatioTapChanger.TransformerEnd") == Some(end))
+                .referrers("RatioTapChanger.TransformerEnd", end)
+                .into_iter()
+                .find(|tap| store.class_of(tap) == Some("RatioTapChanger"))
         })
 }
 
@@ -5324,8 +5389,9 @@ fn phase_tap_changer(store: &Store, end: &str) -> Option<String> {
             .into_iter()
             .find_map(|class| {
                 store
-                    .of_class(class)
-                    .find(|tap| store.refv(tap, "PhaseTapChanger.TransformerEnd") == Some(end))
+                    .referrers("PhaseTapChanger.TransformerEnd", end)
+                    .into_iter()
+                    .find(|tap| store.class_of(tap) == Some(class))
             })
         })
         .map(str::to_string)
@@ -5411,22 +5477,24 @@ fn apply_limits_to_targets(
     kv: f64,
     version: CgmesVersion,
 ) {
-    // Limit sets point at their terminal/equipment, so scan sets once.
-    for set in store.of_class("OperationalLimitSet") {
-        let target = store
-            .refv(set, "OperationalLimitSet.Terminal")
-            .or_else(|| store.refv(set, "OperationalLimitSet.Equipment"));
-        if !target.is_some_and(|target| targets.contains(&target)) {
+    // Limit sets point at their terminal or equipment, and limits point at
+    // their set; both are reverse indexed.
+    let mut sets = Vec::new();
+    for target in targets {
+        sets.extend(store.referrers("OperationalLimitSet.Terminal", target));
+        sets.extend(store.referrers("OperationalLimitSet.Equipment", target));
+    }
+    sets.sort_unstable();
+    sets.dedup();
+    for set in sets {
+        if store.class_of(set) != Some("OperationalLimitSet") {
             continue;
         }
-        for limit in store.objects.iter().filter_map(|o| {
-            matches!(
-                o.class.as_str(),
-                "CurrentLimit" | "ApparentPowerLimit" | "ActivePowerLimit"
-            )
-            .then_some(o.id.as_str())
-        }) {
-            if store.refv(limit, "OperationalLimit.OperationalLimitSet") != Some(set) {
+        for limit in store.referrers("OperationalLimit.OperationalLimitSet", set) {
+            if !matches!(
+                store.class_of(limit),
+                Some("CurrentLimit" | "ApparentPowerLimit" | "ActivePowerLimit")
+            ) {
                 continue;
             }
             let Some(limit_type) = store.refv(limit, "OperationalLimit.OperationalLimitType")

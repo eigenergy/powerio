@@ -165,7 +165,7 @@ fn every_iidm_version_reads_the_same_network() {
         let compatibility = parsed
             .diagnostics
             .iter()
-            .filter(|diagnostic| diagnostic.code() == "READ.XIIDM.VERSION.COMPATIBILITY")
+            .filter(|diagnostic| diagnostic.code() == "READ.XIIDM.VERSION_COMPATIBILITY")
             .count();
         assert_eq!(compatibility, usize::from(version != "1_17"), "{version}");
     }
@@ -218,7 +218,7 @@ fn jiidm_reads_as_the_matching_xiidm_document() {
         oldest
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code() == "READ.XIIDM.VERSION.COMPATIBILITY")
+            .any(|diagnostic| diagnostic.code() == "READ.XIIDM.VERSION_COMPATIBILITY")
     );
 }
 

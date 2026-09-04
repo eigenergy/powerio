@@ -60,7 +60,7 @@ impl PioTimeSeries {
                 format!("PowerIO IR does not define a time series of `{element_type}`"),
             ));
         }
-        require_element_type(&values, &element_type)?;
+        require_element_type(values.iter(), &element_type)?;
         let values = TimeSeries::new(time_points, values)?;
         Ok(Self {
             type_name: format!("powerio.TimeSeries<{element_type}>").into_boxed_str(),
@@ -166,13 +166,7 @@ impl PioScenarioSet {
                 format!("PowerIO IR does not define a scenario set of `{element_type}`"),
             ));
         }
-        require_element_type(
-            &scenarios
-                .iter()
-                .map(|scenario| scenario.value().clone())
-                .collect::<Vec<_>>(),
-            &element_type,
-        )?;
+        require_element_type(scenarios.iter().map(Scenario::value), &element_type)?;
         let values = ScenarioSet::new(scenarios)?;
         Ok(Self {
             type_name: format!("powerio.ScenarioSet<{element_type}>").into_boxed_str(),
@@ -262,12 +256,12 @@ fn is_scenario_element_type(type_name: &str) -> bool {
         )
 }
 
-fn require_element_type(
-    values: &[PioValue],
+fn require_element_type<'a>(
+    values: impl IntoIterator<Item = &'a PioValue>,
     element_type: &str,
 ) -> Result<(), powerio_core::Error> {
     if let Some(value) = values
-        .iter()
+        .into_iter()
         .find(|value| value.type_name() != element_type)
     {
         return Err(powerio_core::Error::new(

@@ -14,6 +14,24 @@ use quick_xml::events::attributes::Attribute;
 /// character reference such as `&#10;` keeps its character.
 const XML_VERSION: XmlVersion = XmlVersion::Implicit1_0;
 
+/// The character a general entity reference in element text stands for: a
+/// character reference, or one of the five predefined XML entities. Any
+/// other name is `None`, since the readers accept no DTD that could define
+/// one.
+pub(crate) fn resolve_general_ref(reference: &quick_xml::events::BytesRef<'_>) -> Option<String> {
+    if let Ok(Some(character)) = reference.resolve_char_ref() {
+        return Some(character.to_string());
+    }
+    match reference.xml10_content().ok()?.as_ref() {
+        "amp" => Some("&".to_string()),
+        "lt" => Some("<".to_string()),
+        "gt" => Some(">".to_string()),
+        "quot" => Some("\"".to_string()),
+        "apos" => Some("'".to_string()),
+        _ => None,
+    }
+}
+
 /// The text of one attribute: transcoded to UTF-8, the predefined entities
 /// expanded, and normalized under [`XML_VERSION`].
 pub(crate) fn attribute_value<'a>(
