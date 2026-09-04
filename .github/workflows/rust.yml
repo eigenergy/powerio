@@ -80,6 +80,23 @@ jobs:
     - name: Check formatting
       run: cargo fmt --all --check
 
+  # The declared rust-version must build the locked dependency graph, or a
+  # consumer on that toolchain cannot use the published crates.
+  msrv:
+    name: MSRV (rust-version)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+    - name: Read rust-version
+      id: msrv
+      run: echo "version=$(grep -oE '^rust-version = "[0-9.]+"' Cargo.toml | grep -oE '[0-9.]+')" >> "$GITHUB_OUTPUT"
+    - uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ steps.msrv.outputs.version }}
+    - uses: Swatinem/rust-cache@v2
+    - name: Check the publishable crates on the minimum toolchain
+      run: cargo check --locked --workspace --exclude powerio-py --exclude powerio-capi
+
   # Own job so a stale schema fails in parallel with clippy and the tests
   # instead of masking them (the #255 merge failure hid both).
   schemas:

@@ -453,7 +453,7 @@ jobs:
     # recovery path for a missed event. A prerelease still builds wheels and an
     # sdist as run artifacts, but never uploads them to PyPI.
     if: (github.event_name == 'release' && github.event.release.prerelease == false) || github.event_name == 'workflow_dispatch'
-    needs: [ release-preflight, lint, quality, test, test-gridfm, wheels, wheel-smoke, sdist ]
+    needs: [ release-preflight, lint, quality, test, test-gridfm, goc3-reference, wheels, wheel-smoke, sdist ]
     runs-on: ubuntu-latest
     # Deployment protection (required reviewers, tag rules) lives on the pypi
     # environment in the repo settings, not in this file.

@@ -413,9 +413,10 @@ pub fn parse_with_json_class(
         .extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension.eq_ignore_ascii_case("xiidm"))
-        || source
-            .primary_buffer()
-            .is_ok_and(|buffer| xiidm::looks_like_xiidm(buffer.content_bytes()));
+        || (source.format().is_none()
+            && source
+                .primary_buffer()
+                .is_ok_and(|buffer| xiidm::looks_like_xiidm(buffer.content_bytes())));
     let is_jiidm = source.format().is_some_and(|format| {
         routing::parse_transmission_format(format.as_str()) == Some(TransmissionFormat::Jiidm)
     }) || std::path::Path::new(source.name())
@@ -1072,7 +1073,8 @@ fn echo_text(module: &PioModule<BalancedNetwork>, target: TargetFormat) -> Optio
     // source's own; any other revision goes through write_psse_rev so the
     // caller gets the layout it asked for instead of the original bytes.
     if let TargetFormat::Psse { rev } = target
-        && psse::header_rev(text.trim_start_matches('\u{feff}')).ok()? != rev
+        && (!matches!(rev, 33..=35)
+            || psse::header_rev(text.trim_start_matches('\u{feff}')).ok()? != rev)
     {
         return None;
     }
@@ -1726,7 +1728,7 @@ pub(super) fn warn_dropped_extras(
     warnings: &mut Diagnostics,
 ) {
     let mut dropped = 0usize;
-    let mut keys: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut keys: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
     for extras in net
         .buses()
         .iter()
@@ -1742,7 +1744,7 @@ pub(super) fn warn_dropped_extras(
         let mut carries = false;
         for key in extras.keys().filter(|key| !consumed(key)) {
             carries = true;
-            keys.insert(key.clone());
+            keys.insert(key.as_str());
         }
         if carries {
             dropped += 1;
@@ -1752,7 +1754,7 @@ pub(super) fn warn_dropped_extras(
         let named = keys
             .iter()
             .take(EXTRAS_KEYS_NAMED)
-            .map(String::as_str)
+            .copied()
             .collect::<Vec<_>>()
             .join("`, `");
         let remainder = keys.len().saturating_sub(EXTRAS_KEYS_NAMED);

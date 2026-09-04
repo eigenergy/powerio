@@ -98,11 +98,14 @@ pub fn classified_json(input: &Path) -> anyhow::Result<Option<ClassifiedCase>> {
         format,
         DetectedFormat::Transmission(_) | DetectedFormat::Distribution(_)
     ) {
-        anyhow::bail!(
-            "unrecognized JSON format family `{}` in {}; pass --from to choose a format",
-            format.name(),
-            input.display()
-        );
+        return Err(crate::cli_failure(
+            &crate::codes::REQUEST_CLI_OPTION_INVALID,
+            format!(
+                "unrecognized JSON format family `{}` in {}; pass --from to choose a format",
+                format.name(),
+                input.display()
+            ),
+        ));
     }
     Ok(Some(ClassifiedCase { text, format }))
 }
@@ -111,22 +114,24 @@ pub fn classified_json(input: &Path) -> anyhow::Result<Option<ClassifiedCase>> {
 /// outcomes (package, ambiguous markers, no markers) into errors
 /// that name the fix.
 fn classify_case_json(text: &str, path: &Path) -> anyhow::Result<DetectedFormat> {
+    let refuse =
+        |message: String| crate::cli_failure(&crate::codes::REQUEST_CLI_OPTION_INVALID, message);
     match powerio_tx::format::routing::classify_json_text(text) {
         JsonClass::Case(Detection::Known(format)) => Ok(format),
-        JsonClass::Module => anyhow::bail!(
-            "{} is a stored .pio.json module; `summary`, `convert`, and `matrix` \
-             read it directly, and the bindings' parse loads it (powerio.parse \
-             in Python)",
+        JsonClass::Module => Err(refuse(format!(
+            "{} is PowerIO IR; `summary`, `convert`, `verify`, `dcopf`, and \
+             `sensitivities` read it directly, and `deserialize` loads it in the \
+             language APIs",
             path.display()
-        ),
-        JsonClass::Case(Detection::Ambiguous) => anyhow::bail!(
+        ))),
+        JsonClass::Case(Detection::Ambiguous) => Err(refuse(format!(
             "ambiguous JSON markers in {}; pass --from to choose a format",
             path.display()
-        ),
-        JsonClass::Case(Detection::Unknown) => anyhow::bail!(
+        ))),
+        JsonClass::Case(Detection::Unknown) => Err(refuse(format!(
             "cannot infer JSON format for {}; pass --from to choose a format",
             path.display()
-        ),
+        ))),
     }
 }
 

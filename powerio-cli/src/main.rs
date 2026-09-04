@@ -1,9 +1,11 @@
-//! The `powerio` binary: a clap CLI and a ratatui TUI over `powerio-matrix`.
+//! The `powerio` binary: a clap CLI and a ratatui TUI over the `powerio`
+//! facade and its component crates.
 //!
-//! Subcommands: `batch` (matrix families), `gen` (synthetic cases), `verify`,
-//! `dcopf` (DC OPF bundle), `sensitivities` (PTDF/LODF), `gridfm` (gridfm-datakit
-//! Parquet), `serialize` (PowerIO IR), and `convert`. With no subcommand it launches the TUI. Run
-//! `powerio --help` for the full surface.
+//! Subcommands: `convert`, `summary`, `serialize` (PowerIO IR), `verify`,
+//! `batch` (matrix families), `dcopf` (DC OPF bundle), `sensitivities` (PTDF
+//! and LODF), `gridfm` (GridFM Parquet), `gen` (synthetic cases), `geo`
+//! (geographic layers), and `corpus` (the private corpus harness). With no
+//! subcommand it opens the TUI. Run `powerio --help` for the full surface.
 
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
@@ -925,8 +927,31 @@ fn exit_status(error: &anyhow::Error) -> u8 {
 fn error_category(error: &anyhow::Error) -> Option<ErrorCategory> {
     error
         .chain()
-        .find_map(|cause| cause.downcast_ref::<powerio_core::Error>())
-        .map(powerio_core::Error::category)
+        .find_map(|cause| classified(cause).map(|(_, category)| category))
+}
+
+/// The code and category a cause carries when it is one of the PowerIO error
+/// types. The matrix and calculation errors wrap their causes transparently,
+/// so the core error inside them never appears in the chain on its own.
+fn classified(
+    cause: &(dyn std::error::Error + 'static),
+) -> Option<(&'static powerio_core::DiagnosticInfo, ErrorCategory)> {
+    if let Some(error) = cause.downcast_ref::<powerio_core::Error>() {
+        return error.info().map(|info| (info, error.category()));
+    }
+    if let Some(error) = cause.downcast_ref::<powerio_matrix::Error>() {
+        return Some((error.code(), error.category()));
+    }
+    if let Some(error) = cause.downcast_ref::<powerio_prob::Error>() {
+        return Some((error.code(), error.category()));
+    }
+    if let Some(error) = cause.downcast_ref::<powerio_tx::Error>() {
+        return Some((error.code(), error.category()));
+    }
+    if let Some(error) = cause.downcast_ref::<powerio_dist::Error>() {
+        return Some((error.code(), error.category()));
+    }
+    None
 }
 
 static DIAGNOSTICS_FORMAT: std::sync::OnceLock<DiagnosticsFormat> = std::sync::OnceLock::new();
@@ -997,7 +1022,7 @@ fn failure_frames(error: &anyhow::Error) -> Vec<(bool, String)> {
             .as_deref()
             .is_some_and(|above| above.ends_with(&text));
         if !repeats_the_frame_above {
-            let is_powerio_error = cause.downcast_ref::<powerio_core::Error>().is_some();
+            let is_powerio_error = classified(cause).is_some();
             frames.push((is_powerio_error, text.clone()));
         }
         previous = Some(text);
@@ -1018,8 +1043,14 @@ fn failure_diagnostics(error: &anyhow::Error) -> Vec<powerio_core::Diagnostic> {
     let mut records: Vec<Diagnostic> = match failure {
         Some(failure) if !failure.diagnostics().is_empty() => failure.diagnostics().to_vec(),
         _ => {
+            // A typed error without its own records still names its code;
+            // only a failure no PowerIO error type classifies is unclassified.
+            let code = error
+                .chain()
+                .find_map(|cause| classified(cause).map(|(code, _)| code))
+                .unwrap_or(&codes::BIND_CLI_UNCLASSIFIED);
             let (_, message) = frames.remove(0);
-            vec![Diagnostic::of(&codes::BIND_CLI_UNCLASSIFIED, message)]
+            vec![Diagnostic::of(code, message)]
         }
     };
     let primary_id = if let Some(id) = records[0].id() {
@@ -1057,7 +1088,13 @@ fn stdin_source() -> anyhow::Result<powerio_core::Source> {
     std::io::stdin()
         .lock()
         .read_to_end(&mut bytes)
-        .context("reading standard input")?;
+        .map_err(|cause| {
+            powerio_core::Error::new(
+                &powerio_core::codes::READ_IO_READ,
+                "cannot read standard input",
+            )
+            .with_cause(cause)
+        })?;
     powerio_core::Source::from_memory("<stdin>", bytes)
         .context("creating the standard input source")
 }
@@ -1101,8 +1138,14 @@ fn print_error_chain(error: &anyhow::Error) {
 fn read_text_file(path: &Path) -> anyhow::Result<String> {
     let source = powerio_core::Source::open(path)?;
     let buffer = source.primary_buffer()?;
-    String::from_utf8(buffer.content_bytes().to_vec())
-        .with_context(|| format!("{} is not UTF-8 text", path.display()))
+    String::from_utf8(buffer.content_bytes().to_vec()).map_err(|cause| {
+        powerio_core::Error::new(
+            &powerio_core::codes::READ_IO_READ,
+            format!("{} is not UTF-8 text", path.display()),
+        )
+        .with_cause(cause)
+        .into()
+    })
 }
 
 fn run_geo(command: GeoCommand) -> anyhow::Result<()> {
@@ -1269,7 +1312,13 @@ fn run_sensitivities(
     drop_tolerance: f64,
 ) -> anyhow::Result<()> {
     let mpc = balanced_case(input, from).with_context(|| format!("parse {}", input.display()))?;
-    std::fs::create_dir_all(output)?;
+    std::fs::create_dir_all(output).map_err(|cause| {
+        powerio_core::Error::new(
+            &powerio_core::codes::EMIT_IO_STAGING,
+            format!("cannot create the output directory {}", output.display()),
+        )
+        .with_cause(cause)
+    })?;
     let view = powerio_matrix::IndexedNetwork::new(&mpc);
     let options = SensitivityOptions {
         formula: formula.into(),
@@ -1344,8 +1393,12 @@ fn missing_gen_cost_policy(
             Ok(MissingGenCostPolicy::zero())
         }
         MissingGenCostArg::Quadratic => {
-            let value = default_gen_cost
-                .context("--missing-gen-cost quadratic requires --default-gen-cost C2,C1,C0")?;
+            let Some(value) = default_gen_cost else {
+                fail_with!(
+                    REQUEST_CLI_OPTION_INVALID,
+                    "--missing-gen-cost quadratic requires --default-gen-cost C2,C1,C0"
+                );
+            };
             let [c2, c1, c0] = parse_cost_triple(value)?;
             Ok(MissingGenCostPolicy::calc_quadratic(c2, c1, c0))
         }
@@ -1362,9 +1415,13 @@ fn parse_cost_triple(value: &str) -> anyhow::Result<[f64; 3]> {
     }
     let mut out = [0.0; 3];
     for (slot, part) in out.iter_mut().zip(parts) {
-        *slot = part
-            .parse::<f64>()
-            .with_context(|| format!("parse --default-gen-cost value `{part}`"))?;
+        *slot = match part.parse::<f64>() {
+            Ok(value) => value,
+            Err(_) => fail_with!(
+                REQUEST_CLI_OPTION_INVALID,
+                "--default-gen-cost value `{part}` is not a number"
+            ),
+        };
         if !slot.is_finite() {
             fail_with!(
                 REQUEST_CLI_OPTION_INVALID,
@@ -1585,9 +1642,12 @@ fn parse_gridfm_scenario(
             module.value().type_name()
         );
     };
-    let value = scenarios
-        .get(&scenario_id)
-        .with_context(|| format!("gridfm scenario {scenario} does not exist"))?;
+    let Some(value) = scenarios.get(&scenario_id) else {
+        fail_with!(
+            REQUEST_CLI_OPTION_INVALID,
+            "gridfm scenario {scenario} does not exist"
+        );
+    };
     let powerio::PioValue::BalancedNetwork(network) = value else {
         fail_with!(
             VALIDATE_CLI_INPUT_LACKS_DATA,
@@ -1599,6 +1659,11 @@ fn parse_gridfm_scenario(
 }
 
 fn run_summary(input: &Path, from: Option<FormatArg>, scenario: i64) -> anyhow::Result<()> {
+    if is_stdin(input) {
+        // Refuses a gridfm dataset, which is a directory, before the gridfm
+        // branch opens a path named `-`.
+        stdin_format(from)?;
+    }
     let value =
         if from == Some(FormatArg::Gridfm) || (from.is_none() && looks_like_gridfm_dir(input)) {
             let (network, diagnostics) = parse_gridfm_scenario(input, scenario)?;
@@ -1641,7 +1706,7 @@ fn run_serialize(
     // The module is serialized either way, as the record of what the reader
     // saw; a refused include is an `Error` finding in its own document, so the
     // exit status says so, as `convert` does.
-    fail_on_parse_errors(parse_errors)
+    fail_on_reported_errors(parse_errors, 0)
 }
 
 /// The parse options for an optional `--from` token.
@@ -2049,7 +2114,10 @@ fn finish_memory_emission(
     diagnostics.extend(emission.diagnostics.iter().cloned());
     report_diagnostics(&diagnostics);
     write_conversion_output(&emission.text, &emission.sidecars, output)?;
-    fail_on_parse_errors(parse_error_count(&diagnostics))
+    fail_on_reported_errors(
+        parse_error_count(parse_diagnostics),
+        parse_error_count(&emission.diagnostics),
+    )
 }
 
 fn finish_path_emission(
@@ -2061,7 +2129,10 @@ fn finish_path_emission(
     diagnostics.extend(result.diagnostics().iter().cloned());
     report_diagnostics(&diagnostics);
     report_written(output);
-    fail_on_parse_errors(parse_error_count(&diagnostics))
+    fail_on_reported_errors(
+        parse_error_count(parse_diagnostics),
+        parse_error_count(result.diagnostics()),
+    )
 }
 
 /// The number of `Error`-or-worse findings among `diagnostics`.
@@ -2073,17 +2144,24 @@ fn parse_error_count(diagnostics: &[powerio_core::Diagnostic]) -> usize {
 }
 
 /// Exit nonzero after the output is written: the file exists for
-/// inspection, but the parse was incomplete and scripts must not treat the
-/// run as clean (#275). The error records themselves were reported with the
-/// other diagnostics.
-fn fail_on_parse_errors(parse_errors: usize) -> anyhow::Result<()> {
-    if parse_errors == 0 {
-        return Ok(());
+/// inspection, but the parse or the emission was incomplete and scripts must
+/// not treat the run as clean (#275). The error records themselves were
+/// reported with the other diagnostics. Reader errors take the parse status;
+/// errors the writer alone reported take the output status.
+fn fail_on_reported_errors(parse_errors: usize, emit_errors: usize) -> anyhow::Result<()> {
+    if parse_errors > 0 {
+        return Err(cli_failure(
+            &codes::PARSE_CLI_ERRORS_REPORTED,
+            format!("the reader reported {parse_errors} error(s); the output is incomplete"),
+        ));
     }
-    Err(cli_failure(
-        &codes::PARSE_CLI_ERRORS_REPORTED,
-        format!("the reader reported {parse_errors} error(s); the output is incomplete"),
-    ))
+    if emit_errors > 0 {
+        return Err(cli_failure(
+            &codes::EMIT_CLI_ERRORS_REPORTED,
+            format!("the writer reported {emit_errors} error(s); the output is incomplete"),
+        ));
+    }
+    Ok(())
 }
 
 /// Commit one complete output file through the no-replace destination:
@@ -2466,7 +2544,7 @@ fn convert_to_cgmes(
     .with_context(|| format!("emitting CGMES to {}", output.display()))?;
     report_diagnostics(result.diagnostics());
     report_written(output);
-    fail_on_parse_errors(parse_errors)
+    fail_on_reported_errors(parse_errors, 0)
 }
 
 /// A single-file case input parsed to its own family model.
@@ -2489,7 +2567,10 @@ fn balanced_case(
     from: Option<FormatArg>,
 ) -> anyhow::Result<powerio_matrix::BalancedNetwork> {
     match parse_family_case(input, from)? {
-        FamilyCase::Transmission(module) => Ok(module.into_value()),
+        FamilyCase::Transmission(module) => {
+            report_diagnostics(&module.diagnostics);
+            Ok(module.into_value())
+        }
         FamilyCase::Distribution(_) => Err(cli_failure(
             &codes::REQUEST_CLI_FAMILY_MISMATCH,
             format!(

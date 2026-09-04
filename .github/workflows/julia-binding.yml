@@ -177,6 +177,14 @@ jobs:
     - name: ABI 7 companion coverage
       if: steps.powerio-jl.outputs.available == 'true'
       run: POWERIO_JL=PowerIO.jl bash scripts/check-capi-v7.sh
+    # The Julia column of the language guide and the Julia diagnostic
+    # registry are checked only when a checkout is present; without one the
+    # two gates skip their Julia half.
+    - name: Documentation symbols and diagnostic parity with PowerIO.jl
+      if: steps.powerio-jl.outputs.available == 'true'
+      run: |
+        POWERIO_JL=PowerIO.jl python3 scripts/check-doc-symbols.py
+        POWERIO_JL=PowerIO.jl bash scripts/check-diagnostic-parity.sh
     # PowerIO.jl's ccall tests skip themselves when the cdylib is absent.
     # POWERIO_CAPI points them at the library just built.
     - name: Test PowerIO.jl against the built library

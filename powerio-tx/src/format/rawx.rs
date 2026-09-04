@@ -2032,15 +2032,12 @@ fn with_rawx_node_numbers(net: &BalancedNetwork) -> Result<Option<BalancedNetwor
         }
     }
 
-    let mut prepared = net.clone();
-    let detailed = std::sync::Arc::make_mut(
-        prepared
-            .detailed_connectivity_mut()
-            .as_mut()
-            .expect("the source network has detailed connectivity"),
-    );
+    // Copy the connectivity directly rather than through
+    // `detailed_connectivity_mut`, which clears the source omission markers
+    // the writer still reports as dropped.
+    let mut numbered = detailed.clone();
     let mut next = BTreeMap::<ComponentId, i32>::new();
-    for node in &mut detailed.connectivity_nodes {
+    for node in &mut numbered.connectivity_nodes {
         if node.node_number.is_some() {
             continue;
         }
@@ -2060,6 +2057,8 @@ fn with_rawx_node_numbers(net: &BalancedNetwork) -> Result<Option<BalancedNetwor
         used.insert(*candidate);
         *candidate = candidate.checked_add(1).unwrap_or(i32::MAX);
     }
+    let mut prepared = net.clone();
+    prepared.tables_mut().detailed_connectivity = Some(std::sync::Arc::new(numbered));
     Ok(Some(prepared))
 }
 

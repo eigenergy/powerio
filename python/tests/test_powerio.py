@@ -373,14 +373,12 @@ def test_public_type_is_balanced_network(case9):
 
 def test_features_reports_compiled_in_surface():
     features = powerio.features()
-    assert features.keys() == {"arrow", "matrix", "gridfm", "dist", "prob"}
+    assert features.keys() == {"matrix", "gridfm", "dist", "prob"}
     assert all(isinstance(v, bool) for v in features.values())
-    # matrix/dist/prob are unconditional dependencies of the extension; arrow
-    # has no Python binding surface at all.
+    # matrix/dist/prob are unconditional dependencies of the extension.
     assert features["matrix"] is True
     assert features["dist"] is True
     assert features["prob"] is True
-    assert features["arrow"] is False
     assert "features" in powerio.__all__
 
 
@@ -1765,8 +1763,8 @@ def test_matrix_methods_match_rust_arrow_golden(name):
             ),
             "bprime": _real_matrix_arrow_payload(case.calc_bprime_matrix(), "bprime"),
             "incidence": _real_matrix_arrow_payload(
-                # ABI 6 Arrow keeps its released bus by branch table layout;
-                # Python exposes the PowerModels branch by bus orientation.
+                # The payload keeps the bus by branch table layout; Python
+                # exposes the PowerModels branch by bus orientation.
                 case.calc_incidence_matrix().T,
                 "incidence",
             ),

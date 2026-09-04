@@ -186,24 +186,6 @@ impl<T: fmt::Debug> fmt::Debug for TimeSeries<T> {
     }
 }
 
-/// Checked flattened dimension used by type specific column builders.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by later series constructors")
-)]
-pub(crate) fn checked_dimension_product(
-    what: &str,
-    rows: usize,
-    columns: usize,
-) -> Result<usize, Error> {
-    rows.checked_mul(columns).ok_or_else(|| {
-        Error::new(
-            &crate::codes::VALIDATE_TIME_SERIES_DIMENSION_OVERFLOW,
-            format!("{what} dimensions {rows} by {columns} overflow usize"),
-        )
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,7 +202,6 @@ mod tests {
     fn shape_and_dimension_overflow_are_errors() {
         let point = TimePoint::new("t0", None).unwrap();
         assert!(TimeSeries::<u8>::new(vec![point], Vec::new()).is_err());
-        assert!(checked_dimension_product("column", usize::MAX, 2).is_err());
     }
 
     #[test]

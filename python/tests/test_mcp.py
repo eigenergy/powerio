@@ -226,7 +226,7 @@ def test_about_reports_exact_tool_list():
     # `about` passes the library's own version report through unchanged;
     # `scripts/wheel-smoke.py` owns pinning that report to the release version.
     assert about["powerio_ir"] == powerio.versions()["powerio_ir"]
-    assert about["powerio_ir"]["name"] == "pio-ir"
+    assert about["powerio_ir"]["schema"] == "pio-ir"
     assert "parse" in about["tools"]
     assert "export_state" not in about["tools"]
 

@@ -163,7 +163,7 @@ fn build_case<'a>(
         geo: None,
         case_metadata: crate::network::CaseMetadata::default(),
         detailed_connectivity: None,
-        generated_uids: std::collections::BTreeSet::default(),
+        generated_uids: Default::default(),
         buses: buses.into(),
         loads: loads.into(),
         shunts: shunts.into(),

@@ -4891,7 +4891,7 @@ def check_xiidm_version_fixture(
     expected_compatibility = 0 if version == "1.17" else 1
     require(
         sum(
-            diagnostic["code"] == "READ.XIIDM.VERSION.COMPATIBILITY"
+            diagnostic["code"] == "READ.XIIDM.VERSION_COMPATIBILITY"
             for diagnostic in diagnostics
         )
         == expected_compatibility,

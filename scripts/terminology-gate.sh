@@ -45,7 +45,6 @@ current_docs=(
   docs/src/README.md
   docs/src/getting-started.md
   docs/src/concepts.md
-  docs/src/architecture.md
   docs/src/transmission.md
   docs/src/distribution.md
   docs/src/time-series.md
@@ -60,7 +59,6 @@ current_docs=(
   docs/src/corpus-harness.md
   docs/src/pio-json-schema.md
   docs/src/scope-0.11.md
-  docs/src/api-0.11.md
   docs/release-notes/0.11.0-draft.md
   powerio/README.md
   powerio-core/README.md

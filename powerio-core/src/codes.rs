@@ -62,8 +62,6 @@ crate::diagnostic_codes! {
         "a time point duration has an invalid nanosecond remainder", category = Data;
     VALIDATE_TIME_SERIES_SHAPE = "VALIDATE.TIME_SERIES.SHAPE", Error,
         "time point and value counts differ", category = Data;
-    VALIDATE_TIME_SERIES_DIMENSION_OVERFLOW = "VALIDATE.TIME_SERIES.DIMENSION_OVERFLOW", Error,
-        "the product of two data dimensions exceeds usize", category = Data;
 
     VALIDATE_SCENARIO_INVALID_ID = "VALIDATE.SCENARIO.INVALID_ID", Error,
         "a scenario identity is empty, contains NUL, or exceeds its bound", category = Data;

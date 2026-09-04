@@ -21,31 +21,17 @@ pub mod codes {
             "a string argument is not valid UTF-8", category = Data;
         BIND_CAPI_INDEX_OUT_OF_RANGE = "BIND.CAPI.INDEX_OUT_OF_RANGE", Error,
             "an index argument cannot be converted or is out of range", category = Data;
-        BIND_CAPI_LENGTH_MISMATCH = "BIND.CAPI.LENGTH_MISMATCH", Error,
-            "a caller buffer length does not match the documented dimension", category = Data;
-        BIND_CAPI_INTERIOR_NUL = "BIND.CAPI.INTERIOR_NUL", Error,
-            "a string powerio produced holds an interior NUL and cannot cross as a C string",
-            category = Data;
         BIND_CAPI_PANIC = "BIND.CAPI.PANIC", Error,
             "a panic was caught at the boundary and did not cross it", category = Data;
         BIND_CAPI_INVALID_OPTIONS = "BIND.CAPI.INVALID_OPTIONS", Error,
             "an options struct declared a size or a field value this build cannot honor",
             category = Data;
-        PARSE_CAPI_JSON_MALFORMED = "PARSE.CAPI.JSON_MALFORMED", Error,
-            "a JSON document handed to an entry point could not be decoded", category = Parse;
-        READ_CAPI_IO_FAILED = "READ.CAPI.IO_FAILED", Error,
-            "an entry point could not read the file it was given", category = Io;
         EMIT_CAPI_SERIALIZE_FAILED = "EMIT.CAPI.SERIALIZE_FAILED", Error,
             "a document or table an entry point returns could not be built or serialized",
             category = Output;
         BIND_CAPI_UNCODED_FAILURE = "BIND.CAPI.UNCODED_FAILURE", Error,
             "a library failure reached the boundary carrying no finding of its own",
             category = Data;
-        REQUEST_CAPI_ARROW_TABLE_UNKNOWN = "REQUEST.CAPI.ARROW_TABLE_UNKNOWN", Error,
-            "the caller asked for an Arrow table id this surface does not have",
-            category = Request;
-        REQUEST_CAPI_FEATURE_DISABLED = "REQUEST.CAPI.FEATURE_DISABLED", Error,
-            "the build lacks the cargo feature the request needs", category = Request;
         REQUEST_CAPI_UNKNOWN_FORMULA = "REQUEST.CAPI.UNKNOWN_FORMULA", Error,
             "the caller named a branch susceptance formula this surface does not have",
             category = Request;

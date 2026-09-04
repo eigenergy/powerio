@@ -603,7 +603,8 @@ where
             )
         })?;
         let replacement_mw = if index + 1 == loads.len() {
-            total_mw - assigned_mw
+            // Rounding can leave the remainder a hair below zero.
+            (total_mw - assigned_mw).max(0.0)
         } else {
             let replacement = total_mw * (weights[index] / weight_sum);
             assigned_mw += replacement;

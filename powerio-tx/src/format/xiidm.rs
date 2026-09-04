@@ -13652,7 +13652,7 @@ mod tests {
             diagnostics
                 .records()
                 .iter()
-                .any(|diagnostic| diagnostic.code() == "READ.XIIDM.VERSION.COMPATIBILITY")
+                .any(|diagnostic| diagnostic.code() == "READ.XIIDM.VERSION_COMPATIBILITY")
         );
         assert!(
             diagnostics
@@ -13746,7 +13746,7 @@ mod tests {
             if version != "1_17" {
                 assert!(
                     diagnostics.records().iter().any(|diagnostic| {
-                        diagnostic.code() == "READ.XIIDM.VERSION.COMPATIBILITY"
+                        diagnostic.code() == "READ.XIIDM.VERSION_COMPATIBILITY"
                     })
                 );
             }
@@ -15891,7 +15891,7 @@ mod tests {
                 && message.contains("`position` on `GEN`")
         }));
         assert!(messages.iter().any(|message| {
-            message.starts_with("READ.XIIDM.VERSION.COMPATIBILITY") && message.contains("1.13")
+            message.starts_with("READ.XIIDM.VERSION_COMPATIBILITY") && message.contains("1.13")
         }));
 
         let unsupported = document.replacen("\"version\" : \"1.13\"", "\"version\" : \"1.18\"", 1);
@@ -15951,7 +15951,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(switches, vec!["SW".to_owned()]);
         assert!(diagnostics.records().iter().any(|diagnostic| {
-            diagnostic.code() == "READ.XIIDM.VERSION.COMPATIBILITY"
+            diagnostic.code() == "READ.XIIDM.VERSION_COMPATIBILITY"
                 && diagnostic.message().contains("`SELF`")
         }));
         let shunt = &network.shunts()[0];

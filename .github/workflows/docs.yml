@@ -129,17 +129,19 @@ jobs:
             <dt>released / docs.rs</dt>
             <dd><a href="https://docs.rs/powerio">powerio</a>
                 <a href="https://docs.rs/powerio-core">powerio-core</a>
-                <a href="https://docs.rs/powerio-matrix">powerio-matrix</a>
+                <a href="https://docs.rs/powerio-tx">powerio-tx</a>
+                <a href="https://docs.rs/powerio-dist">powerio-dist</a>
                 <a href="https://docs.rs/powerio-prob">powerio-prob</a>
-                <a href="https://docs.rs/powerio-dist">powerio-dist</a></dd>
+                <a href="https://docs.rs/powerio-matrix">powerio-matrix</a></dd>
           </div>
           <div>
             <dt>development / main</dt>
             <dd><a href="powerio/index.html">powerio</a>
                 <a href="powerio_core/index.html">powerio-core</a>
-                <a href="powerio_matrix/index.html">powerio-matrix</a>
-                <a href="powerio_prob/index.html">powerio-prob</a>
+                <a href="powerio_tx/index.html">powerio-tx</a>
                 <a href="powerio_dist/index.html">powerio-dist</a>
+                <a href="powerio_prob/index.html">powerio-prob</a>
+                <a href="powerio_matrix/index.html">powerio-matrix</a>
                 <a href="powerio_capi/index.html">powerio-capi</a>
                 <a href="python/powerio.html">python</a></dd>
           </div>

@@ -5,10 +5,8 @@
 # NAMES only, so it cannot see a changed argument order, a changed type, or a
 # struct field — the class of defect that let pio_convert_file ship with two
 # arguments reversed. Both run: the parity script is cheap enough for every
-# feature job, this one needs cbindgen and runs once.
-#
-# cbindgen maps each optional feature to an #ifdef via cbindgen.toml [defines],
-# so one generated header covers every feature configuration and this check does
+# feature job, this one needs cbindgen and runs once. ABI 7 exports one fixed
+# symbol set, so one generated header covers every build and this check does
 # not need to be repeated per feature set.
 set -euo pipefail
 cd "$(dirname "$0")/.."
