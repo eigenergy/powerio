@@ -877,7 +877,8 @@ pub(crate) struct MulticonductorNetworkTables {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geo: Option<DistGeoMeta>,
     pub buses: Vec<DistBus>,
-    pub linecodes: Vec<DistLineCode>,
+    #[serde(rename = "linecodes")]
+    pub line_codes: Vec<DistLineCode>,
     pub lines: Vec<DistLine>,
     pub switches: Vec<DistSwitch>,
     pub transformers: Vec<DistTransformer>,
@@ -893,7 +894,8 @@ pub(crate) struct MulticonductorNetworkTables {
     /// BMOPF allows exactly one; the model allows any number and the BMOPF
     /// writer warns beyond the first.
     pub sources: Vec<VoltageSource>,
-    pub untyped: Vec<UntypedObject>,
+    #[serde(rename = "untyped")]
+    pub untyped_objects: Vec<UntypedObject>,
     /// Source commands and options the typed model does not interpret
     /// (`solve`, `set mode=...`), in order, as (verb, args).
     pub commands: Vec<(String, String)>,
@@ -972,7 +974,7 @@ dist_table_accessors! {
     name, name_mut: Option<String>;
     geo, geo_mut: Option<DistGeoMeta>;
     buses, buses_mut: Vec<DistBus>;
-    linecodes, linecodes_mut: Vec<DistLineCode>;
+    line_codes, line_codes_mut: Vec<DistLineCode>;
     lines, lines_mut: Vec<DistLine>;
     switches, switches_mut: Vec<DistSwitch>;
     transformers, transformers_mut: Vec<DistTransformer>;
@@ -983,7 +985,7 @@ dist_table_accessors! {
     shunts, shunts_mut: Vec<DistShunt>;
     capacitors, capacitors_mut: Vec<DistCapacitor>;
     sources, sources_mut: Vec<VoltageSource>;
-    untyped, untyped_mut: Vec<UntypedObject>;
+    untyped_objects, untyped_objects_mut: Vec<UntypedObject>;
     commands, commands_mut: Vec<(String, String)>;
     options, options_mut: Vec<(String, String)>;
     defaulted, defaulted_mut: BTreeMap<String, Vec<&'static str>>;
@@ -1020,7 +1022,7 @@ impl Default for MulticonductorNetworkTables {
             base_frequency: crate::dss::defaults::BASE_FREQUENCY,
             geo: None,
             buses: Vec::new(),
-            linecodes: Vec::new(),
+            line_codes: Vec::new(),
             lines: Vec::new(),
             switches: Vec::new(),
             transformers: Vec::new(),
@@ -1031,7 +1033,7 @@ impl Default for MulticonductorNetworkTables {
             shunts: Vec::new(),
             capacitors: Vec::new(),
             sources: Vec::new(),
-            untyped: Vec::new(),
+            untyped_objects: Vec::new(),
             commands: Vec::new(),
             options: Vec::new(),
             defaulted: BTreeMap::new(),
@@ -1062,7 +1064,7 @@ impl MulticonductorNetwork {
 
     /// Case insensitive, matching the source formats' name semantics.
     pub fn linecode(&self, name: &str) -> Option<&DistLineCode> {
-        self.linecodes()
+        self.line_codes()
             .iter()
             .find(|c| c.name.eq_ignore_ascii_case(name))
     }
@@ -1078,7 +1080,7 @@ pub(crate) fn warn_defaulted_frequency(
     field: &str,
     diags: &mut crate::collect::Diagnostics,
 ) {
-    let charging = net.linecodes().iter().any(|c| {
+    let charging = net.line_codes().iter().any(|c| {
         [&c.b_from, &c.b_to]
             .iter()
             .flat_map(|m| m.iter())
@@ -1128,7 +1130,7 @@ pub(crate) fn warn_unresolved_references(
         .map(|b| b.id.to_ascii_lowercase())
         .collect();
     let linecodes: BTreeSet<String> = net
-        .linecodes()
+        .line_codes()
         .iter()
         .map(|c| c.name.to_ascii_lowercase())
         .collect();
@@ -1367,7 +1369,7 @@ mod tests {
         let mut network = MulticonductorNetwork::named("strict-ir");
         let mut code = DistLineCode::new("lc", vec![vec![0.1]], vec![vec![0.2]]);
         code.i_max = Some(vec![f64::INFINITY]);
-        network.linecodes_mut().push(code);
+        network.line_codes_mut().push(code);
 
         let text = serde_json::to_string(&network).unwrap();
         assert!(text.contains(r#""i_max":["Infinity"]"#), "{text}");

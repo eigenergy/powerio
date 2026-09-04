@@ -14822,7 +14822,7 @@ mod tests {
         );
         assert!(
             module
-                .diagnostics
+                .diagnostics()
                 .iter()
                 .any(|diagnostic| diagnostic.message().contains("is empty"))
         );

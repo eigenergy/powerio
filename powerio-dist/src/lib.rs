@@ -12,7 +12,7 @@
 //! ```no_run
 //! let source = powerio_core::Source::open("feeder.dss")?;
 //! let module = powerio_dist::parse(source)?;
-//! for line in powerio_dist::diagnostics::render_diagnostics(&module.diagnostics) {
+//! for line in powerio_dist::diagnostics::render_diagnostics(module.diagnostics()) {
 //!     eprintln!("parse: {line}");
 //! }
 //! let emitted = powerio_dist::emit(

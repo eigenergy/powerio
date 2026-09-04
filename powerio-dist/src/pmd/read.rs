@@ -414,7 +414,7 @@ impl Reader<'_> {
             };
             match key {
                 "bus" => self.buses(items),
-                "linecode" => self.linecodes(items),
+                "linecode" => self.line_codes(items),
                 "line" => self.lines(items),
                 "switch" => self.switches(items),
                 "load" => self.loads(items),
@@ -437,7 +437,7 @@ impl Reader<'_> {
                 format!("ENGINEERING `{key}` components are not typed; kept untyped"),
             );
             for (name, v) in items {
-                self.net.untyped_mut().push(UntypedObject {
+                self.net.untyped_objects_mut().push(UntypedObject {
                     class: key.clone(),
                     name: name.clone(),
                     props: vec![(None, v.to_string())],
@@ -517,7 +517,7 @@ impl Reader<'_> {
         }
     }
 
-    fn linecodes(&mut self, items: &Map<String, Value>) {
+    fn line_codes(&mut self, items: &Map<String, Value>) {
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
             let mut lc = linecode_from(name, o, self.net.base_frequency(), &mut self.diagnostics);
@@ -527,7 +527,7 @@ impl Reader<'_> {
             );
             extras.append(&mut lc.extras);
             lc.extras = extras;
-            self.net.linecodes_mut().push(lc);
+            self.net.line_codes_mut().push(lc);
         }
     }
 
@@ -538,7 +538,7 @@ impl Reader<'_> {
         // collision search itself quadratic in the line count.
         let mut linecode_names: BTreeSet<String> = self
             .net
-            .linecodes()
+            .line_codes()
             .iter()
             .map(|c| c.name.to_ascii_lowercase())
             .collect();
@@ -578,7 +578,7 @@ impl Reader<'_> {
                     self.net.base_frequency(),
                     &mut self.diagnostics,
                 );
-                self.net.linecodes_mut().push(lc);
+                self.net.line_codes_mut().push(lc);
                 self.diagnostics.push(&C::READ_PMD_VALUE_INLINED, format!(
                     "line {name}: inline impedance materialized as linecode {lc_name}; the PMD writer re-inlines it"
                 ));

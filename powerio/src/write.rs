@@ -109,7 +109,7 @@ fn typed_sibling<T>(module: &PioModule<PioValue>, value: T) -> Result<PioModule<
     for entry in module.source_map() {
         out.add_source_map_entry(entry.clone())?;
     }
-    for diagnostic in &module.diagnostics {
+    for diagnostic in module.diagnostics() {
         out.add_diagnostic(diagnostic.clone())?;
     }
     for entry in module.history() {
@@ -1005,7 +1005,7 @@ mod tests {
         assert_eq!(sibling.producer(), module.producer());
         assert_eq!(sibling.sources(), module.sources());
         assert_eq!(sibling.source_map(), module.source_map());
-        assert_eq!(sibling.diagnostics, module.diagnostics);
+        assert_eq!(sibling.diagnostics(), module.diagnostics());
         assert_eq!(sibling.history(), module.history());
         assert_eq!(sibling.extensions(), module.extensions());
         let sibling_source = sibling.source().unwrap();

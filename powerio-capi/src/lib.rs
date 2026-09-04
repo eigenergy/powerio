@@ -2244,7 +2244,7 @@ impl DiagnosticsInner {
     fn records(&self) -> &[Diagnostic] {
         match &self.owner {
             DiagnosticsOwner::Owned(records) => records,
-            DiagnosticsOwner::Module(module) => &module.module.diagnostics,
+            DiagnosticsOwner::Module(module) => module.module.diagnostics(),
         }
     }
 }
@@ -12688,7 +12688,7 @@ pub unsafe extern "C" fn pio_multiconductor_network_counts(
             let network = require_multiconductor_network(network)?;
             *require_output(output, "output")? = PioMulticonductorNetworkCountsView {
                 buses: network.buses().len(),
-                line_codes: network.linecodes().len(),
+                line_codes: network.line_codes().len(),
                 lines: network.lines().len(),
                 switches: network.switches().len(),
                 transformers: network.transformers().len(),
@@ -12699,7 +12699,7 @@ pub unsafe extern "C" fn pio_multiconductor_network_counts(
                 shunts: network.shunts().len(),
                 capacitors: network.capacitors().len(),
                 voltage_sources: network.sources().len(),
-                untyped_objects: network.untyped().len(),
+                untyped_objects: network.untyped_objects().len(),
                 commands: network.commands().len(),
                 options: network.options().len(),
             };
@@ -12835,7 +12835,7 @@ pub unsafe extern "C" fn pio_multiconductor_network_line_code_at(
     unsafe {
         entry(error, false, || {
             let network = require_multiconductor_network(network)?;
-            let line_code = network.linecodes().get(index).ok_or_else(|| {
+            let line_code = network.line_codes().get(index).ok_or_else(|| {
                 boundary_error(
                     &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
                     format!("multiconductor line code index {index} is out of range"),
@@ -12852,7 +12852,7 @@ fn multiconductor_line_code_matrix<'a>(
     line_code_index: usize,
     matrix: &str,
 ) -> Result<&'a powerio_dist::ConductorMatrix, *mut PioError> {
-    let line_code = network.linecodes().get(line_code_index).ok_or_else(|| {
+    let line_code = network.line_codes().get(line_code_index).ok_or_else(|| {
         boundary_error(
             &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
             format!("multiconductor line code index {line_code_index} is out of range"),
@@ -13810,7 +13810,7 @@ pub unsafe extern "C" fn pio_multiconductor_network_untyped_object_at(
     unsafe {
         entry(error, false, || {
             let network = require_multiconductor_network(network)?;
-            let object = network.untyped().get(index).ok_or_else(|| {
+            let object = network.untyped_objects().get(index).ok_or_else(|| {
                 boundary_error(
                     &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
                     format!("untyped object index {index} is out of range"),
@@ -13837,7 +13837,7 @@ pub unsafe extern "C" fn pio_multiconductor_network_untyped_object_property_at(
     unsafe {
         entry(error, false, || {
             let network = require_multiconductor_network(network)?;
-            let object = network.untyped().get(object_index).ok_or_else(|| {
+            let object = network.untyped_objects().get(object_index).ok_or_else(|| {
                 boundary_error(
                     &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
                     format!("untyped object index {object_index} is out of range"),
@@ -16246,7 +16246,7 @@ mod tests {
         line_code.i_max = Some(Vec::new());
         line_code.s_max = Some(vec![900.0]);
         line_code.source = Some(String::new());
-        network.linecodes_mut().push(line_code);
+        network.line_codes_mut().push(line_code);
 
         let mut line = powerio_dist::DistLine::new(
             "line",
@@ -16383,14 +16383,16 @@ mod tests {
             vec![240.0],
             vec![0.0],
         ));
-        network.untyped_mut().push(powerio_dist::UntypedObject::new(
-            "curve",
-            "raw",
-            vec![
-                (None, "first".into()),
-                (Some(String::new()), "second".into()),
-            ],
-        ));
+        network
+            .untyped_objects_mut()
+            .push(powerio_dist::UntypedObject::new(
+                "curve",
+                "raw",
+                vec![
+                    (None, "first".into()),
+                    (Some(String::new()), "second".into()),
+                ],
+            ));
         network
             .commands_mut()
             .push(("solve".into(), "mode=daily".into()));

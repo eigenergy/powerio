@@ -102,7 +102,7 @@ fn renamed_terminals(net: &MulticonductorNetwork) -> BTreeMap<String, i64> {
 /// `net.linecode()` is a linear scan, and a line runs it once each.
 fn linecodes_by_name(net: &MulticonductorNetwork) -> BTreeMap<String, &DistLineCode> {
     let mut by_name = BTreeMap::new();
-    for c in net.linecodes() {
+    for c in net.line_codes() {
         by_name.entry(c.name.to_ascii_lowercase()).or_insert(c);
     }
     by_name
@@ -470,12 +470,12 @@ impl Writer {
         }
         doc.insert("bus".into(), Value::Object(buses));
 
-        self.linecodes(net, &mut doc);
+        self.line_codes(net, &mut doc);
         self.branches(net, &mut doc);
         self.injections(net, &mut doc);
         self.transformers(net, &mut doc);
 
-        for u in net.untyped() {
+        for u in net.untyped_objects() {
             self.warn(
                 &C::EMIT_PMD_RECORD_DROPPED,
                 format!(
@@ -487,13 +487,13 @@ impl Writer {
         Value::Object(doc)
     }
 
-    fn linecodes(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
+    fn line_codes(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
         // Linecodes the reader materialized from inline line impedance
         // re-inline on the line; they are skipped here unless a line
         // without the marker also references them.
         let inlined = inlined_codes(net);
         let mut codes = Map::new();
-        for c in net.linecodes() {
+        for c in net.line_codes() {
             if inlined.contains(&c.name.to_lowercase()) {
                 continue;
             }
@@ -1171,7 +1171,7 @@ pub(super) fn lag_polarity(windings: &[DistWinding]) -> Vec<i64> {
 /// referencing line carries the reader's `pmd_inline` marker.
 fn inlined_codes(net: &MulticonductorNetwork) -> BTreeSet<String> {
     let mut inlined = BTreeSet::new();
-    for c in net.linecodes() {
+    for c in net.line_codes() {
         let mut refs = net
             .lines()
             .iter()

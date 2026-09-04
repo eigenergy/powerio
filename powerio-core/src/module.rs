@@ -56,9 +56,7 @@ fn allocation_refused(cause: TryReserveError) -> Error {
 /// finite set elsewhere, while Rust applications can use any value here.
 pub struct PioModule<T> {
     value: T,
-    /// Diagnostics produced while acquiring, validating, or deriving the
-    /// value.
-    pub diagnostics: Vec<Diagnostic>,
+    diagnostics: Vec<Diagnostic>,
     records: ModuleRecords,
 }
 
@@ -105,6 +103,13 @@ impl<T> PioModule<T> {
         self.records.retained_source = None;
         self.sever_value_targets();
         &mut self.value
+    }
+
+    /// Diagnostics produced while acquiring, validating, or deriving the
+    /// value, in the order they were recorded.
+    #[must_use]
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        &self.diagnostics
     }
 
     #[must_use]
@@ -776,7 +781,7 @@ mod tests {
             .with_source(source)
             .with_diagnostic(diagnostic)
             .unwrap();
-        let diagnostics_pointer = module.diagnostics.as_ptr();
+        let diagnostics_pointer = module.diagnostics().as_ptr();
         let source_pointer = module
             .source()
             .unwrap()
@@ -786,7 +791,7 @@ mod tests {
             .as_ptr();
         let mapped = module.map_value(String::into_bytes);
         assert_eq!(mapped.value, b"value");
-        assert_eq!(mapped.diagnostics.as_ptr(), diagnostics_pointer);
+        assert_eq!(mapped.diagnostics().as_ptr(), diagnostics_pointer);
         assert_eq!(
             mapped
                 .source()
@@ -807,12 +812,12 @@ mod tests {
                 "kept",
             ))
             .unwrap();
-        let diagnostics_pointer = module.diagnostics.as_ptr();
+        let diagnostics_pointer = module.diagnostics().as_ptr();
         let recovered = module
             .__try_map_value::<usize>(Err)
             .expect_err("conversion fails");
         assert_eq!(recovered.value, "value");
-        assert_eq!(recovered.diagnostics.as_ptr(), diagnostics_pointer);
+        assert_eq!(recovered.diagnostics().as_ptr(), diagnostics_pointer);
     }
 
     #[test]
@@ -927,9 +932,9 @@ mod tests {
         assert_eq!(derived.sources().len(), 1);
         assert!(derived.source().is_none());
         assert!(derived.source_map().is_empty());
-        assert_eq!(derived.diagnostics.len(), 1);
-        assert!(derived.diagnostics[0].target().is_none());
-        assert_eq!(derived.diagnostics[0].spans().len(), 1);
+        assert_eq!(derived.diagnostics().len(), 1);
+        assert!(derived.diagnostics()[0].target().is_none());
+        assert_eq!(derived.diagnostics()[0].spans().len(), 1);
         assert_eq!(derived.history().len(), 2);
         assert_eq!(
             derived.extensions().get("org.example"),
@@ -1004,8 +1009,8 @@ mod tests {
         assert!(module.source().is_none());
         assert!(module.source_map().is_empty());
         assert_eq!(module.sources().len(), 1);
-        assert_eq!(module.diagnostics.len(), 2);
-        assert_eq!(module.diagnostics[0].target(), Some("/0"));
+        assert_eq!(module.diagnostics().len(), 2);
+        assert_eq!(module.diagnostics()[0].target(), Some("/0"));
         assert_eq!(module.history().len(), 2);
     }
 }

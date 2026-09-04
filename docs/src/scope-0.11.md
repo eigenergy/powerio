@@ -29,6 +29,20 @@
   strings. PyPSA CSV, PSLF, and OpenDSS tokenize through owned strings, and
   the Egret, GO Challenge 3, OPFData, and pandapower readers decode through a
   generic JSON value tree first.
+- Two field vocabularies coexist. Rust records and Python dict rows use the
+  MATPOWER derived names (`vm`, `pg`, `rate_a`, `tap`); C ABI 7 and Julia
+  spell the quantity and unit out (`vm_pu`, `active_power_mw`, `rate_a_mva`,
+  `tap_ratio`). One vocabulary for all four surfaces is a 1.0 decision, taken
+  separately from the PowerIO IR keys, which change only with a generation.
+- Python tables return dict rows; typed element views like Julia's are not
+  offered yet.
+- `to_balanced` and `to_balanced_report` live in `powerio::transform` rather
+  than the facade root, and `serialize_diagnostics` returns a `String` where
+  `serialize` returns an `EmitResult`.
+- `SocwrOpfSolution` names branch flows `branch_from_active_power` where the
+  other solutions say `branch_from_active_flow`, and its `bus_order` and
+  `branch_order` are iterators rather than vectors. PowerIO IR generation 2
+  carries the same split in its keys.
 
 ## Versions
 

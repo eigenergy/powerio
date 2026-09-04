@@ -1702,7 +1702,7 @@ fn geo_layer_cell(cell: &mut Cell) -> Result<(), String> {
     let back = powerio::parse_with_options(source, &options).map_err(|err| err.to_string())?;
     cell.record_warnings(
         TARGET_READBACK,
-        &powerio_core::render_diagnostics(&back.diagnostics),
+        &powerio_core::render_diagnostics(back.diagnostics()),
     );
     let powerio::PioValue::GeoLayer(read_back) = &back.value() else {
         return Err(format!(
@@ -1836,7 +1836,7 @@ struct DistParsed {
 
 fn dist_module_to_parsed(module: powerio_core::PioModule<MulticonductorNetwork>) -> DistParsed {
     DistParsed {
-        warnings: powerio_dist::diagnostics::render_diagnostics(&module.diagnostics),
+        warnings: powerio_dist::diagnostics::render_diagnostics(module.diagnostics()),
         network: module.value().clone(),
         module,
     }
@@ -2028,7 +2028,7 @@ fn parse_transmission_source(
     let options = powerio::ParseOptions::default().format_id(format);
     let module = powerio::parse_with_options(source, &options).map_err(|err| err.to_string())?;
     let warnings = module
-        .diagnostics
+        .diagnostics()
         .iter()
         .map(|d| format!("{}: {}", d.code(), d.message()))
         .collect();

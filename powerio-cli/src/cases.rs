@@ -223,7 +223,7 @@ pub fn load_network(path: &Path) -> anyhow::Result<LoadedCase> {
                         crate::module_io::load_balanced_memory_named(&text, format.name(), stem)
                             .with_context(|| format!("parse {}", path.display()))?;
                     Ok(LoadedCase {
-                        warnings: powerio_core::render_diagnostics(&parsed.diagnostics),
+                        warnings: powerio_core::render_diagnostics(parsed.diagnostics()),
                         network: parsed.into_value(),
                     })
                 }
@@ -243,7 +243,7 @@ pub fn load_network(path: &Path) -> anyhow::Result<LoadedCase> {
             let parsed = crate::module_io::load_balanced_module(path, None)
                 .with_context(|| format!("parse {}", path.display()))?;
             Ok(LoadedCase {
-                warnings: powerio_core::render_diagnostics(&parsed.diagnostics),
+                warnings: powerio_core::render_diagnostics(parsed.diagnostics()),
                 network: parsed.into_value(),
             })
         }
@@ -261,7 +261,7 @@ fn lower_to_balanced(
     stem: Option<&str>,
     path: &Path,
 ) -> anyhow::Result<LoadedCase> {
-    let mut warnings = powerio_core::render_diagnostics(&parsed.diagnostics);
+    let mut warnings = powerio_core::render_diagnostics(parsed.diagnostics());
     let mut net = parsed.into_value();
     if net.name().is_none() {
         *net.name_mut() = stem.map(str::to_owned);

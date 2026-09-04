@@ -38,7 +38,7 @@ fn unmapped_official_fields_remain_diagnosed_after_ir_and_fresh_emission() {
         .with_format(FormatId::new("xiidm").unwrap());
     let module = parse(source).unwrap();
     let field_diagnostics = module
-        .diagnostics
+        .diagnostics()
         .iter()
         .filter(|diagnostic| diagnostic.code() == "READ.XIIDM.FIELD_UNMAPPED")
         .map(powerio::Diagnostic::message)
@@ -82,7 +82,7 @@ fn unmapped_official_fields_remain_diagnosed_after_ir_and_fresh_emission() {
     .unwrap();
     assert_eq!(
         restored
-            .diagnostics
+            .diagnostics()
             .iter()
             .filter(|diagnostic| diagnostic.code() == "READ.XIIDM.FIELD_UNMAPPED")
             .count(),

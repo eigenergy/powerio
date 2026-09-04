@@ -2044,7 +2044,7 @@ fn parse_and_emit_diagnostics_stay_in_their_own_channels() {
     );
     assert!(
         module
-            .diagnostics
+            .diagnostics()
             .iter()
             .any(|diagnostic| diagnostic.message().contains("`switch`"))
     );

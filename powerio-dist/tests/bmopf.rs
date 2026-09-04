@@ -148,7 +148,7 @@ fn one_triangle_matrix_spelling_mirrors_on_read() {
         }"#,
     )
     .unwrap();
-    let lc = &net.linecodes()[0];
+    let lc = &net.line_codes()[0];
     assert_eq!(lc.r_series[0][1].to_bits(), 0.25f64.to_bits());
     assert_eq!(lc.r_series[1][0].to_bits(), 0.25f64.to_bits());
     assert_eq!(lc.x_series[1][0].to_bits(), 0.5f64.to_bits());
@@ -229,7 +229,7 @@ fn assert_model_eq(a: &MulticonductorNetwork, b: &MulticonductorNetwork) {
     };
     let (a, b) = (strip(a), strip(b));
     assert_eq!(a.buses(), b.buses());
-    assert_eq!(a.linecodes(), b.linecodes());
+    assert_eq!(a.line_codes(), b.line_codes());
     assert_eq!(a.lines(), b.lines());
     assert_eq!(a.switches(), b.switches());
     assert_eq!(a.loads(), b.loads());
@@ -2420,7 +2420,7 @@ fn linecode_constructor_sizes_x_only_matrix_from_x() {
     assert_eq!(lc.b_to, vec![vec![0.0]]);
 
     let mut net = MulticonductorNetwork::default();
-    net.linecodes_mut().push(lc);
+    net.line_codes_mut().push(lc);
     let out = emit_bmopf_json(&net);
     assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
@@ -2502,7 +2502,7 @@ fn synthesized_inline_linecode_never_shadows_a_declared_one() {
         }"#,
     );
     let net = parse_bmopf_str(&text).unwrap();
-    assert_eq!(net.linecodes().len(), 2);
+    assert_eq!(net.line_codes().len(), 2);
     let series = |name: &str| net.linecode(name).unwrap().r_series[0][0].to_bits();
     // The declared code keeps its name and its impedance.
     assert_eq!(series("LC"), 9.0f64.to_bits());
@@ -2653,8 +2653,13 @@ fn dss_autotransformer_drop_has_stable_diagnostic() {
          New AutoTrans.at1 phases=1 windings=2 buses=(sourcebus.1.0, loadbus.1.0) \
          kvs=(7.2 0.24) kvas=(25 25) xhl=2\n",
     );
-    assert_eq!(net.untyped().len(), 1, "{:?}", net.untyped());
-    assert_eq!(net.untyped()[0].class, "autotrans");
+    assert_eq!(
+        net.untyped_objects().len(),
+        1,
+        "{:?}",
+        net.untyped_objects()
+    );
+    assert_eq!(net.untyped_objects()[0].class, "autotrans");
 
     let out = emit_bmopf_json(&net);
     assert!(
@@ -2883,7 +2888,7 @@ fn an_untyped_capacitor_re_emits_under_extras() {
         "New Circuit.c basekv=4.16\n\
          New Capacitor.cap bus1=b.1 phases=0 kv=7.2 kvar=300\n",
     );
-    assert!(net.untyped().iter().any(|u| u.class == "capacitor"));
+    assert!(net.untyped_objects().iter().any(|u| u.class == "capacitor"));
     let out = emit_bmopf_json(&net);
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     assert!(
@@ -3035,7 +3040,7 @@ fn schema_fields_survive_a_round_trip_without_wrong_warnings() {
     let generator = &net.generators()[0];
     assert_eq!(generator.s_max.as_deref(), Some([5000.0; 3].as_slice()));
     assert_eq!(generator.i_max.as_deref(), Some([20.0; 3].as_slice()));
-    assert_eq!(net.linecodes()[0].source.as_deref(), Some("datasheet"));
+    assert_eq!(net.line_codes()[0].source.as_deref(), Some("datasheet"));
 
     let out = emit_bmopf_json(&net);
     assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
@@ -3238,7 +3243,7 @@ fn an_inline_line_rating_is_not_repeated_on_its_synthetic_linecode() {
     let net = parse_dss_str(src);
     let line = &net.lines()[0];
     let code = net
-        .linecodes()
+        .line_codes()
         .iter()
         .find(|c| c.name == line.linecode)
         .expect("synthetic linecode");
@@ -3327,8 +3332,8 @@ fn reporting_a_malformed_field_does_not_disturb_the_read() {
     );
     // The line keeps its inline matrices: one synthesized linecode, with the
     // sound entries intact and only the malformed cell undefined.
-    assert_eq!(net.linecodes().len(), 1, "{:?}", net.warnings);
-    let lc = &net.linecodes()[0];
+    assert_eq!(net.line_codes().len(), 1, "{:?}", net.warnings);
+    let lc = &net.line_codes()[0];
     assert!(lc.r_series[0][0].is_nan(), "{:?}", lc.r_series);
     for (got, want) in [
         (lc.r_series[1][1], 0.3),
@@ -3594,7 +3599,7 @@ fn bmopf_regulator_subtypes_round_trip_verbatim() {
     let net = parse_bmopf_str(text).unwrap();
     // Typed reads: the autotransformer is one row, the open delta bank its
     // two legs, none of them untyped.
-    assert!(net.untyped().is_empty());
+    assert!(net.untyped_objects().is_empty());
     let by_name = |name: &str| {
         net.transformers()
             .iter()
@@ -3684,9 +3689,13 @@ fn regulator_banks_survive_a_dss_bmopf_dss_round_trip() {
     let bmopf = emit_bmopf_json(&net);
     let again = parse_bmopf_str(&bmopf.text).unwrap();
     assert!(
-        again.untyped().is_empty(),
+        again.untyped_objects().is_empty(),
         "untyped rows survived: {:?}",
-        again.untyped().iter().map(|u| &u.class).collect::<Vec<_>>()
+        again
+            .untyped_objects()
+            .iter()
+            .map(|u| &u.class)
+            .collect::<Vec<_>>()
     );
     let regs: Vec<&str> = again
         .transformers()

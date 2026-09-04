@@ -6453,7 +6453,7 @@ mod tests {
             entries[0].parameters()["repairs"].as_array().unwrap().len(),
             diags.len()
         );
-        assert_eq!(module.diagnostics.len(), diags.len());
+        assert_eq!(module.diagnostics().len(), diags.len());
         let module = repair_values(module).unwrap();
         assert_eq!(module.history().len(), 1);
     }

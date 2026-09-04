@@ -35,7 +35,7 @@ fn parse_ucte_text(name: &str, text: &str) -> powerio_core::PioModule<BalancedNe
 }
 
 fn messages(module: &powerio_core::PioModule<BalancedNetwork>) -> Vec<String> {
-    powerio_tx::diagnostics::render_diagnostics(&module.diagnostics)
+    powerio_tx::diagnostics::render_diagnostics(module.diagnostics())
 }
 
 fn bus_by_name<'a>(net: &'a BalancedNetwork, name: &str) -> &'a powerio_tx::network::Bus {
@@ -244,7 +244,7 @@ fn the_synthetic_case_parses_to_the_expected_counts_and_values() {
         "{rendered:#?}"
     );
     let floor = module
-        .diagnostics
+        .diagnostics()
         .iter()
         .find(|d| d.message().contains("0.05 ohm floor"))
         .unwrap();

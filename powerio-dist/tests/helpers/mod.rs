@@ -159,8 +159,8 @@ fn from_module(module: powerio_core::PioModule<MulticonductorNetwork>) -> Parsed
         Some(Arc::new(text.to_owned()))
     });
     Parsed {
-        warnings: powerio_dist::diagnostics::render_diagnostics(&module.diagnostics),
-        diagnostics: module.diagnostics.clone(),
+        warnings: powerio_dist::diagnostics::render_diagnostics(module.diagnostics()),
+        diagnostics: module.diagnostics().to_vec(),
         source,
         network: module.value().clone(),
         module,
@@ -283,7 +283,7 @@ pub fn convert_str(text: &str, to: DistTargetFormat, from: &str) -> Result<Conv,
     let module = powerio_dist::parse(source).map_err(|error| core_to_dist(&error))?;
     let mut conv = emit_module_with_options(&module, to, &powerio_dist::EmitOptions::default())
         .map_err(|error| core_to_dist(&error))?;
-    let mut diagnostics = module.diagnostics.clone();
+    let mut diagnostics = module.diagnostics().to_vec();
     diagnostics.append(&mut conv.diagnostics);
     conv.warnings = powerio_dist::diagnostics::render_diagnostics(&diagnostics);
     conv.diagnostics = diagnostics;

@@ -148,11 +148,11 @@ fn a_psse_warning_covers_the_multi_line_record_it_came_from() {
     )
     .unwrap();
     let substituted: Vec<_> = module
-        .diagnostics
+        .diagnostics()
         .iter()
         .filter(|diagnostic| diagnostic.code() == "READ.PSSE.VALUE_SUBSTITUTED")
         .collect();
-    assert!(!substituted.is_empty(), "{:?}", module.diagnostics);
+    assert!(!substituted.is_empty(), "{:?}", module.diagnostics());
     let buffer = module.source().unwrap().primary_buffer().unwrap();
     for diagnostic in substituted {
         assert_eq!(diagnostic.spans().len(), 1, "{diagnostic:?}");
@@ -166,12 +166,12 @@ fn a_psse_warning_covers_the_multi_line_record_it_came_from() {
     // Findings about the whole document carry no record span.
     assert!(
         module
-            .diagnostics
+            .diagnostics()
             .iter()
             .filter(|diagnostic| diagnostic.code() != "READ.PSSE.VALUE_SUBSTITUTED")
             .all(|diagnostic| diagnostic.spans().is_empty()),
         "{:?}",
-        module.diagnostics
+        module.diagnostics()
     );
 }
 

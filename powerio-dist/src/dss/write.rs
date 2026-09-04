@@ -840,7 +840,7 @@ impl DssWriter {
 
         self.buscoords(net);
         self.sources(net);
-        self.linecodes(net);
+        self.line_codes(net);
         self.lines(net);
         self.switches(net);
         self.transformers(net);
@@ -850,7 +850,7 @@ impl DssWriter {
         self.generators(net);
         self.ibrs(net);
 
-        for u in net.untyped() {
+        for u in net.untyped_objects() {
             self.warn(
                 &C::EMIT_DSS_RECORD_DROPPED,
                 format!(
@@ -1105,9 +1105,9 @@ impl DssWriter {
         self.out.push('\n');
     }
 
-    fn linecodes(&mut self, net: &MulticonductorNetwork) {
+    fn line_codes(&mut self, net: &MulticonductorNetwork) {
         let omega_nf = std::f64::consts::TAU * net.base_frequency() * 1e-9;
-        for c in net.linecodes() {
+        for c in net.line_codes() {
             self.emit_linecode(c, omega_nf);
         }
         // #307: a line whose unique grounded return is not the last conductor
@@ -1127,7 +1127,7 @@ impl DssWriter {
                 continue;
             };
             let Some(code) = net
-                .linecodes()
+                .line_codes()
                 .iter()
                 .find(|c| c.name.eq_ignore_ascii_case(&l.linecode))
             else {
@@ -1233,7 +1233,7 @@ impl DssWriter {
                     &l.terminal_map_to,
                 )
                 .filter(|_| {
-                    net.linecodes().iter().any(|c| {
+                    net.line_codes().iter().any(|c| {
                         c.name.eq_ignore_ascii_case(&l.linecode)
                             && c.n_conductors == l.terminal_map_from.len()
                     })
@@ -3605,7 +3605,7 @@ mod tests {
             base_frequency: 60.0,
             buses: vec![b, bus("b2", &["1", "2"], &[])],
             sources: vec![vs],
-            linecodes: vec![lc],
+            line_codes: vec![lc],
             transformers: vec![t],
             ..MulticonductorNetworkTables::default()
         });
@@ -3812,7 +3812,7 @@ mod tests {
     #[test]
     fn a_line_with_its_linecode_permutes_the_matrices_in_step() {
         let mut net = terminal_order_network(&["p1", "n", "p2"]);
-        net.linecodes_mut().push(DistLineCode::new(
+        net.line_codes_mut().push(DistLineCode::new(
             "lc",
             vec![vec![1.0], vec![0.2, 2.0], vec![0.3, 0.4, 3.0]],
             vec![vec![10.0], vec![0.0, 20.0], vec![0.0, 0.0, 30.0]],

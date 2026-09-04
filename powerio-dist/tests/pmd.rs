@@ -154,7 +154,7 @@ fn pmd_round_trips_to_model_equality() {
     assert_eq!(a.loads(), b.loads());
     assert_eq!(a.shunts(), b.shunts());
     assert_eq!(a.sources(), b.sources());
-    assert_eq!(a.linecodes(), b.linecodes());
+    assert_eq!(a.line_codes(), b.line_codes());
     assert_eq!(a.transformers(), b.transformers());
 }
 
@@ -614,8 +614,8 @@ fn inline_linecode_collision_with_document_linecode() {
     }"#;
     let net = parse_pmd_str(text).unwrap();
 
-    let names: BTreeSet<&str> = net.linecodes().iter().map(|c| c.name.as_str()).collect();
-    assert_eq!(net.linecodes().len(), 2);
+    let names: BTreeSet<&str> = net.line_codes().iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(net.line_codes().len(), 2);
     assert!(names.contains("foo_z") && names.contains("foo_z2"));
 
     let foo = net.lines().iter().find(|l| l.name == "foo").unwrap();
@@ -696,7 +696,7 @@ fn null_suffix_restoration() {
     // conductor). The entry stays in the array so finite bounds beside it
     // survive the parse, and the PMD writer spells it back as null.
     assert_eq!(
-        net.linecodes()[0].i_max.as_deref(),
+        net.line_codes()[0].i_max.as_deref(),
         Some(&[f64::INFINITY][..])
     );
     let out = rewrite(text);

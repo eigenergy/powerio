@@ -53,7 +53,7 @@ fn a_single_conductor_line_stamps_its_hand_inverted_admittance() {
     net.buses_mut().push(DistBus::new("b", strings(&["1"])));
     // z = (1 + 2j) ohm/m over 10 m: Y = 1/(10 + 20j) = (10 - 20j)/500
     //   = 0.02 - 0.04j siemens.
-    net.linecodes_mut()
+    net.line_codes_mut()
         .push(DistLineCode::new("lc", vec![vec![1.0]], vec![vec![2.0]]));
     net.lines_mut().push(DistLine::new(
         "l1",
@@ -92,7 +92,7 @@ fn a_two_conductor_line_matches_the_hand_inverse_and_shunt_halves() {
     );
     // A from-end shunt half: b_from = diag(0.5) S/m.
     code.b_from = vec![vec![0.5, 0.0], vec![0.0, 0.5]];
-    net.linecodes_mut().push(code);
+    net.line_codes_mut().push(code);
     net.lines_mut().push(DistLine::new(
         "l1",
         "a",
@@ -296,7 +296,7 @@ fn axis_mappings_survive_source_row_reordering() {
         let mut net = MulticonductorNetwork::default();
         net.buses_mut().push(DistBus::new("a", strings(&["1"])));
         net.buses_mut().push(DistBus::new("b", strings(&["1"])));
-        net.linecodes_mut()
+        net.line_codes_mut()
             .push(DistLineCode::new("lc", vec![vec![1.0]], vec![vec![1.0]]));
         net.lines_mut().push(DistLine::new(
             "l1",

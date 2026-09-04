@@ -50,7 +50,7 @@ pub fn deserialize_module_text(
 
 fn module_to_parsed(module: powerio_core::PioModule<BalancedNetwork>) -> Parsed {
     Parsed {
-        diagnostics: module.diagnostics.clone(),
+        diagnostics: module.diagnostics().to_vec(),
         network: module.into_value(),
     }
 }

@@ -158,7 +158,7 @@ fn current_ir_round_trips_with_records_and_nonfinite_bounds() {
     );
     assert_eq!(back.sources().len(), 1);
     assert_eq!(back.source_map().len(), 1);
-    assert_eq!(back.diagnostics.len(), 1);
+    assert_eq!(back.diagnostics().len(), 1);
     assert_eq!(back.history().len(), 1);
     assert!(back.extensions().contains_key("org.example.note"));
 
@@ -180,8 +180,8 @@ fn a_repair_finding_target_is_a_pointer_the_writer_accepts() {
     network.buses_mut()[1].vm = 0.0; // outside [0, 2] p.u.: triggers a repair
     let module = PioModule::new(network);
     let module = repair_values(module).unwrap();
-    assert_eq!(module.diagnostics.len(), 1);
-    let diagnostic = &module.diagnostics[0];
+    assert_eq!(module.diagnostics().len(), 1);
+    let diagnostic = &module.diagnostics()[0];
     assert!(
         diagnostic.target_is_pointer(),
         "not an RFC 6901 pointer: {:?}",
@@ -236,13 +236,13 @@ fn module_with_d0_and_d1(order: [&str; 2]) -> PioModule<PioValue> {
 /// (not some other record that ended up sharing the id).
 fn assert_d1_still_resolves_to_d0(module: &PioModule<PioValue>) {
     let d1 = module
-        .diagnostics
+        .diagnostics()
         .iter()
         .find(|d| d.id().is_some_and(|id| id.as_str() == "d1"))
         .expect("d1 present");
     assert_eq!(d1.related().first().map(DiagnosticId::as_str), Some("d0"));
     let d0 = module
-        .diagnostics
+        .diagnostics()
         .iter()
         .find(|d| d.id().is_some_and(|id| id.as_str() == "d0"))
         .expect("d0 present");
@@ -275,9 +275,9 @@ fn an_id_synthesized_for_an_unlabeled_diagnostic_never_collides_with_an_explicit
         let text = serialize_module_text(&module).unwrap();
         let back = deserialize_module_text(&text).unwrap();
 
-        assert_eq!(back.diagnostics.len(), 3, "order {order:?}");
+        assert_eq!(back.diagnostics().len(), 3, "order {order:?}");
         let ids: std::collections::HashSet<&str> = back
-            .diagnostics
+            .diagnostics()
             .iter()
             .map(|d| d.id().unwrap().as_str())
             .collect();
@@ -660,7 +660,7 @@ fn suggested_action_survives_the_stored_round_trip() {
     );
     let reread = deserialize_module_text(&text).expect("deserializes");
     assert_eq!(
-        reread.diagnostics[0].suggested_action(),
+        reread.diagnostics()[0].suggested_action(),
         Some("rerun with --strict"),
         "the action survives the round trip"
     );

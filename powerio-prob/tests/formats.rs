@@ -95,7 +95,7 @@ fn goc3_parses_to_the_scuc_instance() {
     // The scheduling categories and nested time data arrived typed.
     assert!(!instance.inputs().interval_durations.is_empty());
     assert_eq!(instance.inputs().devices[0].periods.len(), 2);
-    assert!(module.diagnostics.iter().all(|diagnostic| {
+    assert!(module.diagnostics().iter().all(|diagnostic| {
         diagnostic.code() != powerio_tx::diagnostics::codes::READ_GOC3_RETAINED_SOURCE_ONLY.code
     }));
 }
@@ -119,7 +119,7 @@ fn goc3_reports_each_known_optional_field_that_only_retained_source_preserves() 
             .contains_key("con_loss_factor")
     );
     let diagnostics: Vec<_> = module
-        .diagnostics
+        .diagnostics()
         .iter()
         .filter(|diagnostic| {
             diagnostic.code() == powerio_tx::diagnostics::codes::READ_GOC3_RETAINED_SOURCE_ONLY.code
@@ -165,7 +165,7 @@ fn goc3_reports_official_optional_fields_without_typed_slots() {
     ))
     .unwrap();
     let untyped: Vec<_> = module
-        .diagnostics
+        .diagnostics()
         .iter()
         .filter(|diagnostic| {
             diagnostic.code()
@@ -199,7 +199,7 @@ fn goc3_reports_official_optional_fields_without_typed_slots() {
             && message.contains("retained in `Load.extras`")
     }));
     let source_only: Vec<_> = module
-        .diagnostics
+        .diagnostics()
         .iter()
         .filter(|diagnostic| {
             diagnostic.code() == powerio_tx::diagnostics::codes::READ_GOC3_RETAINED_SOURCE_ONLY.code

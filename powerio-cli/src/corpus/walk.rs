@@ -392,7 +392,7 @@ impl Net {
                 warnings.extend(emission.render_diagnostics());
                 match catch_panic(|| crate::module_io::load_balanced_memory(&emission.text, to)) {
                     Ok(Ok(parsed)) => {
-                        warnings.extend(powerio_core::render_diagnostics(&parsed.diagnostics));
+                        warnings.extend(powerio_core::render_diagnostics(parsed.diagnostics()));
                         Ok(Self::Balanced(parsed.into_value()))
                     }
                     Ok(Err(err)) => Err(format!("readback: {err}")),
@@ -421,7 +421,7 @@ impl Net {
                     crate::module_io::load_multiconductor_memory(&emission.text, to)
                 }) {
                     Ok(Ok(parsed)) => {
-                        warnings.extend(powerio_core::render_diagnostics(&parsed.diagnostics));
+                        warnings.extend(powerio_core::render_diagnostics(parsed.diagnostics()));
                         Ok(Self::Dist(parsed.into_value()))
                     }
                     Ok(Err(err)) => Err(format!("readback: {err}")),

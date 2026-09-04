@@ -136,7 +136,7 @@ pub fn to_network_from_raw(
     // order per class.
     for obj in raw.of_class("linecode") {
         let lc = rd.linecode(obj);
-        rd.net.linecodes_mut().push(lc);
+        rd.net.line_codes_mut().push(lc);
     }
     for obj in raw.of_class("vsource") {
         let vs = rd.vsource(obj);
@@ -181,7 +181,7 @@ pub fn to_network_from_raw(
             {
                 *outside_profile.entry(class).or_default() += 1;
             }
-            rd.net.untyped_mut().push(UntypedObject::from(obj));
+            rd.net.untyped_objects_mut().push(UntypedObject::from(obj));
         }
     }
     // The static circuit profile: equipment and topology. Schedules,
@@ -207,7 +207,7 @@ pub fn to_network_from_raw(
     // either way; the reader does not substitute a default impedance.
     let known: std::collections::BTreeSet<String> = rd
         .net
-        .linecodes()
+        .line_codes()
         .iter()
         .map(|c| c.name.to_ascii_lowercase())
         .collect();
@@ -1040,7 +1040,7 @@ impl Reader<'_> {
         let amps = self.f64_or(props, "emergamps", "line", line_name, dd::line::EMERGAMPS);
         let i_max = Some(vec![amps; phases]);
         let name = format!("_line_{line_name}");
-        self.net.linecodes_mut().push(DistLineCode {
+        self.net.line_codes_mut().push(DistLineCode {
             name: name.clone(),
             n_conductors: phases,
             r_series: scale_mat(&z.r, 1.0 / length_factor),
@@ -1468,7 +1468,9 @@ impl Reader<'_> {
                     obj.name
                 ),
             );
-            self.net.untyped_mut().push(UntypedObject::from(obj));
+            self.net
+                .untyped_objects_mut()
+                .push(UntypedObject::from(obj));
             return;
         }
         let bus = bus_spec(props.get("bus1"), "");
@@ -1489,7 +1491,9 @@ impl Reader<'_> {
                     obj.name
                 ),
             );
-            self.net.untyped_mut().push(UntypedObject::from(obj));
+            self.net
+                .untyped_objects_mut()
+                .push(UntypedObject::from(obj));
             return;
         }
 
@@ -1504,7 +1508,9 @@ impl Reader<'_> {
                     obj.name
                 ),
             );
-            self.net.untyped_mut().push(UntypedObject::from(obj));
+            self.net
+                .untyped_objects_mut()
+                .push(UntypedObject::from(obj));
             return;
         }
         let has_rx = props.by_name.contains_key("r") || props.by_name.contains_key("x");
@@ -1525,7 +1531,9 @@ impl Reader<'_> {
                         obj.name
                     ),
                 );
-                self.net.untyped_mut().push(UntypedObject::from(obj));
+                self.net
+                    .untyped_objects_mut()
+                    .push(UntypedObject::from(obj));
             }
             return;
         }
@@ -1553,7 +1561,9 @@ impl Reader<'_> {
                     obj.name
                 ),
             );
-            self.net.untyped_mut().push(UntypedObject::from(obj));
+            self.net
+                .untyped_objects_mut()
+                .push(UntypedObject::from(obj));
             return;
         };
         let denom = resistance * resistance + reactance * reactance;
@@ -1562,7 +1572,9 @@ impl Reader<'_> {
                 "reactor {}: zero impedance grounding reactor is not a typed shunt; kept untyped",
                 obj.name
             ));
-            self.net.untyped_mut().push(UntypedObject::from(obj));
+            self.net
+                .untyped_objects_mut()
+                .push(UntypedObject::from(obj));
             return;
         }
         let map = self.terminals(bus, phases, phases + 1, phases);
@@ -1603,7 +1615,9 @@ impl Reader<'_> {
                     spec.class, obj.name
                 ),
             );
-            self.net.untyped_mut().push(UntypedObject::from(obj));
+            self.net
+                .untyped_objects_mut()
+                .push(UntypedObject::from(obj));
             return;
         }
         // InterpretConnection: `d*` and `ll` are delta for both Capacitor and
@@ -1623,7 +1637,9 @@ impl Reader<'_> {
                     spec.class, obj.name, spec.series_name
                 ),
             );
-            self.net.untyped_mut().push(UntypedObject::from(obj));
+            self.net
+                .untyped_objects_mut()
+                .push(UntypedObject::from(obj));
             return;
         }
 
@@ -1635,7 +1651,9 @@ impl Reader<'_> {
                     spec.class, obj.name
                 ),
             );
-            self.net.untyped_mut().push(UntypedObject::from(obj));
+            self.net
+                .untyped_objects_mut()
+                .push(UntypedObject::from(obj));
             return;
         }
         // Read the first kvar array entry, as the DSS engine does for a
@@ -1670,7 +1688,9 @@ impl Reader<'_> {
                     spec.class, obj.name
                 ),
             );
-            self.net.untyped_mut().push(UntypedObject::from(obj));
+            self.net
+                .untyped_objects_mut()
+                .push(UntypedObject::from(obj));
             return;
         }
 
@@ -1698,7 +1718,9 @@ impl Reader<'_> {
                     spec.class, obj.name
                 ),
             );
-            self.net.untyped_mut().push(UntypedObject::from(obj));
+            self.net
+                .untyped_objects_mut()
+                .push(UntypedObject::from(obj));
             return;
         };
         let mut extras = extras_from_leftovers(props);
@@ -1841,7 +1863,9 @@ impl Reader<'_> {
                     obj.name
                 ),
             );
-            self.net.untyped_mut().push(UntypedObject::from(obj));
+            self.net
+                .untyped_objects_mut()
+                .push(UntypedObject::from(obj));
             return;
         }
         let conn_delta = props.get("conn").is_some_and(|v| {
@@ -1940,7 +1964,9 @@ impl Reader<'_> {
                     obj.name
                 ),
             );
-            self.net.untyped_mut().push(UntypedObject::from(obj));
+            self.net
+                .untyped_objects_mut()
+                .push(UntypedObject::from(obj));
             return;
         }
         self.xycurves
@@ -1986,7 +2012,9 @@ impl Reader<'_> {
                     obj.name
                 ),
             );
-            self.net.untyped_mut().push(UntypedObject::from(obj));
+            self.net
+                .untyped_objects_mut()
+                .push(UntypedObject::from(obj));
             return;
         }
         for der in derlist {
@@ -2210,7 +2238,9 @@ impl Reader<'_> {
         if !target.is_empty() {
             self.regulated.insert(target.to_ascii_lowercase());
         }
-        self.net.untyped_mut().push(UntypedObject::from(obj));
+        self.net
+            .untyped_objects_mut()
+            .push(UntypedObject::from(obj));
     }
 
     /// Marks regcontrol targeted transformers with the BMOPF regulator
@@ -2670,12 +2700,12 @@ mod tests {
         );
         assert!(net.shunts().is_empty());
         assert!(
-            net.untyped()
+            net.untyped_objects()
                 .iter()
                 .any(|u| u.class.eq_ignore_ascii_case("capacitor") && u.name == "cap")
         );
         assert!(
-            net.untyped()
+            net.untyped_objects()
                 .iter()
                 .any(|u| u.class.eq_ignore_ascii_case("reactor") && u.name == "rea")
         );
@@ -2706,7 +2736,7 @@ mod tests {
         assert!(sh.b[0][1] < 0.0, "{:?}", sh.b);
         assert_eq!(sh.terminal_map, vec!["1", "2", "3"]);
         assert!(
-            net.untyped()
+            net.untyped_objects()
                 .iter()
                 .all(|u| !(u.class.eq_ignore_ascii_case("capacitor") && u.name == "cap"))
         );

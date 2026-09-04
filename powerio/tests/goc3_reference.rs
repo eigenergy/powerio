@@ -51,7 +51,7 @@ fn assert_benchmark_case(path: &Path) {
     assert_device_values(instance, &expected, path);
 
     let retained_only: Vec<_> = module
-        .diagnostics
+        .diagnostics()
         .iter()
         .filter(|diagnostic| diagnostic.code() == "READ.GOC3.RETAINED_SOURCE_ONLY")
         .collect();
