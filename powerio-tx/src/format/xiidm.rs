@@ -6533,8 +6533,7 @@ fn attributes(element: &BytesStart<'_>, decoder: quick_xml::encoding::Decoder) -
         let key = std::str::from_utf8(attribute.key.as_ref())
             .map_err(|error| format_error(error.to_string()))?
             .to_owned();
-        let value = attribute
-            .decoded_and_normalized_value(quick_xml::XmlVersion::Implicit1_0, decoder)
+        let value = super::xml::attribute_value(&attribute, decoder)
             .map_err(|error| format_error(error.to_string()))?
             .into_owned();
         if values.insert(key.clone(), value).is_some() {
@@ -8229,8 +8228,7 @@ fn open_element(
         let attribute = attribute.map_err(|error| jiidm_emission_error(error.to_string()))?;
         let key = std::str::from_utf8(attribute.key.as_ref())
             .map_err(|error| jiidm_emission_error(error.to_string()))?;
-        let value = attribute
-            .decoded_and_normalized_value(quick_xml::XmlVersion::Implicit1_0, decoder)
+        let value = super::xml::attribute_value(&attribute, decoder)
             .map_err(|error| jiidm_emission_error(error.to_string()))?
             .into_owned();
         if key == "xmlns" || key.starts_with("xmlns:") {
@@ -13187,6 +13185,27 @@ mod tests {
                 .records()
                 .iter()
                 .all(|diagnostic| !diagnostic.message().contains("system MVA base"))
+        );
+    }
+
+    #[test]
+    fn attribute_values_are_normalized_before_they_reach_the_network() {
+        // XML 1.0 attribute value normalization: literal whitespace characters
+        // become spaces, and a character reference keeps its character.
+        let source = BUS_BREAKER.replacen(
+            "<iidm:substation id=\"S\"",
+            "<iidm:substation id=\"S\" name=\"North\n\tyard&#10;east\"",
+            1,
+        );
+        let network = parse_xiidm_source(&source, &mut Diagnostics::new()).unwrap();
+        let detailed = network.detailed_connectivity().as_ref().unwrap();
+        let substation = component_id("substation", "S").unwrap();
+        assert_eq!(
+            component_metadata(detailed, &substation)
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("North  yard\neast")
         );
     }
 

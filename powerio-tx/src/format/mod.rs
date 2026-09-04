@@ -66,6 +66,7 @@ mod surge;
 mod ucte;
 mod union_find;
 mod xiidm;
+mod xml;
 
 pub use powerworld::{PwdDisplay, PwdSubstation};
 

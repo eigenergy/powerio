@@ -7213,8 +7213,7 @@ pub(super) fn validate_rdf_graph(files: &[(String, String)]) -> Result<()> {
                         ) {
                             continue;
                         }
-                        let value = attribute
-                            .decoded_and_normalized_value(quick_xml::XmlVersion::Implicit1_0, reader.decoder())
+                        let value = crate::format::xml::attribute_value(&attribute, reader.decoder())
                             .map_err(|error| {
                                 emission_error(format!(
                                     "generated CGMES file `{name}` has an invalid RDF attribute value: {error}"
