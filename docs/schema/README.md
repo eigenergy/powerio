@@ -34,10 +34,11 @@ the PowerIO release that wrote a document. The C ABI remains independently
 versioned. A reader accepts generation `2`; support for any other generation
 requires an explicit reader or upgrade path.
 
-The four historical files are exact copies of schemas checked into their
-releases. Their original `$id` values and field names remain as evidence of
-what those releases produced. Their presence does not make them readable by
-the current deserializer. Retired payload schemas described an older split
+The `0.1`, `0.2`, and `0.9` files are the exact schemas frozen in the v0.9.0
+tag. The `0.10.0` file is the exact `powerio.module` schema from the v0.10.0
+tag. Their original `$id` values and field names remain as evidence of what
+those releases produced. Their presence does not make them readable by the
+current deserializer. Retired payload schemas described an older split
 representation and are intentionally excluded.
 
 Generate the current schema with:

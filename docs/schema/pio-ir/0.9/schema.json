@@ -1556,27 +1556,24 @@
           "$ref": "#/$defs/Configuration"
         },
         "cost": {
-          "description": "Generation cost, $/kWh per phase conductor, exactly as the source\nstates it: one entry per phase, or a single entry for a scalar\nstatement. No OpenDSS equivalent, so it is None until a format\nsupplies it.",
-          "items": {
-            "anyOf": [
-              {
-                "format": "double",
-                "type": "number"
-              },
-              {
-                "enum": [
-                  "Infinity",
-                  "-Infinity",
-                  "NaN"
-                ],
-                "type": "string"
-              }
-            ]
-          },
-          "type": [
-            "array",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "$/kWh; no OpenDSS equivalent, so it is None until a format supplies it."
         },
         "extras": {
           "additionalProperties": true,
@@ -4822,6 +4819,13 @@
             "$ref": "#/$defs/UntypedObject"
           },
           "type": "array"
+        },
+        "warnings": {
+          "description": "The parse session's findings as `CODE: message` lines, rendered from\n`parse_diagnostics` so the text and the structure cannot disagree.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -4838,6 +4842,7 @@
         "untyped",
         "commands",
         "options",
+        "warnings",
         "extras"
       ],
       "type": "object"
