@@ -1146,3 +1146,85 @@ fn an_unreadable_include_is_a_warning_not_a_containment_refusal() {
 fn nix_running_as_root() -> bool {
     std::fs::File::open("/proc/1/mem").is_ok() || std::env::var("USER").is_ok_and(|u| u == "root")
 }
+
+/// PowerIO IR built from a distribution case converts to that case's own
+/// format through the writer, never by echoing the retained IR document.
+#[test]
+fn convert_writes_a_deserialized_distribution_module_through_the_writer() {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let ir = std::env::temp_dir().join(format!("powerio-cli-dss-{stamp}.pio.json"));
+    let source = repo_file("tests/data/dist/micro/switch.dss");
+    let serialized = run(&[
+        "serialize",
+        source.to_str().unwrap(),
+        "-o",
+        ir.to_str().unwrap(),
+    ]);
+    assert_success(&serialized);
+
+    for target in ["dss", "bmopf-json"] {
+        let converted = run(&["convert", ir.to_str().unwrap(), "--to", target, "-o", "-"]);
+        assert_success(&converted);
+        let stdout = String::from_utf8_lossy(&converted.stdout);
+        assert!(
+            !stdout.contains("\"pio-ir\""),
+            "{target} echoed the IR:\n{stdout}"
+        );
+    }
+    let dss = run(&["convert", ir.to_str().unwrap(), "--to", "dss", "-o", "-"]);
+    let stdout = String::from_utf8_lossy(&dss.stdout).to_ascii_lowercase();
+    assert!(stdout.contains("new circuit"), "{stdout}");
+
+    std::fs::remove_file(ir).unwrap();
+}
+
+/// A failure raised by a typed library error inside a matrix command exits
+/// with that error's category and names its code, not the unclassified one.
+#[test]
+fn a_typed_library_failure_exits_with_its_category_and_code() {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let case = std::env::temp_dir().join(format!("powerio-cli-zero-impedance-{stamp}.m"));
+    std::fs::write(
+        &case,
+        "function mpc = zero\n\
+         mpc.version = '2';\n\
+         mpc.baseMVA = 100;\n\
+         mpc.bus = [\n\
+         1 3 0 0 0 0 1 1 0 230 1 1.1 0.9;\n\
+         2 1 10 5 0 0 1 1 0 230 1 1.1 0.9;\n\
+         ];\n\
+         mpc.gen = [\n\
+         1 10 5 100 -100 1 100 1 100 0 0 0 0 0 0 0 0 0 0 0 0;\n\
+         ];\n\
+         mpc.branch = [\n\
+         1 2 0 0 0 100 100 100 0 0 1 -360 360;\n\
+         ];\n",
+    )
+    .unwrap();
+    let out = run(&[
+        "--diagnostics-format",
+        "json",
+        "verify",
+        case.to_str().unwrap(),
+        "--kind",
+        "bdoubleprime",
+    ]);
+    assert_eq!(
+        out.status.code(),
+        Some(5),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let records = json_diagnostics(&out);
+    let code = records[0]["code"].as_str().unwrap();
+    assert_ne!(code, "BIND.CLI.UNCLASSIFIED", "{records:?}");
+    assert!(code.contains("ZERO_IMPEDANCE"), "{records:?}");
+
+    std::fs::remove_file(case).unwrap();
+}

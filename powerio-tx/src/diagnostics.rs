@@ -293,7 +293,7 @@ pub mod codes {
             "an XIIDM value is retained in detailed connectivity but represented differently in the balanced calculation view";
         READ_XIIDM_VALUE_DEFAULTED = "READ.XIIDM.VALUE_DEFAULTED", Warning,
             "a PowerIO value absent from XIIDM was assigned a documented default";
-        READ_XIIDM_VERSION_COMPATIBILITY = "READ.XIIDM.VERSION.COMPATIBILITY", Remark,
+        READ_XIIDM_VERSION_COMPATIBILITY = "READ.XIIDM.VERSION_COMPATIBILITY", Remark,
             "an older XIIDM input version was read; fresh XIIDM output uses 1.17";
 
         READ_SURGE_RETAINED_SOURCE_ONLY = "READ.SURGE.RETAINED_SOURCE_ONLY", Warning,

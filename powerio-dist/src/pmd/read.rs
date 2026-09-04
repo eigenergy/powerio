@@ -39,18 +39,18 @@ pub(crate) fn parse_pmd_collecting(
     // shares the `data_model` marker but is index based and structurally
     // unrelated; interpreting its sections as ENGINEERING would silently
     // build a wrong network.
-    if let Some(dm) = doc.get("data_model").and_then(Value::as_str) {
-        if !dm.eq_ignore_ascii_case("ENGINEERING") {
-            return Err(Error::Json {
-                format: "PMD",
-                message: format!(
-                    "`data_model` is `{dm}`; this reader supports the ENGINEERING model \
+    if let Some(dm) = doc.get("data_model").and_then(Value::as_str)
+        && !dm.eq_ignore_ascii_case("ENGINEERING")
+    {
+        return Err(Error::Json {
+            format: "PMD",
+            message: format!(
+                "`data_model` is `{dm}`; this reader supports the ENGINEERING model \
                      (convert MATHEMATICAL output back with \
                      PowerModelsDistribution.transform_solution or export the ENGINEERING \
                      model)"
-                ),
-            });
-        }
+            ),
+        });
     }
     let mut net = MulticonductorNetwork::from_tables(MulticonductorNetworkTables {
         source_format: Some(DistSourceFormat::PmdJson),

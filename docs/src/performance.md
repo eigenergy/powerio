@@ -10,17 +10,17 @@ PowerIO has five benchmark tiers. Keep them separate when publishing numbers.
 | Python parser comparison | `.venv/bin/python evals/performance/bench_parse.py --json <cases>` | Python package parse and matrix path against pandapower reader paths |
 | C ABI release size | three `cargo build -p powerio-capi --release` feature sets plus `stat` | binary size for core, `arrow,matrix`, and all release features |
 
-The published table lives in the repository benchmark results, and this guide is
-the public reference for how those numbers are produced. Each refresh should
-update the snapshot environment there: machine model, chip,
-core count, memory, OS, Rust, C compiler, Julia, Python, and the package
-versions used by the comparison harnesses. Regenerate the JSON inputs first,
-then splice only the marked regions:
+`evals/performance/render_tables.py` writes the published tables from the
+JSON the harnesses produce, and this page is the reference for how those
+numbers are made. Each refresh records the snapshot environment: machine
+model, chip, core count, memory, OS, Rust, C compiler, Julia, Python, and the
+package versions of the comparison harnesses. Regenerate the JSON inputs
+first, then render:
 
 ```sh
 bash evals/validation/fetch_cases.sh
 cargo build --release -p powerio-capi --features arrow,matrix
-python3.12 -m venv .venv
+python3.11 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip maturin -r evals/validation/requirements.txt
 env VIRTUAL_ENV=$PWD/.venv .venv/bin/maturin develop --release
 julia --project=evals/validation evals/performance/bench_julia.jl --json
@@ -29,6 +29,7 @@ julia --project=evals/validation evals/performance/bench_julia.jl --json
   tests/data/large/case9241pegase.m \
   tests/data/large/case13659pegase.m \
   tests/data/large/case193k.m
+# tests/data/large/ is not in the repository; evals/validation/fetch_cases.sh fills it.
 python3 evals/performance/render_tables.py
 python3 evals/performance/render_tables.py --check
 ```
@@ -69,16 +70,15 @@ publishable claim by itself. A release note or benchmark page needs the commit, 
 cleanliness, machine, toolchain, command, fixtures, and whether optional large
 cases were present.
 
-Measure C ABI release size before publishing a C ABI change:
+Measure the C ABI release size before publishing a C ABI change. ABI 7
+exports one symbol set; only the `gridfm` feature changes the binary, so
+two builds cover the range (the library suffix is `.so` on Linux, `.dylib` on
+macOS, and `.dll` on Windows):
 
 ```sh
 cargo build -p powerio-capi --release --no-default-features
-cp target/release/libpowerio_capi.dylib /tmp/libpowerio_capi-core.dylib
-cargo build -p powerio-capi --release --no-default-features --features arrow,matrix
-cp target/release/libpowerio_capi.dylib /tmp/libpowerio_capi-arrow-matrix.dylib
-cargo build -p powerio-capi --release --no-default-features --features arrow,matrix,gridfm,dist,prob
-cp target/release/libpowerio_capi.dylib /tmp/libpowerio_capi-all.dylib
-stat -f '%z %N' /tmp/libpowerio_capi-core.dylib \
-  /tmp/libpowerio_capi-arrow-matrix.dylib \
-  /tmp/libpowerio_capi-all.dylib
+cp target/release/libpowerio_capi.so /tmp/libpowerio_capi-core.so
+cargo build -p powerio-capi --release --no-default-features --features gridfm
+cp target/release/libpowerio_capi.so /tmp/libpowerio_capi-gridfm.so
+stat -c '%s %n' /tmp/libpowerio_capi-core.so /tmp/libpowerio_capi-gridfm.so
 ```

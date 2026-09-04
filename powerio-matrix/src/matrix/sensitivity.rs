@@ -402,7 +402,7 @@ pub(crate) fn for_each_ptdf_lodf_entry(
                 (SensitivitySolverPath::SparseCholesky, ptdf, lodf)
             }
             SensitivitySolver::Auto => {
-                unreachable!("select_solver_for_reduced_dimension resolves Auto")
+                unreachable!("select_solver_for_shape resolves Auto")
             }
         };
 

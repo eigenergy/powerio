@@ -82,8 +82,6 @@ pub mod codes {
             "a grounded return conductor is not last in a positional dss node list";
 
         // READ.PMD.
-        READ_PMD_FIELD_DROPPED = "READ.PMD.FIELD_DROPPED", Warning,
-            "a PMD field the multiconductor model cannot state was dropped";
         READ_PMD_VALUE_CLAMPED = "READ.PMD.VALUE_CLAMPED", Warning,
             "a PMD dimension beyond the supported maximum was clamped";
         READ_PMD_VALUE_COLLAPSED = "READ.PMD.VALUE_COLLAPSED", Warning,
@@ -218,16 +216,6 @@ pub mod codes {
         VALIDATE_MULTICONDUCTOR_REFERENCE_UNDEFINED =
             "VALIDATE.MULTICONDUCTOR.REFERENCE_UNDEFINED", Warning,
             "an element references a bus or linecode the document does not declare";
-        /// Emitted by the stored document's payload validation in the facade;
-        /// declared here because this crate owns the multiconductor model.
-        VALIDATE_MULTI_STRUCTURE = "VALIDATE.MULTI.STRUCTURE", Error,
-            "a multiconductor payload's referential integrity does not hold";
-        VALIDATE_MULTI_TERMINAL_MAP = "VALIDATE.MULTI.TERMINAL_MAP", Error,
-            "a multiconductor terminal map does not match the element it belongs to";
-        VALIDATE_MULTI_UNTYPED_OBJECT = "VALIDATE.MULTI.UNTYPED_OBJECT", Warning,
-            "a multiconductor object is carried untyped";
-        VALIDATE_MULTI_NO_VOLTAGE_SOURCE = "VALIDATE.MULTI.NO_VOLTAGE_SOURCE", Warning,
-            "a multiconductor payload declares no voltage source";
         EMIT_MULTICONDUCTOR_ROUTE_DROPPED = "EMIT.MULTICONDUCTOR.ROUTE_DROPPED", Warning,
             "a line polyline was dropped because the target has no polyline field";
         EMIT_MULTICONDUCTOR_SIDECAR_DROPPED = "EMIT.MULTICONDUCTOR.SIDECAR_DROPPED", Warning,

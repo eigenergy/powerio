@@ -17,6 +17,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs" / "src"
+# Julia names the table may use that Base, not PowerIO.jl, provides:
+# `parse` extends `Base.parse` and is deliberately not exported, and the
+# argument types are Base types.
+JULIA_BASE = {"parse", "IO", "AbstractVector", "length", "keys", "haskey"}
 HISTORY_PAGES = {"migration-0.11.md"}
 
 def fail(page: Path, message: str) -> None:
@@ -97,9 +101,9 @@ for page in PAGES:
             if "PowerIO." in fence and "import PowerIO" not in fence and not is_history:
                 fail(page, "julia example qualifies PowerIO names without `import PowerIO`")
             for name in set(re.findall(r"(?<![.\w])([a-z][a-z_0-9]*[a-z0-9]!?)\(", fence)):
-                if name in {"println", "print", "read", "readdir", "joinpath", "string",
-                            "length", "first", "filter", "endswith", "typeof", "show",
-                            "get", "sort", "collect", "pairs", "keys", "haskey", "String"}:
+                if name in JULIA_BASE | {"println", "print", "read", "readdir", "joinpath",
+                                         "string", "first", "filter", "endswith", "typeof",
+                                         "show", "get", "sort", "collect", "pairs", "String"}:
                     continue
                 if name not in julia_exports and not is_history:
                     fail(page, f"julia example calls {name}(), not exported by PowerIO.jl")
@@ -168,8 +172,8 @@ for line in lang_page.read_text().splitlines():
         for fragment in cell_fragments(julia_cell):
             names = set(re.findall(r"(?<![.\w])([a-z][a-z0-9_]*!?)\s*\(", fragment))
             if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_!]*", fragment):
-                names.add(fragment.rstrip("!"))
-            for token in names - RECEIVERS:
+                names.add(fragment)
+            for token in names - RECEIVERS - JULIA_BASE:
                 if token not in julia_exports:
                     fail(lang_page, f"operation table ({concept}): Julia names `{token}`, not exported by PowerIO.jl")
 

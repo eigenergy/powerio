@@ -8,7 +8,7 @@
 
 #![allow(clippy::missing_safety_doc)]
 
-use std::ffi::{c_char, c_void};
+use std::ffi::c_char;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -16010,12 +16010,14 @@ pub unsafe extern "C" fn pio_schema_report(error: *mut *mut PioError) -> *mut Pi
                     "version": powerio::IR_VERSION
                 },
                 "bmopf_schema": powerio_dist::BMOPF_SCHEMA_VERSION,
+                // ABI 7 exports one fixed symbol set. Matrices, the
+                // multiconductor model, and calculation types are always
+                // present; only GridFM Parquet support is a build option.
                 "features": {
-                    "arrow": cfg!(feature = "arrow"),
-                    "matrix": cfg!(feature = "matrix"),
+                    "matrix": true,
                     "gridfm": cfg!(feature = "gridfm"),
-                    "dist": cfg!(feature = "dist"),
-                    "prob": cfg!(feature = "prob")
+                    "dist": true,
+                    "prob": true
                 },
                 "foreign_schemas": {
                     "bmopf": powerio_dist::BMOPF_SCHEMA_VERSION
@@ -16051,9 +16053,6 @@ pub unsafe extern "C" fn pio_string_retain(string: *const PioString) -> *mut Pio
 pub unsafe extern "C" fn pio_string_release(string: *mut PioString) {
     unsafe { PioString::release_raw(string) };
 }
-
-// Keep the opaque handles genuinely opaque to Rust callers too.
-const _: fn(*const c_void) = |_| {};
 
 #[cfg(test)]
 mod tests {
@@ -16445,7 +16444,7 @@ mod tests {
                 parsed["json_classes"],
                 serde_json::json!(powerio::JSON_CLASSES)
             );
-            for feature in ["arrow", "matrix", "gridfm", "dist", "prob"] {
+            for feature in ["matrix", "gridfm", "dist", "prob"] {
                 assert!(parsed["features"][feature].is_boolean());
             }
             pio_string_release(report);

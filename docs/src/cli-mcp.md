@@ -16,7 +16,17 @@ powerio gridfm case14.m -o out                     # a GridFM Parquet dataset
 powerio geo extract case.aux -o layer.geo.json     # standalone geographic layers
 ```
 
-Format names, structural value types, and diagnostic codes are the same strings the language APIs use. Diagnostics render one per line on stderr as `CODE: message`.
+The other subcommands are `batch`, which writes matrix families for every
+case in a directory, `gen`, which writes synthetic cases, `geo apply` and
+`geo convert`, `corpus`, the private corpus harness described in
+[Corpus harness](corpus-harness.md), and `tui`. `dcopf` accepts the alias
+`dc-opf`. `--from` and `--to` take the format tokens and aliases of the
+[format table](format-fidelity.md); `iidm` and `rawx` are accepted as
+input spellings only.
+
+Format names, structural value types, and diagnostic codes are the same
+strings the language APIs use. Diagnostics render one per line on stderr as
+`CODE: message`.
 
 ### Standard input and output
 
@@ -54,8 +64,12 @@ diagnostic code, including the ones the command line raises itself
 `REQUEST.CLI.OUTPUT_REQUIRED`, `REQUEST.CLI.FAMILY_MISMATCH`,
 `REQUEST.CLI.OPTION_INVALID`, `REQUEST.CLI.NO_CASES`,
 `PARSE.CLI.ERRORS_REPORTED`, `VALIDATE.CLI.INPUT_LACKS_DATA`,
-`EMIT.CLI.SIDECAR_PATH`). A failure that reaches the top of
-the program without one is reported as `BIND.CLI.UNCLASSIFIED` and exits 1.
+`EMIT.CLI.SIDECAR_PATH`, `EMIT.CLI.ERRORS_REPORTED`). A reader that reports
+errors ends the run with `PARSE.CLI.ERRORS_REPORTED` and status 4 after the
+output is written; a writer that reports errors ends it with
+`EMIT.CLI.ERRORS_REPORTED` and status 6. A failure that reaches the top of
+the program without a registered code is reported as `BIND.CLI.UNCLASSIFIED`
+and exits 1.
 
 ### Diagnostics format
 
@@ -79,11 +93,8 @@ failure adds its record, and each further reason in its cause chain becomes a
   "message": "No such file or directory (os error 2)", "related": ["failure"]}]
 ```
 
-The same flag shape and the same rule, one record type for warnings and
-failures with notes attached to a primary record, is what GCC
-(`-fdiagnostics-format=`), rustc (`--error-format=json`, `children`), and MLIR
-(`Diagnostic::attachNote`) use; the exit status stays the process exit status
-and is not repeated inside the records.
+The exit status stays the process exit status and is not repeated inside the
+records.
 
 ## The MCP server
 
@@ -101,10 +112,11 @@ return in-memory artifacts. Diagnostics remain structured records with code,
 severity, message, target, and source spans.
 
 ```sh
-pip install 'powerio[mcp]'
-powerio-mcp            # stdio transport
+pip install 'powerio[mcp]'   # Python 3.10 or later
+powerio-mcp                  # stdio transport
 ```
 
 The server accepts exactly one input source: serialized PowerIO IR, a grid
 exchange path, or in-memory grid exchange content. Filesystem access is
-disabled unless allowed roots are configured; remote URI schemes are rejected.
+disabled unless `POWERIO_MCP_ALLOWED_ROOTS` names the directories the server
+may read; remote URI schemes are rejected.

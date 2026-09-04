@@ -25,6 +25,8 @@ powerio_core::diagnostic_codes! {
         "the input carries none of the data the command needs", category = Data;
     EMIT_CLI_SIDECAR_PATH = "EMIT.CLI.SIDECAR_PATH", Error,
         "an emitted sidecar path is not relative to the output directory", category = Output;
+    EMIT_CLI_ERRORS_REPORTED = "EMIT.CLI.ERRORS_REPORTED", Error,
+        "the writer reported errors, so the output is incomplete", category = Output;
     BIND_CLI_UNCLASSIFIED = "BIND.CLI.UNCLASSIFIED", Error,
         "the command failed without a registered diagnostic code";
 }

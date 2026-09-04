@@ -231,20 +231,20 @@ impl App {
     }
 
     pub fn parse_selected(&mut self) {
-        if let Some(entry) = self.cases.get_mut(self.selected) {
-            if matches!(entry.parsed, ParseStatus::NotLoaded) {
-                entry.parsed = match crate::cases::load_network(&entry.path) {
-                    Ok(loaded) => {
-                        self.log.push_parse_warnings(&entry.path, &loaded.warnings);
-                        ParseStatus::Loaded {
-                            n_buses: loaded.network.buses().len(),
-                            n_branches: loaded.network.branches().len(),
-                            base_mva: loaded.network.base_mva(),
-                        }
+        if let Some(entry) = self.cases.get_mut(self.selected)
+            && matches!(entry.parsed, ParseStatus::NotLoaded)
+        {
+            entry.parsed = match crate::cases::load_network(&entry.path) {
+                Ok(loaded) => {
+                    self.log.push_parse_warnings(&entry.path, &loaded.warnings);
+                    ParseStatus::Loaded {
+                        n_buses: loaded.network.buses().len(),
+                        n_branches: loaded.network.branches().len(),
+                        base_mva: loaded.network.base_mva(),
                     }
-                    Err(e) => ParseStatus::Failed(format!("{e:#}")),
-                };
-            }
+                }
+                Err(e) => ParseStatus::Failed(format!("{e:#}")),
+            };
         }
     }
 

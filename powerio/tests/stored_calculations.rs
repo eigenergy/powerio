@@ -865,3 +865,36 @@ fn every_scuc_output_series_round_trips_under_its_exported_name() {
     assert_eq!(*solution.network_outputs(), network_outputs);
     assert_eq!(*solution.device_outputs(), device_outputs);
 }
+
+/// Every multiconductor operating point quantity the runtime defines has a
+/// stored spelling, so a point carrying generator powers survives the round
+/// trip instead of losing the columns silently.
+#[test]
+fn every_multiconductor_quantity_round_trips() {
+    let mut net = mc_network();
+    net.generators_mut().push(powerio_dist::DistGenerator::new(
+        "pv",
+        "src",
+        vec!["1".into(), "2".into()],
+        powerio_dist::Configuration::Wye,
+        vec![5_000.0, 5_000.0],
+        vec![0.0, 0.0],
+    ));
+    let point = powerio_prob::MulticonductorOperatingPointBuilder::for_point(net)
+        .terminal_voltage_magnitudes(vec![240.0, 240.0, 240.0])
+        .terminal_voltage_angles(vec![0.0, -2.094, 2.094])
+        .generator_active_powers(vec![4_000.0, 3_500.0])
+        .generator_reactive_powers(vec![100.0, 50.0])
+        .build_point()
+        .unwrap();
+    let text = round_trip(
+        PioValue::MulticonductorOperatingPoint(point),
+        "multiconductor operating point",
+    );
+    let back = deserialize(&text).unwrap();
+    let PioValue::MulticonductorOperatingPoint(point) = &back.value() else {
+        panic!("wrong kind");
+    };
+    assert_eq!(point.generator_active_power("pv", "2"), Some(3_500.0));
+    assert_eq!(point.generator_reactive_power("pv", "1"), Some(100.0));
+}

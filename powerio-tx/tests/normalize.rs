@@ -57,12 +57,14 @@ fn per_unit_and_radians_on_case9() {
     // Polynomial gen cost: the p^2 coeff scales by base^2, p^1 by base, the
     // constant is unchanged.
     for (g, rg) in n.generators().iter().zip(raw.generators()) {
-        if let (Some(c), Some(rc)) = (&g.cost, &rg.cost) {
-            if c.model == 2 && c.coeffs.len() >= 3 && rc.coeffs.len() >= 3 {
-                assert!(approx(c.coeffs[0], rc.coeffs[0] * base * base));
-                assert!(approx(c.coeffs[1], rc.coeffs[1] * base));
-                assert!(approx(c.coeffs[2], rc.coeffs[2]));
-            }
+        if let (Some(c), Some(rc)) = (&g.cost, &rg.cost)
+            && c.model == 2
+            && c.coeffs.len() >= 3
+            && rc.coeffs.len() >= 3
+        {
+            assert!(approx(c.coeffs[0], rc.coeffs[0] * base * base));
+            assert!(approx(c.coeffs[1], rc.coeffs[1] * base));
+            assert!(approx(c.coeffs[2], rc.coeffs[2]));
         }
     }
 }

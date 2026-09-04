@@ -1487,18 +1487,14 @@ def deserialize(source: Any) -> PioModule:
 
 
 def features() -> dict[str, bool]:
-    """Optional build-time features compiled into this powerio installation.
+    """The build-time features compiled into this powerio installation.
 
     ``matrix``, ``dist``, and ``prob`` are unconditional dependencies of the
-    extension and are always ``True``. ``gridfm`` reflects whether the
-    GridFM Parquet parsing and emission were compiled in; the published wheel
-    always includes them, while a custom source build can omit them.
-    ``arrow`` is always ``False``: unlike the C ABI and the Julia binding,
-    this binding calls into the Rust core directly and does not expose the
-    Arrow C Data Interface.
+    extension and are always ``True``. ``gridfm`` reports whether GridFM
+    Parquet parsing and emission were compiled in; the published wheel
+    includes them, while a custom source build can omit them.
     """
     return {
-        "arrow": False,
         "matrix": True,
         "gridfm": bool(getattr(_powerio, "_has_gridfm", False)),
         "dist": True,

@@ -12,3 +12,9 @@ git-repository-url = "https://github.com/eigenergy/powerio"
 site-url = "/powerio/guide/"
 additional-css = ["theme/powerio.css"]
 mathjax-support = true
+
+# Pages merged in 0.11; the old addresses keep resolving.
+[output.html.redirect]
+"/architecture.html" = "concepts.html"
+"/api-0.11.html" = "languages.html"
+"/architecture-map.html" = "crate-graph.html"

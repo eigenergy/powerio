@@ -633,19 +633,21 @@ pub fn calc_multiconductor_admittance_matrix(
         // reactance between the primary terminals and the ideal link. With
         // the link exact, stamping it across the primary terminal pairs
         // preserves the two winding short circuit behavior.
-        if let Some(&xsc_pct) = transformer.xsc_pct.first() {
-            if primary.s_rating > 0.0 && primary.v_ref > 0.0 && xsc_pct != 0.0 {
-                let z_base = primary.v_ref * primary.v_ref / primary.s_rating;
-                let x = xsc_pct / 100.0 * z_base;
-                let y = Complex64::new(0.0, -1.0 / x);
-                for pair in 0..pairs {
-                    let p = resolve(
-                        &primary.bus,
-                        &primary.terminal_map[pair],
-                        &format!("transformer `{}`", transformer.name),
-                    )?;
-                    stamper.add(p, p, y);
-                }
+        if let Some(&xsc_pct) = transformer.xsc_pct.first()
+            && primary.s_rating > 0.0
+            && primary.v_ref > 0.0
+            && xsc_pct != 0.0
+        {
+            let z_base = primary.v_ref * primary.v_ref / primary.s_rating;
+            let x = xsc_pct / 100.0 * z_base;
+            let y = Complex64::new(0.0, -1.0 / x);
+            for pair in 0..pairs {
+                let p = resolve(
+                    &primary.bus,
+                    &primary.terminal_map[pair],
+                    &format!("transformer `{}`", transformer.name),
+                )?;
+                stamper.add(p, p, y);
             }
         }
     }

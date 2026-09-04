@@ -205,10 +205,10 @@ impl BalancedNetwork {
 
         // Clear control references that point outside the kept set.
         for br in &mut branches {
-            if let Some(c) = &mut br.control {
-                if c.controlled_bus.is_some_and(|b| !kept.contains(&b)) {
-                    c.controlled_bus = None;
-                }
+            if let Some(c) = &mut br.control
+                && c.controlled_bus.is_some_and(|b| !kept.contains(&b))
+            {
+                c.controlled_bus = None;
             }
         }
         for transformer in &mut transformers_3w {
@@ -223,10 +223,10 @@ impl BalancedNetwork {
             }
         }
         for sh in &mut shunts {
-            if let Some(c) = &mut sh.control {
-                if c.control_bus.is_some_and(|b| !kept.contains(&b)) {
-                    c.control_bus = None;
-                }
+            if let Some(c) = &mut sh.control
+                && c.control_bus.is_some_and(|b| !kept.contains(&b))
+            {
+                c.control_bus = None;
             }
         }
         for g in &mut generators {
@@ -363,10 +363,9 @@ impl BalancedNetwork {
         if let (Some(fk), Some(into_bus)) = (
             from_kind,
             self.buses_mut().iter_mut().find(|b| b.id == into),
-        ) {
-            if kind_priority(fk) > kind_priority(into_bus.kind) {
-                into_bus.kind = fk;
-            }
+        ) && kind_priority(fk) > kind_priority(into_bus.kind)
+        {
+            into_bus.kind = fk;
         }
         // The topology changed, so the retained source text is stale.
     }

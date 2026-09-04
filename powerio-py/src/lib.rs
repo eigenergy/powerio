@@ -894,10 +894,6 @@ impl PyBalancedNetwork {
         balanced_field_to_py(py, self.inner(), "areas")
     }
 
-    fn connectivity_report<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        self.calc_connectivity_report(py)
-    }
-
     fn calc_connectivity_report<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let r = IndexedNetwork::with_core(self.inner(), &self.core).calc_connectivity_report();
         let d = PyDict::new(py);
@@ -1138,12 +1134,6 @@ impl PyBalancedNetwork {
         coo_triplets(py, &l)
     }
 
-    /// This network's coordinates as the canonical GeoJSON layer. Raises when
-    /// the network carries none.
-    fn geo_layer_json(&self) -> PyResult<String> {
-        self.to_geo_layer_json()
-    }
-
     /// Transform this network's coordinates to the canonical GeoJSON layer.
     fn to_geo_layer_json(&self) -> PyResult<String> {
         Ok(self.inner().to_geo_layer().to_geojson())
@@ -1160,8 +1150,7 @@ impl PyBalancedNetwork {
         text: &str,
         name_hint: Option<&str>,
     ) -> PyResult<(PyBalancedNetwork, Bound<'py, PyDict>)> {
-        let parsed = powerio::GeoLayer::parse(text, name_hint)
-            .map_err(|error| PowerIOParseError::new_err(error.to_string()))?;
+        let parsed = powerio::GeoLayer::parse(text, name_hint).map_err(core_pyerr)?;
         let mut inner = self.inner().clone();
         let report = inner.apply_geo_layer(&parsed.layer);
         let mut diagnostics = self.diagnostics().to_vec();
@@ -1255,12 +1244,6 @@ impl PyMulticonductorNetwork {
         self.inner().base_frequency()
     }
 
-    /// This network's coordinates as the canonical GeoJSON layer. Raises when
-    /// the network carries none.
-    fn geo_layer_json(&self) -> PyResult<String> {
-        self.to_geo_layer_json()
-    }
-
     /// Transform this network's coordinates to the canonical GeoJSON layer.
     fn to_geo_layer_json(&self) -> PyResult<String> {
         Ok(powerio::dist_geo::to_dist_geo_layer(self.inner()).to_geojson())
@@ -1276,8 +1259,7 @@ impl PyMulticonductorNetwork {
         text: &str,
         name_hint: Option<&str>,
     ) -> PyResult<(PyMulticonductorNetwork, Bound<'py, PyDict>)> {
-        let parsed = powerio::GeoLayer::parse(text, name_hint)
-            .map_err(|error| PowerIOParseError::new_err(error.to_string()))?;
+        let parsed = powerio::GeoLayer::parse(text, name_hint).map_err(core_pyerr)?;
         let mut net = self.inner().clone();
         let report = powerio::dist_geo::apply_dist_geo_layer(&mut net, &parsed.layer);
         *net.source_format_mut() = None;
@@ -1668,7 +1650,7 @@ fn versions_json() -> PyResult<String> {
         powerio::version::VERSION_KEY: powerio::VERSION,
         "bmopf_schema": powerio_dist_bmopf_schema(),
         "powerio_ir": {
-            "name": powerio::IR_SCHEMA_NAME,
+            "schema": powerio::IR_SCHEMA_NAME,
             "version": powerio::IR_VERSION,
         },
     });
@@ -4270,8 +4252,7 @@ fn parse_geo<'py>(
     text: &str,
     name_hint: Option<&str>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let parsed = powerio::GeoLayer::parse(text, name_hint)
-        .map_err(|error| PowerIOParseError::new_err(error.to_string()))?;
+    let parsed = powerio::GeoLayer::parse(text, name_hint).map_err(core_pyerr)?;
     let out = PyDict::new(py);
     out.set_item("geojson", parsed.layer.to_geojson())?;
     let diagnostics: Vec<PyDiagnostic> =

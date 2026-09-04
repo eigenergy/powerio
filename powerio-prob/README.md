@@ -8,15 +8,15 @@ maps to `AcScucInstance`; optional format fields outside the Challenge 3
 formulation do not. When one source contains the problem and its matching
 solution, the universal parser uses the problem's identities and time axis to
 produce `AcScucSolution`. DeepMind OPFData parsing (`AcOpfSolution`) also lives
-here. BMOPF electrical data
-parses to `MulticonductorNetwork`; callers then construct `McAcPfInstance` or
-`McAcOpfInstance` explicitly.
+here. BMOPF electrical data parses to `MulticonductorNetwork` in
+`powerio-dist`; callers then construct `McAcPfInstance` or `McAcOpfInstance`
+here explicitly.
 
 The crate stays matrix free: sparse operators over these instances belong to `powerio-matrix`, and the ordinary way in is the `powerio` facade's one parse.
 
 ```rust,ignore
-let module = powerio::parse(powerio::Source::open("scenario_002.json")?, None)?;
-let powerio::PioValue::AcScucInstance(instance) = &module.value else {
+let module = powerio::parse("scenario_002.json")?;
+let powerio::PioValue::AcScucInstance(instance) = module.value() else {
     panic!("expected an AC SCUC instance");
 };
 assert_eq!(instance.inputs().interval_durations().len(), 24);

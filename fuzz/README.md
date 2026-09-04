@@ -1,24 +1,21 @@
 # Fuzzing the parser surface
 
-libFuzzer harnesses for the readers that take untrusted input: `matpower`,
-`psse`, `pslf`, and `powerworld_aux` feed memory sources to the corresponding
-readers; `pwb` and `pwd` feed the PowerWorld binary decoders raw bytes; `dss`
-feeds the distribution
-family's tokenizer. The remaining JSON formats
-(PowerModels, egret, pandapower) ride serde_json rather than a hand-written
-tokenizer, so the harnesses cover every hand-rolled reader. The invariant
+libFuzzer harnesses for the readers that take untrusted input. The invariant
 under test is the parser trust model: any input returns `Ok` or a structured
 `Err`, never a panic and never undefined behavior.
 
-`json_classify` drives the `.json` classifier and its C entry point over
-arbitrary bytes, asserting that every answer is one of the documented families.
-A file picker dispatches on that answer, so an undocumented token is a defect
-even when nothing panics.
+| Target | Input |
+|---|---|
+| `matpower`, `psse`, `pslf`, `powerworld_aux` | memory sources for the corresponding readers |
+| `pwb`, `pwd` | raw bytes for the PowerWorld binary decoders |
+| `json_classify` | arbitrary bytes for the `.json` classifier and its C entry point; every answer must be a documented family, since a file picker dispatches on it |
+| `stored_module` | the PowerIO IR reader; a document that deserializes must serialize and deserialize again |
+| `dss`, `pmd_json` | the distribution readers, which also write the parsed network back and project its graph, so a count cap that a consumer sizes an allocation from is exercised on both sides |
+| `dist_classify` | the distribution `.json` classifier, which runs before any reader cap applies, and the reader and writers it names |
+| `dss_includes`, `dss_includes_fs` | OpenDSS include resolution over in-memory buffers and over a real filesystem tree with an escaping symbolic link |
 
-`dss` and `pmd_json` also write the parsed network back and project its graph.
-A reader that accepts an unbounded count is only half the hazard; the other
-half is a consumer that sizes an allocation from it, which is where a small
-input turns into gigabytes. Fuzzing the pair catches a cap that does not hold.
+The JSON formats that ride serde_json (PowerModels, egret, pandapower) have no
+hand written tokenizer, so the harnesses cover every hand rolled reader.
 
 Needs nightly and [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz):
 

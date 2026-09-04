@@ -41,7 +41,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 arrow = { workspace = true, optional = true }
 parquet = { version = "59", default-features = false, features = ["arrow", "snap"], optional = true }
-thiserror = "2"
 
 [dev-dependencies]
 powerio-matrix = { workspace = true, features = ["gridfm"] }

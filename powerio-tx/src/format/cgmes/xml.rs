@@ -234,9 +234,10 @@ pub(crate) fn parse_cimxml(text: &str) -> Result<CimDocument> {
             // `&amp;`-style references arrive as their own events.
             (_, Event::GeneralRef(r)) => {
                 if !current_prop_nested && current_prop.as_deref().is_some_and(|p| !p.is_empty()) {
-                    let resolved = resolve_general_ref(&r).ok_or_else(|| {
-                        xml_err("CGMES XML contains an undeclared or external entity reference")
-                    })?;
+                    let resolved =
+                        crate::format::xml::resolve_general_ref(&r).ok_or_else(|| {
+                            xml_err("CGMES XML contains an undeclared or external entity reference")
+                        })?;
                     prop_text.push_str(&resolved);
                 }
             }
@@ -246,23 +247,23 @@ pub(crate) fn parse_cimxml(text: &str) -> Result<CimDocument> {
             (_, Event::End(_)) => {
                 match depth {
                     3 => {
-                        if let Some(prop) = current_prop.take() {
-                            if !prop.is_empty() {
-                                if current_prop_nested && in_header {
-                                    if let Some(header) = header.as_mut() {
-                                        header.nested_properties.push(prop);
-                                    }
-                                    prop_text.clear();
-                                } else {
-                                    let value = std::mem::take(&mut prop_text);
-                                    push_prop(
-                                        in_header,
-                                        &mut header,
-                                        &mut current,
-                                        prop,
-                                        PropValue::Text(value.trim().to_string()),
-                                    );
+                        if let Some(prop) = current_prop.take()
+                            && !prop.is_empty()
+                        {
+                            if current_prop_nested && in_header {
+                                if let Some(header) = header.as_mut() {
+                                    header.nested_properties.push(prop);
                                 }
+                                prop_text.clear();
+                            } else {
+                                let value = std::mem::take(&mut prop_text);
+                                push_prop(
+                                    in_header,
+                                    &mut header,
+                                    &mut current,
+                                    prop,
+                                    PropValue::Text(value.trim().to_string()),
+                                );
                             }
                         }
                         current_prop_nested = false;
@@ -350,20 +351,6 @@ fn read_object<R>(
 /// Numeric character references resolve directly; the five XML predefined
 /// entities by name. Anything else (a DTD-defined entity, absent from CGMES
 /// practice) contributes nothing.
-fn resolve_general_ref(r: &quick_xml::events::BytesRef<'_>) -> Option<String> {
-    if let Ok(Some(ch)) = r.resolve_char_ref() {
-        return Some(ch.to_string());
-    }
-    match r.xml10_content().ok()?.as_ref() {
-        "amp" => Some("&".to_string()),
-        "lt" => Some("<".to_string()),
-        "gt" => Some(">".to_string()),
-        "quot" => Some("\"".to_string()),
-        "apos" => Some("'".to_string()),
-        _ => None,
-    }
-}
-
 fn is_rdf_attribute(resolve: &ResolveResult, local: &[u8], expected_local: &[u8]) -> bool {
     matches!(resolve, ResolveResult::Bound(namespace) if namespace.as_ref() == RDF_NS.as_bytes())
         && local == expected_local

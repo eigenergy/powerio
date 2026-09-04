@@ -8,8 +8,8 @@ the `powerio` facade re-exports it behind the `matrix` feature.
 ```rust
 use powerio_matrix::{BuildOptions, IndexedNetwork, calc_bprime_matrix};
 
-let module = powerio::parse(powerio_core::Source::open("case14.m")?)?;
-let powerio::PioValue::BalancedNetwork(network) = &module.value else {
+let module = powerio::parse("case14.m")?;
+let powerio::PioValue::BalancedNetwork(network) = module.value() else {
     panic!("expected a balanced network");
 };
 let view = IndexedNetwork::new(network);

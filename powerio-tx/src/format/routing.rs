@@ -825,9 +825,8 @@ mod tests {
     }
 
     /// A key's presence check is true even when its value is JSON `null`;
-    /// only a genuinely absent key is absent. Pins the header deserializer
-    /// A string marker (`schema`, `_class`, `format`) whose
-    /// value is not a string carries no marker from that key, matching
+    /// only an absent key is absent. A string marker (`schema`, `_class`,
+    /// `format`) whose value is not a string carries no marker from that key, matching
     /// `serde_json::Value::as_str`'s permissive read; classification still
     /// proceeds over the document's other markers instead of erroring.
     #[test]

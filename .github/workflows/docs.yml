@@ -129,17 +129,19 @@ jobs:
             <dt>released / docs.rs</dt>
             <dd><a href="https://docs.rs/powerio">powerio</a>
                 <a href="https://docs.rs/powerio-core">powerio-core</a>
-                <a href="https://docs.rs/powerio-matrix">powerio-matrix</a>
+                <a href="https://docs.rs/powerio-tx">powerio-tx</a>
+                <a href="https://docs.rs/powerio-dist">powerio-dist</a>
                 <a href="https://docs.rs/powerio-prob">powerio-prob</a>
-                <a href="https://docs.rs/powerio-dist">powerio-dist</a></dd>
+                <a href="https://docs.rs/powerio-matrix">powerio-matrix</a></dd>
           </div>
           <div>
             <dt>development / main</dt>
             <dd><a href="powerio/index.html">powerio</a>
                 <a href="powerio_core/index.html">powerio-core</a>
-                <a href="powerio_matrix/index.html">powerio-matrix</a>
-                <a href="powerio_prob/index.html">powerio-prob</a>
+                <a href="powerio_tx/index.html">powerio-tx</a>
                 <a href="powerio_dist/index.html">powerio-dist</a>
+                <a href="powerio_prob/index.html">powerio-prob</a>
+                <a href="powerio_matrix/index.html">powerio-matrix</a>
                 <a href="powerio_capi/index.html">powerio-capi</a>
                 <a href="python/powerio.html">python</a></dd>
           </div>
@@ -193,6 +195,20 @@ jobs:
         # directory and nothing here.
         for schema in docs/schema/pio-ir/*/schema.json; do
           redirect_schema_page "$(dirname "${schema#docs/schema/}")"
+        done
+        # A historical document keeps the `$id` its release published, which
+        # names a path on this site. Serve that path too, so a document that
+        # quotes the identifier still resolves.
+        for schema in docs/schema/pio-ir/*/schema.json; do
+          archive="$(dirname "${schema#docs/schema/}")"
+          id="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("$id", ""))' "$schema")"
+          served="${id#https://powerio.dev/schema/}"
+          served="${served%/schema.json}"
+          if [ -n "$served" ] && [ "$served" != "$id" ] && [ "$served" != "$archive" ]; then
+            mkdir -p "target/doc/schema/$served"
+            cp "$schema" "target/doc/schema/$served/schema.json"
+            cp "target/doc/schema/$archive/index.html" "target/doc/schema/$served/index.html"
+          fi
         done
     - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
       with:

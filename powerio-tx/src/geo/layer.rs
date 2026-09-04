@@ -913,14 +913,14 @@ pub(super) fn note_space_change(
     previous: Option<&GeoMeta>,
     space: &CoordinateSpace,
 ) {
-    if let Some(previous) = previous {
-        if previous.space != *space {
-            report.notes.push(format!(
-                "the network's coordinate space changed from {} to {}",
-                previous.space.token(),
-                space.token()
-            ));
-        }
+    if let Some(previous) = previous
+        && previous.space != *space
+    {
+        report.notes.push(format!(
+            "the network's coordinate space changed from {} to {}",
+            previous.space.token(),
+            space.token()
+        ));
     }
 }
 

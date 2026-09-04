@@ -76,19 +76,21 @@ pub fn read_module(text: &str) -> Result<PioModule<PioValue>> {
         }
         Ok(stored) => {
             let version = dto::StoredVersion::Integer(stored.version);
-            return Err(unsupported(&stored.schema, Some(&version)));
+            let producer = format!("{} {}", stored.producer.name, stored.producer.version);
+            return Err(unsupported(&stored.schema, Some(&version), Some(&producer)));
         }
         Err(error) => error,
     };
     let header: dto::StoredHeader =
         serde_json::from_str(text).map_err(|error| invalid(error.to_string()))?;
+    let producer = header.producer.as_ref().and_then(describe_producer);
     match (header.schema.as_deref(), header.version) {
         (Some(schema), Some(dto::StoredVersion::Integer(version)))
             if is_readable(schema, version) =>
         {
             Err(invalid(decode_error.to_string()))
         }
-        (Some(schema), version) => Err(unsupported(schema, version.as_ref())),
+        (Some(schema), version) => Err(unsupported(schema, version.as_ref(), producer.as_deref())),
         (None, _) => Err(powerio_core::Error::new(
             &codes::READ_MODULE_UNSUPPORTED,
             "the document is not PowerIO IR",
@@ -97,11 +99,30 @@ pub fn read_module(text: &str) -> Result<PioModule<PioValue>> {
 }
 
 fn is_readable(schema: &str, version: u64) -> bool {
-    schema == crate::IR_SCHEMA_NAME && version == crate::IR_VERSION
+    schema == crate::IR_SCHEMA_NAME
+        && (crate::IR_MIN_VERSION..=crate::IR_VERSION).contains(&version)
 }
 
-/// The refusal for an identity or generation this build does not read.
-fn unsupported(schema: &str, version: Option<&dto::StoredVersion>) -> powerio_core::Error {
+/// The producer a document states, as a refusal names it: `name version`
+/// when both are strings, either one alone, or nothing.
+fn describe_producer(producer: &serde_json::Value) -> Option<String> {
+    let name = producer.get("name").and_then(serde_json::Value::as_str);
+    let version = producer.get("version").and_then(serde_json::Value::as_str);
+    match (name, version) {
+        (Some(name), Some(version)) => Some(format!("{name} {version}")),
+        (Some(name), None) => Some(name.to_owned()),
+        (None, Some(version)) => Some(format!("version {version}")),
+        (None, None) => None,
+    }
+}
+
+/// The refusal for an identity or generation this build does not read. It
+/// names what the document states, producer included, and the remedy.
+fn unsupported(
+    schema: &str,
+    version: Option<&dto::StoredVersion>,
+    producer: Option<&str>,
+) -> powerio_core::Error {
     let guidance = if schema == crate::IR_SCHEMA_NAME
         && version
             .and_then(dto::StoredVersion::as_integer)
@@ -109,16 +130,26 @@ fn unsupported(schema: &str, version: Option<&dto::StoredVersion>) -> powerio_co
     {
         "upgrade PowerIO to a release that supports this later IR generation".to_owned()
     } else {
+        let reads = if crate::IR_MIN_VERSION == crate::IR_VERSION {
+            format!("generation {}", crate::IR_VERSION)
+        } else {
+            format!(
+                "generations {} through {}",
+                crate::IR_MIN_VERSION,
+                crate::IR_VERSION
+            )
+        };
         format!(
-            "this build reads `{}` generation {}; regenerate this document from its source data",
-            crate::IR_SCHEMA_NAME,
-            crate::IR_VERSION
+            "this build reads `{}` {reads}; regenerate this document from its source data",
+            crate::IR_SCHEMA_NAME
         )
     };
     let version = version.map_or_else(|| "<none>".to_owned(), ToString::to_string);
+    let written_by =
+        producer.map_or_else(String::new, |producer| format!(" written by {producer}"));
     powerio_core::Error::new(
         &codes::READ_MODULE_UNSUPPORTED,
-        format!("unsupported stored module `{schema}` version {version}: {guidance}"),
+        format!("unsupported stored module `{schema}` version {version}{written_by}: {guidance}"),
     )
 }
 
@@ -404,11 +435,13 @@ const BALANCED_FLAGS: [BalancedOperatingPointFlag; 3] = [
     BalancedOperatingPointFlag::SwitchClosed,
 ];
 
-const MULTICONDUCTOR_NUMERIC_QUANTITIES: [MulticonductorOperatingPointQuantity; 6] = [
+const MULTICONDUCTOR_NUMERIC_QUANTITIES: [MulticonductorOperatingPointQuantity; 8] = [
     MulticonductorOperatingPointQuantity::TerminalVoltageMagnitude,
     MulticonductorOperatingPointQuantity::TerminalVoltageAngle,
     MulticonductorOperatingPointQuantity::LoadActivePower,
     MulticonductorOperatingPointQuantity::LoadReactivePower,
+    MulticonductorOperatingPointQuantity::GeneratorActivePower,
+    MulticonductorOperatingPointQuantity::GeneratorReactivePower,
     MulticonductorOperatingPointQuantity::TransformerTap,
     MulticonductorOperatingPointQuantity::CapacitorSteps,
 ];
@@ -797,6 +830,8 @@ fn mc_dense_by_name(
         "terminal_voltage_angle" => builder.terminal_voltage_angles(values),
         "load_active_power" => builder.load_active_powers(values),
         "load_reactive_power" => builder.load_reactive_powers(values),
+        "generator_active_power" => builder.generator_active_powers(values),
+        "generator_reactive_power" => builder.generator_reactive_powers(values),
         "switch_closed" => builder.switch_closed(decode_flags(name, values)?),
         "transformer_tap" => builder.transformer_taps(values),
         "capacitor_steps" => builder.capacitor_steps(values),
@@ -921,6 +956,16 @@ fn multiconductor_identity_order(
                 load.terminal_map
                     .iter()
                     .map(move |terminal| format!("{}/{terminal}", load.name))
+            })
+            .collect(),
+        "generator_active_power" | "generator_reactive_power" => network
+            .generators()
+            .iter()
+            .flat_map(|generator| {
+                generator
+                    .terminal_map
+                    .iter()
+                    .map(move |terminal| format!("{}/{terminal}", generator.name))
             })
             .collect(),
         "switch_closed" => network
@@ -2161,9 +2206,6 @@ fn decode_ac_scuc_solution(solution: dto::AcScucSolution) -> Result<powerio_prob
     Ok(value)
 }
 
-// One arm per stored value kind; splitting the match would scatter the
-// kind-to-decoder table this function is.
-#[allow(clippy::too_many_lines)]
 fn decode_dispatch(
     dispatch: Option<&dto::GeneratorDispatch>,
 ) -> Option<powerio_prob::GeneratorDispatch> {
@@ -2386,40 +2428,34 @@ fn decode_severity(severity: dto::Severity) -> DiagnosticSeverity {
 
 /// Every diagnostic's stored form, each given an identifier: the one its
 /// runtime record already carries, or the lowest `d{n}` not already claimed
-/// by another diagnostic in this same list. Checked against every existing
-/// id (explicit or synthesized earlier in this pass) rather than derived
-/// from list position, so a diagnostic appended with no id of its own can
-/// never collide with one an external document set explicitly, and
-/// reordering the list can't make a collision appear later either.
+/// by another diagnostic in this same list. Minted ids are `d0`, `d1`, ...
+/// skipping every id the list already carries, so a diagnostic appended with
+/// no id of its own never collides with one an external document set
+/// explicitly. The counter only moves forward, so minting stays linear in
+/// the list length.
 pub(crate) fn encode_diagnostics(diagnostics: &[Diagnostic]) -> Vec<dto::Diagnostic> {
-    let mut used: HashSet<String> = diagnostics
+    let used: HashSet<&str> = diagnostics
         .iter()
-        .filter_map(|diagnostic| diagnostic.id().map(|id| id.as_str().to_owned()))
+        .filter_map(|diagnostic| diagnostic.id().map(DiagnosticId::as_str))
         .collect();
+    let mut next = 0usize;
     diagnostics
         .iter()
         .map(|diagnostic| {
             let id = if let Some(id) = diagnostic.id() {
                 id.as_str().to_owned()
             } else {
-                let minted = unused_id("d", &used);
-                used.insert(minted.clone());
-                minted
+                loop {
+                    let candidate = format!("d{next}");
+                    next += 1;
+                    if !used.contains(candidate.as_str()) {
+                        break candidate;
+                    }
+                }
             };
             encode_diagnostic(id, diagnostic)
         })
         .collect()
-}
-
-/// The lowest `{prefix}{n}` (n = 0, 1, 2, ...) not already in `used`. Always
-/// found within `used.len() + 1` tries: a finite set can only rule out that
-/// many distinct candidates, so the search below always terminates.
-#[allow(clippy::maybe_infinite_iter)]
-fn unused_id(prefix: &str, used: &HashSet<String>) -> String {
-    (0..)
-        .map(|n| format!("{prefix}{n}"))
-        .find(|candidate| !used.contains(candidate))
-        .expect("a finite used set cannot rule out every candidate")
 }
 
 fn encode_diagnostic(id: String, diagnostic: &Diagnostic) -> dto::Diagnostic {

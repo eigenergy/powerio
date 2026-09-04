@@ -66,10 +66,10 @@ pub fn rating_set_names(aux: &AuxFile, object_type: &str) -> Vec<(usize, String)
             continue;
         };
         for row in &blk.rows {
-            if let (Some(num), Some(name)) = (row.values.get(num_at), row.values.get(name_at)) {
-                if let Ok(n) = num.trim().parse() {
-                    out.push((n, name.to_string()));
-                }
+            if let (Some(num), Some(name)) = (row.values.get(num_at), row.values.get(name_at))
+                && let Ok(n) = num.trim().parse()
+            {
+                out.push((n, name.to_string()));
             }
         }
     }

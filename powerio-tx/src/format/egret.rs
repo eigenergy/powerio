@@ -355,7 +355,9 @@ fn cost_curve(cost: &GenCost) -> Option<Value> {
         1 => {
             let points: Vec<Value> = cost
                 .coeffs
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|pt| Value::Array(vec![jnum(pt[0]), jnum(pt[1])]))
                 .collect();
             curve.insert("cost_curve_type".into(), Value::String("piecewise".into()));
@@ -478,7 +480,7 @@ fn build_from_document(document: Document, name_hint: Option<&str>) -> Result<Ba
         geo: None,
         case_metadata: crate::network::CaseMetadata::default(),
         detailed_connectivity: None,
-        generated_uids: std::collections::BTreeSet::default(),
+        generated_uids: std::sync::Arc::default(),
         buses: buses.into(),
         loads: loads.into(),
         shunts: shunts.into(),

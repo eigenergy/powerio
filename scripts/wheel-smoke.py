@@ -2,8 +2,8 @@
 
 Runs in a clean environment with the wheel (and its `all` extra) installed:
 imports powerio, parses a case, verifies the reported version and schema
-identity, narrows a typed module, builds one matrix, and checks the stored
-document writes deterministically.
+identity, checks the value type with ``isinstance``, builds one matrix, and
+checks the stored document writes deterministically.
 """
 
 import json
@@ -24,7 +24,7 @@ def main() -> None:
     versions = powerio.versions()
     assert powerio.__version__ == versions["powerio_version"], versions
     assert versions["powerio_ir"] == {
-        "name": "pio-ir",
+        "schema": "pio-ir",
         "version": 2,
     }, versions
 
@@ -59,7 +59,7 @@ def main() -> None:
     print(
         "wheel smoke OK:",
         versions["powerio_version"],
-        f"powerio_ir={versions['powerio_ir']['name']}/{versions['powerio_ir']['version']}",
+        f"powerio_ir={versions['powerio_ir']['schema']}/{versions['powerio_ir']['version']}",
     )
 
 

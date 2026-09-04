@@ -234,7 +234,7 @@ pub(crate) fn parse_goc3_source(
             }),
         case_metadata: crate::network::CaseMetadata::default(),
         detailed_connectivity: None,
-        generated_uids: std::collections::BTreeSet::default(),
+        generated_uids: std::sync::Arc::default(),
         buses: buses.into(),
         loads: loads.into(),
         shunts: shunts.into(),
@@ -659,12 +659,12 @@ fn device_rows(network: &Map<String, Value>) -> Result<Vec<Goc3DeviceRecord<'_>>
     for item in section(network, "simple_dispatchable_device")? {
         let obj = item_object(item, "simple_dispatchable_device")?;
         let uid = item_uid(item, obj);
-        if let Some(uid) = &uid {
-            if !seen_uids.insert(uid.clone()) {
-                return Err(bad(format!(
-                    "duplicate simple_dispatchable_device uid `{uid}`"
-                )));
-            }
+        if let Some(uid) = &uid
+            && !seen_uids.insert(uid.clone())
+        {
+            return Err(bad(format!(
+                "duplicate simple_dispatchable_device uid `{uid}`"
+            )));
         }
         let kind = match string(obj, "device_type").unwrap_or("producer") {
             "producer" => Goc3DeviceKind::Generators,
@@ -725,10 +725,10 @@ fn device_time_series(time_series: Option<&Map<String, Value>>) -> Result<HashMa
         if let Some(key) = item.key {
             out.insert(key.to_owned(), item.value);
         }
-        if let Some(obj) = item.value.as_object() {
-            if let Some(uid) = string(obj, "uid") {
-                out.insert(uid.to_owned(), item.value);
-            }
+        if let Some(obj) = item.value.as_object()
+            && let Some(uid) = string(obj, "uid")
+        {
+            out.insert(uid.to_owned(), item.value);
         }
     }
     Ok(out)

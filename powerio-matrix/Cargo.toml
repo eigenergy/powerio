@@ -40,8 +40,6 @@ serde_json.workspace = true
 # randomness backend out, so the crate builds on wasm32 targets.
 rand = { version = "0.9", default-features = false, features = ["std"] }
 rand_chacha = { version = "0.9", default-features = false, features = ["std"] }
-walkdir = "2"
-rayon = "1"
 sha2 = "0.10"
 rustc-hash = "2"
 # arrow and parquet release in lockstep and share `RecordBatch`; keep both on the

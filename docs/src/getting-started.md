@@ -1,18 +1,19 @@
-# Getting Started
+# Getting started
 
 ## Install
 
 Rust:
 
 ```sh
-cargo add powerio            # parsing, emission, .pio.json
-cargo add powerio -F matrix  # + sparse matrices and graph data
+cargo add powerio             # parsing, emission, PowerIO IR
+cargo add powerio -F matrix   # and sparse matrices, sensitivities, graph data
 ```
 
-Python (parse and emit need only the interpreter; matrices pull scipy):
+Python:
 
 ```sh
-pip install powerio          # or: pip install "powerio[all]"
+pip install powerio           # parsing, emission, PowerIO IR
+pip install 'powerio[all]'    # and SciPy matrices, NetworkX graphs, Polars for GridFM
 ```
 
 Julia:
@@ -21,65 +22,84 @@ Julia:
 using Pkg; Pkg.add("PowerIO")
 ```
 
-C and C++: clone the repository, build the shared library, and use the installed header.
+The `powerio` command:
+
+```sh
+cargo install powerio-cli
+```
+
+C and C++: build the shared library from a checkout and include the checked in
+header.
 
 ```sh
 git clone https://github.com/eigenergy/powerio
 cd powerio
 cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,prob
-# → target/release/libpowerio_capi.{so,dylib}, header powerio-capi/include/powerio.h
+# target/release/libpowerio_capi.{so,dylib,dll}; header powerio-capi/include/powerio.h
 ```
 
 ## Parse, inspect, emit
 
-Julia:
+Rust:
 
-```julia
-using PowerIO
-case = parse("case9.m")
-case isa PioModule{BalancedNetwork}
-length(case.value.buses)              # 9
-case.diagnostics                      # the reader's findings, usually empty here
-emit(case, "matpower", "copy.m")     # same format: byte exact echo
-result = emit(case, "psse")         # another format: artifacts + diagnostics
+```rust,ignore
+let module = powerio::parse("case9.m")?;
+let powerio::PioValue::BalancedNetwork(network) = module.value() else {
+    panic!("expected a balanced network");
+};
+println!("{} buses", network.buses().len());
+for finding in &module.diagnostics {
+    eprintln!("{}: {}", finding.code(), finding.message());
+}
+powerio::emit(&module, "matpower", "copy.m")?;      // the source bytes, unchanged
+let result = powerio::emit(&module, "psse", "case9.raw")?;
+for finding in result.diagnostics() {
+    eprintln!("{}", finding.code());                   // what PSS/E cannot carry
+}
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 Python:
 
 ```python
 import powerio
-case = powerio.parse("case9.m")
-net = case.value                # BalancedNetwork
-case.diagnostics                # native records: code, severity, message, spans
-powerio.emit(case, "matpower", "copy.m")
+
+module = powerio.parse("case9.m")
+network = module.value                       # BalancedNetwork
+for finding in module.diagnostics:
+    print(finding.code, finding.message)
+powerio.emit(module, "matpower", "copy.m")   # the source bytes, unchanged
+result = powerio.emit(module, "psse")        # text in memory
+result.text
+result.diagnostics
 ```
 
-Rust:
+Julia:
 
-```rust,ignore
-let module = powerio::parse("case9.m")?;
-match &module.value {
-    powerio::PioValue::BalancedNetwork(network) => {
-        println!("{} buses", network.buses().len());
-    }
-    other => println!("value type: {}", other.type_name()),
-}
-let result = powerio::emit(&module, "matpower", "copy.m")?;
-for diagnostic in result.diagnostics() {
-    eprintln!("{}", diagnostic.code());
-}
+```julia
+using PowerIO
+
+module_ = parse("case9.m")
+net = module_.value                          # BalancedNetwork
+length(net.buses)                            # 9
+module_.diagnostics
+emit(module_, "matpower", "copy.m")          # the source bytes, unchanged
+result = emit(module_, "psse")               # text in memory
+result.diagnostics
 ```
 
 Command line:
 
 ```sh
-powerio convert case9.m --to psse -o case9.raw
-powerio summary case9.m               # the canonical network summary JSON
+powerio convert case9.m --to psse -o case9.raw   # findings on stderr
+powerio summary case9.m                          # counts, bases, and findings as JSON
 ```
 
 ## Where next
 
-- The value families and what each source parses to: [Core Concepts](concepts.md).
-- Balanced transmission work: [Transmission Networks](transmission.md). Conductor level distribution work: [Distribution Networks](distribution.md).
-- Matrices, signs, units, and row identities: [Matrices and Graphs](matrices.md).
-- Each format's supported profile and write behavior: [Formats and Fidelity](format-fidelity.md).
+- What each source parses to and what a module carries: [Core concepts](concepts.md).
+- Balanced transmission cases: [Transmission networks](transmission.md).
+  Conductor level distribution cases: [Distribution networks](distribution.md).
+- Matrices, signs, units, and index mappings: [Matrices and graphs](matrices.md).
+- What each reader keeps and each writer reports: [Formats and fidelity](format-fidelity.md).
+- The same operations in each language: [Rust, Python, Julia, and C](languages.md).

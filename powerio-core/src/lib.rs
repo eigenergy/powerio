@@ -5,7 +5,7 @@
 //! not own electrical network, calculation, matrix, or dynamic value types.
 
 mod bounded;
-mod codes;
+pub mod codes;
 mod component_id;
 mod diagnostic;
 mod error;

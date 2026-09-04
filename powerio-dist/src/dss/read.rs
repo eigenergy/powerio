@@ -116,10 +116,11 @@ pub fn to_network_from_raw(
         // `Set defaultb=50` is DefaultBaseFrequency but anything shorter
         // ("default", "d") binds DefaultDaily; the bound sits at the unique
         // resolution point.
-        if name.len() >= "defaultb".len() && "defaultbasefrequency".starts_with(name.as_str()) {
-            if let Ok(f) = value.to_f64(Some(rd.vars)) {
-                *rd.net.base_frequency_mut() = f;
-            }
+        if name.len() >= "defaultb".len()
+            && "defaultbasefrequency".starts_with(name.as_str())
+            && let Ok(f) = value.to_f64(Some(rd.vars))
+        {
+            *rd.net.base_frequency_mut() = f;
         }
         rd.net
             .options_mut()
@@ -1612,18 +1613,18 @@ impl Reader<'_> {
             v.text.to_ascii_lowercase().starts_with('d') || v.text.eq_ignore_ascii_case("ll")
         });
         let bus = bus_spec(props.get("bus1"), "");
-        if let Some(return_bus) = props.get("bus2").map(super::lex::Value::to_bus_spec) {
-            if !same_bus_ground_return(&bus, &return_bus, phases) {
-                self.warn(
-                    &C::READ_DSS_OBJECT_UNTYPED,
-                    format!(
-                        "{} {}: series {} (bus2) are not typed yet; kept untyped",
-                        spec.class, obj.name, spec.series_name
-                    ),
-                );
-                self.net.untyped_mut().push(UntypedObject::from(obj));
-                return;
-            }
+        if let Some(return_bus) = props.get("bus2").map(super::lex::Value::to_bus_spec)
+            && !same_bus_ground_return(&bus, &return_bus, phases)
+        {
+            self.warn(
+                &C::READ_DSS_OBJECT_UNTYPED,
+                format!(
+                    "{} {}: series {} (bus2) are not typed yet; kept untyped",
+                    spec.class, obj.name, spec.series_name
+                ),
+            );
+            self.net.untyped_mut().push(UntypedObject::from(obj));
+            return;
         }
 
         if conn_delta && phases == 1 && bus.nodes.len() < 2 {

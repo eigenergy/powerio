@@ -66,6 +66,7 @@ mod surge;
 mod ucte;
 mod union_find;
 mod xiidm;
+mod xml;
 
 pub use powerworld::{PwdDisplay, PwdSubstation};
 
@@ -412,9 +413,10 @@ pub fn parse_with_json_class(
         .extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension.eq_ignore_ascii_case("xiidm"))
-        || source
-            .primary_buffer()
-            .is_ok_and(|buffer| xiidm::looks_like_xiidm(buffer.content_bytes()));
+        || (source.format().is_none()
+            && source
+                .primary_buffer()
+                .is_ok_and(|buffer| xiidm::looks_like_xiidm(buffer.content_bytes())));
     let is_jiidm = source.format().is_some_and(|format| {
         routing::parse_transmission_format(format.as_str()) == Some(TransmissionFormat::Jiidm)
     }) || std::path::Path::new(source.name())
@@ -1071,7 +1073,8 @@ fn echo_text(module: &PioModule<BalancedNetwork>, target: TargetFormat) -> Optio
     // source's own; any other revision goes through write_psse_rev so the
     // caller gets the layout it asked for instead of the original bytes.
     if let TargetFormat::Psse { rev } = target
-        && psse::header_rev(text.trim_start_matches('\u{feff}')).ok()? != rev
+        && (!matches!(rev, 33..=35)
+            || psse::header_rev(text.trim_start_matches('\u{feff}')).ok()? != rev)
     {
         return None;
     }
@@ -1379,10 +1382,10 @@ pub(super) fn allocate_circuit_id<K: Ord + Clone>(
     used: &mut std::collections::BTreeMap<K, std::collections::BTreeSet<String>>,
 ) -> String {
     let taken = used.entry(key).or_default();
-    if let Some(id) = preferred {
-        if taken.insert(id.to_owned()) {
-            return id.to_owned();
-        }
+    if let Some(id) = preferred
+        && taken.insert(id.to_owned())
+    {
+        return id.to_owned();
     }
     let mut n = 1u32;
     loop {
@@ -1414,18 +1417,16 @@ fn warn_psse_downgrade(
         format,
         module.value().source_format(),
         source_text.as_deref(),
-    ) {
-        if let Ok(src_rev) = psse::header_rev(src)
-            && src_rev > rev
-        {
-            conv.push(
+    ) && let Ok(src_rev) = psse::header_rev(src)
+        && src_rev > rev
+    {
+        conv.push(
                 &codes::EMIT_PSSE_DOWNGRADED,
                 format!(
                     "PSS/E source is revision {src_rev} but the emission target is revision {rev}; \
                      the older layout drops fields the source carried (emit as psse{src_rev} to keep them)"
                 ),
             );
-        }
     }
 }
 
@@ -1725,7 +1726,7 @@ pub(super) fn warn_dropped_extras(
     warnings: &mut Diagnostics,
 ) {
     let mut dropped = 0usize;
-    let mut keys: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut keys: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
     for extras in net
         .buses()
         .iter()
@@ -1741,7 +1742,7 @@ pub(super) fn warn_dropped_extras(
         let mut carries = false;
         for key in extras.keys().filter(|key| !consumed(key)) {
             carries = true;
-            keys.insert(key.clone());
+            keys.insert(key.as_str());
         }
         if carries {
             dropped += 1;
@@ -1751,7 +1752,7 @@ pub(super) fn warn_dropped_extras(
         let named = keys
             .iter()
             .take(EXTRAS_KEYS_NAMED)
-            .map(String::as_str)
+            .copied()
             .collect::<Vec<_>>()
             .join("`, `");
         let remainder = keys.len().saturating_sub(EXTRAS_KEYS_NAMED);
@@ -1886,10 +1887,8 @@ fn warn_missing_reference(net: &BalancedNetwork, format: TargetFormat, conv: &mu
             | TargetFormat::Pslf
             | TargetFormat::SurgeJson
     );
-    if needs_ref {
-        if let Some(message) = missing_reference_warning(net) {
-            conv.push(&format.emit_family().reference_missing, message);
-        }
+    if needs_ref && let Some(message) = missing_reference_warning(net) {
+        conv.push(&format.emit_family().reference_missing, message);
     }
 }
 
@@ -1964,10 +1963,10 @@ pub(crate) fn set_bus_kind(
     bus: BusId,
     kind: BusType,
 ) {
-    if let Some(&idx) = bus_pos.get(&bus) {
-        if buses[idx].kind != BusType::Isolated {
-            buses[idx].kind = kind;
-        }
+    if let Some(&idx) = bus_pos.get(&bus)
+        && buses[idx].kind != BusType::Isolated
+    {
+        buses[idx].kind = kind;
     }
 }
 

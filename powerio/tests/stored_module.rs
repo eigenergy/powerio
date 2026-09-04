@@ -429,6 +429,18 @@ fn an_unreadable_powerio_ir_generation_is_refused_with_the_remedy() {
         .to_string();
     assert!(error.contains("version 1"), "{error}");
 
+    // The producer a document states is named, so the reader a user needs is
+    // clear from the refusal alone.
+    let text = serde_json::json!({
+        "schema": powerio::IR_SCHEMA_NAME,
+        "version": newer,
+        "producer": { "name": "powerio", "version": "9.0.0" },
+    })
+    .to_string();
+    let error = deserialize_module_text(&text).unwrap_err().to_string();
+    assert!(error.contains("written by powerio 9.0.0"), "{error}");
+    assert!(error.contains("upgrade PowerIO"), "{error}");
+
     let text = serde_json::json!({
         "schema": "someone.else",
         "version": powerio::IR_VERSION,

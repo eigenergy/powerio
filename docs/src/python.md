@@ -12,7 +12,9 @@ Matrix and graph helpers use optional Python packages:
 pip install 'powerio[matrix]'   # NumPy and SciPy
 pip install 'powerio[graph]'    # NetworkX
 pip install 'powerio[gridfm]'   # Polars
-pip install 'powerio[all]'
+pip install 'powerio[all]'      # the three above
+pip install 'powerio[pandas]'   # pandas and PyArrow tables, Python 3.10 or later
+pip install 'powerio[mcp]'      # the MCP server, Python 3.10 or later
 ```
 
 Importing `powerio` and using `parse`, `emit`, `serialize`, or `deserialize`
@@ -37,7 +39,7 @@ case_from_text = powerio.parse(
     StringIO(matpower_text), format="matpower", name="case9.m"
 )
 case_from_binary = powerio.parse(
-    pwb_bytes, format="powerworld-pwb", name="case.pwb"
+    pwb_bytes, format="pwb", name="case.pwb"
 )
 ```
 
@@ -80,10 +82,9 @@ Diagnostics are fields of the module, not methods on the contained network or
 solution. Python uses its normal type system; there is no `.kind` property,
 kind enum, or typed narrowing helper.
 
-Registered values include `BalancedNetwork`,
-`dist.MulticonductorNetwork`, `OperatingPoint`, `TimeSeries`, `ScenarioSet`,
-the PF/OPF/SCUC calculation instances and solutions, and
-`SocwrOpfSolution`.
+The value classes are `BalancedNetwork`, `dist.MulticonductorNetwork`,
+`OperatingPoint`, `TimeSeries`, `ScenarioSet`, `GeoLayer`, the PF, OPF, and
+SCUC instances and solutions, and `SocwrOpfSolution`.
 
 ## Emit grid exchange formats
 
@@ -151,7 +152,7 @@ report = powerio.apply_updates(
     module,
     [
         powerio.OperatingPointUpdate.set_load_active_power(
-            load_id, powerio.ActivePower.mw(42.0)
+            load_id, powerio.ActivePower.megawatts(42.0)
         )
     ],
 )
@@ -178,8 +179,23 @@ p_branch = network.calc_branch_flow_dc(voltage_angles)
 p_bus = network.calc_bus_injection_dc(voltage_angles)
 ```
 
-SciPy is imported only when a sparse matrix is requested. NumPy is imported
-only for array based helpers. The public API has no DC data bundle.
+`calc_admittance_matrix`, `calc_bprime_matrix`, `calc_ptdf`, `calc_lodf`,
+`to_normalized`, and `to_networkx` are methods of the same class. SciPy is
+imported only when a sparse matrix is requested, NumPy only for array based
+helpers, and NetworkX only by `to_networkx`.
+
+## Other functions
+
+| Function | Result |
+|---|---|
+| `resolve_format(name)` | the canonical `FormatInfo` for a token or alias, or `None` |
+| `features()` | which build features the installed extension carries |
+| `versions()` | the release, the PowerIO IR identity, and the BMOPF schema version |
+| `parse_geo(text, name_hint=None)` | a geographic layer in canonical form with its diagnostics |
+| `parse_display(path, format=None)` | the raw PowerWorld `.pwd` display record as `DisplayData` |
+| `from_ppc(ppc)` | a `BalancedNetwork` from a pandapower or PYPOWER case dictionary |
+| `PioModule.from_value(value)` | a module around a value built in Python |
+| `module.to_balanced_report()`, `module.to_balanced()` | the multiconductor to balanced transformation |
 
 ## Errors
 
@@ -194,7 +210,7 @@ serialized PowerIO modules through the `powerio_ir` field. Electrical inputs and
 PowerIO types and PowerIO IR. The server does not define another network,
 calculation, update, or solution schema.
 
-Filesystem access is disabled unless the deployment configures allowed roots.
-Remote URI schemes are rejected. Host approval, request identifiers, timeout,
-and cancellation handling remain MCP transport concerns and do not alter the
-PowerIO data.
+Filesystem access is disabled unless `POWERIO_MCP_ALLOWED_ROOTS` names the
+directories the server may read. Remote URI schemes are rejected. Host
+approval, request identifiers, timeout, and cancellation handling remain MCP
+transport concerns and do not alter the PowerIO data.

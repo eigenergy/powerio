@@ -60,23 +60,21 @@ pub fn run(opts: TuiOptions) -> anyhow::Result<()> {
             let timeout = tick_rate
                 .checked_sub(last_tick.elapsed())
                 .unwrap_or_default();
-            if event::poll(timeout)? {
-                if let Event::Key(key) = event::read()? {
-                    if key.kind == KeyEventKind::Press {
-                        if let Err(e) = handle_key(&mut app, key) {
-                            tracing::error!(error = %e, "key handler error");
-                            app.set_status(format!("error: {e}"));
-                        }
-                    }
-                }
+            if event::poll(timeout)?
+                && let Event::Key(key) = event::read()?
+                && key.kind == KeyEventKind::Press
+                && let Err(e) = handle_key(&mut app, key)
+            {
+                tracing::error!(error = %e, "key handler error");
+                app.set_status(format!("error: {e}"));
             }
             if last_tick.elapsed() >= tick_rate {
                 last_tick = Instant::now();
                 app.drain_worker();
-                if let Some((_, when)) = app.status {
-                    if when.elapsed() > Duration::from_secs(4) {
-                        app.status = None;
-                    }
+                if let Some((_, when)) = app.status
+                    && when.elapsed() > Duration::from_secs(4)
+                {
+                    app.status = None;
                 }
             }
             if app.should_quit {

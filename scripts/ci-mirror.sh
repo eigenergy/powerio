@@ -81,18 +81,18 @@ lib_path_var=DYLD_LIBRARY_PATH
 [ "$(uname -s)" = "Linux" ] && lib_path_var=LD_LIBRARY_PATH
 
 run cargo build -q -p powerio-capi --release --features dist
-cc -DPIO_DIST -I powerio-capi/include powerio-capi/examples/smoke.c \
+cc -I powerio-capi/include powerio-capi/examples/smoke.c \
    -L target/release -lpowerio_capi -o "$smoke_dir/smoke_dist"
 run env "$lib_path_var=target/release" "$smoke_dir/smoke_dist" tests/data/case9.m
-c++ -std=c++17 -DPIO_DIST -I powerio-capi/include powerio-capi/examples/header_cpp.cpp \
+c++ -std=c++17 -I powerio-capi/include powerio-capi/examples/header_cpp.cpp \
    -L target/release -lpowerio_capi -o "$smoke_dir/header_cpp_dist"
 run env "$lib_path_var=target/release" "$smoke_dir/header_cpp_dist"
 
 run cargo build -q -p powerio-capi --release --features arrow,matrix,gridfm,dist,prob
-cc -DPIO_ARROW -DPIO_MATRIX -DPIO_GRIDFM -DPIO_DIST -DPIO_PROB \
+cc -DPIO_GRIDFM \
    -I powerio-capi/include powerio-capi/examples/smoke.c \
    -L target/release -lpowerio_capi -o "$smoke_dir/smoke_release"
-c++ -std=c++17 -DPIO_ARROW -DPIO_MATRIX -DPIO_GRIDFM -DPIO_DIST -DPIO_PROB \
+c++ -std=c++17 -DPIO_GRIDFM \
    -I powerio-capi/include powerio-capi/examples/header_cpp.cpp \
    -L target/release -lpowerio_capi -o "$smoke_dir/header_cpp_release"
 run env "$lib_path_var=target/release" "$smoke_dir/header_cpp_release"

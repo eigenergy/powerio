@@ -1111,14 +1111,14 @@ impl<L: Loader> Executor<'_, L> {
         ctx: &dyn Fn(String) -> String,
     ) -> Option<(String, String)> {
         let p = scan.next_param()?;
-        if let Some(name) = &p.name {
-            if !name.eq_ignore_ascii_case("object") {
-                self.raw.warn(
-                    &C::PARSE_DSS_SOURCE_MALFORMED,
-                    ctx(format!("expected Class.Name, got `{name}=`")),
-                );
-                return None;
-            }
+        if let Some(name) = &p.name
+            && !name.eq_ignore_ascii_case("object")
+        {
+            self.raw.warn(
+                &C::PARSE_DSS_SOURCE_MALFORMED,
+                ctx(format!("expected Class.Name, got `{name}=`")),
+            );
+            return None;
         }
         let spec = p.value.text;
         match spec.split_once('.') {

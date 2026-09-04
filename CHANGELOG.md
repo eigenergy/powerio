@@ -1,247 +1,210 @@
 # Changelog
 
-## 0.11.0 (unreleased)
+## 0.11.0
 
-PowerIO 0.11 is the stabilization release for the API developed through the
-0.10 beta. It has four representation operations: `parse`, `emit`, `serialize`,
-and `deserialize`. Paths, streams, and memory enter through `Source`; separate
-file, text, and byte parsing functions are gone. `PioModule<T>` stores the
-value, diagnostics, sources, provenance, and history. Rust matches `PioValue`,
-Python uses `isinstance`, Julia uses multiple dispatch, and C uses structural
-type names and typed borrowed accessors.
+PowerIO 0.11 is the stabilization release of the API developed through the
+0.10 beta. Four operations move data: `parse`, `emit`, `serialize`, and
+`deserialize`. `PioModule<T>` holds the value, its diagnostics, sources,
+producer, and history. Rust matches `PioValue` through `module.value()`,
+Python uses `isinstance`, Julia uses dispatch, and C uses structural type
+names with typed borrowed accessors. The 0.11.x line is reserved for
+compatible fixes, performance work, and additive change; an unavoidable
+break in the public Rust API moves to 0.12. The Rust API stays pre-1.0 while
+public signatures expose types from the pre-1.0 `sprs` and `petgraph`
+crates.
 
-PowerIO IR is the only PowerIO-owned JSON document. The standalone
-`BalancedNetwork::to_json`, `from_json`, and `to_json_with_diagnostics`
-operations and the `model-json` classifier family are removed. A bare object
-shaped like a `BalancedNetwork` is neither PowerIO IR nor a grid exchange
-format; wrap the value in `PioModule` and call `serialize`.
+### Operations and values
 
-This release deliberately remains pre-1.0 because public Rust signatures still
-expose types from the pre-1.0 `sprs` and `petgraph` crates. The 0.11.x line is
-reserved for compatible bug fixes, performance improvements, and additive
-work; an unavoidable breaking public API change moves to 0.12. PowerIO 1.0
-follows a downstream stabilization cycle and an explicit decision about those
-public dependency boundaries.
+- `parse`, `emit`, `serialize`, and `deserialize` take their input or output
+  through `IntoSource` and `IntoDestination`: a file or directory name,
+  content already in memory, or a built `Source` or `Destination`. The
+  ordinary read is `powerio::parse("case.raw")`. Optional configuration is a
+  `ParseOptions` value passed to `parse_with_options`. Content in memory
+  carries the name `<memory>`, which identifies no format, so a format read
+  from a file extension is declared through the options or named through
+  `Source::from_memory`.
+- `emit(module, format, destination)` returns an `EmitResult`: one artifact
+  per file produced, the output layout, the fidelity (an exact echo of
+  retained source bytes or fresh canonical output), and the emission
+  diagnostics. The same call handles memory, one file, and directory output.
+- A geographic layer is a module value, `powerio.GeoLayer`. The canonical
+  `.geo.json`, GeoJSON, aliased CSV or JSON records, headerless buscoords
+  CSV, and a PowerWorld `.pwd` display parse to it, `emit` writes it as
+  `geo-json`, PowerIO IR carries it, and `pio_value_geo_layer` reads it in C.
+- `TimeSeries<T>` and `ScenarioSet<T>` use ordinary collection operations.
+  An entry is the contained value or a view rooted in the owning module.
+- `OperatingPointUpdate`, `NetworkUpdate`, and `CalculationUpdate` target
+  stable component identities with absolute values and explicit units.
+  `apply_updates` validates the whole batch before changing anything and
+  returns an `UpdateReport` naming the changed fields and whether energized
+  connectivity changed. A bus demand update names a load or an allocation
+  rule; PowerIO never assigns aggregate demand to an arbitrary load.
+- `BalancedNetwork` records carry stable component identities. Identities
+  PowerIO generates are marked as generated, so a writer does not report
+  internal indexing data as a dropped source field.
+- Removed: `parse_file`, `parse_text`, `parse_str`, `parse_bytes`,
+  `write_to`, `write_string`, `write_file`, `to_format`, `PioValueKind`,
+  `.kind`, `try_into_typed`, `IntoTypedModule`, `StateInventory`,
+  `StateSelector`, `SelectedState`, `list_states`, `select_state`,
+  `export_state`, `BalancedNetwork::to_json`, `from_json`, and
+  `to_json_with_diagnostics`, the `model-json` classification family, the
+  `pio-json` format token, the Rust `parse_display`, `DisplayData`, and
+  `DisplayFormat`, the public DC data bundle types, and the abbreviation
+  `Mat` (now `ConductorMatrix`). Python keeps `parse_display` for the raw
+  PowerWorld display record. The migration guide lists every replacement.
 
-PowerIO IR uses the durable identity `"schema": "pio-ir"` and independent
-integer generation `"version": 2`. The producer record separately identifies
-the PowerIO release that wrote a document. Readers and upgrade code for
-earlier document generations are removed. `powerio::IR_SCHEMA_NAME`,
-`powerio::IR_VERSION`, and `powerio::IR_SCHEMA_ID` state the current identity.
-C ABI 7 is the only C ABI and contains no aliases for earlier ABI generations.
+### PowerIO IR
 
-`BalancedNetwork` and `MulticonductorNetwork` are the two electrical network
-types. `OperatingPoint<T>`, `TimeSeries<T>`, and `ScenarioSet<T>` compose over
-both. Calculation data uses explicit PF, OPF, and SCUC instance and solution
-types. `SocwrOpfSolution` records the PowerModels SOCWR relaxation and its
-objective lower bound without claiming an AC feasible solution.
-Multiconductor matrices use the descriptive Rust name `ConductorMatrix`; the
-beta abbreviation `Mat` is removed.
+- The document identity is `"schema": "pio-ir"` with integer generation
+  `"version": 2`. The generation changes only when the serialized
+  representation changes; the producer record names the release that wrote
+  a document, and the reader never consults it for compatibility.
+  `powerio::IR_SCHEMA_NAME`, `IR_VERSION`, `IR_MIN_VERSION`, and
+  `IR_SCHEMA_ID` state the identity and the generation window. Every 0.11.x
+  release reads every generation the line wrote; the readers for earlier
+  generations are removed, and a refused document names the identity,
+  generation, and producer it states with the remedy.
+- PowerIO IR is the only PowerIO owned JSON document. A bare object shaped
+  like a `BalancedNetwork` is neither PowerIO IR nor a grid exchange format.
+- `serialize` is deterministic: one module serializes to identical text every
+  time, and serializing what that text deserializes to reproduces it.
+- The MATPOWER and PSS/E readers attach the byte range of the record a
+  finding is about to every diagnostic they raise, and
+  `powerio_core::Error::with_span` attaches a range to the failure that ends
+  an operation.
+- The guide gains a PowerIO IR reference that defines every structural value
+  type field by field; `powerio/tests/ir_reference.rs` holds the page to the
+  generated schema. `docs/schema/README.md` is the ledger of generations, and
+  every published schema stays served at its original `$id`.
 
-`OperatingPointUpdate`, `NetworkUpdate`, and `CalculationUpdate` target stable
-component identities and absolute values with units. `apply_updates` validates
-the full batch before changing a value. `UpdateReport` lists the changed fields
-and reports whether energized connectivity changed.
+### Calculations
 
-The public DC bundle and “DC branch coefficient” vocabulary are removed.
-Callers use `calc_incidence_matrix`, `calc_branch_susceptances`,
-`calc_bus_susceptance_matrix`, `calc_branch_flow_matrix`,
-`calc_branch_phase_shift_injection`, `calc_bus_phase_shift_injection`,
-`calc_branch_flow_dc`, and `calc_bus_injection_dc`. Incidence is branches by
-buses, with `+1` at the from bus and `-1` at the to bus, matching PowerModels
-and MATPOWER signs.
+- The DC calculations are named for their result: `calc_incidence_matrix`,
+  `calc_branch_susceptances`, `calc_bus_susceptance_matrix`,
+  `calc_branch_flow_matrix`, `calc_branch_phase_shift_injection`,
+  `calc_bus_phase_shift_injection`, `calc_branch_flow_dc`, and
+  `calc_bus_injection_dc`. Incidence is branches by buses, `+1` at the from
+  bus and `-1` at the to bus, matching PowerModels and MATPOWER.
+- Instances and solutions use explicit PF, OPF, and SCUC types.
+  `SocwrOpfSolution` records a PowerModels SOCWR relaxation and its objective
+  lower bound without claiming an AC feasible solution. OPF preparation
+  preserves the instance objective, active constraints, source identities,
+  and source row mappings; convex piecewise linear costs stay piecewise
+  linear. AC and DC solutions store nonnegative terminal thermal limit
+  multipliers and objective derivatives without assuming a currency, and
+  `Termination` distinguishes convergence, iteration limit, infeasibility,
+  unboundedness, failure, and an unreported result.
 
-OPF preparation preserves the instance objective, active constraints, source
-identities, and source row mappings. Convex piecewise linear costs remain
-piecewise linear. AC and DC solutions store separate nonnegative terminal
-thermal limit multipliers and objective derivatives without assuming a
-currency. `Termination` distinguishes convergence, iteration limit,
-infeasibility, unboundedness, failure, and an unreported result.
+### Formats
 
-Python and Julia expose `.value` and `.diagnostics`, the same four
-representation operations, ordinary collection indexing, typed updates, and
-the named `calc_*` functions. PowerIO.jl uses ABI 7 and owner rooted views;
-Julia does not encode and reparse values to inspect them.
+- PowSybl XIIDM and JIIDM 1.0 through 1.17 parse and emit through
+  `BalancedNetwork`; fresh output uses 1.17. One element mapping consumes
+  both encodings, `jiidm` is a format token, and a bare `.json` whose first
+  key is `version` classifies as JIIDM.
+- CIM CGMES 2.4.15 and 3.0 parse and emit; fresh output is a deterministic
+  CGMES 3.0 EQ, TP, SSH, and SV profile set. A set without `TopologicalNode`
+  data reads when its profiles describe node breaker equipment: buses are
+  calculated as connected components of the `ConnectivityNode` graph joined
+  by closed, in service switches, named after a busbar section and
+  identified by a UUIDv5 of the joined node identifiers.
+  `READ.CGMES.TOPOLOGY_CALCULATED` reports the calculation and
+  `READ.CGMES.CONNECTIVITY_INSUFFICIENT` names missing data. CGMES retains
+  every source substation; XIIDM and JIIDM join container groups only where
+  their one substation rule requires it and report the change. The reader
+  and writer build on Mohamed Numair's contribution, audited in
+  `evals/powsybl/cgmes-contribution-audit.md`.
+- The CGMES and XIIDM readers scale with the model: the CGMES object store
+  is indexed by class and by reference, and the XIIDM reader groups its
+  records by voltage level once. Both XML readers resolve the predefined
+  entities and character references in element text, so a name containing
+  `&` reads back from the writer's own output. An XIIDM read failure names
+  the element, its `id`, and the byte offset it starts at. JIIDM emission
+  reports under `EMIT.JIIDM`.
+- ENTSO-E UCTE-DEF 2003.09.01 and 2007.05.01 parse and emit under the token
+  `ucte`; fresh output uses 2007.05.01. A bus whose name is not a UCTE node
+  code receives a derived code and an `EMIT.UCTE.VALUE_SUBSTITUTED` warning.
+  A `##R` record stating both a phase and an angle regulation folds the
+  phase ratio into the angle formula as PowSybl's importer does, and fresh
+  output solves the angle step against the phase regulation beside it.
+- The IEEE Common Data Format parses under the token `ieee-cdf`; the format
+  is read only.
+- PSS/E RAW revision 32 is read. Fresh output uses revisions 33 through 35;
+  a revision 32 source written back as PSS/E produces revision 33. RAW 33,
+  34, and 35 and RAWX 35 share one mapping for transformer controls and
+  detailed connectivity. Fresh RAW 34 and 35 and RAWX output preserve AC line
+  and transformer names, exact regulated node references, and the control
+  data for every winding of a three winding transformer. The sign of `COD`
+  records whether automatic adjustment is enabled without losing the
+  control mode. RAWX allocates missing PSS/E node numbers before exact
+  regulation targets are written.
+- DOE GO Challenge 3 problem data parses to `AcScucInstance`; a directory or
+  memory source holding the problem and its solution parses to
+  `AcScucSolution`, and `emit` writes a complete solution as the official
+  output file. A solution file alone is rejected.
+- GridFM Parquet reads keep the stated branch flows and quadratic costs, and
+  a GridFM to GridFM conversion has no findings. Scenario batches reject
+  duplicate identifiers, differing system bases, and misaligned rows.
+- BMOPF parsing accepts schema 0.1.0 and 0.2.0, resolving the profile from
+  `meta.schema_version` or `meta.$schema`; fresh output uses 0.2.0 from the
+  `distribution-system-opt/dsopt-schema` repository.
+- PowerWorld PWB reading recognizes the bus and generator record families
+  covered by the binary corpus.
+- XIIDM, CGMES, and UCTE state physical units and no system base; the
+  balanced calculation view uses 100 MVA without reporting a missing value,
+  and XIIDM and JIIDM emission converts impedance with the network's actual
+  base. Targets without a complete exchange model report one grouped loss
+  for detailed topology, case metadata, stable identities, geographic
+  metadata, and solver metadata. Every conversion matrix warning names a
+  field the target cannot state, and the PowSybl gate loads every fresh
+  result with PowSybl.
 
-DOE GO Challenge 3 problem and solution files use the one public `parse`
-operation. A source containing the problem returns
-`PioModule<AcScucInstance>`; a directory or named memory source containing the
-problem and matching solution returns `PioModule<AcScucSolution>` and retains
-both files. A solution file alone is rejected because it contains neither the
-component definitions nor the time axis. `emit` writes a complete
-`AcScucSolution` as the official GO Challenge 3 output file; unchanged problem
-data still uses exact same format echo.
+### Command line
 
-PowSybl XIIDM and JIIDM 1.0 through 1.17 and CIM CGMES 2.4.15 and 3.0 now
-parse and emit through `BalancedNetwork`; fresh output uses IIDM 1.17 and
-CGMES 3.0.
-The CGMES reader and writer build on Mohamed Numair's original contribution;
-`evals/powsybl/cgmes-contribution-audit.md` records how each part of that work
-appears in 0.11.
-The source neutral model retains detailed bus breaker and node breaker
-connectivity, hierarchy, terminals, switches, operational limits, tap changer
-steps and controls, reactive limits, external identities, aliases, AC and DC
-equipment, and the operating and solution quantities those formats carry.
-The interoperability gate removes retained source bytes before writing and
-loads every fresh result with PowSybl. An external RTE 7k check compares all
-29 PyPowSybl tables without committing the 33 MB source case.
+- `-` reads the case from standard input with a declared `--from` format for
+  `convert`, `summary`, `serialize`, `verify`, `dcopf`, and `sensitivities`.
+- The exit status follows the PowerIO error category: 2 `request`, 3 `io`, 4
+  `parse`, 5 `data`, 6 `output`, and 1 for a failure without one. Failures
+  the command raises itself carry registered `*.CLI.*` codes, and a failure
+  raised by a typed library error inside a matrix command exits with that
+  error's category. A writer that reports errors ends the run with
+  `EMIT.CLI.ERRORS_REPORTED` and status 6.
+- `--diagnostics-format json` replaces every stderr line with one JSON array
+  of PowerIO IR diagnostic records covering the whole run, with each reason
+  in a failure's cause chain as a `note` record related to the failure.
+  `powerio::serialize_diagnostics` is the same encoding as a library
+  function. `verify`, `dcopf`, and `sensitivities` report reader warnings
+  like the other commands.
+- `EMIT.MULTICONDUCTOR.SIDECAR_DROPPED` is the warning `convert` reports
+  when standard output cannot carry a sidecar file. A deserialized
+  distribution module converts to its source format through the writer
+  rather than by echoing the retained PowerIO IR document.
 
-PSS/E RAW 33, 34, and 35 and RAWX 35 now use one mapping for transformer
-controls and detailed connectivity. Fresh RAW 34/35 and RAWX output preserves
-AC line and transformer names, exact generator, switched shunt, and transformer
-regulated node references, and the control data for every winding of a
-3-winding transformer. The sign of `COD` records whether automatic adjustment
-is enabled without losing its control mode. `|COD| = 4` means control of a DC
-line quantity on a 2-winding transformer, and `|COD| = 5` means asymmetric
-active power flow control.
+### Bindings
 
-The `powerio` command composes with shell pipelines. `-` as the input of
-`convert`, `summary`, `serialize`, `verify`, `dcopf`, and `sensitivities` reads
-the case from standard input with a declared `--from` format. The exit status
-follows the PowerIO error category: 2 `request`, 3 `io`, 4 `parse`, 5 `data`,
-6 `output`, and 1 for a failure without a category. Failures the command line
-raises itself carry registered `*.CLI.*` diagnostic codes.
-`--diagnostics-format json` replaces every stderr line with one JSON array of
-PowerIO IR diagnostic records covering the whole run, warnings and the failure
-alike, with each reason in a failure's cause chain as a `note` record related
-to the failure record; `powerio::serialize_diagnostics` is that encoding as a
-library function. `EMIT.MULTICONDUCTOR.SIDECAR_DROPPED`, registered but never
-raised before, is the warning `convert` reports when standard output cannot
-carry a sidecar file.
+- C ABI 7 replaces ABI 6 with no aliases for earlier generations and no
+  Arrow export. Sources, destinations, modules, typed values, collections,
+  diagnostics, artifacts, matrices, and vectors use opaque reference counted
+  handles; every buffer carries an explicit length; borrowed typed handles
+  keep their module owner alive. `pio_schema_report` states the release, the
+  ABI, the PowerIO IR identity, the BMOPF schema version, and the compiled
+  features; only `gridfm` is a build option.
+- PowerIO.jl uses ABI 7 with owner rooted views; Julia does not encode and
+  reparse values to inspect them.
+- Python exposes `.value` and `.diagnostics`, the four operations, ordinary
+  collection indexing, typed updates, and the named `calc_*` functions.
+  `versions()["powerio_ir"]` carries `schema` and `version`, and
+  `features()` reports the compiled features.
 
-PSS/E RAW revision 32 is read. Revision 32 records end before the bus voltage
-limits (`NVHI`, `NVLO`, `EVHI`, `EVLO`), the load `INTRPT` field, the
-transformer `VECGRP` field, and the winding `CNXA` field that revision 33
-added; the reader lays every record out by the header revision and defaults
-those fields, and a revision 32 record that ends before its last typed field
-is reported as `READ.PSSE.VALUE_DEFAULTED` with the record's byte range in the
-retained source. A header revision outside 32 through 35 keeps its coded
-rejection. Fresh output still uses revisions 33 through 35: no emission target
-names revision 32, so a revision 32 source written back as PSS/E produces
-fresh revision 33 text, and its unmodeled sections survive only in the
-retained source. Two PowSybl Core revision 32 cases join the fixtures under
-their MPL-2.0 license, and the PowSybl interoperability gate loads the fresh
-revision 33 output written from each.
+### Dependencies and repository
 
-The guide gains a PowerIO IR reference (`docs/src/ir-reference.md`) that
-defines every structural value type field by field: type, unit, sign
-convention, invariant, and the value a reader takes when a field is absent;
-`powerio/tests/ir_reference.rs` holds the page to the generated schema in both
-directions. `serialize` is deterministic: one module serializes to identical
-text every time, and serializing what that text deserializes to reproduces
-it. The MATPOWER and PSS/E readers attach the byte range of the record a
-finding is about, into the retained source, to the diagnostics they raise:
-the failure that ends a read and the warnings alike. `powerio_core::Error`
-gains `with_span`, which attaches a range to the diagnostic that ended an
-operation.
-
-**IIDM 1.0 through 1.17 and JIIDM.** The PowSybl reader accepts every IIDM
-serialization version, from the iTesla namespaced 1.0 to 1.17, with each
-version's rules: busbar section voltages, inline tie lines, `targetV` ratio
-tap changers, legacy shunt and static VAR compensator attributes, and loading
-limits stated on the equipment. Each maps to the same tables as its 1.17 form.
-The new `jiidm` token reads PowSybl's JSON encoding of any of those versions
-and writes JIIDM 1.17 in PowSybl's field layout and order; a bare `.json`
-whose first key is `version` classifies as `jiidm`. `SourceFormat::Jiidm`
-names a module read from JIIDM, and `EMIT.JIIDM.*` codes report its writer.
-XIIDM output stays 1.17. The XIIDM element mapping now reads one tree
-representation produced by either the XML or JSON reader. In the PowSybl
-gate, PyPowSybl reads PowerIO's JIIDM output and PowerIO reads PyPowSybl's.
-
-CGMES sets without `TopologicalNode` data now read when their declared
-profiles describe node breaker equipment (CGMES 2.4.15 EquipmentOperation,
-or CGMES 3.0 CoreEquipment with `ConnectivityNode` data), matching PowSybl.
-The reader calculates buses as connected components of the
-`ConnectivityNode` graph joined by closed, in-service switches. SSH
-`Switch.open` takes precedence over EQ `Switch.normalOpen`. Each calculated
-bus takes the name of a busbar section on it and a UUIDv5 identity derived
-from the joined `ConnectivityNode` mRIDs, without inventing a source
-`TopologicalNode` mRID. `READ.CGMES.TOPOLOGY_CALCULATED` reports the
-calculation, and `READ.CGMES.CONNECTIVITY_INSUFFICIENT` names missing data
-when a set has neither `TopologicalNode` data nor calculable connectivity.
-Bay containers resolve to their voltage level, and a `TopologicalNode` whose
-container holds none of its `ConnectivityNode` data follows those nodes. The
-PowSybl gate compares calculated bus assignments for the MiniGrid, SmallGrid,
-and CGMES 3.0 MicroGrid node breaker sets with PyPowSybl.
-
-ENTSO-E UCTE-DEF `.uct` files read and write through `BalancedNetwork` under
-the format token `ucte` (alias `uct`). The reader accepts revisions
-2003.09.01 and 2007.05.01 and maps `##N` nodes with their `##Z` country
-groups, `##L` lines and busbar couplers, `##T` transformers, and `##R` phase
-and angle regulation. `##TT` and `##E` records remain available for same
-format emission and are reported with `READ.UCTE.RETAINED_SOURCE_ONLY` before
-other format emission. A node's 8-character code is the bus name, each
-country is an area, and cross-border `X` nodes form their own area so tie
-lines keep both ends. New output uses revision 2007.05.01; a bus whose name is
-not a UCTE node code receives a derived code and an
-`EMIT.UCTE.VALUE_SUBSTITUTED` warning. Reader findings name their records with
-source spans. The PowSybl gate loads PowerIO UCTE output from a MATPOWER case
-with PyPowSybl and compares bus and branch counts with PyPowSybl for every
-`.uct` fixture in the pinned PowSybl Core checkout.
-
-The IEEE Common Data Format parses to `BalancedNetwork` under the token
-`ieee-cdf` (alias `cdf`). A `.txt` or `.cdf` file opening with a CDF title
-card is detected without a declared format. The reader maps the title card
-MVA base and date, the bus, branch, and interchange sections, transformer
-taps, phase shifts, and regulating control blocks, and reports what the
-format does not state under `READ.IEEE_CDF.*` codes with record spans. Loss
-zone names and tie lines survive in the retained source only. The format is
-read only: `emit` to `ieee-cdf` is refused. The vendored IEEE 14 and 30 bus
-cases are checked against `case14.m` and `case30.m`, and the PowSybl gate
-compares every public IEEE CDF case with PyPowSybl's own CDF importer.
-
-GridFM Parquet reads preserve the table's `pf`, `qf`, `pt`, and `qt` branch
-flows and interpret every `cp0`, `cp1`, and `cp2` triple as the polynomial the
-dataset states, including an all-zero cost. Dense bus indices, nodal load and
-shunt totals, and unit-tap line classification are GridFM source data rather
-than reader losses. The writer reports only detected projections from a richer
-network into GridFM's fixed tables, and a GridFM-to-GridFM conversion has no
-findings. PowerIO-generated component identities carry explicit provenance in
-PowerIO IR so target writers do not report internal indexing data as a dropped
-source field. Scenario batches reject duplicate scenario ids, differing system
-bases, and misaligned bus, branch, or generator rows before writing Parquet.
-
-Exchange-format conversion keeps source structure distinct from target
-requirements. CGMES retains every source substation, including substations
-joined by a transformer; XIIDM and JIIDM join only the emitted container groups
-when their transformer representation requires one substation and report that
-hierarchy change. Generated CGMES operational-limit helper objects no longer
-create metadata churn or readback findings, and their typed values, durations,
-and names remain in operational limit groups. XIIDM, CGMES, and UCTE use 100
-MVA as the IR normalization for physical-unit input without reporting a source
-value those formats do not state. XIIDM and JIIDM emission converts impedance
-and admittance with the network's actual MVA base, preserving physical values
-when that normalization is not 100 MVA. UCTE emission widens generation bounds
-that do not contain dispatch, reports the substitution, and keeps plant type
-for an out-of-service generator. Targets without a complete exchange model
-report one grouped loss for detailed topology, case metadata, stable source
-identities, geographic metadata, and solver metadata. RAWX substation terminals
-reuse their electrical equipment rows' selected type, buses, and identifier;
-missing PSS/E node numbers are allocated before exact regulation targets are
-written, eliminating generated readback records outside the typed model.
-
-**One `parse`, one `emit`, and no display sibling.** `parse`, `emit`,
-`serialize`, and `deserialize` take their input or output through
-`powerio_core::IntoSource` and `powerio_core::IntoDestination`, implemented for
-a file or directory name in every spelling a caller holds one, for content
-already in memory, and for a built `Source` or `Destination`. The ordinary read
-is `powerio::parse("case.raw")?` with one call and one failure point, following
-`mlir::parseSourceFile(filename, block, config)` and
-`llvm::object::createBinary`, which autodetects the file type. The optional
-format argument every caller wrote as `None` is gone: optional configuration is
-`ParseOptions`, passed to `parse_with_options`, as MLIR and LLVM pass a
-defaulted config value and this workspace already pairs `emit` with
-`emit_with_options`. Content in memory carries the name `<memory>`, which
-identifies no format, so a format detected from a file extension is declared
-through the options or named through `Source::from_memory`. `parse_display`,
-`DisplayData`, and `DisplayFormat` are removed: a geographic layer is a module
-value, `powerio.GeoLayer`. The canonical `.geo.json`, GeoJSON, aliased CSV or
-JSON records, headerless buscoords CSV, and a PowerWorld `.pwd` display all
-parse to it, `emit` writes one as `geo-json`, PowerIO IR carries it, and
-`pio_value_geo_layer` takes it in C. Which value a format produces is data
-rather than a choice of operation, so no reading verb stands beside `parse`. Python and Julia
-keep their `format` keyword and C ABI 7 is unchanged. See
-`docs/src/migration-0.11.md` for the table of replacements.
+- quick-xml 0.41: attribute values follow XML 1.0 attribute value
+  normalization, so a literal tab or line break inside an attribute value
+  becomes one space and a character reference keeps its character.
+- The workspace `rust-version` is 1.88, the toolchain the locked dependency
+  graph needs, and CI checks it. Unused dependencies are removed from the
+  published manifests.
+- The tag workflow requires a CHANGELOG section headed exactly by the
+  release version, checked before the platform builds start.
 
 ## 0.10.0
 

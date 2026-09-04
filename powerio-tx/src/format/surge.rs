@@ -284,10 +284,10 @@ fn gen_obj(
         "voltage_regulated".into(),
         Value::Bool(generator.voltage_regulation_on),
     );
-    if let Some(cost) = &generator.cost {
-        if let Some(cost) = cost_obj(cost, warnings) {
-            obj.insert("cost".into(), cost);
-        }
+    if let Some(cost) = &generator.cost
+        && let Some(cost) = cost_obj(cost, warnings)
+    {
+        obj.insert("cost".into(), cost);
     }
     if generator.has_caps() {
         warnings.push(&F.field_dropped, format!(
@@ -316,7 +316,7 @@ fn cost_obj(cost: &GenCost, warnings: &mut Diagnostics) -> Option<Value> {
             // saturating_mul: `ncost` comes from input, so an oversized count
             // must clamp to the coefficient length instead of overflowing.
             let count = cost.ncost.saturating_mul(2).min(cost.coeffs.len());
-            if count % 2 != 0 {
+            if !count.is_multiple_of(2) {
                 warnings.push(
                     &F.field_dropped,
                     "piecewise generator cost has an odd coefficient count; cost dropped",
@@ -569,7 +569,7 @@ pub(crate) fn parse_surge_source(
         geo: None,
         case_metadata: crate::network::CaseMetadata::default(),
         detailed_connectivity: None,
-        generated_uids: std::collections::BTreeSet::default(),
+        generated_uids: std::sync::Arc::default(),
         buses: buses.into(),
         loads: array_field(network, "loads", false)?
             .into_iter()

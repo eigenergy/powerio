@@ -9,12 +9,21 @@ cbindgen --config powerio-capi/cbindgen.toml --crate powerio-capi \
   --output powerio-capi/include/powerio.h
 ```
 
-`scripts/capi-header-regen.sh` checks the generated header against the checked
-in file. Do not edit it by hand.
+`scripts/capi-header-parity.sh` compares the exported symbols with the header
+in every CI feature job, and `scripts/capi-header-regen.sh` regenerates the
+header with cbindgen and diffs it once. Do not edit the header by hand.
 
 ABI 7 is the only C surface in PowerIO 0.11. Symbols from ABI 4, 5, and 6 are
-not aliases and are not exported. A caller must compare `pio_abi_version()`
-with `PIO_ABI_VERSION` before using the library.
+not exported and have no aliases. A caller compares `pio_abi_version()` with
+`PIO_ABI_VERSION` before using the library.
+
+ABI 7 exports one fixed symbol set. The `gridfm` cargo feature adds GridFM
+Parquet parsing and emission behind the same entry points; the `arrow`,
+`matrix`, `dist`, and `prob` feature names are accepted by the build and gate
+nothing. `pio_schema_report` returns a JSON document with the release
+(`powerio_version`), the ABI (`abi`), the PowerIO IR identity (`powerio_ir`
+with `schema` and `version`), the BMOPF schema version, the compiled features,
+and the diagnostic namespaces and error categories.
 
 ## Parse and inspect a module
 
@@ -45,7 +54,9 @@ pio_source_release(source);
 ```
 
 Use `pio_source_from_memory` for text or binary bytes already in memory. Both
-source constructors feed the same `pio_parse` operation.
+source constructors feed the same `pio_parse` operation. `pio_geo_layer_parse`
+reads a geographic layer from text without a source, for callers that hold
+the layer document in memory.
 
 `pio_module_value` returns an owner rooted value handle. Exact typed accessors
 return owner rooted views without serializing or copying the module value.

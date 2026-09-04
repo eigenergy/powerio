@@ -481,7 +481,13 @@ fn echo_text(
 ) -> Option<String> {
     let source = module.source()?;
     let buffer = source.primary_buffer().ok()?;
-    if !target.matches(*module.value().source_format()) {
+    // Both the retained source's declared format and the value's own must be
+    // the target: a deserialized module retains the PowerIO IR document, not
+    // the case its value came from.
+    let declared = source
+        .format()
+        .and_then(|format| parse_dist_target_format(format.as_str()))?;
+    if declared != target || !target.matches(*module.value().source_format()) {
         return None;
     }
     let text = std::str::from_utf8(buffer.bytes()).ok()?;

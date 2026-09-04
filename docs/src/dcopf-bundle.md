@@ -1,9 +1,16 @@
-# DC OPF bundle schema
+# DC OPF bundle
 
 `powerio dcopf <case>.m -o <out>` assembles a `DcOpfInstance` and writes
 `<out>/<case>_dcopf/`. Rust callers pass an assembled instance to
 `powerio_matrix::emit_dcopf_bundle`. The directory contains Matrix
 Market files and `dcopf_meta.json`.
+
+The bundle states the DC problem in the solver's positive form: `b.mtx`
+holds the positive susceptance magnitude of each branch and `A.mtx` is bus
+by branch. The public calculations of [Matrices and graphs](matrices.md) use
+the PowerModels form, where `calc_branch_susceptances` is negative for an
+inductive branch and `calc_incidence_matrix` is branch by bus. The bundle's
+`b` is the negated public `b`, and `A.mtx` is the transposed public `A`.
 
 ## Definitions
 

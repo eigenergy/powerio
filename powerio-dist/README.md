@@ -2,9 +2,10 @@
 
 `powerio-dist` parses multiconductor distribution networks into a typed model
 in wire coordinates. It converts between OpenDSS `.dss`,
-PowerModelsDistribution ENGINEERING JSON, and the draft BMOPF schema from the
-IEEE PES Task Force on Benchmarking Multiconductor OPF
-(<https://github.com/frederikgeth/bmopf-report>).
+PowerModelsDistribution ENGINEERING JSON, and BMOPF JSON, the schema of the
+IEEE PES Task Force on Benchmarking Multiconductor OPF published at
+<https://github.com/distribution-system-opt/dsopt-schema>. It reads schema
+0.1.0 and 0.2.0 and writes 0.2.0.
 
 Emitting back to the source format reproduces the retained bytes. Cross format
 emission reports fields the target cannot represent. The DSS reader expands

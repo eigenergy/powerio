@@ -14,4 +14,11 @@ if [ "v$version" != "$TAG" ]; then
     echo "tag $TAG does not match workspace version $version; bump Cargo.toml" >&2
     exit 1
 fi
+# The tag workflow copies the CHANGELOG section headed exactly `## <version>`
+# into the draft release body; a suffix such as "(unreleased)" leaves that
+# body empty and fails the run after every platform has built.
+if ! grep -qxF "## $version" CHANGELOG.md; then
+    echo "CHANGELOG.md needs a section headed exactly '## $version' for the release body" >&2
+    exit 1
+fi
 echo "release tag OK: $TAG matches workspace $version"

@@ -1,9 +1,9 @@
 # From 0.10 to 0.11
 
-PowerIO 0.10.0 was the public beta for the candidate 1.0 API. PowerIO 0.11
-makes the next source and ABI break. The changes remove duplicate operations
-and expose the same concepts in Rust, Python, Julia, and C. The 0.11.x line is
-then compatibility focused; another unavoidable public break moves to 0.12.
+PowerIO 0.11 breaks the 0.10 source API and the C ABI once. The changes
+remove duplicate operations and expose the same concepts in Rust, Python,
+Julia, and C. The 0.11.x line then stays compatible; another unavoidable
+public break moves to 0.12.
 
 ## One `parse`, one `emit`
 
@@ -34,9 +34,9 @@ let module = powerio::parse(powerio::Source::from_memory("case9.m", bytes)?)?;
 | `serialize(&module, Destination::path(path))` | `serialize(&module, path)` |
 | `deserialize(Source::open(path)?)` | `deserialize(path)` |
 | `network.to_json()` | `serialize(&PioModule::new(network), destination)` |
-| `BalancedNetwork::from_json(text)` | `deserialize(Source::from_memory("module.pio.json", text)?)?.value` |
-| `parse_display(source, from)` | `parse(input)`, which returns `PioValue::GeoLayer` |
-| `DisplayData`, `DisplayFormat` | removed; a layer is the value `powerio.GeoLayer` |
+| `BalancedNetwork::from_json(text)` | `deserialize(Source::from_memory("module.pio.json", text)?)?.into_value()` |
+| `parse_display(source, from)` | `parse(input)`, which returns `PioValue::GeoLayer`; `PwdDisplay` remains for the raw display record |
+| `DisplayData`, `DisplayFormat` | removed from Rust; Python keeps `parse_display` and `DisplayData` for the raw PowerWorld display record |
 | a layer written by hand | `emit(&module, "geo-json", path)` |
 
 Python accepts a path, file object, or bytes-like object. A `str` names a
@@ -73,7 +73,7 @@ The following 0.10 names are removed:
 source mappings, history, and extensions. Rust, Python, and Julia expose
 `value` and `diagnostics` as fields or properties.
 
-Rust dynamic parsing returns `PioModule<PioValue>`. Match `module.value`
+Rust dynamic parsing returns `PioModule<PioValue>`. Match `module.value()`
 directly. Python uses `isinstance(module.value, BalancedNetwork)`. Julia
 dispatches on `PioModule{BalancedNetwork}` or another concrete parameter.
 
@@ -90,7 +90,7 @@ callable `diagnostics()` operation.
 `emit` is the only operation that produces a grid exchange format.
 
 ```rust,ignore
-powerio::emit(&module, "matpower", powerio::Destination::path("copy.m"))?;
+powerio::emit(&module, "matpower", "copy.m")?;
 # Ok::<(), powerio::Error>(())
 ```
 
@@ -157,8 +157,9 @@ after setting every participating load to zero.
 
 ## Use calculation names that state the result
 
-The public DC bundle types and the phrase “DC branch coefficients” are gone.
-Use the named calculations:
+The DC data types `PioDcData`, `DcNetworkData`, and `dc_data`, and the phrase
+"DC branch coefficients", are gone. The DC OPF bundle files written by
+`powerio dcopf` and `emit_dcopf_bundle` remain. Use the named calculations:
 
 ```text
 calc_incidence_matrix
@@ -206,12 +207,12 @@ AcScucInstance     AcScucSolution
 W-space values and objective lower bound. It is not an `AcOpfSolution` unless
 voltage recovery and AC residual checks support that claim.
 
-Instance fields use `initial_point`, not the catch-all beta name.
+The initial assignment of an instance is the `initial_point` field.
 
 ## C ABI 7
 
-PowerIO 0.11 replaces ABI 6 with ABI 7. ABI 7 has no ABI 4, 5, or 6 aliases and
-does not reuse removed table IDs. Sources, destinations, modules, typed values,
+PowerIO 0.11 replaces ABI 6 with ABI 7. ABI 7 has no ABI 4, 5, or 6 aliases
+and no Arrow export. Sources, destinations, modules, typed values,
 collections, diagnostics, artifacts, sparse matrices, and vectors use opaque
 reference counted handles. Every buffer carries an explicit length. Borrowed
 typed handles keep their module owner alive.
