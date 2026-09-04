@@ -402,19 +402,45 @@ fn unknown_semantic_fields_are_refused() {
     assert!(error.contains("surprise"), "{error}");
 }
 
+/// The refusal names the version found and says what to do: a document from
+/// a newer build on this build's own line needs that newer PowerIO; a
+/// document from another line, or one that is not PowerIO IR, is regenerated.
 #[test]
-fn only_the_current_powerio_ir_version_is_accepted() {
-    for version in ["0.10.0", "0.11.1", "1.0.0"] {
-        let text = serde_json::json!({
-            "schema": powerio::IR_SCHEMA_NAME,
-            "version": version,
-        })
+fn only_compatible_powerio_ir_versions_are_accepted() {
+    let header = |version: serde_json::Value| {
+        serde_json::json!({ "schema": powerio::IR_SCHEMA_NAME, "version": version }).to_string()
+    };
+
+    // The next patch on this build's line, whatever this build's version is.
+    let newer = {
+        let mut parts: Vec<u64> = powerio::IR_SCHEMA_VERSION
+            .split('.')
+            .map(|part| part.parse().unwrap())
+            .collect();
+        *parts.last_mut().unwrap() += 1;
+        parts
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(".")
+    };
+    let error = deserialize_module_text(&header(newer.clone().into()))
+        .unwrap_err()
         .to_string();
-        let error = deserialize_module_text(&text).unwrap_err().to_string();
+    assert!(error.contains(&format!("version {newer}")), "{error}");
+    assert!(error.contains("upgrade PowerIO"), "{error}");
+
+    // Another line, earlier or later, is another document shape.
+    for version in ["0.10.0", "99.0.0"] {
+        let error = deserialize_module_text(&header(version.into()))
+            .unwrap_err()
+            .to_string();
         assert!(error.contains(&format!("version {version}")), "{error}");
+        assert!(error.contains("regenerate this one"), "{error}");
     }
 
-    let error = deserialize_module_text(r#"{"schema": "powerio.module", "version": 1}"#)
+    // The v0.10.0 document's integer version is named as written.
+    let error = deserialize_module_text(&header(1.into()))
         .unwrap_err()
         .to_string();
     assert!(error.contains("version 1"), "{error}");

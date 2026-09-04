@@ -223,8 +223,10 @@ def test_display_decodes_powerworld_pwd():
 def test_about_reports_exact_tool_list():
     about = server._about_tool()
     assert about["powerio_version"] == powerio.__version__
+    # `about` passes the library's own version report through unchanged;
+    # `scripts/wheel-smoke.py` owns pinning that report to the release version.
+    assert about["module_schema"] == powerio.versions()["module_schema"]
     assert about["module_schema"]["name"] == "powerio.module"
-    assert about["module_schema"]["version"] == powerio.__version__
     assert "parse" in about["tools"]
     assert "export_state" not in about["tools"]
 

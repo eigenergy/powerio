@@ -3,8 +3,9 @@
 # one story before anything publishes.
 #
 # - PIO_ABI_VERSION in the Rust source and the checked-in C header agree.
-# - The PowerIO IR schema name and version agree with the current schema file.
-#   Since 0.11.0, the schema version is the `powerio` crate version.
+# - The generated PowerIO IR schema states the workspace version: since
+#   0.11.0 the IR version is the `powerio` crate version, so the schema file,
+#   its `$id`, and its header constants all name that version.
 # - Every publishable crate carries the one workspace version.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -17,21 +18,38 @@ if [ "$rust_abi" != "$header_abi" ]; then
 fi
 
 workspace_version=$(grep -oE '^version = "[0-9]+\.[0-9]+\.[0-9]+"' Cargo.toml | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
-schema_name=$(grep -oE 'pub const IR_SCHEMA_NAME: &str = "[^"]+"' powerio/src/lib.rs | grep -oE '"[^"]+"$' | tr -d '"')
-if [ "$schema_name" != "powerio.module" ]; then
-    echo "unexpected PowerIO IR schema name: $schema_name" >&2
-    exit 1
-fi
-grep -q 'pub const IR_SCHEMA_VERSION: &str = VERSION;' powerio/src/lib.rs \
-    || { echo "IR_SCHEMA_VERSION must track the powerio crate version" >&2; exit 1; }
+# The generated schema is what a consumer validates a document against, so it
+# is the artifact that states the IR identity: CI regenerates it from the Rust
+# constants, and this gate reads the identity back out of it.
 schema_path="docs/schema/pio-module/$workspace_version/schema.json"
 if [ ! -f "$schema_path" ]; then
     echo "$schema_path is not checked in" >&2
     exit 1
 fi
-grep -q "\"\$id\": \"https://powerio.dev/schema/pio-module/$workspace_version/schema.json\"" \
-    "$schema_path" \
-    || { echo "the current PowerIO IR schema \$id disagrees with $workspace_version" >&2; exit 1; }
+schema_name=$(python3 - "$schema_path" "$workspace_version" <<'PY'
+import json
+import sys
+
+path, version = sys.argv[1], sys.argv[2]
+with open(path, encoding="utf-8") as handle:
+    schema = json.load(handle)
+header = schema["properties"]
+expected_id = f"https://powerio.dev/schema/pio-module/{version}/schema.json"
+problems = []
+if schema.get("$id") != expected_id:
+    problems.append(f"$id is {schema.get('$id')!r}, not {expected_id}")
+if header["version"].get("const") != version:
+    problems.append(f"the version constant is {header['version'].get('const')!r}, not {version!r}")
+if problems:
+    print(f"{path}: " + "; ".join(problems), file=sys.stderr)
+    sys.exit(1)
+print(header["schema"]["const"])
+PY
+) || { echo "the current PowerIO IR schema disagrees with workspace version $workspace_version" >&2; exit 1; }
+if [ "$schema_name" != "powerio.module" ]; then
+    echo "unexpected PowerIO IR schema name: $schema_name" >&2
+    exit 1
+fi
 
 for manifest in powerio/Cargo.toml powerio-core/Cargo.toml powerio-tx/Cargo.toml \
                 powerio-dist/Cargo.toml powerio-matrix/Cargo.toml powerio-prob/Cargo.toml \

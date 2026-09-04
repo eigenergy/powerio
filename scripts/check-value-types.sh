@@ -43,9 +43,11 @@ print("\n".join(sorted(names)))
 PY
 )
 
-schema=$(python3 - <<'PY'
+workspace_version=$(grep -oE '^version = "[0-9]+\.[0-9]+\.[0-9]+"' Cargo.toml | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+schema=$(python3 - "docs/schema/pio-module/$workspace_version/schema.json" <<'PY'
 import json
-with open('docs/schema/pio-module/0.11.0/schema.json', encoding='utf-8') as handle:
+import sys
+with open(sys.argv[1], encoding='utf-8') as handle:
     document = json.load(handle)
 branches = document['$defs']['StoredValue']['oneOf']
 names = sorted(branch['properties']['type']['const'] for branch in branches)

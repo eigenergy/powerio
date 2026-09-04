@@ -73,14 +73,28 @@
 /// The facade version recorded on producers and stored modules.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// The discriminator written in every current PowerIO IR document.
-pub const IR_SCHEMA_NAME: &str = "powerio.module";
+/// The `schema` discriminator of every PowerIO IR document.
+pub use powerio_core::IR_SCHEMA_NAME;
 
-/// The current PowerIO IR schema version.
+/// The PowerIO IR version this build writes.
 ///
-/// Beginning with PowerIO 0.11.0, the schema version is the `powerio` crate
-/// version. The C ABI is versioned independently.
+/// Beginning with PowerIO 0.11.0, the IR version is the `powerio` crate
+/// version, and [`deserialize`] reads every document a SemVer compatible
+/// build no newer than this one wrote: the same major version, and on the
+/// `0.y` line the same minor version, with a patch no later than this build's.
+/// PowerIO 0.11.3 reads the documents of 0.11.0 through 0.11.3 and refuses
+/// 0.10.0, 0.12.0, and 0.11.4, naming the version it found. The compatible
+/// line therefore stays additive, and an older build never misreads a newer
+/// document. The C ABI is versioned independently.
 pub const IR_SCHEMA_VERSION: &str = VERSION;
+
+/// The `$id` of the JSON Schema for the documents this build writes, which is
+/// also the address the schema is served from.
+pub const IR_SCHEMA_ID: &str = concat!(
+    "https://powerio.dev/schema/pio-module/",
+    env!("CARGO_PKG_VERSION"),
+    "/schema.json"
+);
 
 use powerio_tx::format;
 pub use powerio_tx::{
@@ -797,13 +811,6 @@ fn json_family(
     let Ok(text) = std::str::from_utf8(buffer.content_bytes()) else {
         return Ok(RoutedFamily::Balanced(None));
     };
-    if serde_json::from_str::<serde_json::Value>(text).is_ok_and(|value| {
-        value
-            .as_object()
-            .is_some_and(|root| root.contains_key("time_series_output"))
-    }) {
-        return Ok(RoutedFamily::Goc3);
-    }
     let class = format::routing::classify_json_text(text);
     match class {
         JsonClass::Case(Detection::Known(SourceFormat::Transmission(

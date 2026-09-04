@@ -13305,8 +13305,7 @@ mod tests {
                 })
         );
 
-        let restored: BalancedNetwork =
-            serde_json::from_str(&serde_json::to_string(&network).unwrap()).unwrap();
+        let restored = crate::network::serde_round_trip(&network);
         let emission = write_xiidm(&restored).unwrap();
         let generator = emission
             .text
@@ -13415,8 +13414,7 @@ mod tests {
                 .omitted_fields,
             detailed.omitted_fields
         );
-        let restored: BalancedNetwork =
-            serde_json::from_str(&serde_json::to_string(&network).unwrap()).unwrap();
+        let restored = crate::network::serde_round_trip(&network);
         assert_eq!(
             restored
                 .detailed_connectivity()
@@ -15069,8 +15067,7 @@ mod tests {
         assert_eq!(metadata.aliases[0].value, "n-1");
         assert_eq!(metadata.properties["owner"], "RTE");
 
-        let serialized = serde_json::to_string(&network).unwrap();
-        let restored: BalancedNetwork = serde_json::from_str(&serialized).unwrap();
+        let restored = crate::network::serde_round_trip(&network);
         assert!(restored.buses().is_empty());
         assert_eq!(
             restored.detailed_connectivity().as_ref().unwrap().dc_nodes,

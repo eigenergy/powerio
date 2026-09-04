@@ -58,42 +58,69 @@ pub fn emit_module(module: &PioModule<PioValue>) -> Result<String> {
     serde_json::to_string_pretty(&stored).map_err(|error| invalid(error.to_string()))
 }
 
-/// Decode one current PowerIO IR document. Other schemas and versions are refused.
+/// Decode one PowerIO IR document. A document a compatible build no newer
+/// than this one wrote decodes directly (see [`crate::IR_SCHEMA_VERSION`]);
+/// any other schema name or version is refused with what was found named.
 ///
 /// # Errors
 /// An unsupported schema or version, or an invalid document.
 pub fn read_module(text: &str) -> Result<PioModule<PioValue>> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    // One scan decodes the current shape. Only a document that is not one is
+    // scanned again, for its header alone, so the refusal can say whether it
+    // is another PowerIO IR generation, a current document that is invalid,
+    // or not PowerIO IR at all.
+    let decode_error = match serde_json::from_str::<StoredModule>(text) {
+        Ok(stored) if is_readable(&stored.schema, &stored.version) => {
+            dto::validate(&stored).map_err(invalid)?;
+            return decode_stored(stored);
+        }
+        Ok(stored) => return Err(unsupported(&stored.schema, &stored.version)),
+        Err(error) => error,
+    };
     let header: dto::StoredHeader =
         serde_json::from_str(text).map_err(|error| invalid(error.to_string()))?;
-    match (header.schema.as_deref(), header.version.as_ref()) {
-        (Some(crate::IR_SCHEMA_NAME), Some(serde_json::Value::String(version)))
-            if version == crate::IR_SCHEMA_VERSION =>
+    match (header.schema.as_deref(), header.version) {
+        (Some(schema), Some(dto::StoredVersion::Text(version)))
+            if is_readable(schema, &version) =>
         {
-            let stored: StoredModule =
-                serde_json::from_str(text).map_err(|error| invalid(error.to_string()))?;
-            dto::validate(&stored).map_err(invalid)?;
-            decode_stored(stored)
+            Err(invalid(decode_error.to_string()))
         }
-        (Some(schema), version) => Err(powerio_core::Error::new(
-            &codes::READ_MODULE_UNSUPPORTED,
-            format!(
-                "unsupported stored module `{schema}` version {}",
-                version.map_or_else(
-                    || "<none>".to_string(),
-                    |value| {
-                        value
-                            .as_str()
-                            .map_or_else(|| value.to_string(), str::to_owned)
-                    },
-                )
-            ),
+        (Some(schema), version) => Err(unsupported(
+            schema,
+            &version.map_or_else(|| "<none>".to_owned(), |version| version.to_string()),
         )),
         (None, _) => Err(powerio_core::Error::new(
             &codes::READ_MODULE_UNSUPPORTED,
             "the document is not PowerIO IR",
         )),
     }
+}
+
+fn is_readable(schema: &str, version: &str) -> bool {
+    schema == crate::IR_SCHEMA_NAME && crate::ir::ir_version_is_readable(version)
+}
+
+/// The refusal for a header naming a schema or version this build does not
+/// read. It states what was found and what to do about it: a document a newer
+/// compatible PowerIO wrote needs that newer reader; anything else is
+/// regenerated from its source data.
+fn unsupported(schema: &str, version: &str) -> powerio_core::Error {
+    let this = crate::IR_SCHEMA_VERSION;
+    let guidance =
+        if schema == crate::IR_SCHEMA_NAME && crate::ir::ir_version_is_newer_compatible(version) {
+            format!("a newer PowerIO than this build ({this}) wrote it; upgrade PowerIO to read it")
+        } else {
+            format!(
+                "this build ({this}) reads `{}` documents from its own compatible release line; \
+                 regenerate this one from its source data",
+                crate::IR_SCHEMA_NAME
+            )
+        };
+    powerio_core::Error::new(
+        &codes::READ_MODULE_UNSUPPORTED,
+        format!("unsupported stored module `{schema}` version {version}: {guidance}"),
+    )
 }
 
 // ---- value encoding ---------------------------------------------------------

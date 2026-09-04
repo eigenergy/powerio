@@ -1,9 +1,9 @@
 # Developer Guides
 
-Material for contributors: the 0.11 candidate API, crate graph, checked architecture
+Material for contributors: the 0.11 API, crate graph, checked architecture
 map, compiler infrastructure lessons, matrix internals, evaluation corpus,
 performance work, and release checks. The changelog records older releases;
-the guide documents only the 1.0 implementation. The dated design record
-behind the candidate 1.0 API (terminology, rationale, ontology, and architecture) lives
-outside the guide at
+the guide documents only the current implementation. The dated design record
+behind the candidate 1.0 API (terminology, rationale, ontology, and
+architecture) lives outside the guide at
 [`docs/design/`](https://github.com/eigenergy/powerio/tree/main/docs/design).

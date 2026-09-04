@@ -110,9 +110,10 @@ formats.
 
 Use `serialize` and `deserialize` for PowerIO IR. `.pio.json` is not a grid
 exchange format and is absent from format discovery. Both operations use the
-PowerIO IR v0.11.0 document shape: `"schema": "powerio.module"` and
-`"version": "0.11.0"`. Earlier documents must be regenerated from their
-original power system data.
+PowerIO IR document shape: `"schema": "powerio.module"` and `"version"` naming
+the release that wrote it. Every 0.11.x build reads the documents of the
+0.11.x releases no newer than itself; 0.10 documents must be regenerated from
+their original power system data.
 
 The following 0.10 names are removed:
 

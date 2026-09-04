@@ -23,10 +23,12 @@ work; an unavoidable breaking public API change moves to 0.12. PowerIO 1.0
 follows a downstream stabilization cycle and an explicit decision about those
 public dependency boundaries.
 
-PowerIO IR has one current document shape: `"schema": "powerio.module"` and
-`"version": "0.11.0"`. Beginning with this release, its version equals the
-`powerio` crate version. Readers and upgrade code for earlier documents are
-removed.
+PowerIO IR has one document shape per release: `"schema": "powerio.module"`
+and `"version"` equal to the `powerio` crate version, beginning with
+`"0.11.0"`. A build reads every document a compatible release no newer than
+itself wrote, so 0.11.x documents stay readable across the line, and it refuses
+a newer document or a 0.10 document with the version named. Readers and upgrade
+code for earlier document generations are removed.
 C ABI 7 is the only C ABI and contains no aliases for earlier ABI generations.
 
 `BalancedNetwork` and `MulticonductorNetwork` are the two electrical network

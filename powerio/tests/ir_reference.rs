@@ -11,7 +11,16 @@
 use std::collections::BTreeSet;
 
 const PAGE: &str = include_str!("../../docs/src/ir-reference.md");
-const SCHEMA: &str = include_str!("../../docs/schema/pio-module/0.11.0/schema.json");
+const SCHEMA_PATH: &str = concat!(
+    "docs/schema/pio-module/",
+    env!("CARGO_PKG_VERSION"),
+    "/schema.json"
+);
+const SCHEMA: &str = include_str!(concat!(
+    "../../docs/schema/pio-module/",
+    env!("CARGO_PKG_VERSION"),
+    "/schema.json"
+));
 
 /// A line beginning with this text names the definitions of the next table.
 const MARKER: &str = "Schema definition";
@@ -164,7 +173,7 @@ fn every_documented_field_exists_and_every_schema_field_is_documented() {
 
     assert!(
         problems.is_empty(),
-        "docs/src/ir-reference.md disagrees with docs/schema/pio-module/0.11.0/schema.json:\n{}",
+        "docs/src/ir-reference.md disagrees with {SCHEMA_PATH}:\n{}",
         problems.join("\n")
     );
 }

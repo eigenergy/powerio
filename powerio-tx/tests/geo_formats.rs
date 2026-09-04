@@ -189,8 +189,7 @@ fn locations_and_routes_survive_serde_round_trip() {
             kind: None,
         },
     ]);
-    let text = serde_json::to_string(&net).unwrap();
-    let back: powerio_tx::BalancedNetwork = serde_json::from_str(&text).unwrap();
+    let back = serde_round_trip(&net);
     assert_eq!(back.buses()[0].location, net.buses()[0].location);
     assert_eq!(back.branches()[0].route, net.branches()[0].route);
     assert_eq!(back.geo(), net.geo());

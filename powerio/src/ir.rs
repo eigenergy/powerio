@@ -6,6 +6,57 @@ use powerio_core::{
 
 use crate::PioValue;
 
+/// Whether this build deserializes a PowerIO IR document stating `version`.
+///
+/// This is the one statement of the compatibility window that
+/// [`IR_SCHEMA_VERSION`](crate::IR_SCHEMA_VERSION) documents: a document is
+/// readable when a SemVer compatible build no newer than this one wrote it.
+pub(crate) fn ir_version_is_readable(version: &str) -> bool {
+    readable_by(version, crate::IR_SCHEMA_VERSION)
+}
+
+/// Whether a document stating `version` comes from a newer build on this
+/// build's own compatible line, so that a newer PowerIO reads it and this one
+/// does not.
+pub(crate) fn ir_version_is_newer_compatible(version: &str) -> bool {
+    version != crate::IR_SCHEMA_VERSION && readable_by(crate::IR_SCHEMA_VERSION, version)
+}
+
+/// A document written by `document` is readable by a build at `reader` when
+/// the two versions are SemVer compatible and the reader is not the older.
+fn readable_by(document: &str, reader: &str) -> bool {
+    let (Some((major, minor, patch)), Some((reader_major, reader_minor, reader_patch))) =
+        (parse_version(document), parse_version(reader))
+    else {
+        return false;
+    };
+    if major != reader_major {
+        return false;
+    }
+    if major == 0 {
+        minor == reader_minor && patch <= reader_patch
+    } else {
+        (minor, patch) <= (reader_minor, reader_patch)
+    }
+}
+
+/// `MAJOR.MINOR.PATCH` as numbers. A prerelease, a build tag, or any other
+/// spelling is not a released PowerIO version and reads as none.
+fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
+    fn number(part: &str) -> Option<u64> {
+        (!part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+            .then(|| part.parse().ok())
+            .flatten()
+    }
+    let mut parts = text.split('.');
+    let version = (
+        number(parts.next()?)?,
+        number(parts.next()?)?,
+        number(parts.next()?)?,
+    );
+    parts.next().is_none().then_some(version)
+}
+
 /// Serialize a diagnostics list as the JSON array of PowerIO IR diagnostic
 /// records: the encoding a module's `diagnostics` field carries, with an
 /// identity minted for every record that has none.
@@ -76,4 +127,50 @@ pub fn deserialize(input: impl powerio_core::IntoSource) -> Result<PioModule<Pio
     crate::stored::read_module(text)
         .map(|module| module.with_source(source.clone()))
         .map_err(|error| error.with_source(source))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ir_version_is_newer_compatible, ir_version_is_readable, readable_by};
+
+    #[test]
+    fn this_build_reads_its_own_documents_and_no_newer_ones() {
+        assert!(ir_version_is_readable(crate::IR_SCHEMA_VERSION));
+        assert!(!ir_version_is_newer_compatible(crate::IR_SCHEMA_VERSION));
+    }
+
+    #[test]
+    fn a_reader_accepts_compatible_documents_no_newer_than_itself() {
+        // The same 0.y line, no later than the reader.
+        assert!(readable_by("0.11.0", "0.11.0"));
+        assert!(readable_by("0.11.0", "0.11.3"));
+        assert!(!readable_by("0.11.4", "0.11.3"));
+        // Another 0.y line is another document shape in either direction.
+        assert!(!readable_by("0.10.0", "0.11.0"));
+        assert!(!readable_by("0.12.0", "0.11.0"));
+        // From 1.0 the minor version is compatible as well, still no newer.
+        assert!(readable_by("1.0.0", "1.2.1"));
+        assert!(readable_by("1.2.0", "1.2.1"));
+        assert!(!readable_by("1.2.2", "1.2.1"));
+        assert!(!readable_by("1.3.0", "1.2.1"));
+        assert!(!readable_by("0.11.0", "1.0.0"));
+        assert!(!readable_by("2.0.0", "1.0.0"));
+    }
+
+    #[test]
+    fn only_a_released_version_spelling_is_readable() {
+        for spelling in [
+            "1",
+            "0.11",
+            "0.11.0.1",
+            "0.11.0-rc1",
+            "0.11.0+build",
+            "v0.11.0",
+            "",
+            " 0.11.0",
+            "0.11.+1",
+        ] {
+            assert!(!readable_by(spelling, "0.11.0"), "{spelling:?}");
+        }
+    }
 }

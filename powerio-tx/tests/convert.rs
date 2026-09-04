@@ -305,8 +305,7 @@ fn rich_writer_warnings_cover_simple_formats() {
 fn extra_branch_rating_sets_survive_serde_round_trip() {
     let net = rich_audit_network();
 
-    let text = serde_json::to_string(&net).unwrap();
-    let back: BalancedNetwork = serde_json::from_str(&text).unwrap();
+    let back = serde_round_trip(&net);
 
     assert_eq!(back.branches()[0].rating_sets.len(), 1);
     assert_eq!(back.branches()[0].rating_sets[0].name, "RATE4");
@@ -2504,9 +2503,8 @@ fn generator_cost_csv_patches_validate_index_and_bus() {
 
 #[test]
 fn a_bare_network_object_is_not_a_case_format() {
-    let net = parse_matpower_file(data("case14.m")).unwrap();
-    let text = serde_json::to_string(&net).unwrap();
-    let source = powerio_core::Source::from_memory("network.json", text.into_bytes()).unwrap();
+    let text = r#"{"name":"network","base_mva":100.0,"buses":[],"branches":[]}"#;
+    let source = powerio_core::Source::from_memory("network.json", text.as_bytes()).unwrap();
     let error = powerio_tx::parse(source).expect_err("an unmarked object must not parse");
     assert!(error.to_string().contains("cannot infer JSON format"));
 }

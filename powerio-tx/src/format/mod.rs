@@ -1630,56 +1630,48 @@ pub(super) fn warn_dropped_areas(
         }
         return;
     }
-    let mut fields: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    let mut fields = std::collections::BTreeSet::new();
+    let mut stated = 0usize;
     for area in net.areas() {
-        if area.slack_bus.is_some() {
-            fields.insert("swing bus");
+        let mut states_any = false;
+        for field in stated_area_fields(area) {
+            fields.insert(field);
+            states_any = true;
         }
-        if area.net_interchange != 0.0 {
-            fields.insert("scheduled net interchange");
-        }
-        if area.tolerance != 0.0 {
-            fields.insert("interchange tolerance");
-        }
-        if area.name.is_some() {
-            fields.insert("name");
-        }
-        if area.uid.is_some() {
-            fields.insert("source identity");
-        }
-        if area.area_type.is_some() {
-            fields.insert("classification");
-        }
+        stated += usize::from(states_any);
     }
     if fields.is_empty() {
         return;
     }
     let total = net.areas().len();
-    let stated = net
-        .areas()
-        .iter()
-        .filter(|area| {
-            area.slack_bus.is_some()
-                || area.net_interchange != 0.0
-                || area.tolerance != 0.0
-                || area.name.is_some()
-                || area.uid.is_some()
-                || area.area_type.is_some()
-        })
-        .count();
-    let (subject, verb) = if total == 1 {
-        ("the area record".to_owned(), "states")
+    let subject = if total == 1 {
+        "the area record states".to_owned()
     } else {
-        (format!("{stated} of {total} area records"), "state")
+        format!("{stated} of {total} area records state")
     };
     warnings.push(
         &family.areas_dropped,
         format!(
-            "{subject} {verb} {}: {target} bus rows carry the area number, but {target} has no \
-             record for the area's attributes",
+            "{subject} {}: {target} bus rows carry the area number, but {target} has no record \
+             for the area's attributes",
             fields.into_iter().collect::<Vec<_>>().join(", ")
         ),
     );
+}
+
+/// The attributes an area record states beyond its number, by the names the
+/// dropped area warning reports them under.
+fn stated_area_fields(area: &crate::Area) -> impl Iterator<Item = &'static str> {
+    [
+        (area.slack_bus.is_some(), "swing bus"),
+        (area.net_interchange != 0.0, "scheduled net interchange"),
+        (area.tolerance != 0.0, "interchange tolerance"),
+        (area.name.is_some(), "name"),
+        (area.uid.is_some(), "source identity"),
+        (area.area_type.is_some(), "classification"),
+    ]
+    .into_iter()
+    .filter_map(|(stated, field)| stated.then_some(field))
 }
 
 pub(super) fn warn_extra_branch_rating_sets(

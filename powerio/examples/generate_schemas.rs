@@ -23,29 +23,21 @@ mod generate {
             .nth(1)
             .map_or_else(|| PathBuf::from("docs/schema"), PathBuf::from);
 
-        // Since 0.11.0, the IR schema version is the `powerio` crate version.
-        let relative_path = format!("pio-module/{}", powerio::IR_SCHEMA_VERSION);
-        let id = format!(
-            "https://powerio.dev/schema/pio-module/{}/schema.json",
-            powerio::IR_SCHEMA_VERSION
-        );
+        // The schema lives at the version this build writes, and its `$id` is
+        // the address that directory is served from.
         write_schema(
             serde_json::to_value(powerio::generate_ir_schema())?,
-            &out,
-            &relative_path,
-            &id,
-            &[],
-        )?;
-
-        Ok(())
+            &out.join("pio-module")
+                .join(powerio::IR_SCHEMA_VERSION)
+                .join("schema.json"),
+            powerio::IR_SCHEMA_ID,
+        )
     }
 
     fn write_schema(
         mut schema: serde_json::Value,
-        out: &Path,
-        rel: &str,
+        path: &Path,
         id: &str,
-        also_required: &[&str],
     ) -> Result<(), Box<dyn std::error::Error>> {
         spell_nonfinite_floats(&mut schema)?;
         let root = schema
@@ -53,30 +45,6 @@ mod generate {
             .ok_or("schemars returned a non-object schema root")?;
         root.insert("$id".to_owned(), json!(id));
 
-        let properties = root
-            .get("properties")
-            .and_then(serde_json::Value::as_object)
-            .ok_or("schemars returned a root with no properties")?;
-        // A name that no longer exists would silently demand a field the
-        // document cannot carry, so it is an error rather than a no-op.
-        if let Some(missing) = also_required
-            .iter()
-            .find(|name| !properties.contains_key(**name))
-        {
-            return Err(format!("`{missing}` is required but is not a property of {rel}").into());
-        }
-        let required = root
-            .entry("required")
-            .or_insert_with(|| json!([]))
-            .as_array_mut()
-            .ok_or("schemars returned a non-array `required`")?;
-        for name in also_required {
-            if !required.iter().any(|value| value == name) {
-                required.push(json!(name));
-            }
-        }
-
-        let path = out.join(rel).join("schema.json");
         fs::create_dir_all(path.parent().ok_or("schema path has no parent")?)?;
         let mut text = serde_json::to_string_pretty(&schema)?;
         text.push('\n');

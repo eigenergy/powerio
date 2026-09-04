@@ -120,20 +120,11 @@ fn serde_round_trips_and_defaults() {
         1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9\n\
         0 / END OF BUS DATA, BEGIN LOAD DATA\nQ\n";
     let net = parse_psse(raw).unwrap();
-    let json = serde_json::to_string(&net).unwrap();
-    assert_eq!(
-        serde_json::from_str::<BalancedNetwork>(&json)
-            .unwrap()
-            .base_frequency(),
-        50.0
-    );
+    assert_eq!(serde_round_trip(&net).base_frequency(), 50.0);
 
     // A JSON document with no base_frequency key falls back to the default.
-    let without: serde_json::Value = {
-        let mut v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        v.as_object_mut().unwrap().remove("base_frequency");
-        v
-    };
+    let mut without = serde_json::to_value(&net).unwrap();
+    without.as_object_mut().unwrap().remove("base_frequency");
     let restored: BalancedNetwork = serde_json::from_value(without).unwrap();
     assert_eq!(restored.base_frequency(), DEFAULT_BASE_FREQUENCY);
 }

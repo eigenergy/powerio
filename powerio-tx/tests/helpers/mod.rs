@@ -47,6 +47,12 @@ fn text_from_result(result: powerio_core::EmitResult) -> TextEmission {
     }
 }
 
+/// A network as it comes back from its own serde representation, the form
+/// PowerIO IR nests as `value.data`.
+pub fn serde_round_trip(network: &BalancedNetwork) -> BalancedNetwork {
+    serde_json::from_str(&serde_json::to_string(network).unwrap()).unwrap()
+}
+
 pub fn emit_module(
     module: &powerio_core::PioModule<BalancedNetwork>,
     target: powerio_tx::TargetFormat,

@@ -17,8 +17,9 @@ version. The current document shape begins:
 }
 ```
 
-Use `serialize` to produce it and `deserialize` to read it. PowerIO v0.11.0
-reads the v0.11.0 document shape.
+Use `serialize` to produce it and `deserialize` to read it. A build reads the
+documents of its own compatible release line, as [Schema changes](#schema-changes)
+states.
 
 The generated JSON Schema is checked in at
 `docs/schema/pio-module/0.11.0/schema.json` and served from
@@ -126,6 +127,11 @@ than allocation failures or truncated results.
 ## Schema changes
 
 The version belongs to the PowerIO IR document, not the Rust memory layout, a
-grid exchange format, or the C ABI. PowerIO v0.11.0 writes and reads document
-version `0.11.0`. Historical schemas document what earlier releases produced;
-they do not add implicit compatibility to the deserializer.
+grid exchange format, or the C ABI. Since 0.11.0 it is the `powerio` release
+that wrote the document, and a build reads every document a SemVer compatible
+build no newer than itself wrote: PowerIO 0.11.3 reads the documents of 0.11.0
+through 0.11.3 and refuses 0.10.0, 0.12.0, and 0.11.4, naming the version it
+found and whether a newer PowerIO or a regenerated document is the remedy. A
+0.11.x release may therefore add a field with a default and may not remove or
+redefine one. Historical schemas document what earlier lines produced; they do
+not add compatibility to the deserializer.

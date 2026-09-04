@@ -200,8 +200,10 @@ pub enum JsonClass {
 /// its optional `:<format>` tail, the Python `classify_json_text` status, and
 /// the Julia family symbol.
 ///
-/// Consumers can read this list rather than hard-code the classifier's output
-/// vocabulary.
+/// A consumer may cache this set. A spelling never changes, a new family is
+/// appended within a release line, and a family leaves only in a breaking
+/// release that records the removal in the changelog and the migration guide,
+/// as 0.11 recorded `model-json`.
 pub const JSON_CLASSES: [&str; 5] = [
     "transmission",
     "distribution",
@@ -248,7 +250,7 @@ pub fn classify_json_text(text: &str) -> JsonClass {
         return JsonClass::Case(Detection::Unknown);
     };
     // PowerIO IR names itself in its header.
-    if header.schema.as_deref() == Some("powerio.module") {
+    if header.schema.as_deref() == Some(powerio_core::IR_SCHEMA_NAME) {
         return JsonClass::Module;
     }
     header.classify()
@@ -535,6 +537,18 @@ mod tests {
             classify_json_text(r#"{"schema":"powerio.module","version":"0.11.0"}"#),
             JsonClass::Module
         );
+        // Routing is the schema name's job alone. Every PowerIO IR generation
+        // reaches the deserializer, which owns the version rule and can then
+        // name the version it refuses.
+        for version in [r#""0.10.0""#, r#""99.0.0""#, "1", "null"] {
+            assert_eq!(
+                classify_json_text(&format!(
+                    r#"{{"schema":"powerio.module","version":{version}}}"#
+                )),
+                JsonClass::Module,
+                "version {version}"
+            );
+        }
         assert_eq!(
             classify_json_text(r#"{"buses":[],"linecodes":[]}"#),
             JsonClass::Case(Detection::Unknown)

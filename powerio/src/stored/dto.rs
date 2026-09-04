@@ -1350,12 +1350,33 @@ impl<'de> Deserialize<'de> for StoredModule {
     }
 }
 
+/// The `version` a document states, kept as written so a refusal can name it:
+/// the string this reader compares, or whatever an earlier generation wrote
+/// there (the v0.10.0 document carried the integer `1`).
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub(super) enum StoredVersion {
+    Text(String),
+    Other(serde_json::Value),
+}
+
+impl fmt::Display for StoredVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Text(text) => f.write_str(text),
+            Self::Other(value) => value.fmt(f),
+        }
+    }
+}
+
+/// The two header fields the reader dispatches on, read from a document that
+/// did not decode as the current shape.
 #[derive(Debug, Deserialize)]
 pub(super) struct StoredHeader {
     #[serde(default)]
     pub(super) schema: Option<String>,
     #[serde(default)]
-    pub(super) version: Option<serde_json::Value>,
+    pub(super) version: Option<StoredVersion>,
 }
 
 /// Structural validation of one decoded document: identities, digests,

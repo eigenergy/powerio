@@ -4994,13 +4994,17 @@ impl BalancedNetwork {
     }
 }
 
+/// A network as it comes back from its own serde representation, the form
+/// PowerIO IR nests as `value.data`. Shared by the unit tests of every module
+/// that checks a field survives that trip.
+#[cfg(test)]
+pub(crate) fn serde_round_trip(network: &BalancedNetwork) -> BalancedNetwork {
+    serde_json::from_str(&serde_json::to_string(network).unwrap()).unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn serde_round_trip(network: &BalancedNetwork) -> BalancedNetwork {
-        serde_json::from_str(&serde_json::to_string(network).unwrap()).unwrap()
-    }
 
     fn close(actual: f64, expected: f64) {
         assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
@@ -6155,7 +6159,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::float_cmp)]
-    fn nonfinite_values_round_trip_through_model_json() {
+    fn nonfinite_values_round_trip_through_serde() {
         let bus = |id, vm| Bus {
             id: BusId(id),
             kind: BusType::Pq,
