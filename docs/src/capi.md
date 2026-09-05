@@ -13,17 +13,18 @@ cbindgen --config powerio-capi/cbindgen.toml --crate powerio-capi \
 in every CI feature job, and `scripts/capi-header-regen.sh` regenerates the
 header with cbindgen and diffs it once. Do not edit the header by hand.
 
-ABI 7 is the only C surface in PowerIO 0.11. Symbols from ABI 4, 5, and 6 are
-not exported and have no aliases. A caller compares `pio_abi_version()` with
-`PIO_ABI_VERSION` before using the library.
+ABI 7 is the only C API in PowerIO 0.11; symbols from ABI 4, 5, and 6 are
+not exported and have no aliases. Compare `pio_abi_version()` with
+`PIO_ABI_VERSION` before you use the library.
 
-ABI 7 exports one fixed symbol set. The `gridfm` cargo feature adds GridFM
-Parquet parsing and emission behind the same entry points; the `arrow`,
-`matrix`, `dist`, and `prob` feature names are accepted by the build and gate
-nothing. `pio_schema_report` returns a JSON document with the release
-(`powerio_version`), the ABI (`abi`), the PowerIO IR identity (`powerio_ir`
-with `schema` and `version`), the BMOPF schema version, the compiled features,
-and the diagnostic namespaces and error categories.
+The exported symbol set is fixed. The `gridfm` cargo feature adds GridFM
+Parquet parsing and emission behind the same entry points, and the `arrow`,
+`matrix`, `dist`, and `prob` feature names are still accepted by the build but
+gate nothing. `pio_schema_report` returns a JSON document with the release
+(`powerio_version`), the ABI (`abi`), the PowerIO IR schema name and
+generation (`powerio_ir` with `schema` and `version`), the BMOPF schema
+version, the compiled features, and the diagnostic namespaces and error
+categories.
 
 ## Parse and inspect a module
 
@@ -53,36 +54,39 @@ pio_module_release(module);
 pio_source_release(source);
 ```
 
-Use `pio_source_from_memory` for text or binary bytes already in memory. Both
-source constructors feed the same `pio_parse` operation. `pio_geo_layer_parse`
-reads a geographic layer from text without a source, for callers that hold
-the layer document in memory.
+Use `pio_source_from_memory` for text or binary bytes you already hold in
+memory; both source constructors feed the same `pio_parse`.
+`pio_geo_layer_parse` reads a geographic layer straight from text, with no
+source object, for callers that have the layer document in memory.
 
-`pio_module_value` returns an owner rooted value handle. Exact typed accessors
-return owner rooted views without serializing or copying the module value.
-Releasing a module does not invalidate a retained child. Every opaque handle
-has matching `retain` and `release` functions; `release(NULL)` is a no-op.
+`pio_module_value` returns an owner rooted value handle, and the exact typed
+accessors return owner rooted views without serializing or copying the module
+value. Releasing a module does not invalidate a child you have retained.
+Every opaque handle has matching `retain` and `release` functions, and
+`release(NULL)` is a no-op.
 
-Structural type names replace ordinal kind integers. Use
-`pio_value_type_name`, `pio_value_is_type`, and the exact typed accessor for the
-type the caller handles.
+Structural type names have replaced ordinal kind integers. Check the type
+with `pio_value_type_name` or `pio_value_is_type`, then call the exact typed
+accessor for the type you handle.
 
 ## Diagnostics and errors
 
-Fallible functions take one `PioError **` output. A null return or documented
-failure value indicates failure. Inspect `pio_error_code`,
-`pio_error_message`, and `pio_error_diagnostics`; branch on the stable code,
-not the message text. Passing a null error output discards the error.
+Fallible functions take one `PioError **` output and signal failure with a
+null return or a documented failure value. Inspect `pio_error_code`,
+`pio_error_message`, and `pio_error_diagnostics`, and branch on the stable
+code rather than the message text. If you pass a null error output the error
+is discarded.
 
-All strings and buffers carry explicit lengths. `PioStringView`,
+Every string and buffer comes with an explicit length. `PioStringView`,
 `PioByteView`, `PioSizeView`, and `PioF64View` borrow their data from an owning
-handle. They need not end in NUL.
+handle and need not end in NUL.
 
 ## Emit and serialize
 
-`pio_emit` produces a grid exchange representation. A memory destination keeps
-artifact bytes in the returned `PioEmitResult`; a path destination writes the
-artifact and returns the same inventory and diagnostics.
+`pio_emit` writes a grid exchange format. With a memory destination the
+artifact bytes stay in the returned `PioEmitResult`; with a path destination
+the artifacts are written to disk and the result holds the same list of
+artifacts and the same diagnostics.
 
 ```c
 PioDestination *destination = pio_destination_memory("case", 4, &error);
@@ -100,23 +104,23 @@ pio_emit_result_release(result);
 pio_destination_release(destination);
 ```
 
-`pio_module_serialize` writes PowerIO IR. `pio_module_deserialize` reads it.
-The IR header is `"schema": "pio-ir"` and integer `"version": 2`;
-`pio_schema_report` reports both. The producer record separately names the
-PowerIO release. `pio_module_deserialize` refuses an unsupported identity or
-generation with what it found. ABI 7 exposes no reader for earlier generations
-and no module JSON aliases.
+`pio_module_serialize` writes PowerIO IR and `pio_module_deserialize` reads
+it. The IR header is `"schema": "pio-ir"` with integer `"version": 2`, and
+`pio_schema_report` reports both; the producer record names the PowerIO
+release separately. `pio_module_deserialize` refuses an unsupported schema
+name or generation and tells you what it found. ABI 7 has no reader for
+earlier generations and no module JSON aliases.
 
 ## Collections, updates, and calculations
 
-Time series and scenario set handles expose length and owner rooted element
-access. Positions are zero based in C. Scenario sets also support lookup by
-scenario ID.
+Time series and scenario set handles give you the length and owner rooted
+access to each element. Positions are zero based in C, and scenario sets can
+also be looked up by scenario ID.
 
 Typed update constructors produce `PioOperatingPointUpdate`,
 `PioNetworkUpdate`, and `PioCalculationUpdate`. `pio_apply_updates` validates
-the complete batch before applying it and returns a `PioUpdateReport` with the
-exact component IDs and fields changed. The report states whether energized
+the whole batch before it applies anything and returns a `PioUpdateReport`
+listing the exact component IDs and fields it changed, and whether energized
 connectivity changed.
 
 Named matrix and vector functions expose the public DC calculations directly:
@@ -132,5 +136,5 @@ pio_calc_branch_flow_dc
 pio_calc_bus_injection_dc
 ```
 
-Sparse matrices use owned CSR arrays. Vectors use owned `double` arrays. The C
-surface has no public DC data bundle.
+Sparse matrices come back as owned CSR arrays and vectors as owned `double`
+arrays. The C API has no public DC data bundle.

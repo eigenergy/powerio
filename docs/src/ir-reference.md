@@ -1,19 +1,20 @@
 # PowerIO IR reference
 
-This page defines every structural value type the PowerIO IR carries, field
-by field: the type of each field, its unit, its sign convention, the
-invariant the deserializer or the constructors hold it to, and what a reader
-supplies when the field is absent. The generated schema at
-`docs/schema/pio-ir/2/schema.json` is the machine form of the same
-definitions. `powerio/tests/ir_reference.rs` reads this page and checks, in
-both directions, that each table names exactly the fields the schema defines
-for its definition, so the two cannot drift apart.
+This page lists every structural value type in the PowerIO IR, field by
+field: each field's type, unit, and sign convention, the invariant the
+deserializer or the constructors enforce, and what a reader uses when the
+field is absent. The generated schema at `docs/schema/pio-ir/2/schema.json`
+is the machine form of the same definitions. To keep the two from drifting
+apart, `powerio/tests/ir_reference.rs` reads this page and checks in both
+directions that each table lists the same fields the schema defines for its
+definition.
 
 ## Reading the tables
 
-Every field table follows a line that begins with the words "Schema
-definition" and names, in backticks, the `$defs` entries of the schema the
-table documents. The columns are:
+Each field table sits under a line that begins with the words "Schema
+definition" and gives, in backticks, the `$defs` entries of the schema the
+table documents; that line is how the test pairs a table with its
+definitions. The columns are:
 
 - **field**: the JSON member name in `value.data` (or in the nested record).
 - **type**: `float` is a JSON number or one of the strings `"Infinity"`,
@@ -31,12 +32,13 @@ table documents. The columns are:
   the deserializer refuses a document without it; otherwise the value a
   reader takes when the member is missing.
 
-Every element row of a network carries `uid`, the stable component identity
-that operating points, solutions, and updates address. `parse` and
-`serialize` assign `{table}:{row}` to a row whose source states none, so a
-document written by PowerIO always carries one. `extras` on an element is
-the map of source fields the typed model has no slot for, keyed by the
-source's own field names; it is required in the document and may be empty.
+`uid` on an element row is the stable component identity that operating
+points, solutions, and updates refer to. When the source gives none, `parse`
+and `serialize` assign `{table}:{row}`, so a document PowerIO writes has one
+wherever a table below says "assigned at serialization". `extras` on an
+element is the map of source fields the typed model has no slot for, keyed
+by the source's own field names; the member is required in the document but
+may be empty.
 
 ## Structural type names
 
@@ -80,9 +82,9 @@ schema definition beside it.
 
 ## powerio.BalancedNetwork
 
-The positive sequence transmission model. Powers are MW and MVAr, voltage
-magnitudes per unit, angles degrees, impedances per unit on `base_mva`, as
-MATPOWER states them. Bus identifiers are the source's own.
+The positive sequence transmission model, in the units MATPOWER uses: powers
+in MW and MVAr, voltage magnitudes in per unit, angles in degrees, and
+impedances in per unit on `base_mva`. Bus identifiers are the source's own.
 
 Schema definition: `BalancedNetwork`.
 
@@ -145,13 +147,13 @@ Schema definition: `Load`.
 | `uid` | string or null | | | unique within `loads` | assigned at serialization |
 | `extras` | object | | | | required |
 
-`LoadVoltageModel` is tagged by `kind`: `constant_power` states no further
-member; `zip` states `p_constant_power`, `p_constant_current`,
+`LoadVoltageModel` is tagged by `kind`. `constant_power` has no further
+member. `zip` has `p_constant_power`, `p_constant_current`,
 `p_constant_impedance` (MW, summing to `p`) and `q_constant_power`,
-`q_constant_current`, `q_constant_impedance` (MVAr, summing to `q`), an
+`q_constant_current`, `q_constant_impedance` (MVAr, summing to `q`), plus an
 optional `v_nom` (kV), an optional source `load_type` code, and an optional
-`scaling` factor; `exponential` states `gamma_p`, `gamma_q`, and `v_nom`
-with `P = p (V / v_nom)^gamma_p` and `Q = q (V / v_nom)^gamma_q`.
+`scaling` factor. `exponential` has `gamma_p`, `gamma_q`, and `v_nom`, with
+`P = p (V / v_nom)^gamma_p` and `Q = q (V / v_nom)^gamma_q`.
 
 ### Shunt
 
@@ -392,8 +394,8 @@ Schema definition: `HvdcConverter`.
 
 ### Switch
 
-A transmission switch. A closed switch is data; matrix calculations do not
-lower it to a zero impedance branch.
+A transmission switch. A closed switch stays a switch in the data; the matrix
+calculations do not lower it to a zero impedance branch.
 
 Schema definition: `Switch`.
 
@@ -488,7 +490,7 @@ Schema definition: `StaticVarCompensator`.
 
 ### SolverParams
 
-Each member is stated only when the source carries it.
+Each member is set only when the source has it.
 
 Schema definition: `SolverParams`.
 
@@ -548,11 +550,11 @@ Schema definition: `TerminalReference`.
 
 ### DetailedConnectivity
 
-The hierarchy and bus breaker or node breaker connectivity a source states
+The hierarchy and bus breaker or node breaker connectivity a source gives
 beyond the balanced calculation view (XIIDM, CGMES, PSS/E RAW 35 and RAWX).
-Every collection is empty when absent. The record types are defined in the
-schema under the names below; their field names carry their units (`_kv`,
-`_mw`, `_mvar`, `_a`, `_ohm`, `_h`, `_f`, `_km`, `_degrees`, `_percent`,
+Every collection is empty when absent. The schema defines the record types
+under the names below. Their field names end in their units (`_kv`, `_mw`,
+`_mvar`, `_a`, `_ohm`, `_h`, `_f`, `_km`, `_degrees`, `_percent`,
 `_seconds`), and terminal powers use the load sign convention (positive is
 consumption) where the record says so.
 
@@ -591,11 +593,11 @@ Schema definition: `DetailedConnectivity`.
 
 ## powerio.MulticonductorNetwork
 
-The conductor level distribution model, in SI units with radian angles: watts,
-vars, volts, amperes, ohms, siemens, meters. Bus identifiers are the source's
-own strings. Terminal names are the source's own (OpenDSS node numbers as
-strings), and a `terminal_map` lists, in conductor order, the terminals of
-the named bus an element connects to.
+The conductor level distribution model, in SI units (watts, vars, volts,
+amperes, ohms, siemens, meters) with angles in radians. Bus identifiers and
+terminal names are the source's own strings; for OpenDSS the terminal names
+are its node numbers. An element's `terminal_map` lists, in conductor order,
+the terminals of the named bus it connects to.
 
 Schema definition: `MulticonductorNetwork`.
 
@@ -738,11 +740,11 @@ Schema definition: `DistLoad`.
 | `voltage_model` | `DistLoadVoltageModel` | | | | required |
 | `extras` | object | | | | required |
 
-`DistLoadVoltageModel` is tagged by `model`: `constant_power`,
-`constant_current`, and `constant_impedance` each state `v_nom` (volts per
-active phase); `zip` states `v_nom` and the per phase coefficient arrays
+`DistLoadVoltageModel` is tagged by `model`. `constant_power`,
+`constant_current`, and `constant_impedance` each have `v_nom` (volts per
+active phase). `zip` has `v_nom` and the per phase coefficient arrays
 `alpha_z`, `alpha_i`, `alpha_p` (active power) and `beta_z`, `beta_i`,
-`beta_p` (reactive power), each triple summing to one; `exponential` states
+`beta_p` (reactive power), each triple summing to one. `exponential` has
 `v_nom`, `gamma_p`, and `gamma_q`.
 
 ### DistCapacitor
@@ -900,10 +902,10 @@ Schema definition: `DistLocation`.
 ## powerio.GeoLayer
 
 A standalone geographic document: element points and routes in one coordinate
-space, keyed by element identity rather than embedded in a case. It is what
-the canonical `.geo.json`, GeoJSON, aliased CSV or JSON records, headerless
-buscoords CSV, and a PowerWorld `.pwd` display parse to, and
-`apply_geo_layer` places one onto a network.
+space, keyed by element identity rather than embedded in a case. The
+canonical `.geo.json`, GeoJSON, aliased CSV or JSON records, headerless
+buscoords CSV, and a PowerWorld `.pwd` display all parse to one, and
+`apply_geo_layer` places it onto a network.
 
 Schema definition: `GeoLayer`.
 
@@ -913,12 +915,12 @@ Schema definition: `GeoLayer`.
 | `kind` | token `source`, `synthetic`, `manual`, `derived`, or null | | | default origin of features without their own `kind` | null |
 | `features` | array of `GeoFeature` | | | | empty |
 
-`CoordinateSpace` is tagged by `space`: `geographic` states an optional
-`crs`, with x longitude and y latitude in decimal degrees and a null `crs`
-meaning EPSG:4326; `projected` states an optional `crs` for planar
-coordinates; `diagram` states an optional `canvas` for drawing coordinates
-with no earth referent; `unknown` states no further member and means the
-source declared no space.
+`CoordinateSpace` is tagged by `space`. `geographic` has an optional `crs`;
+x is longitude and y latitude in decimal degrees, and a null `crs` means
+EPSG:4326. `projected` has an optional `crs` for planar coordinates.
+`diagram` has an optional `canvas` for drawing coordinates with no earth
+referent. `unknown` has no further member and means the source declared no
+space.
 
 Schema definition: `Canvas`.
 
@@ -941,10 +943,10 @@ Schema definition: `GeoFeature`.
 | `to` | string or null | | | the other endpoint bus | null |
 | `kind` | token as `GeoLayer.kind`, or null | | | | null (the layer default) |
 
-`GeoGeometry` is one tagged object: `point` states one `[x, y]` position for
-a placed element, and `line_string` states an array of `[x, y]` positions for
-a route. Positions are in the layer's coordinate space, a route states at
-least one, and every coordinate is finite.
+`GeoGeometry` is one tagged object: `point` is a single `[x, y]` position for
+a placed element, and `line_string` is an array of `[x, y]` positions for a
+route. Positions are in the layer's coordinate space, a route has at least
+one, and every coordinate is finite.
 
 ### ElementKey
 
@@ -962,10 +964,10 @@ Schema definition: `ElementKey`.
 
 ## powerio.OperatingPoint\<N\>
 
-A possibly partial alternate electrical assignment over the fixed component
-identities of one base network `N`: demand, setpoints, dispatch, voltages,
-injections, service status, switch positions, transformer taps, and phase
-shifts. A quantity the point does not state resolves to the network's own
+An alternate electrical assignment, possibly partial, over the fixed
+component identities of one base network `N`: demand, setpoints, dispatch,
+voltages, injections, service status, switch positions, transformer taps, and
+phase shifts. Any quantity the point leaves out resolves to the network's own
 value.
 
 Schema definitions: `StoredOperatingPoint`, `StoredOperatingPoint2`.
@@ -983,7 +985,7 @@ Schema definition: `StoredQuantity`.
 | `values` | array of float | the quantity's unit; a flag is 0 or 1 | | | required |
 
 An operating point stored inside a collection or an instance omits the
-network, which the enclosing record states once.
+network, because the enclosing record gives it once.
 
 Schema definition: `StoredOperatingPointAssignment`.
 
@@ -1039,7 +1041,7 @@ Schema definitions: `StoredTimeSeries`, `StoredTimeSeries2`.
 | `time_points` | array of `TimePoint` | | | | required |
 | `values` | array of the element type, each a complete network | | | same length as `time_points` | required |
 
-A series of operating points states the shared base network once.
+A series of operating points gives the shared base network once.
 
 Schema definitions: `StoredOperatingPointTimeSeries`, `StoredOperatingPointTimeSeries2`.
 
@@ -1065,9 +1067,9 @@ Schema definition: `Duration`.
 
 ## powerio.ScenarioSet\<T\>
 
-Named alternatives of `T` with no implied order. Either every scenario states
-a probability or none does; stated probabilities are nonnegative and sum to
-one within `SCENARIO_PROBABILITY_TOLERANCE`.
+Named alternatives of `T` with no implied order. Either every scenario has a
+probability or none does; when present, the probabilities are nonnegative and
+sum to one within `SCENARIO_PROBABILITY_TOLERANCE`.
 
 Schema definitions: `StoredScenarioSet`, `StoredScenarioSet2`, `StoredScenarioSet3`, `StoredScenarioSet4`, `StoredScenarioSet5`, `StoredScenarioSet6`.
 
@@ -1083,7 +1085,7 @@ Schema definitions: `StoredScenario`, `StoredScenario2`, `StoredScenario3`, `Sto
 | `probability` | float or null | | | in `[0, 1]` | null |
 | `value` | the element type: a network, a network time series, or an operating point time series | | | | required |
 
-A scenario set of operating points states the shared base network once.
+A scenario set of operating points gives the shared base network once.
 
 Schema definitions: `StoredOperatingPointScenarioSet`, `StoredOperatingPointScenarioSet2`.
 
@@ -1102,10 +1104,10 @@ Schema definition: `StoredOperatingPointScenario`.
 
 ## Instances
 
-An instance is the complete input of one named calculation over a network it
-contains. Every instance may carry an `initial_point`, the starting operating
-assignment a solver may use, whose identities name components of the
-instance's network.
+An instance is the complete input to one named calculation, including the
+network it runs over. An instance may also include an `initial_point`, a
+starting operating assignment a solver may use, whose identities refer to
+components of the instance's network.
 
 ### powerio.DcPfInstance
 
@@ -1131,10 +1133,10 @@ Schema definition: `AcPfInstance`.
 | `specifications` | array of `AcBusSpecification` | | | one per bus, in bus table order | required |
 | `initial_point` | `StoredOperatingPointAssignment` or null | | | | null |
 
-`AcBusSpecification` is tagged by `kind`: `pq` states `p` (MW) and `q`
-(MVAr), the prescribed net injection; `pv` states `p` and `vm` (p.u.);
-`reference` states `vm` and `va` (degrees); `isolated` states nothing.
-Powers are net injections into the network, positive for generation.
+`AcBusSpecification` is tagged by `kind`. `pq` gives `p` (MW) and `q`
+(MVAr), the prescribed net injection; `pv` gives `p` and `vm` (p.u.);
+`reference` gives `vm` and `va` (degrees); `isolated` gives nothing. Powers
+are net injections into the network, positive for generation.
 
 ### powerio.DcOpfInstance
 
@@ -1180,7 +1182,7 @@ Schema definition: `ActiveConstraints`.
 
 `ConstraintSelection` is tagged by `select`: `all` (every element with a
 stated limit), `none` (the family is relaxed), or `only` with `identities`,
-the exact element identities (`uid` values, or bus ids) the family applies
+the list of element identities (`uid` values, or bus ids) the family applies
 to.
 
 ### powerio.McAcPfInstance
@@ -1219,7 +1221,7 @@ Schema definition: `MulticonductorActiveConstraints`.
 The DOE GO Challenge 3 formulation: one balanced network plus scheduling,
 reserve, and contingency inputs. Powers in the inputs are per unit on the
 network's `base_mva`, times are hours from the start of the horizon, and
-costs are dollars or dollars per per unit hour, as the data format states
+costs are dollars or dollars per per unit hour, as the data format gives
 them.
 
 Schema definition: `AcScucInstance`.
@@ -1433,18 +1435,18 @@ Schema definition: `ScucViolationCosts`.
 
 ## Solutions
 
-A solution contains the instance it solves and records its values in the
+A solution contains the instance it solves, and its arrays follow the
 instance network's table order: one entry per bus, per branch, or per
 generator. Injections are net injections into the network at a bus,
 positive for generation; branch flows are measured into the branch at the
-named terminal. Every solution states how the calculation ended and the
-residuals a producer reported. `producer` is the free text solver identity
-the producer states, or null.
+named terminal. Each solution says how the calculation ended and what
+residuals the producer reported. `producer` is the producer's free text
+solver identity, or null.
 
 `Termination` is tagged by `kind`: `converged`, `iteration_limit`,
-`infeasible`, `unbounded`, `failed`, or `not_reported` (a source that records
-a solved calculation without termination information, as DeepMind OPFData
-does).
+`infeasible`, `unbounded`, `failed`, or `not_reported`, for a source that
+stores a solved calculation without termination information, as DeepMind
+OPFData does.
 
 Schema definition: `Residuals`.
 
@@ -1697,8 +1699,9 @@ Schema definition: `ScucDeviceOutputs`.
 
 ## Module records
 
-The records beside `value` in a `.pio.json` document. Their meaning is
-described in [.pio.json schema](pio-json-schema.md); their fields are:
+The records beside `value` in a `.pio.json` document.
+[.pio.json schema](pio-json-schema.md) explains what each one is for; the
+tables here list their fields.
 
 Schema definition: `Producer`.
 

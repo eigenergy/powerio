@@ -1,9 +1,10 @@
 # Distribution networks
 
-A multiconductor network is the conductor level distribution model. OpenDSS,
-PowerModelsDistribution engineering JSON, and BMOPF JSON parse to it.
-Construct `McAcPfInstance` or `McAcOpfInstance` explicitly when a calculation
-is required ([Calculation instances and solutions](instances.md)).
+A multiconductor network is the conductor level distribution model, and
+OpenDSS, PowerModelsDistribution engineering JSON, and BMOPF JSON all parse to
+it. When you need a calculation, construct an `McAcPfInstance` or
+`McAcOpfInstance` from it explicitly (see
+[Calculation instances and solutions](instances.md)).
 
 ```julia
 using PowerIO
@@ -14,17 +15,17 @@ net.linecodes[1]                           # per length impedance matrices, SI u
 feeder.diagnostics                         # what the reader kept, assumed, or refused
 ```
 
-The model keeps conductor identity everywhere. Buses carry ordered terminals
-and explicit grounding. Lines and switches map conductors between terminal
-sets. Transformers state windings with connection kinds. Loads and generators
-attach per terminal. Impedance and shunt matrices are SI, per unit length on
-line codes. An element the reader has no typed slot for stays verbatim in the
-`untyped` table and is reported.
+The model identifies individual conductors throughout. Buses have ordered
+terminals and explicit grounding, lines and switches map conductors between
+terminal sets, transformers list their windings with connection kinds, and
+loads and generators attach per terminal. Impedance and shunt matrices are in
+SI units, per unit length, on line codes. An element the reader has no typed
+slot for stays verbatim in the `untyped` table and is reported.
 
-The OpenDSS profile is the static circuit: element definitions and their
-electrical data. Load shapes, solve commands, monitors, and other calculation
-instructions are outside it. They stay in the retained source, are reported
-as uninterpreted, and survive a same format write byte for byte.
+The OpenDSS profile is the static circuit, meaning the element definitions
+and their electrical data. Load shapes, solve commands, monitors, and other
+calculation instructions are outside it; they stay in the retained source,
+are reported as uninterpreted, and survive a same format write byte for byte.
 
 ```julia
 emit(feeder, "dss", "copy.dss")            # the source bytes, sidecars included
@@ -33,10 +34,10 @@ result.text
 result.diagnostics
 ```
 
-There is no implicit conversion between the multiconductor and balanced
-models. The balanced positive sequence equivalent is an explicit
-transformation that states its assumptions, such as voltage bases per zone,
-phase aggregation, and switch merging, and refuses what it cannot state:
+Nothing converts between the multiconductor and balanced models implicitly.
+The balanced positive sequence equivalent is an explicit transformation that
+reports its assumptions, such as voltage bases per zone, phase aggregation,
+and switch merging, and refuses what it cannot represent:
 
 ```rust,ignore
 use powerio::transform::{to_balanced, to_balanced_report};

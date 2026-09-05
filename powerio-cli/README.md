@@ -21,8 +21,8 @@ powerio
 ```
 
 `powerio sensitivities --solver sparse` writes Matrix Market coordinates
-through temp files, so the command does not keep the full sparse PTDF/LODF
-output in memory.
+through temp files, so the command does not have to hold the full sparse
+PTDF/LODF output in memory.
 
-The workspace README has install notes and library examples:
+Install notes and library examples are in the workspace README:
 <https://github.com/eigenergy/powerio>.

@@ -28,8 +28,8 @@ The `powerio` command:
 cargo install powerio-cli
 ```
 
-C and C++: build the shared library from a checkout and include the checked in
-header.
+For C and C++, build the shared library from a checkout and include the
+checked in header.
 
 ```sh
 git clone https://github.com/eigenergy/powerio
@@ -40,23 +40,28 @@ cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,prob
 
 ## Parse, inspect, emit
 
-Rust:
+Rust. The example is a complete program; it imports only `parse`, `emit`, and
+the `PioValue` enum, and `?` hands any failure to `main`.
 
 ```rust,ignore
-let module = powerio::parse("case9.m")?;
-let powerio::PioValue::BalancedNetwork(network) = module.value() else {
-    panic!("expected a balanced network");
-};
-println!("{} buses", network.buses().len());
-for finding in module.diagnostics() {
-    eprintln!("{}: {}", finding.code(), finding.message());
+use powerio::{PioValue, emit, parse};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let module = parse("case9.m")?;
+    let PioValue::BalancedNetwork(network) = module.value() else {
+        panic!("expected a balanced network");
+    };
+    println!("{} buses", network.buses().len());
+    for finding in module.diagnostics() {
+        eprintln!("{}: {}", finding.code(), finding.message());
+    }
+    emit(&module, "matpower", "copy.m")?;      // the source bytes, unchanged
+    let result = emit(&module, "psse", "case9.raw")?;
+    for finding in result.diagnostics() {
+        eprintln!("{}", finding.code());       // what PSS/E cannot carry
+    }
+    Ok(())
 }
-powerio::emit(&module, "matpower", "copy.m")?;      // the source bytes, unchanged
-let result = powerio::emit(&module, "psse", "case9.raw")?;
-for finding in result.diagnostics() {
-    eprintln!("{}", finding.code());                   // what PSS/E cannot carry
-}
-# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 Python:
@@ -97,9 +102,9 @@ powerio summary case9.m                          # counts, bases, and findings a
 
 ## Where next
 
-- What each source parses to and what a module carries: [Core concepts](concepts.md).
+- What each source parses to and what a module contains: [Core concepts](concepts.md).
 - Balanced transmission cases: [Transmission networks](transmission.md).
-  Conductor level distribution cases: [Distribution networks](distribution.md).
+- Conductor level distribution cases: [Distribution networks](distribution.md).
 - Matrices, signs, units, and index mappings: [Matrices and graphs](matrices.md).
 - What each reader keeps and each writer reports: [Formats and fidelity](format-fidelity.md).
 - The same operations in each language: [Rust, Python, Julia, and C](languages.md).

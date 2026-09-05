@@ -2,19 +2,23 @@
 
 PowerIO reads power system data into typed values, writes those values in the
 formats other tools read, and builds the sparse matrices and graph data that
-solvers consume. The Rust crates are the implementation; the Python package,
-[PowerIO.jl](https://eigenergy.github.io/PowerIO.jl), and the C ABI expose
-the same operations under the same names.
+solvers consume. The Rust crates are the implementation, and the Python
+package, [PowerIO.jl](https://eigenergy.github.io/PowerIO.jl), and the C ABI
+expose the same operations under the same names.
 
 ```rust,ignore
-let module = powerio::parse("case9.m")?;         // PioModule<PioValue>
-match module.value() {
-    powerio::PioValue::BalancedNetwork(network) => {
-        println!("{} buses", network.buses().len());
+use powerio::{PioValue, parse};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let module = parse("case9.m")?;         // PioModule<PioValue>
+    match module.value() {
+        PioValue::BalancedNetwork(network) => {
+            println!("{} buses", network.buses().len());
+        }
+        other => println!("{}", other.type_name()),
     }
-    other => println!("{}", other.type_name()),
+    Ok(())
 }
-# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 ```python
@@ -28,10 +32,10 @@ module_ = parse("case9.m")                        # PioModule{BalancedNetwork}
 feeder = parse("IEEE13Nodeckt.dss")               # PioModule{MulticonductorNetwork}
 ```
 
-A parse returns a module: one typed value together with the records that
-explain it, which are the source descriptions, the source map, the reader's
+A parse returns a module, which is one typed value together with the data
+that explains it: the source descriptions, the source map, the reader's
 diagnostics, the derivation history, and, while the process runs, the source
-bytes themselves. The value depends on what the source declares:
+bytes themselves. Which value you get depends on what the source declares:
 
 | Source | Value |
 |---|---|
@@ -44,23 +48,22 @@ bytes themselves. The value depends on what the source declares:
 | a DeepMind OPFData file | `AcOpfSolution` |
 | a geographic layer document or a PowerWorld `.pwd` display | `GeoLayer` |
 
-Four operations move data. `parse` reads a grid exchange format into a
-module. `emit` writes a module in a grid exchange format. `serialize` and
-`deserialize` move PowerIO IR, the JSON document that carries a complete
-module between PowerIO consumers. PowerIO IR is not a grid exchange format,
-and `parse` does not accept it.
+`parse` reads a grid exchange format into a module, and `emit` writes a
+module out in one. The other two operations, `serialize` and `deserialize`,
+write and read PowerIO IR, the JSON document that stores a complete module for
+another PowerIO consumer to read back. PowerIO IR is not a grid exchange
+format, so `parse` does not accept it; `deserialize` does.
 
-Three rules hold everywhere:
+Whichever format you use, writing an unchanged module back to its own format
+reproduces the source bytes byte for byte, and writing to another format
+keeps what that format can represent and reports each loss as a diagnostic
+with a stable code. Converting from one kind of value to another is an
+explicit operation that adds an entry to the module history; nothing converts
+as a side effect.
 
-- writing an unchanged module back to its own format reproduces the source
-  bytes exactly;
-- writing another format keeps what that format can state and reports each
-  loss as a diagnostic with a stable code;
-- moving between value families is an explicit operation that records itself
-  in the module history, never a side effect.
-
-[Getting started](getting-started.md) installs PowerIO and runs a first
-conversion. [Core concepts](concepts.md) defines the module, the value
-families, diagnostics, and sources. [Formats and fidelity](format-fidelity.md)
-states what each reader keeps and each writer reports. [Rust, Python, Julia,
-and C](languages.md) maps every operation across the four languages.
+To install PowerIO and run a first conversion, start with
+[Getting started](getting-started.md). [Core concepts](concepts.md) defines
+the module, the value types, diagnostics, and sources.
+[Formats and fidelity](format-fidelity.md) says what each reader keeps and
+each writer reports, and [Rust, Python, Julia, and C](languages.md) shows
+each operation in all four languages.

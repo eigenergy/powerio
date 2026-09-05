@@ -117,7 +117,7 @@ fi
 
 # Keep the ordinary language quickstarts on the same four operations, each
 # naming the case file and nothing else.
-grep -Fq 'let module = powerio::parse("case9.m")?;' README.md
+grep -Fq 'let module = parse("case9.m")?;' README.md
 grep -Fq 'module = powerio.parse("case9.m")' README.md
 grep -Fq 'module_ = parse("case9.m")' README.md
 

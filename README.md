@@ -1,5 +1,14 @@
 # PowerIO
 
+[![Rust](https://github.com/eigenergy/powerio/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/eigenergy/powerio/actions/workflows/rust.yml)
+[![Python](https://github.com/eigenergy/powerio/actions/workflows/python.yml/badge.svg?branch=main)](https://github.com/eigenergy/powerio/actions/workflows/python.yml)
+[![Julia binding](https://github.com/eigenergy/powerio/actions/workflows/julia-binding.yml/badge.svg?branch=main)](https://github.com/eigenergy/powerio/actions/workflows/julia-binding.yml)
+[![crates.io](https://img.shields.io/crates/v/powerio)](https://crates.io/crates/powerio)
+[![docs.rs](https://docs.rs/powerio/badge.svg)](https://docs.rs/powerio)
+[![PyPI](https://img.shields.io/pypi/v/powerio)](https://pypi.org/project/powerio/)
+[![MSRV 1.88](https://img.shields.io/badge/MSRV-1.88-blue.svg)](Cargo.toml)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
+
 <p align="center">
   <img
     src="https://raw.githubusercontent.com/eigenergy/powerio/60e0126c/docs/src/assets/powerio-hero.png"
@@ -10,14 +19,14 @@
 
 PowerIO reads power system data into typed values, writes those values back
 out in the formats other tools read, and builds the sparse matrices and graph
-data that solvers consume. The core is Rust. The Python package, the Julia
-package [PowerIO.jl](https://github.com/eigenergy/PowerIO.jl), and the C ABI
-expose the same operations under the same names.
+data that solvers consume. The core is Rust, and the Python package, the
+Julia package [PowerIO.jl](https://github.com/eigenergy/PowerIO.jl), and the
+C ABI expose the same operations under the same names.
 
-A parse returns a `PioModule`: one typed value together with its sources,
-diagnostics, source map, and history. The value is a network, a calculation
-instance, a solution, a time series, a scenario set, or a geographic layer,
-depending on what the source declares.
+A parse returns a `PioModule`, which is one typed value together with its
+sources, diagnostics, source map, and history. Depending on what the source
+declares, the value is a network, a calculation instance, a solution, a time
+series, a scenario set, or a geographic layer.
 
 ## Install
 
@@ -34,17 +43,21 @@ cargo install powerio-cli         # the powerio command
 Rust:
 
 ```rust,ignore
-let module = powerio::parse("case9.m")?;
-let powerio::PioValue::BalancedNetwork(network) = module.value() else {
-    panic!("expected a balanced network");
-};
-assert_eq!(network.buses().len(), 9);
-powerio::emit(&module, "matpower", "copy.m")?;   // the source bytes, unchanged
-let result = powerio::emit(&module, "psse", "case9.raw")?;
-for finding in result.diagnostics() {
-    eprintln!("{}", finding.code());                // what PSS/E cannot carry
+use powerio::{PioValue, emit, parse};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let module = parse("case9.m")?;
+    let PioValue::BalancedNetwork(network) = module.value() else {
+        panic!("expected a balanced network");
+    };
+    assert_eq!(network.buses().len(), 9);
+    emit(&module, "matpower", "copy.m")?;   // the source bytes, unchanged
+    let result = emit(&module, "psse", "case9.raw")?;
+    for finding in result.diagnostics() {
+        eprintln!("{}", finding.code());    // what PSS/E cannot carry
+    }
+    Ok(())
 }
-# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 Python:
@@ -81,11 +94,13 @@ powerio verify case9.m --kind bdoubleprime
 powerio sensitivities case9.m -o out
 ```
 
-Writing an unchanged module back to its own format reproduces the source byte
-for byte. Writing another format keeps what that format can state and reports
-each loss as a diagnostic with a stable code. `serialize` and `deserialize`
-move PowerIO IR, the JSON document that carries a complete module between
-PowerIO consumers; it is not a grid exchange format.
+If you write an unchanged module back to its own format, you get the source
+back byte for byte. If you write it to another format, PowerIO keeps what
+that format can represent and reports each loss as a diagnostic with a stable
+code, so you can see what the conversion dropped. `serialize` and
+`deserialize` write and read PowerIO IR, the JSON document that stores a
+complete module for another PowerIO consumer to read back. PowerIO IR is not
+a grid exchange format.
 
 ## Formats
 
@@ -116,13 +131,14 @@ PowerIO consumers; it is not a grid exchange format.
 | BMOPF JSON | `bmopf-json` | 0.1.0, 0.2.0 | 0.2.0 |
 | Geographic layer `.geo.json` | `geo-json` | yes | yes |
 
-Balanced transmission formats parse to `BalancedNetwork`; OpenDSS, PMD, and
-BMOPF parse to `MulticonductorNetwork`. A GO Challenge 3 problem parses to
-`AcScucInstance`, a problem with its solution to `AcScucSolution`, an OPFData
-file to `AcOpfSolution`, a GridFM dataset to `ScenarioSet<BalancedNetwork>`,
-and a PyPSA directory with several snapshots to a `TimeSeries`. The
+The balanced transmission formats parse to `BalancedNetwork`, and OpenDSS,
+PMD, and BMOPF parse to `MulticonductorNetwork`. A GO Challenge 3 problem
+parses to `AcScucInstance`, a problem with its solution to `AcScucSolution`,
+an OPFData file to `AcOpfSolution`, a GridFM dataset to
+`ScenarioSet<BalancedNetwork>`, and a PyPSA directory with several snapshots
+to a `TimeSeries`. The
 [format guide](https://eigenergy.github.io/powerio/guide/format-fidelity.html)
-states what each reader keeps, what each writer reports, and how each is
+says what each reader keeps, what each writer reports, and how each is
 checked against its reference implementation.
 
 ## Packages
@@ -140,8 +156,8 @@ powerio-capi     C ABI 7 for C, C++, Julia, and other bindings
 ```
 
 `powerio-tx` and `powerio-dist` share `powerio-core` and nothing else, so a
-distribution consumer pulls no transmission code. `powerio-prob` is matrix
-free. The `powerio` facade re-exports the component crates, and
+distribution consumer pulls in no transmission code. `powerio-prob` is matrix
+free. The `powerio` facade re-exports the component crates, with
 `powerio-matrix` behind its `matrix` feature.
 
 ## Documentation

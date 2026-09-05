@@ -2,7 +2,7 @@
 
 ## The powerio command
 
-The `powerio` binary drives the same operations from a shell. With no subcommand it opens the interactive TUI.
+The `powerio` binary runs the same operations from a shell, and with no subcommand it opens the interactive TUI.
 
 ```sh
 powerio convert case14.m --to psse -o case14.raw   # parse + emit, findings on stderr
@@ -25,17 +25,17 @@ case in a directory, `gen`, which writes synthetic cases, `geo apply` and
 input spellings only.
 
 Format names, structural value types, and diagnostic codes are the same
-strings the language APIs use. Diagnostics render one per line on stderr as
+strings the language APIs use. Diagnostics print one per line on stderr as
 `CODE: message`.
 
 ### Standard input and output
 
 `convert`, `summary`, `serialize`, `verify`, `dcopf`, and `sensitivities` read
 the case from standard input when the input is `-`. A stream has no file name
-to infer a format from, so `--from` is required; a gridfm dataset is a
-directory and cannot arrive on a stream. `convert` and `serialize` write a
-single text result to standard output when `-o` is `-` or omitted; a directory
-format such as `pypsa-csv` or `cgmes` needs an output directory.
+to infer a format from, so `--from` is required, and a gridfm dataset is a
+directory, so it cannot arrive on a stream at all. `convert` and `serialize`
+write a single text result to standard output when `-o` is `-` or omitted; a
+directory format such as `pypsa-csv` or `cgmes` needs an output directory.
 
 ```sh
 cat case9.m | powerio convert - --from matpower --to psse -o - > case9.raw
@@ -101,15 +101,15 @@ records.
 `powerio-mcp` (from the Python package) calls the public Python API directly.
 Its tools are `parse`, `emit`, `summarize`, `diagnostics`, `to_normalized`,
 `calc_matrix`, `to_balanced_report`, `to_balanced`, `display`, and `about`.
-`parse` returns serialized PowerIO IR. The tools that accept `powerio_ir`
-deserialize that same IR; they do not define another network, collection,
-calculation, update, or solution representation.
+`parse` returns serialized PowerIO IR, and the tools that accept `powerio_ir`
+deserialize that same IR rather than defining a network, collection,
+calculation, update, or solution representation of their own.
 
-Collection entries use an ordinary zero-based `time_index` or a
-`scenario_id`. No tool exports or expands an entry into a static network.
-`emit(format, destination)` writes a file or directory; omit `destination` to
-return in-memory artifacts. Diagnostics remain structured records with code,
-severity, message, target, and source spans.
+You address a collection entry with a plain zero based `time_index` or a
+`scenario_id`; no tool exports or expands an entry into a static network.
+`emit(format, destination)` writes a file or directory, and if you omit
+`destination` it returns the artifacts in memory. Diagnostics stay structured
+records with code, severity, message, target, and source spans.
 
 ```sh
 pip install 'powerio[mcp]'   # Python 3.10 or later
@@ -117,6 +117,6 @@ powerio-mcp                  # stdio transport
 ```
 
 The server accepts exactly one input source: serialized PowerIO IR, a grid
-exchange path, or in-memory grid exchange content. Filesystem access is
-disabled unless `POWERIO_MCP_ALLOWED_ROOTS` names the directories the server
-may read; remote URI schemes are rejected.
+exchange path, or grid exchange content in memory. Filesystem access is off
+unless `POWERIO_MCP_ALLOWED_ROOTS` names the directories the server may read,
+and remote URI schemes are rejected.

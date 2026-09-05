@@ -14828,8 +14828,8 @@ pub unsafe extern "C" fn pio_apply_updates(
 
 /// Replace aggregate active demand at one bus using the named allocation rule.
 ///
-/// The view invalidation and exclusivity contract of `pio_apply_updates`
-/// applies.
+/// The same view invalidation and exclusivity rules as `pio_apply_updates`
+/// apply.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_apply_bus_load_active_power(
     module: *mut PioModule,

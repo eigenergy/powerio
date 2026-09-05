@@ -1,11 +1,12 @@
 # Testing and release checks
 
-A numerical semantics change needs tests and a short reason in code or docs.
-A performance change needs before and after measurements.
+If your change alters numerical semantics, it needs tests and a short note in
+code or docs saying why. If it is a performance change, it needs before and
+after measurements.
 
 ## Baseline checks
 
-`scripts/ci-mirror.sh` runs everything `rust.yml` runs, in the same feature combinations: format, clippy, the terminology and symbol gates, header parity, every crate's tests in each gated feature set, the C smoke and header programs, schema generation, packaging checks, and the docs build. Run it before pushing. A hand assembled subset misses the feature gated suites: `cargo test --workspace` builds powerio-capi with default features only and skips every test behind `arrow`, `gridfm`, `matrix`, or `prob`.
+`scripts/ci-mirror.sh` runs everything `rust.yml` runs, in the same feature combinations: format, clippy, the terminology and symbol gates, header parity, every crate's tests in each gated feature set, the C smoke and header programs, schema generation, packaging checks, and the docs build. Run it before pushing rather than assembling your own subset, because a hand assembled subset misses the feature gated suites. `cargo test --workspace`, for example, builds powerio-capi with default features only and skips every test behind `arrow`, `gridfm`, `matrix`, or `prob`.
 
 Point `POWERIO_JL` at a PowerIO.jl checkout to include the Julia binding suite against the freshly built library, or set `POWERIO_JL_OPTIONAL=1` to run without one.
 
@@ -20,14 +21,14 @@ pip install dist/*.whl
 python -m pytest python/tests
 ```
 
-Install the built wheel. An editable install (`maturin develop`) is shadowed
-by the `powerio/` crate directory at the repository root when pytest runs
-from there.
+Install the built wheel rather than an editable one. When pytest runs from the
+repository root, the `powerio/` crate directory there shadows a
+`maturin develop` install.
 
 ## Route changes
 
-Use the smallest gate set that covers the changed surface, then run the
-[release gates](#release-gates) before a release claim.
+Pick the smallest set of gates that covers what you changed, then run the
+[release gates](#release-gates) before you claim a release.
 
 | changed surface | extra gates |
 | --- | --- |
@@ -43,15 +44,16 @@ Use the smallest gate set that covers the changed surface, then run the
 | CLI behavior | `cargo test -p powerio-cli --test cli` |
 | documentation or website | `mdbook build docs`; `mdbook test docs`; `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`; regenerate schemas and the C header when their source rustdoc changes; run `scripts/capi-header-parity.sh`; check links to retired guide outputs |
 
-`evals/validation/run_validation.sh` requires the Python oracle stack in the same
-Python 3.11+ venv as the local wheel. Missing PyPSA, pandapower, or egret is a
-setup failure. `evals/validation/run_rich_validation.sh` treats the committed
-PowerModels rich oracle as strict; missing Julia is a setup failure.
+`evals/validation/run_validation.sh` needs the Python oracle stack in the same
+Python 3.11+ venv as the local wheel, and treats a missing PyPSA, pandapower,
+or egret as a setup failure. `evals/validation/run_rich_validation.sh` treats
+the committed PowerModels rich oracle as strict, so missing Julia is a setup
+failure there too.
 
 ## Release gates
 
-Run the full set below, in addition to the baseline checks, before publishing
-a release claim:
+Before you publish a release claim, run the full set below on top of the
+baseline checks:
 
 ```sh
 cargo test -p powerio-capi --no-default-features
@@ -77,23 +79,23 @@ bash evals/validation/run_rich_validation.sh
 PowerModels.jl, ExaPowerIO.jl, egret, and pandapower to
 writer matrix; `run_rich_validation.sh` covers fields outside the MATPOWER row
 shape (branch terminal admittance, switches, current ratings, solution values,
-HVDC costs, load voltage models). GOC3 has a separate `goc3-reference` CI job.
-It pins the GO-3 data model, C3DataUtilities, and the D1, D2, and D3 files from
-GOC3Benchmark.jl. The job validates PowerIO's problem and solution documents
-with the GO-3 data model, parses all three benchmark problems as
+HVDC costs, load voltage models). GOC3 has its own `goc3-reference` CI job,
+which pins the GO-3 data model, C3DataUtilities, and the D1, D2, and D3 files
+from GOC3Benchmark.jl. That job validates PowerIO's problem and solution
+documents with the GO-3 data model, parses all three benchmark problems as
 `AcScucInstance`, runs the Challenge 3 data checks on them, and runs the same
 checks on a PowerIO `AcScucSolution` output document. Surge has no external
-validator in this harness; its Rust parser, writer, routing, stored module, and
-round trip tests provide its current evidence. What the independent checks
-prove, per format, is in the
-[format chapter](format-fidelity.md).
+validator in this harness, so its current evidence is its Rust parser, writer,
+routing, stored module, and round trip tests. The
+[format chapter](format-fidelity.md) says what the independent checks prove
+for each format.
 
-The gates do not prove every source format field is lossless. Known losses are
-part of the public behavior and surface as warnings.
+The gates do not prove that every field of every source format survives.
+Known losses are part of the public behavior and show up as warnings.
 
 ## Benchmark updates
 
-Regenerate benchmark JSON before changing published tables:
+Regenerate the benchmark JSON before you change a published table:
 
 ```sh
 julia --project=evals/validation evals/performance/bench_julia.jl --json
@@ -107,7 +109,7 @@ python3 evals/performance/render_tables.py --check
 ```
 
 The ASV suite tracks Python wheel parse and matrix timing across git history.
-For an uncommitted worktree, smoke test it against the local venv:
+To smoke test it on an uncommitted worktree, point it at the local venv:
 
 ```sh
 cd evals/performance/asv
@@ -115,13 +117,13 @@ cd evals/performance/asv
 ../../../.venv/bin/asv run --quick --show-stderr -E existing:../../../.venv/bin/python --dry-run
 ```
 
-Do not update generated benchmark tables by hand. Update the snapshot
-environment described in the
+Do not edit generated benchmark tables by hand. When you publish new numbers,
+update the snapshot environment described on the
 [performance page](performance.md)
-when publishing new numbers: commit, tree cleanliness, machine, OS, toolchain,
-Python stack, Julia stack, commands, fixtures, and optional local data.
+as well: commit, tree cleanliness, machine, OS, toolchain, Python stack, Julia
+stack, commands, fixtures, and optional local data.
 
-Broad local corpora stay local. Pass them through documented environment
-variables or `--root` flags, review the reports the run writes under
-`evals/validation/results/`, and do not commit corpus paths or generated
+Broad local corpora stay local. Pass them in through the documented
+environment variables or `--root` flags, review the reports the run writes
+under `evals/validation/results/`, and do not commit corpus paths or generated
 outputs.

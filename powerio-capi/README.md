@@ -23,9 +23,9 @@ scripts/capi-smoke.sh
 ```
 
 ABI 7 exports one fixed symbol set. The `gridfm` cargo feature adds GridFM
-Parquet support behind the same entry points; the other feature names the
-release build passes gate nothing. `pio_schema_report` states what a library
-was built with.
+Parquet support behind the same entry points, and the other feature names the
+release build passes do not gate anything. `pio_schema_report` tells you what
+a library was built with.
 
 ## Parse, inspect, and emit
 
@@ -77,19 +77,17 @@ int main(void) {
 }
 ```
 
-Use `pio_source_from_memory` for text or binary memory. A `PioSource` is the
-parse input, and `pio_parse` is the grid exchange parse operation;
-`pio_geo_layer_parse` reads a geographic layer from text held in memory.
-For DOE GO Challenge 3, a directory containing the problem file parses to an
-`AcScucInstance`; add the matching solution file to that directory and the same
-call parses an `AcScucSolution`.
+For text or binary content already in memory, build the `PioSource` with
+`pio_source_from_memory` instead. `pio_parse` is the grid exchange parser;
+`pio_geo_layer_parse` reads a geographic layer from text in memory. For DOE
+GO Challenge 3, a directory containing the problem file parses to an
+`AcScucInstance`, and if you add the matching solution file to that directory
+the same call parses an `AcScucSolution`.
 
-Use `pio_emit` for every grid exchange output. A memory destination returns
+`pio_emit` handles every grid exchange output. A memory destination returns
 artifact bytes; a path destination writes a file or directory and returns the
-artifact inventory. PowerIO IR is separate:
-
-- `pio_module_serialize`
-- `pio_module_deserialize`
+list of artifacts it wrote. PowerIO IR has its own pair,
+`pio_module_serialize` and `pio_module_deserialize`.
 
 ## Values and ownership
 
@@ -102,35 +100,36 @@ accessor.
 
 The typed accessors cover balanced and multiconductor networks, operating
 points, PF/OPF/SCUC instances and solutions, time series, and scenario sets.
-They do not serialize or clone the value. A child handle keeps its module
-owner alive, so it remains valid after the original module handle is released.
+They neither serialize nor clone the value, and a child handle keeps its
+module owner alive, so it stays valid even after you release the original
+module handle.
 
-Every opaque handle has `retain` and `release` functions. Releasing `NULL` is
-a no op. Borrowed string, byte, index, and floating point views remain valid
-until their documented owner is released or mutated.
+Every opaque handle has `retain` and `release` functions, and releasing
+`NULL` does nothing. Borrowed string, byte, index, and floating point views
+stay valid until their documented owner is released or mutated.
 
 ## Diagnostics and errors
 
-Diagnostics are stored on `PioModule` and read with
-`pio_module_diagnostics`. Emission diagnostics belong to `PioEmitResult`.
+Diagnostics are stored on the `PioModule` and read with
+`pio_module_diagnostics`; emission diagnostics belong to the `PioEmitResult`.
 Both use `PioDiagnostics` and the `pio_diagnostic_*` accessors.
 
-Every fallible operation accepts `PioError **`. Pass `NULL` only when the
-failure details are intentionally discarded. Branch on `pio_error_code`; the
-rendered message is for people.
+Every fallible function takes a `PioError **`. Pass `NULL` only when you
+really do not want to know why it failed. Branch on `pio_error_code`; the
+rendered message is for people to read.
 
 ## Typed updates
 
 Construct a stable `PioComponentId`, a replacement value with an explicit
 unit, and one typed update. Wrap operating point and network updates as
 `PioCalculationUpdate` and pass the complete array to `pio_apply_updates`.
-PowerIO validates the batch before changing the module.
+PowerIO validates the whole batch before it changes the module.
 
 `PioUpdateReport` lists the exact component identity, field, and optional
-terminal changed. `pio_update_report_connectivity_changed` is true only when
-electrical connectivity changed. If borrowed value handles exist, the module
-detaches by copy on write; those handles continue to refer to the pre-edit
-value.
+terminal that changed. `pio_update_report_connectivity_changed` is true only
+when electrical connectivity changed. If borrowed value handles exist, the
+module detaches by copy on write, and those handles keep referring to the
+value from before the edit.
 
 ## DC calculations
 
