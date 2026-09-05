@@ -57,6 +57,7 @@ pub mod geo;
 pub mod graph;
 pub mod model;
 pub mod pmd;
+pub mod readiness;
 #[cfg(test)]
 pub(crate) mod testkit;
 
@@ -80,4 +81,7 @@ pub use model::{
     DistWinding, DistWindingConn, Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation,
     MulticonductorNetwork, PowerFactorControl, ReactivePowerReference, ReactivePowerUnit,
     UntypedObject, VoltVarControl, VoltWattControl, VoltageSource, find_unresolved_references,
+};
+pub use readiness::{
+    audit_electrical_readiness, ElectricalReadiness, ReadinessFinding, ReadinessSeverity,
 };
