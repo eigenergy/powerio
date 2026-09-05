@@ -5,8 +5,40 @@
 //! <https://github.com/frederikgeth/bmopf-report>).
 //!
 //! The model uses wire coordinates: string bus IDs, ordered terminal names,
-//! explicit grounding, terminal maps, SI units, and radians. The transmission
-//! model in `powerio` is positive sequence and remains a separate type.
+//! explicit grounding, terminal maps on every element, SI units, and radians.
+//! The transmission model in `powerio` is positive sequence and remains a
+//! separate type.
+//!
+//! ```no_run
+//! let source = powerio_core::Source::open("feeder.dss")?;
+//! let module = powerio_dist::parse(source)?;
+//! for line in powerio_dist::diagnostics::render_diagnostics(module.diagnostics()) {
+//!     eprintln!("parse: {line}");
+//! }
+//! let conv = powerio_dist::write_as(&module, powerio_dist::DistTargetFormat::PmdJson);
+//! # Ok::<(), powerio_core::Error>(())
+//! ```
+//!
+//! # Fidelity rules
+//!
+//! Writing to the retained source format returns the original bytes. Cross
+//! format conversion writes from the typed model and reports fields the target
+//! cannot represent in [`Conversion::diagnostics`]. The DSS reader expands OpenDSS
+//! class defaults into explicit model values and records them in
+//! [`MulticonductorNetwork::defaulted`]. BMOPF output includes those values.
+//! The per fixture results live in `docs/conversion-matrix.md`.
+//!
+//! # Float formatting
+//!
+//! Canonical output formats every number as its shortest round trip
+//! representation: Rust's `Display` for `.dss`, serde_json (ryu) for both
+//! JSON formats. The readers parse with serde_json's `float_roundtrip`
+//! feature, so a parse of canonical output recovers the exact bit pattern
+//! and canonical writes are idempotent. JSON cannot carry `Inf`/`NaN`: the
+//! PMD writer emits `null` (PMD restores the value from the field name
+//! suffix), and the BMOPF writer emits `0` with a warning, since the schema
+//! requires numbers. The byte exact echo tier is unaffected; it never
+//! reformats.
 
 pub mod bmopf;
 mod collect;
@@ -17,9 +49,9 @@ pub mod error;
 pub mod geo;
 pub mod graph;
 pub mod model;
+pub(crate) mod nonfinite;
 pub mod pmd;
 pub mod readiness;
-pub(crate) mod nonfinite;
 #[cfg(test)]
 pub(crate) mod testkit;
 
@@ -47,7 +79,7 @@ pub use model::{
     MulticonductorNetwork, PowerFactorControl, ReactivePowerReference, ReactivePowerUnit,
     UntypedObject, VoltVarControl, VoltWattControl, VoltageSource, unresolved_references,
 };
+pub use pmd::write_pmd_json;
 pub use readiness::{
     audit_electrical_readiness, ElectricalReadiness, ReadinessFinding, ReadinessSeverity,
 };
-pub use pmd::write_pmd_json;
