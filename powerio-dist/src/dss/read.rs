@@ -844,6 +844,7 @@ impl Reader<'_> {
             terminal_map: map,
             v_magnitude,
             v_angle,
+            energy_cost_rate: None,
             extras,
         }
     }
@@ -855,6 +856,19 @@ impl Reader<'_> {
     #[expect(clippy::too_many_lines)]
     fn line(&mut self, obj: &RawObject) {
         let props = Props::new(obj);
+        if crate::readiness::DEFERRED_GEOMETRY_KEYS
+            .iter()
+            .any(|key| props.by_name.contains_key(*key))
+        {
+            self.warn(&C::READ_DSS_GEOMETRY_UNRESOLVED, format!(
+                "line {}: geometry-derived conductor impedances are unresolved; the complete source object is retained without a synthetic linecode or terminal map",
+                obj.name
+            ));
+            self.net
+                .untyped_objects_mut()
+                .push(UntypedObject::from(obj));
+            return;
+        }
         // `linecode=` assigns the line's phase count from the code
         // (Line.cpp FetchLineCode) exactly like `phases=`; properties
         // apply in order, so the later of the two wins. Bus node lists
@@ -1253,67 +1267,59 @@ impl Reader<'_> {
         let mut xht = dd::transformer::XHT;
         let mut xlt = dd::transformer::XLT;
         let mut xhl_specified = false;
-        let mut x_pairs: BTreeMap<(usize, usize), f64> = BTreeMap::new();
+        let mut xsc_pct = vec![dd::transformer::XHL];
         let mut extras = Extras::new();
         let conn_is_delta =
             |t: &str| t.to_ascii_lowercase().starts_with('d') || t.eq_ignore_ascii_case("ll");
-        for p in &obj.props {
-            let Some(name) = &p.name else { continue };
-            let v = &p.value;
-            match name.as_str() {
-                "phases" => {
-                    phases = self.usize_prop(Some(v)).unwrap_or(phases);
-                }
-                "windings" => {
-                    n_windings = self.usize_prop(Some(v)).unwrap_or(n_windings).max(1);
-                    windings = vec![WindingRaw::default(); n_windings];
-                    active = 0;
-                }
-                "wdg" => {
-                    let k = self.usize_prop(Some(v)).unwrap_or(1).max(1);
-                    grow(
-                        &mut windings,
-                        k,
-                        &mut n_windings,
-                        &obj.name,
-                        &mut self.diags,
-                    );
-                    active = k - 1;
-                }
-                "bus" => windings[active].bus = Some(v.to_bus_spec()),
-                "conn" => windings[active].conn_delta = conn_is_delta(&v.text),
-                "kv" | "kva" | "tap" | "%r" | "rneut" | "xneut" => {
-                    let parsed = self.f64_prop(Some(v));
-                    let w = &mut windings[active];
-                    match name.as_str() {
-                        "kv" => {
-                            w.kv = parsed.unwrap_or(w.kv);
-                            w.kv_specified = true;
-                        }
-                        "kva" => {
-                            w.kva = parsed.unwrap_or(w.kva);
-                            w.kva_specified = true;
-                        }
-                        "tap" => w.tap = parsed.unwrap_or(w.tap),
-                        "%r" => w.r_pct = parsed.unwrap_or(w.r_pct),
-                        "rneut" => w.r_neutral = parsed,
-                        "xneut" => w.x_neutral = parsed,
-                        _ => unreachable!("matched transformer scalar property"),
+        let mut begin = 0;
+        for end in obj.edit_bounds() {
+            let mut scalar_reactance_changed = false;
+            for p in &obj.props[begin..end] {
+                let Some(name) = &p.name else { continue };
+                let v = &p.value;
+                match name.as_str() {
+                    "phases" => {
+                        phases = self.usize_prop(Some(v)).unwrap_or(phases);
                     }
-                }
-                "buses" | "conns" => {
-                    let items = v.to_string_list(Some(self.vars));
-                    grow(
-                        &mut windings,
-                        items.len(),
-                        &mut n_windings,
-                        &obj.name,
-                        &mut self.diags,
-                    );
-                    apply_winding_strings(&mut windings, name, &items);
-                }
-                "kvs" | "kvas" | "taps" | "%rs" => match v.to_vector(Some(self.vars)) {
-                    Ok(items) => {
+                    "windings" => {
+                        n_windings = self.usize_prop(Some(v)).unwrap_or(n_windings).max(1);
+                        windings = vec![WindingRaw::default(); n_windings];
+                        active = 0;
+                    }
+                    "wdg" => {
+                        let k = self.usize_prop(Some(v)).unwrap_or(1).max(1);
+                        grow(
+                            &mut windings,
+                            k,
+                            &mut n_windings,
+                            &obj.name,
+                            &mut self.diags,
+                        );
+                        active = k - 1;
+                    }
+                    "bus" => windings[active].bus = Some(v.to_bus_spec()),
+                    "conn" => windings[active].conn_delta = conn_is_delta(&v.text),
+                    "kv" | "kva" | "tap" | "%r" | "rneut" | "xneut" => {
+                        let parsed = self.f64_prop(Some(v));
+                        let w = &mut windings[active];
+                        match name.as_str() {
+                            "kv" => {
+                                w.kv = parsed.unwrap_or(w.kv);
+                                w.kv_specified = true;
+                            }
+                            "kva" => {
+                                w.kva = parsed.unwrap_or(w.kva);
+                                w.kva_specified = true;
+                            }
+                            "tap" => w.tap = parsed.unwrap_or(w.tap),
+                            "%r" => w.r_pct = parsed.unwrap_or(w.r_pct),
+                            "rneut" => w.r_neutral = parsed,
+                            "xneut" => w.x_neutral = parsed,
+                            _ => unreachable!("matched transformer scalar property"),
+                        }
+                    }
+                    "buses" | "conns" => {
+                        let items = v.to_string_list(Some(self.vars));
                         grow(
                             &mut windings,
                             items.len(),
@@ -1321,48 +1327,89 @@ impl Reader<'_> {
                             &obj.name,
                             &mut self.diags,
                         );
-                        apply_winding_numbers(&mut windings, name, &items);
+                        apply_winding_strings(&mut windings, name, &items);
                     }
-                    Err(e) => self.warn(
-                        &C::READ_DSS_VALUE_DEFAULTED,
-                        format!("transformer {}: {name}: {e}", obj.name),
-                    ),
-                },
-                "%loadloss" => {
-                    // The engine splits load loss across the first two
-                    // windings: %R each = %loadloss / 2 (Transformer.cpp,
-                    // property 26). The written value also rides in extras
-                    // for the canonical echo.
-                    if let Some(ll) = self.f64_prop(Some(v)) {
-                        for w in windings.iter_mut().take(2) {
-                            w.r_pct = ll / 2.0;
+                    "kvs" | "kvas" | "taps" | "%rs" => match v.to_vector(Some(self.vars)) {
+                        Ok(items) => {
+                            grow(
+                                &mut windings,
+                                items.len(),
+                                &mut n_windings,
+                                &obj.name,
+                                &mut self.diags,
+                            );
+                            apply_winding_numbers(&mut windings, name, &items);
+                        }
+                        Err(e) => self.warn(
+                            &C::READ_DSS_VALUE_DEFAULTED,
+                            format!("transformer {}: {name}: {e}", obj.name),
+                        ),
+                    },
+                    "%loadloss" => {
+                        // The engine splits load loss across the first two
+                        // windings: %R each = %loadloss / 2 (Transformer.cpp,
+                        // property 26). The written value also rides in extras
+                        // for the canonical echo.
+                        if let Some(ll) = self.f64_prop(Some(v)) {
+                            for w in windings.iter_mut().take(2) {
+                                w.r_pct = ll / 2.0;
+                            }
+                        }
+                        extras.insert("%loadloss".to_string(), v.text.clone().into());
+                    }
+                    "xhl" | "x12" => {
+                        xhl = self.f64_prop(Some(v)).unwrap_or(xhl);
+                        xhl_specified = true;
+                        scalar_reactance_changed = true;
+                    }
+                    "xht" | "x13" => {
+                        xht = self.f64_prop(Some(v)).unwrap_or(xht);
+                        scalar_reactance_changed = true;
+                    }
+                    "xlt" | "x23" => {
+                        xlt = self.f64_prop(Some(v)).unwrap_or(xlt);
+                        scalar_reactance_changed = true;
+                    }
+                    "xscarray" => match v.to_vector(Some(self.vars)) {
+                        Ok(items) if items.len() == n_windings * (n_windings - 1) / 2 => {
+                            xsc_pct = items;
+                            xhl_specified = true;
+                        }
+                        Ok(items) => self.warn(
+                            &C::READ_DSS_VALUE_DEFAULTED,
+                            format!(
+                                "transformer {}: xscarray has {} values; expected {} for {n_windings} windings; retained reactances apply",
+                                obj.name, items.len(), n_windings * (n_windings - 1) / 2,
+                            ),
+                        ),
+                        Err(e) => self.warn(
+                            &C::READ_DSS_VALUE_DEFAULTED,
+                            format!("transformer {}: xscarray: {e}", obj.name),
+                        ),
+                    },
+                    other if x_pair_key(other).is_some() => {
+                        if let Some((i, j)) = x_pair_key(other) {
+                            let x = self.f64_prop(Some(v)).unwrap_or(0.0);
+                            if let Some(index) = pair_keys(n_windings).iter().position(|pair| *pair == (i, j)) {
+                                xsc_pct[index] = x;
+                            }
                         }
                     }
-                    extras.insert("%loadloss".to_string(), v.text.clone().into());
-                }
-                "xhl" | "x12" => {
-                    xhl = self.f64_prop(Some(v)).unwrap_or(xhl);
-                    xhl_specified = true;
-                    x_pairs.insert((0, 1), xhl);
-                }
-                "xht" | "x13" => {
-                    xht = self.f64_prop(Some(v)).unwrap_or(xht);
-                    x_pairs.insert((0, 2), xht);
-                }
-                "xlt" | "x23" => {
-                    xlt = self.f64_prop(Some(v)).unwrap_or(xlt);
-                    x_pairs.insert((1, 2), xlt);
-                }
-                other if x_pair_key(other).is_some() => {
-                    if let Some((i, j)) = x_pair_key(other) {
-                        let x = self.f64_prop(Some(v)).unwrap_or(0.0);
-                        x_pairs.insert((i, j), x);
+                    other => {
+                        extras.insert(other.to_string(), v.text.clone().into());
                     }
                 }
-                other => {
-                    extras.insert(other.to_string(), v.text.clone().into());
+                xsc_pct.resize(n_windings * (n_windings - 1) / 2, dd::transformer::XLT);
+            }
+            // OpenDSS reapplies all scalar reactances at the end of an edit.
+            if scalar_reactance_changed && (2..=3).contains(&n_windings) {
+                xsc_pct[0] = xhl;
+                if n_windings == 3 {
+                    xsc_pct[1] = xht;
+                    xsc_pct[2] = xlt;
                 }
             }
+            begin = end;
         }
 
         if !xhl_specified {
@@ -1370,21 +1417,6 @@ impl Reader<'_> {
         }
         let out = self.finish_windings(&windings, phases, &obj.name);
 
-        let xsc_pct = if n_windings >= 3 {
-            pair_keys(n_windings)
-                .into_iter()
-                .map(|pair| {
-                    x_pairs.get(&pair).copied().unwrap_or(match pair {
-                        (0, 1) => xhl,
-                        (0, 2) => xht,
-                        (1, 2) => xlt,
-                        _ => 0.0,
-                    })
-                })
-                .collect()
-        } else {
-            vec![xhl]
-        };
         DistTransformer {
             name: obj.name.clone(),
             windings: out,

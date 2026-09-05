@@ -90,3 +90,7 @@ jobs:
       run: .venv/bin/python -c "import egret, jsonschema, opendssdirect, pandapower, pypsa"
     - name: Run the validation matrix
       run: bash evals/validation/run_validation.sh
+    - name: Compare explicit BMOPF core admittances with OpenDSS
+      run: |
+        cargo build --release -p powerio-cli
+        .venv/bin/python evals/validation/validate_bmopf_core_shunts.py --powerio "$PWD/target/release/powerio"

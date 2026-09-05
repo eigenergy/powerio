@@ -34,6 +34,19 @@ pub(crate) fn emit_pmd_json_text(net: &MulticonductorNetwork) -> TextEmission {
         warnings: crate::diagnostics::Diagnostics::new(),
         renamed_terminals: renamed_terminals(net),
     };
+    for source in net
+        .sources()
+        .iter()
+        .filter(|source| source.energy_cost_rate.is_some())
+    {
+        w.warn(
+            &C::EMIT_PMD_FIELD_DROPPED,
+            format!(
+                "voltage source {}: energy_cost_rate has no target field",
+                source.name
+            ),
+        );
+    }
     let doc = w.document(net);
     TextEmission::new(
         serde_json::to_string_pretty(&doc).expect("maps and finite numbers") + "\n",
@@ -432,15 +445,28 @@ impl Writer {
             o.insert("grounded".into(), json!(grounded));
             o.insert("status".into(), Self::status(&b.extras));
             self.bus_coordinates(&mut o, b, net);
-            // The scalar magnitude bounds have ENGINEERING fields: `vm_lb` and
-            // `vm_ub` are per-terminal vectors in the same unit every other
-            // voltage here uses (volts over `voltage_scale_factor`, the rule
-            // `vm_nom` follows above). The model's scalar broadcasts over the
-            // terminals, which is the inverse of the reader's uniform-vector
-            // collapse.
-            for (key, bound) in [("vm_lb", b.v_min), ("vm_ub", b.v_max)] {
-                if let Some(v) = bound {
-                    o.insert(key.into(), json!(vec![v / 1e3; b.terminals.len().max(1)]));
+            let phase_indices = b.phase_indices(net.extras().get("bmopf_terminal_conventions"));
+            for (key, scalar, phases, default) in [
+                ("vm_lb", b.v_min, &b.v_min_phase, 0.0),
+                ("vm_ub", b.v_max, &b.v_max_phase, f64::INFINITY),
+            ] {
+                let retained = b.extras.get(&format!("pmd_{key}"));
+                let mut values = retained
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .filter(|values| values.len() == b.terminals.len())
+                    .unwrap_or_else(|| vec![json!(default); b.terminals.len()]);
+                if scalar.is_some() || phases.is_some() {
+                    for (phase, &terminal) in phase_indices.iter().enumerate() {
+                        if let Some(v) =
+                            scalar.or_else(|| phases.as_ref().and_then(|v| v.get(phase)).copied())
+                        {
+                            values[terminal] = json!(v / 1e3);
+                        }
+                    }
+                    o.insert(key.into(), Value::Array(values));
+                } else if let Some(retained) = retained {
+                    o.insert(key.into(), retained.clone());
                 }
             }
             // The phase-to-neutral, phase-to-phase, and sequence bound families
@@ -1060,21 +1086,36 @@ impl Writer {
         if let Some(controls) = t.extras.get("controls") {
             o.insert("controls".into(), controls.clone());
         }
-        let noloadloss = Self::extras_f64(&t.extras, "%noloadloss").unwrap_or(0.0) / 100.0;
-        let cmag = Self::extras_f64(&t.extras, "%imag").unwrap_or(0.0) / 100.0;
-        o.insert("noloadloss".into(), json!(noloadloss));
-        o.insert("cmag".into(), json!(cmag));
+        self.transformer_no_load_fields(t, &mut o, &what);
         o.insert("status".into(), Self::status(&t.extras));
         o.insert(
             "source_id".into(),
             json!(format!("transformer.{}", t.name.to_lowercase())),
         );
-        self.extras_dropped(
-            &t.extras,
-            &["controls", "%loadloss", "%noloadloss", "%imag", "emerghkva"],
-            &what,
-        );
         Value::Object(o)
+    }
+    fn transformer_no_load_fields(
+        &mut self,
+        t: &DistTransformer,
+        o: &mut Map<String, Value>,
+        what: &str,
+    ) {
+        let explicit_shunt = crate::model::transformer_no_load_percentages(t);
+        let (loss, imag) = explicit_shunt.unwrap_or_else(|| {
+            (
+                Self::extras_f64(&t.extras, "%noloadloss").unwrap_or(0.0),
+                Self::extras_f64(&t.extras, "%imag").unwrap_or(0.0),
+            )
+        });
+        let noloadloss = loss / 100.0;
+        let cmag = imag / 100.0;
+        o.insert("noloadloss".into(), json!(noloadloss));
+        o.insert("cmag".into(), json!(cmag));
+        let mut allowed = vec!["controls", "%loadloss", "%noloadloss", "%imag", "emerghkva"];
+        if explicit_shunt.is_some() {
+            allowed.push("no_load_shunt");
+        }
+        self.extras_dropped(&t.extras, &allowed, what);
     }
 }
 

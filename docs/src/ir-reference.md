@@ -635,6 +635,8 @@ Schema definition: `DistBus`.
 | `grounded` | array of string | | | each names a terminal of this bus; zero impedance to ground | required |
 | `v_min` | float or null | volts | | `v_min <= v_max` | null (unbounded) |
 | `v_max` | float or null | volts | | | null (unbounded) |
+| `v_min_phase` | array of float or null | volts | | phase order excludes neutral and earth; scalar `v_min` takes precedence | null |
+| `v_max_phase` | array of float or null | volts | | phase order excludes neutral and earth; scalar `v_max` takes precedence | null |
 | `vpn_min` | array of float or null | volts | | per phase to neutral bound | null |
 | `vpn_max` | array of float or null | volts | | | null |
 | `vpp_min` | array of float or null | volts | | per phase to phase bound | null |
@@ -868,6 +870,7 @@ Schema definition: `VoltageSource`.
 | `terminal_map` | array of string | | | terminals of `bus` | required |
 | `v_magnitude` | array of float | volts per terminal | | 0 on a grounded terminal; same length as `terminal_map` | required |
 | `v_angle` | array of float | radians per terminal | | same length as `terminal_map` | required |
+| `energy_cost_rate` | optional array of float | $/kWh | positive injection supplies the network | one entry per phase in terminal-map order; excludes neutral terminals | no stated source-price term |
 | `extras` | object | | | | required |
 
 ### UntypedObject

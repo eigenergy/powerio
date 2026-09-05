@@ -52,6 +52,12 @@ const fn info(
 ///
 #[must_use]
 pub fn resolve_format(name: &str) -> Option<FormatInfo> {
+    match name {
+        "bmopf-json@0.1.0" => return Some(info("bmopf-json@0.1.0", Some("json"), false, true)),
+        "bmopf-json@0.2.0" => return Some(info("bmopf-json@0.2.0", Some("json"), false, true)),
+        _ => {}
+    }
+
     if crate::is_geo_layer_token(name) {
         return Some(info(
             "geo-json",

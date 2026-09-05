@@ -874,6 +874,46 @@ fn emit_dynamic(
     format: &str,
     destination: Destination,
 ) -> Result<EmitResult, Error> {
+    if let Some(version) = format.strip_prefix("bmopf-json@") {
+        let profile = match version {
+            "0.1.0" => powerio_dist::BmopfSchemaVersion::Bmopf010,
+            "0.2.0" => powerio_dist::BmopfSchemaVersion::Bmopf020,
+            _ => return Err(unknown_format(format)),
+        };
+        let (network, diagnostics) = match module.value() {
+            PioValue::MulticonductorNetwork(network) => (network.clone(), Vec::new()),
+            PioValue::McAcPfInstance(instance) => (
+                instance.network().clone(),
+                vec![calculation_data_omitted(module.value().type_name(), format)],
+            ),
+            PioValue::McAcOpfInstance(instance) => (
+                instance.network().clone(),
+                vec![calculation_data_omitted(module.value().type_name(), format)],
+            ),
+            PioValue::MulticonductorOperatingPoint(point) => {
+                network_with_multiconductor_operating_point(point, format)
+            }
+            PioValue::McAcPfSolution(solution) => (
+                solution.instance().network().clone(),
+                vec![solution_data_omitted(module.value().type_name(), format)],
+            ),
+            PioValue::McAcOpfSolution(solution) => (
+                solution.instance().network().clone(),
+                vec![solution_data_omitted(module.value().type_name(), format)],
+            ),
+            _ => return Err(unsupported_type(module, format)),
+        };
+        let typed = typed_sibling(module, network)?.sever_source();
+        let mut options = powerio_dist::EmitOptions::default();
+        options.bmopf.schema_version = profile;
+        return powerio_dist::emit_with_options(
+            &typed,
+            powerio_dist::DistTargetFormat::BmopfJson,
+            &options,
+            destination,
+        )
+        .map(|result| result.__with_diagnostics(diagnostics));
+    }
     if let Some(artifacts) = echo_retained_directory(module, format)? {
         return destination.__commit_artifacts(
             true,

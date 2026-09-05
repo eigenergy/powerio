@@ -2143,6 +2143,14 @@ fn check_bus_conductor_sets(
     let neutral_terminals = global_neutral_terminals(net);
     let mut saw_neutral = false;
     for (i, bus) in net.buses().iter().enumerate() {
+        if (bus.v_min.is_none() && bus.v_min_phase.is_some())
+            || (bus.v_max.is_none() && bus.v_max_phase.is_some())
+        {
+            report.diagnostics.push(Diagnostic::of(
+                &codes::TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_OBJECT,
+                format!("bus {} has nonuniform phase voltage bounds that a balanced bus cannot represent", bus.id),
+            ).with_value_target(format!("/buses/{i}")));
+        }
         let active_count = active_terminal_count(&bus.terminals, Some(bus), &neutral_terminals);
         if active_count < bus.terminals.len() {
             saw_neutral = true;

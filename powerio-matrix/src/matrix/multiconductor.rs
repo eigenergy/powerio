@@ -14,10 +14,9 @@
 //! the linecode), shunts, and capacitor banks. Ideal equipment — two winding
 //! transformer coupling and voltage sources — enters the augmented system as
 //! exact constraint rows over the node voltages with their coupled ideal
-//! currents, never as fabricated impedances; the winding leakage reactance is
-//! a real impedance and stamps into the passive matrix. Element stamps the
-//! builder does not support produce structured diagnostics and are omitted
-//! loudly.
+//! currents. Transformer leakage, non-WYE connections, floating winding
+//! neutrals, core shunts and tap decisions require a different augmented
+//! formulation and return an unsupported-physics error before assembly.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -337,7 +336,45 @@ impl Stamper {
 pub fn calc_multiconductor_admittance_matrix(
     network: &MulticonductorNetwork,
 ) -> Result<MulticonductorAdmittance> {
+    powerio_dist::require_electrical_readiness(network)?;
     let index = MulticonductorNodeIndex::build(network)?;
+    for transformer in network.transformers() {
+        let supported = transformer.windings.len() == 2
+            && transformer.xsc_pct.iter().all(|&x| x == 0.0)
+            && transformer.windings.iter().all(|w| {
+                w.conn == powerio_dist::DistWindingConn::Wye
+                    && w.r_pct == 0.0
+                    && w.r_neutral.is_none_or(|r| r == 0.0)
+                    && w.x_neutral.is_none_or(|x| x == 0.0)
+                    && (w.terminal_map.len() == 1
+                        || w.terminal_map.last().is_some_and(|terminal| {
+                            index.resolve(&w.bus, terminal) == Some(NodeRef::Ground)
+                        }))
+            })
+            && transformer.windings[0].terminal_map.len()
+                == transformer.windings[1].terminal_map.len()
+            && transformer.extras.get("no_load_shunt").is_none_or(|shunt| {
+                ["g", "b"]
+                    .iter()
+                    .all(|key| shunt.get(key).and_then(serde_json::Value::as_f64) == Some(0.0))
+            })
+            && ["g_no_load", "b_no_load", "%noloadloss", "%imag"]
+                .iter()
+                .all(|key| {
+                    transformer
+                        .extras
+                        .get(*key)
+                        .and_then(serde_json::Value::as_f64)
+                        .is_none_or(|v| v == 0.0)
+                })
+            && !["tap_min", "tap_max", "tap_ratio_min", "tap_ratio_max"]
+                .iter()
+                .any(|key| transformer.extras.contains_key(*key));
+        if !supported {
+            return Err(powerio_core::Error::new(&codes::BUILD_MULTI_PHYSICS_UNSUPPORTED,
+                format!("transformer `{}` requires leakage, winding connection, neutral, core-loss, or tap-control equations outside the ideal grounded-WYE admittance profile", transformer.name)).into());
+        }
+    }
     let n = index.len();
     let mut stamper = Stamper::new(n);
     let mut diagnostics = Vec::new();
@@ -553,11 +590,8 @@ pub fn calc_multiconductor_admittance_matrix(
         }
     }
 
-    // Two winding transformers: the leakage reactance is a real impedance in
-    // series with an exact ideal ratio link. The leakage stamps into the
-    // passive matrix on the primary side; the ideal coupling is the
-    // constraint v_primary - a v_secondary = 0 per phase pair. Anything past
-    // two windings is a structured diagnostic.
+    // Grounded WYE winding pairs use an exact voltage-ratio constraint.
+    // Unsupported transformer physics is rejected before assembly.
     for transformer in network.transformers() {
         if transformer.windings.len() != 2 {
             diagnostics.push(
@@ -627,27 +661,6 @@ pub fn calc_multiconductor_admittance_matrix(
                     rows += 1;
                 }
                 (NodeRef::Ground, NodeRef::Ground) => {}
-            }
-        }
-        // Leakage: xsc on the primary winding base, an ordinary series
-        // reactance between the primary terminals and the ideal link. With
-        // the link exact, stamping it across the primary terminal pairs
-        // preserves the two winding short circuit behavior.
-        if let Some(&xsc_pct) = transformer.xsc_pct.first()
-            && primary.s_rating > 0.0
-            && primary.v_ref > 0.0
-            && xsc_pct != 0.0
-        {
-            let z_base = primary.v_ref * primary.v_ref / primary.s_rating;
-            let x = xsc_pct / 100.0 * z_base;
-            let y = Complex64::new(0.0, -1.0 / x);
-            for pair in 0..pairs {
-                let p = resolve(
-                    &primary.bus,
-                    &primary.terminal_map[pair],
-                    &format!("transformer `{}`", transformer.name),
-                )?;
-                stamper.add(p, p, y);
             }
         }
     }

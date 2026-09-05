@@ -80,6 +80,7 @@ impl McAcPfInstance {
     /// A network with no voltage source: a distribution power flow has no
     /// boundary condition without one.
     pub fn from_network(network: MulticonductorNetwork) -> Result<Self, Error> {
+        powerio_dist::require_electrical_readiness(&network)?;
         if network.sources().is_empty() {
             return Err(Error::new(
                 &codes::BUILD_INSTANCE_SHAPE_MISMATCH,
@@ -216,6 +217,7 @@ impl McAcOpfInstance {
     /// # Errors
     /// A network with no voltage source.
     pub fn from_network(network: MulticonductorNetwork) -> Result<Self, Error> {
+        powerio_dist::require_electrical_readiness(&network)?;
         if network.sources().is_empty() {
             return Err(Error::new(
                 &codes::BUILD_INSTANCE_SHAPE_MISMATCH,
@@ -262,6 +264,7 @@ impl McAcOpfInstance {
     /// Replace the network while preserving this instance's objective,
     /// constraint selections, and a compatible initial point.
     pub fn with_network(mut self, network: MulticonductorNetwork) -> Result<Self, Error> {
+        powerio_dist::require_electrical_readiness(&network)?;
         if network.sources().is_empty() {
             return Err(Error::new(
                 &codes::BUILD_INSTANCE_SHAPE_MISMATCH,

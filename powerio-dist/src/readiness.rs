@@ -11,6 +11,43 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::model::{DistLineCode, MulticonductorNetwork};
 
+pub(crate) const DEFERRED_GEOMETRY_KEYS: [&str; 5] =
+    ["geometry", "spacing", "wires", "cncables", "tscables"];
+
+/// Reject incomplete electrical data before numerical use.
+pub fn require_electrical_readiness(
+    net: &MulticonductorNetwork,
+) -> Result<(), powerio_core::Error> {
+    let report = audit_electrical_readiness(net);
+    if let Some(finding) = report.blockers().next() {
+        return Err(powerio_core::Error::new(
+            &crate::diagnostics::codes::BUILD_DIST_ELECTRICAL_INCOMPLETE,
+            format!("{} {}: {}", finding.code, finding.element, finding.message),
+        ));
+    }
+    Ok(())
+}
+
+/// Reject source-only electrical equipment that a canonical writer cannot reconstruct.
+pub(crate) fn require_resolved_geometry(
+    net: &MulticonductorNetwork,
+) -> Result<(), powerio_core::Error> {
+    let report = audit_electrical_readiness(net);
+    if let Some(finding) = report
+        .blockers()
+        .find(|finding| finding.code == "READINESS.DSS.GEOMETRY_DEFERRED")
+    {
+        return Err(powerio_core::Error::new(
+            &crate::diagnostics::codes::BUILD_DIST_ELECTRICAL_INCOMPLETE,
+            format!(
+                "{}: {}; retain the source module or provide explicit conductor impedances before canonical conversion",
+                finding.element, finding.message
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Severity of an electrical-readiness finding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReadinessSeverity {
@@ -67,6 +104,15 @@ impl ElectricalReadiness {
             message: message.into(),
         });
     }
+
+    fn warn(&mut self, code: &'static str, element: &str, message: impl Into<String>) {
+        self.findings.push(ReadinessFinding {
+            severity: ReadinessSeverity::Warning,
+            code,
+            element: element.to_owned(),
+            message: message.into(),
+        });
+    }
 }
 
 /// Audit a multiconductor network before numerical lowering or solving.
@@ -94,13 +140,41 @@ pub fn audit_electrical_readiness(net: &MulticonductorNetwork) -> ElectricalRead
         );
     }
 
-    let mut buses = BTreeSet::new();
+    let identity = |value: &str| {
+        if *net.source_format() == Some(crate::model::DistSourceFormat::Dss) {
+            value.to_ascii_lowercase()
+        } else {
+            value.to_owned()
+        }
+    };
+    for object in net.untyped_objects() {
+        if object.class.eq_ignore_ascii_case("line")
+            && object.props.iter().any(|(key, _)| {
+                key.as_ref().is_some_and(|key| {
+                    DEFERRED_GEOMETRY_KEYS
+                        .iter()
+                        .any(|candidate| key.eq_ignore_ascii_case(candidate))
+                })
+            })
+        {
+            report.block("READINESS.DSS.GEOMETRY_DEFERRED", &object.name,
+                "source line geometry has no calculated conductor impedances or resolved terminal map");
+        }
+    }
+    for (element, fields) in net.defaulted() {
+        report.warn(
+            "READINESS.SOURCE.DEFAULTED",
+            element,
+            format!("source defaults supplied {}", fields.join(", ")),
+        );
+    }
+    let mut buses = BTreeMap::new();
     for bus in net.buses() {
-        if !buses.insert(bus.id.to_ascii_lowercase()) {
+        if buses.insert(identity(&bus.id), bus).is_some() {
             report.block(
                 "READINESS.BUS.DUPLICATE",
                 &bus.id,
-                "bus identifier is duplicated case-insensitively",
+                "bus identifier is duplicated under the source identifier convention",
             );
         }
         if bus.terminals.is_empty() {
@@ -114,18 +188,54 @@ pub fn audit_electrical_readiness(net: &MulticonductorNetwork) -> ElectricalRead
 
     let mut linecodes = BTreeMap::new();
     for code in net.line_codes() {
-        let key = code.name.to_ascii_lowercase();
+        let key = identity(&code.name);
         if linecodes.insert(key, code).is_some() {
             report.block(
                 "READINESS.LINECODE.DUPLICATE",
                 &code.name,
-                "linecode name is duplicated case-insensitively",
+                "linecode name is duplicated under the source identifier convention",
             );
         }
         audit_linecode(code, &mut report);
     }
 
+    audit_lines(net, &buses, &linecodes, identity, &mut report);
+
+    report
+}
+
+fn audit_lines(
+    net: &MulticonductorNetwork,
+    buses: &BTreeMap<String, &crate::model::DistBus>,
+    linecodes: &BTreeMap<String, &DistLineCode>,
+    identity: impl Fn(&str) -> String,
+    report: &mut ElectricalReadiness,
+) {
+    let mut lines = BTreeSet::new();
     for line in net.lines() {
+        if !lines.insert(identity(&line.name)) {
+            report.block(
+                "READINESS.LINE.DUPLICATE",
+                &line.name,
+                "line identifier is duplicated",
+            );
+        }
+        for (bus_id, terminals) in [
+            (&line.bus_from, &line.terminal_map_from),
+            (&line.bus_to, &line.terminal_map_to),
+        ] {
+            if let Some(bus) = buses.get(&identity(bus_id)) {
+                for terminal in terminals {
+                    if !bus.terminals.contains(terminal) {
+                        report.block(
+                            "READINESS.LINE.TERMINAL_UNRESOLVED",
+                            &line.name,
+                            format!("bus {bus_id} does not declare terminal {terminal}"),
+                        );
+                    }
+                }
+            }
+        }
         if !line.length.is_finite() || line.length <= 0.0 {
             report.block(
                 "READINESS.LINE.LENGTH_INVALID",
@@ -137,14 +247,14 @@ pub fn audit_electrical_readiness(net: &MulticonductorNetwork) -> ElectricalRead
             );
         }
 
-        if !buses.contains(&line.bus_from.to_ascii_lowercase()) {
+        if !buses.contains_key(&identity(&line.bus_from)) {
             report.block(
                 "READINESS.LINE.BUS_FROM_UNRESOLVED",
                 &line.name,
                 format!("from-bus {:?} does not exist", line.bus_from),
             );
         }
-        if !buses.contains(&line.bus_to.to_ascii_lowercase()) {
+        if !buses.contains_key(&identity(&line.bus_to)) {
             report.block(
                 "READINESS.LINE.BUS_TO_UNRESOLVED",
                 &line.name,
@@ -152,9 +262,9 @@ pub fn audit_electrical_readiness(net: &MulticonductorNetwork) -> ElectricalRead
             );
         }
 
-        audit_deferred_geometry(line, &mut report);
+        audit_deferred_geometry(line, report);
 
-        let Some(code) = linecodes.get(&line.linecode.to_ascii_lowercase()) else {
+        let Some(code) = linecodes.get(&identity(&line.linecode)) else {
             report.block(
                 "READINESS.LINE.LINECODE_UNRESOLVED",
                 &line.name,
@@ -178,13 +288,10 @@ pub fn audit_electrical_readiness(net: &MulticonductorNetwork) -> ElectricalRead
             );
         }
     }
-
-    report
 }
 
 fn audit_deferred_geometry(line: &crate::model::DistLine, report: &mut ElectricalReadiness) {
-    const GEOMETRY_KEYS: [&str; 5] = ["geometry", "spacing", "wires", "cncables", "tscables"];
-    let keys: Vec<&str> = GEOMETRY_KEYS
+    let keys: Vec<&str> = DEFERRED_GEOMETRY_KEYS
         .into_iter()
         .filter(|key| line.extras.contains_key(*key))
         .collect();

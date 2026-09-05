@@ -10,7 +10,7 @@ repository. `0.1.0` is the version the IEEE PES Task Force on Benchmarking
 Multiconductor OPF accepts, and `0.2.0` is the proposal that adds the element
 classes 0.1.0 has no table for. PowerIO reads both and writes `0.2.0` by
 default; to write `0.1.0`, pass
-`BmopfEmitOptions::with_profile(BmopfProfile::Bmopf010)`.
+`BmopfEmitOptions::with_schema_version(BmopfSchemaVersion::Bmopf010)`.
 
 ## Conventions
 
@@ -36,8 +36,8 @@ parameter field is zero. A field with no typed slot lands in the element's
 | BMOPF | PowerIO | Note |
 | --- | --- | --- |
 | `name` | `PioModule` value name | |
-| `meta.$schema` | resolved by `BmopfProfile::from_schema_id` | Absent raises `READ.BMOPF.SCHEMA_ABSENT`; a value naming no version raises `READ.BMOPF.SCHEMA_UNKNOWN`. Both parse, and both versions are accepted. |
-| `meta.schema_version` | writer-owned | Stamped on a `0.2.0` write only; `0.1.0` declares no such field. |
+| `meta.$schema` | resolved by `BmopfSchemaVersion::from_schema_id` | Absent raises `READ.BMOPF.SCHEMA_ABSENT`; a value naming no version raises `READ.BMOPF.SCHEMA_UNKNOWN`. Both parse, and both versions are accepted. |
+| `meta.schema_version` | explicit schema version | The reader checks agreement with `meta.$schema`. Fresh proposal output pins a retrieval URL and records proposal status and schema digest in provenance. |
 | `meta.frequency` | `MulticonductorNetwork::base_frequency`, Hz | Absent defaults to 60 with `READ.BMOPF.VALUE_DEFAULTED`. |
 | `meta.*` (the rest) | `MulticonductorNetwork::extras["bmopf_meta"]` | Re-emitted, except the three the writer owns. |
 | `terminal_conventions` | `MulticonductorNetwork::extras["bmopf_terminal_conventions"]` | Re-emitted verbatim; authored from the terminal names when the source states none. |
@@ -51,7 +51,7 @@ parameter field is zero. A field with no typed slot lands in the element's
 | --- | --- | --- |
 | `terminal_names` | `terminals` | Ordered; fixes every per-terminal order on this bus. |
 | `perfectly_grounded_terminals` | `grounded` | |
-| `v_min`, `v_max` | `v_min`, `v_max` | The BMOPF array is per phase terminal; PowerIO holds one value, so a genuine per-phase difference raises `READ.BMOPF.VALUE_COLLAPSED` rather than being dropped. |
+| `v_min`, `v_max` | `v_min_phase`, `v_max_phase` and scalar `v_min`, `v_max` | Unequal bounds remain ordered phase vectors through IR and bindings. A scalar edit explicitly overrides the vector; balanced lowering rejects unequal phase bounds. |
 | `vpn_min`, `vpn_max` | `vpn_min`, `vpn_max` | Per phase terminal, kept as arrays. |
 | `vpp_min`, `vpp_max` | `vpp_min`, `vpp_max` | Per ordered phase pair. |
 | `vpos_min`, `vpos_max` | `vpos_min`, `vpos_max` | Scalars. |
@@ -168,7 +168,7 @@ as two secondary windings.
 | `g_no_load`, `b_no_load` | `extras` | The magnetising branch has no typed slot. |
 | `i_max_from`, `i_max_to` | `extras` | Per winding conductor of that side, in that side's own amperes. |
 | `n_winding.windings[]` | one `DistWinding` each | `bus`, `terminal_map`, `v_nom`, `configuration`, `r_winding`, `delta_roll`, `i_max`. |
-| `n_winding.x_sc` | `xsc_pct`, in `[xhl, xht, xlt]` order | Keyed `i_j` with `i < j` in BMOPF, all referred to winding 1. |
+| `n_winding.x_sc` | `xsc_pct`, ordered `12, 13, ..., 1n, 23, ..., (n-1)n` | Keyed `i_j` with `i < j` in BMOPF, all referred to winding 1. |
 | `single_phase_autotransformer`, `open_delta_regulator` | windings plus `extras["bmopf_subtype"]` | The regulator ratio, its bounds, the ANSI type and the open delta connection ride in `extras`. |
 
 Under schema `0.1.0`, the nine fields that have no subtype slot (`tap`,
@@ -177,6 +177,10 @@ fields) are written to `extras.transformer.<subtype>.<name>` and folded back
 on read, with each move reported under `EMIT.BMOPF.RETAINED_SOURCE_ONLY`.
 Under `0.2.0` the subtypes declare all nine, so nothing moves; only the three
 tap names change, to `tap_ratio`, `tap_ratio_min`, and `tap_ratio_max`.
+
+OpenDSS `Xscarray` populates every winding-pair reactance in this order.
+The reader applies scalar `XHL`/`XHT`/`XLT` updates at edit boundaries;
+regenerated four-or-more-winding records use the complete `Xscarray`.
 
 ## ibr and control_profile
 
@@ -287,14 +291,38 @@ against the specification pages of
 [`math-and-data-model-specifications`](https://github.com/distribution-system-opt/math-and-data-model-specifications)
 rather than inferred from the data.
 
-BMOPFTools.jl is the Task Force toolchain that generated `example_ieee13.json`,
-which lists it in `meta.case_study_generator`. The toolchain is not published
-in the `distribution-system-opt` organization, so the comparison that closed
-issue #414 asked for (against its admittance stamps, constraint activation,
-objective terms, conductor order, and regulator behaviour) is not made here.
-What is checked is the data it writes: the matrix spelling its writer uses,
-with only one triangle filled in, reads back with the mirrored cells filled,
-and the regulator subtypes it adds to the schema read and write as
-`transformer.single_phase_autotransformer` and
-`transformer.open_delta_regulator`. Comparing the numbers a solve produces
-would need the toolchain itself.
+[BMOPFTools.jl](https://github.com/frederikgeth/BMOPFTools.jl) is publicly
+available and is identified as the generator of `example_ieee13.json`.
+The [PowerIO 0.11 compatibility change](https://github.com/frederikgeth/BMOPFTools.jl/pull/385)
+exercises the typed module API, explicit legacy schema version, retained diagnostics,
+transformer core-shunt locations and nominal n-winding imports. Its numerical
+suite compares power-flow voltages and transformer admittance with OpenDSS,
+including independently prepared BMOPF cases and native OpenDSS conversions.
+
+PowerIO's structural tests additionally check triangular matrix completion,
+conductor order, regulator fields, proposal provenance and rejected malformed
+records. These checks distinguish data preservation from the equations a
+particular solver supports; retaining a regulator or n-winding record does not
+imply that PowerIO's own matrix compiler implements it.
+
+## Explicit terminal-coil no-load admittance
+
+`transformer.<subtype>.<id>.no_load_shunt` holds `{winding, g, b}` in transformer
+extras and generation-2 IR. The one-based winding index fixes its physical
+location, and `g + j b` is siemens per coil at the terminal voltage. It cannot
+coexist with the existing from-side `g_no_load` and `b_no_load` fields.
+
+OpenDSS and PMD exciting-branch percentages map to winding 2 with a negative
+magnetizing susceptance. Conversion uses the actual tapped WYE phase-to-neutral
+or DELTA phase-to-phase coil voltage and divides total transformer VA by the
+phase count. A winding-2 shunt converts back to those percentages; other
+locations report that this target parameterization cannot represent them.
+Legacy BMOPF output preserves the object under `extras.transformer` and reports
+the relocation. Nonzero core shunts reject the limited PowerIO passive
+transformer matrix profile before execution.
+
+The independent check `evals/validation/validate_bmopf_core_shunts.py` compares
+six transformer topologies with OpenDSS `Yprim` through an intermediate PowerIO
+IR document. BMOPFTools' 0.11 adapter uses an equivalent bus-shunt matrix and
+retains the original coil object in provenance. Successful parsing alone does
+not establish support for a transformer calculation.

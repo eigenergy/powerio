@@ -63,6 +63,12 @@ pub struct DistBus {
     /// bound is always 0).
     pub v_min: Option<f64>,
     pub v_max: Option<f64>,
+    /// Nonuniform phase-to-ground bounds in phase-terminal order, volts.
+    /// A scalar bound, when present, takes precedence over this vector.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub v_min_phase: Option<Vec<f64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub v_max_phase: Option<Vec<f64>>,
     pub vpn_min: Option<Vec<f64>>,
     pub vpn_max: Option<Vec<f64>>,
     pub vpp_min: Option<Vec<f64>>,
@@ -84,6 +90,36 @@ pub struct DistBus {
 }
 
 impl DistBus {
+    /// Phase positions in terminal order, using explicit BMOPF roles when supplied.
+    #[must_use]
+    pub fn phase_indices(&self, conventions: Option<&serde_json::Value>) -> Vec<usize> {
+        let numeric_four = self.terminals.len() == 4
+            && ["1", "2", "3", "4"]
+                .iter()
+                .all(|t| self.terminals.iter().any(|v| v == t));
+        self.terminals
+            .iter()
+            .enumerate()
+            .filter_map(|(index, terminal)| {
+                let nonphase = if let Some(roles) = conventions {
+                    ["neutral", "earth"].iter().any(|role| {
+                        roles
+                            .get(role)
+                            .and_then(serde_json::Value::as_array)
+                            .is_some_and(|names| {
+                                names
+                                    .iter()
+                                    .any(|name| name.as_str() == Some(terminal.as_str()))
+                            })
+                    })
+                } else {
+                    terminal.eq_ignore_ascii_case("n") || (numeric_four && terminal == "4")
+                };
+                (!nonphase).then_some(index)
+            })
+            .collect()
+    }
+
     #[must_use]
     pub fn new(id: impl Into<String>, terminals: Vec<String>) -> Self {
         Self {
@@ -92,6 +128,8 @@ impl DistBus {
             grounded: Vec::new(),
             v_min: None,
             v_max: None,
+            v_min_phase: None,
+            v_max_phase: None,
             vpn_min: None,
             vpn_max: None,
             vpp_min: None,
@@ -745,7 +783,8 @@ pub struct DistTransformer {
     pub name: String,
     pub windings: Vec<DistWinding>,
     /// Short circuit reactances between winding pairs, percent:
-    /// `[xhl]` for two windings, `[xhl, xht, xlt]` for three.
+    /// Upper-triangular order `12, 13, ..., 1n, 23, ..., (n-1)n`,
+    /// on winding 1's power base, matching OpenDSS `Xscarray`.
     pub xsc_pct: Vec<f64>,
     pub phases: usize,
     pub extras: Extras,
@@ -780,6 +819,9 @@ pub struct VoltageSource {
     pub v_magnitude: Vec<f64>,
     /// Radians per terminal.
     pub v_angle: Vec<f64>,
+    /// Energy cost rate in $/kWh, one entry per phase in terminal-map order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub energy_cost_rate: Option<Vec<f64>>,
     pub extras: Extras,
 }
 
@@ -798,6 +840,7 @@ impl VoltageSource {
             terminal_map,
             v_magnitude,
             v_angle,
+            energy_cost_rate: None,
             extras: Extras::new(),
         }
     }
@@ -1332,6 +1375,40 @@ pub(crate) fn square_from_rows(rows: &[Vec<f64>], n: usize) -> Option<ConductorM
         return None;
     }
     Some(m)
+}
+
+/// Actual coil voltage base, including the fixed winding tap.
+pub(crate) fn winding_coil_voltage(winding: &DistWinding, phases: usize) -> f64 {
+    let divisor = if winding.conn == DistWindingConn::Wye && matches!(phases, 2 | 3) {
+        3f64.sqrt()
+    } else {
+        1.0
+    };
+    winding.v_ref * winding.tap / divisor
+}
+
+/// OpenDSS no-load percentages for an explicit winding-2 terminal-coil shunt.
+/// Other winding locations cannot use the OpenDSS exciting-branch parameters.
+pub(crate) fn transformer_no_load_percentages(t: &DistTransformer) -> Option<(f64, f64)> {
+    let shunt = t.extras.get("no_load_shunt")?;
+    if shunt.get("winding")?.as_u64()? != 2 {
+        return None;
+    }
+    let g = shunt.get("g")?.as_f64()?;
+    let b = shunt.get("b")?.as_f64()?;
+    let voltage = winding_coil_voltage(t.windings.get(1)?, t.phases);
+    let rating = t.windings.first()?.s_rating;
+    if !voltage.is_finite()
+        || voltage <= 0.0
+        || !rating.is_finite()
+        || rating <= 0.0
+        || g < 0.0
+        || b > 0.0
+    {
+        return None;
+    }
+    let scale = 100.0 * t.phases.max(1) as f64 * voltage.powi(2) / rating;
+    Some((g * scale, -b * scale))
 }
 
 #[cfg(test)]

@@ -3689,6 +3689,28 @@
             }
           ]
         },
+        "v_max_phase": {
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "v_min": {
           "anyOf": [
             {
@@ -3708,6 +3730,29 @@
             }
           ],
           "description": "Voltage magnitude bounds, volts: the scalar pair plus the phase to\nneutral and phase to phase families, and the per-sequence scalars\n(BMOPF schema 0.1.0: positive sequence has both bounds, negative and\nzero sequence and neutral to ground are magnitude caps whose lower\nbound is always 0)."
+        },
+        "v_min_phase": {
+          "description": "Nonuniform phase-to-ground bounds in phase-terminal order, volts.\nA scalar bound, when present, takes precedence over this vector.",
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "vn_max": {
           "anyOf": [
@@ -5571,7 +5616,7 @@
           "type": "array"
         },
         "xsc_pct": {
-          "description": "Short circuit reactances between winding pairs, percent:\n`[xhl]` for two windings, `[xhl, xht, xlt]` for three.",
+          "description": "Short circuit reactances between winding pairs, percent:\nUpper-triangular order `12, 13, ..., 1n, 23, ..., (n-1)n`,\non winding 1's power base, matching OpenDSS `Xscarray`.",
           "items": {
             "anyOf": [
               {
@@ -14939,6 +14984,29 @@
       "properties": {
         "bus": {
           "type": "string"
+        },
+        "energy_cost_rate": {
+          "description": "Energy cost rate in $/kWh, one entry per phase in terminal-map order.",
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "extras": {
           "additionalProperties": true,

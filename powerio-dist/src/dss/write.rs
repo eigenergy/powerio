@@ -838,6 +838,19 @@ impl DssWriter {
         ));
         self.out.push('\n');
 
+        for source in net
+            .sources()
+            .iter()
+            .filter(|source| source.energy_cost_rate.is_some())
+        {
+            self.warn(
+                &C::EMIT_DSS_FIELD_DROPPED,
+                format!(
+                    "voltage source {}: energy_cost_rate has no target field",
+                    source.name
+                ),
+            );
+        }
         self.buscoords(net);
         self.sources(net);
         self.line_codes(net);
@@ -949,8 +962,8 @@ impl DssWriter {
             );
         }
         for (field, present) in [
-            ("v_min", b.v_min.is_some()),
-            ("v_max", b.v_max.is_some()),
+            ("v_min", b.v_min.is_some() || b.v_min_phase.is_some()),
+            ("v_max", b.v_max.is_some() || b.v_max_phase.is_some()),
             ("vpn_min", b.vpn_min.is_some()),
             ("vpn_max", b.vpn_max.is_some()),
             ("vpp_min", b.vpp_min.is_some()),
@@ -1505,20 +1518,18 @@ impl DssWriter {
             winding_array(&mut s, &mut edits, "kvs", "kv", &kvs);
             winding_array(&mut s, &mut edits, "kvas", "kva", &kvas);
             let _ = write!(s, " %Rs=({}) taps=({})", rs.join(", "), taps.join(", "));
-            if let Some(xhl) = t.xsc_pct.first() {
-                let _ = write!(s, " xhl={}", num(*xhl));
-                if t.xsc_pct.len() >= 3 {
-                    let xlt = self.star_xlt(t);
-                    let _ = write!(s, " xht={} xlt={}", num(t.xsc_pct[1]), num(xlt));
-                }
-            } else {
-                self.warn(
-                    &C::EMIT_DSS_VALUE_DEFAULTED,
-                    format!("transformer {}: xsc_pct is empty; emitted xhl=0", t.name),
-                );
-                s.push_str(" xhl=0");
+            self.transformer_reactances(t, &mut s);
+            let mut extras = t.extras.clone();
+            // Typed reactances determine output after an IR load or mutation.
+            if nw > 3 && t.xsc_pct.len() == nw * (nw - 1) / 2 {
+                extras.remove("xscarray");
             }
-            s.push_str(&self.extras_tail("transformer", &t.name, &t.extras));
+            if let Some((loss, imag)) = crate::model::transformer_no_load_percentages(t) {
+                extras.remove("no_load_shunt");
+                extras.insert("%noloadloss".into(), serde_json::json!(loss));
+                extras.insert("%imag".into(), serde_json::json!(imag));
+            }
+            s.push_str(&self.extras_tail("transformer", &t.name, &extras));
             self.line_out(&s);
             for (idx, w) in t.windings.iter().enumerate() {
                 if let Some(r) = w.r_neutral {
@@ -1535,6 +1546,34 @@ impl DssWriter {
             }
         }
         self.out.push('\n');
+    }
+
+    /// Emit the complete pair table for four or more windings.
+    fn transformer_reactances(&mut self, t: &DistTransformer, output: &mut String) {
+        let nw = t.windings.len();
+        if nw > 3 {
+            let expected = nw * (nw - 1) / 2;
+            if t.xsc_pct.len() != expected {
+                self.warn(
+                    &C::EMIT_DSS_VALUE_DEFAULTED,
+                    format!("transformer {}: xsc_pct has {} values; expected {expected}; OpenDSS defaults apply to absent pairs", t.name, t.xsc_pct.len()),
+                );
+            }
+            let values: Vec<_> = t.xsc_pct.iter().map(|x| num(*x)).collect();
+            let _ = write!(output, " xscarray=({})", values.join(", "));
+        } else if let Some(xhl) = t.xsc_pct.first() {
+            let _ = write!(output, " xhl={}", num(*xhl));
+            if t.xsc_pct.len() >= 3 {
+                let xlt = self.star_xlt(t);
+                let _ = write!(output, " xht={} xlt={}", num(t.xsc_pct[1]), num(xlt));
+            }
+        } else {
+            self.warn(
+                &C::EMIT_DSS_VALUE_DEFAULTED,
+                format!("transformer {}: xsc_pct is empty; emitted xhl=0", t.name),
+            );
+            output.push_str(" xhl=0");
+        }
     }
 
     /// The `xlt=` value for a three winding record. dss cannot solve a star
@@ -2225,13 +2264,32 @@ impl DssWriter {
         for g in net.generators() {
             self.check_name("generator", &g.name);
             let node_map = self.return_last("generator", &g.name, &g.bus, &g.terminal_map);
-            let phases = self.element_phases(
-                &g.extras,
-                &g.terminal_map,
-                g.configuration,
-                "generator",
-                &g.name,
-            );
+            let phases = extras_usize(&g.extras, "phases")
+                .or_else(|| {
+                    let count = [
+                        Some(g.p_nom.as_slice()),
+                        g.p_min.as_deref(),
+                        g.p_max.as_deref(),
+                        g.q_min.as_deref(),
+                        g.q_max.as_deref(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .map(<[f64]>::len)
+                    .max()
+                    .unwrap_or(0);
+                    (count > 0).then_some(count)
+                })
+                .unwrap_or_else(|| {
+                    self.element_phases(
+                        &g.extras,
+                        &g.terminal_map,
+                        g.configuration,
+                        "generator",
+                        &g.name,
+                    )
+                })
+                .max(1);
             let conn = self.element_conn(&g.extras, g.configuration, &g.bus, &g.terminal_map);
             let nconds = nconds_for(conn, phases);
             self.warn_map_arity("generator", &g.name, g.terminal_map.len(), nconds);
@@ -2972,6 +3030,7 @@ mod tests {
                 terminal_map: strings(&["1", "2", "3", "4"]),
                 v_magnitude: vec![vln, vln, vln, 0.0],
                 v_angle: vec![0.0, -third, third, 0.0],
+                energy_cost_rate: None,
                 extras: Extras::new(),
             },
         )
@@ -4528,6 +4587,7 @@ mod tests {
             terminal_map: strings(&["1", "2", "3", "4"]),
             v_magnitude: vec![20_000.0, 20_000.0, 20_000.0, 0.0],
             v_angle: vec![0.0, -third, third, 0.0],
+            energy_cost_rate: None,
             extras: Extras::new(),
         };
         let wind = VoltageSource {
@@ -4541,6 +4601,7 @@ mod tests {
                 third / 2.0,
                 0.0,
             ],
+            energy_cost_rate: None,
             extras: Extras::new(),
         };
         let net = MulticonductorNetwork::from_tables(MulticonductorNetworkTables {
@@ -4601,6 +4662,7 @@ mod tests {
             terminal_map: strings(&["1", "2", "3"]),
             v_magnitude: vec![2400.0; 3],
             v_angle: vec![0.0, -third, third],
+            energy_cost_rate: None,
             extras: Extras::new(),
         };
         let load = load_on("sb", &["1"], Configuration::Wye);

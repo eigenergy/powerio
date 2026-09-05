@@ -11,7 +11,7 @@
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
-use super::BmopfProfile;
+use super::BmopfSchemaVersion;
 use crate::diagnostics::codes as C;
 use crate::error::{Error, Result};
 use crate::geo::{CoordinateSpace, DistCoordsKind, DistGeoMeta, DistLocation};
@@ -46,6 +46,7 @@ pub(crate) fn parse_bmopf_collecting(
     });
     report_non_numeric_fields(&doc, diags);
     report_schema_version(&doc, diags);
+    super::validate::report(&doc, diags);
     let mut rd = Reader {
         net: &mut net,
         diagnostics: crate::diagnostics::Diagnostics::new(),
@@ -58,47 +59,66 @@ pub(crate) fn parse_bmopf_collecting(
     Ok(net)
 }
 
-/// Resolve the schema version the document declares, and report when it
-/// cannot be resolved.
-///
-/// `meta.$schema` is the one field that states which version a document was
-/// written against, so it is the only thing to detect from. The reader accepts
-/// both versions whatever it finds, since every class 0.2.0 adds at the top
-/// level also reads from `extras` where 0.1.0 puts it. What the version
-/// changes is what a consumer may assume: an unresolved version means the
-/// class layout of the document is not stated anywhere, and a consumer that
-/// assumes one reads a different network on the other. Both findings are
-/// warnings for that reason, not errors.
+/// Report unresolved schema identities and reject contradictory version declarations.
 fn report_schema_version(doc: &Map<String, Value>, diags: &mut crate::collect::Diagnostics) {
     let stated = doc
         .get("meta")
         .and_then(Value::as_object)
         .and_then(|m| m.get("$schema"))
         .and_then(Value::as_str);
+    if let (Some(profile), Some(version)) = (
+        stated.and_then(BmopfSchemaVersion::from_schema_id),
+        doc.get("meta").and_then(|meta| meta.get("schema_version")),
+    ) && version.as_str() != Some(profile.version())
+    {
+        diags.push(
+            &C::READ_BMOPF_SCHEMA_MISMATCH,
+            format!(
+                "meta.schema_version {version} disagrees with the {} schema URI",
+                profile.version()
+            ),
+        );
+    }
     match stated {
         None => diags.push(
             &C::READ_BMOPF_SCHEMA_ABSENT,
             format!(
                 "the document states no `meta.$schema`, so the BMOPF schema version it was \
                  written against is unknown; both {} and {} are accepted",
-                BmopfProfile::Bmopf010.version(),
-                BmopfProfile::Bmopf020.version()
+                BmopfSchemaVersion::Bmopf010.version(),
+                BmopfSchemaVersion::Bmopf020.version()
             ),
         ),
-        Some(id) if BmopfProfile::from_schema_id(id).is_none() => diags.push(
+        Some(id) if BmopfSchemaVersion::from_schema_id(id).is_none() => diags.push(
             &C::READ_BMOPF_SCHEMA_UNKNOWN,
             format!(
                 "`meta.$schema` is `{id}`, which names no known BMOPF schema version; both {} \
                  and {} are accepted",
-                BmopfProfile::Bmopf010.version(),
-                BmopfProfile::Bmopf020.version()
+                BmopfSchemaVersion::Bmopf010.version(),
+                BmopfSchemaVersion::Bmopf020.version()
             ),
         ),
         Some(_) => {}
     }
 }
 
-/// Schema 0.1.0 field names typed `number` or an array of them. Derived from
+fn uniform_bound(value: Option<&Value>) -> Option<f64> {
+    let values = floats(value)?;
+    let first = *values.first()?;
+    values
+        .iter()
+        .all(|&v| v.to_bits() == first.to_bits())
+        .then_some(first)
+}
+
+fn nonuniform_bound(value: Option<&Value>) -> Option<Vec<f64>> {
+    uniform_bound(value)
+        .is_none()
+        .then(|| floats(value))
+        .flatten()
+}
+
+/// Numeric field names shared with 0.1.0, plus draft energy prices. Derived from
 /// the vendored schema; `schema_numeric_fields_match_the_vendored_schema`
 /// holds the two together.
 const NUMERIC_FIELDS: &[&str] = &[
@@ -109,6 +129,7 @@ const NUMERIC_FIELDS: &[&str] = &[
     "beta_p",
     "beta_z",
     "cost",
+    "energy_cost_rate",
     "frequency",
     "gamma_p",
     "gamma_q",
@@ -273,28 +294,6 @@ fn delta_roll_value(v: Option<&Value>) -> Option<i64> {
         .filter(|roll| matches!(*roll, -1 | 1))
 }
 
-/// Like [`first_float`], but the field is per-phase-terminal in the schema
-/// while powerio's model holds one value; warn when collapsing loses a
-/// genuine per-phase difference instead of dropping it silently.
-fn first_float_collapsed(
-    v: Option<&Value>,
-    what: &str,
-    diagnostics: &mut crate::diagnostics::Diagnostics,
-) -> Option<f64> {
-    match v? {
-        Value::Array(a) => {
-            let vals: Vec<f64> = a.iter().map(f).collect();
-            if vals.windows(2).any(|w| w[0].to_bits() != w[1].to_bits()) {
-                diagnostics.push(&C::READ_BMOPF_VALUE_COLLAPSED, format!(
-                    "{what}: per-phase-terminal bound is non-uniform; collapsed to the first entry"
-                ));
-            }
-            vals.first().copied()
-        }
-        v => Some(f(v)),
-    }
-}
-
 fn value_alias<'a>(o: &'a Map<String, Value>, primary: &str, legacy: &str) -> Option<&'a Value> {
     o.get(primary).or_else(|| o.get(legacy))
 }
@@ -311,6 +310,19 @@ fn merge_transformer_overlay(
         let Value::Object(names) = names else {
             continue;
         };
+        if matches!(
+            subtype.as_str(),
+            "n_winding" | "single_phase_autotransformer" | "open_delta_regulator"
+        ) {
+            let table = merged
+                .entry(subtype.clone())
+                .or_insert_with(|| Value::Object(Map::new()));
+            if let Some(table) = table.as_object_mut() {
+                for (name, fields) in names {
+                    table.entry(name.clone()).or_insert_with(|| fields.clone());
+                }
+            }
+        }
         let Some(Value::Object(table)) = merged.get_mut(subtype) else {
             continue;
         };
@@ -558,7 +570,7 @@ impl Reader<'_> {
                 "generator" => self.generators(items),
                 "capacitor" => self.capacitors(items),
                 "shunt" => self.shunts(items),
-                "voltage_source" => self.sources(items),
+                "voltage_source" => self.sources_with_overlay(items, doc),
                 "extras" => self.extras_block(items),
                 // The phase/neutral label conventions block: no typed slot,
                 // stashed whole so a round trip keeps it (the meta pattern).
@@ -581,7 +593,7 @@ impl Reader<'_> {
                 other => {
                     self.diagnostics.push(
                         &C::READ_BMOPF_RETAINED_SOURCE_ONLY,
-                        format!("top level `{other}` is outside the schema; kept untyped"),
+                        format!("top level `{other}` has no typed PowerIO representation; kept as named JSON data"),
                     );
                     for (name, v) in items {
                         self.net.untyped_objects_mut().push(UntypedObject {
@@ -593,24 +605,19 @@ impl Reader<'_> {
                 }
             }
         }
-        if let Some(Value::Object(items)) = doc.get("transformer") {
-            // The writer relocates schema-less transformer fields (taps,
-            // neutral impedance, no load admittance) to
-            // `extras.transformer.<subtype>.<name>`; fold them back onto the
-            // raw objects before parsing.
-            let overlay = doc
-                .get("extras")
-                .and_then(Value::as_object)
-                .and_then(|e| e.get("transformer"))
-                .and_then(Value::as_object)
-                .filter(|o| !o.is_empty());
-            match overlay {
-                Some(overlay) => {
-                    let merged = merge_transformer_overlay(items, overlay);
-                    self.transformers(&merged);
-                }
-                None => self.transformers(items),
-            }
+        let empty = Map::new();
+        let items = doc
+            .get("transformer")
+            .and_then(Value::as_object)
+            .unwrap_or(&empty);
+        let overlay = doc
+            .get("extras")
+            .and_then(|e| e.get("transformer"))
+            .and_then(Value::as_object);
+        if let Some(overlay) = overlay {
+            self.transformers(&merge_transformer_overlay(items, overlay));
+        } else {
+            self.transformers(items);
         }
 
         self.warn_orphan_transformer_overlay(doc);
@@ -619,11 +626,7 @@ impl Reader<'_> {
         }
     }
 
-    /// The `extras.transformer` overlay carries the transformer fields that
-    /// schema 0.1.0 has no slot for. The transformer arm folds it back onto
-    /// the raw objects, so an overlay with no transformer table to attach to
-    /// has no reader at all. Name the loss; `extras_block` skips the overlay
-    /// deliberately, so nothing else reports it.
+    /// Report parameter overlays that have no declared transformer target.
     fn warn_orphan_transformer_overlay(&mut self, doc: &Map<String, Value>) {
         let overlay = doc
             .get("extras")
@@ -866,9 +869,6 @@ impl Reader<'_> {
         }
     }
 
-    // One block per object field; splitting it would scatter a list that
-    // reads end to end.
-    #[expect(clippy::too_many_lines)]
     fn buses(&mut self, items: &Map<String, Value>) {
         for (id, v) in items {
             let Value::Object(o) = v else { continue };
@@ -957,16 +957,10 @@ impl Reader<'_> {
                 id: id.clone(),
                 terminals: strings(o.get("terminal_names")),
                 grounded: strings(o.get("perfectly_grounded_terminals")),
-                v_min: first_float_collapsed(
-                    o.get("v_min"),
-                    &format!("bus {id} v_min"),
-                    &mut self.diagnostics,
-                ),
-                v_max: first_float_collapsed(
-                    o.get("v_max"),
-                    &format!("bus {id} v_max"),
-                    &mut self.diagnostics,
-                ),
+                v_min: uniform_bound(o.get("v_min")),
+                v_max: uniform_bound(o.get("v_max")),
+                v_min_phase: nonuniform_bound(o.get("v_min")),
+                v_max_phase: nonuniform_bound(o.get("v_max")),
                 vpn_min: floats(o.get("vpn_min")),
                 vpn_max: floats(o.get("vpn_max")),
                 vpp_min: floats(o.get("vpp_min")),
@@ -1281,6 +1275,7 @@ impl Reader<'_> {
                 "s_max",
                 "i_max",
                 "cost",
+                "energy_cost_rate",
                 "bus",
                 "configuration",
                 "terminal_map",
@@ -1298,7 +1293,7 @@ impl Reader<'_> {
             // Cost is a per-phase array in the schema, kept exactly as
             // stated. A bare scalar is still accepted for documents written
             // before v0.0.1 and reads as a one-entry statement.
-            let cost = match o.get("cost") {
+            let cost = match o.get("energy_cost_rate").or_else(|| o.get("cost")) {
                 Some(Value::Array(a)) => Some(a.iter().map(f).collect::<Vec<f64>>()),
                 Some(v) => Some(vec![f(v)]),
                 None => None,
@@ -1366,16 +1361,46 @@ impl Reader<'_> {
         }
     }
 
+    fn sources_with_overlay(&mut self, items: &Map<String, Value>, doc: &Map<String, Value>) {
+        let mut merged = items.clone();
+        if let Some(overlay) = doc
+            .get("extras")
+            .and_then(|e| e.get("voltage_source"))
+            .and_then(Value::as_object)
+        {
+            for (name, fields) in overlay {
+                if let (Some(target), Some(fields)) = (
+                    merged.get_mut(name).and_then(Value::as_object_mut),
+                    fields.as_object(),
+                ) {
+                    for (key, value) in fields {
+                        target.entry(key.clone()).or_insert_with(|| value.clone());
+                    }
+                }
+            }
+        }
+        self.sources(&merged);
+    }
+
     fn sources(&mut self, items: &Map<String, Value>) {
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
-            let known = ["v_magnitude", "v_angle", "bus", "terminal_map"];
+            let known = [
+                "v_magnitude",
+                "v_angle",
+                "bus",
+                "terminal_map",
+                "energy_cost_rate",
+                "cost",
+            ];
+            let energy_cost_rate = floats(o.get("energy_cost_rate").or_else(|| o.get("cost")));
             self.net.sources_mut().push(VoltageSource {
                 name: name.clone(),
                 bus: string(o.get("bus")),
                 terminal_map: strings(o.get("terminal_map")),
                 v_magnitude: floats(o.get("v_magnitude")).unwrap_or_default(),
                 v_angle: floats(o.get("v_angle")).unwrap_or_default(),
+                energy_cost_rate,
                 extras: take_extras(
                     o,
                     &known,
@@ -1448,6 +1473,7 @@ impl Reader<'_> {
             "v_ref_to",
             "g_no_load",
             "b_no_load",
+            "no_load_shunt",
             "r_series",
             "x_series",
             "r_series_from",
@@ -1593,7 +1619,7 @@ impl Reader<'_> {
                 extras.insert(key.into(), value.clone());
             }
         }
-        for key in ["g_no_load", "b_no_load"] {
+        for key in ["g_no_load", "b_no_load", "no_load_shunt"] {
             if let Some(v) = o.get(key) {
                 extras.insert(key.into(), v.clone());
             }
@@ -1759,6 +1785,7 @@ impl Reader<'_> {
             "x_series_to",
             "g_no_load",
             "b_no_load",
+            "no_load_shunt",
             "tap_ratio",
             "tap_ratio_min",
             "tap_ratio_max",
@@ -1847,6 +1874,7 @@ impl Reader<'_> {
         for key in [
             "g_no_load",
             "b_no_load",
+            "no_load_shunt",
             "tap_ratio_min",
             "tap_ratio_max",
             "regulator_type",
@@ -1875,10 +1903,18 @@ impl Reader<'_> {
     // reads end to end.
     #[expect(clippy::too_many_lines)]
     fn n_winding_transformer(&mut self, name: &str, o: &Map<String, Value>) -> DistTransformer {
-        let known = ["windings", "x_sc", "s_rating", "g_no_load", "b_no_load"];
+        let known = [
+            "windings",
+            "x_sc",
+            "s_rating",
+            "g_no_load",
+            "b_no_load",
+            "no_load_shunt",
+        ];
         let s = o.get("s_rating").map_or(f64::NAN, f);
         let mut windings = Vec::new();
         let mut delta_rolls = Map::new();
+        let mut winding_metadata = Map::new();
         if let Some(items) = o.get("windings").and_then(Value::as_array) {
             for (idx, item) in self.bounded_windings(name, items).iter().enumerate() {
                 let Some(w) = item.as_object() else {
@@ -1894,6 +1930,14 @@ impl Reader<'_> {
                 let terminal_map = strings(w.get("terminal_map"));
                 let bmopf_v_nom = value_alias(w, "v_nom", "v_ref").map_or(f64::NAN, f);
                 let r_winding = w.get("r_winding").map_or(0.0, f);
+                let rating = w.get("s_rating").map_or(s, f);
+                let retained: Map<String, Value> = ["i_max", "tap_ratio_min", "tap_ratio_max"]
+                    .iter()
+                    .filter_map(|key| w.get(*key).map(|v| ((*key).to_owned(), v.clone())))
+                    .collect();
+                if !retained.is_empty() {
+                    winding_metadata.insert(idx.to_string(), Value::Object(retained));
+                }
                 let connection = w
                     .get("configuration")
                     .or_else(|| w.get("connection"))
@@ -1915,7 +1959,7 @@ impl Reader<'_> {
                     delta_rolls.insert((idx + 1).to_string(), Value::from(delta_roll));
                 }
                 let r_pct = if let Some(base_z) =
-                    n_winding_base_from_bmopf(conn, &terminal_map, bmopf_v_nom, s)
+                    n_winding_base_from_bmopf(conn, &terminal_map, bmopf_v_nom, rating)
                 {
                     r_winding / base_z * 100.0
                 } else {
@@ -1926,11 +1970,11 @@ impl Reader<'_> {
                     terminal_map: terminal_map.clone(),
                     conn,
                     v_ref: n_winding_internal_v_ref(conn, &terminal_map, bmopf_v_nom),
-                    s_rating: s,
+                    s_rating: rating,
                     r_pct,
-                    tap: 1.0,
-                    r_neutral: None,
-                    x_neutral: None,
+                    tap: w.get("tap_ratio").map_or(1.0, f),
+                    r_neutral: w.get("r_neutral").map(f),
+                    x_neutral: w.get("x_neutral").map(f),
                 });
             }
         }
@@ -1957,10 +2001,17 @@ impl Reader<'_> {
             &[],
         );
         extras.insert("bmopf_subtype".into(), "n_winding".into());
+        extras.insert("bmopf_power_base".into(), Value::from(s));
+        if !winding_metadata.is_empty() {
+            extras.insert(
+                "bmopf_winding_metadata".into(),
+                Value::Object(winding_metadata),
+            );
+        }
         if !delta_rolls.is_empty() {
             extras.insert(BMOPF_DELTA_ROLLS_EXTRA.into(), Value::Object(delta_rolls));
         }
-        for key in ["g_no_load", "b_no_load"] {
+        for key in ["g_no_load", "b_no_load", "no_load_shunt"] {
             if let Some(v) = o.get(key) {
                 extras.insert(key.into(), v.clone());
             }
@@ -2254,7 +2305,12 @@ mod tests {
                 "the reader does not know `{sample}` (from `{pattern}`)"
             );
         }
-        // And nothing the reader claims is numeric is absent from the schema.
+        let draft_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/data/dist/bmopf/bmopf-0.2.0.schema.json");
+        let draft: Value =
+            serde_json::from_str(&std::fs::read_to_string(draft_path).unwrap()).unwrap();
+        walk(&draft, &mut names, &mut patterns);
+        // Each recognized numeric name belongs to a supported schema.
         for name in super::NUMERIC_FIELDS {
             assert!(
                 names.iter().any(|n| n == name),

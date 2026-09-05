@@ -3,13 +3,13 @@
 //!
 //! Everything is explicit SI: volts, watts, vars, ohms, siemens, meters,
 //! radians, string bus ids and terminal names. Both schema versions set
-//! `additionalProperties: false` on every element and offer one free form
-//! top level `extras` object, so the strict emitter drops what the target
+//! `additionalProperties: false` on electrical elements and permit free-form
+//! top-level `extras` and `meta.provenance` objects, so the strict emitter drops what the target
 //! version cannot carry and says so per field.
 //!
 //! # Two schema versions
 //!
-//! [`BmopfProfile`] names the version. Schema 0.1.0 is what the task force
+//! [`BmopfSchemaVersion`] names the version. Schema 0.1.0 is what the task force
 //! accepts: ten element classes and four transformer subtypes. Schema 0.2.0
 //! is the proposal that declares the classes 0.1.0 has no table for, and
 //! gives the transformer taps, winding neutral impedance, and no load
@@ -23,8 +23,7 @@
 //! layout of such a document is stated nowhere, and a consumer that assumes
 //! one reads a different network on the other.
 //!
-//! The writer targets one version, 0.2.0 by default. Writing 0.2.0 relocates
-//! nothing. Writing 0.1.0 relocates what that version has no slot for, listed
+//! The writer targets one version, 0.2.0 by default. Writing 0.2.0 keeps supported proposal fields in place. Writing 0.1.0 relocates what that version has no slot for, listed
 //! below, and reports each move.
 //!
 //! # What a 0.1.0 write parks under `extras`
@@ -34,7 +33,7 @@
 //! rather than dropped, with a warning per element. A consumer that reads the
 //! document and ignores `extras` gets a network that differs physically from
 //! the source and no error saying so: a tapped transformer reads as nominal
-//! tap, an impedance grounded neutral as solidly grounded, and the
+//! tap, an impedance grounded neutral loses its internal grounding branch, and the
 //! magnetizing branch disappears.
 //!
 //! ## Transformer fields
@@ -81,7 +80,7 @@
 //! Schema 0.1.0 defines no regulator subtype; the task force's BMOPFTools
 //! toolchain extends it with `single_phase_autotransformer` and
 //! `open_delta_regulator`, and schema 0.2.0 declares both. This emitter
-//! writes them under either version, for interoperation with that toolchain.
+//! writes them at top level under 0.2.0 and in `extras.transformer` under 0.1.0.
 //! An OpenDSS transformer a RegControl targets emits as
 //! `transformer.single_phase_autotransformer` when it reads as a series
 //! regulator (one phase, two windings of equal connection, voltage, and
@@ -94,8 +93,8 @@
 //!
 //! The emitted `terminal_conventions` block is the source document's own
 //! block re-emitted verbatim, or, absent that, one authored from the terminal
-//! names in the model: a terminal named `n` in any case is a neutral, every
-//! other name is a phase. Either way the block describes the terminal naming
+//! names in the model: `n` and `N` are neutral, and `4` in the complete
+//! `1,2,3,4` convention is neutral; other names are phase labels. Either way the block describes the terminal naming
 //! of the document that carries it and nothing else. A consumer that renames
 //! terminals must delete the block and recompute it from the renamed
 //! terminals; carried across a rename it sorts names no bus has any more, and
@@ -105,6 +104,10 @@ mod profile;
 pub(crate) mod read;
 mod write;
 
-pub use profile::BmopfProfile;
+pub use profile::{
+    BMOPF_PROPOSAL_COMMIT, BMOPF_PROPOSAL_SHA256, BMOPF_PROPOSAL_URL, BmopfSchemaVersion,
+};
 pub(crate) use write::emit_bmopf_json_text_with_options;
 pub use write::{BMOPF_SCHEMA_ID, BMOPF_SCHEMA_VERSION, BmopfEmitOptions};
+
+mod validate;

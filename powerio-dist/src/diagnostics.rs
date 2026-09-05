@@ -59,6 +59,10 @@ pub mod codes {
             "an include the case names could not be loaded";
         READ_DSS_INCLUDE_DEPTH_LIMIT = "READ.DSS.INCLUDE_DEPTH_LIMIT", Warning,
             "the reader stopped following includes at the nesting depth limit";
+        READ_DSS_GEOMETRY_UNRESOLVED = "READ.DSS.GEOMETRY_UNRESOLVED", Error,
+            "line geometry remains source data without calculated conductor impedances";
+        BUILD_DIST_ELECTRICAL_INCOMPLETE = "BUILD.DIST.ELECTRICAL_INCOMPLETE", Error,
+            "distribution equipment lacks the electrical data required for numerical use", category = Data;
         READ_DSS_LINECODE_UNKNOWN = "READ.DSS.LINECODE_UNKNOWN", Warning,
             "a line names a linecode the case does not declare";
 
@@ -140,6 +144,10 @@ pub mod codes {
         /// The document states a `meta.$schema` that names no known version.
         READ_BMOPF_SCHEMA_UNKNOWN = "READ.BMOPF.SCHEMA_UNKNOWN", Warning,
             "a BMOPF document states a schema naming no known version";
+        READ_BMOPF_SEMANTIC_INVALID = "READ.BMOPF.SEMANTIC_INVALID", Error,
+            "the BMOPF document has inconsistent dimensions, references, or bounds";
+        READ_BMOPF_SCHEMA_MISMATCH = "READ.BMOPF.SCHEMA_MISMATCH", Error,
+            "the schema URI and explicit schema version disagree";
 
         // EMIT.BMOPF: the general families beside the nineteen transformer
         // codes the writer already publishes.

@@ -214,7 +214,7 @@ fn sources_and_ideal_transformers_enter_the_augmented_system() {
     net.transformers_mut().push(DistTransformer::new(
         "t1",
         vec![primary, secondary],
-        vec![2.0],
+        vec![0.0],
         1,
     ));
 
@@ -253,17 +253,7 @@ fn sources_and_ideal_transformers_enter_the_augmented_system() {
     assert!((constraints[ratio_row][s_node] + 30.0).abs() < 1e-12);
     assert!(augmented.rhs_re[ratio_row].abs() < 1e-15);
 
-    // The leakage reactance is a real impedance on the primary base:
-    // z_base = 7200^2 / 25000, x = 2% of it, stamped as -1/x on the primary
-    // diagonal susceptance.
-    let b = dense(system.susceptance());
-    let z_base = 7200.0f64 * 7200.0 / 25_000.0;
-    let expected = -1.0 / (0.02 * z_base);
-    assert!(
-        (b[p_node][p_node] - expected).abs() < 1e-12,
-        "{} vs {expected}",
-        b[p_node][p_node]
-    );
+    assert_eq!(system.susceptance().nnz(), 0);
 }
 
 #[test]
@@ -279,15 +269,8 @@ fn unsupported_stamps_are_structured_diagnostics() {
         vec![1.0, 1.0, 1.0],
         1,
     ));
-    let system = calc_multiconductor_admittance_matrix(&net).unwrap();
-    assert!(
-        system
-            .diagnostics()
-            .iter()
-            .any(|d| d.code() == "BUILD.MULTI.UNSUPPORTED_STAMP" && d.message().contains("three")),
-        "{:?}",
-        system.diagnostics()
-    );
+    let error = calc_multiconductor_admittance_matrix(&net).unwrap_err();
+    assert!(error.to_string().contains("outside the ideal grounded-WYE"));
 }
 
 #[test]
@@ -343,4 +326,22 @@ fn a_parsed_micro_feeder_assembles_end_to_end() {
     assert!(system.susceptance().nnz() > 0);
     // The source anchors the system through the augmented rows.
     assert!(!system.augmented().labels.is_empty());
+}
+
+#[test]
+fn transformer_leakage_requires_a_series_equation() {
+    let mut net = MulticonductorNetwork::default();
+    net.buses_mut().push(DistBus::new("p", strings(&["1"])));
+    net.buses_mut().push(DistBus::new("s", strings(&["1"])));
+    net.transformers_mut().push(DistTransformer::new(
+        "t",
+        vec![
+            DistWinding::new("p", strings(&["1"]), DistWindingConn::Wye, 7200.0, 25000.0),
+            DistWinding::new("s", strings(&["1"]), DistWindingConn::Wye, 240.0, 25000.0),
+        ],
+        vec![2.0],
+        1,
+    ));
+    let error = calc_multiconductor_admittance_matrix(&net).unwrap_err();
+    assert_eq!(error.code().code, "BUILD.MULTI.PHYSICS_UNSUPPORTED");
 }

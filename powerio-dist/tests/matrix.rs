@@ -980,24 +980,9 @@ fn terminal_maps(net: &MulticonductorNetwork) -> Vec<(String, String, Vec<String
     out
 }
 
-/// The renumbering scheme itself, which the arity fallback in
-/// `assert_maps_eq` cannot check (issue #266 item 3).
-///
-/// dss spells terminals as node positions and PMD requires integer
-/// connections, so a named terminal takes a new name on those legs. The
-/// rename must be a position-stable bijection per bus:
-///
-/// - every element keeps its arity, and position `k` before the leg is
-///   position `k` after it, so no phase order permutation can hide;
-/// - within one bus, a source name always takes the same new name, so two
-///   elements that shared a conductor still share it;
-/// - within one bus, two source names never take one new name, so two
-///   conductors do not merge.
-///
-/// The scope is one bus because dss numbers a terminal by its position in
-/// its own bus, so the same name at two buses can legitimately differ.
-/// A permutation, a merge, or an inconsistent rename each fails here even
-/// though all of them keep the arity.
+/// Supplied conductor positions form a bijection per bus across OpenDSS and
+/// PMD renumbering. OpenDSS can append a grounded neutral to a WYE generator
+/// whose map lists only its phases; that addition must carry a diagnostic.
 #[test]
 fn renumbering_legs_are_position_stable_bijections() {
     for case in CASES {
@@ -1027,9 +1012,18 @@ fn renumbering_legs_are_position_stable_bijections() {
                     // job; this test only pins the rename.
                     continue;
                 };
-                assert_eq!(
-                    source_map.len(),
-                    target_map.len(),
+                let grounded_generator_return = matches!(target, Fmt::Dss)
+                    && key.starts_with("generator ")
+                    && target_map.len() == source_map.len() + 1
+                    && round_tripped
+                        .bus(bus)
+                        .is_some_and(|b| target_map.last().is_some_and(|t| b.grounded.contains(t)))
+                    && conv
+                        .warnings
+                        .iter()
+                        .any(|d| d.starts_with("EMIT.DSS.VALUE_COLLAPSED:") && d.contains(key));
+                assert!(
+                    source_map.len() == target_map.len() || grounded_generator_return,
                     "{what}: {key} changed arity: {source_map:?} vs {target_map:?}"
                 );
                 for (position, (source, renamed)) in

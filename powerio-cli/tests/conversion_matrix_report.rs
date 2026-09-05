@@ -1562,30 +1562,12 @@ const DISTRIBUTION_FORMATS: [DistributionFormat; 3] = [
     },
 ];
 
-// BMOPF schema 0.2.0 carries transformer tap ratios and no-load admittance in
-// schema fields; neutral impedance remains available under
-// `extras.transformer`. The BMOPF source rows use the re-vendored 0.2.0
-// examples.
-// The dss leg splits an unbalanced load into one single phase `Load` per phase
-// (#266 item 2), so a case carrying one arrives at the next hop as several. Each
-// part restates the `kv`/`phases`/`conn` extras the dss reader attaches, and
-// each of those is dropped again on the way into BMOPF or PMD: +8 on the two
-// rows whose source is a dss deck, +2 on the BMOPF→dss row.
-// BMOPF -> PMD drops by 12: the scalar bus voltage bounds now ride PMD's
-// `vm_lb`/`vm_ub` (one entry per terminal, volts over `voltage_scale_factor`)
-// instead of being reported as having no ENGINEERING field. PMD -> dss rises
-// by the same 12: the PMD hop used to lose those bounds silently, so the dss
-// leg had nothing to report; now they arrive and dss — which has no per-bus
-// voltage bound — drops them loudly. What remains on the BMOPF source row is
-// the genuine superset-to-subset loss: named terminals and generator cost,
-// which neither dss nor ENGINEERING states, and the bounds on the dss leg.
-// The PMD reader no longer copies an array vm_nom into the `kv` extra: the
-// typed voltage model carries those volts entry for entry, so the copy only
-// fed a token dss could not parse and BMOPF could only drop — −1 on both
-// cells of the PMD source row.
-// The dss→bmopf and pmd→bmopf cells dropped when the BMOPF writer began
-// aggregating its per-field extras drops into one finding per field (#377).
-const DISTRIBUTION_WARNING_BASELINE: [[usize; 3]; 3] = [[0, 66, 88], [20, 0, 15], [26, 42, 0]];
+// Counts include conductor remapping, explicit neutral materialization, and
+// fields the target cannot represent. Phase voltage limits survive the PMD
+// projection; OpenDSS reports their omission. Retained PMD neutral limits
+// require an additional diagnostic only when they carry nondefault data.
+// PMD emergency transformer ratings remain available for targets to report.
+const DISTRIBUTION_WARNING_BASELINE: [[usize; 3]; 3] = [[0, 66, 88], [21, 0, 16], [27, 44, 0]];
 
 const DISTRIBUTION_CASES: [(&str, &str, DistributionFormat); 7] = [
     (
