@@ -83,5 +83,5 @@ pub use model::{
     UntypedObject, VoltVarControl, VoltWattControl, VoltageSource, find_unresolved_references,
 };
 pub use readiness::{
-    audit_electrical_readiness, ElectricalReadiness, ReadinessFinding, ReadinessSeverity,
+    ElectricalReadiness, ReadinessFinding, ReadinessSeverity, audit_electrical_readiness,
 };

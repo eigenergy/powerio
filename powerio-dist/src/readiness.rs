@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::model::{DistLineCode, Extras, MulticonductorNetwork};
+use crate::model::{DistLineCode, MulticonductorNetwork};
 
 /// Severity of an electrical-readiness finding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,15 +62,6 @@ impl ElectricalReadiness {
     fn block(&mut self, code: &'static str, element: &str, message: impl Into<String>) {
         self.findings.push(ReadinessFinding {
             severity: ReadinessSeverity::Blocker,
-            code,
-            element: element.to_owned(),
-            message: message.into(),
-        });
-    }
-
-    fn warn(&mut self, code: &'static str, element: &str, message: impl Into<String>) {
-        self.findings.push(ReadinessFinding {
-            severity: ReadinessSeverity::Warning,
             code,
             element: element.to_owned(),
             message: message.into(),
@@ -139,7 +130,10 @@ pub fn audit_electrical_readiness(net: &MulticonductorNetwork) -> ElectricalRead
             report.block(
                 "READINESS.LINE.LENGTH_INVALID",
                 &line.name,
-                format!("line length must be finite and greater than zero; got {}", line.length),
+                format!(
+                    "line length must be finite and greater than zero; got {}",
+                    line.length
+                ),
             );
         }
 
@@ -200,8 +194,7 @@ fn audit_deferred_geometry(line: &crate::model::DistLine, report: &mut Electrica
             "READINESS.DSS.GEOMETRY_DEFERRED",
             &line.name,
             format!(
-                "OpenDSS geometry-family property/properties {:?} are deferred; no geometry-derived impedance may be assumed",
-                keys
+                "OpenDSS geometry-family properties {keys:?} are deferred; no geometry-derived impedance may be assumed"
             ),
         );
     }
@@ -217,10 +210,34 @@ fn audit_linecode(code: &DistLineCode, report: &mut ElectricalReadiness) {
         return;
     }
 
-    audit_square_matrix(&code.name, "r_series", &code.r_series, code.n_conductors, report);
-    audit_square_matrix(&code.name, "x_series", &code.x_series, code.n_conductors, report);
-    audit_square_matrix(&code.name, "g_from", &code.g_from, code.n_conductors, report);
-    audit_square_matrix(&code.name, "b_from", &code.b_from, code.n_conductors, report);
+    audit_square_matrix(
+        &code.name,
+        "r_series",
+        &code.r_series,
+        code.n_conductors,
+        report,
+    );
+    audit_square_matrix(
+        &code.name,
+        "x_series",
+        &code.x_series,
+        code.n_conductors,
+        report,
+    );
+    audit_square_matrix(
+        &code.name,
+        "g_from",
+        &code.g_from,
+        code.n_conductors,
+        report,
+    );
+    audit_square_matrix(
+        &code.name,
+        "b_from",
+        &code.b_from,
+        code.n_conductors,
+        report,
+    );
     audit_square_matrix(&code.name, "g_to", &code.g_to, code.n_conductors, report);
     audit_square_matrix(&code.name, "b_to", &code.b_to, code.n_conductors, report);
 }
@@ -252,14 +269,13 @@ fn audit_square_matrix(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DistBus, DistLine, DistLineCode, MulticonductorNetwork};
+    use crate::{DistBus, DistLine, DistLineCode, Extras, MulticonductorNetwork};
 
     fn network_with_line(extras: Extras) -> MulticonductorNetwork {
         let mut net = MulticonductorNetwork::new();
         net.buses_mut()
             .push(DistBus::new("source", vec!["1".into()]));
-        net.buses_mut()
-            .push(DistBus::new("load", vec!["1".into()]));
+        net.buses_mut().push(DistBus::new("load", vec!["1".into()]));
         net.line_codes_mut().push(DistLineCode::new(
             "explicit",
             vec![vec![0.1]],
@@ -292,9 +308,11 @@ mod tests {
         extras.insert("geometry".into(), serde_json::json!("g601"));
         let report = audit_electrical_readiness(&network_with_line(extras));
         assert!(!report.is_ready());
-        assert!(report
-            .blockers()
-            .any(|finding| finding.code == "READINESS.DSS.GEOMETRY_DEFERRED"));
+        assert!(
+            report
+                .blockers()
+                .any(|finding| finding.code == "READINESS.DSS.GEOMETRY_DEFERRED")
+        );
     }
 
     #[test]
@@ -324,9 +342,11 @@ mod tests {
         net.lines_mut()[0].terminal_map_to = vec!["1".into()];
         let report = audit_electrical_readiness(&net);
         assert!(!report.is_ready());
-        assert!(report
-            .blockers()
-            .any(|finding| finding.code == "READINESS.DSS.GEOMETRY_DEFERRED"));
+        assert!(
+            report
+                .blockers()
+                .any(|finding| finding.code == "READINESS.DSS.GEOMETRY_DEFERRED")
+        );
     }
 
     #[test]
@@ -335,8 +355,10 @@ mod tests {
         net.line_codes_mut()[0].n_conductors = 2;
         let report = audit_electrical_readiness(&net);
         assert!(!report.is_ready());
-        assert!(report
-            .blockers()
-            .any(|finding| finding.code == "READINESS.MATRIX.SHAPE_MISMATCH"));
+        assert!(
+            report
+                .blockers()
+                .any(|finding| finding.code == "READINESS.MATRIX.SHAPE_MISMATCH")
+        );
     }
 }
