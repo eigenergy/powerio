@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::model::{DistLineCode, MulticonductorNetwork};
+use crate::model::{DistLineCode, Extras, MulticonductorNetwork};
 
 /// Severity of an electrical-readiness finding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -295,6 +295,24 @@ mod tests {
         assert!(report
             .blockers()
             .any(|finding| finding.code == "READINESS.DSS.GEOMETRY_DEFERRED"));
+    }
+
+    #[test]
+    fn all_deferred_geometry_families_are_hard_blockers() {
+        for key in ["geometry", "spacing", "wires", "cncables", "tscables"] {
+            let mut extras = Extras::new();
+            extras.insert(key.into(), serde_json::json!("deferred"));
+            let report = audit_electrical_readiness(&network_with_line(extras));
+            assert!(!report.is_ready(), "{key} must block readiness");
+            assert_eq!(
+                report
+                    .blockers()
+                    .filter(|finding| finding.code == "READINESS.DSS.GEOMETRY_DEFERRED")
+                    .count(),
+                1,
+                "{key} must produce exactly one deferred-geometry blocker"
+            );
+        }
     }
 
     #[test]
