@@ -1,11 +1,12 @@
 # powerio-tx
 
-`powerio-tx` owns the balanced transmission model and its format parsers. A
-successful parse returns `PioModule<BalancedNetwork>`, retaining source bytes
-and structured diagnostics. The top level `powerio` facade adds universal
-format dispatch, dynamic values, stored modules, and `emit`.
+`powerio-tx` is the balanced transmission model and its format parsers. A
+successful parse returns `PioModule<BalancedNetwork>` with the source bytes
+retained and structured diagnostics attached. The top level `powerio` facade
+adds universal format dispatch, dynamic values, stored modules, and `emit` on
+top of it.
 
-Format support covers MATPOWER, PSS/E RAW revisions 32 through 35 (fresh
+The supported formats are MATPOWER, PSS/E RAW revisions 32 through 35 (fresh
 output at 33 through 35), PSS/E RAWX revision 35, PowSybl XIIDM and JIIDM 1.0
 through 1.17 (fresh output at 1.17), CIM CGMES 2.4.15 and 3.0 (fresh output
 at 3.0), ENTSO-E UCTE-DEF, PowerWorld AUX, PSLF, PowerModels JSON, egret JSON,

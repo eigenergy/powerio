@@ -1,34 +1,35 @@
 # BMOPF field mapping
 
-What every BMOPF field becomes in PowerIO, in which unit, and which
-constraint or objective term it enters. This page is the authority for the
-BMOPF converter: a field that reads or writes differently from what is
-written here is a defect in one of the two.
+This page says what each BMOPF field becomes in PowerIO, in which unit, and
+which constraint or objective term it enters. It is the authority for the
+BMOPF converter, so if you find a field that reads or writes differently from
+what is written here, one of the two has a defect.
 
-Schema versions are named by the [`dsopt-schema`](https://github.com/distribution-system-opt/dsopt-schema)
+Schema versions come from the [`dsopt-schema`](https://github.com/distribution-system-opt/dsopt-schema)
 repository. `0.1.0` is the version the IEEE PES Task Force on Benchmarking
-Multiconductor OPF accepts; `0.2.0` is the proposal that adds the element
+Multiconductor OPF accepts, and `0.2.0` is the proposal that adds the element
 classes 0.1.0 has no table for. PowerIO reads both and writes `0.2.0` by
-default; `BmopfEmitOptions::with_profile(BmopfProfile::Bmopf010)` writes
-`0.1.0`.
+default; to write `0.1.0`, pass
+`BmopfEmitOptions::with_profile(BmopfProfile::Bmopf010)`.
 
 ## Conventions
 
-- Every BMOPF quantity is SI and absolute: volts, amperes, watts, vars,
-  volt-amperes, ohms, siemens, metres, radians, hertz. Cost rate is currency
-  per kilowatt-hour. PowerIO stores the same units with no scaling, so a
-  mapping below states a unit only where the two names differ.
-- A matrix element `A_k_j` is row `k`, column `j`, one-based, and becomes row
-  `k - 1`, column `j - 1` of the corresponding `ConductorMatrix`. The reader
-  mirrors an unstated transpose cell, since these matrices are symmetric; a
-  stated cell wins over its mirror.
-- A per-terminal array has one entry per name in the element's own terminal
-  map, in that order, and keeps that order in PowerIO.
-- An absent constraint field is no constraint, and reads as `None`. An absent
-  parameter field is zero.
-- A field with no typed slot is kept, not dropped: it lands in the element's
-  `extras` and the reader reports it under `READ.BMOPF.RETAINED_SOURCE_ONLY`.
-  The [retained-only inventory](#fields-with-no-typed-slot) lists every one.
+Every BMOPF quantity is SI and absolute: volts, amperes, watts, vars,
+volt-amperes, ohms, siemens, metres, radians, hertz, and a cost rate in
+currency per kilowatt-hour. PowerIO stores the same units with no scaling, so
+a mapping below gives a unit only where the two names differ.
+
+A matrix element `A_k_j` is row `k`, column `j`, counting from one, and lands
+in row `k - 1`, column `j - 1` of the corresponding `ConductorMatrix`. These
+matrices are symmetric, so the reader fills an unstated transpose cell from
+its mirror; a stated cell wins over its mirror. A per terminal array has one
+entry per name in the element's own terminal map, in that order, and PowerIO
+keeps that order.
+
+An absent constraint field means no constraint and reads as `None`; an absent
+parameter field is zero. A field with no typed slot lands in the element's
+`extras`, and the reader reports it under `READ.BMOPF.RETAINED_SOURCE_ONLY`.
+[Fields with no typed slot](#fields-with-no-typed-slot) lists every one.
 
 ## Document level
 
@@ -77,9 +78,9 @@ default; `BmopfEmitOptions::with_profile(BmopfProfile::Bmopf010)` writes
 | `linecode.source` | `source` | |
 | `linecode.line_geometry`, `linecode.derivation` | `extras` | 0.2.0 fields; retained, not typed. |
 
-A line carries exactly one impedance source. The `oneOf` of both versions
-requires either a `linecode` with a `length`, or inline `R_series_1_1` and
-`X_series_1_1` with no `linecode`.
+A line has exactly one impedance source, and the `oneOf` in both schema
+versions enforces it: either a `linecode` with a `length`, or inline
+`R_series_1_1` and `X_series_1_1` with no `linecode`.
 
 ## switch
 
@@ -93,8 +94,9 @@ requires either a `linecode` with a `length`, or inline `R_series_1_1` and
 
 ## load
 
-`DistLoad`. Arrays are per sub-load: one phase-to-neutral branch for `WYE`,
-the terminal pair for `SINGLE_PHASE`, one line-to-line branch for `DELTA`.
+`DistLoad`. Each array has one entry per branch of the load: a phase to
+neutral branch for `WYE`, the terminal pair for `SINGLE_PHASE`, or a line to
+line branch for `DELTA`.
 
 | BMOPF | PowerIO | Note |
 | --- | --- | --- |
@@ -132,8 +134,8 @@ configuration the specification supports.
 
 ## shunt and capacitor
 
-`DistShunt` carries raw admittance, including grounding impedance;
-`DistCapacitor` carries a nameplate-rated bank.
+`DistShunt` is raw admittance, grounding impedance included; `DistCapacitor`
+is a bank with a nameplate rating.
 
 | BMOPF | PowerIO | Note |
 | --- | --- | --- |
@@ -145,10 +147,10 @@ configuration the specification supports.
 
 ## transformer
 
-`DistTransformer` with `windings: Vec<DistWinding>`. The BMOPF subtype rides
-in `DistTransformer::extras["bmopf_subtype"]`, because the winding list alone
-does not pin down every subtype: a centre tap unit reads as two secondary
-windings.
+`DistTransformer` with `windings: Vec<DistWinding>`. The BMOPF subtype is
+kept in `DistTransformer::extras["bmopf_subtype"]`, because the winding list
+alone does not pin down every subtype; a centre tap unit, for example, reads
+as two secondary windings.
 
 | BMOPF | PowerIO | Note |
 | --- | --- | --- |
@@ -169,18 +171,19 @@ windings.
 | `n_winding.x_sc` | `xsc_pct`, in `[xhl, xht, xlt]` order | Keyed `i_j` with `i < j` in BMOPF, all referred to winding 1. |
 | `single_phase_autotransformer`, `open_delta_regulator` | windings plus `extras["bmopf_subtype"]` | The regulator ratio, its bounds, the ANSI type and the open delta connection ride in `extras`. |
 
-Under schema `0.1.0` the nine fields with no subtype slot (`tap`, `tap_min`,
-`tap_max`, the four winding neutral fields, and the two no-load fields) are
-written to `extras.transformer.<subtype>.<name>` and folded back on read, each
-move reported under `EMIT.BMOPF.RETAINED_SOURCE_ONLY`. Under `0.2.0` the
-subtypes declare all nine and nothing moves; only the three tap names change,
-to `tap_ratio`, `tap_ratio_min`, `tap_ratio_max`.
+Under schema `0.1.0`, the nine fields that have no subtype slot (`tap`,
+`tap_min`, `tap_max`, the four winding neutral fields, and the two no-load
+fields) are written to `extras.transformer.<subtype>.<name>` and folded back
+on read, with each move reported under `EMIT.BMOPF.RETAINED_SOURCE_ONLY`.
+Under `0.2.0` the subtypes declare all nine, so nothing moves; only the three
+tap names change, to `tap_ratio`, `tap_ratio_min`, and `tap_ratio_max`.
 
 ## ibr and control_profile
 
-`DistIbr` and `DistControlProfile`. Both are typed under either version;
-`0.1.0` has no top-level table for them, so they are written under `extras`
-and read from either place, with the top-level copy winning.
+`DistIbr` and `DistControlProfile`. Both are typed under either version.
+Because `0.1.0` has no top-level table for them, that version writes them
+under `extras`; on read they come from either place, and the top-level copy
+wins.
 
 | BMOPF | PowerIO | Note |
 | --- | --- | --- |
@@ -202,35 +205,37 @@ and read from either place, with the top-level copy winning.
 
 ## Fields with no typed slot
 
-These classes read into `MulticonductorNetwork::untyped()` by class and name,
-with their properties kept as text, and are written back to the table the
-target version declares: the top level under `0.2.0`, `extras` under `0.1.0`.
-Reading each reports `READ.BMOPF.RETAINED_SOURCE_ONLY`.
+The classes below read into `MulticonductorNetwork::untyped()` by class and
+name, with their properties kept as text, and are written back to the table
+the target version declares: the top level under `0.2.0`, `extras` under
+`0.1.0`. Reading each one reports `READ.BMOPF.RETAINED_SOURCE_ONLY`.
 
 `dc_bus`, `dc_branch`, `dc_grounding`, `dc_load`, `dc_source`, `time_series`,
 `wire_data`, `line_geometry`, and a per-element `time_series` reference map.
 
-They travel and re-emit unchanged. Nothing reads their values into a
-calculation, so a case whose behaviour depends on them is not represented by
-the instance PowerIO builds from it. The reader says so per class rather than
-leaving it to be discovered.
+They pass through and re-emit unchanged. Nothing reads their values into a
+calculation, so if a case's behaviour depends on them, the instance PowerIO
+builds from it does not represent that case. The reader says so per class
+rather than leaving you to discover it.
 
 ## The calculation
 
 `powerio::to_mc_ac_opf_instance` builds a `McAcOpfInstance` through
-`McAcOpfInstance::from_network`. The network is shared, not copied: the
-instance selects which of the network's stated limits are active constraints
-and which objective terms are summed, and reads the numbers from the network.
+`McAcOpfInstance::from_network`. The instance shares the network rather than
+copying it: it selects which of the network's stated limits are active
+constraints and which objective terms are summed, and reads the numbers from
+the network.
 
-**Objective.** One term, `ObjectiveTerm::ActivePowerDispatchCost`. It is the
-specification's default objective: the sum over every dispatchable element and
-every phase of that phase's cost rate against the active power the element
-injects into the network. A positive cost minimises the element's injection
-and a negative cost maximises it, uniformly for a generator, the voltage
-source, and an IBR. The rate comes from the element's own per phase `cost`
-array, so a generator reads it from `DistGenerator::cost` and a voltage source
-or IBR from its `extras["cost"]`. `ObjectiveTerm::NetworkGeneratorCost` is the
-balanced-network term and is not part of a BMOPF instance.
+**Objective.** There is one term, `ObjectiveTerm::ActivePowerDispatchCost`,
+which is the specification's default objective: the sum over every
+dispatchable element and every phase of that phase's cost rate against the
+active power the element injects into the network. A positive cost minimises
+the element's injection and a negative cost maximises it, and that holds the
+same way for a generator, the voltage source, and an IBR. The rate comes from
+the element's own per phase `cost` array: a generator reads it from
+`DistGenerator::cost`, and a voltage source or IBR from its `extras["cost"]`.
+`ObjectiveTerm::NetworkGeneratorCost` is the term for a balanced network and
+is not part of a BMOPF instance.
 
 **Constraints.** `MulticonductorActiveConstraints` selects three families, each
 `ConstraintSelection::All` by default, which matches the specification's rule
@@ -242,23 +247,23 @@ that constraints are active for the elements present.
 | `conductor_limits` | `line.i_max`, `line.s_max`, `linecode.i_max`, `linecode.s_max`, `switch.i_max`, `transformer.i_max_from`, `transformer.i_max_to` |
 | `generator_capability` | `generator.p_min`, `p_max`, `q_min`, `q_max`, `s_max`, `i_max`, and the same bounds on an IBR |
 
-A family selects by stable element identity, so a study relaxing one line's
-thermal limit names that line rather than restating the bound.
-`ConstraintSelection::None` relaxes a family; `Only` names exactly the
+A family selects by stable element identity, so a study that relaxes one
+line's thermal limit refers to that line instead of restating the bound.
+`ConstraintSelection::None` relaxes a whole family, and `Only` lists the
 elements whose limits stay active.
 
-Equipment behaviour is not a selectable family, because it is not a limit: a
-closed switch equates its two ends conductor by conductor, an open switch
-carries no current, the ideal winding pair relates its two coil voltages by
-the turns ratio and balances ampere-turns, and the voltage source fixes its
-terminal voltage with a free current. Those hold for every instance built from
-a network that states them.
+Equipment behaviour has no selection family, because there is no limit to
+relax: a closed switch equates its two ends conductor by conductor, an open
+switch carries no current, the ideal winding pair relates its two coil
+voltages by the turns ratio and balances ampere-turns, and the voltage source
+fixes its terminal voltage with a free current. Those hold in every instance
+built from a network that includes them.
 
 ## The solution
 
-Solved values stay in `McAcOpfSolution` and never travel back into the
-network, so the network keeps stating the case and the solution states one
-result of it.
+Solved values stay in `McAcOpfSolution` and are not written back into the
+network, so the network still describes the case and the solution describes
+one result of it.
 
 | `McAcOpfSolution` | Unit and order |
 | --- | --- |
@@ -273,23 +278,23 @@ result of it.
 
 ## Checked against what
 
-The two published example networks, vendored at
-`tests/data/dist/bmopf/`, are the reference data. `powerio-dist/tests/bmopf.rs`
-checks that each parses, that writing the result validates against the schema
-of the version written, that a second write is identical to the first, and
-that parsing the written document reproduces the model. The equations above
-are checked against the specification pages of
-[`math-and-data-model-specifications`](https://github.com/distribution-system-opt/math-and-data-model-specifications),
-not inferred from the data.
+The reference data is the two published example networks, vendored at
+`tests/data/dist/bmopf/`. `powerio-dist/tests/bmopf.rs` checks that each one
+parses, that writing the result validates against the schema of the version
+written, that a second write is identical to the first, and that parsing the
+written document reproduces the model. The equations above were checked
+against the specification pages of
+[`math-and-data-model-specifications`](https://github.com/distribution-system-opt/math-and-data-model-specifications)
+rather than inferred from the data.
 
 BMOPFTools.jl is the Task Force toolchain that generated `example_ieee13.json`,
-which names it in `meta.case_study_generator`. It is not published in the
-`distribution-system-opt` organization, so the comparison closed issue #414
-asked for, against its admittance stamps, constraint activation, objective
-terms, conductor order, and regulator behaviour, is not made here. What is
-checked against it is the data it writes: the one-triangle matrix spelling its
-writer uses reads back with the mirrored cells filled, and the regulator
-subtypes it extends the schema with read and write as
+which lists it in `meta.case_study_generator`. The toolchain is not published
+in the `distribution-system-opt` organization, so the comparison that closed
+issue #414 asked for (against its admittance stamps, constraint activation,
+objective terms, conductor order, and regulator behaviour) is not made here.
+What is checked is the data it writes: the matrix spelling its writer uses,
+with only one triangle filled in, reads back with the mirrored cells filled,
+and the regulator subtypes it adds to the schema read and write as
 `transformer.single_phase_autotransformer` and
 `transformer.open_delta_regulator`. Comparing the numbers a solve produces
-needs the toolchain.
+would need the toolchain itself.

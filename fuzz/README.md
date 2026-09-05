@@ -1,8 +1,8 @@
 # Fuzzing the parser surface
 
-libFuzzer harnesses for the readers that take untrusted input. The invariant
-under test is the parser trust model: any input returns `Ok` or a structured
-`Err`, never a panic and never undefined behavior.
+These are libFuzzer harnesses for the readers that take untrusted input. The
+invariant under test is the parser trust model: any input returns `Ok` or a
+structured `Err`, with no panic and no undefined behavior.
 
 | Target | Input |
 |---|---|
@@ -14,10 +14,11 @@ under test is the parser trust model: any input returns `Ok` or a structured
 | `dist_classify` | the distribution `.json` classifier, which runs before any reader cap applies, and the reader and writers it names |
 | `dss_includes`, `dss_includes_fs` | OpenDSS include resolution over in-memory buffers and over a real filesystem tree with an escaping symbolic link |
 
-The JSON formats that ride serde_json (PowerModels, egret, pandapower) have no
-hand written tokenizer, so the harnesses cover every hand rolled reader.
+The JSON formats that ride on serde_json (PowerModels, egret, pandapower)
+have no hand written tokenizer, so between them the harnesses cover every
+hand rolled reader.
 
-Needs nightly and [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz):
+You need nightly and [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz):
 
 ```sh
 cargo install cargo-fuzz
@@ -34,6 +35,7 @@ mkdir -p corpus/pwb && cp ../tests/data/powerworld/*.pwb corpus/pwb/ 2>/dev/null
 
 The crate is excluded from the main workspace. CI runs a short smoke pass
 (`.github/workflows/fuzz.yml`): seconds per target on pull requests that touch
-a reader, minutes per target weekly. Long campaigns stay manual; run one when
-touching a reader. A crash reproducer lands in `artifacts/<target>/`; turn it
-into a regression test next to the reader before fixing.
+a reader, minutes per target weekly. Long campaigns stay manual, so run one
+yourself when you touch a reader. A crash reproducer lands in
+`artifacts/<target>/`; turn it into a regression test next to the reader
+before you fix the bug.

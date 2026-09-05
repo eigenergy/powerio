@@ -1,9 +1,10 @@
 # The evaluation workspace
 
 Everything here evaluates powerio against external tools and against its own
-performance record. Nothing in this tree is published; the crates workspace
-excludes it (`exclude = ["fuzz", "evals"]` in the root manifest), and minimal
-fixtures for ordinary tests stay beside those tests under `tests/data`.
+performance record. Nothing in this tree is published: the crates workspace
+excludes it (`exclude = ["fuzz", "evals"]` in the root manifest), and the
+minimal fixtures for ordinary tests stay beside those tests under
+`tests/data`.
 
 - `validation/` is the cross tool correctness matrix: powerio's parse and
   write against PowerModels.jl, ExaPowerIO.jl, Egret, pandapower, PyPSA,
@@ -17,7 +18,7 @@ fixtures for ordinary tests stay beside those tests under `tests/data`.
 
 ## What every case records
 
-A validation case is reproducible or it is noise. Each harness records, in
+A validation case is reproducible or it is noise, so each harness records, in
 its script or beside its fixtures:
 
 - the source software and revision the oracle values came from (each

@@ -28,8 +28,8 @@ The `powerio` command:
 cargo install powerio-cli
 ```
 
-C and C++: build the shared library from a checkout and include the checked in
-header.
+For C and C++, build the shared library from a checkout and include the
+checked in header.
 
 ```sh
 git clone https://github.com/eigenergy/powerio
@@ -40,8 +40,8 @@ cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,prob
 
 ## Parse, inspect, emit
 
-Rust. The example is a complete program: `parse`, `emit`, and the `PioValue`
-enum are the only names it imports, and `?` hands any failure to `main`.
+Rust. The example is a complete program; it imports only `parse`, `emit`, and
+the `PioValue` enum, and `?` hands any failure to `main`.
 
 ```rust,ignore
 use powerio::{PioValue, emit, parse};
@@ -102,9 +102,9 @@ powerio summary case9.m                          # counts, bases, and findings a
 
 ## Where next
 
-- What each source parses to and what a module carries: [Core concepts](concepts.md).
+- What each source parses to and what a module contains: [Core concepts](concepts.md).
 - Balanced transmission cases: [Transmission networks](transmission.md).
-  Conductor level distribution cases: [Distribution networks](distribution.md).
+- Conductor level distribution cases: [Distribution networks](distribution.md).
 - Matrices, signs, units, and index mappings: [Matrices and graphs](matrices.md).
 - What each reader keeps and each writer reports: [Formats and fidelity](format-fidelity.md).
 - The same operations in each language: [Rust, Python, Julia, and C](languages.md).

@@ -1,15 +1,15 @@
 # From 0.10 to 0.11
 
-PowerIO 0.11 breaks the 0.10 source API and the C ABI once. The changes
-remove duplicate operations and expose the same concepts in Rust, Python,
-Julia, and C. The 0.11.x line then stays compatible; another unavoidable
-public break moves to 0.12.
+PowerIO 0.11 breaks the 0.10 source API and the C ABI once, to remove
+duplicate ways of doing the same thing and to expose the same concepts in
+Rust, Python, Julia, and C. After that the 0.11.x line stays compatible, and
+any further unavoidable public break waits for 0.12.
 
 ## One `parse`, one `emit`
 
-Every grid exchange format enters through `parse`, which acquires the input
-itself. A file or directory name, content already in memory, and a `Source`
-carrying named buffers all reach the same operation.
+Every grid exchange format now goes through `parse`, which opens the input
+itself. You can hand it a file or directory name, content already in memory,
+or a `Source` of named buffers, and all of them reach the same call.
 
 ```rust,ignore
 let module = powerio::parse("case9.m")?;
@@ -38,8 +38,8 @@ let module = powerio::parse(powerio::Source::from_memory("case9.m", bytes)?)?;
 | `DisplayData`, `DisplayFormat` | removed from Rust; Python keeps `parse_display` and `DisplayData` for the raw PowerWorld display record |
 | a layer written by hand | `emit(&module, "geo-json", path)` |
 
-Python accepts a path, file object, or bytes-like object. A `str` names a
-path; use `io.StringIO` for text already in memory.
+Python accepts a path, a file object, or a bytes-like object. A `str` is
+taken as a path, so wrap text already in memory in `io.StringIO`.
 
 ```python
 module = powerio.parse("case9.m")
@@ -56,10 +56,10 @@ module_ = parse(IOBuffer(text); format="matpower", name="case9.m")
 module_ = parse(bytes; format="pwb", name="case.pwb")
 ```
 
-C constructs a `PioSource` with `pio_source_open` or
-`pio_source_from_memory`, then calls `pio_parse`.
+In C you construct a `PioSource` with `pio_source_open` or
+`pio_source_from_memory` and then call `pio_parse`.
 
-The following 0.10 names are removed:
+These 0.10 names are removed:
 
 - `parse_file`
 - `parse_text`
@@ -72,21 +72,22 @@ The following 0.10 names are removed:
 source mappings, history, and extensions. Rust, Python, and Julia expose
 `value` and `diagnostics` as fields or properties.
 
-Rust dynamic parsing returns `PioModule<PioValue>`. Match `module.value()`
-directly. Python uses `isinstance(module.value, BalancedNetwork)`. Julia
-dispatches on `PioModule{BalancedNetwork}` or another concrete parameter.
+In Rust, dynamic parsing returns `PioModule<PioValue>`, so match on
+`module.value()` directly. In Python, use
+`isinstance(module.value, BalancedNetwork)`; in Julia, dispatch on
+`PioModule{BalancedNetwork}` or another concrete parameter.
 
-`PioValueKind`, `.kind`, `try_into_typed`, `IntoTypedModule`, and binding
-wrappers that duplicate language type inspection are removed. The C ABI uses
-structural names such as `powerio.BalancedNetwork` and exact type predicates;
-it has no ordinal value kind enum.
+`PioValueKind`, `.kind`, `try_into_typed`, `IntoTypedModule`, and the binding
+wrappers that duplicated each language's own type inspection are removed. The
+C ABI uses structural names such as `powerio.BalancedNetwork` and exact type
+predicates instead of an ordinal value kind enum.
 
-Diagnostics belong to the module. Python and Julia no longer provide a
-callable `diagnostics()` operation.
+Diagnostics belong to the module, so Python and Julia no longer have a
+callable `diagnostics()`.
 
 ## Emit formats; serialize PowerIO IR
 
-`emit` is the only operation that produces a grid exchange format.
+`emit` is now the one way to produce a grid exchange format.
 
 ```rust,ignore
 powerio::emit(&module, "matpower", "copy.m")?;
@@ -102,17 +103,18 @@ memory_result = emit(module_, "matpower")
 file_result = emit(module_, "psse", "case.raw")
 ```
 
-The result records every artifact, the output layout, fidelity, and emission
-diagnostics. The same call handles text, binary, one file, and directory
-formats.
+The result lists every artifact it wrote, the output layout, the fidelity, and
+the emission diagnostics, and the same call handles text, binary, single file,
+and directory formats.
 
-Use `serialize` and `deserialize` for PowerIO IR. `.pio.json` is not a grid
-exchange format and is absent from format discovery. Both operations use the
-PowerIO IR document shape: `"schema": "pio-ir"` and integer `"version": 2`.
-The producer record names the PowerIO release independently. Documents from
-earlier generations must be regenerated from their original power system data.
+PowerIO IR goes through `serialize` and `deserialize` instead. `.pio.json` is
+not a grid exchange format, so format discovery does not list it. Both calls
+use the PowerIO IR document shape, `"schema": "pio-ir"` with integer
+`"version": 2`, and the producer record names the PowerIO release separately.
+Documents from earlier generations have to be regenerated from their original
+power system data.
 
-The following 0.10 names are removed:
+These 0.10 names are removed:
 
 - `write_to`
 - `write_string`
@@ -123,41 +125,42 @@ The following 0.10 names are removed:
 - the `model-json` JSON classification family
 - the `pio-json` format token
 
-`to_*` remains available for a genuine in-memory semantic transformation.
+`to_*` is still there for a genuine semantic transformation in memory.
 
 ## Use ordinary collection operations
 
-`TimeSeries<T>` and `ScenarioSet<T>` contain actual typed values. Rust uses
-`len`, `iter`, and checked `get`; Python uses iteration and indexing; Julia
-uses `length`, iteration, and 1-based `getindex`; C provides opaque length and
-element access.
+`TimeSeries<T>` and `ScenarioSet<T>` hold real typed values, so you use them
+like any other collection. Rust has `len`, `iter`, and checked `get`; Python
+has iteration and indexing; Julia has `length`, iteration, and 1-based
+`getindex`; C has opaque length and element access.
 
 Remove calls to `StateInventory`, `StateSelector`, `SelectedState`,
-`list_states`, `select_state`, and `export_state`. Index the collection
-instead. A returned entry is the contained typed value or an owner rooted
-typed view. It is not encoded and reparsed.
+`list_states`, `select_state`, and `export_state` and index the collection
+instead. What you get back is the contained typed value itself, or an owner
+rooted typed view of it; nothing is encoded and reparsed on the way out.
 
 ## Apply typed updates
 
-PowerIO defines `OperatingPointUpdate`, `NetworkUpdate`,
-`CalculationUpdate`, `apply_updates`, and `UpdateReport`. Updates identify a
-component by stable `ComponentId`, carry absolute values with explicit units,
-validate the whole batch, and apply atomically. Julia mutation operations end
-in `!`.
+PowerIO 0.11 adds `OperatingPointUpdate`, `NetworkUpdate`,
+`CalculationUpdate`, `apply_updates`, and `UpdateReport`. An update identifies
+its component by stable `ComponentId` and gives an absolute value with an
+explicit unit; the whole batch is validated first and then applied
+atomically. In Julia the mutating functions end in `!`.
 
-`UpdateReport` lists the component IDs and fields changed and reports whether
-energized connectivity changed. A bus demand update must name a load or an
-explicit allocation rule. PowerIO never assigns aggregate demand to an
-arbitrary load. `LoadAllocation::ProportionalToCurrentActivePower` preserves
-the current shares and refuses an all zero basis. `LoadAllocation::Equal`
-divides the replacement equally, so a caller can explicitly restore demand
-after setting every participating load to zero.
+`UpdateReport` lists the component IDs and fields that changed and says
+whether energized connectivity changed. A bus demand update has to name a load
+or an explicit allocation rule, because PowerIO will not pick an arbitrary
+load to receive aggregate demand. `LoadAllocation::ProportionalToCurrentActivePower`
+keeps the current shares and refuses an all zero basis;
+`LoadAllocation::Equal` splits the replacement evenly, which is how you
+restore demand after setting every participating load to zero.
 
 ## Use calculation names that state the result
 
 The DC data types `PioDcData`, `DcNetworkData`, and `dc_data`, and the phrase
-"DC branch coefficients", are gone. The DC OPF bundle files written by
-`powerio dcopf` and `emit_dcopf_bundle` remain. Use the named calculations:
+"DC branch coefficients", are gone, though the DC OPF bundle files written by
+`powerio dcopf` and `emit_dcopf_bundle` remain. Use the named calculations
+instead:
 
 ```text
 calc_incidence_matrix
@@ -184,12 +187,12 @@ p_shift  = A' * (b .* shift)
 p_bus    = -B * va + p_shift
 ```
 
-`BranchSusceptanceFormula` selects the documented series susceptance,
-tap adjusted reactance, or reactance only equation.
+`BranchSusceptanceFormula` picks between the documented series susceptance,
+tap adjusted reactance, and reactance only equations.
 
 ## Calculation instances and solutions
 
-PowerIO 0.11 registers the following calculation pairs:
+PowerIO 0.11 registers these calculation pairs:
 
 ```text
 DcPfInstance       DcPfSolution
@@ -201,26 +204,28 @@ McAcOpfInstance    McAcOpfSolution
 AcScucInstance     AcScucSolution
 ```
 
-`SocwrOpfSolution` records a PowerModels SOCWR relaxation, including its
-W-space values and objective lower bound. It is not an `AcOpfSolution` unless
-voltage recovery and AC residual checks support that claim.
+`SocwrOpfSolution` holds a PowerModels SOCWR relaxation, including its
+W-space values and objective lower bound. PowerIO does not call it an
+`AcOpfSolution` unless voltage recovery and AC residual checks support that
+claim.
 
-The initial assignment of an instance is the `initial_point` field.
+The initial assignment of an instance is its `initial_point` field.
 
 ## C ABI 7
 
-PowerIO 0.11 replaces ABI 6 with ABI 7. ABI 7 has no ABI 4, 5, or 6 aliases
-and no Arrow export. Sources, destinations, modules, typed values,
-collections, diagnostics, artifacts, sparse matrices, and vectors use opaque
-reference counted handles. Every buffer carries an explicit length. Borrowed
-typed handles keep their module owner alive.
+PowerIO 0.11 replaces ABI 6 with ABI 7, which drops the ABI 4, 5, and 6
+aliases and the Arrow export. Sources, destinations, modules, typed values,
+collections, diagnostics, artifacts, sparse matrices, and vectors are all
+opaque reference counted handles, every buffer comes with an explicit length,
+and a borrowed typed handle keeps its module owner alive.
 
 PowerIO.jl moves to ABI 7 in the same release. Julia packages should depend on
 PowerIO.jl rather than call the C ABI directly.
 
 ## Inputs accepted by 0.11
 
-PowerIO accepts documented aliases for names defined by external formats, such
-as `rawx` for the canonical `psse-rawx` format token. Those aliases identify
-the same third party format; they do not preserve a prerelease PowerIO API or
-IR shape. There are no beta source or document aliases in 0.11.
+PowerIO still accepts documented aliases for names that external formats
+define, such as `rawx` for the canonical `psse-rawx` format token. An alias
+like that names the same third party format; it does not keep a prerelease
+PowerIO API or IR shape alive, and 0.11 has no beta source or document
+aliases at all.
