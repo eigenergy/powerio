@@ -9,6 +9,9 @@ cargo add powerio             # parsing, emission, PowerIO IR
 cargo add powerio -F matrix   # and sparse matrices, sensitivities, graph data
 ```
 
+Use Rust 1.88 or newer. Add the `gridfm` feature when your application reads
+or writes GridFM Parquet directories: `cargo add powerio -F gridfm`.
+
 Python:
 
 ```sh
@@ -39,6 +42,10 @@ cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,prob
 ```
 
 ## Parse, inspect, emit
+
+Download [case9.m](https://github.com/eigenergy/powerio/blob/main/tests/data/case9.m)
+to your working directory for these examples. In a repository checkout, the
+same file is `tests/data/case9.m`; pass that path when running from the root.
 
 Rust. The example is a complete program; it imports only `parse`, `emit`, and
 the `PioValue` enum, and `?` hands any failure to `main`.
@@ -99,6 +106,31 @@ Command line:
 powerio convert case9.m --to psse -o case9.raw   # findings on stderr
 powerio summary case9.m                          # counts, bases, and findings as JSON
 ```
+
+## Keep a module for later
+
+Use `serialize` to save the value with its diagnostics and history, then
+`deserialize` to restore it in any PowerIO binding:
+
+```rust,ignore
+powerio::serialize(&module, "case9.pio.json")?;
+let restored = powerio::deserialize("case9.pio.json")?;
+```
+
+```python
+powerio.serialize(module, "case9.pio.json")
+restored = powerio.deserialize("case9.pio.json")
+```
+
+```julia
+serialize(module_, "case9.pio.json")
+restored = deserialize("case9.pio.json")
+```
+
+PowerIO IR stores the typed data and source metadata. Original input bytes
+stay in memory, so an unchanged parsed module can echo them, while a restored
+module produces fresh output. Inspect the returned emission diagnostics when
+exporting to another tool.
 
 ## Where next
 

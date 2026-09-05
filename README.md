@@ -40,6 +40,10 @@ cargo install powerio-cli         # the powerio command
 
 ## Parse and emit
 
+The examples use [case9.m](tests/data/case9.m), the nine-bus MATPOWER case
+included in this repository. Save it in your working directory first, or
+replace `"case9.m"` with the path to your own case.
+
 Rust:
 
 ```rust,ignore
@@ -99,8 +103,14 @@ back byte for byte. If you write it to another format, PowerIO keeps what
 that format can represent and reports each loss as a diagnostic with a stable
 code, so you can see what the conversion dropped. `serialize` and
 `deserialize` write and read PowerIO IR, the JSON document that stores a
-complete module for another PowerIO consumer to read back. PowerIO IR is not
-a grid exchange format.
+complete module for another PowerIO consumer to read back. It preserves the
+typed data and its history; retained source bytes stay in the running process.
+After deserialization, `emit` writes fresh output from the stored value.
+
+Upgrading from 0.10? Start with the
+[migration guide](https://eigenergy.github.io/powerio/guide/migration-0.11.html).
+PowerIO 0.11 uses PowerIO IR generation 2 and C ABI 7; these version numbers
+describe separate interfaces.
 
 ## Formats
 
@@ -143,17 +153,20 @@ checked against its reference implementation.
 
 ## Packages
 
-```text
-powerio-core     Source, PioModule, diagnostics, time series, scenario sets, destinations
-powerio-tx       BalancedNetwork and the balanced format readers and writers
-powerio-dist     MulticonductorNetwork and the OpenDSS, PMD, and BMOPF converters
-powerio-prob     operating points, updates, calculation instances, and solutions
-powerio-matrix   sparse matrices, sensitivities, the DC OPF bundle, and graph data
-powerio          the facade: PioValue, parse, emit, serialize, deserialize
-powerio-cli      the powerio command and its terminal interface
-powerio-py       the extension behind the Python package
-powerio-capi     C ABI 7 for C, C++, Julia, and other bindings
-```
+Start with `powerio` in an application. The component crates let libraries
+depend on just the layer they use.
+
+| Crate | Provides |
+|---|---|
+| `powerio` | `PioValue`, `parse`, `emit`, `serialize`, `deserialize` |
+| `powerio-core` | `Source`, `PioModule`, diagnostics, collections, destinations |
+| `powerio-tx` | `BalancedNetwork` and balanced format readers and writers |
+| `powerio-dist` | `MulticonductorNetwork` and OpenDSS, PMD, BMOPF converters |
+| `powerio-prob` | Operating points, updates, calculation instances and solutions |
+| `powerio-matrix` | Sparse matrices, sensitivities, DC OPF bundles and graph data |
+| `powerio-cli` | The `powerio` command and its terminal interface |
+| `powerio-py` | The native extension used by the Python package |
+| `powerio-capi` | C ABI 7, used by Julia and other FFI bindings |
 
 `powerio-tx` and `powerio-dist` share `powerio-core` and nothing else, so a
 distribution consumer pulls in no transmission code. `powerio-prob` is matrix
