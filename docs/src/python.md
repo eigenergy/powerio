@@ -6,7 +6,8 @@ Install the base package for parsing, emission, PowerIO IR, and typed values:
 pip install powerio
 ```
 
-Matrix and graph helpers use optional Python packages:
+The matrix and graph helpers need optional packages, so install the extra you
+want:
 
 ```bash
 pip install 'powerio[matrix]'   # NumPy and SciPy
@@ -17,17 +18,17 @@ pip install 'powerio[pandas]'   # pandas and PyArrow tables, Python 3.10 or late
 pip install 'powerio[mcp]'      # the MCP server, Python 3.10 or later
 ```
 
-Importing `powerio` and using `parse`, `emit`, `serialize`, or `deserialize`
-does not import those optional packages.
+Importing `powerio` and calling `parse`, `emit`, `serialize`, or `deserialize`
+does not import any of those optional packages.
 
 ## Parse one source
 
-`powerio.parse` accepts a path, file object, or bytes-like object. A Python
-`str` always names a path. Use `io.StringIO` for raw text. There is no Python
-`Source` class: the path, file object, or bytes-like value already states
-where the bytes come from, and the interpreter owns them, so `parse` takes it
-directly. Rust and C build a `Source` because they need that ownership stated
-explicitly; see [Rust, Python, Julia, and C](languages.md).
+`powerio.parse` accepts a path, a file object, or a bytes-like object. A `str`
+is always a path, so wrap raw text in `io.StringIO`. There is no Python
+`Source` class, because a path, file object, or bytes-like value already says
+where the bytes come from and the interpreter owns them; `parse` takes it
+directly. Rust and C build a `Source` because they need that ownership made
+explicit, as [Rust, Python, Julia, and C](languages.md) explains.
 
 ```python
 from io import StringIO
@@ -44,15 +45,14 @@ case_from_binary = powerio.parse(
 ```
 
 `format` is optional when the source name and content identify the format.
-`name` applies only to memory and file object sources; it supplies a source
-name for diagnostics and format detection.
-
-There is no separate `parse_file`, `parse_text`, or `parse_bytes` API.
+`name` applies only to memory and file object sources, where it supplies a
+source name for diagnostics and format detection. There is no separate
+`parse_file`, `parse_text`, or `parse_bytes` API.
 
 ## Parse a GO Challenge 3 solution
 
-Put the GO Challenge 3 problem and matching solution files in one directory.
-The ordinary `parse` operation reads both:
+Put the GO Challenge 3 problem file and its matching solution file in one
+directory, and the ordinary `parse` call reads both:
 
 ```python
 solution = powerio.parse("scenario_002")
@@ -60,13 +60,14 @@ assert isinstance(solution.value, powerio.AcScucSolution)
 ```
 
 With only the problem file, the same call returns `AcScucInstance`. A solution
-file alone fails because it does not contain the component definitions or time
-axis. The solution module retains both files and its diagnostics.
+file on its own fails, because it has neither the component definitions nor the
+time axis. The solution module keeps both files and its diagnostics.
 
 ## Module values and diagnostics
 
-Parsing returns `PioModule[T]`. `module.value` is the concrete Python value
-and `module.diagnostics` is the list of diagnostics stored on that module.
+Parsing returns a `PioModule[T]`, where `module.value` is the concrete Python
+value and `module.diagnostics` is the list of diagnostics stored on that
+module.
 
 ```python
 module = powerio.parse("case9.m")
@@ -78,9 +79,9 @@ for diagnostic in module.diagnostics:
     print(diagnostic.code, diagnostic.severity, diagnostic.message)
 ```
 
-Diagnostics are fields of the module, not methods on the contained network or
-solution. Python uses its normal type system; there is no `.kind` property,
-kind enum, or typed narrowing helper.
+Diagnostics live on the module rather than on the contained network or
+solution. To find out what you have, use Python's normal type system; there is
+no `.kind` property, kind enum, or typed narrowing helper.
 
 The value classes are `BalancedNetwork`, `dist.MulticonductorNetwork`,
 `OperatingPoint`, `TimeSeries`, `ScenarioSet`, `GeoLayer`, the PF, OPF, and
@@ -88,8 +89,7 @@ SCUC instances and solutions, and `SocwrOpfSolution`.
 
 ## Emit grid exchange formats
 
-`powerio.emit` is the one operation that produces a grid exchange
-representation:
+`powerio.emit` is the only function that writes a grid exchange format:
 
 ```python
 result = powerio.emit(module, "matpower")
@@ -99,15 +99,14 @@ result = powerio.emit(module, "psse", "case.raw")
 result = powerio.emit(module, "pypsa", "case-directory")
 ```
 
-With no destination, artifacts stay in memory. A path destination writes one
-file or a directory. A writable file object accepts a single file artifact.
-Every `EmitResult` carries the artifact inventory (one `Artifact` per produced
-file, with its `name` and either `data` for a memory result or `path` after a
-filesystem commit), the layout, the fidelity, and the emission diagnostics.
-`result.text` is the one UTF-8 memory artifact when the inventory holds
-exactly one, and `None` otherwise.
+With no destination the artifacts stay in memory; a path destination writes one
+file or a directory, and a writable file object accepts a single file artifact.
+An `EmitResult` has the artifacts (one `Artifact` per produced file, with its
+`name` and either `data` for a memory result or `path` after a filesystem
+commit), the layout, the fidelity, and the emission diagnostics. `result.text`
+is the UTF-8 memory artifact when there is a single one, and `None` otherwise.
 
-PowerIO IR uses separate operations:
+PowerIO IR has its own pair of functions:
 
 ```python
 ir = powerio.serialize(module)
@@ -115,16 +114,15 @@ powerio.serialize(module, "case.pio.json")
 same_module = powerio.deserialize(ir.artifacts[0].data)
 ```
 
-The IR header is `"schema": "pio-ir"` and integer `"version": 2`;
-`powerio.versions()["powerio_ir"]` reports both. The producer record separately
-identifies `powerio.__version__`. `deserialize` refuses an unsupported identity
-or generation with what it found. PowerIO IR is not a grid exchange format and
-is absent from format discovery.
+The IR header is `"schema": "pio-ir"` with the integer `"version": 2`, and
+`powerio.versions()["powerio_ir"]` reports both. The producer record gives
+`powerio.__version__` separately. `deserialize` refuses a document whose schema
+or version it does not support and reports what it found. PowerIO IR is not a
+grid exchange format, so it does not appear in format discovery.
 
 ## Collections
 
-`TimeSeries` follows Python sequence behavior. `ScenarioSet` follows keyed
-collection behavior.
+`TimeSeries` behaves like a Python sequence and `ScenarioSet` like a mapping:
 
 ```python
 series = module.value
@@ -138,14 +136,15 @@ for scenario_id in scenarios:
     use(scenario_id, scenarios[scenario_id])
 ```
 
-Entries are owner rooted typed values. Indexing does not serialize or copy a
+Entries are owner rooted typed values, so indexing does not serialize or copy a
 complete network.
 
 ## Typed updates
 
 PowerIO supplies `OperatingPointUpdate`, `NetworkUpdate`, and
-`CalculationUpdate`. Each update targets a stable `ComponentId`; power values
-use `ActivePower`, `ReactivePower`, or `ApparentPower` so units are explicit.
+`CalculationUpdate`. Each update targets a stable `ComponentId`, and power
+values use `ActivePower`, `ReactivePower`, or `ApparentPower` so the unit is
+explicit.
 
 ```python
 report = powerio.apply_updates(
@@ -162,13 +161,13 @@ for change in report.changes:
 print(report.connectivity_changed)
 ```
 
-The complete batch is validated before mutation. A failed batch leaves the
-module unchanged. `UpdateReport` lists exact changes and says whether
-energized connectivity changed.
+The whole batch is validated before anything is mutated, so a failed batch
+leaves the module unchanged. The `UpdateReport` lists each change and says
+whether energized connectivity changed.
 
 ## Matrices and vectors
 
-`BalancedNetwork` exposes verb led derived calculations:
+The derived calculations are `calc_*` methods on `BalancedNetwork`:
 
 ```python
 A = network.calc_incidence_matrix()
@@ -181,8 +180,8 @@ p_bus = network.calc_bus_injection_dc(voltage_angles)
 
 `calc_admittance_matrix`, `calc_bprime_matrix`, `calc_ptdf`, `calc_lodf`,
 `to_normalized`, and `to_networkx` are methods of the same class. SciPy is
-imported only when a sparse matrix is requested, NumPy only for array based
-helpers, and NetworkX only by `to_networkx`.
+imported only when you ask for a sparse matrix, NumPy only for the array based
+helpers, and NetworkX only inside `to_networkx`.
 
 ## Other functions
 
@@ -199,21 +198,21 @@ helpers, and NetworkX only by `to_networkx`.
 
 ## Errors
 
-Parse failures raise `PowerIOParseError`. Valid data that cannot satisfy an
-operation raises `PowerIODataError`. Both derive from `PowerIOError` and carry
-a stable diagnostic code. Branch on `.code`, not the rendered message.
-A Rust panic inside the extension surfaces as `PowerIOError` with code
-`BIND.PY.PANIC`, never as `pyo3_runtime.PanicException`; module state is
-unchanged because every mutation is built in full before it is installed.
+A parse failure raises `PowerIOParseError`, and valid data that cannot satisfy
+an operation raises `PowerIODataError`. Both derive from `PowerIOError` and
+have a stable diagnostic code, so branch on `.code` rather than on the rendered
+message. A Rust panic inside the extension raises `PowerIOError` with code
+`BIND.PY.PANIC` instead of `pyo3_runtime.PanicException`, and the module is
+left unchanged, because each mutation is built in full before it is installed.
 
 ## MCP server
 
-The optional MCP server accepts paths, in-memory grid exchange content, and
-serialized PowerIO modules through the `powerio_ir` field. Electrical inputs and outputs remain
-PowerIO types and PowerIO IR. The server does not define another network,
-calculation, update, or solution schema.
+The optional MCP server accepts paths, grid exchange content held in memory,
+and serialized PowerIO modules through the `powerio_ir` field. Electrical
+inputs and outputs stay PowerIO types and PowerIO IR; the server does not
+define another network, calculation, update, or solution schema.
 
-Filesystem access is disabled unless `POWERIO_MCP_ALLOWED_ROOTS` names the
-directories the server may read. Remote URI schemes are rejected. Host
-approval, request identifiers, timeout, and cancellation handling remain MCP
-transport concerns and do not alter the PowerIO data.
+Filesystem access is off unless `POWERIO_MCP_ALLOWED_ROOTS` lists the
+directories the server may read, and remote URI schemes are rejected. Host
+approval, request identifiers, timeouts, and cancellation are MCP transport
+concerns and do not touch the PowerIO data.
