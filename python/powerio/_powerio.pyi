@@ -60,6 +60,11 @@ __all__ = [
     "versions_json",
 ]
 
+PANIC_CODE: str
+
+class PanicException(BaseException):
+    """A Rust panic pyo3 caught at the boundary; the wrapper converts it."""
+
 class PowerIOError(ValueError):
     """Base error from the powerio parser, emitter, or matrix calculations.
 

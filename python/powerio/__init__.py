@@ -40,6 +40,8 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Optional, Union
 
 from . import _powerio
+from ._guard import guard as _guard
+from ._guard import guard_class as _guard_class
 from ._powerio import (
     ActivePower,
     ApparentPower,
@@ -318,6 +320,7 @@ _BALANCED_DELEGATED_NAMES = frozenset(
 )
 
 
+@_guard_class
 class BalancedNetwork:
     """A parsed balanced power network.
 
@@ -687,17 +690,20 @@ class BalancedNetwork:
         return g
 
 
+@_guard
 def parse_display(path: Any, format: Optional[str] = None) -> DisplayData:
     """Parse a display artifact such as a PowerWorld ``.pwd`` file."""
     return _wrap_display(_powerio.parse_display(str(path), format))
 
 
+@_guard
 def resolve_format(name: str) -> Optional[FormatInfo]:
     """Resolve a format token or common alias to its canonical metadata."""
     resolved = _powerio.resolve_format(name)
     return None if resolved is None else FormatInfo(*resolved)
 
 
+@_guard
 def parse_geo(text: str, name_hint: Optional[str] = None) -> dict[str, Any]:
     """Tolerantly read a geographic sidecar and return its canonical form.
 
@@ -796,6 +802,7 @@ def _ppc_to_matpower_text(ppc) -> str:
     return "\n".join(lines) + "\n"
 
 
+@_guard
 def from_ppc(ppc) -> BalancedNetwork:
     """Case from a PYPOWER dict (``ppc``); the inverse of :meth:`BalancedNetwork.to_ppc`.
 
@@ -824,6 +831,7 @@ from . import dist  # noqa: E402  (needs EmitResult defined above)
 MulticonductorNetwork = dist.MulticonductorNetwork
 
 
+@_guard
 def versions() -> Any:
     """Return the PowerIO release, sole IR identity, and BMOPF schema."""
     return _json.loads(_powerio.versions_json())
@@ -869,6 +877,7 @@ def _bind_collection_entry(
     return value
 
 
+@_guard_class
 class TimeSeries(_TypedValue, Sequence):
     """Values of one type ordered in time."""
 
@@ -935,6 +944,7 @@ class TimeSeries(_TypedValue, Sequence):
         return (self[position] for position in range(len(self)))
 
 
+@_guard_class
 class ScenarioSet(_TypedValue, Mapping):
     """Named alternatives of one type, with optional probabilities."""
 
@@ -997,10 +1007,12 @@ class ScenarioSet(_TypedValue, Mapping):
         )
 
 
+@_guard_class
 class OperatingPoint(_TypedValue):
     """A possibly partial assignment over fixed equipment identities."""
 
 
+@_guard_class
 class _BalancedCalculation(_TypedValue):
     """A calculation over one shared balanced network."""
 
@@ -1010,6 +1022,7 @@ class _BalancedCalculation(_TypedValue):
         return BalancedNetwork(self.module._inner._balanced_calculation_network())
 
 
+@_guard_class
 class _MulticonductorCalculation(_TypedValue):
     """A calculation over one shared multiconductor network."""
 
@@ -1021,6 +1034,7 @@ class _MulticonductorCalculation(_TypedValue):
         )
 
 
+@_guard_class
 class _CalculationSolution(_TypedValue):
     """A solution that retains the exact typed instance it solves."""
 
@@ -1054,6 +1068,7 @@ class McAcOpfInstance(_MulticonductorCalculation):
     """A multiconductor AC optimal power flow calculation instance."""
 
 
+@_guard_class
 class AcScucInstance(_BalancedCalculation):
     """An AC security constrained unit commitment calculation instance."""
 
@@ -1091,6 +1106,7 @@ class McAcOpfSolution(_MulticonductorCalculation, _CalculationSolution):
     """A multiconductor AC optimal power flow solution."""
 
 
+@_guard_class
 class AcScucSolution(_BalancedCalculation, _CalculationSolution):
     """An AC security constrained unit commitment solution."""
 
@@ -1125,6 +1141,7 @@ class AcScucSolution(_BalancedCalculation, _CalculationSolution):
         return self.module._inner._ac_scuc_solution_objective()
 
 
+@_guard_class
 class GeoLayer(_TypedValue):
     """A standalone geographic document: element points and routes keyed by
     element identity, in one coordinate space.
@@ -1170,6 +1187,7 @@ _VALUE_CLASSES: dict[str, type[_TypedValue]] = {
 }
 
 
+@_guard_class
 class PioModule:
     """One typed value with diagnostics, producer, sources, source mappings,
     history, and extensions.
@@ -1288,6 +1306,7 @@ def _refresh_collection_entry(target: Any, location: _CollectionEntry) -> None:
         raise TypeError("the selected value does not support typed updates")
 
 
+@_guard
 def apply_updates(
     target: Any,
     updates: Union[
@@ -1321,6 +1340,7 @@ def apply_updates(
     return report
 
 
+@_guard
 def apply_bus_load_active_power(
     module: PioModule,
     bus_id: int,
@@ -1388,6 +1408,7 @@ def _memory_from_source(source: Any, name: Optional[str]) -> tuple[bytes, str]:
     return data, name
 
 
+@_guard
 def parse(
     source: Any,
     *,
@@ -1458,6 +1479,7 @@ def _emit_to_destination(
     return result
 
 
+@_guard
 def emit(module: PioModule, format: str, destination: Optional[Any] = None) -> EmitResult:
     """Emit a module as one grid exchange format."""
     return _emit_to_destination(
@@ -1468,6 +1490,7 @@ def emit(module: PioModule, format: str, destination: Optional[Any] = None) -> E
     )
 
 
+@_guard
 def serialize(module: PioModule, destination: Optional[Any] = None) -> EmitResult:
     """Serialize a module as PowerIO IR."""
     return _emit_to_destination(
@@ -1478,6 +1501,7 @@ def serialize(module: PioModule, destination: Optional[Any] = None) -> EmitResul
     )
 
 
+@_guard
 def deserialize(source: Any) -> PioModule:
     """Deserialize PowerIO IR from a path, file object, or bytes-like source."""
     path = _path_from_source(source)
@@ -1487,6 +1511,7 @@ def deserialize(source: Any) -> PioModule:
     return PioModule(_powerio._PioModule._deserialize_memory(data))
 
 
+@_guard
 def features() -> dict[str, bool]:
     """The build-time features compiled into this powerio installation.
 

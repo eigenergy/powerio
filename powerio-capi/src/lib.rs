@@ -15048,7 +15048,7 @@ unsafe fn run_output_operation(
     operation: impl FnOnce(
         &powerio::PioModule<PioValue>,
         Destination,
-    ) -> Result<EmitResult, powerio_core::Error>,
+    ) -> Result<EmitResult, *mut PioError>,
 ) -> *mut PioEmitResult {
     unsafe {
         entry(error, std::ptr::null_mut(), || {
@@ -15064,9 +15064,7 @@ unsafe fn run_output_operation(
             let destination = destination
                 .build()
                 .map_err(|failure| error_from_core(&failure))?;
-            operation(&module.module, destination)
-                .map(emit_result_handle)
-                .map_err(|failure| error_from_core(&failure))
+            operation(&module.module, destination).map(emit_result_handle)
         })
     }
 }
@@ -15080,16 +15078,10 @@ pub unsafe extern "C" fn pio_emit(
     destination: *const PioDestination,
     error: *mut *mut PioError,
 ) -> *mut PioEmitResult {
-    let format = match unsafe { required_str(format, format_len, "format") } {
-        Ok(format) => format.to_owned(),
-        Err(failure) => {
-            unsafe { store_error(error, failure) };
-            return std::ptr::null_mut();
-        }
-    };
     unsafe {
         run_output_operation(module, destination, error, |module, destination| {
-            powerio::emit(module, &format, destination)
+            let format = required_str(format, format_len, "format")?;
+            powerio::emit(module, format, destination).map_err(|failure| error_from_core(&failure))
         })
     }
 }
@@ -15103,7 +15095,7 @@ pub unsafe extern "C" fn pio_module_serialize(
 ) -> *mut PioEmitResult {
     unsafe {
         run_output_operation(module, destination, error, |module, destination| {
-            powerio::serialize(module, destination)
+            powerio::serialize(module, destination).map_err(|failure| error_from_core(&failure))
         })
     }
 }
@@ -15286,23 +15278,29 @@ pub unsafe extern "C" fn pio_calculation_solution_get_objective(
     if out_objective.is_null() {
         return false;
     }
-    let Some(solution) =
-        (unsafe { PioCalculationSolution::get(solution) }).and_then(ValueInner::value)
-    else {
-        return false;
-    };
-    let objective = match solution {
-        PioValue::DcOpfSolution(solution) => Some(solution.objective()),
-        PioValue::AcOpfSolution(solution) => Some(solution.objective()),
-        PioValue::McAcOpfSolution(solution) => Some(solution.objective()),
-        PioValue::AcScucSolution(solution) => solution.objective(),
-        _ => None,
-    };
-    if let Some(objective) = objective {
-        unsafe { *out_objective = objective };
-        true
-    } else {
-        false
+    // No error slot: a missing objective is an ordinary false. `entry` still
+    // turns a panic into false instead of aborting the caller.
+    unsafe {
+        entry(std::ptr::null_mut(), false, || {
+            let Some(solution) = PioCalculationSolution::get(solution).and_then(ValueInner::value)
+            else {
+                return Ok(false);
+            };
+            let objective = match solution {
+                PioValue::DcOpfSolution(solution) => Some(solution.objective()),
+                PioValue::AcOpfSolution(solution) => Some(solution.objective()),
+                PioValue::McAcOpfSolution(solution) => Some(solution.objective()),
+                PioValue::AcScucSolution(solution) => solution.objective(),
+                _ => None,
+            };
+            Ok(match objective {
+                Some(objective) => {
+                    *out_objective = objective;
+                    true
+                }
+                None => false,
+            })
+        })
     }
 }
 
@@ -15314,13 +15312,18 @@ pub unsafe extern "C" fn pio_socwr_opf_solution_get_objective_lower_bound(
     if out_lower_bound.is_null() {
         return false;
     }
-    let Some(PioValue::SocwrOpfSolution(solution)) =
-        (unsafe { PioCalculationSolution::get(solution) }).and_then(ValueInner::value)
-    else {
-        return false;
-    };
-    unsafe { *out_lower_bound = solution.objective_lower_bound() };
-    true
+    // No error slot, as for pio_calculation_solution_get_objective.
+    unsafe {
+        entry(std::ptr::null_mut(), false, || {
+            let Some(PioValue::SocwrOpfSolution(solution)) =
+                PioCalculationSolution::get(solution).and_then(ValueInner::value)
+            else {
+                return Ok(false);
+            };
+            *out_lower_bound = solution.objective_lower_bound();
+            Ok(true)
+        })
+    }
 }
 
 fn balanced_branch_identities(network: &BalancedNetwork) -> impl Iterator<Item = &str> {

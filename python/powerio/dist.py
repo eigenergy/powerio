@@ -19,9 +19,12 @@ from __future__ import annotations
 import json as _json
 from typing import Any, Optional
 
+from ._guard import guard_class as _guard_class
+
 __all__ = ["MulticonductorNetwork"]
 
 
+@_guard_class
 class MulticonductorNetwork:
     """A parsed multiconductor distribution network in wire coordinates.
 
