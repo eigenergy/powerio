@@ -16,7 +16,7 @@
       "properties": {
         "$schema": {
           "type": "string",
-          "description": "The `$id` of the schema document this dataset is written against. A reader selects the schema version from this field; a dataset that omits it declares no version and a reader cannot resolve one."
+          "description": "Schema retrieval URI or documented canonical identifier. A pinned proposal uses an immutable commit URL. Its resolved version must agree with meta.schema_version when both are supplied."
         },
         "version": {
           "type": "string",
@@ -1681,7 +1681,7 @@
           },
           "r_neutral_from": {
             "$ref": "#/$defs/nonnegative_number",
-            "description": "Grounding resistance [Ohm] of the 'from'-side winding's own neutral: an internal branch from the winding's shared neutral to earth. Zero or absent grounds that neutral solidly. Groundings outside the transformer stay on buses and shunts."
+            "description": "Grounding resistance [Ohm] of the 'from' winding's own neutral. Absence of both neutral impedance fields adds no internal grounding branch. Explicitly zero impedance grounds that winding neutral solidly. External bus grounding remains separate."
           },
           "x_neutral_from": {
             "$ref": "#/$defs/nonnegative_number",
@@ -1689,7 +1689,7 @@
           },
           "r_neutral_to": {
             "$ref": "#/$defs/nonnegative_number",
-            "description": "Grounding resistance [Ohm] of the 'to'-side winding's own neutral: an internal branch from the winding's shared neutral to earth. Zero or absent grounds that neutral solidly. Groundings outside the transformer stay on buses and shunts."
+            "description": "Grounding resistance [Ohm] of the 'to' winding's own neutral. Absence of both neutral impedance fields adds no internal grounding branch. Explicitly zero impedance grounds that winding neutral solidly. External bus grounding remains separate."
           },
           "x_neutral_to": {
             "$ref": "#/$defs/nonnegative_number",
@@ -1786,7 +1786,7 @@
           },
           "r_neutral_from": {
             "$ref": "#/$defs/nonnegative_number",
-            "description": "Grounding resistance [Ohm] of the 'from'-side winding's own neutral: an internal branch from the winding's shared neutral to earth. Zero or absent grounds that neutral solidly. Groundings outside the transformer stay on buses and shunts."
+            "description": "Grounding resistance [Ohm] of the 'from' winding's own neutral. Absence of both neutral impedance fields adds no internal grounding branch. Explicitly zero impedance grounds that winding neutral solidly. External bus grounding remains separate."
           },
           "x_neutral_from": {
             "$ref": "#/$defs/nonnegative_number",
@@ -1794,7 +1794,7 @@
           },
           "r_neutral_to": {
             "$ref": "#/$defs/nonnegative_number",
-            "description": "Grounding resistance [Ohm] of the 'to'-side winding's own neutral: an internal branch from the winding's shared neutral to earth. Zero or absent grounds that neutral solidly. Groundings outside the transformer stay on buses and shunts."
+            "description": "Grounding resistance [Ohm] of the 'to' winding's own neutral. Absence of both neutral impedance fields adds no internal grounding branch. Explicitly zero impedance grounds that winding neutral solidly. External bus grounding remains separate."
           },
           "x_neutral_to": {
             "$ref": "#/$defs/nonnegative_number",
@@ -1959,6 +1959,35 @@
         "i_max": {
           "$ref": "#/$defs/nonnegative_number",
           "description": "Current-magnitude limit [A] applied to each phase coil current of this winding, referred to this winding's own voltage. A per-coil limit, not a per-terminal one: a DELTA winding's coil current is not its terminal current."
+        },
+        "s_rating": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Winding rating [VA]. Defaults to the transformer s_rating when absent; the transformer s_rating remains the common short-circuit base."
+        },
+        "tap_ratio": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 1,
+          "description": "Dimensionless multiplier on this winding nominal coil voltage. Referred ideal coil voltages divide by v_nom * tap_ratio."
+        },
+        "tap_ratio_min": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Lower bound on this winding tap multiplier; a nonfixed interval requires a supported tap decision."
+        },
+        "tap_ratio_max": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Upper bound on this winding tap multiplier."
+        },
+        "r_neutral": {
+          "$ref": "#/$defs/nonnegative_number",
+          "description": "Winding-neutral-to-earth resistance [Ohm]. Absence of both neutral impedance fields adds no internal grounding branch; explicitly zero impedance gives solid grounding."
+        },
+        "x_neutral": {
+          "type": "number",
+          "description": "Winding-neutral-to-earth reactance [Ohm]; see r_neutral."
         }
       },
       "required": [
@@ -1975,9 +2004,6 @@
         "type": "string",
         "description": "Id of an entry of the top-level `time_series` table"
       }
-    },
-    "ideal_equipment": {
-      "$comment": "Ideal equipment states an exact algebraic relation between its terminal quantities, with no impedance and no loss. A document declares ideal equipment by omitting the impedance fields, which default to zero; it never states a zero impedance and a nonzero loss.\nIdeal two-winding transformer, per phase coil k, with turns ratio n = v_nom_from / v_nom_to: v_from_k = n * v_to_k and i_to_k = -n * i_from_k, so s_from + s_to = 0. The `configuration` of each winding maps coil quantities to terminal quantities: a WYE winding's coil k spans terminal k and the winding's neutral terminal, and a DELTA winding's coil k spans terminals k and k + delta_roll, with the index taken modulo the phase count.\nIdeal n-winding transformer, windings j = 1..m with winding 1 the reference: v_j / v_nom_j is equal for every j, and the coil powers sum to zero. Pairwise `x_sc` entries and `r_winding` then place the leakage impedance around that ideal core.\nIdeal single-phase autotransformer regulator with regulation ratio a and `regulator_type` B: v_to = a * v_from and i_from = -a * i_to. Type A inverts the ratio, n_eff = 1 / a.\nIdeal closed switch: v_from_k = v_to_k and i_from_k + i_to_k = 0 for every conductor k. Ideal open switch: i_from_k = i_to_k = 0, and the two terminal voltages are unrelated.\nIdeal voltage source: the terminal voltage is fixed at the stated `v_magnitude` and `v_angle` and the terminal current is free.\nIdeal DC grounding, `r` absent or zero: v_dc = 0 at the terminal and the earth-return current is free."
     },
     "single_phase_autotransformer": {
       "type": "object",
@@ -2124,21 +2150,27 @@
             "items": {
               "$ref": "#/$defs/nonnegative_number"
             },
-            "description": "Per-regulator regulation ratios [a1, a2] (length 2). Start values when free."
+            "description": "Per-regulator regulation ratios [a1, a2] (length 2). Start values when free.",
+            "minItems": 2,
+            "maxItems": 2
           },
           "tap_ratio_min": {
             "type": "array",
             "items": {
               "$ref": "#/$defs/nonnegative_number"
             },
-            "description": "Per-regulator lower bounds [a1_min, a2_min]. With tap_ratio_min < tap_ratio_max (element-wise) that regulator's tap is a free OPF variable."
+            "description": "Per-regulator lower bounds [a1_min, a2_min]. With tap_ratio_min < tap_ratio_max (element-wise) that regulator's tap is a free OPF variable.",
+            "minItems": 2,
+            "maxItems": 2
           },
           "tap_ratio_max": {
             "type": "array",
             "items": {
               "$ref": "#/$defs/nonnegative_number"
             },
-            "description": "Per-regulator upper bounds [a1_max, a2_max] (see tap_ratio_min)."
+            "description": "Per-regulator upper bounds [a1_max, a2_max] (see tap_ratio_min).",
+            "minItems": 2,
+            "maxItems": 2
           },
           "regulator_type": {
             "$ref": "#/$defs/regulator_type"
@@ -2218,5 +2250,5 @@
       }
     }
   },
-  "description": "Data schema for four-wire multiconductor distribution optimal power flow network cases, released by the IEEE PES Task Force on Benchmarking Multiconductor OPF for Distribution Systems. Every quantity is SI and absolute: volts, amperes, watts, vars, volt-amperes, ohms, siemens, metres, radians, hertz, degrees Celsius. There are no per-unit values and no scaling factors. Element identity is the key of the object in its table, and a terminal is named by a string, so a document states conductor identity everywhere.\n\nUnknown fields are rejected. Every object in this schema sets additionalProperties to false, and the matrix element names are the only pattern-matched keys. The single place a document may carry data this schema does not define is the top-level `extras` object, which is free-form and carries no defined meaning; a reader that ignores `extras` reads a different network than the writer wrote, so a writer that moves data there states so.\n\nArray dimensions. A per-terminal array has one entry for each name in the element's own `terminal_map`, in that order; a per-phase array has one entry for each phase conductor of the element, which is the number of names in `terminal_map` that `terminal_conventions` classifies as a phase, in `terminal_map` order. A bus voltage bound array is per phase terminal of the bus, in `terminal_names` order, and never carries an entry for the neutral, which bounds through `vn_max`. A matrix `prefix_i_j` index is one-based and indexes the element's own conductor ordering: for a line or a switch, position i of `terminal_map_from`, which position i of `terminal_map_to` connects to; for a linecode, position i of the `terminal_map_from` of every line that references it, so a linecode's conductor count is fixed and every referencing line states a terminal map of that width; for a line geometry, position i of `conductors`, whose `terminal` names the conductor the compiled row carries. A matrix is symmetric, so a document may state one triangle; a stated cell wins over its mirror.\n\nSchema version against dataset version. `meta.schema_version` is the version of this schema document and is fixed at 0.2.0; `meta.$schema` is the `$id` of the schema document the dataset is written against, and it carries the same version. `meta.version` is the version of the dataset itself and is unrelated to either: a case may revise its own data many times against one schema version."
+  "description": "Proposed BMOPF 0.2.0 structural schema, subject to IEEE PES BMOPF Task Force review. Electrical quantities use absolute SI units. Element IDs are table keys; ordered terminal maps establish conductor identity. Cross-field dimensions, references, role lists and bounds require semantic validation in addition to JSON Schema. Unknown electrical fields are rejected; top-level extras and meta.provenance are free-form extension locations. Neither location establishes computational support. The canonical $id identifies this schema; a case may retrieve its pinned revision from an immutable commit URL. See the proposal documentation for compatibility and implementation status."
 }

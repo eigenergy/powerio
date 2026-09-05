@@ -3689,6 +3689,28 @@
             }
           ]
         },
+        "v_max_phase": {
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "v_min": {
           "anyOf": [
             {
@@ -3708,6 +3730,29 @@
             }
           ],
           "description": "Voltage magnitude bounds, volts: the scalar pair plus the phase to\nneutral and phase to phase families, and the per-sequence scalars\n(BMOPF schema 0.1.0: positive sequence has both bounds, negative and\nzero sequence and neutral to ground are magnitude caps whose lower\nbound is always 0)."
+        },
+        "v_min_phase": {
+          "description": "Nonuniform phase-to-ground bounds in phase-terminal order, volts.\nA scalar bound, when present, takes precedence over this vector.",
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "vn_max": {
           "anyOf": [

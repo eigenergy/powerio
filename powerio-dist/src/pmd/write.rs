@@ -432,15 +432,28 @@ impl Writer {
             o.insert("grounded".into(), json!(grounded));
             o.insert("status".into(), Self::status(&b.extras));
             self.bus_coordinates(&mut o, b, net);
-            // The scalar magnitude bounds have ENGINEERING fields: `vm_lb` and
-            // `vm_ub` are per-terminal vectors in the same unit every other
-            // voltage here uses (volts over `voltage_scale_factor`, the rule
-            // `vm_nom` follows above). The model's scalar broadcasts over the
-            // terminals, which is the inverse of the reader's uniform-vector
-            // collapse.
-            for (key, bound) in [("vm_lb", b.v_min), ("vm_ub", b.v_max)] {
-                if let Some(v) = bound {
-                    o.insert(key.into(), json!(vec![v / 1e3; b.terminals.len().max(1)]));
+            let phase_indices = b.phase_indices(net.extras().get("bmopf_terminal_conventions"));
+            for (key, scalar, phases, default) in [
+                ("vm_lb", b.v_min, &b.v_min_phase, 0.0),
+                ("vm_ub", b.v_max, &b.v_max_phase, f64::INFINITY),
+            ] {
+                let retained = b.extras.get(&format!("pmd_{key}"));
+                let mut values = retained
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .filter(|values| values.len() == b.terminals.len())
+                    .unwrap_or_else(|| vec![json!(default); b.terminals.len()]);
+                if scalar.is_some() || phases.is_some() {
+                    for (phase, &terminal) in phase_indices.iter().enumerate() {
+                        if let Some(v) =
+                            scalar.or_else(|| phases.as_ref().and_then(|v| v.get(phase)).copied())
+                        {
+                            values[terminal] = json!(v / 1e3);
+                        }
+                    }
+                    o.insert(key.into(), Value::Array(values));
+                } else if let Some(retained) = retained {
+                    o.insert(key.into(), retained.clone());
                 }
             }
             // The phase-to-neutral, phase-to-phase, and sequence bound families

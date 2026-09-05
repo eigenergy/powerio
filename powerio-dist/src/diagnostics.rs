@@ -140,6 +140,10 @@ pub mod codes {
         /// The document states a `meta.$schema` that names no known version.
         READ_BMOPF_SCHEMA_UNKNOWN = "READ.BMOPF.SCHEMA_UNKNOWN", Warning,
             "a BMOPF document states a schema naming no known version";
+        READ_BMOPF_SEMANTIC_INVALID = "READ.BMOPF.SEMANTIC_INVALID", Error,
+            "the BMOPF document has inconsistent dimensions, references, or bounds";
+        READ_BMOPF_SCHEMA_MISMATCH = "READ.BMOPF.SCHEMA_MISMATCH", Error,
+            "the schema URI and explicit schema version disagree";
 
         // EMIT.BMOPF: the general families beside the nineteen transformer
         // codes the writer already publishes.

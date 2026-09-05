@@ -1334,6 +1334,11 @@ pub struct PioMulticonductorBusView {
     pub has_voltage_min: bool,
     pub voltage_max_v: f64,
     pub has_voltage_max: bool,
+    /// Nonuniform phase bounds, in phase-terminal order, used when the scalar is absent.
+    pub phase_to_ground_voltage_min_v: PioF64View,
+    pub has_phase_to_ground_voltage_min: bool,
+    pub phase_to_ground_voltage_max_v: PioF64View,
+    pub has_phase_to_ground_voltage_max: bool,
     pub phase_to_neutral_voltage_min_v: PioF64View,
     pub has_phase_to_neutral_voltage_min: bool,
     pub phase_to_neutral_voltage_max_v: PioF64View,
@@ -12285,6 +12290,10 @@ fn multiconductor_bus_view(bus: &powerio_dist::DistBus) -> PioMulticonductorBusV
         has_voltage_min: bus.v_min.is_some(),
         voltage_max_v: bus.v_max.unwrap_or(0.0),
         has_voltage_max: bus.v_max.is_some(),
+        phase_to_ground_voltage_min_v: optional_f64_view(bus.v_min_phase.as_deref()).0,
+        has_phase_to_ground_voltage_min: bus.v_min_phase.is_some(),
+        phase_to_ground_voltage_max_v: optional_f64_view(bus.v_max_phase.as_deref()).0,
+        has_phase_to_ground_voltage_max: bus.v_max_phase.is_some(),
         phase_to_neutral_voltage_min_v: vpn_min,
         has_phase_to_neutral_voltage_min: has_vpn_min,
         phase_to_neutral_voltage_max_v: vpn_max,
@@ -16762,6 +16771,40 @@ mod tests {
 
             pio_balanced_network_release(network);
             pio_diagnostics_release(diagnostics);
+        }
+    }
+
+    #[test]
+    fn abi_seven_bus_views_preserve_phase_bounds_after_owner_release() {
+        unsafe {
+            let mut network = complete_multiconductor_network();
+            network.buses_mut()[0].v_min = None;
+            network.buses_mut()[0].v_min_phase = Some(vec![210.0, 215.0]);
+            let module = module_handle(powerio::PioModule::new(PioValue::from(network)));
+            let value = pio_module_value(module);
+            let mut error = std::ptr::null_mut();
+            let network = pio_value_multiconductor_network(value, &mut error);
+            assert!(!network.is_null());
+            let mut bus = std::mem::MaybeUninit::<PioMulticonductorBusView>::uninit();
+            pio_module_release(module);
+            pio_value_release(value);
+            assert!(pio_multiconductor_network_bus_at(
+                network,
+                0,
+                bus.as_mut_ptr(),
+                &mut error
+            ));
+            let bus = bus.assume_init();
+            assert!(bus.has_phase_to_ground_voltage_min);
+            assert!(!bus.has_voltage_min);
+            assert_eq!(
+                std::slice::from_raw_parts(
+                    bus.phase_to_ground_voltage_min_v.data,
+                    bus.phase_to_ground_voltage_min_v.len
+                ),
+                &[210.0, 215.0]
+            );
+            pio_multiconductor_network_release(network);
         }
     }
 

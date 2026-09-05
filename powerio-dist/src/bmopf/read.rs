@@ -46,6 +46,7 @@ pub(crate) fn parse_bmopf_collecting(
     });
     report_non_numeric_fields(&doc, diags);
     report_schema_version(&doc, diags);
+    super::validate::report(&doc, diags);
     let mut rd = Reader {
         net: &mut net,
         diagnostics: crate::diagnostics::Diagnostics::new(),
@@ -58,23 +59,26 @@ pub(crate) fn parse_bmopf_collecting(
     Ok(net)
 }
 
-/// Resolve the schema version the document declares, and report when it
-/// cannot be resolved.
-///
-/// `meta.$schema` is the one field that states which version a document was
-/// written against, so it is the only thing to detect from. The reader accepts
-/// both versions whatever it finds, since every class 0.2.0 adds at the top
-/// level also reads from `extras` where 0.1.0 puts it. What the version
-/// changes is what a consumer may assume: an unresolved version means the
-/// class layout of the document is not stated anywhere, and a consumer that
-/// assumes one reads a different network on the other. Both findings are
-/// warnings for that reason, not errors.
+/// Report unresolved schema identities and reject contradictory version declarations.
 fn report_schema_version(doc: &Map<String, Value>, diags: &mut crate::collect::Diagnostics) {
     let stated = doc
         .get("meta")
         .and_then(Value::as_object)
         .and_then(|m| m.get("$schema"))
         .and_then(Value::as_str);
+    if let (Some(profile), Some(version)) = (
+        stated.and_then(BmopfProfile::from_schema_id),
+        doc.get("meta").and_then(|meta| meta.get("schema_version")),
+    ) && version.as_str() != Some(profile.version())
+    {
+        diags.push(
+            &C::READ_BMOPF_SCHEMA_MISMATCH,
+            format!(
+                "meta.schema_version {version} disagrees with the {} schema URI",
+                profile.version()
+            ),
+        );
+    }
     match stated {
         None => diags.push(
             &C::READ_BMOPF_SCHEMA_ABSENT,
@@ -96,6 +100,22 @@ fn report_schema_version(doc: &Map<String, Value>, diags: &mut crate::collect::D
         ),
         Some(_) => {}
     }
+}
+
+fn uniform_bound(value: Option<&Value>) -> Option<f64> {
+    let values = floats(value)?;
+    let first = *values.first()?;
+    values
+        .iter()
+        .all(|&v| v.to_bits() == first.to_bits())
+        .then_some(first)
+}
+
+fn nonuniform_bound(value: Option<&Value>) -> Option<Vec<f64>> {
+    uniform_bound(value)
+        .is_none()
+        .then(|| floats(value))
+        .flatten()
 }
 
 /// Schema 0.1.0 field names typed `number` or an array of them. Derived from
@@ -273,28 +293,6 @@ fn delta_roll_value(v: Option<&Value>) -> Option<i64> {
         .filter(|roll| matches!(*roll, -1 | 1))
 }
 
-/// Like [`first_float`], but the field is per-phase-terminal in the schema
-/// while powerio's model holds one value; warn when collapsing loses a
-/// genuine per-phase difference instead of dropping it silently.
-fn first_float_collapsed(
-    v: Option<&Value>,
-    what: &str,
-    diagnostics: &mut crate::diagnostics::Diagnostics,
-) -> Option<f64> {
-    match v? {
-        Value::Array(a) => {
-            let vals: Vec<f64> = a.iter().map(f).collect();
-            if vals.windows(2).any(|w| w[0].to_bits() != w[1].to_bits()) {
-                diagnostics.push(&C::READ_BMOPF_VALUE_COLLAPSED, format!(
-                    "{what}: per-phase-terminal bound is non-uniform; collapsed to the first entry"
-                ));
-            }
-            vals.first().copied()
-        }
-        v => Some(f(v)),
-    }
-}
-
 fn value_alias<'a>(o: &'a Map<String, Value>, primary: &str, legacy: &str) -> Option<&'a Value> {
     o.get(primary).or_else(|| o.get(legacy))
 }
@@ -311,6 +309,19 @@ fn merge_transformer_overlay(
         let Value::Object(names) = names else {
             continue;
         };
+        if matches!(
+            subtype.as_str(),
+            "n_winding" | "single_phase_autotransformer" | "open_delta_regulator"
+        ) {
+            let table = merged
+                .entry(subtype.clone())
+                .or_insert_with(|| Value::Object(Map::new()));
+            if let Some(table) = table.as_object_mut() {
+                for (name, fields) in names {
+                    table.entry(name.clone()).or_insert_with(|| fields.clone());
+                }
+            }
+        }
         let Some(Value::Object(table)) = merged.get_mut(subtype) else {
             continue;
         };
@@ -593,24 +604,19 @@ impl Reader<'_> {
                 }
             }
         }
-        if let Some(Value::Object(items)) = doc.get("transformer") {
-            // The writer relocates schema-less transformer fields (taps,
-            // neutral impedance, no load admittance) to
-            // `extras.transformer.<subtype>.<name>`; fold them back onto the
-            // raw objects before parsing.
-            let overlay = doc
-                .get("extras")
-                .and_then(Value::as_object)
-                .and_then(|e| e.get("transformer"))
-                .and_then(Value::as_object)
-                .filter(|o| !o.is_empty());
-            match overlay {
-                Some(overlay) => {
-                    let merged = merge_transformer_overlay(items, overlay);
-                    self.transformers(&merged);
-                }
-                None => self.transformers(items),
-            }
+        let empty = Map::new();
+        let items = doc
+            .get("transformer")
+            .and_then(Value::as_object)
+            .unwrap_or(&empty);
+        let overlay = doc
+            .get("extras")
+            .and_then(|e| e.get("transformer"))
+            .and_then(Value::as_object);
+        if let Some(overlay) = overlay {
+            self.transformers(&merge_transformer_overlay(items, overlay));
+        } else {
+            self.transformers(items);
         }
 
         self.warn_orphan_transformer_overlay(doc);
@@ -619,11 +625,7 @@ impl Reader<'_> {
         }
     }
 
-    /// The `extras.transformer` overlay carries the transformer fields that
-    /// schema 0.1.0 has no slot for. The transformer arm folds it back onto
-    /// the raw objects, so an overlay with no transformer table to attach to
-    /// has no reader at all. Name the loss; `extras_block` skips the overlay
-    /// deliberately, so nothing else reports it.
+    /// Report parameter overlays that have no declared transformer target.
     fn warn_orphan_transformer_overlay(&mut self, doc: &Map<String, Value>) {
         let overlay = doc
             .get("extras")
@@ -866,9 +868,6 @@ impl Reader<'_> {
         }
     }
 
-    // One block per object field; splitting it would scatter a list that
-    // reads end to end.
-    #[expect(clippy::too_many_lines)]
     fn buses(&mut self, items: &Map<String, Value>) {
         for (id, v) in items {
             let Value::Object(o) = v else { continue };
@@ -957,16 +956,10 @@ impl Reader<'_> {
                 id: id.clone(),
                 terminals: strings(o.get("terminal_names")),
                 grounded: strings(o.get("perfectly_grounded_terminals")),
-                v_min: first_float_collapsed(
-                    o.get("v_min"),
-                    &format!("bus {id} v_min"),
-                    &mut self.diagnostics,
-                ),
-                v_max: first_float_collapsed(
-                    o.get("v_max"),
-                    &format!("bus {id} v_max"),
-                    &mut self.diagnostics,
-                ),
+                v_min: uniform_bound(o.get("v_min")),
+                v_max: uniform_bound(o.get("v_max")),
+                v_min_phase: nonuniform_bound(o.get("v_min")),
+                v_max_phase: nonuniform_bound(o.get("v_max")),
                 vpn_min: floats(o.get("vpn_min")),
                 vpn_max: floats(o.get("vpn_max")),
                 vpp_min: floats(o.get("vpp_min")),
@@ -1879,6 +1872,7 @@ impl Reader<'_> {
         let s = o.get("s_rating").map_or(f64::NAN, f);
         let mut windings = Vec::new();
         let mut delta_rolls = Map::new();
+        let mut winding_metadata = Map::new();
         if let Some(items) = o.get("windings").and_then(Value::as_array) {
             for (idx, item) in self.bounded_windings(name, items).iter().enumerate() {
                 let Some(w) = item.as_object() else {
@@ -1894,6 +1888,14 @@ impl Reader<'_> {
                 let terminal_map = strings(w.get("terminal_map"));
                 let bmopf_v_nom = value_alias(w, "v_nom", "v_ref").map_or(f64::NAN, f);
                 let r_winding = w.get("r_winding").map_or(0.0, f);
+                let rating = w.get("s_rating").map_or(s, f);
+                let retained: Map<String, Value> = ["i_max", "tap_ratio_min", "tap_ratio_max"]
+                    .iter()
+                    .filter_map(|key| w.get(*key).map(|v| ((*key).to_owned(), v.clone())))
+                    .collect();
+                if !retained.is_empty() {
+                    winding_metadata.insert(idx.to_string(), Value::Object(retained));
+                }
                 let connection = w
                     .get("configuration")
                     .or_else(|| w.get("connection"))
@@ -1915,7 +1917,7 @@ impl Reader<'_> {
                     delta_rolls.insert((idx + 1).to_string(), Value::from(delta_roll));
                 }
                 let r_pct = if let Some(base_z) =
-                    n_winding_base_from_bmopf(conn, &terminal_map, bmopf_v_nom, s)
+                    n_winding_base_from_bmopf(conn, &terminal_map, bmopf_v_nom, rating)
                 {
                     r_winding / base_z * 100.0
                 } else {
@@ -1926,11 +1928,11 @@ impl Reader<'_> {
                     terminal_map: terminal_map.clone(),
                     conn,
                     v_ref: n_winding_internal_v_ref(conn, &terminal_map, bmopf_v_nom),
-                    s_rating: s,
+                    s_rating: rating,
                     r_pct,
-                    tap: 1.0,
-                    r_neutral: None,
-                    x_neutral: None,
+                    tap: w.get("tap_ratio").map_or(1.0, f),
+                    r_neutral: w.get("r_neutral").map(f),
+                    x_neutral: w.get("x_neutral").map(f),
                 });
             }
         }
@@ -1957,6 +1959,13 @@ impl Reader<'_> {
             &[],
         );
         extras.insert("bmopf_subtype".into(), "n_winding".into());
+        extras.insert("bmopf_power_base".into(), Value::from(s));
+        if !winding_metadata.is_empty() {
+            extras.insert(
+                "bmopf_winding_metadata".into(),
+                Value::Object(winding_metadata),
+            );
+        }
         if !delta_rolls.is_empty() {
             extras.insert(BMOPF_DELTA_ROLLS_EXTRA.into(), Value::Object(delta_rolls));
         }

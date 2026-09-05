@@ -1854,6 +1854,13 @@ typedef struct {
     bool has_voltage_min;
     double voltage_max_v;
     bool has_voltage_max;
+    /**
+     * Nonuniform phase bounds, in phase-terminal order, used when the scalar is absent.
+     */
+    PioF64View phase_to_ground_voltage_min_v;
+    bool has_phase_to_ground_voltage_min;
+    PioF64View phase_to_ground_voltage_max_v;
+    bool has_phase_to_ground_voltage_max;
     PioF64View phase_to_neutral_voltage_min_v;
     bool has_phase_to_neutral_voltage_min;
     PioF64View phase_to_neutral_voltage_max_v;

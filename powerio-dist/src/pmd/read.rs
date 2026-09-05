@@ -383,8 +383,67 @@ const SECTIONS: &[&str] = &[
     "transformer",
 ];
 
+fn inferred_terminal_roles(doc: &Map<String, Value>) -> Option<Value> {
+    let mut neutral = BTreeSet::new();
+    for class in ["load", "generator", "voltage_source", "shunt"] {
+        for component in doc
+            .get(class)
+            .and_then(Value::as_object)
+            .into_iter()
+            .flat_map(|v| v.values())
+        {
+            let wye = component.get("configuration").and_then(Value::as_str) == Some("WYE");
+            let connections = ints_as_strings(component.get("connections"));
+            let has_neutral = if class == "voltage_source" {
+                component
+                    .get("vm")
+                    .and_then(Value::as_array)
+                    .and_then(|v| v.last())
+                    .and_then(Value::as_f64)
+                    == Some(0.0)
+            } else {
+                connections.len() == 2 || connections.len() == 4
+            };
+            if wye
+                && has_neutral
+                && let Some(terminal) = connections.last()
+            {
+                neutral.insert(terminal.clone());
+            }
+        }
+    }
+    for transformer in doc
+        .get("transformer")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|v| v.values())
+    {
+        if let (Some(configurations), Some(connections)) = (
+            transformer.get("configuration").and_then(Value::as_array),
+            transformer.get("connections").and_then(Value::as_array),
+        ) {
+            for (configuration, terminals) in configurations.iter().zip(connections) {
+                if configuration.as_str() == Some("WYE")
+                    && terminals
+                        .as_array()
+                        .is_some_and(|v| v.len() == 2 || v.len() == 4)
+                    && let Some(terminal) = ints_as_strings(Some(terminals)).last()
+                {
+                    neutral.insert(terminal.clone());
+                }
+            }
+        }
+    }
+    (!neutral.is_empty()).then(|| serde_json::json!({"neutral": neutral}))
+}
+
 impl Reader<'_> {
     fn document(&mut self, doc: &Map<String, Value>) {
+        if let Some(roles) = inferred_terminal_roles(doc) {
+            self.net
+                .extras_mut()
+                .insert("bmopf_terminal_conventions".into(), roles);
+        }
         if let Some(name) = doc.get("name").and_then(Value::as_str) {
             *self.net.name_mut() = Some(name.to_string());
         }
@@ -487,33 +546,50 @@ impl Reader<'_> {
                 extras.insert("xg".into(), o.get("xg").cloned().unwrap_or(Value::Null));
             }
             stash_status(o, &mut extras, &format!("bus {id}"), &mut self.diagnostics);
-            // `vm_lb`/`vm_ub` are per-terminal vectors in the ENGINEERING
-            // voltage unit (volts over `voltage_scale_factor`); the model's
-            // scalar bound takes the uniform value, the same collapse the
-            // BMOPF reader applies to its per-terminal arrays.
-            let bound = |key: &str,
-                         diagnostics: &mut crate::diagnostics::Diagnostics|
-             -> Option<f64> {
-                let vals = floats(key, o.get(key))?;
-                let first = vals.first().copied()?;
-                if vals.iter().any(|v| v.to_bits() != first.to_bits()) {
-                    diagnostics.push(&C::READ_PMD_VALUE_COLLAPSED, format!(
-                        "bus {id}: `{key}` is non-uniform across terminals; collapsed to the first entry"
-                    ));
-                }
-                Some(first * 1e3)
-            };
-            let v_min = bound("vm_lb", &mut self.diagnostics);
-            let v_max = bound("vm_ub", &mut self.diagnostics);
-            self.net.buses_mut().push(DistBus {
+            let mut bus = DistBus {
                 id: id.clone(),
                 terminals: ints_as_strings(o.get("terminals")),
                 grounded: ints_as_strings(o.get("grounded")),
-                v_min,
-                v_max,
                 extras,
                 ..DistBus::default()
-            });
+            };
+            let indices = bus.phase_indices(self.net.extras().get("bmopf_terminal_conventions"));
+            let bound = |key: &str| -> (Option<f64>, Option<Vec<f64>>) {
+                let Some(values) = floats(key, o.get(key)) else {
+                    return (None, None);
+                };
+                let phase_values: Option<Vec<_>> = indices
+                    .iter()
+                    .map(|&i| values.get(i).map(|v| v * 1e3))
+                    .collect();
+                let Some(phase_values) = phase_values else {
+                    return (None, None);
+                };
+                if let Some(&first) = phase_values.first()
+                    && phase_values.iter().all(|&v| v.to_bits() == first.to_bits())
+                {
+                    (Some(first), None)
+                } else {
+                    (None, Some(phase_values))
+                }
+            };
+            (bus.v_min, bus.v_min_phase) = bound("vm_lb");
+            (bus.v_max, bus.v_max_phase) = bound("vm_ub");
+            for (key, default) in [("vm_lb", serde_json::json!(0.0)), ("vm_ub", Value::Null)] {
+                if let Some(value) = o.get(key) {
+                    let needs_retention = value.as_array().is_none_or(|values| {
+                        values.len() != bus.terminals.len()
+                            || values
+                                .iter()
+                                .enumerate()
+                                .any(|(i, v)| !indices.contains(&i) && *v != default)
+                    });
+                    if needs_retention {
+                        bus.extras.insert(format!("pmd_{key}"), value.clone());
+                    }
+                }
+            }
+            self.net.buses_mut().push(bus);
         }
     }
 

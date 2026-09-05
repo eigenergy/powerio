@@ -2,6 +2,19 @@
 
 ## 0.11.0
 
+- Preserve three-phase generator counts in OpenDSS conversion, including BMOPF
+  inputs whose phase maps omit a neutral. Keep legacy MCP root environment
+  aliases compatible with PowerMCP.
+
+- Identify BMOPF 0.2.0 as a pinned proposal, expose explicit legacy/proposal
+  emission profiles and report semantic version, dimension and reference errors.
+- Preserve unequal phase-voltage bounds through IR and conversion, and retain
+  n-winding ratings, taps, neutral impedances and current limits. Legacy output
+  relocates proposed-only subtypes with diagnostics.
+- Reject unsupported transformer equations before multiconductor admittance
+  assembly; the unreleased ABI 7 bus views and Julia binding expose per-phase bounds.
+
+
 PowerIO 0.11 is the stabilization release of the API developed through the
 0.10 beta. Four operations move data: `parse`, `emit`, `serialize`, and
 `deserialize`. `PioModule<T>` holds the value, its diagnostics, sources,

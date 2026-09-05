@@ -23,7 +23,7 @@ impl MemoryEmission {
     }
 }
 
-fn unpack_memory_emission(
+pub(crate) fn unpack_memory_emission(
     result: powerio_core::EmitResult,
     primary_name: Option<&str>,
 ) -> anyhow::Result<MemoryEmission> {

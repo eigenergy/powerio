@@ -13,7 +13,7 @@ import pytest
 from powerio.mcp import sandbox
 
 DATA = Path(__file__).resolve().parents[2] / "tests" / "data"
-ENV_NAMES = ("POWERIO_MCP_ALLOWED_ROOTS",)
+ENV_NAMES = ("POWERIO_MCP_ALLOWED_ROOTS", "POWERIO_MCP_ROOT", "POWERIO_MCP_ALLOWED_ROOT")
 
 
 @pytest.fixture(autouse=True)
@@ -322,3 +322,17 @@ def test_staged_directory_write_rolls_back_a_failed_swap(monkeypatch, tmp_path):
     assert not [
         path for path in tmp_path.iterdir() if path.name.startswith(".dataset.")
     ]
+
+
+@pytest.mark.parametrize("name", ("POWERIO_MCP_ROOT", "POWERIO_MCP_ALLOWED_ROOT"))
+def test_compatibility_root_settings_keep_containment(name, monkeypatch, tmp_path):
+    for key in ("POWERIO_MCP_ALLOWED_ROOTS", "POWERIO_MCP_ROOT", "POWERIO_MCP_ALLOWED_ROOT"):
+        monkeypatch.delenv(key, raising=False)
+    inside = tmp_path / "inside"
+    inside.mkdir()
+    monkeypatch.setenv(name, str(inside))
+    assert sandbox.allowed_roots() == (inside,)
+    with pytest.raises(sandbox.PathNotAllowed):
+        sandbox.checked_path(str(tmp_path / "outside.txt"))
+    monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(tmp_path))
+    assert sandbox.allowed_roots() == (tmp_path,)

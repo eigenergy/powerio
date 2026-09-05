@@ -7,10 +7,10 @@ use serde::{Deserialize, Serialize};
 /// A schema version fixes which element classes exist and where they live.
 /// `0.1.0` declares the ten element classes and four transformer subtypes the
 /// task force accepts today, sets `additionalProperties: false` on every
-/// object, and offers one free form `extras` object; the classes outside it
+/// object, and permits free-form `extras` and `meta.provenance`; the classes outside it
 /// travel there. `0.2.0` declares those classes at the top level and gives the
 /// transformer taps, winding neutral impedance, and no load admittance their
-/// own slots, so nothing travels.
+/// own slots. Unsupported malformed records still require diagnostics.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
@@ -31,6 +31,14 @@ const SCHEMA_ID_010: &str = "https://raw.githubusercontent.com/distribution-syst
 /// The `$id` of schema 0.2.0.
 const SCHEMA_ID_020: &str = "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.2.0/bmopf.schema.json";
 
+/// Immutable revision of the proposed BMOPF 0.2.0 schema.
+pub const BMOPF_PROPOSAL_COMMIT: &str = "2560b3bb9cdfee89321e02a12c320c9fb6519af0";
+/// SHA-256 of the exact UTF-8 schema document at the pinned revision.
+pub const BMOPF_PROPOSAL_SHA256: &str =
+    "7f8ab08476b610d7bc9ecf3539d209b3bc212e8472bc38987afedc1163d71bce";
+/// Immutable retrieval location, distinct from the schema's canonical `$id`.
+pub const BMOPF_PROPOSAL_URL: &str = "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/2560b3bb9cdfee89321e02a12c320c9fb6519af0/schema/bmopf/0.2.0/bmopf.schema.json";
+
 impl BmopfProfile {
     /// The schema version string, as `meta.schema_version` states it.
     #[must_use]
@@ -41,12 +49,21 @@ impl BmopfProfile {
         }
     }
 
-    /// The `$id` of the schema document, as `meta.$schema` states it.
+    /// The canonical `$id` of the schema document, independent of retrieval revision.
     #[must_use]
     pub const fn schema_id(self) -> &'static str {
         match self {
             Self::Bmopf010 => SCHEMA_ID_010,
             Self::Bmopf020 => SCHEMA_ID_020,
+        }
+    }
+
+    /// Retrieval URL for fresh output. Proposal output pins an immutable commit.
+    #[must_use]
+    pub const fn retrieval_url(self) -> &'static str {
+        match self {
+            Self::Bmopf010 => SCHEMA_ID_010,
+            Self::Bmopf020 => BMOPF_PROPOSAL_URL,
         }
     }
 

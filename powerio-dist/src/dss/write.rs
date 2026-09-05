@@ -949,8 +949,8 @@ impl DssWriter {
             );
         }
         for (field, present) in [
-            ("v_min", b.v_min.is_some()),
-            ("v_max", b.v_max.is_some()),
+            ("v_min", b.v_min.is_some() || b.v_min_phase.is_some()),
+            ("v_max", b.v_max.is_some() || b.v_max_phase.is_some()),
             ("vpn_min", b.vpn_min.is_some()),
             ("vpn_max", b.vpn_max.is_some()),
             ("vpp_min", b.vpp_min.is_some()),
@@ -2225,13 +2225,32 @@ impl DssWriter {
         for g in net.generators() {
             self.check_name("generator", &g.name);
             let node_map = self.return_last("generator", &g.name, &g.bus, &g.terminal_map);
-            let phases = self.element_phases(
-                &g.extras,
-                &g.terminal_map,
-                g.configuration,
-                "generator",
-                &g.name,
-            );
+            let phases = extras_usize(&g.extras, "phases")
+                .or_else(|| {
+                    let count = [
+                        Some(g.p_nom.as_slice()),
+                        g.p_min.as_deref(),
+                        g.p_max.as_deref(),
+                        g.q_min.as_deref(),
+                        g.q_max.as_deref(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .map(<[f64]>::len)
+                    .max()
+                    .unwrap_or(0);
+                    (count > 0).then_some(count)
+                })
+                .unwrap_or_else(|| {
+                    self.element_phases(
+                        &g.extras,
+                        &g.terminal_map,
+                        g.configuration,
+                        "generator",
+                        &g.name,
+                    )
+                })
+                .max(1);
             let conn = self.element_conn(&g.extras, g.configuration, &g.bus, &g.terminal_map);
             let nconds = nconds_for(conn, phases);
             self.warn_map_arity("generator", &g.name, g.terminal_map.len(), nconds);

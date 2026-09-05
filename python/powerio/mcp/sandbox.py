@@ -10,8 +10,9 @@ at all, can apply the same rules. Use :func:`checked_path` for one file,
 :func:`staged_file_write` for a file writer, and
 :func:`staged_directory_write` for a directory writer.
 
-When the variable is unset or empty, the policy is off and every path is
-allowed.
+When the primary variable is unset or empty, `POWERIO_MCP_ROOT` and then
+`POWERIO_MCP_ALLOWED_ROOT` provide the allowed roots. The first nonempty value
+wins. With none configured, every path is allowed.
 
     >>> from powerio.mcp.sandbox import checked_path
     >>> checked_path("case9.m", purpose="path")            # doctest: +SKIP
@@ -33,8 +34,12 @@ from urllib.parse import unquote, urlparse
 ALLOWED_ROOTS_ENV = "POWERIO_MCP_ALLOWED_ROOTS"
 """Primary variable: an ``os.pathsep`` separated list of allowed roots."""
 
+LEGACY_ROOT_ENVS = ("POWERIO_MCP_ROOT", "POWERIO_MCP_ALLOWED_ROOT")
+"""Compatibility spellings, read in order when the primary is unset."""
+
 __all__ = [
     "ALLOWED_ROOTS_ENV",
+    "LEGACY_ROOT_ENVS",
     "PathNotAllowed",
     "admitting_root",
     "allowed_roots",
@@ -58,7 +63,8 @@ class PathNotAllowed(ValueError):
 
 def allowed_roots() -> tuple[Path, ...]:
     """Roots the policy confines paths to, empty when the policy is off."""
-    raw = os.environ.get(ALLOWED_ROOTS_ENV) or ""
+    raw = next((os.environ[name] for name in (ALLOWED_ROOTS_ENV, *LEGACY_ROOT_ENVS)
+                if os.environ.get(name)), "")
     if not raw:
         return ()
     roots = []

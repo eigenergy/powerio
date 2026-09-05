@@ -63,6 +63,12 @@ pub struct DistBus {
     /// bound is always 0).
     pub v_min: Option<f64>,
     pub v_max: Option<f64>,
+    /// Nonuniform phase-to-ground bounds in phase-terminal order, volts.
+    /// A scalar bound, when present, takes precedence over this vector.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub v_min_phase: Option<Vec<f64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub v_max_phase: Option<Vec<f64>>,
     pub vpn_min: Option<Vec<f64>>,
     pub vpn_max: Option<Vec<f64>>,
     pub vpp_min: Option<Vec<f64>>,
@@ -84,6 +90,36 @@ pub struct DistBus {
 }
 
 impl DistBus {
+    /// Phase positions in terminal order, using explicit BMOPF roles when supplied.
+    #[must_use]
+    pub fn phase_indices(&self, conventions: Option<&serde_json::Value>) -> Vec<usize> {
+        let numeric_four = self.terminals.len() == 4
+            && ["1", "2", "3", "4"]
+                .iter()
+                .all(|t| self.terminals.iter().any(|v| v == t));
+        self.terminals
+            .iter()
+            .enumerate()
+            .filter_map(|(index, terminal)| {
+                let nonphase = if let Some(roles) = conventions {
+                    ["neutral", "earth"].iter().any(|role| {
+                        roles
+                            .get(role)
+                            .and_then(serde_json::Value::as_array)
+                            .is_some_and(|names| {
+                                names
+                                    .iter()
+                                    .any(|name| name.as_str() == Some(terminal.as_str()))
+                            })
+                    })
+                } else {
+                    terminal.eq_ignore_ascii_case("n") || (numeric_four && terminal == "4")
+                };
+                (!nonphase).then_some(index)
+            })
+            .collect()
+    }
+
     #[must_use]
     pub fn new(id: impl Into<String>, terminals: Vec<String>) -> Self {
         Self {
@@ -92,6 +128,8 @@ impl DistBus {
             grounded: Vec::new(),
             v_min: None,
             v_max: None,
+            v_min_phase: None,
+            v_max_phase: None,
             vpn_min: None,
             vpn_max: None,
             vpp_min: None,

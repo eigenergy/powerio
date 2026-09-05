@@ -508,6 +508,12 @@ enum FormatArg {
     /// IEEE BMOPF JSON distribution case (parse and emit).
     #[value(name = "bmopf-json", alias = "bmopf")]
     BmopfJson,
+    /// Re-encode against the legacy BMOPF 0.1.0 profile.
+    #[value(name = "bmopf-json@0.1.0")]
+    Bmopf010,
+    /// Re-encode against the pinned BMOPF 0.2.0 proposal.
+    #[value(name = "bmopf-json@0.2.0")]
+    Bmopf020,
 }
 
 impl FormatArg {
@@ -545,7 +551,9 @@ impl FormatArg {
             | FormatArg::IeeeCdf
             | FormatArg::Dss
             | FormatArg::PmdJson
-            | FormatArg::BmopfJson => return None,
+            | FormatArg::BmopfJson
+            | FormatArg::Bmopf010
+            | FormatArg::Bmopf020 => return None,
         })
     }
 
@@ -558,7 +566,9 @@ impl FormatArg {
         match self {
             FormatArg::Dss => Some(DistTargetFormat::Dss),
             FormatArg::PmdJson => Some(DistTargetFormat::PmdJson),
-            FormatArg::BmopfJson => Some(DistTargetFormat::BmopfJson),
+            FormatArg::BmopfJson | FormatArg::Bmopf010 | FormatArg::Bmopf020 => {
+                Some(DistTargetFormat::BmopfJson)
+            }
             FormatArg::Matpower
             | FormatArg::PowerModelsJson
             | FormatArg::EgretJson
@@ -614,6 +624,8 @@ impl FormatArg {
             FormatArg::Dss => "dss",
             FormatArg::PmdJson => "pmd-json",
             FormatArg::BmopfJson => "bmopf-json",
+            FormatArg::Bmopf010 => "bmopf-json@0.1.0",
+            FormatArg::Bmopf020 => "bmopf-json@0.2.0",
         }
     }
 
@@ -2060,8 +2072,13 @@ fn convert_multiconductor_module(
             to.name()
         )
     })?;
-    let emission = module_io::emit_multiconductor_module(module, target)
-        .with_context(|| format!("emitting {}", target.name()))?;
+    let emission = if matches!(to, FormatArg::Bmopf010 | FormatArg::Bmopf020) {
+        let result = powerio::emit(module, to.name(), powerio::Destination::memory("output")?)?;
+        module_io::unpack_memory_emission(result, None)?
+    } else {
+        module_io::emit_multiconductor_module(module, target)
+            .with_context(|| format!("emitting {}", target.name()))?
+    };
     finish_memory_emission(module.diagnostics(), &emission, output)
 }
 

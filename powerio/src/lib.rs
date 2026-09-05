@@ -143,7 +143,10 @@ pub type Result<T> = std::result::Result<T, powerio_core::Error>;
 /// overlap with balanced network types. Common unambiguous records are also
 /// available at the facade root.
 pub use powerio_dist as dist;
-pub use powerio_dist::{ConductorMatrix, DistGeoMeta, DistGraphEdgeKind, MulticonductorNetwork};
+pub use powerio_dist::{
+    BmopfEmitOptions, BmopfProfile, ConductorMatrix, DistGeoMeta, DistGraphEdgeKind,
+    MulticonductorNetwork,
+};
 
 pub use powerio_prob::solution::{SocwrOpfDuals, SocwrOpfSolution, SocwrOpfValues};
 /// The balanced calculation types used by solver consumers. The full problem
