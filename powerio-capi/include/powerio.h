@@ -4105,8 +4105,8 @@ PioUpdateReport *pio_apply_updates(PioModule *module,
 /**
  * Replace aggregate active demand at one bus using the named allocation rule.
  *
- * The view invalidation and exclusivity contract of `pio_apply_updates`
- * applies.
+ * The same view invalidation and exclusivity rules as `pio_apply_updates`
+ * apply.
  */
 PioUpdateReport *pio_apply_bus_load_active_power(PioModule *module,
                                                  size_t bus_id,

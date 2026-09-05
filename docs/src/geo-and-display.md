@@ -10,15 +10,19 @@ records, headerless buscoords CSV, and a PowerWorld `.pwd` display all parse
 to it, and a `.pwd` lifts into a diagram space layer with substation targets.
 
 ```rust,ignore
-let module = powerio::parse("layer.geo.json")?;
-let powerio::PioValue::GeoLayer(layer) = module.value() else {
-    panic!("a layer document parses to powerio.GeoLayer");
-};
+use powerio::{PioValue, emit, parse, serialize};
 
-// A layer travels through PowerIO IR and out as the canonical document.
-powerio::serialize(&module, "layer.pio.json")?;
-powerio::emit(&module, "geo-json", "layer.geo.json")?;
-# Ok::<(), Box<dyn std::error::Error>>(())
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let module = parse("layer.geo.json")?;
+    let PioValue::GeoLayer(layer) = module.value() else {
+        panic!("a layer document parses to powerio.GeoLayer");
+    };
+
+    // A layer travels through PowerIO IR and out as the canonical document.
+    serialize(&module, "layer.pio.json")?;
+    emit(&module, "geo-json", "layer.geo.json")?;
+    Ok(())
+}
 ```
 
 `PwdDisplay` remains available for the raw display record: the canvas, the

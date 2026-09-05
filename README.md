@@ -34,17 +34,21 @@ cargo install powerio-cli         # the powerio command
 Rust:
 
 ```rust,ignore
-let module = powerio::parse("case9.m")?;
-let powerio::PioValue::BalancedNetwork(network) = module.value() else {
-    panic!("expected a balanced network");
-};
-assert_eq!(network.buses().len(), 9);
-powerio::emit(&module, "matpower", "copy.m")?;   // the source bytes, unchanged
-let result = powerio::emit(&module, "psse", "case9.raw")?;
-for finding in result.diagnostics() {
-    eprintln!("{}", finding.code());                // what PSS/E cannot carry
+use powerio::{PioValue, emit, parse};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let module = parse("case9.m")?;
+    let PioValue::BalancedNetwork(network) = module.value() else {
+        panic!("expected a balanced network");
+    };
+    assert_eq!(network.buses().len(), 9);
+    emit(&module, "matpower", "copy.m")?;   // the source bytes, unchanged
+    let result = emit(&module, "psse", "case9.raw")?;
+    for finding in result.diagnostics() {
+        eprintln!("{}", finding.code());    // what PSS/E cannot carry
+    }
+    Ok(())
 }
-# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 Python:

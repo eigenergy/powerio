@@ -23,7 +23,6 @@ let module = powerio::parse_with_options(
     &powerio::ParseOptions::default().format("matpower")?,
 )?;
 let module = powerio::parse(powerio::Source::from_memory("case9.m", bytes)?)?;
-# Ok::<(), powerio::Error>(())
 ```
 
 | 0.10 | 0.11 |
@@ -91,7 +90,6 @@ callable `diagnostics()` operation.
 
 ```rust,ignore
 powerio::emit(&module, "matpower", "copy.m")?;
-# Ok::<(), powerio::Error>(())
 ```
 
 ```python

@@ -40,23 +40,28 @@ cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,prob
 
 ## Parse, inspect, emit
 
-Rust:
+Rust. The example is a complete program: `parse`, `emit`, and the `PioValue`
+enum are the only names it imports, and `?` hands any failure to `main`.
 
 ```rust,ignore
-let module = powerio::parse("case9.m")?;
-let powerio::PioValue::BalancedNetwork(network) = module.value() else {
-    panic!("expected a balanced network");
-};
-println!("{} buses", network.buses().len());
-for finding in module.diagnostics() {
-    eprintln!("{}: {}", finding.code(), finding.message());
+use powerio::{PioValue, emit, parse};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let module = parse("case9.m")?;
+    let PioValue::BalancedNetwork(network) = module.value() else {
+        panic!("expected a balanced network");
+    };
+    println!("{} buses", network.buses().len());
+    for finding in module.diagnostics() {
+        eprintln!("{}: {}", finding.code(), finding.message());
+    }
+    emit(&module, "matpower", "copy.m")?;      // the source bytes, unchanged
+    let result = emit(&module, "psse", "case9.raw")?;
+    for finding in result.diagnostics() {
+        eprintln!("{}", finding.code());       // what PSS/E cannot carry
+    }
+    Ok(())
 }
-powerio::emit(&module, "matpower", "copy.m")?;      // the source bytes, unchanged
-let result = powerio::emit(&module, "psse", "case9.raw")?;
-for finding in result.diagnostics() {
-    eprintln!("{}", finding.code());                   // what PSS/E cannot carry
-}
-# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 Python:

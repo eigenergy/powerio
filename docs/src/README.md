@@ -7,14 +7,18 @@ solvers consume. The Rust crates are the implementation; the Python package,
 the same operations under the same names.
 
 ```rust,ignore
-let module = powerio::parse("case9.m")?;         // PioModule<PioValue>
-match module.value() {
-    powerio::PioValue::BalancedNetwork(network) => {
-        println!("{} buses", network.buses().len());
+use powerio::{PioValue, parse};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let module = parse("case9.m")?;         // PioModule<PioValue>
+    match module.value() {
+        PioValue::BalancedNetwork(network) => {
+            println!("{} buses", network.buses().len());
+        }
+        other => println!("{}", other.type_name()),
     }
-    other => println!("{}", other.type_name()),
+    Ok(())
 }
-# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 ```python

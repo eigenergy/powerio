@@ -15,10 +15,14 @@ here explicitly.
 The crate stays matrix free: sparse operators over these instances belong to `powerio-matrix`, and the ordinary way in is the `powerio` facade's one parse.
 
 ```rust,ignore
-let module = powerio::parse("scenario_002.json")?;
-let powerio::PioValue::AcScucInstance(instance) = module.value() else {
-    panic!("expected an AC SCUC instance");
-};
-assert_eq!(instance.inputs().interval_durations().len(), 24);
-# Ok::<(), Box<dyn std::error::Error>>(())
+use powerio::{PioValue, parse};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let module = parse("scenario_002.json")?;
+    let PioValue::AcScucInstance(instance) = module.value() else {
+        panic!("expected an AC SCUC instance");
+    };
+    assert_eq!(instance.inputs().interval_durations().len(), 24);
+    Ok(())
+}
 ```
