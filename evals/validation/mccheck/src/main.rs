@@ -21,7 +21,11 @@ fn main() {
         .nth(1)
         .expect("usage: powerio-eval-mccheck <deck.dss>");
     let module = powerio_dist::parse(Source::open(&path).unwrap()).unwrap();
-    let net = module.value();
+    let mut passive = module.value().clone();
+    let excluded_transformers = passive.transformers().len();
+    // Transformer buses are excluded by the oracle; this projection checks passive stamps only.
+    passive.transformers_mut().clear();
+    let net = &passive;
     let y = calc_multiconductor_admittance_matrix(net).unwrap();
     let idx = y.index();
     let nodes: Vec<String> = idx
@@ -65,7 +69,7 @@ fn main() {
         .map(|d| format!("{:?}", d.message()))
         .collect();
     println!(
-        "{{\"nodes\": {:?}, \"resolution\": [{}], \"entries\": [{}], \"diagnostics\": [{}], \"constraint_labels\": {:?} }}",
+        "{{\"scope\": \"passive_components\", \"excluded_transformers\": {excluded_transformers}, \"nodes\": {:?}, \"resolution\": [{}], \"entries\": [{}], \"diagnostics\": [{}], \"constraint_labels\": {:?} }}",
         nodes,
         resolution.join(","),
         entries.join(","),

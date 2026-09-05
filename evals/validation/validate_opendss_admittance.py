@@ -2,15 +2,14 @@
 OpenDSS's own element primitive admittances (CktElement.YPrim), the
 authoritative per element matrix OpenDSS itself stamps from.
 
-Only the passive classes powerio stamps into G + jB are assembled here: Line
-(non switch), Capacitor, Reactor. A transformer, a voltage source, and every
-other active or controlled element enter powerio's system as an augmented
-constraint row over the node voltages, not as a fabricated admittance, so
-their buses are excluded from this comparison by element rather than folded
-in and hoped to cancel. powerio's own node resolution (from the
-`powerio-eval-mccheck` helper, evals/validation/mccheck/) folds closed switch
-merges before the comparison, so the two sides already agree on which
-terminals share one electrical node.
+Only the passive classes PowerIO stamps into G + jB are assembled here: Line
+(non switch), Capacitor and Reactor. The helper explicitly removes transformers
+from its local copy before building this passive projection. Transformer buses,
+voltage-source buses and every other active or controlled element's buses are
+excluded on both sides. This comparison does not establish transformer physics
+support. The separate core-shunt comparison checks the proposed winding-local
+admittances against OpenDSS. PowerIO's node resolution folds closed switch merges
+before comparison, so both sides use the same electrical nodes.
 
 Caveat that motivated building this leg on YPrim instead of the more obvious
 YMatrix.getYsparse() (OpenDSS's assembled system Y, "SystemY"): on
@@ -108,10 +107,14 @@ def pio(deck: Path):
             "MCCHECK must point at the built powerio-eval-mccheck binary "
             "(cargo build --release --manifest-path evals/validation/mccheck/Cargo.toml)"
         )
-    out = subprocess.run(
-        [MCCHECK_BIN, str(deck)], capture_output=True, text=True, check=True
-    ).stdout
-    d = json.loads(out)
+    result = subprocess.run(
+        [MCCHECK_BIN, str(deck)], capture_output=True, text=True, check=False
+    )
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip() or "passive admittance helper failed")
+    d = json.loads(result.stdout)
+    if d.get("scope") != "passive_components":
+        raise RuntimeError("admittance helper did not declare its passive projection")
     n = len(d["nodes"])
     Y = np.zeros((n, n), dtype=complex)
     for r, c, re, im in d["entries"]:
