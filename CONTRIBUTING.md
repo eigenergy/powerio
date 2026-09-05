@@ -47,12 +47,18 @@ The release version lives in `[workspace.package]` and the workspace dependency
 pins in `[workspace.dependencies]`. Update them together; the next Cargo command
 updates `Cargo.lock`. Then:
 
-1. Merge the bump with a `CHANGELOG.md` section headed exactly `## X.Y.Z`,
-   tag the commit `vX.Y.Z`, and push the tag. The release-binaries workflow
+1. Merge the bump with a `CHANGELOG.md` section headed exactly `## X.Y.Z`
+   and wait for main CI. Complete the paired PowerIO.jl review first: its
+   version, changelog, and ready release intent must identify this release,
+   and the intent digest must match the final Julia tree. Follow
+   [PowerIO.jl's release procedure](https://github.com/eigenergy/PowerIO.jl/blob/main/CONTRIBUTING.md#releasing).
+2. Create an annotated `vX.Y.Z` tag on the tested main commit and push it.
+   The release-binaries workflow
    checks the tag against the workspace version and that heading, builds the
    C ABI tarballs, and stages a draft GitHub release whose body is that
    section.
-2. Publish the draft release. The release event fires the PyPI publish
+3. Inspect the draft and its five binary assets, then publish the release.
+   The release event fires the PyPI publish
    (python.yml) and the crates.io publish (crates.yml: powerio-core,
    powerio-tx, powerio-dist, powerio-prob, powerio-matrix, powerio, and
    powerio-cli, in dependency order). Both deploy through reviewer protected
@@ -60,9 +66,13 @@ updates `Cargo.lock`. Then:
    settings). PyPI skips files it already has and crates.io skips versions
    already in the index, so if one of them fails partway you recover by
    running it again.
-3. Follow up in PowerIO.jl: regenerate Artifacts.toml from the new tag and
-   register the new version (see its CONTRIBUTING.md). A breaking C ABI change
-   bumps `PIO_ABI_VERSION` first; see "C ABI changes" above.
+4. Check PowerIO.jl's "Update artifacts" workflow. After publication it
+   validates the release against the ready intent, tests the new library,
+   updates only `Artifacts.toml`, and dispatches registration for the tested
+   commit. The daily schedule retries if repository dispatch is unavailable.
+   Check its reported reason if the update is parked; the Julia contributing
+   guide gives recovery commands. A breaking C ABI change bumps
+   `PIO_ABI_VERSION` first; see "C ABI changes" above.
 
 ## Naming
 

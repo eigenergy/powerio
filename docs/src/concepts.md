@@ -22,7 +22,7 @@ PioModule<T>
 ```
 
 In Rust you reach the value through `module.value()` and the diagnostics
-through the `diagnostics` field. Python and Julia expose both as properties,
+through `module.diagnostics()`. Python and Julia expose both as properties,
 `value` and `diagnostics`, and C exposes borrowed accessors because its values
 are opaque. Diagnostics belong to the module rather than to the network or
 solution inside it.

@@ -21,6 +21,12 @@ on:
 permissions:
   contents: read
 
+# A moved, unpublished tag supersedes its previous build. Keep one run per
+# ref so its assets cannot race another run for the same draft release.
+concurrency:
+  group: release-binaries-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -262,6 +268,22 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Verify the tag still names this build
+        shell: bash
+        env:
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          # Annotated tags resolve through ^{}; lightweight tags name the
+          # commit directly. A missing or moved tag must attach no assets.
+          refs="$(git ls-remote --tags origin "$RELEASE_REF" "${RELEASE_REF}^{}")"
+          tag_sha="$(printf '%s\n' "$refs" | awk '$2 !~ /\^\{\}$/ { print $1 }')"
+          peeled_sha="$(printf '%s\n' "$refs" | awk '$2 ~ /\^\{\}$/ { print $1 }')"
+          current_sha="${peeled_sha:-$tag_sha}"
+          if [ "$current_sha" != "$RELEASE_SHA" ]; then
+            echo "::error::Release tag moved or disappeared while this build ran."
+            exit 1
+          fi
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: libpowerio_capi.*

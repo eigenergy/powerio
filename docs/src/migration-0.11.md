@@ -70,7 +70,9 @@ These 0.10 names are removed:
 
 `PioModule<T>` contains the typed value and its diagnostics, producer, sources,
 source mappings, history, and extensions. Rust, Python, and Julia expose
-`value` and `diagnostics` as fields or properties.
+these members using their usual language conventions: Rust has accessor
+methods such as `value()` and `diagnostics()`, and Python and Julia have
+properties such as `.value` and `.diagnostics`.
 
 In Rust, dynamic parsing returns `PioModule<PioValue>`, so match on
 `module.value()` directly. In Python, use
