@@ -253,6 +253,69 @@ fn defaults_materialize_with_provenance() {
 }
 
 #[test]
+fn transformer_xscarray_preserves_every_pair_after_mutation() {
+    for (count, array) in [(2, "8"), (3, "8 9 6"), (4, "8 9 10 6 7 4")] {
+        let source = format!(
+            "New Circuit.test basekv=115\nNew Transformer.t phases=3 windings={count} xscarray=[{array}]"
+        );
+        let mut parsed = parse_dss_str(&source);
+        let expected: Vec<f64> = array
+            .split_whitespace()
+            .map(|v| v.parse().unwrap())
+            .collect();
+        assert_eq!(parsed.transformers()[0].xsc_pct, expected);
+        assert!(!parsed.transformers()[0].extras.contains_key("xscarray"));
+        parsed.transformers_mut()[0].xsc_pct[0] = 11.0;
+        let emitted = emit_dss(&parsed);
+        let restored = parse_dss_str(&emitted.text);
+        let mut changed = expected;
+        changed[0] = 11.0;
+        assert_eq!(restored.transformers()[0].xsc_pct, changed);
+    }
+}
+
+#[test]
+fn transformer_reactances_follow_opendss_edit_boundaries() {
+    let cases = [
+        ("windings=3 xscarray=[8 9 6] xhl=11", vec![11.0, 35.0, 30.0]),
+        ("windings=3 xhl=11 xscarray=[8 9 6]", vec![11.0, 35.0, 30.0]),
+        (
+            "windings=3 xhl=11\nEdit Transformer.t xscarray=[8 9 6]",
+            vec![8.0, 9.0, 6.0],
+        ),
+        (
+            "windings=3 xscarray=[8 9 6]\nEdit Transformer.t xhl=11",
+            vec![11.0, 35.0, 30.0],
+        ),
+        (
+            "windings=4 xscarray=[8 9 10 6 7 4]\nEdit Transformer.t xhl=11",
+            vec![8.0, 9.0, 10.0, 6.0, 7.0, 4.0],
+        ),
+        ("windings=4", vec![7.0, 30.0, 30.0, 30.0, 30.0, 30.0]),
+        ("windings=3", vec![7.0, 30.0, 30.0]),
+        (
+            "windings=4 xscarray=[8 9 10 6 7 4] windings=3",
+            vec![8.0, 9.0, 10.0],
+        ),
+    ];
+    for (properties, expected) in cases {
+        let parsed = parse_dss_str(&format!("New Circuit.test\nNew Transformer.t {properties}"));
+        assert_eq!(parsed.transformers()[0].xsc_pct, expected, "{properties}");
+    }
+}
+
+#[test]
+fn transformer_xscarray_wrong_dimensions_report_defaulting() {
+    let parsed = parse_dss_str("New Circuit.test\nNew Transformer.t windings=4 xscarray=[8 8 8]");
+    assert!(
+        parsed
+            .diagnostics
+            .iter()
+            .any(|d| d.message().contains("xscarray has 3 values; expected 6"))
+    );
+}
+
+#[test]
 fn micro_transformers_type_correctly() {
     let net = parse("micro/xfmr_center_tap.dss");
     let t = net.transformers().iter().find(|t| t.name == "t1").unwrap();

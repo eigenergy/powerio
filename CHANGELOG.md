@@ -2,6 +2,9 @@
 
 ## 0.11.0
 
+- Preserve every OpenDSS `Xscarray` winding-pair reactance through the typed
+  model, generation-2 IR, BMOPF and regenerated OpenDSS, including edits.
+
 - Preserve physical transformer exciting-branch locations with the pinned
   proposal's explicit per-coil `no_load_shunt`. Correct magnetizing signs,
   WYE/DELTA voltage bases and fixed-tap scaling; retain PMD no-load percentages.

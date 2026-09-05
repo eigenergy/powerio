@@ -783,7 +783,8 @@ pub struct DistTransformer {
     pub name: String,
     pub windings: Vec<DistWinding>,
     /// Short circuit reactances between winding pairs, percent:
-    /// `[xhl]` for two windings, `[xhl, xht, xlt]` for three.
+    /// Upper-triangular order `12, 13, ..., 1n, 23, ..., (n-1)n`,
+    /// on winding 1's power base, matching OpenDSS `Xscarray`.
     pub xsc_pct: Vec<f64>,
     pub phases: usize,
     pub extras: Extras,

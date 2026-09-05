@@ -168,7 +168,7 @@ as two secondary windings.
 | `g_no_load`, `b_no_load` | `extras` | The magnetising branch has no typed slot. |
 | `i_max_from`, `i_max_to` | `extras` | Per winding conductor of that side, in that side's own amperes. |
 | `n_winding.windings[]` | one `DistWinding` each | `bus`, `terminal_map`, `v_nom`, `configuration`, `r_winding`, `delta_roll`, `i_max`. |
-| `n_winding.x_sc` | `xsc_pct`, in `[xhl, xht, xlt]` order | Keyed `i_j` with `i < j` in BMOPF, all referred to winding 1. |
+| `n_winding.x_sc` | `xsc_pct`, ordered `12, 13, ..., 1n, 23, ..., (n-1)n` | Keyed `i_j` with `i < j` in BMOPF, all referred to winding 1. |
 | `single_phase_autotransformer`, `open_delta_regulator` | windings plus `extras["bmopf_subtype"]` | The regulator ratio, its bounds, the ANSI type and the open delta connection ride in `extras`. |
 
 Under schema `0.1.0`, the nine fields that have no subtype slot (`tap`,
@@ -177,6 +177,10 @@ fields) are written to `extras.transformer.<subtype>.<name>` and folded back
 on read, with each move reported under `EMIT.BMOPF.RETAINED_SOURCE_ONLY`.
 Under `0.2.0` the subtypes declare all nine, so nothing moves; only the three
 tap names change, to `tap_ratio`, `tap_ratio_min`, and `tap_ratio_max`.
+
+OpenDSS `Xscarray` populates every winding-pair reactance in this order.
+The reader applies scalar `XHL`/`XHT`/`XLT` updates at edit boundaries;
+regenerated four-or-more-winding records use the complete `Xscarray`.
 
 ## ibr and control_profile
 
@@ -287,17 +291,19 @@ against the specification pages of
 [`math-and-data-model-specifications`](https://github.com/distribution-system-opt/math-and-data-model-specifications)
 rather than inferred from the data.
 
-BMOPFTools.jl is the Task Force toolchain that generated `example_ieee13.json`,
-which lists it in `meta.case_study_generator`. The toolchain is not published
-in the `distribution-system-opt` organization, so the comparison that closed
-issue #414 asked for (against its admittance stamps, constraint activation,
-objective terms, conductor order, and regulator behaviour) is not made here.
-What is checked is the data it writes: the matrix spelling its writer uses,
-with only one triangle filled in, reads back with the mirrored cells filled,
-and the regulator subtypes it adds to the schema read and write as
-`transformer.single_phase_autotransformer` and
-`transformer.open_delta_regulator`. Comparing the numbers a solve produces
-would need the toolchain itself.
+[BMOPFTools.jl](https://github.com/frederikgeth/BMOPFTools.jl) is publicly
+available and is identified as the generator of `example_ieee13.json`.
+The [PowerIO 0.11 compatibility change](https://github.com/frederikgeth/BMOPFTools.jl/pull/385)
+exercises the typed module API, explicit legacy profile, retained diagnostics,
+transformer core-shunt locations and nominal n-winding imports. Its numerical
+suite compares power-flow voltages and transformer admittance with OpenDSS,
+including independently prepared BMOPF cases and native OpenDSS conversions.
+
+PowerIO's structural tests additionally check triangular matrix completion,
+conductor order, regulator fields, proposal provenance and rejected malformed
+records. These checks distinguish data preservation from the equations a
+particular solver supports; retaining a regulator or n-winding record does not
+imply that PowerIO's own matrix compiler implements it.
 
 ## Explicit terminal-coil no-load admittance
 

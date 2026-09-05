@@ -1505,20 +1505,12 @@ impl DssWriter {
             winding_array(&mut s, &mut edits, "kvs", "kv", &kvs);
             winding_array(&mut s, &mut edits, "kvas", "kva", &kvas);
             let _ = write!(s, " %Rs=({}) taps=({})", rs.join(", "), taps.join(", "));
-            if let Some(xhl) = t.xsc_pct.first() {
-                let _ = write!(s, " xhl={}", num(*xhl));
-                if t.xsc_pct.len() >= 3 {
-                    let xlt = self.star_xlt(t);
-                    let _ = write!(s, " xht={} xlt={}", num(t.xsc_pct[1]), num(xlt));
-                }
-            } else {
-                self.warn(
-                    &C::EMIT_DSS_VALUE_DEFAULTED,
-                    format!("transformer {}: xsc_pct is empty; emitted xhl=0", t.name),
-                );
-                s.push_str(" xhl=0");
-            }
+            self.transformer_reactances(t, &mut s);
             let mut extras = t.extras.clone();
+            // Typed reactances determine output after an IR load or mutation.
+            if nw > 3 && t.xsc_pct.len() == nw * (nw - 1) / 2 {
+                extras.remove("xscarray");
+            }
             if let Some((loss, imag)) = crate::model::transformer_no_load_percentages(t) {
                 extras.remove("no_load_shunt");
                 extras.insert("%noloadloss".into(), serde_json::json!(loss));
@@ -1541,6 +1533,34 @@ impl DssWriter {
             }
         }
         self.out.push('\n');
+    }
+
+    /// Emit the complete pair table for four or more windings.
+    fn transformer_reactances(&mut self, t: &DistTransformer, output: &mut String) {
+        let nw = t.windings.len();
+        if nw > 3 {
+            let expected = nw * (nw - 1) / 2;
+            if t.xsc_pct.len() != expected {
+                self.warn(
+                    &C::EMIT_DSS_VALUE_DEFAULTED,
+                    format!("transformer {}: xsc_pct has {} values; expected {expected}; OpenDSS defaults apply to absent pairs", t.name, t.xsc_pct.len()),
+                );
+            }
+            let values: Vec<_> = t.xsc_pct.iter().map(|x| num(*x)).collect();
+            let _ = write!(output, " xscarray=({})", values.join(", "));
+        } else if let Some(xhl) = t.xsc_pct.first() {
+            let _ = write!(output, " xhl={}", num(*xhl));
+            if t.xsc_pct.len() >= 3 {
+                let xlt = self.star_xlt(t);
+                let _ = write!(output, " xht={} xlt={}", num(t.xsc_pct[1]), num(xlt));
+            }
+        } else {
+            self.warn(
+                &C::EMIT_DSS_VALUE_DEFAULTED,
+                format!("transformer {}: xsc_pct is empty; emitted xhl=0", t.name),
+            );
+            output.push_str(" xhl=0");
+        }
     }
 
     /// The `xlt=` value for a three winding record. dss cannot solve a star
