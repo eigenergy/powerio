@@ -18,6 +18,12 @@ parser has produced a syntactically valid `DistLine`. Applications should
 call the audit before numerical lowering or solving and stop when
 `is_ready()` is false.
 
+The regression contract explicitly covers **all five** deferred geometry
+properties. A future geometry-lowering implementation should change the
+corresponding readiness behavior deliberately and update these tests and the
+scope documentation together; a parser accepting one of these properties is
+not evidence that numerical impedance data exists.
+
 This is intentionally a non-breaking safety boundary. It does not attempt to
 implement Carson's equations, infer conductor count from `phases`, or replace
 geometry-derived impedance with OpenDSS `Line` factory defaults. Explicit
