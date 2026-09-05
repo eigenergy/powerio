@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
-pub enum BmopfProfile {
+pub enum BmopfSchemaVersion {
     /// Schema 0.1.0, the version the task force accepts.
     Bmopf010,
     /// Schema 0.2.0, the proposal in
@@ -32,14 +32,14 @@ const SCHEMA_ID_010: &str = "https://raw.githubusercontent.com/distribution-syst
 const SCHEMA_ID_020: &str = "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.2.0/bmopf.schema.json";
 
 /// Immutable revision of the proposed BMOPF 0.2.0 schema.
-pub const BMOPF_PROPOSAL_COMMIT: &str = "5e692902329b06342913b1a57c546a5fae51b2f1";
+pub const BMOPF_PROPOSAL_COMMIT: &str = "fe8671a74d2fc1a15a499c5b1f66cbb80fc22e12";
 /// SHA-256 of the exact UTF-8 schema document at the pinned revision.
 pub const BMOPF_PROPOSAL_SHA256: &str =
-    "e08521ca45c5406194019c31e0389ba070545b4b720bfbefa2947f5446b581fa";
+    "74d6c6de3637d52e42a26c4cb0584f51df70d69f360b236cf5e23afaf7669462";
 /// Immutable retrieval location, distinct from the schema's canonical `$id`.
-pub const BMOPF_PROPOSAL_URL: &str = "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/5e692902329b06342913b1a57c546a5fae51b2f1/schema/bmopf/0.2.0/bmopf.schema.json";
+pub const BMOPF_PROPOSAL_URL: &str = "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/fe8671a74d2fc1a15a499c5b1f66cbb80fc22e12/schema/bmopf/0.2.0/bmopf.schema.json";
 
-impl BmopfProfile {
+impl BmopfSchemaVersion {
     /// The schema version string, as `meta.schema_version` states it.
     #[must_use]
     pub const fn version(self) -> &'static str {
@@ -95,15 +95,15 @@ mod tests {
 
     #[test]
     fn the_default_output_version_is_the_one_that_states_every_class() {
-        assert_eq!(BmopfProfile::default(), BmopfProfile::Bmopf020);
-        assert_eq!(BmopfProfile::default().version(), "0.2.0");
+        assert_eq!(BmopfSchemaVersion::default(), BmopfSchemaVersion::Bmopf020);
+        assert_eq!(BmopfSchemaVersion::default().version(), "0.2.0");
     }
 
     #[test]
     fn a_version_resolves_from_its_own_schema_id() {
-        for expected in [BmopfProfile::Bmopf010, BmopfProfile::Bmopf020] {
+        for expected in [BmopfSchemaVersion::Bmopf010, BmopfSchemaVersion::Bmopf020] {
             assert_eq!(
-                BmopfProfile::from_schema_id(expected.schema_id()),
+                BmopfSchemaVersion::from_schema_id(expected.schema_id()),
                 Some(expected)
             );
         }
@@ -117,8 +117,8 @@ mod tests {
             "https://raw.githubusercontent.com/frederikgeth/bmopf-report/main/draft_schema_and_networks/draft_bmopf_schema.json",
         ] {
             assert_eq!(
-                BmopfProfile::from_schema_id(id),
-                Some(BmopfProfile::Bmopf010),
+                BmopfSchemaVersion::from_schema_id(id),
+                Some(BmopfSchemaVersion::Bmopf010),
                 "{id}"
             );
         }
@@ -126,9 +126,9 @@ mod tests {
 
     #[test]
     fn a_schema_location_naming_no_version_resolves_to_none() {
-        assert_eq!(BmopfProfile::from_schema_id(""), None);
+        assert_eq!(BmopfSchemaVersion::from_schema_id(""), None);
         assert_eq!(
-            BmopfProfile::from_schema_id("https://example.org/bmopf/schema/v1/bmopf.json"),
+            BmopfSchemaVersion::from_schema_id("https://example.org/bmopf/schema/v1/bmopf.json"),
             None
         );
     }
@@ -136,8 +136,10 @@ mod tests {
     #[test]
     fn a_version_resolves_from_a_relocated_schema_of_the_same_version() {
         assert_eq!(
-            BmopfProfile::from_schema_id("file:///cases/schema/bmopf/0.2.0/bmopf.schema.json"),
-            Some(BmopfProfile::Bmopf020)
+            BmopfSchemaVersion::from_schema_id(
+                "file:///cases/schema/bmopf/0.2.0/bmopf.schema.json"
+            ),
+            Some(BmopfSchemaVersion::Bmopf020)
         );
     }
 }

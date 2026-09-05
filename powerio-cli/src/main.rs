@@ -508,10 +508,10 @@ enum FormatArg {
     /// IEEE BMOPF JSON distribution case (parse and emit).
     #[value(name = "bmopf-json", alias = "bmopf")]
     BmopfJson,
-    /// Re-encode against the legacy BMOPF 0.1.0 profile.
+    /// Re-encode against the BMOPF 0.1.0 schema.
     #[value(name = "bmopf-json@0.1.0")]
     Bmopf010,
-    /// Re-encode against the pinned BMOPF 0.2.0 proposal.
+    /// Re-encode against draft BMOPF 0.2.
     #[value(name = "bmopf-json@0.2.0")]
     Bmopf020,
 }

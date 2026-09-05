@@ -393,3 +393,29 @@ def test_parse_confines_includes_to_the_case_directory(tmp_path):
         for diagnostic in confined.diagnostics
     )
     assert "include_root" not in inspect.signature(powerio.parse).parameters
+
+
+def test_source_energy_prices_and_draft_schema_digest_survive_ir():
+    import hashlib
+
+    document = {
+        "meta": {"schema_version": "0.2.0"},
+        "bus": {"b": {"terminal_names": ["a", "n"]}},
+        "voltage_source": {"s": {
+            "bus": "b", "terminal_map": ["a", "n"],
+            "v_magnitude": [230, 0], "v_angle": [0, 0],
+            "energy_cost_rate": [0.1],
+        }},
+    }
+    module = powerio.parse(io.StringIO(json.dumps(document)), format="bmopf-json")
+    restored = _parse_module(_emit_module(module))
+    assert restored.value.voltage_sources[0]["energy_cost_rate"] == [0.1]
+    output = json.loads(powerio.emit(restored, "bmopf-json@0.2.0").text)
+    provenance = output["meta"]["provenance"]["powerio_bmopf"]
+    schema = (DATA / "bmopf" / "bmopf-0.2.0.schema.json").read_bytes()
+    assert provenance["schema_sha256"] == hashlib.sha256(schema).hexdigest()
+    assert provenance["schema_status"] == "proposal"
+    assert provenance["schema_commit"] in output["meta"]["$schema"]
+    legacy = json.loads(powerio.emit(restored, "bmopf-json@0.1.0").text)
+    assert "energy_cost_rate" not in legacy["voltage_source"]["s"]
+    assert legacy["extras"]["voltage_source"]["s"]["energy_cost_rate"] == [0.1]

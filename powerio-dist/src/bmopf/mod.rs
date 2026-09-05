@@ -9,7 +9,7 @@
 //!
 //! # Two schema versions
 //!
-//! [`BmopfProfile`] names the version. Schema 0.1.0 is what the task force
+//! [`BmopfSchemaVersion`] names the version. Schema 0.1.0 is what the task force
 //! accepts: ten element classes and four transformer subtypes. Schema 0.2.0
 //! is the proposal that declares the classes 0.1.0 has no table for, and
 //! gives the transformer taps, winding neutral impedance, and no load
@@ -104,7 +104,9 @@ mod profile;
 pub(crate) mod read;
 mod write;
 
-pub use profile::{BMOPF_PROPOSAL_COMMIT, BMOPF_PROPOSAL_SHA256, BMOPF_PROPOSAL_URL, BmopfProfile};
+pub use profile::{
+    BMOPF_PROPOSAL_COMMIT, BMOPF_PROPOSAL_SHA256, BMOPF_PROPOSAL_URL, BmopfSchemaVersion,
+};
 pub(crate) use write::emit_bmopf_json_text_with_options;
 pub use write::{BMOPF_SCHEMA_ID, BMOPF_SCHEMA_VERSION, BmopfEmitOptions};
 

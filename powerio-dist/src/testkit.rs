@@ -38,6 +38,7 @@ impl Parsed {
             target,
             &crate::convert::EmitOptions::default(),
         )
+        .expect("fixture supports the requested conversion")
     }
 
     /// Write from the typed value, bypassing the echo tier.

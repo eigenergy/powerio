@@ -10,7 +10,7 @@ repository. `0.1.0` is the version the IEEE PES Task Force on Benchmarking
 Multiconductor OPF accepts, and `0.2.0` is the proposal that adds the element
 classes 0.1.0 has no table for. PowerIO reads both and writes `0.2.0` by
 default; to write `0.1.0`, pass
-`BmopfEmitOptions::with_profile(BmopfProfile::Bmopf010)`.
+`BmopfEmitOptions::with_schema_version(BmopfSchemaVersion::Bmopf010)`.
 
 ## Conventions
 
@@ -36,8 +36,8 @@ parameter field is zero. A field with no typed slot lands in the element's
 | BMOPF | PowerIO | Note |
 | --- | --- | --- |
 | `name` | `PioModule` value name | |
-| `meta.$schema` | resolved by `BmopfProfile::from_schema_id` | Absent raises `READ.BMOPF.SCHEMA_ABSENT`; a value naming no version raises `READ.BMOPF.SCHEMA_UNKNOWN`. Both parse, and both versions are accepted. |
-| `meta.schema_version` | explicit profile identity | The reader checks agreement with `meta.$schema`. Fresh proposal output pins a retrieval URL and records proposal status and schema digest in provenance. |
+| `meta.$schema` | resolved by `BmopfSchemaVersion::from_schema_id` | Absent raises `READ.BMOPF.SCHEMA_ABSENT`; a value naming no version raises `READ.BMOPF.SCHEMA_UNKNOWN`. Both parse, and both versions are accepted. |
+| `meta.schema_version` | explicit schema version | The reader checks agreement with `meta.$schema`. Fresh proposal output pins a retrieval URL and records proposal status and schema digest in provenance. |
 | `meta.frequency` | `MulticonductorNetwork::base_frequency`, Hz | Absent defaults to 60 with `READ.BMOPF.VALUE_DEFAULTED`. |
 | `meta.*` (the rest) | `MulticonductorNetwork::extras["bmopf_meta"]` | Re-emitted, except the three the writer owns. |
 | `terminal_conventions` | `MulticonductorNetwork::extras["bmopf_terminal_conventions"]` | Re-emitted verbatim; authored from the terminal names when the source states none. |
@@ -294,7 +294,7 @@ rather than inferred from the data.
 [BMOPFTools.jl](https://github.com/frederikgeth/BMOPFTools.jl) is publicly
 available and is identified as the generator of `example_ieee13.json`.
 The [PowerIO 0.11 compatibility change](https://github.com/frederikgeth/BMOPFTools.jl/pull/385)
-exercises the typed module API, explicit legacy profile, retained diagnostics,
+exercises the typed module API, explicit legacy schema version, retained diagnostics,
 transformer core-shunt locations and nominal n-winding imports. Its numerical
 suite compares power-flow voltages and transformer admittance with OpenDSS,
 including independently prepared BMOPF cases and native OpenDSS conversions.

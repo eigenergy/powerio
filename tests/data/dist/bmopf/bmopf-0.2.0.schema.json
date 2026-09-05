@@ -347,7 +347,8 @@
             "items": {
               "type": "number"
             },
-            "description": "Linear active-power cost [$/kWh] of each phase conductor of the source, one entry per phase conductor in `terminal_map` order. The source is not special in the objective: a positive injection is an import, so a positive entry is the import price and an export is credited at the same price. A scalar is rejected. Absent, the source carries no objective term."
+            "description": "Linear active-power cost [$/kWh] of each phase conductor of the source, one entry per phase conductor in `terminal_map` order. The source is not special in the objective: a positive injection is an import, so a positive entry is the import price and an export is credited at the same price. A scalar is rejected. Absent, the source carries no objective term. Legacy spelling accepted for compatibility with earlier drafts. Fresh output uses energy_cost_rate.",
+            "deprecated": true
           },
           "p_min": {
             "type": "array",
@@ -362,6 +363,13 @@
               "type": "number"
             },
             "description": "Maximum active power [W] delivered by each phase conductor of the source, one entry per phase conductor in `terminal_map` order."
+          },
+          "energy_cost_rate": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Energy cost rate [$/kWh], one entry per phase conductor in terminal_map order. Neutral terminals have no price entry."
           }
         },
         "required": [
@@ -615,7 +623,8 @@
             "items": {
               "type": "number"
             },
-            "description": "Linear active-power generating cost [$/kWh] of each phase conductor, one entry per phase conductor in `terminal_map` order. A scalar is rejected."
+            "description": "Linear active-power generating cost [$/kWh] of each phase conductor, one entry per phase conductor in `terminal_map` order. A scalar is rejected. Legacy spelling accepted for compatibility with earlier drafts. Fresh output uses energy_cost_rate.",
+            "deprecated": true
           },
           "bus": {
             "$ref": "#/$defs/bus_type"
@@ -628,13 +637,35 @@
           },
           "time_series": {
             "$ref": "#/$defs/time_series_ref"
+          },
+          "energy_cost_rate": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Energy cost rate [$/kWh], one entry per phase conductor in terminal_map order. Neutral terminals have no price entry."
           }
         },
         "required": [
-          "cost",
           "bus",
           "configuration",
           "terminal_map"
+        ],
+        "allOf": [
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "energy_cost_rate"
+                ]
+              },
+              {
+                "required": [
+                  "cost"
+                ]
+              }
+            ]
+          }
         ]
       }
     },
@@ -991,7 +1022,8 @@
             "items": {
               "type": "number"
             },
-            "description": "Linear active-power dispatch cost [$/kWh] of each phase conductor, one entry per phase conductor in `terminal_map` order. The objective sums this rate against the active power the phase injects into the network, so a positive entry minimises injection and a negative entry maximises it. A scalar is rejected."
+            "description": "Linear active-power dispatch cost [$/kWh] of each phase conductor, one entry per phase conductor in `terminal_map` order. The objective sums this rate against the active power the phase injects into the network, so a positive entry minimises injection and a negative entry maximises it. A scalar is rejected. Legacy spelling accepted for compatibility with earlier drafts. Fresh output uses energy_cost_rate.",
+            "deprecated": true
           },
           "control_profile": {
             "type": "string",
@@ -1007,6 +1039,13 @@
           },
           "time_series": {
             "$ref": "#/$defs/time_series_ref"
+          },
+          "energy_cost_rate": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Energy cost rate [$/kWh], one entry per phase conductor in terminal_map order. Neutral terminals have no price entry."
           }
         },
         "required": [

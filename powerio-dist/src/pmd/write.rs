@@ -34,6 +34,19 @@ pub(crate) fn emit_pmd_json_text(net: &MulticonductorNetwork) -> TextEmission {
         warnings: crate::diagnostics::Diagnostics::new(),
         renamed_terminals: renamed_terminals(net),
     };
+    for source in net
+        .sources()
+        .iter()
+        .filter(|source| source.energy_cost_rate.is_some())
+    {
+        w.warn(
+            &C::EMIT_PMD_FIELD_DROPPED,
+            format!(
+                "voltage source {}: energy_cost_rate has no target field",
+                source.name
+            ),
+        );
+    }
     let doc = w.document(net);
     TextEmission::new(
         serde_json::to_string_pretty(&doc).expect("maps and finite numbers") + "\n",

@@ -1580,6 +1580,9 @@ pub struct PioVoltageSourceView {
     pub terminal_map_count: usize,
     pub voltage_magnitude_v: PioF64View,
     pub voltage_angle_rad: PioF64View,
+    /// Dollars/kWh in phase order, excluding neutral terminals.
+    pub energy_cost_rate_per_kwh: PioF64View,
+    pub has_energy_cost_rate: bool,
 }
 
 /// One source object retained without a typed PowerIO representation.
@@ -13810,6 +13813,10 @@ pub unsafe extern "C" fn pio_multiconductor_network_voltage_source_at(
                 terminal_map_count: source.terminal_map.len(),
                 voltage_magnitude_v: PioF64View::new(&source.v_magnitude),
                 voltage_angle_rad: PioF64View::new(&source.v_angle),
+                energy_cost_rate_per_kwh: PioF64View::new(
+                    source.energy_cost_rate.as_deref().unwrap_or(&[]),
+                ),
+                has_energy_cost_rate: source.energy_cost_rate.is_some(),
             };
             Ok(true)
         })
@@ -16429,6 +16436,7 @@ mod tests {
             vec![240.0],
             vec![0.0],
         ));
+        network.sources_mut()[0].energy_cost_rate = Some(vec![0.125]);
         network
             .untyped_objects_mut()
             .push(powerio_dist::UntypedObject::new(
@@ -17054,7 +17062,11 @@ mod tests {
                 source.as_mut_ptr(),
                 &mut error,
             ));
-            assert_eq!(*source.assume_init().voltage_magnitude_v.data, 240.0);
+            let source = source.assume_init();
+            assert_eq!(*source.voltage_magnitude_v.data, 240.0);
+            assert!(source.has_energy_cost_rate);
+            assert_eq!(source.energy_cost_rate_per_kwh.len, 1);
+            assert_eq!(*source.energy_cost_rate_per_kwh.data, 0.125);
 
             let mut object = std::mem::MaybeUninit::<PioMulticonductorUntypedObjectView>::uninit();
             assert!(pio_multiconductor_network_untyped_object_at(

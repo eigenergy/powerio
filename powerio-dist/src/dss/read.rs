@@ -844,6 +844,7 @@ impl Reader<'_> {
             terminal_map: map,
             v_magnitude,
             v_angle,
+            energy_cost_rate: None,
             extras,
         }
     }
@@ -855,6 +856,19 @@ impl Reader<'_> {
     #[expect(clippy::too_many_lines)]
     fn line(&mut self, obj: &RawObject) {
         let props = Props::new(obj);
+        if crate::readiness::DEFERRED_GEOMETRY_KEYS
+            .iter()
+            .any(|key| props.by_name.contains_key(*key))
+        {
+            self.warn(&C::READ_DSS_GEOMETRY_UNRESOLVED, format!(
+                "line {}: geometry-derived conductor impedances are unresolved; the complete source object is retained without a synthetic linecode or terminal map",
+                obj.name
+            ));
+            self.net
+                .untyped_objects_mut()
+                .push(UntypedObject::from(obj));
+            return;
+        }
         // `linecode=` assigns the line's phase count from the code
         // (Line.cpp FetchLineCode) exactly like `phases=`; properties
         // apply in order, so the later of the two wins. Bus node lists

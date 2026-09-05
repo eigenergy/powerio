@@ -61,7 +61,7 @@ pub mod readiness;
 #[cfg(test)]
 pub(crate) mod testkit;
 
-pub use bmopf::{BMOPF_SCHEMA_ID, BMOPF_SCHEMA_VERSION, BmopfEmitOptions, BmopfProfile};
+pub use bmopf::{BMOPF_SCHEMA_ID, BMOPF_SCHEMA_VERSION, BmopfEmitOptions, BmopfSchemaVersion};
 pub use convert::{
     DistTargetFormat, EmitOptions, classify_distribution_json, emit, emit_with_options, parse,
     parse_dist_target_format,
@@ -83,5 +83,6 @@ pub use model::{
     UntypedObject, VoltVarControl, VoltWattControl, VoltageSource, find_unresolved_references,
 };
 pub use readiness::{
-    audit_electrical_readiness, ElectricalReadiness, ReadinessFinding, ReadinessSeverity,
+    ElectricalReadiness, ReadinessFinding, ReadinessSeverity, audit_electrical_readiness,
+    require_electrical_readiness,
 };

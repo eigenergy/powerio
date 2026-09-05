@@ -935,6 +935,7 @@ impl Reader<'_> {
                     .iter()
                     .map(|a| a.to_radians())
                     .collect(),
+                energy_cost_rate: None,
                 extras,
             });
         }

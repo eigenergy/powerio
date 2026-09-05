@@ -54,15 +54,15 @@ Multiconductor admittance matrices build directly from the multiconductor
 network through `powerio_matrix::calc_multiconductor_admittance_matrix`,
 which is Rust only in 0.11.
 
-## BMOPF proposal profiles
+## BMOPF schema versions
 
-PowerIO v0.11.0 supports a pinned BMOPF 0.2.0 **proposal**, subject to Task Force
+PowerIO v0.11.0 supports **draft BMOPF 0.2**, subject to Task Force
 review. The schema version is separate from the PowerIO release and from
 PowerIO IR generation 2. Producer provenance records the proposal revision and
 schema digest. Previously emitted schema identifiers remain readable aliases.
 
 An unqualified `bmopf-json` emission preserves an unchanged source byte for
-byte. An explicit profile always re-encodes the selected version:
+byte. An explicit schema version always re-encodes the selected version:
 
 ```sh
 powerio convert feeder.json --to bmopf-json@0.1.0 -o legacy.json
@@ -71,7 +71,7 @@ powerio convert feeder.json --to bmopf-json@0.2.0 -o proposal.json
 
 The same format strings work with Rust `powerio::emit`, Python `powerio.emit`,
 C `pio_emit`, Julia `emit` and the PowerIO MCP emission tool. Rust also exposes
-`BmopfProfile` and `BmopfEmitOptions` for the distribution writer.
+`BmopfSchemaVersion` and `BmopfEmitOptions` for the distribution writer.
 
 Legacy output relocates proposed-only equipment and transformer fields into
 `extras`, with diagnostics. A consumer that ignores those extensions cannot be
@@ -98,10 +98,23 @@ transformer coupling and rejects leakage, other winding connections, floating
 neutrals, core shunts or tap decisions that need a different formulation.
 
 The BMOPF proposal schema is pinned to
-[`5e69290`](https://github.com/distribution-system-opt/dsopt-schema/commit/5e692902329b06342913b1a57c546a5fae51b2f1),
-with SHA-256 `e08521ca45c5406194019c31e0389ba070545b4b720bfbefa2947f5446b581fa`.
+[`fe8671a`](https://github.com/distribution-system-opt/dsopt-schema/commit/fe8671a74d2fc1a15a499c5b1f66cbb80fc22e12),
+with SHA-256 `74d6c6de3637d52e42a26c4cb0584f51df70d69f360b236cf5e23afaf7669462`.
 Fresh 0.2.0 output places the immutable retrieval URL in `meta.$schema` and
 records the canonical identity, proposal status, digest and revision under
 `meta.provenance.powerio_bmopf`. Existing provenance is preserved; a name
 collision uses a numbered producer entry. Reading the former canonical or
 version-directory identifiers remains supported without fetching remote data.
+
+### Energy prices
+
+Draft BMOPF 0.2 uses `energy_cost_rate` in $/kWh. Generator entries follow phase
+order, as do voltage-source entries. Neutral terminals have no price entry. PowerIO retains source prices in `VoltageSource.energy_cost_rate` and
+in generation-2 IR. C and Julia expose `energy_cost_rate_per_kwh`; Python's
+voltage-source records expose `energy_cost_rate`.
+
+The reader also accepts the deprecated per-phase `cost` spelling. Explicit
+0.1.0 output keeps generator `cost` and relocates source prices to
+`extras.voltage_source`, with a diagnostic. Only a consumer that reads that
+overlay can use the retained source prices. PowerIO stores the coefficients;
+the selected solver determines whether and how they enter its objective.

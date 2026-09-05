@@ -336,6 +336,7 @@ impl Stamper {
 pub fn calc_multiconductor_admittance_matrix(
     network: &MulticonductorNetwork,
 ) -> Result<MulticonductorAdmittance> {
+    powerio_dist::require_electrical_readiness(network)?;
     let index = MulticonductorNodeIndex::build(network)?;
     for transformer in network.transformers() {
         let supported = transformer.windings.len() == 2

@@ -11,7 +11,7 @@ use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use serde_json::{Map, Value, json};
 
-use super::BmopfProfile;
+use super::BmopfSchemaVersion;
 use crate::convert::TextEmission;
 use crate::diagnostics::codes as C;
 use crate::diagnostics::{Diagnostic, DiagnosticInfo};
@@ -25,13 +25,13 @@ use crate::model::{
 };
 
 /// Canonical identity of the default schema. Fresh proposal output uses
-/// [`BmopfProfile::retrieval_url`] in `meta.$schema`.
-pub const BMOPF_SCHEMA_ID: &str = BmopfProfile::Bmopf020.schema_id();
+/// [`BmopfSchemaVersion::retrieval_url`] in `meta.$schema`.
+pub const BMOPF_SCHEMA_ID: &str = BmopfSchemaVersion::Bmopf020.schema_id();
 
 /// The version of the schema the writer targets by default, and the value it
 /// stamps into `meta.schema_version`. It is
-/// [`BmopfProfile::default`]`().version()`.
-pub const BMOPF_SCHEMA_VERSION: &str = BmopfProfile::Bmopf020.version();
+/// [`BmopfSchemaVersion::default`]`().version()`.
+pub const BMOPF_SCHEMA_VERSION: &str = BmopfSchemaVersion::Bmopf020.version();
 
 /// Untyped classes that belong to the BMOPF ecosystem. Schema 0.1.0 has no
 /// top-level table for them (`additionalProperties: false` plus the free form
@@ -80,6 +80,7 @@ const IBR_EXTRA_FIELDS: &[&str] = &[
     "grid_forming",
     "v_ref_internal",
     "cost",
+    "energy_cost_rate",
     "time_series",
 ];
 
@@ -163,12 +164,12 @@ fn regulator_allowed_extras() -> Vec<&'static str> {
 pub struct BmopfEmitOptions {
     /// The schema version to write against.
     ///
-    /// The default is [`BmopfProfile::Bmopf020`], the version that states
+    /// The default is [`BmopfSchemaVersion::Bmopf020`], the version that states
     /// every class the model carries, so output relocates nothing. Set
-    /// [`BmopfProfile::Bmopf010`] to write the version the task force
+    /// [`BmopfSchemaVersion::Bmopf010`] to write the version the task force
     /// accepts, which moves the classes it has no table for under `extras`
     /// and reports each move.
-    pub profile: BmopfProfile,
+    pub schema_version: BmopfSchemaVersion,
     /// Emit the BMOPFTools coordinate sideload fields on buses.
     ///
     /// The default stays schema strict because the BMOPF schema rejects these
@@ -179,8 +180,8 @@ pub struct BmopfEmitOptions {
 impl BmopfEmitOptions {
     /// The options with the schema version replaced.
     #[must_use]
-    pub const fn with_profile(mut self, profile: BmopfProfile) -> Self {
-        self.profile = profile;
+    pub const fn with_schema_version(mut self, schema_version: BmopfSchemaVersion) -> Self {
+        self.schema_version = schema_version;
         self
     }
 }
@@ -374,14 +375,14 @@ impl Writer {
         let mut m = Map::new();
         m.insert(
             "$schema".into(),
-            json!(self.options.profile.retrieval_url()),
+            json!(self.options.schema_version.retrieval_url()),
         );
         // Schema 0.1.0 has no `schema_version` field, and its `meta` rejects
         // what it does not declare, so only 0.2.0 states the version twice.
-        if self.options.profile == BmopfProfile::Bmopf020 {
+        if self.options.schema_version == BmopfSchemaVersion::Bmopf020 {
             m.insert(
                 "schema_version".into(),
-                json!(self.options.profile.version()),
+                json!(self.options.schema_version.version()),
             );
         }
         m.insert(
@@ -411,7 +412,7 @@ impl Writer {
                 }
             }
         }
-        if self.options.profile == BmopfProfile::Bmopf020 {
+        if self.options.schema_version == BmopfSchemaVersion::Bmopf020 {
             proposal_provenance(&mut m);
         }
         Value::Object(m)
@@ -448,12 +449,12 @@ impl Writer {
         if let Some(Value::Object(stash)) = net.extras().get(BMOPF_EXTRAS_STASH) {
             extras.extend(stash.clone());
         }
-        match self.options.profile {
-            BmopfProfile::Bmopf010 => {
+        match self.options.schema_version {
+            BmopfSchemaVersion::Bmopf010 => {
                 self.control_profiles(net, &mut extras);
                 self.ibrs(net, &mut extras);
             }
-            BmopfProfile::Bmopf020 => {
+            BmopfSchemaVersion::Bmopf020 => {
                 self.control_profiles(net, &mut doc);
                 self.ibrs(net, &mut doc);
             }
@@ -463,11 +464,57 @@ impl Writer {
             let overflow = std::mem::take(&mut self.transformer_overflow);
             extras.insert("transformer".into(), Value::Object(overflow));
         }
+        self.cost_version(&mut doc, &mut extras);
         if !extras.is_empty() {
             doc.insert("extras".into(), Value::Object(extras));
         }
         self.warn_unemitted_untyped(net);
         Value::Object(doc)
+    }
+
+    fn cost_version(&mut self, doc: &mut Map<String, Value>, extras: &mut Map<String, Value>) {
+        for class in ["generator", "ibr", "voltage_source"] {
+            let Some(table) = doc.get_mut(class).and_then(Value::as_object_mut) else {
+                continue;
+            };
+            for (name, value) in table {
+                let Some(record) = value.as_object_mut() else {
+                    continue;
+                };
+                if self.options.schema_version == BmopfSchemaVersion::Bmopf020 {
+                    if let Some(cost) = record.remove("cost") {
+                        record.entry("energy_cost_rate").or_insert(cost);
+                    }
+                } else if class == "voltage_source" {
+                    for field in ["cost", "energy_cost_rate"] {
+                        if let Some(cost) = record.remove(field) {
+                            let table = extras.entry(class).or_insert_with(|| json!({}));
+                            if !table.is_object() {
+                                self.warn(
+                                    &C::EMIT_BMOPF_FIELD_DROPPED,
+                                    "voltage-source extension is not an object",
+                                );
+                                continue;
+                            }
+                            let source = table
+                                .as_object_mut()
+                                .unwrap()
+                                .entry(name)
+                                .or_insert_with(|| json!({}));
+                            if !source.is_object() {
+                                self.warn(
+                                    &C::EMIT_BMOPF_FIELD_DROPPED,
+                                    "voltage-source extension record is not an object",
+                                );
+                                continue;
+                            }
+                            source.as_object_mut().unwrap().insert(field.into(), cost);
+                            self.warn(&C::EMIT_BMOPF_RETAINED_SOURCE_ONLY, format!("voltage source {name}: {field} retained in extras.voltage_source for BMOPF 0.1.0"));
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fn buses(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
@@ -776,7 +823,7 @@ impl Writer {
     /// too malformed to type still has no slot in it and keeps its raw
     /// properties under `extras`.
     fn raw_table_at_top_level(&self, class: &str) -> bool {
-        self.options.profile == BmopfProfile::Bmopf020 && class != "capacitor"
+        self.options.schema_version == BmopfSchemaVersion::Bmopf020 && class != "capacitor"
     }
 
     /// `extras` is seeded from the source document's own `extras` object, so
@@ -937,6 +984,10 @@ impl Writer {
             }
             doc.insert("shunt".into(), Value::Object(shunts));
         }
+        self.voltage_sources(net, doc);
+    }
+
+    fn voltage_sources(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
         let emitted_sources = bmopf_voltage_sources(net);
         let mut sources = Map::new();
         if emitted_sources.is_empty() {
@@ -969,6 +1020,14 @@ impl Writer {
             o.insert("bus".into(), json!(&vs.bus));
             o.insert("terminal_map".into(), json!(&vs.terminal_map));
             let mut extras = vs.extras.clone();
+            if let Some(rates) = &vs.energy_cost_rate {
+                o.insert(
+                    "energy_cost_rate".into(),
+                    self.nums(rates, "voltage source energy cost rate"),
+                );
+                extras.remove("energy_cost_rate");
+                extras.remove("cost");
+            }
             if let Some(cost) = extras.remove("cost") {
                 o.insert("cost".into(), cost);
             }
@@ -1448,7 +1507,7 @@ impl Writer {
             "b_no_load",
             "no_load_shunt",
         ];
-        if self.options.profile == BmopfProfile::Bmopf020 {
+        if self.options.schema_version == BmopfSchemaVersion::Bmopf020 {
             rename_tap_fields(by_subtype);
             return;
         }
@@ -2489,6 +2548,7 @@ struct SourceEmit {
     terminal_map: Vec<String>,
     v_magnitude: Vec<f64>,
     v_angle: Vec<f64>,
+    energy_cost_rate: Option<Vec<f64>>,
     extras: Extras,
     dropped_extras: Vec<(String, Extras)>,
 }
@@ -2501,6 +2561,7 @@ impl From<&VoltageSource> for SourceEmit {
             terminal_map: source.terminal_map.clone(),
             v_magnitude: source.v_magnitude.clone(),
             v_angle: source.v_angle.clone(),
+            energy_cost_rate: source.energy_cost_rate.clone(),
             extras: source.extras.clone(),
             dropped_extras: Vec::new(),
         }
@@ -2576,7 +2637,7 @@ fn merge_voltage_source_group(
     let mut seen = BTreeSet::new();
     for index in &sorted {
         let source = &sources[*index];
-        if source_has_bounds_or_cost(&source.extras) {
+        if source.energy_cost_rate.is_some() || source_has_bounds_or_cost(&source.extras) {
             return None;
         }
         let (rank, phase) = single_phase_source(source)?;
@@ -2635,9 +2696,16 @@ fn merge_voltage_source_group(
 }
 
 fn source_has_bounds_or_cost(extras: &Extras) -> bool {
-    ["p_min", "p_max", "q_min", "q_max", "cost"]
-        .iter()
-        .any(|key| extras.contains_key(*key))
+    [
+        "p_min",
+        "p_max",
+        "q_min",
+        "q_max",
+        "cost",
+        "energy_cost_rate",
+    ]
+    .iter()
+    .any(|key| extras.contains_key(*key))
 }
 
 fn single_phase_source(source: &SourceEmit) -> Option<(usize, PhaseSource)> {
@@ -2981,7 +3049,7 @@ fn proposal_provenance(meta: &mut Map<String, Value>) {
         "schema_status": "proposal", "schema_version": "0.2.0",
         "schema_commit": super::BMOPF_PROPOSAL_COMMIT,
         "schema_sha256": super::BMOPF_PROPOSAL_SHA256,
-        "schema_id": BmopfProfile::Bmopf020.schema_id(),
+        "schema_id": BmopfSchemaVersion::Bmopf020.schema_id(),
         "schema_retrieval_url": super::BMOPF_PROPOSAL_URL
     });
     let provenance = meta.entry("provenance").or_insert_with(|| json!({}));
@@ -3065,7 +3133,7 @@ mod tests {
         // relocates a transformer field, and only that version relocates.
         let mut w = Writer {
             options: BmopfEmitOptions {
-                profile: BmopfProfile::Bmopf010,
+                schema_version: BmopfSchemaVersion::Bmopf010,
                 ..BmopfEmitOptions::default()
             },
             warnings: crate::diagnostics::Diagnostics::new(),

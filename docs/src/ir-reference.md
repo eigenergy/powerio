@@ -870,6 +870,7 @@ Schema definition: `VoltageSource`.
 | `terminal_map` | array of string | | | terminals of `bus` | required |
 | `v_magnitude` | array of float | volts per terminal | | 0 on a grounded terminal; same length as `terminal_map` | required |
 | `v_angle` | array of float | radians per terminal | | same length as `terminal_map` | required |
+| `energy_cost_rate` | optional array of float | $/kWh | positive injection supplies the network | one entry per phase in terminal-map order; excludes neutral terminals | no stated source-price term |
 | `extras` | object | | | | required |
 
 ### UntypedObject

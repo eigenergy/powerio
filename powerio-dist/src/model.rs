@@ -819,6 +819,9 @@ pub struct VoltageSource {
     pub v_magnitude: Vec<f64>,
     /// Radians per terminal.
     pub v_angle: Vec<f64>,
+    /// Energy cost rate in $/kWh, one entry per phase in terminal-map order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub energy_cost_rate: Option<Vec<f64>>,
     pub extras: Extras,
 }
 
@@ -837,6 +840,7 @@ impl VoltageSource {
             terminal_map,
             v_magnitude,
             v_angle,
+            energy_cost_rate: None,
             extras: Extras::new(),
         }
     }

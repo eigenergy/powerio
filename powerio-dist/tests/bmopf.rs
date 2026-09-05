@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use powerio_dist::{
-    BmopfEmitOptions, BmopfProfile, Configuration, CoordinateSpace, DiagnosticSeverity,
+    BmopfEmitOptions, BmopfSchemaVersion, Configuration, CoordinateSpace, DiagnosticSeverity,
     DiagnosticStage, DistBus, DistCoordsKind, DistGeoMeta, DistLineCode, DistLocation,
     DistTransformer, DistWinding, DistWindingConn, Extras, MulticonductorNetwork, VoltageSource,
 };
@@ -61,7 +61,7 @@ fn nonuniform_phase_bounds_survive_value_serialization_and_emission() {
 fn contradictory_schema_versions_are_reported_as_errors() {
     let input = format!(
         r#"{{"meta":{{"$schema":"{}","schema_version":"0.1.0"}},"bus":{{}}}}"#,
-        BmopfProfile::Bmopf020.retrieval_url()
+        BmopfSchemaVersion::Bmopf020.retrieval_url()
     );
     let parsed = parse_bmopf_str(&input).unwrap();
     assert!(
@@ -74,10 +74,10 @@ fn contradictory_schema_versions_are_reported_as_errors() {
 }
 
 /// The validator for one vendored schema version.
-fn schema_validator_for(profile: BmopfProfile) -> jsonschema::Validator {
+fn schema_validator_for(profile: BmopfSchemaVersion) -> jsonschema::Validator {
     let file = match profile {
-        BmopfProfile::Bmopf010 => "bmopf/draft_bmopf_schema.json",
-        BmopfProfile::Bmopf020 => "bmopf/bmopf-0.2.0.schema.json",
+        BmopfSchemaVersion::Bmopf010 => "bmopf/draft_bmopf_schema.json",
+        BmopfSchemaVersion::Bmopf020 => "bmopf/bmopf-0.2.0.schema.json",
         _ => unreachable!("every schema version has a vendored document"),
     };
     let schema: serde_json::Value =
@@ -87,7 +87,7 @@ fn schema_validator_for(profile: BmopfProfile) -> jsonschema::Validator {
 
 /// The validator for the version the writer targets by default.
 fn schema_validator() -> jsonschema::Validator {
-    schema_validator_for(BmopfProfile::default())
+    schema_validator_for(BmopfSchemaVersion::default())
 }
 
 fn errors(validator: &jsonschema::Validator, text: &str) -> Vec<String> {
@@ -155,7 +155,7 @@ fn vendored_examples_validate_after_canonicalization() {
 /// mismatch.
 #[test]
 fn vendored_examples_raw_validation_is_known_and_bounded() {
-    let v = schema_validator_for(BmopfProfile::Bmopf010);
+    let v = schema_validator_for(BmopfSchemaVersion::Bmopf010);
     for example in ["bmopf/example_ieee13.json", "bmopf/example_enwl_n1_f2.json"] {
         let text = std::fs::read_to_string(fixture(example)).unwrap();
         assert_eq!(errors(&v, &text), Vec::<String>::new(), "{example}");
@@ -747,7 +747,7 @@ fn dss_fixed_generator_emits_as_bmopf_generator() {
     assert_eq!(g["p_max"], serde_json::json!([10_000.0]));
     assert_eq!(g["q_min"], serde_json::json!([2_000.0]));
     assert_eq!(g["q_max"], serde_json::json!([2_000.0]));
-    assert_eq!(g["cost"], serde_json::json!([0.0]));
+    assert_eq!(g["energy_cost_rate"], serde_json::json!([0.0]));
 }
 
 #[test]
@@ -802,7 +802,10 @@ fn fixed_bmopf_generators_with_cost_stay_generators() {
     );
     assert_eq!(doc["generator"]["g"]["p_min"], serde_json::json!([100.0]));
     assert_eq!(doc["generator"]["g"]["p_max"], serde_json::json!([100.0]));
-    assert_eq!(doc["generator"]["g"]["cost"], serde_json::json!([0.001]));
+    assert_eq!(
+        doc["generator"]["g"]["energy_cost_rate"],
+        serde_json::json!([0.001])
+    );
     let again = parse_bmopf_str(&out.text).unwrap();
     assert_model_eq(&net, &again);
 }
@@ -1004,7 +1007,7 @@ fn voltage_source_cost_round_trips_as_extra() {
 
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     assert_eq!(
-        doc["voltage_source"]["source"]["cost"],
+        doc["voltage_source"]["source"]["energy_cost_rate"],
         serde_json::json!([1.0])
     );
     assert!(
@@ -2748,7 +2751,7 @@ fn source_extras_value_that_is_not_a_table_does_not_panic() {
         let net = parse_bmopf_str(&text).unwrap();
         let out = emit_bmopf_json_with_options(
             &net,
-            BmopfEmitOptions::default().with_profile(BmopfProfile::Bmopf010),
+            BmopfEmitOptions::default().with_schema_version(BmopfSchemaVersion::Bmopf010),
         );
         assert!(
             out.warnings
@@ -2780,7 +2783,7 @@ fn source_extras_entry_replaced_by_the_top_level_table_warns() {
     let net = parse_bmopf_str(&text).unwrap();
     let out = emit_bmopf_json_with_options(
         &net,
-        BmopfEmitOptions::default().with_profile(BmopfProfile::Bmopf010),
+        BmopfEmitOptions::default().with_schema_version(BmopfSchemaVersion::Bmopf010),
     );
     assert!(
         out.warnings
@@ -3762,10 +3765,12 @@ fn regulator_banks_survive_a_dss_bmopf_dss_round_trip() {
 /// resolves that same value back to the version.
 #[test]
 fn the_written_schema_version_reads_back_as_the_version_written() {
-    for profile in [BmopfProfile::Bmopf010, BmopfProfile::Bmopf020] {
+    for profile in [BmopfSchemaVersion::Bmopf010, BmopfSchemaVersion::Bmopf020] {
         let net = parse_bmopf_file(fixture("bmopf/example_ieee13.json")).unwrap();
-        let out =
-            emit_bmopf_json_with_options(&net, BmopfEmitOptions::default().with_profile(profile));
+        let out = emit_bmopf_json_with_options(
+            &net,
+            BmopfEmitOptions::default().with_schema_version(profile),
+        );
         assert_eq!(
             errors(&schema_validator_for(profile), &out.text),
             Vec::<String>::new(),
@@ -3775,13 +3780,13 @@ fn the_written_schema_version_reads_back_as_the_version_written() {
         let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
         assert_eq!(doc["meta"]["$schema"], profile.retrieval_url());
         assert_eq!(
-            BmopfProfile::from_schema_id(doc["meta"]["$schema"].as_str().unwrap()),
+            BmopfSchemaVersion::from_schema_id(doc["meta"]["$schema"].as_str().unwrap()),
             Some(profile)
         );
         // Only 0.2.0 declares the version field, and its `meta` rejects what
         // it does not declare.
         match profile {
-            BmopfProfile::Bmopf010 => assert!(doc["meta"]["schema_version"].is_null()),
+            BmopfSchemaVersion::Bmopf010 => assert!(doc["meta"]["schema_version"].is_null()),
             _ => assert_eq!(doc["meta"]["schema_version"], profile.version()),
         }
         let reparsed = parse_bmopf_str(&out.text).unwrap();
@@ -3865,7 +3870,7 @@ fn the_tables_schema_0_1_0_relocates_stay_in_place_under_0_2_0() {
 
     let out = emit_bmopf_json_with_options(
         &net,
-        BmopfEmitOptions::default().with_profile(BmopfProfile::Bmopf010),
+        BmopfEmitOptions::default().with_schema_version(BmopfSchemaVersion::Bmopf010),
     );
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     for table in ["ibr", "time_series", "dc_bus"] {
@@ -3873,7 +3878,10 @@ fn the_tables_schema_0_1_0_relocates_stay_in_place_under_0_2_0() {
         assert!(doc[table].is_null(), "{table}: {}", out.text);
     }
     assert_eq!(
-        errors(&schema_validator_for(BmopfProfile::Bmopf010), &out.text),
+        errors(
+            &schema_validator_for(BmopfSchemaVersion::Bmopf010),
+            &out.text
+        ),
         Vec::<String>::new(),
         "{}",
         out.text
@@ -3898,13 +3906,13 @@ fn n_winding_ratings_taps_neutrals_and_limits_survive_serialization() {
     let parsed = parse_bmopf_str(&input.to_string()).unwrap();
     let restored: MulticonductorNetwork =
         serde_json::from_str(&serde_json::to_string(&*parsed).unwrap()).unwrap();
-    for profile in [BmopfProfile::Bmopf020, BmopfProfile::Bmopf010] {
+    for profile in [BmopfSchemaVersion::Bmopf020, BmopfSchemaVersion::Bmopf010] {
         let mut options = BmopfEmitOptions::default();
-        options.profile = profile;
+        options.schema_version = profile;
         let output = emit_bmopf_json_with_options(&restored, options);
         let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
         assert!(schema_validator_for(profile).is_valid(&doc), "{doc}");
-        let encoded = if profile == BmopfProfile::Bmopf020 {
+        let encoded = if profile == BmopfSchemaVersion::Bmopf020 {
             &doc["transformer"]["n_winding"]["t"]
         } else {
             &doc["extras"]["transformer"]["n_winding"]["t"]

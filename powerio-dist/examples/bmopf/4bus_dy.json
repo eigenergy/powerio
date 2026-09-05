@@ -223,7 +223,7 @@
     }
   },
   "meta": {
-    "$schema": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/5e692902329b06342913b1a57c546a5fae51b2f1/schema/bmopf/0.2.0/bmopf.schema.json",
+    "$schema": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/fe8671a74d2fc1a15a499c5b1f66cbb80fc22e12/schema/bmopf/0.2.0/bmopf.schema.json",
     "case_study_generator": {
       "tool": "powerio",
       "version": "0.11.0"
@@ -247,6 +247,26 @@
         "schema_id": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.2.0/bmopf.schema.json",
         "schema_retrieval_url": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/5e692902329b06342913b1a57c546a5fae51b2f1/schema/bmopf/0.2.0/bmopf.schema.json",
         "schema_sha256": "e08521ca45c5406194019c31e0389ba070545b4b720bfbefa2947f5446b581fa",
+        "schema_status": "proposal",
+        "schema_version": "0.2.0"
+      },
+      "powerio_bmopf_2": {
+        "producer": "powerio",
+        "producer_version": "0.11.0",
+        "schema_commit": "d83cfc9ce61a81e78c544c0561d0d418fa69a4ff",
+        "schema_id": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.2.0/bmopf.schema.json",
+        "schema_retrieval_url": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/d83cfc9ce61a81e78c544c0561d0d418fa69a4ff/schema/bmopf/0.2.0/bmopf.schema.json",
+        "schema_sha256": "15405bb43be48ce77fa6e59be67b5fee58ad10474c8db67306f837df5e9846b2",
+        "schema_status": "proposal",
+        "schema_version": "0.2.0"
+      },
+      "powerio_bmopf_3": {
+        "producer": "powerio",
+        "producer_version": "0.11.0",
+        "schema_commit": "fe8671a74d2fc1a15a499c5b1f66cbb80fc22e12",
+        "schema_id": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.2.0/bmopf.schema.json",
+        "schema_retrieval_url": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/fe8671a74d2fc1a15a499c5b1f66cbb80fc22e12/schema/bmopf/0.2.0/bmopf.schema.json",
+        "schema_sha256": "74d6c6de3637d52e42a26c4cb0584f51df70d69f360b236cf5e23afaf7669462",
         "schema_status": "proposal",
         "schema_version": "0.2.0"
       }

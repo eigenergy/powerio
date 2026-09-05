@@ -2,11 +2,17 @@
 
 ## 0.11.0
 
+- Integrate Burhan Abdullah's electrical-readiness checks (#494). Retain
+  unresolved OpenDSS geometry without fabricated line impedances; reject
+  numerical calculations and canonical conversion until impedance data exists.
+- Read draft BMOPF 0.2 `energy_cost_rate` in $/kWh, including per-phase
+  voltage-source prices, while accepting the deprecated `cost` spelling.
+  Preserve source prices through IR and typed C, Python and Julia access.
+
 - Preserve every OpenDSS `Xscarray` winding-pair reactance through the typed
   model, generation-2 IR, BMOPF and regenerated OpenDSS, including edits.
 
-- Preserve physical transformer exciting-branch locations with the pinned
-  proposal's explicit per-coil `no_load_shunt`. Correct magnetizing signs,
+- Preserve physical transformer exciting-branch locations with draft BMOPF 0.2's explicit per-coil `no_load_shunt`. Correct magnetizing signs,
   WYE/DELTA voltage bases and fixed-tap scaling; retain PMD no-load percentages.
   Six independent OpenDSS admittance comparisons cover the conversion through IR.
 
@@ -14,8 +20,7 @@
   inputs whose phase maps omit a neutral. Keep legacy MCP root environment
   aliases compatible with PowerMCP.
 
-- Identify BMOPF 0.2.0 as a pinned proposal, expose explicit legacy/proposal
-  emission profiles and report semantic version, dimension and reference errors.
+- Identify draft BMOPF 0.2 explicitly, expose schema-version selection and report semantic version, dimension and reference errors.
 - Preserve unequal phase-voltage bounds through IR and conversion, and retain
   n-winding ratings, taps, neutral impedances and current limits. Legacy output
   relocates proposed-only subtypes with diagnostics.
@@ -175,7 +180,7 @@ crates.
 - GridFM Parquet reads keep the stated branch flows and quadratic costs, and
   a GridFM to GridFM conversion has no findings. Scenario batches reject
   duplicate identifiers, differing system bases, and misaligned rows.
-- BMOPF parsing accepts schema 0.1.0 and 0.2.0, resolving the profile from
+- BMOPF parsing accepts schema 0.1.0 and draft BMOPF 0.2, resolving the schema version from
   `meta.schema_version` or `meta.$schema`; fresh output uses 0.2.0 from the
   `distribution-system-opt/dsopt-schema` repository.
 - PowerWorld PWB reading recognizes the bus and generator record families

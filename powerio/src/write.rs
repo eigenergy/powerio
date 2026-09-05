@@ -876,8 +876,8 @@ fn emit_dynamic(
 ) -> Result<EmitResult, Error> {
     if let Some(version) = format.strip_prefix("bmopf-json@") {
         let profile = match version {
-            "0.1.0" => powerio_dist::BmopfProfile::Bmopf010,
-            "0.2.0" => powerio_dist::BmopfProfile::Bmopf020,
+            "0.1.0" => powerio_dist::BmopfSchemaVersion::Bmopf010,
+            "0.2.0" => powerio_dist::BmopfSchemaVersion::Bmopf020,
             _ => return Err(unknown_format(format)),
         };
         let (network, diagnostics) = match module.value() {
@@ -905,7 +905,7 @@ fn emit_dynamic(
         };
         let typed = typed_sibling(module, network)?.sever_source();
         let mut options = powerio_dist::EmitOptions::default();
-        options.bmopf.profile = profile;
+        options.bmopf.schema_version = profile;
         return powerio_dist::emit_with_options(
             &typed,
             powerio_dist::DistTargetFormat::BmopfJson,

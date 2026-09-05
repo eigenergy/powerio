@@ -1,6 +1,6 @@
 # IEEE cases in BMOPF JSON
 
-Reference encodings of IEEE distribution test cases in the pinned BMOPF 0.2.0 proposal,
+Reference encodings of IEEE distribution test cases in draft BMOPF 0.2,
 produced by `powerio-dist`. They validate against that schema and
 exercise parsers and data profilers such as `BMOPFTools.jl`. Regenerate them
 rather than editing by hand.
@@ -9,7 +9,7 @@ rather than editing by hand.
 |---|---|---|---|
 | IEEE 34 | `tests/data/dist/opendss/ieee34/ieee34Mod1.dss` (vendored) | 80,822 bytes | 23 |
 | IEEE 123 | `tests/data/dist/opendss/ieee123/IEEE123Master.dss` (vendored) | 120,747 bytes | 43 |
-| 4 bus delta wye | `4Bus-DY-Bal/4Bus-DY-Bal.DSS` from the OpenDSS distribution | 8,321 bytes | 0 |
+| 4 bus delta wye | `4Bus-DY-Bal/4Bus-DY-Bal.DSS` from the OpenDSS distribution | 8,980 bytes | 0 |
 
 34 and 123 are recognizable feeders. The Kersting 4 bus case isolates a single
 delta to wye service transformer, the four wire winding that the BMOPF schema's
@@ -34,8 +34,7 @@ Each document carries a top level `meta` block. `meta.case_study_generator`
 names the writing tool and version. `meta.$schema` gives an immutable proposal
 retrieval URL, while `meta.provenance.powerio_bmopf` records its canonical
 identity, commit, schema digest and proposal status.
-The block is deterministic (no timestamp) so output stays byte stable. Per phase
-generator `cost` is an array, as schema 0.2.0 requires.
+The block is deterministic (no timestamp) so output stays byte stable. Generator `energy_cost_rate` is a per-phase array in $/kWh.
 
 ## Source provenance
 

@@ -144,7 +144,7 @@ pub type Result<T> = std::result::Result<T, powerio_core::Error>;
 /// available at the facade root.
 pub use powerio_dist as dist;
 pub use powerio_dist::{
-    BmopfEmitOptions, BmopfProfile, ConductorMatrix, DistGeoMeta, DistGraphEdgeKind,
+    BmopfEmitOptions, BmopfSchemaVersion, ConductorMatrix, DistGeoMeta, DistGraphEdgeKind,
     MulticonductorNetwork,
 };
 

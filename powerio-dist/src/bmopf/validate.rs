@@ -383,6 +383,19 @@ impl Check<'_> {
         }
     }
 
+    fn cost_aliases(&mut self, record: &Map<String, Value>, path: &str) {
+        if let (Some(old), Some(new)) = (
+            record.get("cost").and_then(Value::as_array),
+            record.get("energy_cost_rate").and_then(Value::as_array),
+        ) {
+            let old: Vec<_> = old.iter().map(Value::as_f64).collect();
+            let new: Vec<_> = new.iter().map(Value::as_f64).collect();
+            if old != new {
+                self.error(path, "cost and energy_cost_rate must agree in phase order");
+            }
+        }
+    }
+
     fn walk(&mut self, value: &Value, path: &str) {
         match value {
             Value::Array(items) => {
@@ -432,7 +445,7 @@ impl Check<'_> {
                         for key in ["v_magnitude", "v_angle"] {
                             self.dimension(value, key, &[map.len()], path);
                         }
-                        for key in ["p_min", "p_max", "cost"] {
+                        for key in ["p_min", "p_max", "cost", "energy_cost_rate"] {
                             self.dimension(value, key, &[np], path);
                         }
                     }
@@ -451,12 +464,21 @@ impl Check<'_> {
                         }
                     }
                     if path.starts_with("generator.") || path.starts_with("ibr.") {
-                        for key in ["p_min", "p_max", "q_min", "q_max", "s_max", "cost"] {
+                        for key in [
+                            "p_min",
+                            "p_max",
+                            "q_min",
+                            "q_max",
+                            "s_max",
+                            "cost",
+                            "energy_cost_rate",
+                        ] {
                             self.dimension(value, key, &[np], path);
                         }
                         self.dimension(value, "i_max", &[np, map.len()], path);
                     }
                 }
+                self.cost_aliases(record, path);
                 self.no_load_shunt(record, path);
                 self.tap_bounds(value, record, path);
                 self.references_and_profiles(value, record, path);

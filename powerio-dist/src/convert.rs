@@ -454,22 +454,21 @@ impl DistTargetFormat {
     }
 }
 
-/// Prepare a parsed module for emission to `format`. Emitting an unchanged
-/// parsed module to its source format returns the retained source bytes
-/// exactly, including a byte order mark; any other target serializes the typed
-/// value.
-#[must_use]
+/// Prepare exact retained-source text or validated canonical output.
 pub(crate) fn emit_text_with_options(
     module: &powerio_core::PioModule<MulticonductorNetwork>,
     format: DistTargetFormat,
     options: &EmitOptions,
-) -> TextEmission {
-    if options.is_default_for(format)
+) -> Result<TextEmission, powerio_core::Error> {
+    let output = if options.is_default_for(format)
         && let Some(text) = echo_text(module, format)
     {
-        return TextEmission::faithful(text);
-    }
-    emit_value_text_with_options(module.value(), format, options)
+        TextEmission::faithful(text)
+    } else {
+        crate::readiness::require_resolved_geometry(module.value())?;
+        emit_value_text_with_options(module.value(), format, options)
+    };
+    Ok(output)
 }
 
 /// The retained source text when emitting `module` back to its source format:
@@ -571,7 +570,7 @@ pub fn emit_with_options(
     options: &EmitOptions,
     destination: powerio_core::Destination,
 ) -> std::result::Result<powerio_core::EmitResult, powerio_core::Error> {
-    let conv = emit_text_with_options(module, format, options);
+    let conv = emit_text_with_options(module, format, options)?;
     match format {
         DistTargetFormat::Dss => {
             let mut artifacts = vec![powerio_core::MemoryArtifact::new(

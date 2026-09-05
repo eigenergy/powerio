@@ -11,7 +11,7 @@
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
-use super::BmopfProfile;
+use super::BmopfSchemaVersion;
 use crate::diagnostics::codes as C;
 use crate::error::{Error, Result};
 use crate::geo::{CoordinateSpace, DistCoordsKind, DistGeoMeta, DistLocation};
@@ -67,7 +67,7 @@ fn report_schema_version(doc: &Map<String, Value>, diags: &mut crate::collect::D
         .and_then(|m| m.get("$schema"))
         .and_then(Value::as_str);
     if let (Some(profile), Some(version)) = (
-        stated.and_then(BmopfProfile::from_schema_id),
+        stated.and_then(BmopfSchemaVersion::from_schema_id),
         doc.get("meta").and_then(|meta| meta.get("schema_version")),
     ) && version.as_str() != Some(profile.version())
     {
@@ -85,17 +85,17 @@ fn report_schema_version(doc: &Map<String, Value>, diags: &mut crate::collect::D
             format!(
                 "the document states no `meta.$schema`, so the BMOPF schema version it was \
                  written against is unknown; both {} and {} are accepted",
-                BmopfProfile::Bmopf010.version(),
-                BmopfProfile::Bmopf020.version()
+                BmopfSchemaVersion::Bmopf010.version(),
+                BmopfSchemaVersion::Bmopf020.version()
             ),
         ),
-        Some(id) if BmopfProfile::from_schema_id(id).is_none() => diags.push(
+        Some(id) if BmopfSchemaVersion::from_schema_id(id).is_none() => diags.push(
             &C::READ_BMOPF_SCHEMA_UNKNOWN,
             format!(
                 "`meta.$schema` is `{id}`, which names no known BMOPF schema version; both {} \
                  and {} are accepted",
-                BmopfProfile::Bmopf010.version(),
-                BmopfProfile::Bmopf020.version()
+                BmopfSchemaVersion::Bmopf010.version(),
+                BmopfSchemaVersion::Bmopf020.version()
             ),
         ),
         Some(_) => {}
@@ -118,7 +118,7 @@ fn nonuniform_bound(value: Option<&Value>) -> Option<Vec<f64>> {
         .flatten()
 }
 
-/// Schema 0.1.0 field names typed `number` or an array of them. Derived from
+/// Numeric field names shared with 0.1.0, plus draft energy prices. Derived from
 /// the vendored schema; `schema_numeric_fields_match_the_vendored_schema`
 /// holds the two together.
 const NUMERIC_FIELDS: &[&str] = &[
@@ -129,6 +129,7 @@ const NUMERIC_FIELDS: &[&str] = &[
     "beta_p",
     "beta_z",
     "cost",
+    "energy_cost_rate",
     "frequency",
     "gamma_p",
     "gamma_q",
@@ -569,7 +570,7 @@ impl Reader<'_> {
                 "generator" => self.generators(items),
                 "capacitor" => self.capacitors(items),
                 "shunt" => self.shunts(items),
-                "voltage_source" => self.sources(items),
+                "voltage_source" => self.sources_with_overlay(items, doc),
                 "extras" => self.extras_block(items),
                 // The phase/neutral label conventions block: no typed slot,
                 // stashed whole so a round trip keeps it (the meta pattern).
@@ -1274,6 +1275,7 @@ impl Reader<'_> {
                 "s_max",
                 "i_max",
                 "cost",
+                "energy_cost_rate",
                 "bus",
                 "configuration",
                 "terminal_map",
@@ -1291,7 +1293,7 @@ impl Reader<'_> {
             // Cost is a per-phase array in the schema, kept exactly as
             // stated. A bare scalar is still accepted for documents written
             // before v0.0.1 and reads as a one-entry statement.
-            let cost = match o.get("cost") {
+            let cost = match o.get("energy_cost_rate").or_else(|| o.get("cost")) {
                 Some(Value::Array(a)) => Some(a.iter().map(f).collect::<Vec<f64>>()),
                 Some(v) => Some(vec![f(v)]),
                 None => None,
@@ -1359,16 +1361,46 @@ impl Reader<'_> {
         }
     }
 
+    fn sources_with_overlay(&mut self, items: &Map<String, Value>, doc: &Map<String, Value>) {
+        let mut merged = items.clone();
+        if let Some(overlay) = doc
+            .get("extras")
+            .and_then(|e| e.get("voltage_source"))
+            .and_then(Value::as_object)
+        {
+            for (name, fields) in overlay {
+                if let (Some(target), Some(fields)) = (
+                    merged.get_mut(name).and_then(Value::as_object_mut),
+                    fields.as_object(),
+                ) {
+                    for (key, value) in fields {
+                        target.entry(key.clone()).or_insert_with(|| value.clone());
+                    }
+                }
+            }
+        }
+        self.sources(&merged);
+    }
+
     fn sources(&mut self, items: &Map<String, Value>) {
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
-            let known = ["v_magnitude", "v_angle", "bus", "terminal_map"];
+            let known = [
+                "v_magnitude",
+                "v_angle",
+                "bus",
+                "terminal_map",
+                "energy_cost_rate",
+                "cost",
+            ];
+            let energy_cost_rate = floats(o.get("energy_cost_rate").or_else(|| o.get("cost")));
             self.net.sources_mut().push(VoltageSource {
                 name: name.clone(),
                 bus: string(o.get("bus")),
                 terminal_map: strings(o.get("terminal_map")),
                 v_magnitude: floats(o.get("v_magnitude")).unwrap_or_default(),
                 v_angle: floats(o.get("v_angle")).unwrap_or_default(),
+                energy_cost_rate,
                 extras: take_extras(
                     o,
                     &known,
@@ -2273,7 +2305,12 @@ mod tests {
                 "the reader does not know `{sample}` (from `{pattern}`)"
             );
         }
-        // And nothing the reader claims is numeric is absent from the schema.
+        let draft_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/data/dist/bmopf/bmopf-0.2.0.schema.json");
+        let draft: Value =
+            serde_json::from_str(&std::fs::read_to_string(draft_path).unwrap()).unwrap();
+        walk(&draft, &mut names, &mut patterns);
+        // Each recognized numeric name belongs to a supported schema.
         for name in super::NUMERIC_FIELDS {
             assert!(
                 names.iter().any(|n| n == name),

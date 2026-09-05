@@ -838,6 +838,19 @@ impl DssWriter {
         ));
         self.out.push('\n');
 
+        for source in net
+            .sources()
+            .iter()
+            .filter(|source| source.energy_cost_rate.is_some())
+        {
+            self.warn(
+                &C::EMIT_DSS_FIELD_DROPPED,
+                format!(
+                    "voltage source {}: energy_cost_rate has no target field",
+                    source.name
+                ),
+            );
+        }
         self.buscoords(net);
         self.sources(net);
         self.line_codes(net);
@@ -3017,6 +3030,7 @@ mod tests {
                 terminal_map: strings(&["1", "2", "3", "4"]),
                 v_magnitude: vec![vln, vln, vln, 0.0],
                 v_angle: vec![0.0, -third, third, 0.0],
+                energy_cost_rate: None,
                 extras: Extras::new(),
             },
         )
@@ -4573,6 +4587,7 @@ mod tests {
             terminal_map: strings(&["1", "2", "3", "4"]),
             v_magnitude: vec![20_000.0, 20_000.0, 20_000.0, 0.0],
             v_angle: vec![0.0, -third, third, 0.0],
+            energy_cost_rate: None,
             extras: Extras::new(),
         };
         let wind = VoltageSource {
@@ -4586,6 +4601,7 @@ mod tests {
                 third / 2.0,
                 0.0,
             ],
+            energy_cost_rate: None,
             extras: Extras::new(),
         };
         let net = MulticonductorNetwork::from_tables(MulticonductorNetworkTables {
@@ -4646,6 +4662,7 @@ mod tests {
             terminal_map: strings(&["1", "2", "3"]),
             v_magnitude: vec![2400.0; 3],
             v_angle: vec![0.0, -third, third],
+            energy_cost_rate: None,
             extras: Extras::new(),
         };
         let load = load_on("sb", &["1"], Configuration::Wye);

@@ -14985,6 +14985,29 @@
         "bus": {
           "type": "string"
         },
+        "energy_cost_rate": {
+          "description": "Energy cost rate in $/kWh, one entry per phase in terminal-map order.",
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "extras": {
           "additionalProperties": true,
           "type": "object"

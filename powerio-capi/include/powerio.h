@@ -2102,6 +2102,11 @@ typedef struct {
     size_t terminal_map_count;
     PioF64View voltage_magnitude_v;
     PioF64View voltage_angle_rad;
+    /**
+     * Dollars/kWh in phase order, excluding neutral terminals.
+     */
+    PioF64View energy_cost_rate_per_kwh;
+    bool has_energy_cost_rate;
 } PioVoltageSourceView;
 
 /**
