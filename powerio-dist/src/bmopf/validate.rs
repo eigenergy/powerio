@@ -348,6 +348,41 @@ impl Check<'_> {
         }
     }
 
+    fn no_load_shunt(&mut self, record: &Map<String, Value>, path: &str) {
+        if let Some(shunt) = record.get("no_load_shunt") {
+            let count = record
+                .get("windings")
+                .and_then(Value::as_array)
+                .map_or_else(
+                    || {
+                        if path.starts_with("transformer.center_tap.") {
+                            3
+                        } else {
+                            2
+                        }
+                    },
+                    Vec::len,
+                );
+            let winding = shunt.get("winding").and_then(Value::as_u64);
+            if winding.is_none_or(|index| index == 0 || index > count as u64) {
+                self.error(
+                    &format!("{path}.no_load_shunt.winding"),
+                    "no-load shunt winding does not exist",
+                );
+            }
+            if shunt
+                .get("g")
+                .and_then(Value::as_f64)
+                .is_none_or(|v| v < 0.0)
+                || shunt.get("b").and_then(Value::as_f64).is_none()
+                || record.contains_key("g_no_load")
+                || record.contains_key("b_no_load")
+            {
+                self.error(&format!("{path}.no_load_shunt"), "requires nonnegative g, finite b and no competing g_no_load/b_no_load representation");
+            }
+        }
+    }
+
     fn walk(&mut self, value: &Value, path: &str) {
         match value {
             Value::Array(items) => {
@@ -422,6 +457,7 @@ impl Check<'_> {
                         self.dimension(value, "i_max", &[np, map.len()], path);
                     }
                 }
+                self.no_load_shunt(record, path);
                 self.tap_bounds(value, record, path);
                 self.references_and_profiles(value, record, path);
                 for (key, item) in record {

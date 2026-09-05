@@ -94,11 +94,12 @@ const BMOPF_DELTA_ROLLS_EXTRA: &str = "bmopf_delta_rolls";
 /// element comes near this bound.
 const MAX_DIM: usize = 64;
 
-const TRANSFORMER_NO_LOAD_ALLOWED_EXTRAS: [&str; 7] = [
+const TRANSFORMER_NO_LOAD_ALLOWED_EXTRAS: [&str; 8] = [
     "bmopf_power_base",
     "bmopf_winding_metadata",
     "g_no_load",
     "b_no_load",
+    "no_load_shunt",
     "%noloadloss",
     "%imag",
     BMOPF_DELTA_ROLLS_EXTRA,
@@ -123,7 +124,7 @@ const REGULATOR_STATED_OHMS: [&str; 4] = [
     "x_series_to",
 ];
 
-const TRANSFORMER_TWO_WINDING_ALLOWED_EXTRAS: [&str; 18] = [
+const TRANSFORMER_TWO_WINDING_ALLOWED_EXTRAS: [&str; 19] = [
     "tap_min",
     "tap_max",
     "mintap",
@@ -136,6 +137,7 @@ const TRANSFORMER_TWO_WINDING_ALLOWED_EXTRAS: [&str; 18] = [
     "pmd_tm_step",
     "g_no_load",
     "b_no_load",
+    "no_load_shunt",
     "r_neutral_from",
     "x_neutral_from",
     "r_neutral_to",
@@ -214,11 +216,6 @@ pub(crate) fn emit_bmopf_json_text_with_options(
     let mut w = Writer {
         options,
         warnings: crate::diagnostics::Diagnostics::new(),
-        grounded: net
-            .buses()
-            .iter()
-            .map(|b| (b.id.to_ascii_lowercase(), b.grounded.clone()))
-            .collect(),
         transformer_overflow: Map::new(),
         dropped_extras: BTreeMap::new(),
     };
@@ -234,7 +231,6 @@ pub(crate) fn emit_bmopf_json_text_with_options(
 struct Writer {
     options: BmopfEmitOptions,
     warnings: crate::diagnostics::Diagnostics,
-    grounded: BTreeMap<String, Vec<String>>,
     /// Transformer fields with no slot in the schema 0.1.0 subtype defs
     /// (taps, neutral impedance, no load admittance), relocated to
     /// `extras.transformer.<subtype>.<name>` instead of dropped.
@@ -1450,6 +1446,7 @@ impl Writer {
             "x_neutral_to",
             "g_no_load",
             "b_no_load",
+            "no_load_shunt",
         ];
         if self.options.profile == BmopfProfile::Bmopf020 {
             rename_tap_fields(by_subtype);
@@ -2155,6 +2152,7 @@ impl Writer {
             let to_1 = per(to);
             let mut t1 = t.clone();
             t1.windings = vec![f.clone(), to_1.clone()];
+            t1.phases = 1;
             split_no_load_extras(&mut t1, t.phases);
             let v = self.two_winding(&t1, &f, &to_1, 1.0, true, false);
             out.push((format!("{}_{}", t.name, k + 1), v));
@@ -2338,104 +2336,54 @@ impl Writer {
         &mut self,
         o: &mut Map<String, Value>,
         t: &DistTransformer,
-        from: &DistWinding,
+        _from: &DistWinding,
         s: f64,
     ) {
-        if let Some(v) = t.extras.get("g_no_load") {
-            o.insert("g_no_load".into(), v.clone());
-        } else if let Some(loss_pct) = extras_number(&t.extras, "%noloadloss") {
-            if self.is_phase_to_phase_single_phase(from) {
-                let mut details = Map::new();
-                details.insert("field".into(), json!("%noloadloss"));
-                details.insert("reason".into(), json!("phase_to_phase_single_phase"));
-                self.transformer_diagnostic(
-                    t,
-                    &C::EMIT_BMOPF_TRANSFORMER_NO_LOAD_SHUNT_DROPPED,
-                    format!(
-                        "transformer {}: phase-to-phase %noloadloss cannot be represented as a BMOPF no-load shunt; dropped",
-                        t.name
-                    ),
-                    details,
-                );
-            } else {
-                let v_stamp = no_load_voltage_base(from);
-                if s.is_finite() && s > 0.0 && v_stamp.is_finite() && v_stamp > 0.0 {
-                    let y_base = s / (v_stamp * v_stamp);
-                    o.insert(
-                        "g_no_load".into(),
-                        self.num(loss_pct / 100.0 * y_base, "transformer g_no_load"),
-                    );
-                } else {
-                    let mut details = Map::new();
-                    details.insert("field".into(), json!("%noloadloss"));
-                    details.insert("s_rating".into(), json!(s));
-                    details.insert("v_nom_from".into(), json!(v_stamp));
-                    self.transformer_diagnostic(
-                        t,
-                        &C::EMIT_BMOPF_TRANSFORMER_NO_LOAD_SHUNT_UNCONVERTIBLE,
-                        format!(
-                            "transformer {}: %noloadloss cannot be converted without a positive s_rating and v_nom_from",
-                            t.name
-                        ),
-                        details,
-                    );
-                }
-            }
+        if let Some(shunt) = t.extras.get("no_load_shunt") {
+            o.insert("no_load_shunt".into(), shunt.clone());
+            return;
         }
-
-        if let Some(v) = t.extras.get("b_no_load") {
-            o.insert("b_no_load".into(), v.clone());
-        } else if let Some(imag_pct) = extras_number(&t.extras, "%imag") {
-            if self.is_phase_to_phase_single_phase(from) {
-                let mut details = Map::new();
-                details.insert("field".into(), json!("%imag"));
-                details.insert("reason".into(), json!("phase_to_phase_single_phase"));
-                self.transformer_diagnostic(
-                    t,
-                    &C::EMIT_BMOPF_TRANSFORMER_NO_LOAD_SHUNT_DROPPED,
-                    format!(
-                        "transformer {}: phase-to-phase %imag cannot be represented as a BMOPF no-load shunt; dropped",
-                        t.name
-                    ),
-                    details,
-                );
-            } else {
-                let v_stamp = no_load_voltage_base(from);
-                if s.is_finite() && s > 0.0 && v_stamp.is_finite() && v_stamp > 0.0 {
-                    let y_base = s / (v_stamp * v_stamp);
-                    o.insert(
-                        "b_no_load".into(),
-                        self.num(imag_pct / 100.0 * y_base, "transformer b_no_load"),
-                    );
-                } else {
-                    let mut details = Map::new();
-                    details.insert("field".into(), json!("%imag"));
-                    details.insert("s_rating".into(), json!(s));
-                    details.insert("v_nom_from".into(), json!(v_stamp));
-                    self.transformer_diagnostic(
-                        t,
-                        &C::EMIT_BMOPF_TRANSFORMER_NO_LOAD_SHUNT_UNCONVERTIBLE,
-                        format!(
-                            "transformer {}: %imag cannot be converted without a positive s_rating and v_nom_from",
-                            t.name
-                        ),
-                        details,
-                    );
+        if t.extras.contains_key("g_no_load") || t.extras.contains_key("b_no_load") {
+            for key in ["g_no_load", "b_no_load"] {
+                if let Some(value) = t.extras.get(key) {
+                    o.insert(key.into(), value.clone());
                 }
             }
-        } else if !self.is_phase_to_phase_single_phase(from)
-            && extras_number(&t.extras, "%noloadloss").is_some()
+            return;
+        }
+        let loss = extras_number(&t.extras, "%noloadloss");
+        let imag = extras_number(&t.extras, "%imag");
+        if loss.is_none() && imag.is_none() {
+            return;
+        }
+        // OpenDSS places the exciting branch on physical winding 2. Its
+        // terminal admittance includes the winding tap and the per-coil base.
+        let voltage = t
+            .windings
+            .get(1)
+            .map(|w| crate::model::winding_coil_voltage(w, t.phases));
+        if let Some(voltage) = voltage
+            && voltage.is_finite()
+            && voltage > 0.0
+            && s.is_finite()
+            && s > 0.0
+            && loss.is_none_or(|v| v >= 0.0)
+            && imag.is_none_or(|v| v >= 0.0)
         {
-            o.insert("b_no_load".into(), json!(0.0));
+            let y_base = s / t.phases.max(1) as f64 / voltage.powi(2);
+            o.insert(
+                "no_load_shunt".into(),
+                json!({
+                    "winding": 2,
+                    "g": loss.unwrap_or(0.0) / 100.0 * y_base,
+                    "b": -imag.unwrap_or(0.0) / 100.0 * y_base,
+                }),
+            );
+        } else {
+            let details = Map::from_iter([("field".into(), json!("no_load_shunt"))]);
+            self.transformer_diagnostic(t, &C::EMIT_BMOPF_TRANSFORMER_NO_LOAD_SHUNT_UNCONVERTIBLE,
+                format!("transformer {}: no-load percentages require nonnegative values, a positive power base and a positive winding-2 coil voltage", t.name), details);
         }
-    }
-
-    fn is_phase_to_phase_single_phase(&self, winding: &DistWinding) -> bool {
-        n_winding_phase_count(winding) == 1
-            && !self
-                .grounded
-                .get(&winding.bus.to_ascii_lowercase())
-                .is_some_and(|g| winding.terminal_map.iter().any(|t| g.contains(t)))
     }
 
     fn transformer_extras_dropped(&mut self, t: &DistTransformer, allowed: &[&str]) {
@@ -3088,18 +3036,6 @@ fn authored_terminal_conventions(net: &MulticonductorNetwork) -> Option<Value> {
     (!phase.is_empty() || !neutral.is_empty()).then(|| json!({"phase": phase, "neutral": neutral}))
 }
 
-fn no_load_voltage_base(from: &DistWinding) -> f64 {
-    let phases = match from.conn {
-        DistWindingConn::Wye => from.terminal_map.len().saturating_sub(1),
-        DistWindingConn::Delta => from.terminal_map.len(),
-    };
-    if phases >= 3 {
-        from.v_ref / 3f64.sqrt()
-    } else {
-        from.v_ref
-    }
-}
-
 fn config_str(c: Configuration) -> &'static str {
     match c {
         Configuration::Wye => "WYE",
@@ -3133,7 +3069,6 @@ mod tests {
                 ..BmopfEmitOptions::default()
             },
             warnings: crate::diagnostics::Diagnostics::new(),
-            grounded: BTreeMap::new(),
             transformer_overflow: Map::new(),
             dropped_extras: BTreeMap::new(),
         };

@@ -352,6 +352,11 @@ pub fn calc_multiconductor_admittance_matrix(
             })
             && transformer.windings[0].terminal_map.len()
                 == transformer.windings[1].terminal_map.len()
+            && transformer.extras.get("no_load_shunt").is_none_or(|shunt| {
+                ["g", "b"]
+                    .iter()
+                    .all(|key| shunt.get(key).and_then(serde_json::Value::as_f64) == Some(0.0))
+            })
             && ["g_no_load", "b_no_load", "%noloadloss", "%imag"]
                 .iter()
                 .all(|key| {

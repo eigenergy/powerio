@@ -1566,7 +1566,8 @@ const DISTRIBUTION_FORMATS: [DistributionFormat; 3] = [
 // fields the target cannot represent. Phase voltage limits survive the PMD
 // projection; OpenDSS reports their omission. Retained PMD neutral limits
 // require an additional diagnostic only when they carry nondefault data.
-const DISTRIBUTION_WARNING_BASELINE: [[usize; 3]; 3] = [[0, 66, 88], [21, 0, 16], [27, 41, 0]];
+// PMD emergency transformer ratings remain available for targets to report.
+const DISTRIBUTION_WARNING_BASELINE: [[usize; 3]; 3] = [[0, 66, 88], [21, 0, 16], [27, 44, 0]];
 
 const DISTRIBUTION_CASES: [(&str, &str, DistributionFormat); 7] = [
     (

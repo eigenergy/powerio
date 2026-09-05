@@ -32,12 +32,12 @@ const SCHEMA_ID_010: &str = "https://raw.githubusercontent.com/distribution-syst
 const SCHEMA_ID_020: &str = "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.2.0/bmopf.schema.json";
 
 /// Immutable revision of the proposed BMOPF 0.2.0 schema.
-pub const BMOPF_PROPOSAL_COMMIT: &str = "2560b3bb9cdfee89321e02a12c320c9fb6519af0";
+pub const BMOPF_PROPOSAL_COMMIT: &str = "5e692902329b06342913b1a57c546a5fae51b2f1";
 /// SHA-256 of the exact UTF-8 schema document at the pinned revision.
 pub const BMOPF_PROPOSAL_SHA256: &str =
-    "7f8ab08476b610d7bc9ecf3539d209b3bc212e8472bc38987afedc1163d71bce";
+    "e08521ca45c5406194019c31e0389ba070545b4b720bfbefa2947f5446b581fa";
 /// Immutable retrieval location, distinct from the schema's canonical `$id`.
-pub const BMOPF_PROPOSAL_URL: &str = "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/2560b3bb9cdfee89321e02a12c320c9fb6519af0/schema/bmopf/0.2.0/bmopf.schema.json";
+pub const BMOPF_PROPOSAL_URL: &str = "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/5e692902329b06342913b1a57c546a5fae51b2f1/schema/bmopf/0.2.0/bmopf.schema.json";
 
 impl BmopfProfile {
     /// The schema version string, as `meta.schema_version` states it.

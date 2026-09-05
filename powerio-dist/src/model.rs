@@ -1372,6 +1372,40 @@ pub(crate) fn square_from_rows(rows: &[Vec<f64>], n: usize) -> Option<ConductorM
     Some(m)
 }
 
+/// Actual coil voltage base, including the fixed winding tap.
+pub(crate) fn winding_coil_voltage(winding: &DistWinding, phases: usize) -> f64 {
+    let divisor = if winding.conn == DistWindingConn::Wye && matches!(phases, 2 | 3) {
+        3f64.sqrt()
+    } else {
+        1.0
+    };
+    winding.v_ref * winding.tap / divisor
+}
+
+/// OpenDSS no-load percentages for an explicit winding-2 terminal-coil shunt.
+/// Other winding locations cannot use the OpenDSS exciting-branch parameters.
+pub(crate) fn transformer_no_load_percentages(t: &DistTransformer) -> Option<(f64, f64)> {
+    let shunt = t.extras.get("no_load_shunt")?;
+    if shunt.get("winding")?.as_u64()? != 2 {
+        return None;
+    }
+    let g = shunt.get("g")?.as_f64()?;
+    let b = shunt.get("b")?.as_f64()?;
+    let voltage = winding_coil_voltage(t.windings.get(1)?, t.phases);
+    let rating = t.windings.first()?.s_rating;
+    if !voltage.is_finite()
+        || voltage <= 0.0
+        || !rating.is_finite()
+        || rating <= 0.0
+        || g < 0.0
+        || b > 0.0
+    {
+        return None;
+    }
+    let scale = 100.0 * t.phases.max(1) as f64 * voltage.powi(2) / rating;
+    Some((g * scale, -b * scale))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -11,8 +11,8 @@ use powerio_dist::{
 
 mod helpers;
 use helpers::{
-    emit_bmopf_json, emit_bmopf_json_with_options, emit_dss, parse_bmopf_file, parse_bmopf_str,
-    parse_dss_file, parse_dss_str, parse_pmd_str,
+    emit_bmopf_json, emit_bmopf_json_with_options, emit_dss, emit_pmd_json, parse_bmopf_file,
+    parse_bmopf_str, parse_dss_file, parse_dss_str, parse_pmd_str,
 };
 
 /// The findings beside the schema version notice.
@@ -1723,11 +1723,12 @@ fn dss_noloadloss_derives_bmopf_no_load_fields() {
     let out = emit_bmopf_json(&net);
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     let t = &doc["transformer"]["single_phase"]["t1"];
-    let expected_g = 0.2 / 100.0 * 25_000.0 / (7200.0 * 7200.0);
-    let g = t["g_no_load"].as_f64().unwrap();
+    assert_eq!(t["no_load_shunt"]["winding"], 2);
+    let expected_g = 0.2 / 100.0 * 25_000.0 / (240.0 * 240.0);
+    let g = t["no_load_shunt"]["g"].as_f64().unwrap();
     assert!((g - expected_g).abs() < 1e-18, "g_no_load = {g}");
-    let expected_b = 0.5 / 100.0 * 25_000.0 / (7200.0 * 7200.0);
-    let b = t["b_no_load"].as_f64().unwrap();
+    let expected_b = -0.5 / 100.0 * 25_000.0 / (240.0 * 240.0);
+    let b = t["no_load_shunt"]["b"].as_f64().unwrap();
     assert!((b - expected_b).abs() < 1e-18, "b_no_load = {b}");
     assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
 }
@@ -1809,13 +1810,10 @@ fn dss_phase_to_phase_noloadloss_does_not_emit_bmopf_ground_shunt() {
     let t = &doc["transformer"]["single_phase"]["t1"];
     assert!(t.get("g_no_load").is_none(), "{t}");
     assert!(t.get("b_no_load").is_none(), "{t}");
-    assert!(
-        out.warnings
-            .iter()
-            .any(|w| w.contains("phase-to-phase") && w.contains("%noloadloss")),
-        "{:?}",
-        out.warnings
-    );
+    assert_eq!(t["no_load_shunt"]["winding"], 2);
+    let shunt = &t["no_load_shunt"];
+    assert!((shunt["g"].as_f64().unwrap() * 480.0_f64.powi(2) - 50.0).abs() < 1e-10);
+    assert!((shunt["b"].as_f64().unwrap() * 480.0_f64.powi(2) + 125.0).abs() < 1e-10);
     assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
 }
 
@@ -1871,13 +1869,13 @@ fn wye_wye_3_neutral_grounding_decomposes_once_not_per_phase() {
     assert_eq!(sp["t_1"]["x_neutral_from"], serde_json::json!(6.0));
     assert_eq!(sp["t_1"]["r_neutral_to"], serde_json::json!(7.0));
     assert_eq!(sp["t_1"]["x_neutral_to"], serde_json::json!(8.0));
-    let expected_g = 0.3 / 100.0 * (75_000.0 / 3.0) / ((12_470.0 / 3f64.sqrt()).powi(2));
-    let expected_b = 0.6 / 100.0 * (75_000.0 / 3.0) / ((12_470.0 / 3f64.sqrt()).powi(2));
+    let expected_g = 0.3 / 100.0 * (75_000.0 / 3.0) / ((480.0 / 3f64.sqrt()).powi(2));
+    let expected_b = -0.6 / 100.0 * (75_000.0 / 3.0) / ((480.0 / 3f64.sqrt()).powi(2));
     for name in ["t_1", "t_2", "t_3"] {
         let t = &sp[name];
-        let g = t["g_no_load"].as_f64().unwrap();
+        let g = t["no_load_shunt"]["g"].as_f64().unwrap();
         assert!((g - expected_g).abs() < 1e-18, "{name} g_no_load = {g}");
-        let b = t["b_no_load"].as_f64().unwrap();
+        let b = t["no_load_shunt"]["b"].as_f64().unwrap();
         assert!((b - expected_b).abs() < 1e-18, "{name} b_no_load = {b}");
     }
     for name in ["t_2", "t_3"] {
@@ -4006,4 +4004,57 @@ fn three_phase_generator_without_neutral_keeps_phase_count_in_dss() {
         "{:?}",
         parsed.warnings
     );
+}
+
+#[test]
+fn no_load_shunt_preserves_winding_units_and_tap_after_conversion() {
+    for connection in ["wye", "delta"] {
+        let (from, source_bus, target_bus) = if connection == "wye" {
+            ("delta", "src.1.2.3", "dst.1.2.3.0")
+        } else {
+            ("wye", "src.1.2.3.0", "dst.1.2.3")
+        };
+        let dss = format!(
+            "Clear\nNew Circuit.core basekv=12.47 phases=3 bus1=src.1.2.3.0\nNew Transformer.t phases=3 windings=2 buses=({source_bus} {target_bus}) conns=({from} {connection}) kvs=(12.47 0.48) kvas=(75 75) taps=(1 1.05) %Rs=(1 1) xhl=2 %noloadloss=0.3 %imag=0.6\n"
+        );
+        let source = parse_dss_str(&dss);
+        let output = emit_bmopf_json(&source);
+        assert_eq!(
+            errors(&schema_validator(), &output.text),
+            Vec::<String>::new()
+        );
+        let converted = parse_bmopf_str(&output.text).unwrap();
+        let t = &converted.transformers()[0];
+        let shunt = &t.extras["no_load_shunt"];
+        let voltage = 480.0 * 1.05
+            / if connection == "wye" {
+                3f64.sqrt()
+            } else {
+                1.0
+            };
+        let loss = 3.0 * voltage.powi(2) * shunt["g"].as_f64().unwrap();
+        let q = -3.0 * voltage.powi(2) * shunt["b"].as_f64().unwrap();
+        assert!((loss - 225.0).abs() < 1e-8, "{connection}: {loss}");
+        assert!((q - 450.0).abs() < 1e-8, "{connection}: {q}");
+        assert_eq!(shunt["winding"], 2);
+        let pmd_output = emit_pmd_json(&converted);
+        let pmd_network = parse_pmd_str(&pmd_output.text).unwrap();
+        let pmd_bmopf = emit_bmopf_json(&pmd_network);
+        let pmd_again = parse_bmopf_str(&pmd_bmopf.text).unwrap();
+        let pmd_shunt = &pmd_again.transformers()[0].extras["no_load_shunt"];
+        for key in ["g", "b"] {
+            assert!(
+                (pmd_shunt[key].as_f64().unwrap() - shunt[key].as_f64().unwrap()).abs() < 1e-12
+            );
+        }
+        // Conversion materializes the winding-2 shunt at its terminal voltage.
+        let dss_output = emit_dss(&converted);
+        let restored = parse_dss_str(&dss_output.text);
+        let roundtrip = emit_bmopf_json(&restored);
+        let net = parse_bmopf_str(&roundtrip.text).unwrap();
+        let actual = &net.transformers()[0].extras["no_load_shunt"];
+        for key in ["g", "b"] {
+            assert!((actual[key].as_f64().unwrap() - shunt[key].as_f64().unwrap()).abs() < 1e-12);
+        }
+    }
 }

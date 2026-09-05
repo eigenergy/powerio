@@ -1073,21 +1073,36 @@ impl Writer {
         if let Some(controls) = t.extras.get("controls") {
             o.insert("controls".into(), controls.clone());
         }
-        let noloadloss = Self::extras_f64(&t.extras, "%noloadloss").unwrap_or(0.0) / 100.0;
-        let cmag = Self::extras_f64(&t.extras, "%imag").unwrap_or(0.0) / 100.0;
-        o.insert("noloadloss".into(), json!(noloadloss));
-        o.insert("cmag".into(), json!(cmag));
+        self.transformer_no_load_fields(t, &mut o, &what);
         o.insert("status".into(), Self::status(&t.extras));
         o.insert(
             "source_id".into(),
             json!(format!("transformer.{}", t.name.to_lowercase())),
         );
-        self.extras_dropped(
-            &t.extras,
-            &["controls", "%loadloss", "%noloadloss", "%imag", "emerghkva"],
-            &what,
-        );
         Value::Object(o)
+    }
+    fn transformer_no_load_fields(
+        &mut self,
+        t: &DistTransformer,
+        o: &mut Map<String, Value>,
+        what: &str,
+    ) {
+        let explicit_shunt = crate::model::transformer_no_load_percentages(t);
+        let (loss, imag) = explicit_shunt.unwrap_or_else(|| {
+            (
+                Self::extras_f64(&t.extras, "%noloadloss").unwrap_or(0.0),
+                Self::extras_f64(&t.extras, "%imag").unwrap_or(0.0),
+            )
+        });
+        let noloadloss = loss / 100.0;
+        let cmag = imag / 100.0;
+        o.insert("noloadloss".into(), json!(noloadloss));
+        o.insert("cmag".into(), json!(cmag));
+        let mut allowed = vec!["controls", "%loadloss", "%noloadloss", "%imag", "emerghkva"];
+        if explicit_shunt.is_some() {
+            allowed.push("no_load_shunt");
+        }
+        self.extras_dropped(&t.extras, &allowed, what);
     }
 }
 

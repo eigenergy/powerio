@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.2.0/bmopf.schema.json",
   "title": "BMOPF network case schema 0.2.0",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -1705,6 +1705,9 @@
           },
           "time_series": {
             "$ref": "#/$defs/time_series_ref"
+          },
+          "no_load_shunt": {
+            "$ref": "#/$defs/transformer_no_load_shunt"
           }
         },
         "required": [
@@ -1715,6 +1718,27 @@
           "s_rating",
           "v_nom_from",
           "v_nom_to"
+        ],
+        "allOf": [
+          {
+            "not": {
+              "required": [
+                "no_load_shunt"
+              ],
+              "anyOf": [
+                {
+                  "required": [
+                    "g_no_load"
+                  ]
+                },
+                {
+                  "required": [
+                    "b_no_load"
+                  ]
+                }
+              ]
+            }
+          }
         ]
       }
     },
@@ -1810,6 +1834,9 @@
           },
           "time_series": {
             "$ref": "#/$defs/time_series_ref"
+          },
+          "no_load_shunt": {
+            "$ref": "#/$defs/transformer_no_load_shunt"
           }
         },
         "required": [
@@ -1820,6 +1847,27 @@
           "s_rating",
           "v_nom_from",
           "v_nom_to"
+        ],
+        "allOf": [
+          {
+            "not": {
+              "required": [
+                "no_load_shunt"
+              ],
+              "anyOf": [
+                {
+                  "required": [
+                    "g_no_load"
+                  ]
+                },
+                {
+                  "required": [
+                    "b_no_load"
+                  ]
+                }
+              ]
+            }
+          }
         ]
       }
     },
@@ -2084,6 +2132,9 @@
           },
           "time_series": {
             "$ref": "#/$defs/time_series_ref"
+          },
+          "no_load_shunt": {
+            "$ref": "#/$defs/transformer_no_load_shunt"
           }
         },
         "required": [
@@ -2091,6 +2142,27 @@
           "bus_to",
           "terminal_map_from",
           "terminal_map_to"
+        ],
+        "allOf": [
+          {
+            "not": {
+              "required": [
+                "no_load_shunt"
+              ],
+              "anyOf": [
+                {
+                  "required": [
+                    "g_no_load"
+                  ]
+                },
+                {
+                  "required": [
+                    "b_no_load"
+                  ]
+                }
+              ]
+            }
+          }
         ]
       }
     },
@@ -2191,6 +2263,9 @@
           },
           "time_series": {
             "$ref": "#/$defs/time_series_ref"
+          },
+          "no_load_shunt": {
+            "$ref": "#/$defs/transformer_no_load_shunt"
           }
         },
         "required": [
@@ -2199,6 +2274,27 @@
           "terminal_map_from",
           "terminal_map_to",
           "connection"
+        ],
+        "allOf": [
+          {
+            "not": {
+              "required": [
+                "no_load_shunt"
+              ],
+              "anyOf": [
+                {
+                  "required": [
+                    "g_no_load"
+                  ]
+                },
+                {
+                  "required": [
+                    "b_no_load"
+                  ]
+                }
+              ]
+            }
+          }
         ]
       }
     },
@@ -2240,15 +2336,65 @@
           },
           "time_series": {
             "$ref": "#/$defs/time_series_ref"
+          },
+          "no_load_shunt": {
+            "$ref": "#/$defs/transformer_no_load_shunt"
           }
         },
         "required": [
           "windings",
           "x_sc",
           "s_rating"
+        ],
+        "allOf": [
+          {
+            "not": {
+              "required": [
+                "no_load_shunt"
+              ],
+              "anyOf": [
+                {
+                  "required": [
+                    "g_no_load"
+                  ]
+                },
+                {
+                  "required": [
+                    "b_no_load"
+                  ]
+                }
+              ]
+            }
+          }
         ]
       }
+    },
+    "transformer_no_load_shunt": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Explicit terminal-coil no-load admittance. Each coil of the selected physical winding receives this admittance, in siemens, at the stated operating tap. The object is mutually exclusive with g_no_load and b_no_load.",
+      "properties": {
+        "winding": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "One-based physical winding index. Two-winding subtypes use 1=from, 2=to. A center tap uses 1=from, 2=first to terminal to centre, 3=centre to last to terminal. An n_winding transformer uses its windings array order."
+        },
+        "g": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Conductance per coil [S], giving real loss g*abs(u)^2 for coil voltage u."
+        },
+        "b": {
+          "type": "number",
+          "description": "Susceptance per coil [S]; negative for lagging magnetizing current. Consumed reactive power is -b*abs(u)^2."
+        }
+      },
+      "required": [
+        "winding",
+        "g",
+        "b"
+      ]
     }
   },
-  "description": "Proposed BMOPF 0.2.0 structural schema, subject to IEEE PES BMOPF Task Force review. Electrical quantities use absolute SI units. Element IDs are table keys; ordered terminal maps establish conductor identity. Cross-field dimensions, references, role lists and bounds require semantic validation in addition to JSON Schema. Unknown electrical fields are rejected; top-level extras and meta.provenance are free-form extension locations. Neither location establishes computational support. The canonical $id identifies this schema; a case may retrieve its pinned revision from an immutable commit URL. See the proposal documentation for compatibility and implementation status."
+  "description": "Proposed BMOPF 0.2.0 network data contract, subject to Task Force review. An immutable retrieval URL identifies a particular proposal snapshot."
 }

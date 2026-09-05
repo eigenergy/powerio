@@ -3362,7 +3362,7 @@
     }
   },
   "meta": {
-    "$schema": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/2560b3bb9cdfee89321e02a12c320c9fb6519af0/schema/bmopf/0.2.0/bmopf.schema.json",
+    "$schema": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/5e692902329b06342913b1a57c546a5fae51b2f1/schema/bmopf/0.2.0/bmopf.schema.json",
     "case_study_generator": {
       "tool": "powerio",
       "version": "0.11.0"
@@ -3372,10 +3372,10 @@
       "powerio_bmopf": {
         "producer": "powerio",
         "producer_version": "0.11.0",
-        "schema_commit": "2560b3bb9cdfee89321e02a12c320c9fb6519af0",
+        "schema_commit": "5e692902329b06342913b1a57c546a5fae51b2f1",
         "schema_id": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.2.0/bmopf.schema.json",
-        "schema_retrieval_url": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/2560b3bb9cdfee89321e02a12c320c9fb6519af0/schema/bmopf/0.2.0/bmopf.schema.json",
-        "schema_sha256": "7f8ab08476b610d7bc9ecf3539d209b3bc212e8472bc38987afedc1163d71bce",
+        "schema_retrieval_url": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/5e692902329b06342913b1a57c546a5fae51b2f1/schema/bmopf/0.2.0/bmopf.schema.json",
+        "schema_sha256": "e08521ca45c5406194019c31e0389ba070545b4b720bfbefa2947f5446b581fa",
         "schema_status": "proposal",
         "schema_version": "0.2.0"
       }

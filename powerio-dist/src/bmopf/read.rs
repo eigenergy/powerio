@@ -592,7 +592,7 @@ impl Reader<'_> {
                 other => {
                     self.diagnostics.push(
                         &C::READ_BMOPF_RETAINED_SOURCE_ONLY,
-                        format!("top level `{other}` is outside the schema; kept untyped"),
+                        format!("top level `{other}` has no typed PowerIO representation; kept as named JSON data"),
                     );
                     for (name, v) in items {
                         self.net.untyped_objects_mut().push(UntypedObject {
@@ -1441,6 +1441,7 @@ impl Reader<'_> {
             "v_ref_to",
             "g_no_load",
             "b_no_load",
+            "no_load_shunt",
             "r_series",
             "x_series",
             "r_series_from",
@@ -1586,7 +1587,7 @@ impl Reader<'_> {
                 extras.insert(key.into(), value.clone());
             }
         }
-        for key in ["g_no_load", "b_no_load"] {
+        for key in ["g_no_load", "b_no_load", "no_load_shunt"] {
             if let Some(v) = o.get(key) {
                 extras.insert(key.into(), v.clone());
             }
@@ -1752,6 +1753,7 @@ impl Reader<'_> {
             "x_series_to",
             "g_no_load",
             "b_no_load",
+            "no_load_shunt",
             "tap_ratio",
             "tap_ratio_min",
             "tap_ratio_max",
@@ -1840,6 +1842,7 @@ impl Reader<'_> {
         for key in [
             "g_no_load",
             "b_no_load",
+            "no_load_shunt",
             "tap_ratio_min",
             "tap_ratio_max",
             "regulator_type",
@@ -1868,7 +1871,14 @@ impl Reader<'_> {
     // reads end to end.
     #[expect(clippy::too_many_lines)]
     fn n_winding_transformer(&mut self, name: &str, o: &Map<String, Value>) -> DistTransformer {
-        let known = ["windings", "x_sc", "s_rating", "g_no_load", "b_no_load"];
+        let known = [
+            "windings",
+            "x_sc",
+            "s_rating",
+            "g_no_load",
+            "b_no_load",
+            "no_load_shunt",
+        ];
         let s = o.get("s_rating").map_or(f64::NAN, f);
         let mut windings = Vec::new();
         let mut delta_rolls = Map::new();
@@ -1969,7 +1979,7 @@ impl Reader<'_> {
         if !delta_rolls.is_empty() {
             extras.insert(BMOPF_DELTA_ROLLS_EXTRA.into(), Value::Object(delta_rolls));
         }
-        for key in ["g_no_load", "b_no_load"] {
+        for key in ["g_no_load", "b_no_load", "no_load_shunt"] {
             if let Some(v) = o.get(key) {
                 extras.insert(key.into(), v.clone());
             }

@@ -1518,7 +1518,13 @@ impl DssWriter {
                 );
                 s.push_str(" xhl=0");
             }
-            s.push_str(&self.extras_tail("transformer", &t.name, &t.extras));
+            let mut extras = t.extras.clone();
+            if let Some((loss, imag)) = crate::model::transformer_no_load_percentages(t) {
+                extras.remove("no_load_shunt");
+                extras.insert("%noloadloss".into(), serde_json::json!(loss));
+                extras.insert("%imag".into(), serde_json::json!(imag));
+            }
+            s.push_str(&self.extras_tail("transformer", &t.name, &extras));
             self.line_out(&s);
             for (idx, w) in t.windings.iter().enumerate() {
                 if let Some(r) = w.r_neutral {

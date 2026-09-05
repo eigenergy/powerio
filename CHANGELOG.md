@@ -2,6 +2,11 @@
 
 ## 0.11.0
 
+- Preserve physical transformer exciting-branch locations with the pinned
+  proposal's explicit per-coil `no_load_shunt`. Correct magnetizing signs,
+  WYE/DELTA voltage bases and fixed-tap scaling; retain PMD no-load percentages.
+  Six independent OpenDSS admittance comparisons cover the conversion through IR.
+
 - Preserve three-phase generator counts in OpenDSS conversion, including BMOPF
   inputs whose phase maps omit a neutral. Keep legacy MCP root environment
   aliases compatible with PowerMCP.

@@ -1073,6 +1073,24 @@ impl Reader<'_> {
                 "sm_ub",
             ],
         );
+        for (field, extra) in [
+            ("noloadloss", "%noloadloss"),
+            ("cmag", "%imag"),
+            ("sm_ub", "emerghkva"),
+        ] {
+            if let Some(value) = o.get(field) {
+                if let Some(number) = value.as_f64().filter(|v| v.is_finite() && *v >= 0.0) {
+                    extras.insert(
+                        extra.into(),
+                        serde_json::json!(number * if field == "sm_ub" { 1.0 } else { 100.0 }),
+                    );
+                } else {
+                    extras.insert(field.into(), value.clone());
+                    self.diagnostics.push(&C::READ_PMD_SOURCE_MALFORMED,
+                        format!("transformer {name}: {field} requires a finite nonnegative number; retained in extras"));
+                }
+            }
+        }
         for key in ["tm_set", "tm_lb", "tm_ub", "tm_fix", "tm_step"] {
             if let Some(v) = o.get(key) {
                 extras.insert(format!("pmd_{key}"), v.clone());
