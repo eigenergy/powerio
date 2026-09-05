@@ -5616,7 +5616,7 @@
           "type": "array"
         },
         "xsc_pct": {
-          "description": "Short circuit reactances between winding pairs, percent:\n`[xhl]` for two windings, `[xhl, xht, xlt]` for three.",
+          "description": "Short circuit reactances between winding pairs, percent:\nUpper-triangular order `12, 13, ..., 1n, 23, ..., (n-1)n`,\non winding 1's power base, matching OpenDSS `Xscarray`.",
           "items": {
             "anyOf": [
               {
