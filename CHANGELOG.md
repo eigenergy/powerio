@@ -198,6 +198,10 @@ crates.
   range error instead of panicking, and the unit and field name getters in C
   and Python return `unknown` for a variant the build does not name instead of
   aborting.
+- `pio_emit` validates its format inside the panic boundary, the two objective
+  getters run inside it as well, and a Rust panic in the Python extension
+  raises `PowerIOError` with code `BIND.PY.PANIC` instead of escaping as
+  `PanicException`.
 - C ABI 7 replaces ABI 6 with no aliases for earlier generations and no
   Arrow export. Sources, destinations, modules, typed values, collections,
   diagnostics, artifacts, matrices, and vectors use opaque reference counted

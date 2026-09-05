@@ -33,6 +33,15 @@ use powerio_tx::{
     POWER_MODELS_ANGLE_BOUND_PAD, classify_json_text as classify_balanced_json_text,
 };
 
+/// Diagnostic codes this binding raises on its own, beside the codes the core
+/// crates report.
+pub mod codes {
+    powerio_core::diagnostic_codes! {
+        BIND_PY_PANIC = "BIND.PY.PANIC", Error,
+            "a panic was caught at the Python boundary and did not cross it", category = Data;
+    }
+}
+
 pyo3::create_exception!(
     powerio,
     PowerIOError,
@@ -4269,6 +4278,11 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("PowerIOError", m.py().get_type::<PowerIOError>())?;
     m.add("PowerIOParseError", m.py().get_type::<PowerIOParseError>())?;
     m.add("PowerIODataError", m.py().get_type::<PowerIODataError>())?;
+    m.add(
+        "PanicException",
+        m.py().get_type::<pyo3::panic::PanicException>(),
+    )?;
+    m.add("PANIC_CODE", codes::BIND_PY_PANIC.code)?;
     m.add_class::<PyBalancedNetwork>()?;
     m.add_function(wrap_pyfunction!(parse_display, m)?)?;
     m.add_class::<PyMulticonductorNetwork>()?;

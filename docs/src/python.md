@@ -202,6 +202,9 @@ helpers, and NetworkX only by `to_networkx`.
 Parse failures raise `PowerIOParseError`. Valid data that cannot satisfy an
 operation raises `PowerIODataError`. Both derive from `PowerIOError` and carry
 a stable diagnostic code. Branch on `.code`, not the rendered message.
+A Rust panic inside the extension surfaces as `PowerIOError` with code
+`BIND.PY.PANIC`, never as `pyo3_runtime.PanicException`; module state is
+unchanged because every mutation is built in full before it is installed.
 
 ## MCP server
 
