@@ -21,6 +21,7 @@ export interface Output {
   id: string;
   format: string;
   paths: string[];
+  layout?: 'file' | 'directory';
   size: number;
   status: 'converted' | 'warnings' | 'unchanged' | 'error';
   diagnostics: Diagnostic[];

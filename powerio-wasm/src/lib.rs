@@ -141,6 +141,10 @@ impl Conversion {
             Ok(result) => {
                 let response = json!({
                     "ok": true,
+                    "layout": match result.layout() {
+                        powerio::OutputLayout::File => "file",
+                        powerio::OutputLayout::Directory => "directory",
+                    },
                     "fidelity": match result.fidelity() {
                         powerio::Fidelity::ExactSameFormat => "exact",
                         powerio::Fidelity::Canonical => "canonical",
@@ -250,7 +254,13 @@ mod tests {
         assert_eq!(inspection["family"], "transmission");
         let native =
             powerio::parse(Source::from_memory("case9.m", bytes.to_vec()).unwrap()).unwrap();
-        for format in ["matpower", "powermodels-json", "psse", "pandapower-json"] {
+        for format in [
+            "matpower",
+            "powermodels-json",
+            "psse",
+            "pandapower-json",
+            "cgmes",
+        ] {
             let emitted =
                 powerio::emit(&native, format, Destination::memory("case9").unwrap()).unwrap();
             let output: Value =
@@ -262,6 +272,14 @@ mod tests {
             let EmittedOutput::Memory { artifacts } = emitted.output() else {
                 panic!("memory expected")
             };
+            assert_eq!(
+                output["layout"],
+                if emitted.layout() == powerio::OutputLayout::File {
+                    "file"
+                } else {
+                    "directory"
+                }
+            );
             assert_eq!(converter.artifact_count(), artifacts.len());
             for (index, artifact) in artifacts.iter().enumerate() {
                 assert_eq!(converter.take_artifact(index), artifact.bytes());
