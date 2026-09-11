@@ -720,7 +720,25 @@ fn diagonal_byte_identity() {
         let net = parse_case(case);
         let original = std::fs::read_to_string(fixture(case.rel)).unwrap();
         let echoed = net.emit(case.fmt.target());
-        assert_eq!(echoed.text, original, "{}: diagonal echo", case.label);
+        let retained = if matches!(case.fmt, Fmt::Dss) && !echoed.sidecars.is_empty() {
+            let entry = format!(
+                "source/{}",
+                std::path::Path::new(case.rel)
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+            );
+            &echoed
+                .sidecars
+                .iter()
+                .find(|file| file.path == entry)
+                .unwrap()
+                .text
+        } else {
+            &echoed.text
+        };
+        assert_eq!(*retained, original, "{}: diagonal echo", case.label);
         assert!(echoed.warnings.is_empty(), "{}: echo warns", case.label);
     }
 }

@@ -594,9 +594,21 @@ pub fn emit_with_options(
                 };
                 let path = powerio_core::ArtifactPath::new(format!("source/{name}"))?;
                 if buffer.id() == primary.id() {
+                    let target = if path.as_str().contains('"') {
+                        let (token, representable) = crate::dss::dss_value_out(path.as_str());
+                        if !representable {
+                            return Err(powerio_core::Error::new(
+                                &powerio_core::codes::REQUEST_OUTPUT_INVALID_ARTIFACT_PATH,
+                                "the project entry filename cannot be represented in an OpenDSS redirect",
+                            ));
+                        }
+                        token
+                    } else {
+                        format!("\"{}\"", path.as_str())
+                    };
                     artifacts.push(powerio_core::MemoryArtifact::new(
                         powerio_core::ArtifactPath::new("case.dss")?,
-                        format!("Redirect \"{}\"\n", path.as_str()).into_bytes(),
+                        format!("Redirect {target}\n").into_bytes(),
                     ));
                 }
                 artifacts.push(powerio_core::MemoryArtifact::new(

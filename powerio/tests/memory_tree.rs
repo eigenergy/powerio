@@ -198,3 +198,41 @@ fn format_catalog_tokens_resolve_and_read_only_targets_stay_read_only() {
             .any(|entry| entry.format.token == "bmopf-json@0.2.0")
     );
 }
+
+#[test]
+fn dss_project_entry_names_reparse_or_are_refused() {
+    for name in ["model/entry\"file.dss", "model/entry\"')] }file.dss"] {
+        let module = powerio::parse(tree(
+            &[(name, "New Circuit.example basekv=12.47 bus1=source\n")],
+            Some(name),
+        ))
+        .unwrap();
+        let result = powerio::emit(&module, "dss", Destination::memory("out").unwrap());
+        if name.contains('}') {
+            assert!(result.is_err());
+            continue;
+        }
+        let EmittedOutput::Memory { artifacts } = result.unwrap().into_output() else {
+            panic!("memory artifacts expected")
+        };
+        let source = Source::from_memory_tree(
+            "output",
+            artifacts.into_iter().map(|artifact| {
+                let path =
+                    ArtifactPath::new(artifact.name().as_str().strip_prefix("out/").unwrap())
+                        .unwrap();
+                (path, Arc::<[u8]>::from(artifact.into_bytes()))
+            }),
+            Some(ArtifactPath::new("case.dss").unwrap()),
+        )
+        .unwrap();
+        let parsed = powerio::parse(source).unwrap();
+        assert!(
+            !parsed
+                .diagnostics()
+                .iter()
+                .any(|entry| entry.code().starts_with("READ.DSS.INCLUDE"))
+        );
+        assert_eq!(parsed.sources().len(), 2);
+    }
+}

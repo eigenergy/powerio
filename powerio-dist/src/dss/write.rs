@@ -389,7 +389,7 @@ fn name_breaks_dss(name: &str, is_bus_id: bool) -> bool {
 /// wrapper, so the next write sees the bare value and picks the same form.
 /// `false` means nothing reparses to the value — every closer appears in
 /// it and bare scanning splits it — and the caller must warn.
-fn dss_value_out(value: &str) -> (String, bool) {
+pub(crate) fn dss_value_out(value: &str) -> (String, bool) {
     // An empty value is never bare representable: `key=` makes the lexer
     // eat the next token as the value. `()` strips back to the empty string.
     if value.is_empty() {
