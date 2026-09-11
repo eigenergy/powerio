@@ -4,7 +4,7 @@
 
 - Add PowerIO Convert at `powerio.dev/convert/`: local WebAssembly batch
   conversion with mixed-format detection, project folders and ZIPs, multiple
-  outputs, native diagnostics, and private downloads.
+  outputs, native diagnostics, private downloads, and optional error statistics.
 - Parse caller-supplied file trees entirely in memory, including PyPSA folders
   and OpenDSS projects with nested references.
 - Keep included files and their original paths when copying unchanged OpenDSS

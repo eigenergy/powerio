@@ -2,7 +2,9 @@
 
 A static Svelte application at <https://powerio.dev/convert/>. The native
 PowerIO parser and writers run in a dedicated WebAssembly worker. No
-conversion API, account, or server storage is required.
+conversion API, account, or server storage is required. Rust owns parsing
+and writing; plain TypeScript owns the queue, project grouping, and storage.
+Svelte renders the controls, and the telemetry policy uses plain JavaScript.
 
 ## Development
 
@@ -66,14 +68,47 @@ examples, JavaScript, and WASM ship with the site. Conversion runs offline
 after the engine loads; a fresh offline visit still requires those assets.
 There is no file-upload endpoint or service worker.
 
-On powerio.dev only, an iframe with `sandbox="allow-scripts"` loads the
-Umami script. Its opaque origin prevents access to the converter DOM,
-selected files, browser storage, and reports. The parent sends only
-allowlisted events and properties. Manual custom payloads use a fixed
-page URL and title, with no query, fragment, referrer, filenames, source
-content, or diagnostic messages. Umami receives normal connection
-metadata. The preference switch and Do Not Track disable analytics;
-blocked analytics never block conversion.
+Statistics are off until the visitor opts in. No analytics script or request
+loads before consent. The switch persists locally, and Do Not Track or
+Global Privacy Control overrides it. Opting out removes the frame and its
+pending events; opting in does not upload earlier activity. Conversion
+works when the analytics service is blocked or unavailable.
+
+On powerio.dev only, an iframe with `sandbox="allow-scripts"` loads Umami.
+It loads the third-party script only after a consent message from the
+converter; opening the frame URL directly sends nothing. Its opaque origin prevents access to the converter DOM, selected files,
+browser storage, and reports. Both sides apply the same closed vocabulary
+in [`public/analytics-policy.js`](public/analytics-policy.js). Unknown
+format values become `unknown`; unreviewed diagnostic codes become `other`.
+There is no general text, numeric, or regular-expression escape hatch.
+The reviewed codes describe parsing, format compatibility, project-file
+acquisition, or browser failures, never electrical conditions or equipment.
+New codes and formats require an explicit edit to this list.
+
+Events describe engine startup, parse and conversion outcomes, selected
+parser problem codes, examples, downloads, sharing, CLI discovery, and issue
+report preparation. Batch sizes and elapsed times use broad buckets. The
+software version has a fixed allowlist. Each operation sends at most three
+distinct problem codes; each page visit sends at most 20 distinct problem
+events and 100 custom events overall. Each enabled frame also sends one
+fixed pageview. Identical problems are counted once per
+page visit. These limits mean event totals are capped observations, not an
+exact count of failed cases. No case identifiers connect the observations.
+The budget and duplicate set live only in tab memory.
+
+Custom payloads use a fixed page URL and title. Files, filenames, paths,
+raw diagnostics, report text, source snippets, coordinates, topology,
+equipment counts, electrical values, file hashes, exact sizes, and exact
+processing times are excluded. Query strings, fragments, referrers, custom
+visitor IDs, screen dimensions, and browser language are also excluded
+from the application payload. Umami still receives the IP address and
+browser connection metadata inherent in an HTTP request. Umami derives
+browser/OS/device, approximate country/region/city, and session/visit
+statistics from that metadata, as described in its
+[metric definitions](https://docs.umami.is/docs/metric-definitions). This is limited
+telemetry, not a promise that no information leaves the browser or a legal
+certification about CEII. Sensitive models and detailed diagnostics stay
+local. Detailed reports require the visitor's review before sharing.
 
 The implementation uses Umami's documented
 [custom payload API](https://docs.umami.is/docs/tracker-functions) and

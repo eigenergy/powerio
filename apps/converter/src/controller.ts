@@ -1,5 +1,5 @@
 import { ArtifactStore, download } from './artifacts';
-import { analyticsEnabled, bucket, configureAnalytics, track } from './analytics';
+import { analyticsEnabled, bucket, configureAnalytics, track, trackOperation } from './analytics';
 import { basename, groupInputs, safeName, stem, unpack } from './inputs';
 import { WorkerClient } from './worker-client';
 import type { BrowserFile, ConverterState, Diagnostic, Family, Job, Output } from './types';
@@ -36,13 +36,14 @@ export class ConverterController {
   }
   initialize() {
     return this.startup ??= (async () => {
+      configureAnalytics(this.state.analytics);
       try {
         const [capabilities] = await Promise.all([this.engine(), this.store.initialize()]);
         this.state.formats = capabilities.formats;
         this.state.engine.version = capabilities.version;
         this.applySharedSettings();
-        configureAnalytics(this.state.analytics);
-      } catch (error) { this.state.error = message(error); }
+        track('engine_result', { outcome: 'ready', version: this.state.engine.version });
+      } catch (error) { this.state.error = message(error); track('engine_result', { outcome: 'error' }); }
       this.state.phase = 'idle'; this.publish();
     })();
   }
@@ -84,6 +85,7 @@ export class ConverterController {
         try { expanded.push(...(/\.zip$/i.test(entry.path) ? await unpack(entry) : [entry])); }
         catch (error) {
           this.state.jobs.push({ id: crypto.randomUUID(), name: entry.file.name, files: [entry.path], size: entry.file.size, status: 'error', diagnostics: [issue(message(error), 'WEB.INPUT.ARCHIVE')], outputs: [] });
+          trackOperation('input', 'error', undefined, undefined, [issue('', 'WEB.INPUT.ARCHIVE')]);
         }
       }
       for (const input of await groupInputs(expanded)) {
@@ -97,6 +99,7 @@ export class ConverterController {
         this.state.jobs.push(job);
         this.publish();
         if (!input.needsPrimary) await this.inspect(job, epoch);
+        else trackOperation('input', 'needs-primary');
       }
     });
   }
@@ -120,13 +123,17 @@ export class ConverterController {
         current.status = 'error';
         current.diagnostics.push(issue('This document is not a supported grid exchange case. Use PowerIO in the terminal for geographic layers, IR, and other operations.', 'WEB.INPUT.VALUE_TYPE'));
       }
-      if (release) await this.client!.request('release');
+      if (release) {
+        trackOperation('parse', current.status === 'ready' && warned(current.diagnostics) ? 'warnings' : current.status, current.format, undefined, current.diagnostics);
+        await this.client!.request('release');
+      }
       this.publish();
       return current.status === 'ready';
     } catch (error) {
       if (epoch !== this.epoch) return false;
       const current = this.job(id)!;
       current.status = 'error'; current.diagnostics = [issue(message(error))];
+      trackOperation('parse', 'error', current.format, undefined, current.diagnostics);
       this.client?.close(); this.client = undefined;
       await this.engine(); this.publish();
       return false;
@@ -241,12 +248,13 @@ export class ConverterController {
             output.diagnostics.push(issue('Local storage is full. Download completed results and remove those cases, then retry the remaining conversion.', 'WEB.STORAGE.FULL'));
             this.job(selected.id)!.outputs = [...this.job(selected.id)!.outputs.filter(entry => entry.format !== token), output];
             this.job(selected.id)!.status = 'done'; this.publish();
+            trackOperation('convert', 'error', job.format, token, output.diagnostics);
             throw error;
           }
           this.artifacts.set(output.id, saved);
           const current = this.job(selected.id)!;
           current.outputs = [...current.outputs.filter(entry => entry.format !== token), output];
-          if (output.status === 'error') track('conversion_error', { source: job.format ?? 'unknown', target: token, code: output.diagnostics[0]?.code ?? 'unknown' });
+          trackOperation('convert', output.status, job.format, token, output.diagnostics);
           this.publish();
           if (restart) {
             this.client?.close(); this.client = undefined;
@@ -264,6 +272,7 @@ export class ConverterController {
     });
   }
   cancel() {
+    if (this.state.phase === 'converting') track('batch_cancelled');
     this.epoch++; this.client?.close(); this.client = undefined;
     this.state.jobs.forEach(job => { if (['queued', 'inspecting', 'converting'].includes(job.status)) job.status = 'cancelled'; });
     this.state.phase = 'idle'; this.state.message = 'Cancelled. Completed results are still available.'; this.publish();
@@ -361,7 +370,7 @@ export class ConverterController {
     }
     track('example', { kind }); return this.addFiles(files);
   }
-  setAnalytics(enabled: boolean) { this.state.analytics = enabled; configureAnalytics(enabled); this.publish(); }
+  setAnalytics(enabled: boolean) { this.state.analytics = configureAnalytics(enabled); this.publish(); }
   private applySharedSettings() {
     const { family, target } = document.documentElement.dataset;
     if ((family === 'transmission' || family === 'distribution') && this.state.formats.some(format => format.family === family && format.token === target && format.canEmit)) {

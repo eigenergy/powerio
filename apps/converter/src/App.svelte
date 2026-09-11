@@ -22,13 +22,14 @@
     activeName: "",
     message: "",
     error: "",
-    analytics: true,
+    analytics: false,
   });
   let fileInput: HTMLInputElement;
   let folderInput: HTMLInputElement;
   let missingInput: HTMLInputElement;
   let missingJobId: string | undefined;
   let reportDialog: HTMLDialogElement;
+  let privacyDetails: HTMLDetailsElement;
   let report = $state("");
   let dragging = $state(false);
   let notice = $state("");
@@ -438,6 +439,15 @@
           >Your files stay on your computer.<br class="mobile-break" /> PowerIO converts
           them in your browser.</span
         >
+      </p>
+      <p class="analytics-invitation">
+        <a
+          href="#privacy"
+          onclick={() => {
+            privacyDetails.open = true;
+          }}>Help improve PowerIO</a
+        >
+        <span>Optional statistics, off by default.</span>
       </p>
     </div>
     <div class="mascot-scene" aria-hidden="true">
@@ -996,7 +1006,7 @@
       </div>
     </div>
     <div class="help-section">
-      <details class="info-detail" id="privacy">
+      <details class="info-detail" id="privacy" bind:this={privacyDetails}>
         <summary>Your files stay here.</summary>
         <div>
           <p>
@@ -1008,20 +1018,61 @@
             may remain in temporary browser storage until Clear all removes them
             or PowerIO clears them on your next visit.
           </p>
+          <h3 class="analytics-heading">Optional usage statistics</h3>
           <p>
-            Umami receives normal connection metadata, such as an IP address and
-            browser information, along with coarse usage events: formats used,
-            completion and error categories, and approximate batch sizes.
-            Analytics never include file contents, names, paths, raw error
-            messages, or reports. Do Not Track is respected.
+            Usage statistics are off by default. Umami analytics load only if
+            you opt in, and only activity after opt-in is shared. Switch them
+            off at any time. Do Not Track and Global Privacy Control (GPC) are
+            respected.
+          </p>
+          <p>
+            Shared statistics can include standard format names, broad parse or
+            conversion outcomes, reviewed parser problem codes, approximate
+            batch sizes, broad elapsed-time ranges, and the PowerIO version.
+            Unreviewed problem codes are reported as "other".
+          </p>
+          <p>
+            File contents, names, paths, raw error messages, reports, grid
+            properties and locations, and electrical diagnostics are never
+            included. Connecting to Umami exposes your IP address and browser
+            connection metadata. Umami uses this metadata for browser, operating
+            system and device information, approximate location (country, region
+            and city), and visit statistics. It generates its own session and
+            visit IDs. PowerIO does not send a custom visitor ID. <a
+              href="https://docs.umami.is/docs/metric-definitions"
+              >Umami's data definitions</a
+            >
+            explain these statistics.
+          </p>
+          <details class="analytics-example">
+            <summary>See an example statistic</summary>
+            <dl>
+              <dt>Outcome</dt>
+              <dd>Parse problem</dd>
+              <dt>Format</dt>
+              <dd>OpenDSS</dd>
+              <dt>Problem code</dt>
+              <dd><code>READ.DSS.INCLUDE_LOAD_FAILED</code></dd>
+            </dl>
+          </details>
+          <p>
+            <a
+              href="https://github.com/eigenergy/powerio/tree/main/apps/converter/public/analytics-policy.js"
+              >Review the analytics policy</a
+            >
+            for the exact allowed fields. Source review and suggestions are welcome
+            on GitHub.
           </p>
           <label class="checkbox-label analytics-control"
             ><input
               type="checkbox"
               checked={view.analytics}
-              onchange={(event) =>
-                controller?.setAnalytics(event.currentTarget.checked)}
-            />Allow anonymous usage analytics</label
+              onchange={(event) => {
+                const input = event.currentTarget;
+                controller?.setAnalytics(input.checked);
+                input.checked = controller?.state.analytics ?? false;
+              }}
+            />Share limited usage and error statistics</label
           >
         </div>
       </details>
@@ -1138,8 +1189,12 @@
   >
   <p>Open source. Built for the power systems community.</p>
   <div class="footer-links">
-    <a href="#privacy">Privacy</a><a href="https://github.com/eigenergy/powerio"
-      >Source code</a
+    <a
+      href="#privacy"
+      onclick={() => {
+        privacyDetails.open = true;
+      }}>Privacy</a
+    ><a href="https://github.com/eigenergy/powerio">Source code</a
     >{#if view.engine.version}<span
         >Engine {view.engine.version}{#if view.engine.commit}<a
             href={`https://github.com/eigenergy/powerio/commit/${view.engine.commit}`}

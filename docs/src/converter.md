@@ -58,11 +58,22 @@ browser storage. Clear all removes the session's files; abandoned temporary
 files are removed on the next visit. Closing or reloading the tab discards
 the queue, so download results before leaving.
 
-Limited Umami analytics count conversion and download activity using format
-names, diagnostic codes, and approximate batch sizes. The analytics script
-runs in an isolated iframe that cannot read the selected files. It receives
-normal connection metadata. Turn analytics off in the Privacy section;
-Do Not Track is also respected. Conversion works when analytics is blocked.
+Optional Umami statistics help identify formats and parser problems that
+need work. They are off by default; enable them in the Privacy section.
+Only activity after opt-in is shared. Statistics include standard format
+names, broad outcomes, reviewed parser codes, software version, and coarse
+batch-size and elapsed-time ranges. Unknown codes become `other`. Electrical
+diagnostics and grid properties stay local. Duplicate problems and event
+limits reduce repeated reporting.
+
+The analytics script runs in an isolated iframe that cannot read files or
+the converter page. Umami receives IP and browser connection metadata with
+its requests and derives browser/device, approximate location, and visit
+statistics from that metadata. See [Umami metric definitions](https://docs.umami.is/docs/metric-definitions).
+Switch statistics off at any time; Do Not Track and Global
+Privacy Control also disable them. Conversion works with analytics blocked.
+The [public analytics policy](https://github.com/eigenergy/powerio/blob/main/apps/converter/public/analytics-policy.js)
+lists every permitted event and value.
 
 Share settings copies a link containing output preferences only. It never
 includes files or filenames. Report a conversion problem prepares an

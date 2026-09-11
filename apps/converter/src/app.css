@@ -1857,3 +1857,57 @@ tbody td {
   cursor: not-allowed;
   color: #607087;
 }
+
+.analytics-invitation {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 9px;
+  margin-top: 10px;
+  font-size: 11px;
+  color: #607087;
+}
+.analytics-invitation a {
+  font-weight: 500;
+}
+.analytics-heading {
+  margin: 21px 0 9px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #40516b;
+}
+.analytics-example {
+  margin: 15px 0;
+  padding: 0 12px;
+  border: 1px solid #e4eaf1;
+  border-radius: 6px;
+  background: #f8faff;
+}
+.analytics-example summary {
+  padding-block: 11px;
+  font-size: 12px;
+}
+.analytics-example dl {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 7px 12px;
+  margin: 0 0 12px;
+  line-height: 1.5;
+  font-size: 11px;
+}
+.analytics-example dt {
+  color: #40516b;
+}
+.analytics-example dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.analytics-example code {
+  font-size: 10px;
+}
+.analytics-example:not([open]) > summary::after {
+  content: "+";
+}
+.analytics-example[open] > summary::after {
+  content: "-";
+}

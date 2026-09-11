@@ -6,7 +6,7 @@ const fake = vi.hoisted(() => ({
   pending: undefined as undefined | { resolve: (value: unknown) => void; reject: (error: Error) => void },
   pause: false,
 }));
-vi.mock('./analytics', () => ({ analyticsEnabled: () => false, configureAnalytics: vi.fn(), track: vi.fn(), bucket: String }));
+vi.mock('./analytics', () => ({ analyticsEnabled: () => false, configureAnalytics: vi.fn(), track: vi.fn(), trackOperation: vi.fn(), bucket: String }));
 vi.mock('./worker-client', () => ({ WorkerClient: class {
   async initialize() { return { version: '0.11.1', formats: [
     { token: 'matpower', family: 'transmission', canRead: true, canEmit: true, extension: 'm' },
