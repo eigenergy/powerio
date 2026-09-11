@@ -1,4 +1,4 @@
-import ConverterWorker from './converter.worker?worker';
+import ConverterWorker from './converter.worker?worker&inline';
 import wasmUrl from './wasm/powerio_wasm_bg.wasm?url';
 
 let compiled: Promise<WebAssembly.Module> | undefined;

@@ -105,10 +105,16 @@ impl Conversion {
             Ok(module) => module,
             Err(error) => return failure(&error),
         };
-        let detected = module
-            .source()
-            .and_then(Source::format)
-            .map(|f| f.as_str().to_owned());
+        let detected =
+            module
+                .source()
+                .and_then(Source::format)
+                .map(|format| match format.as_str() {
+                    "powerworld-pwb" => "pwb".to_owned(),
+                    token => powerio::resolve_format(token)
+                        .map_or(token, |resolved| resolved.token)
+                        .to_owned(),
+                });
         let family = detected.as_ref().and_then(|token| {
             powerio::grid_formats()
                 .find(|entry| entry.format.token == token)
@@ -217,6 +223,20 @@ mod tests {
             serde_json::from_str(&converter.inspect(Some("missing.m".into()), None)).unwrap();
         assert_eq!(result["ok"], false);
         assert!(!result["diagnostics"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn binary_powerworld_source_matches_its_catalog_entry() {
+        let mut converter = Conversion::new("case.pwb".into());
+        converter.add_file(
+            "case.pwb".into(),
+            include_bytes!("../../tests/data/powerworld/ACTIVSg200.pwb"),
+        );
+        let result: Value =
+            serde_json::from_str(&converter.inspect(Some("case.pwb".into()), None)).unwrap();
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["format"], "pwb");
+        assert_eq!(result["family"], "transmission");
     }
 
     #[test]
