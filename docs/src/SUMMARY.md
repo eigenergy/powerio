@@ -3,6 +3,7 @@
 [Overview](README.md)
 
 - [Getting started](getting-started.md)
+- [Browser converter](converter.md)
 - [Core concepts](concepts.md)
 - [Transmission networks](transmission.md)
 - [Distribution networks](distribution.md)

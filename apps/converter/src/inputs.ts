@@ -62,7 +62,8 @@ export async function groupInputs(entries: BrowserFile[]): Promise<InputCase[]> 
     const files = [...remaining].filter(file => (root ? file.path.startsWith(`${root}/`) : !file.path.includes('/')) && /\.(dss|csv|txt)$/i.test(file.path));
     const dss = files.filter(file => /\.dss$/i.test(file.path));
     const masters = dss.filter(file => /^master\.dss$/i.test(basename(file.path)));
-    const primary = masters.length === 1 ? masters[0] : dss.length === 1 ? dss[0] : undefined;
+    const caseEntry = dss.find(file => file.path === (root ? `${root}/case.dss` : 'case.dss'));
+    const primary = caseEntry ?? (masters.length === 1 ? masters[0] : dss.length === 1 ? dss[0] : undefined);
     take(root || primary?.file.name || 'OpenDSS project', files, root, primary?.path, !primary);
   }
   const xmlGroups = new Map<string, BrowserFile[]>();

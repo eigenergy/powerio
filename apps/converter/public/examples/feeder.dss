@@ -1,0 +1,4 @@
+Clear
+New Circuit.example basekv=12.47 bus1=source phases=3
+New Line.feeder bus1=source bus2=load phases=3 r1=0.1 x1=0.2 r0=0.3 x0=0.4 length=1
+New Load.community bus1=load phases=3 conn=wye kv=12.47 kw=100 kvar=20

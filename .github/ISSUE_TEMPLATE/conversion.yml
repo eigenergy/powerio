@@ -1,0 +1,27 @@
+name: Conversion problem
+description: Report unexpected parsing or conversion in PowerIO or the browser converter.
+title: '[Conversion] '
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve PowerIO. Describe the expected result and include diagnostic codes if available. Review reports and examples for private information before posting. The converter never attaches files automatically.
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+      description: Which input and output formats are involved, and what should the output contain?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: Include the sanitized report from the converter, or the PowerIO version, browser, command, and diagnostic codes.
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: Steps and shareable example
+      description: A small synthetic case is ideal. Remove private identifiers and confirm permission before attaching data. The full local conversion report can contain filenames and diagnostic messages.
