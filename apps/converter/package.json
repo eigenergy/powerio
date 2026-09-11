@@ -1,0 +1,30 @@
+{
+  "name": "powerio-converter",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "wasm": "node scripts/build-wasm.mjs",
+    "build": "npm run wasm && vite build && node scripts/pages.mjs",
+    "build:ui": "vite build && node scripts/pages.mjs",
+    "preview": "vite preview --host 127.0.0.1",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "test": "vitest run",
+    "test:browser": "playwright test"
+  },
+  "dependencies": {
+    "@fontsource-variable/atkinson-hyperlegible-next": "5.3.0",
+    "@zip.js/zip.js": "2.14.0",
+    "svelte": "5.57.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@sveltejs/vite-plugin-svelte": "7.3.0",
+    "@types/node": "^24.0.0",
+    "svelte-check": "^4.4.0",
+    "typescript": "^5.9.0",
+    "vite": "8.3.0",
+    "vitest": "^4.0.0"
+  }
+}

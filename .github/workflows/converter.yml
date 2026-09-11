@@ -1,0 +1,43 @@
+name: Converter
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: converter-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  engine:
+    name: Browser conversion engine
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked -p powerio-wasm
+      - run: cargo clippy --locked -p powerio-wasm --all-targets -- -D warnings
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/converter/package-lock.json
+      - run: cargo install wasm-pack --version 0.15.0 --locked
+      - run: npm ci
+        working-directory: apps/converter
+      - run: npm run wasm
+        working-directory: apps/converter
+      - run: npm test
+        working-directory: apps/converter

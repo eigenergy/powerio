@@ -9,6 +9,7 @@ members = [
     "powerio-py",
     "powerio-capi",
     "powerio-dist",
+    "powerio-wasm",
     "tests/facade-only",
 ]
 # Bare `cargo build`/`test`/`clippy` touch only the library + CLI crates, so the
