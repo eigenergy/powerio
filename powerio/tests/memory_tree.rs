@@ -83,14 +83,56 @@ fn nested_dss_primary_resolves_sibling_and_parent_paths() {
             .is_err()
     );
     let module = powerio::parse(source).unwrap();
-    assert!(matches!(module.value(), PioValue::MulticonductorNetwork(_)));
+    let PioValue::MulticonductorNetwork(network) = module.value() else {
+        panic!("distribution network expected")
+    };
+    assert_eq!(network.lines().len(), 1);
+    assert_eq!(network.loads().len(), 1);
+    assert!(
+        !module
+            .diagnostics()
+            .iter()
+            .any(|entry| entry.code().starts_with("READ.DSS.INCLUDE"))
+    );
     assert_eq!(module.sources().len(), 3);
+    let echoed = powerio::emit(&module, "dss", Destination::memory("out").unwrap()).unwrap();
+    assert_eq!(echoed.fidelity(), Fidelity::ExactSameFormat);
+    let EmittedOutput::Memory { artifacts } = echoed.output() else {
+        panic!("memory artifacts expected")
+    };
+    assert_eq!(artifacts.len(), files.len() + 1);
+    for (path, text) in files {
+        let artifact = artifacts
+            .iter()
+            .find(|artifact| artifact.name().as_str() == format!("out/source/{path}"))
+            .unwrap();
+        assert_eq!(artifact.bytes(), text.as_bytes());
+    }
     powerio::emit(
         &module,
         "pmd-json",
         Destination::memory("case.json").unwrap(),
     )
     .unwrap();
+}
+
+#[test]
+fn memory_tree_dss_includes_cannot_escape_the_supplied_root() {
+    let source = tree(
+        &[(
+            "model/Master.dss",
+            "Clear\nNew Circuit.example basekv=12.47 bus1=source\nRedirect ../../outside.dss\n",
+        )],
+        Some("model/Master.dss"),
+    );
+    let module = powerio::parse(source).unwrap();
+    assert!(
+        module
+            .diagnostics()
+            .iter()
+            .any(|entry| entry.code() == "READ.DSS.INCLUDE_REFUSED")
+    );
+    assert_eq!(module.sources().len(), 1);
 }
 
 #[test]
