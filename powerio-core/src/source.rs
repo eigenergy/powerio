@@ -202,7 +202,7 @@ impl AcquisitionState {
 #[derive(Debug)]
 enum SourceProvider {
     Memory {
-        primary: SourceBuffer,
+        primary: Option<SourceBuffer>,
         named: BTreeMap<String, SourceBuffer>,
     },
     File {
@@ -333,9 +333,71 @@ impl Source {
         Ok(Self {
             name: name.into(),
             provider: Arc::new(SourceProvider::Memory {
-                primary,
+                primary: Some(primary),
                 named: BTreeMap::new(),
             }),
+            declared_format: None,
+        })
+    }
+
+    /// Retain a tree of caller-owned files without filesystem access.
+    ///
+    /// A primary path selects a file and resolves its references relative to
+    /// its containing directory. Without a primary path, the source is a
+    /// directory. Paths must be unique and portable; the tree shares the
+    /// referenced-file count, depth, and byte limits of filesystem sources.
+    pub fn from_memory_tree(
+        name: impl Into<String>,
+        files: impl IntoIterator<Item = (crate::ArtifactPath, Arc<[u8]>)>,
+        primary: Option<crate::ArtifactPath>,
+    ) -> Result<Self, Error> {
+        let name = name.into();
+        if !valid_nonempty_text(&name) {
+            return Err(Error::new(
+                &crate::codes::REQUEST_SOURCE_INVALID_NAME,
+                "an in-memory source requires a nonempty bounded name",
+            ));
+        }
+        let mut named = BTreeMap::new();
+        let mut total_bytes = 0u64;
+        for (path, bytes) in files {
+            let segments = resolve_segments(&[], path.as_str())?;
+            let key = segments.join("/");
+            total_bytes = total_bytes.saturating_add(bytes.len() as u64);
+            if named.len() >= MAX_REFERENCED_FILES || total_bytes > MAX_REFERENCED_BYTES {
+                return Err(Error::new(
+                    &crate::codes::READ_IO_REFERENCE_BUDGET,
+                    "an in-memory tree exceeds 4096 files or 64 MiB",
+                ));
+            }
+            let id = if primary.as_ref() == Some(&path) {
+                PRIMARY_SOURCE_ID
+            } else {
+                &key
+            };
+            let directory = segments[..segments.len() - 1].to_vec();
+            let buffer = SourceBuffer::new(SourceId::new(id)?, key.clone(), bytes, directory);
+            if named.insert(key.clone(), buffer).is_some() {
+                return Err(Error::new(
+                    &crate::codes::REQUEST_SOURCE_INVALID_PATH,
+                    format!("duplicate in-memory file `{key}`"),
+                ));
+            }
+        }
+        let primary = primary
+            .map(|path| {
+                named.get(path.as_str()).cloned().ok_or_else(|| {
+                    Error::new(
+                        &crate::codes::REQUEST_SOURCE_UNKNOWN_BUFFER,
+                        format!("primary file `{}` was not supplied", path.as_str()),
+                    )
+                })
+            })
+            .transpose()?;
+        let name = primary.as_ref().map_or(name.as_str(), SourceBuffer::name);
+        Ok(Self {
+            name: name.into(),
+            provider: Arc::new(SourceProvider::Memory { primary, named }),
             declared_format: None,
         })
     }
@@ -456,26 +518,39 @@ impl Source {
 
     #[must_use]
     pub fn is_directory(&self) -> bool {
-        matches!(&*self.provider, SourceProvider::Directory { .. })
+        matches!(
+            &*self.provider,
+            SourceProvider::Directory { .. } | SourceProvider::Memory { primary: None, .. }
+        )
     }
 
     /// Borrow the sole primary buffer of a file or memory source.
     pub fn primary_buffer(&self) -> Result<SourceBuffer, Error> {
         match &*self.provider {
-            SourceProvider::Memory { primary, .. } | SourceProvider::File { primary, .. } => {
-                Ok(primary.clone())
+            SourceProvider::Memory {
+                primary: Some(primary),
+                ..
             }
-            SourceProvider::Directory { .. } => Err(Error::new(
-                &crate::codes::REQUEST_SOURCE_DIRECTORY_REQUIRED,
-                "a directory source has no implicit primary buffer",
-            )
-            .with_source(self.clone())),
+            | SourceProvider::File { primary, .. } => Ok(primary.clone()),
+            SourceProvider::Directory { .. } | SourceProvider::Memory { primary: None, .. } => {
+                Err(Error::new(
+                    &crate::codes::REQUEST_SOURCE_DIRECTORY_REQUIRED,
+                    "a directory source has no implicit primary buffer",
+                )
+                .with_source(self.clone()))
+            }
         }
     }
 
     /// Acquire and retain one file of a directory source by its root relative
     /// name.
     pub fn buffer(&self, name: &crate::ArtifactPath) -> Result<SourceBuffer, Error> {
+        if matches!(
+            &*self.provider,
+            SourceProvider::Memory { primary: None, .. }
+        ) {
+            return self.root_buffer(name.as_str());
+        }
         let SourceProvider::Directory { acquisition } = &*self.provider else {
             return Err(Error::new(
                 &crate::codes::REQUEST_SOURCE_DIRECTORY_REQUIRED,
@@ -710,8 +785,17 @@ impl Source {
     pub fn acquired_buffers(&self) -> Vec<SourceBuffer> {
         match &*self.provider {
             SourceProvider::Memory { primary, named } => {
-                let mut buffers = vec![primary.clone()];
-                buffers.extend(named.values().cloned());
+                let mut buffers: Vec<_> = primary.iter().cloned().collect();
+                buffers.extend(
+                    named
+                        .values()
+                        .filter(|buffer| {
+                            primary
+                                .as_ref()
+                                .is_none_or(|entry| entry.id() != buffer.id())
+                        })
+                        .cloned(),
+                );
                 buffers
             }
             SourceProvider::File {

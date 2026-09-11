@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Parse caller-supplied file trees entirely in memory, including PyPSA folders
+  and OpenDSS projects with nested references.
+- Discover grid format names, electrical families, and reader/writer capabilities
+  through the Rust facade.
+
 ## 0.11.1
 
 PowerIO 0.11.1 adds distribution calculations and improves geographic data,
