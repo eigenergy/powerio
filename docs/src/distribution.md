@@ -124,7 +124,7 @@ transformer coupling and rejects leakage, other winding connections, floating
 neutrals, core shunts or tap decisions that need a different formulation.
 
 The BMOPF proposal schema is pinned to
-[`fe8671a`](https://github.com/distribution-system-opt/dsopt-schema/commit/fe8671a74d2fc1a15a499c5b1f66cbb80fc22e12),
+[`664b494`](https://github.com/distribution-system-opt/dsopt-schema/commit/664b494f2ee31ee76f8f78e7852cdb1f1c9a8e7d),
 with SHA-256 `74d6c6de3637d52e42a26c4cb0584f51df70d69f360b236cf5e23afaf7669462`.
 Fresh 0.2.0 output places the immutable retrieval URL in `meta.$schema` and
 records the canonical identity, proposal status, digest and revision under

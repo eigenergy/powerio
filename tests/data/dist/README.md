@@ -19,14 +19,14 @@ Benchmarking Multiconductor OPF.
   `48707ea839c20032c88df715587e50d097637cd0cc8a17b2d213d4591eea8bc7`
 - `example_enwl_n1_f2.json` sha256
   `24d2c054b70b5e09d179f785cb09ff90cddbf73c859756154e9eb604782b69f1`
-- The released schemas live in
+- The versioned schema proposals live in
   <https://github.com/distribution-system-opt/dsopt-schema>. `draft_bmopf_schema.json`
   is the 0.1.0 draft the two examples validate against, kept beside them.
 - `bmopf-0.2.0.schema.json` is the 0.2.0 proposal, from
   <https://github.com/distribution-system-opt/dsopt-schema> at commit
-  `202b7b59ae3ea97b81cded0b6d428234f6c536c2` on branch
+  `664b494f2ee31ee76f8f78e7852cdb1f1c9a8e7d` on branch
   `propose-bmopf-0.2.0`, unchanged. sha256
-  `2744afb88a036783a6d22f5e830fe254321a6a68e203d31c6ff2e084d27b20cc`. It is
+  `74d6c6de3637d52e42a26c4cb0584f51df70d69f360b236cf5e23afaf7669462`. It is
   the version the writer targets by default, so the writer's output is
   validated against it; the proposal is CC BY 4.0. Re-vendor it when that
   proposal changes.
