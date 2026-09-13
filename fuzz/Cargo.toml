@@ -97,3 +97,21 @@ test = false
 name = "dss_includes_fs"
 path = "fuzz_targets/dss_includes_fs.rs"
 test = false
+
+[[bin]]
+name = "cgmes"
+path = "fuzz_targets/cgmes.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "cgmes_zip"
+path = "fuzz_targets/cgmes_zip.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "ucte"
+path = "fuzz_targets/ucte.rs"
+test = false
+bench = false

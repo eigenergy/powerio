@@ -23,7 +23,7 @@ fn parse_primary_limit(value: Option<&std::ffi::OsStr>) -> Result<u64, Error> {
         .to_str()
         .filter(|value| !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()))
         .and_then(|value| value.parse::<u64>().ok())
-        .filter(|&limit| limit > 0 && limit <= isize::MAX as u64);
+        .filter(|&limit| limit > 0 && isize::try_from(limit).is_ok());
     limit.ok_or_else(|| Error::new(&crate::codes::REQUEST_SOURCE_INVALID_LIMIT,
         "POWERIO_MAX_PRIMARY_BYTES must be a positive decimal byte count within this platform's allocation limit"))
 }

@@ -19426,6 +19426,56 @@ mod tests {
         }
     }
 
+    fn check_stored_solution_columns(module: &powerio::PioModule<PioValue>) {
+        let result = powerio::serialize(module, Destination::memory("solution").unwrap()).unwrap();
+        let EmittedOutput::Memory { artifacts } = result.into_output() else {
+            panic!("memory output required")
+        };
+        let document: serde_json::Value = serde_json::from_slice(artifacts[0].bytes()).unwrap();
+        for key in [
+            "bus_voltage_magnitude",
+            "bus_voltage_angle",
+            "bus_active_injection",
+            "branch_from_active_flow",
+            "terminal_voltage_magnitude",
+            "terminal_voltage_angle",
+        ] {
+            let Some(values) = document["value"]["data"][key].as_array() else {
+                continue;
+            };
+            if values.is_empty() {
+                continue;
+            }
+            assert_eq!(
+                collect_solution_values(module.value(), key).unwrap().len(),
+                values.len()
+            );
+            let mut malformed = document.clone();
+            malformed["value"]["data"][key]
+                .as_array_mut()
+                .unwrap()
+                .pop();
+            let bytes = serde_json::to_vec(&malformed).unwrap();
+            unsafe {
+                let mut error = std::ptr::null_mut();
+                let source = pio_source_from_memory(
+                    c"input.pio.json".as_ptr(),
+                    14,
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    &mut error,
+                );
+                assert!(!source.is_null());
+                let decoded = pio_module_deserialize(source, &mut error);
+                assert!(decoded.is_null());
+                assert!(!error.is_null());
+                assert_ne!(view_text(pio_error_code(error)), "BIND.CAPI.PANIC");
+                pio_error_release(error);
+                pio_source_release(source);
+            }
+        }
+    }
+
     #[test]
     #[allow(clippy::too_many_lines)]
     fn every_solution_exposes_its_owner_rooted_instance() {
@@ -19630,7 +19680,17 @@ mod tests {
             ];
 
             for (value, expected_instance_type, is_multiconductor, accessor) in solutions {
-                let module = module_handle(powerio::PioModule::new(value));
+                let stored = powerio::PioModule::new(value);
+                if matches!(
+                    stored.value(),
+                    PioValue::AcPfSolution(_)
+                        | PioValue::DcOpfSolution(_)
+                        | PioValue::McAcPfSolution(_)
+                        | PioValue::McAcOpfSolution(_)
+                ) {
+                    check_stored_solution_columns(&stored);
+                }
+                let module = module_handle(stored);
                 let value = pio_module_value(module);
                 let mut error = std::ptr::null_mut();
                 let solution = accessor(value, &mut error);

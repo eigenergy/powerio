@@ -10,13 +10,14 @@ structured `Err`, with no panic and no undefined behavior.
 | `pwb`, `pwd` | raw bytes for the PowerWorld binary decoders |
 | `json_classify` | arbitrary bytes for the `.json` classifier and its C entry point; every answer must be a documented family, since a file picker dispatches on it |
 | `stored_module` | the PowerIO IR reader; a document that deserializes must serialize and deserialize again |
+| `cgmes`, `cgmes_zip`, `ucte` | CGMES XML, CGMES ZIP acquisition, and UCTE text |
 | `dss`, `pmd_json` | the distribution readers, which also write the parsed network back and project its graph, so a count cap that a consumer sizes an allocation from is exercised on both sides |
 | `dist_classify` | the distribution `.json` classifier, which runs before any reader cap applies, and the reader and writers it names |
 | `dss_includes`, `dss_includes_fs` | OpenDSS include resolution over in-memory buffers and over a real filesystem tree with an escaping symbolic link |
 
 The JSON formats that ride on serde_json (PowerModels, egret, pandapower)
-have no hand written tokenizer, so between them the harnesses cover every
-hand rolled reader.
+use serde_json for tokenization. The table lists the readers with dedicated
+fuzz targets; other readers rely on their unit and integration tests.
 
 You need nightly and [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz):
 
