@@ -116,6 +116,29 @@ Q
 """
 
 
+def test_primary_file_limit_is_host_configurable(monkeypatch, tmp_path):
+    path = tmp_path / "input.m"
+    payload = TINY.encode()
+    path.write_bytes(payload)
+    monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", str(len(payload)))
+    assert powerio.parse(path).value.n_buses == 3
+    monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", str(len(payload) - 1))
+    with pytest.raises(powerio.PowerIOError) as failure:
+        powerio.parse(path)
+    assert failure.value.code == "READ.IO.PRIMARY_BUDGET"
+    monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", "invalid")
+    with pytest.raises(powerio.PowerIOError) as failure:
+        powerio.parse(path)
+    assert failure.value.code == "REQUEST.SOURCE.INVALID_LIMIT"
+    monkeypatch.delenv("POWERIO_MAX_PRIMARY_BYTES")
+    assert powerio.parse(path).value.n_buses == 3
+    with path.open("wb") as stream:
+        stream.truncate((64 << 20) + 1)
+    with pytest.raises(powerio.PowerIOError) as failure:
+        powerio.parse(path)
+    assert failure.value.code == "READ.IO.PRIMARY_BUDGET"
+
+
 def load(name):
     return powerio.parse(DATA / f"{name}.m").value
 

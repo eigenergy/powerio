@@ -376,3 +376,17 @@ def test_directory_assembly_remains_private(monkeypatch, tmp_path):
     assert (out / "keep").read_text() == "old"
     assert (out / "new").read_text() == "data"
     assert out.stat().st_mode & 0o777 == 0o755
+
+
+def test_checked_path_keeps_parent_segments_after_symlinks(monkeypatch, tmp_path):
+    nested = tmp_path / "inner" / "nested"
+    nested.mkdir(parents=True)
+    (tmp_path / "case.m").write_text("root case")
+    (nested.parent / "case.m").write_text("inner case")
+    (tmp_path / "link").symlink_to(nested, target_is_directory=True)
+    monkeypatch.chdir(tmp_path)
+    for request in ("link/../case.m", str(tmp_path / "link/../case.m"),
+                    (tmp_path / "link/../case.m").as_uri()):
+        checked = Path(sandbox.checked_path(request))
+        assert checked.is_absolute()
+        assert checked.read_text() == "inner case"

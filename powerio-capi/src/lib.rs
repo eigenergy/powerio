@@ -19426,6 +19426,27 @@ mod tests {
         }
     }
 
+    fn check_stored_solution_rejected(document: &serde_json::Value) {
+        let bytes = serde_json::to_vec(document).unwrap();
+        unsafe {
+            let mut error = std::ptr::null_mut();
+            let source = pio_source_from_memory(
+                c"input.pio.json".as_ptr(),
+                14,
+                bytes.as_ptr(),
+                bytes.len(),
+                &mut error,
+            );
+            assert!(!source.is_null());
+            let decoded = pio_module_deserialize(source, &mut error);
+            assert!(decoded.is_null());
+            assert!(!error.is_null());
+            assert_ne!(view_text(pio_error_code(error)), "BIND.CAPI.PANIC");
+            pio_error_release(error);
+            pio_source_release(source);
+        }
+    }
+
     fn check_stored_solution_columns(module: &powerio::PioModule<PioValue>) {
         let result = powerio::serialize(module, Destination::memory("solution").unwrap()).unwrap();
         let EmittedOutput::Memory { artifacts } = result.into_output() else {
@@ -19455,25 +19476,15 @@ mod tests {
                 .as_array_mut()
                 .unwrap()
                 .pop();
-            let bytes = serde_json::to_vec(&malformed).unwrap();
-            unsafe {
-                let mut error = std::ptr::null_mut();
-                let source = pio_source_from_memory(
-                    c"input.pio.json".as_ptr(),
-                    14,
-                    bytes.as_ptr(),
-                    bytes.len(),
-                    &mut error,
-                );
-                assert!(!source.is_null());
-                let decoded = pio_module_deserialize(source, &mut error);
-                assert!(decoded.is_null());
-                assert!(!error.is_null());
-                assert_ne!(view_text(pio_error_code(error)), "BIND.CAPI.PANIC");
-                pio_error_release(error);
-                pio_source_release(source);
-            }
+            check_stored_solution_rejected(&malformed);
         }
+        let mut duplicate = document;
+        let buses = duplicate["value"]["data"]["instance"]["network"]["buses"]
+            .as_array_mut()
+            .unwrap();
+        assert!(buses.len() >= 2);
+        buses[1]["id"] = buses[0]["id"].clone();
+        check_stored_solution_rejected(&duplicate);
     }
 
     #[test]

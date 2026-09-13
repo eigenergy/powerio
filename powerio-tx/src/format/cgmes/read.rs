@@ -49,7 +49,6 @@ trait CheckedOption<T> {
     fn try_or_else(self, f: impl FnOnce() -> Result<Option<T>>) -> Result<Option<T>>;
     fn try_and_then<U>(self, f: impl FnOnce(T) -> Result<Option<U>>) -> Result<Option<U>>;
     fn try_unwrap_or_else(self, f: impl FnOnce() -> Result<T>) -> Result<T>;
-    fn try_map<U>(self, f: impl FnOnce(T) -> Result<U>) -> Result<Option<U>>;
     fn try_map_or<U>(self, default: U, f: impl FnOnce(T) -> Result<U>) -> Result<U>;
 }
 impl<T> CheckedOption<T> for Option<T> {
@@ -70,9 +69,6 @@ impl<T> CheckedOption<T> for Option<T> {
             Some(value) => Ok(value),
             None => f(),
         }
-    }
-    fn try_map<U>(self, f: impl FnOnce(T) -> Result<U>) -> Result<Option<U>> {
-        self.map(f).transpose()
     }
     fn try_map_or<U>(self, default: U, f: impl FnOnce(T) -> Result<U>) -> Result<U> {
         match self {
@@ -2196,101 +2192,98 @@ fn terminal_nominal_kv(mapper: &Mapper<'_>, terminal: &str) -> Result<Option<f64
 }
 
 fn check_equipment_base_voltages(mapper: &mut Mapper<'_>) -> Result<()> {
-    Ok({
-        for object in &mapper.store.objects {
-            if !class_is_consumed(&object.class) {
-                continue;
-            }
-            let Some(base) = mapper
-                .store
-                .refv(&object.id, "ConductingEquipment.BaseVoltage")
-            else {
-                continue;
-            };
-            let Some(stated_kv) = mapper.store.f(base, "BaseVoltage.nominalVoltage")? else {
-                mapper.warnings.push_as(
+    for object in &mapper.store.objects {
+        if !class_is_consumed(&object.class) {
+            continue;
+        }
+        let Some(base) = mapper
+            .store
+            .refv(&object.id, "ConductingEquipment.BaseVoltage")
+        else {
+            continue;
+        };
+        let Some(stated_kv) = mapper.store.f(base, "BaseVoltage.nominalVoltage")? else {
+            mapper.warnings.push_as(
                 &codes::READ_CGMES_FIELD_UNMAPPED,
                 format!(
                     "{} `{}` property `ConductingEquipment.BaseVoltage` references BaseVoltage `{base}` without a nominal voltage; fresh CGMES derives the equipment base voltage from its connected voltage level",
                     object.class, object.id
                 ),
             );
-                continue;
-            };
-            let mut connected_kv = mapper
-                .wiring
-                .terminals(&object.id)
-                .iter()
-                .try_filter_map(|terminal| terminal_nominal_kv(mapper, terminal))?
-                .collect::<Vec<_>>();
-            connected_kv.sort_by(f64::total_cmp);
-            connected_kv.dedup_by(|left, right| {
-                (*left - *right).abs() <= 1e-9 * left.abs().max(right.abs()).max(1.0)
-            });
-            if connected_kv.is_empty() {
-                mapper.warnings.push_as(
+            continue;
+        };
+        let mut connected_kv = mapper
+            .wiring
+            .terminals(&object.id)
+            .iter()
+            .try_filter_map(|terminal| terminal_nominal_kv(mapper, terminal))?
+            .collect::<Vec<_>>();
+        connected_kv.sort_by(f64::total_cmp);
+        connected_kv.dedup_by(|left, right| {
+            (*left - *right).abs() <= 1e-9 * left.abs().max(right.abs()).max(1.0)
+        });
+        if connected_kv.is_empty() {
+            mapper.warnings.push_as(
                 &codes::READ_CGMES_FIELD_UNMAPPED,
                 format!(
                     "{} `{}` states `ConductingEquipment.BaseVoltage` `{base}` ({stated_kv} kV), but none of its terminals resolve to a voltage level; fresh CGMES cannot reproduce this field",
                     object.class, object.id
                 ),
             );
-                continue;
-            }
-            if connected_kv.iter().any(|connected| {
-                (*connected - stated_kv).abs()
-                    > 1e-9 * connected.abs().max(stated_kv.abs()).max(1.0)
-            }) {
-                mapper.warnings.push_as(
+            continue;
+        }
+        if connected_kv.iter().any(|connected| {
+            (*connected - stated_kv).abs() > 1e-9 * connected.abs().max(stated_kv.abs()).max(1.0)
+        }) {
+            mapper.warnings.push_as(
                 &codes::READ_CGMES_VALUE_APPROXIMATED,
                 format!(
                     "{} `{}` states `ConductingEquipment.BaseVoltage` {stated_kv} kV, but its connected voltage level value(s) are {connected_kv:?} kV; PowerIO uses the connected voltage levels and fresh CGMES writes their base voltages",
                     object.class, object.id
                 ),
             );
-            }
         }
-    })
+    }
+    Ok(())
 }
 
 fn warn_collapsed_base_voltage_identities(
     store: &Store,
     warnings: &mut CgmesDiagnostics,
 ) -> Result<()> {
-    Ok({
-        let mut by_nominal_voltage: BTreeMap<u64, (f64, Vec<&str>)> = BTreeMap::new();
-        for id in store.of_class("BaseVoltage") {
-            let Some(nominal_kv) = store
-                .f(id, "BaseVoltage.nominalVoltage")?
-                .filter(|value| value.is_finite() && *value > 0.0)
-            else {
-                continue;
-            };
-            by_nominal_voltage
-                .entry(nominal_kv.to_bits())
-                .or_insert_with(|| (nominal_kv, Vec::new()))
-                .1
-                .push(id);
+    let mut by_nominal_voltage: BTreeMap<u64, (f64, Vec<&str>)> = BTreeMap::new();
+    for id in store.of_class("BaseVoltage") {
+        let Some(nominal_kv) = store
+            .f(id, "BaseVoltage.nominalVoltage")?
+            .filter(|value| value.is_finite() && *value > 0.0)
+        else {
+            continue;
+        };
+        by_nominal_voltage
+            .entry(nominal_kv.to_bits())
+            .or_insert_with(|| (nominal_kv, Vec::new()))
+            .1
+            .push(id);
+    }
+    for (_, (nominal_kv, ids)) in by_nominal_voltage {
+        if ids.len() < 2 {
+            continue;
         }
-        for (_, (nominal_kv, ids)) in by_nominal_voltage {
-            if ids.len() < 2 {
-                continue;
-            }
-            let samples = ids.iter().take(5).copied().collect::<Vec<_>>().join("`, `");
-            let remainder = if ids.len() > 5 {
-                format!(" and {} more", ids.len() - 5)
-            } else {
-                String::new()
-            };
-            warnings.push_as(
+        let samples = ids.iter().take(5).copied().collect::<Vec<_>>().join("`, `");
+        let remainder = if ids.len() > 5 {
+            format!(" and {} more", ids.len() - 5)
+        } else {
+            String::new()
+        };
+        warnings.push_as(
             &codes::READ_CGMES_VALUE_APPROXIMATED,
             format!(
                 "{} distinct BaseVoltage identities [`{samples}`]{remainder} all declare {nominal_kv} kV; PowerIO uses one source neutral voltage value and fresh CGMES emits one deterministic BaseVoltage identity for that voltage",
                 ids.len()
             ),
         );
-        }
-    })
+    }
+    Ok(())
 }
 
 fn solved_voltage(store: &Store, topological_node: &str) -> Result<(Option<f64>, Option<f64>)> {
@@ -4077,18 +4070,17 @@ fn apply_voltage_limits(
     voltage_levels: &mut [VoltageLevel],
     warnings: &mut CgmesDiagnostics,
 ) -> Result<()> {
-    Ok({
-        let mut candidates = read_voltage_limit_candidates(store, version, warnings)?;
-        for level in voltage_levels {
-            let direct = valid_declared_voltage_limits(level, warnings);
-            if let Some(candidate) = candidates.remove(level.component.local_id()) {
-                apply_voltage_limit_candidate(level, &candidate, direct, warnings);
-            } else {
-                level.low_voltage_limit_kv = direct.0;
-                level.high_voltage_limit_kv = direct.1;
-            }
+    let mut candidates = read_voltage_limit_candidates(store, version, warnings)?;
+    for level in voltage_levels {
+        let direct = valid_declared_voltage_limits(level, warnings);
+        if let Some(candidate) = candidates.remove(level.component.local_id()) {
+            apply_voltage_limit_candidate(level, &candidate, direct, warnings);
+        } else {
+            level.low_voltage_limit_kv = direct.0;
+            level.high_voltage_limit_kv = direct.1;
         }
-    })
+    }
+    Ok(())
 }
 
 fn loading_limits(
@@ -4346,57 +4338,56 @@ fn apply_phase_tap_reactance_deviations(
     class: &str,
     steps: &mut [TapChangerStep],
 ) -> Result<()> {
-    Ok({
-        let Some(end) = store.refv(tap, "PhaseTapChanger.TransformerEnd") else {
-            return Ok(());
+    let Some(end) = store.refv(tap, "PhaseTapChanger.TransformerEnd") else {
+        return Ok(());
+    };
+    let nominal_x = store.f(end, "PowerTransformerEnd.x")?.unwrap_or(0.0);
+    if nominal_x == 0.0 {
+        return Ok(());
+    }
+    let x_min = store
+        .f(tap, "PhaseTapChanger.xStepMin")?
+        .try_or_else(|| store.f(tap, "PhaseTapChangerLinear.xMin"))?
+        .try_or_else(|| store.f(tap, "PhaseTapChangerNonLinear.xMin"))?
+        .filter(|value| *value >= 0.0)
+        .unwrap_or(nominal_x);
+    let Some(x_max) = store
+        .f(tap, "PhaseTapChanger.xStepMax")?
+        .try_or_else(|| store.f(tap, "PhaseTapChangerLinear.xMax"))?
+        .try_or_else(|| store.f(tap, "PhaseTapChangerNonLinear.xMax"))?
+    else {
+        return Ok(());
+    };
+    if x_min < 0.0 || x_max <= 0.0 || x_min > x_max {
+        return Ok(());
+    }
+    let alpha_max = steps
+        .iter()
+        .map(|step| step.alpha_degrees)
+        .reduce(f64::max)
+        .unwrap_or(0.0);
+    if alpha_max == 0.0 {
+        return Ok(());
+    }
+    let alpha_max_radians = alpha_max.to_radians();
+    let winding_angle = store
+        .f(tap, "PhaseTapChangerAsymmetrical.windingConnectionAngle")?
+        .unwrap_or(90.0)
+        .to_radians();
+    for step in steps {
+        let alpha = step.alpha_degrees.to_radians();
+        let x = if class == "PhaseTapChangerAsymmetrical" {
+            let numerator = winding_angle.sin() - alpha_max_radians.tan() * winding_angle.cos();
+            let denominator = winding_angle.sin() - alpha.tan() * winding_angle.cos();
+            let factor = alpha.tan() / alpha_max_radians.tan() * numerator / denominator;
+            x_min + (x_max - x_min) * factor.powi(2)
+        } else {
+            let factor = (alpha / 2.0).sin() / (alpha_max_radians / 2.0).sin();
+            x_min + (x_max - x_min) * factor.powi(2)
         };
-        let nominal_x = store.f(end, "PowerTransformerEnd.x")?.unwrap_or(0.0);
-        if nominal_x == 0.0 {
-            return Ok(());
-        }
-        let x_min = store
-            .f(tap, "PhaseTapChanger.xStepMin")?
-            .try_or_else(|| store.f(tap, "PhaseTapChangerLinear.xMin"))?
-            .try_or_else(|| store.f(tap, "PhaseTapChangerNonLinear.xMin"))?
-            .filter(|value| *value >= 0.0)
-            .unwrap_or(nominal_x);
-        let Some(x_max) = store
-            .f(tap, "PhaseTapChanger.xStepMax")?
-            .try_or_else(|| store.f(tap, "PhaseTapChangerLinear.xMax"))?
-            .try_or_else(|| store.f(tap, "PhaseTapChangerNonLinear.xMax"))?
-        else {
-            return Ok(());
-        };
-        if x_min < 0.0 || x_max <= 0.0 || x_min > x_max {
-            return Ok(());
-        }
-        let alpha_max = steps
-            .iter()
-            .map(|step| step.alpha_degrees)
-            .reduce(f64::max)
-            .unwrap_or(0.0);
-        if alpha_max == 0.0 {
-            return Ok(());
-        }
-        let alpha_max_radians = alpha_max.to_radians();
-        let winding_angle = store
-            .f(tap, "PhaseTapChangerAsymmetrical.windingConnectionAngle")?
-            .unwrap_or(90.0)
-            .to_radians();
-        for step in steps {
-            let alpha = step.alpha_degrees.to_radians();
-            let x = if class == "PhaseTapChangerAsymmetrical" {
-                let numerator = winding_angle.sin() - alpha_max_radians.tan() * winding_angle.cos();
-                let denominator = winding_angle.sin() - alpha.tan() * winding_angle.cos();
-                let factor = alpha.tan() / alpha_max_radians.tan() * numerator / denominator;
-                x_min + (x_max - x_min) * factor.powi(2)
-            } else {
-                let factor = (alpha / 2.0).sin() / (alpha_max_radians / 2.0).sin();
-                x_min + (x_max - x_min) * factor.powi(2)
-            };
-            step.reactance_deviation_percent = 100.0 * (x - nominal_x) / nominal_x;
-        }
-    })
+        step.reactance_deviation_percent = 100.0 * (x - nominal_x) / nominal_x;
+    }
+    Ok(())
 }
 
 fn calculated_tap_steps(
@@ -5153,42 +5144,41 @@ fn read_equivalent_injections(
     loads: &mut Vec<Load>,
     generators: &mut Vec<Generator>,
 ) -> Result<()> {
-    Ok({
-        let mut count = 0usize;
-        for id in mapper.store.of_class("EquivalentInjection") {
-            let Some(bus) = mapper.bus_of_equipment_terminal(id, 0) else {
-                continue;
-            };
-            let (p, q) = mapper.power(id, "EquivalentInjection")?;
-            let regulation = mapper
-                .store
-                .boolean(id, "EquivalentInjection.regulationStatus")?
-                .unwrap_or(false);
-            if regulation {
-                let mut generator = Generator::new(bus);
-                generator.pg = -p;
-                generator.qg = -q;
-                generator.in_service = mapper.in_service(id)?;
-                generator.uid = Some(id.to_string());
-                generators.push(generator);
-            } else {
-                let mut load = Load::new(bus, p, q);
-                load.in_service = mapper.in_service(id)?;
-                load.uid = Some(id.to_string());
-                loads.push(load);
-            }
-            count += 1;
+    let mut count = 0usize;
+    for id in mapper.store.of_class("EquivalentInjection") {
+        let Some(bus) = mapper.bus_of_equipment_terminal(id, 0) else {
+            continue;
+        };
+        let (p, q) = mapper.power(id, "EquivalentInjection")?;
+        let regulation = mapper
+            .store
+            .boolean(id, "EquivalentInjection.regulationStatus")?
+            .unwrap_or(false);
+        if regulation {
+            let mut generator = Generator::new(bus);
+            generator.pg = -p;
+            generator.qg = -q;
+            generator.in_service = mapper.in_service(id)?;
+            generator.uid = Some(id.to_string());
+            generators.push(generator);
+        } else {
+            let mut load = Load::new(bus, p, q);
+            load.in_service = mapper.in_service(id)?;
+            load.uid = Some(id.to_string());
+            loads.push(load);
         }
-        if count > 0 {
-            mapper.warnings.push_as(
-                &codes::READ_CGMES_VALUE_APPROXIMATED,
-                format!(
-                    "{count} EquivalentInjection(s) at boundary nodes mapped to \
+        count += 1;
+    }
+    if count > 0 {
+        mapper.warnings.push_as(
+            &codes::READ_CGMES_VALUE_APPROXIMATED,
+            format!(
+                "{count} EquivalentInjection(s) at boundary nodes mapped to \
              loads/generators (p/q at the tie point)"
-                ),
-            );
-        }
-    })
+            ),
+        );
+    }
+    Ok(())
 }
 
 fn read_branches(
@@ -5668,16 +5658,15 @@ fn apply_limits(
     kv: f64,
     version: CgmesVersion,
 ) -> Result<()> {
-    Ok({
-        let mut terminals: Vec<&str> = mapper
-            .wiring
-            .terminals(equipment)
-            .iter()
-            .map(String::as_str)
-            .collect();
-        terminals.push(equipment);
-        apply_limits_to_targets(mapper.store, &terminals, branch, kv, version)?;
-    })
+    let mut terminals: Vec<&str> = mapper
+        .wiring
+        .terminals(equipment)
+        .iter()
+        .map(String::as_str)
+        .collect();
+    terminals.push(equipment);
+    apply_limits_to_targets(mapper.store, &terminals, branch, kv, version)?;
+    Ok(())
 }
 
 /// A temporary limit admissible for this many seconds or fewer is the
@@ -5691,74 +5680,71 @@ fn apply_limits_to_targets(
     kv: f64,
     version: CgmesVersion,
 ) -> Result<()> {
-    Ok({
-        // Limit sets point at their terminal or equipment, and limits point at
-        // their set; both are reverse indexed.
-        let mut sets = Vec::new();
-        for target in targets {
-            sets.extend(store.referrers("OperationalLimitSet.Terminal", target));
-            sets.extend(store.referrers("OperationalLimitSet.Equipment", target));
+    // Limit sets point at their terminal or equipment, and limits point at
+    // their set; both are reverse indexed.
+    let mut sets = Vec::new();
+    for target in targets {
+        sets.extend(store.referrers("OperationalLimitSet.Terminal", target));
+        sets.extend(store.referrers("OperationalLimitSet.Equipment", target));
+    }
+    sets.sort_unstable();
+    sets.dedup();
+    for set in sets {
+        if store.class_of(set) != Some("OperationalLimitSet") {
+            continue;
         }
-        sets.sort_unstable();
-        sets.dedup();
-        for set in sets {
-            if store.class_of(set) != Some("OperationalLimitSet") {
+        for limit in store.referrers("OperationalLimit.OperationalLimitSet", set) {
+            if !matches!(
+                store.class_of(limit),
+                Some("CurrentLimit" | "ApparentPowerLimit" | "ActivePowerLimit")
+            ) {
                 continue;
             }
-            for limit in store.referrers("OperationalLimit.OperationalLimitSet", set) {
-                if !matches!(
-                    store.class_of(limit),
-                    Some("CurrentLimit" | "ApparentPowerLimit" | "ActivePowerLimit")
-                ) {
-                    continue;
+            let Some(limit_type) = store.refv(limit, "OperationalLimit.OperationalLimitType")
+            else {
+                continue;
+            };
+            let kind = match version {
+                CgmesVersion::V2_4_15 => {
+                    store.enum_value(limit_type, "entsoe:OperationalLimitType.limitType")
                 }
-                let Some(limit_type) = store.refv(limit, "OperationalLimit.OperationalLimitType")
-                else {
-                    continue;
-                };
-                let kind = match version {
-                    CgmesVersion::V2_4_15 => {
-                        store.enum_value(limit_type, "entsoe:OperationalLimitType.limitType")
+                CgmesVersion::V3_0 => store.enum_value(limit_type, "eu:OperationalLimitType.kind"),
+            };
+            let class = store.class_of(limit).unwrap_or_default();
+            let value = store
+                .f(limit, &format!("{class}.value"))?
+                .try_or_else(|| store.f(limit, &format!("{class}.normalValue")))?
+                .unwrap_or(0.0);
+            let mva = if class == "CurrentLimit" {
+                3f64.sqrt() * kv * value / 1000.0
+            } else {
+                value
+            };
+            let slot = match kind {
+                Some("patl") => Some(&mut branch.rate_a),
+                Some("tatl") => {
+                    if store
+                        .f(limit_type, "OperationalLimitType.acceptableDuration")?
+                        .is_some_and(|seconds| seconds <= EMERGENCY_LIMIT_SECONDS)
+                    {
+                        Some(&mut branch.rate_c)
+                    } else {
+                        Some(&mut branch.rate_b)
                     }
-                    CgmesVersion::V3_0 => {
-                        store.enum_value(limit_type, "eu:OperationalLimitType.kind")
-                    }
-                };
-                let class = store.class_of(limit).unwrap_or_default();
-                let value = store
-                    .f(limit, &format!("{class}.value"))?
-                    .try_or_else(|| store.f(limit, &format!("{class}.normalValue")))?
-                    .unwrap_or(0.0);
-                let mva = if class == "CurrentLimit" {
-                    3f64.sqrt() * kv * value / 1000.0
-                } else {
-                    value
-                };
-                let slot = match kind {
-                    Some("patl") => Some(&mut branch.rate_a),
-                    Some("tatl") => {
-                        if store
-                            .f(limit_type, "OperationalLimitType.acceptableDuration")?
-                            .is_some_and(|seconds| seconds <= EMERGENCY_LIMIT_SECONDS)
-                        {
-                            Some(&mut branch.rate_c)
-                        } else {
-                            Some(&mut branch.rate_b)
-                        }
-                    }
-                    Some("tc" | "tct") => Some(&mut branch.rate_c),
-                    _ => None,
-                };
-                if let Some(slot) = slot {
-                    // Several sets can constrain one branch; the binding limit
-                    // is the smallest.
-                    if *slot == 0.0 || mva < *slot {
-                        *slot = mva;
-                    }
+                }
+                Some("tc" | "tct") => Some(&mut branch.rate_c),
+                _ => None,
+            };
+            if let Some(slot) = slot {
+                // Several sets can constrain one branch; the binding limit
+                // is the smallest.
+                if *slot == 0.0 || mva < *slot {
+                    *slot = mva;
                 }
             }
         }
-    })
+    }
+    Ok(())
 }
 
 fn class_is_consumed(class: &str) -> bool {
@@ -6007,7 +5993,7 @@ mod tests {
             let mut store = Store::default();
             store
                 .merge(CimDocument {
-                    cim_namespaces: vec![],
+                    cim_namespaces: BTreeSet::new(),
                     header: None,
                     objects: vec![CimObject {
                         class: "Extension".into(),
