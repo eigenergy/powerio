@@ -3,6 +3,7 @@
 import asyncio
 import io
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -26,6 +27,11 @@ New Transformer.t1 phases=3 windings=2 buses=(src, sec) conns=(delta, wye) kvs=(
 New Load.l1 bus1=sec phases=3 conn=wye kv=0.416 kw=90 pf=0.95 model=1
 Set VoltageBases=[12.47, 0.416]
 """
+
+
+@pytest.fixture(autouse=True)
+def configured_test_roots(monkeypatch, tmp_path):
+    monkeypatch.setenv(sandbox.ALLOWED_ROOTS_ENV, os.pathsep.join((str(DATA), str(tmp_path))))
 
 
 def test_tool_surface_uses_powerio_operations_and_types():

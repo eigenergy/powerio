@@ -169,7 +169,7 @@ def checked_path(value: str, *, purpose: str = "path", for_write: bool = False) 
     exist, and a dangling symlink in the final position is resolved before the
     containment check.
     """
-    path = decode_local_path(value, purpose=purpose)
+    path = Path(os.path.abspath(decode_local_path(value, purpose=purpose)))
     check_allowed_path(path, for_write=for_write, purpose=purpose)
     return str(path)
 

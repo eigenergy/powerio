@@ -108,34 +108,6 @@ trait CheckedIterator: Iterator + Sized {
     fn try_map<T>(self, f: impl FnMut(Self::Item) -> Result<T>) -> Result<std::vec::IntoIter<T>> {
         self.map(f).collect::<Result<Vec<_>>>().map(Vec::into_iter)
     }
-    fn try_filter(
-        self,
-        mut f: impl FnMut(&Self::Item) -> Result<bool>,
-    ) -> Result<std::vec::IntoIter<Self::Item>> {
-        let mut values = Vec::new();
-        for item in self {
-            if f(&item)? {
-                values.push(item);
-            }
-        }
-        Ok(values.into_iter())
-    }
-    fn checked_any(self, mut f: impl FnMut(Self::Item) -> Result<bool>) -> Result<bool> {
-        for item in self {
-            if f(item)? {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-    fn checked_all(self, mut f: impl FnMut(Self::Item) -> Result<bool>) -> Result<bool> {
-        for item in self {
-            if !f(item)? {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    }
 }
 impl<I: Iterator> CheckedIterator for I {}
 
@@ -917,7 +889,7 @@ impl Wiring {
                 if let Some(eq) = store.refv(id, "Terminal.ConductingEquipment") {
                     let seq = store
                         .f(id, "ACDCTerminal.sequenceNumber")?
-                        .try_or_else(|| Ok({ store.f(id, "Terminal.sequenceNumber")? }))?
+                        .try_or_else(|| store.f(id, "Terminal.sequenceNumber"))?
                         .unwrap_or(1.0);
                     of_equipment
                         .entry(eq.to_string())
@@ -1234,7 +1206,7 @@ pub(crate) fn read_cgmes_documents_into(
         scenario_time,
         name_hint,
         warnings,
-    )?
+    )
 }
 
 fn is_equipment_core(profile: &str) -> bool {
@@ -1539,12 +1511,10 @@ fn buses_from_topological_nodes(store: &Store) -> Result<BusTable> {
 /// `Switch.open` assignment, else the EQ `Switch.normalOpen` default, else
 /// closed. PowSybl's `SwitchConversion.update` applies the same precedence.
 fn switch_is_open(store: &Store, switch: &str) -> Result<bool> {
-    Ok({
-        store
-            .boolean(switch, "Switch.open")?
-            .try_or_else(|| Ok({ store.boolean(switch, "Switch.normalOpen")? }))?
-            .unwrap_or(false)
-    })
+    Ok(store
+        .boolean(switch, "Switch.open")?
+        .try_or_else(|| store.boolean(switch, "Switch.normalOpen"))?
+        .unwrap_or(false))
 }
 
 /// The service status a topology processor reads: the SV `SvStatus.inService`
@@ -1556,13 +1526,11 @@ fn switch_in_service(
     switch: &str,
     sv_status: &HashMap<String, bool>,
 ) -> Result<bool> {
-    Ok({
-        sv_status
-            .get(switch)
-            .copied()
-            .try_or_else(|| Ok({ store.boolean(switch, "Equipment.inService")? }))?
-            .unwrap_or(true)
-    })
+    Ok(sv_status
+        .get(switch)
+        .copied()
+        .try_or_else(|| store.boolean(switch, "Equipment.inService"))?
+        .unwrap_or(true))
 }
 
 /// The nominal voltage of a calculated bus: its container's `VoltageLevel`
@@ -1573,7 +1541,7 @@ fn calculated_bus_kv(store: &Store, container: &str, nodes: &[String]) -> Result
         if store.class_of(container) == Some("VoltageLevel")
             && let Some(kv) = store
                 .refv(container, "VoltageLevel.BaseVoltage")
-                .try_and_then(|base| Ok({ store.f(base, "BaseVoltage.nominalVoltage")? }))?
+                .try_and_then(|base| store.f(base, "BaseVoltage.nominalVoltage"))?
         {
             return Ok(Some(kv));
         }
@@ -1591,35 +1559,22 @@ fn calculated_bus_kv(store: &Store, container: &str, nodes: &[String]) -> Result
             .map(|(_, terminal)| terminal)
             .try_find_map(|terminal| {
                 Ok({
-                    {
-                        let equipment =
-                            present!(store.refv(terminal, "Terminal.ConductingEquipment"));
-                        let stated = store
-                            .refv(equipment, "ConductingEquipment.BaseVoltage")
-                            .try_and_then(|base| {
-                                Ok({ store.f(base, "BaseVoltage.nominalVoltage")? })
-                            })?;
-                        if stated.is_some() {
-                            return Ok(stated);
-                        }
-                        store
-                            .referrers("TransformerEnd.Terminal", terminal)
-                            .into_iter()
-                            .try_find_map(|end| {
-                                Ok({
-                                    {
-                                        store
-                                            .refv(end, "TransformerEnd.BaseVoltage")
-                                            .try_and_then(|base| {
-                                                Ok({ store.f(base, "BaseVoltage.nominalVoltage")? })
-                                            })?
-                                            .try_or_else(|| {
-                                                Ok({ store.f(end, "PowerTransformerEnd.ratedU")? })
-                                            })?
-                                    }
-                                })
-                            })?
+                    let equipment = present!(store.refv(terminal, "Terminal.ConductingEquipment"));
+                    let stated = store
+                        .refv(equipment, "ConductingEquipment.BaseVoltage")
+                        .try_and_then(|base| store.f(base, "BaseVoltage.nominalVoltage"))?;
+                    if stated.is_some() {
+                        return Ok(stated);
                     }
+                    store
+                        .referrers("TransformerEnd.Terminal", terminal)
+                        .into_iter()
+                        .try_find_map(|end| {
+                            store
+                                .refv(end, "TransformerEnd.BaseVoltage")
+                                .try_and_then(|base| store.f(base, "BaseVoltage.nominalVoltage"))?
+                                .try_or_else(|| store.f(end, "PowerTransformerEnd.ratedU"))
+                        })?
                 })
             })?
     })
@@ -1702,15 +1657,11 @@ fn calculate_buses(
 
     let busbar_names: HashMap<&str, String> = store
         .of_class("BusbarSection")
-        .try_filter_map(|busbar| {
-            Ok({
-                {
-                    let terminal = wiring.terminals(busbar).first()?;
-                    let node = store.refv(terminal, "Terminal.ConnectivityNode")?;
-                    Some((node, store.name(busbar)))
-                }
-            })
-        })?
+        .filter_map(|busbar| {
+            let terminal = wiring.terminals(busbar).first()?;
+            let node = store.refv(terminal, "Terminal.ConnectivityNode")?;
+            Some((node, store.name(busbar)))
+        })
         .collect();
 
     let referenced: BTreeSet<&str> = store
@@ -2078,7 +2029,7 @@ fn build(
     let base_frequency = store
         .of_class("BaseFrequency")
         .next()
-        .try_and_then(|f| Ok({ store.f(f, "BaseFrequency.frequency")? }))?
+        .try_and_then(|f| store.f(f, "BaseFrequency.frequency"))?
         .unwrap_or_else(|| {
             mapper.warnings.push_as(
                 &codes::READ_CGMES_VALUE_DEFAULTED,
@@ -2270,7 +2221,7 @@ fn check_equipment_base_voltages(mapper: &mut Mapper<'_>) -> Result<()> {
                 .wiring
                 .terminals(&object.id)
                 .iter()
-                .try_filter_map(|terminal| Ok({ terminal_nominal_kv(mapper, terminal)? }))?
+                .try_filter_map(|terminal| terminal_nominal_kv(mapper, terminal))?
                 .collect::<Vec<_>>();
             connected_kv.sort_by(f64::total_cmp);
             connected_kv.dedup_by(|left, right| {
@@ -2343,21 +2294,15 @@ fn warn_collapsed_base_voltage_identities(
 }
 
 fn solved_voltage(store: &Store, topological_node: &str) -> Result<(Option<f64>, Option<f64>)> {
-    Ok({
-        store
-            .referrers("SvVoltage.TopologicalNode", topological_node)
-            .first()
-            .try_map_or((None, None), |value| {
-                Ok({
-                    {
-                        (
-                            store.f(value, "SvVoltage.v")?,
-                            store.f(value, "SvVoltage.angle")?,
-                        )
-                    }
-                })
-            })?
-    })
+    store
+        .referrers("SvVoltage.TopologicalNode", topological_node)
+        .first()
+        .try_map_or((None, None), |value| {
+            Ok((
+                store.f(value, "SvVoltage.v")?,
+                store.f(value, "SvVoltage.angle")?,
+            ))
+        })
 }
 
 fn sv_voltage_authority_mismatch<'a>(
@@ -2379,14 +2324,10 @@ fn sv_voltage_authority_mismatch<'a>(
 fn terminal_topological_node<'a>(store: &'a Store, terminal: &str) -> Option<&'a str> {
     store
         .refv(terminal, "Terminal.TopologicalNode")
-        .try_or_else(|| {
-            Ok({
-                {
-                    let connectivity_node = store.refv(terminal, "Terminal.ConnectivityNode")?;
-                    store.refv(connectivity_node, "ConnectivityNode.TopologicalNode")
-                }
-            })
-        })?
+        .or_else(|| {
+            let connectivity_node = store.refv(terminal, "Terminal.ConnectivityNode")?;
+            store.refv(connectivity_node, "ConnectivityNode.TopologicalNode")
+        })
 }
 
 fn boundary_equipment_authorities<'a>(
@@ -2477,18 +2418,14 @@ fn build_detailed_connectivity(
     let substations = store
         .of_class("Substation")
         .try_map(|id| {
-            Ok({
-                {
-                    Ok(Substation {
-                        component: component_id("substation", id)?,
-                        country: store
-                            .enum_value(id, "entsoe:Substation.Country")
-                            .map(str::to_string),
-                        operator: None,
-                        geographical_tags: Vec::new(),
-                    })
-                }
-            })
+            Ok(Ok(Substation {
+                component: component_id("substation", id)?,
+                country: store
+                    .enum_value(id, "entsoe:Substation.Country")
+                    .map(str::to_string),
+                operator: None,
+                geographical_tags: Vec::new(),
+            }))
         })?
         .collect::<Result<Vec<_>>>()?;
 
@@ -2509,46 +2446,44 @@ fn build_detailed_connectivity(
         .of_class("VoltageLevel")
         .try_map(|id| {
             Ok({
-                {
-                    let base = store
-                        .refv(id, "VoltageLevel.BaseVoltage")
-                        .try_and_then(|base| Ok({ store.f(base, "BaseVoltage.nominalVoltage")? }))?
-                        .unwrap_or(0.0);
-                    let has_nodes = containers_with_nodes.contains(id);
-                    let mut buses = match mapper.topology {
-                        BusSource::TopologicalNodes => topological_nodes_by_container
-                            .get(id)
-                            .map(Vec::as_slice)
-                            .unwrap_or_default()
-                            .iter()
-                            .filter_map(|node| mapper.bus_of_node.get(*node).copied())
-                            .collect::<Vec<_>>(),
-                        BusSource::Calculated => mapper
-                            .calculated
-                            .iter()
-                            .filter(|group| group.container == id)
-                            .map(|group| group.bus)
-                            .collect::<Vec<_>>(),
-                    };
-                    buses.sort_unstable();
-                    buses.dedup();
-                    Ok(VoltageLevel {
-                        component: component_id("voltage_level", id)?,
-                        substation: store
-                            .refv(id, "VoltageLevel.Substation")
-                            .map(|substation| component_id("substation", substation))
-                            .transpose()?,
-                        nominal_kv: base,
-                        low_voltage_limit_kv: store.f(id, "VoltageLevel.lowVoltageLimit")?,
-                        high_voltage_limit_kv: store.f(id, "VoltageLevel.highVoltageLimit")?,
-                        topology_kind: if has_nodes {
-                            TopologyKind::NodeBreaker
-                        } else {
-                            TopologyKind::BusBreaker
-                        },
-                        buses,
-                    })
-                }
+                let base = store
+                    .refv(id, "VoltageLevel.BaseVoltage")
+                    .try_and_then(|base| store.f(base, "BaseVoltage.nominalVoltage"))?
+                    .unwrap_or(0.0);
+                let has_nodes = containers_with_nodes.contains(id);
+                let mut buses = match mapper.topology {
+                    BusSource::TopologicalNodes => topological_nodes_by_container
+                        .get(id)
+                        .map(Vec::as_slice)
+                        .unwrap_or_default()
+                        .iter()
+                        .filter_map(|node| mapper.bus_of_node.get(*node).copied())
+                        .collect::<Vec<_>>(),
+                    BusSource::Calculated => mapper
+                        .calculated
+                        .iter()
+                        .filter(|group| group.container == id)
+                        .map(|group| group.bus)
+                        .collect::<Vec<_>>(),
+                };
+                buses.sort_unstable();
+                buses.dedup();
+                Ok(VoltageLevel {
+                    component: component_id("voltage_level", id)?,
+                    substation: store
+                        .refv(id, "VoltageLevel.Substation")
+                        .map(|substation| component_id("substation", substation))
+                        .transpose()?,
+                    nominal_kv: base,
+                    low_voltage_limit_kv: store.f(id, "VoltageLevel.lowVoltageLimit")?,
+                    high_voltage_limit_kv: store.f(id, "VoltageLevel.highVoltageLimit")?,
+                    topology_kind: if has_nodes {
+                        TopologyKind::NodeBreaker
+                    } else {
+                        TopologyKind::BusBreaker
+                    },
+                    buses,
+                })
             })
         })?
         .collect::<Result<Vec<_>>>()?;
@@ -2725,13 +2660,9 @@ fn build_detailed_connectivity(
     let junctions = store
         .of_class("Junction")
         .try_map(|id| {
-            Ok({
-                {
-                    Ok(Junction {
-                        component: component_id("junction", id)?,
-                    })
-                }
-            })
+            Ok(Ok(Junction {
+                component: component_id("junction", id)?,
+            }))
         })?
         .collect::<Result<Vec<_>>>()?;
 
@@ -2746,7 +2677,7 @@ fn build_detailed_connectivity(
         };
         let sequence = store
             .f(id, "ACDCTerminal.sequenceNumber")?
-            .try_or_else(|| Ok({ store.f(id, "Terminal.sequenceNumber")? }))?
+            .try_or_else(|| store.f(id, "Terminal.sequenceNumber"))?
             .unwrap_or(1.0);
         let terminal = u8::try_from(sequence as u64).unwrap_or(u8::MAX);
         let bus = store.refv(id, "Terminal.TopologicalNode");
@@ -2834,7 +2765,7 @@ fn build_detailed_connectivity(
                 endpoint2: endpoint(second)?,
                 open: store
                     .boolean(id, "Switch.open")?
-                    .try_or_else(|| Ok({ store.boolean(id, "Switch.normalOpen")? }))?
+                    .try_or_else(|| store.boolean(id, "Switch.normalOpen"))?
                     .unwrap_or(false),
                 retained: store.boolean(id, "Switch.retained")?.unwrap_or(false),
             });
@@ -2855,152 +2786,146 @@ fn build_detailed_connectivity(
         .filter(|object| !(own_output && writer_derived_component_metadata(&object.class)))
         .try_map(|object| {
             Ok({
+                let mut properties = BTreeMap::new();
+                if LOAD_CLASSES.contains(&object.class.as_str())
+                    || SWITCH_CLASSES.contains(&object.class.as_str())
+                    || object.class == "ExternalNetworkInjection"
                 {
-                    let mut properties = BTreeMap::new();
-                    if LOAD_CLASSES.contains(&object.class.as_str())
-                        || SWITCH_CLASSES.contains(&object.class.as_str())
-                        || object.class == "ExternalNetworkInjection"
+                    properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.clone());
+                }
+                if object.class == "PowerTransformer" {
+                    properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.clone());
+                }
+                if object.class == "SeriesCompensator" {
+                    properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.clone());
+                    for property in [
+                        "SeriesCompensator.r0",
+                        "SeriesCompensator.x0",
+                        "SeriesCompensator.varistorRatedCurrent",
+                        "SeriesCompensator.varistorVoltageThreshold",
+                    ] {
+                        if let Some(value) = store.f(&object.id, property)? {
+                            properties.insert(property.into(), value.to_string());
+                        }
+                    }
+                    if let Some(value) =
+                        store.boolean(&object.id, "SeriesCompensator.varistorPresent")?
                     {
-                        properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.clone());
+                        properties.insert(
+                            "SeriesCompensator.varistorPresent".into(),
+                            value.to_string(),
+                        );
                     }
-                    if object.class == "PowerTransformer" {
-                        properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.clone());
+                }
+                if object.class == "PowerTransformerEnd" {
+                    properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.clone());
+                    if let Some(transformer) =
+                        store.refv(&object.id, "PowerTransformerEnd.PowerTransformer")
+                    {
+                        properties.insert(
+                            "PowerTransformerEnd.PowerTransformer".into(),
+                            transformer.into(),
+                        );
                     }
-                    if object.class == "SeriesCompensator" {
-                        properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.clone());
-                        for property in [
-                            "SeriesCompensator.r0",
-                            "SeriesCompensator.x0",
-                            "SeriesCompensator.varistorRatedCurrent",
-                            "SeriesCompensator.varistorVoltageThreshold",
-                        ] {
-                            if let Some(value) = store.f(&object.id, property)? {
-                                properties.insert(property.into(), value.to_string());
-                            }
-                        }
-                        if let Some(value) =
-                            store.boolean(&object.id, "SeriesCompensator.varistorPresent")?
+                    if let Some(end_number) = store.text(&object.id, "TransformerEnd.endNumber") {
+                        properties.insert("TransformerEnd.endNumber".into(), end_number.into());
+                    }
+                }
+                if object.class == "SynchronousMachine"
+                    && let Some(unit) = store.refv(&object.id, "RotatingMachine.GeneratingUnit")
+                {
+                    properties.insert(super::CGMES_GENERATING_UNIT_PROPERTY.into(), unit.into());
+                }
+                if object.class == "SynchronousMachine" {
+                    for (property, enumeration) in [
+                        ("SynchronousMachine.type", "SynchronousMachineKind"),
+                        (
+                            "SynchronousMachine.operatingMode",
+                            "SynchronousMachineOperatingMode",
+                        ),
+                    ] {
+                        if let Some(value) = store
+                            .enum_value(&object.id, property)
+                            .map(|value| format!("{enumeration}.{value}"))
                         {
-                            properties.insert(
-                                "SeriesCompensator.varistorPresent".into(),
-                                value.to_string(),
-                            );
+                            properties.insert(property.into(), value);
                         }
                     }
-                    if object.class == "PowerTransformerEnd" {
-                        properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.clone());
-                        if let Some(transformer) =
-                            store.refv(&object.id, "PowerTransformerEnd.PowerTransformer")
-                        {
-                            properties.insert(
-                                "PowerTransformerEnd.PowerTransformer".into(),
-                                transformer.into(),
-                            );
-                        }
-                        if let Some(end_number) = store.text(&object.id, "TransformerEnd.endNumber")
-                        {
-                            properties.insert("TransformerEnd.endNumber".into(), end_number.into());
-                        }
-                    }
-                    if object.class == "SynchronousMachine"
-                        && let Some(unit) = store.refv(&object.id, "RotatingMachine.GeneratingUnit")
+                    if let Some(value) =
+                        store.text(&object.id, "SynchronousMachine.referencePriority")
                     {
                         properties
-                            .insert(super::CGMES_GENERATING_UNIT_PROPERTY.into(), unit.into());
+                            .insert("SynchronousMachine.referencePriority".into(), value.into());
                     }
-                    if object.class == "SynchronousMachine" {
-                        for (property, enumeration) in [
-                            ("SynchronousMachine.type", "SynchronousMachineKind"),
-                            (
-                                "SynchronousMachine.operatingMode",
-                                "SynchronousMachineOperatingMode",
-                            ),
-                        ] {
-                            if let Some(value) = store
-                                .enum_value(&object.id, property)
-                                .map(|value| format!("{enumeration}.{value}"))
-                            {
-                                properties.insert(property.into(), value);
-                            }
-                        }
-                        if let Some(value) =
-                            store.text(&object.id, "SynchronousMachine.referencePriority")
-                        {
-                            properties.insert(
-                                "SynchronousMachine.referencePriority".into(),
-                                value.into(),
-                            );
-                        }
-                    }
-                    retain_regulating_control_properties(store, &object.id, &mut properties);
-                    if object.class.ends_with("GeneratingUnit") {
-                        properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.clone());
-                        for property in [
-                            "IdentifiedObject.description",
-                            "GeneratingUnit.initialP",
-                            "GeneratingUnit.nominalP",
-                        ] {
-                            if let Some(value) = store.text(&object.id, property) {
-                                properties.insert(property.into(), value.into());
-                            }
-                        }
-                        if let Some(value) = store.boolean(&object.id, "Equipment.aggregate")? {
-                            properties.insert("Equipment.aggregate".into(), value.to_string());
-                        }
-                        if let Some(value) = store
-                            .enum_value(&object.id, "GeneratingUnit.genControlSource")
-                            .map(|value| format!("GeneratorControlSource.{value}"))
-                        {
-                            properties.insert("GeneratingUnit.genControlSource".into(), value);
-                        }
-                    }
-                    if let Some(in_service) = mapper.sv_status.get(&object.id) {
-                        properties.insert(
-                            super::CGMES_SV_STATUS_PROPERTY.into(),
-                            in_service.to_string(),
-                        );
-                    }
-                    if object.class == "TopologicalNode"
-                        && sv_voltage_authority_mismatch(store, &object.id).is_some()
-                    {
-                        properties.insert(
-                            super::CGMES_SV_VOLTAGE_AUTHORITY_MISMATCH_PROPERTY.into(),
-                            "true".into(),
-                        );
-                    }
-                    Ok(ComponentMetadata {
-                        component: component_id(component_type(&object.class), &object.id)?,
-                        name: store
-                            .text(&object.id, "IdentifiedObject.name")
-                            .map(str::to_string),
-                        equipment_container: store
-                            .refv(&object.id, "Equipment.EquipmentContainer")
-                            .map(|container| {
-                                component_id(
-                                    component_type(store.class_of(container).unwrap_or_default()),
-                                    container,
-                                )
-                            })
-                            .transpose()?,
-                        aliases: store
-                            .text(&object.id, "IdentifiedObject.shortName")
-                            .map(|value| {
-                                vec![ComponentAlias {
-                                    value: value.to_string(),
-                                    alias_type: Some("short_name".into()),
-                                }]
-                            })
-                            .unwrap_or_default(),
-                        external_identifiers: vec![ExternalIdentifier {
-                            value: object.id.clone(),
-                            authority: Some("CGMES".into()),
-                        }],
-                        properties,
-                        fictitious: store
-                            .boolean(&object.id, "IdentifiedObject.isFictitious")?
-                            .unwrap_or(false),
-                    })
                 }
+                retain_regulating_control_properties(store, &object.id, &mut properties);
+                if object.class.ends_with("GeneratingUnit") {
+                    properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.clone());
+                    for property in [
+                        "IdentifiedObject.description",
+                        "GeneratingUnit.initialP",
+                        "GeneratingUnit.nominalP",
+                    ] {
+                        if let Some(value) = store.text(&object.id, property) {
+                            properties.insert(property.into(), value.into());
+                        }
+                    }
+                    if let Some(value) = store.boolean(&object.id, "Equipment.aggregate")? {
+                        properties.insert("Equipment.aggregate".into(), value.to_string());
+                    }
+                    if let Some(value) = store
+                        .enum_value(&object.id, "GeneratingUnit.genControlSource")
+                        .map(|value| format!("GeneratorControlSource.{value}"))
+                    {
+                        properties.insert("GeneratingUnit.genControlSource".into(), value);
+                    }
+                }
+                if let Some(in_service) = mapper.sv_status.get(&object.id) {
+                    properties.insert(
+                        super::CGMES_SV_STATUS_PROPERTY.into(),
+                        in_service.to_string(),
+                    );
+                }
+                if object.class == "TopologicalNode"
+                    && sv_voltage_authority_mismatch(store, &object.id).is_some()
+                {
+                    properties.insert(
+                        super::CGMES_SV_VOLTAGE_AUTHORITY_MISMATCH_PROPERTY.into(),
+                        "true".into(),
+                    );
+                }
+                Ok(ComponentMetadata {
+                    component: component_id(component_type(&object.class), &object.id)?,
+                    name: store
+                        .text(&object.id, "IdentifiedObject.name")
+                        .map(str::to_string),
+                    equipment_container: store
+                        .refv(&object.id, "Equipment.EquipmentContainer")
+                        .map(|container| {
+                            component_id(
+                                component_type(store.class_of(container).unwrap_or_default()),
+                                container,
+                            )
+                        })
+                        .transpose()?,
+                    aliases: store
+                        .text(&object.id, "IdentifiedObject.shortName")
+                        .map(|value| {
+                            vec![ComponentAlias {
+                                value: value.to_string(),
+                                alias_type: Some("short_name".into()),
+                            }]
+                        })
+                        .unwrap_or_default(),
+                    external_identifiers: vec![ExternalIdentifier {
+                        value: object.id.clone(),
+                        authority: Some("CGMES".into()),
+                    }],
+                    properties,
+                    fictitious: store
+                        .boolean(&object.id, "IdentifiedObject.isFictitious")?
+                        .unwrap_or(false),
+                })
             })
         })?
         .collect::<Result<Vec<_>>>()?;
@@ -3288,20 +3213,12 @@ fn read_reactive_capability_curve(
                 .referrers("CurveData.Curve", curve)
                 .into_iter()
                 .try_filter_map(|point| {
-                    Ok({
-                        {
-                            Some(ReactiveCapabilityCurvePoint {
-                                active_power_mw: present!(store.f(point, "CurveData.xvalue")?),
-                                minimum_reactive_power_mvar: present!(
-                                    store.f(point, "CurveData.y1value")?
-                                ),
-                                maximum_reactive_power_mvar: present!(
-                                    store.f(point, "CurveData.y2value")?
-                                ),
-                                properties: BTreeMap::new(),
-                            })
-                        }
-                    })
+                    Ok(Some(ReactiveCapabilityCurvePoint {
+                        active_power_mw: present!(store.f(point, "CurveData.xvalue")?),
+                        minimum_reactive_power_mvar: present!(store.f(point, "CurveData.y1value")?),
+                        maximum_reactive_power_mvar: present!(store.f(point, "CurveData.y2value")?),
+                        properties: BTreeMap::new(),
+                    }))
                 })?
                 .collect::<Vec<_>>()
         };
@@ -3545,7 +3462,7 @@ fn cgmes_2_line_rated_dc_voltage(
 #[allow(clippy::too_many_lines)]
 fn read_dc_equipment(mapper: &mut Mapper<'_>, version: CgmesVersion) -> Result<ReadDcEquipment> {
     let store = mapper.store;
-    let wiring = DcTerminalWiring::build(store)??;
+    let wiring = DcTerminalWiring::build(store)?;
     let mut result = ReadDcEquipment::default();
 
     for id in store.of_class("DCConverterUnit") {
@@ -3693,7 +3610,7 @@ fn read_dc_equipment(mapper: &mut Mapper<'_>, version: CgmesVersion) -> Result<R
             dc_terminal2,
             rated_dc_voltage_kv: store
                 .f(id, "DCConductingEquipment.ratedUdc")?
-                .try_or_else(|| Ok({ store.f(id, "DCSeriesDevice.ratedUdc")? }))?,
+                .try_or_else(|| store.f(id, "DCSeriesDevice.ratedUdc"))?,
             resistance_ohm: store.f(id, "DCSeriesDevice.resistance")?,
             inductance_h: store.f(id, "DCSeriesDevice.inductance")?,
         });
@@ -3865,7 +3782,7 @@ fn terminal_reference(store: &Store, terminal: &str) -> Result<Option<TerminalRe
     };
     let sequence = store
         .f(terminal, "ACDCTerminal.sequenceNumber")?
-        .try_or_else(|| Ok({ store.f(terminal, "Terminal.sequenceNumber")? }))?
+        .try_or_else(|| store.f(terminal, "Terminal.sequenceNumber"))?
         .unwrap_or(1.0);
     let terminal = u8::try_from(sequence.round() as u64).unwrap_or(u8::MAX);
     Ok(Some(TerminalReference {
@@ -3924,34 +3841,33 @@ fn read_static_var_compensators(mapper: &mut Mapper<'_>) -> Result<Vec<StaticVar
             } else {
                 StaticVarCompensatorRegulationMode::Voltage
             };
-        let target = control
-            .try_and_then(|value| Ok({ store.f(value, "RegulatingControl.targetValue")? }))?;
-        svc.voltage_setpoint_kv =
-            if svc.regulation_mode == StaticVarCompensatorRegulationMode::Voltage {
-                control
-                    .try_and_then(|value| {
-                        Ok({ regulating_control_target_kv(store, value, mapper.warnings)? })
-                    })?
-                    .try_or_else(|| Ok({ store.f(id, "StaticVarCompensator.voltageSetPoint")? }))?
-                    .unwrap_or(0.0)
-            } else {
-                store
-                    .f(id, "StaticVarCompensator.voltageSetPoint")?
-                    .unwrap_or(0.0)
-            };
-        svc.reactive_power_setpoint_mvar =
-            if svc.regulation_mode == StaticVarCompensatorRegulationMode::ReactivePower {
-                target.try_unwrap_or_else(|| {
-                    Ok({ store.f(id, "StaticVarCompensator.q")?.unwrap_or(0.0) })
-                })?
-            } else {
-                0.0
-            };
+        let target =
+            control.try_and_then(|value| store.f(value, "RegulatingControl.targetValue"))?;
+        svc.voltage_setpoint_kv = if svc.regulation_mode
+            == StaticVarCompensatorRegulationMode::Voltage
+        {
+            control
+                .try_and_then(|value| regulating_control_target_kv(store, value, mapper.warnings))?
+                .try_or_else(|| store.f(id, "StaticVarCompensator.voltageSetPoint"))?
+                .unwrap_or(0.0)
+        } else {
+            store
+                .f(id, "StaticVarCompensator.voltageSetPoint")?
+                .unwrap_or(0.0)
+        };
+        svc.reactive_power_setpoint_mvar = if svc.regulation_mode
+            == StaticVarCompensatorRegulationMode::ReactivePower
+        {
+            target
+                .try_unwrap_or_else(|| Ok(store.f(id, "StaticVarCompensator.q")?.unwrap_or(0.0)))?
+        } else {
+            0.0
+        };
         let equipment_enabled = store
             .boolean(id, "RegulatingCondEq.controlEnabled")?
             .unwrap_or(false);
         let control_enabled = control
-            .try_and_then(|value| Ok({ store.boolean(value, "RegulatingControl.enabled")? }))?
+            .try_and_then(|value| store.boolean(value, "RegulatingControl.enabled"))?
             .unwrap_or(equipment_enabled);
         svc.regulating = equipment_enabled && control_enabled;
         svc.regulating_terminal = control
@@ -4037,7 +3953,7 @@ fn read_voltage_limit_candidates(
             };
             let Some(value) = store
                 .f(id, "VoltageLimit.normalValue")?
-                .try_or_else(|| Ok({ store.f(id, "VoltageLimit.value")? }))?
+                .try_or_else(|| store.f(id, "VoltageLimit.value"))?
                 .filter(|value| value.is_finite() && *value > 0.0)
             else {
                 warnings.push_as(
@@ -4200,7 +4116,7 @@ fn loading_limits(
             };
             let value = store
                 .f(&object.id, &format!("{class}.normalValue"))?
-                .try_or_else(|| Ok({ store.f(&object.id, &format!("{class}.value"))? }))?;
+                .try_or_else(|| store.f(&object.id, &format!("{class}.value")))?;
             let Some(value) = value.filter(|value| value.is_finite() && *value > 0.0) else {
                 warnings.push(format!(
                 "{class} `{}` has a missing, nonfinite, or nonpositive value and was not retained",
@@ -4395,29 +4311,27 @@ fn table_tap_steps(
             .into_iter()
             .filter(|point| store.class_of(point) == Some(point_class))
             .try_map(|point| {
-                Ok({
-                    TapChangerStep {
-                        position: store
-                            .f(point, "TapChangerTablePoint.step")?
-                            .unwrap_or(0.0)
-                            .round() as i32,
-                        rho: store.f(point, "TapChangerTablePoint.ratio")?.unwrap_or(1.0),
-                        alpha_degrees: store
-                            .f(point, "PhaseTapChangerTablePoint.angle")?
-                            .unwrap_or(0.0),
-                        resistance_deviation_percent: store
-                            .f(point, "TapChangerTablePoint.r")?
-                            .unwrap_or(0.0),
-                        reactance_deviation_percent: store
-                            .f(point, "TapChangerTablePoint.x")?
-                            .unwrap_or(0.0),
-                        conductance_deviation_percent: store
-                            .f(point, "TapChangerTablePoint.g")?
-                            .unwrap_or(0.0),
-                        susceptance_deviation_percent: store
-                            .f(point, "TapChangerTablePoint.b")?
-                            .unwrap_or(0.0),
-                    }
+                Ok(TapChangerStep {
+                    position: store
+                        .f(point, "TapChangerTablePoint.step")?
+                        .unwrap_or(0.0)
+                        .round() as i32,
+                    rho: store.f(point, "TapChangerTablePoint.ratio")?.unwrap_or(1.0),
+                    alpha_degrees: store
+                        .f(point, "PhaseTapChangerTablePoint.angle")?
+                        .unwrap_or(0.0),
+                    resistance_deviation_percent: store
+                        .f(point, "TapChangerTablePoint.r")?
+                        .unwrap_or(0.0),
+                    reactance_deviation_percent: store
+                        .f(point, "TapChangerTablePoint.x")?
+                        .unwrap_or(0.0),
+                    conductance_deviation_percent: store
+                        .f(point, "TapChangerTablePoint.g")?
+                        .unwrap_or(0.0),
+                    susceptance_deviation_percent: store
+                        .f(point, "TapChangerTablePoint.b")?
+                        .unwrap_or(0.0),
                 })
             })?
             .collect::<Vec<_>>();
@@ -4434,27 +4348,27 @@ fn apply_phase_tap_reactance_deviations(
 ) -> Result<()> {
     Ok({
         let Some(end) = store.refv(tap, "PhaseTapChanger.TransformerEnd") else {
-            return Ok();
+            return Ok(());
         };
         let nominal_x = store.f(end, "PowerTransformerEnd.x")?.unwrap_or(0.0);
         if nominal_x == 0.0 {
-            return Ok();
+            return Ok(());
         }
         let x_min = store
             .f(tap, "PhaseTapChanger.xStepMin")?
-            .try_or_else(|| Ok({ store.f(tap, "PhaseTapChangerLinear.xMin")? }))?
-            .try_or_else(|| Ok({ store.f(tap, "PhaseTapChangerNonLinear.xMin")? }))?
+            .try_or_else(|| store.f(tap, "PhaseTapChangerLinear.xMin"))?
+            .try_or_else(|| store.f(tap, "PhaseTapChangerNonLinear.xMin"))?
             .filter(|value| *value >= 0.0)
             .unwrap_or(nominal_x);
         let Some(x_max) = store
             .f(tap, "PhaseTapChanger.xStepMax")?
-            .try_or_else(|| Ok({ store.f(tap, "PhaseTapChangerLinear.xMax")? }))?
-            .try_or_else(|| Ok({ store.f(tap, "PhaseTapChangerNonLinear.xMax")? }))?
+            .try_or_else(|| store.f(tap, "PhaseTapChangerLinear.xMax"))?
+            .try_or_else(|| store.f(tap, "PhaseTapChangerNonLinear.xMax"))?
         else {
-            return Ok();
+            return Ok(());
         };
         if x_min < 0.0 || x_max <= 0.0 || x_min > x_max {
-            return Ok();
+            return Ok(());
         }
         let alpha_max = steps
             .iter()
@@ -4462,7 +4376,7 @@ fn apply_phase_tap_reactance_deviations(
             .reduce(f64::max)
             .unwrap_or(0.0);
         if alpha_max == 0.0 {
-            return Ok();
+            return Ok(());
         }
         let alpha_max_radians = alpha_max.to_radians();
         let winding_angle = store
@@ -4508,13 +4422,11 @@ fn calculated_tap_steps(
     let class = store.class_of(tap).unwrap_or_default();
     let voltage_increment = store
         .f(tap, "RatioTapChanger.stepVoltageIncrement")?
-        .try_or_else(|| Ok({ store.f(tap, "PhaseTapChangerNonLinear.voltageStepIncrement")? }))?
+        .try_or_else(|| store.f(tap, "PhaseTapChangerNonLinear.voltageStepIncrement"))?
         .unwrap_or(0.0);
     let phase_increment = store
         .f(tap, "PhaseTapChangerLinear.stepPhaseShiftIncrement")?
-        .try_or_else(|| {
-            Ok({ store.f(tap, "PhaseTapChangerSymmetrical.stepPhaseShiftIncrement")? })
-        })?;
+        .try_or_else(|| store.f(tap, "PhaseTapChangerSymmetrical.stepPhaseShiftIncrement"))?;
     let winding_angle = store
         .f(tap, "PhaseTapChangerAsymmetrical.windingConnectionAngle")?
         .unwrap_or(90.0)
@@ -4587,8 +4499,8 @@ fn read_tap_changers(mapper: &mut Mapper<'_>) -> Result<Vec<TapChanger>> {
                 .map_or_else(|| calculated_tap_steps(store, &tap, kind), Ok)?;
             let tap_position = store
                 .f(&tap, "TapChanger.step")?
-                .try_or_else(|| Ok({ store.f(&tap, "TapChanger.normalStep")? }))?
-                .try_or_else(|| Ok({ store.f(&tap, "TapChanger.neutralStep")? }))?
+                .try_or_else(|| store.f(&tap, "TapChanger.normalStep"))?
+                .try_or_else(|| store.f(&tap, "TapChanger.neutralStep"))?
                 .unwrap_or(f64::from(low))
                 .round() as i32;
             let solved_tap_position = sv_tap_step(store, &tap)?.map(|value| value.round() as i32);
@@ -4605,7 +4517,7 @@ fn read_tap_changers(mapper: &mut Mapper<'_>) -> Result<Vec<TapChanger>> {
                 voltage_step_increment_percent: store
                     .f(&tap, "RatioTapChanger.stepVoltageIncrement")?
                     .try_or_else(|| {
-                        Ok({ store.f(&tap, "PhaseTapChangerNonLinear.voltageStepIncrement")? })
+                        store.f(&tap, "PhaseTapChangerNonLinear.voltageStepIncrement")
                     })?,
                 load_tap_changing_capabilities: store
                     .boolean(&tap, "TapChanger.ltcFlag")?
@@ -4613,22 +4525,15 @@ fn read_tap_changers(mapper: &mut Mapper<'_>) -> Result<Vec<TapChanger>> {
                 regulating: store
                     .boolean(&tap, "TapChanger.controlEnabled")?
                     .try_or_else(|| {
-                        Ok({
-                            {
-                                control.try_and_then(|value| {
-                                    Ok({ store.boolean(value, "RegulatingControl.enabled")? })
-                                })?
-                            }
-                        })
+                        control
+                            .try_and_then(|value| store.boolean(value, "RegulatingControl.enabled"))
                     })?
                     .unwrap_or(false),
                 regulation_mode: tap_control_mode(store, &tap, mapper.warnings),
-                regulation_value: control.try_and_then(|value| {
-                    Ok({ store.f(value, "RegulatingControl.targetValue")? })
-                })?,
-                target_deadband: control.try_and_then(|value| {
-                    Ok({ store.f(value, "RegulatingControl.targetDeadband")? })
-                })?,
+                regulation_value: control
+                    .try_and_then(|value| store.f(value, "RegulatingControl.targetValue"))?,
+                target_deadband: control
+                    .try_and_then(|value| store.f(value, "RegulatingControl.targetDeadband"))?,
                 regulation_terminal: control
                     .and_then(|value| store.refv(value, "RegulatingControl.Terminal"))
                     .map(|terminal| terminal_reference(store, terminal))
@@ -5057,22 +4962,20 @@ fn read_nonlinear_shunts(mapper: &mut Mapper<'_>) -> Result<Vec<Shunt>> {
             .into_iter()
             .try_filter_map(|point| {
                 Ok({
-                    {
-                        let number = store
-                            .f(point, "NonlinearShuntCompensatorPoint.sectionNumber")??
+                    let number =
+                        present!(store.f(point, "NonlinearShuntCompensatorPoint.sectionNumber")?)
                             .round() as usize;
-                        (number > 0).then_some((
-                            number,
-                            store
-                                .f(point, "NonlinearShuntCompensatorPoint.g")?
-                                .unwrap_or(0.0)
-                                * kv2,
-                            store
-                                .f(point, "NonlinearShuntCompensatorPoint.b")?
-                                .unwrap_or(0.0)
-                                * kv2,
-                        ))
-                    }
+                    (number > 0).then_some((
+                        number,
+                        store
+                            .f(point, "NonlinearShuntCompensatorPoint.g")?
+                            .unwrap_or(0.0)
+                            * kv2,
+                        store
+                            .f(point, "NonlinearShuntCompensatorPoint.b")?
+                            .unwrap_or(0.0)
+                            * kv2,
+                    ))
                 })
             })?
             .collect();
@@ -5124,7 +5027,7 @@ fn shunt_control(
         .boolean(shunt, "RegulatingCondEq.controlEnabled")?
         .unwrap_or(false);
     let control_enabled = regulation
-        .try_and_then(|control| Ok({ store.boolean(control, "RegulatingControl.enabled")? }))?
+        .try_and_then(|control| store.boolean(control, "RegulatingControl.enabled"))?
         .unwrap_or(equipment_enabled);
     let enabled = equipment_enabled && control_enabled;
     let regulating_terminal = regulation
@@ -5142,11 +5045,11 @@ fn shunt_control(
         regulating_control_scale_to_kv(store, control, mapper.warnings)
     });
     let target = regulation
-        .try_and_then(|control| Ok({ store.f(control, "RegulatingControl.targetValue")? }))?
+        .try_and_then(|control| store.f(control, "RegulatingControl.targetValue"))?
         .unwrap_or(0.0)
         * scale_to_kv;
     let deadband = regulation
-        .try_and_then(|control| Ok({ store.f(control, "RegulatingControl.targetDeadband")? }))?
+        .try_and_then(|control| store.f(control, "RegulatingControl.targetDeadband"))?
         .unwrap_or(0.0)
         * scale_to_kv;
     Ok(Some(SwitchedShuntControl {
@@ -5186,7 +5089,7 @@ fn selected_sections(mapper: &mut Mapper<'_>, id: &str, default: f64) -> Result<
         }
         assigned
             .or(observed)
-            .try_or_else(|| Ok({ store.f(id, "ShuntCompensator.normalSections")? }))?
+            .try_or_else(|| store.f(id, "ShuntCompensator.normalSections"))?
             .unwrap_or(default)
             .max(0.0)
             .round() as usize
@@ -5194,12 +5097,10 @@ fn selected_sections(mapper: &mut Mapper<'_>, id: &str, default: f64) -> Result<
 }
 
 fn sv_sections(store: &Store, shunt: &str) -> Result<Option<f64>> {
-    Ok({
-        store
-            .referrers("SvShuntCompensatorSections.ShuntCompensator", shunt)
-            .into_iter()
-            .try_find_map(|sv| Ok({ store.f(sv, "SvShuntCompensatorSections.sections")? }))?
-    })
+    store
+        .referrers("SvShuntCompensatorSections.ShuntCompensator", shunt)
+        .into_iter()
+        .try_find_map(|sv| store.f(sv, "SvShuntCompensatorSections.sections"))
 }
 
 fn read_switches(mapper: &mut Mapper<'_>) -> Result<Vec<Switch>> {
@@ -5528,9 +5429,8 @@ fn read_three_winding_transformer(
             if let Some(ratio_tap) = ratio_tap_changer(mapper.store, end) {
                 tap *= ratio_tap_factor(mapper, ratio_tap)?;
             }
-            let shift = phase_tap_changer(mapper.store, end).try_map_or(0.0, |phase_tap| {
-                Ok({ phase_shift_deg(mapper, &phase_tap, false)? })
-            })?;
+            let shift = phase_tap_changer(mapper.store, end)
+                .try_map_or(0.0, |phase_tap| phase_shift_deg(mapper, &phase_tap, false))?;
 
             let mut limits = Branch::new(bus, bus, 0.0, 1.0);
             apply_limits_to_targets(
@@ -5652,7 +5552,7 @@ fn ratio_tap_factor(mapper: &Mapper<'_>, rtc: &str) -> Result<f64> {
         let neutral = store.f(rtc, "TapChanger.neutralStep")?.unwrap_or(0.0);
         let step = store
             .f(rtc, "TapChanger.step")?
-            .try_or_else(|| Ok({ sv_tap_step(store, rtc)? }))?
+            .try_or_else(|| sv_tap_step(store, rtc))?
             .unwrap_or(neutral);
         if let Some(steps) = table_tap_steps(store, rtc, TapChangerKind::Ratio)?
             && let Some(value) = steps
@@ -5669,12 +5569,10 @@ fn ratio_tap_factor(mapper: &Mapper<'_>, rtc: &str) -> Result<f64> {
 }
 
 fn sv_tap_step(store: &Store, tap_changer: &str) -> Result<Option<f64>> {
-    Ok({
-        store
-            .referrers("SvTapStep.TapChanger", tap_changer)
-            .into_iter()
-            .try_find_map(|sv| Ok({ store.f(sv, "SvTapStep.position")? }))?
-    })
+    store
+        .referrers("SvTapStep.TapChanger", tap_changer)
+        .into_iter()
+        .try_find_map(|sv| store.f(sv, "SvTapStep.position"))
 }
 
 fn ratio_tap_changer<'a>(store: &'a Store, end: &str) -> Option<&'a str> {
@@ -5718,7 +5616,7 @@ fn phase_shift_deg(mapper: &mut Mapper<'_>, ptc: &str, invert: bool) -> Result<f
         let neutral = store.f(ptc, "TapChanger.neutralStep")?.unwrap_or(0.0);
         let step = store
             .f(ptc, "TapChanger.step")?
-            .try_or_else(|| Ok({ sv_tap_step(store, ptc)? }))?
+            .try_or_else(|| sv_tap_step(store, ptc))?
             .unwrap_or(neutral);
         let degrees = match class.as_str() {
             "PhaseTapChangerLinear" => {
@@ -5829,7 +5727,7 @@ fn apply_limits_to_targets(
                 let class = store.class_of(limit).unwrap_or_default();
                 let value = store
                     .f(limit, &format!("{class}.value"))?
-                    .try_or_else(|| Ok({ store.f(limit, &format!("{class}.normalValue"))? }))?
+                    .try_or_else(|| store.f(limit, &format!("{class}.normalValue")))?
                     .unwrap_or(0.0);
                 let mva = if class == "CurrentLimit" {
                     3f64.sqrt() * kv * value / 1000.0
