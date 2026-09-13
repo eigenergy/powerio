@@ -19482,8 +19482,13 @@ mod tests {
         let buses = duplicate["value"]["data"]["instance"]["network"]["buses"]
             .as_array_mut()
             .unwrap();
-        assert!(buses.len() >= 2);
-        buses[1]["id"] = buses[0]["id"].clone();
+        if buses.len() > 1 {
+            buses[1]["id"] = buses[0]["id"].clone();
+        } else {
+            let terminals = buses[0]["terminals"].as_array_mut().unwrap();
+            assert!(terminals.len() >= 2);
+            terminals[1] = terminals[0].clone();
+        }
         check_stored_solution_rejected(&duplicate);
     }
 
