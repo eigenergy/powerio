@@ -2,14 +2,14 @@
 
 Reference encodings of IEEE distribution test cases in draft BMOPF 0.2,
 produced by `powerio-dist`. They validate against that schema and
-exercise parsers and data profilers such as `BMOPFTools.jl`. Regenerate them
+exercise parsers and validation tools. Regenerate them
 rather than editing by hand.
 
 | Case | Source `.dss` | Size | Write diagnostics |
 |---|---|---|---|
 | IEEE 34 | `tests/data/dist/opendss/ieee34/ieee34Mod1.dss` (vendored) | 80,822 bytes | 23 |
 | IEEE 123 | `tests/data/dist/opendss/ieee123/IEEE123Master.dss` (vendored) | 120,747 bytes | 43 |
-| 4 bus delta wye | `4Bus-DY-Bal/4Bus-DY-Bal.DSS` from the OpenDSS distribution | 9,639 bytes | 0 |
+| 4 bus delta wye | `4Bus-DY-Bal/4Bus-DY-Bal.DSS` from the OpenDSS distribution | 10,957 bytes | 0 |
 
 34 and 123 are recognizable feeders. The Kersting 4 bus case isolates a single
 delta to wye service transformer, the four wire winding that the BMOPF schema's
