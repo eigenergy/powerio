@@ -6,7 +6,25 @@
 //! files, directories, and memory output use [`PioDestination`]. Values are
 //! identified by canonical structural type names rather than an ordinal enum.
 
-#![allow(clippy::missing_safety_doc)]
+//! # Safety
+//!
+//! Non-null handles must be live handles of the declared type from this library.
+//! Retain creates an independently releasable handle. Release consumes one owned
+//! handle and must not overlap any use of that same raw handle. Concurrent
+//! immutable access is permitted. Module mutation requires exclusive access,
+//! including exclusion of retain calls, until the call returns.
+//!
+//! Every non-null input pointer must be aligned and readable for its stated
+//! length; output pointers must be aligned and writable for their declared type.
+//! Spans must fit within one allocation and at most `isize::MAX` bytes. Input
+//! memory must remain unchanged while read. Output memory must not alias inputs
+//! or other outputs. Null pointers are accepted only where the operation handles
+//! their absence; a reported pointer error does not validate arbitrary addresses.
+//!
+//! Borrowed views remain valid while their owner remains alive and unchanged.
+//! Module mutation invalidates plain views; independently owned child handles
+//! retain their snapshots. Returned owned handles must use their matching release
+//! function. These requirements apply to direct Rust callers as well as C callers.
 
 use std::ffi::c_char;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -2430,6 +2448,9 @@ pub extern "C" fn pio_version() -> PioStringView {
 }
 
 /// The failure's stable diagnostic code.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_error_code(error: *const PioError) -> PioStringView {
     unsafe { PioError::get(error) }.map_or(PioStringView::EMPTY, |error| {
@@ -2438,6 +2459,9 @@ pub unsafe extern "C" fn pio_error_code(error: *const PioError) -> PioStringView
 }
 
 /// The rendered failure message.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_error_message(error: *const PioError) -> PioStringView {
     unsafe { PioError::get(error) }.map_or(PioStringView::EMPTY, |error| {
@@ -2446,6 +2470,9 @@ pub unsafe extern "C" fn pio_error_message(error: *const PioError) -> PioStringV
 }
 
 /// The structured diagnostics that caused the failure.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_error_diagnostics(error: *const PioError) -> *mut PioDiagnostics {
     unsafe { PioError::get(error) }.map_or(std::ptr::null_mut(), |error| {
@@ -2453,21 +2480,35 @@ pub unsafe extern "C" fn pio_error_diagnostics(error: *const PioError) -> *mut P
     })
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_error_retain(error: *const PioError) -> *mut PioError {
     unsafe { PioError::retain_raw(error) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_error_release(error: *mut PioError) {
     unsafe { PioError::release_raw(error) };
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_diagnostics_len(diagnostics: *const PioDiagnostics) -> usize {
     unsafe { PioDiagnostics::get(diagnostics) }.map_or(0, |values| values.records().len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_diagnostic_code(
     diagnostics: *const PioDiagnostics,
@@ -2480,6 +2521,9 @@ pub unsafe extern "C" fn pio_diagnostic_code(
         })
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_diagnostic_severity(
     diagnostics: *const PioDiagnostics,
@@ -2492,6 +2536,9 @@ pub unsafe extern "C" fn pio_diagnostic_severity(
         })
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_diagnostic_message(
     diagnostics: *const PioDiagnostics,
@@ -2505,6 +2552,9 @@ pub unsafe extern "C" fn pio_diagnostic_message(
 }
 
 /// Whether this diagnostic has a durable identity.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_diagnostic_has_id(
     diagnostics: *const PioDiagnostics,
@@ -2516,6 +2566,9 @@ pub unsafe extern "C" fn pio_diagnostic_has_id(
 }
 
 /// Borrow this diagnostic's durable identity, or an empty view when absent.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_diagnostic_id(
     diagnostics: *const PioDiagnostics,
@@ -2528,6 +2581,9 @@ pub unsafe extern "C" fn pio_diagnostic_id(
 }
 
 /// Whether this diagnostic names a value element.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_diagnostic_has_target(
     diagnostics: *const PioDiagnostics,
@@ -2539,6 +2595,9 @@ pub unsafe extern "C" fn pio_diagnostic_has_target(
 }
 
 /// Borrow this diagnostic's value element locator, or an empty view when absent.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_diagnostic_target(
     diagnostics: *const PioDiagnostics,
@@ -2551,6 +2610,9 @@ pub unsafe extern "C" fn pio_diagnostic_target(
 }
 
 /// Whether this diagnostic carries a suggested action.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_diagnostic_has_suggested_action(
     diagnostics: *const PioDiagnostics,
@@ -2562,6 +2624,9 @@ pub unsafe extern "C" fn pio_diagnostic_has_suggested_action(
 }
 
 /// Borrow this diagnostic's suggested action, or an empty view when absent.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_diagnostic_suggested_action(
     diagnostics: *const PioDiagnostics,
@@ -2574,6 +2639,9 @@ pub unsafe extern "C" fn pio_diagnostic_suggested_action(
 }
 
 /// Number of source byte ranges attached to this diagnostic.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_diagnostic_n_spans(
     diagnostics: *const PioDiagnostics,
@@ -2585,6 +2653,9 @@ pub unsafe extern "C" fn pio_diagnostic_n_spans(
 }
 
 /// Read one source byte range. The source string borrows from `diagnostics`.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_diagnostic_span(
     diagnostics: *const PioDiagnostics,
@@ -2624,6 +2695,9 @@ pub unsafe extern "C" fn pio_diagnostic_span(
 }
 
 /// Number of other diagnostic identities referenced by this diagnostic.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_diagnostic_n_related(
     diagnostics: *const PioDiagnostics,
@@ -2635,6 +2709,9 @@ pub unsafe extern "C" fn pio_diagnostic_n_related(
 }
 
 /// Borrow one related diagnostic identity, or an empty view when out of range.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_diagnostic_related(
     diagnostics: *const PioDiagnostics,
@@ -2648,6 +2725,9 @@ pub unsafe extern "C" fn pio_diagnostic_related(
 }
 
 /// Serialize this diagnostic's structured details as an owned JSON object.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_diagnostic_details_json(
     diagnostics: *const PioDiagnostics,
@@ -2680,6 +2760,10 @@ pub unsafe extern "C" fn pio_diagnostic_details_json(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_diagnostics_retain(
     diagnostics: *const PioDiagnostics,
@@ -2687,6 +2771,10 @@ pub unsafe extern "C" fn pio_diagnostics_retain(
     unsafe { PioDiagnostics::retain_raw(diagnostics) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_diagnostics_release(diagnostics: *mut PioDiagnostics) {
     unsafe { PioDiagnostics::release_raw(diagnostics) };
@@ -2737,6 +2825,9 @@ opaque_handle!(
 );
 
 /// Acquire a file or directory path.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_source_open(
     path: *const c_char,
@@ -2754,6 +2845,9 @@ pub unsafe extern "C" fn pio_source_open(
 }
 
 /// Retain named bytes as an in-memory source. Binary content is supported.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_source_from_memory(
     name: *const c_char,
@@ -2773,17 +2867,28 @@ pub unsafe extern "C" fn pio_source_from_memory(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_source_retain(source: *const PioSource) -> *mut PioSource {
     unsafe { PioSource::retain_raw(source) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_source_release(source: *mut PioSource) {
     unsafe { PioSource::release_raw(source) };
 }
 
 /// Select a filesystem output path.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_destination_path(
     path: *const c_char,
@@ -2801,6 +2906,9 @@ pub unsafe extern "C" fn pio_destination_path(
 }
 
 /// Select memory output and prefix returned artifact names with `root`.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_destination_memory(
     root: *const c_char,
@@ -2818,6 +2926,10 @@ pub unsafe extern "C" fn pio_destination_memory(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_destination_retain(
     destination: *const PioDestination,
@@ -2825,12 +2937,19 @@ pub unsafe extern "C" fn pio_destination_retain(
     unsafe { PioDestination::retain_raw(destination) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_destination_release(destination: *mut PioDestination) {
     unsafe { PioDestination::release_raw(destination) };
 }
 
 /// Parse one geographic sidecar from an acquired source.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_geo_layer_parse(
     source: *const PioSource,
@@ -2863,6 +2982,9 @@ pub unsafe extern "C" fn pio_geo_layer_parse(
 }
 
 /// Return diagnostics produced while parsing a geographic sidecar.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_geo_layer_diagnostics(
     layer: *const PioGeoLayer,
@@ -2874,11 +2996,19 @@ pub unsafe extern "C" fn pio_geo_layer_diagnostics(
     })
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_geo_layer_retain(layer: *const PioGeoLayer) -> *mut PioGeoLayer {
     unsafe { PioGeoLayer::retain_raw(layer) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_geo_layer_release(layer: *mut PioGeoLayer) {
     unsafe { PioGeoLayer::release_raw(layer) };
@@ -3558,6 +3688,9 @@ unsafe fn require_value<'a>(value: *const PioValueHandle) -> Result<&'a ValueInn
 }
 
 /// Parse one acquired grid exchange source.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_parse(
     source: *const PioSource,
@@ -3589,6 +3722,9 @@ pub unsafe extern "C" fn pio_parse(
 /// A document carries the independent PowerIO IR generation reported by
 /// `pio_schema_report`. This library refuses any unsupported identity or
 /// generation through `error`, naming what it found.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_deserialize(
     source: *const PioSource,
@@ -3627,6 +3763,9 @@ unsafe fn transform_module<T>(
 }
 
 /// Construct a DC power flow calculation module from a balanced network module.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_to_dc_pf_instance(
     module: *const PioModule,
@@ -3643,6 +3782,9 @@ pub unsafe extern "C" fn pio_module_to_dc_pf_instance(
 }
 
 /// Construct an AC power flow calculation module from a balanced network module.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_to_ac_pf_instance(
     module: *const PioModule,
@@ -3659,6 +3801,9 @@ pub unsafe extern "C" fn pio_module_to_ac_pf_instance(
 }
 
 /// Construct a DC optimal power flow calculation module from a balanced network module.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_to_dc_opf_instance(
     module: *const PioModule,
@@ -3675,6 +3820,9 @@ pub unsafe extern "C" fn pio_module_to_dc_opf_instance(
 }
 
 /// Construct an AC optimal power flow calculation module from a balanced network module.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_to_ac_opf_instance(
     module: *const PioModule,
@@ -3692,6 +3840,9 @@ pub unsafe extern "C" fn pio_module_to_ac_opf_instance(
 
 /// Construct a multiconductor AC power flow calculation module from a
 /// multiconductor network module.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_to_mc_ac_pf_instance(
     module: *const PioModule,
@@ -3709,6 +3860,9 @@ pub unsafe extern "C" fn pio_module_to_mc_ac_pf_instance(
 
 /// Construct a multiconductor AC optimal power flow calculation module from a
 /// multiconductor network module.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_to_mc_ac_opf_instance(
     module: *const PioModule,
@@ -3724,6 +3878,9 @@ pub unsafe extern "C" fn pio_module_to_mc_ac_opf_instance(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_to_lindist3flow_opf_instance(
     module: *const PioModule,
@@ -3742,6 +3899,9 @@ pub unsafe extern "C" fn pio_module_to_lindist3flow_opf_instance(
 /// Apply one geographic layer to a balanced or multiconductor network module.
 /// The input module is unchanged. When `out_report` is not NULL, it receives
 /// an independently owned report handle.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_apply_geo_layer(
     module: *const PioModule,
@@ -3778,6 +3938,9 @@ pub unsafe extern "C" fn pio_module_apply_geo_layer(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_geo_apply_report_matched_buses(
     report: *const PioGeoApplyReport,
@@ -3785,6 +3948,9 @@ pub unsafe extern "C" fn pio_geo_apply_report_matched_buses(
     unsafe { PioGeoApplyReport::get(report) }.map_or(0, |report| report.matched_buses)
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_geo_apply_report_matched_branches(
     report: *const PioGeoApplyReport,
@@ -3792,6 +3958,9 @@ pub unsafe extern "C" fn pio_geo_apply_report_matched_branches(
     unsafe { PioGeoApplyReport::get(report) }.map_or(0, |report| report.matched_branches)
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_geo_apply_report_unmatched_features(
     report: *const PioGeoApplyReport,
@@ -3799,6 +3968,9 @@ pub unsafe extern "C" fn pio_geo_apply_report_unmatched_features(
     unsafe { PioGeoApplyReport::get(report) }.map_or(0, |report| report.unmatched_features)
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_geo_apply_report_unlocated_buses(
     report: *const PioGeoApplyReport,
@@ -3806,6 +3978,9 @@ pub unsafe extern "C" fn pio_geo_apply_report_unlocated_buses(
     unsafe { PioGeoApplyReport::get(report) }.map_or(0, |report| report.unlocated_buses)
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_geo_apply_report_unlocated_branches(
     report: *const PioGeoApplyReport,
@@ -3813,6 +3988,9 @@ pub unsafe extern "C" fn pio_geo_apply_report_unlocated_branches(
     unsafe { PioGeoApplyReport::get(report) }.map_or(0, |report| report.unlocated_branches)
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_geo_apply_report_note_count(
     report: *const PioGeoApplyReport,
@@ -3820,6 +3998,9 @@ pub unsafe extern "C" fn pio_geo_apply_report_note_count(
     unsafe { PioGeoApplyReport::get(report) }.map_or(0, |report| report.notes.len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_geo_apply_report_note_at(
     report: *const PioGeoApplyReport,
@@ -3845,6 +4026,10 @@ pub unsafe extern "C" fn pio_geo_apply_report_note_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_geo_apply_report_retain(
     report: *const PioGeoApplyReport,
@@ -3852,12 +4037,19 @@ pub unsafe extern "C" fn pio_geo_apply_report_retain(
     unsafe { PioGeoApplyReport::retain_raw(report) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_geo_apply_report_release(report: *mut PioGeoApplyReport) {
     unsafe { PioGeoApplyReport::release_raw(report) };
 }
 
 /// Return an owner-rooted view of the module's value.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_value(module: *const PioModule) -> *mut PioValueHandle {
     unsafe { PioModule::arc(module) }.map_or(std::ptr::null_mut(), |owner| {
@@ -3866,6 +4058,9 @@ pub unsafe extern "C" fn pio_module_value(module: *const PioModule) -> *mut PioV
 }
 
 /// Return the module's stored diagnostics.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_diagnostics(module: *const PioModule) -> *mut PioDiagnostics {
     unsafe { PioModule::arc(module) }.map_or(std::ptr::null_mut(), |module| {
@@ -3913,6 +4108,9 @@ fn json_value_kind(value: &serde_json::Value) -> &'static str {
 }
 
 /// Read the program identity recorded with a module.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_producer(
     module: *const PioModule,
@@ -3934,12 +4132,18 @@ pub unsafe extern "C" fn pio_module_producer(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_source_count(module: *const PioModule) -> usize {
     unsafe { PioModule::get(module) }.map_or(0, |module| module.module.sources().len())
 }
 
 /// Read one durable source descriptor by zero based position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_source_at(
     module: *const PioModule,
@@ -3983,12 +4187,18 @@ pub unsafe extern "C" fn pio_module_source_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_source_map_count(module: *const PioModule) -> usize {
     unsafe { PioModule::get(module) }.map_or(0, |module| module.module.source_map().len())
 }
 
 /// Read one source map entry by zero based position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_source_map_at(
     module: *const PioModule,
@@ -4018,6 +4228,9 @@ pub unsafe extern "C" fn pio_module_source_map_at(
 }
 
 /// Read one byte range from a source map entry.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_source_map_span_at(
     module: *const PioModule,
@@ -4055,12 +4268,18 @@ pub unsafe extern "C" fn pio_module_source_map_span_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_history_count(module: *const PioModule) -> usize {
     unsafe { PioModule::get(module) }.map_or(0, |module| module.module.history().len())
 }
 
 /// Read one operation from module history by zero based position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_history_at(
     module: *const PioModule,
@@ -4099,6 +4318,9 @@ pub unsafe extern "C" fn pio_module_history_at(
 }
 
 /// Read one named structured history parameter by zero based position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_history_parameter_at(
     module: *const PioModule,
@@ -4140,6 +4362,9 @@ pub unsafe extern "C" fn pio_module_history_parameter_at(
 }
 
 /// Return an owner-rooted structured history parameter value.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_history_parameter_value_at(
     module: *const PioModule,
@@ -4179,6 +4404,9 @@ pub unsafe extern "C" fn pio_module_history_parameter_value_at(
 }
 
 /// Read one assumption attached to a history entry.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_history_assumption_at(
     module: *const PioModule,
@@ -4214,6 +4442,9 @@ pub unsafe extern "C" fn pio_module_history_assumption_at(
 }
 
 /// Read one declared loss attached to a history entry.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_history_loss_at(
     module: *const PioModule,
@@ -4248,12 +4479,18 @@ pub unsafe extern "C" fn pio_module_history_loss_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_extension_count(module: *const PioModule) -> usize {
     unsafe { PioModule::get(module) }.map_or(0, |module| module.module.extensions().len())
 }
 
 /// Read one namespaced structured module extension by zero based position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_extension_at(
     module: *const PioModule,
@@ -4288,6 +4525,9 @@ pub unsafe extern "C" fn pio_module_extension_at(
 }
 
 /// Return an owner-rooted structured module extension value.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_extension_value_at(
     module: *const PioModule,
@@ -4348,6 +4588,9 @@ fn json_value_view(value: &serde_json::Value) -> PioJsonValueView {
 }
 
 /// Read the type and scalar or collection data for a structured value.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_json_value_get(
     value: *const PioJsonValue,
@@ -4375,6 +4618,9 @@ pub unsafe extern "C" fn pio_json_value_get(
 }
 
 /// Return one owner-rooted element from a structured JSON array.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_json_value_array_at(
     value: *const PioJsonValue,
@@ -4412,6 +4658,9 @@ pub unsafe extern "C" fn pio_json_value_array_at(
 }
 
 /// Read one key and value type from a structured JSON object.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_json_value_object_entry_at(
     value: *const PioJsonValue,
@@ -4452,6 +4701,9 @@ pub unsafe extern "C" fn pio_json_value_object_entry_at(
 }
 
 /// Return one owner-rooted value from a structured JSON object by position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_json_value_object_value_at(
     value: *const PioJsonValue,
@@ -4488,27 +4740,46 @@ pub unsafe extern "C" fn pio_json_value_object_value_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_json_value_retain(value: *const PioJsonValue) -> *mut PioJsonValue {
     unsafe { PioJsonValue::retain_raw(value) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_json_value_release(value: *mut PioJsonValue) {
     unsafe { PioJsonValue::release_raw(value) };
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_retain(module: *const PioModule) -> *mut PioModule {
     unsafe { PioModule::retain_raw(module) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_release(module: *mut PioModule) {
     unsafe { PioModule::release_raw(module) };
 }
 
 /// Canonical structural type name, such as `powerio.BalancedNetwork`.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_value_type_name(value: *const PioValueHandle) -> PioStringView {
     unsafe { PioValueHandle::get(value) }
@@ -4519,6 +4790,9 @@ pub unsafe extern "C" fn pio_value_type_name(value: *const PioValueHandle) -> Pi
 }
 
 /// Exact structural type predicate.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_value_is_type(
     value: *const PioValueHandle,
@@ -4535,6 +4809,9 @@ pub unsafe extern "C" fn pio_value_is_type(
 }
 
 /// Borrow the value as a balanced network without serialization or copying.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_value_balanced_network(
     value: *const PioValueHandle,
@@ -4563,6 +4840,9 @@ pub unsafe extern "C" fn pio_value_balanced_network(
 /// Take the value as a geographic layer handle. The layer is copied out of
 /// the value, so the handle outlives the module the way
 /// `pio_geo_layer_parse` produces one.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_value_geo_layer(
     value: *const PioValueHandle,
@@ -4586,6 +4866,9 @@ pub unsafe extern "C" fn pio_value_geo_layer(
 }
 
 /// Borrow the value as a multiconductor network without serialization or copying.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_value_multiconductor_network(
     value: *const PioValueHandle,
@@ -4614,6 +4897,9 @@ pub unsafe extern "C" fn pio_value_multiconductor_network(
 }
 
 /// Borrow the value as a time series.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_value_time_series(
     value: *const PioValueHandle,
@@ -4637,6 +4923,9 @@ pub unsafe extern "C" fn pio_value_time_series(
 }
 
 /// Borrow the value as a scenario set.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_value_scenario_set(
     value: *const PioValueHandle,
@@ -4819,6 +5108,9 @@ unsafe fn solution_accessor(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_value_balanced_operating_point(
     value: *const PioValueHandle,
@@ -4827,6 +5119,9 @@ pub unsafe extern "C" fn pio_value_balanced_operating_point(
     unsafe { operating_point_accessor(value, ExpectedValue::BalancedOperatingPoint, error) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_value_multiconductor_operating_point(
     value: *const PioValueHandle,
@@ -4835,6 +5130,9 @@ pub unsafe extern "C" fn pio_value_multiconductor_operating_point(
     unsafe { operating_point_accessor(value, ExpectedValue::MulticonductorOperatingPoint, error) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_value_dc_pf_instance(
     value: *const PioValueHandle,
@@ -4843,6 +5141,9 @@ pub unsafe extern "C" fn pio_value_dc_pf_instance(
     unsafe { instance_accessor(value, ExpectedValue::DcPfInstance, error) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_value_ac_pf_instance(
     value: *const PioValueHandle,
@@ -4851,6 +5152,9 @@ pub unsafe extern "C" fn pio_value_ac_pf_instance(
     unsafe { instance_accessor(value, ExpectedValue::AcPfInstance, error) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_value_dc_opf_instance(
     value: *const PioValueHandle,
@@ -4859,6 +5163,9 @@ pub unsafe extern "C" fn pio_value_dc_opf_instance(
     unsafe { instance_accessor(value, ExpectedValue::DcOpfInstance, error) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_value_ac_opf_instance(
     value: *const PioValueHandle,
@@ -4867,6 +5174,9 @@ pub unsafe extern "C" fn pio_value_ac_opf_instance(
     unsafe { instance_accessor(value, ExpectedValue::AcOpfInstance, error) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_value_mc_ac_pf_instance(
     value: *const PioValueHandle,
@@ -4875,6 +5185,9 @@ pub unsafe extern "C" fn pio_value_mc_ac_pf_instance(
     unsafe { instance_accessor(value, ExpectedValue::McAcPfInstance, error) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_value_mc_ac_opf_instance(
     value: *const PioValueHandle,
@@ -4883,6 +5196,9 @@ pub unsafe extern "C" fn pio_value_mc_ac_opf_instance(
     unsafe { instance_accessor(value, ExpectedValue::McAcOpfInstance, error) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_value_lindist3flow_opf_instance(
     value: *const PioValueHandle,
@@ -4891,6 +5207,9 @@ pub unsafe extern "C" fn pio_value_lindist3flow_opf_instance(
     unsafe { instance_accessor(value, ExpectedValue::LinDist3FlowOpfInstance, error) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_value_ac_scuc_instance(
     value: *const PioValueHandle,
@@ -4899,6 +5218,9 @@ pub unsafe extern "C" fn pio_value_ac_scuc_instance(
     unsafe { instance_accessor(value, ExpectedValue::AcScucInstance, error) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_value_dc_pf_solution(
     value: *const PioValueHandle,
@@ -4907,6 +5229,9 @@ pub unsafe extern "C" fn pio_value_dc_pf_solution(
     unsafe { solution_accessor(value, ExpectedValue::DcPfSolution, error) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_value_ac_pf_solution(
     value: *const PioValueHandle,
@@ -4915,6 +5240,9 @@ pub unsafe extern "C" fn pio_value_ac_pf_solution(
     unsafe { solution_accessor(value, ExpectedValue::AcPfSolution, error) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_value_dc_opf_solution(
     value: *const PioValueHandle,
@@ -4923,6 +5251,9 @@ pub unsafe extern "C" fn pio_value_dc_opf_solution(
     unsafe { solution_accessor(value, ExpectedValue::DcOpfSolution, error) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_value_ac_opf_solution(
     value: *const PioValueHandle,
@@ -4931,6 +5262,9 @@ pub unsafe extern "C" fn pio_value_ac_opf_solution(
     unsafe { solution_accessor(value, ExpectedValue::AcOpfSolution, error) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_value_socwr_opf_solution(
     value: *const PioValueHandle,
@@ -4939,6 +5273,9 @@ pub unsafe extern "C" fn pio_value_socwr_opf_solution(
     unsafe { solution_accessor(value, ExpectedValue::SocwrOpfSolution, error) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_value_mc_ac_pf_solution(
     value: *const PioValueHandle,
@@ -4947,6 +5284,9 @@ pub unsafe extern "C" fn pio_value_mc_ac_pf_solution(
     unsafe { solution_accessor(value, ExpectedValue::McAcPfSolution, error) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_value_mc_ac_opf_solution(
     value: *const PioValueHandle,
@@ -4955,6 +5295,9 @@ pub unsafe extern "C" fn pio_value_mc_ac_opf_solution(
     unsafe { solution_accessor(value, ExpectedValue::McAcOpfSolution, error) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_value_lindist3flow_opf_solution(
     value: *const PioValueHandle,
@@ -4963,6 +5306,9 @@ pub unsafe extern "C" fn pio_value_lindist3flow_opf_solution(
     unsafe { solution_accessor(value, ExpectedValue::LinDist3FlowOpfSolution, error) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_value_ac_scuc_solution(
     value: *const PioValueHandle,
@@ -4971,6 +5317,9 @@ pub unsafe extern "C" fn pio_value_ac_scuc_solution(
     unsafe { solution_accessor(value, ExpectedValue::AcScucSolution, error) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_operating_point_type_name(
     point: *const PioOperatingPoint,
@@ -4980,6 +5329,9 @@ pub unsafe extern "C" fn pio_operating_point_type_name(
         .map_or(PioStringView::EMPTY, PioStringView::new)
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calculation_instance_type_name(
     instance: *const PioCalculationInstance,
@@ -4989,6 +5341,9 @@ pub unsafe extern "C" fn pio_calculation_instance_type_name(
         .map_or(PioStringView::EMPTY, PioStringView::new)
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calculation_solution_type_name(
     solution: *const PioCalculationSolution,
@@ -5002,6 +5357,9 @@ pub unsafe extern "C" fn pio_calculation_solution_type_name(
 
 /// Return an owner-rooted view of the exact calculation instance retained by
 /// a calculation solution.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calculation_solution_instance(
     solution: *const PioCalculationSolution,
@@ -5075,6 +5433,9 @@ fn make_multiconductor_network_view(
     })
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_operating_point_balanced_network(
     point: *const PioOperatingPoint,
@@ -5099,6 +5460,9 @@ pub unsafe extern "C" fn pio_operating_point_balanced_network(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_operating_point_multiconductor_network(
     point: *const PioOperatingPoint,
@@ -5123,6 +5487,9 @@ pub unsafe extern "C" fn pio_operating_point_multiconductor_network(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calculation_instance_balanced_network(
     instance: *const PioCalculationInstance,
@@ -5190,6 +5557,9 @@ pub unsafe extern "C" fn pio_calculation_instance_balanced_network(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calculation_instance_multiconductor_network(
     instance: *const PioCalculationInstance,
@@ -5316,6 +5686,9 @@ fn opf_analysis_branch_source(
 }
 
 /// Build the matrix free DC OPF inputs from one typed instance.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_build_dc_opf_preparation(
     instance: *const PioCalculationInstance,
@@ -5350,6 +5723,9 @@ pub unsafe extern "C" fn pio_build_dc_opf_preparation(
 }
 
 /// Read the dimensions and conventions of a DC OPF preparation.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_opf_preparation_summary(
     preparation: *const PioDcOpfPreparation,
@@ -5401,6 +5777,9 @@ pub unsafe extern "C" fn pio_dc_opf_preparation_summary(
 }
 
 /// Borrow the dense reference bus indices of a DC OPF preparation.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_opf_preparation_reference_buses(
     preparation: *const PioDcOpfPreparation,
@@ -5411,6 +5790,9 @@ pub unsafe extern "C" fn pio_dc_opf_preparation_reference_buses(
 }
 
 /// Borrow the analysis rows skipped for zero impedance.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_opf_preparation_skipped_zero_impedance(
     preparation: *const PioDcOpfPreparation,
@@ -5421,6 +5803,9 @@ pub unsafe extern "C" fn pio_dc_opf_preparation_skipped_zero_impedance(
 }
 
 /// Read one dense bus row of a DC OPF preparation.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_opf_preparation_bus_at(
     preparation: *const PioDcOpfPreparation,
@@ -5458,6 +5843,9 @@ pub unsafe extern "C" fn pio_dc_opf_preparation_bus_at(
 }
 
 /// Read one generator row of a DC OPF preparation.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_opf_preparation_generator_at(
     preparation: *const PioDcOpfPreparation,
@@ -5505,6 +5893,9 @@ pub unsafe extern "C" fn pio_dc_opf_preparation_generator_at(
 }
 
 /// Read one active branch row of a DC OPF preparation.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_opf_preparation_branch_at(
     preparation: *const PioDcOpfPreparation,
@@ -5551,6 +5942,9 @@ pub unsafe extern "C" fn pio_dc_opf_preparation_branch_at(
 }
 
 /// Build the matrix free AC OPF inputs from one typed instance.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_build_ac_opf_preparation(
     instance: *const PioCalculationInstance,
@@ -5585,6 +5979,9 @@ pub unsafe extern "C" fn pio_build_ac_opf_preparation(
 }
 
 /// Read the dimensions and conventions of an AC OPF preparation.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_opf_preparation_summary(
     preparation: *const PioAcOpfPreparation,
@@ -5634,6 +6031,9 @@ pub unsafe extern "C" fn pio_ac_opf_preparation_summary(
 }
 
 /// Borrow the dense reference bus indices of an AC OPF preparation.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_opf_preparation_reference_buses(
     preparation: *const PioAcOpfPreparation,
@@ -5644,6 +6044,9 @@ pub unsafe extern "C" fn pio_ac_opf_preparation_reference_buses(
 }
 
 /// Borrow the analysis rows skipped for zero impedance.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_opf_preparation_skipped_zero_impedance(
     preparation: *const PioAcOpfPreparation,
@@ -5654,6 +6057,9 @@ pub unsafe extern "C" fn pio_ac_opf_preparation_skipped_zero_impedance(
 }
 
 /// Read one dense bus row of an AC OPF preparation.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_opf_preparation_bus_at(
     preparation: *const PioAcOpfPreparation,
@@ -5697,6 +6103,9 @@ pub unsafe extern "C" fn pio_ac_opf_preparation_bus_at(
 }
 
 /// Read one generator row of an AC OPF preparation.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_opf_preparation_generator_at(
     preparation: *const PioAcOpfPreparation,
@@ -5749,6 +6158,9 @@ pub unsafe extern "C" fn pio_ac_opf_preparation_generator_at(
 }
 
 /// Read one storage row of an AC OPF preparation.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_opf_preparation_storage_at(
     preparation: *const PioAcOpfPreparation,
@@ -5798,6 +6210,9 @@ pub unsafe extern "C" fn pio_ac_opf_preparation_storage_at(
 }
 
 /// Read one active branch row of an AC OPF preparation.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_opf_preparation_branch_at(
     preparation: *const PioAcOpfPreparation,
@@ -5849,6 +6264,9 @@ pub unsafe extern "C" fn pio_ac_opf_preparation_branch_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_pf_instance_bus_specification_count(
     instance: *const PioCalculationInstance,
@@ -5859,6 +6277,9 @@ pub unsafe extern "C" fn pio_dc_pf_instance_bus_specification_count(
 }
 
 /// Read one DC power flow bus specification by zero based bus table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_pf_instance_bus_specification_at(
     instance: *const PioCalculationInstance,
@@ -5915,6 +6336,9 @@ pub unsafe extern "C" fn pio_dc_pf_instance_bus_specification_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_pf_instance_branch_susceptance_formula(
     instance: *const PioCalculationInstance,
@@ -5928,6 +6352,9 @@ pub unsafe extern "C" fn pio_dc_pf_instance_branch_susceptance_formula(
         })
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_pf_instance_bus_specification_count(
     instance: *const PioCalculationInstance,
@@ -5938,6 +6365,9 @@ pub unsafe extern "C" fn pio_ac_pf_instance_bus_specification_count(
 }
 
 /// Read one AC power flow bus specification by zero based bus table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_pf_instance_bus_specification_at(
     instance: *const PioCalculationInstance,
@@ -5995,6 +6425,9 @@ pub unsafe extern "C" fn pio_ac_pf_instance_bus_specification_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_opf_instance_branch_susceptance_formula(
     instance: *const PioCalculationInstance,
@@ -6043,6 +6476,9 @@ impl CalculationInstanceInner {
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_lindist3flow_opf_instance_node_count(
     instance: *const PioCalculationInstance,
@@ -6052,6 +6488,9 @@ pub unsafe extern "C" fn pio_lindist3flow_opf_instance_node_count(
         .map_or(0, |instance| instance.topology().nodes.len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_lindist3flow_opf_instance_conductor_count(
     instance: *const PioCalculationInstance,
@@ -6062,6 +6501,9 @@ pub unsafe extern "C" fn pio_lindist3flow_opf_instance_conductor_count(
 }
 
 /// Read a node by zero based position. Strings borrow the instance handle.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_lindist3flow_opf_instance_node_at(
     instance: *const PioCalculationInstance,
@@ -6098,6 +6540,9 @@ pub unsafe extern "C" fn pio_lindist3flow_opf_instance_node_at(
 }
 
 /// Read a conductor by zero based position. Strings borrow the instance handle.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_lindist3flow_opf_instance_conductor_at(
     instance: *const PioCalculationInstance,
@@ -6156,6 +6601,9 @@ fn objective_term_name(term: &powerio_prob::ObjectiveTerm) -> &'static str {
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calculation_instance_objective_term_count(
     instance: *const PioCalculationInstance,
@@ -6166,6 +6614,9 @@ pub unsafe extern "C" fn pio_calculation_instance_objective_term_count(
 }
 
 /// Read one typed objective term by zero based position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calculation_instance_objective_term_at(
     instance: *const PioCalculationInstance,
@@ -6266,6 +6717,9 @@ fn constraint_selection_parts(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calculation_instance_active_constraint_count(
     instance: *const PioCalculationInstance,
@@ -6281,6 +6735,9 @@ pub unsafe extern "C" fn pio_calculation_instance_active_constraint_count(
 }
 
 /// Read one active constraint family by zero based position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calculation_instance_active_constraint_at(
     instance: *const PioCalculationInstance,
@@ -6309,6 +6766,9 @@ pub unsafe extern "C" fn pio_calculation_instance_active_constraint_at(
 }
 
 /// Read one selected component identity from an `only` constraint selection.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calculation_instance_active_constraint_identity_at(
     instance: *const PioCalculationInstance,
@@ -6338,6 +6798,9 @@ pub unsafe extern "C" fn pio_calculation_instance_active_constraint_identity_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calculation_instance_has_initial_point(
     instance: *const PioCalculationInstance,
@@ -6348,6 +6811,9 @@ pub unsafe extern "C" fn pio_calculation_instance_has_initial_point(
 
 /// Return the optional owner-rooted initial operating point. A calculation
 /// instance with no initial point returns NULL without setting an error.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calculation_instance_initial_point(
     instance: *const PioCalculationInstance,
@@ -6450,6 +6916,9 @@ fn dist_load_voltage_model_name(model: &powerio_dist::DistLoadVoltageModel) -> &
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_mc_ac_pf_instance_load_count(
     instance: *const PioCalculationInstance,
@@ -6459,6 +6928,9 @@ pub unsafe extern "C" fn pio_mc_ac_pf_instance_load_count(
         .map_or(0, |instance| instance.loads().len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_mc_ac_pf_instance_load_at(
     instance: *const PioCalculationInstance,
@@ -6501,6 +6973,9 @@ fn model_value(values: &[f64], index: usize) -> (f64, bool) {
         .map_or((0.0, false), |value| (value, true))
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_mc_ac_pf_instance_load_terminal_at(
     instance: *const PioCalculationInstance,
@@ -6622,6 +7097,9 @@ pub unsafe extern "C" fn pio_mc_ac_pf_instance_load_terminal_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_mc_ac_pf_instance_source_count(
     instance: *const PioCalculationInstance,
@@ -6631,6 +7109,9 @@ pub unsafe extern "C" fn pio_mc_ac_pf_instance_source_count(
         .map_or(0, |instance| instance.sources().len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_mc_ac_pf_instance_source_at(
     instance: *const PioCalculationInstance,
@@ -6663,6 +7144,9 @@ pub unsafe extern "C" fn pio_mc_ac_pf_instance_source_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_mc_ac_pf_instance_source_terminal_at(
     instance: *const PioCalculationInstance,
@@ -6715,6 +7199,9 @@ pub unsafe extern "C" fn pio_mc_ac_pf_instance_source_terminal_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_mc_ac_pf_instance_isolated_terminal_count(
     instance: *const PioCalculationInstance,
@@ -6724,6 +7211,9 @@ pub unsafe extern "C" fn pio_mc_ac_pf_instance_isolated_terminal_count(
         .map_or(0, |instance| instance.isolated_terminals().len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_mc_ac_pf_instance_isolated_terminal_at(
     instance: *const PioCalculationInstance,
@@ -6756,6 +7246,9 @@ pub unsafe extern "C" fn pio_mc_ac_pf_instance_isolated_terminal_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_mc_ac_pf_instance_active_control_count(
     instance: *const PioCalculationInstance,
@@ -6765,6 +7258,9 @@ pub unsafe extern "C" fn pio_mc_ac_pf_instance_active_control_count(
         .map_or(0, |instance| instance.control_modes().len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_mc_ac_pf_instance_active_control_at(
     instance: *const PioCalculationInstance,
@@ -7054,6 +7550,9 @@ fn scuc_device_or_error(
 }
 
 /// Read semantic collection sizes for one AC SCUC instance.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_dimensions(
     instance: *const PioCalculationInstance,
@@ -7081,6 +7580,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_dimensions(
 }
 
 /// Borrow interval durations in hours, in chronological order.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_interval_durations(
     instance: *const PioCalculationInstance,
@@ -7093,6 +7595,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_interval_durations(
 }
 
 /// Read the four required violation costs.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_violation_costs(
     instance: *const PioCalculationInstance,
@@ -7114,6 +7619,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_violation_costs(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_device_count(
     instance: *const PioCalculationInstance,
@@ -7123,6 +7631,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_device_count(
         .map_or(0, |inputs| inputs.devices.len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_device_at(
     instance: *const PioCalculationInstance,
@@ -7141,6 +7652,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_device_at(
 }
 
 /// Read one device by its exact source UID.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_device_get(
     instance: *const PioCalculationInstance,
@@ -7165,6 +7679,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_device_get(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_device_startup_cost_adjustment_count(
     instance: *const PioCalculationInstance,
@@ -7176,6 +7693,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_device_startup_cost_adjustment_cou
         .map_or(0, |device| device.startup_cost_adjustments.len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_device_startup_cost_adjustment_at(
     instance: *const PioCalculationInstance,
@@ -7208,6 +7728,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_device_startup_cost_adjustment_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_device_startup_limit_count(
     instance: *const PioCalculationInstance,
@@ -7219,6 +7742,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_device_startup_limit_count(
         .map_or(0, |device| device.startup_limits.len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_device_startup_limit_at(
     instance: *const PioCalculationInstance,
@@ -7302,6 +7828,9 @@ unsafe fn scuc_energy_requirement_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_device_energy_upper_bound_count(
     instance: *const PioCalculationInstance,
@@ -7310,6 +7839,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_device_energy_upper_bound_count(
     unsafe { scuc_energy_requirement_count(instance, device_index, true) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_device_energy_upper_bound_at(
     instance: *const PioCalculationInstance,
@@ -7330,6 +7862,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_device_energy_upper_bound_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_device_energy_lower_bound_count(
     instance: *const PioCalculationInstance,
@@ -7338,6 +7873,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_device_energy_lower_bound_count(
     unsafe { scuc_energy_requirement_count(instance, device_index, false) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_device_energy_lower_bound_at(
     instance: *const PioCalculationInstance,
@@ -7358,6 +7896,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_device_energy_lower_bound_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_device_period_at(
     instance: *const PioCalculationInstance,
@@ -7393,6 +7934,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_device_period_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_device_energy_cost_block_count(
     instance: *const PioCalculationInstance,
@@ -7406,6 +7950,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_device_energy_cost_block_count(
         .map_or(0, |period| period.energy_cost_blocks.len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_device_energy_cost_block_at(
     instance: *const PioCalculationInstance,
@@ -7444,6 +7991,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_device_energy_cost_block_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_shunt_count(
     instance: *const PioCalculationInstance,
@@ -7464,6 +8014,9 @@ fn scuc_shunt_view(shunt: &powerio_prob::ScucShunt) -> PioScucShuntView {
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_shunt_at(
     instance: *const PioCalculationInstance,
@@ -7487,6 +8040,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_shunt_at(
 }
 
 /// Read one shunt by its exact source UID.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_shunt_get(
     instance: *const PioCalculationInstance,
@@ -7511,6 +8067,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_shunt_get(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_branch_switching_cost_count(
     instance: *const PioCalculationInstance,
@@ -7520,6 +8079,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_branch_switching_cost_count(
         .map_or(0, |inputs| inputs.branch_switching_costs.len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_branch_switching_cost_at(
     instance: *const PioCalculationInstance,
@@ -7546,6 +8108,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_branch_switching_cost_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_transformer_control_count(
     instance: *const PioCalculationInstance,
@@ -7555,6 +8120,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_transformer_control_count(
         .map_or(0, |inputs| inputs.transformer_controls.len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_transformer_control_at(
     instance: *const PioCalculationInstance,
@@ -7583,6 +8151,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_transformer_control_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_active_reserve_zone_count(
     instance: *const PioCalculationInstance,
@@ -7592,6 +8163,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_active_reserve_zone_count(
         .map_or(0, |inputs| inputs.active_reserve_zones.len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_active_reserve_zone_at(
     instance: *const PioCalculationInstance,
@@ -7628,6 +8202,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_active_reserve_zone_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_active_reserve_zone_period_at(
     instance: *const PioCalculationInstance,
@@ -7674,6 +8251,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_active_reserve_zone_period_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_active_reserve_zone_bus_at(
     instance: *const PioCalculationInstance,
@@ -7703,6 +8283,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_active_reserve_zone_bus_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_reactive_reserve_zone_count(
     instance: *const PioCalculationInstance,
@@ -7712,6 +8295,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_reactive_reserve_zone_count(
         .map_or(0, |inputs| inputs.reactive_reserve_zones.len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_reactive_reserve_zone_at(
     instance: *const PioCalculationInstance,
@@ -7740,6 +8326,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_reactive_reserve_zone_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_reactive_reserve_zone_period_at(
     instance: *const PioCalculationInstance,
@@ -7789,6 +8378,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_reactive_reserve_zone_period_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_reactive_reserve_zone_bus_at(
     instance: *const PioCalculationInstance,
@@ -7822,6 +8414,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_reactive_reserve_zone_bus_at(
 }
 
 /// Return the number of named contingencies.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_contingency_count(
     instance: *const PioCalculationInstance,
@@ -7839,6 +8434,9 @@ fn scuc_contingency_view(contingency: &powerio_prob::ScucContingency) -> PioScuc
 }
 
 /// Read one named contingency in source order.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_contingency_at(
     instance: *const PioCalculationInstance,
@@ -7862,6 +8460,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_contingency_at(
 }
 
 /// Read one named contingency by its exact source UID.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_contingency_get(
     instance: *const PioCalculationInstance,
@@ -7887,6 +8488,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_contingency_get(
 }
 
 /// Read one stable component identity from a named contingency.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_instance_contingency_component_at(
     instance: *const PioCalculationInstance,
@@ -7920,6 +8524,9 @@ pub unsafe extern "C" fn pio_ac_scuc_instance_contingency_component_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calculation_solution_balanced_network(
     solution: *const PioCalculationSolution,
@@ -7952,6 +8559,9 @@ pub unsafe extern "C" fn pio_calculation_solution_balanced_network(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calculation_solution_multiconductor_network(
     solution: *const PioCalculationSolution,
@@ -7991,6 +8601,9 @@ pub unsafe extern "C" fn pio_calculation_solution_multiconductor_network(
 /// component identity. Multiconductor terminal identities use
 /// component/terminal. Returns false when the point does not contain the
 /// quantity or identity.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_operating_point_get_value(
     point: *const PioOperatingPoint,
@@ -8125,6 +8738,10 @@ pub unsafe extern "C" fn pio_operating_point_get_value(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_operating_point_retain(
     point: *const PioOperatingPoint,
@@ -8132,11 +8749,19 @@ pub unsafe extern "C" fn pio_operating_point_retain(
     unsafe { PioOperatingPoint::retain_raw(point) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_operating_point_release(point: *mut PioOperatingPoint) {
     unsafe { PioOperatingPoint::release_raw(point) };
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calculation_instance_retain(
     instance: *const PioCalculationInstance,
@@ -8144,11 +8769,19 @@ pub unsafe extern "C" fn pio_calculation_instance_retain(
     unsafe { PioCalculationInstance::retain_raw(instance) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calculation_instance_release(instance: *mut PioCalculationInstance) {
     unsafe { PioCalculationInstance::release_raw(instance) };
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_opf_preparation_retain(
     preparation: *const PioDcOpfPreparation,
@@ -8156,11 +8789,19 @@ pub unsafe extern "C" fn pio_dc_opf_preparation_retain(
     unsafe { PioDcOpfPreparation::retain_raw(preparation) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_opf_preparation_release(preparation: *mut PioDcOpfPreparation) {
     unsafe { PioDcOpfPreparation::release_raw(preparation) };
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_opf_preparation_retain(
     preparation: *const PioAcOpfPreparation,
@@ -8168,11 +8809,19 @@ pub unsafe extern "C" fn pio_ac_opf_preparation_retain(
     unsafe { PioAcOpfPreparation::retain_raw(preparation) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_opf_preparation_release(preparation: *mut PioAcOpfPreparation) {
     unsafe { PioAcOpfPreparation::release_raw(preparation) };
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calculation_solution_retain(
     solution: *const PioCalculationSolution,
@@ -8180,16 +8829,28 @@ pub unsafe extern "C" fn pio_calculation_solution_retain(
     unsafe { PioCalculationSolution::retain_raw(solution) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calculation_solution_release(solution: *mut PioCalculationSolution) {
     unsafe { PioCalculationSolution::release_raw(solution) };
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_value_retain(value: *const PioValueHandle) -> *mut PioValueHandle {
     unsafe { PioValueHandle::retain_raw(value) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_value_release(value: *mut PioValueHandle) {
     unsafe { PioValueHandle::release_raw(value) };
@@ -8211,6 +8872,9 @@ fn scenario_set(value: &ValueInner) -> Option<&PioScenarioSet> {
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_time_series_len(series: *const PioTimeSeriesHandle) -> usize {
     unsafe { PioTimeSeriesHandle::get(series) }
@@ -8218,6 +8882,9 @@ pub unsafe extern "C" fn pio_time_series_len(series: *const PioTimeSeriesHandle)
         .map_or(0, PioTimeSeries::len)
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_time_series_element_type(
     series: *const PioTimeSeriesHandle,
@@ -8230,6 +8897,9 @@ pub unsafe extern "C" fn pio_time_series_element_type(
 }
 
 /// Return an owner-rooted entry by zero-based position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_time_series_get(
     series: *const PioTimeSeriesHandle,
@@ -8261,6 +8931,10 @@ pub unsafe extern "C" fn pio_time_series_get(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_time_series_retain(
     series: *const PioTimeSeriesHandle,
@@ -8268,11 +8942,18 @@ pub unsafe extern "C" fn pio_time_series_retain(
     unsafe { PioTimeSeriesHandle::retain_raw(series) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_time_series_release(series: *mut PioTimeSeriesHandle) {
     unsafe { PioTimeSeriesHandle::release_raw(series) };
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_scenario_set_len(set: *const PioScenarioSetHandle) -> usize {
     unsafe { PioScenarioSetHandle::get(set) }
@@ -8280,6 +8961,9 @@ pub unsafe extern "C" fn pio_scenario_set_len(set: *const PioScenarioSetHandle) 
         .map_or(0, PioScenarioSet::len)
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_scenario_set_element_type(
     set: *const PioScenarioSetHandle,
@@ -8291,6 +8975,9 @@ pub unsafe extern "C" fn pio_scenario_set_element_type(
         })
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_scenario_set_id_at(
     set: *const PioScenarioSetHandle,
@@ -8305,6 +8992,9 @@ pub unsafe extern "C" fn pio_scenario_set_id_at(
 }
 
 /// Return an owner-rooted scenario value by zero-based position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_scenario_set_get_at(
     set: *const PioScenarioSetHandle,
@@ -8337,6 +9027,9 @@ pub unsafe extern "C" fn pio_scenario_set_get_at(
 }
 
 /// Return an owner-rooted scenario value by exact scenario ID.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_scenario_set_get(
     set: *const PioScenarioSetHandle,
@@ -8373,6 +9066,10 @@ pub unsafe extern "C" fn pio_scenario_set_get(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_scenario_set_retain(
     set: *const PioScenarioSetHandle,
@@ -8380,6 +9077,10 @@ pub unsafe extern "C" fn pio_scenario_set_retain(
     unsafe { PioScenarioSetHandle::retain_raw(set) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_scenario_set_release(set: *mut PioScenarioSetHandle) {
     unsafe { PioScenarioSetHandle::release_raw(set) };
@@ -8387,6 +9088,9 @@ pub unsafe extern "C" fn pio_scenario_set_release(set: *mut PioScenarioSetHandle
 
 // ---- network access --------------------------------------------------------
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_name(
     network: *const PioBalancedNetwork,
@@ -8398,6 +9102,9 @@ pub unsafe extern "C" fn pio_balanced_network_name(
         })
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_base_mva(network: *const PioBalancedNetwork) -> f64 {
     unsafe { PioBalancedNetwork::get(network) }
@@ -8405,6 +9112,9 @@ pub unsafe extern "C" fn pio_balanced_network_base_mva(network: *const PioBalanc
         .map_or(f64::NAN, BalancedNetwork::base_mva)
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_base_frequency_hz(
     network: *const PioBalancedNetwork,
@@ -8415,6 +9125,9 @@ pub unsafe extern "C" fn pio_balanced_network_base_frequency_hz(
 }
 
 /// Read the optional coordinate space metadata for a balanced network.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_geo(
     network: *const PioBalancedNetwork,
@@ -8430,6 +9143,9 @@ pub unsafe extern "C" fn pio_balanced_network_geo(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_has_detailed_connectivity(
     network: *const PioBalancedNetwork,
@@ -8440,6 +9156,9 @@ pub unsafe extern "C" fn pio_balanced_network_has_detailed_connectivity(
 }
 
 /// Return the optional owner-rooted detailed connectivity view.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_detailed_connectivity(
     network: *const PioBalancedNetwork,
@@ -8457,6 +9176,9 @@ pub unsafe extern "C" fn pio_balanced_network_detailed_connectivity(
 }
 
 /// Read every detailed connectivity table length.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_counts(
     details: *const PioDetailedConnectivity,
@@ -8587,12 +9309,17 @@ fn reactive_limits_view(
 
 fn reactive_limit_properties(
     limits: &powerio_tx::ReactiveLimits,
-) -> &std::collections::BTreeMap<String, String> {
-    match limits {
+) -> Result<&std::collections::BTreeMap<String, String>, *mut PioError> {
+    Ok(match limits {
         powerio_tx::ReactiveLimits::MinMax(limits) => &limits.properties,
         powerio_tx::ReactiveLimits::CapabilityCurve(curve) => &curve.properties,
-        _ => unreachable!("all reactive limit forms are handled"),
-    }
+        _ => {
+            return Err(boundary_error(
+                &codes::REQUEST_CAPI_TYPE_MISMATCH,
+                "unsupported reactive limit form",
+            ));
+        }
+    })
 }
 
 fn reactive_capability_curve(
@@ -8886,6 +9613,9 @@ fn dc_equipment_view(
 }
 
 /// Read one field that was absent from the source representation.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_omitted_field_at(
     details: *const PioDetailedConnectivity,
@@ -8912,6 +9642,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_omitted_field_at(
 }
 
 /// Read one component metadata record by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_component_metadata_at(
     details: *const PioDetailedConnectivity,
@@ -8948,6 +9681,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_component_metadata_at(
 }
 
 /// Read one alias from a component metadata record.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_component_alias_at(
     details: *const PioDetailedConnectivity,
@@ -8986,6 +9722,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_component_alias_at(
 }
 
 /// Read one external identifier from a component metadata record.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_external_identifier_at(
     details: *const PioDetailedConnectivity,
@@ -9027,6 +9766,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_external_identifier_at(
 }
 
 /// Read one string property from a component metadata record.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_component_property_at(
     details: *const PioDetailedConnectivity,
@@ -9086,6 +9828,9 @@ fn case_metadata_view(metadata: &powerio_tx::CaseMetadata) -> PioCaseMetadataVie
 }
 
 /// Read one PowSybl subnetwork by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_subnetwork_at(
     details: *const PioDetailedConnectivity,
@@ -9114,6 +9859,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_subnetwork_at(
 }
 
 /// Read one component identity contained by a PowSybl subnetwork.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_subnetwork_component_at(
     details: *const PioDetailedConnectivity,
@@ -9144,6 +9892,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_subnetwork_component_at(
 }
 
 /// Read one substation by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_substation_at(
     details: *const PioDetailedConnectivity,
@@ -9177,6 +9928,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_substation_at(
 }
 
 /// Read one geographical tag of a substation.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_substation_geographical_tag_at(
     details: *const PioDetailedConnectivity,
@@ -9207,6 +9961,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_substation_geographical_tag_a
 }
 
 /// Read one voltage level by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_voltage_level_at(
     details: *const PioDetailedConnectivity,
@@ -9243,6 +10000,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_voltage_level_at(
 }
 
 /// Read one balanced bus ID assigned to a voltage level.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_voltage_level_bus_at(
     details: *const PioDetailedConnectivity,
@@ -9276,6 +10036,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_voltage_level_bus_at(
 }
 
 /// Read one configured bus breaker bus by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_bus_breaker_bus_at(
     details: *const PioDetailedConnectivity,
@@ -9308,6 +10071,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_bus_breaker_bus_at(
 }
 
 /// Read one calculated bus by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_calculated_bus_at(
     details: *const PioDetailedConnectivity,
@@ -9339,6 +10105,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_calculated_bus_at(
 }
 
 /// Read one node identity from a calculated bus.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_calculated_bus_node_at(
     details: *const PioDetailedConnectivity,
@@ -9372,6 +10141,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_calculated_bus_node_at(
 }
 
 /// Read one connectivity node by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_node_at(
     details: *const PioDetailedConnectivity,
@@ -9402,6 +10174,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_node_at(
 }
 
 /// Read one busbar section by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_busbar_section_at(
     details: *const PioDetailedConnectivity,
@@ -9429,6 +10204,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_busbar_section_at(
 }
 
 /// Read one CIM junction by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_junction_at(
     details: *const PioDetailedConnectivity,
@@ -9454,6 +10232,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_junction_at(
 }
 
 /// Read one AC terminal by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_terminal_at(
     details: *const PioDetailedConnectivity,
@@ -9500,6 +10281,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_terminal_at(
 }
 
 /// Read one detailed topology switch by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_switch_at(
     details: *const PioDetailedConnectivity,
@@ -9535,6 +10319,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_switch_at(
 }
 
 /// Read one node breaker internal connection by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_internal_connection_at(
     details: *const PioDetailedConnectivity,
@@ -9562,6 +10349,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_internal_connection_at(
 }
 
 /// Read one operational limit group by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_operational_limit_group_at(
     details: *const PioDetailedConnectivity,
@@ -9633,6 +10423,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_operational_limit_group_at(
 }
 
 /// Read one string property from an operational limit group.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_operational_limit_group_property_at(
     details: *const PioDetailedConnectivity,
@@ -9661,6 +10454,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_operational_limit_group_prope
 }
 
 /// Read one temporary current, active power, or apparent power limit.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_temporary_limit_at(
     details: *const PioDetailedConnectivity,
@@ -9719,6 +10515,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_temporary_limit_at(
 }
 
 /// Read one PowSybl boundary line by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_boundary_line_at(
     details: *const PioDetailedConnectivity,
@@ -9766,6 +10565,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_boundary_line_at(
 }
 
 /// Read one property on a boundary line generation reactive limit record.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_boundary_line_reactive_limit_property_at(
     details: *const PioDetailedConnectivity,
@@ -9824,6 +10626,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_boundary_line_reactive_limit_
 }
 
 /// Read one point from a boundary line generation reactive capability curve.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_boundary_line_reactive_capability_point_at(
     details: *const PioDetailedConnectivity,
@@ -9878,6 +10683,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_boundary_line_reactive_capabi
 }
 
 /// Read one property from one boundary line reactive capability curve point.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_boundary_line_reactive_capability_point_property_at(
     details: *const PioDetailedConnectivity,
@@ -9939,6 +10747,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_boundary_line_reactive_capabi
 }
 
 /// Read one PowSybl tie line by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_tie_line_at(
     details: *const PioDetailedConnectivity,
@@ -9970,6 +10781,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_tie_line_at(
 }
 
 /// Read one transformer tap changer by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_tap_changer_at(
     details: *const PioDetailedConnectivity,
@@ -10037,6 +10851,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_tap_changer_at(
 }
 
 /// Read one transformer tap changer step by zero based position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_tap_changer_step_at(
     details: *const PioDetailedConnectivity,
@@ -10075,6 +10892,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_tap_changer_step_at(
 }
 
 /// Read reactive limits retained for one equipment record.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_equipment_reactive_limits_at(
     details: *const PioDetailedConnectivity,
@@ -10104,6 +10924,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_equipment_reactive_limits_at(
 }
 
 /// Read one property from an equipment reactive limit record.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_equipment_reactive_limit_property_at(
     details: *const PioDetailedConnectivity,
@@ -10127,13 +10950,16 @@ pub unsafe extern "C" fn pio_detailed_connectivity_equipment_reactive_limit_prop
                     )
                 })?;
             *require_output(output, "output")? =
-                string_property_view(reactive_limit_properties(&record.limits), property_index)?;
+                string_property_view(reactive_limit_properties(&record.limits)?, property_index)?;
             Ok(true)
         })
     }
 }
 
 /// Read one point from an equipment reactive capability curve.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_equipment_reactive_capability_point_at(
     details: *const PioDetailedConnectivity,
@@ -10172,6 +10998,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_equipment_reactive_capability
 }
 
 /// Read one property from an equipment reactive capability curve point.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_equipment_reactive_capability_point_property_at(
     details: *const PioDetailedConnectivity,
@@ -10217,6 +11046,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_equipment_reactive_capability
 }
 
 /// Read one DC converter unit by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_dc_converter_unit_at(
     details: *const PioDetailedConnectivity,
@@ -10248,6 +11080,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_dc_converter_unit_at(
 }
 
 /// Read one DC topological node by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_dc_topological_node_at(
     details: *const PioDetailedConnectivity,
@@ -10284,6 +11119,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_dc_topological_node_at(
 }
 
 /// Read one physical DC node by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_dc_node_at(
     details: *const PioDetailedConnectivity,
@@ -10322,6 +11160,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_dc_node_at(
 }
 
 /// Read one DC ground by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_dc_ground_at(
     details: *const PioDetailedConnectivity,
@@ -10358,6 +11199,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_dc_ground_at(
 }
 
 /// Read one DC busbar by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_dc_busbar_at(
     details: *const PioDetailedConnectivity,
@@ -10394,6 +11238,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_dc_busbar_at(
 }
 
 /// Read one DC line by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_dc_line_at(
     details: *const PioDetailedConnectivity,
@@ -10430,6 +11277,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_dc_line_at(
 }
 
 /// Read one DC series device by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_dc_series_device_at(
     details: *const PioDetailedConnectivity,
@@ -10466,6 +11316,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_dc_series_device_at(
 }
 
 /// Read one DC switch by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_dc_switch_at(
     details: *const PioDetailedConnectivity,
@@ -10502,6 +11355,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_dc_switch_at(
 }
 
 /// Read one voltage source converter by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_voltage_source_converter_at(
     details: *const PioDetailedConnectivity,
@@ -10647,6 +11503,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_voltage_source_converter_at(
 }
 
 /// Read one line commutated converter by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_line_commutated_converter_at(
     details: *const PioDetailedConnectivity,
@@ -10818,6 +11677,9 @@ fn droop_curve_segment_view(segment: &powerio_tx::DroopCurveSegment) -> PioDroop
 }
 
 /// Read one DC voltage droop curve segment from a voltage source converter.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_voltage_source_converter_droop_curve_segment_at(
     details: *const PioDetailedConnectivity,
@@ -10857,6 +11719,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_voltage_source_converter_droo
 }
 
 /// Read one DC voltage droop curve segment from a line commutated converter.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_line_commutated_converter_droop_curve_segment_at(
     details: *const PioDetailedConnectivity,
@@ -10898,6 +11763,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_line_commutated_converter_dro
 }
 
 /// Read one property from a voltage source converter reactive limit record.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_voltage_source_converter_reactive_limit_property_at(
     details: *const PioDetailedConnectivity,
@@ -10925,13 +11793,16 @@ pub unsafe extern "C" fn pio_detailed_connectivity_voltage_source_converter_reac
                 )
             })?;
             *require_output(output, "output")? =
-                string_property_view(reactive_limit_properties(limits), property_index)?;
+                string_property_view(reactive_limit_properties(limits)?, property_index)?;
             Ok(true)
         })
     }
 }
 
 /// Read one point from a voltage source converter reactive capability curve.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_voltage_source_converter_reactive_capability_point_at(
     details: *const PioDetailedConnectivity,
@@ -10972,6 +11843,9 @@ pub unsafe extern "C" fn pio_detailed_connectivity_voltage_source_converter_reac
 }
 
 /// Read one property from a voltage source converter reactive capability point.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_voltage_source_converter_reactive_capability_point_property_at(
     details: *const PioDetailedConnectivity,
@@ -11018,6 +11892,10 @@ pub unsafe extern "C" fn pio_detailed_connectivity_voltage_source_converter_reac
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_retain(
     details: *const PioDetailedConnectivity,
@@ -11025,11 +11903,18 @@ pub unsafe extern "C" fn pio_detailed_connectivity_retain(
     unsafe { PioDetailedConnectivity::retain_raw(details) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_detailed_connectivity_release(details: *mut PioDetailedConnectivity) {
     unsafe { PioDetailedConnectivity::release_raw(details) };
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_bus_count(
     network: *const PioBalancedNetwork,
@@ -11039,6 +11924,9 @@ pub unsafe extern "C" fn pio_balanced_network_bus_count(
         .map_or(0, |network| network.buses().len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_branch_count(
     network: *const PioBalancedNetwork,
@@ -11048,6 +11936,9 @@ pub unsafe extern "C" fn pio_balanced_network_branch_count(
         .map_or(0, |network| network.branches().len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_load_count(
     network: *const PioBalancedNetwork,
@@ -11057,6 +11948,9 @@ pub unsafe extern "C" fn pio_balanced_network_load_count(
         .map_or(0, |network| network.loads().len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_shunt_count(
     network: *const PioBalancedNetwork,
@@ -11066,6 +11960,9 @@ pub unsafe extern "C" fn pio_balanced_network_shunt_count(
         .map_or(0, |network| network.shunts().len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_static_var_compensator_count(
     network: *const PioBalancedNetwork,
@@ -11075,6 +11972,9 @@ pub unsafe extern "C" fn pio_balanced_network_static_var_compensator_count(
         .map_or(0, |network| network.static_var_compensators().len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_generator_count(
     network: *const PioBalancedNetwork,
@@ -11084,6 +11984,9 @@ pub unsafe extern "C" fn pio_balanced_network_generator_count(
         .map_or(0, |network| network.generators().len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_storage_count(
     network: *const PioBalancedNetwork,
@@ -11093,6 +11996,9 @@ pub unsafe extern "C" fn pio_balanced_network_storage_count(
         .map_or(0, |network| network.storage().len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_switch_count(
     network: *const PioBalancedNetwork,
@@ -11102,6 +12008,9 @@ pub unsafe extern "C" fn pio_balanced_network_switch_count(
         .map_or(0, |network| network.switches().len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_hvdc_count(
     network: *const PioBalancedNetwork,
@@ -11111,6 +12020,9 @@ pub unsafe extern "C" fn pio_balanced_network_hvdc_count(
         .map_or(0, |network| network.hvdc().len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_three_winding_transformer_count(
     network: *const PioBalancedNetwork,
@@ -11120,6 +12032,9 @@ pub unsafe extern "C" fn pio_balanced_network_three_winding_transformer_count(
         .map_or(0, |network| network.transformers_3w().len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_area_count(
     network: *const PioBalancedNetwork,
@@ -11351,10 +12266,7 @@ fn switched_shunt_mode_name(mode: powerio_tx::SwitchedShuntMode) -> &'static str
     }
 }
 
-const GENERATOR_CAPABILITY_NAMES: [&str; 11] = [
-    "pc1", "pc2", "qc1min", "qc1max", "qc2min", "qc2max", "ramp_agc", "ramp_10", "ramp_30",
-    "ramp_q", "apf",
-];
+use powerio_tx::network::GEN_EXTRA_KEYS as GENERATOR_CAPABILITY_NAMES;
 
 fn static_var_compensator_regulation_mode_name(
     mode: powerio_tx::StaticVarCompensatorRegulationMode,
@@ -11437,6 +12349,9 @@ fn hvdc_converter_view(
 }
 
 /// Read one bus by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_bus_at(
     network: *const PioBalancedNetwork,
@@ -11488,6 +12403,9 @@ pub unsafe extern "C" fn pio_balanced_network_bus_at(
 }
 
 /// Read one load by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_load_at(
     network: *const PioBalancedNetwork,
@@ -11521,6 +12439,9 @@ pub unsafe extern "C" fn pio_balanced_network_load_at(
 }
 
 /// Read one shunt by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_shunt_at(
     network: *const PioBalancedNetwork,
@@ -11568,6 +12489,9 @@ pub unsafe extern "C" fn pio_balanced_network_shunt_at(
 }
 
 /// Read one switched shunt block by zero based position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_shunt_block_at(
     network: *const PioBalancedNetwork,
@@ -11608,6 +12532,9 @@ pub unsafe extern "C" fn pio_balanced_network_shunt_block_at(
 }
 
 /// Read one static VAR compensator by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_static_var_compensator_at(
     network: *const PioBalancedNetwork,
@@ -11654,6 +12581,9 @@ pub unsafe extern "C" fn pio_balanced_network_static_var_compensator_at(
 }
 
 /// Read one branch by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_branch_at(
     network: *const PioBalancedNetwork,
@@ -11716,6 +12646,9 @@ pub unsafe extern "C" fn pio_balanced_network_branch_at(
 }
 
 /// Read one point from an explicitly stored balanced branch route.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_branch_route_point_at(
     network: *const PioBalancedNetwork,
@@ -11752,6 +12685,9 @@ pub unsafe extern "C" fn pio_balanced_network_branch_route_point_at(
 }
 
 /// Read one additional named branch MVA rating.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_branch_rating_at(
     network: *const PioBalancedNetwork,
@@ -11834,6 +12770,9 @@ fn generator_energy_source_name(value: powerio_tx::GeneratorEnergySource) -> &'s
 }
 
 /// Read one generator by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_generator_at(
     network: *const PioBalancedNetwork,
@@ -11905,6 +12844,9 @@ pub unsafe extern "C" fn pio_balanced_network_generator_at(
 }
 
 /// Read one named generator capability or ramp field.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_generator_capability_at(
     network: *const PioBalancedNetwork,
@@ -11930,7 +12872,12 @@ pub unsafe extern "C" fn pio_balanced_network_generator_capability_at(
                         format!("generator capability index {capability_index} is out of range"),
                     )
                 })?;
-            let value = generator.caps[capability_index];
+            let value = *generator.caps.get(capability_index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    "generator capability index is out of range",
+                )
+            })?;
             *require_output(output, "output")? = PioGeneratorCapabilityView {
                 name: PioStringView::new(name),
                 value: value.unwrap_or(0.0),
@@ -11942,6 +12889,9 @@ pub unsafe extern "C" fn pio_balanced_network_generator_capability_at(
 }
 
 /// Read one storage element by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_storage_at(
     network: *const PioBalancedNetwork,
@@ -11993,6 +12943,9 @@ pub unsafe extern "C" fn pio_balanced_network_storage_at(
 }
 
 /// Read one transmission switch by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_switch_at(
     network: *const PioBalancedNetwork,
@@ -12035,6 +12988,9 @@ pub unsafe extern "C" fn pio_balanced_network_switch_at(
 }
 
 /// Read one HVDC line by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_hvdc_at(
     network: *const PioBalancedNetwork,
@@ -12114,6 +13070,9 @@ pub unsafe extern "C" fn pio_balanced_network_hvdc_at(
 }
 
 /// Read one three winding transformer by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_three_winding_transformer_at(
     network: *const PioBalancedNetwork,
@@ -12151,6 +13110,9 @@ pub unsafe extern "C" fn pio_balanced_network_three_winding_transformer_at(
 }
 
 /// Read one winding of a three winding transformer.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_three_winding_transformer_winding_at(
     network: *const PioBalancedNetwork,
@@ -12197,6 +13159,9 @@ pub unsafe extern "C" fn pio_balanced_network_three_winding_transformer_winding_
 }
 
 /// Read one pairwise impedance of a three winding transformer.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_three_winding_transformer_impedance_at(
     network: *const PioBalancedNetwork,
@@ -12236,6 +13201,9 @@ pub unsafe extern "C" fn pio_balanced_network_three_winding_transformer_impedanc
 }
 
 /// Read one control area by zero based table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_area_at(
     network: *const PioBalancedNetwork,
@@ -12273,6 +13241,10 @@ pub unsafe extern "C" fn pio_balanced_network_area_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_retain(
     network: *const PioBalancedNetwork,
@@ -12280,6 +13252,10 @@ pub unsafe extern "C" fn pio_balanced_network_retain(
     unsafe { PioBalancedNetwork::retain_raw(network) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_release(network: *mut PioBalancedNetwork) {
     unsafe { PioBalancedNetwork::release_raw(network) };
@@ -12910,6 +13886,9 @@ fn control_profile_view(profile: &powerio_dist::DistControlProfile) -> PioContro
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_name(
     network: *const PioMulticonductorNetwork,
@@ -12920,6 +13899,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_name(
         .map_or(PioStringView::EMPTY, PioStringView::new)
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_has_name(
     network: *const PioMulticonductorNetwork,
@@ -12929,6 +13911,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_has_name(
         .is_some_and(|network| network.name().is_some())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_source_format(
     network: *const PioMulticonductorNetwork,
@@ -12941,6 +13926,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_source_format(
         })
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_has_source_format(
     network: *const PioMulticonductorNetwork,
@@ -12951,6 +13939,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_has_source_format(
 }
 
 /// Read the network coordinate metadata, including absence through `has_geo`.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_geo(
     network: *const PioMulticonductorNetwork,
@@ -12968,6 +13959,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_geo(
 
 /// Read exact table lengths. Defaulted source fields and arbitrary extension
 /// maps are retained internally and are not separate domain tables.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_counts(
     network: *const PioMulticonductorNetwork,
@@ -12999,6 +13993,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_counts(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_base_frequency_hz(
     network: *const PioMulticonductorNetwork,
@@ -13008,6 +14005,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_base_frequency_hz(
         .map_or(f64::NAN, |network| network.base_frequency())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_bus_count(
     network: *const PioMulticonductorNetwork,
@@ -13017,6 +14017,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_bus_count(
         .map_or(0, |network| network.buses().len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_line_count(
     network: *const PioMulticonductorNetwork,
@@ -13026,6 +14029,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_line_count(
         .map_or(0, |network| network.lines().len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_load_count(
     network: *const PioMulticonductorNetwork,
@@ -13035,6 +14041,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_load_count(
         .map_or(0, |network| network.loads().len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_generator_count(
     network: *const PioMulticonductorNetwork,
@@ -13046,6 +14055,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_generator_count(
 
 /// Read one multiconductor bus by zero based table position. Borrowed strings
 /// and numeric spans remain valid while the network handle is alive.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_bus_at(
     network: *const PioMulticonductorNetwork,
@@ -13068,6 +14080,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_bus_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_bus_terminal_at(
     network: *const PioMulticonductorNetwork,
@@ -13092,6 +14107,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_bus_terminal_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_bus_grounded_terminal_at(
     network: *const PioMulticonductorNetwork,
@@ -13116,6 +14134,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_bus_grounded_terminal_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_line_code_at(
     network: *const PioMulticonductorNetwork,
@@ -13156,7 +14177,12 @@ fn multiconductor_line_code_matrix<'a>(
         "susceptance_from" => &line_code.b_from,
         "conductance_to" => &line_code.g_to,
         "susceptance_to" => &line_code.b_to,
-        _ => unreachable!("all line code matrices are handled"),
+        _ => {
+            return Err(boundary_error(
+                &codes::REQUEST_CAPI_TYPE_MISMATCH,
+                "unsupported line code matrix",
+            ));
+        }
     })
 }
 
@@ -13179,6 +14205,9 @@ unsafe fn write_multiconductor_line_code_matrix_row(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_line_code_resistance_matrix_row_at(
     network: *const PioMulticonductorNetwork,
@@ -13199,6 +14228,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_line_code_resistance_matrix_
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_line_code_reactance_matrix_row_at(
     network: *const PioMulticonductorNetwork,
@@ -13219,6 +14251,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_line_code_reactance_matrix_r
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_line_code_conductance_from_matrix_row_at(
     network: *const PioMulticonductorNetwork,
@@ -13239,6 +14274,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_line_code_conductance_from_m
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_line_code_susceptance_from_matrix_row_at(
     network: *const PioMulticonductorNetwork,
@@ -13259,6 +14297,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_line_code_susceptance_from_m
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_line_code_conductance_to_matrix_row_at(
     network: *const PioMulticonductorNetwork,
@@ -13279,6 +14320,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_line_code_conductance_to_mat
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_line_code_susceptance_to_matrix_row_at(
     network: *const PioMulticonductorNetwork,
@@ -13299,6 +14343,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_line_code_susceptance_to_mat
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_line_at(
     network: *const PioMulticonductorNetwork,
@@ -13350,6 +14397,9 @@ unsafe fn write_multiconductor_line_terminal(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_line_terminal_from_at(
     network: *const PioMulticonductorNetwork,
@@ -13363,6 +14413,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_line_terminal_from_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_line_terminal_to_at(
     network: *const PioMulticonductorNetwork,
@@ -13383,6 +14436,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_line_terminal_to_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_line_route_point_at(
     network: *const PioMulticonductorNetwork,
@@ -13418,6 +14474,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_line_route_point_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_switch_at(
     network: *const PioMulticonductorNetwork,
@@ -13469,6 +14528,9 @@ unsafe fn write_multiconductor_switch_terminal(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_switch_terminal_from_at(
     network: *const PioMulticonductorNetwork,
@@ -13489,6 +14551,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_switch_terminal_from_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_switch_terminal_to_at(
     network: *const PioMulticonductorNetwork,
@@ -13509,6 +14574,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_switch_terminal_to_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_transformer_at(
     network: *const PioMulticonductorNetwork,
@@ -13536,6 +14604,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_transformer_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_transformer_winding_at(
     network: *const PioMulticonductorNetwork,
@@ -13584,6 +14655,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_transformer_winding_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_transformer_winding_terminal_at(
     network: *const PioMulticonductorNetwork,
@@ -13741,6 +14815,9 @@ unsafe fn write_multiconductor_terminal(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_load_at(
     network: *const PioMulticonductorNetwork,
@@ -13763,6 +14840,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_load_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_load_terminal_at(
     network: *const PioMulticonductorNetwork,
@@ -13783,6 +14863,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_load_terminal_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_generator_at(
     network: *const PioMulticonductorNetwork,
@@ -13805,6 +14888,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_generator_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_generator_terminal_at(
     network: *const PioMulticonductorNetwork,
@@ -13825,6 +14911,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_generator_terminal_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_inverter_based_resource_at(
     network: *const PioMulticonductorNetwork,
@@ -13847,6 +14936,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_inverter_based_resource_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_inverter_based_resource_terminal_at(
     network: *const PioMulticonductorNetwork,
@@ -13867,6 +14959,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_inverter_based_resource_term
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_control_profile_at(
     network: *const PioMulticonductorNetwork,
@@ -13889,6 +14984,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_control_profile_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_shunt_at(
     network: *const PioMulticonductorNetwork,
@@ -13917,6 +15015,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_shunt_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_shunt_terminal_at(
     network: *const PioMulticonductorNetwork,
@@ -13966,6 +15067,9 @@ unsafe fn write_multiconductor_shunt_matrix_row(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_shunt_conductance_matrix_row_at(
     network: *const PioMulticonductorNetwork,
@@ -13979,6 +15083,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_shunt_conductance_matrix_row
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_shunt_susceptance_matrix_row_at(
     network: *const PioMulticonductorNetwork,
@@ -13992,6 +15099,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_shunt_susceptance_matrix_row
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_capacitor_at(
     network: *const PioMulticonductorNetwork,
@@ -14023,6 +15133,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_capacitor_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_capacitor_terminal_at(
     network: *const PioMulticonductorNetwork,
@@ -14043,6 +15156,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_capacitor_terminal_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_voltage_source_at(
     network: *const PioMulticonductorNetwork,
@@ -14075,6 +15191,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_voltage_source_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_voltage_source_terminal_at(
     network: *const PioMulticonductorNetwork,
@@ -14095,6 +15214,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_voltage_source_terminal_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_untyped_object_at(
     network: *const PioMulticonductorNetwork,
@@ -14121,6 +15243,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_untyped_object_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_untyped_object_property_at(
     network: *const PioMulticonductorNetwork,
@@ -14155,6 +15280,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_untyped_object_property_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_command_at(
     network: *const PioMulticonductorNetwork,
@@ -14180,6 +15308,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_command_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_option_at(
     network: *const PioMulticonductorNetwork,
@@ -14205,6 +15336,10 @@ pub unsafe extern "C" fn pio_multiconductor_network_option_at(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_retain(
     network: *const PioMulticonductorNetwork,
@@ -14212,6 +15347,10 @@ pub unsafe extern "C" fn pio_multiconductor_network_retain(
     unsafe { PioMulticonductorNetwork::retain_raw(network) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_release(
     network: *mut PioMulticonductorNetwork,
@@ -14305,6 +15444,9 @@ unsafe fn optional_owned_string(
 }
 
 /// Construct a stable component identity.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_component_id_new(
     component_type: *const c_char,
@@ -14325,6 +15467,9 @@ pub unsafe extern "C" fn pio_component_id_new(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_component_id_type(component: *const PioComponentId) -> PioStringView {
     unsafe { PioComponentId::get(component) }.map_or(PioStringView::EMPTY, |component| {
@@ -14332,6 +15477,9 @@ pub unsafe extern "C" fn pio_component_id_type(component: *const PioComponentId)
     })
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_component_id_local_id(
     component: *const PioComponentId,
@@ -14341,6 +15489,10 @@ pub unsafe extern "C" fn pio_component_id_local_id(
     })
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_component_id_retain(
     component: *const PioComponentId,
@@ -14348,6 +15500,10 @@ pub unsafe extern "C" fn pio_component_id_retain(
     unsafe { PioComponentId::retain_raw(component) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_component_id_release(component: *mut PioComponentId) {
     unsafe { PioComponentId::release_raw(component) };
@@ -14363,11 +15519,17 @@ pub extern "C" fn pio_active_power_from_megawatts(value: f64) -> *mut PioActiveP
     PioActivePower::new_raw(ActivePower::from_megawatts(value))
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_active_power_value(power: *const PioActivePower) -> f64 {
     unsafe { PioActivePower::get(power) }.map_or(f64::NAN, |power| power.value())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_active_power_unit(power: *const PioActivePower) -> PioStringView {
     unsafe { PioActivePower::get(power) }.map_or(PioStringView::EMPTY, |power| {
@@ -14379,6 +15541,10 @@ pub unsafe extern "C" fn pio_active_power_unit(power: *const PioActivePower) -> 
     })
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_active_power_retain(
     power: *const PioActivePower,
@@ -14386,6 +15552,10 @@ pub unsafe extern "C" fn pio_active_power_retain(
     unsafe { PioActivePower::retain_raw(power) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_active_power_release(power: *mut PioActivePower) {
     unsafe { PioActivePower::release_raw(power) };
@@ -14401,11 +15571,17 @@ pub extern "C" fn pio_reactive_power_from_megavars(value: f64) -> *mut PioReacti
     PioReactivePower::new_raw(ReactivePower::from_megavars(value))
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_reactive_power_value(power: *const PioReactivePower) -> f64 {
     unsafe { PioReactivePower::get(power) }.map_or(f64::NAN, |power| power.value())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_reactive_power_unit(power: *const PioReactivePower) -> PioStringView {
     unsafe { PioReactivePower::get(power) }.map_or(PioStringView::EMPTY, |power| {
@@ -14417,6 +15593,10 @@ pub unsafe extern "C" fn pio_reactive_power_unit(power: *const PioReactivePower)
     })
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_reactive_power_retain(
     power: *const PioReactivePower,
@@ -14424,6 +15604,10 @@ pub unsafe extern "C" fn pio_reactive_power_retain(
     unsafe { PioReactivePower::retain_raw(power) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_reactive_power_release(power: *mut PioReactivePower) {
     unsafe { PioReactivePower::release_raw(power) };
@@ -14439,11 +15623,17 @@ pub extern "C" fn pio_apparent_power_from_megavolt_amperes(value: f64) -> *mut P
     PioApparentPower::new_raw(ApparentPower::from_megavolt_amperes(value))
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_apparent_power_value(power: *const PioApparentPower) -> f64 {
     unsafe { PioApparentPower::get(power) }.map_or(f64::NAN, |power| power.value())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_apparent_power_unit(power: *const PioApparentPower) -> PioStringView {
     unsafe { PioApparentPower::get(power) }.map_or(PioStringView::EMPTY, |power| {
@@ -14455,6 +15645,10 @@ pub unsafe extern "C" fn pio_apparent_power_unit(power: *const PioApparentPower)
     })
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_apparent_power_retain(
     power: *const PioApparentPower,
@@ -14462,6 +15656,10 @@ pub unsafe extern "C" fn pio_apparent_power_retain(
     unsafe { PioApparentPower::retain_raw(power) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_apparent_power_release(power: *mut PioApparentPower) {
     unsafe { PioApparentPower::release_raw(power) };
@@ -14487,6 +15685,9 @@ unsafe fn apparent_power_copy(
     unsafe { require_handle(power.cast(), "PioApparentPower") }.copied()
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_operating_point_update_set_load_active_power(
     load: *const PioComponentId,
@@ -14508,6 +15709,9 @@ pub unsafe extern "C" fn pio_operating_point_update_set_load_active_power(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_operating_point_update_set_load_reactive_power(
     load: *const PioComponentId,
@@ -14529,6 +15733,9 @@ pub unsafe extern "C" fn pio_operating_point_update_set_load_reactive_power(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_operating_point_update_set_generator_active_power(
     generator: *const PioComponentId,
@@ -14550,6 +15757,9 @@ pub unsafe extern "C" fn pio_operating_point_update_set_generator_active_power(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_operating_point_update_set_generator_reactive_power(
     generator: *const PioComponentId,
@@ -14571,6 +15781,9 @@ pub unsafe extern "C" fn pio_operating_point_update_set_generator_reactive_power
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_operating_point_update_set_generator_voltage_magnitude(
     generator: *const PioComponentId,
@@ -14589,6 +15802,9 @@ pub unsafe extern "C" fn pio_operating_point_update_set_generator_voltage_magnit
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_operating_point_update_set_generator_in_service(
     generator: *const PioComponentId,
@@ -14607,6 +15823,9 @@ pub unsafe extern "C" fn pio_operating_point_update_set_generator_in_service(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_operating_point_update_set_branch_in_service(
     branch: *const PioComponentId,
@@ -14625,6 +15844,9 @@ pub unsafe extern "C" fn pio_operating_point_update_set_branch_in_service(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_operating_point_update_set_transformer_tap_ratio(
     transformer: *const PioComponentId,
@@ -14643,6 +15865,9 @@ pub unsafe extern "C" fn pio_operating_point_update_set_transformer_tap_ratio(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_operating_point_update_set_transformer_phase_shift_degrees(
     transformer: *const PioComponentId,
@@ -14661,6 +15886,9 @@ pub unsafe extern "C" fn pio_operating_point_update_set_transformer_phase_shift_
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_operating_point_update_set_switch_closed(
     switch_id: *const PioComponentId,
@@ -14679,6 +15907,9 @@ pub unsafe extern "C" fn pio_operating_point_update_set_switch_closed(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_network_update_set_branch_thermal_rating(
     branch: *const PioComponentId,
@@ -14700,6 +15931,9 @@ pub unsafe extern "C" fn pio_network_update_set_branch_thermal_rating(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calculation_update_from_operating_point(
     update: *const PioOperatingPointUpdate,
@@ -14722,6 +15956,9 @@ pub unsafe extern "C" fn pio_calculation_update_from_operating_point(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calculation_update_from_network(
     update: *const PioNetworkUpdate,
@@ -14744,6 +15981,10 @@ pub unsafe extern "C" fn pio_calculation_update_from_network(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_operating_point_update_retain(
     update: *const PioOperatingPointUpdate,
@@ -14751,11 +15992,19 @@ pub unsafe extern "C" fn pio_operating_point_update_retain(
     unsafe { PioOperatingPointUpdate::retain_raw(update) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_operating_point_update_release(update: *mut PioOperatingPointUpdate) {
     unsafe { PioOperatingPointUpdate::release_raw(update) };
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_network_update_retain(
     update: *const PioNetworkUpdate,
@@ -14763,11 +16012,19 @@ pub unsafe extern "C" fn pio_network_update_retain(
     unsafe { PioNetworkUpdate::retain_raw(update) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_network_update_release(update: *mut PioNetworkUpdate) {
     unsafe { PioNetworkUpdate::release_raw(update) };
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calculation_update_retain(
     update: *const PioCalculationUpdate,
@@ -14775,6 +16032,10 @@ pub unsafe extern "C" fn pio_calculation_update_retain(
     unsafe { PioCalculationUpdate::retain_raw(update) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calculation_update_release(update: *mut PioCalculationUpdate) {
     unsafe { PioCalculationUpdate::release_raw(update) };
@@ -14894,17 +16155,22 @@ fn parse_load_allocation(value: &str) -> Result<LoadAllocation, *mut PioError> {
 
 fn separated_updates(
     updates: &[CalculationUpdate],
-) -> (Vec<OperatingPointUpdate>, Vec<NetworkUpdate>) {
+) -> Result<(Vec<OperatingPointUpdate>, Vec<NetworkUpdate>), powerio_core::Error> {
     let mut operating = Vec::new();
     let mut network = Vec::new();
     for update in updates {
         match update {
             CalculationUpdate::OperatingPoint(update) => operating.push(update.clone()),
             CalculationUpdate::Network(update) => network.push(update.clone()),
-            _ => unreachable!("unsupported calculation update from this PowerIO build"),
+            _ => {
+                return Err(powerio_core::Error::new(
+                    &codes::REQUEST_CAPI_TYPE_MISMATCH,
+                    "unsupported calculation update",
+                ));
+            }
         }
     }
-    (operating, network)
+    Ok((operating, network))
 }
 
 fn reject_network_updates(
@@ -14918,7 +16184,10 @@ fn reject_network_updates(
                 &codes::REQUEST_CAPI_TYPE_MISMATCH,
                 "a network update cannot be applied to an operating point",
             )),
-            _ => unreachable!("unsupported calculation update from this PowerIO build"),
+            _ => Err(powerio_core::Error::new(
+                &codes::REQUEST_CAPI_TYPE_MISMATCH,
+                "unsupported calculation update",
+            )),
         })
         .collect()
 }
@@ -14933,12 +16202,12 @@ fn apply_dynamic_updates(
     };
     match value {
         PioValue::BalancedNetwork(network) => {
-            let (operating, physical) = separated_updates(updates);
+            let (operating, physical) = separated_updates(updates)?;
             append_update_report(&mut output, apply_updates(network, &operating)?);
             append_update_report(&mut output, apply_updates(network, &physical)?);
         }
         PioValue::MulticonductorNetwork(network) => {
-            let (operating, physical) = separated_updates(updates);
+            let (operating, physical) = separated_updates(updates)?;
             append_update_report(&mut output, apply_updates(network, &operating)?);
             append_update_report(&mut output, apply_updates(network, &physical)?);
         }
@@ -15056,6 +16325,10 @@ unsafe fn module_make_mut<'a>(
 /// source map views) are invalidated by a successful call and must be read
 /// again. The caller must hold exclusive access to `module` for the duration of
 /// the call: no concurrent call of any kind on this handle, including retain.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The module handle requires exclusive access, including exclusion of retain.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_apply_updates(
     module: *mut PioModule,
@@ -15098,6 +16371,10 @@ pub unsafe extern "C" fn pio_apply_updates(
 ///
 /// The same view invalidation and exclusivity rules as `pio_apply_updates`
 /// apply.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The module handle requires exclusive access, including exclusion of retain.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_apply_bus_load_active_power(
     module: *mut PioModule,
@@ -15125,11 +16402,17 @@ pub unsafe extern "C" fn pio_apply_bus_load_active_power(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_update_report_len(report: *const PioUpdateReport) -> usize {
     unsafe { PioUpdateReport::get(report) }.map_or(0, |report| report.changes.len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_update_report_connectivity_changed(
     report: *const PioUpdateReport,
@@ -15137,6 +16420,9 @@ pub unsafe extern "C" fn pio_update_report_connectivity_changed(
     unsafe { PioUpdateReport::get(report) }.is_some_and(|report| report.connectivity_changed)
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_update_report_change(
     report: *const PioUpdateReport,
@@ -15162,6 +16448,9 @@ pub unsafe extern "C" fn pio_update_report_change(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_update_change_component_id(
     change: *const PioUpdateChange,
@@ -15190,6 +16479,9 @@ fn updated_field_name(field: UpdatedField) -> &'static str {
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_update_change_field(change: *const PioUpdateChange) -> PioStringView {
     unsafe { PioUpdateChange::get(change) }
@@ -15199,6 +16491,9 @@ pub unsafe extern "C" fn pio_update_change_field(change: *const PioUpdateChange)
         })
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_update_change_terminal(
     change: *const PioUpdateChange,
@@ -15209,6 +16504,10 @@ pub unsafe extern "C" fn pio_update_change_terminal(
         .map_or(PioStringView::EMPTY, PioStringView::new)
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_update_report_retain(
     report: *const PioUpdateReport,
@@ -15216,11 +16515,19 @@ pub unsafe extern "C" fn pio_update_report_retain(
     unsafe { PioUpdateReport::retain_raw(report) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_update_report_release(report: *mut PioUpdateReport) {
     unsafe { PioUpdateReport::release_raw(report) };
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_update_change_retain(
     change: *const PioUpdateChange,
@@ -15228,6 +16535,10 @@ pub unsafe extern "C" fn pio_update_change_retain(
     unsafe { PioUpdateChange::retain_raw(change) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_update_change_release(change: *mut PioUpdateChange) {
     unsafe { PioUpdateChange::release_raw(change) };
@@ -15269,7 +16580,7 @@ opaque_handle!(
     ArtifactInner
 );
 
-fn emit_result_handle(result: EmitResult) -> *mut PioEmitResult {
+fn emit_result_handle(result: EmitResult) -> Result<*mut PioEmitResult, *mut PioError> {
     let layout = match result.layout() {
         powerio::OutputLayout::File => "file",
         powerio::OutputLayout::Directory => "directory",
@@ -15299,14 +16610,19 @@ fn emit_result_handle(result: EmitResult) -> *mut PioEmitResult {
                 bytes: None,
             })
             .collect(),
-        _ => unreachable!("unsupported emitted output from this PowerIO build"),
+        _ => {
+            return Err(boundary_error(
+                &codes::REQUEST_CAPI_TYPE_MISMATCH,
+                "unsupported emitted output",
+            ));
+        }
     };
-    PioEmitResult::new_raw(EmitResultInner {
+    Ok(PioEmitResult::new_raw(EmitResultInner {
         layout,
         fidelity,
         artifacts,
         diagnostics,
-    })
+    }))
 }
 
 unsafe fn run_output_operation(
@@ -15332,12 +16648,15 @@ unsafe fn run_output_operation(
             let destination = destination
                 .build()
                 .map_err(|failure| error_from_core(&failure))?;
-            operation(&module.module, destination).map(emit_result_handle)
+            operation(&module.module, destination).and_then(emit_result_handle)
         })
     }
 }
 
 /// Emit one module as a grid exchange format.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_emit(
     module: *const PioModule,
@@ -15355,6 +16674,9 @@ pub unsafe extern "C" fn pio_emit(
 }
 
 /// Serialize one module as PowerIO IR.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_serialize(
     module: *const PioModule,
@@ -15368,6 +16690,9 @@ pub unsafe extern "C" fn pio_module_serialize(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_emit_result_layout(result: *const PioEmitResult) -> PioStringView {
     unsafe { PioEmitResult::get(result) }.map_or(PioStringView::EMPTY, |result| {
@@ -15375,6 +16700,9 @@ pub unsafe extern "C" fn pio_emit_result_layout(result: *const PioEmitResult) ->
     })
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_emit_result_fidelity(result: *const PioEmitResult) -> PioStringView {
     unsafe { PioEmitResult::get(result) }.map_or(PioStringView::EMPTY, |result| {
@@ -15382,11 +16710,17 @@ pub unsafe extern "C" fn pio_emit_result_fidelity(result: *const PioEmitResult) 
     })
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_emit_result_artifact_count(result: *const PioEmitResult) -> usize {
     unsafe { PioEmitResult::get(result) }.map_or(0, |result| result.artifacts.len())
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_emit_result_artifact(
     result: *const PioEmitResult,
@@ -15412,6 +16746,9 @@ pub unsafe extern "C" fn pio_emit_result_artifact(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_emit_result_diagnostics(
     result: *const PioEmitResult,
@@ -15421,6 +16758,10 @@ pub unsafe extern "C" fn pio_emit_result_diagnostics(
     })
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_emit_result_retain(
     result: *const PioEmitResult,
@@ -15428,11 +16769,18 @@ pub unsafe extern "C" fn pio_emit_result_retain(
     unsafe { PioEmitResult::retain_raw(result) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_emit_result_release(result: *mut PioEmitResult) {
     unsafe { PioEmitResult::release_raw(result) };
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_artifact_name(artifact: *const PioArtifact) -> PioStringView {
     unsafe { PioArtifact::get(artifact) }
@@ -15444,6 +16792,9 @@ pub unsafe extern "C" fn pio_artifact_name(artifact: *const PioArtifact) -> PioS
 
 /// Return emitted memory bytes. A path destination has no memory bytes and
 /// returns an empty view.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_artifact_bytes(artifact: *const PioArtifact) -> PioByteView {
     unsafe { PioArtifact::get(artifact) }
@@ -15452,11 +16803,19 @@ pub unsafe extern "C" fn pio_artifact_bytes(artifact: *const PioArtifact) -> Pio
         .map_or(PioByteView::EMPTY, PioByteView::new)
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_artifact_retain(artifact: *const PioArtifact) -> *mut PioArtifact {
     unsafe { PioArtifact::retain_raw(artifact) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_artifact_release(artifact: *mut PioArtifact) {
     unsafe { PioArtifact::release_raw(artifact) };
@@ -15513,6 +16872,9 @@ fn termination_name(termination: &powerio_prob::Termination) -> &'static str {
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calculation_solution_termination(
     solution: *const PioCalculationSolution,
@@ -15539,6 +16901,9 @@ pub unsafe extern "C" fn pio_calculation_solution_termination(
 
 /// Return an OPF or SCUC objective. SOCWR reports a lower bound through
 /// pio_socwr_opf_solution_get_objective_lower_bound instead.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calculation_solution_get_objective(
     solution: *const PioCalculationSolution,
@@ -15574,6 +16939,9 @@ pub unsafe extern "C" fn pio_calculation_solution_get_objective(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_socwr_opf_solution_get_objective_lower_bound(
     solution: *const PioCalculationSolution,
@@ -15899,6 +17267,9 @@ fn collect_solution_values(solution: &PioValue, quantity: &str) -> Result<Vec<f6
 }
 
 /// Copy one named solution quantity into an independently owned vector.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calculation_solution_get_values(
     solution: *const PioCalculationSolution,
@@ -15923,6 +17294,9 @@ pub unsafe extern "C" fn pio_calculation_solution_get_values(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_solution_time_count(
     solution: *const PioCalculationSolution,
@@ -15936,6 +17310,9 @@ pub unsafe extern "C" fn pio_ac_scuc_solution_time_count(
 }
 
 /// Copy one AC SCUC output row for one time position into an owned vector.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_ac_scuc_solution_get_values_at(
     solution: *const PioCalculationSolution,
@@ -16074,6 +17451,9 @@ opaque_handle!(
 /// order; the branch axis is every in service, non self loop branch in table
 /// order, followed by three winding transformer windings, less any skipped
 /// branch. Release with `pio_dc_operators_release`.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calc_dc_operators(
     network: *const PioBalancedNetwork,
@@ -16110,12 +17490,18 @@ pub unsafe extern "C" fn pio_calc_dc_operators(
 }
 
 /// The length of the bus axis.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_operators_n_buses(operators: *const PioDcOperators) -> usize {
     unsafe { PioDcOperators::get(operators) }.map_or(0, |inner| inner.bus_ids.len())
 }
 
 /// The length of the branch axis.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_operators_n_branches(operators: *const PioDcOperators) -> usize {
     unsafe { PioDcOperators::get(operators) }
@@ -16123,6 +17509,9 @@ pub unsafe extern "C" fn pio_dc_operators_n_branches(operators: *const PioDcOper
 }
 
 /// Bus axis row to source bus id. Borrowed from the handle.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_operators_bus_ids(operators: *const PioDcOperators) -> PioSizeView {
     unsafe { PioDcOperators::get(operators) }
@@ -16132,6 +17521,9 @@ pub unsafe extern "C" fn pio_dc_operators_bus_ids(operators: *const PioDcOperato
 /// Branch axis row to the analysis branch row it represents: the position in
 /// the network's branch table, with three winding transformer windings after
 /// the branches. Borrowed from the handle.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_operators_branch_rows(
     operators: *const PioDcOperators,
@@ -16143,6 +17535,9 @@ pub unsafe extern "C" fn pio_dc_operators_branch_rows(
 
 /// Analysis branch rows dropped under `skip_zero_impedance`, in table order.
 /// Borrowed from the handle.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_operators_skipped_branch_rows(
     operators: *const PioDcOperators,
@@ -16155,6 +17550,9 @@ pub unsafe extern "C" fn pio_dc_operators_skipped_branch_rows(
 /// The stable identity of branch axis row `index`: the source uid when one
 /// exists, else `branches:<row>`. An index past the branch axis returns an
 /// empty view. Borrowed from the handle.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_operators_branch_identity(
     operators: *const PioDcOperators,
@@ -16241,6 +17639,9 @@ unsafe fn dc_operators_vector_from_angles(
 }
 
 /// The incidence matrix `A`, branches by buses, over the handle's axes.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_operators_incidence_matrix(
     operators: *const PioDcOperators,
@@ -16250,6 +17651,9 @@ pub unsafe extern "C" fn pio_dc_operators_incidence_matrix(
 }
 
 /// The bus susceptance matrix `B = A' diag(b) A`, buses by buses.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_operators_bus_susceptance_matrix(
     operators: *const PioDcOperators,
@@ -16259,6 +17663,9 @@ pub unsafe extern "C" fn pio_dc_operators_bus_susceptance_matrix(
 }
 
 /// The branch flow matrix `Bf = diag(b) A`, branches by buses.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_operators_branch_flow_matrix(
     operators: *const PioDcOperators,
@@ -16268,6 +17675,9 @@ pub unsafe extern "C" fn pio_dc_operators_branch_flow_matrix(
 }
 
 /// The per branch susceptances `b` over the branch axis.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_operators_branch_susceptances(
     operators: *const PioDcOperators,
@@ -16281,6 +17691,9 @@ pub unsafe extern "C" fn pio_dc_operators_branch_susceptances(
 }
 
 /// The per branch phase shift injection `b .* shift`.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_operators_branch_phase_shift_injection(
     operators: *const PioDcOperators,
@@ -16296,6 +17709,9 @@ pub unsafe extern "C" fn pio_dc_operators_branch_phase_shift_injection(
 }
 
 /// The per bus phase shift injection `A' (b .* shift)`.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_operators_bus_phase_shift_injection(
     operators: *const PioDcOperators,
@@ -16311,6 +17727,9 @@ pub unsafe extern "C" fn pio_dc_operators_bus_phase_shift_injection(
 }
 
 /// DC branch flows for bus voltage angles in radians over the bus axis.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_operators_branch_flow_dc(
     operators: *const PioDcOperators,
@@ -16330,6 +17749,9 @@ pub unsafe extern "C" fn pio_dc_operators_branch_flow_dc(
 }
 
 /// DC bus injections for bus voltage angles in radians over the bus axis.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_operators_bus_injection_dc(
     operators: *const PioDcOperators,
@@ -16348,6 +17770,10 @@ pub unsafe extern "C" fn pio_dc_operators_bus_injection_dc(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_operators_retain(
     operators: *const PioDcOperators,
@@ -16355,6 +17781,10 @@ pub unsafe extern "C" fn pio_dc_operators_retain(
     unsafe { PioDcOperators::retain_raw(operators) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_operators_release(operators: *mut PioDcOperators) {
     unsafe { PioDcOperators::release_raw(operators) };
@@ -16394,6 +17824,9 @@ unsafe fn dc_vector(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calc_incidence_matrix(
     network: *const PioBalancedNetwork,
@@ -16408,6 +17841,9 @@ pub unsafe extern "C" fn pio_calc_incidence_matrix(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calc_bus_susceptance_matrix(
     network: *const PioBalancedNetwork,
@@ -16422,6 +17858,9 @@ pub unsafe extern "C" fn pio_calc_bus_susceptance_matrix(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calc_branch_flow_matrix(
     network: *const PioBalancedNetwork,
@@ -16436,6 +17875,9 @@ pub unsafe extern "C" fn pio_calc_branch_flow_matrix(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calc_branch_susceptances(
     network: *const PioBalancedNetwork,
@@ -16450,6 +17892,9 @@ pub unsafe extern "C" fn pio_calc_branch_susceptances(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calc_branch_phase_shift_injection(
     network: *const PioBalancedNetwork,
@@ -16464,6 +17909,9 @@ pub unsafe extern "C" fn pio_calc_branch_phase_shift_injection(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calc_bus_phase_shift_injection(
     network: *const PioBalancedNetwork,
@@ -16508,6 +17956,9 @@ unsafe fn dc_vector_from_angles(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calc_branch_flow_dc(
     network: *const PioBalancedNetwork,
@@ -16530,6 +17981,9 @@ pub unsafe extern "C" fn pio_calc_branch_flow_dc(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_calc_bus_injection_dc(
     network: *const PioBalancedNetwork,
@@ -16552,16 +18006,25 @@ pub unsafe extern "C" fn pio_calc_bus_injection_dc(
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_sparse_matrix_rows(matrix: *const PioSparseMatrix) -> usize {
     unsafe { PioSparseMatrix::get(matrix) }.map_or(0, |matrix| matrix.rows)
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_sparse_matrix_columns(matrix: *const PioSparseMatrix) -> usize {
     unsafe { PioSparseMatrix::get(matrix) }.map_or(0, |matrix| matrix.columns)
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_sparse_matrix_row_offsets(
     matrix: *const PioSparseMatrix,
@@ -16571,6 +18034,9 @@ pub unsafe extern "C" fn pio_sparse_matrix_row_offsets(
     })
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_sparse_matrix_column_indices(
     matrix: *const PioSparseMatrix,
@@ -16580,12 +18046,19 @@ pub unsafe extern "C" fn pio_sparse_matrix_column_indices(
     })
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_sparse_matrix_values(matrix: *const PioSparseMatrix) -> PioF64View {
     unsafe { PioSparseMatrix::get(matrix) }
         .map_or(PioF64View::EMPTY, |matrix| PioF64View::new(&matrix.values))
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_sparse_matrix_retain(
     matrix: *const PioSparseMatrix,
@@ -16593,22 +18066,37 @@ pub unsafe extern "C" fn pio_sparse_matrix_retain(
     unsafe { PioSparseMatrix::retain_raw(matrix) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_sparse_matrix_release(matrix: *mut PioSparseMatrix) {
     unsafe { PioSparseMatrix::release_raw(matrix) };
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_vector_values(vector: *const PioVector) -> PioF64View {
     unsafe { PioVector::get(vector) }
         .map_or(PioF64View::EMPTY, |vector| PioF64View::new(&vector.values))
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_vector_retain(vector: *const PioVector) -> *mut PioVector {
     unsafe { PioVector::retain_raw(vector) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_vector_release(vector: *mut PioVector) {
     unsafe { PioVector::release_raw(vector) };
@@ -16627,6 +18115,9 @@ opaque_handle!(
 );
 
 /// Return version information for this ABI and the PowerIO IR serializer/deserializer.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_schema_report(error: *mut *mut PioError) -> *mut PioString {
     unsafe {
@@ -16666,6 +18157,9 @@ pub unsafe extern "C" fn pio_schema_report(error: *mut *mut PioError) -> *mut Pi
     }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_string_view(string: *const PioString) -> PioStringView {
     unsafe { PioString::get(string) }.map_or(PioStringView::EMPTY, |string| {
@@ -16673,11 +18167,19 @@ pub unsafe extern "C" fn pio_string_view(string: *const PioString) -> PioStringV
     })
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_string_retain(string: *const PioString) -> *mut PioString {
     unsafe { PioString::retain_raw(string) }
 }
 
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_string_release(string: *mut PioString) {
     unsafe { PioString::release_raw(string) };

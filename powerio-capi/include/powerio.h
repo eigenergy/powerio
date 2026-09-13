@@ -2186,68 +2186,133 @@ PioStringView pio_version(void);
 
 /**
  * The failure's stable diagnostic code.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioStringView pio_error_code(const PioError *error);
 
 /**
  * The rendered failure message.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioStringView pio_error_message(const PioError *error);
 
 /**
  * The structured diagnostics that caused the failure.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioDiagnostics *pio_error_diagnostics(const PioError *error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioError *pio_error_retain(const PioError *error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_error_release(PioError *error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_diagnostics_len(const PioDiagnostics *diagnostics);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioStringView pio_diagnostic_code(const PioDiagnostics *diagnostics, size_t index);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioStringView pio_diagnostic_severity(const PioDiagnostics *diagnostics, size_t index);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioStringView pio_diagnostic_message(const PioDiagnostics *diagnostics, size_t index);
 
 /**
  * Whether this diagnostic has a durable identity.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_diagnostic_has_id(const PioDiagnostics *diagnostics, size_t index);
 
 /**
  * Borrow this diagnostic's durable identity, or an empty view when absent.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioStringView pio_diagnostic_id(const PioDiagnostics *diagnostics, size_t index);
 
 /**
  * Whether this diagnostic names a value element.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_diagnostic_has_target(const PioDiagnostics *diagnostics, size_t index);
 
 /**
  * Borrow this diagnostic's value element locator, or an empty view when absent.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioStringView pio_diagnostic_target(const PioDiagnostics *diagnostics, size_t index);
 
 /**
  * Whether this diagnostic carries a suggested action.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_diagnostic_has_suggested_action(const PioDiagnostics *diagnostics, size_t index);
 
 /**
  * Borrow this diagnostic's suggested action, or an empty view when absent.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioStringView pio_diagnostic_suggested_action(const PioDiagnostics *diagnostics, size_t index);
 
 /**
  * Number of source byte ranges attached to this diagnostic.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 size_t pio_diagnostic_n_spans(const PioDiagnostics *diagnostics, size_t index);
 
 /**
  * Read one source byte range. The source string borrows from `diagnostics`.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_diagnostic_span(const PioDiagnostics *diagnostics,
                          size_t index,
@@ -2257,11 +2322,17 @@ bool pio_diagnostic_span(const PioDiagnostics *diagnostics,
 
 /**
  * Number of other diagnostic identities referenced by this diagnostic.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 size_t pio_diagnostic_n_related(const PioDiagnostics *diagnostics, size_t index);
 
 /**
  * Borrow one related diagnostic identity, or an empty view when out of range.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioStringView pio_diagnostic_related(const PioDiagnostics *diagnostics,
                                      size_t index,
@@ -2269,22 +2340,43 @@ PioStringView pio_diagnostic_related(const PioDiagnostics *diagnostics,
 
 /**
  * Serialize this diagnostic's structured details as an owned JSON object.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioString *pio_diagnostic_details_json(const PioDiagnostics *diagnostics,
                                        size_t index,
                                        PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioDiagnostics *pio_diagnostics_retain(const PioDiagnostics *diagnostics);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_diagnostics_release(PioDiagnostics *diagnostics);
 
 /**
  * Acquire a file or directory path.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioSource *pio_source_open(const char *path, size_t path_len, PioError **error);
 
 /**
  * Retain named bytes as an in-memory source. Binary content is supported.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioSource *pio_source_from_memory(const char *name,
                                   size_t name_len,
@@ -2292,40 +2384,91 @@ PioSource *pio_source_from_memory(const char *name,
                                   size_t data_len,
                                   PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioSource *pio_source_retain(const PioSource *source);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_source_release(PioSource *source);
 
 /**
  * Select a filesystem output path.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioDestination *pio_destination_path(const char *path, size_t path_len, PioError **error);
 
 /**
  * Select memory output and prefix returned artifact names with `root`.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioDestination *pio_destination_memory(const char *root, size_t root_len, PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioDestination *pio_destination_retain(const PioDestination *destination);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_destination_release(PioDestination *destination);
 
 /**
  * Parse one geographic sidecar from an acquired source.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioGeoLayer *pio_geo_layer_parse(const PioSource *source, PioError **error);
 
 /**
  * Return diagnostics produced while parsing a geographic sidecar.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioDiagnostics *pio_geo_layer_diagnostics(const PioGeoLayer *layer);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioGeoLayer *pio_geo_layer_retain(const PioGeoLayer *layer);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_geo_layer_release(PioGeoLayer *layer);
 
 /**
  * Parse one acquired grid exchange source.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioModule *pio_parse(const PioSource *source,
                      const char *format,
@@ -2338,102 +2481,203 @@ PioModule *pio_parse(const PioSource *source,
  * A document carries the independent PowerIO IR generation reported by
  * `pio_schema_report`. This library refuses any unsupported identity or
  * generation through `error`, naming what it found.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioModule *pio_module_deserialize(const PioSource *source, PioError **error);
 
 /**
  * Construct a DC power flow calculation module from a balanced network module.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioModule *pio_module_to_dc_pf_instance(const PioModule *module, PioError **error);
 
 /**
  * Construct an AC power flow calculation module from a balanced network module.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioModule *pio_module_to_ac_pf_instance(const PioModule *module, PioError **error);
 
 /**
  * Construct a DC optimal power flow calculation module from a balanced network module.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioModule *pio_module_to_dc_opf_instance(const PioModule *module, PioError **error);
 
 /**
  * Construct an AC optimal power flow calculation module from a balanced network module.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioModule *pio_module_to_ac_opf_instance(const PioModule *module, PioError **error);
 
 /**
  * Construct a multiconductor AC power flow calculation module from a
  * multiconductor network module.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioModule *pio_module_to_mc_ac_pf_instance(const PioModule *module, PioError **error);
 
 /**
  * Construct a multiconductor AC optimal power flow calculation module from a
  * multiconductor network module.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioModule *pio_module_to_mc_ac_opf_instance(const PioModule *module, PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioModule *pio_module_to_lindist3flow_opf_instance(const PioModule *module, PioError **error);
 
 /**
  * Apply one geographic layer to a balanced or multiconductor network module.
  * The input module is unchanged. When `out_report` is not NULL, it receives
  * an independently owned report handle.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioModule *pio_module_apply_geo_layer(const PioModule *module,
                                       const PioGeoLayer *layer,
                                       PioGeoApplyReport **out_report,
                                       PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_geo_apply_report_matched_buses(const PioGeoApplyReport *report);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_geo_apply_report_matched_branches(const PioGeoApplyReport *report);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_geo_apply_report_unmatched_features(const PioGeoApplyReport *report);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_geo_apply_report_unlocated_buses(const PioGeoApplyReport *report);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_geo_apply_report_unlocated_branches(const PioGeoApplyReport *report);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_geo_apply_report_note_count(const PioGeoApplyReport *report);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioStringView pio_geo_apply_report_note_at(const PioGeoApplyReport *report,
                                            size_t index,
                                            PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioGeoApplyReport *pio_geo_apply_report_retain(const PioGeoApplyReport *report);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_geo_apply_report_release(PioGeoApplyReport *report);
 
 /**
  * Return an owner-rooted view of the module's value.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioValueHandle *pio_module_value(const PioModule *module);
 
 /**
  * Return the module's stored diagnostics.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioDiagnostics *pio_module_diagnostics(const PioModule *module);
 
 /**
  * Read the program identity recorded with a module.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_module_producer(const PioModule *module, PioModuleProducerView *output, PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_module_source_count(const PioModule *module);
 
 /**
  * Read one durable source descriptor by zero based position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_module_source_at(const PioModule *module,
                           size_t index,
                           PioModuleSourceView *output,
                           PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_module_source_map_count(const PioModule *module);
 
 /**
  * Read one source map entry by zero based position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_module_source_map_at(const PioModule *module,
                               size_t index,
@@ -2442,6 +2686,9 @@ bool pio_module_source_map_at(const PioModule *module,
 
 /**
  * Read one byte range from a source map entry.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_module_source_map_span_at(const PioModule *module,
                                    size_t entry_index,
@@ -2449,10 +2696,18 @@ bool pio_module_source_map_span_at(const PioModule *module,
                                    PioSourceSpanView *output,
                                    PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_module_history_count(const PioModule *module);
 
 /**
  * Read one operation from module history by zero based position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_module_history_at(const PioModule *module,
                            size_t index,
@@ -2461,6 +2716,9 @@ bool pio_module_history_at(const PioModule *module,
 
 /**
  * Read one named structured history parameter by zero based position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_module_history_parameter_at(const PioModule *module,
                                      size_t history_index,
@@ -2470,6 +2728,9 @@ bool pio_module_history_parameter_at(const PioModule *module,
 
 /**
  * Return an owner-rooted structured history parameter value.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioJsonValue *pio_module_history_parameter_value_at(const PioModule *module,
                                                     size_t history_index,
@@ -2478,6 +2739,9 @@ PioJsonValue *pio_module_history_parameter_value_at(const PioModule *module,
 
 /**
  * Read one assumption attached to a history entry.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioStringView pio_module_history_assumption_at(const PioModule *module,
                                                size_t history_index,
@@ -2486,16 +2750,27 @@ PioStringView pio_module_history_assumption_at(const PioModule *module,
 
 /**
  * Read one declared loss attached to a history entry.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioStringView pio_module_history_loss_at(const PioModule *module,
                                          size_t history_index,
                                          size_t loss_index,
                                          PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_module_extension_count(const PioModule *module);
 
 /**
  * Read one namespaced structured module extension by zero based position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_module_extension_at(const PioModule *module,
                              size_t index,
@@ -2504,6 +2779,9 @@ bool pio_module_extension_at(const PioModule *module,
 
 /**
  * Return an owner-rooted structured module extension value.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioJsonValue *pio_module_extension_value_at(const PioModule *module,
                                             size_t index,
@@ -2511,16 +2789,25 @@ PioJsonValue *pio_module_extension_value_at(const PioModule *module,
 
 /**
  * Read the type and scalar or collection data for a structured value.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_json_value_get(const PioJsonValue *value, PioJsonValueView *output, PioError **error);
 
 /**
  * Return one owner-rooted element from a structured JSON array.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioJsonValue *pio_json_value_array_at(const PioJsonValue *value, size_t index, PioError **error);
 
 /**
  * Read one key and value type from a structured JSON object.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_json_value_object_entry_at(const PioJsonValue *value,
                                     size_t index,
@@ -2529,31 +2816,67 @@ bool pio_json_value_object_entry_at(const PioJsonValue *value,
 
 /**
  * Return one owner-rooted value from a structured JSON object by position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioJsonValue *pio_json_value_object_value_at(const PioJsonValue *value,
                                              size_t index,
                                              PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioJsonValue *pio_json_value_retain(const PioJsonValue *value);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_json_value_release(PioJsonValue *value);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioModule *pio_module_retain(const PioModule *module);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_module_release(PioModule *module);
 
 /**
  * Canonical structural type name, such as `powerio.BalancedNetwork`.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioStringView pio_value_type_name(const PioValueHandle *value);
 
 /**
  * Exact structural type predicate.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_value_is_type(const PioValueHandle *value, const char *type_name, size_t type_name_len);
 
 /**
  * Borrow the value as a balanced network without serialization or copying.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioBalancedNetwork *pio_value_balanced_network(const PioValueHandle *value, PioError **error);
 
@@ -2561,94 +2884,242 @@ PioBalancedNetwork *pio_value_balanced_network(const PioValueHandle *value, PioE
  * Take the value as a geographic layer handle. The layer is copied out of
  * the value, so the handle outlives the module the way
  * `pio_geo_layer_parse` produces one.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioGeoLayer *pio_value_geo_layer(const PioValueHandle *value, PioError **error);
 
 /**
  * Borrow the value as a multiconductor network without serialization or copying.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioMulticonductorNetwork *pio_value_multiconductor_network(const PioValueHandle *value,
                                                            PioError **error);
 
 /**
  * Borrow the value as a time series.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioTimeSeriesHandle *pio_value_time_series(const PioValueHandle *value, PioError **error);
 
 /**
  * Borrow the value as a scenario set.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioScenarioSetHandle *pio_value_scenario_set(const PioValueHandle *value, PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioOperatingPoint *pio_value_balanced_operating_point(const PioValueHandle *value,
                                                       PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioOperatingPoint *pio_value_multiconductor_operating_point(const PioValueHandle *value,
                                                             PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioCalculationInstance *pio_value_dc_pf_instance(const PioValueHandle *value, PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioCalculationInstance *pio_value_ac_pf_instance(const PioValueHandle *value, PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioCalculationInstance *pio_value_dc_opf_instance(const PioValueHandle *value, PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioCalculationInstance *pio_value_ac_opf_instance(const PioValueHandle *value, PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioCalculationInstance *pio_value_mc_ac_pf_instance(const PioValueHandle *value, PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioCalculationInstance *pio_value_mc_ac_opf_instance(const PioValueHandle *value, PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioCalculationInstance *pio_value_lindist3flow_opf_instance(const PioValueHandle *value,
                                                             PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioCalculationInstance *pio_value_ac_scuc_instance(const PioValueHandle *value, PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioCalculationSolution *pio_value_dc_pf_solution(const PioValueHandle *value, PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioCalculationSolution *pio_value_ac_pf_solution(const PioValueHandle *value, PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioCalculationSolution *pio_value_dc_opf_solution(const PioValueHandle *value, PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioCalculationSolution *pio_value_ac_opf_solution(const PioValueHandle *value, PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioCalculationSolution *pio_value_socwr_opf_solution(const PioValueHandle *value, PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioCalculationSolution *pio_value_mc_ac_pf_solution(const PioValueHandle *value, PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioCalculationSolution *pio_value_mc_ac_opf_solution(const PioValueHandle *value, PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioCalculationSolution *pio_value_lindist3flow_opf_solution(const PioValueHandle *value,
                                                             PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioCalculationSolution *pio_value_ac_scuc_solution(const PioValueHandle *value, PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioStringView pio_operating_point_type_name(const PioOperatingPoint *point);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioStringView pio_calculation_instance_type_name(const PioCalculationInstance *instance);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioStringView pio_calculation_solution_type_name(const PioCalculationSolution *solution);
 
 /**
  * Return an owner-rooted view of the exact calculation instance retained by
  * a calculation solution.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioCalculationInstance *pio_calculation_solution_instance(const PioCalculationSolution *solution,
                                                           PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioBalancedNetwork *pio_operating_point_balanced_network(const PioOperatingPoint *point,
                                                          PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioMulticonductorNetwork *pio_operating_point_multiconductor_network(const PioOperatingPoint *point,
                                                                      PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioBalancedNetwork *pio_calculation_instance_balanced_network(const PioCalculationInstance *instance,
                                                               PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioMulticonductorNetwork *pio_calculation_instance_multiconductor_network(const PioCalculationInstance *instance,
                                                                           PioError **error);
 
 /**
  * Build the matrix free DC OPF inputs from one typed instance.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioDcOpfPreparation *pio_build_dc_opf_preparation(const PioCalculationInstance *instance,
                                                   const char *units,
@@ -2660,6 +3131,9 @@ PioDcOpfPreparation *pio_build_dc_opf_preparation(const PioCalculationInstance *
 
 /**
  * Read the dimensions and conventions of a DC OPF preparation.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_dc_opf_preparation_summary(const PioDcOpfPreparation *preparation,
                                     PioDcOpfPreparationView *output,
@@ -2667,16 +3141,25 @@ bool pio_dc_opf_preparation_summary(const PioDcOpfPreparation *preparation,
 
 /**
  * Borrow the dense reference bus indices of a DC OPF preparation.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioSizeView pio_dc_opf_preparation_reference_buses(const PioDcOpfPreparation *preparation);
 
 /**
  * Borrow the analysis rows skipped for zero impedance.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioSizeView pio_dc_opf_preparation_skipped_zero_impedance(const PioDcOpfPreparation *preparation);
 
 /**
  * Read one dense bus row of a DC OPF preparation.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_dc_opf_preparation_bus_at(const PioDcOpfPreparation *preparation,
                                    size_t index,
@@ -2685,6 +3168,9 @@ bool pio_dc_opf_preparation_bus_at(const PioDcOpfPreparation *preparation,
 
 /**
  * Read one generator row of a DC OPF preparation.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_dc_opf_preparation_generator_at(const PioDcOpfPreparation *preparation,
                                          size_t index,
@@ -2693,6 +3179,9 @@ bool pio_dc_opf_preparation_generator_at(const PioDcOpfPreparation *preparation,
 
 /**
  * Read one active branch row of a DC OPF preparation.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_dc_opf_preparation_branch_at(const PioDcOpfPreparation *preparation,
                                       size_t index,
@@ -2701,6 +3190,9 @@ bool pio_dc_opf_preparation_branch_at(const PioDcOpfPreparation *preparation,
 
 /**
  * Build the matrix free AC OPF inputs from one typed instance.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioAcOpfPreparation *pio_build_ac_opf_preparation(const PioCalculationInstance *instance,
                                                   const char *units,
@@ -2712,6 +3204,9 @@ PioAcOpfPreparation *pio_build_ac_opf_preparation(const PioCalculationInstance *
 
 /**
  * Read the dimensions and conventions of an AC OPF preparation.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_ac_opf_preparation_summary(const PioAcOpfPreparation *preparation,
                                     PioAcOpfPreparationView *output,
@@ -2719,16 +3214,25 @@ bool pio_ac_opf_preparation_summary(const PioAcOpfPreparation *preparation,
 
 /**
  * Borrow the dense reference bus indices of an AC OPF preparation.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioSizeView pio_ac_opf_preparation_reference_buses(const PioAcOpfPreparation *preparation);
 
 /**
  * Borrow the analysis rows skipped for zero impedance.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioSizeView pio_ac_opf_preparation_skipped_zero_impedance(const PioAcOpfPreparation *preparation);
 
 /**
  * Read one dense bus row of an AC OPF preparation.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_ac_opf_preparation_bus_at(const PioAcOpfPreparation *preparation,
                                    size_t index,
@@ -2737,6 +3241,9 @@ bool pio_ac_opf_preparation_bus_at(const PioAcOpfPreparation *preparation,
 
 /**
  * Read one generator row of an AC OPF preparation.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_ac_opf_preparation_generator_at(const PioAcOpfPreparation *preparation,
                                          size_t index,
@@ -2745,6 +3252,9 @@ bool pio_ac_opf_preparation_generator_at(const PioAcOpfPreparation *preparation,
 
 /**
  * Read one storage row of an AC OPF preparation.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_ac_opf_preparation_storage_at(const PioAcOpfPreparation *preparation,
                                        size_t index,
@@ -2753,42 +3263,84 @@ bool pio_ac_opf_preparation_storage_at(const PioAcOpfPreparation *preparation,
 
 /**
  * Read one active branch row of an AC OPF preparation.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_ac_opf_preparation_branch_at(const PioAcOpfPreparation *preparation,
                                       size_t index,
                                       PioAcOpfBranchView *output,
                                       PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_dc_pf_instance_bus_specification_count(const PioCalculationInstance *instance);
 
 /**
  * Read one DC power flow bus specification by zero based bus table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_dc_pf_instance_bus_specification_at(const PioCalculationInstance *instance,
                                              size_t index,
                                              PioDcBusSpecificationView *output,
                                              PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioStringView pio_dc_pf_instance_branch_susceptance_formula(const PioCalculationInstance *instance);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_ac_pf_instance_bus_specification_count(const PioCalculationInstance *instance);
 
 /**
  * Read one AC power flow bus specification by zero based bus table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_ac_pf_instance_bus_specification_at(const PioCalculationInstance *instance,
                                              size_t index,
                                              PioAcBusSpecificationView *output,
                                              PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioStringView pio_dc_opf_instance_branch_susceptance_formula(const PioCalculationInstance *instance);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_lindist3flow_opf_instance_node_count(const PioCalculationInstance *instance);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_lindist3flow_opf_instance_conductor_count(const PioCalculationInstance *instance);
 
 /**
  * Read a node by zero based position. Strings borrow the instance handle.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_lindist3flow_opf_instance_node_at(const PioCalculationInstance *instance,
                                            size_t index,
@@ -2797,26 +3349,45 @@ bool pio_lindist3flow_opf_instance_node_at(const PioCalculationInstance *instanc
 
 /**
  * Read a conductor by zero based position. Strings borrow the instance handle.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_lindist3flow_opf_instance_conductor_at(const PioCalculationInstance *instance,
                                                 size_t index,
                                                 PioLinDist3FlowConductorView *output,
                                                 PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_calculation_instance_objective_term_count(const PioCalculationInstance *instance);
 
 /**
  * Read one typed objective term by zero based position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_calculation_instance_objective_term_at(const PioCalculationInstance *instance,
                                                 size_t index,
                                                 PioObjectiveTermView *output,
                                                 PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_calculation_instance_active_constraint_count(const PioCalculationInstance *instance);
 
 /**
  * Read one active constraint family by zero based position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_calculation_instance_active_constraint_at(const PioCalculationInstance *instance,
                                                    size_t index,
@@ -2825,56 +3396,117 @@ bool pio_calculation_instance_active_constraint_at(const PioCalculationInstance 
 
 /**
  * Read one selected component identity from an `only` constraint selection.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioStringView pio_calculation_instance_active_constraint_identity_at(const PioCalculationInstance *instance,
                                                                      size_t constraint_index,
                                                                      size_t identity_index,
                                                                      PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_calculation_instance_has_initial_point(const PioCalculationInstance *instance);
 
 /**
  * Return the optional owner-rooted initial operating point. A calculation
  * instance with no initial point returns NULL without setting an error.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioOperatingPoint *pio_calculation_instance_initial_point(const PioCalculationInstance *instance,
                                                           PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_mc_ac_pf_instance_load_count(const PioCalculationInstance *instance);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_mc_ac_pf_instance_load_at(const PioCalculationInstance *instance,
                                    size_t index,
                                    PioPrescribedTerminalPowerView *output,
                                    PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_mc_ac_pf_instance_load_terminal_at(const PioCalculationInstance *instance,
                                             size_t load_index,
                                             size_t terminal_index,
                                             PioTerminalPowerView *output,
                                             PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_mc_ac_pf_instance_source_count(const PioCalculationInstance *instance);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_mc_ac_pf_instance_source_at(const PioCalculationInstance *instance,
                                      size_t index,
                                      PioPrescribedSourceVoltageView *output,
                                      PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_mc_ac_pf_instance_source_terminal_at(const PioCalculationInstance *instance,
                                               size_t source_index,
                                               size_t terminal_index,
                                               PioTerminalVoltageView *output,
                                               PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_mc_ac_pf_instance_isolated_terminal_count(const PioCalculationInstance *instance);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_mc_ac_pf_instance_isolated_terminal_at(const PioCalculationInstance *instance,
                                                 size_t index,
                                                 PioIsolatedTerminalView *output,
                                                 PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_mc_ac_pf_instance_active_control_count(const PioCalculationInstance *instance);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_mc_ac_pf_instance_active_control_at(const PioCalculationInstance *instance,
                                              size_t index,
                                              PioActiveControlView *output,
@@ -2882,6 +3514,9 @@ bool pio_mc_ac_pf_instance_active_control_at(const PioCalculationInstance *insta
 
 /**
  * Read semantic collection sizes for one AC SCUC instance.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_ac_scuc_instance_dimensions(const PioCalculationInstance *instance,
                                      PioScucDimensionsView *output,
@@ -2889,18 +3524,34 @@ bool pio_ac_scuc_instance_dimensions(const PioCalculationInstance *instance,
 
 /**
  * Borrow interval durations in hours, in chronological order.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioF64View pio_ac_scuc_instance_interval_durations(const PioCalculationInstance *instance);
 
 /**
  * Read the four required violation costs.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_ac_scuc_instance_violation_costs(const PioCalculationInstance *instance,
                                           PioScucViolationCostView *output,
                                           PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_ac_scuc_instance_device_count(const PioCalculationInstance *instance);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_ac_scuc_instance_device_at(const PioCalculationInstance *instance,
                                     size_t index,
                                     PioScucDeviceView *output,
@@ -2908,6 +3559,9 @@ bool pio_ac_scuc_instance_device_at(const PioCalculationInstance *instance,
 
 /**
  * Read one device by its exact source UID.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_ac_scuc_instance_device_get(const PioCalculationInstance *instance,
                                      const char *uid,
@@ -2915,52 +3569,107 @@ bool pio_ac_scuc_instance_device_get(const PioCalculationInstance *instance,
                                      PioScucDeviceView *output,
                                      PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_ac_scuc_instance_device_startup_cost_adjustment_count(const PioCalculationInstance *instance,
                                                                  size_t device_index);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_ac_scuc_instance_device_startup_cost_adjustment_at(const PioCalculationInstance *instance,
                                                             size_t device_index,
                                                             size_t adjustment_index,
                                                             PioScucStartupCostAdjustmentView *output,
                                                             PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_ac_scuc_instance_device_startup_limit_count(const PioCalculationInstance *instance,
                                                        size_t device_index);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_ac_scuc_instance_device_startup_limit_at(const PioCalculationInstance *instance,
                                                   size_t device_index,
                                                   size_t limit_index,
                                                   PioScucStartupLimitView *output,
                                                   PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_ac_scuc_instance_device_energy_upper_bound_count(const PioCalculationInstance *instance,
                                                             size_t device_index);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_ac_scuc_instance_device_energy_upper_bound_at(const PioCalculationInstance *instance,
                                                        size_t device_index,
                                                        size_t requirement_index,
                                                        PioScucEnergyRequirementView *output,
                                                        PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_ac_scuc_instance_device_energy_lower_bound_count(const PioCalculationInstance *instance,
                                                             size_t device_index);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_ac_scuc_instance_device_energy_lower_bound_at(const PioCalculationInstance *instance,
                                                        size_t device_index,
                                                        size_t requirement_index,
                                                        PioScucEnergyRequirementView *output,
                                                        PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_ac_scuc_instance_device_period_at(const PioCalculationInstance *instance,
                                            size_t device_index,
                                            size_t period_index,
                                            PioScucDevicePeriodView *output,
                                            PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_ac_scuc_instance_device_energy_cost_block_count(const PioCalculationInstance *instance,
                                                            size_t device_index,
                                                            size_t period_index);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_ac_scuc_instance_device_energy_cost_block_at(const PioCalculationInstance *instance,
                                                       size_t device_index,
                                                       size_t period_index,
@@ -2968,8 +3677,18 @@ bool pio_ac_scuc_instance_device_energy_cost_block_at(const PioCalculationInstan
                                                       PioScucEnergyCostBlockView *output,
                                                       PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_ac_scuc_instance_shunt_count(const PioCalculationInstance *instance);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_ac_scuc_instance_shunt_at(const PioCalculationInstance *instance,
                                    size_t index,
                                    PioScucShuntView *output,
@@ -2977,6 +3696,9 @@ bool pio_ac_scuc_instance_shunt_at(const PioCalculationInstance *instance,
 
 /**
  * Read one shunt by its exact source UID.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_ac_scuc_instance_shunt_get(const PioCalculationInstance *instance,
                                     const char *uid,
@@ -2984,52 +3706,112 @@ bool pio_ac_scuc_instance_shunt_get(const PioCalculationInstance *instance,
                                     PioScucShuntView *output,
                                     PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_ac_scuc_instance_branch_switching_cost_count(const PioCalculationInstance *instance);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_ac_scuc_instance_branch_switching_cost_at(const PioCalculationInstance *instance,
                                                    size_t index,
                                                    PioScucBranchSwitchingCostView *output,
                                                    PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_ac_scuc_instance_transformer_control_count(const PioCalculationInstance *instance);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_ac_scuc_instance_transformer_control_at(const PioCalculationInstance *instance,
                                                  size_t index,
                                                  PioScucTransformerControlView *output,
                                                  PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_ac_scuc_instance_active_reserve_zone_count(const PioCalculationInstance *instance);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_ac_scuc_instance_active_reserve_zone_at(const PioCalculationInstance *instance,
                                                  size_t index,
                                                  PioScucActiveReserveZoneView *output,
                                                  PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_ac_scuc_instance_active_reserve_zone_period_at(const PioCalculationInstance *instance,
                                                         size_t zone_index,
                                                         size_t period_index,
                                                         PioScucActiveReservePeriodView *output,
                                                         PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_ac_scuc_instance_active_reserve_zone_bus_at(const PioCalculationInstance *instance,
                                                      size_t zone_index,
                                                      size_t bus_index,
                                                      PioComponentIdView *output,
                                                      PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_ac_scuc_instance_reactive_reserve_zone_count(const PioCalculationInstance *instance);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_ac_scuc_instance_reactive_reserve_zone_at(const PioCalculationInstance *instance,
                                                    size_t index,
                                                    PioScucReactiveReserveZoneView *output,
                                                    PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_ac_scuc_instance_reactive_reserve_zone_period_at(const PioCalculationInstance *instance,
                                                           size_t zone_index,
                                                           size_t period_index,
                                                           PioScucReactiveReservePeriodView *output,
                                                           PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_ac_scuc_instance_reactive_reserve_zone_bus_at(const PioCalculationInstance *instance,
                                                        size_t zone_index,
                                                        size_t bus_index,
@@ -3038,11 +3820,17 @@ bool pio_ac_scuc_instance_reactive_reserve_zone_bus_at(const PioCalculationInsta
 
 /**
  * Return the number of named contingencies.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 size_t pio_ac_scuc_instance_contingency_count(const PioCalculationInstance *instance);
 
 /**
  * Read one named contingency in source order.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_ac_scuc_instance_contingency_at(const PioCalculationInstance *instance,
                                          size_t contingency_index,
@@ -3051,6 +3839,9 @@ bool pio_ac_scuc_instance_contingency_at(const PioCalculationInstance *instance,
 
 /**
  * Read one named contingency by its exact source UID.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_ac_scuc_instance_contingency_get(const PioCalculationInstance *instance,
                                           const char *uid,
@@ -3060,6 +3851,9 @@ bool pio_ac_scuc_instance_contingency_get(const PioCalculationInstance *instance
 
 /**
  * Read one stable component identity from a named contingency.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_ac_scuc_instance_contingency_component_at(const PioCalculationInstance *instance,
                                                    size_t contingency_index,
@@ -3067,9 +3861,19 @@ bool pio_ac_scuc_instance_contingency_component_at(const PioCalculationInstance 
                                                    PioScucContingencyComponentView *output,
                                                    PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioBalancedNetwork *pio_calculation_solution_balanced_network(const PioCalculationSolution *solution,
                                                               PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioMulticonductorNetwork *pio_calculation_solution_multiconductor_network(const PioCalculationSolution *solution,
                                                                           PioError **error);
 
@@ -3078,6 +3882,9 @@ PioMulticonductorNetwork *pio_calculation_solution_multiconductor_network(const 
  * component identity. Multiconductor terminal identities use
  * component/terminal. Returns false when the point does not contain the
  * quantity or identity.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_operating_point_get_value(const PioOperatingPoint *point,
                                    const char *quantity,
@@ -3087,53 +3894,168 @@ bool pio_operating_point_get_value(const PioOperatingPoint *point,
                                    double *out_value,
                                    PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioOperatingPoint *pio_operating_point_retain(const PioOperatingPoint *point);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_operating_point_release(PioOperatingPoint *point);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioCalculationInstance *pio_calculation_instance_retain(const PioCalculationInstance *instance);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_calculation_instance_release(PioCalculationInstance *instance);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioDcOpfPreparation *pio_dc_opf_preparation_retain(const PioDcOpfPreparation *preparation);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_dc_opf_preparation_release(PioDcOpfPreparation *preparation);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioAcOpfPreparation *pio_ac_opf_preparation_retain(const PioAcOpfPreparation *preparation);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_ac_opf_preparation_release(PioAcOpfPreparation *preparation);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioCalculationSolution *pio_calculation_solution_retain(const PioCalculationSolution *solution);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_calculation_solution_release(PioCalculationSolution *solution);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioValueHandle *pio_value_retain(const PioValueHandle *value);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_value_release(PioValueHandle *value);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_time_series_len(const PioTimeSeriesHandle *series);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioStringView pio_time_series_element_type(const PioTimeSeriesHandle *series);
 
 /**
  * Return an owner-rooted entry by zero-based position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioValueHandle *pio_time_series_get(const PioTimeSeriesHandle *series,
                                     size_t index,
                                     PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioTimeSeriesHandle *pio_time_series_retain(const PioTimeSeriesHandle *series);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_time_series_release(PioTimeSeriesHandle *series);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_scenario_set_len(const PioScenarioSetHandle *set);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioStringView pio_scenario_set_element_type(const PioScenarioSetHandle *set);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioStringView pio_scenario_set_id_at(const PioScenarioSetHandle *set, size_t index);
 
 /**
  * Return an owner-rooted scenario value by zero-based position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioValueHandle *pio_scenario_set_get_at(const PioScenarioSetHandle *set,
                                         size_t index,
@@ -3141,38 +4063,82 @@ PioValueHandle *pio_scenario_set_get_at(const PioScenarioSetHandle *set,
 
 /**
  * Return an owner-rooted scenario value by exact scenario ID.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioValueHandle *pio_scenario_set_get(const PioScenarioSetHandle *set,
                                      const char *id,
                                      size_t id_len,
                                      PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioScenarioSetHandle *pio_scenario_set_retain(const PioScenarioSetHandle *set);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_scenario_set_release(PioScenarioSetHandle *set);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioStringView pio_balanced_network_name(const PioBalancedNetwork *network);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 double pio_balanced_network_base_mva(const PioBalancedNetwork *network);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 double pio_balanced_network_base_frequency_hz(const PioBalancedNetwork *network);
 
 /**
  * Read the optional coordinate space metadata for a balanced network.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_balanced_network_geo(const PioBalancedNetwork *network,
                               PioBalancedGeoView *output,
                               PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_balanced_network_has_detailed_connectivity(const PioBalancedNetwork *network);
 
 /**
  * Return the optional owner-rooted detailed connectivity view.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioDetailedConnectivity *pio_balanced_network_detailed_connectivity(const PioBalancedNetwork *network);
 
 /**
  * Read every detailed connectivity table length.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_counts(const PioDetailedConnectivity *details,
                                       PioDetailedConnectivityCountsView *output,
@@ -3180,6 +4146,9 @@ bool pio_detailed_connectivity_counts(const PioDetailedConnectivity *details,
 
 /**
  * Read one field that was absent from the source representation.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_omitted_field_at(const PioDetailedConnectivity *details,
                                                 size_t index,
@@ -3188,6 +4157,9 @@ bool pio_detailed_connectivity_omitted_field_at(const PioDetailedConnectivity *d
 
 /**
  * Read one component metadata record by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_component_metadata_at(const PioDetailedConnectivity *details,
                                                      size_t index,
@@ -3196,6 +4168,9 @@ bool pio_detailed_connectivity_component_metadata_at(const PioDetailedConnectivi
 
 /**
  * Read one alias from a component metadata record.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_component_alias_at(const PioDetailedConnectivity *details,
                                                   size_t metadata_index,
@@ -3205,6 +4180,9 @@ bool pio_detailed_connectivity_component_alias_at(const PioDetailedConnectivity 
 
 /**
  * Read one external identifier from a component metadata record.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_external_identifier_at(const PioDetailedConnectivity *details,
                                                       size_t metadata_index,
@@ -3214,6 +4192,9 @@ bool pio_detailed_connectivity_external_identifier_at(const PioDetailedConnectiv
 
 /**
  * Read one string property from a component metadata record.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_component_property_at(const PioDetailedConnectivity *details,
                                                      size_t metadata_index,
@@ -3223,6 +4204,9 @@ bool pio_detailed_connectivity_component_property_at(const PioDetailedConnectivi
 
 /**
  * Read one PowSybl subnetwork by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_subnetwork_at(const PioDetailedConnectivity *details,
                                              size_t index,
@@ -3231,6 +4215,9 @@ bool pio_detailed_connectivity_subnetwork_at(const PioDetailedConnectivity *deta
 
 /**
  * Read one component identity contained by a PowSybl subnetwork.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_subnetwork_component_at(const PioDetailedConnectivity *details,
                                                        size_t subnetwork_index,
@@ -3240,6 +4227,9 @@ bool pio_detailed_connectivity_subnetwork_component_at(const PioDetailedConnecti
 
 /**
  * Read one substation by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_substation_at(const PioDetailedConnectivity *details,
                                              size_t index,
@@ -3248,6 +4238,9 @@ bool pio_detailed_connectivity_substation_at(const PioDetailedConnectivity *deta
 
 /**
  * Read one geographical tag of a substation.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_substation_geographical_tag_at(const PioDetailedConnectivity *details,
                                                               size_t substation_index,
@@ -3257,6 +4250,9 @@ bool pio_detailed_connectivity_substation_geographical_tag_at(const PioDetailedC
 
 /**
  * Read one voltage level by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_voltage_level_at(const PioDetailedConnectivity *details,
                                                 size_t index,
@@ -3265,6 +4261,9 @@ bool pio_detailed_connectivity_voltage_level_at(const PioDetailedConnectivity *d
 
 /**
  * Read one balanced bus ID assigned to a voltage level.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_voltage_level_bus_at(const PioDetailedConnectivity *details,
                                                     size_t voltage_level_index,
@@ -3274,6 +4273,9 @@ bool pio_detailed_connectivity_voltage_level_bus_at(const PioDetailedConnectivit
 
 /**
  * Read one configured bus breaker bus by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_bus_breaker_bus_at(const PioDetailedConnectivity *details,
                                                   size_t index,
@@ -3282,6 +4284,9 @@ bool pio_detailed_connectivity_bus_breaker_bus_at(const PioDetailedConnectivity 
 
 /**
  * Read one calculated bus by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_calculated_bus_at(const PioDetailedConnectivity *details,
                                                  size_t index,
@@ -3290,6 +4295,9 @@ bool pio_detailed_connectivity_calculated_bus_at(const PioDetailedConnectivity *
 
 /**
  * Read one node identity from a calculated bus.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_calculated_bus_node_at(const PioDetailedConnectivity *details,
                                                       size_t calculated_bus_index,
@@ -3299,6 +4307,9 @@ bool pio_detailed_connectivity_calculated_bus_node_at(const PioDetailedConnectiv
 
 /**
  * Read one connectivity node by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_node_at(const PioDetailedConnectivity *details,
                                        size_t index,
@@ -3307,6 +4318,9 @@ bool pio_detailed_connectivity_node_at(const PioDetailedConnectivity *details,
 
 /**
  * Read one busbar section by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_busbar_section_at(const PioDetailedConnectivity *details,
                                                  size_t index,
@@ -3315,6 +4329,9 @@ bool pio_detailed_connectivity_busbar_section_at(const PioDetailedConnectivity *
 
 /**
  * Read one CIM junction by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_junction_at(const PioDetailedConnectivity *details,
                                            size_t index,
@@ -3323,6 +4340,9 @@ bool pio_detailed_connectivity_junction_at(const PioDetailedConnectivity *detail
 
 /**
  * Read one AC terminal by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_terminal_at(const PioDetailedConnectivity *details,
                                            size_t index,
@@ -3331,6 +4351,9 @@ bool pio_detailed_connectivity_terminal_at(const PioDetailedConnectivity *detail
 
 /**
  * Read one detailed topology switch by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_switch_at(const PioDetailedConnectivity *details,
                                          size_t index,
@@ -3339,6 +4362,9 @@ bool pio_detailed_connectivity_switch_at(const PioDetailedConnectivity *details,
 
 /**
  * Read one node breaker internal connection by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_internal_connection_at(const PioDetailedConnectivity *details,
                                                       size_t index,
@@ -3347,6 +4373,9 @@ bool pio_detailed_connectivity_internal_connection_at(const PioDetailedConnectiv
 
 /**
  * Read one operational limit group by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_operational_limit_group_at(const PioDetailedConnectivity *details,
                                                           size_t index,
@@ -3355,6 +4384,9 @@ bool pio_detailed_connectivity_operational_limit_group_at(const PioDetailedConne
 
 /**
  * Read one string property from an operational limit group.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_operational_limit_group_property_at(const PioDetailedConnectivity *details,
                                                                    size_t group_index,
@@ -3364,6 +4396,9 @@ bool pio_detailed_connectivity_operational_limit_group_property_at(const PioDeta
 
 /**
  * Read one temporary current, active power, or apparent power limit.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_temporary_limit_at(const PioDetailedConnectivity *details,
                                                   size_t group_index,
@@ -3375,6 +4410,9 @@ bool pio_detailed_connectivity_temporary_limit_at(const PioDetailedConnectivity 
 
 /**
  * Read one PowSybl boundary line by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_boundary_line_at(const PioDetailedConnectivity *details,
                                                 size_t index,
@@ -3383,6 +4421,9 @@ bool pio_detailed_connectivity_boundary_line_at(const PioDetailedConnectivity *d
 
 /**
  * Read one property on a boundary line generation reactive limit record.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_boundary_line_reactive_limit_property_at(const PioDetailedConnectivity *details,
                                                                         size_t boundary_line_index,
@@ -3392,6 +4433,9 @@ bool pio_detailed_connectivity_boundary_line_reactive_limit_property_at(const Pi
 
 /**
  * Read one point from a boundary line generation reactive capability curve.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_boundary_line_reactive_capability_point_at(const PioDetailedConnectivity *details,
                                                                           size_t boundary_line_index,
@@ -3401,6 +4445,9 @@ bool pio_detailed_connectivity_boundary_line_reactive_capability_point_at(const 
 
 /**
  * Read one property from one boundary line reactive capability curve point.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_boundary_line_reactive_capability_point_property_at(const PioDetailedConnectivity *details,
                                                                                    size_t boundary_line_index,
@@ -3411,6 +4458,9 @@ bool pio_detailed_connectivity_boundary_line_reactive_capability_point_property_
 
 /**
  * Read one PowSybl tie line by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_tie_line_at(const PioDetailedConnectivity *details,
                                            size_t index,
@@ -3419,6 +4469,9 @@ bool pio_detailed_connectivity_tie_line_at(const PioDetailedConnectivity *detail
 
 /**
  * Read one transformer tap changer by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_tap_changer_at(const PioDetailedConnectivity *details,
                                               size_t index,
@@ -3427,6 +4480,9 @@ bool pio_detailed_connectivity_tap_changer_at(const PioDetailedConnectivity *det
 
 /**
  * Read one transformer tap changer step by zero based position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_tap_changer_step_at(const PioDetailedConnectivity *details,
                                                    size_t tap_changer_index,
@@ -3436,6 +4492,9 @@ bool pio_detailed_connectivity_tap_changer_step_at(const PioDetailedConnectivity
 
 /**
  * Read reactive limits retained for one equipment record.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_equipment_reactive_limits_at(const PioDetailedConnectivity *details,
                                                             size_t index,
@@ -3444,6 +4503,9 @@ bool pio_detailed_connectivity_equipment_reactive_limits_at(const PioDetailedCon
 
 /**
  * Read one property from an equipment reactive limit record.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_equipment_reactive_limit_property_at(const PioDetailedConnectivity *details,
                                                                     size_t equipment_index,
@@ -3453,6 +4515,9 @@ bool pio_detailed_connectivity_equipment_reactive_limit_property_at(const PioDet
 
 /**
  * Read one point from an equipment reactive capability curve.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_equipment_reactive_capability_point_at(const PioDetailedConnectivity *details,
                                                                       size_t equipment_index,
@@ -3462,6 +4527,9 @@ bool pio_detailed_connectivity_equipment_reactive_capability_point_at(const PioD
 
 /**
  * Read one property from an equipment reactive capability curve point.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_equipment_reactive_capability_point_property_at(const PioDetailedConnectivity *details,
                                                                                size_t equipment_index,
@@ -3472,6 +4540,9 @@ bool pio_detailed_connectivity_equipment_reactive_capability_point_property_at(c
 
 /**
  * Read one DC converter unit by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_dc_converter_unit_at(const PioDetailedConnectivity *details,
                                                     size_t index,
@@ -3480,6 +4551,9 @@ bool pio_detailed_connectivity_dc_converter_unit_at(const PioDetailedConnectivit
 
 /**
  * Read one DC topological node by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_dc_topological_node_at(const PioDetailedConnectivity *details,
                                                       size_t index,
@@ -3488,6 +4562,9 @@ bool pio_detailed_connectivity_dc_topological_node_at(const PioDetailedConnectiv
 
 /**
  * Read one physical DC node by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_dc_node_at(const PioDetailedConnectivity *details,
                                           size_t index,
@@ -3496,6 +4573,9 @@ bool pio_detailed_connectivity_dc_node_at(const PioDetailedConnectivity *details
 
 /**
  * Read one DC ground by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_dc_ground_at(const PioDetailedConnectivity *details,
                                             size_t index,
@@ -3504,6 +4584,9 @@ bool pio_detailed_connectivity_dc_ground_at(const PioDetailedConnectivity *detai
 
 /**
  * Read one DC busbar by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_dc_busbar_at(const PioDetailedConnectivity *details,
                                             size_t index,
@@ -3512,6 +4595,9 @@ bool pio_detailed_connectivity_dc_busbar_at(const PioDetailedConnectivity *detai
 
 /**
  * Read one DC line by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_dc_line_at(const PioDetailedConnectivity *details,
                                           size_t index,
@@ -3520,6 +4606,9 @@ bool pio_detailed_connectivity_dc_line_at(const PioDetailedConnectivity *details
 
 /**
  * Read one DC series device by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_dc_series_device_at(const PioDetailedConnectivity *details,
                                                    size_t index,
@@ -3528,6 +4617,9 @@ bool pio_detailed_connectivity_dc_series_device_at(const PioDetailedConnectivity
 
 /**
  * Read one DC switch by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_dc_switch_at(const PioDetailedConnectivity *details,
                                             size_t index,
@@ -3536,6 +4628,9 @@ bool pio_detailed_connectivity_dc_switch_at(const PioDetailedConnectivity *detai
 
 /**
  * Read one voltage source converter by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_voltage_source_converter_at(const PioDetailedConnectivity *details,
                                                            size_t index,
@@ -3544,6 +4639,9 @@ bool pio_detailed_connectivity_voltage_source_converter_at(const PioDetailedConn
 
 /**
  * Read one line commutated converter by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_line_commutated_converter_at(const PioDetailedConnectivity *details,
                                                             size_t index,
@@ -3552,6 +4650,9 @@ bool pio_detailed_connectivity_line_commutated_converter_at(const PioDetailedCon
 
 /**
  * Read one DC voltage droop curve segment from a voltage source converter.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_voltage_source_converter_droop_curve_segment_at(const PioDetailedConnectivity *details,
                                                                                size_t converter_index,
@@ -3561,6 +4662,9 @@ bool pio_detailed_connectivity_voltage_source_converter_droop_curve_segment_at(c
 
 /**
  * Read one DC voltage droop curve segment from a line commutated converter.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_line_commutated_converter_droop_curve_segment_at(const PioDetailedConnectivity *details,
                                                                                 size_t converter_index,
@@ -3570,6 +4674,9 @@ bool pio_detailed_connectivity_line_commutated_converter_droop_curve_segment_at(
 
 /**
  * Read one property from a voltage source converter reactive limit record.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_voltage_source_converter_reactive_limit_property_at(const PioDetailedConnectivity *details,
                                                                                    size_t converter_index,
@@ -3579,6 +4686,9 @@ bool pio_detailed_connectivity_voltage_source_converter_reactive_limit_property_
 
 /**
  * Read one point from a voltage source converter reactive capability curve.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_voltage_source_converter_reactive_capability_point_at(const PioDetailedConnectivity *details,
                                                                                      size_t converter_index,
@@ -3588,6 +4698,9 @@ bool pio_detailed_connectivity_voltage_source_converter_reactive_capability_poin
 
 /**
  * Read one property from a voltage source converter reactive capability point.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_detailed_connectivity_voltage_source_converter_reactive_capability_point_property_at(const PioDetailedConnectivity *details,
                                                                                               size_t converter_index,
@@ -3596,34 +4709,104 @@ bool pio_detailed_connectivity_voltage_source_converter_reactive_capability_poin
                                                                                               PioStringPropertyView *output,
                                                                                               PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioDetailedConnectivity *pio_detailed_connectivity_retain(const PioDetailedConnectivity *details);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_detailed_connectivity_release(PioDetailedConnectivity *details);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_balanced_network_bus_count(const PioBalancedNetwork *network);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_balanced_network_branch_count(const PioBalancedNetwork *network);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_balanced_network_load_count(const PioBalancedNetwork *network);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_balanced_network_shunt_count(const PioBalancedNetwork *network);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_balanced_network_static_var_compensator_count(const PioBalancedNetwork *network);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_balanced_network_generator_count(const PioBalancedNetwork *network);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_balanced_network_storage_count(const PioBalancedNetwork *network);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_balanced_network_switch_count(const PioBalancedNetwork *network);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_balanced_network_hvdc_count(const PioBalancedNetwork *network);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_balanced_network_three_winding_transformer_count(const PioBalancedNetwork *network);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_balanced_network_area_count(const PioBalancedNetwork *network);
 
 /**
  * Read one bus by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_balanced_network_bus_at(const PioBalancedNetwork *network,
                                  size_t index,
@@ -3632,6 +4815,9 @@ bool pio_balanced_network_bus_at(const PioBalancedNetwork *network,
 
 /**
  * Read one load by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_balanced_network_load_at(const PioBalancedNetwork *network,
                                   size_t index,
@@ -3640,6 +4826,9 @@ bool pio_balanced_network_load_at(const PioBalancedNetwork *network,
 
 /**
  * Read one shunt by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_balanced_network_shunt_at(const PioBalancedNetwork *network,
                                    size_t index,
@@ -3648,6 +4837,9 @@ bool pio_balanced_network_shunt_at(const PioBalancedNetwork *network,
 
 /**
  * Read one switched shunt block by zero based position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_balanced_network_shunt_block_at(const PioBalancedNetwork *network,
                                          size_t shunt_index,
@@ -3657,6 +4849,9 @@ bool pio_balanced_network_shunt_block_at(const PioBalancedNetwork *network,
 
 /**
  * Read one static VAR compensator by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_balanced_network_static_var_compensator_at(const PioBalancedNetwork *network,
                                                     size_t index,
@@ -3665,6 +4860,9 @@ bool pio_balanced_network_static_var_compensator_at(const PioBalancedNetwork *ne
 
 /**
  * Read one branch by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_balanced_network_branch_at(const PioBalancedNetwork *network,
                                     size_t index,
@@ -3673,6 +4871,9 @@ bool pio_balanced_network_branch_at(const PioBalancedNetwork *network,
 
 /**
  * Read one point from an explicitly stored balanced branch route.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_balanced_network_branch_route_point_at(const PioBalancedNetwork *network,
                                                 size_t branch_index,
@@ -3682,6 +4883,9 @@ bool pio_balanced_network_branch_route_point_at(const PioBalancedNetwork *networ
 
 /**
  * Read one additional named branch MVA rating.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_balanced_network_branch_rating_at(const PioBalancedNetwork *network,
                                            size_t branch_index,
@@ -3691,6 +4895,9 @@ bool pio_balanced_network_branch_rating_at(const PioBalancedNetwork *network,
 
 /**
  * Read one generator by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_balanced_network_generator_at(const PioBalancedNetwork *network,
                                        size_t index,
@@ -3699,6 +4906,9 @@ bool pio_balanced_network_generator_at(const PioBalancedNetwork *network,
 
 /**
  * Read one named generator capability or ramp field.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_balanced_network_generator_capability_at(const PioBalancedNetwork *network,
                                                   size_t generator_index,
@@ -3708,6 +4918,9 @@ bool pio_balanced_network_generator_capability_at(const PioBalancedNetwork *netw
 
 /**
  * Read one storage element by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_balanced_network_storage_at(const PioBalancedNetwork *network,
                                      size_t index,
@@ -3716,6 +4929,9 @@ bool pio_balanced_network_storage_at(const PioBalancedNetwork *network,
 
 /**
  * Read one transmission switch by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_balanced_network_switch_at(const PioBalancedNetwork *network,
                                     size_t index,
@@ -3724,6 +4940,9 @@ bool pio_balanced_network_switch_at(const PioBalancedNetwork *network,
 
 /**
  * Read one HVDC line by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_balanced_network_hvdc_at(const PioBalancedNetwork *network,
                                   size_t index,
@@ -3732,6 +4951,9 @@ bool pio_balanced_network_hvdc_at(const PioBalancedNetwork *network,
 
 /**
  * Read one three winding transformer by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_balanced_network_three_winding_transformer_at(const PioBalancedNetwork *network,
                                                        size_t index,
@@ -3740,6 +4962,9 @@ bool pio_balanced_network_three_winding_transformer_at(const PioBalancedNetwork 
 
 /**
  * Read one winding of a three winding transformer.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_balanced_network_three_winding_transformer_winding_at(const PioBalancedNetwork *network,
                                                                size_t transformer_index,
@@ -3749,6 +4974,9 @@ bool pio_balanced_network_three_winding_transformer_winding_at(const PioBalanced
 
 /**
  * Read one pairwise impedance of a three winding transformer.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_balanced_network_three_winding_transformer_impedance_at(const PioBalancedNetwork *network,
                                                                  size_t transformer_index,
@@ -3758,26 +4986,64 @@ bool pio_balanced_network_three_winding_transformer_impedance_at(const PioBalanc
 
 /**
  * Read one control area by zero based table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_balanced_network_area_at(const PioBalancedNetwork *network,
                                   size_t index,
                                   PioBalancedAreaView *output,
                                   PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioBalancedNetwork *pio_balanced_network_retain(const PioBalancedNetwork *network);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_balanced_network_release(PioBalancedNetwork *network);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioStringView pio_multiconductor_network_name(const PioMulticonductorNetwork *network);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_has_name(const PioMulticonductorNetwork *network);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioStringView pio_multiconductor_network_source_format(const PioMulticonductorNetwork *network);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_has_source_format(const PioMulticonductorNetwork *network);
 
 /**
  * Read the network coordinate metadata, including absence through `has_geo`.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_multiconductor_network_geo(const PioMulticonductorNetwork *network,
                                     PioMulticonductorGeoView *output,
@@ -3786,134 +5052,260 @@ bool pio_multiconductor_network_geo(const PioMulticonductorNetwork *network,
 /**
  * Read exact table lengths. Defaulted source fields and arbitrary extension
  * maps are retained internally and are not separate domain tables.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_multiconductor_network_counts(const PioMulticonductorNetwork *network,
                                        PioMulticonductorNetworkCountsView *output,
                                        PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 double pio_multiconductor_network_base_frequency_hz(const PioMulticonductorNetwork *network);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_multiconductor_network_bus_count(const PioMulticonductorNetwork *network);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_multiconductor_network_line_count(const PioMulticonductorNetwork *network);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_multiconductor_network_load_count(const PioMulticonductorNetwork *network);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_multiconductor_network_generator_count(const PioMulticonductorNetwork *network);
 
 /**
  * Read one multiconductor bus by zero based table position. Borrowed strings
  * and numeric spans remain valid while the network handle is alive.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_multiconductor_network_bus_at(const PioMulticonductorNetwork *network,
                                        size_t index,
                                        PioMulticonductorBusView *output,
                                        PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_bus_terminal_at(const PioMulticonductorNetwork *network,
                                                 size_t bus_index,
                                                 size_t terminal_index,
                                                 PioStringView *output,
                                                 PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_bus_grounded_terminal_at(const PioMulticonductorNetwork *network,
                                                          size_t bus_index,
                                                          size_t terminal_index,
                                                          PioStringView *output,
                                                          PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_line_code_at(const PioMulticonductorNetwork *network,
                                              size_t index,
                                              PioMulticonductorLineCodeView *output,
                                              PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_line_code_resistance_matrix_row_at(const PioMulticonductorNetwork *network,
                                                                    size_t line_code_index,
                                                                    size_t row_index,
                                                                    PioF64View *output,
                                                                    PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_line_code_reactance_matrix_row_at(const PioMulticonductorNetwork *network,
                                                                   size_t line_code_index,
                                                                   size_t row_index,
                                                                   PioF64View *output,
                                                                   PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_line_code_conductance_from_matrix_row_at(const PioMulticonductorNetwork *network,
                                                                          size_t line_code_index,
                                                                          size_t row_index,
                                                                          PioF64View *output,
                                                                          PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_line_code_susceptance_from_matrix_row_at(const PioMulticonductorNetwork *network,
                                                                          size_t line_code_index,
                                                                          size_t row_index,
                                                                          PioF64View *output,
                                                                          PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_line_code_conductance_to_matrix_row_at(const PioMulticonductorNetwork *network,
                                                                        size_t line_code_index,
                                                                        size_t row_index,
                                                                        PioF64View *output,
                                                                        PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_line_code_susceptance_to_matrix_row_at(const PioMulticonductorNetwork *network,
                                                                        size_t line_code_index,
                                                                        size_t row_index,
                                                                        PioF64View *output,
                                                                        PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_line_at(const PioMulticonductorNetwork *network,
                                         size_t index,
                                         PioMulticonductorLineView *output,
                                         PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_line_terminal_from_at(const PioMulticonductorNetwork *network,
                                                       size_t line_index,
                                                       size_t terminal_index,
                                                       PioStringView *output,
                                                       PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_line_terminal_to_at(const PioMulticonductorNetwork *network,
                                                     size_t line_index,
                                                     size_t terminal_index,
                                                     PioStringView *output,
                                                     PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_line_route_point_at(const PioMulticonductorNetwork *network,
                                                     size_t line_index,
                                                     size_t point_index,
                                                     PioMulticonductorLocationView *output,
                                                     PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_switch_at(const PioMulticonductorNetwork *network,
                                           size_t index,
                                           PioMulticonductorSwitchView *output,
                                           PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_switch_terminal_from_at(const PioMulticonductorNetwork *network,
                                                         size_t switch_index,
                                                         size_t terminal_index,
                                                         PioStringView *output,
                                                         PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_switch_terminal_to_at(const PioMulticonductorNetwork *network,
                                                       size_t switch_index,
                                                       size_t terminal_index,
                                                       PioStringView *output,
                                                       PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_transformer_at(const PioMulticonductorNetwork *network,
                                                size_t index,
                                                PioMulticonductorTransformerView *output,
                                                PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_transformer_winding_at(const PioMulticonductorNetwork *network,
                                                        size_t transformer_index,
                                                        size_t winding_index,
                                                        PioMulticonductorTransformerWindingView *output,
                                                        PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_transformer_winding_terminal_at(const PioMulticonductorNetwork *network,
                                                                 size_t transformer_index,
                                                                 size_t winding_index,
@@ -3921,116 +5313,226 @@ bool pio_multiconductor_network_transformer_winding_terminal_at(const PioMultico
                                                                 PioStringView *output,
                                                                 PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_load_at(const PioMulticonductorNetwork *network,
                                         size_t index,
                                         PioMulticonductorLoadView *output,
                                         PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_load_terminal_at(const PioMulticonductorNetwork *network,
                                                  size_t load_index,
                                                  size_t terminal_index,
                                                  PioStringView *output,
                                                  PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_generator_at(const PioMulticonductorNetwork *network,
                                              size_t index,
                                              PioMulticonductorGeneratorView *output,
                                              PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_generator_terminal_at(const PioMulticonductorNetwork *network,
                                                       size_t generator_index,
                                                       size_t terminal_index,
                                                       PioStringView *output,
                                                       PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_inverter_based_resource_at(const PioMulticonductorNetwork *network,
                                                            size_t index,
                                                            PioInverterBasedResourceView *output,
                                                            PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_inverter_based_resource_terminal_at(const PioMulticonductorNetwork *network,
                                                                     size_t resource_index,
                                                                     size_t terminal_index,
                                                                     PioStringView *output,
                                                                     PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_control_profile_at(const PioMulticonductorNetwork *network,
                                                    size_t index,
                                                    PioControlProfileView *output,
                                                    PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_shunt_at(const PioMulticonductorNetwork *network,
                                          size_t index,
                                          PioMulticonductorShuntView *output,
                                          PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_shunt_terminal_at(const PioMulticonductorNetwork *network,
                                                   size_t shunt_index,
                                                   size_t terminal_index,
                                                   PioStringView *output,
                                                   PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_shunt_conductance_matrix_row_at(const PioMulticonductorNetwork *network,
                                                                 size_t shunt_index,
                                                                 size_t row_index,
                                                                 PioF64View *output,
                                                                 PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_shunt_susceptance_matrix_row_at(const PioMulticonductorNetwork *network,
                                                                 size_t shunt_index,
                                                                 size_t row_index,
                                                                 PioF64View *output,
                                                                 PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_capacitor_at(const PioMulticonductorNetwork *network,
                                              size_t index,
                                              PioMulticonductorCapacitorView *output,
                                              PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_capacitor_terminal_at(const PioMulticonductorNetwork *network,
                                                       size_t capacitor_index,
                                                       size_t terminal_index,
                                                       PioStringView *output,
                                                       PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_voltage_source_at(const PioMulticonductorNetwork *network,
                                                   size_t index,
                                                   PioVoltageSourceView *output,
                                                   PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_voltage_source_terminal_at(const PioMulticonductorNetwork *network,
                                                            size_t source_index,
                                                            size_t terminal_index,
                                                            PioStringView *output,
                                                            PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_untyped_object_at(const PioMulticonductorNetwork *network,
                                                   size_t index,
                                                   PioMulticonductorUntypedObjectView *output,
                                                   PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_untyped_object_property_at(const PioMulticonductorNetwork *network,
                                                            size_t object_index,
                                                            size_t property_index,
                                                            PioMulticonductorUntypedPropertyView *output,
                                                            PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_command_at(const PioMulticonductorNetwork *network,
                                            size_t index,
                                            PioMulticonductorCommandView *output,
                                            PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_multiconductor_network_option_at(const PioMulticonductorNetwork *network,
                                           size_t index,
                                           PioStringPropertyView *output,
                                           PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioMulticonductorNetwork *pio_multiconductor_network_retain(const PioMulticonductorNetwork *network);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_multiconductor_network_release(PioMulticonductorNetwork *network);
 
 /**
  * Construct a stable component identity.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioComponentId *pio_component_id_new(const char *component_type,
                                      size_t component_type_len,
@@ -4038,120 +5540,309 @@ PioComponentId *pio_component_id_new(const char *component_type,
                                      size_t local_id_len,
                                      PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioStringView pio_component_id_type(const PioComponentId *component);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioStringView pio_component_id_local_id(const PioComponentId *component);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioComponentId *pio_component_id_retain(const PioComponentId *component);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_component_id_release(PioComponentId *component);
 
 PioActivePower *pio_active_power_from_watts(double value);
 
 PioActivePower *pio_active_power_from_megawatts(double value);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 double pio_active_power_value(const PioActivePower *power);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioStringView pio_active_power_unit(const PioActivePower *power);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioActivePower *pio_active_power_retain(const PioActivePower *power);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_active_power_release(PioActivePower *power);
 
 PioReactivePower *pio_reactive_power_from_vars(double value);
 
 PioReactivePower *pio_reactive_power_from_megavars(double value);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 double pio_reactive_power_value(const PioReactivePower *power);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioStringView pio_reactive_power_unit(const PioReactivePower *power);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioReactivePower *pio_reactive_power_retain(const PioReactivePower *power);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_reactive_power_release(PioReactivePower *power);
 
 PioApparentPower *pio_apparent_power_from_volt_amperes(double value);
 
 PioApparentPower *pio_apparent_power_from_megavolt_amperes(double value);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 double pio_apparent_power_value(const PioApparentPower *power);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioStringView pio_apparent_power_unit(const PioApparentPower *power);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioApparentPower *pio_apparent_power_retain(const PioApparentPower *power);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_apparent_power_release(PioApparentPower *power);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioOperatingPointUpdate *pio_operating_point_update_set_load_active_power(const PioComponentId *load,
                                                                           const char *terminal,
                                                                           size_t terminal_len,
                                                                           const PioActivePower *power,
                                                                           PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioOperatingPointUpdate *pio_operating_point_update_set_load_reactive_power(const PioComponentId *load,
                                                                             const char *terminal,
                                                                             size_t terminal_len,
                                                                             const PioReactivePower *power,
                                                                             PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioOperatingPointUpdate *pio_operating_point_update_set_generator_active_power(const PioComponentId *generator,
                                                                                const char *terminal,
                                                                                size_t terminal_len,
                                                                                const PioActivePower *power,
                                                                                PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioOperatingPointUpdate *pio_operating_point_update_set_generator_reactive_power(const PioComponentId *generator,
                                                                                  const char *terminal,
                                                                                  size_t terminal_len,
                                                                                  const PioReactivePower *power,
                                                                                  PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioOperatingPointUpdate *pio_operating_point_update_set_generator_voltage_magnitude(const PioComponentId *generator,
                                                                                     double voltage_magnitude_per_unit,
                                                                                     PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioOperatingPointUpdate *pio_operating_point_update_set_generator_in_service(const PioComponentId *generator,
                                                                              bool in_service,
                                                                              PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioOperatingPointUpdate *pio_operating_point_update_set_branch_in_service(const PioComponentId *branch,
                                                                           bool in_service,
                                                                           PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioOperatingPointUpdate *pio_operating_point_update_set_transformer_tap_ratio(const PioComponentId *transformer,
                                                                               double tap_ratio,
                                                                               PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioOperatingPointUpdate *pio_operating_point_update_set_transformer_phase_shift_degrees(const PioComponentId *transformer,
                                                                                         double phase_shift_degrees,
                                                                                         PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioOperatingPointUpdate *pio_operating_point_update_set_switch_closed(const PioComponentId *switch_id,
                                                                       bool closed,
                                                                       PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioNetworkUpdate *pio_network_update_set_branch_thermal_rating(const PioComponentId *branch,
                                                                const char *terminal,
                                                                size_t terminal_len,
                                                                const PioApparentPower *rating,
                                                                PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioCalculationUpdate *pio_calculation_update_from_operating_point(const PioOperatingPointUpdate *update,
                                                                   PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioCalculationUpdate *pio_calculation_update_from_network(const PioNetworkUpdate *update,
                                                           PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioOperatingPointUpdate *pio_operating_point_update_retain(const PioOperatingPointUpdate *update);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_operating_point_update_release(PioOperatingPointUpdate *update);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioNetworkUpdate *pio_network_update_retain(const PioNetworkUpdate *update);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_network_update_release(PioNetworkUpdate *update);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioCalculationUpdate *pio_calculation_update_retain(const PioCalculationUpdate *update);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_calculation_update_release(PioCalculationUpdate *update);
 
 /**
@@ -4163,6 +5854,10 @@ void pio_calculation_update_release(PioCalculationUpdate *update);
  * source map views) are invalidated by a successful call and must be read
  * again. The caller must hold exclusive access to `module` for the duration of
  * the call: no concurrent call of any kind on this handle, including retain.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The module handle requires exclusive access, including exclusion of retain.
  */
 PioUpdateReport *pio_apply_updates(PioModule *module,
                                    const PioCalculationUpdate *const *updates,
@@ -4174,6 +5869,10 @@ PioUpdateReport *pio_apply_updates(PioModule *module,
  *
  * The same view invalidation and exclusivity rules as `pio_apply_updates`
  * apply.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The module handle requires exclusive access, including exclusion of retain.
  */
 PioUpdateReport *pio_apply_bus_load_active_power(PioModule *module,
                                                  size_t bus_id,
@@ -4182,30 +5881,87 @@ PioUpdateReport *pio_apply_bus_load_active_power(PioModule *module,
                                                  size_t allocation_len,
                                                  PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_update_report_len(const PioUpdateReport *report);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_update_report_connectivity_changed(const PioUpdateReport *report);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioUpdateChange *pio_update_report_change(const PioUpdateReport *report,
                                           size_t index,
                                           PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioComponentId *pio_update_change_component_id(const PioUpdateChange *change);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioStringView pio_update_change_field(const PioUpdateChange *change);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioStringView pio_update_change_terminal(const PioUpdateChange *change);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioUpdateReport *pio_update_report_retain(const PioUpdateReport *report);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_update_report_release(PioUpdateReport *report);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioUpdateChange *pio_update_change_retain(const PioUpdateChange *change);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_update_change_release(PioUpdateChange *change);
 
 /**
  * Emit one module as a grid exchange format.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioEmitResult *pio_emit(const PioModule *module,
                         const char *format,
@@ -4215,61 +5971,145 @@ PioEmitResult *pio_emit(const PioModule *module,
 
 /**
  * Serialize one module as PowerIO IR.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioEmitResult *pio_module_serialize(const PioModule *module,
                                     const PioDestination *destination,
                                     PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioStringView pio_emit_result_layout(const PioEmitResult *result);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioStringView pio_emit_result_fidelity(const PioEmitResult *result);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_emit_result_artifact_count(const PioEmitResult *result);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioArtifact *pio_emit_result_artifact(const PioEmitResult *result, size_t index, PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioDiagnostics *pio_emit_result_diagnostics(const PioEmitResult *result);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioEmitResult *pio_emit_result_retain(const PioEmitResult *result);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_emit_result_release(PioEmitResult *result);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioStringView pio_artifact_name(const PioArtifact *artifact);
 
 /**
  * Return emitted memory bytes. A path destination has no memory bytes and
  * returns an empty view.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioByteView pio_artifact_bytes(const PioArtifact *artifact);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioArtifact *pio_artifact_retain(const PioArtifact *artifact);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_artifact_release(PioArtifact *artifact);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioStringView pio_calculation_solution_termination(const PioCalculationSolution *solution);
 
 /**
  * Return an OPF or SCUC objective. SOCWR reports a lower bound through
  * pio_socwr_opf_solution_get_objective_lower_bound instead.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 bool pio_calculation_solution_get_objective(const PioCalculationSolution *solution,
                                             double *out_objective);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 bool pio_socwr_opf_solution_get_objective_lower_bound(const PioCalculationSolution *solution,
                                                       double *out_lower_bound);
 
 /**
  * Copy one named solution quantity into an independently owned vector.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioVector *pio_calculation_solution_get_values(const PioCalculationSolution *solution,
                                                const char *quantity,
                                                size_t quantity_len,
                                                PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_ac_scuc_solution_time_count(const PioCalculationSolution *solution);
 
 /**
  * Copy one AC SCUC output row for one time position into an owned vector.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioVector *pio_ac_scuc_solution_get_values_at(const PioCalculationSolution *solution,
                                               const char *quantity,
@@ -4287,6 +6127,9 @@ PioVector *pio_ac_scuc_solution_get_values_at(const PioCalculationSolution *solu
  * order; the branch axis is every in service, non self loop branch in table
  * order, followed by three winding transformer windings, less any skipped
  * branch. Release with `pio_dc_operators_release`.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioDcOperators *pio_calc_dc_operators(const PioBalancedNetwork *network,
                                       const char *formula,
@@ -4296,16 +6139,25 @@ PioDcOperators *pio_calc_dc_operators(const PioBalancedNetwork *network,
 
 /**
  * The length of the bus axis.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 size_t pio_dc_operators_n_buses(const PioDcOperators *operators);
 
 /**
  * The length of the branch axis.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 size_t pio_dc_operators_n_branches(const PioDcOperators *operators);
 
 /**
  * Bus axis row to source bus id. Borrowed from the handle.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioSizeView pio_dc_operators_bus_ids(const PioDcOperators *operators);
 
@@ -4313,12 +6165,18 @@ PioSizeView pio_dc_operators_bus_ids(const PioDcOperators *operators);
  * Branch axis row to the analysis branch row it represents: the position in
  * the network's branch table, with three winding transformer windings after
  * the branches. Borrowed from the handle.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioSizeView pio_dc_operators_branch_rows(const PioDcOperators *operators);
 
 /**
  * Analysis branch rows dropped under `skip_zero_impedance`, in table order.
  * Borrowed from the handle.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioSizeView pio_dc_operators_skipped_branch_rows(const PioDcOperators *operators);
 
@@ -4326,46 +6184,70 @@ PioSizeView pio_dc_operators_skipped_branch_rows(const PioDcOperators *operators
  * The stable identity of branch axis row `index`: the source uid when one
  * exists, else `branches:<row>`. An index past the branch axis returns an
  * empty view. Borrowed from the handle.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioStringView pio_dc_operators_branch_identity(const PioDcOperators *operators, size_t index);
 
 /**
  * The incidence matrix `A`, branches by buses, over the handle's axes.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioSparseMatrix *pio_dc_operators_incidence_matrix(const PioDcOperators *operators,
                                                    PioError **error);
 
 /**
  * The bus susceptance matrix `B = A' diag(b) A`, buses by buses.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioSparseMatrix *pio_dc_operators_bus_susceptance_matrix(const PioDcOperators *operators,
                                                          PioError **error);
 
 /**
  * The branch flow matrix `Bf = diag(b) A`, branches by buses.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioSparseMatrix *pio_dc_operators_branch_flow_matrix(const PioDcOperators *operators,
                                                      PioError **error);
 
 /**
  * The per branch susceptances `b` over the branch axis.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioVector *pio_dc_operators_branch_susceptances(const PioDcOperators *operators, PioError **error);
 
 /**
  * The per branch phase shift injection `b .* shift`.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioVector *pio_dc_operators_branch_phase_shift_injection(const PioDcOperators *operators,
                                                          PioError **error);
 
 /**
  * The per bus phase shift injection `A' (b .* shift)`.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioVector *pio_dc_operators_bus_phase_shift_injection(const PioDcOperators *operators,
                                                       PioError **error);
 
 /**
  * DC branch flows for bus voltage angles in radians over the bus axis.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioVector *pio_dc_operators_branch_flow_dc(const PioDcOperators *operators,
                                            const double *voltage_angles,
@@ -4374,46 +6256,96 @@ PioVector *pio_dc_operators_branch_flow_dc(const PioDcOperators *operators,
 
 /**
  * DC bus injections for bus voltage angles in radians over the bus axis.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioVector *pio_dc_operators_bus_injection_dc(const PioDcOperators *operators,
                                              const double *voltage_angles,
                                              size_t voltage_angles_len,
                                              PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioDcOperators *pio_dc_operators_retain(const PioDcOperators *operators);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_dc_operators_release(PioDcOperators *operators);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioSparseMatrix *pio_calc_incidence_matrix(const PioBalancedNetwork *network,
                                            const char *formula,
                                            size_t formula_len,
                                            PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioSparseMatrix *pio_calc_bus_susceptance_matrix(const PioBalancedNetwork *network,
                                                  const char *formula,
                                                  size_t formula_len,
                                                  PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioSparseMatrix *pio_calc_branch_flow_matrix(const PioBalancedNetwork *network,
                                              const char *formula,
                                              size_t formula_len,
                                              PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioVector *pio_calc_branch_susceptances(const PioBalancedNetwork *network,
                                         const char *formula,
                                         size_t formula_len,
                                         PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioVector *pio_calc_branch_phase_shift_injection(const PioBalancedNetwork *network,
                                                  const char *formula,
                                                  size_t formula_len,
                                                  PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioVector *pio_calc_bus_phase_shift_injection(const PioBalancedNetwork *network,
                                               const char *formula,
                                               size_t formula_len,
                                               PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioVector *pio_calc_branch_flow_dc(const PioBalancedNetwork *network,
                                    const char *formula,
                                    size_t formula_len,
@@ -4421,6 +6353,11 @@ PioVector *pio_calc_branch_flow_dc(const PioBalancedNetwork *network,
                                    size_t voltage_angles_len,
                                    PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioVector *pio_calc_bus_injection_dc(const PioBalancedNetwork *network,
                                      const char *formula,
                                      size_t formula_len,
@@ -4428,35 +6365,109 @@ PioVector *pio_calc_bus_injection_dc(const PioBalancedNetwork *network,
                                      size_t voltage_angles_len,
                                      PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_sparse_matrix_rows(const PioSparseMatrix *matrix);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 size_t pio_sparse_matrix_columns(const PioSparseMatrix *matrix);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioSizeView pio_sparse_matrix_row_offsets(const PioSparseMatrix *matrix);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioSizeView pio_sparse_matrix_column_indices(const PioSparseMatrix *matrix);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioF64View pio_sparse_matrix_values(const PioSparseMatrix *matrix);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioSparseMatrix *pio_sparse_matrix_retain(const PioSparseMatrix *matrix);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_sparse_matrix_release(PioSparseMatrix *matrix);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioF64View pio_vector_values(const PioVector *vector);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioVector *pio_vector_retain(const PioVector *vector);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_vector_release(PioVector *vector);
 
 /**
  * Return version information for this ABI and the PowerIO IR serializer/deserializer.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioString *pio_schema_report(PioError **error);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
 PioStringView pio_string_view(const PioString *string);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
 PioString *pio_string_retain(const PioString *string);
 
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
 void pio_string_release(PioString *string);
 
 #ifdef __cplusplus

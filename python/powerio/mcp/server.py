@@ -929,4 +929,5 @@ def diagnostics(powerio_ir: str) -> dict:
 
 def main() -> None:
     """Serve the PowerIO MCP tools over stdio."""
+    sandbox._DEFAULT_ROOT = Path.cwd().resolve(strict=True)
     mcp.run()

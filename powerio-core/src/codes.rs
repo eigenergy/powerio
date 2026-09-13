@@ -53,6 +53,10 @@ crate::diagnostic_codes! {
         "a source buffer changed while it was being acquired", category = Io;
     READ_IO_ALLOCATION_REFUSED = "READ.IO.ALLOCATION_REFUSED", Error,
         "memory for a source buffer could not be reserved", category = Io;
+    REQUEST_SOURCE_INVALID_LIMIT = "REQUEST.SOURCE.INVALID_LIMIT", Error,
+        "the primary source byte limit is invalid", category = Request;
+    READ_IO_PRIMARY_BUDGET = "READ.IO.PRIMARY_BUDGET", Error,
+        "a primary source exceeds its byte limit", category = Io;
     READ_IO_REFERENCE_BUDGET = "READ.IO.REFERENCE_BUDGET", Error,
         "acquiring another referenced file would pass the source acquisition budget", category = Io;
 

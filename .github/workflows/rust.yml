@@ -422,3 +422,13 @@ jobs:
       run: |
         cargo test -p powerio-capi --features dist --verbose
         bash scripts/ci-clippy.sh capi-dist
+
+  core-freebsd:
+    name: Core (FreeBSD)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: x86_64-unknown-freebsd
+    - run: cargo check -p powerio-core --target x86_64-unknown-freebsd --locked

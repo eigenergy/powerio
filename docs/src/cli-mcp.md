@@ -128,6 +128,12 @@ powerio-mcp                  # stdio transport
 ```
 
 The server accepts exactly one input source: serialized PowerIO IR, a grid
-exchange path, or grid exchange content in memory. Filesystem access is off
-unless `POWERIO_MCP_ALLOWED_ROOTS` names the directories the server may read,
-and remote URI schemes are rejected.
+exchange path, or grid exchange content in memory. Filesystem reads and writes default
+to the directory captured at server startup. `POWERIO_MCP_ALLOWED_ROOTS`
+selects explicit directories instead. Remote URI schemes are rejected.
+
+Primary files default to a 64 MiB acquisition limit, checked before reserving
+memory. Set `POWERIO_MAX_PRIMARY_BYTES` in the host environment to a positive
+decimal byte count for larger inputs. This setting also applies to ordinary
+Rust, C, Python, and Julia path-based source acquisition. Referenced files
+retain their separate cumulative limit.

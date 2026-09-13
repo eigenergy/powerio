@@ -236,7 +236,9 @@ and serialized PowerIO modules through the `powerio_ir` field. Electrical
 inputs and outputs stay PowerIO types and PowerIO IR; the server does not
 define another network, calculation, update, or solution schema.
 
-Filesystem access is off unless `POWERIO_MCP_ALLOWED_ROOTS` lists the
-directories the server may read, and remote URI schemes are rejected. Host
+Filesystem reads and writes default to the directory captured at server startup.
+`POWERIO_MCP_ALLOWED_ROOTS` selects explicit directories instead; the compatibility
+settings `POWERIO_MCP_ROOT` and `POWERIO_MCP_ALLOWED_ROOT` follow it in precedence.
+Remote URI schemes are rejected. Host
 approval, request identifiers, timeouts, and cancellation are MCP transport
 concerns and do not touch the PowerIO data.

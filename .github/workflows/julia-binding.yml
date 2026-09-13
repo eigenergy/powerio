@@ -48,6 +48,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  JULIA_NUM_THREADS: "4"
+  POWERIO_REQUIRE_LIBRARY: "1"
 
 jobs:
   compatibility:

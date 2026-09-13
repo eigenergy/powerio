@@ -17,7 +17,8 @@ ENV_NAMES = ("POWERIO_MCP_ALLOWED_ROOTS", "POWERIO_MCP_ROOT", "POWERIO_MCP_ALLOW
 
 
 @pytest.fixture(autouse=True)
-def _clear_roots(monkeypatch):
+def _clear_roots(monkeypatch, tmp_path):
+    monkeypatch.setattr(sandbox, "_DEFAULT_ROOT", tmp_path.resolve())
     for name in ENV_NAMES:
         monkeypatch.delenv(name, raising=False)
 
@@ -34,8 +35,8 @@ def test_importing_the_sandbox_does_not_pull_in_the_mcp_sdk():
     assert out.stdout.strip() == "[]"
 
 
-def test_no_roots_configured_allows_any_path(tmp_path):
-    assert sandbox.allowed_roots() == ()
+def test_no_roots_configured_uses_startup_directory(tmp_path):
+    assert sandbox.allowed_roots() == (tmp_path.resolve(),)
     assert sandbox.checked_path(str(tmp_path / "case9.m")) == str(tmp_path / "case9.m")
 
 
@@ -147,8 +148,8 @@ def test_admitting_root_names_the_containing_root(monkeypatch, tmp_path):
         sandbox.admitting_root(tmp_path / "elsewhere.dss")
 
 
-def test_admitting_root_is_none_when_the_policy_is_off(tmp_path):
-    assert sandbox.admitting_root(tmp_path / "case.dss") is None
+def test_admitting_root_uses_startup_directory(tmp_path):
+    assert sandbox.admitting_root(tmp_path / "case.dss") == tmp_path.resolve()
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
@@ -336,3 +337,42 @@ def test_compatibility_root_settings_keep_containment(name, monkeypatch, tmp_pat
         sandbox.checked_path(str(tmp_path / "outside.txt"))
     monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(tmp_path))
     assert sandbox.allowed_roots() == (tmp_path,)
+
+
+def test_default_root_survives_working_directory_change(monkeypatch, tmp_path):
+    elsewhere = tmp_path.parent / (tmp_path.name + "-elsewhere")
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    assert sandbox.checked_path(str(tmp_path / "case.m")) == str(tmp_path / "case.m")
+    with pytest.raises(sandbox.PathNotAllowed):
+        sandbox.checked_path("case.m")
+    with pytest.raises(sandbox.PathNotAllowed):
+        sandbox.checked_path(str(elsewhere / "out.m"), for_write=True)
+
+
+def test_empty_root_entries_are_rejected(monkeypatch, tmp_path):
+    monkeypatch.setenv(sandbox.ALLOWED_ROOTS_ENV, " " + os.pathsep + " ")
+    with pytest.raises(sandbox.PathNotAllowed, match="at least one directory"):
+        sandbox.checked_path(str(tmp_path / "case.m"))
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permissions")
+def test_directory_assembly_remains_private(monkeypatch, tmp_path):
+    out = tmp_path / "dataset"
+    out.mkdir(mode=0o755)
+    (out / "keep").write_text("old")
+    copytree = sandbox.shutil.copytree
+
+    def inspect_copy(source, target, *args, **kwargs):
+        assert Path(target).parent.stat().st_mode & 0o777 == 0o700
+        return copytree(source, target, *args, **kwargs)
+
+    def write(staging):
+        assert Path(staging).parent.stat().st_mode & 0o777 == 0o700
+        return _write_tree(staging, {"new": "data"})
+
+    monkeypatch.setattr(sandbox.shutil, "copytree", inspect_copy)
+    sandbox.staged_directory_write(str(out), True, write)
+    assert (out / "keep").read_text() == "old"
+    assert (out / "new").read_text() == "data"
+    assert out.stat().st_mode & 0o777 == 0o755

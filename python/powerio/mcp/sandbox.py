@@ -12,7 +12,8 @@ at all, can apply the same rules. Use :func:`checked_path` for one file,
 
 When the primary variable is unset or empty, `POWERIO_MCP_ROOT` and then
 `POWERIO_MCP_ALLOWED_ROOT` provide the allowed roots. The first nonempty value
-wins. With none configured, every path is allowed.
+wins. With none configured, paths stay beneath the directory captured when
+the server initializes.
 
     >>> from powerio.mcp.sandbox import checked_path
     >>> checked_path("case9.m", purpose="path")            # doctest: +SKIP
@@ -53,6 +54,7 @@ __all__ = [
 ]
 
 _T = TypeVar("_T")
+_DEFAULT_ROOT = Path.cwd().resolve(strict=True)
 
 
 class PathNotAllowed(ValueError):
@@ -62,16 +64,18 @@ class PathNotAllowed(ValueError):
 
 
 def allowed_roots() -> tuple[Path, ...]:
-    """Roots the policy confines paths to, empty when the policy is off."""
+    """Configured roots, or the captured startup directory."""
     raw = next((os.environ[name] for name in (ALLOWED_ROOTS_ENV, *LEGACY_ROOT_ENVS)
                 if os.environ.get(name)), "")
     if not raw:
-        return ()
+        return (_DEFAULT_ROOT,)
     roots = []
     for entry in raw.split(os.pathsep):
         item = entry.strip()
         if item:
             roots.append(Path(item).expanduser().resolve(strict=False))
+    if not roots:
+        raise PathNotAllowed("allowed MCP roots must name at least one directory")
     return tuple(roots)
 
 
@@ -125,17 +129,15 @@ def _path_for_policy(path: Path, *, for_write: bool) -> Path:
 
 def admitting_root(
     path: Path, *, for_write: bool = False, purpose: str = "path"
-) -> Path | None:
-    """The allowed root that contains ``path``, ``None`` when the policy is off.
+) -> Path:
+    """The allowed root that contains ``path``.
 
-    Raises :class:`PathNotAllowed` when roots are configured and ``path``
+    Raises :class:`PathNotAllowed` when ``path``
     resolves outside all of them. Symlinks are resolved first, including a
     dangling final component under ``for_write``, so a link inside a root
     cannot redirect a write out of it.
     """
     roots = allowed_roots()
-    if not roots:
-        return None
     try:
         resolved = _path_for_policy(path, for_write=for_write)
     except OSError as exc:
@@ -389,7 +391,6 @@ def staged_directory_write(
 
     workspace = Path(tempfile.mkdtemp(prefix=f".{output.name}.stage-", dir=parent))
     staging_installed = False
-    os.chmod(workspace, 0o755)
     # The writers stage and commit themselves and refuse an existing target,
     # so the path handed to the writer must not exist yet: it is a child of
     # the private workspace, never the workspace directory itself.
@@ -426,7 +427,7 @@ def staged_directory_write(
                 )
 
         replacement = Path(
-            tempfile.mkdtemp(prefix=f".{output.name}.install-", dir=parent)
+            tempfile.mkdtemp(prefix=f".{output.name}.install-", dir=workspace)
         )
         replacement.rmdir()
         shutil.copytree(output, replacement, copy_function=shutil.copy2)
@@ -437,7 +438,7 @@ def staged_directory_write(
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(staging / relative, target)
 
-        backup = Path(tempfile.mkdtemp(prefix=f".{output.name}.backup-", dir=parent))
+        backup = Path(tempfile.mkdtemp(prefix=f".{output.name}.backup-", dir=workspace))
         backup.rmdir()
         os.replace(output, backup)
         try:
@@ -451,7 +452,7 @@ def staged_directory_write(
         backup = None
         return _rebase_writer_result(result, staging, output)
     finally:
-        if not staging_installed:
+        if not staging_installed and backup is None:
             shutil.rmtree(workspace, ignore_errors=True)
         if replacement is not None:
             shutil.rmtree(replacement, ignore_errors=True)

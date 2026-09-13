@@ -2413,6 +2413,7 @@ dependencies = [
 name = "powerio-core"
 version = "0.11.1"
 dependencies = [
+ "errno",
  "libc",
  "schemars",
  "serde",
