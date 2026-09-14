@@ -11,15 +11,18 @@ def check():
         head = api(f'repos/{repo}/git/ref/heads/main')['object']['sha']
         api(f'repos/{repo}/contents/.github/paired-release.json?ref={head}')
         successful_ci(repo, head)
-        runs = api(f'repos/{repo}/actions/runs?status=in_progress&per_page=100')['workflow_runs']
-        require(not any(r['event'] == 'release' or r['name'] in ('Update artifacts', 'Register Package') for r in runs),
+        runs = api(f'repos/{repo}/actions/runs?per_page=100')['workflow_runs']
+        require(not any(r['status'] != 'completed' and
+                        (r['event'] == 'release' or r['name'] in ('Update artifacts', 'Register Package')) for r in runs),
                 f'{repo} has an active legacy release')
     variable = api(f'repos/{POWERIO}/actions/variables/POWERIO_RELEASE_APP_ID')
     require(variable['value'].isdigit(), 'release App ID is missing or invalid')
     names = {s['name'] for s in api(f'repos/{POWERIO}/actions/secrets?per_page=100')['secrets']}
     require('POWERIO_RELEASE_APP_PRIVATE_KEY' in names, 'release App private key is missing')
     probe = api(f'repos/{POWERIO}/actions/workflows/release-app-access.yml/runs?per_page=1')['workflow_runs']
-    require(probe and probe[0]['conclusion'] == 'success', 'run Release App access successfully before activation')
+    require(probe and probe[0]['conclusion'] == 'success' and
+            probe[0]['head_sha'] == api(f'repos/{POWERIO}/git/ref/heads/main')['object']['sha'],
+            'run Release App access successfully on current main before activation')
     environments = {}
     for name in ('crates-io', 'pypi'):
         env = api(f'repos/{POWERIO}/environments/{name}')
