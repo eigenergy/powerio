@@ -89,7 +89,7 @@ pub(crate) fn compile_objective(objective: &Objective) -> Result<PreparedObjecti
 }
 
 pub(crate) fn row_identity(uid: Option<&str>, table: &str, row: usize) -> String {
-    uid.map_or_else(|| format!("{table}:{row}"), str::to_owned)
+    row_identity_ref(uid, table, row).into_owned()
 }
 
 /// [`row_identity`] without the copy: a stated identity is borrowed, and only
@@ -185,22 +185,18 @@ pub(crate) fn active_bus_index(case: &IndexedNetwork<'_>) -> Result<ActiveBusInd
 
 /// Validate a selection against the complete family and return one flag per
 /// active analysis row.
-pub(crate) fn constraint_mask<'a, I>(
+pub(crate) fn constraint_mask(
     family: &'static str,
     selection: &ConstraintSelection,
-    all_identities: I,
+    all_identities: &[Cow<'_, str>],
     active_identities: &[String],
-) -> Result<Vec<bool>>
-where
-    I: IntoIterator<Item = Cow<'a, str>>,
-{
-    let all_identities = all_identities.into_iter();
-    let mut declared = HashSet::with_capacity(all_identities.size_hint().0);
+) -> Result<Vec<bool>> {
+    let mut declared = HashSet::with_capacity(all_identities.len());
     for identity in all_identities {
-        if let Some(duplicate) = declared.replace(identity) {
+        if !declared.insert(identity.as_ref()) {
             return Err(Error::DuplicateElementIdentity {
                 family,
-                identity: duplicate.into_owned(),
+                identity: identity.clone().into_owned(),
             });
         }
     }

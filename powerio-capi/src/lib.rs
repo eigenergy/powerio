@@ -37,10 +37,9 @@ use powerio::{
 };
 use powerio_core::{ComponentId, HistoryEntry, HistoryId, HistoryKind, Producer};
 use powerio_matrix::{
-    AcOpfAssemblyOptions, AcOpfPreparation, AnalysisBranchSource, CostCurveAction,
-    CostCurveDeparture, CostCurvePolicy, CostCurveProjection, DcOperatorOptions, DcOperators,
-    DcOpfAssemblyOptions, DcOpfPreparation, PreparedObjective, SparseMatrix, Units,
-    build_ac_opf_preparation, build_dc_opf_preparation,
+    AcOpfAssemblyOptions, AcOpfPreparation, AnalysisBranchSource, CostCurvePolicy,
+    CostCurveProjection, DcOperatorOptions, DcOperators, DcOpfAssemblyOptions, DcOpfPreparation,
+    PreparedObjective, SparseMatrix, Units, build_ac_opf_preparation, build_dc_opf_preparation,
 };
 use powerio_prob::{
     ActivePower, ActivePowerUnit, ApparentPower, ApparentPowerUnit, CalculationUpdate,
@@ -5693,16 +5692,8 @@ impl PioCostCurveProjectionView {
         Self {
             component_id: PioStringView::new(&projection.identity),
             source_row: projection.source_row,
-            departure: PioStringView::new(match projection.departure {
-                CostCurveDeparture::NonconvexPiecewise => "nonconvex_piecewise",
-                CostCurveDeparture::ConcavePolynomial => "concave_polynomial",
-                _ => "unknown",
-            }),
-            action: PioStringView::new(match projection.action {
-                CostCurveAction::Kept => "kept",
-                CostCurveAction::LowerEnvelope => "lower_envelope",
-                _ => "unknown",
-            }),
+            departure: PioStringView::new(projection.departure.name()),
+            action: PioStringView::new(projection.action.name()),
             projection_loss: projection.projection_loss,
         }
     }
@@ -5716,10 +5707,7 @@ unsafe fn optional_option_str<'a>(
     view: PioStringView,
     what: &str,
 ) -> Result<Option<&'a str>, *mut PioError> {
-    if view.data.is_null() || view.len == 0 {
-        return Ok(None);
-    }
-    unsafe { required_str(view.data, view.len, what) }.map(Some)
+    Ok(unsafe { optional_str(view.data, view.len, what) }?.filter(|text| !text.is_empty()))
 }
 
 /// Read a caller supplied option set, defaulting every field it leaves empty.
@@ -6210,13 +6198,7 @@ pub unsafe extern "C" fn pio_build_ac_opf_preparation_with_options(
                         "AC OPF preparation requires powerio.AcOpfInstance",
                     )
                 })?;
-            let dc = opf_build_options(options)?;
-            let options = AcOpfAssemblyOptions::default()
-                .with_units(dc.units)
-                .with_skip_zero_impedance(dc.skip_zero_impedance)
-                .with_synthesize_unrated_limits(dc.synthesize_unrated_limits)
-                .with_correct_angle_difference_bounds(dc.correct_angle_difference_bounds)
-                .with_cost_curve_policy(dc.cost_curve_policy);
+            let options = AcOpfAssemblyOptions::from(opf_build_options(options)?);
             build_ac_opf_preparation(instance, &options)
                 .map(PioAcOpfPreparation::new_raw)
                 .map_err(|failure| error_from_matrix(&failure))

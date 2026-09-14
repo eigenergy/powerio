@@ -95,9 +95,12 @@ pub enum Error {
     NonconvexPiecewiseCost { gen_index: usize, segment: usize },
 
     #[error(
-        "generator {gen_index} has a piecewise linear cost that cannot be projected to one nodal quadratic cost"
+        "generator {gen_index} has a {reason} that cannot be projected to one nodal quadratic cost"
     )]
-    PiecewiseNodalCost { gen_index: usize },
+    NodalCostUnsupported {
+        gen_index: usize,
+        reason: NodalCostObstruction,
+    },
 
     #[error(
         "generator {gen_index} has a concave cost row (c2 = {c2}); the `convex_only` cost curve policy carries convex curves only"
@@ -108,11 +111,6 @@ pub enum Error {
         "generator {gen_index} has a concave cost row and no finite active power range; a concave curve has no lower convex envelope over an unbounded range"
     )]
     UnboundedCostEnvelope { gen_index: usize },
-
-    #[error(
-        "generator {gen_index} has a concave cost row that cannot be projected to one nodal quadratic cost"
-    )]
-    ConcaveNodalCost { gen_index: usize },
 
     #[error("matrix-market I/O: {0}")]
     Mtx(String),
@@ -199,9 +197,7 @@ impl Error {
             Error::NonconvexPiecewiseCost { .. } => {
                 &powerio_prob::diagnostics::codes::BUILD_INSTANCE_PIECEWISE_COST_NONCONVEX
             }
-            Error::PiecewiseNodalCost { .. } | Error::ConcaveNodalCost { .. } => {
-                &codes::BUILD_OPF_NODAL_COST_UNSUPPORTED
-            }
+            Error::NodalCostUnsupported { .. } => &codes::BUILD_OPF_NODAL_COST_UNSUPPORTED,
             Error::ConcaveCost { .. } | Error::UnboundedCostEnvelope { .. } => {
                 &powerio_prob::diagnostics::codes::BUILD_INSTANCE_CONCAVE_COST
             }
@@ -242,9 +238,42 @@ impl Error {
             | Error::NonconvexPiecewiseCost { .. }
             | Error::ConcaveCost { .. }
             | Error::UnboundedCostEnvelope { .. } => C::Data,
-            Error::PiecewiseNodalCost { .. } | Error::ConcaveNodalCost { .. } => C::Request,
+            Error::NodalCostUnsupported { .. } => C::Request,
             // Output-side serialization write failures.
             Error::Mtx(_) | Error::Parquet(_) => C::Output,
+        }
+    }
+}
+
+/// The shape of a prepared generator cost column that a bus space quadratic
+/// cannot carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NodalCostObstruction {
+    /// A piecewise linear curve, which is not one quadratic.
+    Piecewise,
+    /// A concave curve, whose least cost split sits at a bound rather than
+    /// where the marginal costs meet, so the parallel rule does not describe
+    /// it.
+    Concave,
+}
+
+impl NodalCostObstruction {
+    /// The `snake_case` name this obstruction is recorded under.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Piecewise => "piecewise",
+            Self::Concave => "concave",
+        }
+    }
+}
+
+impl std::fmt::Display for NodalCostObstruction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Piecewise => f.write_str("piecewise linear cost"),
+            Self::Concave => f.write_str("concave cost row"),
         }
     }
 }
@@ -430,7 +459,10 @@ mod tests {
                 gen_index: 0,
                 segment: 1,
             },
-            Error::PiecewiseNodalCost { gen_index: 0 },
+            Error::NodalCostUnsupported {
+                gen_index: 0,
+                reason: NodalCostObstruction::Piecewise,
+            },
             Error::ConcaveCost {
                 gen_index: 0,
                 c2: -0.5,
@@ -458,7 +490,10 @@ mod tests {
             gen_index: 2,
             segment: 1,
         };
-        let nodal_projection = Error::PiecewiseNodalCost { gen_index: 2 };
+        let nodal_projection = Error::NodalCostUnsupported {
+            gen_index: 2,
+            reason: NodalCostObstruction::Piecewise,
+        };
 
         assert_eq!(
             malformed.code().code,

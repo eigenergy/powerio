@@ -8,7 +8,7 @@ use crate::{AnalysisBranchSource, Error, Result};
 use powerio_prob::ReferenceBuses;
 
 use super::{limits, nodal};
-use crate::cost_curve::{CostCurveInput, CostCurvePolicy, CostCurveProjection, GeneratorCostTerms};
+use crate::cost_curve::{CostCurvePolicy, CostCurveProjection};
 use crate::{PiecewiseLinearCost, PreparedObjective};
 
 /// Unit system for power and generator cost data.
@@ -308,15 +308,10 @@ impl DcOpfPreparation {
     pub fn calc_nodal_generator_data(&self) -> Result<NodalGeneratorParameters> {
         let n = self.n_buses;
         let generators = &self.generators;
-        if let Some(gen_index) = generators.piecewise_linear.iter().position(Option::is_some) {
-            return Err(Error::PiecewiseNodalCost { gen_index });
-        }
-        // The least cost split of a bus total over concave curves sits at a
-        // bound, not where the marginals meet, so the parallel rule below does
-        // not describe it. The projection refuses rather than pricing the bus
-        // by a rule that does not hold for its generators.
-        if let Some(gen_index) = generators.q.iter().position(|&q| q < 0.0) {
-            return Err(Error::ConcaveNodalCost { gen_index });
+        if let Some((gen_index, reason)) =
+            nodal::nodal_cost_obstruction(&generators.q, &generators.piecewise_linear)
+        {
+            return Err(Error::NodalCostUnsupported { gen_index, reason });
         }
         let bus_of_gen = &generators.bus_of_gen;
         let costs =
@@ -377,25 +372,14 @@ pub(crate) fn preparation_from_view(
             continue;
         };
         let identity = crate::opf::row_identity(generator.uid.as_deref(), "generators", source_row);
-        let terms = match options.objective {
-            PreparedObjective::Feasibility => GeneratorCostTerms::zero(),
-            PreparedObjective::NetworkGeneratorCost => {
-                let cost = generator
-                    .cost
-                    .as_ref()
-                    .ok_or(powerio_tx::Error::MissingGenCost {
-                        gen_index: source_row,
-                    })?;
-                crate::cost_curve::generator_cost_terms(&CostCurveInput {
-                    cost,
-                    identity: &identity,
-                    source_row,
-                    bounds: (generator.pmin, generator.pmax),
-                    power_scale: p_scale,
-                    policy: options.cost_curve_policy,
-                })?
-            }
-        };
+        let terms = crate::cost_curve::compile_generator_cost(
+            generator,
+            source_row,
+            &identity,
+            options.objective,
+            p_scale,
+            options.cost_curve_policy,
+        )?;
         cost_curve_projections.extend(terms.projection);
         generator_identities.push(identity);
         bus_of_gen.push(bus);
@@ -582,22 +566,19 @@ pub(crate) fn apply_instance_semantics(
 ) -> Result<()> {
     // A stated identity is borrowed from the source table, so a case whose
     // records carry uids copies no string here.
-    let source_generator_ids = source
+    let source_generator_ids: Vec<Cow<'_, str>> = source
         .generators()
         .iter()
         .enumerate()
         .map(|(row, generator)| {
             crate::opf::row_identity_ref(generator.uid.as_deref(), "generators", row)
-        });
-    let source_branch_ids =
-        source.branches().iter().enumerate().map(|(row, branch)| {
-            crate::opf::row_identity_ref(branch.uid.as_deref(), "branches", row)
-        });
+        })
+        .collect();
 
     preparation.generators.capability_active = crate::opf::constraint_mask(
         "generator capability",
         &constraints.generator_capability,
-        source_generator_ids,
+        &source_generator_ids,
         &preparation.generators.identities,
     )?;
 
@@ -605,20 +586,26 @@ pub(crate) fn apply_instance_semantics(
     // bound rows to expose. Still validate an explicit identity selection:
     // a misspelled bus must not disappear merely because this formulation
     // has no corresponding variable.
+    let source_bus_ids: Vec<Cow<'_, str>> = source
+        .buses()
+        .iter()
+        .map(|bus| Cow::Owned(bus.id.to_string()))
+        .collect();
     let _ = crate::opf::constraint_mask(
         "bus voltage bounds",
         &constraints.voltage_bounds,
-        source
-            .buses()
-            .iter()
-            .map(|bus| Cow::Owned(bus.id.to_string())),
+        &source_bus_ids,
         &[],
     )?;
 
     // Synthetic winding branches are part of the analysis family and are
     // addressable by the identities returned in the preparation.
-    let analysis_branch_ids = || {
-        source_branch_ids.clone().chain(
+    let analysis_branch_ids: Vec<Cow<'_, str>> = source
+        .branches()
+        .iter()
+        .enumerate()
+        .map(|(row, branch)| crate::opf::row_identity_ref(branch.uid.as_deref(), "branches", row))
+        .chain(
             preparation
                 .branches
                 .identities
@@ -627,11 +614,11 @@ pub(crate) fn apply_instance_semantics(
                 .filter(|(_, row)| **row >= source.branches().len())
                 .map(|(identity, _)| Cow::Borrowed(identity.as_str())),
         )
-    };
+        .collect();
     preparation.branches.thermal_limit_active = crate::opf::constraint_mask(
         "branch thermal limits",
         &constraints.thermal_limits,
-        analysis_branch_ids(),
+        &analysis_branch_ids,
         &preparation.branches.identities,
     )?;
     for (active, limit) in preparation
@@ -645,7 +632,7 @@ pub(crate) fn apply_instance_semantics(
     preparation.branches.angle_bound_active = crate::opf::constraint_mask(
         "branch angle bounds",
         &constraints.angle_bounds,
-        analysis_branch_ids(),
+        &analysis_branch_ids,
         &preparation.branches.identities,
     )?;
 

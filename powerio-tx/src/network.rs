@@ -1933,10 +1933,7 @@ impl BalancedNetwork {
         macro_rules! assign {
             ($table:ident, $table_mut:ident, $set_uid:expr, $stem:expr) => {
                 if self.$table().iter().any(|value| value.uid.is_none()) {
-                    if used.is_none() {
-                        used = Some(self.component_ids_in_use());
-                    }
-                    let used = used.as_mut().expect("the set is filled above");
+                    let used = used.get_or_insert_with(|| self.component_ids_in_use());
                     let generated = assign_missing_ids(
                         self.$table_mut(),
                         |value| value.uid.as_deref(),

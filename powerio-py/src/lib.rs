@@ -3927,22 +3927,8 @@ impl PyPioModule {
             let row = PyDict::new(py);
             row.set_item("identity", &projection.identity)?;
             row.set_item("source_row", projection.source_row)?;
-            row.set_item(
-                "departure",
-                match projection.departure {
-                    powerio_matrix::CostCurveDeparture::NonconvexPiecewise => "nonconvex_piecewise",
-                    powerio_matrix::CostCurveDeparture::ConcavePolynomial => "concave_polynomial",
-                    _ => "unknown",
-                },
-            )?;
-            row.set_item(
-                "action",
-                match projection.action {
-                    powerio_matrix::CostCurveAction::Kept => "kept",
-                    powerio_matrix::CostCurveAction::LowerEnvelope => "lower_envelope",
-                    _ => "unknown",
-                },
-            )?;
+            row.set_item("departure", projection.departure.name())?;
+            row.set_item("action", projection.action.name())?;
             row.set_item("projection_loss", projection.projection_loss)?;
             rows.push(row);
         }

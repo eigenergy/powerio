@@ -140,7 +140,7 @@ pub(crate) fn build_ybus_with_flags(case: &IndexedNetwork, flags: YbusFlags) -> 
 /// [`YbusFlags::default`] for the physical admittances (taps and shifts on).
 ///
 /// Returns `Ok(None)` for a zero-impedance branch — one whose impedance
-/// magnitude is under [`MIN_DIVISIBLE_MAGNITUDE`](super::MIN_DIVISIBLE_MAGNITUDE) —
+/// magnitude is under [`powerio_tx::dc::MIN_DIVISIBLE_MAGNITUDE`] —
 /// which the callers skip (Y_bus) or zero out (gridfm). `row` only labels the
 /// error.
 ///

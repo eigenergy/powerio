@@ -235,11 +235,7 @@ fn a_piecewise_case_writes_the_bundle_without_the_nodal_cost_files() {
     )
     .expect("manifest json");
     assert_eq!(manifest["nodal_cost"]["written"], false);
-    assert!(
-        manifest["nodal_cost"]["omitted_because"]
-            .as_str()
-            .is_some_and(|reason| reason.contains("piecewise"))
-    );
+    assert_eq!(manifest["nodal_cost"]["omitted_because"], "piecewise");
     assert_eq!(manifest["cost_curve_policy"], "any");
     assert_eq!(
         manifest["cost_curve_projections"]

@@ -589,7 +589,10 @@ fn missing_piecewise_and_unsupported_costs_are_distinct() {
     assert_eq!(prepared.generators.q, vec![0.0]);
     assert!(matches!(
         prepared.calc_nodal_generator_data(),
-        Err(Error::PiecewiseNodalCost { gen_index: 0 })
+        Err(Error::NodalCostUnsupported {
+            gen_index: 0,
+            reason: crate::NodalCostObstruction::Piecewise,
+        })
     ));
 
     let mut unsupported = small_network();
@@ -787,7 +790,13 @@ fn a_concave_cost_row_is_refused_however_many_generators_share_the_bus() {
             .calc_nodal_generator_data()
             .expect_err("a concave column has no parallel rule");
         assert!(
-            matches!(error, Error::ConcaveNodalCost { gen_index: at } if at == gen_index),
+            matches!(
+                error,
+                Error::NodalCostUnsupported {
+                    gen_index: at,
+                    reason: crate::NodalCostObstruction::Concave,
+                } if at == gen_index
+            ),
             "{error}"
         );
         assert_eq!(error.code().code, "BUILD.OPF.NODAL_COST_UNSUPPORTED");

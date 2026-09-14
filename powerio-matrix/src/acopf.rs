@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use powerio_prob::{AcBusSpecification, AcOpfInstance, AcPfInstance, ReferenceBuses};
 use powerio_tx::{BalancedNetwork, BusId, IndexedNetwork};
 
-use crate::cost_curve::{CostCurveInput, CostCurvePolicy, CostCurveProjection, GeneratorCostTerms};
+use crate::cost_curve::{CostCurvePolicy, CostCurveProjection};
 use crate::dcopf::{Units, limits, nodal};
 use crate::{AnalysisBranchSource, Error, PiecewiseLinearCost, PreparedObjective, Result};
 
@@ -83,6 +83,19 @@ impl AcOpfAssemblyOptions {
     pub const fn with_cost_curve_policy(mut self, policy: CostCurvePolicy) -> Self {
         self.cost_curve_policy = policy;
         self
+    }
+}
+
+/// The DC and AC preparations take the same assembly choices, so a caller
+/// holding one set states the other without restating a field.
+impl From<crate::DcOpfAssemblyOptions> for AcOpfAssemblyOptions {
+    fn from(options: crate::DcOpfAssemblyOptions) -> Self {
+        Self::default()
+            .with_units(options.units)
+            .with_skip_zero_impedance(options.skip_zero_impedance)
+            .with_synthesize_unrated_limits(options.synthesize_unrated_limits)
+            .with_correct_angle_difference_bounds(options.correct_angle_difference_bounds)
+            .with_cost_curve_policy(options.cost_curve_policy)
     }
 }
 
@@ -462,11 +475,10 @@ impl AcOpfPreparation {
     pub fn calc_nodal_generator_data(&self) -> Result<NodalAcGeneratorData> {
         let n = self.n_buses;
         let generators = &self.generators;
-        if let Some(gen_index) = generators.q.iter().position(|&q| q < 0.0) {
-            return Err(Error::ConcaveNodalCost { gen_index });
-        }
-        if let Some(gen_index) = generators.piecewise_linear.iter().position(Option::is_some) {
-            return Err(Error::PiecewiseNodalCost { gen_index });
+        if let Some((gen_index, reason)) =
+            nodal::nodal_cost_obstruction(&generators.q, &generators.piecewise_linear)
+        {
+            return Err(Error::NodalCostUnsupported { gen_index, reason });
         }
         let bus_of_gen = &generators.bus_of_gen;
         let costs =
@@ -734,25 +746,14 @@ fn preparation_from_view(
             continue;
         };
         let identity = crate::opf::row_identity(generator.uid.as_deref(), "generators", source_row);
-        let terms = match objective {
-            PreparedObjective::Feasibility => GeneratorCostTerms::zero(),
-            PreparedObjective::NetworkGeneratorCost => {
-                let cost = generator
-                    .cost
-                    .as_ref()
-                    .ok_or(powerio_tx::Error::MissingGenCost {
-                        gen_index: source_row,
-                    })?;
-                crate::cost_curve::generator_cost_terms(&CostCurveInput {
-                    cost,
-                    identity: &identity,
-                    source_row,
-                    bounds: (generator.pmin, generator.pmax),
-                    power_scale: p_scale,
-                    policy: options.cost_curve_policy,
-                })?
-            }
-        };
+        let terms = crate::cost_curve::compile_generator_cost(
+            generator,
+            source_row,
+            &identity,
+            objective,
+            p_scale,
+            options.cost_curve_policy,
+        )?;
         cost_curve_projections.extend(terms.projection);
         generator_identities.push(identity);
         bus_of_gen.push(bus);
@@ -1060,58 +1061,55 @@ fn apply_instance_semantics(
 ) -> Result<()> {
     // A stated identity is borrowed from the source table, so a case whose
     // records carry uids copies no string here.
-    let source_generator_ids = source
+    let source_generator_ids: Vec<Cow<'_, str>> = source
         .generators()
         .iter()
         .enumerate()
         .map(|(row, generator)| {
             crate::opf::row_identity_ref(generator.uid.as_deref(), "generators", row)
-        });
-    let source_branch_ids =
-        source.branches().iter().enumerate().map(|(row, branch)| {
-            crate::opf::row_identity_ref(branch.uid.as_deref(), "branches", row)
-        });
-
-    // Bus ids are numbers, so their identities are built rather than
-    // borrowed. A synthetic star bus has no source row, so its id joins the
-    // family; membership is a set lookup, not a scan of what is already there.
-    let mut analysis_bus_ids: Vec<String> = source
-        .buses()
-        .iter()
-        .map(|bus| bus.id.to_string())
+        })
         .collect();
-    let mut known: HashSet<&str> = HashSet::with_capacity(analysis_bus_ids.len());
-    for identity in &analysis_bus_ids {
-        known.insert(identity.as_str());
-    }
-    let mut added: Vec<String> = Vec::new();
-    for bus in &preparation.bus_ids {
-        let identity = bus.to_string();
-        if !known.contains(identity.as_str()) && !added.iter().any(|seen| seen == &identity) {
-            added.push(identity);
-        }
-    }
-    analysis_bus_ids.extend(added);
 
+    // Bus ids are numbers, so their identities are built rather than borrowed.
+    // A synthetic star bus has no source row, so its id joins the family;
+    // membership is a lookup on the id, not on its rendering.
+    let source_bus_ids: HashSet<BusId> = source.buses().iter().map(|bus| bus.id).collect();
     let active_bus_ids: Vec<String> = preparation
         .bus_ids
         .iter()
         .map(ToString::to_string)
         .collect();
+    let analysis_bus_ids: Vec<Cow<'_, str>> = source
+        .buses()
+        .iter()
+        .map(|bus| Cow::Owned(bus.id.to_string()))
+        .chain(
+            preparation
+                .bus_ids
+                .iter()
+                .zip(&active_bus_ids)
+                .filter(|(bus, _)| !source_bus_ids.contains(*bus))
+                .map(|(_, identity)| Cow::Borrowed(identity.as_str())),
+        )
+        .collect();
     preparation.buses.voltage_bound_active = crate::opf::constraint_mask(
         "bus voltage bounds",
         &constraints.voltage_bounds,
-        analysis_bus_ids.iter().map(|id| Cow::Borrowed(id.as_str())),
+        &analysis_bus_ids,
         &active_bus_ids,
     )?;
     preparation.generators.capability_active = crate::opf::constraint_mask(
         "generator capability",
         &constraints.generator_capability,
-        source_generator_ids,
+        &source_generator_ids,
         &preparation.generators.identities,
     )?;
-    let analysis_branch_ids = || {
-        source_branch_ids.clone().chain(
+    let analysis_branch_ids: Vec<Cow<'_, str>> = source
+        .branches()
+        .iter()
+        .enumerate()
+        .map(|(row, branch)| crate::opf::row_identity_ref(branch.uid.as_deref(), "branches", row))
+        .chain(
             preparation
                 .branches
                 .identities
@@ -1120,11 +1118,11 @@ fn apply_instance_semantics(
                 .filter(|(_, row)| **row >= source.branches().len())
                 .map(|(identity, _)| Cow::Borrowed(identity.as_str())),
         )
-    };
+        .collect();
     preparation.branches.thermal_limit_active = crate::opf::constraint_mask(
         "branch thermal limits",
         &constraints.thermal_limits,
-        analysis_branch_ids(),
+        &analysis_branch_ids,
         &preparation.branches.identities,
     )?;
     for (active, limit) in preparation
@@ -1138,7 +1136,7 @@ fn apply_instance_semantics(
     preparation.branches.angle_bound_active = crate::opf::constraint_mask(
         "branch angle bounds",
         &constraints.angle_bounds,
-        analysis_branch_ids(),
+        &analysis_branch_ids,
         &preparation.branches.identities,
     )?;
 

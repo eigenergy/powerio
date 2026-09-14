@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use powerio_core::{Diagnostic, DiagnosticSeverity};
 use powerio_tx::GenCost;
 
-use crate::{Error, PiecewiseCostInvalidity, PiecewiseLinearCost, Result};
+use crate::{Error, PiecewiseCostInvalidity, PiecewiseLinearCost, PreparedObjective, Result};
 
 /// Which generator cost curve shapes a preparation carries.
 ///
@@ -98,6 +98,15 @@ pub enum CostCurveDeparture {
 }
 
 impl CostCurveDeparture {
+    /// The `snake_case` name this departure serializes as.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::NonconvexPiecewise => "nonconvex_piecewise",
+            Self::ConcavePolynomial => "concave_polynomial",
+        }
+    }
+
     /// The property of the stated curve, for a diagnostic message.
     #[must_use]
     pub const fn summary(self) -> &'static str {
@@ -118,6 +127,17 @@ pub enum CostCurveAction {
     /// The lower convex envelope of the stated curve over the generator's
     /// stated active power range.
     LowerEnvelope,
+}
+
+impl CostCurveAction {
+    /// The `snake_case` name this action serializes as.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Kept => "kept",
+            Self::LowerEnvelope => "lower_envelope",
+        }
+    }
 }
 
 /// One generator whose stated cost curve is not convex, and what the
@@ -219,6 +239,45 @@ pub(crate) struct CostCurveInput<'a> {
     /// Multiplier from the source power unit into the preparation's unit.
     pub power_scale: f64,
     pub policy: CostCurvePolicy,
+}
+
+/// Compile one in service generator's objective term, as both balanced
+/// preparations read it: an identically zero curve for a feasibility problem,
+/// and the generator's own cost row under `policy` otherwise.
+///
+/// # Errors
+/// [`powerio_tx::Error::MissingGenCost`] when the network objective is
+/// selected and the generator states no cost row, plus whatever
+/// [`generator_cost_terms`] raises.
+pub(crate) fn compile_generator_cost(
+    generator: &powerio_tx::Generator,
+    source_row: usize,
+    identity: &str,
+    objective: PreparedObjective,
+    power_scale: f64,
+    policy: CostCurvePolicy,
+) -> Result<GeneratorCostTerms> {
+    match objective {
+        PreparedObjective::NetworkGeneratorCost => {
+            let cost = generator
+                .cost
+                .as_ref()
+                .ok_or(powerio_tx::Error::MissingGenCost {
+                    gen_index: source_row,
+                })?;
+            generator_cost_terms(&CostCurveInput {
+                cost,
+                identity,
+                source_row,
+                bounds: (generator.pmin, generator.pmax),
+                power_scale,
+                policy,
+            })
+        }
+        // Every other objective prices no generator, so no cost row is read
+        // and no curve reaches the policy.
+        _ => Ok(GeneratorCostTerms::zero()),
+    }
 }
 
 /// Compile one generator cost under `policy`.
@@ -395,16 +454,16 @@ fn lower_convex_envelope(power: &[f64], value: &[f64]) -> (PiecewiseLinearCost, 
         hull.push(point);
     }
 
+    // Every stated point the hull dropped lies between two consecutive hull
+    // breakpoints, and a point the hull kept lies on its own chord.
     let mut loss = 0.0_f64;
-    let mut segment = 0;
-    for point in 0..power.len() {
-        while segment + 2 < hull.len() && hull[segment + 1] < point {
-            segment += 1;
-        }
-        let (left, right) = (hull[segment], hull[segment + 1]);
+    for chord in hull.windows(2) {
+        let (left, right) = (chord[0], chord[1]);
         let slope = (value[right] - value[left]) / (power[right] - power[left]);
-        let on_envelope = value[left] + slope * (power[point] - power[left]);
-        loss = loss.max(value[point] - on_envelope);
+        for point in left + 1..right {
+            let on_envelope = value[left] + slope * (power[point] - power[left]);
+            loss = loss.max(value[point] - on_envelope);
+        }
     }
 
     let curve = PiecewiseLinearCost {

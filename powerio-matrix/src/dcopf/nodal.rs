@@ -9,6 +9,23 @@
 //! [`combine_costs`]. Compiling a source cost row into the generator space
 //! columns this module reads belongs to [`crate::cost_curve`].
 
+use crate::NodalCostObstruction;
+
+/// The first prepared generator column a bus space quadratic cannot carry.
+///
+/// Both balanced preparations project their generator columns the same way, so
+/// they ask this one question rather than each spelling out the two checks.
+pub(crate) fn nodal_cost_obstruction(
+    q: &[f64],
+    piecewise_linear: &[Option<crate::PiecewiseLinearCost>],
+) -> Option<(usize, NodalCostObstruction)> {
+    if let Some(gen_index) = piecewise_linear.iter().position(Option::is_some) {
+        return Some((gen_index, NodalCostObstruction::Piecewise));
+    }
+    let gen_index = q.iter().position(|&q| q < 0.0)?;
+    Some((gen_index, NodalCostObstruction::Concave))
+}
+
 /// Sum of a generator column vector over the bus of each generator.
 pub(crate) fn sum_by_bus(n_buses: usize, bus_of_gen: &[usize], values: &[f64]) -> Vec<f64> {
     let mut totals = vec![0.0; n_buses];

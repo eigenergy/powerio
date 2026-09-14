@@ -48,7 +48,11 @@
   dip of about 0.07 percent, now prepares under the default policy.
 - The bus space projection `calc_nodal_generator_data` refuses a concave
   generator column with `BUILD.OPF.NODAL_COST_UNSUPPORTED`: the parallel rule
-  describes the least cost split only over convex curves.
+  describes the least cost split only over convex curves. The DC and AC
+  projections ask one shared question, so they name the same obstruction on a
+  case that has both; `Error::NodalCostUnsupported` carries a
+  `NodalCostObstruction` reason, which the bundle manifest records as
+  `piecewise` or `concave` rather than a sentence.
 - `emit_dcopf_bundle` writes a case whose generators carry piecewise linear or
   concave costs. It leaves out `q.mtx`, `c.mtx`, and `c0.mtx`, records why in
   the manifest's new `nodal_cost` block, and reports it as a warning on the

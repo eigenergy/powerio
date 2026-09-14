@@ -45,9 +45,6 @@ pub(crate) use ybus::{YbusFlags, branch_admittance, branch_flows};
 
 use sprs::CsMat;
 
-// The bound the matrix and instance builders share; it lives beside the DC
-// formula because both are properties of the branch primitives.
-
 /// Which MATPOWER fast decoupled scheme to use.
 ///
 /// - `Bx`: clears resistance for `Bpp`.

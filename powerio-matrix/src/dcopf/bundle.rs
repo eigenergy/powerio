@@ -91,7 +91,7 @@ struct DcOpfDimensions {
 struct NodalCostMeta {
     written: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    omitted_because: Option<String>,
+    omitted_because: Option<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -173,7 +173,16 @@ fn emit_prepared(
     // states what it left out, rather than refusing a case over the three
     // files a consumer of the generator space never opens.
     let nodal_cost = instance.calc_nodal_generator_data();
-    let nodal_bounds = NodalBounds::of(instance);
+    // The bounds at a bus are a plain sum, so the projection carries them when
+    // it succeeds and they are summed here only when it does not.
+    let bus_of_gen = &instance.generators.bus_of_gen;
+    let (pmax, pmin) = match &nodal_cost {
+        Ok(nodal) => (nodal.pmax.clone(), nodal.pmin.clone()),
+        Err(_) => (
+            nodal::sum_by_bus(instance.n_buses, bus_of_gen, &instance.generators.pmax),
+            nodal::sum_by_bus(instance.n_buses, bus_of_gen, &instance.generators.pmin),
+        ),
+    };
     let fixed_withdrawal = instance.calc_fixed_nodal_withdrawal();
     let flow_offset = instance.calc_branch_flow_offset();
     // The case name comes from source file content, so it must not steer the
@@ -210,8 +219,8 @@ fn emit_prepared(
         put_vec(&mut inventory, "c.mtx", &nodal.c)?;
         put_vec(&mut inventory, "c0.mtx", &nodal.c0)?;
     }
-    put_vec(&mut inventory, "pmax.mtx", &nodal_bounds.pmax)?;
-    put_vec(&mut inventory, "pmin.mtx", &nodal_bounds.pmin)?;
+    put_vec(&mut inventory, "pmax.mtx", &pmax)?;
+    put_vec(&mut inventory, "pmin.mtx", &pmin)?;
     put_vec(&mut inventory, "fmax.mtx", &instance.branches.f_max)?;
     put_vec(&mut inventory, "pd.mtx", &instance.p_d)?;
     put_vec(&mut inventory, "gs.mtx", &instance.g_s)?;
@@ -281,7 +290,10 @@ fn emit_prepared(
         units: instance.units,
         nodal_cost: NodalCostMeta {
             written: nodal_cost.is_ok(),
-            omitted_because: nodal_cost.as_ref().err().map(ToString::to_string),
+            omitted_because: match &nodal_cost {
+                Err(crate::Error::NodalCostUnsupported { reason, .. }) => Some(reason.name()),
+                _ => None,
+            },
         },
         cost_curve_policy: options.assembly.cost_curve_policy,
         cost_curve_projections: &instance.cost_curve_projections,
@@ -341,24 +353,6 @@ fn emit_prepared(
         files: artifacts,
         diagnostics,
     })
-}
-
-/// The nodal generator bounds, which are a plain sum over the generators at
-/// each bus whatever shape their cost curves have.
-struct NodalBounds {
-    pmax: Vec<f64>,
-    pmin: Vec<f64>,
-}
-
-impl NodalBounds {
-    fn of(instance: &DcOpfPreparation) -> Self {
-        let n = instance.n_buses;
-        let bus_of_gen = &instance.generators.bus_of_gen;
-        Self {
-            pmax: nodal::sum_by_bus(n, bus_of_gen, &instance.generators.pmax),
-            pmin: nodal::sum_by_bus(n, bus_of_gen, &instance.generators.pmin),
-        }
-    }
 }
 
 #[allow(clippy::too_many_lines)]

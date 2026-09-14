@@ -80,7 +80,8 @@ The bus space cost files represent polynomial generator costs only. A case
 whose generators carry piecewise linear or concave costs is written without
 `q.mtx`, `c.mtx`, and `c0.mtx` rather than with zero polynomial coefficients
 that state the wrong price: `nodal_cost.written` in the manifest is `false`,
-`nodal_cost.omitted_because` says why, and the bundle reports it as a
+`nodal_cost.omitted_because` names the obstruction (`piecewise` or
+`concave`), and the bundle reports it as a
 `BUILD.OPF.NODAL_COST_UNSUPPORTED` warning. The generator space columns and
 the nodal bounds `pmax` and `pmin` are complete in either case, and the in
 memory preparation keeps the breakpoints exactly.

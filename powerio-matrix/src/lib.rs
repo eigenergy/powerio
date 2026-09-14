@@ -51,7 +51,9 @@ pub(crate) use powerio_tx::{indexed, network};
 
 pub mod diagnostics;
 pub mod error;
-pub use error::{ElementCounts, Error, PiecewiseCostInvalidity, Result, ScenarioMismatch};
+pub use error::{
+    ElementCounts, Error, NodalCostObstruction, PiecewiseCostInvalidity, Result, ScenarioMismatch,
+};
 
 /// Compressed sparse row matrix used by the projection calculations.
 pub type SparseMatrix = sprs::CsMat<f64>;
