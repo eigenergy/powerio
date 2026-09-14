@@ -2,7 +2,8 @@
 """Check paired release setup and activate one approved publication route."""
 
 import argparse
-from paired_release import POWERIO, JULIA, api, require, successful_ci
+
+from paired_release import JULIA, POWERIO, api, require, successful_ci
 
 
 def check():
@@ -47,8 +48,9 @@ def activate():
             api(f'repos/{repo}/actions/variables', {'name': 'PAIRED_RELEASES', 'value': 'true'})
     for name, env in environments.items():
         wait = next((rule.get('wait_timer', 0) for rule in env['protection_rules'] if rule['type'] == 'wait_timer'), 0)
-        from paired_release import run
         import json
+
+        from paired_release import run
         run('gh', 'api', '--method', 'PUT', f'repos/{POWERIO}/environments/{name}', '--input', '-',
             input=json.dumps({'wait_timer': wait, 'prevent_self_review': False, 'reviewers': [],
                               'deployment_branch_policy': env['deployment_branch_policy']}))

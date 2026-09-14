@@ -4,7 +4,8 @@
 import base64
 import json
 from pathlib import Path
-from paired_release import POWERIO, api, require, sha256, source
+
+from paired_release import POWERIO, api, sha256
 
 BRANCH = 'maintenance/bmopf-upstream-review'
 PATH = '.github/bmopf-upstream.json'
@@ -41,7 +42,12 @@ def main():
         api(f'repos/{POWERIO}/git/refs', {'ref': f'refs/heads/{BRANCH}', 'sha': base})
     current = api(f'repos/{POWERIO}/contents/{PATH}?ref={BRANCH}', missing=True)
     content = (json.dumps(report, indent=2, sort_keys=True) + '\n').encode()
-    if current is None or base64.b64decode(current['content']) != content:
+    unchanged = current is not None and base64.b64decode(current['content']) == content
+    prior = api(f'repos/{POWERIO}/pulls?state=all&head=eigenergy:{BRANCH}&base=main')
+    if unchanged and prior and prior[0]['state'] == 'closed' and not prior[0].get('merged_at'):
+        print('The current upstream observation was already reviewed and closed')
+        return
+    if not unchanged:
         from paired_release import run
         payload = {'message': 'docs: record BMOPF upstream review state', 'branch': BRANCH,
                    'content': base64.b64encode(content).decode()}

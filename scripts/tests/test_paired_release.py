@@ -59,6 +59,12 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "yanked"):
             pair.registry_action(self.manifest, {"0.11.3": {"git-tree-sha1": "d" * 40, "yanked": True}})
 
+    def test_breaking_version_policy_matches_julia_semver(self):
+        self.assertTrue(pair.breaking_transition((0, 11, 3), (0, 12, 0)))
+        self.assertTrue(pair.breaking_transition((1, 1, 0), (2, 0, 0)))
+        self.assertFalse(pair.breaking_transition((1, 1, 0), (1, 2, 0)))
+        self.assertFalse(pair.breaking_transition((0, 11, 3), (0, 11, 4)))
+
     def test_asset_urls_cannot_drift_to_another_release(self):
         def content(tag):
             return ''.join(f'[[powerio_capi]]\n[[powerio_capi.download]]\nurl = "https://github.com/{pair.POWERIO}/releases/download/{tag}/{name}"\nsha256 = "{digest}"\n' for name, digest in self.manifest["assets"].items()).encode()
