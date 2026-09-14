@@ -1,0 +1,59 @@
+name: Complete paired draft
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing paired draft tag to prepare or retry
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: complete-paired-${{ inputs.tag }}
+  cancel-in-progress: false
+jobs:
+  candidate:
+    if: vars.PAIRED_RELEASES == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        id: app
+        with:
+          app-id: ${{ vars.POWERIO_RELEASE_APP_ID }}
+          private-key: ${{ secrets.POWERIO_RELEASE_APP_PRIVATE_KEY }}
+          owner: eigenergy
+          repositories: powerio,PowerIO.jl
+      - name: Read the frozen pair
+        id: pair
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          TAG: ${{ inputs.tag }}
+        run: python3 scripts/paired_release.py metadata "$TAG"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: eigenergy/PowerIO.jl
+          ref: ${{ steps.pair.outputs.julia_source_sha }}
+          path: PowerIO.jl
+          persist-credentials: false
+      - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
+        with:
+          version: '1'
+      - uses: julia-actions/cache@a7bed9df697e5d7309d68afe7542a87621a8b6c8 # v3.3.0
+      - name: Generate and test the candidate against draft binaries
+        if: steps.pair.outputs.prepared != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          julia --project=PowerIO.jl -e 'using Pkg; Pkg.instantiate()'
+          julia --project=PowerIO.jl PowerIO.jl/gen/paired_release.jl prepare "$TAG"
+      - name: Record the tested commit and paired review information
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          TAG: ${{ inputs.tag }}
+          VALIDATION_URL: https://github.com/eigenergy/powerio/actions/runs/${{ github.run_id }}
+        run: python3 scripts/paired_release.py complete "$TAG" --julia-root PowerIO.jl
