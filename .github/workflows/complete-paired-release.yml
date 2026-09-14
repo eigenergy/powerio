@@ -1,4 +1,5 @@
 name: Complete paired draft
+run-name: Complete paired draft ${{ inputs.tag }}
 on:
   workflow_dispatch:
     inputs:

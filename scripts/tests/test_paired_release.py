@@ -2,6 +2,7 @@
 
 import copy
 import importlib.util
+import sys
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -9,6 +10,8 @@ from unittest.mock import patch
 SPEC = importlib.util.spec_from_file_location("paired_release", Path(__file__).parents[1] / "paired_release.py")
 pair = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(pair)
+sys.path.insert(0, str(Path(__file__).parents[1]))
+from prepare_release_prs import bump_lock_versions  # noqa: E402
 
 
 class ReleaseTests(unittest.TestCase):
@@ -58,6 +61,12 @@ class ReleaseTests(unittest.TestCase):
     def test_yanked_registration_requires_attention(self):
         with self.assertRaisesRegex(ValueError, "yanked"):
             pair.registry_action(self.manifest, {"0.11.3": {"git-tree-sha1": "d" * 40, "yanked": True}})
+
+    def test_release_bump_includes_nonprefixed_workspace_members(self):
+        lock = '[[package]]\nname = "facade-only"\nversion = "0.11.2"\n\n[[package]]\nname = "serde"\nversion = "1.0.0"\n'
+        changed = bump_lock_versions(lock, ['facade-only'], '0.11.3')
+        self.assertIn('name = "facade-only"\nversion = "0.11.3"', changed)
+        self.assertIn('name = "serde"\nversion = "1.0.0"', changed)
 
     def test_breaking_version_policy_matches_julia_semver(self):
         self.assertTrue(pair.breaking_transition((0, 11, 3), (0, 12, 0)))
