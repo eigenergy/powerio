@@ -52,9 +52,16 @@ jobs:
         run: |
           julia --project=PowerIO.jl -e 'using Pkg; Pkg.instantiate()'
           julia --project=PowerIO.jl PowerIO.jl/gen/paired_release.jl prepare "$TAG"
+      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        id: writer
+        with:
+          app-id: ${{ vars.POWERIO_RELEASE_APP_ID }}
+          private-key: ${{ secrets.POWERIO_RELEASE_APP_PRIVATE_KEY }}
+          owner: eigenergy
+          repositories: powerio,PowerIO.jl
       - name: Record the tested commit and paired review information
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GH_TOKEN: ${{ steps.writer.outputs.token }}
           TAG: ${{ inputs.tag }}
           VALIDATION_URL: https://github.com/eigenergy/powerio/actions/runs/${{ github.run_id }}
         run: python3 scripts/paired_release.py complete "$TAG" --julia-root PowerIO.jl
