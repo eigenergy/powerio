@@ -61,6 +61,36 @@ python3 evals/performance/extract_matrix_bench.py
 python3 evals/performance/render_tables.py
 ```
 
+## Parse and DC OPF preparation
+
+`cargo bench -p powerio-matrix --bench dcopf` times the path a consumer pays
+before a solver sees anything: the MATPOWER reader, `DcOpfInstance::from_network`,
+and `build_dc_opf_preparation`. The vendored `case2869pegase` always runs;
+point `POWERIO_BENCH_PGLIB` at a pglib-opf checkout to add
+`pglib_opf_case13659_pegase.m`.
+
+```sh
+POWERIO_BENCH_PGLIB=~/Datasets/pglib-opf cargo bench -p powerio-matrix --bench dcopf
+```
+
+On `pglib_opf_case13659_pegase.m` (13659 buses, 20467 branches), 0.11.3
+measures:
+
+| Stage | 0.11.2 | 0.11.3 |
+| --- | --- | --- |
+| MATPOWER parse | 92.0 ms | 92.5 ms |
+| `DcOpfInstance::from_network` | 22.1 ms | 0.47 ms |
+| `build_dc_opf_preparation` | 27.9 ms | 19.6 ms |
+| instance plus preparation | 50.0 ms | 20.1 ms |
+
+The instance step spent nearly all of its time collecting every stated
+identity into a set that a case with no missing identity never reads;
+`assign_missing_component_ids` now fills that set only when a table is short
+one. The preparation step spent its extra time copying every source
+identity into an owned string for the four constraint masks, which now borrow
+from the source tables. The prepared arrays are unchanged: the 27 file DC OPF
+bundle for this case is identical before and after.
+
 While you work on one builder, filter the run down to the benchmarks you care
 about, for example:
 

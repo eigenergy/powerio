@@ -348,8 +348,10 @@ impl DcOpfInstance {
     pub fn from_network(mut network: BalancedNetwork) -> Result<Self, Error> {
         network.assign_missing_component_ids();
         require_reference(&network)?;
-        require_dispatchable(&network)?;
-        let objective = default_opf_objective(&network);
+        // One pass over the bus table answers both questions.
+        let active_buses = active_bus_ids(&network);
+        require_dispatchable_on(&network, &active_buses)?;
+        let objective = default_opf_objective_on(&network, &active_buses);
         Ok(Self {
             network,
             objective,
@@ -488,8 +490,10 @@ impl AcOpfInstance {
     pub fn from_network(mut network: BalancedNetwork) -> Result<Self, Error> {
         network.assign_missing_component_ids();
         require_reference(&network)?;
-        require_dispatchable(&network)?;
-        let objective = default_opf_objective(&network);
+        // One pass over the bus table answers both questions.
+        let active_buses = active_bus_ids(&network);
+        require_dispatchable_on(&network, &active_buses)?;
+        let objective = default_opf_objective_on(&network, &active_buses);
         Ok(Self {
             network,
             objective,
@@ -703,7 +707,14 @@ fn require_reference(network: &BalancedNetwork) -> Result<(), Error> {
 }
 
 fn require_dispatchable(network: &BalancedNetwork) -> Result<(), Error> {
-    let active_buses = active_bus_ids(network);
+    require_dispatchable_on(network, &active_bus_ids(network))
+}
+
+/// [`require_dispatchable`] over a bus set the caller already has.
+fn require_dispatchable_on(
+    network: &BalancedNetwork,
+    active_buses: &BTreeSet<BusId>,
+) -> Result<(), Error> {
     if network
         .generators()
         .iter()
@@ -718,8 +729,11 @@ fn require_dispatchable(network: &BalancedNetwork) -> Result<(), Error> {
     }
 }
 
-fn default_opf_objective(network: &BalancedNetwork) -> Objective {
-    let active_buses = active_bus_ids(network);
+/// The default objective over a bus set the caller already has.
+fn default_opf_objective_on(
+    network: &BalancedNetwork,
+    active_buses: &BTreeSet<BusId>,
+) -> Objective {
     if network.generators().iter().any(|generator| {
         generator.in_service && active_buses.contains(&generator.bus) && generator.cost.is_some()
     }) {

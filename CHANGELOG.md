@@ -19,6 +19,21 @@
   result. Python adds `PioModule.cost_curve_projections(policy="any")`. Every
   existing symbol and signature is unchanged, so ABI 7 holds.
 
+### Performance
+
+- `assign_missing_component_ids` collects the identities already in use only
+  when a table is short one, instead of copying every record's identity into a
+  set on every call. `DcOpfInstance::from_network` on
+  `pglib_opf_case13659_pegase.m` drops from 22.1 ms to 0.47 ms.
+- The four OPF constraint masks borrow each source identity instead of copying
+  it, and `DcOpfInstance::from_network` reads the active bus set once for both
+  questions it answers. `build_dc_opf_preparation` on the same case drops from
+  27.9 ms to 19.6 ms, and the AC preparation's quadratic scan over analysis bus
+  identities becomes a set lookup. The prepared arrays are unchanged: the DC
+  OPF bundle for that case is identical file for file.
+- Add `cargo bench -p powerio-matrix --bench dcopf`, which times the MATPOWER
+  parse, the instance build, and the preparation.
+
 ### Changed
 
 - `DcOpfInstance` and `AcOpfInstance` assembly no longer refuses a nonconvex

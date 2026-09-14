@@ -1,5 +1,6 @@
 //! Shared OPF preparation semantics.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 
 use powerio_prob::{ConstraintSelection, Objective, ObjectiveTerm, ReferenceBuses};
@@ -91,6 +92,12 @@ pub(crate) fn row_identity(uid: Option<&str>, table: &str, row: usize) -> String
     uid.map_or_else(|| format!("{table}:{row}"), str::to_owned)
 }
 
+/// [`row_identity`] without the copy: a stated identity is borrowed, and only
+/// a row that states none builds its positional name.
+pub(crate) fn row_identity_ref<'a>(uid: Option<&'a str>, table: &str, row: usize) -> Cow<'a, str> {
+    uid.map_or_else(|| Cow::Owned(format!("{table}:{row}")), Cow::Borrowed)
+}
+
 /// Dense bus rows used by a balanced OPF preparation. A bus explicitly typed
 /// isolated states no equation, so it and every incident element stay out of
 /// the numerical problem while its source row remains in the PowerIO model.
@@ -178,18 +185,22 @@ pub(crate) fn active_bus_index(case: &IndexedNetwork<'_>) -> Result<ActiveBusInd
 
 /// Validate a selection against the complete family and return one flag per
 /// active analysis row.
-pub(crate) fn constraint_mask(
+pub(crate) fn constraint_mask<'a, I>(
     family: &'static str,
     selection: &ConstraintSelection,
-    all_identities: &[String],
+    all_identities: I,
     active_identities: &[String],
-) -> Result<Vec<bool>> {
-    let mut declared = HashSet::with_capacity(all_identities.len());
+) -> Result<Vec<bool>>
+where
+    I: IntoIterator<Item = Cow<'a, str>>,
+{
+    let all_identities = all_identities.into_iter();
+    let mut declared = HashSet::with_capacity(all_identities.size_hint().0);
     for identity in all_identities {
-        if !declared.insert(identity.as_str()) {
+        if let Some(duplicate) = declared.replace(identity) {
             return Err(Error::DuplicateElementIdentity {
                 family,
-                identity: identity.clone(),
+                identity: duplicate.into_owned(),
             });
         }
     }

@@ -3,6 +3,9 @@
 //! `powerio_prob::build_ac_opf_instance`; it lives here now beside the DC
 //! preparation so every solver formulates over the one shared assembly.
 
+use std::borrow::Cow;
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 
 use powerio_prob::{AcBusSpecification, AcOpfInstance, AcPfInstance, ReferenceBuses};
@@ -1055,62 +1058,73 @@ fn apply_instance_semantics(
     source: &BalancedNetwork,
     constraints: &powerio_prob::ActiveConstraints,
 ) -> Result<()> {
-    let source_generator_ids: Vec<String> = source
+    // A stated identity is borrowed from the source table, so a case whose
+    // records carry uids copies no string here.
+    let source_generator_ids = source
         .generators()
         .iter()
         .enumerate()
         .map(|(row, generator)| {
-            crate::opf::row_identity(generator.uid.as_deref(), "generators", row)
-        })
-        .collect();
-    let source_branch_ids: Vec<String> = source
-        .branches()
-        .iter()
-        .enumerate()
-        .map(|(row, branch)| crate::opf::row_identity(branch.uid.as_deref(), "branches", row))
-        .collect();
+            crate::opf::row_identity_ref(generator.uid.as_deref(), "generators", row)
+        });
+    let source_branch_ids =
+        source.branches().iter().enumerate().map(|(row, branch)| {
+            crate::opf::row_identity_ref(branch.uid.as_deref(), "branches", row)
+        });
+
+    // Bus ids are numbers, so their identities are built rather than
+    // borrowed. A synthetic star bus has no source row, so its id joins the
+    // family; membership is a set lookup, not a scan of what is already there.
     let mut analysis_bus_ids: Vec<String> = source
         .buses()
         .iter()
         .map(|bus| bus.id.to_string())
         .collect();
+    let mut known: HashSet<&str> = HashSet::with_capacity(analysis_bus_ids.len());
+    for identity in &analysis_bus_ids {
+        known.insert(identity.as_str());
+    }
+    let mut added: Vec<String> = Vec::new();
     for bus in &preparation.bus_ids {
         let identity = bus.to_string();
-        if !analysis_bus_ids.iter().any(|known| known == &identity) {
-            analysis_bus_ids.push(identity);
+        if !known.contains(identity.as_str()) && !added.iter().any(|seen| seen == &identity) {
+            added.push(identity);
         }
     }
+    analysis_bus_ids.extend(added);
 
+    let active_bus_ids: Vec<String> = preparation
+        .bus_ids
+        .iter()
+        .map(ToString::to_string)
+        .collect();
     preparation.buses.voltage_bound_active = crate::opf::constraint_mask(
         "bus voltage bounds",
         &constraints.voltage_bounds,
-        &analysis_bus_ids,
-        &preparation
-            .bus_ids
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>(),
+        analysis_bus_ids.iter().map(|id| Cow::Borrowed(id.as_str())),
+        &active_bus_ids,
     )?;
     preparation.generators.capability_active = crate::opf::constraint_mask(
         "generator capability",
         &constraints.generator_capability,
-        &source_generator_ids,
+        source_generator_ids,
         &preparation.generators.identities,
     )?;
-    let mut analysis_branch_ids = source_branch_ids;
-    analysis_branch_ids.extend(
-        preparation
-            .branches
-            .identities
-            .iter()
-            .zip(&preparation.branches.analysis_rows)
-            .filter(|(_, row)| **row >= source.branches().len())
-            .map(|(identity, _)| identity.clone()),
-    );
+    let analysis_branch_ids = || {
+        source_branch_ids.clone().chain(
+            preparation
+                .branches
+                .identities
+                .iter()
+                .zip(&preparation.branches.analysis_rows)
+                .filter(|(_, row)| **row >= source.branches().len())
+                .map(|(identity, _)| Cow::Borrowed(identity.as_str())),
+        )
+    };
     preparation.branches.thermal_limit_active = crate::opf::constraint_mask(
         "branch thermal limits",
         &constraints.thermal_limits,
-        &analysis_branch_ids,
+        analysis_branch_ids(),
         &preparation.branches.identities,
     )?;
     for (active, limit) in preparation
@@ -1124,7 +1138,7 @@ fn apply_instance_semantics(
     preparation.branches.angle_bound_active = crate::opf::constraint_mask(
         "branch angle bounds",
         &constraints.angle_bounds,
-        &analysis_branch_ids,
+        analysis_branch_ids(),
         &preparation.branches.identities,
     )?;
 

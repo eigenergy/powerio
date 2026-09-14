@@ -57,5 +57,9 @@ tempfile = "3"
 name = "matrix"
 harness = false
 
+[[bench]]
+name = "dcopf"
+harness = false
+
 [lints]
 workspace = true

@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use serde::{Deserialize, Serialize};
 
 use powerio_tx::{BalancedNetwork, BranchSusceptanceFormula, BusId, IndexedNetwork};
@@ -581,25 +583,24 @@ pub(crate) fn apply_instance_semantics(
     source: &BalancedNetwork,
     constraints: &powerio_prob::ActiveConstraints,
 ) -> Result<()> {
-    let source_generator_ids: Vec<String> = source
+    // A stated identity is borrowed from the source table, so a case whose
+    // records carry uids copies no string here.
+    let source_generator_ids = source
         .generators()
         .iter()
         .enumerate()
         .map(|(row, generator)| {
-            crate::opf::row_identity(generator.uid.as_deref(), "generators", row)
-        })
-        .collect();
-    let source_branch_ids: Vec<String> = source
-        .branches()
-        .iter()
-        .enumerate()
-        .map(|(row, branch)| crate::opf::row_identity(branch.uid.as_deref(), "branches", row))
-        .collect();
+            crate::opf::row_identity_ref(generator.uid.as_deref(), "generators", row)
+        });
+    let source_branch_ids =
+        source.branches().iter().enumerate().map(|(row, branch)| {
+            crate::opf::row_identity_ref(branch.uid.as_deref(), "branches", row)
+        });
 
     preparation.generators.capability_active = crate::opf::constraint_mask(
         "generator capability",
         &constraints.generator_capability,
-        &source_generator_ids,
+        source_generator_ids,
         &preparation.generators.identities,
     )?;
 
@@ -607,34 +608,33 @@ pub(crate) fn apply_instance_semantics(
     // bound rows to expose. Still validate an explicit identity selection:
     // a misspelled bus must not disappear merely because this formulation
     // has no corresponding variable.
-    let source_bus_ids: Vec<String> = source
-        .buses()
-        .iter()
-        .map(|bus| bus.id.to_string())
-        .collect();
     let _ = crate::opf::constraint_mask(
         "bus voltage bounds",
         &constraints.voltage_bounds,
-        &source_bus_ids,
+        source
+            .buses()
+            .iter()
+            .map(|bus| Cow::Owned(bus.id.to_string())),
         &[],
     )?;
 
     // Synthetic winding branches are part of the analysis family and are
     // addressable by the identities returned in the preparation.
-    let mut analysis_branch_ids = source_branch_ids;
-    analysis_branch_ids.extend(
-        preparation
-            .branches
-            .identities
-            .iter()
-            .zip(&preparation.branches.analysis_rows)
-            .filter(|(_, row)| **row >= source.branches().len())
-            .map(|(identity, _)| identity.clone()),
-    );
+    let analysis_branch_ids = || {
+        source_branch_ids.clone().chain(
+            preparation
+                .branches
+                .identities
+                .iter()
+                .zip(&preparation.branches.analysis_rows)
+                .filter(|(_, row)| **row >= source.branches().len())
+                .map(|(identity, _)| Cow::Borrowed(identity.as_str())),
+        )
+    };
     preparation.branches.thermal_limit_active = crate::opf::constraint_mask(
         "branch thermal limits",
         &constraints.thermal_limits,
-        &analysis_branch_ids,
+        analysis_branch_ids(),
         &preparation.branches.identities,
     )?;
     for (active, limit) in preparation
@@ -648,7 +648,7 @@ pub(crate) fn apply_instance_semantics(
     preparation.branches.angle_bound_active = crate::opf::constraint_mask(
         "branch angle bounds",
         &constraints.angle_bounds,
-        &analysis_branch_ids,
+        analysis_branch_ids(),
         &preparation.branches.identities,
     )?;
 

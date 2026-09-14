@@ -1925,17 +1925,24 @@ impl BalancedNetwork {
     /// Callers that assemble a network by pushing records can call this once
     /// after construction. PowerIO parsers call it before returning a module.
     pub fn assign_missing_component_ids(&mut self) {
-        let mut used = self.component_ids_in_use();
+        // A parsed network usually states every identity, and collecting the
+        // ones in use copies one String per record over every table. Fill the
+        // set the first time a table is short an identity, not before.
+        let mut used: Option<HashSet<String>> = None;
         let mut next_suffix = HashMap::new();
         macro_rules! assign {
             ($table:ident, $table_mut:ident, $set_uid:expr, $stem:expr) => {
                 if self.$table().iter().any(|value| value.uid.is_none()) {
+                    if used.is_none() {
+                        used = Some(self.component_ids_in_use());
+                    }
+                    let used = used.as_mut().expect("the set is filled above");
                     let generated = assign_missing_ids(
                         self.$table_mut(),
                         |value| value.uid.as_deref(),
                         $set_uid,
                         $stem,
-                        &mut used,
+                        used,
                         &mut next_suffix,
                     );
                     std::sync::Arc::make_mut(&mut self.tables_mut().generated_uids)
