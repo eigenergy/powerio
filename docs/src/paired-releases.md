@@ -48,8 +48,12 @@ release branch or replaces published data.
 
 **Reconcile paired releases** runs after publication and daily. Manual dispatch
 accepts an existing published tag. It checks the manifest, resumes missing or
-failed package publication, posts a deduplicated registration request on the
-exact tested Julia commit, and retries TagBot when General has accepted the
+failed package publication, and dispatches Julia's existing **Register Package**
+workflow for the exact approved commit. That workflow checks the manifest,
+tests the published artifacts, and posts a deduplicated registration request
+using the repository's Actions token, which satisfies
+[Registrator's caller checks](https://github.com/JuliaRegistries/Registrator.jl/blob/master/src/commentbot/github_utils.jl).
+The release App handles cross-repository dispatch. Reconciliation retries TagBot when General has accepted the
 version but its Julia release is absent. Missing credentials, unexpected
 assets, mismatched hashes, and a different registered tree fail explicitly.
 Waiting for General is reported separately from completed publication.

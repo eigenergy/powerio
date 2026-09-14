@@ -81,36 +81,8 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           TAG: ${{ matrix.tag }}
         run: python3 scripts/paired_release.py status "$TAG"
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: steps.state.outputs.action == 'register'
-        with:
-          repository: eigenergy/PowerIO.jl
-          ref: ${{ steps.state.outputs.julia_sha }}
-          path: PowerIO.jl
-          persist-credentials: false
-      - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
-        if: steps.state.outputs.action == 'register'
-        with:
-          version: '1'
-      - uses: julia-actions/cache@a7bed9df697e5d7309d68afe7542a87621a8b6c8 # v3.3.0
-        if: steps.state.outputs.action == 'register'
-      - name: Recheck the exact Julia package using published artifacts
-        if: steps.state.outputs.action == 'register'
-        env:
-          VERSION: ${{ matrix.tag }}
-        run: |
-          julia --project=PowerIO.jl -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
-          julia --project=PowerIO.jl -e 'using PowerIO; PowerIO.library_version() == ENV["VERSION"][2:end] || error("library version mismatch"); PowerIO.abi_version() == PowerIO.PIO_ABI_VERSION || error("ABI mismatch")'
-          git -C PowerIO.jl diff --exit-code
-      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
-        id: writer
-        with:
-          app-id: ${{ vars.POWERIO_RELEASE_APP_ID }}
-          private-key: ${{ secrets.POWERIO_RELEASE_APP_PRIVATE_KEY }}
-          owner: eigenergy
-          repositories: powerio,PowerIO.jl
       - name: Resume publication and registration
         env:
-          GH_TOKEN: ${{ steps.writer.outputs.token }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
           TAG: ${{ matrix.tag }}
         run: python3 scripts/paired_release.py register "$TAG" | tee -a "$GITHUB_STEP_SUMMARY"
