@@ -34,6 +34,12 @@
 - Add `cargo bench -p powerio-matrix --bench dcopf`, which times the MATPOWER
   parse, the instance build, and the preparation.
 
+### Fixed
+
+- The PSS/E RAWX writer reports a non-numeric value in a numeric field of a
+  retained RAW section instead of panicking. `add_simple_output_table` now
+  propagates the failure its row reader already produced.
+
 ### Changed
 
 - `DcOpfInstance` and `AcOpfInstance` assembly no longer refuses a nonconvex

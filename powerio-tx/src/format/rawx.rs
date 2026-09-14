@@ -1799,35 +1799,35 @@ pub(super) fn read_raw_detailed_connectivity(
 
     let (_, _, sections) = split_raw(source)?;
     let mut network = Map::new();
-    add_simple_output_table(&mut network, "bus", BUS_FIELDS, &["name"], &sections);
+    add_simple_output_table(&mut network, "bus", BUS_FIELDS, &["name"], &sections)?;
     add_simple_output_table(
         &mut network,
         "load",
         LOAD_FIELDS,
         &["loadid", "loadtype"],
         &sections,
-    );
+    )?;
     add_simple_output_table(
         &mut network,
         "fixshunt",
         FIXED_SHUNT_FIELDS,
         &["shntid"],
         &sections,
-    );
+    )?;
     add_simple_output_table(
         &mut network,
         "generator",
         GENERATOR_FIELDS,
         &["machid"],
         &sections,
-    );
+    )?;
     add_simple_output_table(
         &mut network,
         "acline",
         AC_LINE_FIELDS,
         &["ckt", "name"],
         &sections,
-    );
+    )?;
     add_transformer_output_table(&mut network, &sections)?;
     add_simple_output_table(
         &mut network,
@@ -1835,7 +1835,7 @@ pub(super) fn read_raw_detailed_connectivity(
         SWITCHED_SHUNT_FIELDS,
         &["shntid", "rmidnt"],
         &sections,
-    );
+    )?;
     add_two_terminal_output_table(&mut network, &sections)?;
     network.insert(
         "sub".to_owned(),
@@ -1940,37 +1940,37 @@ fn raw_to_rawx(net: &BalancedNetwork, raw: &str, diagnostics: &mut Diagnostics) 
         "caseid".to_owned(),
         table_object(CASE_FIELDS, Value::Array(case_data)),
     );
-    add_simple_output_table(&mut network, "bus", BUS_FIELDS, &["name"], &sections);
+    add_simple_output_table(&mut network, "bus", BUS_FIELDS, &["name"], &sections)?;
     add_simple_output_table(
         &mut network,
         "load",
         LOAD_FIELDS,
         &["loadid", "loadtype"],
         &sections,
-    );
+    )?;
     add_simple_output_table(
         &mut network,
         "fixshunt",
         FIXED_SHUNT_FIELDS,
         &["shntid"],
         &sections,
-    );
+    )?;
     add_simple_output_table(
         &mut network,
         "generator",
         GENERATOR_FIELDS,
         &["machid"],
         &sections,
-    );
+    )?;
     add_simple_output_table(
         &mut network,
         "acline",
         AC_LINE_FIELDS,
         &["ckt", "name"],
         &sections,
-    );
+    )?;
     add_transformer_output_table(&mut network, &sections)?;
-    add_simple_output_table(&mut network, "area", AREA_FIELDS, &["arname"], &sections);
+    add_simple_output_table(&mut network, "area", AREA_FIELDS, &["arname"], &sections)?;
     add_two_terminal_output_table(&mut network, &sections)?;
     add_simple_output_table(
         &mut network,
@@ -1978,7 +1978,7 @@ fn raw_to_rawx(net: &BalancedNetwork, raw: &str, diagnostics: &mut Diagnostics) 
         SWITCHED_SHUNT_FIELDS,
         &["shntid", "rmidnt"],
         &sections,
-    );
+    )?;
     add_system_switch_output_table(&mut network, net, diagnostics);
     apply_detailed_equipment_ids(&mut network, net)?;
     add_detailed_connectivity_output_tables(&mut network, net, diagnostics)?;
@@ -2110,13 +2110,15 @@ fn section_after_marker(line: &str) -> Option<String> {
     Some(rest[..end].trim().to_owned())
 }
 
+/// # Errors
+/// A section row states a non-numeric value in a numeric field.
 fn add_simple_output_table(
     network: &mut Map<String, Value>,
     name: &str,
     fields: &[&str],
     strings: &[&str],
     sections: &BTreeMap<String, Vec<String>>,
-) {
+) -> Result<()> {
     let section_name = match name {
         "bus" => "BUS",
         "load" => "LOAD",
@@ -2125,7 +2127,7 @@ fn add_simple_output_table(
         "acline" => "BRANCH",
         "area" => "AREA",
         "swshunt" => "SWITCHED SHUNT",
-        _ => return,
+        _ => return Ok(()),
     };
     let rows: Vec<Value> = sections
         .get(section_name)
@@ -2136,12 +2138,13 @@ fn add_simple_output_table(
                 .into_iter()
                 .map(std::borrow::Cow::into_owned)
                 .collect();
-            Value::Array(tokens_as_values(&tokens, fields, strings).unwrap())
+            Ok(Value::Array(tokens_as_values(&tokens, fields, strings)?))
         })
-        .collect();
+        .collect::<Result<_>>()?;
     if !rows.is_empty() {
         network.insert(name.to_owned(), table_object(fields, Value::Array(rows)));
     }
+    Ok(())
 }
 
 fn add_transformer_output_table(
