@@ -9,10 +9,11 @@ import datetime as dt
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import subprocess
 import tempfile
+from pathlib import Path
+
 import tomllib
 
 POWERIO = "eigenergy/powerio"
@@ -39,7 +40,7 @@ def api(path, data=None, *, missing=False):
     if data is not None:
         command += ["--input", "-"]
     result = subprocess.run(command, input=json.dumps(data) if data is not None else None,
-                            capture_output=True, text=True)
+                            capture_output=True, text=True, check=False)
     if result.returncode:
         if missing and "HTTP 404" in result.stderr:
             return None
@@ -128,6 +129,13 @@ def create_tag(number):
         successful_ci(repo, sha)
         require(json.loads(source(repo, ".github/paired-release.json", sha))["format"] == 1,
                 f"paired release support is not enabled in {repo}")
+    registry = tomllib.loads(source("JuliaRegistries/General", "P/PowerIO/Versions.toml", "master").decode())
+    require(number not in registry, "Julia version is already registered")
+    require(registry_action({"tag": tag}, registry) == "register", "Julia release order is invalid")
+    latest = max(version(v) for v in registry)
+    if breaking_transition(latest, version(number)):
+        require("breaking" in identity(JULIA, pair["julia_source_sha"], number).lower(),
+                "breaking transition requires explicit compatibility notes")
     for repo, key in ((POWERIO, "powerio_sha"), (JULIA, "julia_source_sha")):
         require(api(f"repos/{repo}/git/ref/heads/main")["object"]["sha"] == pair[key],
                 "main advanced during preparation; retry preparation")
@@ -268,6 +276,10 @@ def complete_candidate(tag, julia_root):
     print(f"{tag} is ready for paired review and publication")
 
 
+def breaking_transition(previous, target):
+    return target[0] > previous[0] or (previous[0] == target[0] == 0 and target[1] > previous[1])
+
+
 def registry_action(manifest, versions):
     number = manifest["tag"][1:]
     target = version(number)
@@ -298,8 +310,8 @@ def register(tag):
             print(f"{tag}: registered and Julia release exists")
         return
     body_notes = identity(JULIA, manifest["julia_source_sha"], tag[1:])
-    major, minor, _ = max(version(v) for v in registry)
-    if version(tag[1:])[:2] != (major, minor):
+    latest = max(version(v) for v in registry)
+    if breaking_transition(latest, version(tag[1:])):
         require("breaking" in body_notes.lower(), "minor/major transition requires explicit compatibility notes")
     sha = manifest["julia_sha"]
     comments = pages(f"repos/{JULIA}/commits/{sha}/comments?per_page=100")

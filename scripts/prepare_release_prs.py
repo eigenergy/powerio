@@ -4,8 +4,8 @@
 import argparse
 import base64
 import re
-import tomllib
 
+import tomllib
 from paired_release import JULIA, POWERIO, api, require, source, version
 
 
