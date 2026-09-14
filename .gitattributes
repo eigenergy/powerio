@@ -30,3 +30,6 @@ tests/data/ucte/*.uct -whitespace
 
 # IEEE CDF uses fixed columns and meaningful trailing padding.
 tests/data/ieee-cdf/*.txt -whitespace
+
+# Archived schemas retain their exact upstream bytes on every platform.
+powerio-dist/schemas/bmopf/**/*.json -text linguist-vendored
