@@ -159,7 +159,13 @@ def create_tag(number, *, replace=False):
 
 
 def release(tag):
-    return api(f"repos/{POWERIO}/releases/tags/{tag}", missing=True)
+    published = api(f"repos/{POWERIO}/releases/tags/{tag}", missing=True)
+    if published is not None:
+        return published
+    matches = [item for item in pages(f"repos/{POWERIO}/releases?per_page=100")
+               if item["tag_name"] == tag]
+    require(len(matches) <= 1, "multiple releases name the requested tag")
+    return matches[0] if matches else None
 
 
 def download(tag, name, dest):
