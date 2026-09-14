@@ -14,6 +14,10 @@ jobs:
           private-key: ${{ secrets.POWERIO_RELEASE_APP_PRIVATE_KEY }}
           owner: eigenergy
           repositories: powerio,PowerIO.jl
+          permission-contents: write
+          permission-pull-requests: write
+          permission-actions: write
+          permission-workflows: write
       - name: Verify both selected repositories are accessible
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
