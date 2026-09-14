@@ -170,6 +170,13 @@ class ReleaseTests(unittest.TestCase):
             api.assert_not_called()
             run.assert_not_called()
 
+    def test_publication_retry_runs_on_the_tag_allowed_by_deployment_rules(self):
+        with patch.object(pair, 'public_json', return_value=None), patch.object(pair, 'api', return_value={'workflow_runs': []}), patch.object(pair, 'run') as run:
+            pair.repair_publications('v0.11.3', self.manifest)
+            self.assertEqual(run.call_count, 2)
+            for call in run.call_args_list:
+                self.assertEqual(call.args[call.args.index('--ref') + 1], 'v0.11.3')
+
     def test_changelog_requires_curated_notes(self):
         self.assertEqual(pair.notes('# Changelog\n\n## 0.11.3\n\n- Maintenance.\n\n## 0.11.2\n- Older.\n', '0.11.3'), '- Maintenance.')
         with self.assertRaises(ValueError):
