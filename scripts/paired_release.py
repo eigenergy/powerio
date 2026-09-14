@@ -338,6 +338,7 @@ def register(tag):
     repair_publications(tag, manifest)
     registry = tomllib.loads(source("JuliaRegistries/General", "P/PowerIO/Versions.toml", "master").decode())
     action = registry_action(manifest, registry)
+    sync_candidate(manifest)
     if action == "registered":
         jl_release = api(f"repos/{JULIA}/releases/tags/{tag}", missing=True)
         if not jl_release:
@@ -345,6 +346,26 @@ def register(tag):
             print(f"{tag}: registered; waiting for TagBot")
         else:
             print(f"{tag}: registered and Julia release exists")
+        return
+    sha = manifest["julia_sha"]
+    title = f"Register PowerIO.jl {tag[1:]} {sha}"
+    runs = api(f"repos/{JULIA}/actions/workflows/register.yml/runs?per_page=100")["workflow_runs"]
+    if not any(r["display_title"] == title and r["status"] != "completed" for r in runs):
+        run("gh", "workflow", "run", "register.yml", "--repo", JULIA, "--ref", "main",
+            "-f", "version=" + tag[1:], "-f", "expected_sha=" + sha)
+    print(f"{tag}: Julia registration workflow selected {sha}; scheduled retries remain active")
+
+
+def request_registration(tag, expected_sha, julia_root):
+    require(os.environ.get("GITHUB_REPOSITORY") == JULIA,
+            "registration requests run in the PowerIO.jl repository workflow")
+    manifest = verify(tag)
+    require(manifest["julia_sha"] == commit_sha(expected_sha), "registration SHA differs from approved pair")
+    require(run("git", "rev-parse", "HEAD", cwd=julia_root) == expected_sha, "wrong tested Julia checkout")
+    run("git", "diff", "--exit-code", cwd=julia_root)
+    registry = tomllib.loads(source("JuliaRegistries/General", "P/PowerIO/Versions.toml", "master").decode())
+    if registry_action(manifest, registry) == "registered":
+        print(f"{tag}: exact Julia tree is already registered")
         return
     body_notes = identity(JULIA, manifest["julia_source_sha"], tag[1:])
     latest = max(version(v) for v in registry)
@@ -357,6 +378,11 @@ def register(tag):
                  dt.datetime.fromisoformat(c["created_at"].replace('Z', '+00:00')) > cutoff for c in comments)
     if not recent:
         api(f"repos/{JULIA}/commits/{sha}/comments", {"body": f"@JuliaRegistrator register\n\nRelease notes:\n{body_notes}"})
+    print(f"{tag}: registration request for {sha} is pending in General")
+
+
+def sync_candidate(manifest):
+    tag, sha = manifest["tag"], manifest["julia_sha"]
     branch = manifest["julia_branch"]
     ref = api(f"repos/{JULIA}/git/ref/heads/{branch}", missing=True)
     if ref is None:
@@ -367,7 +393,6 @@ def register(tag):
     if not prs:
         api(f"repos/{JULIA}/pulls", {"title": f"release: synchronize {tag} artifacts", "head": branch,
             "base": "main", "body": f"Synchronize the exact artifact references tested and approved in the PowerIO {tag} paired release. Registration uses commit `{sha}` independently of later main changes."})
-    print(f"{tag}: waiting for General registration of {sha}; scheduled retries remain active")
 
 
 
@@ -414,8 +439,10 @@ def repair_publications(tag, manifest):
         run("gh", "workflow", "run", workflow, "--repo", POWERIO, "--ref", tag, "-f", "tag=" + tag)
 
 
-def registration_status(tag):
+def registration_status(tag, expected_sha=None):
     manifest = verify(tag)
+    if expected_sha is not None:
+        require(manifest["julia_sha"] == commit_sha(expected_sha), "requested SHA differs from approved pair")
     versions = tomllib.loads(source("JuliaRegistries/General", "P/PowerIO/Versions.toml", "master").decode())
     action = registry_action(manifest, versions)
     if os.environ.get("GITHUB_OUTPUT"):
@@ -481,9 +508,10 @@ def emit_pair(tag):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["tag", "metadata", "complete", "verify", "register", "status", "recover", "replace-unpublished"])
+    parser.add_argument("command", choices=["tag", "metadata", "complete", "verify", "register", "status", "recover", "replace-unpublished", "request-registration"])
     parser.add_argument("version_or_tag", nargs="?", default="")
     parser.add_argument("--julia-root", default="PowerIO.jl")
+    parser.add_argument("--expected-sha")
     args = parser.parse_args()
     if args.command == "recover":
         recover_drafts()
@@ -496,7 +524,9 @@ def main():
     elif args.command == "complete":
         complete_candidate(args.version_or_tag, args.julia_root)
     elif args.command == "status":
-        registration_status(args.version_or_tag)
+        registration_status(args.version_or_tag, args.expected_sha)
+    elif args.command == "request-registration":
+        request_registration(args.version_or_tag, args.expected_sha, args.julia_root)
     elif args.command == "verify":
         print(json.dumps(verify(args.version_or_tag)))
     else:
