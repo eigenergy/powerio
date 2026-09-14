@@ -65,7 +65,7 @@ workflow PRs pass CI. The new workflows require `PAIRED_RELEASES=true` in both
 repositories. The legacy Julia artifact and registration jobs stop when that
 variable is enabled, leaving one release authority.
 
-Register a dedicated GitHub App owned by eigenergy, installed only on
+[Register the dedicated GitHub App](https://github.com/organizations/eigenergy/settings/apps/new?name=eigenergy-powerio-releases&description=Coordinate+reviewed+PowerIO+and+PowerIO.jl+releases.&url=https%3A%2F%2Fgithub.com%2Feigenergy%2Fpowerio&public=false&webhook_active=false&request_oauth_on_install=false&contents=write&pull_requests=write&actions=write&workflows=write) owned by eigenergy, installed only on
 `powerio` and `PowerIO.jl`. Grant repository Contents, Pull requests, and
 Actions write permissions, plus Workflows write to preserve a pinned commit
 when later workflow edits advance main. Generated commits do not edit workflow
