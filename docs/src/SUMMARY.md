@@ -28,3 +28,5 @@
   - [Corpus harness](corpus-harness.md)
   - [Performance](performance.md)
   - [Testing and release checks](contributor-workflow.md)
+
+- [Paired releases](paired-releases.md)

@@ -1,0 +1,82 @@
+"""Exercise immutable release identity and recovery decisions without publication."""
+
+import copy
+import importlib.util
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+SPEC = importlib.util.spec_from_file_location("paired_release", Path(__file__).parents[1] / "paired_release.py")
+pair = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(pair)
+
+
+class ReleaseTests(unittest.TestCase):
+    def setUp(self):
+        self.frozen = {"format": 1, "tag": "v0.11.3", "powerio_sha": "a" * 40, "julia_source_sha": "b" * 40}
+        self.manifest = dict(self.frozen, julia_sha="c" * 40, julia_tree_sha="d" * 40,
+                             assets={name: "e" * 64 for name in pair.ASSETS},
+                             validation={"status": "passed", "url": "https://github.com/eigenergy/powerio/actions/runs/123"})
+        self.assets = {name: {"digest": "sha256:" + "e" * 64} for name in pair.ASSETS}
+
+    def test_frozen_pair_does_not_read_main(self):
+        with patch.object(pair, "api", side_effect=AssertionError("must not read main")):
+            pair.validate_manifest(self.manifest, self.frozen, self.assets)
+
+    def test_changed_candidate_is_rejected(self):
+        for key in ("powerio_sha", "julia_source_sha", "tag"):
+            changed = copy.deepcopy(self.manifest)
+            changed[key] = "f" * 40
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                pair.validate_manifest(changed, self.frozen, self.assets)
+
+    def test_changed_binary_is_rejected(self):
+        self.assets[next(iter(pair.ASSETS))]["digest"] = "sha256:" + "f" * 64
+        with self.assertRaisesRegex(ValueError, "digest mismatch"):
+            pair.validate_manifest(self.manifest, self.frozen, self.assets)
+
+    def test_missing_and_extra_assets_are_rejected(self):
+        values = [{"name": n} for n in pair.ASSETS | {pair.MANIFEST}]
+        pair.asset_map({"assets": values}, complete=True)
+        for changed in (values[:-1], values + [{"name": "unreviewed.zip"}], values + values[:1]):
+            with self.assertRaises(ValueError):
+                pair.asset_map({"assets": changed}, complete=True)
+
+    def test_registered_tree_is_terminal(self):
+        versions = {"0.11.3": {"git-tree-sha1": "d" * 40}}
+        self.assertEqual(pair.registry_action(self.manifest, versions), "registered")
+
+    def test_registered_wrong_tree_is_not_success(self):
+        with self.assertRaisesRegex(ValueError, "different Julia tree"):
+            pair.registry_action(self.manifest, {"0.11.3": {"git-tree-sha1": "f" * 40}})
+
+    def test_next_version_and_out_of_order_dispatch(self):
+        self.assertEqual(pair.registry_action(self.manifest, {"0.11.2": {}}), "register")
+        with self.assertRaises(ValueError):
+            pair.registry_action(self.manifest, {"0.11.4": {}})
+
+    def test_yanked_registration_requires_attention(self):
+        with self.assertRaisesRegex(ValueError, "yanked"):
+            pair.registry_action(self.manifest, {"0.11.3": {"git-tree-sha1": "d" * 40, "yanked": True}})
+
+    def test_asset_urls_cannot_drift_to_another_release(self):
+        def content(tag):
+            return ''.join(f'[[powerio_capi]]\n[[powerio_capi.download]]\nurl = "https://github.com/{pair.POWERIO}/releases/download/{tag}/{name}"\nsha256 = "{digest}"\n' for name, digest in self.manifest["assets"].items()).encode()
+        pair.validate_artifacts(content('v0.11.3'), 'v0.11.3', self.manifest['assets'])
+        with self.assertRaises(ValueError):
+            pair.validate_artifacts(content('v0.11.4'), 'v0.11.3', self.manifest['assets'])
+
+    def test_missing_credentials_fail_without_registration(self):
+        with patch.object(pair, "verify", side_effect=RuntimeError("credentials expired")), patch.object(pair, "api") as api:
+            with self.assertRaises(RuntimeError):
+                pair.register('v0.11.3')
+            api.assert_not_called()
+
+    def test_changelog_requires_curated_notes(self):
+        self.assertEqual(pair.notes('# Changelog\n\n## 0.11.3\n\n- Maintenance.\n\n## 0.11.2\n- Older.\n', '0.11.3'), '- Maintenance.')
+        with self.assertRaises(ValueError):
+            pair.notes('## 0.11.3\n- REVIEW REQUIRED\n', '0.11.3')
+
+
+if __name__ == '__main__':
+    unittest.main()

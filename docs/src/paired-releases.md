@@ -1,0 +1,79 @@
+# Paired releases
+
+PowerIO and PowerIO.jl use matching versions in the 0.11 series. A maintainer
+chooses the version and reviews both changelogs. Automation freezes the two
+source commits, prepares the binaries and Julia artifact references, and
+presents one draft release. Publishing that draft approves publication to
+crates.io, PyPI, and Julia's General registry.
+
+## Prepare and approve
+
+1. Run **Prepare paired release**, stage `changes`, with the intended version.
+   It opens draft `release/X.Y.Z` PRs in both repositories. Write the curated
+   changelog entries, review the compatibility implications, and merge both
+   PRs after CI passes. No version or compatibility assessment is inferred.
+2. Run the same workflow, stage `candidate`. It checks both `main` versions,
+   notes, and CI, then creates an annotated tag containing the exact source
+   pairing. The binary workflow tests the pinned Julia source and builds the
+   five platform archives.
+3. **Complete paired draft** downloads and verifies the draft archives, runs
+   the Julia checks, and records a candidate commit changing only
+   `Artifacts.toml`. It attaches `release-manifest.json` and displays both
+   changelogs, source commits, and test evidence in the draft release.
+4. Inspect that complete draft and publish it. This is the publication
+   approval for both repositories. Do not publish a draft that still says
+   candidate preparation is in progress. Registry workflows reject a release
+   without its complete, verified manifest.
+
+The manifest records the source pairing, exact Julia candidate tree,
+`Artifacts.toml` hash, binary hashes, changelog hashes, and validation run.
+The tag annotation and published immutable assets identify the approved
+candidate. Editing release-body prose does not authorize different code.
+New `main` commits do not change the candidate or block its registration.
+
+## Retry and recovery
+
+Rerun **Complete paired draft** for an interrupted draft. It preserves
+existing candidate commits and assets. A different candidate needs a new
+review; no workflow force pushes a release branch or replaces published data.
+
+**Reconcile paired releases** runs after publication and daily. Manual dispatch
+accepts an existing published tag. It checks the manifest, resumes missing or
+failed package publication, posts a deduplicated registration request on the
+exact tested Julia commit, and retries TagBot when General has accepted the
+version but its Julia release is absent. Missing credentials, unexpected
+assets, mismatched hashes, and a different registered tree fail explicitly.
+Waiting for General is reported separately from completed publication.
+
+A synchronization PR brings the approved artifact references back to Julia
+`main`; its timing does not affect the already approved package. General
+registration remains subject to that community's checks and review.
+
+## One-time activation after v0.11.2
+
+Keep the existing release route active until v0.11.2 finishes and the paired
+workflow PRs pass CI. The new workflows require `PAIRED_RELEASES=true` in both
+repositories. The legacy Julia artifact and registration jobs stop when that
+variable is enabled, leaving one release authority.
+
+Register a dedicated GitHub App owned by eigenergy, installed only on
+`powerio` and `PowerIO.jl`. Grant repository Contents, Pull requests, and
+Actions write permissions, plus Workflows write to preserve a pinned commit
+when later workflow edits advance main. Generated commits do not edit workflow
+files. Metadata is read-only. Disable webhooks.
+Store its ID as `POWERIO_RELEASE_APP_ID` and its private key as
+`POWERIO_RELEASE_APP_PRIVATE_KEY` in PowerIO Actions settings. Workflow tokens
+are short-lived installation tokens. Keep existing trusted publishing and
+Julia's `TAGBOT_SSH`; the App is not a package registry credential.
+
+Run `python3 scripts/activate_paired_releases.py --check` to inspect the
+settings, then `--activate` to enable immutable releases and paired dispatch.
+The activation command preserves publishing environment names and tag rules,
+and removes their separate reviewer lists only after checking that the paired
+workflow files, App configuration, and immutable release setting exist.
+The human Publish release action then serves as the paired publication
+approval. Do not activate while a legacy release is still running.
+
+The old `.github/powerio-release.toml` is retained only for legacy recovery.
+Paired releases do not read it, require its ready flag, or ask maintainers to
+refresh its checksum. Its historical helper tests remain for old releases.
