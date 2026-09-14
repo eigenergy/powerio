@@ -75,7 +75,10 @@ Store its ID as `POWERIO_RELEASE_APP_ID` and its private key as
 are short-lived installation tokens. Keep existing trusted publishing and
 Julia's `TAGBOT_SSH`; the App is not a package registry credential.
 
-Run `python3 scripts/activate_paired_releases.py --check` to inspect the
+Run the **Release App access** workflow on current `main`. The read-only probe
+checks access to both repositories. Confirm the configured App permissions in
+GitHub's installation settings, then run
+`python3 scripts/activate_paired_releases.py --check` to inspect the
 settings, then `--activate` to enable immutable releases and paired dispatch.
 The activation command preserves publishing environment names and tag rules,
 and removes their separate reviewer lists only after checking that the paired
