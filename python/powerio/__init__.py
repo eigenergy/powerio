@@ -1386,6 +1386,19 @@ class PioModule:
         """Build an AC optimal power flow instance from a balanced network module."""
         return PioModule(self._inner._to_ac_opf_instance())
 
+    def cost_curve_projections(self, policy: str = "any") -> list[dict[str, Any]]:
+        """Generator cost curves a DC OPF preparation does not carry as stated.
+
+        ``policy`` is ``"any"`` (carry the stated curve), ``"convex_only"``
+        (refuse a curve that is not convex), or ``"convexify_lower_envelope"``
+        (replace it with its lower convex envelope). Each entry names the
+        generator ``identity``, its ``source_row``, the ``departure`` from
+        convexity, the ``action`` the preparation took, and the
+        ``projection_loss`` that action costs in the source cost unit. An empty
+        list means every carried curve is convex as stated.
+        """
+        return self._inner._dc_opf_cost_curve_projections(policy)
+
     def to_mc_ac_pf_instance(self) -> "PioModule":
         """Build a multiconductor AC power flow instance from a network module."""
         return PioModule(self._inner._to_mc_ac_pf_instance())

@@ -37,7 +37,8 @@ use powerio::{
 };
 use powerio_core::{ComponentId, HistoryEntry, HistoryId, HistoryKind, Producer};
 use powerio_matrix::{
-    AcOpfAssemblyOptions, AcOpfPreparation, AnalysisBranchSource, DcOperatorOptions, DcOperators,
+    AcOpfAssemblyOptions, AcOpfPreparation, AnalysisBranchSource, CostCurveAction,
+    CostCurveDeparture, CostCurvePolicy, CostCurveProjection, DcOperatorOptions, DcOperators,
     DcOpfAssemblyOptions, DcOpfPreparation, PreparedObjective, SparseMatrix, Units,
     build_ac_opf_preparation, build_dc_opf_preparation,
 };
@@ -5646,6 +5647,138 @@ fn opf_preparation_units(name: &str) -> Result<Units, *mut PioError> {
     }
 }
 
+fn opf_cost_curve_policy(name: &str) -> Result<CostCurvePolicy, *mut PioError> {
+    CostCurvePolicy::parse(name)
+        .map_err(|reason| boundary_error(&codes::BIND_CAPI_INVALID_OPTIONS, reason))
+}
+
+/// The build options an OPF preparation is assembled under.
+///
+/// Fill this with [`pio_opf_build_options_default`] and change only what the
+/// caller cares about; the defaults track
+/// `DcOpfAssemblyOptions::default()` so a caller does not restate them. Both
+/// string fields borrow for the duration of the build call, and an empty
+/// `PioStringView` reads as the default for that field.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioOpfBuildOptions {
+    /// `per_unit` or `native`.
+    pub units: PioStringView,
+    /// `any`, `convex_only`, or `convexify_lower_envelope`.
+    pub cost_curve_policy: PioStringView,
+    pub skip_zero_impedance: bool,
+    pub synthesize_unrated_limits: bool,
+    pub correct_angle_difference_bounds: bool,
+}
+
+/// One generator cost curve an OPF preparation does not carry as its source
+/// states it.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioCostCurveProjectionView {
+    /// The stable generator identity the preparation's generator rows use.
+    pub component_id: PioStringView,
+    pub source_row: usize,
+    /// `nonconvex_piecewise` or `concave_polynomial`.
+    pub departure: PioStringView,
+    /// `kept` or `lower_envelope`.
+    pub action: PioStringView,
+    /// Largest amount, in the source cost unit, by which the carried curve
+    /// lies below the stated one.
+    pub projection_loss: f64,
+}
+
+impl PioCostCurveProjectionView {
+    fn of(projection: &CostCurveProjection) -> Self {
+        Self {
+            component_id: PioStringView::new(&projection.identity),
+            source_row: projection.source_row,
+            departure: PioStringView::new(match projection.departure {
+                CostCurveDeparture::NonconvexPiecewise => "nonconvex_piecewise",
+                CostCurveDeparture::ConcavePolynomial => "concave_polynomial",
+                _ => "unknown",
+            }),
+            action: PioStringView::new(match projection.action {
+                CostCurveAction::Kept => "kept",
+                CostCurveAction::LowerEnvelope => "lower_envelope",
+                _ => "unknown",
+            }),
+            projection_loss: projection.projection_loss,
+        }
+    }
+}
+
+/// An optional borrowed option string, where empty means the default.
+///
+/// # Safety
+/// The view must satisfy the crate-level safety requirements.
+unsafe fn optional_option_str<'a>(
+    view: PioStringView,
+    what: &str,
+) -> Result<Option<&'a str>, *mut PioError> {
+    if view.data.is_null() || view.len == 0 {
+        return Ok(None);
+    }
+    unsafe { required_str(view.data, view.len, what) }.map(Some)
+}
+
+/// Read a caller supplied option set, defaulting every field it leaves empty.
+///
+/// # Safety
+/// Pointers must satisfy the crate-level safety requirements.
+unsafe fn opf_build_options(
+    options: *const PioOpfBuildOptions,
+) -> Result<DcOpfAssemblyOptions, *mut PioError> {
+    let Some(options) = (unsafe { options.as_ref() }) else {
+        return Err(boundary_error(
+            &codes::BIND_CAPI_NULL_HANDLE,
+            "PioOpfBuildOptions must not be NULL",
+        ));
+    };
+    let defaults = DcOpfAssemblyOptions::default();
+    let units = match unsafe { optional_option_str(options.units, "units") }? {
+        Some(name) => opf_preparation_units(name)?,
+        None => defaults.units,
+    };
+    let policy =
+        match unsafe { optional_option_str(options.cost_curve_policy, "cost_curve_policy") }? {
+            Some(name) => opf_cost_curve_policy(name)?,
+            None => defaults.cost_curve_policy,
+        };
+    Ok(defaults
+        .with_units(units)
+        .with_cost_curve_policy(policy)
+        .with_skip_zero_impedance(options.skip_zero_impedance)
+        .with_synthesize_unrated_limits(options.synthesize_unrated_limits)
+        .with_correct_angle_difference_bounds(options.correct_angle_difference_bounds))
+}
+
+/// Fill `output` with the assembly defaults ABI 7 states.
+///
+/// # Safety
+/// Pointers must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_opf_build_options_default(
+    output: *mut PioOpfBuildOptions,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let defaults = DcOpfAssemblyOptions::default();
+            *require_output(output, "output")? = PioOpfBuildOptions {
+                units: PioStringView::new(
+                    opf_preparation_units_name(defaults.units).unwrap_or("per_unit"),
+                ),
+                cost_curve_policy: PioStringView::new(defaults.cost_curve_policy.name()),
+                skip_zero_impedance: defaults.skip_zero_impedance,
+                synthesize_unrated_limits: defaults.synthesize_unrated_limits,
+                correct_angle_difference_bounds: defaults.correct_angle_difference_bounds,
+            };
+            Ok(true)
+        })
+    }
+}
+
 fn opf_preparation_units_name(units: Units) -> Option<&'static str> {
     match units {
         Units::PerUnit => Some("per_unit"),
@@ -5718,6 +5851,83 @@ pub unsafe extern "C" fn pio_build_dc_opf_preparation(
             build_dc_opf_preparation(instance, &options)
                 .map(PioDcOpfPreparation::new_raw)
                 .map_err(|failure| error_from_matrix(&failure))
+        })
+    }
+}
+
+/// Build the matrix free DC OPF inputs under an explicit option set.
+///
+/// This is [`pio_build_dc_opf_preparation`] plus the cost curve policy; a
+/// caller fills `options` with [`pio_opf_build_options_default`] and changes
+/// what it needs.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_build_dc_opf_preparation_with_options(
+    instance: *const PioCalculationInstance,
+    options: *const PioOpfBuildOptions,
+    error: *mut *mut PioError,
+) -> *mut PioDcOpfPreparation {
+    unsafe {
+        entry(error, std::ptr::null_mut(), || {
+            let instance = require_calculation_instance(instance)?
+                .dc_opf()
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::REQUEST_CAPI_TYPE_MISMATCH,
+                        "DC OPF preparation requires powerio.DcOpfInstance",
+                    )
+                })?;
+            let options = opf_build_options(options)?;
+            build_dc_opf_preparation(instance, &options)
+                .map(PioDcOpfPreparation::new_raw)
+                .map_err(|failure| error_from_matrix(&failure))
+        })
+    }
+}
+
+/// How many generator cost curves this DC OPF preparation does not carry as
+/// its source states them.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_dc_opf_preparation_cost_curve_projection_count(
+    preparation: *const PioDcOpfPreparation,
+) -> usize {
+    unsafe { PioDcOpfPreparation::get(preparation) }
+        .map_or(0, |value| value.cost_curve_projections.len())
+}
+
+/// Read one cost curve projection of a DC OPF preparation by zero based
+/// position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_dc_opf_preparation_cost_curve_projection_at(
+    preparation: *const PioDcOpfPreparation,
+    index: usize,
+    output: *mut PioCostCurveProjectionView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let value = PioDcOpfPreparation::get(preparation).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_NULL_HANDLE,
+                    "PioDcOpfPreparation must not be NULL",
+                )
+            })?;
+            let projection = value.cost_curve_projections.get(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("DC OPF cost curve projection index {index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = PioCostCurveProjectionView::of(projection);
+            Ok(true)
         })
     }
 }
@@ -5974,6 +6184,87 @@ pub unsafe extern "C" fn pio_build_ac_opf_preparation(
             build_ac_opf_preparation(instance, &options)
                 .map(PioAcOpfPreparation::new_raw)
                 .map_err(|failure| error_from_matrix(&failure))
+        })
+    }
+}
+
+/// Build the matrix free AC OPF inputs under an explicit option set.
+///
+/// This is [`pio_build_ac_opf_preparation`] plus the cost curve policy.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_build_ac_opf_preparation_with_options(
+    instance: *const PioCalculationInstance,
+    options: *const PioOpfBuildOptions,
+    error: *mut *mut PioError,
+) -> *mut PioAcOpfPreparation {
+    unsafe {
+        entry(error, std::ptr::null_mut(), || {
+            let instance = require_calculation_instance(instance)?
+                .ac_opf()
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::REQUEST_CAPI_TYPE_MISMATCH,
+                        "AC OPF preparation requires powerio.AcOpfInstance",
+                    )
+                })?;
+            let dc = opf_build_options(options)?;
+            let options = AcOpfAssemblyOptions::default()
+                .with_units(dc.units)
+                .with_skip_zero_impedance(dc.skip_zero_impedance)
+                .with_synthesize_unrated_limits(dc.synthesize_unrated_limits)
+                .with_correct_angle_difference_bounds(dc.correct_angle_difference_bounds)
+                .with_cost_curve_policy(dc.cost_curve_policy);
+            build_ac_opf_preparation(instance, &options)
+                .map(PioAcOpfPreparation::new_raw)
+                .map_err(|failure| error_from_matrix(&failure))
+        })
+    }
+}
+
+/// How many generator cost curves this AC OPF preparation does not carry as
+/// its source states them.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_ac_opf_preparation_cost_curve_projection_count(
+    preparation: *const PioAcOpfPreparation,
+) -> usize {
+    unsafe { PioAcOpfPreparation::get(preparation) }
+        .map_or(0, |value| value.cost_curve_projections.len())
+}
+
+/// Read one cost curve projection of an AC OPF preparation by zero based
+/// position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_ac_opf_preparation_cost_curve_projection_at(
+    preparation: *const PioAcOpfPreparation,
+    index: usize,
+    output: *mut PioCostCurveProjectionView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let value = PioAcOpfPreparation::get(preparation).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_NULL_HANDLE,
+                    "PioAcOpfPreparation must not be NULL",
+                )
+            })?;
+            let projection = value.cost_curve_projections.get(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("AC OPF cost curve projection index {index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = PioCostCurveProjectionView::of(projection);
+            Ok(true)
         })
     }
 }
@@ -21089,6 +21380,109 @@ mod tests {
             pio_calculation_instance_release(dc_opf);
             pio_value_release(dc_opf_value);
             pio_module_release(dc_opf_module);
+        }
+    }
+
+    /// The option set entry reaches the same arrays as the positional one and
+    /// carries the cost curve policy the positional one cannot state.
+    #[test]
+    fn the_opf_option_set_states_the_cost_curve_policy() {
+        unsafe {
+            let mut network = case9_network();
+            // The Texas7k shape: a six breakpoint row whose first slope is
+            // above its second.
+            network.generators_mut()[0].cost = Some(powerio_tx::GenCost::new(
+                1,
+                0.0,
+                0.0,
+                vec![
+                    15.73, 2029.89, 23.38, 2686.25, 31.04, 3343.01, 38.69, 4000.17, 46.35, 4657.74,
+                    54.0, 5315.71,
+                ],
+            ));
+            let instance_module = module_handle(powerio::PioModule::new(PioValue::DcOpfInstance(
+                powerio_prob::DcOpfInstance::from_network(network).unwrap(),
+            )));
+            let value = pio_module_value(instance_module);
+            let mut error = std::ptr::null_mut();
+            let instance = pio_value_dc_opf_instance(value, &mut error);
+            assert!(!instance.is_null(), "{}", error_text(error));
+
+            let mut options = std::mem::MaybeUninit::<PioOpfBuildOptions>::uninit();
+            assert!(pio_opf_build_options_default(
+                options.as_mut_ptr(),
+                &mut error
+            ));
+            let mut options = options.assume_init();
+            assert_eq!(view_text(options.units), "per_unit");
+            assert_eq!(view_text(options.cost_curve_policy), "any");
+
+            let preparation =
+                pio_build_dc_opf_preparation_with_options(instance, &options, &mut error);
+            assert!(!preparation.is_null(), "{}", error_text(error));
+            assert_eq!(
+                pio_dc_opf_preparation_cost_curve_projection_count(preparation),
+                1
+            );
+            let mut projection = std::mem::MaybeUninit::<PioCostCurveProjectionView>::uninit();
+            assert!(pio_dc_opf_preparation_cost_curve_projection_at(
+                preparation,
+                0,
+                projection.as_mut_ptr(),
+                &mut error,
+            ));
+            let projection = projection.assume_init();
+            assert_eq!(projection.source_row, 0);
+            assert_eq!(view_text(projection.departure), "nonconvex_piecewise");
+            assert_eq!(view_text(projection.action), "kept");
+            let mut out_of_range = std::mem::MaybeUninit::<PioCostCurveProjectionView>::uninit();
+            assert!(!pio_dc_opf_preparation_cost_curve_projection_at(
+                preparation,
+                1,
+                out_of_range.as_mut_ptr(),
+                &mut error,
+            ));
+            pio_error_release(std::mem::replace(&mut error, std::ptr::null_mut()));
+            pio_dc_opf_preparation_release(preparation);
+
+            let policy = "convexify_lower_envelope";
+            options.cost_curve_policy = PioStringView::new(policy);
+            let convexified =
+                pio_build_dc_opf_preparation_with_options(instance, &options, &mut error);
+            assert!(!convexified.is_null(), "{}", error_text(error));
+            let mut projection = std::mem::MaybeUninit::<PioCostCurveProjectionView>::uninit();
+            assert!(pio_dc_opf_preparation_cost_curve_projection_at(
+                convexified,
+                0,
+                projection.as_mut_ptr(),
+                &mut error,
+            ));
+            assert_eq!(view_text(projection.assume_init().action), "lower_envelope");
+            pio_dc_opf_preparation_release(convexified);
+
+            let policy = "convex_only";
+            options.cost_curve_policy = PioStringView::new(policy);
+            assert!(
+                pio_build_dc_opf_preparation_with_options(instance, &options, &mut error).is_null()
+            );
+            assert!(
+                error_text(error).contains("nonconvex"),
+                "{}",
+                error_text(error)
+            );
+            pio_error_release(std::mem::replace(&mut error, std::ptr::null_mut()));
+
+            let policy = "not-a-policy";
+            options.cost_curve_policy = PioStringView::new(policy);
+            assert!(
+                pio_build_dc_opf_preparation_with_options(instance, &options, &mut error).is_null()
+            );
+            assert!(error_text(error).contains("unknown cost curve policy"));
+            pio_error_release(error);
+
+            pio_calculation_instance_release(instance);
+            pio_value_release(value);
+            pio_module_release(instance_module);
         }
     }
 

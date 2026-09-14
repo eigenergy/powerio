@@ -3902,6 +3902,53 @@ impl PyPioModule {
         })
     }
 
+    /// The generator cost curves a DC OPF preparation under `policy` does not
+    /// carry as the source states them, one dict per generator.
+    #[pyo3(signature = (policy="any"))]
+    fn _dc_opf_cost_curve_projections<'py>(
+        &self,
+        py: Python<'py>,
+        policy: &str,
+    ) -> PyResult<Bound<'py, PyList>> {
+        let powerio::PioValue::DcOpfInstance(instance) = self.module()?.value() else {
+            return Err(PowerIODataError::new_err(
+                "cost curve projections need a powerio.DcOpfInstance module",
+            ));
+        };
+        let policy =
+            powerio_matrix::CostCurvePolicy::parse(policy).map_err(PowerIODataError::new_err)?;
+        let preparation = powerio_matrix::build_dc_opf_preparation(
+            instance,
+            &powerio_matrix::DcOpfAssemblyOptions::default().with_cost_curve_policy(policy),
+        )
+        .map_err(to_pyerr)?;
+        let mut rows = Vec::with_capacity(preparation.cost_curve_projections.len());
+        for projection in &preparation.cost_curve_projections {
+            let row = PyDict::new(py);
+            row.set_item("identity", &projection.identity)?;
+            row.set_item("source_row", projection.source_row)?;
+            row.set_item(
+                "departure",
+                match projection.departure {
+                    powerio_matrix::CostCurveDeparture::NonconvexPiecewise => "nonconvex_piecewise",
+                    powerio_matrix::CostCurveDeparture::ConcavePolynomial => "concave_polynomial",
+                    _ => "unknown",
+                },
+            )?;
+            row.set_item(
+                "action",
+                match projection.action {
+                    powerio_matrix::CostCurveAction::Kept => "kept",
+                    powerio_matrix::CostCurveAction::LowerEnvelope => "lower_envelope",
+                    _ => "unknown",
+                },
+            )?;
+            row.set_item("projection_loss", projection.projection_loss)?;
+            rows.push(row);
+        }
+        PyList::new(py, rows)
+    }
+
     fn _to_ac_opf_instance(&self) -> PyResult<Self> {
         let module = powerio::transform::to_ac_opf_instance(self.module()?)
             .map_err(|error| core_error_pyerr(&error))?

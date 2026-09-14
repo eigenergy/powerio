@@ -186,6 +186,54 @@ typedef struct {
 } PioJsonObjectEntryView;
 
 /**
+ * The build options an OPF preparation is assembled under.
+ *
+ * Fill this with [`pio_opf_build_options_default`] and change only what the
+ * caller cares about; the defaults track
+ * `DcOpfAssemblyOptions::default()` so a caller does not restate them. Both
+ * string fields borrow for the duration of the build call, and an empty
+ * `PioStringView` reads as the default for that field.
+ */
+typedef struct {
+    /**
+     * `per_unit` or `native`.
+     */
+    PioStringView units;
+    /**
+     * `any`, `convex_only`, or `convexify_lower_envelope`.
+     */
+    PioStringView cost_curve_policy;
+    bool skip_zero_impedance;
+    bool synthesize_unrated_limits;
+    bool correct_angle_difference_bounds;
+} PioOpfBuildOptions;
+
+/**
+ * One generator cost curve an OPF preparation does not carry as its source
+ * states it.
+ */
+typedef struct {
+    /**
+     * The stable generator identity the preparation's generator rows use.
+     */
+    PioStringView component_id;
+    size_t source_row;
+    /**
+     * `nonconvex_piecewise` or `concave_polynomial`.
+     */
+    PioStringView departure;
+    /**
+     * `kept` or `lower_envelope`.
+     */
+    PioStringView action;
+    /**
+     * Largest amount, in the source cost unit, by which the carried curve
+     * lies below the stated one.
+     */
+    double projection_loss;
+} PioCostCurveProjectionView;
+
+/**
  * Shape and conventions of one prepared DC OPF calculation.
  */
 typedef struct {
@@ -3116,6 +3164,14 @@ PioMulticonductorNetwork *pio_calculation_instance_multiconductor_network(const 
                                                                           PioError **error);
 
 /**
+ * Fill `output` with the assembly defaults ABI 7 states.
+ *
+ * # Safety
+ * Pointers must satisfy the crate-level safety requirements.
+ */
+bool pio_opf_build_options_default(PioOpfBuildOptions *output, PioError **error);
+
+/**
  * Build the matrix free DC OPF inputs from one typed instance.
  *
  * # Safety
@@ -3128,6 +3184,41 @@ PioDcOpfPreparation *pio_build_dc_opf_preparation(const PioCalculationInstance *
                                                   bool synthesize_unrated_limits,
                                                   bool correct_angle_difference_bounds,
                                                   PioError **error);
+
+/**
+ * Build the matrix free DC OPF inputs under an explicit option set.
+ *
+ * This is [`pio_build_dc_opf_preparation`] plus the cost curve policy; a
+ * caller fills `options` with [`pio_opf_build_options_default`] and changes
+ * what it needs.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioDcOpfPreparation *pio_build_dc_opf_preparation_with_options(const PioCalculationInstance *instance,
+                                                               const PioOpfBuildOptions *options,
+                                                               PioError **error);
+
+/**
+ * How many generator cost curves this DC OPF preparation does not carry as
+ * its source states them.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+size_t pio_dc_opf_preparation_cost_curve_projection_count(const PioDcOpfPreparation *preparation);
+
+/**
+ * Read one cost curve projection of a DC OPF preparation by zero based
+ * position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+bool pio_dc_opf_preparation_cost_curve_projection_at(const PioDcOpfPreparation *preparation,
+                                                     size_t index,
+                                                     PioCostCurveProjectionView *output,
+                                                     PioError **error);
 
 /**
  * Read the dimensions and conventions of a DC OPF preparation.
@@ -3201,6 +3292,39 @@ PioAcOpfPreparation *pio_build_ac_opf_preparation(const PioCalculationInstance *
                                                   bool synthesize_unrated_limits,
                                                   bool correct_angle_difference_bounds,
                                                   PioError **error);
+
+/**
+ * Build the matrix free AC OPF inputs under an explicit option set.
+ *
+ * This is [`pio_build_ac_opf_preparation`] plus the cost curve policy.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioAcOpfPreparation *pio_build_ac_opf_preparation_with_options(const PioCalculationInstance *instance,
+                                                               const PioOpfBuildOptions *options,
+                                                               PioError **error);
+
+/**
+ * How many generator cost curves this AC OPF preparation does not carry as
+ * its source states them.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+size_t pio_ac_opf_preparation_cost_curve_projection_count(const PioAcOpfPreparation *preparation);
+
+/**
+ * Read one cost curve projection of an AC OPF preparation by zero based
+ * position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+bool pio_ac_opf_preparation_cost_curve_projection_at(const PioAcOpfPreparation *preparation,
+                                                     size_t index,
+                                                     PioCostCurveProjectionView *output,
+                                                     PioError **error);
 
 /**
  * Read the dimensions and conventions of an AC OPF preparation.

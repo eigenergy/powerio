@@ -11,6 +11,13 @@
   warnings. `convexify_lower_envelope` replaces each such curve with its lower
   convex envelope and reports the per-generator projection loss, and
   `convex_only` keeps the pre-0.11.3 refusal as an opt-in.
+- Expose the policy through C ABI 7 and Python. `PioOpfBuildOptions` with
+  `pio_opf_build_options_default` states the DC and AC assembly choices in one
+  struct, `pio_build_dc_opf_preparation_with_options` and
+  `pio_build_ac_opf_preparation_with_options` take it, and
+  `pio_{dc,ac}_opf_preparation_cost_curve_projection_count`/`_at` read the
+  result. Python adds `PioModule.cost_curve_projections(policy="any")`. Every
+  existing symbol and signature is unchanged, so ABI 7 holds.
 
 ### Changed
 

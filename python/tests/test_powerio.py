@@ -2847,3 +2847,39 @@ def test_operating_point_network_applies_the_point(time_series_powerio_ir):
     assert network.loads[0]["p"] == pytest.approx(91.5)
     assert base.loads[0]["p"] != pytest.approx(91.5)
     assert series[0].network.loads[0]["p"] == pytest.approx(base.loads[0]["p"])
+
+
+def test_cost_curve_projections_report_what_the_preparation_carries():
+    module = powerio.parse(DATA / "pglib" / "pglib_opf_case5_pjm.m").to_dc_opf_instance()
+    assert module.cost_curve_projections() == []
+
+    # Generator 2 of Texas7k_20210804.m: the first slope is above the second.
+    texas7k_row = [
+        15.73, 2029.89, 23.38, 2686.25, 31.04, 3343.01,
+        38.69, 4000.17, 46.35, 4657.74, 54.0, 5315.71,
+    ]
+    document = json.loads(powerio.serialize(module).text)
+    document["value"]["data"]["network"]["generators"][0]["cost"] = {
+        "model": 1,
+        "startup": 0.0,
+        "shutdown": 0.0,
+        "ncost": 6,
+        "coeffs": texas7k_row,
+    }
+    nonconvex = powerio.deserialize(io.StringIO(json.dumps(document)))
+
+    kept = nonconvex.cost_curve_projections()
+    assert len(kept) == 1
+    assert kept[0]["source_row"] == 0
+    assert kept[0]["departure"] == "nonconvex_piecewise"
+    assert kept[0]["action"] == "kept"
+    assert kept[0]["projection_loss"] == 0.0
+
+    convexified = nonconvex.cost_curve_projections("convexify_lower_envelope")
+    assert convexified[0]["action"] == "lower_envelope"
+    assert 0.0 < convexified[0]["projection_loss"] < 1.0
+
+    with pytest.raises(powerio.PowerIOError, match="nonconvex"):
+        nonconvex.cost_curve_projections("convex_only")
+    with pytest.raises(ValueError, match="unknown cost curve policy"):
+        nonconvex.cost_curve_projections("not-a-policy")
