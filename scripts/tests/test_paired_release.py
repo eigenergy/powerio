@@ -112,6 +112,31 @@ class ReleaseTests(unittest.TestCase):
                 pair.register('v0.11.3')
             api.assert_not_called()
 
+    def test_registration_dispatches_the_existing_julia_workflow(self):
+        with patch.object(pair, 'verify', return_value=self.manifest), patch.object(pair, 'repair_publications'), patch.object(pair, 'sync_candidate'), patch.object(pair, 'source', return_value=b'["0.11.2"]'), patch.object(pair, 'api', return_value={'workflow_runs': []}) as api, patch.object(pair, 'run') as run:
+            pair.register('v0.11.3')
+            run.assert_called_once_with('gh', 'workflow', 'run', 'register.yml', '--repo', pair.JULIA, '--ref', 'main', '-f', 'version=0.11.3', '-f', 'expected_sha=' + 'c' * 40)
+            self.assertTrue(all(len(call.args) == 1 for call in api.call_args_list))
+
+    def test_registered_pair_still_synchronizes_artifacts(self):
+        versions = b'["0.11.3"]\ngit-tree-sha1 = "dddddddddddddddddddddddddddddddddddddddd"\n'
+        with patch.object(pair, 'verify', return_value=self.manifest), patch.object(pair, 'repair_publications'), patch.object(pair, 'sync_candidate') as sync, patch.object(pair, 'source', return_value=versions), patch.object(pair, 'api', return_value={'id': 123}), patch.object(pair, 'run') as run:
+            pair.register('v0.11.3')
+            sync.assert_called_once_with(self.manifest)
+            run.assert_not_called()
+
+    def test_registration_request_refuses_another_repository_or_sha(self):
+        for repo, sha in ((pair.POWERIO, 'c' * 40), (pair.JULIA, 'f' * 40)):
+            with self.subTest(repo=repo, sha=sha), patch.dict(pair.os.environ, {'GITHUB_REPOSITORY': repo}), patch.object(pair, 'verify', return_value=self.manifest), patch.object(pair, 'api') as api:
+                with self.assertRaises(ValueError):
+                    pair.request_registration('v0.11.3', sha, '.')
+                api.assert_not_called()
+
+    def test_registration_request_names_the_exact_tested_commit(self):
+        with patch.dict(pair.os.environ, {'GITHUB_REPOSITORY': pair.JULIA}), patch.object(pair, 'verify', return_value=self.manifest), patch.object(pair, 'run', side_effect=['c' * 40, '']), patch.object(pair, 'source', return_value=b'["0.11.2"]'), patch.object(pair, 'identity', return_value='Maintenance.'), patch.object(pair, 'pages', return_value=[]), patch.object(pair, 'api') as api:
+            pair.request_registration('v0.11.3', 'c' * 40, '.')
+            api.assert_called_once_with(f'repos/{pair.JULIA}/commits/' + 'c' * 40 + '/comments', {'body': '@JuliaRegistrator register\n\nRelease notes:\nMaintenance.'})
+
     def replace_candidate(self, *, published=False, registered=False):
         old = dict(self.frozen, powerio_sha="d" * 40, julia_source_sha="e" * 40)
         def fake_api(path, data=None, **_kwargs):
