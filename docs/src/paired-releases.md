@@ -34,6 +34,10 @@ New `main` commits do not change the candidate or block its registration.
 ## Retry and recovery
 
 The daily reconciliation also retries incomplete paired builds and drafts.
+If a draft upload finishes before its validation workflow records success,
+completion reruns the Julia tests and updates only the draft manifest's validation
+reference. It verifies that every source commit, artifact hash, and note remains
+identical. Published releases require completed validation and remain immutable.
 Rerun **Complete paired draft** for an immediate retry of an interrupted draft. It preserves
 existing candidate commits and assets. If source fixes require a different candidate, merge and test those fixes,
 then explicitly select `replace-unpublished` in **Prepare paired release**.

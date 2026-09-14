@@ -45,7 +45,6 @@ jobs:
           version: '1'
       - uses: julia-actions/cache@a45e8fa8be21c18a06b7177052533149e61e9b38
       - name: Generate and test the candidate against draft binaries
-        if: steps.pair.outputs.prepared != 'true'
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           TAG: ${{ inputs.tag }}
