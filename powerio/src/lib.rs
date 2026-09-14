@@ -180,7 +180,7 @@ pub use powerio_matrix as matrix;
 pub mod __gridfm;
 pub mod codes;
 mod formats;
-pub use formats::{FormatInfo, resolve_format};
+pub use formats::{FormatInfo, GridFormatInfo, NetworkFamily, grid_formats, resolve_format};
 #[cfg(feature = "gridfm")]
 mod collect;
 pub mod dist_geo;

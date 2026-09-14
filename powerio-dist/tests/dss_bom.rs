@@ -30,9 +30,21 @@ fn byte_order_marks_are_retained_and_never_reach_the_reader() {
     // The linecode from the redirected file parsed: its own mark was skipped
     // by the decode slice, never tokenized into the first command word.
     assert!(net.line_codes().iter().any(|lc| lc.name == "lc1"));
-    // The echo returns the root file's exact bytes, mark included.
+    let output = net.emit(powerio_dist::DistTargetFormat::Dss);
+    assert_eq!(output.text, "Redirect \"source/master.dss\"\n");
+    let retained = output
+        .sidecars
+        .iter()
+        .find(|file| file.path == "source/master.dss")
+        .unwrap();
+    assert_eq!(retained.text, master_text);
+    let dependency = output
+        .sidecars
+        .iter()
+        .find(|file| file.path == "source/linecodes.dss")
+        .unwrap();
     assert_eq!(
-        net.emit(powerio_dist::DistTargetFormat::Dss).text,
-        master_text
+        dependency.text,
+        "\u{feff}new linecode.lc1 nphases=3 r1=0.1 x1=0.2\n"
     );
 }

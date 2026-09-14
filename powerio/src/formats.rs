@@ -7,6 +7,87 @@
 
 use powerio_tx::format::routing::TransmissionFormat;
 
+/// Electrical model family accepted by a grid format.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NetworkFamily {
+    Transmission,
+    Distribution,
+}
+
+/// A discoverable grid format with its reader and writer capabilities.
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+pub struct GridFormatInfo {
+    pub format: FormatInfo,
+    pub label: &'static str,
+    pub family: NetworkFamily,
+    pub can_read: bool,
+}
+
+/// Enumerate supported grid exchange formats, including explicit output profiles.
+///
+/// PowerIO IR and geographic documents are separate operations. The optional
+/// GridFM format is included only when its implementation is compiled in.
+///
+/// # Panics
+///
+/// Panics if a catalog token has no matching format descriptor.
+pub fn grid_formats() -> impl Iterator<Item = GridFormatInfo> {
+    use NetworkFamily::{Distribution, Transmission};
+    const FORMATS: &[(&str, &str, NetworkFamily, bool)] = &[
+        ("matpower", "MATPOWER", Transmission, true),
+        ("psse", "PSS/E RAW 33", Transmission, true),
+        ("psse34", "PSS/E RAW 34", Transmission, true),
+        ("psse35", "PSS/E RAW 35", Transmission, true),
+        ("psse-rawx", "PSS/E RAWX", Transmission, true),
+        ("powermodels-json", "PowerModels JSON", Transmission, true),
+        ("pandapower-json", "pandapower JSON", Transmission, true),
+        ("pypsa-csv", "PyPSA CSV folder", Transmission, true),
+        ("egret-json", "Egret JSON", Transmission, true),
+        ("powerworld", "PowerWorld AUX", Transmission, true),
+        ("pslf", "PSLF EPC", Transmission, true),
+        ("xiidm", "PowSybl XIIDM", Transmission, true),
+        ("jiidm", "PowSybl JIIDM", Transmission, true),
+        ("cgmes", "CIM CGMES", Transmission, true),
+        ("ucte", "UCTE-DEF", Transmission, true),
+        ("surge-json", "Surge JSON", Transmission, true),
+        ("ieee-cdf", "IEEE CDF (read only)", Transmission, true),
+        ("pwb", "PowerWorld PWB (read only)", Transmission, true),
+        (
+            "opfdata-json",
+            "DeepMind OPFData (read only)",
+            Transmission,
+            true,
+        ),
+        ("goc3-json", "GO Challenge 3", Transmission, true),
+        ("dss", "OpenDSS", Distribution, true),
+        ("pmd-json", "PMD JSON", Distribution, true),
+        (
+            "bmopf-json",
+            "BMOPF JSON (detect version)",
+            Distribution,
+            true,
+        ),
+        ("bmopf-json@0.1.0", "BMOPF 0.1.0", Distribution, false),
+        (
+            "bmopf-json@0.2.0",
+            "BMOPF 0.2.0 proposal",
+            Distribution,
+            false,
+        ),
+        #[cfg(feature = "gridfm")]
+        ("gridfm", "GridFM Parquet", Transmission, true),
+    ];
+    FORMATS
+        .iter()
+        .map(|&(token, label, family, can_read)| GridFormatInfo {
+            format: resolve_format(token).expect("catalog token has format metadata"),
+            label,
+            family,
+            can_read,
+        })
+}
+
 /// The canonical identity and destination shape of a PowerIO format.
 ///
 /// `extension` is the conventional filename suffix without a leading dot; it
