@@ -190,7 +190,14 @@ def validate_manifest(manifest, pair, assets):
             "missing candidate validation evidence")
 
 
-def verify(tag, *, published=True):
+def validation_succeeded(manifest):
+    validation_id = manifest["validation"]["url"].rsplit("/", 1)[1]
+    evidence = api(f"repos/{POWERIO}/actions/runs/{validation_id}", missing=True)
+    return bool(evidence and evidence["status"] == "completed" and evidence["conclusion"] == "success" and
+                evidence["path"] == ".github/workflows/complete-paired-release.yml")
+
+
+def verify(tag, *, published=True, validation=True):
     pair = tag_pair(tag)
     rel = release(tag)
     require(rel is not None and not rel["prerelease"], "stable release is missing")
@@ -202,11 +209,9 @@ def verify(tag, *, published=True):
         download(tag, MANIFEST, path)
         manifest = json.loads(path.read_bytes())
     validate_manifest(manifest, pair, assets)
-    validation_id = manifest["validation"]["url"].rsplit("/", 1)[1]
-    evidence = api(f"repos/{POWERIO}/actions/runs/{validation_id}")
-    require(evidence["status"] == "completed" and evidence["conclusion"] == "success" and
-            evidence["path"] == ".github/workflows/complete-paired-release.yml",
-            "candidate validation workflow has not completed successfully")
+    require(validation or not published, "published releases require completed validation")
+    if validation:
+        require(validation_succeeded(manifest), "candidate validation workflow has not completed successfully")
     require(manifest["julia_branch"] == f"release-candidates/{tag}/{manifest['julia_tree_sha'][:12]}",
             "unexpected Julia candidate branch")
     candidate = api(f"repos/{JULIA}/git/commits/{manifest['julia_sha']}")
@@ -243,14 +248,15 @@ def complete_candidate(tag, julia_root):
     pair = tag_pair(tag)
     rel = release(tag)
     require(rel and not rel["prerelease"], "candidate requires a stable release")
-    if any(a["name"] == MANIFEST for a in rel["assets"]):
-        verify(tag, published=not rel["draft"])
-        print("Candidate already prepared; no assets or commits changed")
-        return
     require(rel["draft"], "unprepared published release cannot be completed")
-    assets = asset_map(rel, complete=False)
+    previous = None
+    if any(a["name"] == MANIFEST for a in rel["assets"]):
+        previous = verify(tag, published=False, validation=False)
+    assets = asset_map(rel, complete=previous is not None)
     hashes = {}
     for name, item in assets.items():
+        if name == MANIFEST:
+            continue
         digest = item.get("digest", "")
         require(re.fullmatch(r"sha256:[0-9a-f]{64}", digest), f"missing GitHub asset digest: {name}")
         hashes[name] = digest[7:]
@@ -260,6 +266,8 @@ def complete_candidate(tag, julia_root):
             "preparation must change only Artifacts.toml")
     artifact = (root / "Artifacts.toml").read_bytes()
     validate_artifacts(artifact, tag, hashes)
+    if previous:
+        require(sha256(artifact) == previous["artifacts_sha256"], "retested artifact file differs from candidate")
     source_commit = api(f"repos/{JULIA}/git/commits/{pair['julia_source_sha']}")
     blob = api(f"repos/{JULIA}/git/blobs", {"content": base64.b64encode(artifact).decode(), "encoding": "base64"})
     tree = api(f"repos/{JULIA}/git/trees", {"base_tree": source_commit["tree"]["sha"], "tree": [
@@ -283,6 +291,12 @@ def complete_candidate(tag, julia_root):
                     notes_sha256={"powerio": sha256(pnotes.encode()), "julia": sha256(jnotes.encode())},
                     validation={"status": "passed", "url": os.environ["VALIDATION_URL"]})
     validate_manifest(manifest, pair, assets)
+    if previous:
+        require({k: v for k, v in manifest.items() if k != "validation"} ==
+                {k: v for k, v in previous.items() if k != "validation"},
+                "retested candidate identity differs from the prepared manifest")
+        if validation_succeeded(previous):
+            manifest = previous
     body = (f"{pnotes}\n\n## PowerIO.jl {tag[1:]}\n\n{jnotes}\n\n## Paired release review\n\n"
             f"PowerIO commit: `{pair['powerio_sha']}`\n\nJulia commit: `{candidate['sha']}`\n\n"
             f"[Candidate validation]({manifest['validation']['url']}) passed. "
@@ -291,8 +305,11 @@ def complete_candidate(tag, julia_root):
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / MANIFEST
         path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
+        require(release(tag)["draft"] and tag_pair(tag) == pair, "candidate changed during completion")
+        if previous is None or manifest != previous:
+            options = ["--clobber"] if previous else []
+            run("gh", "release", "upload", tag, str(path), "--repo", POWERIO, *options)
         run("gh", "release", "edit", tag, "--repo", POWERIO, "--notes", body)
-        run("gh", "release", "upload", tag, str(path), "--repo", POWERIO)
     print(f"{tag} is ready for paired review and publication")
 
 
@@ -411,11 +428,19 @@ def registration_status(tag):
 def recover_drafts():
     complete_runs = api(f"repos/{POWERIO}/actions/workflows/complete-paired-release.yml/runs?per_page=100")["workflow_runs"]
     for rel in pages(f"repos/{POWERIO}/releases?per_page=100"):
-        if not rel["draft"] or rel["prerelease"] or not (rel.get("body") or "").startswith("Candidate preparation is in progress."):
+        if not rel["draft"] or rel["prerelease"]:
             continue
         tag = rel["tag_name"]
-        tag_pair(tag)
-        if {a["name"] for a in rel["assets"]} != ASSETS:
+        try:
+            tag_pair(tag)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        names = {a["name"] for a in rel["assets"]}
+        if names == ASSETS | {MANIFEST}:
+            manifest = verify(tag, published=False, validation=False)
+            if validation_succeeded(manifest) and "## Paired release review" in (rel.get("body") or ""):
+                continue
+        elif names != ASSETS:
             continue
         active = any(r["display_title"] == "Complete paired draft " + tag and r["status"] != "completed" for r in complete_runs)
         if not active:
