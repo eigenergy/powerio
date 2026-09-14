@@ -189,6 +189,11 @@ def verify(tag, *, published=True):
         download(tag, MANIFEST, path)
         manifest = json.loads(path.read_bytes())
     validate_manifest(manifest, pair, assets)
+    validation_id = manifest["validation"]["url"].rsplit("/", 1)[1]
+    evidence = api(f"repos/{POWERIO}/actions/runs/{validation_id}")
+    require(evidence["status"] == "completed" and evidence["conclusion"] == "success" and
+            evidence["path"] == ".github/workflows/complete-paired-release.yml",
+            "candidate validation workflow has not completed successfully")
     candidate = api(f"repos/{JULIA}/git/commits/{manifest['julia_sha']}")
     require(candidate["tree"]["sha"] == manifest["julia_tree_sha"], "Julia candidate tree mismatch")
     require([p["sha"] for p in candidate["parents"]] == [pair["julia_source_sha"]], "unexpected candidate parent")
@@ -348,6 +353,39 @@ def registration_status(tag):
     print(f"{tag}: {action}")
 
 
+def recover_drafts():
+    complete_runs = api(f"repos/{POWERIO}/actions/workflows/complete-paired-release.yml/runs?per_page=100")["workflow_runs"]
+    for rel in pages(f"repos/{POWERIO}/releases?per_page=100"):
+        if not rel["draft"] or rel["prerelease"] or not rel.get("body", "").startswith("Candidate preparation is in progress."):
+            continue
+        tag = rel["tag_name"]
+        tag_pair(tag)
+        if {a["name"] for a in rel["assets"]} != ASSETS:
+            continue
+        active = any(r["display_title"] == "Complete paired draft " + tag and r["status"] != "completed" for r in complete_runs)
+        if not active:
+            run("gh", "workflow", "run", "complete-paired-release.yml", "--repo", POWERIO, "--ref", "main", "-f", "tag=" + tag)
+    builds = api(f"repos/{POWERIO}/actions/workflows/release-binaries.yml/runs?per_page=100")["workflow_runs"]
+    seen = set()
+    for build in builds:
+        tag = build["head_branch"]
+        if tag in seen or build["event"] != "push" or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag or ""):
+            continue
+        seen.add(tag)
+        if build["status"] != "completed" or build["conclusion"] not in ("failure", "timed_out", "cancelled"):
+            continue
+        try:
+            pair = tag_pair(tag)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        require(pair["powerio_sha"] == build["head_sha"], "failed build no longer matches its tag")
+        rel = release(tag)
+        if rel and (not rel["draft"] or any(a["name"] == MANIFEST for a in rel["assets"])):
+            continue
+        run("gh", "run", "rerun", str(build["id"]), "--repo", POWERIO, "--failed")
+    print("Incomplete paired candidates checked; retries preserve their frozen tags")
+
+
 def emit_pair(tag):
     pair = tag_pair(tag)
     print(json.dumps(pair))
@@ -362,11 +400,13 @@ def emit_pair(tag):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["tag", "metadata", "complete", "verify", "register", "status"])
-    parser.add_argument("version_or_tag")
+    parser.add_argument("command", choices=["tag", "metadata", "complete", "verify", "register", "status", "recover"])
+    parser.add_argument("version_or_tag", nargs="?", default="")
     parser.add_argument("--julia-root", default="PowerIO.jl")
     args = parser.parse_args()
-    if args.command == "tag":
+    if args.command == "recover":
+        recover_drafts()
+    elif args.command == "tag":
         create_tag(args.version_or_tag)
     elif args.command == "metadata":
         emit_pair(args.version_or_tag)

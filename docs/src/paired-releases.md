@@ -33,7 +33,8 @@ New `main` commits do not change the candidate or block its registration.
 
 ## Retry and recovery
 
-Rerun **Complete paired draft** for an interrupted draft. It preserves
+The daily reconciliation also retries incomplete paired builds and drafts.
+Rerun **Complete paired draft** for an immediate retry of an interrupted draft. It preserves
 existing candidate commits and assets. A different candidate needs a new
 review; no workflow force pushes a release branch or replaces published data.
 
