@@ -81,7 +81,8 @@ fn schema_validator_for(profile: BmopfSchemaVersion) -> jsonschema::Validator {
         _ => unreachable!("every schema version has a vendored document"),
     };
     let schema: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(file)).unwrap(),
+        &std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(file))
+            .unwrap(),
     )
     .unwrap();
     jsonschema::validator_for(&schema).expect("vendored schema compiles")
