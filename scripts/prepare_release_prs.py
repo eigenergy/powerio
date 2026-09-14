@@ -80,6 +80,14 @@ def version_edits(repo, sha, number):
             result[path] = after
             readme = readme.replace(f'{len(before.encode()):,} bytes', f'{len(after.encode()):,} bytes')
         result[readme_path] = readme
+        for name in ('case9_arrow_coo.json', 'case30_arrow_coo.json'):
+            path = 'tests/data/capi_matrix/' + name
+            before = source(repo, path, sha).decode()
+            result[path] = before.replace(f'"powerio_version": "{old}"', f'"powerio_version": "{number}"')
+        result[f'docs/release-notes/{number}-draft.md'] = (
+            f'# PowerIO {number} release notes\n\n'
+            f'The [curated changelog](../../CHANGELOG.md#{number.replace(".", "")}) '
+            'records this release. Review that section before candidate preparation.\n')
     else:
         project = source(repo, 'Project.toml', sha).decode()
         old = tomllib.loads(project)['version']
