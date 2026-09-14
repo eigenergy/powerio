@@ -382,7 +382,8 @@ def recover_drafts():
         rel = release(tag)
         if rel and (not rel["draft"] or any(a["name"] == MANIFEST for a in rel["assets"])):
             continue
-        run("gh", "run", "rerun", str(build["id"]), "--repo", POWERIO, "--failed")
+        options = [] if build["conclusion"] == "cancelled" else ["--failed"]
+        run("gh", "run", "rerun", str(build["id"]), "--repo", POWERIO, *options)
     print("Incomplete paired candidates checked; retries preserve their frozen tags")
 
 
