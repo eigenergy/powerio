@@ -1,4 +1,5 @@
 name: crates.io
+run-name: PowerIO crates.io ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
 
 # release-binaries.yml stages each release as a draft a human publishes, so the
 # release event fires with a user actor (events from a workflow's GITHUB_TOKEN
@@ -52,6 +53,12 @@ jobs:
             echo "publishable workspace members ($actual) do not match the publish list in crates.yml" >&2
             exit 1
           fi
+      - name: Verify the approved paired release
+        if: vars.PAIRED_RELEASES == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
+        run: python3 scripts/paired_release.py verify "$TAG"
       - name: Verify the immutable published release
         env:
           RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}

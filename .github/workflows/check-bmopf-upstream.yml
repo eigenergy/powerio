@@ -1,0 +1,30 @@
+name: Review BMOPF upstream
+on:
+  schedule:
+    - cron: '19 6 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: bmopf-upstream-review
+  cancel-in-progress: false
+jobs:
+  review:
+    if: vars.PAIRED_RELEASES == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        id: app
+        with:
+          app-id: ${{ vars.POWERIO_RELEASE_APP_ID }}
+          private-key: ${{ secrets.POWERIO_RELEASE_APP_PRIVATE_KEY }}
+          owner: eigenergy
+          repositories: powerio
+      - name: Compare upstream review state and schema hashes
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: python3 scripts/check_bmopf_upstream.py | tee -a "$GITHUB_STEP_SUMMARY"

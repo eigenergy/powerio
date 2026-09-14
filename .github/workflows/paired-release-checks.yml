@@ -1,0 +1,16 @@
+name: Paired release checks
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  decisions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Exercise release decisions without publication
+        run: python3 -m unittest discover -s scripts/tests -v
+      - name: Check Python syntax
+        run: python3 -m py_compile scripts/paired_release.py scripts/prepare_release_prs.py
