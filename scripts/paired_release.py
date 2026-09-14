@@ -13,6 +13,8 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 import tomllib
 
@@ -352,11 +354,45 @@ def register(tag):
 
 
 
+def public_json(url):
+    request = Request(url, headers={"User-Agent": "PowerIO release coordination (https://github.com/eigenergy/powerio)"})
+    try:
+        with urlopen(request, timeout=30) as response:
+            return json.load(response)
+    except HTTPError as error:
+        if error.code == 404:
+            return None
+        raise
+
+
+def python_published(metadata, number):
+    if metadata is None:
+        return False
+    files = {item["filename"] for item in metadata["urls"] if not item.get("yanked", False)}
+    if f"powerio-{number}.tar.gz" not in files:
+        return False
+    wheels = [name for name in files if name.startswith(f"powerio-{number}-") and name.endswith('.whl')]
+    markers = (("manylinux", "x86_64"), ("manylinux", "aarch64"),
+               ("macosx", "x86_64"), ("macosx", "arm64"), ("win_amd64",))
+    return all(any(all(marker in name for marker in group) for name in wheels) for group in markers)
+
+
 def repair_publications(tag, manifest):
-    for workflow in ("crates.yml", "python.yml"):
+    number = tag[1:]
+    crates_complete = True
+    for name in ("powerio-core", "powerio-tx", "powerio-dist", "powerio-prob", "powerio-matrix", "powerio", "powerio-cli"):
+        item = public_json(f"https://crates.io/api/v1/crates/{name}/{number}")
+        if item is None:
+            crates_complete = False
+        else:
+            require(not item["version"]["yanked"], f"{name} {number} is yanked; maintainer action is required")
+    python_complete = python_published(public_json(f"https://pypi.org/pypi/powerio/{number}/json"), number)
+    for workflow, complete in (("crates.yml", crates_complete), ("python.yml", python_complete)):
+        if complete:
+            continue
         runs = api(f"repos/{POWERIO}/actions/workflows/{workflow}/runs?per_page=100")["workflow_runs"]
         relevant = [r for r in runs if r["display_title"].endswith(" " + tag) and r["event"] in ("release", "workflow_dispatch")]
-        if any(r["status"] != "completed" or r["conclusion"] == "success" for r in relevant):
+        if any(r["status"] != "completed" for r in relevant):
             continue
         run("gh", "workflow", "run", workflow, "--repo", POWERIO, "--ref", "main", "-f", "tag=" + tag)
 
