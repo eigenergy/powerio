@@ -142,6 +142,24 @@ class ReleaseTests(unittest.TestCase):
     def test_explicit_unpublished_replacement_can_reuse_the_unreleased_version(self):
         self.replace_candidate()
 
+    def test_python_partial_publication_is_not_complete(self):
+        names = ['powerio-0.11.3.tar.gz'] + ['powerio-0.11.3-cp39-abi3-' + platform + '.whl' for platform in
+                 ('manylinux_2_17_x86_64', 'manylinux_2_17_aarch64', 'macosx_11_0_x86_64', 'macosx_11_0_arm64', 'win_amd64')]
+        metadata = {'urls': [{'filename': name} for name in names]}
+        self.assertTrue(pair.python_published(metadata, '0.11.3'))
+        metadata['urls'].pop()
+        self.assertFalse(pair.python_published(metadata, '0.11.3'))
+
+    def test_completed_publications_do_not_depend_on_retained_workflow_history(self):
+        names = ['powerio-0.11.3.tar.gz'] + ['powerio-0.11.3-cp39-abi3-' + platform + '.whl' for platform in
+                 ('manylinux_2_17_x86_64', 'manylinux_2_17_aarch64', 'macosx_11_0_x86_64', 'macosx_11_0_arm64', 'win_amd64')]
+        def metadata(url):
+            return {'version': {'yanked': False}} if 'crates.io' in url else {'urls': [{'filename': name} for name in names]}
+        with patch.object(pair, 'public_json', side_effect=metadata), patch.object(pair, 'api') as api, patch.object(pair, 'run') as run:
+            pair.repair_publications('v0.11.3', self.manifest)
+            api.assert_not_called()
+            run.assert_not_called()
+
     def test_changelog_requires_curated_notes(self):
         self.assertEqual(pair.notes('# Changelog\n\n## 0.11.3\n\n- Maintenance.\n\n## 0.11.2\n- Older.\n', '0.11.3'), '- Maintenance.')
         with self.assertRaises(ValueError):
