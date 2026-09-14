@@ -12,7 +12,11 @@ SPEC = importlib.util.spec_from_file_location("paired_release", Path(__file__).p
 pair = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(pair)
 sys.path.insert(0, str(Path(__file__).parents[1]))
-from prepare_release_prs import bump_lock_versions, example_metadata  # noqa: E402
+from prepare_release_prs import (  # noqa: E402
+    bump_lock_versions,
+    bump_workspace_versions,
+    example_metadata,
+)
 
 
 class ReleaseTests(unittest.TestCase):
@@ -76,6 +80,12 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(result['powerio_bmopf_11']['schema_commit'], '10')
         self.assertEqual(result['powerio_bmopf_11']['producer_version'], '0.11.3')
         self.assertEqual(example_metadata(changed, '0.11.3', retain_history=True), changed)
+
+    def test_release_bump_does_not_upgrade_unrelated_dependencies(self):
+        cargo = '[workspace.package]\nversion = "0.11.2"\n[workspace.dependencies]\npowerio = { path = "powerio", version = "0.11.2" }\nexternal = { version = "0.11.2" }\n'
+        changed = bump_workspace_versions(cargo, '0.11.3')
+        self.assertIn('powerio = { path = "powerio", version = "0.11.3" }', changed)
+        self.assertIn('external = { version = "0.11.2" }', changed)
 
     def test_release_bump_includes_nonprefixed_workspace_members(self):
         lock = '[[package]]\nname = "facade-only"\nversion = "0.11.2"\n\n[[package]]\nname = "serde"\nversion = "1.0.0"\n'
