@@ -164,7 +164,7 @@ class ReleaseTests(unittest.TestCase):
         names = ['powerio-0.11.3.tar.gz'] + ['powerio-0.11.3-cp39-abi3-' + platform + '.whl' for platform in
                  ('manylinux_2_17_x86_64', 'manylinux_2_17_aarch64', 'macosx_11_0_x86_64', 'macosx_11_0_arm64', 'win_amd64')]
         def metadata(url):
-            return {'version': {'yanked': False}} if 'crates.io' in url else {'urls': [{'filename': name} for name in names]}
+            return {'version': {'yanked': False}} if url.startswith('https://crates.io/') else {'urls': [{'filename': name} for name in names]}
         with patch.object(pair, 'public_json', side_effect=metadata), patch.object(pair, 'api') as api, patch.object(pair, 'run') as run:
             pair.repair_publications('v0.11.3', self.manifest)
             api.assert_not_called()
@@ -174,6 +174,19 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(pair.notes('# Changelog\n\n## 0.11.3\n\n- Maintenance.\n\n## 0.11.2\n- Older.\n', '0.11.3'), '- Maintenance.')
         with self.assertRaises(ValueError):
             pair.notes('## 0.11.3\n- REVIEW REQUIRED\n', '0.11.3')
+
+    def test_uploaded_manifest_with_interrupted_validation_is_retried(self):
+        draft = {'draft': True, 'prerelease': False, 'tag_name': 'v0.11.3',
+                 'body': '## Paired release review',
+                 'assets': [{'name': n} for n in pair.ASSETS | {pair.MANIFEST}]}
+        with patch.object(pair, 'pages', return_value=[draft]), patch.object(pair, 'api', return_value={'workflow_runs': []}), patch.object(pair, 'tag_pair', return_value=self.frozen), patch.object(pair, 'verify', return_value=self.manifest), patch.object(pair, 'validation_succeeded', return_value=False), patch.object(pair, 'run') as run:
+            pair.recover_drafts()
+            run.assert_called_once_with('gh', 'workflow', 'run', 'complete-paired-release.yml', '--repo', pair.POWERIO, '--ref', 'main', '-f', 'tag=v0.11.3')
+
+    def test_interrupted_or_wrong_validation_is_not_publication_evidence(self):
+        for evidence in (None, {'status': 'completed', 'conclusion': 'cancelled', 'path': '.github/workflows/complete-paired-release.yml'}, {'status': 'completed', 'conclusion': 'success', 'path': '.github/workflows/unrelated.yml'}):
+            with self.subTest(evidence=evidence), patch.object(pair, 'api', return_value=evidence):
+                self.assertFalse(pair.validation_succeeded(self.manifest))
 
 
 if __name__ == '__main__':
