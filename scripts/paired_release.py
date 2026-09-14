@@ -411,7 +411,7 @@ def registration_status(tag):
 def recover_drafts():
     complete_runs = api(f"repos/{POWERIO}/actions/workflows/complete-paired-release.yml/runs?per_page=100")["workflow_runs"]
     for rel in pages(f"repos/{POWERIO}/releases?per_page=100"):
-        if not rel["draft"] or rel["prerelease"] or not rel.get("body", "").startswith("Candidate preparation is in progress."):
+        if not rel["draft"] or rel["prerelease"] or not (rel.get("body") or "").startswith("Candidate preparation is in progress."):
             continue
         tag = rel["tag_name"]
         tag_pair(tag)

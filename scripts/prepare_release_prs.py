@@ -11,6 +11,22 @@ import tomllib
 from paired_release import JULIA, POWERIO, api, require, source, version
 
 
+def bump_workspace_versions(text, number):
+    parsed = tomllib.loads(text)['workspace']
+    old = parsed['package']['version']
+    match = re.search(r'(?ms)^\[workspace.package\]\n(.*?)(?=^\[|\Z)', text)
+    require(match is not None, 'workspace package section is missing')
+    section, count = re.subn(r'(?m)^version = "' + re.escape(old) + r'"$', 'version = "' + number + '"', match[1])
+    require(count == 1, 'workspace version declaration is ambiguous')
+    text = text[:match.start(1)] + section + text[match.end(1):]
+    for name, dependency in parsed['dependencies'].items():
+        if isinstance(dependency, dict) and 'path' in dependency and dependency.get('version') == old:
+            pattern = r'(?m)^(' + re.escape(name) + r' = \{[^\n]*version = ")' + re.escape(old) + r'("[^\n]*\})$'
+            text, count = re.subn(pattern, lambda m: m[1] + number + m[2], text)
+            require(count == 1, 'workspace dependency declaration is ambiguous: ' + name)
+    return text
+
+
 def bump_lock_versions(lock, names, number):
     for name in names:
         pattern = r'(name = "' + re.escape(name) + r'"\nversion = ")[^"]+("\n)'
@@ -46,7 +62,7 @@ def version_edits(repo, sha, number):
         cargo = source(repo, 'Cargo.toml', sha).decode()
         old = tomllib.loads(cargo)['workspace']['package']['version']
         require(version(number) > version(old), 'release version must increase')
-        cargo = cargo.replace(f'version = "{old}"', f'version = "{number}"')
+        cargo = bump_workspace_versions(cargo, number)
         lock = source(repo, 'Cargo.lock', sha).decode()
         names = []
         for member in tomllib.loads(cargo)['workspace']['members']:
