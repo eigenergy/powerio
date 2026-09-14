@@ -1,0 +1,29 @@
+{
+  "format": 1,
+  "schemas": [
+    {
+      "version": "0.1.0",
+      "path": "0.1.0/bmopf.schema.json",
+      "status": "historical-baseline",
+      "sha256": "221cfd98cdea69636ba236a5a5e39a75b482736aeb7579045387eb5e5f2a5567",
+      "schema_id": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.1.0/bmopf.schema.json",
+      "upstream_repository": "distribution-system-opt/dsopt-schema",
+      "upstream_commit": "b75d0d6669c670dca37ae3ec778b3ac405c361ba",
+      "upstream_path": "schema/bmopf/0.1.0/bmopf.schema.json",
+      "review_url": "https://github.com/distribution-system-opt/dsopt-schema/pull/3",
+      "license": "CC-BY-4.0"
+    },
+    {
+      "version": "0.2.0",
+      "path": "0.2.0/bmopf.schema.json",
+      "status": "proposal",
+      "sha256": "74d6c6de3637d52e42a26c4cb0584f51df70d69f360b236cf5e23afaf7669462",
+      "schema_id": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.2.0/bmopf.schema.json",
+      "upstream_repository": "distribution-system-opt/dsopt-schema",
+      "upstream_commit": "664b494f2ee31ee76f8f78e7852cdb1f1c9a8e7d",
+      "upstream_path": "schema/bmopf/0.2.0/bmopf.schema.json",
+      "review_url": "https://github.com/distribution-system-opt/dsopt-schema/pull/2",
+      "license": "CC-BY-4.0"
+    }
+  ]
+}

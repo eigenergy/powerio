@@ -41,6 +41,8 @@ jobs:
     # cp1252 plus a BOM (#77). .gitattributes can't catch the latter two, so
     # reject them here. tests/data is exempt: vendored fixtures keep their
     # committed bytes.
+    - name: Check the BMOPF schema archive
+      run: python3 scripts/check-bmopf-archive.py
     - name: No UTF-8 BOM
       run: |
         if git grep -Iln $'\xef\xbb\xbf' -- .; then

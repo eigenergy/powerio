@@ -2307,7 +2307,7 @@ mod tests {
             );
         }
         let draft_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../tests/data/dist/bmopf/bmopf-0.2.0.schema.json");
+            .join("schemas/bmopf/0.2.0/bmopf.schema.json");
         let draft: Value =
             serde_json::from_str(&std::fs::read_to_string(draft_path).unwrap()).unwrap();
         walk(&draft, &mut names, &mut patterns);

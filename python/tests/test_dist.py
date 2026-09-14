@@ -412,7 +412,7 @@ def test_source_energy_prices_and_draft_schema_digest_survive_ir():
     assert restored.value.voltage_sources[0]["energy_cost_rate"] == [0.1]
     output = json.loads(powerio.emit(restored, "bmopf-json@0.2.0").text)
     provenance = output["meta"]["provenance"]["powerio_bmopf"]
-    schema = (DATA / "bmopf" / "bmopf-0.2.0.schema.json").read_bytes()
+    schema = (DATA.parents[2] / "powerio-dist" / "schemas" / "bmopf" / "0.2.0" / "bmopf.schema.json").read_bytes()
     assert provenance["schema_sha256"] == hashlib.sha256(schema).hexdigest()
     assert provenance["schema_status"] == "proposal"
     assert provenance["schema_commit"] in output["meta"]["$schema"]

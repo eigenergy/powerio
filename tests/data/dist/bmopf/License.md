@@ -9,9 +9,8 @@ whatever license the IEEE PES Task Force on Benchmarking Multiconductor OPF
 publishes for it, and the files here are vendored for interoperation testing
 with the task force's knowledge (see the review thread on eigenergy/powerio#82).
 
-`bmopf-0.2.0.schema.json` is vendored unchanged from
-<https://github.com/distribution-system-opt/dsopt-schema> at the commit pinned
-in `../README.md`, and that repository publishes it under CC BY 4.0.
+The versioned schema archive, including the 0.2.0 proposal, is under
+`powerio-dist/schemas/bmopf/` with its own CC BY 4.0 license and provenance.
 
 Underlying data lineage:
 

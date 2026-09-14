@@ -76,12 +76,14 @@ fn contradictory_schema_versions_are_reported_as_errors() {
 /// The validator for one vendored schema version.
 fn schema_validator_for(profile: BmopfSchemaVersion) -> jsonschema::Validator {
     let file = match profile {
-        BmopfSchemaVersion::Bmopf010 => "bmopf/draft_bmopf_schema.json",
-        BmopfSchemaVersion::Bmopf020 => "bmopf/bmopf-0.2.0.schema.json",
+        BmopfSchemaVersion::Bmopf010 => "schemas/bmopf/0.1.0/bmopf.schema.json",
+        BmopfSchemaVersion::Bmopf020 => "schemas/bmopf/0.2.0/bmopf.schema.json",
         _ => unreachable!("every schema version has a vendored document"),
     };
-    let schema: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(fixture(file)).unwrap()).unwrap();
+    let schema: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(file)).unwrap(),
+    )
+    .unwrap();
     jsonschema::validator_for(&schema).expect("vendored schema compiles")
 }
 

@@ -22,7 +22,7 @@ cargo run -p powerio-dist --example regen_bmopf_examples -- --check
 ```
 
 Every document validates against the vendored schema
-(`tests/data/dist/bmopf/bmopf-0.2.0.schema.json`), and the writer reports each
+(`powerio-dist/schemas/bmopf/0.2.0/bmopf.schema.json`), and the writer reports each
 field or conversion the selected target cannot represent. Diagnostic counts
 count aggregated records; each record retains its occurrence count. These are
 canonical conversions. Re-emitting them as OpenDSS does not reconstruct the
