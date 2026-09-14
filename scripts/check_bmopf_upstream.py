@@ -4,6 +4,8 @@
 import base64
 import json
 from pathlib import Path
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 from paired_release import POWERIO, api, sha256
 
@@ -11,16 +13,27 @@ BRANCH = 'maintenance/bmopf-upstream-review'
 PATH = '.github/bmopf-upstream.json'
 
 
+def public_api(path):
+    request = Request("https://api.github.com/" + path, headers={"Accept": "application/vnd.github+json", "User-Agent": "PowerIO schema review"})
+    try:
+        with urlopen(request, timeout=30) as response:
+            return json.load(response)
+    except HTTPError as error:
+        if error.code == 404:
+            return None
+        raise
+
+
 def observe(entry):
     repo = entry['upstream_repository']
     number = entry['review_url'].rsplit('/', 1)[1]
-    pr = api(f'repos/{repo}/pulls/{number}', missing=True)
+    pr = public_api(f'repos/{repo}/pulls/{number}')
     result = {'version': entry['version'], 'archived_sha256': entry['sha256'], 'review_url': entry['review_url']}
     if pr is None:
         return dict(result, status='unavailable')
     status = 'merged' if pr['merged'] else 'closed-unmerged' if pr['state'] == 'closed' else 'open'
     head = pr['head']['sha']
-    item = api(f"repos/{repo}/contents/{entry['upstream_path']}?ref={head}", missing=True)
+    item = public_api(f"repos/{repo}/contents/{entry['upstream_path']}?ref={head}")
     if item is None:
         return dict(result, status=status, schema_status='unavailable')
     digest = sha256(base64.b64decode(item['content']))
