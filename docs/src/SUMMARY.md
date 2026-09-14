@@ -24,6 +24,7 @@
   - [Crate graph and architecture map](crate-graph.md)
   - [LLVM and MLIR lessons](compiler-ir.md)
   - [DC OPF bundle](dcopf-bundle.md)
+  - [Rejection audit](rejection-audit.md)
   - [Corpus harness](corpus-harness.md)
   - [Performance](performance.md)
   - [Testing and release checks](contributor-workflow.md)

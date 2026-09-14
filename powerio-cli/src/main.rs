@@ -147,6 +147,14 @@ enum Command {
         /// Which generator cost curve shapes the prepared objective carries.
         #[arg(long, value_enum, default_value = "any")]
         cost_curve_policy: CostCurvePolicyArg,
+        /// Leave non-self-loop branches with zero reactance out of the
+        /// assembly instead of refusing them.
+        #[arg(long)]
+        skip_zero_impedance: bool,
+        /// Give a branch with no thermal rating the bound its ratings imply
+        /// instead of reading an absent rating as unlimited.
+        #[arg(long)]
+        synthesize_unrated_limits: bool,
     },
     /// Emit DC sensitivity matrices (PTDF, LODF) for one case.
     Sensitivities {
@@ -837,16 +845,21 @@ fn main() -> std::process::ExitCode {
             default_gen_cost,
             gen_cost_csv,
             cost_curve_policy,
+            skip_zero_impedance,
+            synthesize_unrated_limits,
         } => run_dcopf(
             &input,
             from,
             &output,
             formula.into(),
-            units.into(),
             missing_gen_cost,
             default_gen_cost.as_deref(),
             gen_cost_csv.as_deref(),
-            cost_curve_policy.into(),
+            DcOpfAssemblyOptions::default()
+                .with_units(units.into())
+                .with_cost_curve_policy(cost_curve_policy.into())
+                .with_skip_zero_impedance(skip_zero_impedance)
+                .with_synthesize_unrated_limits(synthesize_unrated_limits),
         ),
         Command::Sensitivities {
             input,
@@ -1498,11 +1511,10 @@ fn run_dcopf(
     from: Option<FormatArg>,
     output: &Path,
     formula: BranchSusceptanceFormula,
-    units: Units,
     missing_gen_cost: MissingGenCostArg,
     default_gen_cost: Option<&str>,
     gen_cost_csv: Option<&Path>,
-    cost_curve_policy: CostCurvePolicy,
+    assembly: DcOpfAssemblyOptions,
 ) -> anyhow::Result<()> {
     let mpc = balanced_case(input, from).with_context(|| format!("parse {}", input.display()))?;
     let cost_opts = emit_options(missing_gen_cost, default_gen_cost, gen_cost_csv)?;
@@ -1512,9 +1524,6 @@ fn run_dcopf(
     let instance = powerio_prob::DcOpfInstance::from_network(policy_network)
         .with_context(|| format!("build DC OPF instance for {}", input.display()))?
         .with_branch_susceptance_formula(formula);
-    let assembly = DcOpfAssemblyOptions::default()
-        .with_units(units)
-        .with_cost_curve_policy(cost_curve_policy);
     let bundle_options = DcOpfBundleOptions {
         assembly,
         metadata: DcOpfBundleMetadata {

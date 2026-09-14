@@ -1228,3 +1228,33 @@ fn a_typed_library_failure_exits_with_its_category_and_code() {
 
     std::fs::remove_file(case).unwrap();
 }
+
+/// The assembly knobs every other entry point already had reach `dcopf`, and
+/// the manifest records what they were set to.
+#[test]
+fn dcopf_takes_the_shared_assembly_options() {
+    let stamp = std::process::id();
+    let case = repo_file("tests/data/case9.m");
+    let bundle = std::env::temp_dir().join(format!("powerio-cli-assembly-{stamp}"));
+    let out = run(&[
+        "dcopf",
+        case.to_str().unwrap(),
+        "-o",
+        bundle.to_str().unwrap(),
+        "--skip-zero-impedance",
+        "--synthesize-unrated-limits",
+        "--cost-curve-policy",
+        "convexify-lower-envelope",
+    ]);
+    assert_success(&out);
+
+    let manifest: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(bundle.join("case9_dcopf").join("dcopf_meta.json"))
+            .expect("manifest"),
+    )
+    .expect("manifest json");
+    assert_eq!(manifest["build_options"]["skip_zero_impedance"], true);
+    assert_eq!(manifest["build_options"]["synthesize_unrated_limits"], true);
+    assert_eq!(manifest["cost_curve_policy"], "convexify_lower_envelope");
+    let _ = std::fs::remove_dir_all(&bundle);
+}

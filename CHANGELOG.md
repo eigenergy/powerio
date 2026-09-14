@@ -33,8 +33,13 @@
   the manifest's new `nodal_cost` block, and reports it as a warning on the
   new `DcOpfOutputs::diagnostics`. The manifest also records
   `cost_curve_policy` and `cost_curve_projections[]`.
-- `powerio dcopf` takes `--cost-curve-policy` and prints the bundle's
-  warnings.
+- `powerio dcopf` takes `--cost-curve-policy`, `--skip-zero-impedance`, and
+  `--synthesize-unrated-limits`, the last two of which every other entry point
+  already had, and prints the bundle's warnings.
+- Add `docs/src/rejection-audit.md`: every `Error` severity parse, build, and
+  preparation diagnostic, classified as unusable data or as a consumer's
+  judgement, with the option or explicit transformation that resolves each of
+  the latter.
 
 ## 0.11.2
 
