@@ -2,6 +2,7 @@
 
 import copy
 import importlib.util
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -11,7 +12,7 @@ SPEC = importlib.util.spec_from_file_location("paired_release", Path(__file__).p
 pair = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(pair)
 sys.path.insert(0, str(Path(__file__).parents[1]))
-from prepare_release_prs import bump_lock_versions  # noqa: E402
+from prepare_release_prs import bump_lock_versions, example_metadata  # noqa: E402
 
 
 class ReleaseTests(unittest.TestCase):
@@ -62,6 +63,20 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "yanked"):
             pair.registry_action(self.manifest, {"0.11.3": {"git-tree-sha1": "d" * 40, "yanked": True}})
 
+    def test_example_bump_preserves_numeric_bytes_and_history(self):
+        provenance = {('powerio_bmopf' if n == 0 else f'powerio_bmopf_{n}'): {'producer_version': '0.11.2', 'schema_commit': str(n)} for n in range(11)}
+        meta = {'case_study_generator': {'tool': 'powerio', 'version': '0.11.2'}, 'provenance': provenance}
+        encoded = json.dumps(meta, indent=2, sort_keys=True).replace('\n', '\n  ')
+        text = '{\n  "bus": {"p": 1.0000000000000001},\n  "meta": ' + encoded + '\n}'
+        changed = example_metadata(text, '0.11.3', retain_history=True)
+        self.assertIn('1.0000000000000001', changed)
+        result = json.loads(changed)['meta']['provenance']
+        for key, record in provenance.items():
+            self.assertEqual(result[key], record)
+        self.assertEqual(result['powerio_bmopf_11']['schema_commit'], '10')
+        self.assertEqual(result['powerio_bmopf_11']['producer_version'], '0.11.3')
+        self.assertEqual(example_metadata(changed, '0.11.3', retain_history=True), changed)
+
     def test_release_bump_includes_nonprefixed_workspace_members(self):
         lock = '[[package]]\nname = "facade-only"\nversion = "0.11.2"\n\n[[package]]\nname = "serde"\nversion = "1.0.0"\n'
         changed = bump_lock_versions(lock, ['facade-only'], '0.11.3')
@@ -86,6 +101,46 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 pair.register('v0.11.3')
             api.assert_not_called()
+
+    def replace_candidate(self, *, published=False, registered=False):
+        old = dict(self.frozen, powerio_sha="d" * 40, julia_source_sha="e" * 40)
+        def fake_api(path, data=None, **_kwargs):
+            if data is not None:
+                return {"sha": "9" * 40}
+            if path.endswith('/git/ref/tags/v0.11.3'):
+                return {"object": {"type": "tag", "sha": "f" * 40}}
+            if path.endswith('/git/tags/' + 'f' * 40):
+                import json
+                return {"message": json.dumps(old), "object": {"type": "commit", "sha": old['powerio_sha']}}
+            if path.endswith('/git/ref/heads/main'):
+                return {"object": {"sha": "a" * 40 if pair.POWERIO in path else "b" * 40}}
+            if '/releases/tags/' in path:
+                return {"draft": not published, "id": 123}
+            if path.endswith('/immutable-releases'):
+                return {"enabled": True}
+            raise AssertionError(path)
+        def fake_source(_repo, path, _sha):
+            if path.endswith('Versions.toml'):
+                return ('["0.11.3"]' if registered else '["0.11.2"]').encode()
+            return b'{"format":1}'
+        with patch.object(pair, 'api', side_effect=fake_api), patch.object(pair, 'source', side_effect=fake_source), patch.object(pair, 'identity', return_value='Maintenance'), patch.object(pair, 'successful_ci'), patch.object(pair, 'run') as commands:
+            if published or registered:
+                with self.assertRaises(ValueError):
+                    pair.create_tag('0.11.3', replace=True)
+                commands.assert_not_called()
+            else:
+                pair.create_tag('0.11.3', replace=True)
+                self.assertEqual(len(commands.call_args_list), 2)
+                self.assertTrue(all('DELETE' in call.args for call in commands.call_args_list))
+
+    def test_explicit_unpublished_replacement_preserves_registered_versions(self):
+        self.replace_candidate(registered=True)
+
+    def test_explicit_unpublished_replacement_preserves_published_releases(self):
+        self.replace_candidate(published=True)
+
+    def test_explicit_unpublished_replacement_can_reuse_the_unreleased_version(self):
+        self.replace_candidate()
 
     def test_changelog_requires_curated_notes(self):
         self.assertEqual(pair.notes('# Changelog\n\n## 0.11.3\n\n- Maintenance.\n\n## 0.11.2\n- Older.\n', '0.11.3'), '- Maintenance.')

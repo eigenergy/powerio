@@ -116,11 +116,12 @@ def tag_pair(tag):
     return pair
 
 
-def create_tag(number):
+def create_tag(number, *, replace=False):
     version(number)
     tag = 'v' + number
-    require(api(f"repos/{POWERIO}/git/ref/tags/{tag}", missing=True) is None,
-            "tag already exists; retry that candidate instead")
+    existing = api(f"repos/{POWERIO}/git/ref/tags/{tag}", missing=True)
+    require(existing is None or replace, "tag already exists; retry or explicitly replace the unpublished candidate")
+    previous_pair = tag_pair(tag) if existing else None
     pair = {"format": 1, "tag": tag}
     for repo, key in ((POWERIO, "powerio_sha"), (JULIA, "julia_source_sha")):
         sha = api(f"repos/{repo}/git/ref/heads/main")["object"]["sha"]
@@ -139,6 +140,16 @@ def create_tag(number):
     for repo, key in ((POWERIO, "powerio_sha"), (JULIA, "julia_source_sha")):
         require(api(f"repos/{repo}/git/ref/heads/main")["object"]["sha"] == pair[key],
                 "main advanced during preparation; retry preparation")
+    if existing:
+        require(previous_pair != pair, "candidate is unchanged; retry its existing workflows")
+        current = release(tag)
+        require(current is None or current["draft"], "published candidates cannot be replaced")
+        require(api(f"repos/{POWERIO}/immutable-releases")["enabled"], "immutable release protection must be enabled")
+        require(api(f"repos/{POWERIO}/git/ref/tags/{tag}")["object"]["sha"] == existing["object"]["sha"],
+                "candidate tag changed during preparation")
+        if current:
+            run("gh", "api", "--method", "DELETE", f"repos/{POWERIO}/releases/{current['id']}")
+        run("gh", "api", "--method", "DELETE", f"repos/{POWERIO}/git/refs/tags/{tag}")
     obj = api(f"repos/{POWERIO}/git/tags", {"tag": tag, "message": json.dumps(pair, sort_keys=True),
               "object": pair["powerio_sha"], "type": "commit"})
     api(f"repos/{POWERIO}/git/refs", {"ref": f"refs/tags/{tag}", "sha": obj["sha"]})
@@ -194,6 +205,8 @@ def verify(tag, *, published=True):
     require(evidence["status"] == "completed" and evidence["conclusion"] == "success" and
             evidence["path"] == ".github/workflows/complete-paired-release.yml",
             "candidate validation workflow has not completed successfully")
+    require(manifest["julia_branch"] == f"release-candidates/{tag}/{manifest['julia_tree_sha'][:12]}",
+            "unexpected Julia candidate branch")
     candidate = api(f"repos/{JULIA}/git/commits/{manifest['julia_sha']}")
     require(candidate["tree"]["sha"] == manifest["julia_tree_sha"], "Julia candidate tree mismatch")
     require([p["sha"] for p in candidate["parents"]] == [pair["julia_source_sha"]], "unexpected candidate parent")
@@ -249,7 +262,7 @@ def complete_candidate(tag, julia_root):
     blob = api(f"repos/{JULIA}/git/blobs", {"content": base64.b64encode(artifact).decode(), "encoding": "base64"})
     tree = api(f"repos/{JULIA}/git/trees", {"base_tree": source_commit["tree"]["sha"], "tree": [
         {"path": "Artifacts.toml", "mode": "100644", "type": "blob", "sha": blob["sha"]}]})
-    branch = f"release-candidates/{tag}"
+    branch = f"release-candidates/{tag}/{tree['sha'][:12]}"
     existing = api(f"repos/{JULIA}/git/ref/heads/{branch}", missing=True)
     if existing:
         candidate = api(f"repos/{JULIA}/git/commits/{existing['object']['sha']}")
@@ -262,7 +275,7 @@ def complete_candidate(tag, julia_root):
         api(f"repos/{JULIA}/git/refs", {"ref": f"refs/heads/{branch}", "sha": candidate["sha"]})
     pnotes = identity(POWERIO, pair["powerio_sha"], tag[1:])
     jnotes = identity(JULIA, pair["julia_source_sha"], tag[1:])
-    manifest = dict(pair, julia_sha=candidate["sha"], julia_tree_sha=tree["sha"],
+    manifest = dict(pair, julia_sha=candidate["sha"], julia_tree_sha=tree["sha"], julia_branch=branch,
                     artifacts_sha256=sha256(artifact), assets=hashes,
                     schemas_sha256=sha256(source(POWERIO, "powerio-dist/schemas/bmopf/manifest.json", pair["powerio_sha"])),
                     notes_sha256={"powerio": sha256(pnotes.encode()), "julia": sha256(jnotes.encode())},
@@ -325,9 +338,15 @@ def register(tag):
                  dt.datetime.fromisoformat(c["created_at"].replace('Z', '+00:00')) > cutoff for c in comments)
     if not recent:
         api(f"repos/{JULIA}/commits/{sha}/comments", {"body": f"@JuliaRegistrator register\n\nRelease notes:\n{body_notes}"})
-    prs = api(f"repos/{JULIA}/pulls?state=all&head=eigenergy:release-candidates/{tag}&base=main")
+    branch = manifest["julia_branch"]
+    ref = api(f"repos/{JULIA}/git/ref/heads/{branch}", missing=True)
+    if ref is None:
+        api(f"repos/{JULIA}/git/refs", {"ref": f"refs/heads/{branch}", "sha": sha})
+    else:
+        require(ref["object"]["sha"] == sha, "candidate branch no longer names the approved commit")
+    prs = api(f"repos/{JULIA}/pulls?state=all&head=eigenergy:{branch}&base=main")
     if not prs:
-        api(f"repos/{JULIA}/pulls", {"title": f"release: synchronize {tag} artifacts", "head": f"release-candidates/{tag}",
+        api(f"repos/{JULIA}/pulls", {"title": f"release: synchronize {tag} artifacts", "head": branch,
             "base": "main", "body": f"Synchronize the exact artifact references tested and approved in the PowerIO {tag} paired release. Registration uses commit `{sha}` independently of later main changes."})
     print(f"{tag}: waiting for General registration of {sha}; scheduled retries remain active")
 
@@ -401,12 +420,14 @@ def emit_pair(tag):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["tag", "metadata", "complete", "verify", "register", "status", "recover"])
+    parser.add_argument("command", choices=["tag", "metadata", "complete", "verify", "register", "status", "recover", "replace-unpublished"])
     parser.add_argument("version_or_tag", nargs="?", default="")
     parser.add_argument("--julia-root", default="PowerIO.jl")
     args = parser.parse_args()
     if args.command == "recover":
         recover_drafts()
+    elif args.command == "replace-unpublished":
+        create_tag(args.version_or_tag, replace=True)
     elif args.command == "tag":
         create_tag(args.version_or_tag)
     elif args.command == "metadata":

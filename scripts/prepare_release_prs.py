@@ -3,6 +3,8 @@
 
 import argparse
 import base64
+import copy
+import json
 import re
 
 import tomllib
@@ -15,6 +17,28 @@ def bump_lock_versions(lock, names, number):
         lock, count = re.subn(pattern, lambda m: m[1] + number + m[2], lock)
         require(count == 1, f'missing or ambiguous workspace package {name}')
     return lock
+
+
+
+def example_metadata(text, number, *, retain_history):
+    start = re.search(r'  "meta": ', text).end()
+    meta, length = json.JSONDecoder().raw_decode(text[start:])
+    require(meta['case_study_generator']['tool'] == 'powerio', 'example has another producer')
+    meta['case_study_generator']['version'] = number
+    provenance = meta['provenance']
+    keys = [k for k in provenance if re.fullmatch(r'powerio_bmopf(?:_[0-9]+)?', k)]
+    keys.sort(key=lambda k: 0 if k == 'powerio_bmopf' else int(k.rsplit('_', 1)[1]))
+    record = copy.deepcopy(provenance[keys[-1]])
+    record['producer_version'] = number
+    if not retain_history:
+        provenance['powerio_bmopf'] = record
+    elif record not in provenance.values():
+        index = 0
+        while ('powerio_bmopf' if index == 0 else f'powerio_bmopf_{index}') in provenance:
+            index += 1
+        provenance['powerio_bmopf' if index == 0 else f'powerio_bmopf_{index}'] = record
+    encoded = json.dumps(meta, indent=2, sort_keys=True, ensure_ascii=False).replace('\n', '\n  ')
+    return text[:start] + encoded + text[start + length:]
 
 
 def version_edits(repo, sha, number):
@@ -31,6 +55,15 @@ def version_edits(repo, sha, number):
                 names.append(manifest['name'])
         lock = bump_lock_versions(lock, names, number)
         result = {'Cargo.toml': cargo, 'Cargo.lock': lock}
+        readme_path = 'powerio-dist/examples/bmopf/README.md'
+        readme = source(repo, readme_path, sha).decode()
+        for name in ('ieee34.json', 'ieee123.json', '4bus_dy.json'):
+            path = 'powerio-dist/examples/bmopf/' + name
+            before = source(repo, path, sha).decode()
+            after = example_metadata(before, number, retain_history=name == '4bus_dy.json')
+            result[path] = after
+            readme = readme.replace(f'{len(before.encode()):,} bytes', f'{len(after.encode()):,} bytes')
+        result[readme_path] = readme
     else:
         project = source(repo, 'Project.toml', sha).decode()
         old = tomllib.loads(project)['version']

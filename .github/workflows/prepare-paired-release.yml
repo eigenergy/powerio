@@ -10,7 +10,7 @@ on:
         description: Open reviewed version PRs, or build the merged candidate
         required: true
         type: choice
-        options: [changes, candidate]
+        options: [changes, candidate, replace-unpublished]
 permissions:
   contents: read
 concurrency:
@@ -42,6 +42,8 @@ jobs:
             python3 scripts/prepare_release_prs.py "$VERSION"
           elif [ "$STAGE" = candidate ]; then
             python3 scripts/paired_release.py tag "$VERSION"
+          elif [ "$STAGE" = replace-unpublished ]; then
+            python3 scripts/paired_release.py replace-unpublished "$VERSION"
           else
             exit 1
           fi
