@@ -102,8 +102,15 @@ jobs:
           julia --project=PowerIO.jl -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
           julia --project=PowerIO.jl -e 'using PowerIO; PowerIO.library_version() == ENV["VERSION"][2:end] || error("library version mismatch"); PowerIO.abi_version() == PowerIO.PIO_ABI_VERSION || error("ABI mismatch")'
           git -C PowerIO.jl diff --exit-code
+      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        id: writer
+        with:
+          app-id: ${{ vars.POWERIO_RELEASE_APP_ID }}
+          private-key: ${{ secrets.POWERIO_RELEASE_APP_PRIVATE_KEY }}
+          owner: eigenergy
+          repositories: powerio,PowerIO.jl
       - name: Resume publication and registration
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GH_TOKEN: ${{ steps.writer.outputs.token }}
           TAG: ${{ matrix.tag }}
         run: python3 scripts/paired_release.py register "$TAG" | tee -a "$GITHUB_STEP_SUMMARY"
