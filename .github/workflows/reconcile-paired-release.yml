@@ -1,0 +1,88 @@
+name: Reconcile paired releases
+on:
+  release:
+    types: [published]
+  schedule:
+    - cron: '37 5 * * *'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published paired tag to retry (blank checks all paired releases)
+        required: false
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: reconcile-paired-releases
+  cancel-in-progress: false
+jobs:
+  recover-drafts:
+    if: vars.PAIRED_RELEASES == 'true' && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        id: app
+        with:
+          app-id: ${{ vars.POWERIO_RELEASE_APP_ID }}
+          private-key: ${{ secrets.POWERIO_RELEASE_APP_PRIVATE_KEY }}
+          owner: eigenergy
+          repositories: powerio,PowerIO.jl
+      - name: Resume incomplete paired candidates
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: python3 scripts/paired_release.py recover | tee -a "$GITHUB_STEP_SUMMARY"
+  discover:
+    if: vars.PAIRED_RELEASES == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      tags: ${{ steps.tags.outputs.tags }}
+    steps:
+      - name: Select published paired releases
+        id: tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: |
+          if [ -n "$REQUESTED_TAG" ]; then
+            [[ "$REQUESTED_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+            tags=$(jq -cn --arg tag "$REQUESTED_TAG" '[$tag]')
+          else
+            tags=$(gh api --paginate --slurp repos/eigenergy/powerio/releases?per_page=100 | jq -c '[.[][] | select(.draft == false and .prerelease == false) | select(any(.assets[]; .name == "release-manifest.json")) | .tag_name]')
+          fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+  reconcile:
+    needs: discover
+    if: needs.discover.outputs.tags != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        tag: ${{ fromJSON(needs.discover.outputs.tags) }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        id: app
+        with:
+          app-id: ${{ vars.POWERIO_RELEASE_APP_ID }}
+          private-key: ${{ secrets.POWERIO_RELEASE_APP_PRIVATE_KEY }}
+          owner: eigenergy
+          repositories: powerio,PowerIO.jl
+      - name: Verify the published pair and General state
+        id: state
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          TAG: ${{ matrix.tag }}
+        run: python3 scripts/paired_release.py status "$TAG"
+      - name: Resume publication and registration
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          TAG: ${{ matrix.tag }}
+        run: python3 scripts/paired_release.py register "$TAG" | tee -a "$GITHUB_STEP_SUMMARY"

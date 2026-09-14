@@ -38,7 +38,7 @@ jobs:
   # For a planned binding break, merge the PowerIO.jl change first, then
   # run this workflow again on the tag.
   binding-gate:
-    name: PowerIO.jl main against this tag
+    name: PowerIO.jl against this tag
     # Tag pushes only. A workflow_dispatch run builds artifact-only
     # tarballs and attaches nothing to a release, so it has no gate. That
     # run is also the bypass for a planned binding break.
@@ -70,16 +70,24 @@ jobs:
         artifact-only tarballs without the gate."
         exit 1
     - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+    - name: Read the frozen Julia source
+      id: pair
+      if: vars.PAIRED_RELEASES == 'true'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TAG: ${{ github.ref_name }}
+      run: python3 scripts/paired_release.py metadata "$TAG"
     - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
     - name: Build powerio-capi
       run: |
         cargo build -p powerio-capi --release \
           --features arrow,matrix,gridfm,dist,prob
-    - name: Check out PowerIO.jl default branch
+    - name: Check out the selected PowerIO.jl source
       uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       with:
         repository: eigenergy/PowerIO.jl
+        ref: ${{ steps.pair.outputs.julia_source_sha || 'main' }}
         path: PowerIO.jl
         token: ${{ secrets.POWERIO_JL_REPO_TOKEN || github.token }}
     - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3
@@ -269,6 +277,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: write
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - name: Verify the tag still names this build
@@ -314,14 +323,19 @@ jobs:
             echo "expected five release assets, found $asset_count" >&2
             exit 1
           fi
-      - name: Attach to release
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
+      - name: Attach paired draft assets
+        if: vars.PAIRED_RELEASES == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          python3 scripts/attach_release_assets.py "$TAG" release-assets
+          gh workflow run complete-paired-release.yml --repo eigenergy/powerio --ref main -f "tag=$TAG"
+      - name: Attach legacy draft assets
+        if: vars.PAIRED_RELEASES != 'true'
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
         with:
           files: release-assets/*.tar.gz
           body_path: release-body.md
-          generate_release_notes: true
-          # Stage the release as a draft a human publishes: the release event
-          # then has a user actor, so it actually triggers python.yml (the
-          # GITHUB_TOKEN recursion guard swallows bot-published events), and
-          # nothing ships until the maintainer clicks publish.
+          generate_release_notes: false
           draft: true

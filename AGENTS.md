@@ -123,58 +123,17 @@ pip install dist/*.whl && pytest python/tests  # an editable install is shadowed
 
 ## Release flow
 
-PowerIO releases are tag driven.
+Follow `docs/src/paired-releases.md`. Before paired automation is activated,
+finish v0.11.2 through the existing reviewed Julia intent and tag workflow.
+Do not tag that release until the maintainer approves its final paired diff
+and test results.
 
-1. Wait for `main` CI to pass on the merge commit that should become the
-   release, and make sure `CHANGELOG.md` has a section headed exactly
-   `## X.Y.Z`; the tag workflow copies it into the draft release body and
-   fails without it.
-2. Obtain maintainer approval of the final cross repository diff and test
-   packet. Do not mark the PowerIO.jl release intent ready or create a tag
-   before this approval.
-3. Merge the reviewed PowerIO.jl release intent for the same version before
-   tagging PowerIO. PowerIO.jl's `Project.toml`, top `CHANGELOG.md` section,
-   and `.github/powerio-release.toml` must agree on the Julia version and
-   `vX.Y.Z` PowerIO tag. The intent is marked ready only after its canonical
-   source digest matches the reviewed PowerIO.jl tree.
-4. Check that the tag does not already exist, then create an annotated tag on
-   `origin/main` and push it:
-
-   ```
-   git fetch origin main --tags
-   git ls-remote --tags origin refs/tags/vX.Y.Z
-   git tag -a vX.Y.Z origin/main -m vX.Y.Z
-   git push origin vX.Y.Z
-   ```
-
-5. `.github/workflows/release-binaries.yml` runs on tag pushes. Its binding
-   gate tests PowerIO.jl `main` against the tagged library before it builds
-   the `powerio-capi` release tarballs for `aarch64-apple-darwin`,
-   `aarch64-linux-gnu`, `x86_64-apple-darwin`, `x86_64-linux-gnu`, and
-   `x86_64-w64-mingw32`, with the release features
-   `arrow,matrix,gridfm,dist,prob`.
-6. That workflow creates or updates a **draft** GitHub release and attaches
-   the five binary assets. Do not expect a draft release to exist before the
-   tag workflow runs.
-7. A human inspects and publishes the draft release. Publishing also starts
-   the crates.io workflow, which verifies the workspace package set and
-   publishes `powerio-core`, `powerio-tx`, `powerio-dist`, `powerio-prob`,
-   `powerio-matrix`, `powerio`, and `powerio-cli` in dependency order. A
-   rerun skips versions already present on crates.io.
-8. Publishing the release triggers `.github/workflows/notify-powerio-jl.yml`.
-   If `POWERIO_JL_DISPATCH_TOKEN` is configured, it sends a
-   `powerio-release` repository dispatch to `eigenergy/PowerIO.jl`. If the
-   token is absent, the PowerIO.jl daily schedule or manual dispatch is the
-   fallback.
-9. PowerIO.jl's `.github/workflows/update-artifacts.yml` accepts only the tag
-   named by the ready release intent. It verifies the published release and
-   exact five assets, registry order, absence of an open `artifacts/*` PR,
-   the ABI handshake, schema report, and full Julia tests. It may change only
-   `Artifacts.toml`. After confirming that PowerIO.jl `main` is still the
-   reviewed base SHA, it commits that one file to `main` and dispatches
-   registration for the exact resulting SHA. A schedule is the backstop and a
-   manual dispatch retries the same intent; neither can override its version,
-   tag, changelog, or source digest.
+After activation, version preparation opens paired PRs. Candidate preparation
+freezes reviewed commits and builds a complete draft. The maintainer's Publish
+release action approves both packages. No package publication or registration
+may bypass the immutable manifest checks. Retries use the approved commits
+and assets; later `main` changes do not change the release. Keep legacy
+workflows disabled while paired automation is active.
 
 ## Layout
 
