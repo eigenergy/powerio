@@ -16,6 +16,25 @@ concurrency:
   group: reconcile-paired-releases
   cancel-in-progress: false
 jobs:
+  recover-drafts:
+    if: vars.PAIRED_RELEASES == 'true' && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        id: app
+        with:
+          app-id: ${{ vars.POWERIO_RELEASE_APP_ID }}
+          private-key: ${{ secrets.POWERIO_RELEASE_APP_PRIVATE_KEY }}
+          owner: eigenergy
+          repositories: powerio,PowerIO.jl
+      - name: Resume incomplete paired candidates
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: python3 scripts/paired_release.py recover | tee -a "$GITHUB_STEP_SUMMARY"
   discover:
     if: vars.PAIRED_RELEASES == 'true'
     runs-on: ubuntu-latest
