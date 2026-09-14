@@ -1,9 +1,7 @@
 name: Converter
 
 on:
-  pull_request:
-  push:
-    branches: [main]
+  workflow_call:
   workflow_dispatch:
 
 permissions:
@@ -41,3 +39,44 @@ jobs:
         working-directory: apps/converter
       - run: npm test
         working-directory: apps/converter
+      - run: npm run check
+        working-directory: apps/converter
+      - run: npm run build:ui
+        working-directory: apps/converter
+      - uses: actions/upload-artifact@v4
+        with:
+          name: powerio-converter-site
+          path: apps/converter/dist
+          retention-days: 7
+
+  browser:
+    name: Converter (${{ matrix.browser }})
+    needs: engine
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/converter/package-lock.json
+      - run: npm ci
+        working-directory: apps/converter
+      - uses: actions/download-artifact@v4
+        with:
+          name: powerio-converter-site
+          path: apps/converter/dist
+      - run: npx playwright install --with-deps ${{ matrix.browser }}
+        working-directory: apps/converter
+      - run: npm run test:browser -- --project=${{ matrix.browser }}
+        working-directory: apps/converter
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: converter-failures-${{ matrix.browser }}
+          path: apps/converter/test-results
+          retention-days: 7

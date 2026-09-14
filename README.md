@@ -28,6 +28,9 @@ sources, diagnostics, source map, and history. Depending on what the source
 declares, the value is a network, a calculation instance, a solution, a time
 series, a scenario set, or a geographic layer.
 
+[Convert files in the browser](https://powerio.dev/convert/), including mixed
+transmission and distribution batches. Files stay on the computer.
+
 ## Install
 
 ```sh
