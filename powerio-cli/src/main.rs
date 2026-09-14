@@ -18,7 +18,8 @@ use powerio_matrix::matrix::{BranchSusceptanceFormula, BuildOptions, Scheme, che
 use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
 use powerio_matrix::synth::{SynthSpec, Topology};
 use powerio_matrix::{
-    DcOpfAssemblyOptions, DcOpfBundleMetadata, DcOpfBundleOptions, Units, emit_dcopf_bundle,
+    CostCurvePolicy, DcOpfAssemblyOptions, DcOpfBundleMetadata, DcOpfBundleOptions, Units,
+    emit_dcopf_bundle,
 };
 use powerio_matrix::{SensitivityOptions, SensitivitySolver};
 use powerio_tx::{EmitOptions, MissingGenCostPolicy};
@@ -143,6 +144,9 @@ enum Command {
         /// CSV with columns gen_index,bus,c2,c1,c0 and optional startup,shutdown.
         #[arg(long)]
         gen_cost_csv: Option<PathBuf>,
+        /// Which generator cost curve shapes the prepared objective carries.
+        #[arg(long, value_enum, default_value = "any")]
+        cost_curve_policy: CostCurvePolicyArg,
     },
     /// Emit DC sensitivity matrices (PTDF, LODF) for one case.
     Sensitivities {
@@ -727,6 +731,28 @@ enum UnitsArg {
     Native,
 }
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum CostCurvePolicyArg {
+    /// Carry every readable curve as the source states it, reporting each
+    /// nonconvex piecewise row and concave polynomial row as a warning.
+    Any,
+    /// Carry convex curves only; a curve that is not convex ends the run.
+    ConvexOnly,
+    /// Replace each nonconvex curve with its lower convex envelope and report
+    /// the per generator projection loss.
+    ConvexifyLowerEnvelope,
+}
+
+impl From<CostCurvePolicyArg> for CostCurvePolicy {
+    fn from(value: CostCurvePolicyArg) -> Self {
+        match value {
+            CostCurvePolicyArg::Any => Self::Any,
+            CostCurvePolicyArg::ConvexOnly => Self::ConvexOnly,
+            CostCurvePolicyArg::ConvexifyLowerEnvelope => Self::ConvexifyLowerEnvelope,
+        }
+    }
+}
+
 impl From<UnitsArg> for Units {
     fn from(value: UnitsArg) -> Self {
         match value {
@@ -810,6 +836,7 @@ fn main() -> std::process::ExitCode {
             missing_gen_cost,
             default_gen_cost,
             gen_cost_csv,
+            cost_curve_policy,
         } => run_dcopf(
             &input,
             from,
@@ -819,6 +846,7 @@ fn main() -> std::process::ExitCode {
             missing_gen_cost,
             default_gen_cost.as_deref(),
             gen_cost_csv.as_deref(),
+            cost_curve_policy.into(),
         ),
         Command::Sensitivities {
             input,
@@ -1474,6 +1502,7 @@ fn run_dcopf(
     missing_gen_cost: MissingGenCostArg,
     default_gen_cost: Option<&str>,
     gen_cost_csv: Option<&Path>,
+    cost_curve_policy: CostCurvePolicy,
 ) -> anyhow::Result<()> {
     let mpc = balanced_case(input, from).with_context(|| format!("parse {}", input.display()))?;
     let cost_opts = emit_options(missing_gen_cost, default_gen_cost, gen_cost_csv)?;
@@ -1483,8 +1512,9 @@ fn run_dcopf(
     let instance = powerio_prob::DcOpfInstance::from_network(policy_network)
         .with_context(|| format!("build DC OPF instance for {}", input.display()))?
         .with_branch_susceptance_formula(formula);
-    let mut assembly = DcOpfAssemblyOptions::default();
-    assembly.units = units;
+    let assembly = DcOpfAssemblyOptions::default()
+        .with_units(units)
+        .with_cost_curve_policy(cost_curve_policy);
     let bundle_options = DcOpfBundleOptions {
         assembly,
         metadata: DcOpfBundleMetadata {
@@ -1494,6 +1524,7 @@ fn run_dcopf(
     };
     let outputs = emit_dcopf_bundle(&instance, output, &bundle_options)
         .with_context(|| format!("export DC OPF bundle for {}", input.display()))?;
+    report_diagnostics(&outputs.diagnostics);
     tracing::info!(
         case = %mpc.name(),
         dir = %outputs.dir.display(),

@@ -1,11 +1,14 @@
 use std::path::{Path, PathBuf};
 
+use powerio_core::Diagnostic;
 use powerio_tx::{GenCostPolicyReport, MissingGenCostPolicy};
 
 use crate::Result;
 use crate::SparseMatrix;
+use crate::cost_curve::{CostCurvePolicy, CostCurveProjection, cost_curve_diagnostics};
 use serde::Serialize;
 
+use super::nodal;
 use super::prep::{DcOpfPreparation, Units};
 use super::{DcOpfAssemblyOptions, matrices_from_preparation};
 
@@ -40,6 +43,10 @@ pub struct DcOpfBundleOptions {
 pub struct DcOpfOutputs {
     pub dir: PathBuf,
     pub files: Vec<PathBuf>,
+    /// What the written bundle states about itself: the cost curves it
+    /// carries unchanged from a nonconvex source row, and the nodal cost
+    /// files it left out. Empty when the bundle is the complete assembly.
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 #[derive(Serialize)]
@@ -55,6 +62,13 @@ struct DcOpfMeta<'a> {
     grounding: GroundingMeta<'a>,
     operators: Vec<OperatorMeta>,
     units: Units,
+    /// Whether `q.mtx`, `c.mtx`, and `c0.mtx` are in the bundle, and why they
+    /// are not when they are not.
+    nodal_cost: NodalCostMeta,
+    cost_curve_policy: CostCurvePolicy,
+    /// Generator cost curves the prepared objective does not carry as the
+    /// source states them.
+    cost_curve_projections: &'a [CostCurveProjection],
     cost_policy: MissingGenCostPolicy,
     synthesized_gen_costs: usize,
     patched_gen_costs: usize,
@@ -71,6 +85,13 @@ struct DcOpfDimensions {
     n_generators: usize,
     n_reference_buses: usize,
     n_grounded_buses: usize,
+}
+
+#[derive(Serialize)]
+struct NodalCostMeta {
+    written: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    omitted_because: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -146,7 +167,13 @@ fn emit_prepared(
     options: &DcOpfBundleOptions,
 ) -> Result<DcOpfOutputs> {
     let matrices = matrices_from_preparation(instance);
-    let nodal = instance.calc_nodal_generator_data()?;
+    // A bus space quadratic cannot carry a piecewise or concave generator
+    // column, but the bounds at a bus are a plain sum and the generator space
+    // columns are complete either way. The bundle writes what it has and
+    // states what it left out, rather than refusing a case over the three
+    // files a consumer of the generator space never opens.
+    let nodal_cost = instance.calc_nodal_generator_data();
+    let nodal_bounds = NodalBounds::of(instance);
     let fixed_withdrawal = instance.calc_fixed_nodal_withdrawal();
     let flow_offset = instance.calc_branch_flow_offset();
     // The case name comes from source file content, so it must not steer the
@@ -178,11 +205,13 @@ fn emit_prepared(
     put_vec(&mut inventory, "p_shift.mtx", &instance.p_shift)?;
     put_vec(&mut inventory, "fixed_withdrawal.mtx", &fixed_withdrawal)?;
     put_vec(&mut inventory, "e_r.mtx", &matrices.reference_selector)?;
-    put_vec(&mut inventory, "q.mtx", &nodal.q)?;
-    put_vec(&mut inventory, "c.mtx", &nodal.c)?;
-    put_vec(&mut inventory, "c0.mtx", &nodal.c0)?;
-    put_vec(&mut inventory, "pmax.mtx", &nodal.pmax)?;
-    put_vec(&mut inventory, "pmin.mtx", &nodal.pmin)?;
+    if let Ok(nodal) = &nodal_cost {
+        put_vec(&mut inventory, "q.mtx", &nodal.q)?;
+        put_vec(&mut inventory, "c.mtx", &nodal.c)?;
+        put_vec(&mut inventory, "c0.mtx", &nodal.c0)?;
+    }
+    put_vec(&mut inventory, "pmax.mtx", &nodal_bounds.pmax)?;
+    put_vec(&mut inventory, "pmin.mtx", &nodal_bounds.pmin)?;
     put_vec(&mut inventory, "fmax.mtx", &instance.branches.f_max)?;
     put_vec(&mut inventory, "pd.mtx", &instance.p_d)?;
     put_vec(&mut inventory, "gs.mtx", &instance.g_s)?;
@@ -250,6 +279,12 @@ fn emit_prepared(
             power_units,
         ),
         units: instance.units,
+        nodal_cost: NodalCostMeta {
+            written: nodal_cost.is_ok(),
+            omitted_because: nodal_cost.as_ref().err().map(ToString::to_string),
+        },
+        cost_curve_policy: options.assembly.cost_curve_policy,
+        cost_curve_projections: &instance.cost_curve_projections,
         cost_policy: options.metadata.cost_policy,
         synthesized_gen_costs: options.metadata.cost_report.synthesized,
         patched_gen_costs: options.metadata.cost_report.patched,
@@ -289,10 +324,41 @@ fn emit_prepared(
         unreachable!("a path destination returns a path output")
     };
 
+    let mut diagnostics = cost_curve_diagnostics(&instance.cost_curve_projections);
+    if let Err(error) = &nodal_cost {
+        diagnostics.push(
+            Diagnostic::of(
+                error.code(),
+                format!(
+                    "the bundle states no nodal cost (`q.mtx`, `c.mtx`, `c0.mtx`); the generator space columns carry the whole objective: {error}"
+                ),
+            )
+            .with_severity(powerio_core::DiagnosticSeverity::Warning),
+        );
+    }
     Ok(DcOpfOutputs {
         dir: root,
         files: artifacts,
+        diagnostics,
     })
+}
+
+/// The nodal generator bounds, which are a plain sum over the generators at
+/// each bus whatever shape their cost curves have.
+struct NodalBounds {
+    pmax: Vec<f64>,
+    pmin: Vec<f64>,
+}
+
+impl NodalBounds {
+    fn of(instance: &DcOpfPreparation) -> Self {
+        let n = instance.n_buses;
+        let bus_of_gen = &instance.generators.bus_of_gen;
+        Self {
+            pmax: nodal::sum_by_bus(n, bus_of_gen, &instance.generators.pmax),
+            pmin: nodal::sum_by_bus(n, bus_of_gen, &instance.generators.pmin),
+        }
+    }
 }
 
 #[allow(clippy::too_many_lines)]

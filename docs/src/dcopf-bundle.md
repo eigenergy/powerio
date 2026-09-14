@@ -76,10 +76,24 @@ limits; \\(0\\) means unlimited per MATPOWER), and the radian limits
 The generator space vectors, of length \\(n_{\mathrm{gen}}\\), are `q_gen`,
 `c_gen`, `c0_gen`, `pmax_gen`, and `pmin_gen`.
 
-The bundle schema only represents polynomial generator costs. If a generator
-has a piecewise linear cost, preparation returns a typed error instead of
-writing zero polynomial coefficients; the in memory generator space
-preparation keeps those breakpoints exactly.
+The bus space cost files represent polynomial generator costs only. A case
+whose generators carry piecewise linear or concave costs is written without
+`q.mtx`, `c.mtx`, and `c0.mtx` rather than with zero polynomial coefficients
+that state the wrong price: `nodal_cost.written` in the manifest is `false`,
+`nodal_cost.omitted_because` says why, and the bundle reports it as a
+`BUILD.OPF.NODAL_COST_UNSUPPORTED` warning. The generator space columns and
+the nodal bounds `pmax` and `pmin` are complete in either case, and the in
+memory preparation keeps the breakpoints exactly.
+
+The cost curve shapes the objective carries follow the
+`--cost-curve-policy` option, recorded in the manifest as
+`cost_curve_policy`. Under the default `any` a nonconvex piecewise row or a
+concave polynomial row reaches the arrays as the source states it and is
+listed in `cost_curve_projections`, each entry naming the generator, the
+property of the curve (`departure`), what the bundle carries (`action`), and
+how far below the stated curve that lies (`projection_loss`).
+`convexify-lower-envelope` replaces each such curve with its lower convex
+envelope; `convex-only` refuses the case.
 
 The constant cost terms `c0` and `c0_gen` do not move the argmin. They are
 there so that a consumer reporting objective values can reconstruct the full
@@ -112,7 +126,8 @@ structured metadata:
 - `operators[]`: one entry per emitted operator with `name`, `file`, `kind`,
   `rows`, `cols`, `index_space`, and `units`.
 
-`cost_policy`, `synthesized_gen_costs`, `patched_gen_costs`, `files[]`, and
+`cost_policy`, `synthesized_gen_costs`, `patched_gen_costs`, `nodal_cost`,
+`cost_curve_policy`, `cost_curve_projections[]`, `files[]`, and
 `powerio_version` are top level fields.
 
 ## Solving with it

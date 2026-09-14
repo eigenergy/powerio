@@ -196,3 +196,97 @@ fn assert_convex(power: &[f64], value: &[f64]) {
         );
     }
 }
+
+/// A piecewise cost case still writes the whole bundle: only the three bus
+/// space cost files, which no bus space quadratic can carry, stay out.
+#[test]
+fn a_piecewise_case_writes_the_bundle_without_the_nodal_cost_files() {
+    let network = case5_with_texas7k_cost_row();
+    let instance = DcOpfInstance::from_network(network).expect("DC OPF instance");
+    let output = tempfile::tempdir().expect("tempdir");
+    let bundle = powerio_matrix::emit_dcopf_bundle(
+        &instance,
+        output.path(),
+        &powerio_matrix::DcOpfBundleOptions::default(),
+    )
+    .expect("a piecewise case writes a bundle");
+
+    for present in [
+        "A.mtx",
+        "L.mtx",
+        "pmax.mtx",
+        "pmin.mtx",
+        "q_gen.mtx",
+        "c_gen.mtx",
+        "c0_gen.mtx",
+        "dcopf_meta.json",
+    ] {
+        assert!(bundle.dir.join(present).is_file(), "{present} is missing");
+    }
+    for absent in ["q.mtx", "c.mtx", "c0.mtx"] {
+        assert!(
+            !bundle.dir.join(absent).exists(),
+            "{absent} states a bus space cost this case has none of"
+        );
+    }
+
+    let manifest: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(bundle.dir.join("dcopf_meta.json")).expect("manifest"),
+    )
+    .expect("manifest json");
+    assert_eq!(manifest["nodal_cost"]["written"], false);
+    assert!(
+        manifest["nodal_cost"]["omitted_because"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("piecewise"))
+    );
+    assert_eq!(manifest["cost_curve_policy"], "any");
+    assert_eq!(
+        manifest["cost_curve_projections"]
+            .as_array()
+            .expect("projections")
+            .len(),
+        1
+    );
+
+    let codes: Vec<&str> = bundle
+        .diagnostics
+        .iter()
+        .map(powerio_core::Diagnostic::code)
+        .collect();
+    assert!(codes.contains(&"BUILD.INSTANCE.PIECEWISE_COST_NONCONVEX"));
+    assert!(codes.contains(&"BUILD.OPF.NODAL_COST_UNSUPPORTED"));
+    assert!(
+        bundle
+            .diagnostics
+            .iter()
+            .all(|d| d.severity() == powerio_core::DiagnosticSeverity::Warning)
+    );
+}
+
+/// A quadratic case is unchanged: the bus space cost files are still written
+/// and the bundle reports nothing.
+#[test]
+fn a_quadratic_case_still_writes_the_nodal_cost_files() {
+    let network =
+        parse_matpower_file("../tests/data/pglib/pglib_opf_case14_ieee.m").expect("parse case14");
+    let instance = DcOpfInstance::from_network(network).expect("DC OPF instance");
+    let output = tempfile::tempdir().expect("tempdir");
+    let bundle = powerio_matrix::emit_dcopf_bundle(
+        &instance,
+        output.path(),
+        &powerio_matrix::DcOpfBundleOptions::default(),
+    )
+    .expect("bundle");
+
+    for present in ["q.mtx", "c.mtx", "c0.mtx"] {
+        assert!(bundle.dir.join(present).is_file(), "{present} is missing");
+    }
+    assert!(bundle.diagnostics.is_empty());
+    let manifest: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(bundle.dir.join("dcopf_meta.json")).expect("manifest"),
+    )
+    .expect("manifest json");
+    assert_eq!(manifest["nodal_cost"]["written"], true);
+    assert!(manifest["nodal_cost"].get("omitted_because").is_none());
+}

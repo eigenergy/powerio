@@ -21,6 +21,13 @@
 - The bus space projection `calc_nodal_generator_data` refuses a concave
   generator column with `BUILD.OPF.NODAL_COST_UNSUPPORTED`: the parallel rule
   describes the least cost split only over convex curves.
+- `emit_dcopf_bundle` writes a case whose generators carry piecewise linear or
+  concave costs. It leaves out `q.mtx`, `c.mtx`, and `c0.mtx`, records why in
+  the manifest's new `nodal_cost` block, and reports it as a warning on the
+  new `DcOpfOutputs::diagnostics`. The manifest also records
+  `cost_curve_policy` and `cost_curve_projections[]`.
+- `powerio dcopf` takes `--cost-curve-policy` and prints the bundle's
+  warnings.
 
 ## 0.11.2
 
