@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Add `CostCurvePolicy` to the DC and AC OPF assembly options. The default
+  `any` carries every readable generator cost curve as the source states it and
+  records each nonconvex piecewise row and concave polynomial row in
+  `cost_curve_projections`; `cost_curve_diagnostics` renders those records as
+  warnings. `convexify_lower_envelope` replaces each such curve with its lower
+  convex envelope and reports the per-generator projection loss, and
+  `convex_only` keeps the pre-0.11.3 refusal as an opt-in.
+
+### Changed
+
+- `DcOpfInstance` and `AcOpfInstance` assembly no longer refuses a nonconvex
+  piecewise or concave polynomial cost row by default. `Texas7k_20210804.m`,
+  whose two-decimal cost tabulation leaves 124 of 731 generators with a slope
+  dip of about 0.07 percent, now prepares under the default policy.
+- The bus space projection `calc_nodal_generator_data` refuses a concave
+  generator column with `BUILD.OPF.NODAL_COST_UNSUPPORTED`: the parallel rule
+  describes the least cost split only over convex curves.
+
 ## 0.11.2
 
 - Maintenance updates and regression coverage.

@@ -100,9 +100,19 @@ pub enum Error {
     PiecewiseNodalCost { gen_index: usize },
 
     #[error(
-        "generator {gen_index} has a concave cost row (c2 = {c2}); need a nonnegative quadratic coefficient"
+        "generator {gen_index} has a concave cost row (c2 = {c2}); the `convex_only` cost curve policy carries convex curves only"
     )]
     ConcaveCost { gen_index: usize, c2: f64 },
+
+    #[error(
+        "generator {gen_index} has a concave cost row and no finite active power range; a concave curve has no lower convex envelope over an unbounded range"
+    )]
+    UnboundedCostEnvelope { gen_index: usize },
+
+    #[error(
+        "generator {gen_index} has a concave cost row that cannot be projected to one nodal quadratic cost"
+    )]
+    ConcaveNodalCost { gen_index: usize },
 
     #[error("matrix-market I/O: {0}")]
     Mtx(String),
@@ -189,8 +199,10 @@ impl Error {
             Error::NonconvexPiecewiseCost { .. } => {
                 &powerio_prob::diagnostics::codes::BUILD_INSTANCE_PIECEWISE_COST_NONCONVEX
             }
-            Error::PiecewiseNodalCost { .. } => &codes::BUILD_OPF_NODAL_COST_UNSUPPORTED,
-            Error::ConcaveCost { .. } => {
+            Error::PiecewiseNodalCost { .. } | Error::ConcaveNodalCost { .. } => {
+                &codes::BUILD_OPF_NODAL_COST_UNSUPPORTED
+            }
+            Error::ConcaveCost { .. } | Error::UnboundedCostEnvelope { .. } => {
                 &powerio_prob::diagnostics::codes::BUILD_INSTANCE_CONCAVE_COST
             }
             Error::Mtx(_) => &codes::EMIT_MTX_FAILED,
@@ -228,8 +240,9 @@ impl Error {
             | Error::UnsupportedCostModel { .. }
             | Error::InvalidPiecewiseCost { .. }
             | Error::NonconvexPiecewiseCost { .. }
-            | Error::ConcaveCost { .. } => C::Data,
-            Error::PiecewiseNodalCost { .. } => C::Request,
+            | Error::ConcaveCost { .. }
+            | Error::UnboundedCostEnvelope { .. } => C::Data,
+            Error::PiecewiseNodalCost { .. } | Error::ConcaveNodalCost { .. } => C::Request,
             // Output-side serialization write failures.
             Error::Mtx(_) | Error::Parquet(_) => C::Output,
         }

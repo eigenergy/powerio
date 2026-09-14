@@ -286,7 +286,16 @@ docs/                         the mdBook guide, the schema archive, release note
 - **A bus can host several generators.** `nodal.rs` sums the bounds, which
   is exact, and combines the cost curves by the parallel rule
   `q = 1/Σ(1/qᵢ)`, the curve of the least cost split, which is an
-  approximation. One generator at a bus passes through unchanged.
+  approximation. One generator at a bus passes through unchanged. The rule
+  describes the least cost split only over convex curves, so the projection
+  refuses a piecewise or concave generator column.
+- **Cost curve shape is the caller's choice.** `cost_curve.rs` compiles a
+  source cost row into the generator space columns and applies
+  `CostCurvePolicy`. The default `Any` carries a nonconvex piecewise row or a
+  concave polynomial row as stated and records it in the preparation's
+  `cost_curve_projections`; `ConvexifyLowerEnvelope` replaces it with its
+  lower convex envelope and prices what that drops; `ConvexOnly` refuses.
+  A diagnostic names the property of the data, never a solver.
 - **A leading cost coefficient can be a rounding artifact.** A model 2 row
   that states a linear curve often carries a quadratic term near `1e-17`.
   `GenCost::LEADING_COEFF_TOL` (`1e-12`) is the tolerance the quadratic

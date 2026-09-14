@@ -6,164 +6,8 @@
 //!
 //! Bound aggregation is exact: the sum of the generator ranges is the range
 //! the bus total can reach. Cost aggregation is an approximation, stated in
-//! [`combine_costs`].
-
-use powerio_tx::network::GenCost;
-
-use crate::{Error, PiecewiseCostInvalidity, PiecewiseLinearCost, Result};
-
-/// The complete supported cost data for one generator before unit scaling of
-/// polynomial coefficients.
-pub(crate) struct GeneratorCostTerms {
-    pub q: f64,
-    pub c: f64,
-    pub c0: f64,
-    pub piecewise_linear: Option<PiecewiseLinearCost>,
-}
-
-/// Compile one generator cost without changing its mathematical form.
-pub(crate) fn generator_cost_terms(
-    cost: &GenCost,
-    gen_index: usize,
-    power_scale: f64,
-) -> Result<GeneratorCostTerms> {
-    match cost.model {
-        1 => Ok(GeneratorCostTerms {
-            q: 0.0,
-            c: 0.0,
-            c0: 0.0,
-            piecewise_linear: Some(piecewise_linear_terms(cost, gen_index, power_scale)?),
-        }),
-        2 => {
-            let (q, c, c0) = quadratic_terms(cost, gen_index)?;
-            Ok(GeneratorCostTerms {
-                q,
-                c,
-                c0,
-                piecewise_linear: None,
-            })
-        }
-        _ => Err(Error::UnsupportedCostModel {
-            gen_index,
-            model: cost.model,
-            ncost: cost.ncost,
-        }),
-    }
-}
-
-fn piecewise_linear_terms(
-    cost: &GenCost,
-    gen_index: usize,
-    power_scale: f64,
-) -> Result<PiecewiseLinearCost> {
-    if cost.ncost < 2 {
-        return Err(Error::InvalidPiecewiseCost {
-            gen_index,
-            reason: PiecewiseCostInvalidity::FewerThanTwoBreakpoints {
-                declared: cost.ncost,
-            },
-        });
-    }
-    let expected_values = cost
-        .ncost
-        .checked_mul(2)
-        .ok_or(Error::InvalidPiecewiseCost {
-            gen_index,
-            reason: PiecewiseCostInvalidity::Truncated {
-                expected_values: usize::MAX,
-                got: cost.coeffs.len(),
-            },
-        })?;
-    if cost.coeffs.len() < expected_values {
-        return Err(Error::InvalidPiecewiseCost {
-            gen_index,
-            reason: PiecewiseCostInvalidity::Truncated {
-                expected_values,
-                got: cost.coeffs.len(),
-            },
-        });
-    }
-
-    let mut power = Vec::with_capacity(cost.ncost);
-    let mut value = Vec::with_capacity(cost.ncost);
-    for (point, pair) in cost.coeffs[..expected_values]
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .enumerate()
-    {
-        let p = pair[0] * power_scale;
-        let v = pair[1];
-        if !p.is_finite() || !v.is_finite() {
-            return Err(Error::InvalidPiecewiseCost {
-                gen_index,
-                reason: PiecewiseCostInvalidity::NonFinitePoint { point },
-            });
-        }
-        if power.last().is_some_and(|previous| p <= *previous) {
-            return Err(Error::InvalidPiecewiseCost {
-                gen_index,
-                reason: PiecewiseCostInvalidity::NonIncreasingPower { point },
-            });
-        }
-        power.push(p);
-        value.push(v);
-    }
-
-    let mut previous_slope: Option<f64> = None;
-    for segment in 0..power.len() - 1 {
-        let slope = (value[segment + 1] - value[segment]) / (power[segment + 1] - power[segment]);
-        if !slope.is_finite() {
-            return Err(Error::InvalidPiecewiseCost {
-                gen_index,
-                reason: PiecewiseCostInvalidity::NonFinitePoint { point: segment + 1 },
-            });
-        }
-        if let Some(previous) = previous_slope {
-            let roundoff = 64.0 * f64::EPSILON * previous.abs().max(slope.abs()).max(1.0);
-            if previous > slope + roundoff {
-                return Err(Error::NonconvexPiecewiseCost { gen_index, segment });
-            }
-        }
-        previous_slope = Some(slope);
-    }
-
-    Ok(PiecewiseLinearCost { power, value })
-}
-
-/// `(q, c, c0)` of one generator's cost row, as both instance builders read it.
-///
-/// A MATPOWER model 2 row often carries a leading coefficient near 1e-17 that
-/// the source produced by rounding. It states a linear curve, and reading it as
-/// quadratic gives `1/q` near 1e17 wherever the curvature is inverted.
-///
-/// # Errors
-/// [`Error::UnsupportedCostModel`] for a row that states no quadratic curve;
-/// [`Error::ConcaveCost`] for a negative quadratic coefficient, which the
-/// least cost split in [`combine_costs`] cannot price.
-pub(crate) fn quadratic_terms(cost: &GenCost, gen_index: usize) -> Result<(f64, f64, f64)> {
-    // One rule, stated once on the hub type. Rolling it again here diverged
-    // twice: the threshold applied to `2*c2` rather than to the source
-    // coefficient the artifact lives in, and a longer row whose leading
-    // coefficients are artifacts errored here while the hub read it.
-    let (q, c, c0) = cost
-        .calc_quadratic_with_constant_tol(GenCost::LEADING_COEFF_TOL)
-        .ok_or(Error::UnsupportedCostModel {
-            gen_index,
-            model: cost.model,
-            ncost: cost.ncost,
-        })?;
-    // The readers keep a concave row; the convexity assumption is this
-    // crate's, so the instance builders refuse it here, before bus count
-    // decides whether the row passes through or joins a merge.
-    if q < 0.0 {
-        return Err(Error::ConcaveCost {
-            gen_index,
-            c2: q / 2.0,
-        });
-    }
-    Ok((q, c, c0))
-}
+//! [`combine_costs`]. Compiling a source cost row into the generator space
+//! columns this module reads belongs to [`crate::cost_curve`].
 
 /// Sum of a generator column vector over the bus of each generator.
 pub(crate) fn sum_by_bus(n_buses: usize, bus_of_gen: &[usize], values: &[f64]) -> Vec<f64> {
@@ -264,15 +108,16 @@ impl Default for BusCost {
 
 impl BusCost {
     fn add(&mut self, q: f64, c: f64, c0: f64) {
-        // `quadratic_terms` refuses a negative `q`, so the flat arm below only
-        // ever takes `q == 0` rows.
+        // `DcOpfPreparation::calc_nodal_generator_data` refuses a negative
+        // `q` before reaching here, so the flat arm below only ever takes
+        // `q == 0` rows.
         debug_assert!(q >= 0.0, "concave cost row reached combine_costs: q = {q}");
         self.count += 1;
         if self.count == 1 {
             self.only = (q, c, c0);
         }
         self.c0 += c0;
-        // `quadratic_terms` has already zeroed a rounding artifact, which would
+        // `cost_curve` has already zeroed a rounding artifact, which would
         // otherwise give `1/q` near 1e17 and price the whole bus as free.
         if q > 0.0 {
             self.reciprocal_q += 1.0 / q;
@@ -320,42 +165,6 @@ mod tests {
         assert_eq!(costs.q, vec![0.0, 0.3]);
         assert_eq!(costs.c, vec![0.0, 7.0]);
         assert_eq!(costs.c0, vec![0.0, 11.0]);
-    }
-
-    /// A rounding artifact states a linear curve. Read as quadratic it gives
-    /// `1/q` near 1e17, which swamps the parallel sum and prices the bus as
-    /// nearly free.
-    #[test]
-    fn a_rounding_artifact_reads_as_a_linear_curve() {
-        let artifact = GenCost::new(2, 0.0, 0.0, vec![1e-17, 3.0, 0.0]);
-        let (q, c, c0) = quadratic_terms(&artifact, 0).expect("a model 2 row");
-        assert_eq!((q, c, c0), (0.0, 3.0, 0.0));
-
-        let costs = combine_costs(1, &[0, 0], &[q, 0.2], &[c, 5.0], &[c0, 0.0]);
-        assert_eq!(costs.q, vec![0.0]);
-        assert_eq!(costs.c, vec![3.0], "the cheaper linear term sets the bus");
-    }
-
-    #[test]
-    fn a_concave_row_is_refused_with_its_source_coefficient() {
-        let concave = GenCost::new(2, 0.0, 0.0, vec![-0.5, 5.0, 0.0]);
-        let error = quadratic_terms(&concave, 3).expect_err("a concave row");
-        match error {
-            Error::ConcaveCost { gen_index, c2 } => {
-                assert_eq!(gen_index, 3);
-                assert_eq!(c2.to_bits(), (-0.5_f64).to_bits());
-            }
-            other => panic!("wrong error: {other}"),
-        }
-    }
-
-    /// A negative coefficient within the artifact tolerance is the same
-    /// rounding artifact as a positive one: the row reads flat, no refusal.
-    #[test]
-    fn a_tiny_negative_artifact_still_reads_as_a_linear_curve() {
-        let artifact = GenCost::new(2, 0.0, 0.0, vec![-1e-17, 3.0, 0.0]);
-        let (q, c, c0) = quadratic_terms(&artifact, 0).expect("a model 2 row");
-        assert_eq!((q, c, c0), (0.0, 3.0, 0.0));
     }
 
     #[test]

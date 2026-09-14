@@ -4,6 +4,7 @@
 use super::prep::Units;
 use super::prep::{DcOpfOptions, preparation_from_view};
 use crate::Error;
+use crate::cost_curve::{CostCurveAction, CostCurveDeparture, CostCurvePolicy};
 use powerio_tx::{
     BalancedNetwork, Branch, BranchSusceptanceFormula, Bus, BusId, BusType, GenCost, Generator,
     IndexedNetwork,
@@ -615,8 +616,14 @@ fn nonconvex_and_malformed_piecewise_costs_are_typed_errors() {
         0.0,
         vec![0.0, 0.0, 50.0, 100.0, 100.0, 150.0],
     ));
-    let error = preparation_from_view(&IndexedNetwork::new(&nonconvex), DcOpfOptions::default())
-        .expect_err("decreasing segment slope");
+    let error = preparation_from_view(
+        &IndexedNetwork::new(&nonconvex),
+        DcOpfOptions {
+            cost_curve_policy: CostCurvePolicy::ConvexOnly,
+            ..DcOpfOptions::default()
+        },
+    )
+    .expect_err("decreasing segment slope");
     assert!(matches!(
         error,
         Error::NonconvexPiecewiseCost {
@@ -741,12 +748,17 @@ fn a_cost_rounding_artifact_reaches_neither_space() {
 }
 
 /// #342: `BusCost` read a negative quadratic coefficient two ways, quadratic
-/// for a lone generator and flat inside a shared bus merge. The build now
-/// refuses the row before bus count can decide.
+/// for a lone generator and flat inside a shared bus merge. Bus count still
+/// decides nothing: `convex_only` refuses the row during assembly, and under
+/// every other policy the bus space projection refuses it.
 #[test]
 fn a_concave_cost_row_is_refused_however_many_generators_share_the_bus() {
+    let convex_only = DcOpfOptions {
+        cost_curve_policy: CostCurvePolicy::ConvexOnly,
+        ..DcOpfOptions::default()
+    };
     let lone = case_from_text(&[(-0.5, 5.0)]);
-    let error = preparation_from_view(&IndexedNetwork::new(&lone), DcOpfOptions::default())
+    let error = preparation_from_view(&IndexedNetwork::new(&lone), convex_only)
         .expect_err("a lone concave row");
     assert!(
         matches!(error, Error::ConcaveCost { gen_index: 0, c2 } if c2.to_bits() == (-0.5f64).to_bits()),
@@ -755,13 +767,31 @@ fn a_concave_cost_row_is_refused_however_many_generators_share_the_bus() {
     assert_eq!(error.code().code, "BUILD.INSTANCE.CONCAVE_COST");
 
     let shared = case_from_text(&[(0.04, 20.0), (-0.5, 5.0)]);
-    let error = preparation_from_view(&IndexedNetwork::new(&shared), DcOpfOptions::default())
+    let error = preparation_from_view(&IndexedNetwork::new(&shared), convex_only)
         .expect_err("a concave row in a merge");
     assert!(
         matches!(error, Error::ConcaveCost { gen_index: 1, c2 } if c2.to_bits() == (-0.5f64).to_bits()),
         "{error}"
     );
     assert_eq!(error.code().code, "BUILD.INSTANCE.CONCAVE_COST");
+
+    for (case, gen_index) in [(lone, 0), (shared, 1)] {
+        let prepared = preparation_from_view(&IndexedNetwork::new(&case), DcOpfOptions::default())
+            .expect("the default policy carries the stated curve");
+        assert_eq!(prepared.cost_curve_projections.len(), 1);
+        let projection = &prepared.cost_curve_projections[0];
+        assert_eq!(projection.source_row, gen_index);
+        assert_eq!(projection.departure, CostCurveDeparture::ConcavePolynomial);
+        assert_eq!(projection.action, CostCurveAction::Kept);
+        let error = prepared
+            .calc_nodal_generator_data()
+            .expect_err("a concave column has no parallel rule");
+        assert!(
+            matches!(error, Error::ConcaveNodalCost { gen_index: at } if at == gen_index),
+            "{error}"
+        );
+        assert_eq!(error.code().code, "BUILD.OPF.NODAL_COST_UNSUPPORTED");
+    }
 }
 
 #[test]

@@ -6,6 +6,7 @@ use crate::{AnalysisBranchSource, Error, Result};
 use powerio_prob::ReferenceBuses;
 
 use super::{limits, nodal};
+use crate::cost_curve::{CostCurveInput, CostCurvePolicy, CostCurveProjection, GeneratorCostTerms};
 use crate::{PiecewiseLinearCost, PreparedObjective};
 
 /// Unit system for power and generator cost data.
@@ -79,6 +80,11 @@ pub struct DcOpfOptions {
     /// branch angle difference intervals in the prepared arrays.
     #[serde(default = "default_true")]
     pub correct_angle_difference_bounds: bool,
+    /// Which generator cost curve shapes the prepared objective carries.
+    /// `#[serde(default)]`: documents serialized before the field existed
+    /// deserialize to [`CostCurvePolicy::Any`].
+    #[serde(default)]
+    pub cost_curve_policy: CostCurvePolicy,
     /// The already validated instance objective to compile into the arrays.
     pub objective: PreparedObjective,
 }
@@ -95,6 +101,7 @@ impl Default for DcOpfOptions {
             skip_zero_impedance: false,
             synthesize_unrated_limits: false,
             correct_angle_difference_bounds: true,
+            cost_curve_policy: CostCurvePolicy::default(),
             objective: PreparedObjective::default(),
         }
     }
@@ -121,11 +128,15 @@ pub struct DcGeneratorParameters {
     /// power dimension. It does not move the argmin, but a consumer reporting
     /// or comparing objective values needs it.
     pub c0: Vec<f64>,
-    /// Convex piecewise linear costs aligned with the generator columns.
+    /// Piecewise linear costs aligned with the generator columns.
     ///
     /// `Some` is the complete objective term for that generator; its `q`, `c`,
     /// and `c0` entries above are zero. `None` means the three polynomial
     /// columns carry the complete constant, linear, or quadratic term.
+    ///
+    /// Every curve here is convex unless
+    /// [`DcOpfPreparation::cost_curve_projections`] names its generator; see
+    /// [`CostCurvePolicy`].
     pub piecewise_linear: Vec<Option<PiecewiseLinearCost>>,
     pub pmax: Vec<f64>,
     pub pmin: Vec<f64>,
@@ -231,6 +242,15 @@ pub struct DcOpfPreparation {
     pub p_shift: Vec<f64>,
     pub generators: DcGeneratorParameters,
     pub branches: DcBranchParameters,
+    /// Generators whose stated cost curve is not convex, in generator column
+    /// order, and what these arrays carry for them. Empty when every carried
+    /// curve is convex as stated.
+    ///
+    /// `#[serde(default)]` keeps documents written before this field readable.
+    /// [`cost_curve_diagnostics`](crate::cost_curve_diagnostics) renders the
+    /// list as warnings.
+    #[serde(default)]
+    pub cost_curve_projections: Vec<CostCurveProjection>,
 }
 
 impl DcOpfPreparation {
@@ -289,6 +309,13 @@ impl DcOpfPreparation {
         if let Some(gen_index) = generators.piecewise_linear.iter().position(Option::is_some) {
             return Err(Error::PiecewiseNodalCost { gen_index });
         }
+        // The least cost split of a bus total over concave curves sits at a
+        // bound, not where the marginals meet, so the parallel rule below does
+        // not describe it. The projection refuses rather than pricing the bus
+        // by a rule that does not hold for its generators.
+        if let Some(gen_index) = generators.q.iter().position(|&q| q < 0.0) {
+            return Err(Error::ConcaveNodalCost { gen_index });
+        }
         let bus_of_gen = &generators.bus_of_gen;
         let costs =
             nodal::combine_costs(n, bus_of_gen, &generators.q, &generators.c, &generators.c0);
@@ -335,6 +362,7 @@ pub(crate) fn preparation_from_view(
     let mut piecewise_linear = Vec::new();
     let mut pmax = Vec::new();
     let mut pmin = Vec::new();
+    let mut cost_curve_projections = Vec::new();
 
     for (source_row, generator) in case.in_service_gens() {
         let analysis_bus = case
@@ -346,13 +374,9 @@ pub(crate) fn preparation_from_view(
         let Some(bus) = active_buses.dense_by_analysis[analysis_bus] else {
             continue;
         };
+        let identity = crate::opf::row_identity(generator.uid.as_deref(), "generators", source_row);
         let terms = match options.objective {
-            PreparedObjective::Feasibility => nodal::GeneratorCostTerms {
-                q: 0.0,
-                c: 0.0,
-                c0: 0.0,
-                piecewise_linear: None,
-            },
+            PreparedObjective::Feasibility => GeneratorCostTerms::zero(),
             PreparedObjective::NetworkGeneratorCost => {
                 let cost = generator
                     .cost
@@ -360,14 +384,18 @@ pub(crate) fn preparation_from_view(
                     .ok_or(powerio_tx::Error::MissingGenCost {
                         gen_index: source_row,
                     })?;
-                nodal::generator_cost_terms(cost, source_row, p_scale)?
+                crate::cost_curve::generator_cost_terms(&CostCurveInput {
+                    cost,
+                    identity: &identity,
+                    source_row,
+                    bounds: (generator.pmin, generator.pmax),
+                    power_scale: p_scale,
+                    policy: options.cost_curve_policy,
+                })?
             }
         };
-        generator_identities.push(crate::opf::row_identity(
-            generator.uid.as_deref(),
-            "generators",
-            source_row,
-        ));
+        cost_curve_projections.extend(terms.projection);
+        generator_identities.push(identity);
         bus_of_gen.push(bus);
         generator_rows.push(source_row);
         q.push(terms.q * q_scale);
@@ -542,6 +570,7 @@ pub(crate) fn preparation_from_view(
             thermal_limit_active: vec![true; n_active_branches],
             angle_bound_active: vec![true; n_active_branches],
         },
+        cost_curve_projections,
     })
 }
 

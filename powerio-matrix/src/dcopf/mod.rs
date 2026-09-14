@@ -16,6 +16,7 @@ use crate::{
 };
 
 use crate::Result;
+use crate::cost_curve::CostCurvePolicy;
 use powerio_prob::DcOpfInstance;
 use prep::{DcOpfOptions, apply_instance_semantics, preparation_from_view};
 
@@ -43,6 +44,13 @@ pub struct DcOpfAssemblyOptions {
     /// Apply PowerModels' ±60 degree correction to unconstrained or unusable
     /// branch angle difference intervals in the prepared arrays.
     pub correct_angle_difference_bounds: bool,
+    /// Which generator cost curve shapes the prepared objective carries.
+    /// [`CostCurvePolicy::Any`] by default: convexity is a property of the
+    /// cost data, so a curve that is not convex is carried as stated and
+    /// recorded in
+    /// [`DcOpfPreparation::cost_curve_projections`] rather than ending the
+    /// build.
+    pub cost_curve_policy: CostCurvePolicy,
 }
 
 impl Default for DcOpfAssemblyOptions {
@@ -52,6 +60,7 @@ impl Default for DcOpfAssemblyOptions {
             skip_zero_impedance: false,
             synthesize_unrated_limits: false,
             correct_angle_difference_bounds: true,
+            cost_curve_policy: CostCurvePolicy::Any,
         }
     }
 }
@@ -78,6 +87,12 @@ impl DcOpfAssemblyOptions {
     #[must_use]
     pub const fn with_correct_angle_difference_bounds(mut self, correct: bool) -> Self {
         self.correct_angle_difference_bounds = correct;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_cost_curve_policy(mut self, policy: CostCurvePolicy) -> Self {
+        self.cost_curve_policy = policy;
         self
     }
 }
@@ -141,6 +156,7 @@ pub fn build_dc_opf_preparation(
             skip_zero_impedance: options.skip_zero_impedance,
             synthesize_unrated_limits: options.synthesize_unrated_limits,
             correct_angle_difference_bounds: options.correct_angle_difference_bounds,
+            cost_curve_policy: options.cost_curve_policy,
             objective,
         },
     )?;

@@ -58,6 +58,7 @@ pub type SparseMatrix = sprs::CsMat<f64>;
 
 mod ac_jacobian;
 mod acopf;
+pub mod cost_curve;
 mod dc_operators;
 mod dcopf;
 pub mod io;
@@ -76,6 +77,10 @@ pub use acopf::{
     AcPfAssemblyOptions, AcPfBusData, AcPfGeneratorData, AcPfPreparation, AcStorageData,
     NodalAcGeneratorData, PreparedAcBusSpecification, build_ac_opf_preparation,
     build_ac_pf_preparation,
+};
+pub use cost_curve::{
+    CostCurveAction, CostCurveDeparture, CostCurvePolicy, CostCurveProjection,
+    cost_curve_diagnostics,
 };
 pub use dc_operators::{DcOperatorOptions, DcOperators, ReferenceConstrainedSystem};
 pub use dcopf::{

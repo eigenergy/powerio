@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use powerio_prob::{AcBusSpecification, AcOpfInstance, AcPfInstance, ReferenceBuses};
 use powerio_tx::{BalancedNetwork, BusId, IndexedNetwork};
 
+use crate::cost_curve::{CostCurveInput, CostCurvePolicy, CostCurveProjection, GeneratorCostTerms};
 use crate::dcopf::{Units, limits, nodal};
 use crate::{AnalysisBranchSource, Error, PiecewiseLinearCost, PreparedObjective, Result};
 
@@ -32,6 +33,10 @@ pub struct AcOpfAssemblyOptions {
     /// Apply PowerModels' ±60 degree correction to unconstrained or unusable
     /// branch angle difference intervals in the prepared arrays.
     pub correct_angle_difference_bounds: bool,
+    /// Which generator cost curve shapes the prepared objective carries.
+    /// [`CostCurvePolicy::Any`] by default, as in
+    /// [`DcOpfAssemblyOptions`](crate::DcOpfAssemblyOptions).
+    pub cost_curve_policy: CostCurvePolicy,
 }
 
 impl Default for AcOpfAssemblyOptions {
@@ -41,6 +46,7 @@ impl Default for AcOpfAssemblyOptions {
             skip_zero_impedance: false,
             synthesize_unrated_limits: false,
             correct_angle_difference_bounds: true,
+            cost_curve_policy: CostCurvePolicy::Any,
         }
     }
 }
@@ -67,6 +73,12 @@ impl AcOpfAssemblyOptions {
     #[must_use]
     pub const fn with_correct_angle_difference_bounds(mut self, correct: bool) -> Self {
         self.correct_angle_difference_bounds = correct;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_cost_curve_policy(mut self, policy: CostCurvePolicy) -> Self {
+        self.cost_curve_policy = policy;
         self
     }
 }
@@ -296,9 +308,13 @@ pub struct AcGeneratorData {
     /// Constant objective term. Unscaled in both unit systems: it carries no
     /// power dimension.
     pub c0: Vec<f64>,
-    /// Convex piecewise linear costs aligned with the generator columns. A
-    /// present curve is the complete objective term for that generator; its
-    /// `q`, `c`, and `c0` entries are zero.
+    /// Piecewise linear costs aligned with the generator columns. A present
+    /// curve is the complete objective term for that generator; its `q`, `c`,
+    /// and `c0` entries are zero.
+    ///
+    /// Every curve here is convex unless
+    /// [`AcOpfPreparation::cost_curve_projections`] names its generator; see
+    /// [`CostCurvePolicy`].
     pub piecewise_linear: Vec<Option<PiecewiseLinearCost>>,
     pub pmax: Vec<f64>,
     pub pmin: Vec<f64>,
@@ -404,6 +420,15 @@ pub struct AcOpfPreparation {
     pub generators: AcGeneratorData,
     pub storage: AcStorageData,
     pub branches: AcBranchData,
+    /// Generators whose stated cost curve is not convex, in generator column
+    /// order, and what these arrays carry for them. Empty when every carried
+    /// curve is convex as stated.
+    ///
+    /// `#[serde(default)]` keeps documents written before this field readable.
+    /// [`cost_curve_diagnostics`](crate::cost_curve_diagnostics) renders the
+    /// list as warnings.
+    #[serde(default)]
+    pub cost_curve_projections: Vec<CostCurveProjection>,
 }
 
 impl AcOpfPreparation {
@@ -434,6 +459,9 @@ impl AcOpfPreparation {
     pub fn calc_nodal_generator_data(&self) -> Result<NodalAcGeneratorData> {
         let n = self.n_buses;
         let generators = &self.generators;
+        if let Some(gen_index) = generators.q.iter().position(|&q| q < 0.0) {
+            return Err(Error::ConcaveNodalCost { gen_index });
+        }
         if let Some(gen_index) = generators.piecewise_linear.iter().position(Option::is_some) {
             return Err(Error::PiecewiseNodalCost { gen_index });
         }
@@ -553,6 +581,9 @@ pub fn build_ac_pf_preparation(
             skip_zero_impedance: options.skip_zero_impedance,
             synthesize_unrated_limits: false,
             correct_angle_difference_bounds: options.correct_angle_difference_bounds,
+            // A feasibility objective reads no cost row, so no curve reaches
+            // the policy.
+            cost_curve_policy: CostCurvePolicy::Any,
         },
         PreparedObjective::Feasibility,
     )?;
@@ -680,6 +711,7 @@ fn preparation_from_view(
     let mut cost_c = Vec::new();
     let mut cost_c0 = Vec::new();
     let mut piecewise_linear = Vec::new();
+    let mut cost_curve_projections = Vec::new();
     let mut pmax = Vec::new();
     let mut pmin = Vec::new();
     let mut qmax = Vec::new();
@@ -698,13 +730,9 @@ fn preparation_from_view(
         let Some(bus) = active_buses.dense_by_analysis[analysis_bus] else {
             continue;
         };
+        let identity = crate::opf::row_identity(generator.uid.as_deref(), "generators", source_row);
         let terms = match objective {
-            PreparedObjective::Feasibility => nodal::GeneratorCostTerms {
-                q: 0.0,
-                c: 0.0,
-                c0: 0.0,
-                piecewise_linear: None,
-            },
+            PreparedObjective::Feasibility => GeneratorCostTerms::zero(),
             PreparedObjective::NetworkGeneratorCost => {
                 let cost = generator
                     .cost
@@ -712,14 +740,18 @@ fn preparation_from_view(
                     .ok_or(powerio_tx::Error::MissingGenCost {
                         gen_index: source_row,
                     })?;
-                nodal::generator_cost_terms(cost, source_row, p_scale)?
+                crate::cost_curve::generator_cost_terms(&CostCurveInput {
+                    cost,
+                    identity: &identity,
+                    source_row,
+                    bounds: (generator.pmin, generator.pmax),
+                    power_scale: p_scale,
+                    policy: options.cost_curve_policy,
+                })?
             }
         };
-        generator_identities.push(crate::opf::row_identity(
-            generator.uid.as_deref(),
-            "generators",
-            source_row,
-        ));
+        cost_curve_projections.extend(terms.projection);
+        generator_identities.push(identity);
         bus_of_gen.push(bus);
         generator_rows.push(source_row);
         cost_q.push(terms.q * q_scale);
@@ -1014,6 +1046,7 @@ fn preparation_from_view(
             thermal_limit_active: vec![true; n_active_branches],
             angle_bound_active: vec![true; n_active_branches],
         },
+        cost_curve_projections,
     })
 }
 
