@@ -35,8 +35,12 @@ New `main` commits do not change the candidate or block its registration.
 
 The daily reconciliation also retries incomplete paired builds and drafts.
 Rerun **Complete paired draft** for an immediate retry of an interrupted draft. It preserves
-existing candidate commits and assets. A different candidate needs a new
-review; no workflow force pushes a release branch or replaces published data.
+existing candidate commits and assets. If source fixes require a different candidate, merge and test those fixes,
+then explicitly select `replace-unpublished` in **Prepare paired release**.
+That operation removes only the unpublished draft and tag, preserves the
+previous Julia candidate commit, and prepares a fresh draft for review.
+It refuses a published or registered version. No workflow force pushes a
+release branch or replaces published data.
 
 **Reconcile paired releases** runs after publication and daily. Manual dispatch
 accepts an existing published tag. It checks the manifest, resumes missing or
