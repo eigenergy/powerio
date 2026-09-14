@@ -411,7 +411,7 @@ def repair_publications(tag, manifest):
         relevant = [r for r in runs if r["display_title"].endswith(" " + tag) and r["event"] in ("release", "workflow_dispatch")]
         if any(r["status"] != "completed" for r in relevant):
             continue
-        run("gh", "workflow", "run", workflow, "--repo", POWERIO, "--ref", "main", "-f", "tag=" + tag)
+        run("gh", "workflow", "run", workflow, "--repo", POWERIO, "--ref", tag, "-f", "tag=" + tag)
 
 
 def registration_status(tag):
