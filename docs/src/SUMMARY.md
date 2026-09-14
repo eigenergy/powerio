@@ -25,6 +25,7 @@
   - [LLVM and MLIR lessons](compiler-ir.md)
   - [DC OPF bundle](dcopf-bundle.md)
   - [Rejection audit](rejection-audit.md)
+  - [Entry points](entry-points.md)
   - [Corpus harness](corpus-harness.md)
   - [Performance](performance.md)
   - [Testing and release checks](contributor-workflow.md)

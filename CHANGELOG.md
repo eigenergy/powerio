@@ -48,6 +48,11 @@
   the manifest's new `nodal_cost` block, and reports it as a warning on the
   new `DcOpfOutputs::diagnostics`. The manifest also records
   `cost_curve_policy` and `cost_curve_projections[]`.
+- The DC OPF preparation bounds the denominator its selected formula divides
+  by, as the incidence matrices and `DcOperators` already did. A purely
+  resistive branch (`x = 0`, `r > 0`) under the default `SeriesSusceptance`
+  prepares with `b = 0`, the DC model's reading of it, instead of being refused
+  as zero impedance.
 - `powerio dcopf` takes `--cost-curve-policy`, `--skip-zero-impedance`, and
   `--synthesize-unrated-limits`, the last two of which every other entry point
   already had, and prints the bundle's warnings.
@@ -55,6 +60,10 @@
   preparation diagnostic, classified as unusable data or as a consumer's
   judgement, with the option or explicit transformation that resolves each of
   the latter.
+- Add `docs/src/entry-points.md`: which name is canonical where two reach the
+  same result.
+- Add `BranchSusceptanceFormula::impedance_is_degenerate`, the one rule stating
+  which branches a DC builder carries.
 
 ## 0.11.2
 

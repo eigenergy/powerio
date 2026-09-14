@@ -1433,3 +1433,83 @@ fn economic_output_signs_match_optimal_value_derivatives() {
     );
     assert!((reverse_rating_derivative + 20.0).abs() < 1e-8);
 }
+
+/// One rule decides which branches the DC builders carry.
+///
+/// A purely resistive branch has `b = -x/(r² + x²) = 0` under
+/// `SeriesSusceptance`: it carries no angle-driven flow, which is a reading,
+/// not a failure. The operators and the sensitivity matrices always read it
+/// that way; the OPF preparation used to bound `|x|` whatever the formula
+/// selected and refuse the branch, so the same case built one way and not the
+/// other.
+#[test]
+fn every_dc_builder_bounds_the_denominator_its_formula_divides_by() {
+    let mut resistive = Branch::new(BusId(1), BusId(2), 0.02, 0.0);
+    resistive.tap = 0.0;
+    let network = net_with_gens(
+        "resistive",
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![branch(1, 2, 0.05), resistive],
+        vec![gen_with_cost(
+            1,
+            Some(GenCost::new(2, 0.0, 0.0, vec![0.0, 10.0, 0.0])),
+        )],
+    );
+
+    let formula = BranchSusceptanceFormula::SeriesSusceptance;
+    let view = IndexedNetwork::new(&network);
+    let operators = dc_operators(&network, formula);
+    let ptdf = calc_ptdf(&view, formula).expect("PTDF");
+
+    let instance = powerio_prob::DcOpfInstance::from_network(network.clone())
+        .expect("DC OPF instance")
+        .with_branch_susceptance_formula(formula);
+    let prepared = powerio_matrix::build_dc_opf_preparation(
+        &instance,
+        &powerio_matrix::DcOpfAssemblyOptions::default(),
+    )
+    .expect("the preparation carries what the operators carry");
+
+    assert_eq!(operators.calc_branch_susceptances().len(), 2);
+    assert_eq!(ptdf.rows(), 2);
+    assert_eq!(prepared.n_branches(), 2);
+    assert!(prepared.branches.skipped_zero_impedance.is_empty());
+    // The resistive branch is the second column in every path, weighted zero.
+    // `-x/(r² + x²)` produces a negative zero, so compare the magnitude.
+    assert_eq!(
+        operators.calc_branch_susceptances()[1].abs().to_bits(),
+        0.0_f64.to_bits()
+    );
+    assert_eq!(
+        prepared.branches.susceptance_magnitude[1].abs().to_bits(),
+        0.0_f64.to_bits()
+    );
+
+    // A reactance the selected formula does divide by is still refused: the
+    // rule bounds the denominator, it does not stop bounding.
+    let poison = net_with_gens(
+        "poison",
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![branch(1, 2, 0.05), branch(1, 2, 1e-300)],
+        vec![gen_with_cost(
+            1,
+            Some(GenCost::new(2, 0.0, 0.0, vec![0.0, 10.0, 0.0])),
+        )],
+    );
+    let instance = powerio_prob::DcOpfInstance::from_network(poison.clone())
+        .expect("DC OPF instance")
+        .with_branch_susceptance_formula(formula);
+    assert!(
+        powerio_matrix::build_dc_opf_preparation(
+            &instance,
+            &powerio_matrix::DcOpfAssemblyOptions::default(),
+        )
+        .is_err()
+    );
+    assert!(
+        powerio_matrix::DcOperators::build(
+            &DcPfInstance::from_network(poison).expect("DC power flow instance")
+        )
+        .is_err()
+    );
+}

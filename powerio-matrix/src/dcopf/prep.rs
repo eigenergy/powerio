@@ -449,10 +449,7 @@ pub(crate) fn preparation_from_view(
             // DC flow, and its shift injection cancels at its own bus.
             continue;
         }
-        // The reactance the DC matrix builders bound, on the same rule: an
-        // `x = 1e-300` gives a finite `b = 1e300` that annihilates every real
-        // branch sharing a bus with it. Exact zero used to be the whole test.
-        if branch.x.abs() < powerio_tx::dc::MIN_DIVISIBLE_MAGNITUDE {
+        if options.formula.impedance_is_degenerate(branch.r, branch.x) {
             if options.skip_zero_impedance {
                 skipped_zero_impedance.push(source_row);
                 continue;

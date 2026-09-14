@@ -149,7 +149,6 @@ impl DcOperators {
     /// value, or a branch naming an undeclared bus.
     // One pass over the branch table that fills every axis and operator
     // column; splitting it would scatter the invariants the columns share.
-    #[expect(clippy::too_many_lines)]
     pub fn build_with(instance: &DcPfInstance, options: &DcOperatorOptions) -> Result<Self, Error> {
         let source = instance.network();
         let view = IndexedNetwork::new(source);
@@ -202,14 +201,7 @@ impl DcOperators {
             // The same divisibility floor the other DC builders apply: a
             // formally nonzero impedance below it yields a finite weight big
             // enough to annihilate every real branch sharing a bus.
-            let degenerate = match formula {
-                BranchSusceptanceFormula::SeriesSusceptance => {
-                    branch.r.hypot(branch.x) < powerio_tx::dc::MIN_DIVISIBLE_MAGNITUDE
-                }
-                // Any formula that reads a reactance is bounded by it.
-                _ => branch.x.abs() < powerio_tx::dc::MIN_DIVISIBLE_MAGNITUDE,
-            };
-            if degenerate {
+            if formula.impedance_is_degenerate(branch.r, branch.x) {
                 if options.skip_zero_impedance {
                     skipped_branch_rows.push(row);
                     continue;

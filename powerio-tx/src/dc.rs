@@ -118,6 +118,27 @@ impl BranchSusceptanceFormula {
         matches!(self, Self::TapAdjustedReactance)
     }
 
+    /// Whether this branch's impedance is too small for the selected formula
+    /// to divide by.
+    ///
+    /// The bound reads only the denominator the formula divides by, so a value
+    /// the formula never reads cannot reject a branch: the reciprocal rules
+    /// bound `|x|`, and the series rule bounds `hypot(r, x)`. A magnitude
+    /// below [`MIN_DIVISIBLE_MAGNITUDE`] gives a weight above 1e153, which
+    /// annihilates every real branch sharing a bus with it.
+    ///
+    /// Every DC builder applies this one rule: the incidence and sensitivity
+    /// matrices, the DC operators, and the DC OPF preparation.
+    #[must_use]
+    pub fn impedance_is_degenerate(self, resistance: f64, reactance: f64) -> bool {
+        let magnitude = match self {
+            Self::SeriesSusceptance => resistance.hypot(reactance),
+            // Any formula that divides by a reactance is bounded by it.
+            _ => reactance.abs(),
+        };
+        magnitude < MIN_DIVISIBLE_MAGNITUDE
+    }
+
     /// Whether phase shifts contribute to the nodal injection vector.
     #[must_use]
     pub fn includes_phase_shifts(self) -> bool {

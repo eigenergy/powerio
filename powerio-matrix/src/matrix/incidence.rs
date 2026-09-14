@@ -73,12 +73,7 @@ pub(crate) fn build_incidence(
         // formula never reads cannot reject a branch (#324): the reciprocal
         // rules bound the reactance, and the series formula bounds the whole
         // impedance magnitude.
-        let degenerate = match formula {
-            BranchSusceptanceFormula::SeriesSusceptance => {
-                br.r.hypot(br.x) < crate::matrix::MIN_DIVISIBLE_MAGNITUDE
-            }
-            _ => br.x.abs() < crate::matrix::MIN_DIVISIBLE_MAGNITUDE,
-        };
+        let degenerate = formula.impedance_is_degenerate(br.r, br.x);
         if i == j || degenerate {
             if i != j && degenerate && !opts.skip_zero_impedance {
                 return Err(powerio_tx::Error::ZeroImpedance { row: idx }.into());

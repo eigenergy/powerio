@@ -47,7 +47,6 @@ use sprs::CsMat;
 
 // The bound the matrix and instance builders share; it lives beside the DC
 // formula because both are properties of the branch primitives.
-pub(crate) use powerio_tx::dc::MIN_DIVISIBLE_MAGNITUDE;
 
 /// Which MATPOWER fast decoupled scheme to use.
 ///
