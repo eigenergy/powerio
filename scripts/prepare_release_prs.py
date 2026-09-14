@@ -9,6 +9,14 @@ import tomllib
 from paired_release import JULIA, POWERIO, api, require, source, version
 
 
+def bump_lock_versions(lock, names, number):
+    for name in names:
+        pattern = r'(name = "' + re.escape(name) + r'"\nversion = ")[^"]+("\n)'
+        lock, count = re.subn(pattern, lambda m: m[1] + number + m[2], lock)
+        require(count == 1, f'missing or ambiguous workspace package {name}')
+    return lock
+
+
 def version_edits(repo, sha, number):
     if repo == POWERIO:
         cargo = source(repo, 'Cargo.toml', sha).decode()
@@ -16,8 +24,12 @@ def version_edits(repo, sha, number):
         require(version(number) > version(old), 'release version must increase')
         cargo = cargo.replace(f'version = "{old}"', f'version = "{number}"')
         lock = source(repo, 'Cargo.lock', sha).decode()
-        lock = re.sub(r'(name = "powerio(?:-[^"]+)?"\nversion = ")[^"]+("\n)',
-                      lambda m: m[1] + number + m[2], lock)
+        names = []
+        for member in tomllib.loads(cargo)['workspace']['members']:
+            manifest = tomllib.loads(source(repo, member + '/Cargo.toml', sha).decode())['package']
+            if manifest['version'] == {'workspace': True}:
+                names.append(manifest['name'])
+        lock = bump_lock_versions(lock, names, number)
         result = {'Cargo.toml': cargo, 'Cargo.lock': lock}
     else:
         project = source(repo, 'Project.toml', sha).decode()
