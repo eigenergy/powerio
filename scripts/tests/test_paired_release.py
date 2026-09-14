@@ -27,6 +27,27 @@ class ReleaseTests(unittest.TestCase):
                              validation={"status": "passed", "url": "https://github.com/eigenergy/powerio/actions/runs/123"})
         self.assets = {name: {"digest": "sha256:" + "e" * 64} for name in pair.ASSETS}
 
+    def test_draft_release_is_found_when_tag_endpoint_returns_404(self):
+        draft = {"id": 123, "tag_name": "v0.11.3", "draft": True}
+        with patch.object(pair, "api", return_value=None), patch.object(pair, "pages", return_value=[{"tag_name": "v0.11.2"}, draft]):
+            self.assertEqual(pair.release("v0.11.3"), draft)
+
+    def test_published_release_does_not_require_draft_listing(self):
+        published = {"id": 123, "tag_name": "v0.11.3", "draft": False}
+        with patch.object(pair, "api", return_value=published), patch.object(pair, "pages") as listing:
+            self.assertEqual(pair.release("v0.11.3"), published)
+            listing.assert_not_called()
+
+    def test_absent_release_is_not_replaced_by_another_draft(self):
+        with patch.object(pair, "api", return_value=None), patch.object(pair, "pages", return_value=[{"tag_name": "v0.11.4", "draft": True}]):
+            self.assertIsNone(pair.release("v0.11.3"))
+
+    def test_ambiguous_drafts_are_rejected(self):
+        drafts = [{"id": number, "tag_name": "v0.11.3", "draft": True} for number in (1, 2)]
+        with patch.object(pair, "api", return_value=None), patch.object(pair, "pages", return_value=drafts):
+            with self.assertRaisesRegex(ValueError, "multiple releases"):
+                pair.release("v0.11.3")
+
     def test_frozen_pair_does_not_read_main(self):
         with patch.object(pair, "api", side_effect=AssertionError("must not read main")):
             pair.validate_manifest(self.manifest, self.frozen, self.assets)
