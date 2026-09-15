@@ -45,6 +45,7 @@
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 mod collect;
+pub mod contingency;
 pub mod dc;
 pub mod diagnostics;
 pub mod error;
@@ -94,6 +95,11 @@ pub mod __internal {
     }
 }
 
+pub use contingency::{
+    AutomaticOrder, AutomaticSpec, AutomaticTarget, Change, ChangeOp, ChangeUnit,
+    ContingencyAction, ContingencyCase, ContingencyParsed, ContingencySet, RetainedStatement,
+    SkipRule,
+};
 pub use dc::BranchSusceptanceFormula;
 pub use diagnostics::{Diagnostic, DiagnosticCode, DiagnosticSeverity, EmitFamily};
 pub use error::{Error, ErrorCategory, Result};

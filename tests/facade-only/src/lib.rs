@@ -30,6 +30,7 @@ mod names_resolve_through_the_facade {
     type _DcOpfInstance = powerio::DcOpfInstance;
     type _DcOpfSolution = powerio::DcOpfSolution;
     type _MulticonductorNetwork = powerio::MulticonductorNetwork;
+    type _ContingencySet = powerio::ContingencySet;
     type _GeoLayer = powerio::GeoLayer;
     type _GeoParsed = powerio::GeoParsed;
     type _PwdDisplay = powerio::PwdDisplay;

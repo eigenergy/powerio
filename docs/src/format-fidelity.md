@@ -279,6 +279,17 @@ revision, but no emission target names revision 32, so writing it back as PSS/E
 produces fresh revision 33 text and its unmodeled sections survive only in the
 retained source.
 
+PSS/E contingency description files (`.con`) parse to `ContingencySet` and
+write back with `to_con`. The reader states cases, automatic specifications,
+and `SKIP` rules as typed values; a statement outside the grammar keeps its
+original line and is reported as `READ.CON.STATEMENT_UNRECOGNIZED`, so a file
+written for another solver reads completely. Only a case that never closes, a
+case that starts inside another, and a block left open at end of input are
+refused. The grammar is established from public contingency files and the
+example set PSS/E ships, because the manual that defines it is licensed and
+not public; `powerio-tx/src/contingency/FORMAT.md` lists each statement with
+its evidence.
+
 Generator `IREG`/`NREG`, switched shunt `SWREG`/`NREG`, and transformer
 `CONT`/`NODE` resolve to exact terminal references, including an explicit
 target on the same bus. Each winding of a three winding transformer keeps its

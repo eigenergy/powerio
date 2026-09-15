@@ -38,6 +38,7 @@ evals/performance/asv/env/
 evals/performance/asv/results/
 evals/performance/asv/html/
 tests/data/local_pwb_corpus.tsv
+tests/data/local_psse_contingency_corpus.tsv
 docs/book/
 docs/src/releasing*.md
 private/

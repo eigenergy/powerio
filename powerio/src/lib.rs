@@ -105,22 +105,24 @@ pub const IR_SCHEMA_ID: &str = "https://powerio.dev/schema/pio-ir/2/0.11.1/schem
 
 use powerio_tx::format;
 pub use powerio_tx::{
-    Area, BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, BranchRatingSet,
-    BranchSolution, BranchSusceptanceFormula, Bus, BusId, BusType, Canvas, CoordinateSpace,
-    CoordsKind, DEFAULT_BASE_FREQUENCY, Detection, ElementKey, Extras, GenCaps, GenCost, Generator,
-    GeoApplyReport, GeoFeature, GeoGeometry, GeoLayer, GeoMeta, GeoParsed, GeoTarget, Hvdc,
-    Impedance, IndexCore, IndexedNetwork, JSON_CLASSES, JsonClass, Load, LoadVoltageModel,
-    Location, PwdDisplay, PwdSubstation, Selector, Shunt, ShuntBlock, SolverParams, SourceFormat,
-    Storage, Switch, SwitchedShuntControl, SwitchedShuntMode, Transformer3W, TransformerControl,
-    TransformerControlMode, Winding, apply_substation_points, calc_series_admittance_of,
-    classify_json_bytes, classify_json_text, repair_values, to_geo_layer_from_pwd,
-    to_lonlat_from_pwd_mercator,
+    Area, AutomaticOrder, AutomaticSpec, AutomaticTarget, BalancedNetwork, Branch, BranchCharging,
+    BranchCurrentRatings, BranchRatingSet, BranchSolution, BranchSusceptanceFormula, Bus, BusId,
+    BusType, Canvas, Change, ChangeOp, ChangeUnit, ContingencyAction, ContingencyCase,
+    ContingencyParsed, ContingencySet, CoordinateSpace, CoordsKind, DEFAULT_BASE_FREQUENCY,
+    Detection, ElementKey, Extras, GenCaps, GenCost, Generator, GeoApplyReport, GeoFeature,
+    GeoGeometry, GeoLayer, GeoMeta, GeoParsed, GeoTarget, Hvdc, Impedance, IndexCore,
+    IndexedNetwork, JSON_CLASSES, JsonClass, Load, LoadVoltageModel, Location, PwdDisplay,
+    PwdSubstation, RetainedStatement, Selector, Shunt, ShuntBlock, SkipRule, SolverParams,
+    SourceFormat, Storage, Switch, SwitchedShuntControl, SwitchedShuntMode, Transformer3W,
+    TransformerControl, TransformerControlMode, Winding, apply_substation_points,
+    calc_series_admittance_of, classify_json_bytes, classify_json_text, repair_values,
+    to_geo_layer_from_pwd, to_lonlat_from_pwd_mercator,
 };
 /// Balanced network records and the public network and geographic submodules.
 /// Derived indexes, normalization data, solver tables, and component error
 /// types remain available from `powerio-tx` rather than being duplicated at
 /// the facade root.
-pub use powerio_tx::{geo, network, version};
+pub use powerio_tx::{contingency, geo, network, version};
 
 pub use powerio_core::diagnostic_codes;
 /// The common module records and containers. These explicit facade exports

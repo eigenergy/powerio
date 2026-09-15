@@ -323,6 +323,15 @@ pub mod codes {
         READ_IEEE_CDF_RETAINED_SOURCE_ONLY = "READ.IEEE_CDF.RETAINED_SOURCE_ONLY", Remark,
             "an IEEE CDF field or section survives in the retained source only";
 
+        READ_CON_STATEMENT_UNRECOGNIZED = "READ.CON.STATEMENT_UNRECOGNIZED", Warning,
+            "a PSS/E contingency statement outside the grammar was kept as its original line";
+        READ_CON_TEXT_AFTER_END = "READ.CON.TEXT_AFTER_END", Warning,
+            "a PSS/E contingency file states text after its file END";
+        READ_CON_NOTES_TRUNCATED = "READ.CON.NOTES_TRUNCATED", Warning,
+            "the PSS/E contingency reader stopped recording notes at its budget";
+        READ_CON_SOURCE_MALFORMED = "READ.CON.SOURCE_MALFORMED", Error,
+            "a PSS/E contingency line could not be read as the statement its block requires";
+
         READ_GEO_SOURCE_MALFORMED = "READ.GEO.SOURCE_MALFORMED", Warning,
             "a geo layer row could not be read and was skipped";
         READ_GEO_NOTES_TRUNCATED = "READ.GEO.NOTES_TRUNCATED", Warning,

@@ -7,6 +7,11 @@
   to 0.11, with the rest of the lockfile refreshed. Public APIs are unchanged.
 - Fail CI on a RUSTSEC advisory against the dependency graph. `deny.toml`
   records the single accepted finding.
+- Read and write PSS/E contingency description files (`.con`) through
+  `powerio_tx::contingency`. `ContingencySet::parse` states cases, automatic
+  specifications, and `SKIP` rules as typed values and keeps a statement
+  outside the grammar as its original line, reported under `READ.CON.*`;
+  `ContingencySet::to_con` writes the set back.
 
 ## 0.11.2
 
