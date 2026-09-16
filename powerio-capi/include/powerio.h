@@ -45,6 +45,8 @@ typedef struct PioCalculationUpdate PioCalculationUpdate;
 typedef struct PioCalculationInstance PioCalculationInstance;
 typedef struct PioCalculationSolution PioCalculationSolution;
 typedef struct PioComponentId PioComponentId;
+typedef struct PioContingencyResolution PioContingencyResolution;
+typedef struct PioContingencySet PioContingencySet;
 typedef struct PioDestination PioDestination;
 typedef struct PioDetailedConnectivity PioDetailedConnectivity;
 typedef struct PioDiagnostics PioDiagnostics;
@@ -54,6 +56,7 @@ typedef struct PioGeoApplyReport PioGeoApplyReport;
 typedef struct PioGeoLayer PioGeoLayer;
 typedef struct PioJsonValue PioJsonValue;
 typedef struct PioModule PioModule;
+typedef struct PioMonitoredSet PioMonitoredSet;
 typedef struct PioMulticonductorNetwork PioMulticonductorNetwork;
 typedef struct PioNetworkUpdate PioNetworkUpdate;
 typedef struct PioOperatingPoint PioOperatingPoint;
@@ -63,6 +66,7 @@ typedef struct PioScenarioSetHandle PioScenarioSetHandle;
 typedef struct PioSource PioSource;
 typedef struct PioSparseMatrix PioSparseMatrix;
 typedef struct PioString PioString;
+typedef struct PioSubsystemSet PioSubsystemSet;
 typedef struct PioTimeSeriesHandle PioTimeSeriesHandle;
 typedef struct PioUpdateChange PioUpdateChange;
 typedef struct PioUpdateReport PioUpdateReport;
@@ -90,6 +94,25 @@ typedef struct {
     uint64_t byte_start;
     uint64_t byte_end;
 } PioDiagnosticSpanView;
+
+/**
+ * Borrowed stable component identity.
+ */
+typedef struct {
+    PioStringView component_type;
+    PioStringView local_id;
+} PioComponentIdView;
+
+/**
+ * One network element a contingency case bound to. `row` is the element's
+ * position in the table `id.component_type` names, and `in_service` is the
+ * element's own flag as the network states it before the case is applied.
+ */
+typedef struct {
+    PioComponentIdView id;
+    size_t row;
+    bool in_service;
+} PioContingencyComponentView;
 
 /**
  * Program identity recorded with one module.
@@ -543,14 +566,6 @@ typedef struct {
     double branch_thermal_limit;
     double energy_requirement;
 } PioScucViolationCostView;
-
-/**
- * Borrowed stable component identity.
- */
-typedef struct {
-    PioStringView component_type;
-    PioStringView local_id;
-} PioComponentIdView;
 
 /**
  * Active power ramp limits for one SCUC device, in per unit per hour.
@@ -2465,6 +2480,255 @@ PioGeoLayer *pio_geo_layer_retain(const PioGeoLayer *layer);
 void pio_geo_layer_release(PioGeoLayer *layer);
 
 /**
+ * Read text from an acquired source as a PSS/E contingency description file.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioContingencySet *pio_contingency_set_parse(const PioSource *source, PioError **error);
+
+/**
+ * Return the notes the contingency reader produced, which are empty for a set
+ * taken from a module value.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioDiagnostics *pio_contingency_set_diagnostics(const PioContingencySet *set);
+
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+size_t pio_contingency_set_case_count(const PioContingencySet *set);
+
+/**
+ * Read one case name by zero based position, in the set's own order.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioStringView pio_contingency_set_case_name(const PioContingencySet *set,
+                                            size_t index,
+                                            PioError **error);
+
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
+PioContingencySet *pio_contingency_set_retain(const PioContingencySet *set);
+
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
+void pio_contingency_set_release(PioContingencySet *set);
+
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+size_t pio_subsystem_set_count(const PioSubsystemSet *set);
+
+/**
+ * Read one subsystem name by zero based position, in the file's own order.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioStringView pio_subsystem_set_name(const PioSubsystemSet *set, size_t index, PioError **error);
+
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
+PioSubsystemSet *pio_subsystem_set_retain(const PioSubsystemSet *set);
+
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
+void pio_subsystem_set_release(PioSubsystemSet *set);
+
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+size_t pio_monitored_set_statement_count(const PioMonitoredSet *set);
+
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
+PioMonitoredSet *pio_monitored_set_retain(const PioMonitoredSet *set);
+
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
+void pio_monitored_set_release(PioMonitoredSet *set);
+
+/**
+ * Bind every case of the set to the elements of one balanced network.
+ *
+ * Binding reports rather than refuses: an action naming no element of the
+ * network is kept with its reason and its case is counted unresolved, while
+ * the actions of that case that did bind stay listed.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioContingencyResolution *pio_contingency_set_resolve(const PioContingencySet *set,
+                                                      const PioBalancedNetwork *network,
+                                                      PioError **error);
+
+/**
+ * Expand every automatic specification of the set against one network and one
+ * subsystem set, producing a set whose cases are all explicit.
+ *
+ * When `out_notes` is not NULL it receives an independently owned diagnostics
+ * handle holding one note per specification that expanded into nothing. A
+ * specification naming a subsystem the subsystem set does not state stays in
+ * the returned set.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioContingencySet *pio_contingency_set_expand(const PioContingencySet *set,
+                                              const PioBalancedNetwork *network,
+                                              const PioSubsystemSet *subsystems,
+                                              PioDiagnostics **out_notes,
+                                              PioError **error);
+
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+size_t pio_contingency_resolution_case_count(const PioContingencyResolution *resolution);
+
+/**
+ * The number of cases whose every action bound.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+size_t pio_contingency_resolution_resolved_count(const PioContingencyResolution *resolution);
+
+/**
+ * The number of cases holding at least one action that did not bind.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+size_t pio_contingency_resolution_unresolved_count(const PioContingencyResolution *resolution);
+
+/**
+ * The number of actions the reader kept as text, counted over every case.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+size_t pio_contingency_resolution_unrecognized_statement_count(const PioContingencyResolution *resolution);
+
+/**
+ * Read one case name by zero based position, in the set's own order.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioStringView pio_contingency_resolution_case_name(const PioContingencyResolution *resolution,
+                                                   size_t index,
+                                                   PioError **error);
+
+/**
+ * Whether every action of one case bound. A NULL handle or an index out of
+ * range reads as false; `pio_contingency_resolution_case_unresolved_count`
+ * tells the two apart.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+bool pio_contingency_resolution_case_is_resolved(const PioContingencyResolution *resolution,
+                                                 size_t index);
+
+/**
+ * The number of elements one case's actions bound to.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+size_t pio_contingency_resolution_case_component_count(const PioContingencyResolution *resolution,
+                                                       size_t index);
+
+/**
+ * Read one element one case bound to, by zero based case and element
+ * position, in action order.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+bool pio_contingency_resolution_case_component(const PioContingencyResolution *resolution,
+                                               size_t case_index,
+                                               size_t component_index,
+                                               PioContingencyComponentView *output,
+                                               PioError **error);
+
+/**
+ * The number of one case's actions that bound to nothing.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+size_t pio_contingency_resolution_case_unresolved_count(const PioContingencyResolution *resolution,
+                                                        size_t index);
+
+/**
+ * Read why one action of one case bound to nothing, as the `UnresolvedReason`
+ * variant name in snake case: `no_such_bus`, `no_such_branch`,
+ * `ambiguous_branch`, `no_such_machine`, `no_such_shunt`, `no_such_load`,
+ * `no_such_transformer_3w`, or `unrecognized`.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioStringView pio_contingency_resolution_case_unresolved_reason(const PioContingencyResolution *resolution,
+                                                                size_t case_index,
+                                                                size_t unresolved_index,
+                                                                PioError **error);
+
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
+PioContingencyResolution *pio_contingency_resolution_retain(const PioContingencyResolution *resolution);
+
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
+void pio_contingency_resolution_release(PioContingencyResolution *resolution);
+
+/**
  * Parse one acquired grid exchange source.
  *
  * # Safety
@@ -2889,6 +3153,34 @@ PioBalancedNetwork *pio_value_balanced_network(const PioValueHandle *value, PioE
  * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioGeoLayer *pio_value_geo_layer(const PioValueHandle *value, PioError **error);
+
+/**
+ * Take the value as a PSS/E contingency description file. The set is copied
+ * out of the value, so the handle outlives the module the way
+ * `pio_contingency_set_parse` produces one.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioContingencySet *pio_value_contingency_set(const PioValueHandle *value, PioError **error);
+
+/**
+ * Take the value as a PSS/E subsystem description file. The set is copied out
+ * of the value, so the handle outlives the module.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioSubsystemSet *pio_value_subsystem_set(const PioValueHandle *value, PioError **error);
+
+/**
+ * Take the value as a PSS/E monitored element file. The set is copied out of
+ * the value, so the handle outlives the module.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioMonitoredSet *pio_value_monitored_set(const PioValueHandle *value, PioError **error);
 
 /**
  * Borrow the value as a multiconductor network without serialization or copying.

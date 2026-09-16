@@ -162,6 +162,16 @@ pub enum ContingencyAction {
     Unrecognized { text: String },
 }
 
+impl ContingencyAction {
+    /// The one line statement [`ContingencySet::to_con`] writes for this
+    /// action, without its line ending. A statement kept as text reads back
+    /// as the line the source wrote.
+    #[must_use]
+    pub fn to_con_statement(&self) -> String {
+        write_action(self)
+    }
+}
+
 /// How much a load or generation statement moves, and in what unit.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

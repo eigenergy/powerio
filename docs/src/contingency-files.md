@@ -72,6 +72,27 @@ scopes to table rows against a network and a subsystem set. The binding
 recomputes the PSS/E machine and circuit identifier of every element with the
 RAW writer's own allocation, because a network row's identity carries neither.
 
+Python reaches the same three values and the same two operations:
+
+```python
+import powerio
+
+case = powerio.parse("case.raw").value
+cases = powerio.parse("cases.con").value
+
+resolution = case.resolve_contingencies(cases.text)
+print(resolution["resolved"], "of", resolution["cases"], "cases bound")
+
+groups = powerio.parse("groups.sub").value
+expanded, notes = case.expand_contingencies(cases.text, groups.text)
+print(expanded)
+print(case.select_subsystem_buses(groups.text, "A1"))
+```
+
+C reaches them through `pio_value_contingency_set`,
+`pio_contingency_set_resolve`, and `pio_contingency_set_expand`; the
+[C API guide](capi.md) lists the accessors.
+
 ## What is kept as text
 
 Each reader covers the statements its grammar states and keeps every other

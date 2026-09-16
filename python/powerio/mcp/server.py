@@ -346,6 +346,10 @@ def _value_summary(value: Any) -> Dict[str, Any]:
             "layer": "GeoLayer",
             "features": len(layer.get("features", [])),
         }
+    elif isinstance(
+        value, (powerio.ContingencySet, powerio.SubsystemSet, powerio.MonitoredSet)
+    ):
+        summary = {"lines": len(value.text.splitlines())}
     else:
         summary = {"calculation": type(value).__name__}
     return {"value_type": type(value).__name__, **summary}

@@ -47,6 +47,8 @@ typedef struct PioCalculationUpdate PioCalculationUpdate;
 typedef struct PioCalculationInstance PioCalculationInstance;
 typedef struct PioCalculationSolution PioCalculationSolution;
 typedef struct PioComponentId PioComponentId;
+typedef struct PioContingencyResolution PioContingencyResolution;
+typedef struct PioContingencySet PioContingencySet;
 typedef struct PioDestination PioDestination;
 typedef struct PioDetailedConnectivity PioDetailedConnectivity;
 typedef struct PioDiagnostics PioDiagnostics;
@@ -56,6 +58,7 @@ typedef struct PioGeoApplyReport PioGeoApplyReport;
 typedef struct PioGeoLayer PioGeoLayer;
 typedef struct PioJsonValue PioJsonValue;
 typedef struct PioModule PioModule;
+typedef struct PioMonitoredSet PioMonitoredSet;
 typedef struct PioMulticonductorNetwork PioMulticonductorNetwork;
 typedef struct PioNetworkUpdate PioNetworkUpdate;
 typedef struct PioOperatingPoint PioOperatingPoint;
@@ -65,6 +68,7 @@ typedef struct PioScenarioSetHandle PioScenarioSetHandle;
 typedef struct PioSource PioSource;
 typedef struct PioSparseMatrix PioSparseMatrix;
 typedef struct PioString PioString;
+typedef struct PioSubsystemSet PioSubsystemSet;
 typedef struct PioTimeSeriesHandle PioTimeSeriesHandle;
 typedef struct PioUpdateChange PioUpdateChange;
 typedef struct PioUpdateReport PioUpdateReport;
@@ -176,6 +180,7 @@ include = [
     "PioPrescribedSourceVoltageView",
     "PioPrescribedTerminalPowerView",
     "PioComponentIdView",
+    "PioContingencyComponentView",
     "PioScucDevicePeriodView",
     "PioScucDeviceView",
     "PioScucRampLimitsView",

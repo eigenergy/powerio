@@ -84,8 +84,9 @@ solution. To find out what you have, use Python's normal type system; there is
 no `.kind` property, kind enum, or typed narrowing helper.
 
 The value classes are `BalancedNetwork`, `dist.MulticonductorNetwork`,
-`OperatingPoint`, `TimeSeries`, `ScenarioSet`, `GeoLayer`, the PF, OPF, and
-SCUC instances and solutions, and `SocwrOpfSolution`.
+`OperatingPoint`, `TimeSeries`, `ScenarioSet`, `GeoLayer`, `ContingencySet`,
+`SubsystemSet`, `MonitoredSet`, the PF, OPF, and SCUC instances and solutions,
+and `SocwrOpfSolution`.
 
 ## Emit grid exchange formats
 
@@ -119,6 +120,36 @@ The IR header is `"schema": "pio-ir"` with the integer `"version": 2`, and
 `powerio.__version__` separately. `deserialize` refuses a document whose schema
 or version it does not support and reports what it found. PowerIO IR is not a
 grid exchange format, so it does not appear in format discovery.
+
+## PSS/E contingency analysis files
+
+A `.con`, `.sub`, or `.mon` file parses to `ContingencySet`, `SubsystemSet`,
+or `MonitoredSet`. Each has a `text` property holding the file, and each binds
+to a case through a `BalancedNetwork` method.
+
+```python
+case = powerio.parse("case.raw").value
+cases = powerio.parse("cases.con").value
+print(cases.text.splitlines()[0])
+
+resolution = case.resolve_contingencies(cases.text)
+print(resolution["resolved"], "of", resolution["cases"], "cases bound")
+for result in resolution["case_results"]:
+    if not result["resolved"]:
+        print(result["name"], result["unresolved"][0]["reason"])
+
+groups = powerio.parse("groups.sub").value
+expanded, notes = case.expand_contingencies(cases.text, groups.text)
+print(expanded)
+print(case.select_subsystem_buses(groups.text, "A1"))
+```
+
+`resolve_contingencies` reports rather than refuses: a case naming an element
+the network does not hold is counted unresolved and listed in `case_results`
+with the reason each action did not bind. `expand_contingencies` turns an
+automatic specification such as `SINGLE BRANCH IN SUBSYSTEM 'A1'` into one
+explicit case per element, and returns the expanded `.con` text with the
+readers' and the expansion's notes.
 
 ## Collections
 

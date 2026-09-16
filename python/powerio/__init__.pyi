@@ -34,6 +34,7 @@ __all__ = [
     "BalancedNetwork",
     "CalculationUpdate",
     "ComponentId",
+    "ContingencySet",
     "DcOpfInstance",
     "DcOpfSolution",
     "DcPfInstance",
@@ -47,6 +48,7 @@ __all__ = [
     "McAcOpfSolution",
     "McAcPfInstance",
     "McAcPfSolution",
+    "MonitoredSet",
     "MulticonductorNetwork",
     "NetworkUpdate",
     "OperatingPoint",
@@ -84,6 +86,7 @@ __all__ = [
     "ScucViolationCosts",
     "SocwrOpfSolution",
     "SourceSpan",
+    "SubsystemSet",
     "TimePoint",
     "TimeSeries",
     "UpdateChange",
@@ -883,6 +886,11 @@ class BalancedNetwork:
     def apply_geo_layer(
         self, text: str, name_hint: Optional[str] = ...
     ) -> Tuple["BalancedNetwork", Dict[str, Any]]: ...
+    def resolve_contingencies(self, text: str) -> Dict[str, Any]: ...
+    def expand_contingencies(
+        self, con_text: str, sub_text: str
+    ) -> Tuple[str, List[Diagnostic]]: ...
+    def select_subsystem_buses(self, sub_text: str, name: str) -> List[int]: ...
     def calc_bprime_matrix(
         self, scheme: Scheme = ..., *, skip_zero_impedance: bool = ...
     ) -> Any: ...
@@ -1082,6 +1090,18 @@ class DcOpfSolution(_BalancedCalculation, _CalculationSolution):
 class GeoLayer(_TypedValue):
     @property
     def geojson(self) -> str: ...
+
+class ContingencySet(_TypedValue):
+    @property
+    def text(self) -> str: ...
+
+class SubsystemSet(_TypedValue):
+    @property
+    def text(self) -> str: ...
+
+class MonitoredSet(_TypedValue):
+    @property
+    def text(self) -> str: ...
 
 class AcOpfSolution(_BalancedCalculation, _CalculationSolution):
     @property

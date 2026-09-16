@@ -43,6 +43,16 @@
   states the three new structural types. A document stating what no reader
   could have read, from a line number of 0 to a band whose ends run the wrong
   way round, is refused rather than decoded.
+- Reach the three PSS/E contingency analysis files from Python and C. Python
+  gains the `ContingencySet`, `SubsystemSet`, and `MonitoredSet` value classes,
+  each with a `text` property, and the `BalancedNetwork` methods
+  `resolve_contingencies`, `expand_contingencies`, and
+  `select_subsystem_buses`. C ABI 7 gains the additive symbols
+  `pio_value_contingency_set`, `pio_value_subsystem_set`,
+  `pio_value_monitored_set`, `pio_contingency_set_parse`, the set and
+  subsystem accessors, `pio_contingency_set_resolve` with the
+  `PioContingencyResolution` accessors, and `pio_contingency_set_expand`. The
+  ABI version is unchanged.
 
 ## 0.11.2
 

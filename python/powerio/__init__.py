@@ -95,6 +95,7 @@ __all__ = [
     "BalancedNetwork",
     "CalculationUpdate",
     "ComponentId",
+    "ContingencySet",
     "DcOpfInstance",
     "DcOpfSolution",
     "DcPfInstance",
@@ -110,6 +111,7 @@ __all__ = [
     "McAcOpfSolution",
     "McAcPfInstance",
     "McAcPfSolution",
+    "MonitoredSet",
     "MulticonductorNetwork",
     "NetworkUpdate",
     "OperatingPoint",
@@ -147,6 +149,7 @@ __all__ = [
     "ScucViolationCosts",
     "SocwrOpfSolution",
     "SourceSpan",
+    "SubsystemSet",
     "TimePoint",
     "TimeSeries",
     "UpdateChange",
@@ -388,6 +391,48 @@ class BalancedNetwork:
         """
         inner, report = self._inner.apply_geo_layer(text, name_hint)
         return BalancedNetwork(inner), report
+
+    def resolve_contingencies(self, text: str) -> dict[str, Any]:
+        """Read PSS/E contingency text and bind every case to this network.
+
+        ``text`` is the content of a ``.con`` file, such as
+        ``parse("cases.con").value.text``. The result carries ``cases``,
+        ``resolved``, ``unresolved``, and ``unrecognized_statements`` as
+        counts; ``case_results``, one entry per case in the file's order with
+        its ``name``, whether it ``resolved``, the ``components`` it bound to
+        (each with the ``type`` naming the table, the ``id``, the ``row``, and
+        the element's own ``in_service`` flag), and the actions that bound to
+        nothing as ``{"action", "reason"}``; and ``diagnostics``, the reader's
+        notes on statements it kept as text.
+
+        Binding reports rather than refuses, so a case naming an element this
+        network does not hold is counted unresolved and listed.
+        """
+        return self._inner.resolve_contingencies(text)
+
+    def expand_contingencies(
+        self, con_text: str, sub_text: str
+    ) -> tuple[str, list[Diagnostic]]:
+        """Turn automatic contingency specifications into explicit cases.
+
+        ``con_text`` and ``sub_text`` are the contents of a ``.con`` and a
+        ``.sub`` file. A specification such as ``SINGLE BRANCH IN SUBSYSTEM
+        'A1'`` states a rule, so expanding it needs both the network and the
+        subsystem the ``.sub`` file names. Returns the expanded ``.con`` text,
+        which states every outage explicitly, and the notes from the two
+        readers followed by the expansion's own notes. Only elements this
+        network states in service expand into cases.
+        """
+        return self._inner.expand_contingencies(con_text, sub_text)
+
+    def select_subsystem_buses(self, sub_text: str, name: str) -> list[int]:
+        """The bus numbers one named subsystem of ``sub_text`` selects.
+
+        ``sub_text`` is the content of a ``.sub`` file. The numbers come back
+        in ascending order. A name the file does not state raises
+        ``ValueError``.
+        """
+        return self._inner.select_subsystem_buses(sub_text, name)
 
     # --- matrix calculations (scipy.sparse) -----------------------------
 
@@ -1287,9 +1332,70 @@ class GeoLayer(_TypedValue):
         return data.decode("utf-8")
 
 
+def _emitted_text(module: "PioModule[Any]", format: str) -> str:
+    """Emit ``module`` under one token and decode the single UTF-8 artifact."""
+    result = emit(module, format)
+    data = result.artifacts[0].data
+    if data is None:
+        raise ValueError(f"the {format} emission returned no artifact bytes")
+    return data.decode("utf-8")
+
+
+@_guard_class
+class ContingencySet(_TypedValue):
+    """A PSS/E contingency description file: the cases to run, the automatic
+    specifications that state cases by rule, and the ``SKIP`` rules.
+
+    :func:`parse` returns it for a ``.con`` file or for text declared as
+    ``psse-con``, :meth:`PioModule.emit` writes it back under that token, and
+    :func:`serialize` carries it through PowerIO IR. Bind a set to a case with
+    ``network.resolve_contingencies(cases.text)`` and turn its automatic
+    specifications into explicit cases with
+    ``network.expand_contingencies(cases.text, groups.text)``.
+    """
+
+    @property
+    def text(self) -> str:
+        """The ``.con`` text for this set."""
+        return _emitted_text(self.module, "psse-con")
+
+
+@_guard_class
+class SubsystemSet(_TypedValue):
+    """A PSS/E subsystem description file: the named bus groups a contingency
+    run and a monitored element file draw on.
+
+    :func:`parse` returns it for a ``.sub`` file or for text declared as
+    ``psse-sub``, and ``network.select_subsystem_buses(groups.text, name)``
+    names the buses one subsystem selects.
+    """
+
+    @property
+    def text(self) -> str:
+        """The ``.sub`` text for this set."""
+        return _emitted_text(self.module, "psse-sub")
+
+
+@_guard_class
+class MonitoredSet(_TypedValue):
+    """A PSS/E monitored element file: the branches, interfaces, and voltage
+    scopes a contingency run reports on.
+
+    :func:`parse` returns it for a ``.mon`` file or for text declared as
+    ``psse-mon``.
+    """
+
+    @property
+    def text(self) -> str:
+        """The ``.mon`` text for this set."""
+        return _emitted_text(self.module, "psse-mon")
+
 
 _VALUE_CLASSES: dict[str, type[_TypedValue]] = {
+    "powerio.ContingencySet": ContingencySet,
     "powerio.GeoLayer": GeoLayer,
+    "powerio.MonitoredSet": MonitoredSet,
+    "powerio.SubsystemSet": SubsystemSet,
     "powerio.OperatingPoint<powerio.BalancedNetwork>": OperatingPoint,
     "powerio.OperatingPoint<powerio.MulticonductorNetwork>": OperatingPoint,
     "powerio.DcPfInstance": DcPfInstance,

@@ -1263,6 +1263,55 @@ impl PyBalancedNetwork {
         ))
     }
 
+    /// Read `text` as a PSS/E contingency description file and bind every case
+    /// to this network. See `resolve_contingencies` in the Python wrapper for
+    /// the dict shape.
+    fn resolve_contingencies<'py>(
+        &self,
+        py: Python<'py>,
+        text: &str,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let parsed = powerio::ContingencySet::parse(text).map_err(core_pyerr)?;
+        let resolution = parsed.set.resolve(self.inner());
+        contingency_resolution_dict(py, &resolution, &parsed.diagnostics)
+    }
+
+    /// Expand the automatic specifications of `con_text` against this network
+    /// and the subsystems of `sub_text`. Returns the expanded `.con` text and
+    /// the notes from both readers followed by the expansion's own notes.
+    fn expand_contingencies(
+        &self,
+        con_text: &str,
+        sub_text: &str,
+    ) -> PyResult<(String, Vec<PyDiagnostic>)> {
+        let cases = powerio::ContingencySet::parse(con_text).map_err(core_pyerr)?;
+        let subsystems = powerio::SubsystemSet::parse(sub_text).map_err(core_pyerr)?;
+        let expanded = cases.set.expand(self.inner(), &subsystems.set);
+        let notes: Vec<PyDiagnostic> = cases
+            .diagnostics
+            .iter()
+            .chain(&subsystems.diagnostics)
+            .chain(&expanded.diagnostics)
+            .map(PyDiagnostic::from)
+            .collect();
+        Ok((expanded.set.to_con(), notes))
+    }
+
+    /// The bus numbers one named subsystem of `sub_text` selects over this
+    /// network, in ascending order.
+    fn select_subsystem_buses(&self, sub_text: &str, name: &str) -> PyResult<Vec<usize>> {
+        let parsed = powerio::SubsystemSet::parse(sub_text).map_err(core_pyerr)?;
+        let subsystem = parsed
+            .set
+            .get(name)
+            .ok_or_else(|| PyValueError::new_err(format!("unknown subsystem {name:?}")))?;
+        Ok(subsystem
+            .select_buses(self.inner())
+            .iter()
+            .map(|bus| bus.0)
+            .collect())
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "BalancedNetwork(name={:?}, n_buses={}, n_branches={}, n_generators={})",
@@ -4509,6 +4558,69 @@ fn geo_report_dict<'py>(
     out.set_item("unlocated_buses", report.unlocated_buses)?;
     out.set_item("unlocated_branches", report.unlocated_branches)?;
     out.set_item("notes", report.notes.clone())?;
+    Ok(out)
+}
+
+/// The `UnresolvedReason` variant name in snake case.
+fn unresolved_reason_name(reason: powerio::UnresolvedReason) -> &'static str {
+    use powerio::UnresolvedReason as Reason;
+    match reason {
+        Reason::NoSuchBus => "no_such_bus",
+        Reason::NoSuchBranch => "no_such_branch",
+        Reason::AmbiguousBranch { .. } => "ambiguous_branch",
+        Reason::NoSuchMachine => "no_such_machine",
+        Reason::NoSuchShunt => "no_such_shunt",
+        Reason::NoSuchLoad => "no_such_load",
+        Reason::NoSuchTransformer3w => "no_such_transformer_3w",
+        Reason::Unrecognized => "unrecognized",
+        _ => "unknown",
+    }
+}
+
+/// The `{cases, resolved, unresolved, unrecognized_statements, case_results,
+/// diagnostics}` dict from one contingency resolution.
+fn contingency_resolution_dict<'py>(
+    py: Python<'py>,
+    resolution: &powerio::ContingencyResolution,
+    diagnostics: &[powerio_core::Diagnostic],
+) -> PyResult<Bound<'py, PyDict>> {
+    let case_results = PyList::empty(py);
+    for case in &resolution.cases {
+        let components = PyList::empty(py);
+        for component in &case.components {
+            let item = PyDict::new(py);
+            item.set_item("type", component.id.component_type())?;
+            item.set_item("id", component.id.local_id())?;
+            item.set_item("row", component.row)?;
+            item.set_item("in_service", component.in_service)?;
+            components.append(item)?;
+        }
+        let unresolved = PyList::empty(py);
+        for action in &case.unresolved {
+            let item = PyDict::new(py);
+            item.set_item("action", action.action.to_con_statement())?;
+            item.set_item("reason", unresolved_reason_name(action.reason))?;
+            unresolved.append(item)?;
+        }
+        let entry = PyDict::new(py);
+        entry.set_item("name", &case.name)?;
+        entry.set_item("resolved", case.is_resolved())?;
+        entry.set_item("components", components)?;
+        entry.set_item("unresolved", unresolved)?;
+        case_results.append(entry)?;
+    }
+
+    let out = PyDict::new(py);
+    out.set_item("cases", resolution.cases.len())?;
+    out.set_item("resolved", resolution.resolved)?;
+    out.set_item("unresolved", resolution.unresolved)?;
+    out.set_item(
+        "unrecognized_statements",
+        resolution.unrecognized_statements,
+    )?;
+    out.set_item("case_results", case_results)?;
+    let diagnostics: Vec<PyDiagnostic> = diagnostics.iter().map(PyDiagnostic::from).collect();
+    out.set_item("diagnostics", diagnostics)?;
     Ok(out)
 }
 

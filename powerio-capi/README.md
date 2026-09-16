@@ -99,7 +99,8 @@ list of artifacts it wrote. PowerIO IR has its own pair,
 accessor.
 
 The typed accessors cover balanced and multiconductor networks, operating
-points, PF/OPF/SCUC instances and solutions, time series, and scenario sets.
+points, PF/OPF/SCUC instances and solutions, time series, scenario sets, a
+geographic layer, and the three PSS/E contingency analysis files.
 They neither serialize nor clone the value, and a child handle keeps its
 module owner alive, so it stays valid even after you release the original
 module handle.
