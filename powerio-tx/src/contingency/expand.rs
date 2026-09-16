@@ -20,7 +20,12 @@ use crate::diagnostics::{Diagnostic, codes};
 use crate::network::{BalancedNetwork, BusId, Transformer3W};
 
 /// Output of an expansion: the set with its automatic specifications turned
-/// into cases, plus the notes on specifications that expanded into nothing.
+/// into cases, plus the notes on the specifications that produced no case.
+///
+/// Two findings are noted, one note each: a specification naming a subsystem
+/// the subsystem set does not state earns `BUILD.CON.SUBSYSTEM_UNKNOWN`, and a
+/// specification whose subsystem is stated but holds no element it names earns
+/// `BUILD.CON.SPECIFICATION_EMPTY`. Nothing else is noted.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Expanded {
@@ -36,13 +41,29 @@ impl ContingencySet {
     /// no automatic specification that expanded. A specification naming a
     /// subsystem `subsystems` does not state stays in
     /// [`ContingencySet::automatic`] and earns a `BUILD.CON.SUBSYSTEM_UNKNOWN`
-    /// note; the `SKIP` rules stay with it, because it still needs them.
+    /// note; the `SKIP` rules stay with it, because it still needs them. A
+    /// specification whose subsystem holds no element it names expands into no
+    /// case and earns a `BUILD.CON.SPECIFICATION_EMPTY` note.
     ///
     /// Only elements the network states in service expand into cases, because
     /// outaging an element already out of service changes nothing.
     #[must_use]
     pub fn expand(&self, net: &BalancedNetwork, subsystems: &SubsystemSet) -> Expanded {
-        let index = PsseEquipmentIndex::new(net);
+        self.expand_with(&PsseEquipmentIndex::new(net), subsystems)
+    }
+
+    /// [`ContingencySet::expand`] against an index built once, for a caller
+    /// expanding several sets over one network.
+    ///
+    /// The network is the one the index borrows, so the rows it reads always
+    /// index that network's tables.
+    #[must_use]
+    pub fn expand_with(
+        &self,
+        index: &PsseEquipmentIndex<'_>,
+        subsystems: &SubsystemSet,
+    ) -> Expanded {
+        let net = index.network();
         let mut diagnostics = Vec::new();
         let mut kept = Vec::new();
         let mut generated = Vec::new();
@@ -60,7 +81,17 @@ impl ContingencySet {
                 continue;
             };
             let buses = subsystem.select_buses(net);
-            let singles = single_cases(net, &index, spec, &buses, &self.skips);
+            let singles = single_cases(net, index, spec, &buses, &self.skips);
+            if singles.is_empty() {
+                diagnostics.push(Diagnostic::of(
+                    &codes::BUILD_CON_SPECIFICATION_EMPTY,
+                    format!(
+                        "{}: subsystem '{}' holds no in service element this specification names",
+                        describe(spec),
+                        spec.subsystem
+                    ),
+                ));
+            }
             match spec.order {
                 AutomaticOrder::Single => generated.extend(singles),
                 AutomaticOrder::Double => generated.extend(double_cases(&singles)),
@@ -68,7 +99,10 @@ impl ContingencySet {
         }
         let mut cases = self.cases.clone();
         cases.extend(generated);
-        let skips = if kept.is_empty() {
+        // The rules are the expansion's own input, so they are dropped only
+        // once every specification that could read them has expanded. A set
+        // stating rules and no specification keeps them.
+        let skips = if kept.is_empty() && !self.automatic.is_empty() {
             Vec::new()
         } else {
             self.skips.clone()

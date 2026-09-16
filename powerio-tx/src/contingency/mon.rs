@@ -273,6 +273,10 @@ impl Reader {
     /// Keep a statement line that follows the file level `END`, and report the
     /// first one. A further bare `END` states nothing and is dropped, because
     /// files carry one or two of them.
+    ///
+    /// `to_mon` states every statement it kept before the `END` it writes, so
+    /// a kept statement carries `after_end` false and the written file reads
+    /// back as the same set.
     fn keep_after_end(&mut self, line: &LexedLine<'_>) {
         if line.kind != LineKind::Statement || is_end(line) {
             return;
@@ -291,6 +295,7 @@ impl Reader {
         self.parsed.set.retained.push(RetainedStatement {
             line: line.number,
             text: line.trimmed().to_owned(),
+            after_end: false,
         });
     }
 
@@ -645,13 +650,29 @@ pub struct MonitoredResolution {
     pub unresolved: Vec<UnresolvedMonitor>,
 }
 
-/// One interface and the branch rows its flow sums over.
+/// One interface and the branches its flow sums over.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ResolvedInterface {
     pub name: String,
     pub rating_mw: Option<f64>,
     /// In statement order; a branch named twice appears twice.
-    pub branch_rows: Vec<usize>,
+    pub members: Vec<InterfaceMember>,
+}
+
+/// One branch of an interface, and how the statement stated it against the
+/// stored row.
+///
+/// A `.mon` interface line names its branch in either terminal order, and the
+/// flow of a branch is stated from its stored `from` terminal to its stored
+/// `to` terminal. A member the statement named the other way round therefore
+/// enters the interface sum with its sign flipped, which is what `reversed`
+/// states.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct InterfaceMember {
+    /// The row in `net.branches()`.
+    pub row: usize,
+    /// Whether the statement named the stored `to` terminal first.
+    pub reversed: bool,
 }
 
 /// One voltage statement's buses and limits. `high` is absent for a deviation
@@ -748,10 +769,23 @@ impl MonitoredSet {
     /// whether or not the network states it in service.
     #[must_use]
     pub fn resolve(&self, net: &BalancedNetwork, subsystems: &SubsystemSet) -> MonitoredResolution {
-        let index = PsseEquipmentIndex::new(net);
+        self.resolve_with(&PsseEquipmentIndex::new(net), subsystems)
+    }
+
+    /// [`MonitoredSet::resolve`] against an index built once, for a caller
+    /// binding several files to one network.
+    ///
+    /// The network is the one the index borrows, so the rows it states always
+    /// index that network's tables.
+    #[must_use]
+    pub fn resolve_with(
+        &self,
+        index: &PsseEquipmentIndex<'_>,
+        subsystems: &SubsystemSet,
+    ) -> MonitoredResolution {
         let mut out = MonitoredResolution::default();
         for statement in &self.statements {
-            resolve_statement(statement, net, subsystems, &index, &mut out);
+            resolve_statement(statement, index.network(), subsystems, index, &mut out);
         }
         out
     }
@@ -818,11 +852,11 @@ fn resolve_statement(
             let mut resolved = ResolvedInterface {
                 name: name.clone(),
                 rating_mw: *rating_mw,
-                branch_rows: Vec::new(),
+                members: Vec::new(),
             };
             for branch in branches {
                 match bind_branch(index, branch) {
-                    Ok(row) => resolved.branch_rows.push(row),
+                    Ok(row) => resolved.members.push(member(index, branch, row)),
                     Err(reason) => out.unresolved.push(UnresolvedMonitor {
                         statement: statement.clone(),
                         reason,
@@ -865,6 +899,15 @@ fn unresolved_subsystem(statement: &MonitorStatement, out: &mut MonitoredResolut
 
 fn select(subsystems: &SubsystemSet, name: &str, net: &BalancedNetwork) -> Option<BTreeSet<BusId>> {
     Some(subsystems.get(name)?.select_buses(net))
+}
+
+/// One bound branch with its orientation against the stored row. A statement
+/// naming the stored `to` terminal first states the flow the other way round.
+fn member(index: &PsseEquipmentIndex<'_>, branch: &BranchRef, row: usize) -> InterfaceMember {
+    InterfaceMember {
+        row,
+        reversed: index.network().branches()[row].from != branch.from,
+    }
 }
 
 fn bind_branch(

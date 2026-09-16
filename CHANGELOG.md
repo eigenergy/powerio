@@ -22,11 +22,16 @@
 - Read and write the other two PSS/E contingency analysis files through
   `powerio_tx::contingency`: `SubsystemSet` for the subsystem description file
   (`.sub`) and `MonitoredSet` for the monitored element file (`.mon`), reported
-  under `READ.SUB.*` and `READ.MON.*`. `Subsystem::select_buses` names the
-  buses of a subsystem in a network, `MonitoredSet::resolve` binds monitored
-  branches, interfaces, and voltage scopes to table rows, and
-  `ContingencySet::expand` turns a `.con` file's automatic specifications into
-  explicit cases over those subsystems.
+  under `READ.SUB.*` and `READ.MON.*`. A `JOIN` group states its name through
+  `SelectorGroup::join`, which keeps a group with no name apart from the
+  subsystem's implicit group. `Subsystem::select_buses` names the buses of a
+  subsystem in a network, `MonitoredSet::resolve` binds monitored branches,
+  interfaces, and voltage scopes to table rows, with each interface member's
+  orientation against the row it bound to, and `ContingencySet::expand` turns a
+  `.con` file's automatic specifications into explicit cases over those
+  subsystems, reporting one that expands into nothing as
+  `BUILD.CON.SPECIFICATION_EMPTY`. `MonitoredSet::resolve_with` and
+  `ContingencySet::expand_with` read a `PsseEquipmentIndex` built once.
 
 ## 0.11.2
 

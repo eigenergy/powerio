@@ -338,7 +338,7 @@ pub mod codes {
             "a PSS/E subsystem description file states text after its file END";
         READ_SUB_NOTES_TRUNCATED = "READ.SUB.NOTES_TRUNCATED", Warning,
             "the PSS/E subsystem reader stopped recording notes at its budget";
-        READ_SUB_SOURCE_MALFORMED = "READ.SUB.SOURCE_MALFORMED", Error,
+        READ_SUB_SOURCE_MALFORMED = "READ.SUB.SOURCE_MALFORMED", Warning,
             "a PSS/E subsystem selector states a keyword whose values are not the numbers it needs";
 
         READ_MON_STATEMENT_UNRECOGNIZED = "READ.MON.STATEMENT_UNRECOGNIZED", Warning,
@@ -347,7 +347,7 @@ pub mod codes {
             "a PSS/E monitored element file states text after its file END";
         READ_MON_NOTES_TRUNCATED = "READ.MON.NOTES_TRUNCATED", Warning,
             "the PSS/E monitored element reader stopped recording notes at its budget";
-        READ_MON_SOURCE_MALFORMED = "READ.MON.SOURCE_MALFORMED", Error,
+        READ_MON_SOURCE_MALFORMED = "READ.MON.SOURCE_MALFORMED", Warning,
             "a line inside a PSS/E monitored element block states no branch";
 
         READ_GEO_SOURCE_MALFORMED = "READ.GEO.SOURCE_MALFORMED", Warning,
@@ -403,8 +403,10 @@ pub mod codes {
             "the contingency resolver stopped recording notes at its budget";
         BUILD_CON_SUBSYSTEM_UNKNOWN = "BUILD.CON.SUBSYSTEM_UNKNOWN", Warning,
             "an automatic contingency specification names a subsystem the subsystem set does not state";
+        BUILD_CON_SPECIFICATION_EMPTY = "BUILD.CON.SPECIFICATION_EMPTY", Warning,
+            "an automatic contingency specification names a subsystem that holds no in-service element of its target family";
         BUILD_MON_STATEMENT_UNRESOLVED = "BUILD.MON.STATEMENT_UNRESOLVED", Warning,
-            "a monitored element statement names an element or subsystem that was not found";
+            "a monitored element statement did not bind to exactly one element, or names a subsystem the subsystem set does not state";
 
         // VALIDATE: the case's own internal consistency.
         /// Emitted by the stored document's payload validation in the facade;

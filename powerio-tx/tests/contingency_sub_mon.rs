@@ -12,8 +12,9 @@ use std::path::{Path, PathBuf};
 
 use powerio_tx::network::BalancedNetwork;
 use powerio_tx::{
-    BranchRef, BusId, MonitorScope, MonitorStatement, MonitoredParsed, MonitoredSet,
-    SubsystemParsed, SubsystemSelector, SubsystemSet, UnresolvedMonitorReason,
+    BranchRef, BusId, InterfaceMember, JoinName, MonitorScope, MonitorStatement, MonitoredParsed,
+    MonitoredSet, PsseEquipmentIndex, SubsystemParsed, SubsystemSelector, SubsystemSet,
+    UnresolvedMonitorReason,
 };
 
 fn fixture(name: &str) -> PathBuf {
@@ -138,7 +139,7 @@ fn a_generated_psse_35_subsystem_file_keeps_its_header_and_selector() {
     let subsystem = &parsed.set.subsystems[0];
     assert_eq!(subsystem.name, "WOA");
     assert_eq!(subsystem.groups.len(), 1);
-    assert_eq!(subsystem.groups[0].name, None);
+    assert_eq!(subsystem.groups[0].join, None);
     assert_eq!(
         subsystem.groups[0].selectors,
         vec![SubsystemSelector::Area { from: 1, to: 1 }]
@@ -176,6 +177,7 @@ fn every_selector_spelling_reads() {
             "BUSRANGE",
             "KV",
             "JOINED",
+            "BAREJOIN",
             "ONELINE",
             "A2",
         ]
@@ -222,20 +224,6 @@ fn every_selector_spelling_reads() {
         }]
     );
 
-    // SYSTEM is the SUBSYSTEM synonym, and each JOIN is its own group.
-    let joined = group("JOINED");
-    assert_eq!(joined.len(), 2);
-    assert_eq!(joined[0].name.as_deref(), Some("HIGH"));
-    assert_eq!(joined[0].selectors.len(), 2);
-    assert_eq!(joined[1].name.as_deref(), Some("LOW"));
-    assert_eq!(
-        joined[1].selectors,
-        vec![SubsystemSelector::Bus {
-            from: BusId(203),
-            to: BusId(203),
-        }]
-    );
-
     // A one line subsystem: the selectors follow the name and END closes it.
     assert_eq!(
         group("ONELINE")[0].selectors,
@@ -256,6 +244,48 @@ fn every_selector_spelling_reads() {
 
     // The file states no final END and the writer adds one.
     assert!(parsed.set.to_sub().ends_with("END\nEND\n"));
+}
+
+#[test]
+fn each_join_group_reads_as_its_own_group() {
+    let parsed = parse_sub("selectors.sub");
+    let group = |name: &str| parsed.set.get(name).expect("subsystem").groups.clone();
+
+    // SYSTEM is the SUBSYSTEM synonym, and each JOIN is its own group.
+    let joined = group("JOINED");
+    assert_eq!(joined.len(), 2);
+    assert_eq!(
+        joined[0].join,
+        Some(JoinName::Named {
+            name: "HIGH".into()
+        })
+    );
+    assert_eq!(joined[0].selectors.len(), 2);
+    assert_eq!(joined[1].join, Some(JoinName::Named { name: "LOW".into() }));
+    assert_eq!(
+        joined[1].selectors,
+        vec![SubsystemSelector::Bus {
+            from: BusId(203),
+            to: BusId(203),
+        }]
+    );
+
+    // A JOIN with no name is its own group, distinct from the implicit one,
+    // and two of them stay two groups.
+    let bare = group("BAREJOIN");
+    assert_eq!(bare.len(), 2);
+    assert_eq!(bare[0].join, Some(JoinName::Anonymous));
+    assert_eq!(bare[0].selectors.len(), 2);
+    assert_eq!(bare[1].join, Some(JoinName::Anonymous));
+    assert_eq!(
+        bare[1].selectors,
+        vec![SubsystemSelector::Bus {
+            from: BusId(203),
+            to: BusId(203),
+        }]
+    );
+    // The writer states a group with no name as a bare JOIN.
+    assert!(parsed.set.to_sub().contains("   JOIN\n   AREA 1\n"));
 }
 
 #[test]
@@ -311,6 +341,81 @@ fn a_selector_that_states_no_number_is_reported_and_kept() {
 }
 
 #[test]
+fn a_join_reads_the_selectors_stated_on_its_own_line() {
+    let parsed =
+        SubsystemSet::parse("SUBSYSTEM 'A'\n   JOIN 'G' AREA 1 ZONE 2\n   END\nEND\nEND\n")
+            .expect("parse");
+    assert!(parsed.diagnostics.is_empty(), "{:?}", sub_codes(&parsed));
+    let groups = &parsed.set.subsystems[0].groups;
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].join, Some(JoinName::Named { name: "G".into() }));
+    assert_eq!(
+        groups[0].selectors,
+        vec![
+            SubsystemSelector::Area { from: 1, to: 1 },
+            SubsystemSelector::Zone { from: 2, to: 2 },
+        ]
+    );
+    check_sub_fixed_point(&parsed);
+
+    // The token after the keyword is a name only when it opens no selector.
+    let bare =
+        SubsystemSet::parse("SUBSYSTEM 'A'\n   JOIN AREA 1\n   END\nEND\nEND\n").expect("parse");
+    assert!(bare.diagnostics.is_empty(), "{:?}", sub_codes(&bare));
+    assert_eq!(
+        bare.set.subsystems[0].groups[0].join,
+        Some(JoinName::Anonymous)
+    );
+    assert_eq!(
+        bare.set.subsystems[0].groups[0].selectors,
+        vec![SubsystemSelector::Area { from: 1, to: 1 }]
+    );
+    check_sub_fixed_point(&bare);
+}
+
+#[test]
+fn a_join_line_tail_outside_the_grammar_is_reported_and_kept() {
+    let parsed = SubsystemSet::parse("SUBSYSTEM 'A'\n   JOIN 'G' PARTICIPATE\n   END\nEND\nEND\n")
+        .expect("parse");
+    assert_eq!(sub_codes(&parsed), vec!["READ.SUB.STATEMENT_UNRECOGNIZED"]);
+    let subsystem = &parsed.set.subsystems[0];
+    assert_eq!(
+        subsystem.groups[0].join,
+        Some(JoinName::Named { name: "G".into() })
+    );
+    assert!(subsystem.groups[0].selectors.is_empty());
+    assert_eq!(subsystem.retained[0].text, "PARTICIPATE");
+    check_sub_fixed_point(&parsed);
+
+    let malformed = SubsystemSet::parse("SUBSYSTEM 'A'\n   JOIN 'G' AREA WEST\n   END\nEND\nEND\n")
+        .expect("parse");
+    assert_eq!(sub_codes(&malformed), vec!["READ.SUB.SOURCE_MALFORMED"]);
+    assert_eq!(malformed.set.subsystems[0].retained[0].text, "AREA WEST");
+}
+
+#[test]
+fn an_end_on_a_selector_line_closes_the_open_join_alone() {
+    let parsed =
+        SubsystemSet::parse("SUBSYSTEM 'A'\n   JOIN 'G'\n      AREA 1 END\n   ZONE 2\nEND\nEND\n")
+            .expect("parse");
+    assert!(parsed.diagnostics.is_empty(), "{:?}", sub_codes(&parsed));
+    let groups = &parsed.set.subsystems[0].groups;
+    // The implicit group holds the selectors stated after the JOIN closed.
+    assert_eq!(groups.len(), 2);
+    assert_eq!(groups[0].join, None);
+    assert_eq!(
+        groups[0].selectors,
+        vec![SubsystemSelector::Zone { from: 2, to: 2 }]
+    );
+    assert_eq!(groups[1].join, Some(JoinName::Named { name: "G".into() }));
+    assert_eq!(
+        groups[1].selectors,
+        vec![SubsystemSelector::Area { from: 1, to: 1 }]
+    );
+    check_sub_fixed_point(&parsed);
+}
+
+#[test]
 fn subsystem_text_after_the_file_end_is_reported_once() {
     let parsed = SubsystemSet::parse("SUBSYSTEM 'A'\n   AREA 1\nEND\nEND\nBUSNAMES\nBUSNUMBERS\n")
         .expect("parse");
@@ -361,6 +466,9 @@ fn each_selector_family_names_the_buses_psse_would_name() {
     assert_eq!(selected("KV", &net, &set), [101, 102, 103, 201]);
     // The groups of a subsystem union: HIGH is area 1 within 200 to 240 kV.
     assert_eq!(selected("JOINED", &net, &set), [101, 102, 203]);
+    // Two JOIN groups with no name union like two named ones. One group
+    // holding every selector would intersect to nothing.
+    assert_eq!(selected("BAREJOIN", &net, &set), [101, 102, 203]);
     assert_eq!(selected("ONELINE", &net, &set), [103]);
     assert_eq!(selected("A2", &net, &set), [201, 202]);
 }
@@ -684,10 +792,28 @@ fn block_statements_bind_their_branches_and_report_what_named_nothing() {
     assert_eq!(resolution.interfaces.len(), 2);
     assert_eq!(resolution.interfaces[0].name, "WEST");
     assert_eq!(resolution.interfaces[0].rating_mw, Some(200.0));
-    assert_eq!(resolution.interfaces[0].branch_rows, vec![3, 5]);
+    assert_eq!(
+        resolution.interfaces[0].members,
+        vec![
+            InterfaceMember {
+                row: 3,
+                reversed: false,
+            },
+            InterfaceMember {
+                row: 5,
+                reversed: false,
+            },
+        ]
+    );
     assert_eq!(resolution.interfaces[1].name, "NORTH");
     assert_eq!(resolution.interfaces[1].rating_mw, None);
-    assert_eq!(resolution.interfaces[1].branch_rows, vec![4]);
+    assert_eq!(
+        resolution.interfaces[1].members,
+        vec![InterfaceMember {
+            row: 4,
+            reversed: false,
+        }]
+    );
 
     let reasons: Vec<&UnresolvedMonitorReason> = resolution
         .unresolved
@@ -715,6 +841,43 @@ fn block_statements_bind_their_branches_and_report_what_named_nothing() {
     );
     assert!(diagnostics[0].message().contains("no branch 101 to 203"));
     assert!(diagnostics[1].message().contains("'NOSUCH'"));
+}
+
+#[test]
+fn an_interface_member_states_its_orientation_against_the_stored_row() {
+    let net = select_network();
+    let subsystems = SubsystemSet::default();
+    // Row 3 is stored 103 to 201. The first member names it the other way
+    // round, so its flow enters the interface sum with the opposite sign.
+    let parsed = MonitoredSet::parse("MONITOR INTERFACE 'W'\n201 103 1\n103 201 1\nEND\nEND\n")
+        .expect("parse");
+    let resolution = parsed.set.resolve(&net, &subsystems);
+    assert_eq!(
+        resolution.interfaces[0].members,
+        vec![
+            InterfaceMember {
+                row: 3,
+                reversed: true,
+            },
+            InterfaceMember {
+                row: 3,
+                reversed: false,
+            },
+        ]
+    );
+    assert!(resolution.unresolved.is_empty());
+}
+
+#[test]
+fn an_index_built_once_binds_the_same_set() {
+    let net = select_network();
+    let subsystems = parse_sub("selectors.sub").set;
+    let set = parse_mon("generated.mon").set;
+    let index = PsseEquipmentIndex::new(&net);
+    assert_eq!(
+        set.resolve_with(&index, &subsystems),
+        set.resolve(&net, &subsystems)
+    );
 }
 
 #[test]

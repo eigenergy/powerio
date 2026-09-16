@@ -45,14 +45,17 @@ use std::cmp::Ordering;
 pub use expand::Expanded;
 use lexer::{LexedLine, LineKind, lex};
 pub use mon::{
-    BranchRef, MonitorScope, MonitorStatement, MonitoredParsed, MonitoredResolution, MonitoredSet,
-    ResolvedInterface, ResolvedVoltageScope, UnresolvedMonitor, UnresolvedMonitorReason,
+    BranchRef, InterfaceMember, MonitorScope, MonitorStatement, MonitoredParsed,
+    MonitoredResolution, MonitoredSet, ResolvedInterface, ResolvedVoltageScope, UnresolvedMonitor,
+    UnresolvedMonitorReason,
 };
 pub use resolve::{
     ContingencyResolution, PsseEquipmentIndex, ResolvedCase, ResolvedComponent, UnresolvedAction,
     UnresolvedReason,
 };
-pub use sub::{SelectorGroup, Subsystem, SubsystemParsed, SubsystemSelector, SubsystemSet};
+pub use sub::{
+    JoinName, SelectorGroup, Subsystem, SubsystemParsed, SubsystemSelector, SubsystemSet,
+};
 
 use crate::diagnostics::{Diagnostic, DiagnosticInfo, codes};
 use crate::network::BusId;

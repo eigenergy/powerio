@@ -315,10 +315,13 @@ END
 A file is optional header comments, then any number of subsystems, then one
 file level `END`. `SUBSYSTEM name` opens one and `SYSTEM name` is its synonym;
 the name is quoted or bare. Indentation is spaces or tabs and blank lines are
-dropped. One `END` closes each subsystem and one more closes the file; a
-missing file `END` is tolerated and the writer adds one, a further bare `END`
-after it states nothing, and any other statement after it is kept and reported
-once as `READ.SUB.TEXT_AFTER_END`.
+dropped. An `END` closes the innermost open block: the open `JOIN` group when
+there is one, the subsystem otherwise, and the file after that. A missing file
+`END` is tolerated and the writer adds one, a further bare `END` after it
+states nothing, and any other statement after it is kept and reported once as
+`READ.SUB.TEXT_AFTER_END`. The writer states every kept statement before the
+`END` it writes, so a statement read after the terminator reads back as an
+ordinary file level statement.
 
 Two conditions refuse the file, each naming its 1-based line: a `SUBSYSTEM`
 that starts before the previous one reached `END`, and a subsystem or a `JOIN`
@@ -338,15 +341,25 @@ spelling reads as a range whose ends are equal, and both ends are inclusive.
 | `OWNER n`, `OWNERS a b` | `Owner { from, to }` |
 | `BUS n`, `BUSES a b` | `Bus { from, to }` |
 | `KVRANGE lo hi` | `KvRange { lo, hi }`, floats, inclusive on base kV |
-| `JOIN [name]` ... `END` | one `SelectorGroup` with that name |
+| `JOIN [name]` ... `END` | one `SelectorGroup` whose `join` states the name |
 
-`JOIN` opens a group closed by its own `END`. The selectors stated outside any
-`JOIN` form the subsystem's implicit group, which is the `SelectorGroup` whose
-`name` is `None`.
+`JOIN` opens a group closed by its own `END`, and selectors may follow the
+keyword on that line as they may follow a subsystem name. The token after the
+keyword is the group's name unless it opens a selector, so `JOIN AREA 1` opens
+a group with no name over area 1. The rest of the line reads as selectors, and
+a tail outside the grammar is reported and kept as text on the subsystem rather
+than dropped.
+
+A group's `join` states how the file stated it: absent for the subsystem's
+implicit group, which holds the selectors stated outside any `JOIN`,
+`anonymous` for a `JOIN` with no name, and `named` for one with a name. Two
+`JOIN` blocks with no name are therefore two groups whose bus sets union,
+rather than one group whose selectors intersect.
 
 A line whose first token is a selector keyword but whose values are not the
-numbers it needs is reported as `READ.SUB.SOURCE_MALFORMED`; any other line
-inside a subsystem is reported as `READ.SUB.STATEMENT_UNRECOGNIZED`. Both keep
+numbers it needs is reported as `READ.SUB.SOURCE_MALFORMED`, a warning; any
+other line inside a subsystem is reported as
+`READ.SUB.STATEMENT_UNRECOGNIZED`. Both keep
 their original line on that subsystem, which is where the TARA-only statements
 land: `SCALE ALL FOR EXPORT INCLUDE OFFLINE`, `PARTICIPATE`, `ADD ...`,
 `BASELOAD n`, `TURBINETYPE n`, and `EXCEPT`. A line at file level outside any
@@ -379,7 +392,8 @@ level statements kept as text, then a final `END`.
 | --- | --- |
 | subsystem | `SUBSYSTEM 'name'`, its groups, its kept lines, `END` |
 | implicit group | its selectors, one per line, indented three spaces |
-| `JOIN` group | `   JOIN 'name'`, its selectors, `   END` |
+| named `JOIN` group | `   JOIN 'name'`, its selectors, `   END` |
+| `JOIN` group with no name | `   JOIN`, its selectors, `   END` |
 | `Area` | `   AREA {n}`, or `   AREAS {a} {b}` when the ends differ |
 | `Zone`, `Owner` | `ZONE`/`ZONES`, `OWNER`/`OWNERS`, the same way |
 | `Bus` | `   BUS {n}`, or `   BUSES {a} {b}` |
@@ -420,10 +434,12 @@ of `ALL BUSES`, `SUBSYSTEM name`, `BUS n`, `AREA n`, `ZONE n`, `OWNER n`, and
 
 Files carry one or two file level `END`s and both read the same: the first ends
 the file, a further bare `END` states nothing, and any other statement after it
-is kept and reported once as `READ.MON.TEXT_AFTER_END`. A line inside a block
-that states no branch is reported as `READ.MON.SOURCE_MALFORMED`, any other
-line outside the grammar as `READ.MON.STATEMENT_UNRECOGNIZED`, and both keep
-their original line on the set. The reader records at most 16 notes and then
+is kept and reported once as `READ.MON.TEXT_AFTER_END`. The writer states every
+kept statement before the `END` it writes, so a statement read after the
+terminator reads back as an ordinary kept statement. A line inside a block
+that states no branch is reported as `READ.MON.SOURCE_MALFORMED`, a warning,
+any other line outside the grammar as `READ.MON.STATEMENT_UNRECOGNIZED`, and
+both keep their original line on the set. The reader records at most 16 notes and then
 one `READ.MON.NOTES_TRUNCATED`. A block still open at end of input refuses the
 file, naming the line that opened it.
 
@@ -436,15 +452,23 @@ one per line as `{i:>6} {j:>6} {ckt}` before its `END`.
 ### Binding a monitored set to a network
 
 `MonitoredSet::resolve` takes the network and a `SubsystemSet` and returns
-`MonitoredResolution`, whose rows are positions in the network's tables.
+`MonitoredResolution`, whose rows are positions in the network's tables. A
+caller binding several files to one network builds one `PsseEquipmentIndex` and
+calls `MonitoredSet::resolve_with` and `ContingencySet::expand_with`, which read
+the network the index borrows.
 
 | Statement | Binds to |
 | --- | --- |
 | `BranchesInSubsystem` | `branch_rows`: every branch with both terminals in the subsystem. With `3WLOWVOLTAGE`, `transformer_3w_rows` gains every three winding transformer whose lowest voltage winding sits there |
 | `TiesFromSubsystem` | `tie_rows`: every branch with exactly one terminal in the subsystem |
 | `Branches` | `branch_rows`, one per listed branch |
-| `Interface` | one `ResolvedInterface`, its branch rows in statement order |
+| `Interface` | one `ResolvedInterface`, its members in statement order |
 | `VoltageRange`, `VoltageDeviation` | one `ResolvedVoltageScope`, the scope's bus rows with the limits |
+
+An interface member is a row and the orientation the statement stated it in. A
+branch's flow runs from its stored `from` terminal to its stored `to` terminal,
+so a member the statement named the other way round carries `reversed` and
+enters the interface sum with the opposite sign.
 
 A listed branch binds through `PsseEquipmentIndex::branch_rows`, so it matches
 in either terminal order; zero rows is `NoSuchBranch` and more than one is
@@ -481,8 +505,14 @@ Circuit and machine ids come from `PsseEquipmentIndex`, so a generated case
 names its element the way a RAW file written from this network would.
 
 A specification naming a subsystem the set does not state stays in `automatic`
-and earns one `BUILD.CON.SUBSYSTEM_UNKNOWN` note. The `SKIP` rules stay with
-it; they are cleared only once every specification has expanded.
+and earns one `BUILD.CON.SUBSYSTEM_UNKNOWN` note. A specification whose
+subsystem is stated but holds no in service element of its target family
+expands into no case and earns one `BUILD.CON.SPECIFICATION_EMPTY` note. Those
+two are the whole of what an expansion notes.
+
+The `SKIP` rules are the expansion's own input, so they are dropped only once
+every specification that could read them has expanded: a set that states rules
+and no specification at all keeps them.
 
 ### Names the expansion gives its cases
 

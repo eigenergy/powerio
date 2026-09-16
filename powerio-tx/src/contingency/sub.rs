@@ -66,11 +66,26 @@ pub struct Subsystem {
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SelectorGroup {
-    /// The `JOIN` name, or `None` for the implicit group.
+    /// How the file stated the group: absent for the implicit group, which
+    /// holds the selectors stated outside any `JOIN`, and present for a `JOIN`
+    /// block whether or not that block states a name. Two `JOIN` blocks with
+    /// no name are two groups, and their bus sets union rather than intersect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
+    pub join: Option<JoinName>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selectors: Vec<SubsystemSelector>,
+}
+
+/// What a `JOIN` statement stated after the keyword.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum JoinName {
+    /// `JOIN` with no name, which the writer states as `JOIN`.
+    Anonymous,
+    /// `JOIN name`.
+    Named { name: String },
 }
 
 /// One bus selector. A statement naming a single value reads as a range whose
@@ -185,14 +200,19 @@ impl SubsystemSet {
         for subsystem in &self.subsystems {
             let _ = writeln!(out, "SUBSYSTEM '{}'", subsystem.name);
             for group in &subsystem.groups {
-                match &group.name {
+                match &group.join {
                     None => {
                         for selector in &group.selectors {
                             let _ = writeln!(out, "   {}", write_selector(selector));
                         }
                     }
-                    Some(name) => {
-                        let _ = writeln!(out, "   JOIN '{name}'");
+                    Some(join) => {
+                        match join {
+                            JoinName::Anonymous => out.push_str("   JOIN\n"),
+                            JoinName::Named { name } => {
+                                let _ = writeln!(out, "   JOIN '{name}'");
+                            }
+                        }
                         for selector in &group.selectors {
                             let _ = writeln!(out, "   {}", write_selector(selector));
                         }
@@ -227,7 +247,7 @@ impl SubsystemSet {
 
 /// A `JOIN` group whose `END` has not been read yet.
 struct OpenJoin {
-    name: Option<String>,
+    name: JoinName,
     opened: usize,
     selectors: Vec<SubsystemSelector>,
 }
@@ -250,7 +270,7 @@ impl OpenSubsystem {
         let mut groups = Vec::with_capacity(self.groups.len() + 1);
         if !self.implicit.is_empty() {
             groups.push(SelectorGroup {
-                name: None,
+                join: None,
                 selectors: self.implicit,
             });
         }
@@ -341,6 +361,10 @@ impl Reader {
     /// Keep a statement line that follows the file level `END`, and report the
     /// first one. A further bare `END` states nothing and is dropped, because
     /// files carry one or two of them.
+    ///
+    /// `to_sub` states every statement it kept before the `END` it writes, so
+    /// a kept statement carries `after_end` false and the written file reads
+    /// back as the same set.
     fn keep_after_end(&mut self, line: &LexedLine<'_>) {
         if line.kind != LineKind::Statement || is_end(line) {
             return;
@@ -355,6 +379,7 @@ impl Reader {
         self.parsed.set.retained.push(RetainedStatement {
             line: line.number,
             text: line.trimmed().to_owned(),
+            after_end: false,
         });
     }
 
@@ -367,6 +392,7 @@ impl Reader {
                 self.parsed.set.retained.push(RetainedStatement {
                     line: line.number,
                     text: line.trimmed().to_owned(),
+                    after_end: false,
                 });
             }
         }
@@ -389,26 +415,66 @@ impl Reader {
         if upper.len() <= 2 {
             return;
         }
-        match take_selectors(upper, 2) {
+        self.read_selector_tail(line, upper, words, 2);
+    }
+
+    /// Read the selectors stated after a `SUBSYSTEM` or `JOIN` keyword and its
+    /// name. A trailing `END` closes what the line opened.
+    ///
+    /// A tail outside the grammar keeps its own line, so that writing the
+    /// subsystem back states the opening keyword and the tail separately and
+    /// reading that again gives the same subsystem.
+    fn read_selector_tail(
+        &mut self,
+        line: &LexedLine<'_>,
+        upper: &[String],
+        words: &[&str],
+        at: usize,
+    ) {
+        match take_selectors(upper, at) {
             SelectorParse::Read { selectors, ended } => {
                 self.add_selectors(selectors);
                 if ended {
-                    self.close_subsystem();
+                    self.close_join_or_subsystem();
                 }
             }
-            // A tail outside the grammar keeps its own line, so that writing
-            // the subsystem back states the name and the tail separately and
-            // reading that again gives the same subsystem.
             SelectorParse::Malformed => {
-                let tail = tail_text(words);
+                let tail = tail_text(words, at);
                 self.parsed.malformed(line.number, &tail);
                 self.keep_in_subsystem(line.number, tail);
             }
             SelectorParse::Unrecognized => {
-                let tail = tail_text(words);
+                let tail = tail_text(words, at);
                 self.parsed.unrecognized(line.number, &tail);
                 self.keep_in_subsystem(line.number, tail);
             }
+        }
+    }
+
+    /// Open a `JOIN` group and read the rest of its line. The token after the
+    /// keyword is the group's name unless it opens a selector, so `JOIN AREA 1`
+    /// opens a group with no name over area 1.
+    fn open_join(&mut self, line: &LexedLine<'_>, upper: &[String], words: &[&str]) {
+        let named = upper
+            .get(1)
+            .is_some_and(|word| word != "END" && !is_selector_keyword(word));
+        let name = if named {
+            JoinName::Named {
+                name: words[1].trim().to_owned(),
+            }
+        } else {
+            JoinName::Anonymous
+        };
+        let at = usize::from(named) + 1;
+        if let Some(open) = self.subsystem.as_mut() {
+            open.join = Some(OpenJoin {
+                name,
+                opened: line.number,
+                selectors: Vec::new(),
+            });
+        }
+        if at < upper.len() {
+            self.read_selector_tail(line, upper, words, at);
         }
     }
 
@@ -438,21 +504,14 @@ impl Reader {
                 .as_ref()
                 .is_some_and(|open| open.join.is_none())
         {
-            let name = words.get(1).map(|word| word.trim().to_owned());
-            if let Some(open) = self.subsystem.as_mut() {
-                open.join = Some(OpenJoin {
-                    name,
-                    opened: line.number,
-                    selectors: Vec::new(),
-                });
-            }
+            self.open_join(line, upper, words);
             return Ok(());
         }
         match take_selectors(upper, 0) {
             SelectorParse::Read { selectors, ended } => {
                 self.add_selectors(selectors);
                 if ended {
-                    self.close_subsystem();
+                    self.close_join_or_subsystem();
                 }
             }
             SelectorParse::Malformed => {
@@ -479,7 +538,11 @@ impl Reader {
 
     fn keep_in_subsystem(&mut self, line: usize, text: String) {
         if let Some(open) = self.subsystem.as_mut() {
-            open.retained.push(RetainedStatement { line, text });
+            open.retained.push(RetainedStatement {
+                line,
+                text,
+                after_end: false,
+            });
         }
     }
 
@@ -490,7 +553,7 @@ impl Reader {
             && let Some(join) = open.join.take()
         {
             open.groups.push(SelectorGroup {
-                name: join.name,
+                join: Some(join.name),
                 selectors: join.selectors,
             });
             return;
@@ -505,10 +568,11 @@ impl Reader {
     }
 }
 
-/// The tokens after a subsystem name, rejoined as one line. A token holding
-/// whitespace is quoted, so the rejoined line lexes back into the same tokens.
-fn tail_text(words: &[&str]) -> String {
-    words[2..]
+/// The tokens from `at` to the end of the line, rejoined as one line. A token
+/// holding whitespace is quoted, so the rejoined line lexes back into the same
+/// tokens.
+fn tail_text(words: &[&str], at: usize) -> String {
+    words[at..]
         .iter()
         .map(|word| field(word))
         .collect::<Vec<String>>()

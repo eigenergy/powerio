@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 
 use powerio_tx::network::BalancedNetwork;
 use powerio_tx::{
-    AutomaticTarget, BusId, ContingencyAction, ContingencySet, Expanded, SubsystemSet,
+    AutomaticTarget, BusId, ContingencyAction, ContingencySet, Expanded, PsseEquipmentIndex,
+    SkipRule, SubsystemSet,
 };
 
 fn fixture(name: &str) -> PathBuf {
@@ -264,6 +265,64 @@ fn an_expanded_set_writes_and_reads_back() {
     assert_eq!(written, again.set.to_con());
     assert!(written.contains("CONTINGENCY 'T_101_102_103_1'"));
     assert!(written.contains("SINGLE BRANCH IN SUBSYSTEM 'NOSUCH'"));
+}
+
+#[test]
+fn a_specification_that_names_nothing_in_its_subsystem_is_noted() {
+    let net = select_network();
+    let subsystems = subsystems();
+    // The BUSLIST subsystem holds buses 101 and 203, which no branch joins.
+    let empty = expand(
+        "SINGLE BRANCH IN SUBSYSTEM 'BUSLIST'\nEND\n",
+        &net,
+        &subsystems,
+    );
+    assert!(empty.set.cases.is_empty());
+    assert!(empty.set.automatic.is_empty());
+    assert_eq!(
+        empty
+            .diagnostics
+            .iter()
+            .map(powerio_core::Diagnostic::code)
+            .collect::<Vec<&str>>(),
+        vec!["BUILD.CON.SPECIFICATION_EMPTY"]
+    );
+    assert!(empty.diagnostics[0].message().contains("'BUSLIST'"));
+
+    // A specification that names one element is not empty.
+    let filled = expand("SINGLE UNIT IN SUBSYSTEM 'A2'\nEND\n", &net, &subsystems);
+    assert_eq!(names(&filled), vec!["G_201_1"]);
+    assert!(filled.diagnostics.is_empty());
+}
+
+#[test]
+fn skip_rules_stay_on_a_set_that_states_no_specification() {
+    let net = select_network();
+    let set = ContingencySet {
+        skips: vec![SkipRule {
+            from: BusId(101),
+            to: BusId(102),
+            circuit: "2".into(),
+        }],
+        ..ContingencySet::default()
+    };
+    let expanded = set.expand(&net, &SubsystemSet::default());
+    assert_eq!(expanded.set.skips, set.skips);
+    assert!(expanded.diagnostics.is_empty());
+}
+
+#[test]
+fn an_index_built_once_expands_the_same_set() {
+    let net = select_network();
+    let subsystems = subsystems();
+    let set = ContingencySet::parse(&read("expand.con"))
+        .expect("parse")
+        .set;
+    let index = PsseEquipmentIndex::new(&net);
+    assert_eq!(
+        set.expand_with(&index, &subsystems).set,
+        set.expand(&net, &subsystems).set
+    );
 }
 
 #[test]
