@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Update dependencies to their current majors: arrow and parquet to 60,
+  criterion to 0.8, jsonschema to 0.56, rand and rand_chacha to 0.10, and sha2
+  to 0.11, with the rest of the lockfile refreshed. Public APIs are unchanged.
+- Fail CI on a RUSTSEC advisory against the dependency graph. `deny.toml`
+  records the single accepted finding.
+
 ## 0.11.2
 
 - Maintenance updates and regression coverage.
