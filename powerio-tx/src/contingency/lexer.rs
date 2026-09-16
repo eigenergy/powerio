@@ -105,8 +105,10 @@ fn lex_line(number: usize, text: &str) -> LexedLine<'_> {
 
 /// Split one line into tokens. A token that opens with `'` or `"` runs to its
 /// closing quote and may hold spaces; the quotes are removed and the inner
-/// text kept. An unquoted token whose first character is `/` after at least
-/// one statement token ends the statement: the rest of the line is a comment.
+/// text kept. A token whose quote never closes runs to the end of the line and
+/// drops the line's trailing whitespace, which is not part of the name. An
+/// unquoted token whose first character is `/` after at least one statement
+/// token ends the statement: the rest of the line is a comment.
 fn tokenize(line: &str) -> Vec<Token<'_>> {
     let bytes = line.as_bytes();
     let mut tokens = Vec::new();
@@ -123,7 +125,7 @@ fn tokenize(line: &str) -> Vec<Token<'_>> {
             let start = at + 1;
             let Some(end) = closing_quote(line, start, quote) else {
                 tokens.push(Token {
-                    text: &line[start..],
+                    text: line[start..].trim_end(),
                     quoted: true,
                 });
                 break;
@@ -225,6 +227,9 @@ mod tests {
     #[test]
     fn an_unclosed_quote_runs_to_the_end_of_the_line() {
         assert_eq!(words("CONTINGENCY 'OPEN"), vec!["CONTINGENCY", "OPEN"]);
+        // The line's trailing whitespace is not part of the name.
+        assert_eq!(words("CONTINGENCY 'OPEN   "), vec!["CONTINGENCY", "OPEN"]);
+        assert_eq!(words("CKT 'A B   "), vec!["CKT", "A B"]);
     }
 
     #[test]

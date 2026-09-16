@@ -25,10 +25,10 @@ Siemens documents these files in the PSS/E Program Operation Manual, which
 is licensed and not public. Every statement this reader accepts was therefore
 established from public contingency files, from the example set PSS/E ships,
 and from public question threads, and is listed with its evidence in the
-fixture README. A statement outside the list keeps its original line rather
-than failing the file, so a file this reader has never seen still reads, and a
-new spelling shows up as a `READ.CON.STATEMENT_UNRECOGNIZED` note rather than
-as a silent loss.
+fixture README. A statement outside the list keeps its line, with the
+surrounding whitespace dropped, rather than failing the file, so a file this
+reader has never seen still reads, and a new spelling shows up as a
+`READ.CON.STATEMENT_UNRECOGNIZED` note rather than as a silent loss.
 
 ## Tokenizer
 
@@ -39,7 +39,9 @@ as a silent loss.
   the inner text is kept. A quote followed by whitespace or by the end of the
   line closes the token; a quote sitting inside a word is part of the name,
   and the search continues to the last quote of that character on the line.
-  That is how `'L_000022O'~1'` is one token whose text is `L_000022O'~1`.
+  That is how `'L_000022O'~1'` is one token whose text is `L_000022O'~1`. A
+  quote that never closes runs to the end of the line, without the line's
+  trailing whitespace.
 - A line whose first non-blank character is `/`, `!`, or `#`, or whose first
   token is `COM`, is a comment. `//` falls under the `/` case.
 - An unquoted token whose first character is `/`, after at least one statement
@@ -58,7 +60,10 @@ specifications, `SKIP` blocks, and file level statements, then an optional file
 level `END`. Header comments are kept as written, which preserves the
 `/PSS(R)E 35` stamp and the `COM` banner PSS/E writes. Comment lines elsewhere
 are dropped, after the file level `END` included. Statement lines after that
-`END` are kept as file level statements and reported once.
+`END` are kept as file level statements marked `after_end`, and reported once.
+The writer states them after the `END` it writes, so a `SKIP` or a
+`CONTINGENCY` the file states past its terminator reads back as text rather
+than as grammar.
 
 Three conditions refuse the file, each naming its 1-based line: a
 `CONTINGENCY` that starts before the previous case reached `END`, a case still
@@ -98,7 +103,8 @@ second rule covers the direction and level forms PowerGEM writes,
 `DEFAULT DISPATCH FIRSTLEVEL`, whose `END` would otherwise read as the file
 `END`. Inside a case the whole block, its `END` included, is one
 `Unrecognized { text }` whose lines are joined with newlines, so writing it and
-reading it again gives the same block.
+reading it again gives the same block. Opening a block is reported once, at the
+opening line, as `READ.CON.STATEMENT_UNRECOGNIZED`.
 
 ## File level statements
 
@@ -110,21 +116,26 @@ reading it again gives the same block.
 
 Anything else at file level, `BUSNUMBERS`, `BUSNAMES`, `BRANCHNAMES`, and the
 TARA-only statements among them, becomes a `RetainedStatement` with its line
-number and is reported. A line inside a `SKIP` block that states no branch is
-reported as `READ.CON.SOURCE_MALFORMED` and kept the same way.
+number and is reported. A retained statement holds the line with its
+surrounding whitespace dropped, as every statement kept as text does. A line
+inside a `SKIP` block that states no branch is reported as
+`READ.CON.SOURCE_MALFORMED`, a warning, and kept the same way.
 
-The reader records at most 16 notes and then one `READ.CON.NOTES_TRUNCATED`,
-so a file of unrecognized lines cannot grow the note list without limit. Every
+The reader records at most 16 notes. A 17th finding records one
+`READ.CON.NOTES_TRUNCATED` in place of its note and every finding after it
+records nothing, so a file of unrecognized lines cannot grow the note list
+without limit. A file of exactly 16 findings gets 16 notes and no marker. Every
 line is still kept; only the notes stop.
 
 ## What the writer states
 
 `to_con` writes the header lines as written, then the automatic
 specifications, then one `SKIP` block holding every skip rule, then the cases
-in order, then the file level statements as written, then a final `END`. Every
-line ends with a newline. Reading the result gives the same set, except that a
-statement kept from the middle of a file is written after the cases and so
-reads back from a different line.
+in order, then the file level statements kept from before the file `END`, then
+a final `END`, then the statements read after that `END`. Every line ends with
+a newline. Reading the result gives the same set, except that a statement kept
+from the middle of a file is written after the cases and so reads back from a
+different line.
 
 | Value | Written as |
 | --- | --- |
@@ -159,6 +170,7 @@ their original lines:
 - `PARALLEL` branch statements.
 - What a `DISPATCH` block's body means: the subsystem, the participating
   machines, and the dispatch method are kept as lines rather than as fields.
+  Every such block is reported at its opening line.
 - Bus-name mode, where a statement names `'02CHAMBR 345'` in place of a bus
   number. Reading these needs the case, which this module does not take.
 

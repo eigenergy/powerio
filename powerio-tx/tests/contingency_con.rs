@@ -70,7 +70,20 @@ fn every_fixture_writes_back_to_itself() {
     for name in FIXTURES {
         let parsed = parse_fixture(name);
         let written = check_fixed_point(&parsed);
-        assert!(written.ends_with("END\n"), "{name} has no file END");
+        // The writer states the file END after the cases, and then the
+        // statements the file stated after its own END.
+        let after_end = parsed
+            .set
+            .retained
+            .iter()
+            .filter(|kept| kept.after_end)
+            .count();
+        let lines: Vec<&str> = written.lines().collect();
+        assert_eq!(
+            lines[lines.len() - after_end - 1],
+            "END",
+            "{name} has no file END"
+        );
     }
 }
 
@@ -316,7 +329,9 @@ fn automatic_specifications_skip_rules_and_text_after_the_file_end() {
     assert_eq!(parsed.set.retained.len(), 1);
     assert_eq!(parsed.set.retained[0].text, "BUSNAMES");
     assert_eq!(parsed.set.retained[0].line, 9);
+    assert!(parsed.set.retained[0].after_end);
     let written = parsed.set.to_con();
+    assert!(written.ends_with("END\nBUSNAMES\n"));
     assert!(written.contains("SINGLE TIE FROM SUBSYSTEM 'X'"));
     assert!(written.contains("SINGLE BRANCH IN SUBSYSTEM 'X' 3WLOWVOLTAGE"));
     assert!(written.contains("SKIP\n"));
@@ -325,13 +340,25 @@ fn automatic_specifications_skip_rules_and_text_after_the_file_end() {
 #[test]
 fn tara_statements_keep_their_lines_and_are_reported() {
     let parsed = parse_fixture("tara_extensions.con");
-    assert_eq!(
-        codes(&parsed),
-        vec![
-            "READ.CON.STATEMENT_UNRECOGNIZED",
-            "READ.CON.STATEMENT_UNRECOGNIZED",
-            "READ.CON.STATEMENT_UNRECOGNIZED",
-        ]
+    // BUSNUMBERS, the bus-name mode line, the three dispatch blocks, and
+    // BRANCHNAMES, in line order.
+    assert_eq!(codes(&parsed), vec!["READ.CON.STATEMENT_UNRECOGNIZED"; 6]);
+    let messages: Vec<&str> = parsed
+        .diagnostics
+        .iter()
+        .map(powerio_core::Diagnostic::message)
+        .collect();
+    assert!(
+        messages[2].starts_with("line 6: dispatch block"),
+        "{messages:?}"
+    );
+    assert!(
+        messages[3].starts_with("line 10: dispatch block"),
+        "{messages:?}"
+    );
+    assert!(
+        messages[4].starts_with("line 14: dispatch block"),
+        "{messages:?}"
     );
     assert_eq!(
         parsed.set.header,
@@ -498,6 +525,7 @@ fn a_statement_outside_a_case_is_kept_at_file_level() {
     assert!(parsed.set.cases.is_empty());
     assert_eq!(parsed.set.retained[0].text, "OPEN LINE FROM BUS 1 TO BUS 2");
     assert_eq!(parsed.set.retained[0].line, 1);
+    assert!(!parsed.set.retained[0].after_end);
 }
 
 #[test]
@@ -536,16 +564,21 @@ fn a_skip_line_that_states_no_branch_is_reported_and_kept() {
     assert_eq!(parsed.set.retained[0].text, "ALL TIES");
 }
 
-#[test]
-fn the_note_budget_bounds_the_reader() {
+/// A case holding `findings` statements the grammar does not cover.
+fn unreadable_case(findings: usize) -> ContingencyParsed {
     use std::fmt::Write as _;
 
     let mut text = String::from("CONTINGENCY 'A'\n");
-    for index in 0..50 {
+    for index in 0..findings {
         let _ = writeln!(text, "NOT A STATEMENT {index}");
     }
     text.push_str("END\n");
-    let parsed = ContingencySet::parse(&text).expect("parse");
+    ContingencySet::parse(&text).expect("parse")
+}
+
+#[test]
+fn the_note_budget_bounds_the_reader() {
+    let parsed = unreadable_case(50);
     assert_eq!(parsed.diagnostics.len(), 17);
     assert_eq!(
         parsed
@@ -556,6 +589,54 @@ fn the_note_budget_bounds_the_reader() {
     );
     // Every line is still kept, only the notes stop.
     assert_eq!(parsed.set.cases[0].actions.len(), 50);
+}
+
+#[test]
+fn a_file_of_exactly_the_budget_gets_no_truncation_marker() {
+    let parsed = unreadable_case(16);
+    assert_eq!(codes(&parsed), vec!["READ.CON.STATEMENT_UNRECOGNIZED"; 16]);
+}
+
+#[test]
+fn one_finding_past_the_budget_records_the_marker_in_its_place() {
+    let parsed = unreadable_case(17);
+    let mut expected = vec!["READ.CON.STATEMENT_UNRECOGNIZED"; 16];
+    expected.push("READ.CON.NOTES_TRUNCATED");
+    assert_eq!(codes(&parsed), expected);
+    assert_eq!(parsed.set.cases[0].actions.len(), 17);
+}
+
+#[test]
+fn statements_after_the_file_end_are_written_after_the_end() {
+    let parsed = ContingencySet::parse("END\nCONTINGENCY 'B'\nEND\n").expect("parse");
+    assert_eq!(codes(&parsed), vec!["READ.CON.TEXT_AFTER_END"]);
+    assert!(parsed.set.cases.is_empty());
+    let retained: Vec<&str> = parsed
+        .set
+        .retained
+        .iter()
+        .map(|statement| statement.text.as_str())
+        .collect();
+    assert_eq!(retained, vec!["CONTINGENCY 'B'", "END"]);
+    assert!(
+        parsed
+            .set
+            .retained
+            .iter()
+            .all(|statement| statement.after_end)
+    );
+    assert_eq!(parsed.set.to_con(), "END\nCONTINGENCY 'B'\nEND\n");
+    check_fixed_point(&parsed);
+}
+
+#[test]
+fn a_skip_block_after_the_file_end_stays_text() {
+    let parsed = ContingencySet::parse("END\nSKIP\n100 TO 200 CIRCUIT 1\nEND\n").expect("parse");
+    assert!(parsed.set.skips.is_empty());
+    let again = ContingencySet::parse(&parsed.set.to_con()).expect("read the written set");
+    assert!(again.set.skips.is_empty());
+    assert_eq!(again.set.retained.len(), 3);
+    check_fixed_point(&parsed);
 }
 
 #[test]

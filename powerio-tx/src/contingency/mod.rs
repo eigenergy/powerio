@@ -15,9 +15,9 @@
 //! ```
 //!
 //! [`ContingencySet::parse`] reads UTF-8 text and touches no filesystem.
-//! Statements outside the grammar below keep their original line and are
-//! reported, so a file reads completely rather than failing on the first line
-//! a tool wrote for itself. [`ContingencySet::to_con`] writes the set back in
+//! Statements outside the grammar below keep their line, with surrounding
+//! whitespace dropped, and are reported, so a file reads completely rather
+//! than failing on the first line a tool wrote for itself. [`ContingencySet::to_con`] writes the set back in
 //! one canonical spelling. Only a case that never closes, a case that starts
 //! inside another, and a block left open at end of input are errors.
 //!
@@ -26,6 +26,8 @@
 //! module: it holds what the file states.
 
 mod lexer;
+
+use std::cmp::Ordering;
 
 use lexer::{LexedLine, LineKind, lex};
 
@@ -56,7 +58,7 @@ pub struct ContingencySet {
     /// Branches excluded from automatic expansion.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skips: Vec<SkipRule>,
-    /// File level statements outside the grammar, kept as their original line.
+    /// File level statements outside the grammar, kept as their trimmed line.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub retained: Vec<RetainedStatement>,
 }
@@ -110,8 +112,8 @@ pub enum ContingencyAction {
     ChangeLoad { bus: BusId, change: Change },
     /// The bus generation moves by the stated amount.
     ChangeGeneration { bus: BusId, change: Change },
-    /// A statement outside the grammar, kept as its original line. A nested
-    /// dispatch block keeps all of its lines, joined with newlines.
+    /// A statement outside the grammar, kept as its trimmed line. A nested
+    /// dispatch block keeps all of its trimmed lines, joined with newlines.
     Unrecognized { text: String },
 }
 
@@ -119,8 +121,13 @@ pub enum ContingencyAction {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Change {
+    /// Whether the amount adds to, subtracts from, or replaces the value.
     pub op: ChangeOp,
+    /// How far the value moves, in `unit`. Finite: a line stating a non-finite
+    /// amount does not read as a change and keeps its text, because no written
+    /// form of one reads back.
     pub amount: f64,
+    /// The unit the amount is stated in.
     pub unit: ChangeUnit,
 }
 
@@ -189,13 +196,19 @@ pub struct SkipRule {
     pub circuit: String,
 }
 
-/// A file level statement kept as its original line, with the 1-based line it
-/// was read from.
+/// A file level statement outside the grammar, kept as text.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RetainedStatement {
+    /// The 1-based line the statement was read from.
     pub line: usize,
+    /// The statement's line, with leading and trailing whitespace dropped.
     pub text: String,
+    /// Whether the line follows the file level `END`. The writer states these
+    /// after the `END` it writes, so reading the written file places them
+    /// after the terminator again rather than reading them as grammar.
+    #[serde(default)]
+    pub after_end: bool,
 }
 
 /// Output of a tolerant contingency read: the set plus the reader's notes on
@@ -209,18 +222,17 @@ pub struct ContingencyParsed {
 }
 
 impl ContingencyParsed {
-    /// Record one note, within the reader's note budget. The note that stands
-    /// for the notes past the budget is itself recorded once.
+    /// Record one note, within the reader's note budget. A file with exactly
+    /// the budget of findings gets that many notes and no marker; the first
+    /// note past the budget is replaced by one marker, recorded once.
     fn note(&mut self, info: &'static crate::diagnostics::DiagnosticInfo, message: String) {
-        if self.diagnostics.len() >= MAX_READER_NOTES {
-            return;
-        }
-        self.diagnostics.push(Diagnostic::of(info, message));
-        if self.diagnostics.len() == MAX_READER_NOTES {
-            self.diagnostics.push(Diagnostic::of(
+        match self.diagnostics.len().cmp(&MAX_READER_NOTES) {
+            Ordering::Less => self.diagnostics.push(Diagnostic::of(info, message)),
+            Ordering::Equal => self.diagnostics.push(Diagnostic::of(
                 &codes::READ_CON_NOTES_TRUNCATED,
                 "further reader notes suppressed",
-            ));
+            )),
+            Ordering::Greater => {}
         }
     }
 
@@ -228,6 +240,14 @@ impl ContingencyParsed {
         self.note(
             &codes::READ_CON_STATEMENT_UNRECOGNIZED,
             format!("line {number}: statement kept as text: {text}"),
+        );
+    }
+
+    /// Report a dispatch block, whose lines are kept as one statement.
+    fn dispatch_block(&mut self, number: usize, text: &str) {
+        self.note(
+            &codes::READ_CON_STATEMENT_UNRECOGNIZED,
+            format!("line {number}: dispatch block kept as text: {text}"),
         );
     }
 }
@@ -255,10 +275,12 @@ struct OpenBlock {
 impl ContingencySet {
     /// Read a `.con` file from UTF-8 text. Keywords are case insensitive.
     ///
-    /// A statement the grammar does not cover keeps its original line, in
+    /// A statement the grammar does not cover keeps its line, with
+    /// surrounding whitespace dropped, in
     /// [`ContingencyAction::Unrecognized`] inside a case or in
     /// [`ContingencySet::retained`] at file level, and is reported. Lines after
-    /// a file level `END` are kept the same way and reported once.
+    /// a file level `END` are kept the same way, marked
+    /// [`RetainedStatement::after_end`], and reported once.
     ///
     /// # Errors
     /// [`Error::FormatRead`] when a `CONTINGENCY` starts before the previous
@@ -274,8 +296,8 @@ impl ContingencySet {
 
     /// Write the set as `.con` text: the header lines as written, the
     /// automatic specifications, one `SKIP` block, the cases in order, the
-    /// file level statements kept as text, and a final `END`. Every line ends
-    /// with a newline.
+    /// file level statements kept as text, a final `END`, and then the
+    /// statements read after the file `END`. Every line ends with a newline.
     ///
     /// Reading the result back gives the same set, except that a statement
     /// kept from the middle of a file is written after the cases and so reads
@@ -314,11 +336,15 @@ impl ContingencySet {
             }
             out.push_str("END\n");
         }
-        for statement in &self.retained {
+        for statement in self.retained.iter().filter(|kept| !kept.after_end) {
             out.push_str(&statement.text);
             out.push('\n');
         }
         out.push_str("END\n");
+        for statement in self.retained.iter().filter(|kept| kept.after_end) {
+            out.push_str(&statement.text);
+            out.push('\n');
+        }
         out
     }
 }
@@ -438,6 +464,7 @@ impl Reader {
             None => self.parsed.set.retained.push(RetainedStatement {
                 line: open.opened,
                 text,
+                after_end: false,
             }),
         }
     }
@@ -456,13 +483,17 @@ impl Reader {
                 format!("line {}: text follows the file END", line.number),
             );
         }
-        self.keep_statement(line);
+        self.keep_statement(line, true);
     }
 
-    fn keep_statement(&mut self, line: &LexedLine<'_>) {
+    /// Keep one line as a file level statement. `after_end` marks a line the
+    /// file states after its `END`, which the writer states after the `END` it
+    /// writes.
+    fn keep_statement(&mut self, line: &LexedLine<'_>, after_end: bool) {
         self.parsed.set.retained.push(RetainedStatement {
             line: line.number,
             text: line.trimmed().to_owned(),
+            after_end,
         });
     }
 
@@ -483,7 +514,7 @@ impl Reader {
                 line.trimmed()
             ),
         );
-        self.keep_statement(line);
+        self.keep_statement(line, false);
     }
 
     fn read_case_line(
@@ -543,13 +574,14 @@ impl Reader {
                     self.parsed.set.automatic.push(spec);
                 } else {
                     self.parsed.unrecognized(line.number, line.trimmed());
-                    self.keep_statement(line);
+                    self.keep_statement(line, false);
                 }
             }
         }
     }
 
     fn open_block(&mut self, line: &LexedLine<'_>) {
+        self.parsed.dispatch_block(line.number, line.trimmed());
         self.block = Some(OpenBlock {
             opened: line.number,
             lines: vec![line.trimmed().to_owned()],
