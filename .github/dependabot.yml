@@ -1,0 +1,54 @@
+# Minor and patch updates arrive grouped, one pull request per ecosystem per
+# week. Major updates stay ungrouped so each one gets its own review.
+version: 2
+updates:
+  # `/` and `/fuzz` are the cargo manifest roots outside `evals/`. Only `/` has a
+  # `Cargo.lock`, so `/fuzz` updates the declared ranges. The two manifests under
+  # `evals/` sit outside the workspace and outside the required CI jobs.
+  - package-ecosystem: cargo
+    directories:
+      - "/"
+      - "/fuzz"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: pip
+    directories:
+      - "/"
+      - "/evals/validation"
+      - "/evals/powsybl"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      pip-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  # The three dtolnay/rust-toolchain pins point at branch tips (stable,
+  # nightly, master) rather than at a released tag. The github-actions updater
+  # advances a SHA pin only when that SHA resolves to a tag and a newer tag
+  # exists, so those three need a manual refresh.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      actions-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch

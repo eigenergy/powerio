@@ -35,7 +35,7 @@ jobs:
     name: Encoding (no BOM, no mojibake)
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     # Windows editors have twice corrupted text files in PRs: CRLF in vendored
     # fixtures (#73, now pinned via .gitattributes) and UTF-8 re-encoded as
     # cp1252 plus a BOM (#77). .gitattributes can't catch the latter two, so
@@ -74,8 +74,8 @@ jobs:
     name: rustfmt
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
-    - uses: dtolnay/rust-toolchain@stable
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       with:
         components: rustfmt
     # The tree is rustfmt-clean (style_edition 2024); keep it that way.
@@ -88,14 +88,14 @@ jobs:
     name: MSRV (rust-version)
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - name: Read rust-version
       id: msrv
       run: echo "version=$(grep -oE '^rust-version = "[0-9.]+"' Cargo.toml | grep -oE '[0-9.]+')" >> "$GITHUB_OUTPUT"
-    - uses: dtolnay/rust-toolchain@master
+    - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
       with:
         toolchain: ${{ steps.msrv.outputs.version }}
-    - uses: Swatinem/rust-cache@v2
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
     - name: Check the publishable crates on the minimum toolchain
       run: cargo check --locked --workspace --exclude powerio-py --exclude powerio-capi
 
@@ -105,9 +105,9 @@ jobs:
     name: Generated schemas match
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
-    - uses: dtolnay/rust-toolchain@stable
-    - uses: Swatinem/rust-cache@v2
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
     - name: Check generated JSON schemas
       # `git status --porcelain` catches both an edited schema and an
       # accidentally untracked schema file.
@@ -126,8 +126,8 @@ jobs:
     name: Published crate archives
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
-    - uses: dtolnay/rust-toolchain@stable
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
     - name: Build publishable crate archives
       run: cargo package --workspace --exclude powerio-capi --exclude powerio-py --locked --no-verify
     - name: Audit licenses and excluded fixtures
@@ -138,11 +138,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
-    - uses: dtolnay/rust-toolchain@stable
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       with:
         components: clippy
-    - uses: Swatinem/rust-cache@v2
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
     - name: Build
       run: cargo build --verbose
     # Deny the workspace pedantic lints on the non-extension crates. The PyO3
@@ -196,9 +196,9 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest]
     steps:
-    - uses: actions/checkout@v6
-    - uses: dtolnay/rust-toolchain@stable
-    - uses: Swatinem/rust-cache@v2
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
     - name: Test powerio-core
       run: cargo test -p powerio-core --verbose
     - name: Build powerio-capi (dist feature)
@@ -236,11 +236,11 @@ jobs:
     name: wasm32 check
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
-    - uses: dtolnay/rust-toolchain@stable
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       with:
         targets: wasm32-unknown-unknown
-    - uses: Swatinem/rust-cache@v2
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
     - name: Check wasm32 component crates
       run: |
         cargo check --target wasm32-unknown-unknown -p powerio -p powerio-tx -p powerio-dist \
@@ -251,11 +251,11 @@ jobs:
     name: C ABI (core no-default + C smoke test)
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
-    - uses: dtolnay/rust-toolchain@stable
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       with:
         components: clippy
-    - uses: Swatinem/rust-cache@v2
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
     - name: Build powerio-capi --no-default-features
       run: cargo build -p powerio-capi --release --no-default-features
     # Every `pio_` export in the Rust source must be declared in the checked-in
@@ -300,7 +300,7 @@ jobs:
         LD_LIBRARY_PATH=target/release ./pio_smoke_san tests/data/case9.m
     # A small Go client drives the same ownership paths through cgo, so the
     # handle rules hold from a third runtime.
-    - uses: actions/setup-go@v5
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version: stable
     - name: Go client exercises the ABI ownership paths
@@ -325,11 +325,11 @@ jobs:
     name: Miri (C ABI handle core)
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
-    - uses: dtolnay/rust-toolchain@nightly
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    - uses: dtolnay/rust-toolchain@be39649afda95dbf70f87cce95f68b8d5797b296 # nightly
       with:
         components: miri
-    - uses: Swatinem/rust-cache@v2
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
     # The unsafe ownership helpers behind every ABI v6 handle, under Miri.
     # FFI entry points cannot run under Miri; the pure handle core can.
     - name: Miri over the handle lifecycle
@@ -339,11 +339,11 @@ jobs:
     name: C ABI (arrow feature)
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
-    - uses: dtolnay/rust-toolchain@stable
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       with:
         components: clippy
-    - uses: Swatinem/rust-cache@v2
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
     - name: Build powerio-capi --features arrow
       run: cargo build -p powerio-capi --release --features arrow
     # The cfg-gated pio_to_arrow still appears in the source symbol grep, so
@@ -366,11 +366,11 @@ jobs:
     name: C ABI (release features)
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
-    - uses: dtolnay/rust-toolchain@stable
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       with:
         components: clippy
-    - uses: Swatinem/rust-cache@v2
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
     - name: Build powerio-capi --features arrow,matrix,gridfm,dist,prob
       run: cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,prob
     # The cfg-gated optional symbols still appear in the source symbol grep,
@@ -403,11 +403,11 @@ jobs:
     name: C ABI (dist feature)
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
-    - uses: dtolnay/rust-toolchain@stable
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       with:
         components: clippy
-    - uses: Swatinem/rust-cache@v2
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
     - name: Build powerio-capi --features dist
       run: cargo build -p powerio-capi --release --features dist
     # The cfg-gated pio_dist_* entry points still appear in the source symbol
@@ -431,8 +431,8 @@ jobs:
     name: Core (FreeBSD)
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
-    - uses: dtolnay/rust-toolchain@stable
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       with:
         targets: x86_64-unknown-freebsd
     - run: cargo check -p powerio-core --target x86_64-unknown-freebsd --locked
