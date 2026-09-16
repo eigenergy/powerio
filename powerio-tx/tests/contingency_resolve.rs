@@ -8,7 +8,9 @@ mod helpers;
 use common::*;
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use powerio_core::ComponentId;
 use powerio_tx::network::BalancedNetwork;
 use powerio_tx::{
     BusId, ContingencyResolution, ContingencySet, PsseEquipmentIndex, ResolvedCase,
@@ -321,5 +323,189 @@ fn the_index_is_reusable_across_sets() {
     let net = resolve_network();
     let index = PsseEquipmentIndex::new(&net);
     let set = resolve_cases();
-    assert_eq!(set.resolve_with(&net, &index), set.resolve(&net));
+    assert_eq!(set.resolve_with(&index), set.resolve(&net));
+    assert_eq!(index.network().buses().len(), net.buses().len());
+}
+
+#[test]
+fn two_transformers_on_one_bus_triple_bind_to_neither() {
+    let mut net = resolve_network();
+    // The writer allocates a three winding transformer's id per ordered bus
+    // triple, so a second transformer on the same three buses in a different
+    // winding order takes the same id.
+    let mut reordered = net.transformers_3w()[0].clone();
+    reordered.uid = Some("reordered-3w".to_owned());
+    reordered.windings.swap(0, 2);
+    net.transformers_3w_mut().push(reordered);
+
+    let index = PsseEquipmentIndex::new(&net);
+    let windings = [BusId(2), BusId(4), BusId(5)];
+    assert_eq!(index.transformer_3w_rows(windings, "1"), vec![0, 1]);
+
+    let resolution = resolve_cases().resolve(&net);
+    let case = case(&resolution, "THREE_WINDING");
+    assert_eq!(
+        case.unresolved[0].reason,
+        UnresolvedReason::AmbiguousTransformer3w { matches: 2 }
+    );
+    assert!(case.components.is_empty());
+    let note = resolution
+        .diagnostics()
+        .into_iter()
+        .find(|note| note.message().contains("THREE_WINDING"))
+        .expect("the ambiguous case is reported");
+    assert!(note.message().contains("names 2 transformers"), "{note:?}");
+}
+
+#[test]
+fn a_line_and_a_two_winding_transformer_on_one_pair_are_keyed_apart() {
+    let mut net = resolve_network();
+    // The writer allocates the line ids and the transformer ids in separate
+    // namespaces, so a transformer between buses 1 and 2 takes circuit '1'
+    // just as the line stored 1-2 already does.
+    let mut transformer = net.branches()[0].clone();
+    transformer.uid = Some("xf-1-2".to_owned());
+    transformer.extras.remove("id");
+    transformer.tap = 1.05;
+    net.branches_mut().push(transformer);
+
+    let index = PsseEquipmentIndex::new(&net);
+    assert_eq!(index.circuit_ids(), ["1", "2", "1", "BL", "1", "1"]);
+    // The lines answer the statement; the transformer answers only a circuit
+    // id no line carries.
+    assert_eq!(index.branch_rows(BusId(1), BusId(2), "1"), vec![0]);
+    assert_eq!(index.branch_rows(BusId(1), BusId(2), "2"), vec![1]);
+
+    let resolution = resolve_cases().resolve(&net);
+    assert_eq!(bound(&resolution, "BR_1_2_C1"), [("branch", 0, true)]);
+}
+
+/// Set the retained PSS/E id of one generator, the property the index reads
+/// when it recomputes the machine ids.
+fn set_machine_eqid(net: &mut BalancedNetwork, uid: &str, eqid: &str) {
+    let component = ComponentId::new("generator", uid).expect("a generator identity");
+    let detailed = net
+        .detailed_connectivity_mut()
+        .as_mut()
+        .expect("the PSS/E reader states detailed connectivity");
+    let detailed = Arc::make_mut(detailed);
+    if let Some(metadata) = detailed
+        .component_metadata
+        .iter_mut()
+        .find(|metadata| metadata.component == component)
+    {
+        metadata
+            .properties
+            .insert("psse_eqid".to_owned(), eqid.to_owned());
+        return;
+    }
+    let mut added = detailed
+        .component_metadata
+        .iter()
+        .find(|metadata| metadata.component.component_type() == "generator")
+        .expect("the fixture states generator metadata")
+        .clone();
+    added.component = component;
+    added.properties.clear();
+    added
+        .properties
+        .insert("psse_eqid".to_owned(), eqid.to_owned());
+    detailed.component_metadata.push(added);
+}
+
+/// PSS/E forbids an apostrophe inside a quoted field, so the writer replaces
+/// one with a space. Two ids that differ only in what the replacement left
+/// behind are two ids, and each names its own row.
+#[test]
+fn a_sanitized_id_does_not_take_another_row_s_place() {
+    let mut net = resolve_network();
+
+    net.loads_mut()[0]
+        .extras
+        .insert("id".to_owned(), serde_json::Value::String("a'".to_owned()));
+    net.loads_mut()[1]
+        .extras
+        .insert("id".to_owned(), serde_json::Value::String("a".to_owned()));
+    net.shunts_mut()[0]
+        .extras
+        .insert("id".to_owned(), serde_json::Value::String("a'".to_owned()));
+    net.shunts_mut()[1]
+        .extras
+        .insert("id".to_owned(), serde_json::Value::String("a".to_owned()));
+
+    let third = net.generators()[2].uid.clone().expect("a generator uid");
+    let fourth = net.generators()[3].uid.clone().expect("a generator uid");
+    set_machine_eqid(&mut net, &third, "a'");
+    set_machine_eqid(&mut net, &fourth, "a");
+
+    let index = PsseEquipmentIndex::new(&net);
+    assert_eq!(index.machine_ids(), ["1", "2", "a ", "a"]);
+
+    // Each row answers to the id the writer states for it, and only that one.
+    assert_eq!(index.machine_row(BusId(2), "a "), Some(2));
+    assert_eq!(index.machine_row(BusId(2), "a"), Some(3));
+    assert_eq!(index.load_rows(BusId(4), Some("a ")), vec![0]);
+    assert_eq!(index.load_rows(BusId(4), Some("a")), vec![1]);
+    assert_eq!(index.load_rows(BusId(4), None), vec![0, 1]);
+    assert_eq!(index.fixed_shunt_rows(BusId(3), Some("a ")), vec![0]);
+    assert_eq!(index.fixed_shunt_rows(BusId(3), Some("a")), vec![1]);
+}
+
+#[test]
+fn the_resolution_notes_stop_at_the_budget() {
+    use std::fmt::Write as _;
+
+    let net = resolve_network();
+    let mut text = String::new();
+    for index in 0..20 {
+        let _ = writeln!(
+            text,
+            "CONTINGENCY 'C{index}'\nOPEN LINE FROM BUS 800 TO BUS 900 CIRCUIT 1\nEND"
+        );
+    }
+    text.push_str("END\n");
+    let set = ContingencySet::parse(&text).expect("parse").set;
+
+    let resolution = set.resolve(&net);
+    assert_eq!(resolution.unresolved, 20);
+    let notes = resolution.diagnostics();
+    assert_eq!(notes.len(), 17);
+    assert!(
+        notes[..16]
+            .iter()
+            .all(|note| note.code() == "BUILD.CON.CASE_UNRESOLVED")
+    );
+    assert_eq!(notes[16].code(), "BUILD.CON.NOTES_TRUNCATED");
+}
+
+#[test]
+fn every_reason_states_its_snake_case_name() {
+    let names: Vec<&str> = [
+        UnresolvedReason::NoSuchBus,
+        UnresolvedReason::NoSuchBranch,
+        UnresolvedReason::AmbiguousBranch { matches: 2 },
+        UnresolvedReason::AmbiguousTransformer3w { matches: 2 },
+        UnresolvedReason::NoSuchMachine,
+        UnresolvedReason::NoSuchShunt,
+        UnresolvedReason::NoSuchLoad,
+        UnresolvedReason::NoSuchTransformer3w,
+        UnresolvedReason::Unrecognized,
+    ]
+    .iter()
+    .map(UnresolvedReason::name)
+    .collect();
+    assert_eq!(
+        names,
+        [
+            "no_such_bus",
+            "no_such_branch",
+            "ambiguous_branch",
+            "ambiguous_transformer_3w",
+            "no_such_machine",
+            "no_such_shunt",
+            "no_such_load",
+            "no_such_transformer_3w",
+            "unrecognized",
+        ]
+    );
 }

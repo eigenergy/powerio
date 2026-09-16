@@ -223,18 +223,31 @@ the words PSS/E itself would address it by.
 | load, fixed shunt, switched shunt | `extras["id"]` | the bus, each family allocated apart |
 | three winding transformer | `extras["id"]`, else the retained `psse_eqid` | the position among the transformers on the same ordered bus triple |
 
+Every family is keyed on the id the writer allocates, character for character.
+PSS/E forbids an apostrophe inside a quoted field and the writer replaces one
+with a space, so two ids that differ only in what that replacement left behind
+are two ids, and each names its own row.
+
 A branch lookup reads both orientations, so a statement naming `1 TO 3` finds a
-branch stored `3 1`. A self-loop is counted once. Zero rows is not found; more
-than one is ambiguous and binds to nothing, which happens when two parallel
-branches are stored in opposite terminal orders and take the same circuit id. A
-three winding transformer matches on its three buses in any order.
+branch stored `3 1`. A self-loop is counted once. The lines are keyed apart
+from the two winding transformers, because the writer allocates the two
+families in separate namespaces and a line and a transformer on one terminal
+pair therefore both carry circuit `1`. A lookup reads the lines first and the
+transformers only when no line carries the circuit id, so that pair of rows
+states one branch rather than an ambiguity.
+
+Zero rows is not found. More than one is ambiguous and binds to nothing, which
+happens when two parallel branches of one family are stored in opposite
+terminal orders and take the same circuit id. A three winding transformer
+matches on its three buses in any order, and two transformers on one bus triple
+stored in different winding orders are ambiguous the same way.
 
 ### What each statement binds to
 
 | Action | Binds to | Not found |
 | --- | --- | --- |
 | `OpenBranch` | the one `branch` row | `NoSuchBranch`, or `AmbiguousBranch` past one row |
-| `OpenThreeWinding` | the `transformer_3w` row | `NoSuchTransformer3w` |
+| `OpenThreeWinding` | the one `transformer_3w` row | `NoSuchTransformer3w`, or `AmbiguousTransformer3w` past one row |
 | `RemoveMachine`, `AddMachine` | the `generator` row | `NoSuchMachine` |
 | `RemoveShunt` | the fixed `shunt` with that id, or every fixed shunt at the bus | `NoSuchShunt` |
 | `RemoveSwitchedShunt` | every switched `shunt` at the bus | `NoSuchShunt` |
@@ -255,10 +268,23 @@ states it now. A bus is in service when its type is anything other than
 isolated. An element already out of service still binds, because outaging it
 changes nothing. A case with no actions resolves to no components.
 
+The `.con` grammar states `REMOVE SWSHUNT FROM BUS i` and carries no id, as the
+RAW switched shunt record itself does not, so the statement addresses every
+switched shunt at the bus.
+
+Every reason states a snake_case `name`, the same string the C ABI and Python
+report: `no_such_bus`, `no_such_branch`, `ambiguous_branch`,
+`ambiguous_transformer_3w`, `no_such_machine`, `no_such_shunt`, `no_such_load`,
+`no_such_transformer_3w`, `unrecognized`.
+
 Resolution reports rather than refuses. A case holding any unresolved action is
 counted unresolved and earns one `BUILD.CON.CASE_UNRESOLVED` note naming the
 case and its first unresolved action; the actions of that case that did bind
-stay listed, so a caller can see how far the case got.
+stay listed, so a caller can see how far the case got. The notes stop at the
+reader's budget of 16: the first case past it records one
+`BUILD.CON.NOTES_TRUNCATED` in place of its note and the cases after that
+record nothing, so a set resolved against the wrong network cannot grow the
+note list without limit. Every case is still counted.
 
 ## A later convergence point
 

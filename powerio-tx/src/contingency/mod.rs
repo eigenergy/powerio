@@ -28,7 +28,7 @@
 //! holds it.
 
 mod lexer;
-pub mod resolve;
+mod resolve;
 
 use std::cmp::Ordering;
 
