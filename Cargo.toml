@@ -55,7 +55,7 @@ powerio-dist = { path = "powerio-dist", version = "0.11.2" }
 # Cross-crate type identity: `CsMat<f64>` (sprs) and the Arrow types cross crate
 # boundaries, so every crate must build against the same major.
 sprs = { version = "0.11", default-features = false }
-arrow = { version = "59", default-features = false }
+arrow = { version = "60", default-features = false }
 faer = { version = "0.24.4", default-features = false, features = ["std", "sparse-linalg"] }
 num-complex = "0.4"
 serde = { version = "1", features = ["derive", "rc"] }
