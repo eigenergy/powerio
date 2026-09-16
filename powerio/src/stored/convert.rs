@@ -1095,7 +1095,7 @@ fn encode_lindist3flow_opf_instance(
     instance: &powerio_prob::LinDist3FlowOpfInstance,
 ) -> Result<dto::LinDist3FlowOpfInstance> {
     Ok(dto::LinDist3FlowOpfInstance {
-        base: encode_mc_ac_opf_instance(instance.base_instance())?,
+        base: encode_mc_ac_opf_instance(instance.source_instance())?,
         options: dto::LinDist3FlowBuildOptions {
             reference_policy: match instance.options().reference_policy {
                 powerio_prob::LinDist3FlowReferencePolicy::Auto => {

@@ -32,6 +32,9 @@ pub enum Error {
 
     #[error("neutral Kron reduction failed: {message}")]
     KronReduction { message: String },
+
+    #[error("LinDist3Flow preparation failed: {message}")]
+    LinDist3FlowPreparation { message: String },
 }
 
 impl Error {
@@ -45,6 +48,9 @@ impl Error {
             Error::FormatRead { .. } => &codes::PARSE_DIST_SOURCE_MALFORMED,
             Error::UnknownFormat(_) => &codes::REQUEST_DIST_FORMAT_UNKNOWN,
             Error::KronReduction { .. } => &codes::TRANSFORM_DIST_KRON_REDUCTION_FAILED,
+            Error::LinDist3FlowPreparation { .. } => {
+                &codes::TRANSFORM_DIST_LINDIST3FLOW_PREPARATION_FAILED
+            }
         }
     }
 
@@ -55,7 +61,9 @@ impl Error {
             Error::Io { .. } => ErrorCategory::Io,
             Error::Json { .. } | Error::FormatRead { .. } => ErrorCategory::Parse,
             Error::UnknownFormat(_) => ErrorCategory::Request,
-            Error::KronReduction { .. } => ErrorCategory::Data,
+            Error::KronReduction { .. } | Error::LinDist3FlowPreparation { .. } => {
+                ErrorCategory::Data
+            }
         }
     }
 }
@@ -82,6 +90,9 @@ mod tests {
             Error::UnknownFormat("xyz".into()),
             Error::KronReduction {
                 message: "ambiguous neutral".into(),
+            },
+            Error::LinDist3FlowPreparation {
+                message: "unsupported transformer".into(),
             },
         ];
         for error in &every {

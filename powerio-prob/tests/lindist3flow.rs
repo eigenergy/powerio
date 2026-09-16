@@ -1,11 +1,13 @@
 use powerio_dist::{
-    Configuration, DistBus, DistGenerator, DistLine, DistLineCode, DistLoadVoltageModel,
-    DistSwitch, MulticonductorNetwork, NeutralKronOptions, VoltageSource, neutral_kron_reduce,
+    Configuration, DistBus, DistCapacitor, DistGenerator, DistIbr, DistLine, DistLineCode,
+    DistLoadVoltageModel, DistSwitch, IbrPrimeMover, IbrTopology,
+    LinDist3FlowPreparationActionKind, MulticonductorNetwork, NeutralKronOptions, VoltageSource,
+    neutral_kron_reduce,
 };
 use powerio_prob::{
     LinDist3FlowBuildOptions, LinDist3FlowOpfInstance, LinDist3FlowReferencePolicy,
-    LinDist3FlowReferenceProvenance, McAcOpfInstance, MulticonductorOperatingPointBuilder,
-    Objective, check_lindist3flow_applicability,
+    LinDist3FlowReferenceProvenance, LinDist3FlowUnsupported, McAcOpfInstance,
+    MulticonductorOperatingPointBuilder, Objective, check_lindist3flow_applicability,
 };
 
 fn terminals(names: &[&str]) -> Vec<String> {
@@ -397,6 +399,95 @@ fn strict_slice_reports_unsupported_components_and_load_models() {
             })
             .count(),
         2
+    );
+}
+
+#[test]
+fn lower_policy_prepares_static_switches_and_capacitors_without_mutating_source() {
+    let mut network = three_phase_network(false);
+    let mut switch = DistSwitch::new(
+        "tie",
+        "source",
+        "load",
+        terminals(&["1"]),
+        terminals(&["1"]),
+        false,
+    );
+    switch.i_max = Some(vec![100.0]);
+    network.switches_mut().push(switch);
+    network.capacitors_mut().push(DistCapacitor::new(
+        "bank",
+        "load",
+        terminals(&["1"]),
+        Configuration::Wye,
+        1_000.0,
+        230.0,
+    ));
+    let options =
+        LinDist3FlowBuildOptions::default().with_unsupported(LinDist3FlowUnsupported::Lower);
+    let instance = LinDist3FlowOpfInstance::from_network(network, options).unwrap();
+
+    assert_eq!(instance.source_network().switches().len(), 1);
+    assert_eq!(instance.source_network().capacitors().len(), 1);
+    assert!(instance.network().switches().is_empty());
+    assert!(instance.network().capacitors().is_empty());
+    assert!(instance.applicability().lowered);
+    assert!(
+        instance.preparation().actions.iter().any(|action| {
+            action.kind == LinDist3FlowPreparationActionKind::ClosedSwitchLowered
+        })
+    );
+    assert!(
+        instance
+            .preparation()
+            .actions
+            .iter()
+            .any(|action| { action.kind == LinDist3FlowPreparationActionKind::CapacitorLowered })
+    );
+}
+
+#[test]
+fn approximate_policy_prepares_current_loads_and_static_ibrs() {
+    let mut network = three_phase_network(false);
+    let mut load = powerio_dist::DistLoad::new(
+        "demand",
+        "load",
+        terminals(&["1"]),
+        Configuration::Wye,
+        vec![100.0],
+        vec![20.0],
+    );
+    load.voltage_model = DistLoadVoltageModel::ConstantCurrent { v_nom: vec![230.0] };
+    network.loads_mut().push(load);
+    let mut ibr = DistIbr::new(
+        "pv",
+        "load",
+        terminals(&["2"]),
+        IbrTopology::SinglePhase,
+        IbrPrimeMover::Pv,
+        vec![500.0],
+    );
+    ibr.p_avail = Some(400.0);
+    network.ibrs_mut().push(ibr);
+    let options =
+        LinDist3FlowBuildOptions::default().with_unsupported(LinDist3FlowUnsupported::Approximate);
+    let instance = LinDist3FlowOpfInstance::from_network(network, options).unwrap();
+
+    assert!(instance.network().ibrs().is_empty());
+    assert_eq!(instance.network().generators().len(), 1);
+    assert!(
+        instance
+            .preparation()
+            .actions
+            .iter()
+            .any(|action| { action.kind == LinDist3FlowPreparationActionKind::LoadApproximated })
+    );
+    assert!(
+        instance
+            .preparation()
+            .actions
+            .iter()
+            .any(|action| { action.kind == LinDist3FlowPreparationActionKind::IbrApproximated })
     );
 }
 

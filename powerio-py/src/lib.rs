@@ -4044,6 +4044,18 @@ impl PyPioModule {
         }
         result.set_item("conductors", conductors)?;
         result.set_item("meshed", instance.topology().meshed)?;
+        result.set_item("preparation_policy", instance.preparation().policy.as_str())?;
+        let actions = PyList::empty(py);
+        for action in &instance.preparation().actions {
+            let entry = PyDict::new(py);
+            entry.set_item("kind", action.kind.as_str())?;
+            entry.set_item("source", &action.source)?;
+            entry.set_item("target", action.target.as_deref())?;
+            let details = serde_json::to_value(&action.details).map_err(serialize_pyerr)?;
+            entry.set_item("details", json_value_to_py(py, &details)?)?;
+            actions.append(entry)?;
+        }
+        result.set_item("preparation_actions", actions)?;
         result.set_item(
             "roots",
             instance

@@ -10,10 +10,10 @@ use powerio_core::{PioModule, TimePoint};
 use powerio_prob::{
     AcOpfInstance, AcOpfSolution, AcPfInstance, AcPfSolution, AcScucSolution, DcOpfInstance,
     DcOpfSolution, DcPfInstance, DcPfSolution, LinDist3FlowBuildOptions, LinDist3FlowOpfInstance,
-    LinDist3FlowOpfSolution, LinDist3FlowOpfValues, McAcOpfInstance, McAcOpfSolution,
-    McAcPfInstance, McAcPfSolution, Objective, ObjectiveTerm, Residuals, ScucDeviceOutputs,
-    ScucNetworkOutputs, Termination, ThreeWindingTransformerTerminalActivePower,
-    ThreeWindingTransformerTerminalPower,
+    LinDist3FlowOpfSolution, LinDist3FlowOpfValues, LinDist3FlowPreparationActionKind,
+    LinDist3FlowUnsupported, McAcOpfInstance, McAcOpfSolution, McAcPfInstance, McAcPfSolution,
+    Objective, ObjectiveTerm, Residuals, ScucDeviceOutputs, ScucNetworkOutputs, Termination,
+    ThreeWindingTransformerTerminalActivePower, ThreeWindingTransformerTerminalPower,
 };
 use powerio_tx::{
     Branch, Bus, BusId, BusType, GenCost, Generator, Impedance, Load, Transformer3W, Winding,
@@ -135,6 +135,67 @@ fn every_instance_kind_round_trips() {
             .unwrap(),
         ),
         "lindist3flow_opf_instance",
+    );
+}
+
+#[test]
+fn lindist3flow_preparation_reconstructs_from_the_preserved_source_network() {
+    let mut network = mc_network();
+    let terminals = vec!["1".to_owned(), "2".to_owned(), "3".to_owned()];
+    network
+        .buses_mut()
+        .push(powerio_dist::DistBus::new("load", terminals.clone()));
+    network
+        .line_codes_mut()
+        .push(powerio_dist::DistLineCode::new(
+            "linecode",
+            vec![
+                vec![0.1, 0.0, 0.0],
+                vec![0.0, 0.1, 0.0],
+                vec![0.0, 0.0, 0.1],
+            ],
+            vec![
+                vec![0.05, 0.0, 0.0],
+                vec![0.0, 0.05, 0.0],
+                vec![0.0, 0.0, 0.05],
+            ],
+        ));
+    network.lines_mut().push(powerio_dist::DistLine::new(
+        "line",
+        "src",
+        "load",
+        terminals.clone(),
+        terminals,
+        "linecode",
+        1.0,
+    ));
+    network.switches_mut().push(powerio_dist::DistSwitch::new(
+        "tie",
+        "src",
+        "load",
+        vec!["1".to_owned()],
+        vec!["1".to_owned()],
+        false,
+    ));
+    let options =
+        LinDist3FlowBuildOptions::default().with_unsupported(LinDist3FlowUnsupported::Lower);
+    let text = round_trip(
+        PioValue::LinDist3FlowOpfInstance(
+            LinDist3FlowOpfInstance::from_network(network, options).unwrap(),
+        ),
+        "prepared_lindist3flow_opf_instance",
+    );
+    let back = deserialize(&text).unwrap();
+    let PioValue::LinDist3FlowOpfInstance(instance) = back.value() else {
+        panic!("expected LinDist3Flow OPF instance");
+    };
+
+    assert_eq!(instance.source_network().switches().len(), 1);
+    assert!(instance.network().switches().is_empty());
+    assert!(
+        instance.preparation().actions.iter().any(|action| {
+            action.kind == LinDist3FlowPreparationActionKind::ClosedSwitchLowered
+        })
     );
 }
 

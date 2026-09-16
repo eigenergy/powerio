@@ -59,6 +59,18 @@ pub mod codes {
             "the LinDist3Flow coefficient reference is missing or invalid", category = Data;
         BUILD_LINDIST3FLOW_POLICY_UNAVAILABLE = "BUILD.LINDIST3FLOW.POLICY_UNAVAILABLE", Error,
             "the requested LinDist3Flow projection policy is not implemented", category = Data;
+        BUILD_LINDIST3FLOW_PREPARATION_FAILED =
+            "BUILD.LINDIST3FLOW.PREPARATION_FAILED", Error,
+            "a selected LinDist3Flow component preparation failed", category = Data;
+        BUILD_LINDIST3FLOW_COMPONENT_LOWERED =
+            "BUILD.LINDIST3FLOW.COMPONENT_LOWERED", Warning,
+            "a distribution component was lowered to the LinDist3Flow vocabulary";
+        BUILD_LINDIST3FLOW_COMPONENT_APPROXIMATED =
+            "BUILD.LINDIST3FLOW.COMPONENT_APPROXIMATED", Warning,
+            "a distribution component was approximated for LinDist3Flow";
+        BUILD_LINDIST3FLOW_COMPONENT_OMITTED =
+            "BUILD.LINDIST3FLOW.COMPONENT_OMITTED", Warning,
+            "source data with no retained LinDist3Flow role was omitted";
         BUILD_LINDIST3FLOW_OBJECTIVE_UNSUPPORTED =
             "BUILD.LINDIST3FLOW.OBJECTIVE_UNSUPPORTED", Error,
             "the LinDist3Flow objective is outside the implemented formulation",

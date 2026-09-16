@@ -77,9 +77,11 @@ floating or impedance-grounded neutral by default.
 
 ## Current supported formulation
 
-The strict initial slice has the following contract. `Reject` is the only
-implemented unsupported-data policy; the other enum values reserve future API
-space and currently make the instance inapplicable.
+The strict slice remains the default. Other preparation policies operate on an
+independently owned copy and retain the caller's source network. Every
+transformation and omission appears in `LinDist3FlowPreparationReport`; the
+source network plus options are serialized so the same prepared network and
+report are reconstructed after an IR round trip.
 
 | Concern | Current contract |
 |---|---|
@@ -87,21 +89,35 @@ space and currently make the instance inapplicable.
 | Topology | Cycles and parallel lines are retained in the conductor-resolved graph. Each physical connected component must be source covered, and multiple voltage-source records on one physical island are rejected. Lines receive a deterministic source-rooted orientation without changing source row identity. A warning identifies meshed instances. |
 | Conductors | All retained bus terminals must be phase conductors. Line terminal maps must be nonempty, equal width and resolve exactly at both ends. Mutual series impedance is retained. |
 | Reference | `Auto` uses a complete initial operating point when available, otherwise propagates source phasors at no load. `Explicit` requires the initial point; `SourcePropagated` ignores it. Every reference phasor must be finite and nonzero. Angles are fixed in the linearization. |
-| Lines | Full finite conductor series-impedance matrices and length are supported. Pi shunt admittance is rejected. Apparent-power and current limits are selected from the base instance constraints. |
+| Lines | Full finite conductor series-impedance matrices and length are supported. Under `Lower`, pi shunt halves become explicit endpoint shunts. Apparent-power and current limits are selected from the base instance constraints. |
 | Voltage bounds | Per-terminal phase-to-ground magnitude bounds become bounds on squared voltage. Source-terminal squared voltages are fixed to the reference values. |
-| Loads | Constant-power and constant-impedance models are supported. ZIP is supported only when both active and reactive constant-current fractions are zero. Constant-current, exponential and other load models are rejected. |
+| Loads | Constant-power and constant-impedance models are supported. ZIP is supported directly when both constant-current fractions are zero. Under `Approximate`, constant-current terms use the first-order squared-voltage split `0.5 Z + 0.5 P`, and exponential terms are linearized at nominal voltage. |
 | Connections | Grounded-wye channels, one-channel single phase across one or two terminals, two-terminal delta and three-channel/three-terminal delta are supported. The terminal power split is frozen at the voltage reference. Other arities/configurations are rejected. |
 | Shunts | Finite square terminal admittance matrices are supported through a fixed-angle affine voltage closure. |
 | Generators | Per-channel active/reactive dispatch, paired bounds, apparent-power limits, current limits and linear energy cost are supported for the connection forms above. If selected bounds are absent, nominal dispatch is fixed. |
 | Voltage sources | Per-terminal active/reactive injection variables and optional linear energy prices are supported. Source voltage is fixed. |
-| Transformers and regulators | Rejected. No tap, winding, phase-shift or regulator lowering is implicit. |
-| Switches | Rejected regardless of state. A future lowering pass may remove open switches and contract closed switches, but that must be explicit and audited. |
-| Other equipment | Capacitors, IBRs and untyped objects are rejected. Capacitors are not silently treated as generic shunts. |
+| Transformers and regulators | Transformer electrical lowering remains rejected. Under `Approximate`, already-materialized fixed state is retained while untyped regulator-control records are reported as frozen and omitted. |
+| Switches | Under `Lower`, open contacts are omitted and every closed contact becomes its own zero-impedance line with its own flow and current limit. Parallel contacts are never aggregated. |
+| Other equipment | Under `Lower`, supported static capacitor connections become explicit shunts. Under `Approximate`, supported IBRs become static generators and named control profiles are reported as frozen. Under `Permissive`, remaining untyped source records may be explicitly omitted. |
 | Objective | Feasibility or exactly one `ActivePowerDispatchCost` term. Costs are linear and expressed in the multiconductor device data; balanced-network polynomial generator costs are not compiled. |
 | Time | One snapshot. No time coupling, switching decision or discrete variable. |
 
 Rejecting an element means applicability returns an error diagnostic before
 coefficient construction. It does not mean the element is ignored.
+
+The policy ladder is cumulative:
+
+| Policy | Preparation contract |
+|---|---|
+| `Reject` | Preserve the strict formulation boundary. |
+| `Lower` | Apply representation-preserving neutral, switch, line-shunt and capacitor lowerings. |
+| `Approximate` | Additionally linearize supported load models, represent IBRs as static generators and freeze supported static controls. |
+| `Permissive` | Additionally omit retained untyped records with one reported action per record. It does not make malformed data or unsupported transformer physics disappear. |
+
+Closed switches retain contact-level flow variables and limits. In particular,
+parallel switches with crossed current and apparent-power capabilities are not
+collapsed into independently summed ratings, avoiding the relaxation that
+would result from such aggregation.
 
 ## Equations and approximation boundary
 
@@ -181,12 +197,9 @@ and 210.209 var of losses; LinDist3Flow intentionally balances the 10 kW and
 The following require explicit design and tests rather than relaxing the
 applicability gate:
 
-- switch-state lowering and topology provenance;
 - transformer and regulator affine models, including tap and phase mappings;
-- line charging or endpoint-shunt lowering;
-- constant-current and exponential load approximations;
 - floating/impedance-grounded neutral models;
-- capacitor and IBR formulation support;
+- dynamic IBR/storage state and nonlinear control curves;
 - angle recovery, loop-consistency equations, circulating-flow regularisation,
   automatic radialisation, and discrete controls;
 - broader unbalanced three-phase OpenDSS/PowerModelsDistribution oracle cases.

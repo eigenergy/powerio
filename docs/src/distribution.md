@@ -162,6 +162,16 @@ regularisation, or automatic radialisation. Mesh feasibility therefore means
 feasibility of this declared linear approximation, not AC feasibility or a
 unique physical allocation of branch flows.
 
+`LinDist3FlowBuildOptions::unsupported` selects the component-preparation
+policy. `Reject` keeps the strict boundary. `Lower` applies audited static
+neutral, switch, line-shunt and capacitor transformations. `Approximate` also
+linearizes supported load models and maps IBRs to static generators while
+freezing named controls. `Permissive` can additionally omit retained untyped
+records. `instance.source_network()` remains the caller's input,
+`instance.network()` is the prepared calculation network, and
+`instance.preparation()` records every action. The serialized instance stores
+the source network and reconstructs the preparation report on read.
+
 Solutions expose their instance, termination, objective, and named primal
 columns: `terminal_voltage_magnitude_squared`, `line_active_power`,
 `line_reactive_power`, `generator_active_power`, `generator_reactive_power`,
