@@ -51,7 +51,10 @@ pub mod codes {
             "a network component is outside the implemented LinDist3Flow slice",
             category = Data;
         BUILD_LINDIST3FLOW_TOPOLOGY_INVALID = "BUILD.LINDIST3FLOW.TOPOLOGY_INVALID", Error,
-            "the conductor-resolved network is not a source-rooted forest", category = Data;
+            "the conductor-resolved network is not a valid source-covered graph", category = Data;
+        BUILD_LINDIST3FLOW_MESH_APPROXIMATION =
+            "BUILD.LINDIST3FLOW.MESH_APPROXIMATION", Warning,
+            "a meshed LinDist3Flow model omits angle and loop-consistency equations";
         BUILD_LINDIST3FLOW_REFERENCE_INVALID = "BUILD.LINDIST3FLOW.REFERENCE_INVALID", Error,
             "the LinDist3Flow coefficient reference is missing or invalid", category = Data;
         BUILD_LINDIST3FLOW_POLICY_UNAVAILABLE = "BUILD.LINDIST3FLOW.POLICY_UNAVAILABLE", Error,
