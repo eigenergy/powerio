@@ -379,6 +379,8 @@ pub mod codes {
             "how many elements a geo apply located";
         BUILD_GEO_UNMATCHED_FEATURE = "BUILD.GEO.UNMATCHED_FEATURE", Warning,
             "a geo feature matched no element in the network";
+        BUILD_CON_CASE_UNRESOLVED = "BUILD.CON.CASE_UNRESOLVED", Warning,
+            "a contingency case names an element the network does not hold";
 
         // VALIDATE: the case's own internal consistency.
         /// Emitted by the stored document's payload validation in the facade;

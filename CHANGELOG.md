@@ -13,6 +13,12 @@
   outside the grammar as its trimmed line, reported under `READ.CON.*`;
   `ContingencySet::to_con` writes the set back, statements the file states
   after its `END` included.
+- Resolve a contingency set against a network with `ContingencySet::resolve`.
+  Every action either binds to network elements, named by `ComponentId` and
+  table row, or is kept with a structured reason, and an unresolved case is
+  reported as `BUILD.CON.CASE_UNRESOLVED`. `PsseEquipmentIndex` recomputes the
+  PSS/E machine and circuit id of every element with the RAW writer's own
+  allocation, so a statement binds to the element PSS/E would address.
 
 ## 0.11.2
 

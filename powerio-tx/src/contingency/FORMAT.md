@@ -194,6 +194,72 @@ their lines, with the surrounding whitespace dropped:
 - Bus-name mode, where a statement names `'02CHAMBR 345'` in place of a bus
   number. Reading these needs the case, which this module does not take.
 
+## Resolution against a network
+
+`ContingencySet::resolve` binds a set to a `BalancedNetwork`. It is separate
+from reading, because a `.con` file names elements the way a RAW file does and
+a network does not carry those names.
+
+### Why the ids are recomputed
+
+A network row's `uid` is either the identity its source stated or one PowerIO
+generated from bus numbers: `bus-4` for a load, `3-1` for a branch. Neither
+form carries a machine or a circuit id, so a `.con` statement cannot be matched
+against it. The PSS/E ids are not stored either: the reader drops an id of `1`
+because it is what the writer allocates positionally, and it keeps a machine id
+only when the writer would have allocated a different one.
+
+`PsseEquipmentIndex` therefore recomputes, for every element, the id a RAW file
+written from this network would state, using the writer's own allocation: the
+element's retained id when it has one and that id is still free on its key,
+else the lowest positive integer still free there. An element thus answers to
+the words PSS/E itself would address it by.
+
+| Family | Preferred id | Allocation key |
+| --- | --- | --- |
+| machine | the `psse_eqid` property of the generator's `ComponentId` in `detailed_connectivity` | the bus |
+| branch | the branch's `extras["id"]` | the stored terminal pair `(from, to)` |
+| two winding transformer | `extras["id"]`, else the retained `psse_eqid` | the stored terminal pair, allocated apart from the lines |
+| load, fixed shunt, switched shunt | `extras["id"]` | the bus, each family allocated apart |
+| three winding transformer | `extras["id"]`, else the retained `psse_eqid` | the position among the transformers on the same ordered bus triple |
+
+A branch lookup reads both orientations, so a statement naming `1 TO 3` finds a
+branch stored `3 1`. A self-loop is counted once. Zero rows is not found; more
+than one is ambiguous and binds to nothing, which happens when two parallel
+branches are stored in opposite terminal orders and take the same circuit id. A
+three winding transformer matches on its three buses in any order.
+
+### What each statement binds to
+
+| Action | Binds to | Not found |
+| --- | --- | --- |
+| `OpenBranch` | the one `branch` row | `NoSuchBranch`, or `AmbiguousBranch` past one row |
+| `OpenThreeWinding` | the `transformer_3w` row | `NoSuchTransformer3w` |
+| `RemoveMachine`, `AddMachine` | the `generator` row | `NoSuchMachine` |
+| `RemoveShunt` | the fixed `shunt` with that id, or every fixed shunt at the bus | `NoSuchShunt` |
+| `RemoveSwitchedShunt` | every switched `shunt` at the bus | `NoSuchShunt` |
+| `RemoveLoad` | the `load` with that id, or every load at the bus | `NoSuchLoad` |
+| `DisconnectBus` | the `bus` row alone | `NoSuchBus` |
+| `ChangeLoad`, `ChangeGeneration` | the `bus` row alone | `NoSuchBus` |
+| `Unrecognized` | nothing | `Unrecognized` |
+
+`DisconnectBus` binds to the bus and to nothing else: which elements at that
+bus leave service depends on what the consumer models, so expanding the bus is
+the consumer's work. `ChangeLoad` and `ChangeGeneration` bind to the bus for
+the same reason, and the amount to move rides on the action rather than being
+applied here.
+
+A `ResolvedComponent` states a `ComponentId` whose component type names the
+table its `row` indexes, and the element's own in service flag as the network
+states it now. A bus is in service when its type is anything other than
+isolated. An element already out of service still binds, because outaging it
+changes nothing. A case with no actions resolves to no components.
+
+Resolution reports rather than refuses. A case holding any unresolved action is
+counted unresolved and earns one `BUILD.CON.CASE_UNRESOLVED` note naming the
+case and its first unresolved action; the actions of that case that did bind
+stay listed, so a caller can see how far the case got.
+
 ## A later convergence point
 
 PowerWorld states contingencies in its own `.aux` grammar, read by the

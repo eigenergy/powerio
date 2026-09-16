@@ -97,8 +97,9 @@ pub mod __internal {
 
 pub use contingency::{
     AutomaticOrder, AutomaticSpec, AutomaticTarget, Change, ChangeOp, ChangeUnit,
-    ContingencyAction, ContingencyCase, ContingencyParsed, ContingencySet, RetainedStatement,
-    SkipRule,
+    ContingencyAction, ContingencyCase, ContingencyParsed, ContingencyResolution, ContingencySet,
+    PsseEquipmentIndex, ResolvedCase, ResolvedComponent, RetainedStatement, SkipRule,
+    UnresolvedAction, UnresolvedReason,
 };
 pub use dc::BranchSusceptanceFormula;
 pub use diagnostics::{Diagnostic, DiagnosticCode, DiagnosticSeverity, EmitFamily};

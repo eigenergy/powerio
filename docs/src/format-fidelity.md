@@ -288,7 +288,12 @@ case that starts inside another, and a block left open at end of input are
 refused. The grammar is established from public contingency files and the
 example set PSS/E ships, because the manual that defines it is licensed and
 not public; `powerio-tx/src/contingency/FORMAT.md` lists each statement with
-its evidence.
+its evidence. `ContingencySet::resolve` binds a set to a network and reports,
+per case, which elements each statement named and which named nothing, so a
+case that does not apply is a `BUILD.CON.CASE_UNRESOLVED` note with a reason
+rather than a silent omission. The binding recomputes the PSS/E machine and
+circuit id of every element with the RAW writer's own allocation, because a
+network row's identity carries neither.
 
 Generator `IREG`/`NREG`, switched shunt `SWREG`/`NREG`, and transformer
 `CONT`/`NODE` resolve to exact terminal references, including an explicit

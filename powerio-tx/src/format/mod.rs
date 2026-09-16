@@ -58,7 +58,7 @@ mod pandapower;
 mod powermodels;
 pub mod powerworld;
 mod pslf;
-mod psse;
+pub(crate) mod psse;
 mod pypsa;
 mod rawx;
 pub mod routing;
@@ -1376,7 +1376,7 @@ pub(crate) fn apply_emit_cost_policy(
 /// when it is still free on this key, else the lowest free positional id. Keeps
 /// parallel devices distinct so the `(key, id)` uniqueness rule the PSS/E and
 /// PSLF records require holds even when the source supplies colliding ids.
-pub(super) fn allocate_circuit_id<K: Ord + Clone>(
+pub(crate) fn allocate_circuit_id<K: Ord + Clone>(
     preferred: Option<&str>,
     key: K,
     used: &mut std::collections::BTreeMap<K, std::collections::BTreeSet<String>>,

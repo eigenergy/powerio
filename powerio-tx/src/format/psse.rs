@@ -883,20 +883,8 @@ fn write_psse_rev_inner(
     // the star-point voltage, lines 3-5 the per-winding tap/angle/ratings.
     let mut transformer_3w_ids: BTreeMap<(BusId, BusId, BusId), u32> = BTreeMap::new();
     for t in net.transformers_3w() {
-        let buses = (t.windings[0].bus, t.windings[1].bus, t.windings[2].bus);
-        let next_id = transformer_3w_ids.entry(buses).or_default();
-        *next_id += 1;
-        let positional = next_id.to_string();
-        let raw_id = t
-            .extras
-            .get("id")
-            .and_then(Value::as_str)
-            .or_else(|| detailed_source_id(net, "transformer", t.uid.as_deref()))
-            .unwrap_or(positional.as_str());
-        let transformer_id = sanitize_quoted(raw_id, NAME_FORBIDDEN, ' ');
-        if matches!(transformer_id, std::borrow::Cow::Owned(_)) {
-            sanitized_quoted += 1;
-        }
+        let transformer_id =
+            transformer_3w_id(net, t, &mut transformer_3w_ids, &mut sanitized_quoted);
         let raw_name = t.name.as_deref().unwrap_or("");
         let name = sanitize_quoted(raw_name, NAME_FORBIDDEN, ' ');
         if matches!(name, std::borrow::Cow::Owned(_)) {
@@ -1445,7 +1433,7 @@ fn ide(kind: BusType) -> u8 {
 /// devices stay distinct and the PSS/E `(bus, id)` uniqueness rule holds even
 /// when source ids collide before or after sanitation. `used` tracks the ids
 /// already emitted per bus.
-fn quoted_device_id(
+pub(crate) fn quoted_device_id(
     extras: &Extras,
     bus: BusId,
     used: &mut BTreeMap<BusId, BTreeSet<String>>,
@@ -1459,7 +1447,7 @@ fn quoted_device_id(
     )
 }
 
-fn quoted_circuit_id<K: Ord + Clone>(
+pub(crate) fn quoted_circuit_id<K: Ord + Clone>(
     preferred: Option<&str>,
     key: K,
     used: &mut BTreeMap<K, BTreeSet<String>>,
@@ -1530,7 +1518,35 @@ fn dc_states_beyond_record(d: &Hvdc) -> bool {
         || d.loss1 != 0.0
 }
 
-fn detailed_source_id<'a>(
+/// The circuit id the three winding transformer record states: the element's
+/// own `id` extra, else the `psse_eqid` retained for it, else the position of
+/// this transformer among those on the same ordered bus triple. `used` counts
+/// the records already written per triple. The id is sanitized for the quoted
+/// field, and `sanitized_quoted` counts the ids that sanitation changed.
+pub(crate) fn transformer_3w_id(
+    net: &BalancedNetwork,
+    t: &Transformer3W,
+    used: &mut BTreeMap<(BusId, BusId, BusId), u32>,
+    sanitized_quoted: &mut usize,
+) -> String {
+    let buses = (t.windings[0].bus, t.windings[1].bus, t.windings[2].bus);
+    let next_id = used.entry(buses).or_default();
+    *next_id += 1;
+    let positional = next_id.to_string();
+    let raw_id = t
+        .extras
+        .get("id")
+        .and_then(Value::as_str)
+        .or_else(|| detailed_source_id(net, "transformer", t.uid.as_deref()))
+        .unwrap_or(positional.as_str());
+    let sanitized = sanitize_quoted(raw_id, NAME_FORBIDDEN, ' ');
+    if matches!(sanitized, std::borrow::Cow::Owned(_)) {
+        *sanitized_quoted += 1;
+    }
+    sanitized.into_owned()
+}
+
+pub(crate) fn detailed_source_id<'a>(
     net: &'a BalancedNetwork,
     component_type: &str,
     uid: Option<&str>,
@@ -1538,7 +1554,7 @@ fn detailed_source_id<'a>(
     detailed_source_property(net, component_type, uid, "psse_eqid")
 }
 
-fn detailed_source_property<'a>(
+pub(crate) fn detailed_source_property<'a>(
     net: &'a BalancedNetwork,
     component_type: &str,
     uid: Option<&str>,

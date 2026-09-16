@@ -22,14 +22,21 @@
 //! inside another, and a block left open at end of input are errors.
 //!
 //! The grammar, its evidence, and the writer's spellings are in `FORMAT.md`
-//! next to this file. Resolving a case against a network is not part of this
-//! module: it holds what the file states.
+//! next to this file. Reading holds what the file states and touches no
+//! network. [`ContingencySet::resolve`] is the separate step that binds a set
+//! to the elements of a [`crate::network::BalancedNetwork`]; `resolve.rs`
+//! holds it.
 
 mod lexer;
+pub mod resolve;
 
 use std::cmp::Ordering;
 
 use lexer::{LexedLine, LineKind, lex};
+pub use resolve::{
+    ContingencyResolution, PsseEquipmentIndex, ResolvedCase, ResolvedComponent, UnresolvedAction,
+    UnresolvedReason,
+};
 
 use crate::diagnostics::{Diagnostic, codes};
 use crate::network::BusId;
