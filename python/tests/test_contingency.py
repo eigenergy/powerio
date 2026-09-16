@@ -54,23 +54,36 @@ def test_resolve_contingencies_counts_every_case():
     assert first["resolved"] is True
     assert first["unresolved"] == []
     assert first["components"] == [
-        {"type": "branch", "id": first["components"][0]["id"], "row": 0, "in_service": True}
+        {"type": "branch", "id": "1-2", "row": 0, "in_service": True}
     ]
 
+    # Each case that bound to nothing states one reason and the statement the
+    # `.con` writer produces for the action that named no element.
     unresolved = {
-        case["name"]: case["unresolved"][0]
+        case["name"]: case["unresolved"]
         for case in resolution["case_results"]
         if not case["resolved"]
     }
-    assert len(unresolved) == 3
-    assert {entry["reason"] for entry in unresolved.values()} <= {
-        "no_such_branch",
-        "no_such_machine",
-        "unrecognized",
+    assert unresolved == {
+        "BR_MISSING": [
+            {
+                "action": "OPEN LINE FROM BUS      3 TO BUS      4 CIRCUIT 1",
+                "reason": "no_such_branch",
+            }
+        ],
+        "MACHINE_MISSING": [
+            {
+                "action": "REMOVE MACHINE 9 FROM BUS      1",
+                "reason": "no_such_machine",
+            }
+        ],
+        "UNRECOGNIZED": [
+            {
+                "action": "PARALLEL BRANCH FROM BUS      1 TO BUS      2",
+                "reason": "unrecognized",
+            }
+        ],
     }
-    # The action reads back as the statement the writer would produce.
-    for entry in unresolved.values():
-        assert entry["action"].strip()
 
     # One statement of the fixture is kept as text, so the reader reports it.
     assert resolution["diagnostics"]

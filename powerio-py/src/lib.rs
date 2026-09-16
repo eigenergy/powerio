@@ -4561,22 +4561,6 @@ fn geo_report_dict<'py>(
     Ok(out)
 }
 
-/// The `UnresolvedReason` variant name in snake case.
-fn unresolved_reason_name(reason: powerio::UnresolvedReason) -> &'static str {
-    use powerio::UnresolvedReason as Reason;
-    match reason {
-        Reason::NoSuchBus => "no_such_bus",
-        Reason::NoSuchBranch => "no_such_branch",
-        Reason::AmbiguousBranch { .. } => "ambiguous_branch",
-        Reason::NoSuchMachine => "no_such_machine",
-        Reason::NoSuchShunt => "no_such_shunt",
-        Reason::NoSuchLoad => "no_such_load",
-        Reason::NoSuchTransformer3w => "no_such_transformer_3w",
-        Reason::Unrecognized => "unrecognized",
-        _ => "unknown",
-    }
-}
-
 /// The `{cases, resolved, unresolved, unrecognized_statements, case_results,
 /// diagnostics}` dict from one contingency resolution.
 fn contingency_resolution_dict<'py>(
@@ -4599,7 +4583,7 @@ fn contingency_resolution_dict<'py>(
         for action in &case.unresolved {
             let item = PyDict::new(py);
             item.set_item("action", action.action.to_con_statement())?;
-            item.set_item("reason", unresolved_reason_name(action.reason))?;
+            item.set_item("reason", action.reason.name())?;
             unresolved.append(item)?;
         }
         let entry = PyDict::new(py);
