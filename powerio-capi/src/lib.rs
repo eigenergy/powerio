@@ -2835,31 +2835,116 @@ opaque_handle!(
     powerio::GeoApplyReport
 );
 
+/// Where one PSS/E contingency analysis handle takes its set from: a set the
+/// handle owns, or a module value the handle projects on every access. A view
+/// holds the module owner, so it stays readable after the module handle that
+/// produced it is released.
+enum ContingencySource<T> {
+    Owned(T),
+    Value(ValueInner),
+}
+
 struct ContingencySetInner {
-    set: powerio::ContingencySet,
+    source: ContingencySource<powerio::ContingencySet>,
+    /// The notes of the reader that produced the set. A view and an expanded
+    /// set carry none.
     diagnostics: Vec<Diagnostic>,
+}
+
+impl ContingencySetInner {
+    fn set(&self) -> Option<&powerio::ContingencySet> {
+        match &self.source {
+            ContingencySource::Owned(set) => Some(set),
+            ContingencySource::Value(value) => match value.value()? {
+                PioValue::ContingencySet(set) => Some(set),
+                _ => None,
+            },
+        }
+    }
+}
+
+struct SubsystemSetInner {
+    source: ContingencySource<powerio::SubsystemSet>,
+}
+
+impl SubsystemSetInner {
+    fn set(&self) -> Option<&powerio::SubsystemSet> {
+        match &self.source {
+            ContingencySource::Owned(set) => Some(set),
+            ContingencySource::Value(value) => match value.value()? {
+                PioValue::SubsystemSet(set) => Some(set),
+                _ => None,
+            },
+        }
+    }
+}
+
+struct MonitoredSetInner {
+    source: ContingencySource<powerio::MonitoredSet>,
+}
+
+impl MonitoredSetInner {
+    fn set(&self) -> Option<&powerio::MonitoredSet> {
+        match &self.source {
+            ContingencySource::Owned(set) => Some(set),
+            ContingencySource::Value(value) => match value.value()? {
+                PioValue::MonitoredSet(set) => Some(set),
+                _ => None,
+            },
+        }
+    }
+}
+
+/// One resolution together with the `.con` statement of every action that
+/// bound to nothing. The statements are written once, when the handle is
+/// built, so an accessor lends one rather than returning owned text.
+struct ContingencyResolutionInner {
+    resolution: powerio::ContingencyResolution,
+    unresolved_actions: Vec<Vec<String>>,
+}
+
+impl ContingencyResolutionInner {
+    fn new(resolution: powerio::ContingencyResolution) -> Self {
+        let unresolved_actions = resolution
+            .cases
+            .iter()
+            .map(|case| {
+                case.unresolved
+                    .iter()
+                    .map(|unresolved| unresolved.action.to_con_statement())
+                    .collect()
+            })
+            .collect();
+        Self {
+            resolution,
+            unresolved_actions,
+        }
+    }
 }
 
 opaque_handle!(
     /// PSS/E contingency description file: the cases, the automatic
-    /// specifications, and the `SKIP` rules.
+    /// specifications, and the `SKIP` rules. A handle taken from a module
+    /// value holds that module owner alive.
     PioContingencySet,
     ContingencySetInner
 );
 opaque_handle!(
-    /// PSS/E subsystem description file: the named bus groups.
+    /// PSS/E subsystem description file: the named bus groups. A handle taken
+    /// from a module value holds that module owner alive.
     PioSubsystemSet,
-    powerio::SubsystemSet
+    SubsystemSetInner
 );
 opaque_handle!(
-    /// PSS/E monitored element file: the monitor statements.
+    /// PSS/E monitored element file: the monitor statements. A handle taken
+    /// from a module value holds that module owner alive.
     PioMonitoredSet,
-    powerio::MonitoredSet
+    MonitoredSetInner
 );
 opaque_handle!(
     /// What one contingency set bound to on one network.
     PioContingencyResolution,
-    powerio::ContingencyResolution
+    ContingencyResolutionInner
 );
 
 /// Acquire a file or directory path.
@@ -3076,11 +3161,50 @@ unsafe fn contingency_source_text(
 
 unsafe fn require_contingency_set<'a>(
     set: *const PioContingencySet,
-) -> Result<&'a ContingencySetInner, *mut PioError> {
-    unsafe { PioContingencySet::get(set) }.ok_or_else(|| {
+) -> Result<&'a powerio::ContingencySet, *mut PioError> {
+    unsafe { PioContingencySet::get(set) }
+        .and_then(ContingencySetInner::set)
+        .ok_or_else(|| {
+            boundary_error(
+                &codes::BIND_CAPI_NULL_HANDLE,
+                "PioContingencySet must not be NULL",
+            )
+        })
+}
+
+unsafe fn require_subsystem_set<'a>(
+    set: *const PioSubsystemSet,
+) -> Result<&'a powerio::SubsystemSet, *mut PioError> {
+    unsafe { PioSubsystemSet::get(set) }
+        .and_then(SubsystemSetInner::set)
+        .ok_or_else(|| {
+            boundary_error(
+                &codes::BIND_CAPI_NULL_HANDLE,
+                "PioSubsystemSet must not be NULL",
+            )
+        })
+}
+
+unsafe fn require_monitored_set<'a>(
+    set: *const PioMonitoredSet,
+) -> Result<&'a powerio::MonitoredSet, *mut PioError> {
+    unsafe { PioMonitoredSet::get(set) }
+        .and_then(MonitoredSetInner::set)
+        .ok_or_else(|| {
+            boundary_error(
+                &codes::BIND_CAPI_NULL_HANDLE,
+                "PioMonitoredSet must not be NULL",
+            )
+        })
+}
+
+unsafe fn require_resolution<'a>(
+    resolution: *const PioContingencyResolution,
+) -> Result<&'a ContingencyResolutionInner, *mut PioError> {
+    unsafe { PioContingencyResolution::get(resolution) }.ok_or_else(|| {
         boundary_error(
             &codes::BIND_CAPI_NULL_HANDLE,
-            "PioContingencySet must not be NULL",
+            "PioContingencyResolution must not be NULL",
         )
     })
 }
@@ -3089,34 +3213,16 @@ unsafe fn require_resolved_case<'a>(
     resolution: *const PioContingencyResolution,
     index: usize,
 ) -> Result<&'a powerio::ResolvedCase, *mut PioError> {
-    let resolution = unsafe { PioContingencyResolution::get(resolution) }.ok_or_else(|| {
-        boundary_error(
-            &codes::BIND_CAPI_NULL_HANDLE,
-            "PioContingencyResolution must not be NULL",
-        )
-    })?;
-    resolution.cases.get(index).ok_or_else(|| {
-        boundary_error(
-            &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
-            format!("contingency case index {index} is out of range"),
-        )
-    })
-}
-
-/// The `UnresolvedReason` variant name in snake case.
-fn unresolved_reason_name(reason: powerio::UnresolvedReason) -> &'static str {
-    use powerio::UnresolvedReason as Reason;
-    match reason {
-        Reason::NoSuchBus => "no_such_bus",
-        Reason::NoSuchBranch => "no_such_branch",
-        Reason::AmbiguousBranch { .. } => "ambiguous_branch",
-        Reason::NoSuchMachine => "no_such_machine",
-        Reason::NoSuchShunt => "no_such_shunt",
-        Reason::NoSuchLoad => "no_such_load",
-        Reason::NoSuchTransformer3w => "no_such_transformer_3w",
-        Reason::Unrecognized => "unrecognized",
-        _ => "unknown",
-    }
+    unsafe { require_resolution(resolution) }?
+        .resolution
+        .cases
+        .get(index)
+        .ok_or_else(|| {
+            boundary_error(
+                &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                format!("contingency case index {index} is out of range"),
+            )
+        })
 }
 
 /// Read text from an acquired source as a PSS/E contingency description file.
@@ -3134,7 +3240,7 @@ pub unsafe extern "C" fn pio_contingency_set_parse(
             powerio::ContingencySet::parse(&text)
                 .map(|parsed| {
                     PioContingencySet::new_raw(ContingencySetInner {
-                        set: parsed.set,
+                        source: ContingencySource::Owned(parsed.set),
                         diagnostics: parsed.diagnostics,
                     })
                 })
@@ -3144,7 +3250,7 @@ pub unsafe extern "C" fn pio_contingency_set_parse(
 }
 
 /// Return the notes the contingency reader produced, which are empty for a set
-/// taken from a module value.
+/// taken from a module value and for an expanded set.
 ///
 /// # Safety
 /// Pointers and handles must satisfy the crate-level safety requirements.
@@ -3164,7 +3270,9 @@ pub unsafe extern "C" fn pio_contingency_set_diagnostics(
 /// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_contingency_set_case_count(set: *const PioContingencySet) -> usize {
-    unsafe { PioContingencySet::get(set) }.map_or(0, |set| set.set.cases.len())
+    unsafe { PioContingencySet::get(set) }
+        .and_then(ContingencySetInner::set)
+        .map_or(0, |set| set.cases.len())
 }
 
 /// Read one case name by zero based position, in the set's own order.
@@ -3180,13 +3288,32 @@ pub unsafe extern "C" fn pio_contingency_set_case_name(
     unsafe {
         entry(error, PioStringView::EMPTY, || {
             let set = require_contingency_set(set)?;
-            let case = set.set.cases.get(index).ok_or_else(|| {
+            let case = set.cases.get(index).ok_or_else(|| {
                 boundary_error(
                     &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
                     format!("contingency case index {index} is out of range"),
                 )
             })?;
             Ok(PioStringView::new(&case.name))
+        })
+    }
+}
+
+/// Write the set back as `.con` text, so an expanded set reaches a file. The
+/// text is owned by the returned handle and read with `pio_string_view`;
+/// release it with `pio_string_release`.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_contingency_set_to_con(
+    set: *const PioContingencySet,
+    error: *mut *mut PioError,
+) -> *mut PioString {
+    unsafe {
+        entry(error, std::ptr::null_mut(), || {
+            let set = require_contingency_set(set)?;
+            Ok(PioString::new_raw(StringInner { text: set.to_con() }))
         })
     }
 }
@@ -3216,7 +3343,9 @@ pub unsafe extern "C" fn pio_contingency_set_release(set: *mut PioContingencySet
 /// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_subsystem_set_count(set: *const PioSubsystemSet) -> usize {
-    unsafe { PioSubsystemSet::get(set) }.map_or(0, |set| set.subsystems.len())
+    unsafe { PioSubsystemSet::get(set) }
+        .and_then(SubsystemSetInner::set)
+        .map_or(0, |set| set.subsystems.len())
 }
 
 /// Read one subsystem name by zero based position, in the file's own order.
@@ -3231,12 +3360,7 @@ pub unsafe extern "C" fn pio_subsystem_set_name(
 ) -> PioStringView {
     unsafe {
         entry(error, PioStringView::EMPTY, || {
-            let set = PioSubsystemSet::get(set).ok_or_else(|| {
-                boundary_error(
-                    &codes::BIND_CAPI_NULL_HANDLE,
-                    "PioSubsystemSet must not be NULL",
-                )
-            })?;
+            let set = require_subsystem_set(set)?;
             let subsystem = set.subsystems.get(index).ok_or_else(|| {
                 boundary_error(
                     &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
@@ -3244,6 +3368,25 @@ pub unsafe extern "C" fn pio_subsystem_set_name(
                 )
             })?;
             Ok(PioStringView::new(&subsystem.name))
+        })
+    }
+}
+
+/// Write the set back as `.sub` text. The text is owned by the returned
+/// handle and read with `pio_string_view`; release it with
+/// `pio_string_release`.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_subsystem_set_to_sub(
+    set: *const PioSubsystemSet,
+    error: *mut *mut PioError,
+) -> *mut PioString {
+    unsafe {
+        entry(error, std::ptr::null_mut(), || {
+            let set = require_subsystem_set(set)?;
+            Ok(PioString::new_raw(StringInner { text: set.to_sub() }))
         })
     }
 }
@@ -3273,7 +3416,28 @@ pub unsafe extern "C" fn pio_subsystem_set_release(set: *mut PioSubsystemSet) {
 /// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_monitored_set_statement_count(set: *const PioMonitoredSet) -> usize {
-    unsafe { PioMonitoredSet::get(set) }.map_or(0, |set| set.statements.len())
+    unsafe { PioMonitoredSet::get(set) }
+        .and_then(MonitoredSetInner::set)
+        .map_or(0, |set| set.statements.len())
+}
+
+/// Write the set back as `.mon` text. The text is owned by the returned
+/// handle and read with `pio_string_view`; release it with
+/// `pio_string_release`.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_monitored_set_to_mon(
+    set: *const PioMonitoredSet,
+    error: *mut *mut PioError,
+) -> *mut PioString {
+    unsafe {
+        entry(error, std::ptr::null_mut(), || {
+            let set = require_monitored_set(set)?;
+            Ok(PioString::new_raw(StringInner { text: set.to_mon() }))
+        })
+    }
 }
 
 ///
@@ -3314,7 +3478,9 @@ pub unsafe extern "C" fn pio_contingency_set_resolve(
         entry(error, std::ptr::null_mut(), || {
             let set = require_contingency_set(set)?;
             let network = require_balanced_network(network)?;
-            Ok(PioContingencyResolution::new_raw(set.set.resolve(network)))
+            Ok(PioContingencyResolution::new_raw(
+                ContingencyResolutionInner::new(set.resolve(network)),
+            ))
         })
     }
 }
@@ -3344,20 +3510,15 @@ pub unsafe extern "C" fn pio_contingency_set_expand(
         entry(error, std::ptr::null_mut(), || {
             let set = require_contingency_set(set)?;
             let network = require_balanced_network(network)?;
-            let subsystems = PioSubsystemSet::get(subsystems).ok_or_else(|| {
-                boundary_error(
-                    &codes::BIND_CAPI_NULL_HANDLE,
-                    "PioSubsystemSet must not be NULL",
-                )
-            })?;
-            let expanded = set.set.expand(network, subsystems);
+            let subsystems = require_subsystem_set(subsystems)?;
+            let expanded = set.expand(network, subsystems);
             if !out_notes.is_null() {
                 *out_notes = PioDiagnostics::new_raw(DiagnosticsInner {
                     owner: DiagnosticsOwner::Owned(expanded.diagnostics),
                 });
             }
             Ok(PioContingencySet::new_raw(ContingencySetInner {
-                set: expanded.set,
+                source: ContingencySource::Owned(expanded.set),
                 diagnostics: Vec::new(),
             }))
         })
@@ -3372,7 +3533,7 @@ pub unsafe extern "C" fn pio_contingency_resolution_case_count(
     resolution: *const PioContingencyResolution,
 ) -> usize {
     unsafe { PioContingencyResolution::get(resolution) }
-        .map_or(0, |resolution| resolution.cases.len())
+        .map_or(0, |inner| inner.resolution.cases.len())
 }
 
 /// The number of cases whose every action bound.
@@ -3383,7 +3544,8 @@ pub unsafe extern "C" fn pio_contingency_resolution_case_count(
 pub unsafe extern "C" fn pio_contingency_resolution_resolved_count(
     resolution: *const PioContingencyResolution,
 ) -> usize {
-    unsafe { PioContingencyResolution::get(resolution) }.map_or(0, |resolution| resolution.resolved)
+    unsafe { PioContingencyResolution::get(resolution) }
+        .map_or(0, |inner| inner.resolution.resolved)
 }
 
 /// The number of cases holding at least one action that did not bind.
@@ -3395,7 +3557,7 @@ pub unsafe extern "C" fn pio_contingency_resolution_unresolved_count(
     resolution: *const PioContingencyResolution,
 ) -> usize {
     unsafe { PioContingencyResolution::get(resolution) }
-        .map_or(0, |resolution| resolution.unresolved)
+        .map_or(0, |inner| inner.resolution.unresolved)
 }
 
 /// The number of actions the reader kept as text, counted over every case.
@@ -3407,7 +3569,7 @@ pub unsafe extern "C" fn pio_contingency_resolution_unrecognized_statement_count
     resolution: *const PioContingencyResolution,
 ) -> usize {
     unsafe { PioContingencyResolution::get(resolution) }
-        .map_or(0, |resolution| resolution.unrecognized_statements)
+        .map_or(0, |inner| inner.resolution.unrecognized_statements)
 }
 
 /// Read one case name by zero based position, in the set's own order.
@@ -3440,7 +3602,7 @@ pub unsafe extern "C" fn pio_contingency_resolution_case_is_resolved(
     index: usize,
 ) -> bool {
     unsafe { PioContingencyResolution::get(resolution) }
-        .and_then(|resolution| resolution.cases.get(index))
+        .and_then(|inner| inner.resolution.cases.get(index))
         .is_some_and(powerio::ResolvedCase::is_resolved)
 }
 
@@ -3454,7 +3616,7 @@ pub unsafe extern "C" fn pio_contingency_resolution_case_component_count(
     index: usize,
 ) -> usize {
     unsafe { PioContingencyResolution::get(resolution) }
-        .and_then(|resolution| resolution.cases.get(index))
+        .and_then(|inner| inner.resolution.cases.get(index))
         .map_or(0, |case| case.components.len())
 }
 
@@ -3502,14 +3664,15 @@ pub unsafe extern "C" fn pio_contingency_resolution_case_unresolved_count(
     index: usize,
 ) -> usize {
     unsafe { PioContingencyResolution::get(resolution) }
-        .and_then(|resolution| resolution.cases.get(index))
+        .and_then(|inner| inner.resolution.cases.get(index))
         .map_or(0, |case| case.unresolved.len())
 }
 
-/// Read why one action of one case bound to nothing, as the `UnresolvedReason`
-/// variant name in snake case: `no_such_bus`, `no_such_branch`,
-/// `ambiguous_branch`, `no_such_machine`, `no_such_shunt`, `no_such_load`,
-/// `no_such_transformer_3w`, or `unrecognized`.
+/// Read why one action of one case bound to nothing, as a fixed snake case
+/// name: `no_such_bus`, `no_such_branch`, `ambiguous_branch`,
+/// `ambiguous_transformer_3w`, `no_such_machine`, `no_such_shunt`,
+/// `no_such_load`, `no_such_transformer_3w`, or `unrecognized`. Python reports
+/// the same names.
 ///
 /// # Safety
 /// Pointers and handles must satisfy the crate-level safety requirements.
@@ -3531,7 +3694,43 @@ pub unsafe extern "C" fn pio_contingency_resolution_case_unresolved_reason(
                     ),
                 )
             })?;
-            Ok(PioStringView::new(unresolved_reason_name(action.reason)))
+            Ok(PioStringView::new(action.reason.name()))
+        })
+    }
+}
+
+/// Read the statement of one action of one case that bound to nothing, by zero
+/// based case and action position. The text is the `.con` line
+/// `pio_contingency_set_to_con` writes for that action, without its line
+/// ending, and the view borrows the resolution handle.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_contingency_resolution_case_unresolved_action(
+    resolution: *const PioContingencyResolution,
+    case_index: usize,
+    unresolved_index: usize,
+    error: *mut *mut PioError,
+) -> PioStringView {
+    unsafe {
+        entry(error, PioStringView::EMPTY, || {
+            let inner = require_resolution(resolution)?;
+            let case = inner.unresolved_actions.get(case_index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("contingency case index {case_index} is out of range"),
+                )
+            })?;
+            let statement = case.get(unresolved_index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!(
+                        "contingency case {case_index} unresolved index {unresolved_index} is out of range"
+                    ),
+                )
+            })?;
+            Ok(PioStringView::new(statement))
         })
     }
 }
@@ -5409,9 +5608,9 @@ pub unsafe extern "C" fn pio_value_geo_layer(
     }
 }
 
-/// Take the value as a PSS/E contingency description file. The set is copied
-/// out of the value, so the handle outlives the module the way
-/// `pio_contingency_set_parse` produces one.
+/// Borrow the value as a PSS/E contingency description file without copying.
+/// The handle holds the module owner alive, so it stays readable after the
+/// module handle is released. A set taken this way carries no reader notes.
 ///
 /// # Safety
 /// Pointers and handles must satisfy the crate-level safety requirements.
@@ -5423,22 +5622,26 @@ pub unsafe extern "C" fn pio_value_contingency_set(
     unsafe {
         entry(error, std::ptr::null_mut(), || {
             let value = require_value(value)?;
-            let Some(PioValue::ContingencySet(set)) = value.value() else {
+            if !matches!(value.value(), Some(PioValue::ContingencySet(_))) {
                 return Err(boundary_error(
                     &codes::REQUEST_CAPI_TYPE_MISMATCH,
                     "the value is not powerio.ContingencySet",
                 ));
-            };
+            }
             Ok(PioContingencySet::new_raw(ContingencySetInner {
-                set: set.clone(),
+                source: ContingencySource::Value(ValueInner {
+                    owner: Arc::clone(&value.owner),
+                    steps: value.steps.clone(),
+                }),
                 diagnostics: Vec::new(),
             }))
         })
     }
 }
 
-/// Take the value as a PSS/E subsystem description file. The set is copied out
-/// of the value, so the handle outlives the module.
+/// Borrow the value as a PSS/E subsystem description file without copying. The
+/// handle holds the module owner alive, so it stays readable after the module
+/// handle is released.
 ///
 /// # Safety
 /// Pointers and handles must satisfy the crate-level safety requirements.
@@ -5450,19 +5653,25 @@ pub unsafe extern "C" fn pio_value_subsystem_set(
     unsafe {
         entry(error, std::ptr::null_mut(), || {
             let value = require_value(value)?;
-            let Some(PioValue::SubsystemSet(set)) = value.value() else {
+            if !matches!(value.value(), Some(PioValue::SubsystemSet(_))) {
                 return Err(boundary_error(
                     &codes::REQUEST_CAPI_TYPE_MISMATCH,
                     "the value is not powerio.SubsystemSet",
                 ));
-            };
-            Ok(PioSubsystemSet::new_raw(set.clone()))
+            }
+            Ok(PioSubsystemSet::new_raw(SubsystemSetInner {
+                source: ContingencySource::Value(ValueInner {
+                    owner: Arc::clone(&value.owner),
+                    steps: value.steps.clone(),
+                }),
+            }))
         })
     }
 }
 
-/// Take the value as a PSS/E monitored element file. The set is copied out of
-/// the value, so the handle outlives the module.
+/// Borrow the value as a PSS/E monitored element file without copying. The
+/// handle holds the module owner alive, so it stays readable after the module
+/// handle is released.
 ///
 /// # Safety
 /// Pointers and handles must satisfy the crate-level safety requirements.
@@ -5474,13 +5683,18 @@ pub unsafe extern "C" fn pio_value_monitored_set(
     unsafe {
         entry(error, std::ptr::null_mut(), || {
             let value = require_value(value)?;
-            let Some(PioValue::MonitoredSet(set)) = value.value() else {
+            if !matches!(value.value(), Some(PioValue::MonitoredSet(_))) {
                 return Err(boundary_error(
                     &codes::REQUEST_CAPI_TYPE_MISMATCH,
                     "the value is not powerio.MonitoredSet",
                 ));
-            };
-            Ok(PioMonitoredSet::new_raw(set.clone()))
+            }
+            Ok(PioMonitoredSet::new_raw(MonitoredSetInner {
+                source: ContingencySource::Value(ValueInner {
+                    owner: Arc::clone(&value.owner),
+                    steps: value.steps.clone(),
+                }),
+            }))
         })
     }
 }
@@ -22232,6 +22446,28 @@ mod tests {
         module
     }
 
+    /// Read text back as a module under one contingency analysis format. The
+    /// module is released by the caller.
+    unsafe fn reread_contingency_text(name: &str, format: &str, text: &str) -> *mut PioModule {
+        let mut error = std::ptr::null_mut();
+        let source = unsafe {
+            pio_source_from_memory(
+                name.as_ptr().cast(),
+                name.len(),
+                text.as_ptr(),
+                text.len(),
+                &mut error,
+            )
+        };
+        assert!(!source.is_null(), "{}", unsafe { error_text(error) });
+        let module = unsafe { pio_parse(source, format.as_ptr().cast(), format.len(), &mut error) };
+        unsafe { pio_source_release(source) };
+        assert!(!module.is_null(), "{name}: {}", unsafe {
+            error_text(error)
+        });
+        module
+    }
+
     /// The balanced network of one PSS/E RAW fixture, plus the module that
     /// owns it. Both handles are released by the caller.
     unsafe fn contingency_network(name: &str) -> (*mut PioModule, *mut PioBalancedNetwork) {
@@ -22316,32 +22552,88 @@ mod tests {
                 0
             );
 
-            // Every case that did not bind states one reason per action.
-            let reasons: Vec<(String, String)> =
-                (0..pio_contingency_resolution_case_count(resolution))
-                    .filter(|index| {
-                        !pio_contingency_resolution_case_is_resolved(resolution, *index)
-                    })
-                    .map(|index| {
-                        assert_eq!(
-                            pio_contingency_resolution_case_unresolved_count(resolution, index),
-                            1
-                        );
-                        (
-                            view_text(pio_contingency_resolution_case_name(
-                                resolution, index, &mut error,
-                            )),
-                            view_text(pio_contingency_resolution_case_unresolved_reason(
-                                resolution, index, 0, &mut error,
-                            )),
-                        )
-                    })
-                    .collect();
-            assert_eq!(reasons.len(), 3);
-            assert!(
-                reasons.iter().any(|(_, reason)| reason == "unrecognized"),
-                "{reasons:?}"
+            // Every case that did not bind states one reason and the
+            // statement of each action that named no element.
+            let unresolved: Vec<(String, String, String)> = (0
+                ..pio_contingency_resolution_case_count(resolution))
+                .filter(|index| !pio_contingency_resolution_case_is_resolved(resolution, *index))
+                .map(|index| {
+                    assert_eq!(
+                        pio_contingency_resolution_case_unresolved_count(resolution, index),
+                        1
+                    );
+                    (
+                        view_text(pio_contingency_resolution_case_name(
+                            resolution, index, &mut error,
+                        )),
+                        view_text(pio_contingency_resolution_case_unresolved_reason(
+                            resolution, index, 0, &mut error,
+                        )),
+                        view_text(pio_contingency_resolution_case_unresolved_action(
+                            resolution, index, 0, &mut error,
+                        )),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                unresolved,
+                vec![
+                    (
+                        "BR_MISSING".to_owned(),
+                        "no_such_branch".to_owned(),
+                        "OPEN LINE FROM BUS      3 TO BUS      4 CIRCUIT 1".to_owned(),
+                    ),
+                    (
+                        "MACHINE_MISSING".to_owned(),
+                        "no_such_machine".to_owned(),
+                        "REMOVE MACHINE 9 FROM BUS      1".to_owned(),
+                    ),
+                    (
+                        "UNRECOGNIZED".to_owned(),
+                        "unrecognized".to_owned(),
+                        "PARALLEL BRANCH FROM BUS      1 TO BUS      2".to_owned(),
+                    ),
+                ]
             );
+            let past_end =
+                pio_contingency_resolution_case_unresolved_action(resolution, 0, 0, &mut error);
+            assert_eq!(past_end.len, 0);
+            assert_eq!(
+                view_text(pio_error_code(error)),
+                "BIND.CAPI.INDEX_OUT_OF_RANGE"
+            );
+            pio_error_release(error);
+            error = std::ptr::null_mut();
+
+            // The writer states every case, and the text it produces reads
+            // back as the same set.
+            let written = pio_contingency_set_to_con(set, &mut error);
+            assert!(!written.is_null(), "{}", error_text(error));
+            let written_text = view_text(pio_string_view(written));
+            pio_string_release(written);
+            assert!(
+                written_text.contains(
+                    "CONTINGENCY 'BR_MISSING'\nOPEN LINE FROM BUS      3 TO BUS      4 CIRCUIT 1\nEND\n"
+                ),
+                "{written_text}"
+            );
+            let echo = pio_source_from_memory(
+                c"written.con".as_ptr(),
+                "written.con".len(),
+                written_text.as_ptr(),
+                written_text.len(),
+                &mut error,
+            );
+            assert!(!echo.is_null(), "{}", error_text(error));
+            let again = pio_contingency_set_parse(echo, &mut error);
+            pio_source_release(echo);
+            assert!(!again.is_null(), "{}", error_text(error));
+            assert_eq!(pio_contingency_set_case_count(again), 20);
+            assert_eq!(
+                view_text(pio_contingency_set_case_name(again, 19, &mut error)),
+                "UNRECOGNIZED"
+            );
+            pio_contingency_set_release(again);
 
             // Retaining and releasing leaves every handle usable.
             let retained = pio_contingency_resolution_retain(resolution);
@@ -22387,16 +22679,49 @@ mod tests {
             error = std::ptr::null_mut();
             pio_value_release(cases_value);
 
+            // The handle holds the module owner, so releasing the module
+            // handle leaves the set readable and writable.
+            pio_module_release(cases_module);
+            assert_eq!(pio_contingency_set_case_count(set), 1);
+            let written = pio_contingency_set_to_con(set, &mut error);
+            assert!(!written.is_null(), "{}", error_text(error));
+            let written_text = view_text(pio_string_view(written));
+            assert!(
+                written_text.contains("CONTINGENCY 'EXPLICIT'"),
+                "{written_text}"
+            );
+            assert!(
+                written_text.contains("SINGLE BRANCH IN SUBSYSTEM 'NOSUCH'"),
+                "{written_text}"
+            );
+            pio_string_release(written);
+
             let sub_module = parse_contingency_fixture("selectors.sub");
             let sub_value = pio_module_value(sub_module);
             let subsystems = pio_value_subsystem_set(sub_value, &mut error);
             assert!(!subsystems.is_null(), "{}", error_text(error));
             pio_value_release(sub_value);
-            assert_eq!(pio_subsystem_set_count(subsystems), 9);
+            assert_eq!(pio_subsystem_set_count(subsystems), 10);
             assert_eq!(
                 view_text(pio_subsystem_set_name(subsystems, 0, &mut error)),
                 "A1"
             );
+            let written = pio_subsystem_set_to_sub(subsystems, &mut error);
+            assert!(!written.is_null(), "{}", error_text(error));
+            let written_text = view_text(pio_string_view(written));
+            pio_string_release(written);
+            let echo = reread_contingency_text("written.sub", "psse-sub", &written_text);
+            let echo_value = pio_module_value(echo);
+            let again = pio_value_subsystem_set(echo_value, &mut error);
+            assert!(!again.is_null(), "{}", error_text(error));
+            pio_value_release(echo_value);
+            assert_eq!(pio_subsystem_set_count(again), 10);
+            assert_eq!(
+                view_text(pio_subsystem_set_name(again, 7, &mut error)),
+                "BAREJOIN"
+            );
+            pio_subsystem_set_release(again);
+            pio_module_release(echo);
 
             let (network_module, network) = contingency_network("select_v33.raw");
             let mut expansion_notes = std::ptr::null_mut();
@@ -22409,6 +22734,14 @@ mod tests {
             );
             assert!(!expanded.is_null(), "{}", error_text(error));
             assert_eq!(pio_contingency_set_case_count(expanded), 8);
+            // An expanded set reaches a file through its own writer.
+            let written = pio_contingency_set_to_con(expanded, &mut error);
+            assert!(!written.is_null(), "{}", error_text(error));
+            assert!(
+                view_text(pio_string_view(written)).contains("CONTINGENCY 'T_101_102_103_1'"),
+                "the expanded text states every generated case"
+            );
+            pio_string_release(written);
             assert_eq!(
                 view_text(pio_contingency_set_case_name(expanded, 0, &mut error)),
                 "EXPLICIT"
@@ -22428,6 +22761,18 @@ mod tests {
             assert!(!monitored.is_null(), "{}", error_text(error));
             pio_value_release(monitored_value);
             assert_eq!(pio_monitored_set_statement_count(monitored), 12);
+            let written = pio_monitored_set_to_mon(monitored, &mut error);
+            assert!(!written.is_null(), "{}", error_text(error));
+            let written_text = view_text(pio_string_view(written));
+            pio_string_release(written);
+            let echo = reread_contingency_text("written.mon", "psse-mon", &written_text);
+            let echo_value = pio_module_value(echo);
+            let again = pio_value_monitored_set(echo_value, &mut error);
+            assert!(!again.is_null(), "{}", error_text(error));
+            pio_value_release(echo_value);
+            assert_eq!(pio_monitored_set_statement_count(again), 12);
+            pio_monitored_set_release(again);
+            pio_module_release(echo);
 
             pio_monitored_set_release(monitored);
             pio_module_release(monitored_module);
@@ -22437,7 +22782,6 @@ mod tests {
             pio_subsystem_set_release(subsystems);
             pio_module_release(sub_module);
             pio_contingency_set_release(set);
-            pio_module_release(cases_module);
         }
     }
 

@@ -2489,7 +2489,7 @@ PioContingencySet *pio_contingency_set_parse(const PioSource *source, PioError *
 
 /**
  * Return the notes the contingency reader produced, which are empty for a set
- * taken from a module value.
+ * taken from a module value and for an expanded set.
  *
  * # Safety
  * Pointers and handles must satisfy the crate-level safety requirements.
@@ -2512,6 +2512,16 @@ size_t pio_contingency_set_case_count(const PioContingencySet *set);
 PioStringView pio_contingency_set_case_name(const PioContingencySet *set,
                                             size_t index,
                                             PioError **error);
+
+/**
+ * Write the set back as `.con` text, so an expanded set reaches a file. The
+ * text is owned by the returned handle and read with `pio_string_view`;
+ * release it with `pio_string_release`.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioString *pio_contingency_set_to_con(const PioContingencySet *set, PioError **error);
 
 /**
  *
@@ -2545,6 +2555,16 @@ size_t pio_subsystem_set_count(const PioSubsystemSet *set);
 PioStringView pio_subsystem_set_name(const PioSubsystemSet *set, size_t index, PioError **error);
 
 /**
+ * Write the set back as `.sub` text. The text is owned by the returned
+ * handle and read with `pio_string_view`; release it with
+ * `pio_string_release`.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioString *pio_subsystem_set_to_sub(const PioSubsystemSet *set, PioError **error);
+
+/**
  *
  * # Safety
  * Pointers and handles must satisfy the crate-level safety requirements.
@@ -2566,6 +2586,16 @@ void pio_subsystem_set_release(PioSubsystemSet *set);
  * Pointers and handles must satisfy the crate-level safety requirements.
  */
 size_t pio_monitored_set_statement_count(const PioMonitoredSet *set);
+
+/**
+ * Write the set back as `.mon` text. The text is owned by the returned
+ * handle and read with `pio_string_view`; release it with
+ * `pio_string_release`.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioString *pio_monitored_set_to_mon(const PioMonitoredSet *set, PioError **error);
 
 /**
  *
@@ -2699,15 +2729,30 @@ size_t pio_contingency_resolution_case_unresolved_count(const PioContingencyReso
                                                         size_t index);
 
 /**
- * Read why one action of one case bound to nothing, as the `UnresolvedReason`
- * variant name in snake case: `no_such_bus`, `no_such_branch`,
- * `ambiguous_branch`, `no_such_machine`, `no_such_shunt`, `no_such_load`,
- * `no_such_transformer_3w`, or `unrecognized`.
+ * Read why one action of one case bound to nothing, as a fixed snake case
+ * name: `no_such_bus`, `no_such_branch`, `ambiguous_branch`,
+ * `ambiguous_transformer_3w`, `no_such_machine`, `no_such_shunt`,
+ * `no_such_load`, `no_such_transformer_3w`, or `unrecognized`. Python reports
+ * the same names.
  *
  * # Safety
  * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioStringView pio_contingency_resolution_case_unresolved_reason(const PioContingencyResolution *resolution,
+                                                                size_t case_index,
+                                                                size_t unresolved_index,
+                                                                PioError **error);
+
+/**
+ * Read the statement of one action of one case that bound to nothing, by zero
+ * based case and action position. The text is the `.con` line
+ * `pio_contingency_set_to_con` writes for that action, without its line
+ * ending, and the view borrows the resolution handle.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioStringView pio_contingency_resolution_case_unresolved_action(const PioContingencyResolution *resolution,
                                                                 size_t case_index,
                                                                 size_t unresolved_index,
                                                                 PioError **error);
@@ -3155,9 +3200,9 @@ PioBalancedNetwork *pio_value_balanced_network(const PioValueHandle *value, PioE
 PioGeoLayer *pio_value_geo_layer(const PioValueHandle *value, PioError **error);
 
 /**
- * Take the value as a PSS/E contingency description file. The set is copied
- * out of the value, so the handle outlives the module the way
- * `pio_contingency_set_parse` produces one.
+ * Borrow the value as a PSS/E contingency description file without copying.
+ * The handle holds the module owner alive, so it stays readable after the
+ * module handle is released. A set taken this way carries no reader notes.
  *
  * # Safety
  * Pointers and handles must satisfy the crate-level safety requirements.
@@ -3165,8 +3210,9 @@ PioGeoLayer *pio_value_geo_layer(const PioValueHandle *value, PioError **error);
 PioContingencySet *pio_value_contingency_set(const PioValueHandle *value, PioError **error);
 
 /**
- * Take the value as a PSS/E subsystem description file. The set is copied out
- * of the value, so the handle outlives the module.
+ * Borrow the value as a PSS/E subsystem description file without copying. The
+ * handle holds the module owner alive, so it stays readable after the module
+ * handle is released.
  *
  * # Safety
  * Pointers and handles must satisfy the crate-level safety requirements.
@@ -3174,8 +3220,9 @@ PioContingencySet *pio_value_contingency_set(const PioValueHandle *value, PioErr
 PioSubsystemSet *pio_value_subsystem_set(const PioValueHandle *value, PioError **error);
 
 /**
- * Take the value as a PSS/E monitored element file. The set is copied out of
- * the value, so the handle outlives the module.
+ * Borrow the value as a PSS/E monitored element file without copying. The
+ * handle holds the module owner alive, so it stays readable after the module
+ * handle is released.
  *
  * # Safety
  * Pointers and handles must satisfy the crate-level safety requirements.

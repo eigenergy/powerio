@@ -90,7 +90,9 @@ print(case.select_subsystem_buses(groups.text, "A1"))
 ```
 
 C reaches them through `pio_value_contingency_set`,
-`pio_contingency_set_resolve`, and `pio_contingency_set_expand`; the
+`pio_contingency_set_resolve`, and `pio_contingency_set_expand`, and writes
+each file back with `pio_contingency_set_to_con`, `pio_subsystem_set_to_sub`,
+and `pio_monitored_set_to_mon`, so an expanded set reaches a file from C. The
 [C API guide](capi.md) lists the accessors.
 
 ## What is kept as text

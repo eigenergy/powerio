@@ -99,11 +99,12 @@ list of artifacts it wrote. PowerIO IR has its own pair,
 accessor.
 
 The typed accessors cover balanced and multiconductor networks, operating
-points, PF/OPF/SCUC instances and solutions, time series, scenario sets, a
-geographic layer, and the three PSS/E contingency analysis files.
+points, PF/OPF/SCUC instances and solutions, time series, scenario sets, and
+the three PSS/E contingency analysis files.
 They neither serialize nor clone the value, and a child handle keeps its
 module owner alive, so it stays valid even after you release the original
-module handle.
+module handle. `pio_value_geo_layer` stands apart: it copies the layer out of
+the value, so its handle owns the layer and holds no module.
 
 Every opaque handle has `retain` and `release` functions, and releasing
 `NULL` does nothing. Borrowed string, byte, index, and floating point views
