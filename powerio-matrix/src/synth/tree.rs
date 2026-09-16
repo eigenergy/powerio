@@ -1,6 +1,6 @@
 //! Random spanning tree topology. Produces a singular weighted Laplacian (rank n-1).
 
-use rand::Rng;
+use rand::RngExt;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
