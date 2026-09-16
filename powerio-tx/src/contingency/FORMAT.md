@@ -357,16 +357,17 @@ implicit group, which holds the selectors stated outside any `JOIN`,
 `JOIN` blocks with no name are therefore two groups whose bus sets union,
 rather than one group whose selectors intersect.
 
-A line whose first token is a selector keyword but whose values are not the
-numbers it needs is reported as `READ.SUB.SOURCE_MALFORMED`, a warning; any
-other line inside a subsystem is reported as
-`READ.SUB.STATEMENT_UNRECOGNIZED`. Both keep their trimmed line where the file
-stated it: on the `SelectorGroup` when a `JOIN` is open, and on the subsystem
-otherwise. That is where the TARA-only statements land: `SCALE ALL FOR EXPORT
-INCLUDE OFFLINE`, `PARTICIPATE`, `ADD ...`, `BASELOAD n`, `TURBINETYPE n`, and
-`EXCEPT`. A `JOIN` line read while a `JOIN` is already open opens no group and
-is kept in the open one the same way. A line at file level outside any
-subsystem is kept on the set and reported the same way. The reader records at
+A `KVRANGE` states its band low end first. A line whose first token is a
+selector keyword but whose values are not the numbers it needs, a `KVRANGE`
+whose ends run the other way round included, is reported as
+`READ.SUB.SOURCE_MALFORMED`, a warning; any other line inside a subsystem is
+reported as `READ.SUB.STATEMENT_UNRECOGNIZED`. Both keep their trimmed line
+where the file stated it: on the `SelectorGroup` when a `JOIN` is open, and on
+the subsystem otherwise. That is where the TARA-only statements land: `SCALE
+ALL FOR EXPORT INCLUDE OFFLINE`, `PARTICIPATE`, `ADD ...`, `BASELOAD n`,
+`TURBINETYPE n`, and `EXCEPT`. A `JOIN` line read while a `JOIN` is already
+open opens no group and is kept in the open one the same way. A line at file
+level outside any subsystem is kept on the set and reported the same way. The reader records at
 most 16 notes and then one `READ.SUB.NOTES_TRUNCATED`.
 
 ### Which buses a subsystem names
@@ -431,6 +432,10 @@ END
 | `MONITOR INTERFACE name [RATING x [MW]]` ... `END` | | `Interface { name, rating_mw, branches }` |
 | `MONITOR VOLTAGE RANGE scope lo hi` | | `VoltageRange { scope, vmin, vmax }` |
 | `MONITOR VOLTAGE DEVIATION scope down [up]` | | `VoltageDeviation { scope, down, up }` |
+
+A `MONITOR VOLTAGE RANGE` states its band low end first; one whose ends run
+the other way round keeps its line as text. Every limit a statement states is
+finite, so a value that is not keeps its line the same way.
 
 A `MONITOR BRANCHES` line with nothing after it opens a block of branch lines
 that runs to the next `END`, and `MONITOR INTERFACE` always opens one. Inside a

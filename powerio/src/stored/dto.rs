@@ -1724,9 +1724,27 @@ fn validate_geo_layer(layer: &powerio_tx::GeoLayer) -> Result<(), String> {
     Ok(())
 }
 
-/// Every case names itself and every change states a finite amount, which is
-/// what the `.con` reader admits into a typed statement.
+/// Every statement kept as text states the 1-based line it was read from, so
+/// line 0 names no line of any file.
+fn validate_retained(
+    what: &str,
+    statements: &[powerio_tx::RetainedStatement],
+) -> Result<(), String> {
+    for statement in statements {
+        if statement.line == 0 {
+            return Err(format!(
+                "{what} states a statement kept as text whose line is 0, and lines are 1 based"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// What the `.con` reader admits into a typed statement: every case names
+/// itself, every automatic specification names a subsystem, every change
+/// states a finite amount, and every statement kept as text states its line.
 fn validate_contingency_set(set: &powerio_tx::ContingencySet) -> Result<(), String> {
+    validate_retained("the contingency set", &set.retained)?;
     for (index, case) in set.cases.iter().enumerate() {
         if case.name.trim().is_empty() {
             return Err(format!("contingency case {index} has no name"));
@@ -1755,13 +1773,19 @@ fn validate_contingency_set(set: &powerio_tx::ContingencySet) -> Result<(), Stri
     Ok(())
 }
 
-/// Every subsystem names itself and every base kV band runs low to high,
-/// which is what the `.sub` reader admits into a typed selector.
+/// What the `.sub` reader admits into a typed selector: every subsystem names
+/// itself, every base kV band runs low to high on finite ends, and every
+/// statement kept as text, on the set or on a subsystem, states its line.
 fn validate_subsystem_set(set: &powerio_tx::SubsystemSet) -> Result<(), String> {
+    validate_retained("the subsystem set", &set.retained)?;
     for (index, subsystem) in set.subsystems.iter().enumerate() {
         if subsystem.name.trim().is_empty() {
             return Err(format!("subsystem {index} has no name"));
         }
+        validate_retained(
+            &format!("subsystem `{}`", subsystem.name),
+            &subsystem.retained,
+        )?;
         for group in &subsystem.groups {
             for selector in &group.selectors {
                 if let powerio_tx::SubsystemSelector::KvRange { lo, hi } = selector
@@ -1778,17 +1802,44 @@ fn validate_subsystem_set(set: &powerio_tx::SubsystemSet) -> Result<(), String> 
     Ok(())
 }
 
-/// Every voltage band runs low to high and every statement naming a subsystem
-/// names one, which is what the `.mon` reader admits into a typed statement.
+/// The buses a voltage statement applies to are named by a subsystem the
+/// `.sub` file states or by a finite base kV level.
+fn validate_monitor_scope(index: usize, scope: &powerio_tx::MonitorScope) -> Result<(), String> {
+    match scope {
+        powerio_tx::MonitorScope::Subsystem { name } if name.trim().is_empty() => Err(format!(
+            "monitor statement {index} states a scope that names no subsystem"
+        )),
+        powerio_tx::MonitorScope::Kv { kv } if !kv.is_finite() => Err(format!(
+            "monitor statement {index} states a scope whose base kV is not finite"
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// What the `.mon` reader admits into a typed statement: every voltage range
+/// runs low to high on finite ends, every deviation and every interface rating
+/// is finite, every statement and every scope naming a subsystem names one,
+/// every interface names itself, and every statement kept as text states its
+/// line.
 fn validate_monitored_set(set: &powerio_tx::MonitoredSet) -> Result<(), String> {
+    validate_retained("the monitored element set", &set.retained)?;
     for (index, statement) in set.statements.iter().enumerate() {
         match statement {
-            powerio_tx::MonitorStatement::VoltageRange { vmin, vmax, .. } => {
+            powerio_tx::MonitorStatement::VoltageRange { scope, vmin, vmax } => {
                 if !(vmin.is_finite() && vmax.is_finite() && vmin <= vmax) {
                     return Err(format!(
                         "monitor statement {index} states a voltage range that does not run low to high"
                     ));
                 }
+                validate_monitor_scope(index, scope)?;
+            }
+            powerio_tx::MonitorStatement::VoltageDeviation { scope, down, up } => {
+                if !down.is_finite() || up.is_some_and(|up| !up.is_finite()) {
+                    return Err(format!(
+                        "monitor statement {index} states a voltage deviation that is not finite"
+                    ));
+                }
+                validate_monitor_scope(index, scope)?;
             }
             powerio_tx::MonitorStatement::BranchesInSubsystem { subsystem, .. }
             | powerio_tx::MonitorStatement::TiesFromSubsystem { subsystem } => {
@@ -1796,8 +1847,17 @@ fn validate_monitored_set(set: &powerio_tx::MonitoredSet) -> Result<(), String> 
                     return Err(format!("monitor statement {index} names no subsystem"));
                 }
             }
-            powerio_tx::MonitorStatement::Interface { name, .. } if name.trim().is_empty() => {
-                return Err(format!("monitor statement {index} names no interface"));
+            powerio_tx::MonitorStatement::Interface {
+                name, rating_mw, ..
+            } => {
+                if name.trim().is_empty() {
+                    return Err(format!("monitor statement {index} names no interface"));
+                }
+                if rating_mw.is_some_and(|rating| !rating.is_finite()) {
+                    return Err(format!(
+                        "monitor statement {index} states an interface rating that is not finite"
+                    ));
+                }
             }
             _ => {}
         }

@@ -108,6 +108,26 @@ fn a_monitored_element_file_adds_its_own_counts() {
 }
 
 #[test]
+fn a_subsystem_file_is_read_with_a_monitored_element_file() {
+    let case = fixture("select_v33.raw");
+    let con = fixture("expand.con");
+    let sub = fixture("selectors.sub");
+    let out = run(&[
+        "contingency",
+        "resolve",
+        case.to_str().unwrap(),
+        con.to_str().unwrap(),
+        "--sub",
+        sub.to_str().unwrap(),
+    ]);
+    // The subsystems name the buses a monitored statement works over, so
+    // --sub alone states a file nothing would read.
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("--mon"), "{stderr}");
+}
+
+#[test]
 fn expand_writes_the_generated_cases_as_con_text() {
     let case = fixture("select_v33.raw");
     let con = fixture("expand.con");

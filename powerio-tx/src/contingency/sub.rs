@@ -741,13 +741,13 @@ fn take_selector(upper: &[String], at: usize) -> Option<(SubsystemSelector, usiz
             },
             at + 3,
         )),
-        "KVRANGE" => Some((
-            SubsystemSelector::KvRange {
-                lo: float(1)?,
-                hi: float(2)?,
-            },
-            at + 3,
-        )),
+        // A band whose ends run the wrong way round states no range of base
+        // kV values, so the line stays text rather than reading as a selector
+        // no writer could state again.
+        "KVRANGE" => {
+            let (lo, hi) = (float(1)?, float(2)?);
+            (lo <= hi).then_some((SubsystemSelector::KvRange { lo, hi }, at + 3))
+        }
         _ => None,
     }
 }

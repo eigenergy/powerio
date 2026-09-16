@@ -391,11 +391,12 @@ enum ContingencyCommand {
         case: PathBuf,
         /// Contingency description file (.con).
         contingency: PathBuf,
-        /// Subsystem description file (.sub). Without one, a statement that
-        /// names a subsystem names no buses.
-        #[arg(long)]
+        /// Subsystem description file (.sub), read with --mon: it names the
+        /// buses a monitored statement's subsystem holds. Without one, such a
+        /// statement names no bus.
+        #[arg(long, requires = "mon")]
         sub: Option<PathBuf>,
-        /// Monitored element file (.mon), resolved against the same case and
+        /// Monitored element file (.mon), bound to the same case and
         /// subsystems.
         #[arg(long)]
         mon: Option<PathBuf>,
@@ -2606,7 +2607,11 @@ fn run_contingency_resolve(
         Some(path) => read_subsystem_set(path)?,
         None => powerio::SubsystemSet::default(),
     };
-    let resolution = set.resolve(&network);
+    // One index serves both bindings: it walks the network's tables once and
+    // states the PSS/E id of every element for the contingency set and the
+    // monitored set alike.
+    let index = powerio::PsseEquipmentIndex::new(&network);
+    let resolution = set.resolve_with(&index);
     report_diagnostics(&resolution.diagnostics());
 
     let unresolved: Vec<serde_json::Value> = resolution
@@ -2635,7 +2640,7 @@ fn run_contingency_resolve(
     let monitored = match mon {
         Some(path) => {
             let set = read_monitored_set(path)?;
-            let resolved = set.resolve(&network, &subsystems);
+            let resolved = set.resolve_with(&index, &subsystems);
             report_diagnostics(&resolved.diagnostics());
             let counts = serde_json::json!({
                 "branches": resolved.branch_rows.len(),
@@ -2697,7 +2702,7 @@ fn run_contingency_expand(
     let network = read_network(case, from)?;
     let set = read_contingency_set(contingency)?;
     let subsystems = read_subsystem_set(sub)?;
-    let expanded = set.expand(&network, &subsystems);
+    let expanded = set.expand_with(&powerio::PsseEquipmentIndex::new(&network), &subsystems);
     report_diagnostics(&expanded.diagnostics);
     report_progress(format!(
         "expanded to {} case(s), {} specification(s) left unexpanded",

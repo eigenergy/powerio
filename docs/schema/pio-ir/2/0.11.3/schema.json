@@ -2255,13 +2255,16 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "description": "How far the value moves, in `unit`. Finite: a line stating a non-finite\namount does not read as a change and keeps its text, because no written\nform of one reads back."
         },
         "op": {
-          "$ref": "#/$defs/ChangeOp"
+          "$ref": "#/$defs/ChangeOp",
+          "description": "Whether the amount adds to, subtracts from, or replaces the value."
         },
         "unit": {
-          "$ref": "#/$defs/ChangeUnit"
+          "$ref": "#/$defs/ChangeUnit",
+          "description": "The unit the amount is stated in."
         }
       },
       "required": [
@@ -2689,7 +2692,7 @@
           "type": "object"
         },
         {
-          "description": "A statement outside the grammar, kept as its original line. A nested\ndispatch block keeps all of its lines, joined with newlines.",
+          "description": "A statement outside the grammar, kept as its trimmed line. A nested\ndispatch block keeps all of its trimmed lines, joined with newlines.",
           "properties": {
             "kind": {
               "const": "unrecognized",
@@ -2750,7 +2753,7 @@
           "type": "array"
         },
         "retained": {
-          "description": "File level statements outside the grammar, kept as their original line.",
+          "description": "File level statements outside the grammar, kept as their trimmed line.",
           "items": {
             "$ref": "#/$defs/RetainedStatement"
           },
@@ -7598,6 +7601,41 @@
       ],
       "type": "object"
     },
+    "JoinName": {
+      "description": "What a `JOIN` statement stated after the keyword.",
+      "oneOf": [
+        {
+          "description": "`JOIN` with no name, which the writer states as `JOIN`.",
+          "properties": {
+            "kind": {
+              "const": "anonymous",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`JOIN name`.",
+          "properties": {
+            "kind": {
+              "const": "named",
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "name"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "Junction": {
       "description": "A CIM junction and its conducting equipment identity.\n\nIts electrical connection is recorded by the corresponding entries in\n[`DetailedConnectivity::terminals`].",
       "properties": {
@@ -10045,14 +10083,21 @@
       "type": "object"
     },
     "RetainedStatement": {
-      "description": "A file level statement kept as its original line, with the 1-based line it\nwas read from.",
+      "description": "A file level statement outside the grammar, kept as text.",
       "properties": {
+        "after_end": {
+          "default": false,
+          "description": "Whether the line follows the file level `END`. The writer states these\nafter the `END` it writes, so reading the written file places them\nafter the terminator again rather than reading them as grammar.",
+          "type": "boolean"
+        },
         "line": {
+          "description": "The 1-based line the statement was read from, so the lowest line a\nstatement can carry is 1.",
           "format": "uint",
-          "minimum": 0,
+          "minimum": 1,
           "type": "integer"
         },
         "text": {
+          "description": "The statement's line, with leading and trailing whitespace dropped.",
           "type": "string"
         }
       },
@@ -12089,12 +12134,16 @@
     "SelectorGroup": {
       "description": "One group of selectors whose bus sets intersect across selector types.",
       "properties": {
-        "name": {
-          "description": "The `JOIN` name, or `None` for the implicit group.",
-          "type": [
-            "string",
-            "null"
-          ]
+        "join": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JoinName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How the file stated the group: absent for the implicit group, which\nholds the selectors stated outside any `JOIN`, and present for a `JOIN`\nblock whether or not that block states a name. Two `JOIN` blocks with\nno name are two groups, and their bus sets union rather than intersect."
         },
         "selectors": {
           "items": {

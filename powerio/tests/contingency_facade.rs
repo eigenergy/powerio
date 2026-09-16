@@ -229,3 +229,200 @@ fn each_token_reports_a_single_text_file_that_emits() {
         assert!(info.can_emit, "{token}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// What the readers state and the facade accepts
+// ---------------------------------------------------------------------------
+
+fn parse_text(name: &str, token: &str, text: &str) -> powerio::PioModule<PioValue> {
+    let options = powerio::ParseOptions::default()
+        .format(token)
+        .expect("a declared token");
+    powerio::parse_with_options(
+        Source::from_memory(name, text.as_bytes().to_vec()).expect("memory source"),
+        &options,
+    )
+    .expect("the text parses")
+}
+
+fn serialized(module: &powerio::PioModule<PioValue>) -> serde_json::Value {
+    let stored = powerio::serialize(module, Destination::memory("module.pio.json").unwrap())
+        .expect("serialize");
+    let powerio_core::EmittedOutput::Memory { mut artifacts } = stored.into_output() else {
+        panic!("a memory destination returns memory artifacts");
+    };
+    serde_json::from_slice(&artifacts.pop().expect("one document").into_bytes())
+        .expect("the document is JSON")
+}
+
+fn refusal(document: &serde_json::Value) -> String {
+    let text = serde_json::to_vec(document).expect("JSON");
+    let error = powerio::deserialize(Source::from_memory("module.pio.json", text).unwrap())
+        .expect_err("the document is refused");
+    error.to_string()
+}
+
+/// The readers keep a band whose ends run the wrong way round as text, so no
+/// set the readers produce states one and every parsed module serializes.
+#[test]
+fn a_band_stated_the_wrong_way_round_stays_text_and_the_module_serializes() {
+    let sub = parse_text(
+        "bands.sub",
+        "psse-sub",
+        "SUBSYSTEM 'A'\n   KVRANGE 240.0 100.0\n   AREA 1\nEND\nEND\n",
+    );
+    assert!(
+        sub.diagnostics()
+            .iter()
+            .any(|note| note.code() == "READ.SUB.SOURCE_MALFORMED"),
+        "{:?}",
+        sub.diagnostics()
+    );
+    let PioValue::SubsystemSet(set) = sub.value() else {
+        panic!("a .sub parses to powerio.SubsystemSet");
+    };
+    let subsystem = set.get("A").expect("subsystem A");
+    assert_eq!(subsystem.retained[0].text, "KVRANGE 240.0 100.0");
+    assert_eq!(subsystem.groups.len(), 1, "only the AREA selector reads");
+
+    let mon = parse_text(
+        "bands.mon",
+        "psse-mon",
+        "MONITOR VOLTAGE RANGE ALL BUSES 1.05 0.95\nMONITOR TIES FROM SUBSYSTEM 'A'\nEND\n",
+    );
+    assert!(
+        mon.diagnostics()
+            .iter()
+            .any(|note| note.code() == "READ.MON.STATEMENT_UNRECOGNIZED"),
+        "{:?}",
+        mon.diagnostics()
+    );
+    let PioValue::MonitoredSet(set) = mon.value() else {
+        panic!("a .mon parses to powerio.MonitoredSet");
+    };
+    assert_eq!(
+        set.retained[0].text,
+        "MONITOR VOLTAGE RANGE ALL BUSES 1.05 0.95"
+    );
+    assert_eq!(set.statements.len(), 1);
+
+    // Every module the readers produced carries the PowerIO IR document rules.
+    serialized(&sub);
+    serialized(&mon);
+}
+
+/// A document stating what no reader could have read is refused rather than
+/// decoded into a set that writes a file the reader would keep as text.
+#[test]
+fn deserialize_refuses_a_document_no_reader_could_have_stated() {
+    let mut document = serialized(&parse_text(
+        "lines.sub",
+        "psse-sub",
+        "SUBSYSTEM 'A'\n   KVRANGE 100.0 240.0\n   PARTICIPATE\nEND\nEND\nBUSNAMES\n",
+    ));
+    let data = &mut document["value"]["data"];
+    assert_eq!(data["retained"][0]["line"], 6);
+    assert_eq!(data["subsystems"][0]["retained"][0]["line"], 3);
+
+    let mut set_level = document.clone();
+    set_level["value"]["data"]["retained"][0]["line"] = serde_json::json!(0);
+    assert!(refusal(&set_level).contains("lines are 1 based"));
+
+    let mut subsystem_level = document.clone();
+    subsystem_level["value"]["data"]["subsystems"][0]["retained"][0]["line"] = serde_json::json!(0);
+    let message = refusal(&subsystem_level);
+    assert!(message.contains("subsystem `A`"), "{message}");
+
+    let mut band = document.clone();
+    band["value"]["data"]["subsystems"][0]["groups"][0]["selectors"][0]["lo"] =
+        serde_json::json!(400.0);
+    assert!(refusal(&band).contains("does not run low to high"));
+
+    let mut monitored = serialized(&parse_text(
+        "lines.mon",
+        "psse-mon",
+        "MONITOR VOLTAGE RANGE SUBSYSTEM 'A' 0.95 1.05\nMONITOR FLOWS\nEND\n",
+    ));
+    let mut line = monitored.clone();
+    line["value"]["data"]["retained"][0]["line"] = serde_json::json!(0);
+    assert!(refusal(&line).contains("lines are 1 based"));
+
+    monitored["value"]["data"]["statements"][0]["vmax"] = serde_json::json!(0.9);
+    assert!(refusal(&monitored).contains("does not run low to high"));
+
+    let mut scope = serialized(&parse_text(
+        "scope.mon",
+        "psse-mon",
+        "MONITOR VOLTAGE DEVIATION SUBSYSTEM 'A' 0.05\nEND\n",
+    ));
+    scope["value"]["data"]["statements"][0]["scope"]["name"] = serde_json::json!("  ");
+    let message = refusal(&scope);
+    assert!(message.contains("names no subsystem"), "{message}");
+}
+
+/// A value built in Rust states what the readers never state: a limit that is
+/// not a number. Writing a document from one is refused.
+#[test]
+fn serialize_refuses_a_limit_that_is_not_finite() {
+    use powerio::{MonitorScope, MonitorStatement, MonitoredSet};
+
+    let refuse = |set: MonitoredSet, what: &str| {
+        let module = powerio::PioModule::new(PioValue::MonitoredSet(set));
+        let error = powerio::serialize(&module, Destination::memory("m.pio.json").unwrap())
+            .expect_err(what);
+        assert!(error.to_string().contains("not finite"), "{error}");
+    };
+
+    refuse(
+        MonitoredSet {
+            statements: vec![MonitorStatement::Interface {
+                name: "W".to_owned(),
+                rating_mw: Some(f64::INFINITY),
+                branches: Vec::new(),
+            }],
+            ..MonitoredSet::default()
+        },
+        "an interface rating that is not finite",
+    );
+    refuse(
+        MonitoredSet {
+            statements: vec![MonitorStatement::VoltageDeviation {
+                scope: MonitorScope::AllBuses,
+                down: 0.05,
+                up: Some(f64::NAN),
+            }],
+            ..MonitoredSet::default()
+        },
+        "a deviation that is not finite",
+    );
+    refuse(
+        MonitoredSet {
+            statements: vec![MonitorStatement::VoltageDeviation {
+                scope: MonitorScope::Kv { kv: f64::NAN },
+                down: 0.05,
+                up: None,
+            }],
+            ..MonitoredSet::default()
+        },
+        "a scope base kV that is not finite",
+    );
+
+    let set = powerio::ContingencySet {
+        cases: vec![powerio::ContingencyCase {
+            name: "C".to_owned(),
+            actions: vec![powerio::ContingencyAction::ChangeLoad {
+                bus: powerio::BusId(1),
+                change: powerio::Change {
+                    op: powerio::ChangeOp::Increase,
+                    amount: f64::INFINITY,
+                    unit: powerio::ChangeUnit::Mw,
+                },
+            }],
+        }],
+        ..powerio::ContingencySet::default()
+    };
+    let module = powerio::PioModule::new(PioValue::ContingencySet(set));
+    let error = powerio::serialize(&module, Destination::memory("m.pio.json").unwrap())
+        .expect_err("a change amount that is not finite");
+    assert!(error.to_string().contains("not finite"), "{error}");
+}

@@ -1049,8 +1049,9 @@ Schema definition: `RetainedStatement`.
 
 | field | type | unit | sign | invariant | if absent |
 |---|---|---|---|---|---|
-| `line` | integer | | | the 1-based source line the statement was read from | required |
-| `text` | string | | | the original line | required |
+| `line` | integer | | | the 1-based source line the statement was read from; at least 1 | required |
+| `text` | string | | | the line, with its surrounding whitespace dropped | required |
+| `after_end` | boolean | | | the statement follows the file level `END`, and the `.con` writer states it after the `END` it writes; the `.sub` and `.mon` writers state every kept statement before theirs, so it is false there | false |
 
 ## powerio.SubsystemSet
 
@@ -1083,8 +1084,12 @@ Schema definition: `SelectorGroup`.
 
 | field | type | unit | sign | invariant | if absent |
 |---|---|---|---|---|---|
-| `name` | string or null | | | the `JOIN` name; null is the implicit group | null |
+| `join` | `JoinName` or null | | | how the file stated the group; null is the implicit group, which holds the selectors stated outside any `JOIN` | null |
 | `selectors` | array of `SubsystemSelector` | | | bus sets that intersect across selector types within one group | empty |
+
+`JoinName` is one tagged object, keyed by `kind`: `anonymous` has no further
+member and states a `JOIN` with no name, and `named` carries the group `name`.
+Two groups stated `anonymous` are two groups, whose bus sets union.
 
 `SubsystemSelector` is one tagged object, keyed by `kind`. `area`, `zone`, and
 `owner` name an inclusive `from` and `to` number range; `bus` names an

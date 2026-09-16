@@ -245,7 +245,9 @@ pub struct SkipRule {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RetainedStatement {
-    /// The 1-based line the statement was read from.
+    /// The 1-based line the statement was read from, so the lowest line a
+    /// statement can carry is 1.
+    #[cfg_attr(feature = "schema", schemars(range(min = 1)))]
     pub line: usize,
     /// The statement's line, with leading and trailing whitespace dropped.
     pub text: String,

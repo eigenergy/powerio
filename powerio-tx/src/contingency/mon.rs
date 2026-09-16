@@ -537,7 +537,10 @@ fn parse_voltage(upper: &[String], words: &[&str]) -> Option<MonitorStatement> {
         .collect();
     let values = values?;
     match (deviation, values.as_slice()) {
-        (false, [vmin, vmax]) => Some(MonitorStatement::VoltageRange {
+        // A band whose ends run the wrong way round states no range of voltage
+        // magnitudes, so the line stays text rather than reading as a
+        // statement no writer could state again.
+        (false, [vmin, vmax]) => (vmin <= vmax).then_some(MonitorStatement::VoltageRange {
             scope,
             vmin: *vmin,
             vmax: *vmax,

@@ -111,8 +111,10 @@ $ powerio contingency expand case.raw cases.con --sub groups.sub -o expanded.con
 
 `resolve` prints the case counts, one line per case that bound to nothing with
 its reason, and, when `--mon` names a monitored element file, the monitored
-row counts. `--json` prints the same counts as one object on stdout. `expand`
-writes the expanded `.con` text to stdout, or to the file `-o` names.
+row counts. `--sub` is read with `--mon`, whose statements name the subsystems
+it states, and `resolve` refuses `--sub` without it. `--json` prints the same
+counts as one object on stdout. `expand` writes the expanded `.con` text to
+stdout, or to the file `-o` names.
 
 ## The grammar
 

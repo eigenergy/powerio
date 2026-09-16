@@ -40,7 +40,9 @@
   `deserialize` carry each one. `powerio contingency resolve` reports what a
   set bound to and `powerio contingency expand` writes the expanded set. IR
   generation 2 is kept and the additive catalog `pio-ir/2/0.11.3/schema.json`
-  states the three new structural types.
+  states the three new structural types. A document stating what no reader
+  could have read, from a line number of 0 to a band whose ends run the wrong
+  way round, is refused rather than decoded.
 
 ## 0.11.2
 
