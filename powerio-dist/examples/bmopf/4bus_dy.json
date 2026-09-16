@@ -226,7 +226,7 @@
     "$schema": "https://raw.githubusercontent.com/eigenergy/powerio/5234df55cd13ad31455697cffbdc16ca50662667/powerio-dist/schemas/bmopf/0.2.0/bmopf.schema.json",
     "case_study_generator": {
       "tool": "powerio",
-      "version": "0.11.2"
+      "version": "0.11.3"
     },
     "frequency": 60.0,
     "provenance": {
@@ -304,6 +304,17 @@
       "powerio_bmopf_7": {
         "producer": "powerio",
         "producer_version": "0.11.2",
+        "schema_commit": "664b494f2ee31ee76f8f78e7852cdb1f1c9a8e7d",
+        "schema_id": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.2.0/bmopf.schema.json",
+        "schema_retrieval_url": "https://raw.githubusercontent.com/eigenergy/powerio/5234df55cd13ad31455697cffbdc16ca50662667/powerio-dist/schemas/bmopf/0.2.0/bmopf.schema.json",
+        "schema_sha256": "74d6c6de3637d52e42a26c4cb0584f51df70d69f360b236cf5e23afaf7669462",
+        "schema_status": "proposal",
+        "schema_upstream_url": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/664b494f2ee31ee76f8f78e7852cdb1f1c9a8e7d/schema/bmopf/0.2.0/bmopf.schema.json",
+        "schema_version": "0.2.0"
+      },
+      "powerio_bmopf_8": {
+        "producer": "powerio",
+        "producer_version": "0.11.3",
         "schema_commit": "664b494f2ee31ee76f8f78e7852cdb1f1c9a8e7d",
         "schema_id": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.2.0/bmopf.schema.json",
         "schema_retrieval_url": "https://raw.githubusercontent.com/eigenergy/powerio/5234df55cd13ad31455697cffbdc16ca50662667/powerio-dist/schemas/bmopf/0.2.0/bmopf.schema.json",

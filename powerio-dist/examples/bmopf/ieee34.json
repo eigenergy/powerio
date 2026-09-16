@@ -3365,13 +3365,13 @@
     "$schema": "https://raw.githubusercontent.com/eigenergy/powerio/5234df55cd13ad31455697cffbdc16ca50662667/powerio-dist/schemas/bmopf/0.2.0/bmopf.schema.json",
     "case_study_generator": {
       "tool": "powerio",
-      "version": "0.11.2"
+      "version": "0.11.3"
     },
     "frequency": 60.0,
     "provenance": {
       "powerio_bmopf": {
         "producer": "powerio",
-        "producer_version": "0.11.2",
+        "producer_version": "0.11.3",
         "schema_commit": "664b494f2ee31ee76f8f78e7852cdb1f1c9a8e7d",
         "schema_id": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.2.0/bmopf.schema.json",
         "schema_retrieval_url": "https://raw.githubusercontent.com/eigenergy/powerio/5234df55cd13ad31455697cffbdc16ca50662667/powerio-dist/schemas/bmopf/0.2.0/bmopf.schema.json",
