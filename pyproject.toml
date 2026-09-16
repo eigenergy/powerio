@@ -39,7 +39,7 @@ all = ["numpy>=1.21", "scipy>=1.7", "networkx>=2.6", "polars>=1"]
 # The base package supports Python 3.9, but the oracle stack needs Python 3.11+.
 bench = [
     "pandapower==3.2.2; python_version >= '3.11'",
-    "matpowercaseframes<2; python_version >= '3.11'",
+    "matpowercaseframes<3; python_version >= '3.11'",
     "gridx-egret>=0.6; python_version >= '3.11'",
     "pypsa>=1.0; python_version >= '3.11'",
     "opendssdirect.py>=0.9,<0.10; python_version >= '3.11'",
