@@ -99,6 +99,19 @@ jobs:
     - name: Check the publishable crates on the minimum toolchain
       run: cargo check --locked --workspace --exclude powerio-py --exclude powerio-capi
 
+  # A RUSTSEC advisory against the dependency graph must fail its own job
+  # rather than hide inside a build. deny.toml records the one accepted
+  # finding. The action ships a prebuilt binary, so this needs no toolchain
+  # and no cache.
+  advisories:
+    name: Advisories (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+      with:
+        command: check advisories
+
   # Own job so a stale schema fails in parallel with clippy and the tests
   # instead of masking them (the #255 merge failure hid both).
   schemas:
