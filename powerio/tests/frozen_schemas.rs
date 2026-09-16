@@ -4,7 +4,7 @@
 use std::path::Path;
 
 const SCHEMA_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/schema");
-const CURRENT_SCHEMA: &str = "pio-ir/2/0.11.1/schema.json";
+const CURRENT_SCHEMA: &str = "pio-ir/2/0.11.3/schema.json";
 
 fn read_schema_file(relative: &str) -> String {
     let path = Path::new(SCHEMA_ROOT).join(relative);
@@ -50,6 +50,7 @@ fn the_schema_directory_contains_the_documented_powerio_ir_history() {
             "pio-ir/0.2/schema.json",
             "pio-ir/0.9/schema.json",
             "pio-ir/1/schema.json",
+            "pio-ir/2/0.11.1/schema.json",
             CURRENT_SCHEMA,
             "pio-ir/2/schema.json",
         ]

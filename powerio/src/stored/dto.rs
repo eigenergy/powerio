@@ -692,6 +692,13 @@ pub struct LinDist3FlowOpfInstance {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
+pub struct LinDist3FlowPfInstance {
+    pub formulation: LinDist3FlowOpfInstance,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct AcScucInstance {
     pub network: Box<BalancedNetwork>,
     /// The complete SCUC inputs, in the calculation crate's own
@@ -1052,6 +1059,33 @@ pub struct LinDist3FlowOpfSolution {
     pub objective: StoredF64,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct LinDist3FlowLimitCheck {
+    pub line: String,
+    pub conductor: usize,
+    pub kind: powerio_prob::LinDist3FlowLimitKind,
+    pub value: StoredF64,
+    pub limit: StoredF64,
+    pub loading_ratio: StoredF64,
+    pub overloaded: bool,
+    pub constraint_enforced: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct LinDist3FlowPfSolution {
+    pub instance: LinDist3FlowPfInstance,
+    pub termination: powerio_prob::Termination,
+    pub residuals: powerio_prob::Residuals,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub producer: Option<String>,
+    pub values: LinDist3FlowOpfValues,
+    pub limit_checks: Vec<LinDist3FlowLimitCheck>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -1169,6 +1203,8 @@ pub enum StoredValue {
     McAcPfInstance(McAcPfInstance),
     #[serde(rename = "powerio.McAcOpfInstance")]
     McAcOpfInstance(McAcOpfInstance),
+    #[serde(rename = "powerio.LinDist3FlowPfInstance")]
+    LinDist3FlowPfInstance(LinDist3FlowPfInstance),
     #[serde(rename = "powerio.LinDist3FlowOpfInstance")]
     LinDist3FlowOpfInstance(LinDist3FlowOpfInstance),
     #[serde(rename = "powerio.AcScucInstance")]
@@ -1187,6 +1223,8 @@ pub enum StoredValue {
     McAcPfSolution(Box<McAcPfSolution>),
     #[serde(rename = "powerio.McAcOpfSolution")]
     McAcOpfSolution(Box<McAcOpfSolution>),
+    #[serde(rename = "powerio.LinDist3FlowPfSolution")]
+    LinDist3FlowPfSolution(Box<LinDist3FlowPfSolution>),
     #[serde(rename = "powerio.LinDist3FlowOpfSolution")]
     LinDist3FlowOpfSolution(Box<LinDist3FlowOpfSolution>),
     #[serde(rename = "powerio.AcScucSolution")]
@@ -1778,6 +1816,9 @@ fn validate_value(value: &StoredValue) -> Result<(), String> {
         StoredValue::McAcOpfInstance(instance) => {
             validate_stored_assignment(instance.initial_point.as_ref())
         }
+        StoredValue::LinDist3FlowPfInstance(instance) => {
+            validate_stored_assignment(instance.formulation.base.initial_point.as_ref())
+        }
         StoredValue::LinDist3FlowOpfInstance(instance) => {
             validate_stored_assignment(instance.base.initial_point.as_ref())
         }
@@ -1801,6 +1842,9 @@ fn validate_value(value: &StoredValue) -> Result<(), String> {
         }
         StoredValue::McAcOpfSolution(solution) => {
             validate_stored_assignment(solution.instance.initial_point.as_ref())
+        }
+        StoredValue::LinDist3FlowPfSolution(solution) => {
+            validate_stored_assignment(solution.instance.formulation.base.initial_point.as_ref())
         }
         StoredValue::LinDist3FlowOpfSolution(solution) => {
             validate_stored_assignment(solution.instance.base.initial_point.as_ref())

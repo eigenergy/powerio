@@ -64,6 +64,7 @@ pub mod io;
 mod lindist3flow;
 mod lindist3flow_conic;
 mod lindist3flow_devices;
+mod lindist3flow_pf;
 mod lindist3flow_standard;
 pub mod matrix;
 mod opf;
@@ -102,6 +103,11 @@ pub use lindist3flow_devices::{
     LinDist3FlowPreparation, LinDist3FlowShuntData, LinDist3FlowSourceData, LinDist3FlowVariable,
     LinDist3FlowVoltageTerm, build_lindist3flow_device_data, build_lindist3flow_preparation,
     lindist3flow_connection_incidence,
+};
+pub use lindist3flow_pf::{
+    build_lindist3flow_pf_conic_problem, build_lindist3flow_pf_standard_form,
+    build_lindist3flow_pf_standard_form_with_options, evaluate_lindist3flow_pf_limits,
+    lindist3flow_pf_values_from_primal, lindist3flow_pf_values_from_standard_primal,
 };
 pub use lindist3flow_standard::{
     LinDist3FlowScaling, LinDist3FlowStandardCone, LinDist3FlowStandardForm,

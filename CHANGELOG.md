@@ -13,6 +13,9 @@
 - Implement the LinDist3Flow preparation-policy ladder with typed provenance:
   lower neutral, switch, line-shunt and capacitor data; approximate supported
   loads and static IBRs; and preserve the source network through IR round trips.
+- Add distinct fixed-dispatch LinDist3Flow instance and solution types with a
+  zero objective, monitored rather than enforced line thermal ratings, SI
+  loading reports, Rust/Python APIs, and an additive IR generation-2 catalog.
 
 ## 0.11.2
 

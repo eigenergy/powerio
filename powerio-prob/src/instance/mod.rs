@@ -31,9 +31,9 @@ pub use constraints::{ActiveConstraints, ConstraintSelection, MulticonductorActi
 pub use lindist3flow::{
     LinDist3FlowApplicability, LinDist3FlowApplicabilityStatus, LinDist3FlowBuildOptions,
     LinDist3FlowNode, LinDist3FlowOpfInstance, LinDist3FlowOrientedConductor,
-    LinDist3FlowReferencePolicy, LinDist3FlowReferenceProvenance, LinDist3FlowReferenceState,
-    LinDist3FlowReferenceVoltage, LinDist3FlowTopology, LinDist3FlowUnsupported,
-    check_lindist3flow_applicability,
+    LinDist3FlowPfInstance, LinDist3FlowReferencePolicy, LinDist3FlowReferenceProvenance,
+    LinDist3FlowReferenceState, LinDist3FlowReferenceVoltage, LinDist3FlowTopology,
+    LinDist3FlowUnsupported, check_lindist3flow_applicability,
 };
 pub use merge::{ZeroImpedanceMerge, merge_zero_impedance_buses};
 pub use multiconductor::{

@@ -5,9 +5,10 @@ use powerio_dist::{
     neutral_kron_reduce,
 };
 use powerio_prob::{
-    LinDist3FlowBuildOptions, LinDist3FlowOpfInstance, LinDist3FlowReferencePolicy,
-    LinDist3FlowReferenceProvenance, LinDist3FlowUnsupported, McAcOpfInstance,
-    MulticonductorOperatingPointBuilder, Objective, check_lindist3flow_applicability,
+    LinDist3FlowBuildOptions, LinDist3FlowOpfInstance, LinDist3FlowPfInstance,
+    LinDist3FlowReferencePolicy, LinDist3FlowReferenceProvenance, LinDist3FlowUnsupported,
+    McAcOpfInstance, MulticonductorOperatingPointBuilder, Objective,
+    check_lindist3flow_applicability,
 };
 
 fn terminals(names: &[&str]) -> Vec<String> {
@@ -579,5 +580,69 @@ fn incomplete_generator_bounds_fail_before_numerical_preparation() {
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.code() == "BUILD.LINDIST3FLOW.DEVICE_INVALID")
+    );
+}
+
+#[test]
+fn fixed_dispatch_has_zero_objective_and_monitors_conductor_limits() {
+    let mut network = three_phase_network(false);
+    network.lines_mut()[0].i_max = Some(vec![100.0; 3]);
+    network.generators_mut().push(DistGenerator::new(
+        "pv",
+        "load",
+        terminals(&["1", "2", "3"]),
+        Configuration::Wye,
+        vec![100.0; 3],
+        vec![0.0; 3],
+    ));
+    let instance =
+        LinDist3FlowPfInstance::from_network(network, LinDist3FlowBuildOptions::default()).unwrap();
+
+    assert!(
+        instance
+            .formulation()
+            .base_instance()
+            .objective()
+            .terms()
+            .is_empty()
+    );
+    assert_eq!(
+        instance
+            .formulation()
+            .base_instance()
+            .constraints()
+            .conductor_limits,
+        powerio_prob::ConstraintSelection::None
+    );
+    assert_eq!(
+        instance
+            .formulation()
+            .base_instance()
+            .constraints()
+            .generator_capability,
+        powerio_prob::ConstraintSelection::All
+    );
+}
+
+#[test]
+fn fixed_dispatch_rejects_a_dispatch_range() {
+    let mut network = three_phase_network(false);
+    let mut generator = DistGenerator::new(
+        "pv",
+        "load",
+        terminals(&["1"]),
+        Configuration::Wye,
+        vec![100.0],
+        vec![0.0],
+    );
+    generator.p_min = Some(vec![0.0]);
+    generator.p_max = Some(vec![200.0]);
+    network.generators_mut().push(generator);
+
+    let error = LinDist3FlowPfInstance::from_network(network, LinDist3FlowBuildOptions::default())
+        .unwrap_err();
+    assert_eq!(
+        error.info().map(|info| info.code),
+        Some("BUILD.LINDIST3FLOW.FIXED_DISPATCH_REQUIRED")
     );
 }

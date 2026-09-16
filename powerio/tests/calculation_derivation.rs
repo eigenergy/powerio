@@ -205,6 +205,38 @@ fn multiconductor_module_derives_and_reextracts_lindist3flow_instance() {
 }
 
 #[test]
+fn multiconductor_module_derives_and_reextracts_fixed_dispatch_lindist3flow() {
+    let source = lindist3flow_network_module();
+    let derived = powerio::to_lindist3flow_pf_instance_with_options(
+        &source,
+        powerio::LinDist3FlowBuildOptions::default()
+            .with_reference_policy(powerio::LinDist3FlowReferencePolicy::SourcePropagated),
+    )
+    .unwrap();
+    let history = derived.history().last().unwrap();
+    assert_eq!(history.name(), "to_lindist3flow_pf_instance");
+    assert_eq!(history.input_type(), Some("powerio.MulticonductorNetwork"));
+    assert_eq!(
+        history.output_type(),
+        Some("powerio.LinDist3FlowPfInstance")
+    );
+
+    let history_len = derived.history().len();
+    let dynamic = derived.map_value(powerio::PioValue::from);
+    let extracted = powerio::to_lindist3flow_pf_instance(&dynamic).unwrap();
+    assert_eq!(extracted.history().len(), history_len);
+    assert!(
+        extracted
+            .value()
+            .formulation()
+            .base_instance()
+            .objective()
+            .terms()
+            .is_empty()
+    );
+}
+
+#[test]
 fn neutral_kron_is_an_audited_module_projection_that_composes_with_lindist3flow() {
     let source = neutral_network_module(true);
     let (reduced, report) = powerio::neutral_kron(&source).unwrap();

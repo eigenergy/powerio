@@ -101,7 +101,7 @@ pub const IR_MIN_VERSION: u64 = 2;
 
 /// The `$id` of the schema snapshot describing this build's structural types.
 /// The release in the path identifies the catalog, not a new IR generation.
-pub const IR_SCHEMA_ID: &str = "https://powerio.dev/schema/pio-ir/2/0.11.1/schema.json";
+pub const IR_SCHEMA_ID: &str = "https://powerio.dev/schema/pio-ir/2/0.11.3/schema.json";
 
 use powerio_tx::format;
 pub use powerio_tx::{
@@ -157,8 +157,9 @@ pub use powerio_prob::{
     AcScucSolution, ActivePower, ActivePowerUnit, ApparentPower, ApparentPowerUnit,
     BalancedCalculationInstance, CalculationUpdate, DcBusSpecification, DcOpfInstance,
     DcOpfSolution, DcPfInstance, DcPfSolution, LinDist3FlowApplicability,
-    LinDist3FlowApplicabilityStatus, LinDist3FlowBuildOptions, LinDist3FlowNode,
-    LinDist3FlowOpfInstance, LinDist3FlowOpfSolution, LinDist3FlowOpfValues,
+    LinDist3FlowApplicabilityStatus, LinDist3FlowBuildOptions, LinDist3FlowLimitCheck,
+    LinDist3FlowLimitKind, LinDist3FlowNode, LinDist3FlowOpfInstance, LinDist3FlowOpfSolution,
+    LinDist3FlowOpfValues, LinDist3FlowPfInstance, LinDist3FlowPfSolution,
     LinDist3FlowPreparationAction, LinDist3FlowPreparationActionKind,
     LinDist3FlowPreparationReport, LinDist3FlowReferencePolicy, LinDist3FlowReferenceProvenance,
     LinDist3FlowReferenceState, LinDist3FlowTopology, LinDist3FlowUnsupported, LoadAllocation,
@@ -166,6 +167,7 @@ pub use powerio_prob::{
     OperatingPointUpdate, ReactivePower, ReactivePowerUnit, Termination,
     ThreeWindingTransformerTerminalActivePower, ThreeWindingTransformerTerminalPower, UpdateChange,
     UpdateReport, UpdatedField, apply_bus_load_active_power, apply_updates,
+    evaluate_lindist3flow_pf_limits,
 };
 
 /// Matrix and graph data, re-exported from `powerio-matrix` under the
@@ -198,7 +200,8 @@ pub mod transform;
 pub use transform::{
     apply_geo_layer, network_with_operating_point, neutral_kron, neutral_kron_with_options,
     to_ac_opf_instance, to_ac_pf_instance, to_dc_opf_instance, to_dc_pf_instance,
-    to_lindist3flow_opf_instance, to_lindist3flow_opf_instance_with_options, to_mc_ac_opf_instance,
+    to_lindist3flow_opf_instance, to_lindist3flow_opf_instance_with_options,
+    to_lindist3flow_pf_instance, to_lindist3flow_pf_instance_with_options, to_mc_ac_opf_instance,
     to_mc_ac_pf_instance,
 };
 
