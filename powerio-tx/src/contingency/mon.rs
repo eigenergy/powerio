@@ -117,13 +117,25 @@ pub struct BranchRef {
 #[non_exhaustive]
 pub enum MonitorScope {
     AllBuses,
-    Subsystem(String),
-    Bus(BusId),
-    Area(usize),
-    Zone(usize),
-    Owner(usize),
+    Subsystem {
+        name: String,
+    },
+    Bus {
+        bus: BusId,
+    },
+    Area {
+        area: usize,
+    },
+    Zone {
+        zone: usize,
+    },
+    Owner {
+        owner: usize,
+    },
     /// Every bus at this base kV.
-    Kv(f64),
+    Kv {
+        kv: f64,
+    },
 }
 
 /// Output of a tolerant monitored element read.
@@ -552,16 +564,23 @@ fn parse_scope(upper: &[String], words: &[&str], at: usize) -> Option<(MonitorSc
             Some((MonitorScope::AllBuses, at + 2))
         }
         "SUBSYSTEM" => Some((
-            MonitorScope::Subsystem(words.get(at + 1)?.trim().to_owned()),
+            MonitorScope::Subsystem {
+                name: words.get(at + 1)?.trim().to_owned(),
+            },
             at + 2,
         )),
-        "BUS" => Some((MonitorScope::Bus(BusId(integer(1)?)), at + 2)),
-        "AREA" => Some((MonitorScope::Area(integer(1)?), at + 2)),
-        "ZONE" => Some((MonitorScope::Zone(integer(1)?), at + 2)),
-        "OWNER" => Some((MonitorScope::Owner(integer(1)?), at + 2)),
+        "BUS" => Some((
+            MonitorScope::Bus {
+                bus: BusId(integer(1)?),
+            },
+            at + 2,
+        )),
+        "AREA" => Some((MonitorScope::Area { area: integer(1)? }, at + 2)),
+        "ZONE" => Some((MonitorScope::Zone { zone: integer(1)? }, at + 2)),
+        "OWNER" => Some((MonitorScope::Owner { owner: integer(1)? }, at + 2)),
         "KV" => {
             let kv = upper.get(at + 1)?.parse::<f64>().ok()?;
-            kv.is_finite().then_some((MonitorScope::Kv(kv), at + 2))
+            kv.is_finite().then_some((MonitorScope::Kv { kv }, at + 2))
         }
         _ => None,
     }
@@ -593,12 +612,12 @@ fn parse_branch_ref(words: &[&str]) -> Option<BranchRef> {
 fn write_scope(scope: &MonitorScope) -> String {
     match scope {
         MonitorScope::AllBuses => "ALL BUSES".to_owned(),
-        MonitorScope::Subsystem(name) => format!("SUBSYSTEM '{name}'"),
-        MonitorScope::Bus(bus) => format!("BUS {}", bus.0),
-        MonitorScope::Area(area) => format!("AREA {area}"),
-        MonitorScope::Zone(zone) => format!("ZONE {zone}"),
-        MonitorScope::Owner(owner) => format!("OWNER {owner}"),
-        MonitorScope::Kv(kv) => format!("KV {}", decimal(*kv)),
+        MonitorScope::Subsystem { name } => format!("SUBSYSTEM '{name}'"),
+        MonitorScope::Bus { bus } => format!("BUS {}", bus.0),
+        MonitorScope::Area { area } => format!("AREA {area}"),
+        MonitorScope::Zone { zone } => format!("ZONE {zone}"),
+        MonitorScope::Owner { owner } => format!("OWNER {owner}"),
+        MonitorScope::Kv { kv } => format!("KV {}", decimal(*kv)),
     }
 }
 
@@ -1002,11 +1021,11 @@ fn scope_rows(
     };
     Some(match scope {
         MonitorScope::AllBuses => (0..net.buses().len()).collect(),
-        MonitorScope::Subsystem(name) => rows_of(&select(subsystems, name, net)?),
-        MonitorScope::Bus(bus) => index.bus_row(*bus).into_iter().collect(),
-        MonitorScope::Area(area) => matching(&|bus| bus.area == *area),
-        MonitorScope::Zone(zone) => matching(&|bus| bus.zone == *zone),
-        MonitorScope::Owner(owner) => matching(&|bus| super::sub::owner_of(bus) == *owner),
-        MonitorScope::Kv(kv) => matching(&|bus| (bus.base_kv - *kv).abs() <= KV_TOLERANCE),
+        MonitorScope::Subsystem { name } => rows_of(&select(subsystems, name, net)?),
+        MonitorScope::Bus { bus } => index.bus_row(*bus).into_iter().collect(),
+        MonitorScope::Area { area } => matching(&|bus| bus.area == *area),
+        MonitorScope::Zone { zone } => matching(&|bus| bus.zone == *zone),
+        MonitorScope::Owner { owner } => matching(&|bus| super::sub::owner_of(bus) == *owner),
+        MonitorScope::Kv { kv } => matching(&|bus| (bus.base_kv - *kv).abs() <= KV_TOLERANCE),
     })
 }

@@ -3,7 +3,7 @@
 use powerio_core::{Scenario, ScenarioSet, TimePoint, TimeSeries};
 use powerio_dist::MulticonductorNetwork;
 use powerio_prob::OperatingPoint;
-use powerio_tx::{BalancedNetwork, GeoLayer};
+use powerio_tx::{BalancedNetwork, ContingencySet, GeoLayer, MonitoredSet, SubsystemSet};
 
 /// A dynamically typed time series at the universal parser boundary.
 ///
@@ -287,6 +287,16 @@ pub enum PioValue {
     /// element identity, placed onto a network by
     /// [`crate::apply_geo_layer`].
     GeoLayer(GeoLayer),
+    /// A PSS/E contingency description file (`.con`): the outages a
+    /// contingency analysis runs, bound to a network by
+    /// [`ContingencySet::resolve`].
+    ContingencySet(ContingencySet),
+    /// A PSS/E subsystem description file (`.sub`): the named bus groups a
+    /// contingency description file and a monitored element file draw on.
+    SubsystemSet(SubsystemSet),
+    /// A PSS/E monitored element file (`.mon`): the branch flows, interface
+    /// flows, and bus voltages a contingency analysis reports on.
+    MonitoredSet(MonitoredSet),
     BalancedOperatingPoint(OperatingPoint<BalancedNetwork>),
     MulticonductorOperatingPoint(OperatingPoint<MulticonductorNetwork>),
     TimeSeries(PioTimeSeries),
@@ -318,6 +328,9 @@ impl PioValue {
             Self::BalancedNetwork(_) => "powerio.BalancedNetwork",
             Self::MulticonductorNetwork(_) => "powerio.MulticonductorNetwork",
             Self::GeoLayer(_) => "powerio.GeoLayer",
+            Self::ContingencySet(_) => "powerio.ContingencySet",
+            Self::SubsystemSet(_) => "powerio.SubsystemSet",
+            Self::MonitoredSet(_) => "powerio.MonitoredSet",
             Self::BalancedOperatingPoint(_) => "powerio.OperatingPoint<powerio.BalancedNetwork>",
             Self::MulticonductorOperatingPoint(_) => {
                 "powerio.OperatingPoint<powerio.MulticonductorNetwork>"
@@ -363,6 +376,9 @@ impl From<BalancedNetwork> for PioValue {
 }
 value_conversion!(MulticonductorNetwork, MulticonductorNetwork);
 value_conversion!(GeoLayer, GeoLayer);
+value_conversion!(ContingencySet, ContingencySet);
+value_conversion!(SubsystemSet, SubsystemSet);
+value_conversion!(MonitoredSet, MonitoredSet);
 value_conversion!(OperatingPoint<BalancedNetwork>, BalancedOperatingPoint);
 value_conversion!(
     OperatingPoint<MulticonductorNetwork>,

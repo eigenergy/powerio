@@ -271,6 +271,11 @@ enum Command {
         #[command(subcommand)]
         command: GeoCommand,
     },
+    /// Bind PSS/E contingency analysis files (.con, .sub, .mon) to a case.
+    Contingency {
+        #[command(subcommand)]
+        command: ContingencyCommand,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -374,6 +379,49 @@ enum GeoCommand {
         /// Output file; `-` or omitted writes to stdout.
         #[arg(short, long)]
         output: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ContingencyCommand {
+    /// Bind a contingency description file to a case and report what each
+    /// case named.
+    Resolve {
+        /// Input case file (transmission).
+        case: PathBuf,
+        /// Contingency description file (.con).
+        contingency: PathBuf,
+        /// Subsystem description file (.sub). Without one, a statement that
+        /// names a subsystem names no buses.
+        #[arg(long)]
+        sub: Option<PathBuf>,
+        /// Monitored element file (.mon), resolved against the same case and
+        /// subsystems.
+        #[arg(long)]
+        mon: Option<PathBuf>,
+        /// Write the counts as one JSON object on stdout.
+        #[arg(long)]
+        json: bool,
+        /// Override the inferred case format.
+        #[arg(long, value_enum)]
+        from: Option<FormatArg>,
+    },
+    /// Expand the automatic specifications of a contingency description file
+    /// into explicit cases over a subsystem set.
+    Expand {
+        /// Input case file (transmission).
+        case: PathBuf,
+        /// Contingency description file (.con).
+        contingency: PathBuf,
+        /// Subsystem description file (.sub) the specifications draw from.
+        #[arg(long)]
+        sub: PathBuf,
+        /// Output .con file; `-` or omitted writes to stdout.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Override the inferred case format.
+        #[arg(long, value_enum)]
+        from: Option<FormatArg>,
     },
 }
 
@@ -878,6 +926,7 @@ fn main() -> std::process::ExitCode {
             ),
         ),
         Command::Geo { command } => run_geo(command),
+        Command::Contingency { command } => run_contingency(command),
     };
     let status = match &result {
         Ok(()) => 0,
@@ -2450,6 +2499,212 @@ fn report_geo_apply(report: &powerio::GeoApplyReport) {
     for note in &report.notes {
         report_progress(format!("note: {note}"));
     }
+}
+
+fn run_contingency(command: ContingencyCommand) -> anyhow::Result<()> {
+    match command {
+        ContingencyCommand::Resolve {
+            case,
+            contingency,
+            sub,
+            mon,
+            json,
+            from,
+        } => run_contingency_resolve(
+            &case,
+            &contingency,
+            sub.as_deref(),
+            mon.as_deref(),
+            json,
+            from,
+        ),
+        ContingencyCommand::Expand {
+            case,
+            contingency,
+            sub,
+            output,
+            from,
+        } => run_contingency_expand(&case, &contingency, &sub, output.as_deref(), from),
+    }
+}
+
+/// Parse one PSS/E contingency analysis file through the facade under its own
+/// token, report the reader's notes, and hand back the typed value.
+fn read_contingency_value(
+    input: &std::path::Path,
+    token: &str,
+) -> anyhow::Result<powerio::PioValue> {
+    let module = powerio::parse_with_options(input, &parse_options(Some(token))?)
+        .with_context(|| format!("reading {}", input.display()))?;
+    report_diagnostics(module.diagnostics());
+    Ok(module.into_value())
+}
+
+fn read_contingency_set(input: &std::path::Path) -> anyhow::Result<powerio::ContingencySet> {
+    match read_contingency_value(input, "psse-con")? {
+        powerio::PioValue::ContingencySet(set) => Ok(set),
+        other => fail_with!(
+            REQUEST_CLI_FAMILY_MISMATCH,
+            "{} reads as {}; this command needs a PSS/E contingency description file",
+            input.display(),
+            other.type_name()
+        ),
+    }
+}
+
+fn read_subsystem_set(input: &std::path::Path) -> anyhow::Result<powerio::SubsystemSet> {
+    match read_contingency_value(input, "psse-sub")? {
+        powerio::PioValue::SubsystemSet(set) => Ok(set),
+        other => fail_with!(
+            REQUEST_CLI_FAMILY_MISMATCH,
+            "{} reads as {}; this command needs a PSS/E subsystem description file",
+            input.display(),
+            other.type_name()
+        ),
+    }
+}
+
+fn read_monitored_set(input: &std::path::Path) -> anyhow::Result<powerio::MonitoredSet> {
+    match read_contingency_value(input, "psse-mon")? {
+        powerio::PioValue::MonitoredSet(set) => Ok(set),
+        other => fail_with!(
+            REQUEST_CLI_FAMILY_MISMATCH,
+            "{} reads as {}; this command needs a PSS/E monitored element file",
+            input.display(),
+            other.type_name()
+        ),
+    }
+}
+
+/// A one line account of why a case's action named no element.
+fn unresolved_reason_text(reason: powerio::UnresolvedReason) -> String {
+    use powerio::UnresolvedReason as Reason;
+    match reason {
+        Reason::NoSuchBus => "names no bus".to_owned(),
+        Reason::NoSuchBranch => "names no branch".to_owned(),
+        Reason::AmbiguousBranch { matches } => format!("names {matches} branches"),
+        Reason::NoSuchMachine => "names no machine".to_owned(),
+        Reason::NoSuchShunt => "names no shunt".to_owned(),
+        Reason::NoSuchLoad => "names no load".to_owned(),
+        Reason::NoSuchTransformer3w => "names no three winding transformer".to_owned(),
+        Reason::Unrecognized => "was kept as text and names no element".to_owned(),
+        _ => "names no element".to_owned(),
+    }
+}
+
+fn run_contingency_resolve(
+    case: &std::path::Path,
+    contingency: &std::path::Path,
+    sub: Option<&std::path::Path>,
+    mon: Option<&std::path::Path>,
+    json: bool,
+    from: Option<FormatArg>,
+) -> anyhow::Result<()> {
+    let network = read_network(case, from)?;
+    let set = read_contingency_set(contingency)?;
+    let subsystems = match sub {
+        Some(path) => read_subsystem_set(path)?,
+        None => powerio::SubsystemSet::default(),
+    };
+    let resolution = set.resolve(&network);
+    report_diagnostics(&resolution.diagnostics());
+
+    let unresolved: Vec<serde_json::Value> = resolution
+        .cases
+        .iter()
+        .filter(|case| !case.is_resolved())
+        .map(|case| {
+            let first = &case.unresolved[0];
+            serde_json::json!({
+                "case": case.name,
+                "reason": unresolved_reason_text(first.reason),
+            })
+        })
+        .collect();
+
+    let mut report = serde_json::json!({
+        "schema": "powerio.contingency_resolution",
+        powerio::version::VERSION_KEY: powerio::VERSION,
+        "cases": resolution.cases.len(),
+        "resolved": resolution.resolved,
+        "unresolved": resolution.unresolved,
+        "unrecognized_statements": resolution.unrecognized_statements,
+        "unresolved_cases": unresolved,
+    });
+
+    let monitored = match mon {
+        Some(path) => {
+            let set = read_monitored_set(path)?;
+            let resolved = set.resolve(&network, &subsystems);
+            report_diagnostics(&resolved.diagnostics());
+            let counts = serde_json::json!({
+                "branches": resolved.branch_rows.len(),
+                "ties": resolved.tie_rows.len(),
+                "transformers_3w": resolved.transformer_3w_rows.len(),
+                "interfaces": resolved.interfaces.len(),
+                "voltage_ranges": resolved.voltage_ranges.len(),
+                "voltage_deviations": resolved.voltage_deviations.len(),
+                "unresolved": resolved.unresolved.len(),
+            });
+            report["monitored"] = counts.clone();
+            Some(counts)
+        }
+        None => None,
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+
+    println!(
+        "cases {}: {} resolved, {} unresolved, {} statements kept as text",
+        resolution.cases.len(),
+        resolution.resolved,
+        resolution.unresolved,
+        resolution.unrecognized_statements
+    );
+    for entry in &unresolved {
+        println!(
+            "unresolved {}: {}",
+            entry["case"].as_str().unwrap_or_default(),
+            entry["reason"].as_str().unwrap_or_default()
+        );
+    }
+    if let Some(counts) = monitored {
+        println!(
+            "monitored: {} branches, {} ties, {} three winding transformers, \
+             {} interfaces, {} voltage ranges, {} voltage deviations, {} unresolved",
+            counts["branches"],
+            counts["ties"],
+            counts["transformers_3w"],
+            counts["interfaces"],
+            counts["voltage_ranges"],
+            counts["voltage_deviations"],
+            counts["unresolved"]
+        );
+    }
+    Ok(())
+}
+
+fn run_contingency_expand(
+    case: &std::path::Path,
+    contingency: &std::path::Path,
+    sub: &std::path::Path,
+    output: Option<&std::path::Path>,
+    from: Option<FormatArg>,
+) -> anyhow::Result<()> {
+    let network = read_network(case, from)?;
+    let set = read_contingency_set(contingency)?;
+    let subsystems = read_subsystem_set(sub)?;
+    let expanded = set.expand(&network, &subsystems);
+    report_diagnostics(&expanded.diagnostics);
+    report_progress(format!(
+        "expanded to {} case(s), {} specification(s) left unexpanded",
+        expanded.set.cases.len(),
+        expanded.set.automatic.len()
+    ));
+    write_conversion_output(&expanded.set.to_con(), &[], output)
 }
 
 fn run_geo_convert(

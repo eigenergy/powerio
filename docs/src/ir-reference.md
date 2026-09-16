@@ -3,7 +3,7 @@
 This page lists every structural value type in the PowerIO IR, field by
 field: each field's type, unit, and sign convention, the invariant the
 deserializer or the constructors enforce, and what a reader uses when the
-field is absent. The generated schema at `docs/schema/pio-ir/2/0.11.1/schema.json`
+field is absent. The generated schema at `docs/schema/pio-ir/2/0.11.3/schema.json`
 is the machine form of the same definitions. To keep the two from drifting
 apart, `powerio/tests/ir_reference.rs` reads this page and checks in both
 directions that each table lists the same fields the schema defines for its
@@ -50,6 +50,9 @@ schema definition beside it.
 | `powerio.BalancedNetwork` | `BalancedNetwork` |
 | `powerio.MulticonductorNetwork` | `MulticonductorNetwork` |
 | `powerio.GeoLayer` | `GeoLayer` |
+| `powerio.ContingencySet` | `ContingencySet` |
+| `powerio.SubsystemSet` | `SubsystemSet` |
+| `powerio.MonitoredSet` | `MonitoredSet` |
 | `powerio.OperatingPoint<powerio.BalancedNetwork>` | `StoredOperatingPoint` |
 | `powerio.OperatingPoint<powerio.MulticonductorNetwork>` | `StoredOperatingPoint2` |
 | `powerio.TimeSeries<powerio.BalancedNetwork>` | `StoredTimeSeries` |
@@ -966,6 +969,168 @@ Schema definition: `ElementKey`.
 | `id` | string or null | | | the source's own element identifier | null |
 | `name` | string or null | | | matched case insensitively | null |
 | `index` | integer or null | | positive | 1-based row alias, accepted on read and never written | null |
+
+## powerio.ContingencySet
+
+One PSS/E contingency description file (`.con`): the outages a contingency
+analysis runs. Reading holds what the file states and touches no network;
+`ContingencySet::resolve` binds a set to the elements of a network, and
+`ContingencySet::expand` turns the automatic specifications into explicit
+cases over a subsystem set. A statement the grammar does not cover keeps its
+original line, so a document written back with `to_con` states everything the
+source did.
+
+Schema definition: `ContingencySet`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `header` | array of string | | | the comment lines ahead of the first statement, as written | empty |
+| `cases` | array of `ContingencyCase` | | | in file order | empty |
+| `automatic` | array of `AutomaticSpec` | | | in file order | empty |
+| `skips` | array of `SkipRule` | | | the branches automatic expansion leaves alone | empty |
+| `retained` | array of `RetainedStatement` | | | file level statements outside the grammar | empty |
+
+### ContingencyCase
+
+Every action of one case applies together.
+
+Schema definition: `ContingencyCase`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `name` | string | | | nonempty | required |
+| `actions` | array of `ContingencyAction` | | | in file order | empty |
+
+`ContingencyAction` is one tagged object, keyed by `kind`. `open_branch` names
+`from`, `to`, and `circuit`; `open_three_winding` names `buses`, three bus
+identifiers, and `circuit`. `remove_machine` and `add_machine` name `bus` and
+`id`. `remove_shunt` and `remove_load` name `bus` and an optional `id`, and a
+statement with no id names every such element at the bus.
+`remove_switched_shunt` and `disconnect_bus` name `bus` alone. `change_load`
+and `change_generation` name `bus` and a `Change`. `unrecognized` carries the
+original `text`, and a nested dispatch block keeps all of its lines joined
+with newlines.
+
+Schema definition: `Change`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `op` | token `increase`, `decrease`, or `set` | | | whether the amount adds to, subtracts from, or replaces the present value | required |
+| `amount` | float | MW or percent, as `unit` says | positive is the stated magnitude | finite | required |
+| `unit` | token `mw` or `percent` | | | | required |
+
+### AutomaticSpec
+
+One specification expands into one case per element of a subsystem.
+
+Schema definition: `AutomaticSpec`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `order` | token `single` or `double` | | | how many elements one case outages | required |
+| `target` | token `branch`, `unit`, or `tie` | | | the element family the expansion draws from; `tie` is the branches crossing the subsystem border | required |
+| `subsystem` | string | | | names a subsystem of the `.sub` file the expansion runs against | required |
+| `low_voltage_3w` | boolean | | | `3WLOWVOLTAGE`: a branch expansion also takes the low voltage winding of a three winding transformer | required |
+
+Schema definition: `SkipRule`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `from` | id | | | one terminal of the excluded branch | required |
+| `to` | id | | | the other terminal | required |
+| `circuit` | string | | | the branch circuit id | required |
+
+### RetainedStatement
+
+A statement outside the grammar of its file, kept as the source wrote it. The
+three contingency analysis files share this record.
+
+Schema definition: `RetainedStatement`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `line` | integer | | | the 1-based source line the statement was read from | required |
+| `text` | string | | | the original line | required |
+
+## powerio.SubsystemSet
+
+One PSS/E subsystem description file (`.sub`): the named bus groups a
+contingency description file and a monitored element file draw on.
+`Subsystem::select_buses` names the buses of one subsystem in a network, and
+`SubsystemSet::to_sub` writes the set back.
+
+Schema definition: `SubsystemSet`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `header` | array of string | | | the comment lines ahead of the first statement, as written | empty |
+| `subsystems` | array of `Subsystem` | | | in file order | empty |
+| `retained` | array of `RetainedStatement` | | | file level statements outside the grammar | empty |
+
+### Subsystem
+
+A subsystem is the union of its selector groups.
+
+Schema definition: `Subsystem`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `name` | string | | | nonempty; a `.con` or `.mon` statement names it without case | required |
+| `groups` | array of `SelectorGroup` | | | the implicit group comes first when it has any selector | empty |
+| `retained` | array of `RetainedStatement` | | | statements inside this subsystem that are outside the grammar | empty |
+
+Schema definition: `SelectorGroup`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `name` | string or null | | | the `JOIN` name; null is the implicit group | null |
+| `selectors` | array of `SubsystemSelector` | | | bus sets that intersect across selector types within one group | empty |
+
+`SubsystemSelector` is one tagged object, keyed by `kind`. `area`, `zone`, and
+`owner` name an inclusive `from` and `to` number range; `bus` names an
+inclusive range of bus identifiers; `kv_range` names an inclusive base kV band
+whose `lo` is at most its `hi`. A source statement naming one value reads as a
+range whose two ends are equal.
+
+## powerio.MonitoredSet
+
+One PSS/E monitored element file (`.mon`): the branch flows, interface flows,
+and bus voltages a contingency analysis reports on. `MonitoredSet::resolve`
+binds the statements to the rows of a network against a subsystem set, and
+`MonitoredSet::to_mon` writes the set back.
+
+Schema definition: `MonitoredSet`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `header` | array of string | | | the comment lines ahead of the first statement, as written | empty |
+| `statements` | array of `MonitorStatement` | | | in file order | empty |
+| `retained` | array of `RetainedStatement` | | | statements outside the grammar | empty |
+
+`MonitorStatement` is one tagged object, keyed by `kind`.
+`branches_in_subsystem` names a `subsystem` and `low_voltage_3w`, and takes
+every branch with both terminals in it. `ties_from_subsystem` names a
+`subsystem` and takes every branch with exactly one terminal in it.
+`branches` carries the `branches` a `MONITOR BRANCHES` block lists.
+`interface` names the interface `name`,
+an optional `rating_mw`, and the `branches` whose flows sum over it.
+`voltage_range` names a `scope` and a `vmin` at most its `vmax`, both in per
+unit. `voltage_deviation` names a `scope`, a `down` limit, and an optional
+`up` limit; a source statement naming one value states the downward limit
+alone.
+
+`MonitorScope` is one tagged object, keyed by `kind`: `all_buses` has no
+further member, `subsystem` carries a subsystem `name`, `bus` a `bus`
+identifier, `area`, `zone`, and `owner` a number under their own name, and
+`kv` a base kV value.
+
+Schema definition: `BranchRef`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `from` | id | | | one terminal of the monitored branch | required |
+| `to` | id | | | the other terminal | required |
+| `circuit` | string | | | the branch circuit id; an absent id in the source reads as `1` | required |
 
 ## powerio.OperatingPoint\<N\>
 

@@ -56,6 +56,13 @@
 //! PowerWorld `.pwd` display all parse to [`PioValue::GeoLayer`], `emit`
 //! writes one as `geo-json`, and [`apply_geo_layer`] places one onto a case.
 //!
+//! The three files a PSS/E contingency analysis reads are values of the same
+//! kind. A `.con` parses to [`PioValue::ContingencySet`], a `.sub` to
+//! [`PioValue::SubsystemSet`], and a `.mon` to [`PioValue::MonitoredSet`];
+//! `emit` writes each back under its own token, and `ContingencySet::resolve`,
+//! `Subsystem::select_buses`, and `MonitoredSet::resolve` bind one to a
+//! network.
+//!
 //! [`parse_with_options`] selects the parser explicitly and widens the
 //! directory a format may refer to further files beneath. [`Source`] and
 //! [`Destination`] remain the advanced input and output: a source carrying
@@ -101,7 +108,7 @@ pub const IR_MIN_VERSION: u64 = 2;
 
 /// The `$id` of the schema snapshot describing this build's structural types.
 /// The release in the path identifies the catalog, not a new IR generation.
-pub const IR_SCHEMA_ID: &str = "https://powerio.dev/schema/pio-ir/2/0.11.1/schema.json";
+pub const IR_SCHEMA_ID: &str = "https://powerio.dev/schema/pio-ir/2/0.11.3/schema.json";
 
 use powerio_tx::format;
 pub use powerio_tx::{
@@ -486,6 +493,7 @@ pub fn parse_with_options(
         RoutedFamily::Gridfm => parse_gridfm(source),
         RoutedFamily::Egret => parse_egret(source),
         RoutedFamily::Geo => parse_geo_layer(source),
+        RoutedFamily::Contingency(kind) => parse_contingency_file(source, kind),
         RoutedFamily::Balanced(json_class) => format::parse_with_json_class(source, json_class)
             .map(|module| module.map_value(PioValue::from)),
     }
@@ -600,6 +608,51 @@ fn parse_geo_layer(
         })?),
     };
     powerio_core::PioModule::parsed(PioValue::from(layer), source, diagnostics)
+}
+
+/// Read one PSS/E contingency analysis file into its own value. The reader
+/// keeps a statement outside its grammar as the original line and reports it;
+/// those notes become the module's diagnostics, so nothing the file states is
+/// lost between the text and the value.
+fn parse_contingency_file(
+    source: powerio_core::Source,
+    kind: ContingencyFile,
+) -> std::result::Result<powerio_core::PioModule<PioValue>, powerio_core::Error> {
+    let buffer = match source.primary_buffer() {
+        Ok(buffer) => buffer,
+        Err(error) => return Err(error.with_source(source)),
+    };
+    let text = match std::str::from_utf8(buffer.content_bytes()) {
+        Ok(text) => text,
+        Err(cause) => {
+            return Err(Error::new(
+                kind.not_text_code(),
+                format!("{} is not valid UTF-8: {cause}", kind.description()),
+            )
+            .with_source(source));
+        }
+    };
+    let parsed = match kind {
+        ContingencyFile::Con => powerio_tx::ContingencySet::parse(text)
+            .map(|parsed| (PioValue::from(parsed.set), parsed.diagnostics)),
+        ContingencyFile::Sub => powerio_tx::SubsystemSet::parse(text)
+            .map(|parsed| (PioValue::from(parsed.set), parsed.diagnostics)),
+        ContingencyFile::Mon => powerio_tx::MonitoredSet::parse(text)
+            .map(|parsed| (PioValue::from(parsed.set), parsed.diagnostics)),
+    };
+    let (value, diagnostics) = match parsed {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return Err(Error::new(error.code(), error.to_string())
+                .with_cause(error)
+                .with_source(source));
+        }
+    };
+    let source = match source.format() {
+        Some(_) => source,
+        None => source.with_format(powerio_core::FormatId::new(kind.token())?),
+    };
+    powerio_core::PioModule::parsed(value, source, diagnostics)
 }
 
 /// PyPSA CSV dispatch: one snapshot with no series siblings is the scalar
@@ -726,6 +779,8 @@ enum RoutedFamily {
     /// aliased CSV or JSON records, headerless buscoords CSV, or a PowerWorld
     /// `.pwd` display lifted into a diagram space layer.
     Geo,
+    /// One of the three text files a PSS/E contingency analysis reads.
+    Contingency(ContingencyFile),
     #[cfg(feature = "gridfm")]
     Gridfm,
 }
@@ -780,6 +835,9 @@ fn routed_family(
         // JSON document, so content that opens one routes by classification,
         // mirroring the balanced hub's own sniff.
         "pwd" | "geojson" => Ok(RoutedFamily::Geo),
+        "con" => Ok(RoutedFamily::Contingency(ContingencyFile::Con)),
+        "sub" => Ok(RoutedFamily::Contingency(ContingencyFile::Sub)),
+        "mon" => Ok(RoutedFamily::Contingency(ContingencyFile::Mon)),
         "m" | "raw" | "aux" | "epc" | "pwb" | "uct" => Ok(RoutedFamily::Balanced(None)),
         _ => {
             let jsonish = source.primary_buffer().is_ok_and(|buffer| {
@@ -838,6 +896,91 @@ fn is_geo_token(token: &str) -> bool {
     is_geo_layer_token(token) || is_pwd_display_token(token)
 }
 
+/// Which of the three PSS/E contingency analysis files a source holds. Each
+/// is its own format token, its own value type, and its own writer; the three
+/// never cross.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ContingencyFile {
+    /// The contingency description file, `.con`.
+    Con,
+    /// The subsystem description file, `.sub`.
+    Sub,
+    /// The monitored element file, `.mon`.
+    Mon,
+}
+
+impl ContingencyFile {
+    /// The canonical format token.
+    pub(crate) const fn token(self) -> &'static str {
+        match self {
+            Self::Con => "psse-con",
+            Self::Sub => "psse-sub",
+            Self::Mon => "psse-mon",
+        }
+    }
+
+    /// The conventional filename suffix, without a leading dot.
+    pub(crate) const fn extension(self) -> &'static str {
+        match self {
+            Self::Con => "con",
+            Self::Sub => "sub",
+            Self::Mon => "mon",
+        }
+    }
+
+    /// The name of the one artifact an emission writes. A path destination
+    /// uses the caller's own path; a memory destination uses its root name.
+    /// `con` alone is a reserved device name on Windows, so every name here
+    /// carries a stem.
+    pub(crate) const fn artifact_name(self) -> &'static str {
+        match self {
+            Self::Con => "contingency.con",
+            Self::Sub => "subsystem.sub",
+            Self::Mon => "monitored.mon",
+        }
+    }
+
+    /// The structural type name the file reads into.
+    pub(crate) const fn type_name(self) -> &'static str {
+        match self {
+            Self::Con => "powerio.ContingencySet",
+            Self::Sub => "powerio.SubsystemSet",
+            Self::Mon => "powerio.MonitoredSet",
+        }
+    }
+
+    /// The code for input that is not UTF-8 text.
+    const fn not_text_code(self) -> &'static powerio_core::DiagnosticInfo {
+        use powerio_tx::diagnostics::codes;
+        match self {
+            Self::Con => &codes::READ_CON_NOT_TEXT,
+            Self::Sub => &codes::READ_SUB_NOT_TEXT,
+            Self::Mon => &codes::READ_MON_NOT_TEXT,
+        }
+    }
+
+    /// How the refusal names the file, in prose.
+    const fn description(self) -> &'static str {
+        match self {
+            Self::Con => "a PSS/E contingency description file",
+            Self::Sub => "a PSS/E subsystem description file",
+            Self::Mon => "a PSS/E monitored element file",
+        }
+    }
+}
+
+/// The PSS/E contingency analysis file a format token names, or `None` for
+/// every other token. Case, hyphens, and underscores do not distinguish
+/// spellings, so `psse-con`, `psse_con`, `PSSECon`, and `con` are one name.
+pub(crate) fn contingency_file_of_token(token: &str) -> Option<ContingencyFile> {
+    match token.to_ascii_lowercase().replace(['-', '_'], "").as_str() {
+        "con" | "pssecon" | "contingency" => Some(ContingencyFile::Con),
+        "sub" | "pssesub" | "subsystem" => Some(ContingencyFile::Sub),
+        "mon" | "pssemon" | "monitored" => Some(ContingencyFile::Mon),
+        _ => None,
+    }
+}
+
 /// The family a JSON document's content markers select.
 fn json_family(
     source: &powerio_core::Source,
@@ -885,6 +1028,9 @@ fn family_of_token(token: &str) -> RoutedFamily {
 
     if is_geo_token(token) {
         return RoutedFamily::Geo;
+    }
+    if let Some(kind) = contingency_file_of_token(token) {
+        return RoutedFamily::Contingency(kind);
     }
 
     if powerio_dist::parse_dist_target_format(token).is_some() {

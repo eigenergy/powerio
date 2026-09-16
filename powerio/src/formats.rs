@@ -46,9 +46,10 @@ const fn info(
 
 /// Resolve a format token or common alias to facade owned metadata.
 ///
-/// This includes transmission and distribution grid exchange formats and the
-/// standalone geographic layer document. PowerIO IR is not a grid exchange
-/// format and therefore is not returned here.
+/// This includes transmission and distribution grid exchange formats, the
+/// standalone geographic layer document, and the three PSS/E contingency
+/// analysis files. PowerIO IR is not a grid exchange format and therefore is
+/// not returned here.
 ///
 #[must_use]
 pub fn resolve_format(name: &str) -> Option<FormatInfo> {
@@ -68,6 +69,9 @@ pub fn resolve_format(name: &str) -> Option<FormatInfo> {
     }
     if crate::is_pwd_display_token(name) {
         return Some(info("powerworld-pwd", Some("pwd"), false, false));
+    }
+    if let Some(kind) = crate::contingency_file_of_token(name) {
+        return Some(info(kind.token(), Some(kind.extension()), false, true));
     }
     if let Some(format) = powerio_tx::format::parse_target_format(name) {
         let is_cgmes = format == powerio_tx::TargetFormat::Cgmes;
@@ -115,6 +119,9 @@ mod tests {
         assert_eq!(resolve_format("iidm"), None);
         assert_eq!(resolve_format("rawx"), None);
         assert_eq!(resolve_format("psse-rawx").unwrap().token, "psse-rawx");
+        assert_eq!(resolve_format("con"), resolve_format("PSSE_CON"));
+        assert_eq!(resolve_format("subsystem").unwrap().token, "psse-sub");
+        assert_eq!(resolve_format("mon").unwrap().extension, Some("mon"));
     }
 
     #[test]

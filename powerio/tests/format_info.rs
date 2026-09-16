@@ -27,6 +27,9 @@ fn every_canonical_format_reports_its_artifact_shape() {
         ("dss", Some("dss"), true, true),
         ("pmd-json", Some("json"), false, true),
         ("bmopf-json", Some("json"), false, true),
+        ("psse-con", Some("con"), false, true),
+        ("psse-sub", Some("sub"), false, true),
+        ("psse-mon", Some("mon"), false, true),
     ];
 
     for (token, extension, is_directory, can_emit) in expected {
@@ -58,6 +61,16 @@ fn common_aliases_resolve_without_exposing_component_enums() {
         ("geojson", "geo-json"),
         ("geo", "geo-json"),
         ("pwd", "powerworld-pwd"),
+        ("con", "psse-con"),
+        ("CON", "psse-con"),
+        ("psse_con", "psse-con"),
+        ("contingency", "psse-con"),
+        ("sub", "psse-sub"),
+        ("pssesub", "psse-sub"),
+        ("subsystem", "psse-sub"),
+        ("mon", "psse-mon"),
+        ("PSSE-MON", "psse-mon"),
+        ("monitored", "psse-mon"),
     ] {
         assert_eq!(resolve_format(alias).map(|info| info.token), Some(token));
     }

@@ -32,6 +32,15 @@
   subsystems, reporting one that expands into nothing as
   `BUILD.CON.SPECIFICATION_EMPTY`. `MonitoredSet::resolve_with` and
   `ContingencySet::expand_with` read a `PsseEquipmentIndex` built once.
+- Expose the three PSS/E contingency analysis files through the `powerio`
+  facade. A `.con`, `.sub`, or `.mon` file parses to `PioValue::ContingencySet`,
+  `PioValue::SubsystemSet`, or `PioValue::MonitoredSet` by extension or under
+  the tokens `psse-con`, `psse-sub`, and `psse-mon`; `emit` returns the parsed
+  file for a same format write and canonical text otherwise; `serialize` and
+  `deserialize` carry each one. `powerio contingency resolve` reports what a
+  set bound to and `powerio contingency expand` writes the expanded set. IR
+  generation 2 is kept and the additive catalog `pio-ir/2/0.11.3/schema.json`
+  states the three new structural types.
 
 ## 0.11.2
 

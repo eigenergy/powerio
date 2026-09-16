@@ -11,6 +11,7 @@
 - [Matrices and graphs](matrices.md)
 - [Formats and fidelity](format-fidelity.md)
   - [Geographic and display data](geo-and-display.md)
+  - [PSS/E contingency analysis files](contingency-files.md)
 - [Rust, Python, Julia, and C](languages.md)
   - [Python API](python.md)
   - [C ABI](capi.md)

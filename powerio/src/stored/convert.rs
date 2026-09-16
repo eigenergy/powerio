@@ -164,6 +164,9 @@ fn encode_value(value: &PioValue) -> Result<dto::StoredValue> {
             dto::StoredValue::MulticonductorNetwork(Box::new(network.clone()))
         }
         PioValue::GeoLayer(layer) => dto::StoredValue::GeoLayer(Box::new(layer.clone())),
+        PioValue::ContingencySet(set) => dto::StoredValue::ContingencySet(Box::new(set.clone())),
+        PioValue::SubsystemSet(set) => dto::StoredValue::SubsystemSet(Box::new(set.clone())),
+        PioValue::MonitoredSet(set) => dto::StoredValue::MonitoredSet(Box::new(set.clone())),
         PioValue::BalancedOperatingPoint(point) => {
             dto::StoredValue::BalancedOperatingPoint(encode_balanced_point(point)?)
         }
@@ -1617,9 +1620,12 @@ fn validate_decoded_networks(value: &PioValue) -> Result<()> {
     match value {
         PioValue::BalancedNetwork(network) => balanced(network),
         PioValue::MulticonductorNetwork(network) => multiconductor(network),
-        // A layer carries no network to validate; its own rules run in the
-        // stored document validator.
-        PioValue::GeoLayer(_) => Ok(()),
+        // A layer and the three contingency analysis files carry no network to
+        // validate; their own rules run in the stored document validator.
+        PioValue::GeoLayer(_)
+        | PioValue::ContingencySet(_)
+        | PioValue::SubsystemSet(_)
+        | PioValue::MonitoredSet(_) => Ok(()),
         PioValue::BalancedOperatingPoint(point) => balanced(point.network()),
         PioValue::MulticonductorOperatingPoint(point) => multiconductor(point.network()),
         PioValue::TimeSeries(series) => series
@@ -1916,6 +1922,9 @@ fn decode_value(value: dto::StoredValue) -> Result<PioValue> {
             PioValue::MulticonductorNetwork(*network)
         }
         dto::StoredValue::GeoLayer(layer) => PioValue::GeoLayer(*layer),
+        dto::StoredValue::ContingencySet(set) => PioValue::ContingencySet(*set),
+        dto::StoredValue::SubsystemSet(set) => PioValue::SubsystemSet(*set),
+        dto::StoredValue::MonitoredSet(set) => PioValue::MonitoredSet(*set),
         dto::StoredValue::BalancedOperatingPoint(point) => {
             PioValue::BalancedOperatingPoint(decode_balanced_point(point)?)
         }

@@ -707,6 +707,88 @@ fn emit_geo_layer(
     )
 }
 
+/// The three PSS/E contingency analysis files that a module value can be, or
+/// `None` for every other value.
+fn contingency_file_of_value(value: &PioValue) -> Option<crate::ContingencyFile> {
+    match value {
+        PioValue::ContingencySet(_) => Some(crate::ContingencyFile::Con),
+        PioValue::SubsystemSet(_) => Some(crate::ContingencyFile::Sub),
+        PioValue::MonitoredSet(_) => Some(crate::ContingencyFile::Mon),
+        _ => None,
+    }
+}
+
+/// The module's retained source bytes when the value is a PSS/E contingency
+/// analysis file and `format` names that same file. The three tokens are not
+/// grid case names, so `retained_source_matches_case_format` never claims
+/// them; this is the same rule stated over the contingency tokens.
+fn retained_contingency_source(module: &PioModule<PioValue>, format: &str) -> Option<Vec<u8>> {
+    let kind = contingency_file_of_value(module.value())?;
+    if crate::contingency_file_of_token(format)? != kind {
+        return None;
+    }
+    let source = module.source()?;
+    if source.acquired_buffers().len() != 1 {
+        return None;
+    }
+    if crate::contingency_file_of_token(source.format()?.as_str())? != kind {
+        return None;
+    }
+    Some(source.primary_buffer().ok()?.bytes().to_vec())
+}
+
+/// Write one PSS/E contingency analysis file as canonical text. Each of the
+/// three files is its own target: a `.con` written as `psse-sub` would state
+/// a different grammar, so only the token naming this value's own file is
+/// accepted.
+fn emit_contingency_file(
+    value: &PioValue,
+    kind: crate::ContingencyFile,
+    format: &str,
+    destination: Destination,
+) -> Result<EmitResult, Error> {
+    if crate::contingency_file_of_token(format) != Some(kind) {
+        return Err(if crate::contingency_file_of_token(format).is_some() {
+            Error::new(
+                &codes::REQUEST_EMIT_UNSUPPORTED_VALUE_TYPE,
+                format!(
+                    "{format} names another PSS/E contingency analysis file, not {}; write this one as `{}`",
+                    kind.type_name(),
+                    kind.token()
+                ),
+            )
+        } else if known_format_name(format) {
+            Error::new(
+                &codes::REQUEST_EMIT_UNSUPPORTED_VALUE_TYPE,
+                format!(
+                    "{format} states a grid case, not {}; write this file as `{}`",
+                    kind.type_name(),
+                    kind.token()
+                ),
+            )
+        } else {
+            unknown_format(format)
+        });
+    }
+    let text = match value {
+        PioValue::ContingencySet(set) => set.to_con(),
+        PioValue::SubsystemSet(set) => set.to_sub(),
+        PioValue::MonitoredSet(set) => set.to_mon(),
+        _ => unreachable!("the value variant selected the file kind"),
+    };
+    let artifact = powerio_core::MemoryArtifact::new(
+        powerio_core::ArtifactPath::new(kind.artifact_name())
+            .expect("static name is a valid artifact path"),
+        text.into_bytes(),
+    );
+    destination.__commit_artifacts(
+        false,
+        powerio_core::Fidelity::Canonical,
+        vec![artifact],
+        Vec::new(),
+    )
+}
+
 fn balanced_calculation_network(value: &PioValue) -> Option<&BalancedNetwork> {
     match value {
         PioValue::DcPfInstance(instance) => Some(instance.network()),
@@ -975,6 +1057,23 @@ fn emit_dynamic(
 
     if let PioValue::GeoLayer(layer) = &module.value() {
         return emit_geo_layer(layer, format, destination);
+    }
+
+    if let Some(kind) = contingency_file_of_value(module.value()) {
+        if let Some(bytes) = retained_contingency_source(module, format) {
+            let artifact = powerio_core::MemoryArtifact::new(
+                powerio_core::ArtifactPath::new(kind.artifact_name())
+                    .expect("static name is a valid artifact path"),
+                bytes,
+            );
+            return destination.__commit_artifacts(
+                false,
+                powerio_core::Fidelity::ExactSameFormat,
+                vec![artifact],
+                Vec::new(),
+            );
+        }
+        return emit_contingency_file(module.value(), kind, format, destination);
     }
 
     match &module.value() {

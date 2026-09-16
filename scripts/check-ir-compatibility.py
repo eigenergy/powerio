@@ -12,9 +12,14 @@ from pathlib import Path
 import powerio
 
 ROOT = Path(__file__).resolve().parents[1]
+# Structural types added after 0.11.0 under the same IR generation. A 0.11.0
+# reader rejects each by name and keeps reading the types it implements.
 ADDITIVE_TYPES = {
+    "powerio.ContingencySet",
     "powerio.LinDist3FlowOpfInstance",
     "powerio.LinDist3FlowOpfSolution",
+    "powerio.MonitoredSet",
+    "powerio.SubsystemSet",
 }
 
 

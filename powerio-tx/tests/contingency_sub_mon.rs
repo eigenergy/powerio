@@ -599,7 +599,7 @@ fn a_generated_monitored_element_file_reads_every_statement() {
     assert_eq!(
         statements[0],
         MonitorStatement::VoltageRange {
-            scope: MonitorScope::Subsystem("A1".into()),
+            scope: MonitorScope::Subsystem { name: "A1".into() },
             vmin: 0.95,
             vmax: 1.05,
         }
@@ -607,7 +607,7 @@ fn a_generated_monitored_element_file_reads_every_statement() {
     assert_eq!(
         statements[1],
         MonitorStatement::VoltageDeviation {
-            scope: MonitorScope::Subsystem("A1".into()),
+            scope: MonitorScope::Subsystem { name: "A1".into() },
             down: 0.03,
             up: Some(0.06),
         }
@@ -661,11 +661,11 @@ fn a_generated_monitored_element_file_reads_every_statement() {
     assert_eq!(
         scopes,
         vec![
-            &MonitorScope::Bus(BusId(101)),
-            &MonitorScope::Area(2),
-            &MonitorScope::Zone(3),
-            &MonitorScope::Owner(3),
-            &MonitorScope::Kv(230.0),
+            &MonitorScope::Bus { bus: BusId(101) },
+            &MonitorScope::Area { area: 2 },
+            &MonitorScope::Zone { zone: 3 },
+            &MonitorScope::Owner { owner: 3 },
+            &MonitorScope::Kv { kv: 230.0 },
         ]
     );
     assert!(parsed.set.retained.is_empty());

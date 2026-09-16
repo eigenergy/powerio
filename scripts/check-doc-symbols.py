@@ -10,6 +10,7 @@ Checked shapes:
   naming a checkout, else skipped.
 - Python `powerio.<attr>` references exist in the package's __init__.
 """
+import json
 import re
 import subprocess
 import sys
@@ -59,6 +60,22 @@ for match in re.finditer(r'#\[command\(name = "([a-z-]+)"', cli_main):
     cli_commands.add(match.group(1))
 
 python_init = (ROOT / "python/powerio/__init__.py").read_text()
+
+# The PowerIO IR reference names every structural type in full, so its
+# `powerio.X` references are type names rather than Python attributes.
+# `powerio/tests/ir_reference.rs` checks that page against the schema in both
+# directions; the Python parity of a type is checked where the page teaches
+# Python.
+IR_TYPE_PAGES = {"ir-reference.md"}
+_schema_relative = re.search(
+    r'IR_SCHEMA_ID: &str = "https://powerio\.dev/schema/([^"]+)"',
+    (ROOT / "powerio/src/lib.rs").read_text(),
+).group(1)
+_schema = json.loads((ROOT / "docs/schema" / _schema_relative).read_text())
+IR_TYPE_NAMES = {
+    branch["properties"]["type"]["const"].removeprefix("powerio.").split("<")[0]
+    for branch in _schema["$defs"]["StoredValue"]["oneOf"]
+}
 
 julia_exports: set[str] = set()
 julia_root = Path(__import__("os").environ.get("POWERIO_JL", ""))
@@ -112,6 +129,8 @@ for page in PAGES:
         if attr in {"dev", "h", "versions", "dcopf"}:
             continue
         if (ROOT / "python/powerio" / attr).is_dir():
+            continue
+        if page.name in IR_TYPE_PAGES and attr in IR_TYPE_NAMES:
             continue
         if is_history:
             continue

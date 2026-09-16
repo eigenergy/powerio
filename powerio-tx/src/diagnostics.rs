@@ -331,6 +331,8 @@ pub mod codes {
             "the PSS/E contingency reader stopped recording notes at its budget";
         READ_CON_SOURCE_MALFORMED = "READ.CON.SOURCE_MALFORMED", Warning,
             "a PSS/E contingency line could not be read as the statement its block requires";
+        READ_CON_NOT_TEXT = "READ.CON.NOT_TEXT", Error,
+            "a PSS/E contingency description file is not valid UTF-8 text", category = Parse;
 
         READ_SUB_STATEMENT_UNRECOGNIZED = "READ.SUB.STATEMENT_UNRECOGNIZED", Warning,
             "a PSS/E subsystem statement outside the grammar was kept as its original line";
@@ -340,6 +342,8 @@ pub mod codes {
             "the PSS/E subsystem reader stopped recording notes at its budget";
         READ_SUB_SOURCE_MALFORMED = "READ.SUB.SOURCE_MALFORMED", Warning,
             "a PSS/E subsystem selector states a keyword whose values are not the numbers it needs";
+        READ_SUB_NOT_TEXT = "READ.SUB.NOT_TEXT", Error,
+            "a PSS/E subsystem description file is not valid UTF-8 text", category = Parse;
 
         READ_MON_STATEMENT_UNRECOGNIZED = "READ.MON.STATEMENT_UNRECOGNIZED", Warning,
             "a PSS/E monitored element statement outside the grammar was kept as its original line";
@@ -349,6 +353,8 @@ pub mod codes {
             "the PSS/E monitored element reader stopped recording notes at its budget";
         READ_MON_SOURCE_MALFORMED = "READ.MON.SOURCE_MALFORMED", Warning,
             "a line inside a PSS/E monitored element block states no branch";
+        READ_MON_NOT_TEXT = "READ.MON.NOT_TEXT", Error,
+            "a PSS/E monitored element file is not valid UTF-8 text", category = Parse;
 
         READ_GEO_SOURCE_MALFORMED = "READ.GEO.SOURCE_MALFORMED", Warning,
             "a geo layer row could not be read and was skipped";

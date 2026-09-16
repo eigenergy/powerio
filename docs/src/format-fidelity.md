@@ -279,33 +279,15 @@ revision, but no emission target names revision 32, so writing it back as PSS/E
 produces fresh revision 33 text and its unmodeled sections survive only in the
 retained source.
 
-PSS/E contingency description files (`.con`) parse to `ContingencySet` and
-write back with `to_con`. The reader states cases, automatic specifications,
-and `SKIP` rules as typed values; a statement outside the grammar keeps its
-trimmed line and is reported as `READ.CON.STATEMENT_UNRECOGNIZED`, so a file
-written for another solver reads completely. Only a case that never closes, a
-case that starts inside another, and a block left open at end of input are
-refused. The grammar is established from public contingency files and the
-example set PSS/E ships, because the manual that defines it is licensed and
-not public; `powerio-tx/src/contingency/FORMAT.md` lists each statement with
-its evidence. `ContingencySet::resolve` binds a set to a network and reports,
-per case, which elements each statement named and which named nothing, so a
-case that does not apply is a `BUILD.CON.CASE_UNRESOLVED` note with a reason
-rather than a silent omission. The binding recomputes the PSS/E machine and
-circuit id of every element with the RAW writer's own allocation, because a
-network row's identity carries neither.
-
-The other two files a PSS/E contingency analysis reads parse the same way.
-`SubsystemSet::parse` reads a subsystem description file (`.sub`) and
-`MonitoredSet::parse` reads a monitored element file (`.mon`), each keeping a
-statement outside its grammar as its original line under `READ.SUB.*` or
-`READ.MON.*`, and each writing back with `to_sub` and `to_mon`.
-`Subsystem::select_buses` names the buses of a subsystem in a network,
-`MonitoredSet::resolve` binds monitored branches, interfaces, and voltage
-scopes to table rows, and `ContingencySet::expand` turns a `.con` file's
-automatic specifications into explicit cases over those subsystems. The case
-names the expansion generates and the reading of `3WLOWVOLTAGE` are PowerIO's
-convention, because PSS/E documents neither publicly.
+The three text files a PSS/E contingency analysis reads beside the case are
+values of their own: a `.con` parses to a `ContingencySet`, a `.sub` to a
+`SubsystemSet`, and a `.mon` to a `MonitoredSet`. Each reader
+keeps a statement outside its grammar as the original line and reports it, so
+a file written for another solver reads completely, and each writes back with
+`to_con`, `to_sub`, or `to_mon`. Binding a set to a network is the separate
+step that reports, per case, which elements each statement named and which
+named nothing. [PSS/E contingency analysis files](contingency-files.md) has
+the readers, the binding, the tokens, and the command line.
 
 Generator `IREG`/`NREG`, switched shunt `SWREG`/`NREG`, and transformer
 `CONT`/`NODE` resolve to exact terminal references, including an explicit

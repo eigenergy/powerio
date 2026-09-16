@@ -1119,6 +1119,12 @@ pub enum StoredValue {
     MulticonductorNetwork(Box<MulticonductorNetwork>),
     #[serde(rename = "powerio.GeoLayer")]
     GeoLayer(Box<powerio_tx::GeoLayer>),
+    #[serde(rename = "powerio.ContingencySet")]
+    ContingencySet(Box<powerio_tx::ContingencySet>),
+    #[serde(rename = "powerio.SubsystemSet")]
+    SubsystemSet(Box<powerio_tx::SubsystemSet>),
+    #[serde(rename = "powerio.MonitoredSet")]
+    MonitoredSet(Box<powerio_tx::MonitoredSet>),
     #[serde(rename = "powerio.OperatingPoint<powerio.BalancedNetwork>")]
     BalancedOperatingPoint(StoredOperatingPoint<BalancedNetwork>),
     #[serde(rename = "powerio.OperatingPoint<powerio.MulticonductorNetwork>")]
@@ -1718,6 +1724,87 @@ fn validate_geo_layer(layer: &powerio_tx::GeoLayer) -> Result<(), String> {
     Ok(())
 }
 
+/// Every case names itself and every change states a finite amount, which is
+/// what the `.con` reader admits into a typed statement.
+fn validate_contingency_set(set: &powerio_tx::ContingencySet) -> Result<(), String> {
+    for (index, case) in set.cases.iter().enumerate() {
+        if case.name.trim().is_empty() {
+            return Err(format!("contingency case {index} has no name"));
+        }
+        for action in &case.actions {
+            let (powerio_tx::ContingencyAction::ChangeLoad { change, .. }
+            | powerio_tx::ContingencyAction::ChangeGeneration { change, .. }) = action
+            else {
+                continue;
+            };
+            if !change.amount.is_finite() {
+                return Err(format!(
+                    "contingency case `{}` states a change amount that is not finite",
+                    case.name
+                ));
+            }
+        }
+    }
+    for (index, spec) in set.automatic.iter().enumerate() {
+        if spec.subsystem.trim().is_empty() {
+            return Err(format!(
+                "automatic specification {index} names no subsystem"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Every subsystem names itself and every base kV band runs low to high,
+/// which is what the `.sub` reader admits into a typed selector.
+fn validate_subsystem_set(set: &powerio_tx::SubsystemSet) -> Result<(), String> {
+    for (index, subsystem) in set.subsystems.iter().enumerate() {
+        if subsystem.name.trim().is_empty() {
+            return Err(format!("subsystem {index} has no name"));
+        }
+        for group in &subsystem.groups {
+            for selector in &group.selectors {
+                if let powerio_tx::SubsystemSelector::KvRange { lo, hi } = selector
+                    && !(lo.is_finite() && hi.is_finite() && lo <= hi)
+                {
+                    return Err(format!(
+                        "subsystem `{}` states a base kV band that does not run low to high",
+                        subsystem.name
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Every voltage band runs low to high and every statement naming a subsystem
+/// names one, which is what the `.mon` reader admits into a typed statement.
+fn validate_monitored_set(set: &powerio_tx::MonitoredSet) -> Result<(), String> {
+    for (index, statement) in set.statements.iter().enumerate() {
+        match statement {
+            powerio_tx::MonitorStatement::VoltageRange { vmin, vmax, .. } => {
+                if !(vmin.is_finite() && vmax.is_finite() && vmin <= vmax) {
+                    return Err(format!(
+                        "monitor statement {index} states a voltage range that does not run low to high"
+                    ));
+                }
+            }
+            powerio_tx::MonitorStatement::BranchesInSubsystem { subsystem, .. }
+            | powerio_tx::MonitorStatement::TiesFromSubsystem { subsystem } => {
+                if subsystem.trim().is_empty() {
+                    return Err(format!("monitor statement {index} names no subsystem"));
+                }
+            }
+            powerio_tx::MonitorStatement::Interface { name, .. } if name.trim().is_empty() => {
+                return Err(format!("monitor statement {index} names no interface"));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)]
 fn validate_value(value: &StoredValue) -> Result<(), String> {
     match value {
@@ -1726,6 +1813,9 @@ fn validate_value(value: &StoredValue) -> Result<(), String> {
         | StoredValue::AcScucInstance(_)
         | StoredValue::AcScucSolution(_) => Ok(()),
         StoredValue::GeoLayer(layer) => validate_geo_layer(layer),
+        StoredValue::ContingencySet(set) => validate_contingency_set(set),
+        StoredValue::SubsystemSet(set) => validate_subsystem_set(set),
+        StoredValue::MonitoredSet(set) => validate_monitored_set(set),
         StoredValue::BalancedOperatingPoint(point) => validate_quantities(&point.quantities, 1),
         StoredValue::MulticonductorOperatingPoint(point) => {
             validate_quantities(&point.quantities, 1)
