@@ -71,17 +71,28 @@ module.
 
 ```python
 module = powerio.parse("case9.m")
+print(module.type_name)                      # powerio.BalancedNetwork
 
 if isinstance(module.value, powerio.BalancedNetwork):
     print(module.value.n_buses)
 
 for diagnostic in module.diagnostics:
     print(diagnostic.code, diagnostic.severity, diagnostic.message)
+
+records = powerio.diagnostic_records(module.diagnostics)
 ```
 
 Diagnostics live on the module rather than on the contained network or
-solution. To find out what you have, use Python's normal type system; there is
-no `.kind` property, kind enum, or typed narrowing helper.
+solution. Branch on `module.value` with `isinstance`; there is no `.kind`
+property, kind enum, or typed narrowing helper. `module.type_name` is the
+canonical structural name of the value, the same string the C ABI and PowerIO
+IR use, for messages and machine-readable results.
+
+`powerio.diagnostic_records` turns those diagnostics into JSON-ready
+dictionaries, and `powerio.diagnostic_record` turns one. Each record keeps
+`code`, `severity`, `message`, and `target`, and adds `id`,
+`suggested_action`, `related`, `details`, and `spans` when the diagnostic
+carries them.
 
 The value classes are `BalancedNetwork`, `dist.MulticonductorNetwork`,
 `OperatingPoint`, `TimeSeries`, `ScenarioSet`, `GeoLayer`, `ContingencySet`,
@@ -264,6 +275,8 @@ you need the diagnostic.
 | `parse_display(path, format=None)` | the raw PowerWorld `.pwd` display record as `DisplayData` |
 | `from_ppc(ppc)` | a `BalancedNetwork` from a pandapower or PYPOWER case dictionary |
 | `PioModule.from_value(value)` | a module around a value built in Python |
+| `diagnostic_record(diagnostic)` | one diagnostic as a JSON-ready dictionary |
+| `diagnostic_records(diagnostics)` | every diagnostic as a JSON-ready dictionary, in order |
 | `module.to_balanced_report()`, `module.to_balanced()` | the multiconductor to balanced transformation |
 
 ## Errors

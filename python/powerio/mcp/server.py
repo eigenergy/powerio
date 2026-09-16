@@ -18,7 +18,7 @@ from mcp.server.mcpserver import MCPServer
 from pydantic import Field
 
 import powerio
-from powerio import dist
+from powerio import diagnostic_records, dist
 from powerio.mcp import sandbox
 
 mcp = MCPServer("powerio")
@@ -168,46 +168,6 @@ def _serialize_module_text(module: "powerio.PioModule") -> str:
     return result.text
 
 
-def _canonical_type(module: "powerio.PioModule") -> str:
-    return str(module._inner._type_name)
-
-
-def _diagnostic_record(item: Any) -> Dict[str, Any]:
-    record: Dict[str, Any] = {
-        "code": item.code,
-        "severity": item.severity,
-        "message": item.message,
-        "target": getattr(item, "target", None),
-    }
-    identity = getattr(item, "id", None)
-    if identity:
-        record["id"] = identity
-    suggested_action = getattr(item, "suggested_action", None)
-    if suggested_action:
-        record["suggested_action"] = suggested_action
-    related = getattr(item, "related", None)
-    if related:
-        record["related"] = list(related)
-    details = getattr(item, "details", None)
-    if details is not None:
-        record["details"] = details
-    spans = getattr(item, "spans", None)
-    if spans:
-        record["spans"] = [
-            {
-                "source": span.source,
-                "byte_start": span.byte_start,
-                "byte_end": span.byte_end,
-            }
-            for span in spans
-        ]
-    return record
-
-
-def _diagnostic_records(items: Any) -> list[Dict[str, Any]]:
-    return [_diagnostic_record(item) for item in items]
-
-
 def _diagnostics_summary(records: list[Dict[str, Any]]) -> Dict[str, Any]:
     counts = {name: 0 for name in ("error", "warning", "remark", "note")}
     for record in records:
@@ -232,9 +192,9 @@ def _diagnostics_payload(powerio_ir: str) -> Dict[str, Any]:
         module = powerio.deserialize(io.StringIO(powerio_ir))
     except (powerio.PowerIOError, ValueError, TypeError) as exc:
         raise _coded_error("PowerIO IR", exc) from exc
-    records = _diagnostic_records(module.diagnostics)
+    records = diagnostic_records(module.diagnostics)
     return {
-        "value_type": _canonical_type(module),
+        "value_type": module.type_name,
         "summary": _diagnostics_summary(records),
         "diagnostics": records,
     }
@@ -337,7 +297,7 @@ def _value_summary(value: Any) -> Dict[str, Any]:
         summary = {
             "operating_point": True,
             "network": _balanced_summary(value.network)
-            if _canonical_type(value.module) == "powerio.OperatingPoint<powerio.BalancedNetwork>"
+            if value.module.type_name == "powerio.OperatingPoint<powerio.BalancedNetwork>"
             else None,
         }
     elif isinstance(value, powerio.GeoLayer):
@@ -365,9 +325,9 @@ def _summary_payload(
         module.value, time_index=time_index, scenario_id=scenario_id
     )
     payload = {
-        "module_value_type": _canonical_type(module),
+        "module_value_type": module.type_name,
         **_value_summary(value),
-        "diagnostics": _diagnostic_records(module.diagnostics),
+        "diagnostics": diagnostic_records(module.diagnostics),
     }
     if selection:
         payload["selection"] = selection
@@ -394,7 +354,7 @@ def _emit_result_payload(result: "powerio.EmitResult") -> Dict[str, Any]:
         "layout": result.layout,
         "fidelity": result.fidelity,
         "artifacts": artifacts,
-        "diagnostics": _diagnostic_records(result.diagnostics),
+        "diagnostics": diagnostic_records(result.diagnostics),
     }
     if len(artifacts) == 1 and "text" in artifacts[0]:
         payload["text"] = artifacts[0]["text"]
@@ -449,9 +409,9 @@ def _parse_impl(
     format: Optional[str] = None,
 ) -> Dict[str, Any]:
     module = _load_module(path=path, content=content, format=format)
-    records = _diagnostic_records(module.diagnostics)
+    records = diagnostic_records(module.diagnostics)
     return {
-        "value_type": _canonical_type(module),
+        "value_type": module.type_name,
         "powerio_ir": _serialize_module_text(module),
         "summary": _summary_payload(module),
         "diagnostics": records,
@@ -492,7 +452,7 @@ def _normalize_impl(
     except powerio.PowerIOError as exc:
         raise _coded_error("normalization failed", exc) from exc
     return {
-        "value_type": _canonical_type(normalized),
+        "value_type": normalized.type_name,
         "powerio_ir": _serialize_module_text(normalized),
         "summary": _summary_payload(normalized),
     }
@@ -540,7 +500,7 @@ def _matrix_impl(
         module.value, time_index=time_index, scenario_id=scenario_id
     )
     if isinstance(value, powerio.OperatingPoint):
-        if _canonical_type(value.module) != "powerio.OperatingPoint<powerio.BalancedNetwork>":
+        if value.module.type_name != "powerio.OperatingPoint<powerio.BalancedNetwork>":
             raise ValueError("matrix calculations require a BalancedNetwork")
         value = value.network
     if not isinstance(value, powerio.BalancedNetwork):
@@ -631,7 +591,7 @@ def _matrix_impl(
             }
         )
     payload["skipped_branch_rows"] = list(index_map["skipped_branch_rows"])
-    payload["diagnostics"] = _diagnostic_records(module.diagnostics)
+    payload["diagnostics"] = diagnostic_records(module.diagnostics)
     if selection:
         payload["selection"] = selection
     return payload
@@ -826,7 +786,7 @@ def _to_balanced_tool(
     except (powerio.PowerIOError, ValueError) as exc:
         raise _coded_error("balanced conversion", exc) from exc
     return {
-        "value_type": _canonical_type(converted),
+        "value_type": converted.type_name,
         "powerio_ir": _serialize_module_text(converted),
         "summary": _summary_payload(converted),
     }

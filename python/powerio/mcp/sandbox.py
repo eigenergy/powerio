@@ -372,6 +372,11 @@ def staged_directory_write(
 ) -> _T:
     """Run a directory writer privately, preflight it, then install it.
 
+    ``write`` receives a staging path inside a private workspace. That path
+    does not exist yet and the writer creates it, as PowerIO's emitters do. It
+    is never the workspace directory itself, so a writer that refuses an
+    existing target needs no change.
+
     A new output is installed by one same-filesystem rename. Updating an
     existing directory builds a complete sibling replacement, preserving
     unrelated files, then swaps it in. If the second rename fails, the original
@@ -393,9 +398,7 @@ def staged_directory_write(
 
     workspace = Path(tempfile.mkdtemp(prefix=f".{output.name}.stage-", dir=parent))
     staging_installed = False
-    # The writers stage and commit themselves and refuse an existing target,
-    # so the path handed to the writer must not exist yet: it is a child of
-    # the private workspace, never the workspace directory itself.
+    # A child of the private workspace, so the writer's target does not exist.
     staging = workspace / "out"
     replacement: Path | None = None
     backup: Path | None = None

@@ -4214,8 +4214,8 @@ impl PyPioModule {
         Ok(self.ac_scuc_solution()?.objective())
     }
 
-    /// Canonical structural type name. This stays private to the wrapper;
-    /// callers use `isinstance(module.value, ...)`.
+    /// Canonical structural type name; the wrapper exposes it as
+    /// `PioModule.type_name`.
     #[getter]
     fn _type_name(&self) -> PyResult<String> {
         Ok(self.module()?.value().type_name().to_owned())

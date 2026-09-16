@@ -66,10 +66,26 @@
   length 0 for a row the network states no identity for, and Python reads the
   table from `"type"` and `"id": None` for that row. The ABI version is
   unchanged.
+- Report the canonical structural name of a module's value from Python as
+  `PioModule.type_name`. The string is the one the C ABI and PowerIO IR use,
+  so a caller states the type in a message or a machine-readable result
+  without reading a private attribute.
+- Build JSON-ready diagnostic records from Python with
+  `powerio.diagnostic_record` and `powerio.diagnostic_records`. Each record
+  keeps `code`, `severity`, `message`, and `target`, and adds `id`,
+  `suggested_action`, `related`, `details`, and `spans` when the diagnostic
+  carries them. The MCP server reports its diagnostics through them.
 
 ## 0.11.2
 
 - Maintenance updates and regression coverage.
+- With neither `POWERIO_MCP_ALLOWED_ROOTS` nor the compatibility variables
+  `POWERIO_MCP_ROOT` and `POWERIO_MCP_ALLOWED_ROOT` set, the MCP path policy
+  confines reads and writes to the directory captured when the server
+  initializes. Earlier releases allowed every path. `allowed_roots()` returns
+  that directory, `admitting_root()` always returns a root, a variable that
+  names no directory raises `PathNotAllowed`, and a relative path resolves
+  against the working directory.
 - Bundle the supported BMOPF schema snapshots, license, and provenance with
   the Rust, Python, and native-library distributions. Fresh output references
   PowerIO's archived schema bytes independently of upstream review branches.

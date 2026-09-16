@@ -158,6 +158,8 @@ __all__ = [
     "apply_bus_load_active_power",
     "apply_updates",
     "deserialize",
+    "diagnostic_record",
+    "diagnostic_records",
     "dist",
     "emit",
     "features",
@@ -1468,6 +1470,14 @@ class PioModule:
         return value_class(self)
 
     @property
+    def type_name(self) -> str:
+        """The canonical structural name of the contained value, such as
+        ``powerio.OperatingPoint<powerio.BalancedNetwork>``. The C ABI and
+        PowerIO IR name the same type with the same string.
+        """
+        return str(self._inner._type_name)
+
+    @property
     def diagnostics(self) -> list[Diagnostic]:
         """The diagnostics stored on this module, in encounter order."""
         return list(self._inner.diagnostics)
@@ -1765,3 +1775,45 @@ def features() -> dict[str, bool]:
         "dist": True,
         "prob": True,
     }
+
+
+@_guard
+def diagnostic_record(diagnostic: Diagnostic) -> dict[str, Any]:
+    """One diagnostic as a JSON-ready dictionary.
+
+    ``code``, ``severity``, ``message``, and ``target`` are always present, in
+    that order. ``id``, ``suggested_action``, and ``related`` follow when the
+    diagnostic sets them, ``details`` when it is not ``None``, and ``spans``
+    as ``source``, ``byte_start``, ``byte_end`` dictionaries when the
+    diagnostic carries at least one span.
+    """
+    record: dict[str, Any] = {
+        "code": diagnostic.code,
+        "severity": diagnostic.severity,
+        "message": diagnostic.message,
+        "target": diagnostic.target,
+    }
+    if diagnostic.id:
+        record["id"] = diagnostic.id
+    if diagnostic.suggested_action:
+        record["suggested_action"] = diagnostic.suggested_action
+    if diagnostic.related:
+        record["related"] = list(diagnostic.related)
+    if diagnostic.details is not None:
+        record["details"] = diagnostic.details
+    if diagnostic.spans:
+        record["spans"] = [
+            {
+                "source": span.source,
+                "byte_start": span.byte_start,
+                "byte_end": span.byte_end,
+            }
+            for span in diagnostic.spans
+        ]
+    return record
+
+
+@_guard
+def diagnostic_records(diagnostics: Iterable[Diagnostic]) -> list[dict[str, Any]]:
+    """Every diagnostic as a JSON-ready dictionary, in the order given."""
+    return [diagnostic_record(item) for item in diagnostics]
