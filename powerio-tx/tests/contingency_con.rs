@@ -57,13 +57,14 @@ fn check_fixed_point(parsed: &ContingencyParsed) -> String {
     written
 }
 
-const FIXTURES: [&str; 6] = [
+const FIXTURES: [&str; 7] = [
     "psse35_generated.con",
     "explicit_mixed.con",
     "no_file_end.con",
     "automatic_skip.con",
     "tara_extensions.con",
     "resolve_cases.con",
+    "expand.con",
 ];
 
 #[test]

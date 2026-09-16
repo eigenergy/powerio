@@ -96,10 +96,12 @@ pub mod __internal {
 }
 
 pub use contingency::{
-    AutomaticOrder, AutomaticSpec, AutomaticTarget, Change, ChangeOp, ChangeUnit,
+    AutomaticOrder, AutomaticSpec, AutomaticTarget, BranchRef, Change, ChangeOp, ChangeUnit,
     ContingencyAction, ContingencyCase, ContingencyParsed, ContingencyResolution, ContingencySet,
-    PsseEquipmentIndex, ResolvedCase, ResolvedComponent, RetainedStatement, SkipRule,
-    UnresolvedAction, UnresolvedReason,
+    Expanded, MonitorScope, MonitorStatement, MonitoredParsed, MonitoredResolution, MonitoredSet,
+    PsseEquipmentIndex, ResolvedCase, ResolvedComponent, ResolvedInterface, ResolvedVoltageScope,
+    RetainedStatement, SelectorGroup, SkipRule, Subsystem, SubsystemParsed, SubsystemSelector,
+    SubsystemSet, UnresolvedAction, UnresolvedMonitor, UnresolvedMonitorReason, UnresolvedReason,
 };
 pub use dc::BranchSusceptanceFormula;
 pub use diagnostics::{Diagnostic, DiagnosticCode, DiagnosticSeverity, EmitFamily};

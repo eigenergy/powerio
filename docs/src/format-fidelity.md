@@ -295,6 +295,18 @@ rather than a silent omission. The binding recomputes the PSS/E machine and
 circuit id of every element with the RAW writer's own allocation, because a
 network row's identity carries neither.
 
+The other two files a PSS/E contingency analysis reads parse the same way.
+`SubsystemSet::parse` reads a subsystem description file (`.sub`) and
+`MonitoredSet::parse` reads a monitored element file (`.mon`), each keeping a
+statement outside its grammar as its original line under `READ.SUB.*` or
+`READ.MON.*`, and each writing back with `to_sub` and `to_mon`.
+`Subsystem::select_buses` names the buses of a subsystem in a network,
+`MonitoredSet::resolve` binds monitored branches, interfaces, and voltage
+scopes to table rows, and `ContingencySet::expand` turns a `.con` file's
+automatic specifications into explicit cases over those subsystems. The case
+names the expansion generates and the reading of `3WLOWVOLTAGE` are PowerIO's
+convention, because PSS/E documents neither publicly.
+
 Generator `IREG`/`NREG`, switched shunt `SWREG`/`NREG`, and transformer
 `CONT`/`NODE` resolve to exact terminal references, including an explicit
 target on the same bus. Each winding of a three winding transformer keeps its

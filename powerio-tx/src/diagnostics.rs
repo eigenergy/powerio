@@ -332,6 +332,24 @@ pub mod codes {
         READ_CON_SOURCE_MALFORMED = "READ.CON.SOURCE_MALFORMED", Warning,
             "a PSS/E contingency line could not be read as the statement its block requires";
 
+        READ_SUB_STATEMENT_UNRECOGNIZED = "READ.SUB.STATEMENT_UNRECOGNIZED", Warning,
+            "a PSS/E subsystem statement outside the grammar was kept as its original line";
+        READ_SUB_TEXT_AFTER_END = "READ.SUB.TEXT_AFTER_END", Warning,
+            "a PSS/E subsystem description file states text after its file END";
+        READ_SUB_NOTES_TRUNCATED = "READ.SUB.NOTES_TRUNCATED", Warning,
+            "the PSS/E subsystem reader stopped recording notes at its budget";
+        READ_SUB_SOURCE_MALFORMED = "READ.SUB.SOURCE_MALFORMED", Error,
+            "a PSS/E subsystem selector states a keyword whose values are not the numbers it needs";
+
+        READ_MON_STATEMENT_UNRECOGNIZED = "READ.MON.STATEMENT_UNRECOGNIZED", Warning,
+            "a PSS/E monitored element statement outside the grammar was kept as its original line";
+        READ_MON_TEXT_AFTER_END = "READ.MON.TEXT_AFTER_END", Warning,
+            "a PSS/E monitored element file states text after its file END";
+        READ_MON_NOTES_TRUNCATED = "READ.MON.NOTES_TRUNCATED", Warning,
+            "the PSS/E monitored element reader stopped recording notes at its budget";
+        READ_MON_SOURCE_MALFORMED = "READ.MON.SOURCE_MALFORMED", Error,
+            "a line inside a PSS/E monitored element block states no branch";
+
         READ_GEO_SOURCE_MALFORMED = "READ.GEO.SOURCE_MALFORMED", Warning,
             "a geo layer row could not be read and was skipped";
         READ_GEO_NOTES_TRUNCATED = "READ.GEO.NOTES_TRUNCATED", Warning,
@@ -383,6 +401,10 @@ pub mod codes {
             "an action of a contingency case bound to no element, or named more than one where one was required";
         BUILD_CON_NOTES_TRUNCATED = "BUILD.CON.NOTES_TRUNCATED", Warning,
             "the contingency resolver stopped recording notes at its budget";
+        BUILD_CON_SUBSYSTEM_UNKNOWN = "BUILD.CON.SUBSYSTEM_UNKNOWN", Warning,
+            "an automatic contingency specification names a subsystem the subsystem set does not state";
+        BUILD_MON_STATEMENT_UNRESOLVED = "BUILD.MON.STATEMENT_UNRESOLVED", Warning,
+            "a monitored element statement names an element or subsystem that was not found";
 
         // VALIDATE: the case's own internal consistency.
         /// Emitted by the stored document's payload validation in the facade;

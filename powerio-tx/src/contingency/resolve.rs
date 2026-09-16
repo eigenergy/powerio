@@ -55,6 +55,7 @@ pub struct PsseEquipmentIndex<'n> {
     net: &'n BalancedNetwork,
     machine_ids: Vec<String>,
     circuit_ids: Vec<String>,
+    transformer_3w_ids: Vec<String>,
     bus_rows: BTreeMap<BusId, usize>,
     /// Keyed on the stored terminal order, as the writer keys it. A lookup
     /// reads both orientations.
@@ -202,7 +203,11 @@ fn shunt_index(
 
 /// The three winding transformer rows keyed on their three buses in ascending
 /// order, so a statement naming the buses in any order finds the transformer.
-fn transformer_3w_index(net: &BalancedNetwork, sanitized: &mut usize) -> Transformer3wRows {
+fn transformer_3w_index(
+    net: &BalancedNetwork,
+    sanitized: &mut usize,
+) -> (Vec<String>, Transformer3wRows) {
+    let mut ids = Vec::with_capacity(net.transformers_3w().len());
     let mut rows: Transformer3wRows = BTreeMap::new();
     let mut used = BTreeMap::new();
     for (row, transformer) in net.transformers_3w().iter().enumerate() {
@@ -215,8 +220,9 @@ fn transformer_3w_index(net: &BalancedNetwork, sanitized: &mut usize) -> Transfo
         rows.entry(buses)
             .or_default()
             .push((id.trim().to_owned(), row));
+        ids.push(id);
     }
-    rows
+    (ids, rows)
 }
 
 impl<'n> PsseEquipmentIndex<'n> {
@@ -229,10 +235,12 @@ impl<'n> PsseEquipmentIndex<'n> {
         let (machine_ids, machine_rows) = machine_index(net, &mut sanitized);
         let (circuit_ids, branch_rows) = branch_index(net, &mut sanitized);
         let (fixed_shunt_rows, switched_shunt_rows) = shunt_index(net, &mut sanitized);
+        let (transformer_3w_ids, transformer_3w_rows) = transformer_3w_index(net, &mut sanitized);
         Self {
             net,
             machine_ids,
             circuit_ids,
+            transformer_3w_ids,
             bus_rows: net
                 .buses()
                 .iter()
@@ -244,7 +252,7 @@ impl<'n> PsseEquipmentIndex<'n> {
             fixed_shunt_rows,
             switched_shunt_rows,
             load_rows: load_index(net, &mut sanitized),
-            transformer_3w_rows: transformer_3w_index(net, &mut sanitized),
+            transformer_3w_rows,
         }
     }
 
@@ -265,6 +273,13 @@ impl<'n> PsseEquipmentIndex<'n> {
     #[must_use]
     pub fn circuit_ids(&self) -> &[String] {
         &self.circuit_ids
+    }
+
+    /// The circuit id of every three winding transformer, aligned with
+    /// `net.transformers_3w()`.
+    #[must_use]
+    pub fn transformer_3w_ids(&self) -> &[String] {
+        &self.transformer_3w_ids
     }
 
     /// The row of `bus` in `net.buses()`.

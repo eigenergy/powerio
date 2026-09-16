@@ -26,19 +26,35 @@
 //! network. [`ContingencySet::resolve`] is the separate step that binds a set
 //! to the elements of a [`crate::network::BalancedNetwork`]; `resolve.rs`
 //! holds it.
+//!
+//! The other two files a contingency analysis reads have their own modules
+//! beside this one: `sub.rs` for the subsystem description file
+//! ([`SubsystemSet`]) and `mon.rs` for the monitored element file
+//! ([`MonitoredSet`]). [`ContingencySet::expand`] turns this file's automatic
+//! specifications into explicit cases against a network and a subsystem set;
+//! `expand.rs` holds it.
 
+mod expand;
 mod lexer;
+pub mod mon;
 mod resolve;
+pub mod sub;
 
 use std::cmp::Ordering;
 
+pub use expand::Expanded;
 use lexer::{LexedLine, LineKind, lex};
+pub use mon::{
+    BranchRef, MonitorScope, MonitorStatement, MonitoredParsed, MonitoredResolution, MonitoredSet,
+    ResolvedInterface, ResolvedVoltageScope, UnresolvedMonitor, UnresolvedMonitorReason,
+};
 pub use resolve::{
     ContingencyResolution, PsseEquipmentIndex, ResolvedCase, ResolvedComponent, UnresolvedAction,
     UnresolvedReason,
 };
+pub use sub::{SelectorGroup, Subsystem, SubsystemParsed, SubsystemSelector, SubsystemSet};
 
-use crate::diagnostics::{Diagnostic, codes};
+use crate::diagnostics::{Diagnostic, DiagnosticInfo, codes};
 use crate::network::BusId;
 use crate::{Error, Result};
 
@@ -47,6 +63,25 @@ const FMT: &str = "psse contingency";
 /// Reader notes are bounded so that a file of unrecognized lines cannot grow
 /// the note list without limit.
 const MAX_READER_NOTES: usize = 16;
+
+/// Record one reader note, within the note budget the three contingency
+/// analysis readers share. A file with exactly the budget of findings gets
+/// that many notes and no marker; the first note past the budget is replaced
+/// by one marker under the reader's own truncation code, recorded once.
+fn note_within_budget(
+    diagnostics: &mut Vec<Diagnostic>,
+    info: &'static DiagnosticInfo,
+    truncated: &'static DiagnosticInfo,
+    message: String,
+) {
+    match diagnostics.len().cmp(&MAX_READER_NOTES) {
+        Ordering::Less => diagnostics.push(Diagnostic::of(info, message)),
+        Ordering::Equal => {
+            diagnostics.push(Diagnostic::of(truncated, "further reader notes suppressed"));
+        }
+        Ordering::Greater => {}
+    }
+}
 
 /// One contingency description file.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -229,18 +264,13 @@ pub struct ContingencyParsed {
 }
 
 impl ContingencyParsed {
-    /// Record one note, within the reader's note budget. A file with exactly
-    /// the budget of findings gets that many notes and no marker; the first
-    /// note past the budget is replaced by one marker, recorded once.
-    fn note(&mut self, info: &'static crate::diagnostics::DiagnosticInfo, message: String) {
-        match self.diagnostics.len().cmp(&MAX_READER_NOTES) {
-            Ordering::Less => self.diagnostics.push(Diagnostic::of(info, message)),
-            Ordering::Equal => self.diagnostics.push(Diagnostic::of(
-                &codes::READ_CON_NOTES_TRUNCATED,
-                "further reader notes suppressed",
-            )),
-            Ordering::Greater => {}
-        }
+    fn note(&mut self, info: &'static DiagnosticInfo, message: String) {
+        note_within_budget(
+            &mut self.diagnostics,
+            info,
+            &codes::READ_CON_NOTES_TRUNCATED,
+            message,
+        );
     }
 
     fn unrecognized(&mut self, number: usize, text: &str) {
@@ -964,7 +994,7 @@ fn quoted(value: &str) -> String {
 /// token: an unquoted token opening with `/` would end the statement and leave
 /// the rest of the line a comment. Every other value is written bare, as
 /// PSS/E writes an id and a circuit.
-fn field(value: &str) -> String {
+pub(crate) fn field(value: &str) -> String {
     if value.is_empty()
         || value.contains(char::is_whitespace)
         || value.starts_with('/')
