@@ -56,6 +56,7 @@ pub mod error;
 pub mod geo;
 pub mod graph;
 pub mod kron;
+pub mod lindist3flow;
 pub mod model;
 pub mod pmd;
 pub mod readiness;
@@ -78,6 +79,11 @@ pub use graph::{
 pub use kron::{
     NeutralKronAction, NeutralKronBus, NeutralKronGrounding, NeutralKronOptions,
     NeutralKronRecovery, NeutralKronReduction, NeutralKronReport, neutral_kron_reduce,
+};
+pub use lindist3flow::{
+    LinDist3FlowPreparationAction, LinDist3FlowPreparationActionKind,
+    LinDist3FlowPreparationPolicy, LinDist3FlowPreparationReport, LinDist3FlowPreparedNetwork,
+    prepare_lindist3flow_network,
 };
 pub use model::{
     ActivePowerReference, ActivePowerUnit, ConductorMatrix, Configuration, ControlVoltageReference,

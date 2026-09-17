@@ -63,6 +63,9 @@ pub mod codes {
             "line geometry remains source data without calculated conductor impedances";
         BUILD_DIST_ELECTRICAL_INCOMPLETE = "BUILD.DIST.ELECTRICAL_INCOMPLETE", Error,
             "distribution equipment lacks the electrical data required for numerical use", category = Data;
+        TRANSFORM_DIST_LINDIST3FLOW_PREPARATION_FAILED =
+            "TRANSFORM.DIST.LINDIST3FLOW_PREPARATION_FAILED", Error,
+            "a distribution component cannot be prepared for LinDist3Flow", category = Data;
         READ_DSS_LINECODE_UNKNOWN = "READ.DSS.LINECODE_UNKNOWN", Warning,
             "a line names a linecode the case does not declare";
 

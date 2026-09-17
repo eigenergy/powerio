@@ -41,6 +41,9 @@ pub use multiconductor::{
     PrescribedTerminalPower,
 };
 pub use objective::{Objective, ObjectiveTerm};
+pub use powerio_dist::{
+    LinDist3FlowPreparationAction, LinDist3FlowPreparationActionKind, LinDist3FlowPreparationReport,
+};
 pub use scuc::AcScucInstance;
 pub use scuc_inputs::{
     ScucActiveReserveZone, ScucBranchSwitchingCost, ScucContingency, ScucDevice, ScucDeviceKind,

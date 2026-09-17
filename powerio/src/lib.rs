@@ -159,12 +159,13 @@ pub use powerio_prob::{
     DcOpfSolution, DcPfInstance, DcPfSolution, LinDist3FlowApplicability,
     LinDist3FlowApplicabilityStatus, LinDist3FlowBuildOptions, LinDist3FlowNode,
     LinDist3FlowOpfInstance, LinDist3FlowOpfSolution, LinDist3FlowOpfValues,
-    LinDist3FlowReferencePolicy, LinDist3FlowReferenceProvenance, LinDist3FlowReferenceState,
-    LinDist3FlowTopology, LinDist3FlowUnsupported, LoadAllocation, McAcOpfInstance,
-    McAcOpfSolution, McAcPfInstance, McAcPfSolution, NetworkUpdate, OperatingPointUpdate,
-    ReactivePower, ReactivePowerUnit, Termination, ThreeWindingTransformerTerminalActivePower,
-    ThreeWindingTransformerTerminalPower, UpdateChange, UpdateReport, UpdatedField,
-    apply_bus_load_active_power, apply_updates,
+    LinDist3FlowPreparationAction, LinDist3FlowPreparationActionKind,
+    LinDist3FlowPreparationReport, LinDist3FlowReferencePolicy, LinDist3FlowReferenceProvenance,
+    LinDist3FlowReferenceState, LinDist3FlowTopology, LinDist3FlowUnsupported, LoadAllocation,
+    McAcOpfInstance, McAcOpfSolution, McAcPfInstance, McAcPfSolution, NetworkUpdate,
+    OperatingPointUpdate, ReactivePower, ReactivePowerUnit, Termination,
+    ThreeWindingTransformerTerminalActivePower, ThreeWindingTransformerTerminalPower, UpdateChange,
+    UpdateReport, UpdatedField, apply_bus_load_active_power, apply_updates,
 };
 
 /// Matrix and graph data, re-exported from `powerio-matrix` under the

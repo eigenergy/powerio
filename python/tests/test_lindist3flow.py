@@ -42,6 +42,8 @@ def test_lindist3flow_solution_access_and_lifetimes():
     assert metadata["reference_voltages"] == [(230.0, 0.0), (230.0, 0.0)]
     assert metadata["reference_provenance"] == "source_propagated"
     assert metadata["meshed"] is False
+    assert metadata["preparation_policy"] == "reject"
+    assert metadata["preparation_actions"] == []
     assert network.n_buses == 2
     document = json.loads(powerio.serialize(instance.module).text)
     assert document["version"] == 2

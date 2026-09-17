@@ -8,7 +8,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use powerio_core::{Diagnostic, DiagnosticInfo, DiagnosticSeverity, Error};
-use powerio_dist::{Configuration, DistLoadVoltageModel, MulticonductorNetwork};
+use powerio_dist::{
+    Configuration, DistLoadVoltageModel, LinDist3FlowPreparationAction,
+    LinDist3FlowPreparationActionKind, LinDist3FlowPreparationReport, MulticonductorNetwork,
+    prepare_lindist3flow_network,
+};
 use serde::{Deserialize, Serialize};
 
 use super::McAcOpfInstance;
@@ -31,18 +35,7 @@ pub enum LinDist3FlowReferencePolicy {
     SourcePropagated,
 }
 
-/// Policy for network features outside the canonical affine model.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum LinDist3FlowUnsupported {
-    #[default]
-    Reject,
-    Lower,
-    Approximate,
-    Permissive,
-}
+pub use powerio_dist::LinDist3FlowPreparationPolicy as LinDist3FlowUnsupported;
 
 /// Semantic choices used while creating a LinDist3Flow instance.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -186,11 +179,13 @@ impl LinDist3FlowReferenceState {
 /// Matrix-free LinDist3Flow OPF instance.
 #[derive(Clone, Debug)]
 pub struct LinDist3FlowOpfInstance {
+    source_base: McAcOpfInstance,
     base: McAcOpfInstance,
     topology: LinDist3FlowTopology,
     reference: LinDist3FlowReferenceState,
     applicability: LinDist3FlowApplicability,
     options: LinDist3FlowBuildOptions,
+    preparation: LinDist3FlowPreparationReport,
 }
 
 impl LinDist3FlowOpfInstance {
@@ -214,7 +209,9 @@ impl LinDist3FlowOpfInstance {
         base: McAcOpfInstance,
         options: LinDist3FlowBuildOptions,
     ) -> Result<Self, Error> {
-        let (applicability, topology, reference) = assess(&base, options);
+        let source_base = base;
+        let (base, preparation) = prepare_base(&source_base, options)?;
+        let (applicability, topology, reference) = assess(&base, options, &preparation);
         if let Some(diagnostic) = applicability
             .diagnostics
             .iter()
@@ -235,12 +232,26 @@ impl LinDist3FlowOpfInstance {
             )
         })?;
         Ok(Self {
+            source_base,
             base,
             topology,
             reference,
             applicability,
             options,
+            preparation,
         })
+    }
+
+    /// The unmodified multiconductor OPF instance supplied by the caller.
+    #[must_use]
+    pub fn source_instance(&self) -> &McAcOpfInstance {
+        &self.source_base
+    }
+
+    /// The unmodified distribution network supplied by the caller.
+    #[must_use]
+    pub fn source_network(&self) -> &MulticonductorNetwork {
+        self.source_base.network()
     }
 
     #[must_use]
@@ -271,6 +282,49 @@ impl LinDist3FlowOpfInstance {
     #[must_use]
     pub const fn options(&self) -> LinDist3FlowBuildOptions {
         self.options
+    }
+
+    /// Typed provenance for every component transformation and omission.
+    #[must_use]
+    pub const fn preparation(&self) -> &LinDist3FlowPreparationReport {
+        &self.preparation
+    }
+}
+
+fn prepare_base(
+    source: &McAcOpfInstance,
+    options: LinDist3FlowBuildOptions,
+) -> Result<(McAcOpfInstance, LinDist3FlowPreparationReport), Error> {
+    let prepared =
+        prepare_lindist3flow_network(source.network(), options.unsupported).map_err(|error| {
+            Error::new(
+                &codes::BUILD_LINDIST3FLOW_PREPARATION_FAILED,
+                error.to_string(),
+            )
+        })?;
+    let (network, mut report) = prepared.into_parts();
+    if report.actions.is_empty() {
+        return Ok((source.clone(), report));
+    }
+    match source.clone().with_network(network.clone()) {
+        Ok(base) => Ok((base, report)),
+        Err(error) if source.initial_point().is_some() => {
+            let base = McAcOpfInstance::from_network(network)?
+                .with_objective(source.objective().clone())
+                .with_constraints(source.constraints().clone());
+            let mut action = LinDist3FlowPreparationAction::new(
+                LinDist3FlowPreparationActionKind::InitialPointOmitted,
+                "initial_point",
+                None,
+            );
+            action.details.insert(
+                "reason".to_owned(),
+                serde_json::Value::String(error.to_string()),
+            );
+            report.actions.push(action);
+            Ok((base, report))
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -542,17 +596,6 @@ fn check_supported_slice(
     let network = instance.network();
     check_objective(instance, diagnostics);
     check_device_shapes(instance, diagnostics);
-    if options.unsupported != LinDist3FlowUnsupported::Reject {
-        diagnostics.push(finding(
-            &codes::BUILD_LINDIST3FLOW_POLICY_UNAVAILABLE,
-            format!(
-                "the {:?} unsupported-data policy is reserved but not implemented yet",
-                options.unsupported
-            ),
-            None,
-        ));
-    }
-
     let conventions = network.extras().get("bmopf_terminal_conventions");
     for (row, bus) in network.buses().iter().enumerate() {
         if bus.phase_indices(conventions).len() != bus.terminals.len() {
@@ -647,18 +690,64 @@ pub fn check_lindist3flow_applicability(
     instance: &McAcOpfInstance,
     options: LinDist3FlowBuildOptions,
 ) -> LinDist3FlowApplicability {
-    assess(instance, options).0
+    match prepare_base(instance, options) {
+        Ok((prepared, report)) => assess(&prepared, options, &report).0,
+        Err(error) => LinDist3FlowApplicability {
+            status: LinDist3FlowApplicabilityStatus::Inapplicable,
+            diagnostics: error.into_diagnostics(),
+            roots: Vec::new(),
+            islands: Vec::new(),
+            reference_provenance: None,
+            kron_reduced: false,
+            lowered: false,
+        },
+    }
+}
+
+fn preparation_findings(report: &LinDist3FlowPreparationReport) -> Vec<Diagnostic> {
+    report
+        .actions
+        .iter()
+        .map(|action| {
+            let info = match action.kind {
+                LinDist3FlowPreparationActionKind::LoadApproximated
+                | LinDist3FlowPreparationActionKind::IbrApproximated
+                | LinDist3FlowPreparationActionKind::StaticControlFrozen => {
+                    &codes::BUILD_LINDIST3FLOW_COMPONENT_APPROXIMATED
+                }
+                LinDist3FlowPreparationActionKind::UntypedObjectOmitted
+                | LinDist3FlowPreparationActionKind::InitialPointOmitted => {
+                    &codes::BUILD_LINDIST3FLOW_COMPONENT_OMITTED
+                }
+                _ => &codes::BUILD_LINDIST3FLOW_COMPONENT_LOWERED,
+            };
+            finding(
+                info,
+                format!(
+                    "`{}` was prepared by {:?}{}",
+                    action.source,
+                    action.kind,
+                    action
+                        .target
+                        .as_ref()
+                        .map_or_else(String::new, |target| format!(" as `{target}`"))
+                ),
+                Some(action.source.clone()),
+            )
+        })
+        .collect()
 }
 
 fn assess(
     instance: &McAcOpfInstance,
     options: LinDist3FlowBuildOptions,
+    preparation: &LinDist3FlowPreparationReport,
 ) -> (
     LinDist3FlowApplicability,
     Option<LinDist3FlowTopology>,
     Option<LinDist3FlowReferenceState>,
 ) {
-    let mut diagnostics = Vec::new();
+    let mut diagnostics = preparation_findings(preparation);
     check_supported_slice(instance, options, &mut diagnostics);
     let topology = match build_topology(instance.network()) {
         Ok(topology) => {
@@ -714,7 +803,7 @@ fn assess(
                 .network()
                 .extras()
                 .contains_key("powerio_neutral_kron"),
-            lowered: false,
+            lowered: !preparation.actions.is_empty(),
         },
         topology,
         reference,
