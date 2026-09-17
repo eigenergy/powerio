@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- The documentation, the release scripts, and the C API reference call the
+  PowerIO IR integer its version rather than a generation: `IR_VERSION` and
+  `IR_MIN_VERSION` name the window a build reads, and a release in a catalog
+  snapshot path names a type catalog of that version. This changelog has an
+  open section again.
+
 ## 0.11.3
 
 - Read and write PSS/E contingency description files (`.con`) through

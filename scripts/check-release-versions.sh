@@ -4,7 +4,7 @@
 #
 # - PIO_ABI_VERSION in the Rust source and the checked-in C header agree.
 # - The generated PowerIO IR schema and the facade constants agree on the
-#   independent IR identity and generation.
+#   independent IR identity and version.
 # - Every publishable crate carries the one workspace version.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -23,10 +23,10 @@ if [ "$ir_min_version" -gt "$ir_version" ]; then
     echo "IR_MIN_VERSION $ir_min_version is later than IR_VERSION $ir_version" >&2
     exit 1
 fi
-# Every generation the reader accepts has its schema archived.
-for generation in $(seq "$ir_min_version" "$ir_version"); do
-    if [ ! -f "docs/schema/pio-ir/$generation/schema.json" ]; then
-        echo "docs/schema/pio-ir/$generation/schema.json is not checked in for a readable generation" >&2
+# Every IR version the reader accepts has its schema archived.
+for readable in $(seq "$ir_min_version" "$ir_version"); do
+    if [ ! -f "docs/schema/pio-ir/$readable/schema.json" ]; then
+        echo "docs/schema/pio-ir/$readable/schema.json is not checked in for a readable IR version" >&2
         exit 1
     fi
 done
@@ -46,7 +46,7 @@ PY
 )
 case "$schema_id" in
     "https://powerio.dev/schema/pio-ir/$ir_version/"*) ;;
-    *) echo "IR_SCHEMA_ID does not name the current IR generation" >&2; exit 1 ;;
+    *) echo "IR_SCHEMA_ID does not name the current IR version" >&2; exit 1 ;;
 esac
 schema_path="docs/schema/${schema_id#https://powerio.dev/schema/}"
 if [ ! -f "$schema_path" ]; then
@@ -76,7 +76,7 @@ if problems:
     sys.exit(1)
 print(header["schema"]["const"])
 PY
-) || { echo "the current PowerIO IR schema disagrees with generation $ir_version" >&2; exit 1; }
+) || { echo "the current PowerIO IR schema disagrees with IR version $ir_version" >&2; exit 1; }
 if [ "$schema_name" != "pio-ir" ]; then
     echo "unexpected PowerIO IR schema name: $schema_name" >&2
     exit 1
@@ -121,8 +121,9 @@ echo "release identity OK: ABI $rust_abi, PowerIO IR $schema_name/$ir_version (r
 
 # The Arrow payload goldens embed the producing build's powerio_version; a
 # renumber that misses one fails the golden comparisons later. Stored
-# document fixtures under other directories legitimately keep the versions
-# of the generations they exercise, so only the live-build goldens sweep.
+# document fixtures under other directories legitimately keep the producer
+# versions of the IR versions they exercise, so only the live-build goldens
+# sweep.
 stale=$(grep -rL "\"powerio_version\": \"$workspace_version\"" \
     tests/data/capi_matrix 2>/dev/null || true)
 if [ -n "$stale" ]; then

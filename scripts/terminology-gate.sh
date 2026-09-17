@@ -133,7 +133,7 @@ scan "retired PowerIO beta API on the public surface" \
   -e "$retired" -- "${surface_paths[@]}"
 
 # Retired diagnostic namespaces must not return. PowerIO IR has one reader for
-# its current generation.
+# its current IR version.
 scan "retired diagnostic namespace" \
   "${vendored_excludes[@]}" -e '\bLOWER\.[A-Z_]+' -- "${public_paths[@]}"
 

@@ -117,20 +117,20 @@ records, extension data, collection lengths, ID lengths, and nested value
 depth. Hitting a limit produces a structured PowerIO diagnostic rather than
 an allocation failure or a truncated result.
 
-## Generations
+## IR versions
 
-The integer `version` is the generation of the serialized representation. It
+The integer `version` is the IR version of the serialized representation. It
 is a property of the document alone, separate from the Rust memory layout,
 the PowerIO release, any grid exchange format, and the C ABI, and it changes
 only when an existing representation changes incompatibly. `producer.version` records the release
 that wrote the document; the reader reports it and ignores it when deciding
 compatibility.
 
-PowerIO 0.11.3 keeps generation 2. `powerio::IR_VERSION` and
+PowerIO 0.11.3 keeps IR version 2. `powerio::IR_VERSION` and
 `powerio::IR_MIN_VERSION` are both `2`. Additive structural types do not change
-the generation: older readers continue to accept existing types and reject
+the IR version: older readers continue to accept existing types and reject
 types they do not implement. An incompatible change to an existing record's
-representation or meaning requires a separate generation and release decision.
+representation or meaning requires a version bump and a release decision.
 
 Schema snapshots describe the structural types available in a release.
 `pio-ir/2/schema.json` is the frozen 0.11.0 catalog,
@@ -140,8 +140,20 @@ analysis files.
 The release in that path identifies the snapshot, not another document version.
 Patch releases without catalog changes can reuse the same snapshot.
 A refused document is reported with the schema name,
-generation, and producer it claims and the remedy: a later generation needs a
-newer PowerIO, and an earlier schema name or generation has to be regenerated
+IR version, and producer it claims and the remedy: a later IR version needs a
+newer PowerIO, and an earlier schema name or IR version has to be regenerated
 from its source data.
 [`docs/schema/README.md`](https://github.com/eigenergy/powerio/blob/main/docs/schema/README.md)
-is the ledger of every generation and the archive of every published schema.
+is the ledger of every IR version and the archive of every published schema.
+
+Two other intermediate representations answer the versioning question
+differently. LLVM bitcode carries no explicit version number, and a newer
+reader upgrades any older bitcode on load; there is no forward compatibility.
+MLIR bytecode carries an explicit version number with per-dialect upgrade
+hooks. PowerIO IR carries an explicit version integer and reads the window
+from `IR_MIN_VERSION` through `IR_VERSION`, both 2 in 0.11.3, so a version 1
+document from 0.10.x is refused rather than upgraded, and an upgrade path for
+those documents would be a later addition. Structural types are added without
+a version bump, and a type this build does not implement is rejected. The
+catalog snapshots under `pio-ir/2/<release>/` are the type catalogs of one IR
+version, published when a release adds types; they are not versions.

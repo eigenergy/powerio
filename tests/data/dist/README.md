@@ -101,6 +101,6 @@ release it derives from, and `example_ieee13.json` is governed by the OpenDSS
 distribution license in `opendss/License.txt`.
 
 `micro/lindist3flow-solution.pio.json` is a synthetic two-bus, one-phase
-PowerIO IR generation-2 fixture for typed binding access and lifetime tests.
+PowerIO IR version 2 fixture for typed binding access and lifetime tests.
 It is original test data, released under the micro directory's CC BY 4.0
 license, with no upstream case data.
