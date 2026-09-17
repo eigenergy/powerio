@@ -1,0 +1,27 @@
+name: Release App access
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  access:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        id: app
+        with:
+          app-id: ${{ vars.POWERIO_RELEASE_APP_ID }}
+          private-key: ${{ secrets.POWERIO_RELEASE_APP_PRIVATE_KEY }}
+          owner: eigenergy
+          repositories: powerio,PowerIO.jl
+          permission-contents: write
+          permission-pull-requests: write
+          permission-actions: write
+          permission-workflows: write
+      - name: Verify both selected repositories are accessible
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          for repo in powerio PowerIO.jl; do
+            gh api "repos/eigenergy/$repo/git/ref/heads/main" --jq .object.sha
+          done
