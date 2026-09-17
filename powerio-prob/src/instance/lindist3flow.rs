@@ -17,7 +17,10 @@ use serde::{Deserialize, Serialize};
 
 use super::McAcOpfInstance;
 use crate::diagnostics::codes;
-use crate::{MulticonductorOperatingPointQuantity, ObjectiveTerm};
+use crate::{
+    ConstraintSelection, MulticonductorActiveConstraints, MulticonductorOperatingPointQuantity,
+    Objective, ObjectiveTerm,
+};
 
 /// Selection of the fixed phasors used to form LinDist3Flow coefficients.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -289,6 +292,163 @@ impl LinDist3FlowOpfInstance {
     pub const fn preparation(&self) -> &LinDist3FlowPreparationReport {
         &self.preparation
     }
+}
+
+/// Fixed-dispatch LinDist3Flow instance.
+///
+/// Generator/IBR active and reactive powers are fixed by nominal values or
+/// equal lower/upper bounds. Line thermal limits are monitored after a
+/// converged solve instead of entering the conic feasibility problem. Voltage
+/// and generator-capability selections remain active.
+#[derive(Clone, Debug)]
+pub struct LinDist3FlowPfInstance {
+    formulation: LinDist3FlowOpfInstance,
+}
+
+impl LinDist3FlowPfInstance {
+    /// Build a fixed-dispatch instance from a multiconductor network.
+    ///
+    /// # Errors
+    /// As [`LinDist3FlowOpfInstance::from_network`], or a generator/IBR states
+    /// a dispatch range rather than fixed active and reactive power.
+    pub fn from_network(
+        network: MulticonductorNetwork,
+        options: LinDist3FlowBuildOptions,
+    ) -> Result<Self, Error> {
+        Self::from_mc_ac(McAcOpfInstance::from_network(network)?, options)
+    }
+
+    /// Build from a multiconductor OPF container while discarding its
+    /// objective and monitoring, rather than enforcing, conductor limits.
+    ///
+    /// # Errors
+    /// As [`LinDist3FlowOpfInstance::from_mc_ac`], or dispatch is not fixed.
+    pub fn from_mc_ac(
+        base: McAcOpfInstance,
+        options: LinDist3FlowBuildOptions,
+    ) -> Result<Self, Error> {
+        let mut constraints: MulticonductorActiveConstraints = base.constraints().clone();
+        constraints.conductor_limits = ConstraintSelection::None;
+        constraints.generator_capability = ConstraintSelection::All;
+        let base = base
+            .with_objective(Objective::default())
+            .with_constraints(constraints);
+        let formulation = LinDist3FlowOpfInstance::from_mc_ac(base, options)?;
+        require_fixed_dispatch(&formulation)?;
+        Ok(Self { formulation })
+    }
+
+    /// Restore a fixed-dispatch instance from its canonical formulation.
+    ///
+    /// # Errors
+    /// The formulation carries an objective, enforces conductor limits, or
+    /// contains dispatch ranges rather than fixed active/reactive powers.
+    pub fn from_formulation(formulation: LinDist3FlowOpfInstance) -> Result<Self, Error> {
+        if !formulation.base_instance().objective().terms().is_empty()
+            || !matches!(
+                formulation.base_instance().constraints().conductor_limits,
+                ConstraintSelection::None
+            )
+            || !matches!(
+                formulation
+                    .base_instance()
+                    .constraints()
+                    .generator_capability,
+                ConstraintSelection::All
+            )
+        {
+            return Err(Error::new(
+                &codes::BUILD_LINDIST3FLOW_FIXED_DISPATCH_REQUIRED,
+                "a fixed-dispatch formulation must have no objective, enforce every generator's fixed capability bounds, and monitor rather than enforce conductor limits",
+            ));
+        }
+        require_fixed_dispatch(&formulation)?;
+        Ok(Self { formulation })
+    }
+
+    /// The internal zero-objective formulation used by matrix builders.
+    #[must_use]
+    pub const fn formulation(&self) -> &LinDist3FlowOpfInstance {
+        &self.formulation
+    }
+
+    #[must_use]
+    pub fn network(&self) -> &MulticonductorNetwork {
+        self.formulation.network()
+    }
+
+    #[must_use]
+    pub fn source_network(&self) -> &MulticonductorNetwork {
+        self.formulation.source_network()
+    }
+
+    #[must_use]
+    pub const fn topology(&self) -> &LinDist3FlowTopology {
+        self.formulation.topology()
+    }
+
+    #[must_use]
+    pub const fn reference(&self) -> &LinDist3FlowReferenceState {
+        self.formulation.reference()
+    }
+
+    #[must_use]
+    pub const fn applicability(&self) -> &LinDist3FlowApplicability {
+        self.formulation.applicability()
+    }
+
+    #[must_use]
+    pub const fn options(&self) -> LinDist3FlowBuildOptions {
+        self.formulation.options()
+    }
+
+    #[must_use]
+    pub const fn preparation(&self) -> &LinDist3FlowPreparationReport {
+        self.formulation.preparation()
+    }
+}
+
+#[allow(clippy::float_cmp)] // Equal bounds are the explicit fixed-dispatch representation.
+fn fixed_bounds(lower: Option<&[f64]>, upper: Option<&[f64]>, channels: usize) -> bool {
+    match (lower, upper) {
+        (None, None) => true,
+        (Some(lower), Some(upper)) if lower.len() == channels && upper.len() == channels => lower
+            .iter()
+            .zip(upper)
+            .all(|(lower, upper)| lower.is_finite() && lower == upper),
+        _ => false,
+    }
+}
+
+fn require_fixed_dispatch(instance: &LinDist3FlowOpfInstance) -> Result<(), Error> {
+    for generator in instance.network().generators() {
+        let channels = generator.p_nom.len();
+        let nominal = channels != 0
+            && generator.q_nom.len() == channels
+            && generator.p_nom.iter().all(|value| value.is_finite())
+            && generator.q_nom.iter().all(|value| value.is_finite());
+        if !nominal
+            || !fixed_bounds(
+                generator.p_min.as_deref(),
+                generator.p_max.as_deref(),
+                channels,
+            )
+            || !fixed_bounds(
+                generator.q_min.as_deref(),
+                generator.q_max.as_deref(),
+                channels,
+            )
+        {
+            return Err(Error::new(
+                &codes::BUILD_LINDIST3FLOW_FIXED_DISPATCH_REQUIRED,
+                format!(
+                    "generator `{}` must state finite nominal P/Q or equal per-channel lower and upper bounds",
+                    generator.name
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn prepare_base(

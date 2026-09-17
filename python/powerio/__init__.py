@@ -106,6 +106,8 @@ __all__ = [
     "GeoLayer",
     "LinDist3FlowOpfInstance",
     "LinDist3FlowOpfSolution",
+    "LinDist3FlowPfInstance",
+    "LinDist3FlowPfSolution",
     "McAcOpfInstance",
     "McAcOpfSolution",
     "McAcPfInstance",
@@ -1159,6 +1161,16 @@ class McAcPfInstance(_MulticonductorCalculation):
 
 
 @_guard_class
+class LinDist3FlowPfInstance(_MulticonductorCalculation):
+    """A fixed-dispatch LinDist3Flow power-flow instance."""
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        """Node/conductor axes, preparation actions, and reference phasors."""
+        return self.module._inner._lindist3flow_metadata()
+
+
+@_guard_class
 class LinDist3FlowOpfInstance(_MulticonductorCalculation):
     """A radial fixed-reference multiconductor linear OPF instance."""
 
@@ -1204,6 +1216,25 @@ class SocwrOpfSolution(_BalancedCalculation, _CalculationSolution):
 
 class McAcPfSolution(_MulticonductorCalculation, _CalculationSolution):
     """A multiconductor AC power flow solution."""
+
+
+@_guard_class
+class LinDist3FlowPfSolution(_MulticonductorCalculation, _CalculationSolution):
+    """Fixed-dispatch LinDist3Flow values and monitored SI line limits."""
+
+    @property
+    def termination(self) -> str:
+        """How the calculation ended."""
+        return self.module._inner._lindist3flow_solution_termination()
+
+    @property
+    def limit_checks(self) -> list[dict[str, Any]]:
+        """Monitored line ratings, values, loading ratios, and overload flags."""
+        return self.module._inner._lindist3flow_limit_checks()
+
+    def __getitem__(self, quantity: str) -> list[float]:
+        """Copy one named primal column in its physical instance order."""
+        return self.module._inner._lindist3flow_solution_values(quantity)
 
 
 @_guard_class
@@ -1298,6 +1329,7 @@ _VALUE_CLASSES: dict[str, type[_TypedValue]] = {
     "powerio.AcOpfInstance": AcOpfInstance,
     "powerio.McAcPfInstance": McAcPfInstance,
     "powerio.McAcOpfInstance": McAcOpfInstance,
+    "powerio.LinDist3FlowPfInstance": LinDist3FlowPfInstance,
     "powerio.LinDist3FlowOpfInstance": LinDist3FlowOpfInstance,
     "powerio.AcScucInstance": AcScucInstance,
     "powerio.DcPfSolution": DcPfSolution,
@@ -1307,6 +1339,7 @@ _VALUE_CLASSES: dict[str, type[_TypedValue]] = {
     "powerio.SocwrOpfSolution": SocwrOpfSolution,
     "powerio.McAcPfSolution": McAcPfSolution,
     "powerio.McAcOpfSolution": McAcOpfSolution,
+    "powerio.LinDist3FlowPfSolution": LinDist3FlowPfSolution,
     "powerio.LinDist3FlowOpfSolution": LinDist3FlowOpfSolution,
     "powerio.AcScucSolution": AcScucSolution,
 }
@@ -1397,6 +1430,10 @@ class PioModule:
     def to_lindist3flow_opf_instance(self) -> "PioModule":
         """Build a LinDist3Flow optimal power flow instance from a network module."""
         return PioModule(self._inner._to_lindist3flow_opf_instance())
+
+    def to_lindist3flow_pf_instance(self) -> "PioModule":
+        """Build a fixed-dispatch LinDist3Flow instance from a network module."""
+        return PioModule(self._inner._to_lindist3flow_pf_instance())
 
     def __repr__(self) -> str:
         return repr(self._inner)

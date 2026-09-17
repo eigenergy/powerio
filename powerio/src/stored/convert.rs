@@ -190,6 +190,9 @@ fn encode_value(value: &PioValue) -> Result<dto::StoredValue> {
         PioValue::McAcOpfInstance(instance) => {
             dto::StoredValue::McAcOpfInstance(encode_mc_ac_opf_instance(instance)?)
         }
+        PioValue::LinDist3FlowPfInstance(instance) => {
+            dto::StoredValue::LinDist3FlowPfInstance(encode_lindist3flow_pf_instance(instance)?)
+        }
         PioValue::LinDist3FlowOpfInstance(instance) => {
             dto::StoredValue::LinDist3FlowOpfInstance(encode_lindist3flow_opf_instance(instance)?)
         }
@@ -220,6 +223,9 @@ fn encode_value(value: &PioValue) -> Result<dto::StoredValue> {
         PioValue::McAcOpfSolution(solution) => {
             dto::StoredValue::McAcOpfSolution(Box::new(encode_mc_ac_opf_solution(solution)?))
         }
+        PioValue::LinDist3FlowPfSolution(solution) => dto::StoredValue::LinDist3FlowPfSolution(
+            Box::new(encode_lindist3flow_pf_solution(solution)?),
+        ),
         PioValue::LinDist3FlowOpfSolution(solution) => dto::StoredValue::LinDist3FlowOpfSolution(
             Box::new(encode_lindist3flow_opf_solution(solution)?),
         ),
@@ -1127,6 +1133,14 @@ fn encode_lindist3flow_opf_instance(
     })
 }
 
+fn encode_lindist3flow_pf_instance(
+    instance: &powerio_prob::LinDist3FlowPfInstance,
+) -> Result<dto::LinDist3FlowPfInstance> {
+    Ok(dto::LinDist3FlowPfInstance {
+        formulation: encode_lindist3flow_opf_instance(instance.formulation())?,
+    })
+}
+
 /// The typed objective, mirroring [`powerio_prob::Objective`] with each
 /// term's own weight wrapped for the nonfinite spelling (see
 /// [`dto::ObjectiveTerm`] for why this can't just be the runtime type).
@@ -1539,24 +1553,53 @@ fn encode_mc_ac_opf_solution(
 fn encode_lindist3flow_opf_solution(
     solution: &powerio_prob::LinDist3FlowOpfSolution,
 ) -> Result<dto::LinDist3FlowOpfSolution> {
-    let values = solution.values();
     Ok(dto::LinDist3FlowOpfSolution {
         instance: encode_lindist3flow_opf_instance(solution.instance())?,
         termination: solution.termination().clone(),
         residuals: *solution.residuals(),
         producer: solution.producer().map(str::to_string),
-        values: dto::LinDist3FlowOpfValues {
-            terminal_voltage_magnitude_squared: stored_row(
-                &values.terminal_voltage_magnitude_squared,
-            ),
-            line_active_power: stored_row(&values.line_active_power),
-            line_reactive_power: stored_row(&values.line_reactive_power),
-            generator_active_power: stored_row(&values.generator_active_power),
-            generator_reactive_power: stored_row(&values.generator_reactive_power),
-            source_active_power: stored_row(&values.source_active_power),
-            source_reactive_power: stored_row(&values.source_reactive_power),
-        },
+        values: encode_lindist3flow_values(solution.values()),
         objective: StoredF64(solution.objective()),
+    })
+}
+
+fn encode_lindist3flow_values(
+    values: &powerio_prob::LinDist3FlowOpfValues,
+) -> dto::LinDist3FlowOpfValues {
+    dto::LinDist3FlowOpfValues {
+        terminal_voltage_magnitude_squared: stored_row(&values.terminal_voltage_magnitude_squared),
+        line_active_power: stored_row(&values.line_active_power),
+        line_reactive_power: stored_row(&values.line_reactive_power),
+        generator_active_power: stored_row(&values.generator_active_power),
+        generator_reactive_power: stored_row(&values.generator_reactive_power),
+        source_active_power: stored_row(&values.source_active_power),
+        source_reactive_power: stored_row(&values.source_reactive_power),
+    }
+}
+
+fn encode_lindist3flow_pf_solution(
+    solution: &powerio_prob::LinDist3FlowPfSolution,
+) -> Result<dto::LinDist3FlowPfSolution> {
+    Ok(dto::LinDist3FlowPfSolution {
+        instance: encode_lindist3flow_pf_instance(solution.instance())?,
+        termination: solution.termination().clone(),
+        residuals: *solution.residuals(),
+        producer: solution.producer().map(str::to_string),
+        values: encode_lindist3flow_values(solution.values()),
+        limit_checks: solution
+            .limit_checks()
+            .iter()
+            .map(|check| dto::LinDist3FlowLimitCheck {
+                line: check.line.clone(),
+                conductor: check.conductor,
+                kind: check.kind,
+                value: StoredF64(check.value),
+                limit: StoredF64(check.limit),
+                loading_ratio: StoredF64(check.loading_ratio),
+                overloaded: check.overloaded,
+                constraint_enforced: check.constraint_enforced,
+            })
+            .collect(),
     })
 }
 
@@ -1635,6 +1678,7 @@ fn validate_decoded_networks(value: &PioValue) -> Result<()> {
         PioValue::AcScucInstance(instance) => balanced(instance.network()),
         PioValue::McAcPfInstance(instance) => multiconductor(instance.network()),
         PioValue::McAcOpfInstance(instance) => multiconductor(instance.network()),
+        PioValue::LinDist3FlowPfInstance(instance) => multiconductor(instance.network()),
         PioValue::LinDist3FlowOpfInstance(instance) => multiconductor(instance.network()),
         PioValue::DcPfSolution(solution) => balanced(solution.network()),
         PioValue::AcPfSolution(solution) => balanced(solution.network()),
@@ -1643,6 +1687,7 @@ fn validate_decoded_networks(value: &PioValue) -> Result<()> {
         PioValue::SocwrOpfSolution(solution) => balanced(solution.network()),
         PioValue::McAcPfSolution(solution) => multiconductor(solution.network()),
         PioValue::McAcOpfSolution(solution) => multiconductor(solution.network()),
+        PioValue::LinDist3FlowPfSolution(solution) => multiconductor(solution.network()),
         PioValue::LinDist3FlowOpfSolution(solution) => multiconductor(solution.network()),
         PioValue::AcScucSolution(solution) => balanced(solution.instance().network()),
     }
@@ -1976,6 +2021,9 @@ fn decode_value(value: dto::StoredValue) -> Result<PioValue> {
         dto::StoredValue::McAcOpfInstance(instance) => {
             PioValue::McAcOpfInstance(decode_mc_ac_opf_instance(instance)?)
         }
+        dto::StoredValue::LinDist3FlowPfInstance(instance) => {
+            PioValue::LinDist3FlowPfInstance(decode_lindist3flow_pf_instance(instance)?)
+        }
         dto::StoredValue::LinDist3FlowOpfInstance(instance) => {
             PioValue::LinDist3FlowOpfInstance(decode_lindist3flow_opf_instance(instance)?)
         }
@@ -2002,6 +2050,9 @@ fn decode_value(value: dto::StoredValue) -> Result<PioValue> {
         }
         dto::StoredValue::McAcOpfSolution(solution) => {
             PioValue::McAcOpfSolution(decode_mc_ac_opf_solution(*solution)?)
+        }
+        dto::StoredValue::LinDist3FlowPfSolution(solution) => {
+            PioValue::LinDist3FlowPfSolution(decode_lindist3flow_pf_solution(*solution)?)
         }
         dto::StoredValue::LinDist3FlowOpfSolution(solution) => {
             PioValue::LinDist3FlowOpfSolution(decode_lindist3flow_opf_solution(*solution)?)
@@ -2237,15 +2288,7 @@ fn decode_lindist3flow_opf_solution(
     solution: dto::LinDist3FlowOpfSolution,
 ) -> Result<powerio_prob::LinDist3FlowOpfSolution> {
     let instance = std::sync::Arc::new(decode_lindist3flow_opf_instance(solution.instance)?);
-    let mut values = powerio_prob::LinDist3FlowOpfValues::default();
-    values.terminal_voltage_magnitude_squared =
-        plain_row(&solution.values.terminal_voltage_magnitude_squared);
-    values.line_active_power = plain_row(&solution.values.line_active_power);
-    values.line_reactive_power = plain_row(&solution.values.line_reactive_power);
-    values.generator_active_power = plain_row(&solution.values.generator_active_power);
-    values.generator_reactive_power = plain_row(&solution.values.generator_reactive_power);
-    values.source_active_power = plain_row(&solution.values.source_active_power);
-    values.source_reactive_power = plain_row(&solution.values.source_reactive_power);
+    let values = decode_lindist3flow_values(&solution.values);
     let mut value = powerio_prob::LinDist3FlowOpfSolution::new(
         instance,
         solution.termination,
@@ -2254,6 +2297,63 @@ fn decode_lindist3flow_opf_solution(
     )
     .map_err(|error| invalid(error.to_string()))?
     .with_residuals(solution.residuals);
+    if let Some(producer) = solution.producer {
+        value = value.with_producer(producer);
+    }
+    Ok(value)
+}
+
+fn decode_lindist3flow_values(
+    values: &dto::LinDist3FlowOpfValues,
+) -> powerio_prob::LinDist3FlowOpfValues {
+    let mut decoded = powerio_prob::LinDist3FlowOpfValues::default();
+    decoded.terminal_voltage_magnitude_squared =
+        plain_row(&values.terminal_voltage_magnitude_squared);
+    decoded.line_active_power = plain_row(&values.line_active_power);
+    decoded.line_reactive_power = plain_row(&values.line_reactive_power);
+    decoded.generator_active_power = plain_row(&values.generator_active_power);
+    decoded.generator_reactive_power = plain_row(&values.generator_reactive_power);
+    decoded.source_active_power = plain_row(&values.source_active_power);
+    decoded.source_reactive_power = plain_row(&values.source_reactive_power);
+    decoded
+}
+
+fn decode_lindist3flow_pf_solution(
+    solution: dto::LinDist3FlowPfSolution,
+) -> Result<powerio_prob::LinDist3FlowPfSolution> {
+    let instance = std::sync::Arc::new(decode_lindist3flow_pf_instance(solution.instance)?);
+    let values = decode_lindist3flow_values(&solution.values);
+    let reported_checks = solution
+        .limit_checks
+        .into_iter()
+        .map(|check| {
+            let decoded = powerio_prob::LinDist3FlowLimitCheck::monitored(
+                check.line,
+                check.conductor,
+                check.kind,
+                check.value.0,
+                check.limit.0,
+            );
+            if (decoded.loading_ratio - check.loading_ratio.0).abs() > 1e-10
+                || decoded.overloaded != check.overloaded
+                || check.constraint_enforced
+            {
+                return Err(invalid(
+                    "stored LinDist3Flow limit check has inconsistent ratio, overload flag, or enforcement state",
+                ));
+            }
+            Ok(decoded)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut value =
+        powerio_prob::LinDist3FlowPfSolution::new(instance, solution.termination, values)
+            .map_err(|error| invalid(error.to_string()))?;
+    if value.limit_checks() != reported_checks {
+        return Err(invalid(
+            "stored LinDist3Flow limit checks do not match the converged values and retained ratings",
+        ));
+    }
+    value = value.with_residuals(solution.residuals);
     if let Some(producer) = solution.producer {
         value = value.with_producer(producer);
     }
@@ -2444,6 +2544,15 @@ fn decode_lindist3flow_opf_instance(
         .with_required_neutral_provenance(instance.options.require_neutral_provenance);
     powerio_prob::LinDist3FlowOpfInstance::from_mc_ac(base, options)
         .map_err(|error| invalid(error.to_string()))
+}
+
+fn decode_lindist3flow_pf_instance(
+    instance: dto::LinDist3FlowPfInstance,
+) -> Result<powerio_prob::LinDist3FlowPfInstance> {
+    powerio_prob::LinDist3FlowPfInstance::from_formulation(decode_lindist3flow_opf_instance(
+        instance.formulation,
+    )?)
+    .map_err(|error| invalid(error.to_string()))
 }
 
 // ---- record encoding / decoding --------------------------------------------

@@ -2,8 +2,8 @@
 
 An instance is the complete input for one named calculation, and a solution
 is the result of one; the solution shares the instance it solves. PowerIO has
-eight instance types, from DC power flow through LinDist3Flow and
-multiconductor AC OPF to AC security constrained unit commitment, and nine
+nine instance types, from DC power flow through LinDist3Flow and
+multiconductor AC OPF to AC security constrained unit commitment, and ten
 solution types, because
 `SocwrOpfSolution` is an SOCWR relaxation of an `AcOpfInstance` and is not
 labeled an AC OPF solution.
@@ -15,6 +15,7 @@ DcOpfInstance      DcOpfSolution
 AcOpfInstance      AcOpfSolution
 McAcPfInstance     McAcPfSolution
 McAcOpfInstance    McAcOpfSolution
+LinDist3FlowPfInstance   LinDist3FlowPfSolution
 LinDist3FlowOpfInstance  LinDist3FlowOpfSolution
 AcScucInstance     AcScucSolution
 ```
@@ -70,8 +71,14 @@ Solvers consume instances; PowerIO never solves. The instance is the
 mathematical input only. The choice of equations, B-theta or PTDF for DC OPF
 and polar or SOC for AC OPF, belongs to the solver and does not create
 another instance type. LinDist3Flow is an explicit exception to that general
-AC choice because its fixed-reference linear approximation, radial topology,
-and applicability decisions define the mathematical problem.
+AC choice because its fixed-reference linear approximation, declared mesh
+limitations, and applicability decisions define the mathematical problem.
+
+`LinDist3FlowPfInstance` is the fixed-dispatch form: generator and IBR P/Q
+must be prescribed, its objective is zero, and retained line thermal limits
+are evaluated after convergence instead of constraining the solve. Its
+`LinDist3FlowPfSolution` carries those SI-valued monitored checks separately
+from solver feasibility.
 
 A solution lists its values by stable element identifier, along with the
 termination claim and residuals that PowerIO computes itself rather than

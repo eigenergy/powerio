@@ -8,12 +8,14 @@ use powerio_dist::{
 };
 use powerio_matrix::{
     LinDist3FlowDecisionVariable, LinDist3FlowStandardCone, LinDist3FlowStandardFormOptions,
-    LinDist3FlowStandardRowOrigin, LinDist3FlowVariable, build_lindist3flow_standard_form,
-    build_lindist3flow_standard_form_with_options, lindist3flow_values_from_standard_primal,
+    LinDist3FlowStandardRowOrigin, LinDist3FlowVariable, build_lindist3flow_pf_standard_form,
+    build_lindist3flow_standard_form, build_lindist3flow_standard_form_with_options,
+    evaluate_lindist3flow_pf_limits, lindist3flow_values_from_standard_primal,
 };
 use powerio_prob::{
-    ConstraintSelection, LinDist3FlowBuildOptions, LinDist3FlowOpfInstance, McAcOpfInstance,
-    MulticonductorActiveConstraints,
+    ConstraintSelection, LinDist3FlowBuildOptions, LinDist3FlowOpfInstance, LinDist3FlowOpfValues,
+    LinDist3FlowPfInstance, LinDist3FlowPfSolution, McAcOpfInstance,
+    MulticonductorActiveConstraints, Termination,
 };
 
 const EXPLICIT_NEUTRAL_TWO_BUS: &str = r#"
@@ -249,6 +251,68 @@ fn meshed_standard_form_retains_every_line_drop_without_loop_rows() {
 
     assert_eq!(form.canonical.preparation.network.lines.len(), 3);
     assert_eq!(line_drops, 3);
+}
+
+#[test]
+fn fixed_dispatch_monitors_limits_without_adding_thermal_cones() {
+    let terminal = vec!["a".to_owned()];
+    let mut network = MulticonductorNetwork::named("fixed-dispatch");
+    network
+        .buses_mut()
+        .push(DistBus::new("source", terminal.clone()));
+    network
+        .buses_mut()
+        .push(DistBus::new("load", terminal.clone()));
+    let mut code = DistLineCode::new("linecode", vec![vec![0.1]], vec![vec![0.05]]);
+    code.i_max = Some(vec![5.0]);
+    code.s_max = Some(vec![1_000.0]);
+    network.line_codes_mut().push(code);
+    network.lines_mut().push(DistLine::new(
+        "line",
+        "source",
+        "load",
+        terminal.clone(),
+        terminal.clone(),
+        "linecode",
+        1.0,
+    ));
+    network.sources_mut().push(VoltageSource::new(
+        "grid",
+        "source",
+        terminal,
+        vec![230.0],
+        vec![0.0],
+    ));
+    let instance = std::sync::Arc::new(
+        LinDist3FlowPfInstance::from_network(network, LinDist3FlowBuildOptions::default()).unwrap(),
+    );
+    let form = build_lindist3flow_pf_standard_form(&instance).unwrap();
+    assert!(form.canonical.cones.is_empty());
+    assert!(form.q.iter().all(|coefficient| *coefficient == 0.0));
+
+    let mut values = LinDist3FlowOpfValues::default();
+    values.terminal_voltage_magnitude_squared = vec![230.0f64.powi(2), 200.0f64.powi(2)];
+    values.line_active_power = vec![1_200.0];
+    values.line_reactive_power = vec![0.0];
+    values.source_active_power = vec![1_200.0];
+    values.source_reactive_power = vec![0.0];
+    let checks = evaluate_lindist3flow_pf_limits(&instance, &values).unwrap();
+    assert_eq!(checks.len(), 3);
+    assert!(checks.iter().all(|check| check.overloaded));
+    assert!(
+        checks
+            .iter()
+            .all(|check| !check.constraint_enforced && check.loading_ratio > 1.0)
+    );
+    let solution = LinDist3FlowPfSolution::new(
+        std::sync::Arc::clone(&instance),
+        Termination::Converged,
+        values.clone(),
+    )
+    .unwrap();
+    assert_eq!(solution.limit_checks().len(), 3);
+    let failed = LinDist3FlowPfSolution::new(instance, Termination::Infeasible, values).unwrap();
+    assert!(failed.limit_checks().is_empty());
 }
 
 #[test]

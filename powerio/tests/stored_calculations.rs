@@ -1,5 +1,5 @@
-//! Stored round trips for the calculation kinds: the eight instances, the
-//! eight formulation solutions, and the multiconductor operating point series.
+//! Stored round trips for the calculation kinds, formulation solutions, and
+//! the multiconductor operating point series.
 //! Every kind writes byte stably, reads back, and has a committed fixture.
 
 use std::sync::Arc;
@@ -10,10 +10,11 @@ use powerio_core::{PioModule, TimePoint};
 use powerio_prob::{
     AcOpfInstance, AcOpfSolution, AcPfInstance, AcPfSolution, AcScucSolution, DcOpfInstance,
     DcOpfSolution, DcPfInstance, DcPfSolution, LinDist3FlowBuildOptions, LinDist3FlowOpfInstance,
-    LinDist3FlowOpfSolution, LinDist3FlowOpfValues, LinDist3FlowPreparationActionKind,
-    LinDist3FlowUnsupported, McAcOpfInstance, McAcOpfSolution, McAcPfInstance, McAcPfSolution,
-    Objective, ObjectiveTerm, Residuals, ScucDeviceOutputs, ScucNetworkOutputs, Termination,
-    ThreeWindingTransformerTerminalActivePower, ThreeWindingTransformerTerminalPower,
+    LinDist3FlowOpfSolution, LinDist3FlowOpfValues, LinDist3FlowPfInstance, LinDist3FlowPfSolution,
+    LinDist3FlowPreparationActionKind, LinDist3FlowUnsupported, McAcOpfInstance, McAcOpfSolution,
+    McAcPfInstance, McAcPfSolution, Objective, ObjectiveTerm, Residuals, ScucDeviceOutputs,
+    ScucNetworkOutputs, Termination, ThreeWindingTransformerTerminalActivePower,
+    ThreeWindingTransformerTerminalPower,
 };
 use powerio_tx::{
     Branch, Bus, BusId, BusType, GenCost, Generator, Impedance, Load, Transformer3W, Winding,
@@ -53,6 +54,39 @@ fn mc_network() -> powerio_dist::MulticonductorNetwork {
         vec!["1".into(), "2".into(), "3".into()],
         vec![240.0, 240.0, 240.0],
         vec![0.0, -2.094, 2.094],
+    ));
+    net
+}
+
+fn mc_line_network() -> powerio_dist::MulticonductorNetwork {
+    let terminal = vec!["a".to_owned()];
+    let mut net = powerio_dist::MulticonductorNetwork::named("calc-mc-line");
+    net.buses_mut()
+        .push(powerio_dist::DistBus::new("src", terminal.clone()));
+    net.buses_mut()
+        .push(powerio_dist::DistBus::new("load", terminal.clone()));
+    net.line_codes_mut().push(powerio_dist::DistLineCode::new(
+        "lc",
+        vec![vec![0.1]],
+        vec![vec![0.05]],
+    ));
+    let mut line = powerio_dist::DistLine::new(
+        "line",
+        "src",
+        "load",
+        terminal.clone(),
+        terminal.clone(),
+        "lc",
+        1.0,
+    );
+    line.i_max = Some(vec![4.0]);
+    net.lines_mut().push(line);
+    net.sources_mut().push(powerio_dist::VoltageSource::new(
+        "vs",
+        "src",
+        terminal,
+        vec![240.0],
+        vec![0.0],
     ));
     net
 }
@@ -125,6 +159,13 @@ fn every_instance_kind_round_trips() {
                 .with_objective(objective),
         ),
         "mc_ac_opf_instance",
+    );
+    round_trip(
+        PioValue::LinDist3FlowPfInstance(
+            LinDist3FlowPfInstance::from_network(mc_network(), LinDist3FlowBuildOptions::default())
+                .unwrap(),
+        ),
+        "lindist3flow_pf_instance",
     );
     round_trip(
         PioValue::LinDist3FlowOpfInstance(
@@ -533,6 +574,41 @@ fn every_solution_kind_round_trips() {
         Some(57_552.01)
     );
     assert_eq!(solution.residuals().max_active_power_mismatch, Some(1.0e-8));
+
+    let fixed_dispatch = Arc::new(
+        LinDist3FlowPfInstance::from_network(
+            mc_line_network(),
+            LinDist3FlowBuildOptions::default(),
+        )
+        .unwrap(),
+    );
+    let mut values = LinDist3FlowOpfValues::default();
+    values.terminal_voltage_magnitude_squared = vec![57_600.0, 57_121.0];
+    values.line_active_power = vec![1_000.0];
+    values.line_reactive_power = vec![200.0];
+    values.source_active_power = vec![1_000.0];
+    values.source_reactive_power = vec![200.0];
+    let text = round_trip(
+        PioValue::LinDist3FlowPfSolution(
+            LinDist3FlowPfSolution::new(fixed_dispatch, Termination::Converged, values)
+                .unwrap()
+                .with_producer("test-fixed-dispatch-solver"),
+        ),
+        "lindist3flow_pf_solution",
+    );
+    let back = deserialize(&text).unwrap();
+    let PioValue::LinDist3FlowPfSolution(solution) = back.value() else {
+        panic!("expected a fixed-dispatch LinDist3Flow solution");
+    };
+    assert_eq!(solution.producer(), Some("test-fixed-dispatch-solver"));
+    assert_eq!(solution.limit_checks().len(), 2);
+    assert!(solution.limit_checks().iter().all(|check| check.overloaded));
+    assert!(
+        solution
+            .limit_checks()
+            .iter()
+            .all(|check| !check.constraint_enforced)
+    );
 }
 
 /// SEC-9: the writer used to fold the default branch susceptance formula

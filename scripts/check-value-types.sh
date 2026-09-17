@@ -18,6 +18,8 @@ names = [
     "powerio.DcPfInstance",
     "powerio.DcPfSolution",
     "powerio.GeoLayer",
+    "powerio.LinDist3FlowPfInstance",
+    "powerio.LinDist3FlowPfSolution",
     "powerio.LinDist3FlowOpfInstance",
     "powerio.LinDist3FlowOpfSolution",
     "powerio.McAcOpfInstance",
@@ -45,7 +47,7 @@ print("\n".join(sorted(names)))
 PY
 )
 
-schema=$(python3 - "docs/schema/pio-ir/2/0.11.1/schema.json" <<'PY'
+schema=$(python3 - "docs/schema/pio-ir/2/0.11.3/schema.json" <<'PY'
 import json
 import sys
 with open(sys.argv[1], encoding='utf-8') as handle:

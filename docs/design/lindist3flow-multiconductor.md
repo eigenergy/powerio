@@ -163,6 +163,22 @@ compiler maps rotated cones to ordinary second-order cones, retains semantic
 row origins, and defaults to diagonally scaled per-unit solver coordinates.
 Decoded solution values are returned in SI units.
 
+## Fixed-dispatch power flow
+
+`LinDist3FlowPfInstance` is deliberately distinct from the OPF instance. It
+requires prescribed generator/IBR active and reactive power, replaces the
+objective with zero, and sets conductor-limit selection to `none`. The same
+electrical affine equations remain, so a solver obtains a feasibility problem
+without interpreting a monitored rating as an enforced operating constraint.
+
+After convergence, `evaluate_lindist3flow_pf_limits` evaluates every retained
+line apparent-power rating and both physical endpoint current ratings in SI
+units. `LinDist3FlowPfSolution` stores the value, limit, loading ratio,
+overload flag, and the explicit false `constraint_enforced` state. Parallel
+contacts remain separate line identities. Unsupported transformer/regulator
+lowering means those devices and their limits are not silently claimed as
+checked; preparation diagnostics remain the authority on coverage.
+
 ## Provenance of the implementation
 
 No code was copied forward from stale draft PR #139. The implementation was
@@ -178,9 +194,9 @@ The validation layers intentionally test different claims:
 | Evidence | Claim checked |
 |---|---|
 | `powerio-dist/tests/kron.rs` | Schur-complement values, terminal/data rewrites, provenance, recovery coefficients, and refusal of ambiguous or non-ideal neutral assumptions. |
-| `powerio-prob/tests/lindist3flow.rs` | Conductor radiality, source coverage, reference selection, connection/device dimensions and explicit unsupported-equipment diagnostics. |
+| `powerio-prob/tests/lindist3flow.rs` | Deterministic radial/meshed topology, source coverage, reference selection, preparation policies, fixed dispatch, connection/device dimensions and explicit unsupported-equipment diagnostics. |
 | `powerio-matrix` unit tests | Cross-voltage, winding, connection, coupled voltage-drop, device balance, cone assembly, scaling and primal decoding formulas. |
-| `powerio-matrix/tests/lindist3flow.rs` BMOPF case | End-to-end explicit-neutral parse, Kron projection, standard-form feasibility, SI decoding and objective for a hand-checkable feeder translated from the PowerOptLab reference. |
+| `powerio-matrix/tests/lindist3flow.rs` | End-to-end explicit-neutral parse, Kron projection, mesh retention, fixed-dispatch zero objective, monitored SI limits, standard-form feasibility, SI decoding and objective for a hand-checkable feeder translated from the PowerOptLab reference. |
 | `lindist3flow_oracle.dss` and its JSON result | Independent OpenDSSDirect.py 0.9.4 nonlinear solve of the matching one-phase reduced feeder. The Rust regression requires the compiled lossless-linear solution to remain feasible and its voltage-magnitude error to remain below 0.11%. |
 | `evals/validation/validate_lindist3flow_opendss.py` | Regenerates every committed OpenDSS value, preventing the external oracle from becoming an unaudited literal. |
 | Tellegen native and WebAssembly tests | Clarabel consumes the portable sparse form and the decoded solution/objective agree in native and browser-compatible builds. |

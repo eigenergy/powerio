@@ -3,7 +3,7 @@
 This page lists every structural value type in the PowerIO IR, field by
 field: each field's type, unit, and sign convention, the invariant the
 deserializer or the constructors enforce, and what a reader uses when the
-field is absent. The generated schema at `docs/schema/pio-ir/2/0.11.1/schema.json`
+field is absent. The generated schema at `docs/schema/pio-ir/2/0.11.3/schema.json`
 is the machine form of the same definitions. To keep the two from drifting
 apart, `powerio/tests/ir_reference.rs` reads this page and checks in both
 directions that each table lists the same fields the schema defines for its
@@ -70,6 +70,7 @@ schema definition beside it.
 | `powerio.AcOpfInstance` | `AcOpfInstance` |
 | `powerio.McAcPfInstance` | `McAcPfInstance` |
 | `powerio.McAcOpfInstance` | `McAcOpfInstance` |
+| `powerio.LinDist3FlowPfInstance` | `LinDist3FlowPfInstance` |
 | `powerio.LinDist3FlowOpfInstance` | `LinDist3FlowOpfInstance` |
 | `powerio.AcScucInstance` | `AcScucInstance` |
 | `powerio.DcPfSolution` | `DcPfSolution` |
@@ -79,6 +80,7 @@ schema definition beside it.
 | `powerio.SocwrOpfSolution` | `SocwrOpfSolution` |
 | `powerio.McAcPfSolution` | `McAcPfSolution` |
 | `powerio.McAcOpfSolution` | `McAcOpfSolution` |
+| `powerio.LinDist3FlowPfSolution` | `LinDist3FlowPfSolution` |
 | `powerio.LinDist3FlowOpfSolution` | `LinDist3FlowOpfSolution` |
 | `powerio.AcScucSolution` | `AcScucSolution` |
 
@@ -1213,6 +1215,18 @@ Schema definition: `McAcOpfInstance`.
 | `constraints` | `MulticonductorActiveConstraints` | | | | required |
 | `initial_point` | `StoredOperatingPointAssignment` or null | | | | null |
 
+### powerio.LinDist3FlowPfInstance
+
+The fixed-dispatch instance carries the same coefficient formulation as the
+OPF type, but its objective is empty and conductor limits are monitored after
+a converged solve rather than enforced as conic constraints.
+
+Schema definition: `LinDist3FlowPfInstance`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `formulation` | `LinDist3FlowOpfInstance` | | | zero objective, fixed generator dispatch, and `conductor_limits` selected as `none` | required |
+
 ### powerio.LinDist3FlowOpfInstance
 
 Schema definition: `LinDist3FlowOpfInstance`.
@@ -1227,7 +1241,7 @@ Schema definition: `LinDist3FlowBuildOptions`.
 | field | type | unit | sign | invariant | if absent |
 |---|---|---|---|---|---|
 | `reference_policy` | `auto`, `explicit`, or `source_propagated` | | | selects the fixed coefficient phasors | required |
-| `unsupported` | `reject`, `lower`, `approximate`, or `permissive` | | | only `reject` is implemented; other values fail construction | required |
+| `unsupported` | `reject`, `lower`, `approximate`, or `permissive` | | | selects the audited preparation-policy level | required |
 | `require_neutral_provenance` | bool | | | requires a recorded neutral-Kron projection when true | required |
 
 Schema definition: `MulticonductorActiveConstraints`.
@@ -1681,6 +1695,37 @@ Schema definition: `LinDist3FlowOpfSolution`.
 | `producer` | string or null | | | | null |
 | `values` | `LinDist3FlowOpfValues` | | | physical primal values | required |
 | `objective` | float | objective units | | | required |
+
+### powerio.LinDist3FlowPfSolution
+
+The value arrays use the same physical axes and SI conventions as the OPF
+solution. Limit checks exist only for a converged point and report retained
+line/contact ratings that the fixed-dispatch problem deliberately did not
+enforce.
+
+Schema definition: `LinDist3FlowPfSolution`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `instance` | `LinDist3FlowPfInstance` | | | | required |
+| `termination` | `Termination` | | | non-converged results have no `limit_checks` | required |
+| `residuals` | `Residuals` | | | | required |
+| `producer` | string or null | | | | null |
+| `values` | `LinDist3FlowOpfValues` | | | physical primal values | required |
+| `limit_checks` | array of `LinDist3FlowLimitCheck` | | | identities name retained line conductors | required |
+
+Schema definition: `LinDist3FlowLimitCheck`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `line` | string | | | retained line identity | required |
+| `conductor` | nonnegative integer | | | position in that line's conductor order | required |
+| `kind` | `line_apparent_power`, `line_current_from`, or `line_current_to` | | | determines whether `value` and `limit` are VA or A | required |
+| `value` | float | VA or A | nonnegative | finite | required |
+| `limit` | float | VA or A | positive | finite | required |
+| `loading_ratio` | float | per unit of limit | nonnegative | equals `value / limit` | required |
+| `overloaded` | bool | | | true exactly when `loading_ratio > 1` | required |
+| `constraint_enforced` | bool | | | always false for fixed dispatch | required |
 
 Schema definition: `LinDist3FlowOpfValues`.
 

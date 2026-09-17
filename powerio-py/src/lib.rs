@@ -3364,9 +3364,11 @@ impl PyPioModule {
         match value {
             powerio::PioValue::McAcPfInstance(instance) => Ok(instance.network()),
             powerio::PioValue::McAcOpfInstance(instance) => Ok(instance.network()),
+            powerio::PioValue::LinDist3FlowPfInstance(instance) => Ok(instance.network()),
             powerio::PioValue::LinDist3FlowOpfInstance(instance) => Ok(instance.network()),
             powerio::PioValue::McAcPfSolution(solution) => Ok(solution.network()),
             powerio::PioValue::McAcOpfSolution(solution) => Ok(solution.network()),
+            powerio::PioValue::LinDist3FlowPfSolution(solution) => Ok(solution.network()),
             powerio::PioValue::LinDist3FlowOpfSolution(solution) => Ok(solution.network()),
             other => Err(PyTypeError::new_err(format!(
                 "{} does not contain a multiconductor calculation",
@@ -3938,6 +3940,15 @@ impl PyPioModule {
         })
     }
 
+    fn _to_lindist3flow_pf_instance(&self) -> PyResult<Self> {
+        let module = powerio::transform::to_lindist3flow_pf_instance(self.module()?)
+            .map_err(|error| core_error_pyerr(&error))?
+            .map_value(powerio::PioValue::LinDist3FlowPfInstance);
+        Ok(Self {
+            module: Some(module),
+        })
+    }
+
     /// The balanced network shared by a balanced calculation instance or
     /// solution. `BalancedNetwork::clone` only retains its copy on write
     /// tables; it does not copy them.
@@ -3974,19 +3985,21 @@ impl PyPioModule {
     }
 
     fn _lindist3flow_solution_values(&self, quantity: &str) -> PyResult<Vec<f64>> {
-        let powerio::PioValue::LinDist3FlowOpfSolution(solution) = self.module()?.value() else {
-            return Err(PyTypeError::new_err("expected a LinDist3Flow OPF solution"));
+        let values = match self.module()?.value() {
+            powerio::PioValue::LinDist3FlowPfSolution(solution) => solution.values(),
+            powerio::PioValue::LinDist3FlowOpfSolution(solution) => solution.values(),
+            _ => return Err(PyTypeError::new_err("expected a LinDist3Flow solution")),
         };
         Ok(match quantity {
             "terminal_voltage_magnitude_squared" => {
-                solution.values().terminal_voltage_magnitude_squared.clone()
+                values.terminal_voltage_magnitude_squared.clone()
             }
-            "line_active_power" => solution.values().line_active_power.clone(),
-            "line_reactive_power" => solution.values().line_reactive_power.clone(),
-            "generator_active_power" => solution.values().generator_active_power.clone(),
-            "generator_reactive_power" => solution.values().generator_reactive_power.clone(),
-            "source_active_power" => solution.values().source_active_power.clone(),
-            "source_reactive_power" => solution.values().source_reactive_power.clone(),
+            "line_active_power" => values.line_active_power.clone(),
+            "line_reactive_power" => values.line_reactive_power.clone(),
+            "generator_active_power" => values.generator_active_power.clone(),
+            "generator_reactive_power" => values.generator_reactive_power.clone(),
+            "source_active_power" => values.source_active_power.clone(),
+            "source_reactive_power" => values.source_reactive_power.clone(),
             _ => return Err(pyo3::exceptions::PyKeyError::new_err(quantity.to_owned())),
         })
     }
@@ -3999,10 +4012,12 @@ impl PyPioModule {
     }
 
     fn _lindist3flow_solution_termination(&self) -> PyResult<&'static str> {
-        let powerio::PioValue::LinDist3FlowOpfSolution(solution) = self.module()?.value() else {
-            return Err(PyTypeError::new_err("expected a LinDist3Flow OPF solution"));
+        let termination = match self.module()?.value() {
+            powerio::PioValue::LinDist3FlowPfSolution(solution) => solution.termination(),
+            powerio::PioValue::LinDist3FlowOpfSolution(solution) => solution.termination(),
+            _ => return Err(PyTypeError::new_err("expected a LinDist3Flow solution")),
         };
-        Ok(match solution.termination() {
+        Ok(match termination {
             powerio_prob::Termination::Converged => "converged",
             powerio_prob::Termination::IterationLimit => "iteration_limit",
             powerio_prob::Termination::Infeasible => "infeasible",
@@ -4014,7 +4029,11 @@ impl PyPioModule {
 
     fn _lindist3flow_metadata<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let instance = match self.module()?.value() {
+            powerio::PioValue::LinDist3FlowPfInstance(instance) => instance.formulation(),
             powerio::PioValue::LinDist3FlowOpfInstance(instance) => instance,
+            powerio::PioValue::LinDist3FlowPfSolution(solution) => {
+                solution.instance().formulation()
+            }
             powerio::PioValue::LinDist3FlowOpfSolution(solution) => solution.instance(),
             _ => return Err(PyTypeError::new_err("expected a LinDist3Flow calculation")),
         };
@@ -4084,6 +4103,37 @@ impl PyPioModule {
         Ok(result)
     }
 
+    fn _lindist3flow_limit_checks<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let powerio::PioValue::LinDist3FlowPfSolution(solution) = self.module()?.value() else {
+            return Err(PyTypeError::new_err(
+                "expected a fixed-dispatch LinDist3Flow solution",
+            ));
+        };
+        let result = PyList::empty(py);
+        for check in solution.limit_checks() {
+            let entry = PyDict::new(py);
+            entry.set_item("line", &check.line)?;
+            entry.set_item("conductor", check.conductor)?;
+            entry.set_item(
+                "kind",
+                match check.kind {
+                    powerio_prob::LinDist3FlowLimitKind::LineApparentPower => "line_apparent_power",
+                    powerio_prob::LinDist3FlowLimitKind::LineCurrentFrom => "line_current_from",
+                    powerio_prob::LinDist3FlowLimitKind::LineCurrentTo => "line_current_to",
+                    _ => "unknown",
+                },
+            )?;
+            entry.set_item("unit", check.kind.unit())?;
+            entry.set_item("value", check.value)?;
+            entry.set_item("limit", check.limit)?;
+            entry.set_item("loading_ratio", check.loading_ratio)?;
+            entry.set_item("overloaded", check.overloaded)?;
+            entry.set_item("constraint_enforced", check.constraint_enforced)?;
+            result.append(entry)?;
+        }
+        Ok(result)
+    }
+
     /// The exact typed instance solved by a calculation solution.
     fn _calculation_solution_instance(&self) -> PyResult<Self> {
         let value = match &self.module()?.value() {
@@ -4107,6 +4157,9 @@ impl PyPioModule {
             }
             powerio::PioValue::McAcOpfSolution(solution) => {
                 powerio::PioValue::McAcOpfInstance(solution.instance().clone())
+            }
+            powerio::PioValue::LinDist3FlowPfSolution(solution) => {
+                powerio::PioValue::LinDist3FlowPfInstance(solution.instance().clone())
             }
             powerio::PioValue::LinDist3FlowOpfSolution(solution) => {
                 powerio::PioValue::LinDist3FlowOpfInstance(solution.instance().clone())

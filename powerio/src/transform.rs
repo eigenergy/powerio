@@ -759,6 +759,68 @@ pub fn to_lindist3flow_opf_instance_with_options(
     })
 }
 
+/// Construct a fixed-dispatch LinDist3Flow power-flow calculation from a
+/// multiconductor network using the default formulation options.
+pub fn to_lindist3flow_pf_instance(
+    module: &powerio_core::PioModule<crate::PioValue>,
+) -> Result<powerio_core::PioModule<powerio_prob::LinDist3FlowPfInstance>, powerio_core::Error> {
+    to_lindist3flow_pf_instance_with_options(
+        module,
+        powerio_prob::LinDist3FlowBuildOptions::default(),
+    )
+}
+
+/// Construct a fixed-dispatch LinDist3Flow power-flow calculation with
+/// explicit formulation options.
+pub fn to_lindist3flow_pf_instance_with_options(
+    module: &powerio_core::PioModule<crate::PioValue>,
+    options: powerio_prob::LinDist3FlowBuildOptions,
+) -> Result<powerio_core::PioModule<powerio_prob::LinDist3FlowPfInstance>, powerio_core::Error> {
+    if matches!(module.value(), crate::PioValue::LinDist3FlowPfInstance(_)) {
+        return Ok(module.clone().map_value(|value| match value {
+            crate::PioValue::LinDist3FlowPfInstance(instance) => instance,
+            _ => unreachable!("the value type was checked before extraction"),
+        }));
+    }
+    if !matches!(module.value(), crate::PioValue::MulticonductorNetwork(_)) {
+        return Err(powerio_core::Error::new(
+            &codes::REQUEST_MODULE_WRONG_MODEL_KIND,
+            format!(
+                "to_lindist3flow_pf_instance requires powerio.MulticonductorNetwork; the module contains {}",
+                module.value().type_name()
+            ),
+        ));
+    }
+    let options_value = serde_json::to_value(options).map_err(|cause| {
+        powerio_core::Error::new(
+            &codes::TRANSFORM_LINDIST3FLOW_OPTIONS_SERIALIZE_FAILED,
+            "could not record LinDist3Flow build options in transform history",
+        )
+        .with_cause(cause)
+    })?;
+    let serde_json::Value::Object(parameters) = options_value else {
+        return Err(powerio_core::Error::new(
+            &codes::TRANSFORM_LINDIST3FLOW_OPTIONS_SERIALIZE_FAILED,
+            "LinDist3Flow build options did not serialize as an object",
+        ));
+    };
+    let history = HistoryEntry::new(
+        unused_history_id(module, "to_lindist3flow_pf_instance"),
+        HistoryKind::Transform,
+        "to_lindist3flow_pf_instance",
+    )?
+    .with_input_type("powerio.MulticonductorNetwork")?
+    .with_output_type("powerio.LinDist3FlowPfInstance")?
+    .with_parameters(parameters.into_iter().collect())?;
+    let producer = powerio_core::Producer::new("powerio", crate::VERSION)?;
+    module.clone().try_derive_value(producer, history, |value| {
+        let crate::PioValue::MulticonductorNetwork(network) = value else {
+            unreachable!("the value type was checked before derivation")
+        };
+        powerio_prob::LinDist3FlowPfInstance::from_network(network, options)
+    })
+}
+
 /// Cap a history note list at the record limit, replacing the overflow with
 /// one note stating how many entries were elided, and normalize every kept
 /// note to the record layer's requirements: NUL replaced, never empty, and
