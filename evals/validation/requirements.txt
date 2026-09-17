@@ -17,4 +17,4 @@ pypsa>=1.0             # validate_pypsa.py: PyPSA CSV folder import oracle
 opendssdirect.py>=0.9,<0.10  # validate_opendss.py: OpenDSS solve oracle
 jsonschema>=4.18       # validate_bmopf_schema.py: external BMOPF schema validator
 pillow>=12.3.0; python_version >= "3.10"
-pytest>=9.0.3; python_version >= "3.10"
+pytest>=9.1.1; python_version >= "3.10"
