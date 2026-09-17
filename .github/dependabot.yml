@@ -32,11 +32,10 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
-    # pandapower is pinned because later releases need the matpowercaseframes
-    # 2.x line, which the validation scripts cannot use.
+    # pandapower holds at its pin because the Y_bus cross-check has not run
+    # against 3.4 or later.
     ignore:
       - dependency-name: pandapower
-      - dependency-name: matpowercaseframes
     groups:
       pip-minor-and-patch:
         patterns:
