@@ -2467,6 +2467,17 @@ PioGeoLayer *pio_geo_layer_parse(const PioSource *source, PioError **error);
 PioDiagnostics *pio_geo_layer_diagnostics(const PioGeoLayer *layer);
 
 /**
+ * Write the layer as the canonical `.geo.json` document: a GeoJSON
+ * FeatureCollection whose `powerio_geo` member states the coordinate space
+ * and the writer's version. The text is owned by the returned handle and read
+ * with `pio_string_view`; release it with `pio_string_release`.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioString *pio_geo_layer_to_geojson(const PioGeoLayer *layer, PioError **error);
+
+/**
  *
  * # Safety
  * Pointers and handles must satisfy the crate-level safety requirements.
@@ -2647,6 +2658,27 @@ PioContingencySet *pio_contingency_set_expand(const PioContingencySet *set,
                                               const PioSubsystemSet *subsystems,
                                               PioDiagnostics **out_notes,
                                               PioError **error);
+
+/**
+ * The buses of one balanced network that a named subsystem selects, in
+ * ascending bus number order.
+ *
+ * The name is matched without case and without surrounding whitespace, the
+ * way a `.con` or `.mon` statement names a subsystem. A name the subsystem
+ * set does not state reports `BIND.CAPI.INDEX_OUT_OF_RANGE`.
+ *
+ * The returned vector owns its values: read them with `pio_vector_values` and
+ * release the handle with `pio_vector_release`. Each value is a bus number,
+ * an integer a double represents exactly.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioVector *pio_balanced_network_select_subsystem_buses(const PioBalancedNetwork *network,
+                                                       const PioSubsystemSet *subsystems,
+                                                       const char *name,
+                                                       size_t name_len,
+                                                       PioError **error);
 
 /**
  *
