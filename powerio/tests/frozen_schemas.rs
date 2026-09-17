@@ -108,7 +108,7 @@ fn the_current_powerio_ir_schema_is_committed() {
 }
 
 /// Additive type catalogs preserve every existing record and document rule.
-/// Each earlier generation 2 snapshot is checked against the current one, so
+/// Each earlier IR version 2 snapshot is checked against the current one, so
 /// a catalog that renames or reshapes a published record fails here.
 #[test]
 fn the_generation_two_catalog_only_adds_structural_types() {

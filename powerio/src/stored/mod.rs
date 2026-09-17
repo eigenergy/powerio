@@ -2,7 +2,7 @@
 //!
 //! `.pio.json` is not a case format. The reader dispatches on the `schema`
 //! and `version` header, then decodes the exact typed representation. The
-//! generation is independent of the PowerIO release; the producer record
+//! IR version is independent of the PowerIO release; the producer record
 //! names the release that wrote the document.
 
 mod convert;

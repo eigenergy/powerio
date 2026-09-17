@@ -2826,9 +2826,9 @@ PioModule *pio_parse(const PioSource *source,
 /**
  * Deserialize one PowerIO IR source.
  *
- * A document carries the independent PowerIO IR generation reported by
+ * A document carries the independent PowerIO IR version reported by
  * `pio_schema_report`. This library refuses any unsupported identity or
- * generation through `error`, naming what it found.
+ * version through `error`, naming what it found.
  *
  * # Safety
  * Pointers and handles must satisfy the crate-level safety requirements.

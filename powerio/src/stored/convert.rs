@@ -58,7 +58,7 @@ pub fn emit_module(module: &PioModule<PioValue>) -> Result<String> {
     serde_json::to_string_pretty(&stored).map_err(|error| invalid(error.to_string()))
 }
 
-/// Decode one current PowerIO IR document. Any other identity or generation
+/// Decode one current PowerIO IR document. Any other identity or version
 /// is refused with what was found named.
 ///
 /// # Errors
@@ -67,7 +67,7 @@ pub fn read_module(text: &str) -> Result<PioModule<PioValue>> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     // One scan decodes the current shape. Only a document that is not one is
     // scanned again, for its header alone, so the refusal can say whether it
-    // is another PowerIO IR generation, a current document that is invalid,
+    // is another PowerIO IR version, a current document that is invalid,
     // or not PowerIO IR at all.
     let decode_error = match serde_json::from_str::<StoredModule>(text) {
         Ok(stored) if is_readable(&stored.schema, stored.version) => {
@@ -116,7 +116,7 @@ fn describe_producer(producer: &serde_json::Value) -> Option<String> {
     }
 }
 
-/// The refusal for an identity or generation this build does not read. It
+/// The refusal for an identity or version this build does not read. It
 /// names what the document states, producer included, and the remedy.
 fn unsupported(
     schema: &str,
@@ -128,13 +128,13 @@ fn unsupported(
             .and_then(dto::StoredVersion::as_integer)
             .is_some_and(|version| version > crate::IR_VERSION)
     {
-        "upgrade PowerIO to a release that supports this later IR generation".to_owned()
+        "upgrade PowerIO to a release that supports this later IR version".to_owned()
     } else {
         let reads = if crate::IR_MIN_VERSION == crate::IR_VERSION {
-            format!("generation {}", crate::IR_VERSION)
+            format!("version {}", crate::IR_VERSION)
         } else {
             format!(
-                "generations {} through {}",
+                "versions {} through {}",
                 crate::IR_MIN_VERSION,
                 crate::IR_VERSION
             )

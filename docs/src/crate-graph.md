@@ -41,7 +41,7 @@ stay outside with them.
 
 ## Data flow
 
-![The PowerIO data flow: a Source of named immutable bytes enters parse, which produces a PioModule holding the typed value, retained source, diagnostics, and history; time series and scenario sets expose owner rooted typed entries through indexing and iteration; to_balanced derives a balanced module from a multiconductor module with reported assumptions and losses; calc operations return matrices and vectors with element mappings; emit produces grid exchange formats; serialize and deserialize connect the module to PowerIO IR generation 2.](assets/dataflow.svg)
+![The PowerIO data flow: a Source of named immutable bytes enters parse, which produces a PioModule holding the typed value, retained source, diagnostics, and history; time series and scenario sets expose owner rooted typed entries through indexing and iteration; to_balanced derives a balanced module from a multiconductor module with reported assumptions and losses; calc operations return matrices and vectors with element mappings; emit produces grid exchange formats; serialize and deserialize connect the module to PowerIO IR version 2.](assets/dataflow.svg)
 
 Every arrow out of the module is an explicit call that returns diagnostics;
 nothing is transformed as a side effect of something else.

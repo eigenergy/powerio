@@ -1,11 +1,11 @@
 # PowerIO IR schema history
 
-PowerIO IR has one document lineage. Generations identify incompatible changes
-to existing record layouts or meanings. A release can add structural types
-without changing the generation. Schema snapshots list the types implemented
-by a release and keep their published bytes and identifiers.
+PowerIO IR has one document lineage. The IR version identifies incompatible
+changes to existing record layouts or meanings. A release can add structural
+types without changing the IR version. Schema snapshots list the types
+implemented by a release and keep their published bytes and identifiers.
 
-| Generation | First release | Document identity | Schema snapshot | Read by 0.11.3 |
+| IR version | First release | Document identity | Schema snapshot | Read by 0.11.3 |
 |---|---|---|---|---|
 | none | v0.6.1 | `pio-package` lineage `0.1` | `pio-ir/0.1/schema.json` | no |
 | none | v0.8.0 | `pio-package` lineage `0.2` | `pio-ir/0.2/schema.json` | no |
@@ -27,28 +27,29 @@ The current document begins:
 
 ## Compatibility
 
-PowerIO 0.11.3 keeps IR generation 2 and every existing record layout. The
+PowerIO 0.11.3 keeps IR version 2 and every existing record layout. The
 LinDist3Flow instance and solution types added in 0.11.1 and the three PSS/E
 contingency analysis files added in 0.11.3 use distinct structural type names.
 A reader accepts the types it implements; an older reader rejects an
-unknown type without losing the ability to read familiar types. A generation
+unknown type without losing the ability to read familiar types. A version
 bump requires an incompatible change to an existing representation and an
 explicit release decision. Adding fields to a record is not automatically
 compatible: readers can reject unknown fields, so existing records retain
 their layout throughout the 0.11.x line.
 
-`powerio::IR_VERSION` is the generation a build writes and
+`powerio::IR_VERSION` is the IR version a build writes and
 `powerio::IR_MIN_VERSION` the oldest it reads. Both remain 2 in 0.11.3.
 `producer.version` records the producing release for diagnostics; it does not
 determine whether a document can be read. The C ABI remains independently
-versioned at 7.
+versioned at 7. [The PowerIO IR chapter](../src/pio-json-schema.md) sets this
+versioning scheme beside LLVM bitcode and MLIR bytecode.
 
 The 0.11.0 schema at `pio-ir/2/schema.json` is a frozen snapshot of its 32
 structural types. The 0.11.1 snapshot adds two structural types and their
 supporting definitions, and the 0.11.3 snapshot adds three more:
 `powerio.ContingencySet`, `powerio.SubsystemSet`, and `powerio.MonitoredSet`.
 The release name in the snapshot path does not create
-a new IR generation. A later release without catalog changes can reuse that
+a new IR version. A later release without catalog changes can reuse that
 snapshot. CI checks that all existing definitions and document rules remain
 identical and that every earlier published snapshot keeps its exact bytes.
 
