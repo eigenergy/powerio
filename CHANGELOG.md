@@ -59,7 +59,12 @@
   network states for that row, which is optional: C reads the table from
   `PioContingencyComponentView.id.component_type` and reads a `local_id` of
   length 0 for a row the network states no identity for, and Python reads the
-  table from `"type"` and `"id": None` for that row. The ABI version is
+  table from `"type"` and `"id": None` for that row.
+  `pio_balanced_network_select_subsystem_buses` returns the buses one named
+  subsystem selects on a network as an owned `PioVector` of bus numbers, and
+  `pio_geo_layer_to_geojson` returns a geographic layer's canonical
+  `.geo.json` document as owned text, so C reaches what Python reaches through
+  `select_subsystem_buses` and `GeoLayer.geojson`. The ABI version is
   unchanged.
 - Report the canonical structural name of a module's value from Python as
   `PioModule.type_name`. The string is the one the C ABI and PowerIO IR use,

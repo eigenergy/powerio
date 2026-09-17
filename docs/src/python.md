@@ -134,6 +134,17 @@ grid exchange format, so it does not appear in format discovery.
 
 ## PSS/E contingency analysis files
 
+A contingency set is the content of a PSS/E `.con` file: named cases, each a
+list of outage actions. A subsystem is PSS/E's name for a bus selection stated
+in a `.sub` file through bus, area, zone, owner and kV range selectors; a
+`.con` automatic specification and a `.mon` statement refer to a subsystem by
+name, and selecting a subsystem's buses evaluates its selectors against a
+network. A monitored set is the content of a `.mon` file: the elements whose
+loading and voltage a study reports. A geo layer is a coordinate document kept
+beside a case: points for buses and routes for branches in one coordinate
+space, keyed by element identity, read from five text forms and written as a
+GeoJSON FeatureCollection carrying a `powerio_geo` member.
+
 A `.con`, `.sub`, or `.mon` file parses to `ContingencySet`, `SubsystemSet`,
 or `MonitoredSet`. Each has a `text` property holding the file. A contingency
 set and a subsystem set also reach a network through a `BalancedNetwork`
@@ -175,7 +186,9 @@ property and has no method that binds it to a network, because binding a
 monitored element file to a network and a subsystem set is a Rust operation.
 C reads a monitored set's statement count with
 `pio_monitored_set_statement_count` and its text with
-`pio_monitored_set_to_mon`.
+`pio_monitored_set_to_mon`. C selects a subsystem's buses with
+`pio_balanced_network_select_subsystem_buses`, which names the same buses as
+`select_subsystem_buses`.
 
 ## Collections
 
@@ -278,6 +291,10 @@ you need the diagnostic.
 | `diagnostic_record(diagnostic)` | one diagnostic as a JSON-ready dictionary |
 | `diagnostic_records(diagnostics)` | every diagnostic as a JSON-ready dictionary, in order |
 | `module.to_balanced_report()`, `module.to_balanced()` | the multiconductor to balanced transformation |
+
+`GeoLayer.geojson` returns the canonical `.geo.json` document for a layer, the
+GeoJSON FeatureCollection with the `powerio_geo` member that `parse_geo` reads.
+C returns the same text from `pio_geo_layer_to_geojson`.
 
 ## Errors
 

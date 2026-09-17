@@ -58,6 +58,15 @@ Use `pio_source_from_memory` for text or binary bytes you already hold in
 memory; both source constructors feed the same `pio_parse`.
 `pio_geo_layer_parse` reads a geographic layer straight from text, with no
 source object, for callers that have the layer document in memory.
+`pio_geo_layer_diagnostics` reports what that reader found, and
+`pio_geo_layer_to_geojson` writes the layer back as the canonical `.geo.json`
+document, the GeoJSON FeatureCollection with the `powerio_geo` member that
+`pio_geo_layer_parse` reads.
+
+```c
+PioString *document = pio_geo_layer_to_geojson(layer, &error);
+PioStringView geojson = pio_string_view(document); /* release with pio_string_release */
+```
 
 `pio_module_value` returns an owner rooted value handle, and the exact typed
 accessors return owner rooted views without serializing or copying the module
@@ -112,6 +121,17 @@ name or generation and reports what it found. The reader accepts generation 2
 and the structural types implemented by the library. C ABI 7 has no module JSON aliases.
 
 ## PSS/E contingency analysis files
+
+A contingency set is the content of a PSS/E `.con` file: named cases, each a
+list of outage actions. A subsystem is PSS/E's name for a bus selection stated
+in a `.sub` file through bus, area, zone, owner and kV range selectors; a
+`.con` automatic specification and a `.mon` statement refer to a subsystem by
+name, and selecting a subsystem's buses evaluates its selectors against a
+network. A monitored set is the content of a `.mon` file: the elements whose
+loading and voltage a study reports. A geo layer is a coordinate document kept
+beside a case: points for buses and routes for branches in one coordinate
+space, keyed by element identity, read from five text forms and written as a
+GeoJSON FeatureCollection carrying a `powerio_geo` member.
 
 A `.con`, `.sub`, or `.mon` file parses through `pio_parse` like any other
 source; `pio_value_contingency_set`, `pio_value_subsystem_set`, and
@@ -185,13 +205,26 @@ pio_contingency_resolution_release(resolution);
 pio_contingency_set_release(cases);
 ```
 
+`pio_balanced_network_select_subsystem_buses` evaluates one named subsystem's
+selectors against a network and returns the buses it selects, in ascending
+order, as an owned `PioVector` whose values are bus numbers.
+
+```c
+PioVector *buses =
+    pio_balanced_network_select_subsystem_buses(network, subsystems, "A1", 2, &error);
+PioF64View numbers = pio_vector_values(buses); /* release with pio_vector_release */
+```
+
 The set accessors are `pio_contingency_set_case_count`,
 `pio_contingency_set_case_name`, `pio_contingency_set_diagnostics`, and
 `pio_contingency_set_to_con`; `pio_subsystem_set_count`,
 `pio_subsystem_set_name`, and `pio_subsystem_set_to_sub`; and
 `pio_monitored_set_statement_count` and `pio_monitored_set_to_mon`. Each of
 the three writers returns owned text, read with `pio_string_view` and released
-with `pio_string_release`, which is how an expanded set reaches a file. The
+with `pio_string_release`, which is how an expanded set reaches a file.
+`pio_balanced_network_select_subsystem_buses` reads a network and a subsystem
+set together and hands back an owned `PioVector`, read with
+`pio_vector_values` and released with `pio_vector_release`. The
 resolution accessors are `pio_contingency_resolution_case_count`,
 `pio_contingency_resolution_resolved_count`,
 `pio_contingency_resolution_unresolved_count`,
