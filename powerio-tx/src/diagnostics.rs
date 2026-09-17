@@ -404,7 +404,7 @@ pub mod codes {
         BUILD_CON_SUBSYSTEM_UNKNOWN = "BUILD.CON.SUBSYSTEM_UNKNOWN", Warning,
             "an automatic contingency specification names a subsystem the subsystem set does not state";
         BUILD_CON_SPECIFICATION_EMPTY = "BUILD.CON.SPECIFICATION_EMPTY", Warning,
-            "an automatic contingency specification names a subsystem that holds no in-service element of its target family";
+            "an automatic contingency specification names fewer in-service elements of its target family than its order needs";
         BUILD_MON_STATEMENT_UNRESOLVED = "BUILD.MON.STATEMENT_UNRESOLVED", Warning,
             "a monitored element statement did not bind to exactly one element, or names a subsystem the subsystem set does not state";
 

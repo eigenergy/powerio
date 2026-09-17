@@ -12,7 +12,7 @@
 //! ```
 //!
 //! [`MonitoredSet::parse`] reads UTF-8 text and touches no filesystem.
-//! Statements outside the grammar keep their original line and are reported.
+//! Statements outside the grammar keep their trimmed line and are reported.
 //! [`MonitoredSet::to_mon`] writes the set back in one canonical spelling, and
 //! [`MonitoredSet::resolve`] binds it to the rows of a [`BalancedNetwork`].
 //!
@@ -44,7 +44,7 @@ pub struct MonitoredSet {
     /// The monitor statements, in file order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub statements: Vec<MonitorStatement>,
-    /// Statements outside the grammar, kept as their original line.
+    /// Statements outside the grammar, kept as their trimmed line.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub retained: Vec<RetainedStatement>,
 }
@@ -65,7 +65,13 @@ pub enum MonitorStatement {
     /// Every branch with exactly one terminal in the subsystem.
     TiesFromSubsystem { subsystem: String },
     /// The branches a `MONITOR BRANCHES` block lists by terminal pair.
-    Branches(Vec<BranchRef>),
+    Branches {
+        branches: Vec<BranchRef>,
+        /// The block's lines that state no branch, kept as text. The writer
+        /// states them inside the block, before its `END`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        retained: Vec<RetainedStatement>,
+    },
     /// A named interface and the branches whose flows sum over it.
     Interface {
         name: String,
@@ -73,6 +79,10 @@ pub enum MonitorStatement {
         rating_mw: Option<f64>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         branches: Vec<BranchRef>,
+        /// The block's lines that state no branch, kept as text. The writer
+        /// states them inside the block, before its `END`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        retained: Vec<RetainedStatement>,
     },
     /// A voltage magnitude band over a scope of buses.
     VoltageRange {
@@ -153,9 +163,12 @@ fn bad(message: String) -> Error {
 impl MonitoredSet {
     /// Read a `.mon` file from UTF-8 text. Keywords are case insensitive.
     ///
-    /// A statement the grammar does not cover keeps its original line in
-    /// [`MonitoredSet::retained`] and is reported. Lines after a file level
-    /// `END` are kept the same way and reported once.
+    /// A statement the grammar does not cover keeps its trimmed line where the
+    /// file stated it, and is reported: on the statement inside an open
+    /// `MONITOR BRANCHES` or `MONITOR INTERFACE` block, and in
+    /// [`MonitoredSet::retained`] outside one. Lines after a file level `END`
+    /// are kept at file level, marked [`RetainedStatement::after_end`], and
+    /// reported once.
     ///
     /// # Errors
     /// [`Error::FormatRead`] when a `MONITOR BRANCHES` or `MONITOR INTERFACE`
@@ -170,8 +183,12 @@ impl MonitoredSet {
     }
 
     /// Write the set as `.mon` text: the header lines as written, the
-    /// statements in order, the statements kept as text, and a final `END`.
-    /// Every line ends with a newline.
+    /// statements in order, the statements kept from before the file `END`, a
+    /// final `END`, and then the statements read after that `END`. Every line
+    /// ends with a newline.
+    ///
+    /// A line kept from inside a block is written inside that block, before
+    /// its `END`, so it reads back into the same block.
     #[must_use]
     pub fn to_mon(&self) -> String {
         let mut out = String::new();
@@ -182,11 +199,15 @@ impl MonitoredSet {
         for statement in &self.statements {
             out.push_str(&write_statement(statement));
         }
-        for statement in &self.retained {
+        for statement in self.retained.iter().filter(|kept| !kept.after_end) {
             out.push_str(&statement.text);
             out.push('\n');
         }
         out.push_str("END\n");
+        for statement in self.retained.iter().filter(|kept| kept.after_end) {
+            out.push_str(&statement.text);
+            out.push('\n');
+        }
         out
     }
 }
@@ -198,6 +219,7 @@ struct OpenBlock {
     /// The interface this block belongs to, or `None` for a bare branch list.
     interface: Option<(String, Option<f64>)>,
     branches: Vec<BranchRef>,
+    retained: Vec<RetainedStatement>,
 }
 
 /// The reader's state while it walks the lines of one file.
@@ -274,9 +296,9 @@ impl Reader {
     /// first one. A further bare `END` states nothing and is dropped, because
     /// files carry one or two of them.
     ///
-    /// `to_mon` states every statement it kept before the `END` it writes, so
-    /// a kept statement carries `after_end` false and the written file reads
-    /// back as the same set.
+    /// The statement carries `after_end`, and `to_mon` states it after the
+    /// `END` it writes. A line stated there that opens a monitor statement
+    /// would otherwise read back as grammar rather than as text.
     fn keep_after_end(&mut self, line: &LexedLine<'_>) {
         if line.kind != LineKind::Statement || is_end(line) {
             return;
@@ -288,14 +310,17 @@ impl Reader {
                 format!("line {}: text follows the file END", line.number),
             );
         }
-        self.keep_statement(line);
+        self.keep_statement(line, true);
     }
 
-    fn keep_statement(&mut self, line: &LexedLine<'_>) {
+    /// Keep one line as a file level statement. `after_end` marks a line the
+    /// file states after its `END`, which the writer states after the `END` it
+    /// writes.
+    fn keep_statement(&mut self, line: &LexedLine<'_>, after_end: bool) {
         self.parsed.set.retained.push(RetainedStatement {
             line: line.number,
             text: line.trimmed().to_owned(),
-            after_end: false,
+            after_end,
         });
     }
 
@@ -313,8 +338,12 @@ impl Reader {
                     name,
                     rating_mw,
                     branches: open.branches,
+                    retained: open.retained,
                 },
-                None => MonitorStatement::Branches(open.branches),
+                None => MonitorStatement::Branches {
+                    branches: open.branches,
+                    retained: open.retained,
+                },
             });
             return;
         }
@@ -333,7 +362,13 @@ impl Reader {
                 line.trimmed()
             ),
         );
-        self.keep_statement(line);
+        if let Some(open) = self.block.as_mut() {
+            open.retained.push(RetainedStatement {
+                line: line.number,
+                text: line.trimmed().to_owned(),
+                after_end: false,
+            });
+        }
     }
 
     fn read_statement(&mut self, line: &LexedLine<'_>, upper: &[String], words: &[&str]) {
@@ -351,7 +386,7 @@ impl Reader {
             return;
         }
         self.parsed.unrecognized(line.number, line.trimmed());
-        self.keep_statement(line);
+        self.keep_statement(line, false);
     }
 
     /// One `MONITOR` statement, or `None` when the tail is outside the
@@ -369,6 +404,7 @@ impl Reader {
                         opened: line.number,
                         interface: None,
                         branches: Vec::new(),
+                        retained: Vec::new(),
                     });
                     return Some(Read::OpenedBlock);
                 }
@@ -395,6 +431,7 @@ impl Reader {
                     opened: line.number,
                     interface: Some((name, rating_mw)),
                     branches: Vec::new(),
+                    retained: Vec::new(),
                 });
                 Some(Read::OpenedBlock)
             }
@@ -565,7 +602,11 @@ fn write_scope(scope: &MonitorScope) -> String {
     }
 }
 
-fn write_branch_block(head: &str, branches: &[BranchRef]) -> String {
+fn write_branch_block(
+    head: &str,
+    branches: &[BranchRef],
+    retained: &[RetainedStatement],
+) -> String {
     use std::fmt::Write as _;
 
     let mut out = format!("{head}\n");
@@ -577,6 +618,10 @@ fn write_branch_block(head: &str, branches: &[BranchRef]) -> String {
             branch.to.0,
             field(&branch.circuit)
         );
+    }
+    for statement in retained {
+        out.push_str(&statement.text);
+        out.push('\n');
     }
     out.push_str("END\n");
     out
@@ -594,11 +639,14 @@ fn write_statement(statement: &MonitorStatement) -> String {
         MonitorStatement::TiesFromSubsystem { subsystem } => {
             format!("MONITOR TIES FROM SUBSYSTEM '{subsystem}'\n")
         }
-        MonitorStatement::Branches(branches) => write_branch_block("MONITOR BRANCHES", branches),
+        MonitorStatement::Branches { branches, retained } => {
+            write_branch_block("MONITOR BRANCHES", branches, retained)
+        }
         MonitorStatement::Interface {
             name,
             rating_mw,
             branches,
+            retained,
         } => {
             let head = match rating_mw {
                 Some(rating) => {
@@ -606,7 +654,7 @@ fn write_statement(statement: &MonitorStatement) -> String {
                 }
                 None => format!("MONITOR INTERFACE '{name}'"),
             };
-            write_branch_block(&head, branches)
+            write_branch_block(&head, branches, retained)
         }
         MonitorStatement::VoltageRange { scope, vmin, vmax } => format!(
             "MONITOR VOLTAGE RANGE {} {} {}\n",
@@ -734,7 +782,7 @@ fn describe(statement: &MonitorStatement, reason: &UnresolvedMonitorReason) -> S
         | MonitorStatement::TiesFromSubsystem { subsystem } => {
             format!("monitored subsystem '{subsystem}'")
         }
-        MonitorStatement::Branches(_) => "monitored branches".to_owned(),
+        MonitorStatement::Branches { .. } => "monitored branches".to_owned(),
         MonitorStatement::Interface { name, .. } => format!("monitored interface '{name}'"),
         MonitorStatement::VoltageRange { .. } => "monitored voltage range".to_owned(),
         MonitorStatement::VoltageDeviation { .. } => "monitored voltage deviation".to_owned(),
@@ -831,7 +879,7 @@ fn resolve_statement(
                 }
             }
         }
-        MonitorStatement::Branches(branches) => {
+        MonitorStatement::Branches { branches, .. } => {
             for branch in branches {
                 match bind_branch(index, branch) {
                     Ok(row) => {
@@ -848,6 +896,7 @@ fn resolve_statement(
             name,
             rating_mw,
             branches,
+            ..
         } => {
             let mut resolved = ResolvedInterface {
                 name: name.clone(),

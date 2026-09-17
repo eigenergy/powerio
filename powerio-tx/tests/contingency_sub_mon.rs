@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 use powerio_tx::network::BalancedNetwork;
 use powerio_tx::{
     BranchRef, BusId, InterfaceMember, JoinName, MonitorScope, MonitorStatement, MonitoredParsed,
-    MonitoredSet, PsseEquipmentIndex, SubsystemParsed, SubsystemSelector, SubsystemSet,
-    UnresolvedMonitorReason,
+    MonitoredSet, PsseEquipmentIndex, RetainedStatement, SubsystemParsed, SubsystemSelector,
+    SubsystemSet, UnresolvedMonitorReason,
 };
 
 fn fixture(name: &str) -> PathBuf {
@@ -57,6 +57,14 @@ fn select_network() -> BalancedNetwork {
         .network
 }
 
+/// The text of each kept statement, in order.
+fn kept_text(statements: &[RetainedStatement]) -> Vec<&str> {
+    statements
+        .iter()
+        .map(|statement| statement.text.as_str())
+        .collect()
+}
+
 /// The set with every kept statement's line number cleared. The writer states
 /// the subsystems and the kept statements in its own order, so a statement
 /// read from the middle of a file can read back from a different line;
@@ -70,6 +78,11 @@ fn sub_without_line_numbers(set: &SubsystemSet) -> SubsystemSet {
         for statement in &mut subsystem.retained {
             statement.line = 0;
         }
+        for group in &mut subsystem.groups {
+            for statement in &mut group.retained {
+                statement.line = 0;
+            }
+        }
     }
     set
 }
@@ -78,6 +91,16 @@ fn mon_without_line_numbers(set: &MonitoredSet) -> MonitoredSet {
     let mut set = set.clone();
     for statement in &mut set.retained {
         statement.line = 0;
+    }
+    for statement in &mut set.statements {
+        let (MonitorStatement::Branches { retained, .. }
+        | MonitorStatement::Interface { retained, .. }) = statement
+        else {
+            continue;
+        };
+        for kept in retained {
+            kept.line = 0;
+        }
     }
     set
 }
@@ -384,13 +407,22 @@ fn a_join_line_tail_outside_the_grammar_is_reported_and_kept() {
         Some(JoinName::Named { name: "G".into() })
     );
     assert!(subsystem.groups[0].selectors.is_empty());
-    assert_eq!(subsystem.retained[0].text, "PARTICIPATE");
+    // The tail belongs to the group the line opened.
+    assert_eq!(
+        kept_text(&subsystem.groups[0].retained),
+        vec!["PARTICIPATE"]
+    );
+    assert!(subsystem.retained.is_empty());
     check_sub_fixed_point(&parsed);
 
     let malformed = SubsystemSet::parse("SUBSYSTEM 'A'\n   JOIN 'G' AREA WEST\n   END\nEND\nEND\n")
         .expect("parse");
     assert_eq!(sub_codes(&malformed), vec!["READ.SUB.SOURCE_MALFORMED"]);
-    assert_eq!(malformed.set.subsystems[0].retained[0].text, "AREA WEST");
+    assert_eq!(
+        kept_text(&malformed.set.subsystems[0].groups[0].retained),
+        vec!["AREA WEST"]
+    );
+    check_sub_fixed_point(&malformed);
 }
 
 #[test]
@@ -420,14 +452,66 @@ fn subsystem_text_after_the_file_end_is_reported_once() {
     let parsed = SubsystemSet::parse("SUBSYSTEM 'A'\n   AREA 1\nEND\nEND\nBUSNAMES\nBUSNUMBERS\n")
         .expect("parse");
     assert_eq!(sub_codes(&parsed), vec!["READ.SUB.TEXT_AFTER_END"]);
-    let kept: Vec<&str> = parsed
-        .set
-        .retained
-        .iter()
-        .map(|statement| statement.text.as_str())
-        .collect();
-    assert_eq!(kept, vec!["BUSNAMES", "BUSNUMBERS"]);
+    assert_eq!(
+        kept_text(&parsed.set.retained),
+        vec!["BUSNAMES", "BUSNUMBERS"]
+    );
+    assert!(parsed.set.retained.iter().all(|kept| kept.after_end));
     check_sub_fixed_point(&parsed);
+}
+
+/// Text after the file `END` that reads as grammar is written back after the
+/// `END`, so the file it writes states the same subsystems: none.
+#[test]
+fn a_subsystem_stated_after_the_file_end_stays_text() {
+    let parsed = SubsystemSet::parse("END\nSUBSYSTEM 'A'\nAREA 1\nEND\n").expect("parse");
+    assert_eq!(sub_codes(&parsed), vec!["READ.SUB.TEXT_AFTER_END"]);
+    assert!(parsed.set.subsystems.is_empty());
+    assert_eq!(
+        kept_text(&parsed.set.retained),
+        vec!["SUBSYSTEM 'A'", "AREA 1"]
+    );
+
+    let written = check_sub_fixed_point(&parsed);
+    let again = SubsystemSet::parse(&written).expect("read the written set");
+    assert!(again.set.subsystems.is_empty(), "{written}");
+    assert_eq!(
+        kept_text(&again.set.retained),
+        vec!["SUBSYSTEM 'A'", "AREA 1"]
+    );
+}
+
+#[test]
+fn a_line_read_inside_a_join_is_kept_in_that_group() {
+    let parsed = SubsystemSet::parse(
+        "SUBSYSTEM 'A'\n   JOIN 'G'\n      JOIN 'H'\n      AREA 1\n   END\n   ZONE 2\nEND\nEND\n",
+    )
+    .expect("parse");
+    assert_eq!(sub_codes(&parsed), vec!["READ.SUB.STATEMENT_UNRECOGNIZED"]);
+    let subsystem = &parsed.set.subsystems[0];
+    // A `JOIN` inside an open one opens no group: its line is kept as text.
+    assert_eq!(subsystem.groups.len(), 2);
+    let join = subsystem
+        .groups
+        .iter()
+        .find(|group| group.join == Some(JoinName::Named { name: "G".into() }))
+        .expect("the named group");
+    assert_eq!(
+        join.selectors,
+        vec![SubsystemSelector::Area { from: 1, to: 1 }]
+    );
+    assert_eq!(kept_text(&join.retained), vec!["JOIN 'H'"]);
+    // The line belongs to the group, not to the subsystem around it.
+    assert!(subsystem.retained.is_empty());
+
+    let written = check_sub_fixed_point(&parsed);
+    let again = SubsystemSet::parse(&written).expect("read the written set");
+    let group = again.set.subsystems[0]
+        .groups
+        .iter()
+        .find(|group| group.join == Some(JoinName::Named { name: "G".into() }))
+        .expect("the named group");
+    assert_eq!(kept_text(&group.retained), vec!["JOIN 'H'"]);
 }
 
 #[test]
@@ -597,30 +681,33 @@ fn the_block_forms_read_their_branches() {
     assert_eq!(statements.len(), 4);
     assert_eq!(
         statements[0],
-        MonitorStatement::Branches(vec![
+        MonitorStatement::Branches {
             // An absent circuit reads as 1; mixed indentation and tabs read
             // the same as spaces.
-            BranchRef {
-                from: BusId(101),
-                to: BusId(102),
-                circuit: "1".into(),
-            },
-            BranchRef {
-                from: BusId(101),
-                to: BusId(102),
-                circuit: "2".into(),
-            },
-            BranchRef {
-                from: BusId(102),
-                to: BusId(103),
-                circuit: "1".into(),
-            },
-            BranchRef {
-                from: BusId(101),
-                to: BusId(203),
-                circuit: "1".into(),
-            },
-        ])
+            branches: vec![
+                BranchRef {
+                    from: BusId(101),
+                    to: BusId(102),
+                    circuit: "1".into(),
+                },
+                BranchRef {
+                    from: BusId(101),
+                    to: BusId(102),
+                    circuit: "2".into(),
+                },
+                BranchRef {
+                    from: BusId(102),
+                    to: BusId(103),
+                    circuit: "1".into(),
+                },
+                BranchRef {
+                    from: BusId(101),
+                    to: BusId(203),
+                    circuit: "1".into(),
+                },
+            ],
+            retained: Vec::new(),
+        }
     );
     assert_eq!(
         statements[1],
@@ -639,6 +726,7 @@ fn the_block_forms_read_their_branches() {
                     circuit: "1".into(),
                 },
             ],
+            retained: Vec::new(),
         }
     );
     // An interface with a bare name and no rating.
@@ -652,6 +740,7 @@ fn the_block_forms_read_their_branches() {
                 to: BusId(202),
                 circuit: "1".into(),
             }],
+            retained: Vec::new(),
         }
     );
     assert_eq!(
@@ -679,19 +768,28 @@ fn monitored_structural_errors_name_their_line() {
 }
 
 #[test]
-fn a_block_line_that_states_no_branch_is_reported_and_kept() {
+fn a_block_line_that_states_no_branch_is_reported_and_kept_in_the_block() {
     let parsed =
         MonitoredSet::parse("MONITOR BRANCHES\nALL TIES\n101 102 1\nEND\nEND\n").expect("parse");
     assert_eq!(mon_codes(&parsed), vec!["READ.MON.SOURCE_MALFORMED"]);
+    let MonitorStatement::Branches { branches, retained } = &parsed.set.statements[0] else {
+        panic!(
+            "the block reads as a branch list: {:?}",
+            parsed.set.statements
+        );
+    };
     assert_eq!(
-        parsed.set.statements[0],
-        MonitorStatement::Branches(vec![BranchRef {
+        branches,
+        &vec![BranchRef {
             from: BusId(101),
             to: BusId(102),
             circuit: "1".into(),
-        }])
+        }]
     );
-    assert_eq!(parsed.set.retained[0].text, "ALL TIES");
+    assert_eq!(kept_text(retained), vec!["ALL TIES"]);
+    // The line stays inside the block, so the set states none at file level.
+    assert!(parsed.set.retained.is_empty());
+    check_mon_fixed_point(&parsed);
 }
 
 #[test]
@@ -699,8 +797,65 @@ fn monitored_text_after_the_file_end_is_reported_once() {
     let parsed = MonitoredSet::parse("MONITOR TIES FROM SUBSYSTEM 'A'\nEND\nEND\nBUSNAMES\n")
         .expect("parse");
     assert_eq!(mon_codes(&parsed), vec!["READ.MON.TEXT_AFTER_END"]);
-    assert_eq!(parsed.set.retained[0].text, "BUSNAMES");
+    assert_eq!(kept_text(&parsed.set.retained), vec!["BUSNAMES"]);
+    assert!(parsed.set.retained[0].after_end);
     check_mon_fixed_point(&parsed);
+}
+
+/// Text after the file `END` that reads as grammar is written back after the
+/// `END`, so the file it writes states the same statements: none.
+#[test]
+fn a_monitor_statement_after_the_file_end_stays_text() {
+    let parsed =
+        MonitoredSet::parse("END\nMONITOR VOLTAGE RANGE ALL BUSES 0.9 1.1\n").expect("parse");
+    assert_eq!(mon_codes(&parsed), vec!["READ.MON.TEXT_AFTER_END"]);
+    assert!(parsed.set.statements.is_empty());
+    assert_eq!(
+        kept_text(&parsed.set.retained),
+        vec!["MONITOR VOLTAGE RANGE ALL BUSES 0.9 1.1"]
+    );
+
+    let written = check_mon_fixed_point(&parsed);
+    let again = MonitoredSet::parse(&written).expect("read the written set");
+    assert!(again.set.statements.is_empty(), "{written}");
+    assert_eq!(
+        kept_text(&again.set.retained),
+        vec!["MONITOR VOLTAGE RANGE ALL BUSES 0.9 1.1"]
+    );
+}
+
+/// A statement line inside a block opens no statement: the block runs to its
+/// own `END`, so the line is kept where it was read.
+#[test]
+fn a_statement_read_inside_a_block_is_kept_in_that_block() {
+    let parsed = MonitoredSet::parse(
+        "MONITOR BRANCHES\n101 102 1\nMONITOR VOLTAGE RANGE ALL BUSES 0.9 1.1\nEND\nEND\n",
+    )
+    .expect("parse");
+    assert_eq!(mon_codes(&parsed), vec!["READ.MON.SOURCE_MALFORMED"]);
+    assert_eq!(parsed.set.statements.len(), 1);
+    let MonitorStatement::Branches { retained, .. } = &parsed.set.statements[0] else {
+        panic!(
+            "the block reads as a branch list: {:?}",
+            parsed.set.statements
+        );
+    };
+    assert_eq!(
+        kept_text(retained),
+        vec!["MONITOR VOLTAGE RANGE ALL BUSES 0.9 1.1"]
+    );
+    assert!(parsed.set.retained.is_empty());
+
+    let written = check_mon_fixed_point(&parsed);
+    let again = MonitoredSet::parse(&written).expect("read the written set");
+    let MonitorStatement::Branches { retained, .. } = &again.set.statements[0] else {
+        panic!("the written block reads as a branch list: {written}");
+    };
+    assert_eq!(
+        kept_text(retained),
+        vec!["MONITOR VOLTAGE RANGE ALL BUSES 0.9 1.1"]
+    );
+    assert_eq!(again.set.statements.len(), 1);
 }
 
 #[test]

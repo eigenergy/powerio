@@ -24,7 +24,8 @@ use crate::network::{BalancedNetwork, BusId, Transformer3W};
 ///
 /// Two findings are noted, one note each: a specification naming a subsystem
 /// the subsystem set does not state earns `BUILD.CON.SUBSYSTEM_UNKNOWN`, and a
-/// specification whose subsystem is stated but holds no element it names earns
+/// specification whose subsystem is stated but holds fewer in service elements
+/// than its order needs, one for `SINGLE` and two for `DOUBLE`, earns
 /// `BUILD.CON.SPECIFICATION_EMPTY`. Nothing else is noted.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -42,8 +43,11 @@ impl ContingencySet {
     /// subsystem `subsystems` does not state stays in
     /// [`ContingencySet::automatic`] and earns a `BUILD.CON.SUBSYSTEM_UNKNOWN`
     /// note; the `SKIP` rules stay with it, because it still needs them. A
-    /// specification whose subsystem holds no element it names expands into no
-    /// case and earns a `BUILD.CON.SPECIFICATION_EMPTY` note.
+    /// specification whose subsystem holds fewer elements it names than its
+    /// order needs expands into no case and earns a
+    /// `BUILD.CON.SPECIFICATION_EMPTY` note whose message states both counts.
+    /// A `DOUBLE` specification therefore needs two eligible elements, because
+    /// its cases are the unordered pairs of them.
     ///
     /// Only elements the network states in service expand into cases, because
     /// outaging an element already out of service changes nothing.
@@ -82,11 +86,17 @@ impl ContingencySet {
             };
             let buses = subsystem.select_buses(net);
             let singles = single_cases(net, index, spec, &buses, &self.skips);
-            if singles.is_empty() {
+            let needed = match spec.order {
+                AutomaticOrder::Single => 1,
+                AutomaticOrder::Double => 2,
+            };
+            let eligible = singles.len();
+            if eligible < needed {
+                let plural = if eligible == 1 { "element" } else { "elements" };
                 diagnostics.push(Diagnostic::of(
                     &codes::BUILD_CON_SPECIFICATION_EMPTY,
                     format!(
-                        "{}: subsystem '{}' holds no in service element this specification names",
+                        "{}: subsystem '{}' holds {eligible} in service {plural} this specification names, and its order needs {needed}",
                         describe(spec),
                         spec.subsystem
                     ),

@@ -318,10 +318,11 @@ the name is quoted or bare. Indentation is spaces or tabs and blank lines are
 dropped. An `END` closes the innermost open block: the open `JOIN` group when
 there is one, the subsystem otherwise, and the file after that. A missing file
 `END` is tolerated and the writer adds one, a further bare `END` after it
-states nothing, and any other statement after it is kept and reported once as
-`READ.SUB.TEXT_AFTER_END`. The writer states every kept statement before the
-`END` it writes, so a statement read after the terminator reads back as an
-ordinary file level statement.
+states nothing, and any other statement after it is kept at file level, marked
+`after_end`, and reported once as `READ.SUB.TEXT_AFTER_END`. The writer states
+those statements after the `END` it writes, so a `SUBSYSTEM` line read after
+the terminator is written after the terminator and reads back as text rather
+than as a subsystem.
 
 Two conditions refuse the file, each naming its 1-based line: a `SUBSYSTEM`
 that starts before the previous one reached `END`, and a subsystem or a `JOIN`
@@ -347,8 +348,8 @@ spelling reads as a range whose ends are equal, and both ends are inclusive.
 keyword on that line as they may follow a subsystem name. The token after the
 keyword is the group's name unless it opens a selector, so `JOIN AREA 1` opens
 a group with no name over area 1. The rest of the line reads as selectors, and
-a tail outside the grammar is reported and kept as text on the subsystem rather
-than dropped.
+a tail outside the grammar is reported and kept as text in the group the line
+opened rather than dropped.
 
 A group's `join` states how the file stated it: absent for the subsystem's
 implicit group, which holds the selectors stated outside any `JOIN`,
@@ -359,10 +360,12 @@ rather than one group whose selectors intersect.
 A line whose first token is a selector keyword but whose values are not the
 numbers it needs is reported as `READ.SUB.SOURCE_MALFORMED`, a warning; any
 other line inside a subsystem is reported as
-`READ.SUB.STATEMENT_UNRECOGNIZED`. Both keep
-their original line on that subsystem, which is where the TARA-only statements
-land: `SCALE ALL FOR EXPORT INCLUDE OFFLINE`, `PARTICIPATE`, `ADD ...`,
-`BASELOAD n`, `TURBINETYPE n`, and `EXCEPT`. A line at file level outside any
+`READ.SUB.STATEMENT_UNRECOGNIZED`. Both keep their trimmed line where the file
+stated it: on the `SelectorGroup` when a `JOIN` is open, and on the subsystem
+otherwise. That is where the TARA-only statements land: `SCALE ALL FOR EXPORT
+INCLUDE OFFLINE`, `PARTICIPATE`, `ADD ...`, `BASELOAD n`, `TURBINETYPE n`, and
+`EXCEPT`. A `JOIN` line read while a `JOIN` is already open opens no group and
+is kept in the open one the same way. A line at file level outside any
 subsystem is kept on the set and reported the same way. The reader records at
 most 16 notes and then one `READ.SUB.NOTES_TRUNCATED`.
 
@@ -392,8 +395,8 @@ level statements kept as text, then a final `END`.
 | --- | --- |
 | subsystem | `SUBSYSTEM 'name'`, its groups, its kept lines, `END` |
 | implicit group | its selectors, one per line, indented three spaces |
-| named `JOIN` group | `   JOIN 'name'`, its selectors, `   END` |
-| `JOIN` group with no name | `   JOIN`, its selectors, `   END` |
+| named `JOIN` group | `   JOIN 'name'`, its selectors, its kept lines, `   END` |
+| `JOIN` group with no name | `   JOIN`, its selectors, its kept lines, `   END` |
 | `Area` | `   AREA {n}`, or `   AREAS {a} {b}` when the ends differ |
 | `Zone`, `Owner` | `ZONE`/`ZONES`, `OWNER`/`OWNERS`, the same way |
 | `Bus` | `   BUS {n}`, or `   BUSES {a} {b}` |
@@ -402,7 +405,10 @@ level statements kept as text, then a final `END`.
 A float is written in its `Display` form, with `.0` added when that form states
 no decimal point, so `KVRANGE 69.0 999.0` reads back as the same two `f64`
 values. The implicit group is written first and the `JOIN` groups after it, in
-the order they were read, so reading the written file gives the same set.
+the order they were read, so reading the written file gives the same set. Each
+kept line is written where it was read, inside its group or its subsystem, so
+it reads back into the same place; the file level statements read after the
+file `END` are written after the `END` the writer states.
 
 ## The monitored element file
 
@@ -434,20 +440,27 @@ of `ALL BUSES`, `SUBSYSTEM name`, `BUS n`, `AREA n`, `ZONE n`, `OWNER n`, and
 
 Files carry one or two file level `END`s and both read the same: the first ends
 the file, a further bare `END` states nothing, and any other statement after it
-is kept and reported once as `READ.MON.TEXT_AFTER_END`. The writer states every
-kept statement before the `END` it writes, so a statement read after the
-terminator reads back as an ordinary kept statement. A line inside a block
-that states no branch is reported as `READ.MON.SOURCE_MALFORMED`, a warning,
-any other line outside the grammar as `READ.MON.STATEMENT_UNRECOGNIZED`, and
-both keep their original line on the set. The reader records at most 16 notes and then
-one `READ.MON.NOTES_TRUNCATED`. A block still open at end of input refuses the
+is kept at file level, marked `after_end`, and reported once as
+`READ.MON.TEXT_AFTER_END`. The writer states those statements after the `END`
+it writes, so a `MONITOR` line read after the terminator is written after the
+terminator and reads back as text rather than as a statement. A line inside a
+block that states no branch is reported as `READ.MON.SOURCE_MALFORMED`, a
+warning, any other line outside the grammar as
+`READ.MON.STATEMENT_UNRECOGNIZED`, and both keep their trimmed line where the
+file stated it: on the `Branches` or `Interface` statement when a block is
+open, and on the set otherwise. A `MONITOR` line inside a block opens no
+statement, because the block runs to its own `END`, so it is kept in the block
+the same way. The reader records at most 16 notes and then one
+`READ.MON.NOTES_TRUNCATED`. A block still open at end of input refuses the
 file, naming the line that opened it.
 
-`to_mon` writes the header lines as written, the statements in order, the kept
-lines, and a final `END`. The spellings are the ones in the table above, with
+`to_mon` writes the header lines as written, the statements in order, the lines
+kept from before the file `END`, a final `END`, and then the lines read after
+that `END`. The spellings are the ones in the table above, with
 `SUBSYSTEM 'name'` and `INTERFACE 'name'` quoted, a rating written
 `RATING {x} MW`, floats written as in `to_sub`, and a block's branches written
-one per line as `{i:>6} {j:>6} {ckt}` before its `END`.
+one per line as `{i:>6} {j:>6} {ckt}`, then the block's kept lines, before its
+`END`.
 
 ### Binding a monitored set to a network
 
@@ -506,9 +519,12 @@ names its element the way a RAW file written from this network would.
 
 A specification naming a subsystem the set does not state stays in `automatic`
 and earns one `BUILD.CON.SUBSYSTEM_UNKNOWN` note. A specification whose
-subsystem is stated but holds no in service element of its target family
-expands into no case and earns one `BUILD.CON.SPECIFICATION_EMPTY` note. Those
-two are the whole of what an expansion notes.
+subsystem is stated but holds fewer in service elements of its target family
+than its order needs, one for `SINGLE` and two for `DOUBLE`, expands into no
+case and earns one `BUILD.CON.SPECIFICATION_EMPTY` note whose message states
+how many elements were eligible and how many the order needs. A `DOUBLE`
+specification needs two, because its cases are the unordered pairs of the
+eligible elements. Those two findings are the whole of what an expansion notes.
 
 The `SKIP` rules are the expansion's own input, so they are dropped only once
 every specification that could read them has expanded: a set that states rules

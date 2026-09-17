@@ -296,6 +296,28 @@ fn a_specification_that_names_nothing_in_its_subsystem_is_noted() {
 }
 
 #[test]
+fn a_double_specification_that_names_one_element_is_noted() {
+    let net = select_network();
+    let subsystems = subsystems();
+    // Subsystem 'A2' holds one in service generator, and a pair needs two.
+    let expanded = expand("DOUBLE UNIT IN SUBSYSTEM 'A2'\nEND\n", &net, &subsystems);
+    assert!(expanded.set.cases.is_empty());
+    assert!(expanded.set.automatic.is_empty());
+    assert_eq!(
+        expanded
+            .diagnostics
+            .iter()
+            .map(powerio_core::Diagnostic::code)
+            .collect::<Vec<&str>>(),
+        vec!["BUILD.CON.SPECIFICATION_EMPTY"]
+    );
+    let message = expanded.diagnostics[0].message();
+    assert!(message.contains("DOUBLE UNIT"), "{message}");
+    assert!(message.contains("holds 1 in service element"), "{message}");
+    assert!(message.contains("needs 2"), "{message}");
+}
+
+#[test]
 fn skip_rules_stay_on_a_set_that_states_no_specification() {
     let net = select_network();
     let set = ContingencySet {

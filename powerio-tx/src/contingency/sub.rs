@@ -12,7 +12,7 @@
 //! ```
 //!
 //! [`SubsystemSet::parse`] reads UTF-8 text and touches no filesystem.
-//! Statements outside the grammar keep their original line and are reported,
+//! Statements outside the grammar keep their trimmed line and are reported,
 //! so a file a tool wrote for itself still reads.
 //! [`SubsystemSet::to_sub`] writes the set back in one canonical spelling.
 //! [`Subsystem::select_buses`] is the separate step that names the buses of a
@@ -42,7 +42,7 @@ pub struct SubsystemSet {
     /// The subsystems, in file order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub subsystems: Vec<Subsystem>,
-    /// File level statements outside the grammar, kept as their original line.
+    /// File level statements outside the grammar, kept as their trimmed line.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub retained: Vec<RetainedStatement>,
 }
@@ -56,8 +56,8 @@ pub struct Subsystem {
     /// selectors stated outside any `JOIN`, comes first when it has any.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<SelectorGroup>,
-    /// Statements inside this subsystem that are outside the grammar, kept as
-    /// their original line.
+    /// Statements inside this subsystem, and outside any `JOIN` group, that
+    /// are outside the grammar, kept as their trimmed line.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub retained: Vec<RetainedStatement>,
 }
@@ -74,6 +74,14 @@ pub struct SelectorGroup {
     pub join: Option<JoinName>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selectors: Vec<SubsystemSelector>,
+    /// Statements read while this `JOIN` was open that are outside the
+    /// grammar, kept as their trimmed line: a nested `JOIN`, a selector line
+    /// whose values are not numbers, and any other unrecognized line. The
+    /// writer states them inside the group, before its `END`, so they read
+    /// back into the same group. The implicit group holds none, because a line
+    /// stated outside any `JOIN` is kept on the subsystem.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retained: Vec<RetainedStatement>,
 }
 
 /// What a `JOIN` statement stated after the keyword.
@@ -163,10 +171,12 @@ fn bad(message: String) -> Error {
 impl SubsystemSet {
     /// Read a `.sub` file from UTF-8 text. Keywords are case insensitive.
     ///
-    /// A statement the grammar does not cover keeps its original line, in
-    /// [`Subsystem::retained`] inside a subsystem or in
-    /// [`SubsystemSet::retained`] at file level, and is reported. Lines after
-    /// a file level `END` are kept the same way and reported once.
+    /// A statement the grammar does not cover keeps its trimmed line where the
+    /// file stated it, and is reported: in [`SelectorGroup::retained`] inside
+    /// an open `JOIN`, in [`Subsystem::retained`] inside a subsystem, and in
+    /// [`SubsystemSet::retained`] at file level. Lines after a file level
+    /// `END` are kept at file level, marked
+    /// [`RetainedStatement::after_end`], and reported once.
     ///
     /// # Errors
     /// [`Error::FormatRead`] when a `SUBSYSTEM` starts inside another, or when
@@ -182,12 +192,15 @@ impl SubsystemSet {
 
     /// Write the set as `.sub` text: the header lines as written, the
     /// subsystems in order with their selectors and `JOIN` groups, the file
-    /// level statements kept as text, and a final `END`. Every line ends with
-    /// a newline.
+    /// level statements kept from before the file `END`, a final `END`, and
+    /// then the statements read after that `END`. Every line ends with a
+    /// newline.
     ///
-    /// Reading the result back gives the same set, except that a statement
-    /// kept as text reads back from a different line when the writer's order
-    /// differs from the source's.
+    /// Each statement kept as text is written where it was read: inside its
+    /// `JOIN` group before that group's `END`, inside its subsystem before the
+    /// subsystem's `END`, or at file level. Reading the result back gives the
+    /// same set, except that a statement kept as text reads back from a
+    /// different line when the writer's order differs from the source's.
     #[must_use]
     pub fn to_sub(&self) -> String {
         use std::fmt::Write as _;
@@ -205,6 +218,7 @@ impl SubsystemSet {
                         for selector in &group.selectors {
                             let _ = writeln!(out, "   {}", write_selector(selector));
                         }
+                        write_retained(&mut out, &group.retained);
                     }
                     Some(join) => {
                         match join {
@@ -216,21 +230,23 @@ impl SubsystemSet {
                         for selector in &group.selectors {
                             let _ = writeln!(out, "   {}", write_selector(selector));
                         }
+                        write_retained(&mut out, &group.retained);
                         out.push_str("   END\n");
                     }
                 }
             }
-            for statement in &subsystem.retained {
-                out.push_str(&statement.text);
-                out.push('\n');
-            }
+            write_retained(&mut out, &subsystem.retained);
             out.push_str("END\n");
         }
-        for statement in &self.retained {
+        for statement in self.retained.iter().filter(|kept| !kept.after_end) {
             out.push_str(&statement.text);
             out.push('\n');
         }
         out.push_str("END\n");
+        for statement in self.retained.iter().filter(|kept| kept.after_end) {
+            out.push_str(&statement.text);
+            out.push('\n');
+        }
         out
     }
 
@@ -250,6 +266,7 @@ struct OpenJoin {
     name: JoinName,
     opened: usize,
     selectors: Vec<SubsystemSelector>,
+    retained: Vec<RetainedStatement>,
 }
 
 /// A subsystem whose `END` has not been read yet.
@@ -272,6 +289,7 @@ impl OpenSubsystem {
             groups.push(SelectorGroup {
                 join: None,
                 selectors: self.implicit,
+                retained: Vec::new(),
             });
         }
         groups.extend(self.groups);
@@ -362,9 +380,9 @@ impl Reader {
     /// first one. A further bare `END` states nothing and is dropped, because
     /// files carry one or two of them.
     ///
-    /// `to_sub` states every statement it kept before the `END` it writes, so
-    /// a kept statement carries `after_end` false and the written file reads
-    /// back as the same set.
+    /// The statement carries `after_end`, and `to_sub` states it after the
+    /// `END` it writes. A line stated there that opens a subsystem would
+    /// otherwise read back as grammar rather than as text.
     fn keep_after_end(&mut self, line: &LexedLine<'_>) {
         if line.kind != LineKind::Statement || is_end(line) {
             return;
@@ -379,7 +397,7 @@ impl Reader {
         self.parsed.set.retained.push(RetainedStatement {
             line: line.number,
             text: line.trimmed().to_owned(),
-            after_end: false,
+            after_end: true,
         });
     }
 
@@ -471,6 +489,7 @@ impl Reader {
                 name,
                 opened: line.number,
                 selectors: Vec::new(),
+                retained: Vec::new(),
             });
         }
         if at < upper.len() {
@@ -536,13 +555,20 @@ impl Reader {
         }
     }
 
+    /// Keep one line as text where the file stated it: inside the open `JOIN`
+    /// group when there is one, on the subsystem otherwise.
     fn keep_in_subsystem(&mut self, line: usize, text: String) {
-        if let Some(open) = self.subsystem.as_mut() {
-            open.retained.push(RetainedStatement {
-                line,
-                text,
-                after_end: false,
-            });
+        let Some(open) = self.subsystem.as_mut() else {
+            return;
+        };
+        let kept = RetainedStatement {
+            line,
+            text,
+            after_end: false,
+        };
+        match open.join.as_mut() {
+            Some(join) => join.retained.push(kept),
+            None => open.retained.push(kept),
         }
     }
 
@@ -555,6 +581,7 @@ impl Reader {
             open.groups.push(SelectorGroup {
                 join: Some(join.name),
                 selectors: join.selectors,
+                retained: join.retained,
             });
             return;
         }
@@ -565,6 +592,14 @@ impl Reader {
         if let Some(open) = self.subsystem.take() {
             self.parsed.set.subsystems.push(open.close());
         }
+    }
+}
+
+/// Write each kept statement as its own line.
+fn write_retained(out: &mut String, statements: &[RetainedStatement]) {
+    for statement in statements {
+        out.push_str(&statement.text);
+        out.push('\n');
     }
 }
 
