@@ -12,6 +12,10 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # quick-xml 0.42 rewrites its API from bytes to str across the XIIDM and
+    # CGMES writers and moves in its own pull request.
+    ignore:
+      - dependency-name: quick-xml
     groups:
       cargo-minor-and-patch:
         patterns:
@@ -28,6 +32,11 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # pandapower is pinned because later releases need the matpowercaseframes
+    # 2.x line, which the validation scripts cannot use.
+    ignore:
+      - dependency-name: pandapower
+      - dependency-name: matpowercaseframes
     groups:
       pip-minor-and-patch:
         patterns:
@@ -45,6 +54,10 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # The three dtolnay/rust-toolchain pins point at branch tips that each
+    # default to their own channel, so they are refreshed by hand.
+    ignore:
+      - dependency-name: dtolnay/rust-toolchain
     groups:
       actions-minor-and-patch:
         patterns:
