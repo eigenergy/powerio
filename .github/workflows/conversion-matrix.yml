@@ -32,6 +32,9 @@ env:
 
 jobs:
   report:
+    # A Dependabot pull request does not run the matrix: the job takes 3 to 10
+    # minutes and finishes by posting its report as a comment on the pull request.
+    if: github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

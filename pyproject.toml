@@ -38,8 +38,12 @@ all = ["numpy>=1.21", "scipy>=1.7", "networkx>=2.6", "polars>=1"]
 # Benchmark and validation oracles. These mirror evals/validation/requirements.txt.
 # The base package supports Python 3.9, but the oracle stack needs Python 3.11+.
 bench = [
+    # pandapower holds at 3.2.2 because the Y_bus cross-check has not run
+    # against 3.4 or later, which pass matpowercaseframes a load engine
+    # object that only the 2.x line accepts. matpowercaseframes 2.1 reads
+    # every reference case, so the 2.x line is allowed.
     "pandapower==3.2.2; python_version >= '3.11'",
-    "matpowercaseframes<2; python_version >= '3.11'",
+    "matpowercaseframes<3; python_version >= '3.11'",
     "gridx-egret>=0.6; python_version >= '3.11'",
     "pypsa>=1.0; python_version >= '3.11'",
     "opendssdirect.py>=0.9,<0.10; python_version >= '3.11'",
