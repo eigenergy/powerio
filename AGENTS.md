@@ -262,7 +262,9 @@ docs/                         the mdBook guide, the schema archive, release note
 - **Bindings stay typed and lazy.** C calls `pio_module_value`, checks the
   structural type, and requests an owner rooted typed handle. Python reads
   `module.value`; Julia dispatches on `PioModule{T}`. Typed access does not
-  serialize or clone a module value.
+  serialize or clone a module value. A new `pio_*` entry point fails
+  `julia-binding.yml` until the PowerIO.jl companion branch of the same name
+  calls it or lists it in `gen/unbound_entry_points.txt` with a reason.
 - **Bus IDs.** Source bus ids are the source's own; `IndexedNetwork::bus_index(id)`
   is the only mapping into dense `[0, n)`. Do not clamp out of range; return
   `Error::UnknownBus`.

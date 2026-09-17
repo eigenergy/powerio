@@ -138,7 +138,9 @@ suite against it. A PR that changes something the two projects share (JSON
 shapes, schema versions, `pio_*` behavior) can fail that job against
 PowerIO.jl main. When that happens, push a PowerIO.jl branch with the same
 name as the powerio branch; the job tests against the companion branch when
-one exists. Open both PRs and merge them in either order. Keep PowerIO.jl's
+one exists. A new `pio_*` entry point fails that job until the companion
+branch calls it or lists it in PowerIO.jl's `gen/unbound_entry_points.txt`
+with a reason. Open both PRs and merge them in either order. Keep PowerIO.jl's
 test assertions on the shared pieces at schema strength (same major, shape
 present) rather than byte equality, so additive powerio changes do not fail
 the tandem job.

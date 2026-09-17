@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- `scripts/check-capi-v7.sh` checks the C entry point names in both
+  directions against a paired PowerIO.jl checkout. Every entry point ABI 7
+  declares must be called by the binding or listed in the binding's
+  `gen/unbound_entry_points.txt` with a reason, and an exemption for a name
+  the header no longer declares or the binding now calls fails as well. A new
+  `pio_*` entry point therefore fails `julia-binding.yml` until the companion
+  branch binds or exempts it, and `release-binaries.yml` runs the same check
+  against PowerIO.jl `main` before it builds a tag.
+
 - The documentation, the release scripts, and the C API reference call the
   PowerIO IR integer its version rather than a generation: `IR_VERSION` and
   `IR_MIN_VERSION` name the window a build reads, and a release in a catalog
