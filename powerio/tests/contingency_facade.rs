@@ -172,6 +172,46 @@ fn canonical_text(value: &PioValue) -> String {
     }
 }
 
+/// The value with every kept statement's line number cleared. The writer
+/// states a kept line where the block it belongs to states it, which is a
+/// different line of the file when the writer's order differs from the
+/// source's; the text and its place must survive unchanged.
+fn without_kept_lines(value: &PioValue) -> PioValue {
+    let clear = |statements: &mut Vec<powerio::RetainedStatement>| {
+        for statement in statements {
+            statement.line = 0;
+        }
+    };
+    match value.clone() {
+        PioValue::ContingencySet(mut set) => {
+            clear(&mut set.retained);
+            PioValue::ContingencySet(set)
+        }
+        PioValue::SubsystemSet(mut set) => {
+            clear(&mut set.retained);
+            for subsystem in &mut set.subsystems {
+                clear(&mut subsystem.retained);
+                for group in &mut subsystem.groups {
+                    clear(&mut group.retained);
+                }
+            }
+            PioValue::SubsystemSet(set)
+        }
+        PioValue::MonitoredSet(mut set) => {
+            clear(&mut set.retained);
+            for statement in &mut set.statements {
+                if let powerio::MonitorStatement::Branches { retained, .. }
+                | powerio::MonitorStatement::Interface { retained, .. } = statement
+                {
+                    clear(retained);
+                }
+            }
+            PioValue::MonitoredSet(set)
+        }
+        other => panic!("{} is not a contingency analysis file", other.type_name()),
+    }
+}
+
 fn assert_values_equal(left: &PioValue, right: &PioValue, label: &str) {
     match (left, right) {
         (PioValue::ContingencySet(a), PioValue::ContingencySet(b)) => assert_eq!(a, b, "{label}"),
@@ -360,6 +400,109 @@ fn deserialize_refuses_a_document_no_reader_could_have_stated() {
     assert!(message.contains("names no subsystem"), "{message}");
 }
 
+/// A line kept inside a `JOIN` group or inside a monitored block states its own
+/// line, and a document stating line 0 there is refused like one stating it on
+/// the set.
+#[test]
+fn deserialize_refuses_a_kept_line_of_zero_inside_a_block() {
+    let group = serialized(&parse_text(
+        "join.sub",
+        "psse-sub",
+        "SUBSYSTEM 'A'\n   JOIN 'G'\n      PARTICIPATE\n   END\nEND\nEND\n",
+    ));
+    let kept = &group["value"]["data"]["subsystems"][0]["groups"][0]["retained"][0];
+    assert_eq!(kept["text"], "PARTICIPATE");
+    assert_eq!(kept["line"], 3);
+    let mut zero = group.clone();
+    zero["value"]["data"]["subsystems"][0]["groups"][0]["retained"][0]["line"] =
+        serde_json::json!(0);
+    let message = refusal(&zero);
+    assert!(
+        message.contains("selector group of subsystem `A`"),
+        "{message}"
+    );
+    assert!(message.contains("lines are 1 based"), "{message}");
+
+    for (name, text) in [
+        (
+            "branches.mon",
+            "MONITOR BRANCHES\n101 102 1\nALL TIES\nEND\nEND\n",
+        ),
+        (
+            "interface.mon",
+            "MONITOR INTERFACE 'W'\n101 102 1\nALL TIES\nEND\nEND\n",
+        ),
+    ] {
+        let block = serialized(&parse_text(name, "psse-mon", text));
+        let kept = &block["value"]["data"]["statements"][0]["retained"][0];
+        assert_eq!(kept["text"], "ALL TIES", "{name}");
+        assert_eq!(kept["line"], 3, "{name}");
+        let mut zero = block.clone();
+        zero["value"]["data"]["statements"][0]["retained"][0]["line"] = serde_json::json!(0);
+        let message = refusal(&zero);
+        assert!(message.contains("monitor statement 0"), "{name}: {message}");
+        assert!(message.contains("lines are 1 based"), "{name}: {message}");
+    }
+}
+
+/// A line the reader keeps after the file `END`, or inside a block, is written
+/// back where it was read, so the facade reads the emitted text as the same
+/// value rather than as grammar.
+#[test]
+fn a_kept_line_holds_its_place_through_the_facade() {
+    for (name, token, text) in [
+        (
+            "after_end.con",
+            "psse-con",
+            "CONTINGENCY 'C'\nOPEN LINE FROM BUS 101 TO BUS 102 CIRCUIT 1\nEND\nEND\nSKIP\n",
+        ),
+        (
+            "after_end.sub",
+            "psse-sub",
+            "END\nSUBSYSTEM 'A'\nAREA 1\nEND\n",
+        ),
+        (
+            "after_end.mon",
+            "psse-mon",
+            "END\nMONITOR VOLTAGE RANGE ALL BUSES 0.9 1.1\n",
+        ),
+        (
+            "in_join.sub",
+            "psse-sub",
+            "SUBSYSTEM 'A'\n   JOIN 'G'\n      JOIN 'H'\n      AREA 1\n   END\nEND\nEND\n",
+        ),
+        (
+            "in_block.mon",
+            "psse-mon",
+            "MONITOR BRANCHES\n101 102 1\nMONITOR VOLTAGE RANGE ALL BUSES 0.9 1.1\nEND\nEND\n",
+        ),
+    ] {
+        let module = parse_text(name, token, text);
+        // Emission replays the source a parsed module retains, so the module
+        // goes through a document first: what emits then is the writer's own
+        // text.
+        let document = serde_json::to_vec(&serialized(&module)).expect("JSON");
+        let back = powerio::deserialize(Source::from_memory("module.pio.json", document).unwrap())
+            .expect("the document deserializes");
+        let written = emitted_bytes(&back, token);
+        let again = parse_text(
+            name,
+            token,
+            std::str::from_utf8(&written).expect("the emitted text is UTF-8"),
+        );
+        assert_values_equal(
+            &without_kept_lines(module.value()),
+            &without_kept_lines(again.value()),
+            name,
+        );
+        assert_eq!(
+            canonical_text(again.value()),
+            String::from_utf8(written).expect("the emitted text is UTF-8"),
+            "{name}"
+        );
+    }
+}
+
 /// A value built in Rust states what the readers never state: a limit that is
 /// not a number. Writing a document from one is refused.
 #[test]
@@ -379,6 +522,7 @@ fn serialize_refuses_a_limit_that_is_not_finite() {
                 name: "W".to_owned(),
                 rating_mw: Some(f64::INFINITY),
                 branches: Vec::new(),
+                retained: Vec::new(),
             }],
             ..MonitoredSet::default()
         },

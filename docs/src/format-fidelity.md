@@ -281,12 +281,14 @@ retained source.
 
 The three text files a PSS/E contingency analysis reads beside the case are
 values of their own: a `.con` parses to a `ContingencySet`, a `.sub` to a
-`SubsystemSet`, and a `.mon` to a `MonitoredSet`. Each reader
-keeps a statement outside its grammar as the original line and reports it, so
-a file written for another solver reads completely, and each writes back with
-`to_con`, `to_sub`, or `to_mon`. Binding a set to a network is the separate
-step that reports, per case, which elements each statement named and which
-named nothing. [PSS/E contingency analysis files](contingency-files.md) has
+`SubsystemSet`, and a `.mon` to a `MonitoredSet`. Each reader keeps a statement
+outside its grammar as the trimmed line and reports it, so a file written for
+another solver reads completely, and each writes back with `to_con`, `to_sub`,
+or `to_mon`. A kept statement is written where it was read: inside the case,
+the selector group, or the monitored block it was stated in, and a statement
+read after the file `END` is written after the `END` the writer states, in all
+three files. Binding a set to a network is the separate step that reports, per
+case, which elements each statement named and which named nothing. [PSS/E contingency analysis files](contingency-files.md) has
 the readers, the binding, the tokens, and the command line.
 
 Generator `IREG`/`NREG`, switched shunt `SWREG`/`NREG`, and transformer

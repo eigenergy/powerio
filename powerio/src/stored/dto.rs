@@ -1775,7 +1775,8 @@ fn validate_contingency_set(set: &powerio_tx::ContingencySet) -> Result<(), Stri
 
 /// What the `.sub` reader admits into a typed selector: every subsystem names
 /// itself, every base kV band runs low to high on finite ends, and every
-/// statement kept as text, on the set or on a subsystem, states its line.
+/// statement kept as text, on the set, on a subsystem, or in a selector group,
+/// states its line.
 fn validate_subsystem_set(set: &powerio_tx::SubsystemSet) -> Result<(), String> {
     validate_retained("the subsystem set", &set.retained)?;
     for (index, subsystem) in set.subsystems.iter().enumerate() {
@@ -1787,6 +1788,10 @@ fn validate_subsystem_set(set: &powerio_tx::SubsystemSet) -> Result<(), String> 
             &subsystem.retained,
         )?;
         for group in &subsystem.groups {
+            validate_retained(
+                &format!("a selector group of subsystem `{}`", subsystem.name),
+                &group.retained,
+            )?;
             for selector in &group.selectors {
                 if let powerio_tx::SubsystemSelector::KvRange { lo, hi } = selector
                     && !(lo.is_finite() && hi.is_finite() && lo <= hi)
@@ -1819,11 +1824,16 @@ fn validate_monitor_scope(index: usize, scope: &powerio_tx::MonitorScope) -> Res
 /// What the `.mon` reader admits into a typed statement: every voltage range
 /// runs low to high on finite ends, every deviation and every interface rating
 /// is finite, every statement and every scope naming a subsystem names one,
-/// every interface names itself, and every statement kept as text states its
-/// line.
+/// every interface names itself, and every statement kept as text, on the set
+/// or inside a block, states its line.
 fn validate_monitored_set(set: &powerio_tx::MonitoredSet) -> Result<(), String> {
     validate_retained("the monitored element set", &set.retained)?;
     for (index, statement) in set.statements.iter().enumerate() {
+        if let powerio_tx::MonitorStatement::Branches { retained, .. }
+        | powerio_tx::MonitorStatement::Interface { retained, .. } = statement
+        {
+            validate_retained(&format!("monitor statement {index}"), retained)?;
+        }
         match statement {
             powerio_tx::MonitorStatement::VoltageRange { scope, vmin, vmax } => {
                 if !(vmin.is_finite() && vmax.is_finite() && vmin <= vmax) {

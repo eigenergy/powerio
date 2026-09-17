@@ -1078,7 +1078,7 @@ Schema definition: `Subsystem`.
 |---|---|---|---|---|---|
 | `name` | string | | | nonempty; a `.con` or `.mon` statement names it without case | required |
 | `groups` | array of `SelectorGroup` | | | the implicit group comes first when it has any selector | empty |
-| `retained` | array of `RetainedStatement` | | | statements inside this subsystem that are outside the grammar | empty |
+| `retained` | array of `RetainedStatement` | | | statements inside this subsystem, and outside any `JOIN` group, that are outside the grammar | empty |
 
 Schema definition: `SelectorGroup`.
 
@@ -1086,6 +1086,7 @@ Schema definition: `SelectorGroup`.
 |---|---|---|---|---|---|
 | `join` | `JoinName` or null | | | how the file stated the group; null is the implicit group, which holds the selectors stated outside any `JOIN` | null |
 | `selectors` | array of `SubsystemSelector` | | | bus sets that intersect across selector types within one group | empty |
+| `retained` | array of `RetainedStatement` | | | lines read while this `JOIN` was open that are outside the grammar; the implicit group holds none | empty |
 
 `JoinName` is one tagged object, keyed by `kind`: `anonymous` has no further
 member and states a `JOIN` with no name, and `named` carries the group `name`.
@@ -1118,7 +1119,8 @@ every branch with both terminals in it. `ties_from_subsystem` names a
 `subsystem` and takes every branch with exactly one terminal in it.
 `branches` carries the `branches` a `MONITOR BRANCHES` block lists.
 `interface` names the interface `name`,
-an optional `rating_mw`, and the `branches` whose flows sum over it.
+an optional `rating_mw`, and the `branches` whose flows sum over it. Both
+carry the block's lines that state no branch as `retained`.
 `voltage_range` names a `scope` and a `vmin` at most its `vmax`, both in per
 unit. `voltage_deviation` names a `scope`, a `down` limit, and an optional
 `up` limit; a source statement naming one value states the downward limit

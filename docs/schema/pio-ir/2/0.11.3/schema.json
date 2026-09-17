@@ -9332,6 +9332,13 @@
             "kind": {
               "const": "branches",
               "type": "string"
+            },
+            "retained": {
+              "description": "The block's lines that state no branch, kept as text. The writer\nstates them inside the block, before its `END`.",
+              "items": {
+                "$ref": "#/$defs/RetainedStatement"
+              },
+              "type": "array"
             }
           },
           "required": [
@@ -9374,6 +9381,13 @@
                   "type": "string"
                 }
               ]
+            },
+            "retained": {
+              "description": "The block's lines that state no branch, kept as text. The writer\nstates them inside the block, before its `END`.",
+              "items": {
+                "$ref": "#/$defs/RetainedStatement"
+              },
+              "type": "array"
             }
           },
           "required": [
@@ -9499,7 +9513,7 @@
           "type": "array"
         },
         "retained": {
-          "description": "Statements outside the grammar, kept as their original line.",
+          "description": "Statements outside the grammar, kept as their trimmed line.",
           "items": {
             "$ref": "#/$defs/RetainedStatement"
           },
@@ -12145,6 +12159,13 @@
           ],
           "description": "How the file stated the group: absent for the implicit group, which\nholds the selectors stated outside any `JOIN`, and present for a `JOIN`\nblock whether or not that block states a name. Two `JOIN` blocks with\nno name are two groups, and their bus sets union rather than intersect."
         },
+        "retained": {
+          "description": "Statements read while this `JOIN` was open that are outside the\ngrammar, kept as their trimmed line: a nested `JOIN`, a selector line\nwhose values are not numbers, and any other unrecognized line. The\nwriter states them inside the group, before its `END`, so they read\nback into the same group. The implicit group holds none, because a line\nstated outside any `JOIN` is kept on the subsystem.",
+          "items": {
+            "$ref": "#/$defs/RetainedStatement"
+          },
+          "type": "array"
+        },
         "selectors": {
           "items": {
             "$ref": "#/$defs/SubsystemSelector"
@@ -14484,7 +14505,7 @@
           "type": "string"
         },
         "retained": {
-          "description": "Statements inside this subsystem that are outside the grammar, kept as\ntheir original line.",
+          "description": "Statements inside this subsystem, and outside any `JOIN` group, that\nare outside the grammar, kept as their trimmed line.",
           "items": {
             "$ref": "#/$defs/RetainedStatement"
           },
@@ -14651,7 +14672,7 @@
           "type": "array"
         },
         "retained": {
-          "description": "File level statements outside the grammar, kept as their original line.",
+          "description": "File level statements outside the grammar, kept as their trimmed line.",
           "items": {
             "$ref": "#/$defs/RetainedStatement"
           },
