@@ -243,6 +243,17 @@ impl ContingencyParsed {
         );
     }
 
+    /// Report a statement naming a value no written line states, which is
+    /// therefore kept as text.
+    fn unwritable(&mut self, number: usize, text: &str) {
+        self.note(
+            &codes::READ_CON_SOURCE_MALFORMED,
+            format!(
+                "line {number}: a value holding both quote characters has no written form, and the statement was kept as text: {text}"
+            ),
+        );
+    }
+
     /// Report a dispatch block, whose lines are kept as one statement.
     fn dispatch_block(&mut self, number: usize, text: &str) {
         self.note(
@@ -278,9 +289,11 @@ impl ContingencySet {
     /// A statement the grammar does not cover keeps its line, with
     /// surrounding whitespace dropped, in
     /// [`ContingencyAction::Unrecognized`] inside a case or in
-    /// [`ContingencySet::retained`] at file level, and is reported. Lines after
-    /// a file level `END` are kept the same way, marked
-    /// [`RetainedStatement::after_end`], and reported once.
+    /// [`ContingencySet::retained`] at file level, and is reported. A
+    /// statement naming a value that no written line states, one holding both
+    /// `'` and `"`, is kept the same way. Lines after a file level `END` are
+    /// also kept as text, marked [`RetainedStatement::after_end`], and
+    /// reported once.
     ///
     /// # Errors
     /// [`Error::FormatRead`] when a `CONTINGENCY` starts before the previous
@@ -329,7 +342,7 @@ impl ContingencySet {
             out.push_str("END\n");
         }
         for case in &self.cases {
-            let _ = writeln!(out, "CONTINGENCY '{}'", case.name);
+            let _ = writeln!(out, "CONTINGENCY {}", quoted(&case.name));
             for action in &case.actions {
                 out.push_str(&write_action(action));
                 out.push('\n');
@@ -502,18 +515,21 @@ impl Reader {
             self.skip_opened = None;
             return;
         }
-        if let Some(rule) = parse_skip_rule(upper, words) {
-            self.parsed.set.skips.push(rule);
-            return;
-        }
-        self.parsed.note(
-            &codes::READ_CON_SOURCE_MALFORMED,
-            format!(
-                "line {}: a SKIP line states no branch and was kept as text: {}",
-                line.number,
-                line.trimmed()
+        match parse_skip_rule(upper, words) {
+            Some(rule) if writable(&rule.circuit) => {
+                self.parsed.set.skips.push(rule);
+                return;
+            }
+            Some(_) => self.parsed.unwritable(line.number, line.trimmed()),
+            None => self.parsed.note(
+                &codes::READ_CON_SOURCE_MALFORMED,
+                format!(
+                    "line {}: a SKIP line states no branch and was kept as text: {}",
+                    line.number,
+                    line.trimmed()
+                ),
             ),
-        );
+        }
         self.keep_statement(line, false);
     }
 
@@ -543,41 +559,74 @@ impl Reader {
             self.open_block(line);
             return Ok(());
         }
-        let parsed_action = parse_action(upper, words);
-        let recognized = parsed_action.is_some();
-        let action = parsed_action.unwrap_or_else(|| ContingencyAction::Unrecognized {
-            text: line.trimmed().to_owned(),
-        });
+        let action = match parse_action(upper, words) {
+            Some(action) if action_writable(&action) => action,
+            recognized => {
+                if recognized.is_some() {
+                    self.parsed.unwritable(line.number, line.trimmed());
+                } else {
+                    self.parsed.unrecognized(line.number, line.trimmed());
+                }
+                ContingencyAction::Unrecognized {
+                    text: line.trimmed().to_owned(),
+                }
+            }
+        };
         if let Some(open) = self.case.as_mut() {
             open.actions.push(action);
-        }
-        if !recognized {
-            self.parsed.unrecognized(line.number, line.trimmed());
         }
         Ok(())
     }
 
     fn read_file_line(&mut self, line: &LexedLine<'_>, upper: &[String], words: &[&str]) {
         match upper[0].as_str() {
-            "CONTINGENCY" => {
-                self.case = Some(OpenCase {
-                    name: case_name_of(line),
-                    opened: line.number,
-                    actions: Vec::new(),
-                });
-            }
+            "CONTINGENCY" => self.open_case(line),
             "END" if upper.len() == 1 => self.ended = true,
             "SKIP" if upper.len() == 1 => self.skip_opened = Some(line.number),
             _ if opens_block(upper) => self.open_block(line),
-            _ => {
-                if let Some(spec) = parse_automatic(upper, words) {
-                    self.parsed.set.automatic.push(spec);
-                } else {
-                    self.parsed.unrecognized(line.number, line.trimmed());
+            _ => match parse_automatic(upper, words) {
+                Some(spec) if writable(&spec.subsystem) => self.parsed.set.automatic.push(spec),
+                recognized => {
+                    if recognized.is_some() {
+                        self.parsed.unwritable(line.number, line.trimmed());
+                    } else {
+                        self.parsed.unrecognized(line.number, line.trimmed());
+                    }
                     self.keep_statement(line, false);
                 }
-            }
+            },
         }
+    }
+
+    /// Open a case named by the first token after the `CONTINGENCY` keyword.
+    ///
+    /// A further token is reported and dropped: a line that opened no case
+    /// would leave that case's `END` to terminate the file and every statement
+    /// after it to read as text. A name no written line states keeps the whole
+    /// line as text instead, because a case the writer cannot name back does
+    /// not hold the writer's fixed point.
+    fn open_case(&mut self, line: &LexedLine<'_>) {
+        let name = case_name_of(line);
+        if !writable(&name) {
+            self.parsed.unwritable(line.number, line.trimmed());
+            self.keep_statement(line, false);
+            return;
+        }
+        if line.tokens.len() > 2 {
+            let extra = line.words()[2..].join(" ");
+            self.parsed.note(
+                &codes::READ_CON_SOURCE_MALFORMED,
+                format!(
+                    "line {}: CONTINGENCY states more than a case name, and the tokens after it are not kept: {extra}",
+                    line.number
+                ),
+            );
+        }
+        self.case = Some(OpenCase {
+            name,
+            opened: line.number,
+            actions: Vec::new(),
+        });
     }
 
     fn open_block(&mut self, line: &LexedLine<'_>) {
@@ -612,7 +661,8 @@ fn opens_block(upper: &[String]) -> bool {
 /// The case name on a `CONTINGENCY` line: the token after the keyword,
 /// trimmed. The tokenizer's quote rule keeps a name holding an apostrophe
 /// whole, so `CONTINGENCY 'L_000022O'~1'` names `L_000022O'~1`, and a trailing
-/// comment stays out of the name. A line stating no name names nothing.
+/// comment stays out of the name. A line stating no name names nothing, and a
+/// line stating more than one token names the first.
 fn case_name_of(line: &LexedLine<'_>) -> String {
     line.tokens
         .get(1)
@@ -874,13 +924,63 @@ fn parse_skip_rule(upper: &[String], words: &[&str]) -> Option<SkipRule> {
 // Writing
 // ---------------------------------------------------------------------------
 
-/// A field as written, single quoted when it holds whitespace or is empty, so
-/// the written line reads back as one token.
+/// The quote character a written line closes `value` with: `"` when the value
+/// holds an apostrophe, `'` otherwise. A value holding both has none, because
+/// a quoted token ends at the first quote of its own character that whitespace
+/// or the end of the line follows.
+fn delimiter(value: &str) -> Option<char> {
+    match (value.contains('\''), value.contains('"')) {
+        (true, true) => None,
+        (true, false) => Some('"'),
+        (false, _) => Some('\''),
+    }
+}
+
+/// Whether a written line states `value` as one token that reads back
+/// unchanged. The reader keeps a statement naming a value without one as
+/// text, so a set read from a file names only values that have one.
+fn writable(value: &str) -> bool {
+    delimiter(value).is_some()
+}
+
+/// A name as written: quoted, as PSS/E quotes a case name and a subsystem
+/// name, with the delimiter the value does not hold. A value holding both
+/// quote characters reaches the writer only from a set built in memory, and is
+/// stated single quoted.
+fn quoted(value: &str) -> String {
+    let quote = delimiter(value).unwrap_or('\'');
+    format!("{quote}{value}{quote}")
+}
+
+/// A field as written. A value that is empty, holds whitespace, opens with
+/// `/`, or holds a quote character is quoted, so the line states it as one
+/// token: an unquoted token opening with `/` would end the statement and leave
+/// the rest of the line a comment. Every other value is written bare, as
+/// PSS/E writes an id and a circuit.
 fn field(value: &str) -> String {
-    if value.is_empty() || value.contains(char::is_whitespace) {
-        format!("'{value}'")
+    if value.is_empty()
+        || value.contains(char::is_whitespace)
+        || value.starts_with('/')
+        || value.contains(['\'', '"'])
+    {
+        quoted(value)
     } else {
         value.to_owned()
+    }
+}
+
+/// Whether every value the action states has a written form.
+fn action_writable(action: &ContingencyAction) -> bool {
+    match action {
+        ContingencyAction::OpenBranch { circuit, .. }
+        | ContingencyAction::OpenThreeWinding { circuit, .. } => writable(circuit),
+        ContingencyAction::RemoveMachine { id, .. } | ContingencyAction::AddMachine { id, .. } => {
+            writable(id)
+        }
+        ContingencyAction::RemoveShunt { id, .. } | ContingencyAction::RemoveLoad { id, .. } => {
+            id.as_deref().is_none_or(writable)
+        }
+        _ => true,
     }
 }
 
@@ -955,7 +1055,7 @@ fn write_automatic(spec: &AutomaticSpec) -> String {
         ""
     };
     format!(
-        "{order} {target} {preposition} SUBSYSTEM '{}'{tail}",
-        spec.subsystem
+        "{order} {target} {preposition} SUBSYSTEM {}{tail}",
+        quoted(&spec.subsystem)
     )
 }

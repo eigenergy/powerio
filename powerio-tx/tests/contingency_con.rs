@@ -640,6 +640,123 @@ fn a_skip_block_after_the_file_end_stays_text() {
 }
 
 #[test]
+fn a_value_holding_an_apostrophe_is_written_inside_double_quotes() {
+    let parsed = ContingencySet::parse(concat!(
+        "CONTINGENCY \"O' HARE\"\n",
+        "REMOVE MACHINE \"O' HARE\" FROM BUS 1\n",
+        "REMOVE LOAD \"O' HARE\" FROM BUS 2\n",
+        "REMOVE SHUNT \"O' HARE\" FROM BUS 3\n",
+        "END\n",
+        "SINGLE BRANCH IN SUBSYSTEM \"O' HARE\"\n",
+        "END\n",
+    ))
+    .expect("parse");
+    assert!(parsed.diagnostics.is_empty(), "{:?}", codes(&parsed));
+    assert_eq!(parsed.set.cases[0].name, "O' HARE");
+    assert_eq!(parsed.set.automatic[0].subsystem, "O' HARE");
+    let written = check_fixed_point(&parsed);
+    assert!(written.contains("CONTINGENCY \"O' HARE\"\n"), "{written}");
+    assert!(
+        written.contains("REMOVE MACHINE \"O' HARE\" FROM BUS      1\n"),
+        "{written}"
+    );
+    assert!(
+        written.contains("REMOVE LOAD \"O' HARE\" FROM BUS      2\n"),
+        "{written}"
+    );
+    assert!(
+        written.contains("REMOVE SHUNT \"O' HARE\" FROM BUS      3\n"),
+        "{written}"
+    );
+    assert!(
+        written.contains("SINGLE BRANCH IN SUBSYSTEM \"O' HARE\"\n"),
+        "{written}"
+    );
+}
+
+#[test]
+fn an_id_opening_with_a_slash_is_written_quoted() {
+    let parsed = ContingencySet::parse(concat!(
+        "CONTINGENCY 'A'\n",
+        "OPEN LINE FROM BUS 1 TO BUS 2 CIRCUIT '/1'\n",
+        "END\n",
+        "SKIP\n",
+        "100 TO 200 CIRCUIT '/2'\n",
+        "END\n",
+        "END\n",
+    ))
+    .expect("parse");
+    assert!(parsed.diagnostics.is_empty(), "{:?}", codes(&parsed));
+    assert_eq!(
+        parsed.set.cases[0].actions[0],
+        ContingencyAction::OpenBranch {
+            from: BusId(1),
+            to: BusId(2),
+            circuit: "/1".into(),
+        }
+    );
+    let written = check_fixed_point(&parsed);
+    // An unquoted token opening with `/` would end the statement.
+    assert!(written.contains("CIRCUIT '/1'\n"), "{written}");
+    assert!(written.contains("CIRCUIT '/2'\n"), "{written}");
+}
+
+#[test]
+fn a_value_holding_both_quote_characters_is_kept_as_text() {
+    let name = ContingencySet::parse("CONTINGENCY A'B\"C\nEND\n").expect("parse");
+    assert_eq!(codes(&name), vec!["READ.CON.SOURCE_MALFORMED"]);
+    assert!(name.set.cases.is_empty());
+    assert_eq!(name.set.retained[0].text, "CONTINGENCY A'B\"C");
+    assert!(!name.set.retained[0].after_end);
+    check_fixed_point(&name);
+
+    let id = ContingencySet::parse("CONTINGENCY 'A'\nREMOVE MACHINE A'B\"C FROM BUS 1\nEND\n")
+        .expect("parse");
+    assert_eq!(codes(&id), vec!["READ.CON.SOURCE_MALFORMED"]);
+    assert_eq!(
+        id.set.cases[0].actions[0],
+        ContingencyAction::Unrecognized {
+            text: "REMOVE MACHINE A'B\"C FROM BUS 1".into(),
+        }
+    );
+    check_fixed_point(&id);
+
+    let subsystem =
+        ContingencySet::parse("SINGLE BRANCH IN SUBSYSTEM A'B\"C\nEND\n").expect("parse");
+    assert_eq!(codes(&subsystem), vec!["READ.CON.SOURCE_MALFORMED"]);
+    assert!(subsystem.set.automatic.is_empty());
+    assert_eq!(
+        subsystem.set.retained[0].text,
+        "SINGLE BRANCH IN SUBSYSTEM A'B\"C"
+    );
+    check_fixed_point(&subsystem);
+
+    let skip = ContingencySet::parse("SKIP\n100 TO 200 CIRCUIT A'B\"C\nEND\nEND\n").expect("parse");
+    assert_eq!(codes(&skip), vec!["READ.CON.SOURCE_MALFORMED"]);
+    assert!(skip.set.skips.is_empty());
+    assert_eq!(skip.set.retained[0].text, "100 TO 200 CIRCUIT A'B\"C");
+    check_fixed_point(&skip);
+}
+
+#[test]
+fn a_contingency_line_states_one_name_and_reports_the_rest() {
+    let parsed = ContingencySet::parse("CONTINGENCY A B\nOPEN LINE FROM BUS 1 TO BUS 2\nEND\n")
+        .expect("parse");
+    assert_eq!(codes(&parsed), vec!["READ.CON.SOURCE_MALFORMED"]);
+    assert!(
+        parsed.diagnostics[0].message().ends_with("not kept: B"),
+        "{:?}",
+        parsed.diagnostics[0].message()
+    );
+    // The case still opens, so its END closes the case rather than the file.
+    assert_eq!(parsed.set.cases.len(), 1);
+    assert_eq!(parsed.set.cases[0].name, "A");
+    assert_eq!(parsed.set.cases[0].actions.len(), 1);
+    assert!(parsed.set.retained.is_empty());
+    check_fixed_point(&parsed);
+}
+
+#[test]
 fn a_percent_sign_states_the_unit() {
     let parsed = ContingencySet::parse("CONTINGENCY 'A'\nINCREASE BUS 7 LOAD BY 100%\nEND\n")
         .expect("parse");

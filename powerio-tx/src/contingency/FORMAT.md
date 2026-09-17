@@ -53,6 +53,13 @@ rule above is what keeps a name holding an apostrophe whole, so
 `CONTINGENCY 'L_000022O'~1'` names `L_000022O'~1`, `CONTINGENCY F01` names
 `F01`, and a trailing comment stays out of the name.
 
+A `CONTINGENCY` line stating a further token, `CONTINGENCY A B`, opens the case
+with the first token as its name and reports the rest as
+`READ.CON.SOURCE_MALFORMED`; those tokens are not kept. The case opens rather
+than the line being kept as text, because a line that opened no case would
+leave that case's `END` to terminate the file and every statement after it to
+read as text.
+
 ## File structure
 
 Optional header comments, then any mix of `CONTINGENCY` blocks, automatic
@@ -139,7 +146,7 @@ different line.
 
 | Value | Written as |
 | --- | --- |
-| case | `CONTINGENCY 'name'`, the actions, `END` |
+| case | `CONTINGENCY`, the quoted name, the actions, `END` |
 | `OpenBranch` | `OPEN LINE FROM BUS {from:>6} TO BUS {to:>6} CIRCUIT {c}` |
 | `OpenThreeWinding` | `OPEN THREEWINDING AT BUS {a:>6} TO BUS {b:>6} TO BUS {c:>6} CIRCUIT {ckt}` |
 | `RemoveMachine` | `REMOVE MACHINE {id} FROM BUS {bus:>6}` |
@@ -150,20 +157,33 @@ different line.
 | `DisconnectBus` | `DISCONNECT BUS {bus:>6}` |
 | `ChangeLoad`, `ChangeGeneration` | `INCREASE\|DECREASE BUS {bus} LOAD\|GENERATION BY {x} MW\|PERCENT`, or `SET BUS {bus} LOAD\|GENERATION TO {x} MW\|PERCENT` |
 | `Unrecognized` | its text |
-| `AutomaticSpec` | `SINGLE BRANCH IN SUBSYSTEM 'name'`, `UNIT` with `IN`, `TIE` with `FROM`, and ` 3WLOWVOLTAGE` appended when set |
+| `AutomaticSpec` | `SINGLE BRANCH IN SUBSYSTEM` and the quoted name, `UNIT` with `IN`, `TIE` with `FROM`, and ` 3WLOWVOLTAGE` appended when set |
 | `SkipRule` | `{from:>6} TO {to:>6} CIRCUIT {c}` inside one `SKIP` ... `END` block |
 
-The case name is written unchanged inside single quotes, so a name holding an
-apostrophe is written with that apostrophe bare; the tokenizer's quote rule
-reads it back. An id, a circuit, or a subsystem name holding whitespace is
-written single quoted for the same reason. A float is written with its
-`Display` form, which reads back as the same `f64`.
+A case name and a subsystem name are written quoted, as PSS/E writes them. An
+id and a circuit are written quoted when the value is empty, holds whitespace,
+opens with `/`, or holds a quote character, and bare otherwise; an unquoted
+token opening with `/` would end the statement. The delimiter is the quote
+character the value does not hold: `"` around a value holding an apostrophe,
+`'` around every other value. So `O' HARE` is written `"O' HARE"` and a circuit
+`/1` is written `'/1'`, and each reads back unchanged.
+
+A value holding both `'` and `"` has no delimiter that closes it, because a
+quoted token ends at the first quote of its own character that whitespace or
+the end of the line follows. The reader therefore keeps a `CONTINGENCY` line,
+an automatic specification, a `SKIP` line, or an action naming such a value as
+text, reported as `READ.CON.SOURCE_MALFORMED`, rather than stating a value no
+written line reads back. A set read from a file names only values the writer
+states.
+
+A float is written with its `Display` form, which reads back as the same
+`f64`.
 
 ## Kept as text, not yet established
 
 These appear in public files and in question threads, and no public source
 states their meaning well enough to read them into typed actions. They keep
-their original lines:
+their lines, with the surrounding whitespace dropped:
 
 - `BUSDOUBLE` and the other `DOUBLE` spellings beyond
   `DOUBLE BRANCH|UNIT|TIE IN|FROM SUBSYSTEM`.

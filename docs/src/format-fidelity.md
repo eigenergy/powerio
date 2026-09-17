@@ -282,7 +282,7 @@ retained source.
 PSS/E contingency description files (`.con`) parse to `ContingencySet` and
 write back with `to_con`. The reader states cases, automatic specifications,
 and `SKIP` rules as typed values; a statement outside the grammar keeps its
-original line and is reported as `READ.CON.STATEMENT_UNRECOGNIZED`, so a file
+trimmed line and is reported as `READ.CON.STATEMENT_UNRECOGNIZED`, so a file
 written for another solver reads completely. Only a case that never closes, a
 case that starts inside another, and a block left open at end of input are
 refused. The grammar is established from public contingency files and the
