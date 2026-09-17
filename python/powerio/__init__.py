@@ -399,11 +399,15 @@ class BalancedNetwork:
         ``parse("cases.con").value.text``. The result carries ``cases``,
         ``resolved``, ``unresolved``, and ``unrecognized_statements`` as
         counts; ``case_results``, one entry per case in the file's order with
-        its ``name``, whether it ``resolved``, the ``components`` it bound to
-        (each with the ``type`` naming the table, the ``id``, the ``row``, and
-        the element's own ``in_service`` flag), and the actions that bound to
-        nothing as ``{"action", "reason"}``; and ``diagnostics``, the reader's
-        notes on statements it kept as text.
+        its ``name``, whether it ``resolved``, the ``components`` it bound to,
+        and the actions that bound to nothing as ``{"action", "reason"}``; and
+        ``diagnostics``, the reader's notes on statements it kept as text.
+
+        Each component states the ``type`` naming the table, the ``row`` it
+        occupies there, the element's own ``in_service`` flag, and the ``id``
+        the network states for it. ``id`` is ``None`` when the network states
+        no identity for that row; ``type`` and ``row`` name the element either
+        way.
 
         Binding reports rather than refuses, so a case naming an element this
         network does not hold is counted unresolved and listed.
@@ -1316,7 +1320,7 @@ class GeoLayer(_TypedValue):
 
     :func:`parse` returns it for the canonical ``.geo.json``, GeoJSON, aliased
     CSV or JSON records, headerless buscoords CSV, and a PowerWorld ``.pwd``
-    display. :meth:`PioModule.emit` writes the canonical document as
+    display. :func:`powerio.emit` writes the canonical document as
     ``geo-json``, and :func:`serialize` carries the layer through PowerIO IR.
     Place a layer onto a case with
     ``network.apply_geo_layer(layer.geojson)``.
@@ -1347,7 +1351,7 @@ class ContingencySet(_TypedValue):
     specifications that state cases by rule, and the ``SKIP`` rules.
 
     :func:`parse` returns it for a ``.con`` file or for text declared as
-    ``psse-con``, :meth:`PioModule.emit` writes it back under that token, and
+    ``psse-con``, :func:`powerio.emit` writes it back under that token, and
     :func:`serialize` carries it through PowerIO IR. Bind a set to a case with
     ``network.resolve_contingencies(cases.text)`` and turn its automatic
     specifications into explicit cases with

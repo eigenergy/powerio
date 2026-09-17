@@ -886,6 +886,11 @@ class BalancedNetwork:
     def apply_geo_layer(
         self, text: str, name_hint: Optional[str] = ...
     ) -> Tuple["BalancedNetwork", Dict[str, Any]]: ...
+    # The resolution dict states `cases`, `resolved`, `unresolved`, and
+    # `unrecognized_statements` as counts, `case_results`, and
+    # `diagnostics`. Each component of a case result states `type`, `row`,
+    # `in_service`, and `id`, which is `None` when the network states no
+    # identity for that row.
     def resolve_contingencies(self, text: str) -> Dict[str, Any]: ...
     def expand_contingencies(
         self, con_text: str, sub_text: str

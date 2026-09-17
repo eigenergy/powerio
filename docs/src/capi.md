@@ -150,7 +150,9 @@ for (size_t i = 0; i < pio_contingency_resolution_case_count(resolution); i++) {
                                                        &component, &error)) {
             break;
         }
-        /* component.id.component_type names the table component.row indexes */
+        /* component.id.component_type names the table component.row
+           indexes; component.id.local_id is the element's own identity,
+           and its len is 0 when the network states none for that row */
     }
 
     size_t missing =

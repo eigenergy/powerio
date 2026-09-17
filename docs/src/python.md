@@ -148,10 +148,16 @@ print(case.select_subsystem_buses(groups.text, "A1"))
 `resolve_contingencies` reports rather than refuses: a case naming an element
 the network does not hold is counted unresolved and listed in `case_results`
 with the reason each action did not bind. Each reason is a fixed name such as
-`no_such_branch`; C reports the same names. `expand_contingencies` turns an
-automatic specification such as `SINGLE BRANCH IN SUBSYSTEM 'A1'` into one
-explicit case per element, and returns the expanded `.con` text with the
-readers' and the expansion's notes.
+`no_such_branch`; C reports the same names.
+
+Each element a case bound to states its `type`, which names the table, the
+`row` it occupies there, the element's own `in_service` flag, and its `id`.
+`id` is `None` when the network states no identity for that row, and `type`
+and `row` name the element either way.
+
+`expand_contingencies` turns an automatic specification such as `SINGLE
+BRANCH IN SUBSYSTEM 'A1'` into one explicit case per element, and returns the
+expanded `.con` text with the readers' and the expansion's notes.
 
 `MonitoredSet` is text only in Python. It carries the file as its `text`
 property and has no method that binds it to a network, because binding a

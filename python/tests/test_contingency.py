@@ -1,5 +1,6 @@
 """Tests for the PSS/E contingency analysis values and their network methods."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -90,6 +91,35 @@ def test_resolve_contingencies_counts_every_case():
     assert all(
         isinstance(diagnostic, pio.Diagnostic) for diagnostic in resolution["diagnostics"]
     )
+
+
+def test_resolve_contingencies_states_no_id_for_a_row_without_one():
+    """A row the network states no identity for still names its table.
+
+    The IR document of the fixture network is rewritten with an empty load
+    ``uid``, a stated field the reader keeps as it stands and one no component
+    identity accepts, so both loads bind with ``id`` set to ``None``.
+    """
+    module = pio.parse(CONTINGENCY / "resolve_v33.raw")
+    document = json.loads(pio.serialize(module).text)
+    loads = document["value"]["data"]["loads"]
+    assert len(loads) == 2
+    for load in loads:
+        load["uid"] = ""
+    network = pio.deserialize(json.dumps(document).encode()).value
+    cases = pio.parse(CONTINGENCY / "resolve_cases.con").value
+
+    resolution = network.resolve_contingencies(cases.text)
+    results = {case["name"]: case for case in resolution["case_results"]}
+    assert results["LOADS_AT_BUS"]["components"] == [
+        {"type": "load", "id": None, "row": 0, "in_service": True},
+        {"type": "load", "id": None, "row": 1, "in_service": True},
+    ]
+
+    # A row the network does state a `uid` for reports it, under the same type.
+    assert results["BR_1_2_C1"]["components"] == [
+        {"type": "branch", "id": "1-2", "row": 0, "in_service": True}
+    ]
 
 
 def test_resolve_contingencies_refuses_a_malformed_file():

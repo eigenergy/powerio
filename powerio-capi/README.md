@@ -101,6 +101,11 @@ accessor.
 The typed accessors cover balanced and multiconductor networks, operating
 points, PF/OPF/SCUC instances and solutions, time series, scenario sets, and
 the three PSS/E contingency analysis files.
+`pio_contingency_set_resolve` binds a contingency set to a network and
+`pio_contingency_resolution_case_component` reads each element a case bound
+to. That element's `id.component_type` names the table `row` indexes and every
+element states it; `id.local_id` is the element's own identity, and its `len`
+is 0 when the network states none for the row.
 They neither serialize nor clone the value, and a child handle keeps its
 module owner alive, so it stays valid even after you release the original
 module handle. `pio_value_geo_layer` stands apart: it copies the layer out of

@@ -4563,6 +4563,10 @@ fn geo_report_dict<'py>(
 
 /// The `{cases, resolved, unresolved, unrecognized_statements, case_results,
 /// diagnostics}` dict from one contingency resolution.
+///
+/// Each bound component states `type`, the table its `row` indexes, and `id`,
+/// the element's own identity, which is `None` when the network states none
+/// for the row.
 fn contingency_resolution_dict<'py>(
     py: Python<'py>,
     resolution: &powerio::ContingencyResolution,
@@ -4573,8 +4577,8 @@ fn contingency_resolution_dict<'py>(
         let components = PyList::empty(py);
         for component in &case.components {
             let item = PyDict::new(py);
-            item.set_item("type", component.id.component_type())?;
-            item.set_item("id", component.id.local_id())?;
+            item.set_item("type", component.component_type)?;
+            item.set_item("id", component.id.as_ref().map(|id| id.local_id()))?;
             item.set_item("row", component.row)?;
             item.set_item("in_service", component.in_service)?;
             components.append(item)?;

@@ -1954,9 +1954,12 @@ pub struct PioComponentIdView {
     pub local_id: PioStringView,
 }
 
-/// One network element a contingency case bound to. `row` is the element's
-/// position in the table `id.component_type` names, and `in_service` is the
-/// element's own flag as the network states it before the case is applied.
+/// One network element a contingency case bound to. `id.component_type` names
+/// the table `row` indexes, and every element states it. `id.local_id` is the
+/// element's own identity, and its `len` is 0 when the network states none for
+/// the row; read the `len` rather than the `data` pointer, which is
+/// unspecified at that length. `in_service` is the element's own flag as the
+/// network states it before the case is applied.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct PioContingencyComponentView {
@@ -3623,6 +3626,10 @@ pub unsafe extern "C" fn pio_contingency_resolution_case_component_count(
 /// Read one element one case bound to, by zero based case and element
 /// position, in action order.
 ///
+/// The element's `id.component_type` names the table `row` indexes whether or
+/// not the network states an identity for the row, and `id.local_id` has `len`
+/// 0 when it states none.
+///
 /// # Safety
 /// Pointers and handles must satisfy the crate-level safety requirements.
 #[unsafe(no_mangle)]
@@ -3645,7 +3652,13 @@ pub unsafe extern "C" fn pio_contingency_resolution_case_component(
                 )
             })?;
             *require_output(output, "output")? = PioContingencyComponentView {
-                id: component_id_view(&component.id),
+                id: PioComponentIdView {
+                    component_type: PioStringView::new(component.component_type),
+                    local_id: component
+                        .id
+                        .as_ref()
+                        .map_or(PioStringView::EMPTY, |id| PioStringView::new(id.local_id())),
+                },
                 row: component.row,
                 in_service: component.in_service,
             };
@@ -22647,6 +22660,123 @@ mod tests {
             pio_balanced_network_release(network);
             pio_module_release(module);
             pio_contingency_set_release(set);
+        }
+    }
+
+    /// A row the network states no identity for still names the table it
+    /// indexes. The IR document of the fixture network is rewritten with an
+    /// empty load `uid`, a stated field the reader keeps as it stands and one
+    /// no component identity accepts, so both loads bind with an empty local
+    /// id while `component_type` and `row` still name them.
+    #[test]
+    fn a_bound_component_states_its_table_and_an_optional_identity() {
+        unsafe {
+            let mut error = std::ptr::null_mut();
+            let module = parse_contingency_fixture("resolve_v33.raw");
+            let destination = pio_destination_memory(
+                c"network.pio.json".as_ptr(),
+                "network.pio.json".len(),
+                &mut error,
+            );
+            assert!(!destination.is_null(), "{}", error_text(error));
+            let result = pio_module_serialize(module, destination, &mut error);
+            assert!(!result.is_null(), "{}", error_text(error));
+            let artifact = pio_emit_result_artifact(result, 0, &mut error);
+            assert!(!artifact.is_null(), "{}", error_text(error));
+            let bytes = pio_artifact_bytes(artifact);
+            let mut document: serde_json::Value =
+                serde_json::from_slice(std::slice::from_raw_parts(bytes.data, bytes.len)).unwrap();
+            let loads = document["value"]["data"]["loads"].as_array_mut().unwrap();
+            assert_eq!(loads.len(), 2);
+            for load in loads {
+                load["uid"] = serde_json::Value::String(String::new());
+            }
+            let rewritten = serde_json::to_vec(&document).unwrap();
+            pio_artifact_release(artifact);
+            pio_emit_result_release(result);
+            pio_destination_release(destination);
+            pio_module_release(module);
+
+            let source = pio_source_from_memory(
+                c"network.pio.json".as_ptr(),
+                "network.pio.json".len(),
+                rewritten.as_ptr(),
+                rewritten.len(),
+                &mut error,
+            );
+            assert!(!source.is_null(), "{}", error_text(error));
+            let decoded = pio_module_deserialize(source, &mut error);
+            pio_source_release(source);
+            assert!(!decoded.is_null(), "{}", error_text(error));
+            let value = pio_module_value(decoded);
+            let network = pio_value_balanced_network(value, &mut error);
+            assert!(!network.is_null(), "{}", error_text(error));
+            pio_value_release(value);
+
+            let path = contingency_fixture("resolve_cases.con");
+            let path_text = path.to_string_lossy();
+            let cases = pio_source_open(path_text.as_ptr().cast(), path_text.len(), &mut error);
+            assert!(!cases.is_null(), "{}", error_text(error));
+            let set = pio_contingency_set_parse(cases, &mut error);
+            pio_source_release(cases);
+            assert!(!set.is_null(), "{}", error_text(error));
+            let resolution = pio_contingency_set_resolve(set, network, &mut error);
+            assert!(!resolution.is_null(), "{}", error_text(error));
+
+            let case_of = |name: &str| {
+                let mut case_error = std::ptr::null_mut();
+                (0..pio_contingency_resolution_case_count(resolution))
+                    .find(|index| {
+                        view_text(pio_contingency_resolution_case_name(
+                            resolution,
+                            *index,
+                            &mut case_error,
+                        )) == name
+                    })
+                    .unwrap_or_else(|| panic!("the fixture states a case named {name}"))
+            };
+            let read = |case_index: usize, component_index: usize| {
+                let mut component = std::mem::MaybeUninit::<PioContingencyComponentView>::uninit();
+                let mut read_error = std::ptr::null_mut();
+                assert!(
+                    pio_contingency_resolution_case_component(
+                        resolution,
+                        case_index,
+                        component_index,
+                        component.as_mut_ptr(),
+                        &mut read_error,
+                    ),
+                    "{}",
+                    error_text(read_error)
+                );
+                component.assume_init()
+            };
+
+            // Both loads bind and name their table, and neither states an
+            // identity.
+            let loads_at_bus = case_of("LOADS_AT_BUS");
+            assert_eq!(
+                pio_contingency_resolution_case_component_count(resolution, loads_at_bus),
+                2
+            );
+            for row in 0..2 {
+                let component = read(loads_at_bus, row);
+                assert_eq!(view_text(component.id.component_type), "load");
+                assert_eq!(component.id.local_id.len, 0);
+                assert_eq!(component.row, row);
+                assert!(component.in_service);
+            }
+
+            // A row the network does state a `uid` for states it as the local
+            // id, under the same component type.
+            let branch = read(case_of("BR_1_2_C1"), 0);
+            assert_eq!(view_text(branch.id.component_type), "branch");
+            assert_eq!(view_text(branch.id.local_id), "1-2");
+
+            pio_contingency_resolution_release(resolution);
+            pio_contingency_set_release(set);
+            pio_balanced_network_release(network);
+            pio_module_release(decoded);
         }
     }
 

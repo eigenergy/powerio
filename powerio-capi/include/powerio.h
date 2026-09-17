@@ -104,9 +104,12 @@ typedef struct {
 } PioComponentIdView;
 
 /**
- * One network element a contingency case bound to. `row` is the element's
- * position in the table `id.component_type` names, and `in_service` is the
- * element's own flag as the network states it before the case is applied.
+ * One network element a contingency case bound to. `id.component_type` names
+ * the table `row` indexes, and every element states it. `id.local_id` is the
+ * element's own identity, and its `len` is 0 when the network states none for
+ * the row; read the `len` rather than the `data` pointer, which is
+ * unspecified at that length. `in_service` is the element's own flag as the
+ * network states it before the case is applied.
  */
 typedef struct {
     PioComponentIdView id;
@@ -2709,6 +2712,10 @@ size_t pio_contingency_resolution_case_component_count(const PioContingencyResol
 /**
  * Read one element one case bound to, by zero based case and element
  * position, in action order.
+ *
+ * The element's `id.component_type` names the table `row` indexes whether or
+ * not the network states an identity for the row, and `id.local_id` has `len`
+ * 0 when it states none.
  *
  * # Safety
  * Pointers and handles must satisfy the crate-level safety requirements.

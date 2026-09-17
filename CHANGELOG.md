@@ -59,8 +59,13 @@
   reaches a file from C; and `pio_contingency_set_resolve` with the
   `PioContingencyResolution` accessors, including
   `pio_contingency_resolution_case_unresolved_action` for the statement of an
-  action that bound to nothing, and `pio_contingency_set_expand`. The ABI
-  version is unchanged.
+  action that bound to nothing, and `pio_contingency_set_expand`. Each element
+  a case bound to reports the table its row indexes and the identity the
+  network states for that row, which is optional: C reads the table from
+  `PioContingencyComponentView.id.component_type` and reads a `local_id` of
+  length 0 for a row the network states no identity for, and Python reads the
+  table from `"type"` and `"id": None` for that row. The ABI version is
+  unchanged.
 
 ## 0.11.2
 
