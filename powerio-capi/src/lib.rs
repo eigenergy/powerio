@@ -3122,6 +3122,33 @@ pub unsafe extern "C" fn pio_geo_layer_diagnostics(
     })
 }
 
+/// Write the layer as the canonical `.geo.json` document: a GeoJSON
+/// FeatureCollection whose `powerio_geo` member states the coordinate space
+/// and the writer's version. The text is owned by the returned handle and read
+/// with `pio_string_view`; release it with `pio_string_release`.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_geo_layer_to_geojson(
+    layer: *const PioGeoLayer,
+    error: *mut *mut PioError,
+) -> *mut PioString {
+    unsafe {
+        entry(error, std::ptr::null_mut(), || {
+            let layer = PioGeoLayer::get(layer).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_NULL_HANDLE,
+                    "PioGeoLayer must not be NULL",
+                )
+            })?;
+            Ok(PioString::new_raw(StringInner {
+                text: layer.layer.to_geojson(),
+            }))
+        })
+    }
+}
+
 ///
 /// # Safety
 /// Pointers and handles must satisfy the crate-level safety requirements.
@@ -3524,6 +3551,48 @@ pub unsafe extern "C" fn pio_contingency_set_expand(
                 source: ContingencySource::Owned(expanded.set),
                 diagnostics: Vec::new(),
             }))
+        })
+    }
+}
+
+/// The buses of one balanced network that a named subsystem selects, in
+/// ascending bus number order.
+///
+/// The name is matched without case and without surrounding whitespace, the
+/// way a `.con` or `.mon` statement names a subsystem. A name the subsystem
+/// set does not state reports `BIND.CAPI.INDEX_OUT_OF_RANGE`.
+///
+/// The returned vector owns its values: read them with `pio_vector_values` and
+/// release the handle with `pio_vector_release`. Each value is a bus number,
+/// an integer a double represents exactly.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_balanced_network_select_subsystem_buses(
+    network: *const PioBalancedNetwork,
+    subsystems: *const PioSubsystemSet,
+    name: *const c_char,
+    name_len: usize,
+    error: *mut *mut PioError,
+) -> *mut PioVector {
+    unsafe {
+        entry(error, std::ptr::null_mut(), || {
+            let network = require_balanced_network(network)?;
+            let subsystems = require_subsystem_set(subsystems)?;
+            let name = required_str(name, name_len, "name")?;
+            let subsystem = subsystems.get(name).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("subsystem '{name}' is not stated by the subsystem set"),
+                )
+            })?;
+            let values = subsystem
+                .select_buses(network)
+                .iter()
+                .map(|bus| bus.0 as f64)
+                .collect();
+            Ok(PioVector::new_raw(VectorInner { values }))
         })
     }
 }
@@ -22439,6 +22508,68 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_geo_layer_writes_the_canonical_document_it_parses_back() {
+        unsafe {
+            let document = br#"{
+                "type": "FeatureCollection",
+                "features": [{
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [-83.743, 42.281]
+                    },
+                    "properties": {"bus": "1"}
+                }]
+            }"#;
+            let mut error = std::ptr::null_mut();
+            let source = pio_source_from_memory(
+                c"case9.geojson".as_ptr(),
+                "case9.geojson".len(),
+                document.as_ptr(),
+                document.len(),
+                &mut error,
+            );
+            assert!(!source.is_null(), "{}", error_text(error));
+            let layer = pio_geo_layer_parse(source, &mut error);
+            pio_source_release(source);
+            assert!(!layer.is_null(), "{}", error_text(error));
+
+            let written = pio_geo_layer_to_geojson(layer, &mut error);
+            assert!(!written.is_null(), "{}", error_text(error));
+            let written_text = view_text(pio_string_view(written));
+            pio_string_release(written);
+            assert!(written_text.contains("FeatureCollection"), "{written_text}");
+            assert!(written_text.contains("powerio_geo"), "{written_text}");
+
+            // The canonical document is what the reader takes, and writing it
+            // again reproduces it byte for byte.
+            let echo_source = pio_source_from_memory(
+                c"case9.geo.json".as_ptr(),
+                "case9.geo.json".len(),
+                written_text.as_ptr(),
+                written_text.len(),
+                &mut error,
+            );
+            assert!(!echo_source.is_null(), "{}", error_text(error));
+            let echo = pio_geo_layer_parse(echo_source, &mut error);
+            pio_source_release(echo_source);
+            assert!(!echo.is_null(), "{}", error_text(error));
+            let again = pio_geo_layer_to_geojson(echo, &mut error);
+            assert!(!again.is_null(), "{}", error_text(error));
+            assert_eq!(view_text(pio_string_view(again)), written_text);
+            pio_string_release(again);
+            pio_geo_layer_release(echo);
+
+            let missing = pio_geo_layer_to_geojson(std::ptr::null(), &mut error);
+            assert!(missing.is_null());
+            assert_eq!(view_text(pio_error_code(error)), "BIND.CAPI.NULL_HANDLE");
+            pio_error_release(error);
+
+            pio_geo_layer_release(layer);
+        }
+    }
+
     unsafe fn contingency_fixture(name: &str) -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../tests/data/psse/contingency")
@@ -22912,6 +23043,101 @@ mod tests {
             pio_subsystem_set_release(subsystems);
             pio_module_release(sub_module);
             pio_contingency_set_release(set);
+        }
+    }
+
+    #[test]
+    fn a_named_subsystem_selects_the_buses_of_one_network() {
+        unsafe {
+            let mut error = std::ptr::null_mut();
+            let (network_module, network) = contingency_network("select_v33.raw");
+            let sub_module = parse_contingency_fixture("selectors.sub");
+            let sub_value = pio_module_value(sub_module);
+            let subsystems = pio_value_subsystem_set(sub_value, &mut error);
+            assert!(!subsystems.is_null(), "{}", error_text(error));
+            pio_value_release(sub_value);
+            // The handle holds the module owner, so a set projected from a
+            // module value selects after the module handle is released.
+            pio_module_release(sub_module);
+
+            for (name, expected) in [
+                ("A1", &[101.0, 102.0, 103.0][..]),
+                ("AREARANGE", &[101.0, 102.0, 103.0, 201.0, 202.0][..]),
+                ("KV", &[101.0, 102.0, 103.0, 201.0][..]),
+                // The name is matched without case and without surrounding
+                // whitespace, as a statement names a subsystem.
+                (" a1 ", &[101.0, 102.0, 103.0][..]),
+            ] {
+                let selected = pio_balanced_network_select_subsystem_buses(
+                    network,
+                    subsystems,
+                    name.as_ptr().cast(),
+                    name.len(),
+                    &mut error,
+                );
+                assert!(!selected.is_null(), "{name}: {}", error_text(error));
+                let values = pio_vector_values(selected);
+                assert_eq!(
+                    std::slice::from_raw_parts(values.data, values.len),
+                    expected,
+                    "{name}"
+                );
+                pio_vector_release(selected);
+            }
+
+            let unknown = pio_balanced_network_select_subsystem_buses(
+                network,
+                subsystems,
+                c"NOSUCH".as_ptr(),
+                "NOSUCH".len(),
+                &mut error,
+            );
+            assert!(unknown.is_null());
+            assert_eq!(
+                view_text(pio_error_code(error)),
+                "BIND.CAPI.INDEX_OUT_OF_RANGE"
+            );
+            pio_error_release(error);
+            error = std::ptr::null_mut();
+
+            let no_network = pio_balanced_network_select_subsystem_buses(
+                std::ptr::null(),
+                subsystems,
+                c"A1".as_ptr(),
+                "A1".len(),
+                &mut error,
+            );
+            assert!(no_network.is_null());
+            assert_eq!(view_text(pio_error_code(error)), "BIND.CAPI.NULL_HANDLE");
+            pio_error_release(error);
+            error = std::ptr::null_mut();
+
+            let no_subsystems = pio_balanced_network_select_subsystem_buses(
+                network,
+                std::ptr::null(),
+                c"A1".as_ptr(),
+                "A1".len(),
+                &mut error,
+            );
+            assert!(no_subsystems.is_null());
+            assert_eq!(view_text(pio_error_code(error)), "BIND.CAPI.NULL_HANDLE");
+            pio_error_release(error);
+            error = std::ptr::null_mut();
+
+            let no_name = pio_balanced_network_select_subsystem_buses(
+                network,
+                subsystems,
+                std::ptr::null(),
+                0,
+                &mut error,
+            );
+            assert!(no_name.is_null());
+            assert_eq!(view_text(pio_error_code(error)), "BIND.CAPI.NULL_ARGUMENT");
+            pio_error_release(error);
+
+            pio_subsystem_set_release(subsystems);
+            pio_balanced_network_release(network);
+            pio_module_release(network_module);
         }
     }
 
