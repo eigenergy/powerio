@@ -27,6 +27,10 @@ time series, scenario set, instance, solution.
 | serialize IR | `serialize(&module, destination)` | `serialize(module, destination=None)` | `serialize(module, destination=nothing)` | `pio_module_serialize` |
 | deserialize IR | `deserialize(source)` | `deserialize(source)` | `deserialize(source)` | `pio_module_deserialize` |
 | apply updates | `apply_updates` | `apply_updates` | `apply_updates!` | `pio_apply_updates` |
+| resolve contingencies | `ContingencySet::resolve(&net)` | `network.resolve_contingencies(text)` | `resolve_contingencies(net, set)` | `pio_contingency_set_resolve` |
+| expand contingencies | `ContingencySet::expand(&net, &subsystems)` | `network.expand_contingencies(con, sub)` | `expand_contingencies(net, set, subsystems)` | `pio_contingency_set_expand` |
+| select subsystem buses | `Subsystem::select_buses(&net)` | `network.select_subsystem_buses(sub, name)` | `select_subsystem_buses(net, subsystems, name)` | `pio_balanced_network_select_subsystem_buses` |
+| apply a geo layer | `apply_geo_layer(&module, &layer)` | `network.apply_geo_layer(text)` | `apply_geo_layer(m, layer)` | `pio_module_apply_geo_layer` |
 
 To find out what you parsed, Rust matches on the `PioValue` case that
 `module.value()` returns, Python uses `isinstance`, Julia dispatches on

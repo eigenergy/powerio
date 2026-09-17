@@ -35,6 +35,9 @@ jobs:
   # release can break the Julia binding while both ABI integers stay the
   # same. This job tests the tag against the default branch of PowerIO.jl.
   # It gates `build`: a failure makes no tarballs and no draft release.
+  # It also checks that PowerIO.jl binds or exempts every entry point the
+  # tagged ABI declares, so a release never ships an entry point the binding
+  # has never seen.
   # For a planned binding break, merge the PowerIO.jl change first, then
   # run this workflow again on the tag.
   binding-gate:
@@ -86,9 +89,14 @@ jobs:
       with:
         version: '1'
     - uses: julia-actions/cache@a7bed9df697e5d7309d68afe7542a87621a8b6c8 # v3.3.0
+    # Every entry point this tag declares is bound by PowerIO.jl main or
+    # listed in its gen/unbound_entry_points.txt with a reason.
+    - name: Entry point coverage of PowerIO.jl main
+      run: POWERIO_JL=PowerIO.jl bash scripts/check-capi-v7.sh
     - name: Test PowerIO.jl against this tag
       env:
         POWERIO_CAPI: ${{ github.workspace }}/target/release/libpowerio_capi.so
+        POWERIO_HEADER: ${{ github.workspace }}/powerio-capi/include/powerio.h
       run: |
         julia --project=PowerIO.jl -e 'using Pkg; Pkg.instantiate(); Pkg.test()' || {
           echo "::error::PowerIO.jl's default branch fails against this tag. Merge the \

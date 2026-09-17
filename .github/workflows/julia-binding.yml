@@ -174,9 +174,11 @@ jobs:
         version: '1'
     - uses: julia-actions/cache@a7bed9df697e5d7309d68afe7542a87621a8b6c8 # v3.3.0
       if: steps.powerio-jl.outputs.available == 'true'
-    # Every pio_* entry point named by the paired binding must be declared by
-    # ABI 7.
-    - name: ABI 7 companion coverage
+    # The entry point names in both directions: every pio_* the paired binding
+    # calls is declared by ABI 7, and every entry point ABI 7 declares is
+    # either called by the binding or listed in its
+    # gen/unbound_entry_points.txt with a reason.
+    - name: ABI 7 companion coverage in both directions
       if: steps.powerio-jl.outputs.available == 'true'
       run: POWERIO_JL=PowerIO.jl bash scripts/check-capi-v7.sh
     # The Julia column of the language guide and the Julia diagnostic
@@ -188,11 +190,13 @@ jobs:
         POWERIO_JL=PowerIO.jl python3 scripts/check-doc-symbols.py
         POWERIO_JL=PowerIO.jl bash scripts/check-diagnostic-parity.sh
     # PowerIO.jl's ccall tests skip themselves when the cdylib is absent.
-    # POWERIO_CAPI points them at the library just built.
+    # POWERIO_CAPI points them at the library just built, and POWERIO_HEADER at
+    # this commit's header, which its own entry point coverage test reads.
     - name: Test PowerIO.jl against the built library
       if: steps.powerio-jl.outputs.available == 'true'
       env:
         POWERIO_CAPI: ${{ github.workspace }}/target/release/libpowerio_capi.so
+        POWERIO_HEADER: ${{ github.workspace }}/powerio-capi/include/powerio.h
       run: julia --project=PowerIO.jl -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
     - name: Probe PowerIO.jl against a library without prob
       if: steps.powerio-jl.outputs.available == 'true'
