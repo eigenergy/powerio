@@ -194,6 +194,63 @@ fn voltage_domain_instance(deselect_bounds: bool, load_power: f64) -> LinDist3Fl
     LinDist3FlowOpfInstance::from_mc_ac(base, LinDist3FlowBuildOptions::default()).unwrap()
 }
 
+fn meshed_instance() -> LinDist3FlowOpfInstance {
+    let terminal = vec!["a".to_owned()];
+    let mut network = MulticonductorNetwork::named("mesh");
+    for bus in ["source", "left", "right"] {
+        network
+            .buses_mut()
+            .push(DistBus::new(bus, terminal.clone()));
+    }
+    network.line_codes_mut().push(DistLineCode::new(
+        "linecode",
+        vec![vec![0.1]],
+        vec![vec![0.1]],
+    ));
+    for (name, from, to) in [
+        ("source-left", "source", "left"),
+        ("source-right", "source", "right"),
+        ("tie", "left", "right"),
+    ] {
+        network.lines_mut().push(DistLine::new(
+            name,
+            from,
+            to,
+            terminal.clone(),
+            terminal.clone(),
+            "linecode",
+            1.0,
+        ));
+    }
+    network.sources_mut().push(VoltageSource::new(
+        "grid",
+        "source",
+        terminal,
+        vec![230.0],
+        vec![0.0],
+    ));
+    LinDist3FlowOpfInstance::from_network(network, LinDist3FlowBuildOptions::default()).unwrap()
+}
+
+#[test]
+fn meshed_standard_form_retains_every_line_drop_without_loop_rows() {
+    let form = build_lindist3flow_standard_form(&meshed_instance()).unwrap();
+    let line_drops = form
+        .canonical
+        .equalities
+        .iter()
+        .filter(|row| {
+            matches!(
+                row.origin,
+                powerio_matrix::LinDist3FlowEqualityOrigin::LineDrop { .. }
+            )
+        })
+        .count();
+
+    assert_eq!(form.canonical.preparation.network.lines.len(), 3);
+    assert_eq!(line_drops, 3);
+}
+
 #[test]
 fn squared_voltage_domain_applies_without_selected_voltage_limits() {
     for deselect_bounds in [false, true] {

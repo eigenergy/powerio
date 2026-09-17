@@ -1,7 +1,7 @@
 //! Solver-neutral LinDist3Flow OPF instance front end.
 //!
 //! This module owns formulation semantics that precede numerical coefficient
-//! assembly: applicability, conductor-resolved radial topology, and the fixed
+//! assembly: applicability, conductor-resolved topology, and the fixed
 //! voltage phasor reference. Sparse matrices and affine/SOC preparation remain
 //! in `powerio-matrix`.
 
@@ -85,7 +85,7 @@ pub struct LinDist3FlowNode {
     pub terminal: String,
 }
 
-/// One line conductor oriented away from its conductor island's source.
+/// One line conductor in a deterministic source-rooted orientation.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
@@ -99,7 +99,7 @@ pub struct LinDist3FlowOrientedConductor {
     pub reversed: bool,
 }
 
-/// The source-rooted conductor forest used by the formulation.
+/// The source-covered conductor graph used by the formulation.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
@@ -108,6 +108,9 @@ pub struct LinDist3FlowTopology {
     pub conductors: Vec<LinDist3FlowOrientedConductor>,
     pub roots: Vec<LinDist3FlowNode>,
     pub islands: Vec<Vec<LinDist3FlowNode>>,
+    /// Whether at least one retained conductor closes a cycle or parallels an
+    /// existing conductor connection.
+    pub meshed: bool,
 }
 
 /// Whether applicability checks permit instance construction.
@@ -658,7 +661,16 @@ fn assess(
     let mut diagnostics = Vec::new();
     check_supported_slice(instance, options, &mut diagnostics);
     let topology = match build_topology(instance.network()) {
-        Ok(topology) => Some(topology),
+        Ok(topology) => {
+            if topology.meshed {
+                diagnostics.push(finding(
+                    &codes::BUILD_LINDIST3FLOW_MESH_APPROXIMATION,
+                    "the retained conductor graph contains a cycle or parallel connection; the model keeps every line but adds no angle, loop-consistency, circulating-flow, or radialisation constraint",
+                    None,
+                ));
+            }
+            Some(topology)
+        }
         Err(message) => {
             diagnostics.push(finding(
                 &codes::BUILD_LINDIST3FLOW_TOPOLOGY_INVALID,
@@ -788,9 +800,10 @@ fn build_topology(network: &MulticonductorNetwork) -> Result<LinDist3FlowTopolog
         return Err("the network has no retained bus terminals".to_owned());
     }
 
-    let mut forest = UnionFind::new(nodes.len());
-    let mut bus_forest = UnionFind::new(bus_positions.len());
+    let mut components = UnionFind::new(nodes.len());
+    let mut bus_components = UnionFind::new(bus_positions.len());
     let mut edges = Vec::new();
+    let mut meshed = false;
     for (line_row, line) in network.lines().iter().enumerate() {
         if line.terminal_map_from.len() != line.terminal_map_to.len()
             || line.terminal_map_from.is_empty()
@@ -816,7 +829,7 @@ fn build_topology(network: &MulticonductorNetwork) -> Result<LinDist3FlowTopolog
                     line.name, line.bus_to
                 )
             })?;
-        bus_forest.join(from_bus, to_bus);
+        meshed |= !bus_components.join(from_bus, to_bus);
         for (conductor, (from_terminal, to_terminal)) in line
             .terminal_map_from
             .iter()
@@ -839,13 +852,7 @@ fn build_topology(network: &MulticonductorNetwork) -> Result<LinDist3FlowTopolog
                         line.name, line.bus_to
                     )
                 })?;
-            if !forest.join(from, to) {
-                return Err(format!(
-                    "line `{}` conductor {} closes a cycle in the conductor-resolved graph",
-                    line.name,
-                    conductor + 1
-                ));
-            }
+            meshed |= !components.join(from, to);
             edges.push(Edge {
                 from,
                 to,
@@ -858,12 +865,13 @@ fn build_topology(network: &MulticonductorNetwork) -> Result<LinDist3FlowTopolog
     let mut island_indices: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for node in 0..nodes.len() {
         island_indices
-            .entry(forest.find(node))
+            .entry(components.find(node))
             .or_default()
             .push(node);
     }
     let mut source_nodes: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     let mut island_sources: BTreeMap<usize, Vec<&str>> = BTreeMap::new();
+    let mut source_bus_roots = Vec::new();
     for source in network.sources() {
         let bus = *bus_positions
             .get(&source.bus.to_ascii_lowercase())
@@ -874,9 +882,10 @@ fn build_topology(network: &MulticonductorNetwork) -> Result<LinDist3FlowTopolog
                 )
             })?;
         island_sources
-            .entry(bus_forest.find(bus))
+            .entry(bus_components.find(bus))
             .or_default()
             .push(&source.name);
+        source_bus_roots.push(bus);
         for terminal in &source.terminal_map {
             let node = *positions
                 .get(&node_key(&source.bus, terminal))
@@ -887,7 +896,7 @@ fn build_topology(network: &MulticonductorNetwork) -> Result<LinDist3FlowTopolog
                     )
                 })?;
             source_nodes
-                .entry(forest.find(node))
+                .entry(components.find(node))
                 .or_default()
                 .push(node);
         }
@@ -896,7 +905,7 @@ fn build_topology(network: &MulticonductorNetwork) -> Result<LinDist3FlowTopolog
     for bus in network.buses() {
         let position = bus_positions[&bus.id.to_ascii_lowercase()];
         physical_islands
-            .entry(bus_forest.find(position))
+            .entry(bus_components.find(position))
             .or_default()
             .push(&bus.id);
     }
@@ -915,7 +924,7 @@ fn build_topology(network: &MulticonductorNetwork) -> Result<LinDist3FlowTopolog
     ordered_islands.sort_by_key(|island| island[0]);
     let mut root_indices = Vec::with_capacity(ordered_islands.len());
     for island in &ordered_islands {
-        let component = forest.find(island[0]);
+        let component = components.find(island[0]);
         let roots: &[usize] = source_nodes.get(&component).map_or(&[], Vec::as_slice);
         if roots.len() != 1 {
             return Err(format!(
@@ -928,51 +937,71 @@ fn build_topology(network: &MulticonductorNetwork) -> Result<LinDist3FlowTopolog
         root_indices.push(roots[0]);
     }
 
-    let mut adjacency = vec![Vec::<(usize, usize)>::new(); nodes.len()];
-    for (edge_index, edge) in edges.iter().enumerate() {
-        adjacency[edge.from].push((edge_index, edge.to));
-        adjacency[edge.to].push((edge_index, edge.from));
+    let mut bus_adjacency = vec![Vec::new(); bus_positions.len()];
+    for line in network.lines() {
+        let from = bus_positions[&line.bus_from.to_ascii_lowercase()];
+        let to = bus_positions[&line.bus_to.to_ascii_lowercase()];
+        bus_adjacency[from].push(to);
+        bus_adjacency[to].push(from);
     }
-    let mut directions = vec![None; edges.len()];
-    for &root in &root_indices {
-        let mut stack = vec![(root, usize::MAX)];
-        while let Some((parent, incoming)) = stack.pop() {
-            for &(edge_index, child) in &adjacency[parent] {
-                if edge_index == incoming {
-                    continue;
-                }
-                directions[edge_index] = Some((parent, child));
-                stack.push((child, edge_index));
+    let mut bus_distances = vec![usize::MAX; bus_positions.len()];
+    let mut frontier = std::collections::VecDeque::new();
+    for root in source_bus_roots {
+        bus_distances[root] = 0;
+        frontier.push_back(root);
+    }
+    while let Some(parent) = frontier.pop_front() {
+        for &child in &bus_adjacency[parent] {
+            if bus_distances[child] == usize::MAX {
+                bus_distances[child] = bus_distances[parent] + 1;
+                frontier.push_back(child);
             }
         }
     }
-    let mut line_directions = BTreeMap::new();
-    for (edge, direction) in edges.iter().zip(&directions) {
-        let (parent, _) = direction.expect("each source-rooted forest edge is visited");
-        let reversed = parent != edge.from;
-        if line_directions
-            .insert(edge.line, reversed)
-            .is_some_and(|previous| previous != reversed)
-        {
-            return Err(format!(
-                "line `{}` is reached in conflicting directions across its coupled conductors",
-                network.lines()[edge.line].name
-            ));
-        }
+    if let Some(bus) = bus_distances
+        .iter()
+        .position(|distance| *distance == usize::MAX)
+    {
+        let id = network
+            .buses()
+            .iter()
+            .find(|candidate| bus_positions[&candidate.id.to_ascii_lowercase()] == bus)
+            .map_or("<unknown>", |candidate| candidate.id.as_str());
+        return Err(format!(
+            "bus `{id}` was not reached from its physical-island source"
+        ));
     }
+    let directions = edges
+        .iter()
+        .map(|edge| {
+            let line = &network.lines()[edge.line];
+            let from_bus = bus_positions[&line.bus_from.to_ascii_lowercase()];
+            let to_bus = bus_positions[&line.bus_to.to_ascii_lowercase()];
+            match bus_distances[from_bus].cmp(&bus_distances[to_bus]) {
+                std::cmp::Ordering::Less => (edge.from, edge.to),
+                std::cmp::Ordering::Greater => (edge.to, edge.from),
+                std::cmp::Ordering::Equal => {
+                    let from = line.bus_from.to_ascii_lowercase();
+                    let to = line.bus_to.to_ascii_lowercase();
+                    if from <= to {
+                        (edge.from, edge.to)
+                    } else {
+                        (edge.to, edge.from)
+                    }
+                }
+            }
+        })
+        .collect::<Vec<_>>();
     let conductors = edges
         .iter()
         .zip(directions)
-        .map(|(edge, direction)| {
-            let (parent, child) = direction.expect("each source-rooted forest edge is visited");
-            LinDist3FlowOrientedConductor {
-                line: network.lines()[edge.line].name.clone(),
-                source_line_row: edge.line,
-                conductor_position: edge.conductor,
-                parent: nodes[parent].clone(),
-                child: nodes[child].clone(),
-                reversed: parent != edge.from,
-            }
+        .map(|(edge, (parent, child))| LinDist3FlowOrientedConductor {
+            line: network.lines()[edge.line].name.clone(),
+            source_line_row: edge.line,
+            conductor_position: edge.conductor,
+            parent: nodes[parent].clone(),
+            child: nodes[child].clone(),
+            reversed: parent != edge.from,
         })
         .collect();
     Ok(LinDist3FlowTopology {
@@ -986,6 +1015,7 @@ fn build_topology(network: &MulticonductorNetwork) -> Result<LinDist3FlowTopolog
             .collect(),
         nodes,
         conductors,
+        meshed,
     })
 }
 
@@ -1091,25 +1121,31 @@ fn propagated_reference(
         }
     }
 
-    let mut children = vec![Vec::new(); topology.nodes.len()];
+    let mut adjacency = vec![Vec::new(); topology.nodes.len()];
     for conductor in &topology.conductors {
         let parent = positions[&node_key(&conductor.parent.bus, &conductor.parent.terminal)];
         let child = positions[&node_key(&conductor.child.bus, &conductor.child.terminal)];
-        children[parent].push(child);
+        adjacency[parent].push(child);
+        adjacency[child].push(parent);
     }
     for root in &topology.roots {
         let root = positions[&node_key(&root.bus, &root.terminal)];
         let mut stack = vec![root];
-        while let Some(parent) = stack.pop() {
-            let value = values[parent].ok_or_else(|| {
+        let mut visited = vec![false; topology.nodes.len()];
+        visited[root] = true;
+        while let Some(node) = stack.pop() {
+            let value = values[node].ok_or_else(|| {
                 invalid_reference(format!(
                     "source root `{}/{}` has no phasor",
-                    topology.nodes[parent].bus, topology.nodes[parent].terminal
+                    topology.nodes[root].bus, topology.nodes[root].terminal
                 ))
             })?;
-            for &child in &children[parent] {
-                values[child] = Some(value);
-                stack.push(child);
+            for &neighbor in &adjacency[node] {
+                if !visited[neighbor] {
+                    visited[neighbor] = true;
+                    values[neighbor] = Some(value);
+                    stack.push(neighbor);
+                }
             }
         }
     }

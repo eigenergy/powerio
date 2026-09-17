@@ -151,8 +151,16 @@ Python and Julia expose `LinDist3FlowOpfInstance` and `LinDist3FlowOpfSolution`
 as typed module values. `to_lindist3flow_opf_instance` constructs an instance
 from a supported phase-only network or multiconductor AC OPF instance.
 `instance.metadata` supplies the node and conductor axes, roots, and fixed
-reference voltages. Line powers follow the reported parent-to-child direction.
+reference voltages. It also reports whether the retained conductor graph is
+meshed. Line powers follow the reported parent-to-child direction.
 Python positions are zero based; Julia positions are one based.
+
+Cycles and parallel lines remain in the LinDist3Flow equations. PowerIO emits
+`BUILD.LINDIST3FLOW.MESH_APPROXIMATION` for such an instance because it does
+not add angle recovery, loop-consistency equations, circulating-flow
+regularisation, or automatic radialisation. Mesh feasibility therefore means
+feasibility of this declared linear approximation, not AC feasibility or a
+unique physical allocation of branch flows.
 
 Solutions expose their instance, termination, objective, and named primal
 columns: `terminal_voltage_magnitude_squared`, `line_active_power`,

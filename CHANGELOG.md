@@ -75,6 +75,9 @@
   to 0.11, with the rest of the lockfile refreshed. Public APIs are unchanged.
 - Fail CI on a RUSTSEC advisory against the dependency graph. `deny.toml`
   records the single accepted finding.
+- Accept LinDist3Flow conductor cycles and parallel lines while retaining each
+  line's nodal-balance and squared-voltage-drop equations. Meshed instances
+  report that angle and loop-consistency equations are intentionally absent.
 
 C ABI 7 and PowerIO IR generation 2 remain unchanged.
 

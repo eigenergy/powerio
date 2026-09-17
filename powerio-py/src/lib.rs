@@ -4092,6 +4092,7 @@ impl PyPioModule {
             conductors.append(entry)?;
         }
         result.set_item("conductors", conductors)?;
+        result.set_item("meshed", instance.topology().meshed)?;
         result.set_item(
             "roots",
             instance

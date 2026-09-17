@@ -84,7 +84,7 @@ space and currently make the instance inapplicable.
 | Concern | Current contract |
 |---|---|
 | Network family | `MulticonductorNetwork` only. No balanced conversion. |
-| Topology | Acyclic in the conductor-resolved graph. Each physical connected component must be source covered, and multiple voltage-source records on one physical island are rejected. Lines are oriented away from the source roots without changing source row identity. |
+| Topology | Cycles and parallel lines are retained in the conductor-resolved graph. Each physical connected component must be source covered, and multiple voltage-source records on one physical island are rejected. Lines receive a deterministic source-rooted orientation without changing source row identity. A warning identifies meshed instances. |
 | Conductors | All retained bus terminals must be phase conductors. Line terminal maps must be nonempty, equal width and resolve exactly at both ends. Mutual series impedance is retained. |
 | Reference | `Auto` uses a complete initial operating point when available, otherwise propagates source phasors at no load. `Explicit` requires the initial point; `SourcePropagated` ignores it. Every reference phasor must be finite and nonzero. Angles are fixed in the linearization. |
 | Lines | Full finite conductor series-impedance matrices and length are supported. Pi shunt admittance is rejected. Apparent-power and current limits are selected from the base instance constraints. |
@@ -121,6 +121,14 @@ balances. Cross-voltage products use the first-order fixed-angle closure of
 `sqrt(w_phi w_psi) exp(j delta_theta)`. Connection power maps and winding
 voltage expressions are likewise frozen or linearized at the reference.
 These are formulation approximations, not parser or unit conversions.
+
+Meshed instances retain these nodal balances and one squared-voltage drop row
+for every line conductor. They add no voltage-angle recovery,
+loop-consistency, circulating-flow penalty, or automatic radialisation. A
+feasible mesh can therefore have nonphysical or non-unique active/reactive
+flow allocations. The mesh diagnostic and `LinDist3FlowTopology::meshed`
+metadata make that limitation explicit; successful optimization is only a
+certificate for the assembled approximate model.
 
 Selected apparent-power limits use
 
@@ -179,7 +187,8 @@ applicability gate:
 - constant-current and exponential load approximations;
 - floating/impedance-grounded neutral models;
 - capacitor and IBR formulation support;
-- meshed formulations and discrete controls;
+- angle recovery, loop-consistency equations, circulating-flow regularisation,
+  automatic radialisation, and discrete controls;
 - broader unbalanced three-phase OpenDSS/PowerModelsDistribution oracle cases.
 
 The first external oracle is deliberately minimal and hand inspectable. It
