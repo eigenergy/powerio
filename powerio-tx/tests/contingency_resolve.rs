@@ -14,7 +14,7 @@ use powerio_core::ComponentId;
 use powerio_tx::network::BalancedNetwork;
 use powerio_tx::{
     BusId, ContingencyResolution, ContingencySet, PsseEquipmentIndex, ResolvedCase,
-    UnresolvedReason,
+    ResolvedComponent, UnresolvedReason,
 };
 
 fn fixture(name: &str) -> PathBuf {
@@ -49,12 +49,21 @@ fn bound<'a>(resolution: &'a ContingencyResolution, name: &str) -> Vec<(&'a str,
         .iter()
         .map(|component| {
             (
-                component.id.component_type(),
+                component.component_type,
                 component.row,
                 component.in_service,
             )
         })
         .collect()
+}
+
+/// The identity of one bound component. Every row of the fixture network
+/// carries a `uid`, so every component states one.
+fn identity(component: &ResolvedComponent) -> &ComponentId {
+    component
+        .id
+        .as_ref()
+        .unwrap_or_else(|| panic!("row {} states its uid", component.row))
 }
 
 #[test]
@@ -237,7 +246,7 @@ fn component_ids_carry_the_type_strings_the_update_resolver_requires() {
         .cases
         .iter()
         .flat_map(|case| case.components.iter())
-        .map(|component| component.id.component_type())
+        .map(|component| component.component_type)
         .collect();
     types.sort_unstable();
     types.dedup();
@@ -253,15 +262,59 @@ fn component_ids_carry_the_type_strings_the_update_resolver_requires() {
         ]
     );
 
-    // The identities are the rows' own uids, not table row spellings, so an
-    // update batch resolves them.
+    // An identity carries the same component type as the field beside it.
     for component in resolution.cases.iter().flat_map(|case| &case.components) {
-        assert!(
-            !component.id.local_id().contains(':'),
-            "{} is a table row spelling",
-            component.id
+        assert_eq!(
+            identity(component).component_type(),
+            component.component_type
         );
     }
+
+    // Every identity is the row's own uid, which an update batch resolves.
+    let uids: Vec<&str> = net
+        .loads()
+        .iter()
+        .filter_map(|load| load.uid.as_deref())
+        .collect();
+    for component in &case(&resolution, "LOADS_AT_BUS").components {
+        assert!(
+            uids.contains(&identity(component).local_id()),
+            "{} is not a load uid",
+            identity(component)
+        );
+    }
+}
+
+/// A row the network states no `uid` for has no identity to state. The row
+/// still binds, and `row` still indexes the table.
+#[test]
+fn a_row_with_no_uid_states_no_identity() {
+    let mut net = resolve_network();
+    for load in net.loads_mut() {
+        load.uid = None;
+    }
+    let resolution = resolve_cases().resolve(&net);
+    let loads = &case(&resolution, "LOADS_AT_BUS").components;
+    assert_eq!(loads.len(), 2);
+    assert!(loads.iter().all(|component| component.id.is_none()));
+    // The table the row indexes is named whether or not the row has an
+    // identity.
+    assert!(
+        loads
+            .iter()
+            .all(|component| component.component_type == "load")
+    );
+    assert_eq!(
+        loads
+            .iter()
+            .map(|component| component.row)
+            .collect::<Vec<_>>(),
+        [0, 1]
+    );
+    // A row that does carry a uid still states it, under the same type.
+    let bus = &case(&resolution, "BUS_DISCONNECT").components[0];
+    assert!(bus.id.is_some());
+    assert_eq!(bus.component_type, "bus");
 }
 
 /// The local ACTIVSg2000 corpus, when the manifest names both files.
@@ -414,8 +467,9 @@ fn set_machine_eqid(net: &mut BalancedNetwork, uid: &str, eqid: &str) {
 }
 
 /// PSS/E forbids an apostrophe inside a quoted field, so the writer replaces
-/// one with a space. Two ids that differ only in what the replacement left
-/// behind are two ids, and each names its own row.
+/// one with a space, and reads a quoted id by its trimmed text. An id whose
+/// sanitized form trims onto an id already stated at the bus therefore takes a
+/// free positional id, and each row answers to the id the RAW file states.
 #[test]
 fn a_sanitized_id_does_not_take_another_row_s_place() {
     let mut net = resolve_network();
@@ -439,16 +493,20 @@ fn a_sanitized_id_does_not_take_another_row_s_place() {
     set_machine_eqid(&mut net, &fourth, "a");
 
     let index = PsseEquipmentIndex::new(&net);
-    assert_eq!(index.machine_ids(), ["1", "2", "a ", "a"]);
+    // The second row's `a` trims onto the first row's `a '`, so it takes the
+    // lowest free positional id.
+    assert_eq!(index.machine_ids(), ["1", "2", "a ", "1"]);
 
-    // Each row answers to the id the writer states for it, and only that one.
+    // No two rows share a trimmed id, and either spelling of the first row's
+    // id names it.
     assert_eq!(index.machine_row(BusId(2), "a "), Some(2));
-    assert_eq!(index.machine_row(BusId(2), "a"), Some(3));
-    assert_eq!(index.load_rows(BusId(4), Some("a ")), vec![0]);
-    assert_eq!(index.load_rows(BusId(4), Some("a")), vec![1]);
+    assert_eq!(index.machine_row(BusId(2), "a"), Some(2));
+    assert_eq!(index.machine_row(BusId(2), "1"), Some(3));
+    assert_eq!(index.load_rows(BusId(4), Some("a")), vec![0]);
+    assert_eq!(index.load_rows(BusId(4), Some("1")), vec![1]);
     assert_eq!(index.load_rows(BusId(4), None), vec![0, 1]);
-    assert_eq!(index.fixed_shunt_rows(BusId(3), Some("a ")), vec![0]);
-    assert_eq!(index.fixed_shunt_rows(BusId(3), Some("a")), vec![1]);
+    assert_eq!(index.fixed_shunt_rows(BusId(3), Some("a")), vec![0]);
+    assert_eq!(index.fixed_shunt_rows(BusId(3), Some("1")), vec![1]);
 }
 
 #[test]

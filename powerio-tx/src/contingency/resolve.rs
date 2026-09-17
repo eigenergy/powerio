@@ -28,7 +28,8 @@ use crate::network::{BalancedNetwork, BusId, BusType};
 use super::{ContingencyAction, ContingencySet, MAX_READER_NOTES};
 
 /// Component type strings, the same spellings the update resolver in
-/// `powerio-prob` requires of a [`ComponentId`].
+/// `powerio-prob` requires of a [`ComponentId`], and the ones a
+/// [`ResolvedComponent`] states for the table its row indexes.
 const BUS: &str = "bus";
 const LOAD: &str = "load";
 const SHUNT: &str = "shunt";
@@ -36,22 +37,14 @@ const GENERATOR: &str = "generator";
 const BRANCH: &str = "branch";
 const TRANSFORMER_3W: &str = "transformer_3w";
 
-/// Table names for the row spelling a component with no `uid` falls back to.
-const BUSES_TABLE: &str = "buses";
-const LOADS_TABLE: &str = "loads";
-const SHUNTS_TABLE: &str = "shunts";
-const GENERATORS_TABLE: &str = "generators";
-const BRANCHES_TABLE: &str = "branches";
-const TRANSFORMERS_3W_TABLE: &str = "transformers_3w";
-
 /// The PSS/E id every element of a network would carry in a RAW file written
 /// from it, with the lookups a `.con` statement needs.
 ///
 /// The ids come from the RAW writer's own allocation: an element's retained id
-/// when it has one and that id is still free on its key, else the lowest
-/// positive integer still free there. That is why an id the reader dropped as
-/// a positional default (`1`) comes back, and why parallel elements stay
-/// distinct.
+/// when it has one and that id is still free on its key, compared trimmed, else
+/// the lowest positive integer still free there. That is why an id the reader
+/// dropped as a positional default (`1`) comes back, and why parallel elements
+/// stay distinct.
 ///
 /// Building the index walks every table once. Resolving many sets against one
 /// network builds it once and calls [`ContingencySet::resolve_with`]. The index
@@ -81,10 +74,10 @@ fn sorted_triple(buses: [BusId; 3]) -> [BusId; 3] {
     sorted
 }
 
-/// Rows of one device family keyed by bus, each with the id the RAW writer
-/// would state for it, character for character. An id matches a statement's id
-/// exactly, so two rows whose ids differ only in the padding sanitation left
-/// behind stay distinct.
+/// Rows of one device family keyed by bus, each with the trimmed id the RAW
+/// writer would state for it. PSS/E reads a quoted id by its trimmed text, as
+/// the `.con` reader and the RAW reader both do, and the writer's allocation
+/// gives two rows on one bus two trimmed ids, so a trimmed id names one row.
 type DeviceRows = BTreeMap<BusId, Vec<(String, usize)>>;
 
 /// Branch rows keyed by the stored terminal pair, whether the branch is a two
@@ -105,12 +98,12 @@ type MachineRows = BTreeMap<(BusId, String), usize>;
 type Transformer3wRows = BTreeMap<[BusId; 3], Vec<(String, usize)>>;
 
 /// The machine id of every generator, in table order, and the row each
-/// `(bus, id)` pair names. PSS/E requires machine ids to be unique on a bus
-/// and the allocation preserves that, so one pair names one row.
+/// `(bus, id)` pair names. PSS/E requires machine ids to be unique on a bus,
+/// compared by their trimmed text, and the writer's allocation preserves that,
+/// so one pair names one row.
 ///
-/// The key is the id the writer allocates, character for character. Trimming
-/// it first would merge two rows whose ids differ only in the padding
-/// sanitation left behind, and the second row would replace the first.
+/// The key is the trimmed id the writer allocates, which is the id a RAW file
+/// states and a `.con` statement names.
 fn machine_index(net: &BalancedNetwork, sanitized: &mut usize) -> (Vec<String>, MachineRows) {
     let mut ids = Vec::with_capacity(net.generators().len());
     let mut rows = BTreeMap::new();
@@ -120,7 +113,7 @@ fn machine_index(net: &BalancedNetwork, sanitized: &mut usize) -> (Vec<String>, 
             detailed_source_property(net, GENERATOR, generator.uid.as_deref(), "psse_eqid")
                 .filter(|id| !id.is_empty());
         let id = quoted_circuit_id(preferred, generator.bus, &mut used, sanitized);
-        rows.insert((generator.bus, id.clone()), row);
+        rows.insert((generator.bus, id.trim().to_owned()), row);
         ids.push(id);
     }
     (ids, rows)
@@ -174,7 +167,9 @@ fn load_index(net: &BalancedNetwork, sanitized: &mut usize) -> DeviceRows {
     let mut used = BTreeMap::new();
     for (row, load) in net.loads().iter().enumerate() {
         let id = quoted_device_id(&load.extras, load.bus, &mut used, sanitized);
-        rows.entry(load.bus).or_default().push((id, row));
+        rows.entry(load.bus)
+            .or_default()
+            .push((id.trim().to_owned(), row));
     }
     rows
 }
@@ -197,7 +192,10 @@ fn shunt_index(
             continue;
         }
         let id = quoted_device_id(&shunt.extras, shunt.bus, &mut used, sanitized);
-        fixed.entry(shunt.bus).or_default().push((id, row));
+        fixed
+            .entry(shunt.bus)
+            .or_default()
+            .push((id.trim().to_owned(), row));
     }
     (fixed, switched)
 }
@@ -315,12 +313,12 @@ impl<'n> PsseEquipmentIndex<'n> {
     }
 
     /// The row of `net.generators()` for machine `id` at `bus`. PSS/E requires
-    /// machine ids to be unique on a bus and the allocation preserves that, so
-    /// at most one row matches. `id` is matched against the id the writer
-    /// allocates, character for character.
+    /// machine ids to be unique on a bus and the writer's allocation preserves
+    /// that, so at most one row matches. `id` is matched trimmed, against the
+    /// trimmed id the writer allocates.
     #[must_use]
     pub fn machine_row(&self, bus: BusId, id: &str) -> Option<usize> {
-        self.machine_rows.get(&(bus, id.to_owned())).copied()
+        self.machine_rows.get(&(bus, id.trim().to_owned())).copied()
     }
 
     /// The rows of `net.shunts()` holding a fixed shunt at `bus`: the one with
@@ -378,19 +376,22 @@ impl<'n> PsseEquipmentIndex<'n> {
 }
 
 /// The rows of one bus's devices whose id matches, or all of them when the
-/// statement names no id. An id matches the id the writer allocates, character
-/// for character.
+/// statement names no id. An id matches trimmed, against the trimmed id the
+/// writer allocates.
 fn select_rows(at_bus: Option<&Vec<(String, usize)>>, id: Option<&str>) -> Vec<usize> {
     let Some(devices) = at_bus else {
         return Vec::new();
     };
     match id {
         None => devices.iter().map(|(_, row)| *row).collect(),
-        Some(wanted) => devices
-            .iter()
-            .filter(|(id, _)| id == wanted)
-            .map(|(_, row)| *row)
-            .collect(),
+        Some(wanted) => {
+            let wanted = wanted.trim();
+            devices
+                .iter()
+                .filter(|(id, _)| id == wanted)
+                .map(|(_, row)| *row)
+                .collect()
+        }
     }
 }
 
@@ -465,11 +466,17 @@ impl ResolvedCase {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ResolvedComponent {
-    /// The element's identity. Its component type names the table `row`
-    /// indexes: `bus`, `load`, `shunt`, `generator`, `branch`, or
-    /// `transformer_3w`.
-    pub id: ComponentId,
-    /// The element's position in that table.
+    /// The component type naming the table `row` indexes: `bus`, `load`,
+    /// `shunt`, `generator`, `branch`, or `transformer_3w`. Every component
+    /// states it, including one the network states no identity for.
+    pub component_type: &'static str,
+    /// The element's identity, when the network states one for the row: its
+    /// `uid`, under `component_type`. A row carrying no `uid`, or one
+    /// [`ComponentId`] does not accept, states `None`. A caller that needs
+    /// persistent identities calls `assign_missing_component_ids` on the
+    /// network before building the index, which gives every row a `uid`.
+    pub id: Option<ComponentId>,
+    /// The element's position in the table `component_type` names.
     pub row: usize,
     /// The element's own in service flag as the network states it now, before
     /// the case is applied. For a bus it is whether the bus type is anything
@@ -510,8 +517,7 @@ pub enum UnresolvedReason {
 }
 
 impl UnresolvedReason {
-    /// The snake_case name of the reason, the same string the C ABI and Python
-    /// report.
+    /// The snake_case name of the reason, for reports and bindings.
     #[must_use]
     pub fn name(&self) -> &'static str {
         match self {
@@ -713,26 +719,22 @@ fn non_empty(rows: Vec<usize>, reason: UnresolvedReason) -> Result<Vec<usize>, U
     }
 }
 
-/// The identity of one table row: its `uid` when the row carries one, else the
-/// `table:row` spelling a network with no persistent identities falls back to.
-/// The same spelling covers a `uid` that [`ComponentId::new`] rejects, so every
-/// row states an identity whatever its `uid` holds. A caller that feeds these
-/// identities to an update batch calls `assign_missing_component_ids` first,
-/// which gives every row a `uid`.
-fn component_id(component_type: &str, table: &str, row: usize, uid: Option<&str>) -> ComponentId {
-    let local = uid
-        .filter(|uid| !uid.is_empty())
-        .map_or_else(|| format!("{table}:{row}"), str::to_owned);
-    ComponentId::new(component_type, local).unwrap_or_else(|_| {
-        ComponentId::new(component_type, format!("{table}:{row}"))
-            .expect("a table row spelling is a valid identity")
-    })
+/// The identity of one table row: its `uid` under `component_type`, when the
+/// row carries a `uid` [`ComponentId::new`] accepts, else none. A row without
+/// one has no identity to state, and a position stated in its place would name
+/// an identity the network does not hold. A caller that feeds these identities
+/// to an update batch calls `assign_missing_component_ids` on the network
+/// first, which gives every row a `uid`.
+fn component_id(component_type: &str, uid: Option<&str>) -> Option<ComponentId> {
+    let local = uid.filter(|uid| !uid.is_empty())?;
+    ComponentId::new(component_type, local).ok()
 }
 
 fn bus_component(net: &BalancedNetwork, row: usize) -> ResolvedComponent {
     let bus = &net.buses()[row];
     ResolvedComponent {
-        id: component_id(BUS, BUSES_TABLE, row, bus.uid.as_deref()),
+        component_type: BUS,
+        id: component_id(BUS, bus.uid.as_deref()),
         row,
         in_service: bus.kind != BusType::Isolated,
     }
@@ -741,7 +743,8 @@ fn bus_component(net: &BalancedNetwork, row: usize) -> ResolvedComponent {
 fn load_component(net: &BalancedNetwork, row: usize) -> ResolvedComponent {
     let load = &net.loads()[row];
     ResolvedComponent {
-        id: component_id(LOAD, LOADS_TABLE, row, load.uid.as_deref()),
+        component_type: LOAD,
+        id: component_id(LOAD, load.uid.as_deref()),
         row,
         in_service: load.in_service,
     }
@@ -750,7 +753,8 @@ fn load_component(net: &BalancedNetwork, row: usize) -> ResolvedComponent {
 fn shunt_component(net: &BalancedNetwork, row: usize) -> ResolvedComponent {
     let shunt = &net.shunts()[row];
     ResolvedComponent {
-        id: component_id(SHUNT, SHUNTS_TABLE, row, shunt.uid.as_deref()),
+        component_type: SHUNT,
+        id: component_id(SHUNT, shunt.uid.as_deref()),
         row,
         in_service: shunt.in_service,
     }
@@ -759,7 +763,8 @@ fn shunt_component(net: &BalancedNetwork, row: usize) -> ResolvedComponent {
 fn generator_component(net: &BalancedNetwork, row: usize) -> ResolvedComponent {
     let generator = &net.generators()[row];
     ResolvedComponent {
-        id: component_id(GENERATOR, GENERATORS_TABLE, row, generator.uid.as_deref()),
+        component_type: GENERATOR,
+        id: component_id(GENERATOR, generator.uid.as_deref()),
         row,
         in_service: generator.in_service,
     }
@@ -768,7 +773,8 @@ fn generator_component(net: &BalancedNetwork, row: usize) -> ResolvedComponent {
 fn branch_component(net: &BalancedNetwork, row: usize) -> ResolvedComponent {
     let branch = &net.branches()[row];
     ResolvedComponent {
-        id: component_id(BRANCH, BRANCHES_TABLE, row, branch.uid.as_deref()),
+        component_type: BRANCH,
+        id: component_id(BRANCH, branch.uid.as_deref()),
         row,
         in_service: branch.in_service,
     }
@@ -777,12 +783,8 @@ fn branch_component(net: &BalancedNetwork, row: usize) -> ResolvedComponent {
 fn transformer_3w_component(net: &BalancedNetwork, row: usize) -> ResolvedComponent {
     let transformer = &net.transformers_3w()[row];
     ResolvedComponent {
-        id: component_id(
-            TRANSFORMER_3W,
-            TRANSFORMERS_3W_TABLE,
-            row,
-            transformer.uid.as_deref(),
-        ),
+        component_type: TRANSFORMER_3W,
+        id: component_id(TRANSFORMER_3W, transformer.uid.as_deref()),
         row,
         in_service: transformer.in_service,
     }

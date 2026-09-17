@@ -380,7 +380,7 @@ pub mod codes {
         BUILD_GEO_UNMATCHED_FEATURE = "BUILD.GEO.UNMATCHED_FEATURE", Warning,
             "a geo feature matched no element in the network";
         BUILD_CON_CASE_UNRESOLVED = "BUILD.CON.CASE_UNRESOLVED", Warning,
-            "an action of a contingency case did not bind to exactly one element of the network";
+            "an action of a contingency case bound to no element, or named more than one where one was required";
         BUILD_CON_NOTES_TRUNCATED = "BUILD.CON.NOTES_TRUNCATED", Warning,
             "the contingency resolver stopped recording notes at its budget";
 

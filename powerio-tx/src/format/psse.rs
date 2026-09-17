@@ -1447,6 +1447,16 @@ pub(crate) fn quoted_device_id(
     )
 }
 
+/// The id one record states: `preferred`, sanitized for the quoted field, when
+/// no record on `key` states it already, else the lowest positional id still
+/// free there.
+///
+/// PSS/E reads a quoted id by its trimmed text, so the ids already taken are
+/// tracked trimmed. Sanitation replaces an apostrophe with a space, and an id
+/// whose sanitized form trims onto an id already stated on this key takes a
+/// positional id instead: `a'` and `a` on one bus are written `a ` and `1`.
+/// Two records on one key therefore never state one id, and a name that reads
+/// one of them reads exactly one record.
 pub(crate) fn quoted_circuit_id<K: Ord + Clone>(
     preferred: Option<&str>,
     key: K,
@@ -1460,7 +1470,13 @@ pub(crate) fn quoted_circuit_id<K: Ord + Clone>(
         }
         cleaned.into_owned()
     });
-    super::allocate_circuit_id(sanitized.as_deref(), key, used)
+    let allocated = super::allocate_circuit_id(sanitized.as_deref().map(str::trim), key, used);
+    match sanitized {
+        // The preferred id was free: the record states it with the padding
+        // sanitation left behind, which PSS/E reads as the id it trims to.
+        Some(id) if id.trim() == allocated => id,
+        _ => allocated,
+    }
 }
 
 /// Whether an HVDC line states DC-side data the two-terminal record cannot
@@ -6102,6 +6118,56 @@ Q
             "missing sanitation warning: {:?}",
             conv.render_diagnostics()
         );
+    }
+
+    /// PSS/E reads a quoted id by its trimmed text, so an id whose sanitized
+    /// form trims onto an id already stated at the bus takes a free positional
+    /// id. Two records on one bus never state one id.
+    #[test]
+    fn a_sanitized_id_that_trims_onto_another_id_is_allocated_apart() {
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+2,'A',1,1,1,10.0,5.0,0,0,0,0,1,1,0
+2,'B',1,1,1,20.0,8.0,0,0,0,0,1,1,0
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+        let mut net = parse_psse(raw).unwrap();
+        net.loads_mut()[0]
+            .extras
+            .insert("id".into(), Value::String("a'".into()));
+        net.loads_mut()[1]
+            .extras
+            .insert("id".into(), Value::String("a".into()));
+
+        let conv = write_psse(&net);
+        // The first record states the sanitized id; the second would trim onto
+        // it and states the lowest free positional id instead.
+        assert!(conv.text.contains("2, 'a ',"), "{}", conv.text);
+        assert!(conv.text.contains("2, '1',"), "{}", conv.text);
+
+        let reparsed = parse_psse(&conv.text).unwrap();
+        let ids: Vec<_> = reparsed
+            .loads()
+            .iter()
+            .map(|l| {
+                l.extras
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+            })
+            .collect();
+        // The reader states the first id trimmed and drops the second, which
+        // is the positional default it re-allocates on its own.
+        assert_eq!(ids, vec!["a", ""]);
     }
 
     #[test]

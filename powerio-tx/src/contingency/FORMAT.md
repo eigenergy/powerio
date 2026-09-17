@@ -223,10 +223,14 @@ the words PSS/E itself would address it by.
 | load, fixed shunt, switched shunt | `extras["id"]` | the bus, each family allocated apart |
 | three winding transformer | `extras["id"]`, else the retained `psse_eqid` | the position among the transformers on the same ordered bus triple |
 
-Every family is keyed on the id the writer allocates, character for character.
-PSS/E forbids an apostrophe inside a quoted field and the writer replaces one
-with a space, so two ids that differ only in what that replacement left behind
-are two ids, and each names its own row.
+Every family is keyed on the trimmed id the writer allocates, because PSS/E
+reads a quoted id by its trimmed text, as the `.con` reader and the RAW reader
+both do. The writer's allocation keeps two rows on one key apart under that
+reading: PSS/E forbids an apostrophe inside a quoted field and the writer
+replaces one with a space, so an id whose sanitized form trims onto an id
+already stated there takes a free positional id instead. A bus carrying `a'`
+and `a` states `a ` and `1`, and a statement naming either binds to the row the
+RAW file states it for.
 
 A branch lookup reads both orientations, so a statement naming `1 TO 3` finds a
 branch stored `3 1`. A self-loop is counted once. The lines are keyed apart
@@ -262,18 +266,22 @@ the consumer's work. `ChangeLoad` and `ChangeGeneration` bind to the bus for
 the same reason, and the amount to move rides on the action rather than being
 applied here.
 
-A `ResolvedComponent` states a `ComponentId` whose component type names the
-table its `row` indexes, and the element's own in service flag as the network
-states it now. A bus is in service when its type is anything other than
-isolated. An element already out of service still binds, because outaging it
-changes nothing. A case with no actions resolves to no components.
+A `ResolvedComponent` states the component type naming the table its `row`
+indexes, the row's own identity, and the element's own in service flag as the
+network states it now. A row carrying no `uid`, or one `ComponentId` does not
+accept, states no identity, and still states its type and row: a caller that
+needs persistent identities calls `assign_missing_component_ids` on the network
+before building the index, which gives every row a `uid`. A bus is in service
+when its type is anything other than isolated. An element already out of
+service still binds, because outaging it changes nothing. A case with no
+actions resolves to no components.
 
 The `.con` grammar states `REMOVE SWSHUNT FROM BUS i` and carries no id, as the
 RAW switched shunt record itself does not, so the statement addresses every
 switched shunt at the bus.
 
-Every reason states a snake_case `name`, the same string the C ABI and Python
-report: `no_such_bus`, `no_such_branch`, `ambiguous_branch`,
+Every reason states a snake_case `name`, for reports and bindings:
+`no_such_bus`, `no_such_branch`, `ambiguous_branch`,
 `ambiguous_transformer_3w`, `no_such_machine`, `no_such_shunt`, `no_such_load`,
 `no_such_transformer_3w`, `unrecognized`.
 
