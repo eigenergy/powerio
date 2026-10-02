@@ -43,11 +43,11 @@ pub struct IndexCore {
 }
 
 impl IndexCore {
-    /// Index `net`: map bus ids to dense indices and fold every load/shunt onto
-    /// its bus. Loads and shunts are summed regardless of their `in_service`
-    /// flag, matching the folded `pd/qd/gs/bs` the MATPOWER-shaped model carried
-    /// on the bus row (the matrices key off topology and these aggregates, not
-    /// per-element service status).
+    /// Index `net`: map bus ids to dense indices and fold every in-service
+    /// load and shunt onto its bus. An out-of-service load or shunt draws
+    /// nothing, so it is left out of `pd/qd/gs/bs` and of every matrix built
+    /// from them, the same rule the power flow instances apply to loads and
+    /// generators.
     ///
     /// # Correctness
     /// Bus ids must be unique; a duplicate collapses two buses onto one dense
@@ -72,7 +72,7 @@ impl IndexCore {
         );
         let mut pd = vec![0.0; n];
         let mut qd = vec![0.0; n];
-        for l in net.loads() {
+        for l in net.loads().iter().filter(|l| l.in_service) {
             if let Some(&idx) = bus_id_to_idx.get(&l.bus) {
                 pd[idx] += l.p;
                 qd[idx] += l.q;
@@ -80,7 +80,7 @@ impl IndexCore {
         }
         let mut gs = vec![0.0; n];
         let mut bs = vec![0.0; n];
-        for s in net.shunts() {
+        for s in net.shunts().iter().filter(|s| s.in_service) {
             if let Some(&idx) = bus_id_to_idx.get(&s.bus) {
                 gs[idx] += s.g;
                 bs[idx] += s.b;
@@ -584,6 +584,36 @@ mod tests {
         // every MATPOWER fixture, which folds one load per bus).
         let net = agg_net();
         assert_aggregates(&IndexedNetwork::new(&net));
+    }
+
+    #[test]
+    fn aggregates_leave_out_out_of_service_loads_and_shunts() {
+        // A PSS/E load or fixed shunt with STATUS 0 stays in the network as a
+        // record but draws nothing; folding it in would put its demand into
+        // every power flow and its admittance on the Ybus diagonal.
+        let mut net = agg_net();
+        net.loads_mut().push(Load {
+            bus: BusId(1),
+            p: 50.0,
+            q: 20.0,
+            voltage_model: None,
+            in_service: false,
+            uid: None,
+            extras: Extras::new(),
+        });
+        net.shunts_mut().push(Shunt {
+            bus: BusId(1),
+            g: 7.0,
+            b: 9.0,
+            in_service: false,
+            section_count: None,
+            control: None,
+            uid: None,
+            extras: Extras::new(),
+        });
+        assert_aggregates(&IndexedNetwork::new(&net));
+        let core = IndexCore::build(&net);
+        assert_aggregates(&IndexedNetwork::with_core(&net, &core));
     }
 
     #[test]

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Out-of-service loads and shunts no longer count. `IndexedNetwork` folded
+  every load and shunt onto its bus whatever its `in_service` flag, so a PSS/E
+  load or fixed shunt with STATUS 0 still entered `pd`, `qd`, `gs`, and `bs`
+  and, through them, the Y-bus diagonal, the AC power flow Jacobian, the DC
+  and AC OPF preparations, the matrix pipeline's shunt sidecar and injection,
+  and the GridFM bus table. `IndexCore::build` now sums in-service elements
+  only, the rule the power flow instances already applied to loads and
+  generators, and the OPFData residual check does the same. A network whose
+  loads and shunts are all in service builds exactly what it built before.
+
 - Read back multiconductor solutions over more than 65,536 bus terminals.
   Operating point and solution vectors carry up to 4,194,304 (2^22) entries
   each, required and optional arrays alike, so a 106,038 terminal

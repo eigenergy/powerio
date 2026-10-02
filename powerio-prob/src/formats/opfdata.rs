@@ -87,13 +87,13 @@ fn bus_injections(network: &powerio_tx::BalancedNetwork) -> (Vec<f64>, Vec<f64>)
         .collect();
     let mut p = vec![0.0; network.buses().len()];
     let mut q = vec![0.0; network.buses().len()];
-    for generator in network.generators() {
+    for generator in network.generators().iter().filter(|g| g.in_service) {
         if let Some(&at) = position.get(&generator.bus) {
             p[at] += generator.pg;
             q[at] += generator.qg;
         }
     }
-    for load in network.loads() {
+    for load in network.loads().iter().filter(|l| l.in_service) {
         if let Some(&at) = position.get(&load.bus) {
             p[at] -= load.p;
             q[at] -= load.q;
@@ -116,7 +116,7 @@ fn power_balance_residuals(
         .map(|(index, bus)| (bus.id, index))
         .collect();
     let (mut p, mut q) = bus_injections(network);
-    for shunt in network.shunts() {
+    for shunt in network.shunts().iter().filter(|s| s.in_service) {
         if let Some(&at) = position.get(&shunt.bus) {
             let vm2 = solved.bus_voltage_magnitude[at].powi(2);
             p[at] -= shunt.g * vm2;
