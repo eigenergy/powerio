@@ -351,8 +351,8 @@ branches, and the 30 and 57 bus files place their interchange record after
 the `-9` terminator) are reported as `READ.IEEE_CDF.SOURCE_MALFORMED` and
 printed with each case.
 
-The Python environment pins PyPowSybl 1.16.1, pandas 3.0.5, numpy 2.5.2,
-networkx 3.6.1, and prettytable 3.18.0. PyPowSybl's PowSybl Dependencies
+The Python environment pins PyPowSybl 1.16.1, pandas 3.0.6, numpy 2.5.3,
+networkx 3.7, and prettytable 3.18.0. PyPowSybl's PowSybl Dependencies
 2026.1.0 release pins PowSybl Core 7.3.0. The checker asserts every runtime
 version, the Core version, and the exact Core commit rather than printing them
 for information.
