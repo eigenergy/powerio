@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.11.4
 
 - Out-of-service loads and shunts no longer count. `IndexedNetwork` folded
   every load and shunt onto its bus whatever its `in_service` flag, so a PSS/E
@@ -50,6 +50,12 @@
   zero objective, monitored rather than enforced line thermal ratings, SI
   loading reports, and Rust/Python APIs. The IR version stays 2; the schema
   `pio-ir/2/0.11.4/schema.json` describes the two new structural types.
+
+- Dependencies: thiserror 2.0.21 and rand 0.10.3 in the Rust lockfile, and
+  pandas 3.0.6 and networkx 3.7 in the PowSybl interoperability check, whose
+  pinned runtime versions follow.
+
+C ABI 7 and PowerIO IR version 2 remain unchanged.
 
 ## 0.11.3
 
