@@ -3570,9 +3570,10 @@ fn read_switched_shunt(
     } else {
         Extras::new()
     };
-    // PSS/E defines additional discrete control codes beyond the neutral
-    // Discrete mode. Keep the source code when the typed mode is unchanged so
-    // its validation rules survive fresh PSS/E emission.
+    // MODSW 3 to 6 adjust in discrete steps like MODSW 1 but control a
+    // quantity other than voltage, which the neutral Discrete mode does not
+    // state. Keep the source code when the typed mode is unchanged so the
+    // controlled quantity survives fresh PSS/E emission.
     if modsw != mode_to_modsw(mode) {
         extras.insert("psse_modsw".into(), Value::from(modsw));
     }
@@ -3608,21 +3609,29 @@ fn read_switched_shunt(
 }
 
 /// PSS/E `MODSW` switched-shunt mode code → neutral mode.
+///
+/// PSS/E states 0 locked, 1 discrete and 2 continuous adjustment of the
+/// regulated voltage, and 3 to 6 discrete adjustment that controls the reactive
+/// output of a plant, a VSC dc converter, the admittance setting of another
+/// switched shunt, or a FACTS device. The neutral model has no field for the
+/// controlled quantity, so 3 to 6 read as `Discrete` and the reader keeps the
+/// source code in the `psse_modsw` extra.
 fn modsw_to_mode(modsw: i64) -> SwitchedShuntMode {
     match modsw {
         0 => SwitchedShuntMode::Locked,
-        1 => SwitchedShuntMode::Continuous,
+        2 => SwitchedShuntMode::Continuous,
         _ => SwitchedShuntMode::Discrete,
     }
 }
 
-/// Neutral switched-shunt mode → PSS/E `MODSW` (the 0/1/2 codes; modes beyond
-/// discrete collapse to 2).
+/// Neutral switched-shunt mode → PSS/E `MODSW`: 0 locked, 1 discrete, and 2
+/// continuous, each controlling voltage. The writer restores a retained
+/// `psse_modsw` code of 3 to 6 when the mode is still `Discrete`.
 fn mode_to_modsw(mode: SwitchedShuntMode) -> i64 {
     match mode {
         SwitchedShuntMode::Locked => 0,
-        SwitchedShuntMode::Continuous => 1,
-        SwitchedShuntMode::Discrete => 2,
+        SwitchedShuntMode::Discrete => 1,
+        SwitchedShuntMode::Continuous => 2,
     }
 }
 
@@ -6482,7 +6491,7 @@ Q
         assert_eq!(sh.bus, BusId(3));
         close(sh.b, 19.0);
         let c = sh.control.as_ref().expect("switched-shunt control parsed");
-        assert_eq!(c.mode, SwitchedShuntMode::Discrete);
+        assert_eq!(c.mode, SwitchedShuntMode::Continuous, "MODSW 2");
         close(c.vhigh, 1.05);
         close(c.vlow, 0.95);
         assert_eq!(c.control_bus, Some(BusId(7)));
@@ -6502,7 +6511,7 @@ Q
             .control
             .as_ref()
             .expect("control survives the write");
-        assert_eq!(c2.mode, SwitchedShuntMode::Discrete);
+        assert_eq!(c2.mode, SwitchedShuntMode::Continuous);
         assert_eq!(c2.control_bus, Some(BusId(7)));
         assert_eq!(c2.blocks.len(), 2);
         close(c2.blocks[0].b, 25.0);
@@ -6548,8 +6557,88 @@ Q
         assert!(
             changed_text
                 .lines()
-                .any(|line| line.starts_with("3, 1, 0, 1,"))
+                .any(|line| line.starts_with("3, 2, 0, 1,"))
         );
+    }
+
+    /// PSS/E `MODSW` is 0 locked, 1 discrete and 2 continuous voltage
+    /// control, and 3 to 6 discrete control of a plant, VSC converter,
+    /// switched shunt admittance, or FACTS device output. Regression: the
+    /// reader took 1 as continuous and 2 as discrete, so a continuously
+    /// adjusted shunt read as discrete. ACTIVSg2000 states MODSW 2 for 152 of
+    /// its 153 switched shunts, half of them with a BINIT between block steps.
+    #[test]
+    fn switched_shunt_modsw_codes_read_as_psse_defines_them_and_write_back() {
+        let cases = [
+            (0, SwitchedShuntMode::Locked, None),
+            (1, SwitchedShuntMode::Discrete, None),
+            (2, SwitchedShuntMode::Continuous, None),
+            (3, SwitchedShuntMode::Discrete, Some(3)),
+            (4, SwitchedShuntMode::Discrete, Some(4)),
+            (5, SwitchedShuntMode::Discrete, Some(5)),
+            (6, SwitchedShuntMode::Discrete, Some(6)),
+        ];
+        for source_rev in [33, 35] {
+            for (modsw, mode, retained) in cases {
+                let record = if source_rev >= 35 {
+                    format!("3, 'S1', {modsw}, 0, 1, 1.05, 0.95, 0, 0, 100.0, '', 7.5, 1, 2, 10.0")
+                } else {
+                    format!("3, {modsw}, 0, 1, 1.05, 0.95, 0, 100.0, '', 7.5, 2, 10.0")
+                };
+                let raw = format!(
+                    "0, 100.00, {source_rev}, 0, 0, 60.00 / MODSW {modsw}\n\
+                     CASE\n\
+                     COMMENT\n\
+                     3,'B3',230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9\n\
+                     0 / END OF BUS DATA, BEGIN LOAD DATA\n\
+                     0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA\n\
+                     0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA\n\
+                     0 / END OF GENERATOR DATA, BEGIN BRANCH DATA\n\
+                     0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA\n\
+                     0 / END OF TRANSFORMER DATA, BEGIN AREA DATA\n\
+                     0 / END OF AREA DATA, BEGIN SWITCHED SHUNT DATA\n\
+                     {record}\n\
+                     0 / END OF SWITCHED SHUNT DATA, BEGIN GNE DEVICE DATA\n\
+                     Q\n"
+                );
+                let context = format!("revision {source_rev} MODSW {modsw}");
+                let net = parse_psse(&raw).unwrap();
+                let shunt = &net.shunts()[0];
+                assert_eq!(shunt.control.as_ref().unwrap().mode, mode, "{context}");
+                assert_eq!(
+                    extra_i64(&shunt.extras, "psse_modsw"),
+                    retained,
+                    "{context} retained code"
+                );
+
+                for rev in [33, 34, 35] {
+                    let emitted = write_psse_rev(&net, rev).text;
+                    let written = emitted
+                        .lines()
+                        .skip_while(|line| !line.contains("BEGIN SWITCHED SHUNT DATA"))
+                        .nth(1)
+                        .expect("fresh output has a switched-shunt record");
+                    let modsw_column = if rev >= 35 { 2 } else { 1 };
+                    assert_eq!(
+                        fields(written)[modsw_column],
+                        modsw.to_string(),
+                        "{context} written at revision {rev}"
+                    );
+                    let reparsed = parse_psse(&emitted).unwrap();
+                    let shunt = &reparsed.shunts()[0];
+                    assert_eq!(
+                        shunt.control.as_ref().unwrap().mode,
+                        mode,
+                        "{context} reread from revision {rev}"
+                    );
+                    assert_eq!(
+                        extra_i64(&shunt.extras, "psse_modsw"),
+                        retained,
+                        "{context} reread code from revision {rev}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -6657,7 +6746,7 @@ Q
             .control
             .as_ref()
             .expect("v35 switched-shunt control survives the write");
-        assert_eq!(c.mode, SwitchedShuntMode::Discrete);
+        assert_eq!(c.mode, SwitchedShuntMode::Continuous);
         close(c.vhigh, 1.05);
         close(c.vlow, 0.95);
         assert_eq!(c.control_bus, Some(BusId(7)));
@@ -6933,7 +7022,7 @@ Q
         close(sh.b, 19.0);
         assert!(sh.in_service);
         let c = sh.control.as_ref().expect("switched-shunt control parsed");
-        assert_eq!(c.mode, SwitchedShuntMode::Discrete);
+        assert_eq!(c.mode, SwitchedShuntMode::Continuous, "MODSW 2");
         close(c.vhigh, 1.05);
         close(c.vlow, 0.95);
         assert_eq!(

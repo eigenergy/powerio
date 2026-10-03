@@ -181,7 +181,7 @@ Schema definition: `SwitchedShuntControl`.
 
 | field | type | unit | sign | invariant | if absent |
 |---|---|---|---|---|---|
-| `mode` | token `locked`, `continuous`, `discrete` | | | PSS/E `MODSW` 0, 1, 2 and up | required |
+| `mode` | token `locked`, `continuous`, `discrete` | | | PSS/E `MODSW` 0, 2, and 1 or 3 to 6 | required |
 | `vhigh` | float | p.u. | | `vlow <= vhigh` | required |
 | `vlow` | float | p.u. | | | required |
 | `control_bus` | id or null | | | names a bus | null (the shunt's own bus) |
