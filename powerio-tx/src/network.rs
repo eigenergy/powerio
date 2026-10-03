@@ -2292,6 +2292,12 @@ impl Shunt {
 }
 
 /// How a switched shunt adjusts its susceptance. Maps to the PSS/E `MODSW` code.
+//
+// The IR 2 schema catalogs are published byte for byte, and
+// `powerio/tests/frozen_schemas.rs` holds every record to its published text.
+// The schema descriptions of the two adjusting variants therefore keep their
+// 0.11 wording, which swaps `MODSW` 1 and 2, until a new catalog snapshot
+// takes the code mapping the rustdoc states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
@@ -2299,9 +2305,23 @@ impl Shunt {
 pub enum SwitchedShuntMode {
     /// Fixed at its initial susceptance, no automatic switching (`MODSW` 0).
     Locked,
-    /// Continuous adjustment within the block range (`MODSW` 1).
+    /// Continuous adjustment within the block range to hold the voltage band
+    /// (`MODSW` 2).
+    #[cfg_attr(
+        feature = "schema",
+        schemars(description = "Continuous adjustment within the block range (`MODSW` 1).")
+    )]
     Continuous,
-    /// Discrete adjustment in fixed steps (`MODSW` 2 and up).
+    /// Discrete adjustment in fixed steps (`MODSW` 1, and 3 to 6).
+    ///
+    /// `MODSW` 1 holds the voltage band. `MODSW` 3 to 6 control a plant's
+    /// reactive output, a VSC dc converter's reactive output, another switched
+    /// shunt's admittance setting, or a FACTS device's reactive output; the
+    /// PSS/E reader keeps that code in the shunt's `psse_modsw` extra.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(description = "Discrete adjustment in fixed steps (`MODSW` 2 and up).")
+    )]
     Discrete,
 }
 

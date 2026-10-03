@@ -1061,6 +1061,11 @@ fn transmission_targets() -> impl Iterator<Item = (usize, TransmissionFormat)> {
 //   control, the self-loop UCTE cannot state, and each target's synthesized
 //   defaults. The electrical and core invariants hold after reducing the
 //   source to records the target format actually defines.
+// - PSS/E `MODSW` 1 is discrete and 2 continuous voltage control; the reader
+//   had them swapped. The eight-bus export's one switched shunt states MODSW
+//   1, so it now reads as discrete, the section control IIDM states, and the
+//   XIIDM and JIIDM writers no longer report a continuous control relabeled
+//   as section control: -1 on both cells of the `PSS/E .raw 32` row.
 // - MATPOWER carries only aggregate bus GS/BS values. Two IIDM payload cases
 //   contain switched shunt controls, so the XIIDM, JIIDM, and CGMES source
 //   rows each add two warnings in the MATPOWER column rather than silently
@@ -1111,7 +1116,7 @@ const TRANSMISSION_WARNING_BASELINE: [[usize; TRANSMISSION_TARGETS]; 19] = [
     [18, 12, 6, 6, 18, 12, 6, 12, 18, 36, 36, 12, 0, 12, 36],  // UCTE-DEF .uct
     [0, 6, 14, 14, 14, 6, 9, 6, 12, 70, 70, 38, 38, 0, 15],    // PyPSA CSV
     [6, 0, 14, 14, 14, 6, 9, 0, 12, 64, 64, 32, 40, 12, 0],    // GridFM Parquet
-    [5, 4, 2, 2, 4, 4, 5, 4, 6, 15, 15, 9, 10, 6, 12],         // PSS/E .raw 32
+    [5, 4, 2, 2, 4, 4, 5, 4, 6, 14, 14, 9, 10, 6, 12],         // PSS/E .raw 32
     [8, 8, 6, 6, 8, 8, 9, 8, 8, 13, 13, 8, 14, 9, 11],         // IEEE CDF
     [6, 5, 7, 7, 9, 5, 7, 5, 7, 8, 8, 7, 14, 9, 11],           // GO Challenge 3 JSON
     [3, 2, 5, 5, 5, 3, 4, 2, 4, 32, 32, 8, 32, 5, 4],          // DeepMind OPFData JSON
