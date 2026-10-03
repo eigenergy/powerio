@@ -1,0 +1,49 @@
+name: Prepare paired release
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Maintainer-selected X.Y.Z for both repositories
+        required: true
+        type: string
+      stage:
+        description: Open reviewed version PRs, or build the merged candidate
+        required: true
+        type: choice
+        options: [changes, candidate, replace-unpublished]
+permissions:
+  contents: read
+concurrency:
+  group: paired-release-preparation
+  cancel-in-progress: false
+jobs:
+  prepare:
+    if: vars.PAIRED_RELEASES == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        id: app
+        with:
+          app-id: ${{ vars.POWERIO_RELEASE_APP_ID }}
+          private-key: ${{ secrets.POWERIO_RELEASE_APP_PRIVATE_KEY }}
+          owner: eigenergy
+          repositories: powerio,PowerIO.jl
+      - name: Prepare reviewed changes or the frozen candidate
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          VERSION: ${{ inputs.version }}
+          STAGE: ${{ inputs.stage }}
+        run: |
+          if [ "$STAGE" = changes ]; then
+            python3 scripts/prepare_release_prs.py "$VERSION"
+          elif [ "$STAGE" = candidate ]; then
+            python3 scripts/paired_release.py tag "$VERSION"
+          elif [ "$STAGE" = replace-unpublished ]; then
+            python3 scripts/paired_release.py replace-unpublished "$VERSION"
+          else
+            exit 1
+          fi
