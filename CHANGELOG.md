@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add solver-independent AC multiconductor IVR preparation in `powerio-matrix`,
+  including explicit terminal/coil axes, bases, selected bounds, winding-current
+  transformer descriptors and supported nonlinear load/IBR controls. Unsupported
+  formulation profiles fail explicitly; no optimizer or AD dependency is added.
+
 - Preserve BMOPF per-coil capacitor ratings as exact terminal shunts shared by
   matrix and distribution preparation consumers. Retain custom open-delta
   terminal maps and n-winding apparent-power bounds; edited winding maps cannot
