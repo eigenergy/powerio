@@ -345,3 +345,21 @@ fn transformer_leakage_requires_a_series_equation() {
     let error = calc_multiconductor_admittance_matrix(&net).unwrap_err();
     assert_eq!(error.code().code, "BUILD.MULTI.PHYSICS_UNSUPPORTED");
 }
+
+#[test]
+fn bmopf_unequal_capacitors_stamp_the_actual_coil_ratings() {
+    let text = r#"{"bus":{"b":{"terminal_names":["a","b","c","n"],"perfectly_grounded_terminals":["n"]}},"capacitor":{"c":{"bus":"b","terminal_map":["a","b","c","n"],"configuration":"WYE","q_rated":[13,25,7],"v_nom":230}}}"#;
+    let source = powerio_core::Source::from_memory("caps.json", text.as_bytes().to_vec())
+        .unwrap()
+        .with_format(powerio_core::FormatId::new("bmopf").unwrap());
+    let module = powerio_dist::parse(source).unwrap();
+    let y = calc_multiconductor_admittance_matrix(module.value()).unwrap();
+    let b = dense(y.susceptance());
+    assert_eq!(b.len(), 3);
+    for (i, q) in [13.0, 25.0, 7.0].into_iter().enumerate() {
+        for j in 0..3 {
+            let expected = if i == j { q / 52900.0 } else { 0.0 };
+            assert!((b[i][j] - expected).abs() < 1e-12);
+        }
+    }
+}

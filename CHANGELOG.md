@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Preserve BMOPF per-coil capacitor ratings as exact terminal shunts shared by
+  matrix and distribution preparation consumers. Retain custom open-delta
+  terminal maps and n-winding apparent-power bounds; edited winding maps cannot
+  be overwritten by retained source metadata during emission.
+
 ## 0.11.4
 
 - Out-of-service loads and shunts no longer count. `IndexedNetwork` folded

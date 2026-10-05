@@ -33,7 +33,7 @@ pub(crate) fn parse_bmopf_collecting(
         format: "BMOPF",
         message: e.to_string(),
     })?;
-    let Value::Object(doc) = doc else {
+    let Value::Object(mut doc) = doc else {
         return Err(Error::Json {
             format: "BMOPF",
             message: "top level is not an object".into(),
@@ -47,6 +47,7 @@ pub(crate) fn parse_bmopf_collecting(
     report_non_numeric_fields(&doc, diags);
     report_schema_version(&doc, diags);
     super::validate::report(&doc, diags);
+    super::capacitor::lower(&mut doc, diags)?;
     let mut rd = Reader {
         net: &mut net,
         diagnostics: crate::diagnostics::Diagnostics::new(),
@@ -1734,27 +1735,27 @@ impl Reader<'_> {
                  legs `{name}` and `{second_name}`"
             ),
         );
-        let leg_terminals = |(lead, lag): (u8, u8)| vec![lead.to_string(), lag.to_string()];
-        vec![
-            self.regulator_rows(
-                name,
-                o,
-                "open_delta_regulator",
-                leg_terminals(first_pair),
-                leg_terminals(first_pair),
-                ratios[0],
-                bus_index,
-            ),
-            self.regulator_rows(
-                &second_name,
-                o,
-                "open_delta_regulator",
-                leg_terminals(second_pair),
-                leg_terminals(second_pair),
-                ratios[1],
-                bus_index,
-            ),
-        ]
+        let from = strings(o.get("terminal_map_from"));
+        let to = strings(o.get("terminal_map_to"));
+        let shared = [first_pair.0, first_pair.1]
+            .into_iter()
+            .find(|k| *k == second_pair.0 || *k == second_pair.1)
+            .unwrap_or(first_pair.1);
+        let leg_terminals = |map: &[String], (lead, lag): (u8, u8)| {
+            vec![
+                map.get(usize::from(lead) - 1)
+                    .cloned()
+                    .unwrap_or_else(|| lead.to_string()),
+                map.get(usize::from(lag) - 1)
+                    .cloned()
+                    .unwrap_or_else(|| lag.to_string()),
+            ]
+        };
+        [first_pair,second_pair].into_iter().enumerate().map(|(k,pair)| {
+            let mut t = self.regulator_rows(if k==0 {name} else {&second_name},o,"open_delta_regulator",leg_terminals(&from,pair),leg_terminals(&to,pair),ratios[k],bus_index);
+            t.extras.insert("bmopf_open_delta".into(),serde_json::json!({"from":from,"to":to,"connection":connection,"leg":k,"shared":shared}));
+            t
+        }).collect()
     }
 
     /// The two windings both regulator subtypes share: buses and rating from
@@ -1932,10 +1933,11 @@ impl Reader<'_> {
                 let bmopf_v_nom = value_alias(w, "v_nom", "v_ref").map_or(f64::NAN, f);
                 let r_winding = w.get("r_winding").map_or(0.0, f);
                 let rating = w.get("s_rating").map_or(s, f);
-                let retained: Map<String, Value> = ["i_max", "tap_ratio_min", "tap_ratio_max"]
-                    .iter()
-                    .filter_map(|key| w.get(*key).map(|v| ((*key).to_owned(), v.clone())))
-                    .collect();
+                let retained: Map<String, Value> =
+                    ["i_max", "s_max", "tap_ratio_min", "tap_ratio_max"]
+                        .iter()
+                        .filter_map(|key| w.get(*key).map(|v| ((*key).to_owned(), v.clone())))
+                        .collect();
                 if !retained.is_empty() {
                     winding_metadata.insert(idx.to_string(), Value::Object(retained));
                 }

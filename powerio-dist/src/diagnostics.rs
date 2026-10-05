@@ -126,6 +126,8 @@ pub mod codes {
             "a BMOPF field with no canonical home was dropped";
         READ_BMOPF_RECORD_DROPPED = "READ.BMOPF.RECORD_DROPPED", Warning,
             "a BMOPF object or winding beyond the modeled set was dropped";
+        READ_BMOPF_CAPACITOR_LOWERED = "READ.BMOPF.CAPACITOR_LOWERED", Remark,
+            "a per-coil capacitor was represented exactly by a terminal shunt";
         READ_BMOPF_VALUE_COLLAPSED = "READ.BMOPF.VALUE_COLLAPSED", Warning,
             "a per phase or per terminal BMOPF value was collapsed to one entry";
         READ_BMOPF_TRANSFORMER_OPEN_DELTA_SPLIT = "READ.BMOPF.TRANSFORMER_OPEN_DELTA_SPLIT", Warning,
