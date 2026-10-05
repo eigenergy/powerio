@@ -62,7 +62,7 @@ pub struct McOpfTerminal {
     pub terminal: String,
     /// True for an explicit physical ground.
     pub grounded: bool,
-    /// Prescribed rectangular [real, imaginary] voltage in per unit, when fixed.
+    /// Prescribed rectangular `[real, imaginary]` voltage in per unit, when fixed.
     pub fixed: Option<[f64; 2]>,
     /// Rectangular per-unit voltage seed; not an additional physical reference.
     pub start: [f64; 2],
@@ -84,7 +84,7 @@ pub struct McOpfVoltageLimit {
     /// For sequence limits: (terminal index, complex coefficient) of the measured voltage; empty for ordinary differences.
     pub combination: Vec<(usize, [f64; 2])>,
 }
-/// Centered angle of V[first] * conj(V[second]), in radians.
+/// Centered angle of `V[first] * conj(V[second])`, in radians.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct McOpfAngleLimit {
@@ -158,7 +158,7 @@ pub enum McOpfDeviceKind {
 pub struct McOpfLoadLaw {
     /// Coil nominal voltage divided by V_base.
     pub nominal: f64,
-    /// Active then reactive terms; each [coefficient, exponent] contributes coefficient * (|U| / nominal)^exponent in per-unit power.
+    /// Active then reactive terms; each `[coefficient, exponent]` contributes coefficient * (|U| / nominal)^exponent in per-unit power.
     pub terms: [Vec<[f64; 2]>; 2],
 }
 /// Smooth clipped piecewise-linear controller, with SI-derived per-unit knots.
@@ -182,7 +182,7 @@ pub struct McOpfCoil {
     pub positive: usize,
     /// Negative global terminal index, or physical ground.
     pub negative: Option<usize>,
-    /// Fixed [P,Q] per-unit power: consumption for loads, injection otherwise.
+    /// Fixed `[P,Q]` per-unit power: consumption for loads, injection otherwise.
     pub prescribed: Option<[f64; 2]>,
     /// Voltage-dependent demand, normalized to its physical coil voltage.
     pub load_law: Option<McOpfLoadLaw>,

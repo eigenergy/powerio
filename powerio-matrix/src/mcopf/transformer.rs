@@ -6,7 +6,7 @@ use super::{
 use powerio_dist::DistWindingConn;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
-/// Complex affine expression with no constant term. Coefficients are [real, imaginary].
+/// Complex affine expression with no constant term. Coefficients are `[real, imaginary]`.
 /// Voltage indices address preparation.terminals; current indices address the
 /// owning transformer's coils. Rows of equations are constrained to zero.
 pub struct McOpfComplexRow {
