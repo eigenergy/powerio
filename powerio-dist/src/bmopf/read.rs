@@ -284,6 +284,15 @@ fn floats(v: Option<&Value>) -> Option<Vec<f64>> {
     v?.as_array().map(|a| a.iter().map(f).collect())
 }
 
+// BMOPFTools accepts a scalar as a one-coil vector, not a broadcast. Keep
+// malformed scalars visible as NaN so downstream validation cannot drop a bound.
+fn coil_values(v: Option<&Value>) -> Option<Vec<f64>> {
+    v.map(|value| match value {
+        Value::Array(a) => a.iter().map(f).collect(),
+        value => vec![f(value)],
+    })
+}
+
 fn first_float(v: Option<&Value>) -> Option<f64> {
     match v? {
         Value::Array(a) => a.first().map(f),
@@ -754,13 +763,13 @@ impl Reader<'_> {
                 terminal_map: strings(o.get("terminal_map")),
                 topology,
                 prime_mover,
-                s_max: floats(o.get("s_max")).unwrap_or_default(),
-                i_max: floats(o.get("i_max")),
+                s_max: coil_values(o.get("s_max")).unwrap_or_default(),
+                i_max: coil_values(o.get("i_max")),
                 p_avail: first_float(o.get("p_avail")),
-                p_min: floats(o.get("p_min")),
-                p_max: floats(o.get("p_max")),
-                q_min: floats(o.get("q_min")),
-                q_max: floats(o.get("q_max")),
+                p_min: coil_values(o.get("p_min")),
+                p_max: coil_values(o.get("p_max")),
+                q_min: coil_values(o.get("q_min")),
+                q_max: coil_values(o.get("q_max")),
                 control_profile: o
                     .get("control_profile")
                     .and_then(Value::as_str)

@@ -352,3 +352,13 @@ Open-delta regulators retain their original map only while it agrees with both
 canonical winding maps; otherwise emission writes separate regulator legs and
 reports the loss of the original grouping. N-winding `s_max` remains on its
 original winding axis in the existing winding metadata.
+
+
+### Scalar single-coil IBR bounds
+
+The reader accepts scalar `p_min`, `p_max`, `q_min`, `q_max`, `s_max` and `i_max`
+as one-entry vectors, matching the reference engine's single-coil convention.
+In particular, `p_max: 0` is an enforced zero-availability bound, not an absent
+field. Scalars are not broadcast across multiple coils; downstream cardinality
+validation still applies. Malformed scalar values remain nonfinite and invalid,
+rather than disappearing from the prepared problem.

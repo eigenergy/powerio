@@ -10,7 +10,8 @@
 - Preserve BMOPF per-coil capacitor ratings as exact terminal shunts shared by
   matrix and distribution preparation consumers. Retain custom open-delta
   terminal maps and n-winding apparent-power bounds; edited winding maps cannot
-  be overwritten by retained source metadata during emission.
+  be overwritten by retained source metadata during emission. Scalar single-coil
+  IBR bounds are retained, including zero available PV power.
 
 ## 0.11.4
 

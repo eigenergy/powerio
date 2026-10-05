@@ -148,3 +148,25 @@ fn n_winding_limits_survive_with_their_original_axis() {
         assert_eq!(metadata["bmopf_winding_metadata"][k]["s_max"], json!(1000));
     }
 }
+
+#[test]
+fn scalar_ibr_bounds_remain_present_including_zero_availability() {
+    let input = json!({"bus":{"b":{"terminal_names":["a","n"]}},"ibr":{"pv":{
+        "bus":"b","terminal_map":["a","n"],"topology":"SINGLE_PHASE","prime_mover":"PV",
+        "s_max":5250,"i_max":[30,30],"p_avail":0,"p_min":0,"p_max":0,"q_min":-5250,"q_max":5250
+    }}});
+    let net = parse_bmopf_str(&input.to_string()).unwrap();
+    let inv = &net.ibrs()[0];
+    assert_eq!(inv.s_max, vec![5250.0]);
+    assert_eq!(inv.p_min, Some(vec![0.0]));
+    assert_eq!(inv.p_max, Some(vec![0.0]));
+    assert_eq!(inv.q_min, Some(vec![-5250.0]));
+    assert_eq!(inv.q_max, Some(vec![5250.0]));
+    assert_eq!(inv.p_avail, Some(0.0));
+    let after = parse_bmopf_str(&emit_bmopf_json(&net).text).unwrap();
+    assert_eq!(net.ibrs(), after.ibrs());
+    let mut malformed = input;
+    malformed["ibr"]["pv"]["p_max"] = json!("not a bound");
+    let bad = parse_bmopf_str(&malformed.to_string()).unwrap();
+    assert!(bad.ibrs()[0].p_max.as_ref().unwrap()[0].is_nan());
+}
