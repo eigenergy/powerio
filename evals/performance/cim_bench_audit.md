@@ -15,10 +15,6 @@ RealGrid CGMES 2.4.15 datasets. Distribution CIM issue #456 is separate.
   distribution modeling. The electrical-readiness comparison changes only
   `powerio-dist`; no code from those branches is used here.
 - `krishnasandeepaxe190/powerio` has no commits ahead of upstream main.
-- Markus Mirz's [CIM bench PR #18](https://github.com/Haigutus/cim-bench/pull/18),
-  head `4fe634afd0ab30c2437a2c47a4e2772970eb57a0`, adds cimoxide export and
-  changes its query paths. Measure that pending revision separately from
-  upstream's older adapter; do not claim victory over a stale comparator.
 - Casper Eijkens' CIMD fork and PR #3 concern the separate CLI family;
   upstream PR #10 records its incomplete-profile limitation. Alex Anderson's
   CIM-Graph contribution was merged as PR #1; his fork has no ahead commits.
