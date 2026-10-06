@@ -15,9 +15,10 @@
 //! Header timestamps are a fixed sentinel for the same reason.
 
 use std::borrow::Cow;
+use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use powerio_core::ComponentId;
 use quick_xml::events::Event;
@@ -42,7 +43,8 @@ use crate::{Error, Result};
 /// and source ordering; no emitted record is driven by hash-map iteration.
 struct DetailedIndex<'a> {
     inner: &'a DetailedConnectivity,
-    metadata: HashMap<(&'a str, &'a str), &'a ComponentMetadata>,
+    metadata: HashMap<(&'a str, &'a str), IndexedMetadata<'a>>,
+    equipment_mrids: HashMap<(&'static str, &'a str), String>,
     external_ids: HashMap<&'a str, &'a ComponentMetadata>,
     transformer_ends: HashMap<&'a str, Vec<&'a ComponentMetadata>>,
     terminal_index: HashMap<(&'a str, &'a str, usize), &'a Terminal>,
@@ -57,9 +59,14 @@ struct DetailedIndex<'a> {
     equipment_with_limits: HashSet<(&'a str, &'a str)>,
 }
 
+struct IndexedMetadata<'a> {
+    record: &'a ComponentMetadata,
+    mrid: OnceCell<String>,
+}
+
 impl<'a> DetailedIndex<'a> {
     #[allow(clippy::too_many_lines)] // build one emission's borrowed indexes with first-match semantics
-    fn new(inner: &'a DetailedConnectivity, network: &BalancedNetwork) -> Self {
+    fn new(inner: &'a DetailedConnectivity, network: &'a BalancedNetwork) -> Self {
         let mut metadata = HashMap::with_capacity(inner.component_metadata.len());
         let mut external_ids = HashMap::new();
         let mut transformer_ends: HashMap<&str, Vec<&ComponentMetadata>> = HashMap::new();
@@ -79,7 +86,10 @@ impl<'a> DetailedIndex<'a> {
                     record.component.component_type(),
                     record.component.local_id(),
                 ))
-                .or_insert(record);
+                .or_insert_with(|| IndexedMetadata {
+                    record,
+                    mrid: OnceCell::new(),
+                });
             for identifier in &record.external_identifiers {
                 if identifier
                     .authority
@@ -91,6 +101,39 @@ impl<'a> DetailedIndex<'a> {
                         .or_insert(record);
                 }
             }
+        }
+        let mut equipment_mrids = HashMap::new();
+        let mut register = |component_type: &'static str, id_kind: &str, uid: Option<&'a str>| {
+            if let Some(uid) = uid {
+                equipment_mrids
+                    .entry((component_type, uid))
+                    .or_insert_with(|| mrid_or(id_kind, uid, Some(uid)));
+            }
+        };
+        for load in network.loads() {
+            register("load", "load", load.uid.as_deref());
+        }
+        for generator in network.generators() {
+            register("generator", "generator", generator.uid.as_deref());
+        }
+        for shunt in network.shunts() {
+            register("shunt", "shunt", shunt.uid.as_deref());
+        }
+        for svc in network.static_var_compensators() {
+            register(
+                "static_var_compensator",
+                "static_var_compensator",
+                svc.uid.as_deref(),
+            );
+        }
+        for branch in network.branches() {
+            register("branch", "branch", branch.uid.as_deref());
+        }
+        for transformer in network.transformers_3w() {
+            register("branch", "transformer_3w", transformer.uid.as_deref());
+        }
+        for switch in network.switches() {
+            register("switch", "switch", switch.uid.as_deref());
         }
         let mut terminal_index = HashMap::with_capacity(inner.terminals.len());
         for terminal in &inner.terminals {
@@ -141,7 +184,7 @@ impl<'a> DetailedIndex<'a> {
                 component_mrid_from_metadata(
                     metadata
                         .get(&(component.component_type(), component.local_id()))
-                        .copied(),
+                        .map(|entry| entry.record),
                     component,
                 ),
             );
@@ -174,6 +217,7 @@ impl<'a> DetailedIndex<'a> {
         Self {
             inner,
             metadata,
+            equipment_mrids,
             external_ids,
             transformer_ends,
             terminal_index,
@@ -257,8 +301,10 @@ const RATE_C_LIMIT: RateLimitType = RateLimitType {
 /// are reproducible; imported mRIDs (element `uid`s) take precedence at the
 /// call sites.
 fn det_mrid(kind: &str, name: &str) -> String {
-    let namespace = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, b"https://powerio.dev/cgmes");
-    uuid::Uuid::new_v5(&namespace, format!("{kind}:{name}").as_bytes()).to_string()
+    static NAMESPACE: LazyLock<uuid::Uuid> = LazyLock::new(|| {
+        uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, b"https://powerio.dev/cgmes")
+    });
+    uuid::Uuid::new_v5(&NAMESPACE, format!("{kind}:{name}").as_bytes()).to_string()
 }
 
 /// The imported mRID when the element carries one, else deterministic.
@@ -274,11 +320,22 @@ fn metadata<'a>(
     detailed
         .metadata
         .get(&(component.component_type(), component.local_id()))
-        .copied()
+        .map(|entry| entry.record)
 }
 
 fn component_mrid(detailed: &DetailedIndex<'_>, component: &ComponentId) -> String {
-    component_mrid_from_metadata(metadata(detailed, component), component)
+    detailed
+        .metadata
+        .get(&(component.component_type(), component.local_id()))
+        .map_or_else(
+            || component_mrid_from_metadata(None, component),
+            |entry| {
+                entry
+                    .mrid
+                    .get_or_init(|| component_mrid_from_metadata(Some(entry.record), component))
+                    .clone()
+            },
+        )
 }
 
 fn component_mrid_from_metadata(
@@ -458,7 +515,10 @@ fn mapped_component_metadata<'a>(
     component_type: &str,
     local_id: &str,
 ) -> Option<&'a ComponentMetadata> {
-    detailed?.metadata.get(&(component_type, local_id)).copied()
+    detailed?
+        .metadata
+        .get(&(component_type, local_id))
+        .map(|entry| entry.record)
 }
 
 fn cgmes_metadata_by_external_id<'a>(
@@ -907,12 +967,20 @@ fn detailed_terminal<'a>(
         .copied()
 }
 
+#[allow(clippy::too_many_lines)] // fallback covers each network equipment table
 fn equipment_mrid(
     network: &BalancedNetwork,
     detailed: Option<&DetailedIndex<'_>>,
     component: &ComponentId,
 ) -> Option<String> {
     let local_id = component.local_id();
+    if let Some(id) = detailed.and_then(|index| {
+        index
+            .equipment_mrids
+            .get(&(component.component_type(), local_id))
+    }) {
+        return Some(id.clone());
+    }
     match component.component_type() {
         "load" => network
             .loads()
@@ -1447,6 +1515,16 @@ fn esc(text: &str) -> Cow<'_, str> {
     }
 }
 
+/// Escape formatted XML text directly into the output buffer.
+struct EscapedText<'a>(&'a mut String);
+
+impl std::fmt::Write for EscapedText<'_> {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        self.0.push_str(&esc(text));
+        Ok(())
+    }
+}
+
 /// One profile document under construction.
 struct Doc {
     body: String,
@@ -1463,21 +1541,21 @@ impl Doc {
 
     /// Open an object element (`rdf:ID` definition or `rdf:about` extension).
     fn open(&mut self, class: &str, id: &str, about: bool) {
-        let attr = if about {
-            format!("rdf:about=\"#_{id}\"")
+        let (attr, prefix) = if about {
+            ("rdf:about", "#_")
         } else {
-            format!("rdf:ID=\"_{id}\"")
+            ("rdf:ID", "_")
         };
-        let _ = writeln!(self.body, "  <cim:{class} {attr}>");
-        if !about && let Some(metadata) = self.retained_metadata.get(id).cloned() {
-            if let Some(name) = metadata.name {
-                self.text("IdentifiedObject.name", name);
+        let _ = writeln!(self.body, "  <cim:{class} {attr}=\"{prefix}{id}\">");
+        if !about && let Some(metadata) = self.retained_metadata.get(id) {
+            if let Some(name) = &metadata.name {
+                Self::write_text(&mut self.body, "IdentifiedObject.name", name);
             }
-            if let Some(short_name) = metadata.short_name {
-                self.text("IdentifiedObject.shortName", short_name);
+            if let Some(short_name) = &metadata.short_name {
+                Self::write_text(&mut self.body, "IdentifiedObject.shortName", short_name);
             }
             if metadata.fictitious {
-                self.text("IdentifiedObject.isFictitious", true);
+                Self::write_text(&mut self.body, "IdentifiedObject.isFictitious", true);
             }
         }
     }
@@ -1487,11 +1565,13 @@ impl Doc {
     }
 
     fn text(&mut self, prop: &str, value: impl std::fmt::Display) {
-        let _ = writeln!(
-            self.body,
-            "    <cim:{prop}>{}</cim:{prop}>",
-            esc(&value.to_string())
-        );
+        Self::write_text(&mut self.body, prop, value);
+    }
+
+    fn write_text(body: &mut String, prop: &str, value: impl std::fmt::Display) {
+        let _ = write!(body, "    <cim:{prop}>");
+        let _ = write!(EscapedText(body), "{value}");
+        let _ = writeln!(body, "</cim:{prop}>");
     }
 
     /// A property in a non-`cim` namespace (`entsoe:`/`eu:` extensions).
@@ -7293,10 +7373,10 @@ pub(super) fn validate_rdf_graph(files: &[(String, String)]) -> Result<()> {
     const RDF_NS: &[u8] = b"http://www.w3.org/1999/02/22-rdf-syntax-ns#";
     const MD_NS: &[u8] = b"http://iec.ch/TC57/61970-552/ModelDescription/1#";
 
-    let mut fragment_definitions = HashMap::<String, String>::new();
-    let mut model_definitions = HashMap::<String, String>::new();
-    let mut fragment_references = Vec::<(String, &'static str, String)>::new();
-    let mut model_references = Vec::<(String, String)>::new();
+    let mut fragment_definitions = HashMap::<String, &str>::new();
+    let mut model_definitions = HashMap::<String, &str>::new();
+    let mut fragment_references = Vec::<(&str, &'static str, String)>::new();
+    let mut model_references = Vec::<(&str, String)>::new();
 
     for (name, xml) in files {
         let mut reader = NsReader::from_str(xml);
@@ -7364,7 +7444,7 @@ pub(super) fn validate_rdf_graph(files: &[(String, String)]) -> Result<()> {
                             b"about" => {
                                 if let Some(id) = rdf_object_reference_id(value) {
                                     fragment_references.push((
-                                        name.clone(),
+                                        name.as_str(),
                                         "rdf:about",
                                         id.to_owned(),
                                     ));
@@ -7376,12 +7456,12 @@ pub(super) fn validate_rdf_graph(files: &[(String, String)]) -> Result<()> {
                                         "generated CGMES model dependency in `{name}` has rdf:resource `{value}` instead of a urn:uuid identifier"
                                     ))
                                 })?;
-                                model_references.push((name.clone(), id.to_owned()));
+                                model_references.push((name.as_str(), id.to_owned()));
                             }
                             b"resource" => {
                                 if let Some(id) = rdf_object_reference_id(value) {
                                     fragment_references.push((
-                                        name.clone(),
+                                        name.as_str(),
                                         "rdf:resource",
                                         id.to_owned(),
                                     ));
@@ -7419,10 +7499,10 @@ pub(super) fn validate_rdf_graph(files: &[(String, String)]) -> Result<()> {
     Ok(())
 }
 
-fn register_rdf_definition(
-    definitions: &mut HashMap<String, String>,
+fn register_rdf_definition<'a>(
+    definitions: &mut HashMap<String, &'a str>,
     id: &str,
-    file: &str,
+    file: &'a str,
     kind: &str,
 ) -> Result<()> {
     if id.is_empty() {
@@ -7430,7 +7510,7 @@ fn register_rdf_definition(
             "generated CGMES file `{file}` defines an empty {kind}"
         )));
     }
-    if let Some(first_file) = definitions.insert(id.to_owned(), file.to_owned()) {
+    if let Some(first_file) = definitions.insert(id.to_owned(), file) {
         return Err(emission_error(format!(
             "generated CGMES defines {kind} `{id}` more than once: first in `{first_file}`, then in `{file}`"
         )));

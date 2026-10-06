@@ -27,6 +27,7 @@ mod read;
 mod write;
 mod xml;
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::io::{Cursor, Read};
 use std::path::{Component, Path};
@@ -327,7 +328,7 @@ fn push_zip(
         push_xml(
             &format!("{archive_name}/{raw_name}"),
             path.as_str(),
-            &content,
+            content,
             documents,
             names,
             total,
@@ -348,15 +349,16 @@ fn is_zip_signature(bytes: &[u8]) -> bool {
     )
 }
 
-fn push_xml(
+fn push_xml<'a>(
     name: &str,
     normalized_name: &str,
-    bytes: &[u8],
+    bytes: impl Into<Cow<'a, [u8]>>,
     documents: &mut Vec<(String, String)>,
     names: &mut BTreeSet<String>,
     total: &mut u64,
     max_bytes: u64,
 ) -> Result<()> {
+    let bytes = bytes.into();
     if documents.len() >= MAX_FILES {
         return Err(format_error(format!(
             "CGMES profile set contains more than {MAX_FILES} XML documents"
@@ -371,16 +373,21 @@ fn push_xml(
                 "CGMES profile data exceeds the {max_bytes} byte input limit"
             ))
         })?;
-    reject_unsafe_xml(bytes)?;
+    reject_unsafe_xml(&bytes)?;
     let key = normalized_name.replace('\\', "/").to_ascii_lowercase();
     if !names.insert(key) {
         return Err(format_error(format!(
             "CGMES profile set contains duplicate normalized name {normalized_name}"
         )));
     }
-    let text = std::str::from_utf8(bytes)
-        .map_err(|error| format_error(format!("{name} is not UTF-8 XML: {error}")))?;
-    documents.push((name.to_string(), text.to_string()));
+    let text = match bytes {
+        Cow::Borrowed(bytes) => std::str::from_utf8(bytes)
+            .map(str::to_owned)
+            .map_err(|error| format_error(format!("{name} is not UTF-8 XML: {error}")))?,
+        Cow::Owned(bytes) => String::from_utf8(bytes)
+            .map_err(|error| format_error(format!("{name} is not UTF-8 XML: {error}")))?,
+    };
+    documents.push((name.to_string(), text));
     Ok(())
 }
 
@@ -400,8 +407,16 @@ fn strict_archive_path(name: &str) -> Result<ArtifactPath> {
 }
 
 fn reject_unsafe_xml(bytes: &[u8]) -> Result<()> {
-    let text = String::from_utf8_lossy(bytes).to_ascii_lowercase();
-    if text.contains("<!doctype") || text.contains("<!entity") {
+    let text = String::from_utf8_lossy(bytes);
+    if text.match_indices("<!").any(|(at, _)| {
+        let declaration = &text.as_bytes()[at..];
+        declaration
+            .get(..9)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"<!doctype"))
+            || declaration
+                .get(..8)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"<!entity"))
+    }) {
         return Err(format_error(
             "CGMES XML must not contain a DTD or entity declaration",
         ));
@@ -5818,8 +5833,13 @@ mod tests {
         for xml in [
             "<!DOCTYPE rdf:RDF SYSTEM \"file:///etc/passwd\"><rdf:RDF/>",
             "<!DOCTYPE rdf:RDF [<!ENTITY x \"expanded\">]><rdf:RDF>&x;</rdf:RDF>",
+            "<!-- Ångström -->\n<!DoCtYpE rdf:RDF><rdf:RDF/>",
+            "<!-- 東京 -->\n<!EnTiTy x \"expanded\">",
         ] {
             assert!(reject_unsafe_xml(xml.as_bytes()).is_err());
+        }
+        for xml in ["<!", "<!-- ordinary comment -->", "<![CDATA[Ångström]]>"] {
+            assert!(reject_unsafe_xml(xml.as_bytes()).is_ok());
         }
     }
 
