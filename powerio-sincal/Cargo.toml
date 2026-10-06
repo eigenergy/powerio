@@ -1,0 +1,18 @@
+[package]
+name = "powerio-sincal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Internal native SINCAL transport and schema validation for PowerIO adapters."
+readme = "README.md"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+powerio-core.workspace = true
+zip.workspace = true
+rusqlite.workspace = true
+
+[lints]
+workspace = true

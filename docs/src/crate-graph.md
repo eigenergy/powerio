@@ -10,6 +10,9 @@ powerio-core          Source, FormatId, Diagnostic, Error, PioModule<T>,
 ├── powerio-tx        BalancedNetwork and the balanced readers and writers
 └── powerio-dist      MulticonductorNetwork and the OpenDSS, PMD, and BMOPF converters
 
+powerio-sincal        internal model-neutral SINCAL transport and schema validation;
+                      depends on core; electrical adapters follow in separate changes
+
 powerio-prob          operating points, updates, the seven instances, the eight
                       solutions, and GO Challenge 3, OPFData, and BMOPF assembly;
                       depends on core, tx, and dist; matrix free
@@ -29,6 +32,15 @@ balanced model nor the matrix stack. `powerio-prob` does not depend on
 `cargo add powerio` gets you everything, and its `matrix` feature adds the
 matrix crate without creating a cycle. CI checks these edges against
 `cargo metadata`, so the map below and the manifests cannot drift apart.
+
+The internal `powerio-sincal` crate shares acquisition and retained archive
+bytes and bounded structural schema validation without introducing a dependency
+between the network crates. It owns no electrical model, profile selection,
+mapper or solver. The SINCAL electrical adapters and public dispatch are still being developed; the shared
+transport does not advertise them as supported formats.
+The architecture gate also rejects cross-dependencies between the two network
+crates and any internal workspace dependency of `powerio-sincal` other than
+`powerio-core`, even if a proposed diagram draws such an edge.
 
 ## Components
 

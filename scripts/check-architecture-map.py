@@ -73,9 +73,21 @@ def diagram_nodes(text: str) -> set[str]:
     nodes |= set(re.findall(r'^([A-Za-z0-9_]+)\s*\[', text, re.M))
     return nodes
 
+def network_boundary_violations(edges: set[tuple[str, str]]) -> set[tuple[str, str]]:
+    """Sharing format support must not couple the two electrical models."""
+    forbidden = {("powerio-tx", "powerio-dist"), ("powerio-dist", "powerio-tx"),
+                 ("powerio-tx", "powerio"), ("powerio-dist", "powerio")}
+    return {edge for edge in edges if edge in forbidden
+            or (edge[0] == "powerio-sincal" and edge[1] != "powerio-core")}
+
 def main() -> int:
     render = "--render" in sys.argv
     members, cargo_edges = cargo_workspace()
+    violations = network_boundary_violations(cargo_edges)
+    if violations:
+        print(f"network/backend dependency boundaries violated: {sorted(violations)}",
+              file=sys.stderr)
+        return 1
     text = (DIAGRAMS / "architecture.dot").read_text()
     # 0) every workspace crate is a node somewhere in the diagram. The crate
     # universe comes from cargo metadata, not from the diagram's own text, so
@@ -100,9 +112,9 @@ def main() -> int:
         return 1
     core_edges = {e for e in actual
                   if e[0] in {"powerio", "powerio-tx", "powerio-dist", "powerio-prob",
-                              "powerio-matrix"}
+                              "powerio-matrix", "powerio-sincal"}
                   and e[1] in {"powerio-core", "powerio-tx", "powerio-dist",
-                               "powerio-prob", "powerio-matrix"}}
+                               "powerio-prob", "powerio-matrix", "powerio-sincal"}}
     undrawn = core_edges - drawn
     if undrawn:
         print(f"cargo metadata has component edges architecture.dot does not draw: {sorted(undrawn)}",

@@ -18,6 +18,11 @@ check the current source, tests, and release notes.
   electrical network, matrix, or solver dependencies.
 - **`powerio-tx`**: the format neutral `BalancedNetwork`, the balanced format
   readers and writers, normalization, and derived indexed views.
+- **`powerio-sincal`**: internal model-neutral native archive transport, source
+  retention and bounded schema/identity validation for SINCAL adapters.
+  It depends on `powerio-core`, never
+  either network crate or the facade. Electrical interpretation and
+  profile selection remain adapter work; public SINCAL support is unfinished.
 - **`powerio-dist`**: the multiconductor distribution model
   (`MulticonductorNetwork`) with the OpenDSS `.dss`, PMD JSON, and BMOPF JSON
   converters. It does **not** depend on the transmission crate; both share
@@ -158,7 +163,7 @@ PowerIO releases are tag driven.
    tag workflow runs.
 7. A human inspects and publishes the draft release. Publishing also starts
    the crates.io workflow, which verifies the workspace package set and
-   publishes `powerio-core`, `powerio-tx`, `powerio-dist`, `powerio-prob`,
+   publishes `powerio-core`, `powerio-sincal`, `powerio-tx`, `powerio-dist`, `powerio-prob`,
    `powerio-matrix`, `powerio`, and `powerio-cli` in dependency order. A
    rerun skips versions already present on crates.io.
 8. Publishing the release triggers `.github/workflows/notify-powerio-jl.yml`.

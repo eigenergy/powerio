@@ -1,0 +1,34 @@
+//! Internal, model-neutral SINCAL transport and schema support for family adapters.
+//!
+//! Acquisition and structural validation do not choose a network family.
+//! These implementation interfaces are not the public PowerIO parse API.
+
+mod acquisition;
+mod project;
+mod schema;
+#[cfg(test)]
+mod schema_tests;
+#[cfg(test)]
+mod tests;
+
+pub use acquisition::{MAX_BYTES, SQLITE_MAGIC, database_bytes};
+pub use project::AcquiredProject;
+pub use schema::{DatabaseSnapshot, TerminalIdentity, require_table};
+
+/// Transport/schema failure. The owning adapter supplies its registered diagnostic.
+#[derive(Debug)]
+pub struct Error(String);
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Error {}
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+fn format_error(message: impl std::fmt::Display) -> Error {
+    Error(message.to_string())
+}
