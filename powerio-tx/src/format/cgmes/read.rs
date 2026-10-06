@@ -17,7 +17,7 @@
 //! base. Everything the mapping does not consume is counted per class into
 //! the parse warnings, never dropped silently.
 
-use std::cell::RefCell;
+use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 
@@ -558,7 +558,7 @@ struct Store {
     /// Properties successfully read by the source neutral mapping. This lets
     /// the final diagnostic pass distinguish a mapped class from fields on
     /// that class which the mapping did not consume.
-    read_props: RefCell<BTreeSet<(usize, usize)>>,
+    read_props: OnceCell<Vec<Vec<Cell<bool>>>>,
     /// Whether a document declared this writer's modeling authority. The
     /// declaration permits suppressing only the exact container, island, and
     /// subordinate values fresh emission synthesizes; it does not make other
@@ -582,6 +582,7 @@ impl Store {
         // The indexes describe the store as merged so far; a further document
         // rebuilds them on the next use.
         self.by_class.take();
+        self.read_props.take();
         self.by_reference.borrow_mut().clear();
         let modeling_authority_set = doc
             .header
@@ -730,9 +731,16 @@ impl Store {
     }
 
     fn mark_read(&self, object_at: usize, property_at: usize) {
-        self.read_props
-            .borrow_mut()
-            .insert((object_at, property_at));
+        self.read_properties()[object_at][property_at].set(true);
+    }
+
+    fn read_properties(&self) -> &Vec<Vec<Cell<bool>>> {
+        self.read_props.get_or_init(|| {
+            self.objects
+                .iter()
+                .map(|object| (0..object.props.len()).map(|_| Cell::new(false)).collect())
+                .collect()
+        })
     }
 
     fn text(&self, id: &str, key: &str) -> Option<&str> {
@@ -5852,7 +5860,7 @@ fn warn_unmapped(store: &Store, warnings: &mut CgmesDiagnostics) {
     let own_output = is_own_output(store);
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
     let mut fields: BTreeMap<(&str, &str), (usize, Vec<&str>)> = BTreeMap::new();
-    let read_props = store.read_props.borrow();
+    let read_props = store.read_properties();
     for (object_at, object) in store.objects.iter().enumerate() {
         let class = object.class.as_str();
         if !class_is_consumed(class) {
@@ -5863,7 +5871,7 @@ fn warn_unmapped(store: &Store, warnings: &mut CgmesDiagnostics) {
             continue;
         }
         for (property_at, (property, value)) in object.props.iter().enumerate() {
-            if read_props.contains(&(object_at, property_at)) {
+            if read_props[object_at][property_at].get() {
                 continue;
             }
             if own_output && synthesized_unmapped_property(class, property) {
@@ -6041,7 +6049,15 @@ mod tests {
                 .unwrap(),
             Some(1.0)
         );
-        assert_eq!(number.read_props.borrow().len(), 1);
+        assert_eq!(
+            number
+                .read_properties()
+                .iter()
+                .flatten()
+                .filter(|read| read.get())
+                .count(),
+            1
+        );
         let unread = store(PropValue::Text("bad fallback".into()));
         assert_eq!(
             Some(1.0)
@@ -6049,7 +6065,7 @@ mod tests {
                 .unwrap(),
             Some(1.0)
         );
-        assert!(unread.read_props.borrow().is_empty());
+        assert!(!unread.read_properties().iter().flatten().any(Cell::get));
     }
 
     #[test]
