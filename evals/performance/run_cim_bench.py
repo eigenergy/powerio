@@ -19,7 +19,6 @@ def main():
     p.add_argument("--cim-bench", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--services", nargs="*")
-    p.add_argument("--pending-cimoxide", type=Path)
     p.add_argument("--baseline", action="store_true")
     p.add_argument("--timeout", type=int, default=900)
     a = p.parse_args()
@@ -35,32 +34,13 @@ def main():
     ]
     if a.services:
         services = {k: services[k] for k in a.services}
-    if a.pending_cimoxide:
-        for dataset in ["svedala", "realgrid"]:
-            services[f"cimoxide-pr18-{dataset}"] = {
-                **services.get(f"cimoxide-{dataset}", {}),
-                "image": "cim-bench/cimoxide:latest",
-                "command": f"pytest cimoxide_{dataset}_benchmark.py --benchmark-only",
-            }
     if a.baseline:
         for dataset in ["svedala", "realgrid"]:
             services[f"powerio-baseline-{dataset}"] = {
                 "image": "cim-bench/powerio:baseline",
                 "command": f"pytest powerio_{dataset}_benchmark.py --benchmark-only",
             }
-    priority = [
-        "powerio-svedala",
-        "powerio-realgrid",
-        "cimoxide-pr18-svedala",
-        "cimoxide-pr18-realgrid",
-        "cimoxide-svedala",
-        "cimoxide-realgrid",
-        "libcimpp-realgrid",
-        "triplets-svedala",
-        "triplets-realgrid",
-        "veragrid-svedala",
-        "veragrid-realgrid",
-    ]
+    priority = ["powerio-svedala", "powerio-realgrid"]
     services = dict(
         sorted(
             services.items(),
@@ -122,17 +102,6 @@ def main():
             "-v",
             f"{out}:/output",
         ]
-        if "pr18" in service:
-            entry["comparator_files_sha256"] = {}
-            for f in ["cimoxide_adapter.py", "powsybl_queries.py"]:
-                entry["comparator_files_sha256"][f] = hashlib.sha256(
-                    (a.pending_cimoxide / f).read_bytes()
-                ).hexdigest()
-                cmd += [
-                    "-v",
-                    f"{a.pending_cimoxide.resolve()}/{f}:/benchmarks/parsers/{f}:ro",
-                ]
-            entry["comparator_commit"] = "4fe634afd0ab30c2437a2c47a4e2772970eb57a0"
         # Historical 549c6ff baseline predates the shared 1 GiB defaults.
         if "baseline" in service:
             for var in ["PRIMARY", "REFERENCED", "CGMES"]:
