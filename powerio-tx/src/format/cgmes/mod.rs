@@ -2413,6 +2413,73 @@ mod tests {
     }
 
     #[test]
+    fn transformer_winding_order_is_independent_of_terminal_sequence() {
+        let mut network = network();
+        network.buses_mut()[1].base_kv = 115.0;
+        network.branches_mut()[0].tap = 1.05;
+        let mut files = write::write_cgmes(&network, CgmesVersion::V3_0)
+            .unwrap()
+            .files;
+        let eq = files
+            .iter_mut()
+            .find(|(name, _)| name.ends_with("_EQ.xml"))
+            .unwrap();
+        let transformer =
+            eq.1.lines()
+                .find_map(|line| {
+                    line.trim()
+                        .strip_prefix("<cim:PowerTransformer rdf:ID=\"")
+                        .and_then(|tail| tail.split('"').next())
+                        .map(str::to_owned)
+                })
+                .unwrap();
+        eq.1 =
+            eq.1.split("</cim:Terminal>")
+                .map(|part| {
+                    if part.contains(&format!(
+                        "<cim:Terminal.ConductingEquipment rdf:resource=\"#{transformer}\""
+                    )) {
+                        part.replace("sequenceNumber>1<", "sequenceNumber>TEMP<")
+                            .replace("sequenceNumber>2<", "sequenceNumber>1<")
+                            .replace("sequenceNumber>TEMP<", "sequenceNumber>2<")
+                    } else {
+                        part.to_owned()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("</cim:Terminal>");
+        let original = read::read_cgmes_documents(files, Some("reversed-terminal-sequence"))
+            .unwrap()
+            .network;
+        let fresh = write::write_cgmes(&original, CgmesVersion::V3_0).unwrap();
+        let reparsed = read::read_cgmes_documents(fresh.files, Some("fresh-transformer"))
+            .unwrap()
+            .network;
+        let before = &original.branches()[0];
+        let after = &reparsed.branches()[0];
+        let bus_uid = |net: &BalancedNetwork, bus| {
+            net.buses()
+                .iter()
+                .find(|b| b.id == bus)
+                .unwrap()
+                .uid
+                .clone()
+        };
+        assert_eq!(
+            bus_uid(&original, before.from),
+            bus_uid(&reparsed, after.from)
+        );
+        assert_eq!(bus_uid(&original, before.to), bus_uid(&reparsed, after.to));
+        assert!(
+            (before.tap - after.tap).abs() < 1e-10,
+            "tap {} became {}",
+            before.tap,
+            after.tap
+        );
+        assert!((before.rate_a - after.rate_a).abs() < 1e-10);
+    }
+
+    #[test]
     fn imported_power_transformer_end_identities_round_trip_exactly() {
         let mut network = network();
         network.branches_mut()[0].tap = 1.05;

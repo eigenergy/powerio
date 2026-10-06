@@ -874,6 +874,38 @@ enum BusSource {
     Calculated,
 }
 
+/// The neutral terminal number is a transformer winding side. CIM permits
+/// ACDCTerminal.sequenceNumber to differ from TransformerEnd.endNumber.
+fn terminal_side(store: &Store, terminal: &str) -> Result<u8> {
+    let sequence = store
+        .f(terminal, "ACDCTerminal.sequenceNumber")?
+        .try_or_else(|| store.f(terminal, "Terminal.sequenceNumber"))?
+        .unwrap_or(1.0) as u8;
+    let Some(equipment) = store.refv(terminal, "Terminal.ConductingEquipment") else {
+        return Ok(sequence);
+    };
+    if store.class_of(equipment) != Some("PowerTransformer") {
+        return Ok(sequence);
+    }
+    let ends = store.referrers("TransformerEnd.Terminal", terminal);
+    let mut matching = ends.into_iter().filter(|end| {
+        store.class_of(end) == Some("PowerTransformerEnd")
+            && store.refv(end, "PowerTransformerEnd.PowerTransformer") == Some(equipment)
+    });
+    let Some(end) = matching.next() else {
+        return Ok(sequence);
+    };
+    if matching.next().is_some() {
+        return Err(Error::FormatRead {
+            format: FMT,
+            message: format!(
+                "Terminal `{terminal}` belongs to multiple PowerTransformerEnd records"
+            ),
+        });
+    }
+    Ok(store.f(end, "TransformerEnd.endNumber")?.unwrap_or(1.0) as u8)
+}
+
 /// Terminal wiring: equipment → its terminals (sequence order), terminal →
 /// bus node (the topological node, or the connectivity node when buses are
 /// calculated), and the terminal SSH connection value.
@@ -891,10 +923,7 @@ impl Wiring {
             let mut connected = HashMap::new();
             for id in store.of_class("Terminal") {
                 if let Some(eq) = store.refv(id, "Terminal.ConductingEquipment") {
-                    let seq = store
-                        .f(id, "ACDCTerminal.sequenceNumber")?
-                        .try_or_else(|| store.f(id, "Terminal.sequenceNumber"))?
-                        .unwrap_or(1.0);
+                    let seq = f64::from(terminal_side(store, id)?);
                     of_equipment
                         .entry(eq.to_string())
                         .or_default()
@@ -2680,7 +2709,12 @@ fn build_detailed_connectivity(
             .f(id, "ACDCTerminal.sequenceNumber")?
             .try_or_else(|| store.f(id, "Terminal.sequenceNumber"))?
             .unwrap_or(1.0);
-        let terminal = u8::try_from(sequence as u64).unwrap_or(u8::MAX);
+        let terminal = terminal_side(store, id)?;
+        if terminal != sequence as u8 {
+            mapper.warnings.push_as(&codes::READ_CGMES_FIELD_UNMAPPED, format!(
+                "Terminal `{id}` sequenceNumber {sequence} differs from its transformer winding {terminal}; the neutral terminal number follows the winding, and fresh output uses that number"
+            ));
+        }
         let bus = store.refv(id, "Terminal.TopologicalNode");
         let node = store
             .refv(id, "Terminal.ConnectivityNode")
@@ -3781,11 +3815,7 @@ fn terminal_reference(store: &Store, terminal: &str) -> Result<Option<TerminalRe
     let Some(equipment) = store.refv(terminal, "Terminal.ConductingEquipment") else {
         return Ok(None);
     };
-    let sequence = store
-        .f(terminal, "ACDCTerminal.sequenceNumber")?
-        .try_or_else(|| store.f(terminal, "Terminal.sequenceNumber"))?
-        .unwrap_or(1.0);
-    let terminal = u8::try_from(sequence.round() as u64).unwrap_or(u8::MAX);
+    let terminal = terminal_side(store, terminal)?;
     Ok(Some(TerminalReference {
         equipment: component_id(
             component_type(store.class_of(equipment).unwrap_or_default()),
