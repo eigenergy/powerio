@@ -38,7 +38,6 @@ use crate::network::BalancedNetwork;
 use crate::{Error, Result};
 
 const MAX_FILES: usize = 4_096;
-const DEFAULT_MAX_BYTES: u64 = 64 << 20;
 const MAX_COMPRESSION_RATIO: u64 = 200;
 /// The modeling authority set fresh CGMES output states. A header carrying it
 /// was synthesized by this writer, so its identity, version, creation time,
@@ -181,19 +180,10 @@ pub(crate) fn parse_text(
 }
 
 fn acquire_documents(source: &Source) -> Result<Vec<(String, String)>> {
-    let max_bytes = parse_byte_limit(std::env::var_os("POWERIO_MAX_CGMES_BYTES").as_deref())?;
+    let max_bytes = source
+        .acquisition_byte_limit()
+        .map_err(|error| source_error(&error))?;
     acquire_documents_with_limit(source, max_bytes)
-}
-
-fn parse_byte_limit(value: Option<&std::ffi::OsStr>) -> Result<u64> {
-    let Some(value) = value else {
-        return Ok(DEFAULT_MAX_BYTES);
-    };
-    value.to_str()
-        .filter(|value| !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()))
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|&limit| limit > 0 && isize::try_from(limit).is_ok())
-        .ok_or_else(|| format_error("POWERIO_MAX_CGMES_BYTES must be a positive decimal byte count within this platform's allocation limit"))
 }
 
 fn acquire_documents_with_limit(source: &Source, max_bytes: u64) -> Result<Vec<(String, String)>> {
@@ -5633,20 +5623,6 @@ mod tests {
 
     #[test]
     fn configurable_acquisition_limit_bounds_directory_and_archive_xml() {
-        use std::ffi::OsStr;
-        assert_eq!(parse_byte_limit(None).unwrap(), DEFAULT_MAX_BYTES);
-        assert_eq!(parse_byte_limit(Some(OsStr::new("128"))).unwrap(), 128);
-        for value in [
-            "",
-            "0",
-            "-1",
-            "+1",
-            " 128",
-            "128MiB",
-            "18446744073709551615",
-        ] {
-            assert!(parse_byte_limit(Some(OsStr::new(value))).is_err());
-        }
         let output = write::write_cgmes(&network(), CgmesVersion::V3_0).unwrap();
         let limit = output.files.iter().map(|(_, text)| text.len() as u64).sum();
         let directory = tempfile::tempdir().unwrap();

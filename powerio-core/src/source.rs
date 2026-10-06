@@ -11,9 +11,10 @@ use crate::{Error, SourceId};
 /// budget the distribution reader has enforced since 0.7.
 const MAX_REFERENCED_FILES: usize = 4_096;
 
-/// Total bytes of referenced files one source may acquire.
-const MAX_REFERENCED_BYTES: u64 = 64 << 20;
-const DEFAULT_PRIMARY_BYTES: u64 = 64 << 20;
+// One default for primary input and cumulative acquisition, including archives.
+const DEFAULT_SOURCE_BYTES: u64 = 1 << 30;
+const MAX_REFERENCED_BYTES: u64 = DEFAULT_SOURCE_BYTES;
+const DEFAULT_PRIMARY_BYTES: u64 = DEFAULT_SOURCE_BYTES;
 
 fn referenced_byte_limit() -> Result<u64, Error> {
     parse_byte_limit(
@@ -299,10 +300,10 @@ pub struct Source {
 impl Source {
     /// Acquire a file eagerly or a directory lazily.
     ///
-    /// Primary files are limited to 64 MiB unless `POWERIO_MAX_PRIMARY_BYTES`
+    /// Primary files are limited to 1 GiB unless `POWERIO_MAX_PRIMARY_BYTES`
     /// supplies a positive decimal byte count. The limit is checked before
     /// allocation. Referenced files have a separate cumulative budget.
-    /// `POWERIO_MAX_REFERENCED_BYTES` overrides that budget (64 MiB by default).
+    /// `POWERIO_MAX_REFERENCED_BYTES` overrides that budget (1 GiB by default).
     /// It is read once at construction and shared by every clone of the source.
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, Error> {
         let path = path.into();
@@ -527,6 +528,17 @@ impl Source {
     #[must_use]
     pub fn is_directory(&self) -> bool {
         matches!(&*self.provider, SourceProvider::Directory { .. })
+    }
+
+    /// Byte limit for cumulative acquisition and expanded archive contents.
+    /// Filesystem sources capture `POWERIO_MAX_REFERENCED_BYTES` when opened;
+    /// memory sources read it when a parser requests expansion. Defaults to 1 GiB.
+    pub fn acquisition_byte_limit(&self) -> Result<u64, Error> {
+        match &*self.provider {
+            SourceProvider::File { acquisition, .. }
+            | SourceProvider::Directory { acquisition } => Ok(acquisition.max_bytes),
+            SourceProvider::Memory { .. } => referenced_byte_limit(),
+        }
     }
 
     /// Borrow the sole primary buffer of a file or memory source.
@@ -2059,6 +2071,23 @@ mod tests {
             crate::ErrorCategory::Request
         );
         assert_eq!(sibling.unwrap(), b"real");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn default_budget_accepts_a_primary_and_reference_larger_than_64_mib() {
+        assert_eq!(DEFAULT_SOURCE_BYTES, 1_073_741_824);
+        let root = test_root("large-default-budget");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("large.dat");
+        let size = (64 << 20) + 1;
+        std::fs::File::create(&path).unwrap().set_len(size).unwrap();
+        let source = Source::open(&path).unwrap();
+        assert_eq!(source.primary_buffer().unwrap().bytes().len() as u64, size);
+        drop(source);
+        let directory = Source::open(&root).unwrap();
+        let name = crate::ArtifactPath::new("large.dat").unwrap();
+        assert_eq!(directory.buffer(&name).unwrap().bytes().len() as u64, size);
         std::fs::remove_dir_all(root).unwrap();
     }
 

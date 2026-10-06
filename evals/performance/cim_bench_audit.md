@@ -5,7 +5,7 @@ RealGrid CGMES 2.4.15 datasets. Distribution CIM issue #456 is separate.
 
 ## Community work reviewed (2026-10-06)
 
-- Mohamed Numair suggested CIM bench in [issue #456](https://github.com/eigenergy/powerio/issues/456#issuecomment-6022871135).
+- [Mohamed Numair (@MohamedNumair)](https://github.com/MohamedNumair) suggested CIM bench in [issue #456](https://github.com/eigenergy/powerio/issues/456#issuecomment-6022871135).
   His `core/cgmes` commits `a26b60452a853126f84b9c793e2cdc603ec43081` and
   `11163b32faf87dbe8a64a94a388a771e36c6df8f` supplied the original reader
   and writer already incorporated into PowerIO. The existing
@@ -28,8 +28,8 @@ RealGrid CGMES 2.4.15 datasets. Distribution CIM issue #456 is separate.
 No unmerged community implementation is copied into the new PowerIO APIs.
 If subsequent optimization imports a patch, preserve its author and commit
 provenance. If substantially adapting code, acknowledge the adaptation and
-add verified coauthor credit to the relevant commit. Suggestions receive
-explicit acknowledgment; attribution does not imply endorsement.
+add verified coauthor credit to the relevant commit. The prerequisite and CGMES follow-up commits credit Mohamed Numair as coauthor
+using the identity verified from his original commit.
 
 ## Input provenance
 
@@ -47,13 +47,10 @@ Keep datasets in CIM bench's submodules, not PowerIO fixtures:
 
 ## Runtime interface
 
-`POWERIO_MAX_REFERENCED_BYTES` controls aggregate referenced-file acquisition
-per filesystem Source. `POWERIO_MAX_CGMES_BYTES` controls aggregate expanded
-CGMES XML and bounds individual archives/entries. Both default to 64 MiB;
-benchmark runs opt into 268435456 bytes. Existing archive path, entry-count,
-nesting, and compression-ratio checks remain. Positive decimal byte counts
-must fit the platform allocation limit. Referenced budgets are captured when
-the Source is opened; CGMES budgets when parsing starts.
+Primary input and cumulative acquisition default to 1 GiB, configured through
+`POWERIO_MAX_PRIMARY_BYTES` and `POWERIO_MAX_REFERENCED_BYTES`. Expanded
+archive content uses the acquisition limit. There is no CGMES-specific setting.
+Existing archive path, entry-count, nesting, and compression-ratio checks remain.
 
 Python `BalancedNetwork.component_counts()` returns native lines (excluding
 transformer branches), generators, loads, and source-hierarchy substations
