@@ -5928,7 +5928,9 @@ fn warn_unmapped(store: &Store, warnings: &mut CgmesDiagnostics) {
                 .entry((class, property.as_str()))
                 .or_insert_with(|| (0, Vec::new()));
             *occurrences += 1;
-            if !ids.contains(&object.id.as_str()) {
+            // Each merged object is visited once, with all its properties
+            // together. Repeated values can only repeat the latest ID.
+            if ids.last().copied() != Some(object.id.as_str()) {
                 ids.push(object.id.as_str());
             }
         }
@@ -5998,6 +6000,42 @@ fn warn_regenerated_subordinate_identities(store: &Store, warnings: &mut CgmesDi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unmapped_multi_value_fields_count_objects_once_in_source_order() {
+        let mut store = Store::default();
+        store
+            .merge(CimDocument {
+                cim_namespaces: BTreeSet::new(),
+                header: None,
+                objects: (0..7)
+                    .map(|index| CimObject {
+                        class: "TopologicalIsland".into(),
+                        id: format!("island-{index}"),
+                        definition: true,
+                        props: vec![
+                            (
+                                "TopologicalIsland.TopologicalNodes".into(),
+                                PropValue::Ref("node-a".into()),
+                            ),
+                            (
+                                "TopologicalIsland.TopologicalNodes".into(),
+                                PropValue::Ref("node-b".into()),
+                            ),
+                        ],
+                    })
+                    .collect(),
+            })
+            .unwrap();
+        let mut warnings = CgmesDiagnostics::new(&codes::READ_CGMES_RECORD_UNMAPPED);
+        warn_unmapped(&store, &mut warnings);
+        assert_eq!(warnings.len(), 1);
+        let warning = warnings.iter().next().unwrap();
+        assert!(warning.contains("7 TopologicalIsland object(s) state 14"));
+        assert!(warning.contains(
+            "objects: [`island-0`, `island-1`, `island-2`, `island-3`, `island-4`] and 2 more"
+        ));
+    }
 
     fn document_with_literal(class: &str, property: &str, value: &str) -> CimDocument {
         CimDocument {
