@@ -31,3 +31,22 @@ def test_sever_source_forces_fresh_emission_and_keeps_original(tmp_path):
     result = powerio.emit(cgmes.sever_source(), "cgmes")
     assert result.fidelity != "exact_same_format"
     assert len(result.artifacts) == 4
+
+
+def test_archive_expansion_uses_the_shared_acquisition_limit(monkeypatch, tmp_path):
+    import zipfile
+    import pytest
+
+    module = powerio.parse(DATA / "case14.m")
+    emitted = powerio.emit(module, "cgmes")
+    expanded_bytes = sum(len(artifact.data) for artifact in emitted.artifacts)
+    path = tmp_path / "profiles.zip"
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for artifact in emitted.artifacts:
+            archive.writestr(artifact.name, artifact.data)
+    assert path.stat().st_size < expanded_bytes
+    monkeypatch.setenv("POWERIO_MAX_REFERENCED_BYTES", str(expanded_bytes))
+    assert powerio.parse(path, format="cgmes").value.n_buses == 14
+    monkeypatch.setenv("POWERIO_MAX_REFERENCED_BYTES", str(expanded_bytes - 1))
+    with pytest.raises(powerio.PowerIOError, match="input limit"):
+        powerio.parse(path, format="cgmes")
