@@ -546,6 +546,8 @@ struct Merged {
 struct Store {
     objects: Vec<Merged>,
     by_id: HashMap<String, usize>,
+    /// Adjacent property reads usually refer to the same object.
+    last_object: Cell<Option<usize>>,
     /// Object positions by class, in first definition order. Built on first
     /// use after every document is merged, so a class scan costs the size of
     /// the class rather than the size of the store.
@@ -581,6 +583,7 @@ impl Store {
     fn merge(&mut self, doc: CimDocument) -> Result<()> {
         // The indexes describe the store as merged so far; a further document
         // rebuilds them on the next use.
+        self.last_object.set(None);
         self.by_class.take();
         self.read_props.take();
         self.by_reference.borrow_mut().clear();
@@ -592,6 +595,10 @@ impl Store {
             Some(super::POWERIO_MODELING_AUTHORITY_SET) => self.own_output = true,
             Some(_) => self.foreign_output = true,
             None => {}
+        }
+        if self.objects.is_empty() {
+            self.objects.reserve(doc.objects.len());
+            self.by_id.reserve(doc.objects.len());
         }
         for CimObject {
             class,
@@ -660,20 +667,29 @@ impl Store {
         Ok(())
     }
 
+    fn object_index(&self, id: &str) -> Option<usize> {
+        if let Some(at) = self.last_object.get()
+            && self.objects[at].id == id
+        {
+            return Some(at);
+        }
+        let at = self.by_id.get(id).copied();
+        self.last_object.set(at);
+        at
+    }
+
     fn class_of(&self, id: &str) -> Option<&str> {
-        self.by_id
-            .get(id)
-            .map(|&at| self.objects[at].class.as_str())
+        self.object_index(id)
+            .map(|at| self.objects[at].class.as_str())
     }
 
     fn modeling_authority_set(&self, id: &str) -> Option<&str> {
-        self.by_id
-            .get(id)
-            .and_then(|&at| self.objects[at].modeling_authority_set.as_deref())
+        self.object_index(id)
+            .and_then(|at| self.objects[at].modeling_authority_set.as_deref())
     }
 
     fn contains(&self, id: &str) -> bool {
-        self.by_id.contains_key(id)
+        self.object_index(id).is_some()
     }
 
     /// Ids of every object of `class`, in first-definition order.
@@ -681,7 +697,11 @@ impl Store {
         let by_class = self.by_class.get_or_init(|| {
             let mut by_class: HashMap<String, Vec<usize>> = HashMap::new();
             for (at, object) in self.objects.iter().enumerate() {
-                by_class.entry(object.class.clone()).or_default().push(at);
+                if let Some(positions) = by_class.get_mut(object.class.as_str()) {
+                    positions.push(at);
+                } else {
+                    by_class.insert(object.class.clone(), vec![at]);
+                }
             }
             by_class
         });
@@ -721,7 +741,7 @@ impl Store {
     }
 
     fn raw_prop(&self, id: &str, key: &str) -> Option<(usize, usize, &PropValue)> {
-        let &at = self.by_id.get(id)?;
+        let at = self.object_index(id)?;
         self.objects[at]
             .props
             .iter()

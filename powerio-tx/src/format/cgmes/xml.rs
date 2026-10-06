@@ -258,13 +258,14 @@ pub(crate) fn parse_cimxml(text: &str) -> Result<CimDocument> {
                                 }
                                 prop_text.clear();
                             } else {
-                                let value = std::mem::take(&mut prop_text);
+                                let value = prop_text.trim().to_string();
+                                prop_text.clear();
                                 push_prop(
                                     in_header,
                                     &mut header,
                                     &mut current,
                                     prop,
-                                    PropValue::Text(value.trim().to_string()),
+                                    PropValue::Text(value),
                                 );
                             }
                         }
