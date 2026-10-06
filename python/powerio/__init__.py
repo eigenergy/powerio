@@ -369,6 +369,15 @@ class BalancedNetwork:
         # form, so this is a straight delegate.
         return repr(self._inner)
 
+    def component_counts(self) -> dict[str, int]:
+        """Count native lines, generators, loads, and substations.
+
+        Lines exclude transformer branches. Loads include equivalent injections
+        represented as loads. Substations count the source hierarchy, or zero
+        when the format supplies no hierarchy. No Python table rows are built.
+        """
+        return self._inner.component_counts()
+
     def calc_connectivity_report(self) -> dict[str, Any]:
         """Calculate the in-service topology summary."""
         return self._inner.calc_connectivity_report()
@@ -1465,6 +1474,15 @@ class PioModule:
 
     def __init__(self, inner: "_powerio._PioModule"):
         self._inner = inner
+
+    def sever_source(self) -> "PioModule":
+        """Copy this module without retained input bytes, forcing fresh emission.
+
+        The original module is unchanged. Values, diagnostics, source
+        descriptors, and history are preserved; preparing the copy has a cost
+        separate from emission.
+        """
+        return PioModule(self._inner.sever_source())
 
     @classmethod
     def from_value(cls, value: Any) -> "PioModule":

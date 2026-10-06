@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- CGMES and referenced-file acquisition accept explicit bounded byte-budget
+  overrides (`POWERIO_MAX_CGMES_BYTES`, `POWERIO_MAX_REFERENCED_BYTES`) for
+  large profile sets such as CIM bench's RealGrid. Defaults remain 64 MiB.
+  Python adds `BalancedNetwork.component_counts()` for native table counts
+  and `PioModule.sever_source()` to force fresh emission while preserving the
+  original module. The [CIM bench audit](evals/performance/cim_bench_audit.md)
+  records measurement semantics and community attribution.
+
 - PSS/E switched shunt `MODSW` 1 and 2 now read as PSS/E defines them: 1 is
   discrete and 2 is continuous adjustment of the regulated voltage. The RAW
   and RAWX readers had the two swapped, so a continuously adjusted shunt, such

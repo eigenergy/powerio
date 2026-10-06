@@ -637,6 +637,32 @@ impl PyBalancedNetwork {
         self.inner().areas().len()
     }
 
+    /// Native electrical table counts, without materializing Python rows.
+    /// Lines exclude transformer branches; loads include equivalent injections
+    /// mapped to the load table. Substations are the retained source hierarchy.
+    fn component_counts<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let network = self.inner();
+        let counts = PyDict::new(py);
+        counts.set_item(
+            "lines",
+            network
+                .branches()
+                .iter()
+                .filter(|branch| !branch.is_transformer())
+                .count(),
+        )?;
+        counts.set_item("generators", network.generators().len())?;
+        counts.set_item("loads", network.loads().len())?;
+        counts.set_item(
+            "substations",
+            network
+                .detailed_connectivity()
+                .as_ref()
+                .map_or(0, |details| details.substations.len()),
+        )?;
+        Ok(counts)
+    }
+
     /// The exact source neutral hierarchy and connectivity records, or
     /// `None` when the source supplied only the balanced calculation tables.
     /// Python's network tables are immutable dictionary copies, so this uses
@@ -3733,6 +3759,13 @@ impl PyPioModule {
     fn _copy(&self) -> PyResult<Self> {
         Ok(Self {
             module: Some(self.module()?.clone()),
+        })
+    }
+
+    /// Return a copy that emits from its value instead of replaying source bytes.
+    fn sever_source(&self) -> PyResult<Self> {
+        Ok(Self {
+            module: Some(self.module()?.clone().sever_source()),
         })
     }
 

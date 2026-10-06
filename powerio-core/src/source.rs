@@ -15,9 +15,25 @@ const MAX_REFERENCED_FILES: usize = 4_096;
 const MAX_REFERENCED_BYTES: u64 = 64 << 20;
 const DEFAULT_PRIMARY_BYTES: u64 = 64 << 20;
 
+fn referenced_byte_limit() -> Result<u64, Error> {
+    parse_byte_limit(
+        "POWERIO_MAX_REFERENCED_BYTES",
+        std::env::var_os("POWERIO_MAX_REFERENCED_BYTES").as_deref(),
+        MAX_REFERENCED_BYTES,
+    )
+}
+
 fn parse_primary_limit(value: Option<&std::ffi::OsStr>) -> Result<u64, Error> {
+    parse_byte_limit("POWERIO_MAX_PRIMARY_BYTES", value, DEFAULT_PRIMARY_BYTES)
+}
+
+fn parse_byte_limit(
+    name: &str,
+    value: Option<&std::ffi::OsStr>,
+    default: u64,
+) -> Result<u64, Error> {
     let Some(value) = value else {
-        return Ok(DEFAULT_PRIMARY_BYTES);
+        return Ok(default);
     };
     let limit = value
         .to_str()
@@ -25,19 +41,20 @@ fn parse_primary_limit(value: Option<&std::ffi::OsStr>) -> Result<u64, Error> {
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|&limit| limit > 0 && isize::try_from(limit).is_ok());
     limit.ok_or_else(|| Error::new(&crate::codes::REQUEST_SOURCE_INVALID_LIMIT,
-        "POWERIO_MAX_PRIMARY_BYTES must be a positive decimal byte count within this platform's allocation limit"))
+        format!("{name} must be a positive decimal byte count within this platform's allocation limit")))
 }
 
 #[derive(Clone, Copy)]
 enum ReadBudget {
     Primary(u64),
-    Referenced(u64),
+    Referenced { remaining: u64, total: u64 },
 }
 
 impl ReadBudget {
     fn bytes(self) -> u64 {
         match self {
-            Self::Primary(n) | Self::Referenced(n) => n,
+            Self::Primary(n) => n,
+            Self::Referenced { remaining, .. } => remaining,
         }
     }
     fn exceeded(self, name: &str) -> Error {
@@ -46,10 +63,10 @@ impl ReadBudget {
                 &crate::codes::READ_IO_PRIMARY_BUDGET,
                 format!("primary source `{name}` exceeds its {limit} byte limit"),
             ),
-            Self::Referenced(_) => Error::new(
+            Self::Referenced { total, .. } => Error::new(
                 &crate::codes::READ_IO_REFERENCE_BUDGET,
                 format!(
-                    "referenced file `{name}` would take this source past its {MAX_REFERENCED_BYTES} byte acquisition budget"
+                    "referenced file `{name}` would take this source past its {total} byte acquisition budget"
                 ),
             ),
         }
@@ -209,6 +226,7 @@ impl SourceBuffer {
 #[derive(Debug)]
 struct FileAcquisition {
     root_display: PathBuf,
+    max_bytes: u64,
     /// True when the root was selected with [`Source::with_acquisition_root`]
     /// rather than defaulted to the containing directory.
     selected: bool,
@@ -284,6 +302,8 @@ impl Source {
     /// Primary files are limited to 64 MiB unless `POWERIO_MAX_PRIMARY_BYTES`
     /// supplies a positive decimal byte count. The limit is checked before
     /// allocation. Referenced files have a separate cumulative budget.
+    /// `POWERIO_MAX_REFERENCED_BYTES` overrides that budget (64 MiB by default).
+    /// It is read once at construction and shared by every clone of the source.
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, Error> {
         let path = path.into();
         if path.as_os_str().is_empty() {
@@ -333,6 +353,7 @@ impl Source {
                 primary,
                 acquisition: FileAcquisition {
                     root_display,
+                    max_bytes: referenced_byte_limit()?,
                     selected: false,
                     state: Mutex::new(AcquisitionState::default()),
                 },
@@ -349,6 +370,7 @@ impl Source {
             provider: Arc::new(SourceProvider::Directory {
                 acquisition: FileAcquisition {
                     root_display,
+                    max_bytes: referenced_byte_limit()?,
                     selected: false,
                     state: Mutex::new(AcquisitionState::default()),
                 },
@@ -476,6 +498,7 @@ impl Source {
                 primary,
                 acquisition: FileAcquisition {
                     root_display: canonical,
+                    max_bytes: acquisition.max_bytes,
                     selected: true,
                     state: Mutex::new(AcquisitionState::default()),
                 },
@@ -813,7 +836,7 @@ impl FileAcquisition {
                 format!("this source already acquired {MAX_REFERENCED_FILES} referenced files"),
             ));
         }
-        let remaining = MAX_REFERENCED_BYTES.saturating_sub(state.bytes);
+        let remaining = self.max_bytes.saturating_sub(state.bytes);
         let root = state.pinned_root(&self.root_display)?;
         let file = root.open_beneath(segments).map_err(|error| {
             if platform::is_symlink_refusal(&error) {
@@ -829,7 +852,14 @@ impl FileAcquisition {
                 .with_cause(error)
             }
         })?;
-        let bytes = read_open_file(file, &key, ReadBudget::Referenced(remaining))?;
+        let bytes = read_open_file(
+            file,
+            &key,
+            ReadBudget::Referenced {
+                remaining,
+                total: self.max_bytes,
+            },
+        )?;
         let directory = segments[..segments.len() - 1].to_vec();
         let buffer = SourceBuffer::new(SourceId::new(&key)?, key.clone(), bytes, directory);
         state.files += 1;
@@ -2075,6 +2105,37 @@ mod tests {
         });
         assert!(error.to_string().contains("primary source"));
         assert!(allocated < 4096);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn referenced_limits_are_aggregate_and_cached_reads_are_free() {
+        use std::ffi::OsStr;
+        assert_eq!(parse_byte_limit("limit", None, 8).unwrap(), 8);
+        assert_eq!(
+            parse_byte_limit("limit", Some(OsStr::new("12")), 8).unwrap(),
+            12
+        );
+        for value in ["", "0", "-1", "+1", " 8", "8MiB", "18446744073709551615"] {
+            assert!(parse_byte_limit("limit", Some(OsStr::new(value)), 8).is_err());
+        }
+        let root = test_root("small-referenced-budget");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("a.xml"), b"abcd").unwrap();
+        std::fs::write(root.join("b.xml"), b"efgh").unwrap();
+        std::fs::write(root.join("c.xml"), b"i").unwrap();
+        let mut source = Source::open(&root).unwrap();
+        let SourceProvider::Directory { acquisition } = Arc::get_mut(&mut source.provider).unwrap()
+        else {
+            panic!("directory provider");
+        };
+        acquisition.max_bytes = 8;
+        let name = |s: &str| crate::ArtifactPath::new(s).unwrap();
+        source.buffer(&name("a.xml")).unwrap();
+        source.clone().buffer(&name("a.xml")).unwrap();
+        source.buffer(&name("b.xml")).unwrap();
+        let error = source.buffer(&name("c.xml")).unwrap_err();
+        assert!(error.to_string().contains("8 byte acquisition budget"));
         std::fs::remove_dir_all(root).unwrap();
     }
 
