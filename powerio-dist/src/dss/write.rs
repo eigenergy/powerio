@@ -3025,6 +3025,7 @@ mod tests {
         (
             bus("sb", &["1", "2", "3", "4"], &["4"]),
             VoltageSource {
+                reference_terminal: None,
                 name: "source".into(),
                 bus: "sb".into(),
                 terminal_map: strings(&["1", "2", "3", "4"]),
@@ -4582,6 +4583,7 @@ mod tests {
     fn multiple_sources_keep_named_vsource_when_source_exists() {
         let third = 2.0 * std::f64::consts::FRAC_PI_3;
         let source = VoltageSource {
+            reference_terminal: None,
             name: "source".into(),
             bus: "Bx".into(),
             terminal_map: strings(&["1", "2", "3", "4"]),
@@ -4591,6 +4593,7 @@ mod tests {
             extras: Extras::new(),
         };
         let wind = VoltageSource {
+            reference_terminal: None,
             name: "WindGen1".into(),
             bus: "Bg".into(),
             terminal_map: strings(&["1", "2", "3", "4"]),
@@ -4657,6 +4660,7 @@ mod tests {
         // write1 is not a fixed point. The writer must say so.
         let third = 2.0 * std::f64::consts::FRAC_PI_3;
         let vs = VoltageSource {
+            reference_terminal: None,
             name: "source".into(),
             bus: "sb".into(),
             terminal_map: strings(&["1", "2", "3"]),

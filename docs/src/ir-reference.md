@@ -868,7 +868,11 @@ Schema definition: `PowerFactorControl`.
 
 ### VoltageSource
 
-Schema definition: `VoltageSource`.
+An earth-referenced source retains the original record below. A source with
+an explicit reference terminal uses the separately tagged record described
+after it; it must not add a bare reference field to this legacy record.
+
+Schema definition: `VoltageSource/anyOf/0` (the earth-referenced branch).
 
 | field | type | unit | sign | invariant | if absent |
 |---|---|---|---|---|---|
@@ -879,6 +883,38 @@ Schema definition: `VoltageSource`.
 | `v_angle` | array of float | radians per terminal | | same length as `terminal_map` | required |
 | `energy_cost_rate` | optional array of float | $/kWh | positive injection supplies the network | one entry per phase in terminal-map order; excludes neutral terminals | no stated source-price term |
 | `extras` | object | | | | required |
+
+### ReferencedVoltageSource
+
+The second source-record alternative has structural identity
+`powerio.ReferencedVoltageSource`. Older IR 2 readers reject this wrapper
+because the legacy source fields are absent at its root. Existing records
+remain unchanged. The source can occur anywhere a multiconductor network
+is stored, including collections and calculation instances.
+
+Schema definition: `ReferencedSourceWire/oneOf/0`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `type` | string | | | exactly `powerio.ReferencedVoltageSource` | required |
+| `value` | object | | | referenced source body below | required |
+
+Schema definition: `ReferencedSourceFields`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `name` | string | | | unique within `sources` | required |
+| `bus` | string | | | names a bus | required |
+| `terminal_map` | array of string | | | distinct declared terminals of `bus`; excludes the reference | required |
+| `v_magnitude` | array of float | volts per terminal-to-reference difference | | same length as `terminal_map`; a grounded phase can have a nonzero difference | required |
+| `v_angle` | array of float | radians per terminal-to-reference difference | | same length as `terminal_map` | required |
+| `reference_terminal` | string | | | another declared terminal on `bus`; does not imply grounding | required |
+| `energy_cost_rate` | optional array of float | $/kWh | positive injection supplies the network | per phase in terminal-map order | no stated source-price term |
+| `extras` | object | | | | required |
+
+The voltage constraint is `V(terminal) - V(reference) = magnitude * exp(i*angle)`.
+Every phase-source current has an equal opposite contribution at the reference.
+Neither an external neutral connection nor an earth path is inferred.
 
 ### UntypedObject
 

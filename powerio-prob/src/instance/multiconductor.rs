@@ -19,6 +19,37 @@ use crate::instance::balanced::transform_discarded;
 use crate::instance::constraints::MulticonductorActiveConstraints;
 use crate::instance::objective::{Objective, ObjectiveTerm};
 
+/// A source elsewhere in the document cannot anchor a disconnected island.
+/// This is a necessary bus-level check only: line coupling, winding maps and
+/// per-conductor voltage constraints still determine numerical solvability.
+fn require_source_covered_islands(network: &MulticonductorNetwork) -> Result<(), Error> {
+    let components = crate::update::multiconductor_network_connectivity(network);
+    let positions: std::collections::BTreeMap<_, _> = network
+        .buses()
+        .iter()
+        .enumerate()
+        .map(|(index, bus)| (bus.id.to_ascii_lowercase(), index))
+        .collect();
+    let mut covered = std::collections::BTreeSet::new();
+    for source in network.sources() {
+        if let Some(&index) = positions.get(&source.bus.to_ascii_lowercase()) {
+            covered.insert(components[index]);
+        }
+    }
+    for (index, bus) in network.buses().iter().enumerate() {
+        if !covered.contains(&components[index]) {
+            return Err(Error::new(
+                &codes::BUILD_INSTANCE_SHAPE_MISMATCH,
+                format!(
+                    "multiconductor island containing bus `{}` has no voltage source; explicitly resolve de-energized islands before constructing a calculation instance",
+                    bus.id
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// One load's prescribed terminal power: the load's stated per phase complex
 /// power, keyed by the load's name and its terminal map. Watts and vars, as
 /// the network states them.
@@ -35,17 +66,33 @@ pub struct PrescribedTerminalPower {
     pub voltage_model: powerio_dist::DistLoadVoltageModel,
 }
 
-/// One source's prescribed terminal complex voltage: volts and radians per
-/// terminal, as the network states them.
+/// One source's prescribed phasor parameters, keyed to its network source.
+/// This record does not carry the bus or voltage reference. Use
+/// [`McAcPfInstance::source_boundary`] for the complete borrowed boundary.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PrescribedSourceVoltage {
     pub source: String,
     /// The source's terminals, in its stated terminal map order.
     pub terminals: Vec<String>,
-    /// Volts per terminal (0.0 on grounded terminals).
+    /// Source voltage magnitudes in volts; their reference is on the network source.
     pub v_magnitude: Vec<f64>,
     /// Radians per terminal.
     pub v_angle: Vec<f64>,
+}
+
+/// Complete borrowed source boundary: V(terminal) - V(reference) is the
+/// stated phasor. None means earth; a named reference is on `bus` and does
+/// not imply a connection to earth. Every phase current has an equal
+/// opposite contribution at the reference.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct PrescribedSourceBoundary<'a> {
+    pub source: &'a str,
+    pub bus: &'a str,
+    pub terminals: &'a [String],
+    pub reference_terminal: Option<&'a str>,
+    pub v_magnitude: &'a [f64],
+    pub v_angle: &'a [f64],
 }
 
 /// One equipment control that is active for the calculation, by element name.
@@ -77,8 +124,9 @@ impl McAcPfInstance {
     /// every stated regulator and capacitor control an active control mode.
     ///
     /// # Errors
-    /// A network with no voltage source: a distribution power flow has no
-    /// boundary condition without one.
+    /// A network with no voltage source, or a bus island without a voltage
+    /// source. This necessary connectivity check does not establish conductor
+    /// energization or numerical solvability.
     pub fn from_network(network: MulticonductorNetwork) -> Result<Self, Error> {
         powerio_dist::require_electrical_readiness(&network)?;
         if network.sources().is_empty() {
@@ -87,6 +135,7 @@ impl McAcPfInstance {
                 "the multiconductor network states no voltage source to anchor the calculation",
             ));
         }
+        require_source_covered_islands(&network)?;
         let loads = network
             .loads()
             .iter()
@@ -174,10 +223,27 @@ impl McAcPfInstance {
         &self.loads
     }
 
-    /// The prescribed source terminal voltages, in source table order.
+    /// Source phasor parameters in source table order. Resolve each record
+    /// against the associated network source, or use [`Self::source_boundary`]
+    /// to obtain both endpoints with the phasors.
     #[must_use]
     pub fn sources(&self) -> &[PrescribedSourceVoltage] {
         &self.sources
+    }
+
+    /// Both voltage endpoints and their phasor differences, borrowed from
+    /// this instance. No network cloning or serialization is involved.
+    pub fn source_boundary(&self, index: usize) -> Option<PrescribedSourceBoundary<'_>> {
+        let values = self.sources.get(index)?;
+        let source = self.network.sources().get(index)?;
+        Some(PrescribedSourceBoundary {
+            source: &values.source,
+            bus: &source.bus,
+            terminals: &values.terminals,
+            reference_terminal: source.reference_terminal.as_deref(),
+            v_magnitude: &values.v_magnitude,
+            v_angle: &values.v_angle,
+        })
     }
 
     /// Terminals with no equation, as `(bus, terminal)` pairs.
@@ -215,7 +281,7 @@ impl McAcOpfInstance {
     /// stated limit active.
     ///
     /// # Errors
-    /// A network with no voltage source.
+    /// A network with no voltage source, or a bus island without one.
     pub fn from_network(network: MulticonductorNetwork) -> Result<Self, Error> {
         powerio_dist::require_electrical_readiness(&network)?;
         if network.sources().is_empty() {
@@ -224,6 +290,7 @@ impl McAcOpfInstance {
                 "the multiconductor network states no voltage source to anchor the calculation",
             ));
         }
+        require_source_covered_islands(&network)?;
         Ok(Self {
             network,
             objective: Objective::active_power_dispatch_cost(),
@@ -271,6 +338,7 @@ impl McAcOpfInstance {
                 "the multiconductor network states no voltage source to anchor the calculation",
             ));
         }
+        require_source_covered_islands(&network)?;
         if let Some(initial) = self.initial_point.take() {
             self.initial_point = Some(initial.rebind_network(network.clone())?);
         }

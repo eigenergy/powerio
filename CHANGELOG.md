@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- Multiconductor voltage sources can prescribe voltages relative to an explicit
+  terminal, preserving floating-star displacement and reference current in the
+  sparse matrix constraints. IR 2 carries these as distinct tagged source
+  records that older readers reject; ordinary source records keep their
+  original shape. Prescribed PF boundaries and additive C source views expose
+  both voltage endpoints; existing C layouts remain unchanged. Canonical
+  exchange writers, balanced/LinDist3Flow projections, neutral Kron reduction
+  and legacy C source views reject referenced sources they cannot represent.
+
+- Multiconductor AC power-flow and OPF instance construction now requires a
+  voltage source on every physical bus island, including after network
+  replacement. An open switch cannot leave an island implicitly anchored by
+  a source elsewhere. Resolve de-energized islands explicitly before building
+  an instance; parsing preserves those devices and their data. This bus-level
+  check is necessary but does not establish conductor coverage or solvability.
+
+- Preserve explicit floating neutrals in ideal two-winding WYE multiconductor
+  transformer constraints. Phase-to-neutral voltage ratios now carry neutral
+  currents into nodal balance, including fixed taps and grounding switches.
+  Invalid winding maps and voltage ratios fail instead of silently omitting
+  equipment. Leakage, non-WYE connections, implicit neutral impedances, core
+  losses and tap controls remain outside this matrix builder's supported profile.
+
+## Unreleased
+
 - PSS/E switched shunt `MODSW` 1 and 2 now read as PSS/E defines them: 1 is
   discrete and 2 is continuous adjustment of the regulated voltage. The RAW
   and RAWX readers had the two swapped, so a continuously adjusted shunt, such

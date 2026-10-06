@@ -1396,6 +1396,7 @@ impl Reader<'_> {
             ];
             let energy_cost_rate = floats(o.get("energy_cost_rate").or_else(|| o.get("cost")));
             self.net.sources_mut().push(VoltageSource {
+                reference_terminal: None,
                 name: name.clone(),
                 bus: string(o.get("bus")),
                 terminal_map: strings(o.get("terminal_map")),

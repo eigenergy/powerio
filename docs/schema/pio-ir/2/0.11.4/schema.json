@@ -10150,6 +10150,123 @@
       ],
       "type": "string"
     },
+    "ReferencedSourceFields": {
+      "properties": {
+        "bus": {
+          "type": "string"
+        },
+        "energy_cost_rate": {
+          "description": "Energy cost rate in $/kWh, one entry per phase in terminal-map order.",
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "extras": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "name": {
+          "type": "string"
+        },
+        "reference_terminal": {
+          "description": "Declared reference terminal on the source bus; does not imply grounding.",
+          "type": "string"
+        },
+        "terminal_map": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "v_angle": {
+          "description": "Radians per terminal-to-reference difference.",
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "v_magnitude": {
+          "description": "Volts per terminal-to-reference difference, including at grounded phase terminals.",
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "bus",
+        "terminal_map",
+        "v_magnitude",
+        "v_angle",
+        "extras",
+        "reference_terminal"
+      ],
+      "type": "object"
+    },
+    "ReferencedSourceWire": {
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "const": "powerio.ReferencedVoltageSource",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/ReferencedSourceFields"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "Residuals": {
       "description": "Numerical residuals of the solved equations, in the problem's power unit.\nA field is `None` when the producer did not report it.",
       "properties": {
@@ -16457,96 +16574,103 @@
       "type": "object"
     },
     "VoltageSource": {
-      "properties": {
-        "bus": {
-          "type": "string"
-        },
-        "energy_cost_rate": {
-          "description": "Energy cost rate in $/kWh, one entry per phase in terminal-map order.",
-          "items": {
-            "anyOf": [
-              {
-                "format": "double",
-                "type": "number"
+      "anyOf": [
+        {
+          "properties": {
+            "bus": {
+              "type": "string"
+            },
+            "energy_cost_rate": {
+              "description": "Energy cost rate in $/kWh, one entry per phase in terminal-map order.",
+              "items": {
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
               },
-              {
-                "enum": [
-                  "Infinity",
-                  "-Infinity",
-                  "NaN"
-                ],
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "extras": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "name": {
+              "type": "string"
+            },
+            "terminal_map": {
+              "items": {
                 "type": "string"
-              }
-            ]
+              },
+              "type": "array"
+            },
+            "v_angle": {
+              "description": "Radians per terminal.",
+              "items": {
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "v_magnitude": {
+              "description": "Volts per terminal (0.0 on grounded terminals).",
+              "items": {
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
+              },
+              "type": "array"
+            }
           },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "extras": {
-          "additionalProperties": true,
+          "required": [
+            "name",
+            "bus",
+            "terminal_map",
+            "v_magnitude",
+            "v_angle",
+            "extras"
+          ],
           "type": "object"
         },
-        "name": {
-          "type": "string"
-        },
-        "terminal_map": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "v_angle": {
-          "description": "Radians per terminal.",
-          "items": {
-            "anyOf": [
-              {
-                "format": "double",
-                "type": "number"
-              },
-              {
-                "enum": [
-                  "Infinity",
-                  "-Infinity",
-                  "NaN"
-                ],
-                "type": "string"
-              }
-            ]
-          },
-          "type": "array"
-        },
-        "v_magnitude": {
-          "description": "Volts per terminal (0.0 on grounded terminals).",
-          "items": {
-            "anyOf": [
-              {
-                "format": "double",
-                "type": "number"
-              },
-              {
-                "enum": [
-                  "Infinity",
-                  "-Infinity",
-                  "NaN"
-                ],
-                "type": "string"
-              }
-            ]
-          },
-          "type": "array"
+        {
+          "$ref": "#/$defs/ReferencedSourceWire"
         }
-      },
-      "required": [
-        "name",
-        "bus",
-        "terminal_map",
-        "v_magnitude",
-        "v_angle",
-        "extras"
-      ],
-      "type": "object"
+      ]
     },
     "VoltageSourceConverter": {
       "description": "A voltage source converter connected to an AC voltage level and two DC nodes.",

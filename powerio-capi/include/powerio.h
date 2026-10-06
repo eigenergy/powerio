@@ -2188,6 +2188,18 @@ typedef struct {
     size_t len;
 } PioByteView;
 
+/**
+ * Complete source boundary without changing the legacy source-view layout.
+ * Source phasors specify V(terminal) - V(reference). A named reference is
+ * on source.bus and does not imply grounding; an absent reference means
+ * earth. Borrowed data lives with the owner.
+ */
+typedef struct {
+    PioVoltageSourceView source;
+    PioStringView reference_terminal;
+    bool has_reference_terminal;
+} PioVoltageSourceBoundaryView;
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
@@ -3836,6 +3848,8 @@ bool pio_mc_ac_pf_instance_load_terminal_at(const PioCalculationInstance *instan
 size_t pio_mc_ac_pf_instance_source_count(const PioCalculationInstance *instance);
 
 /**
+ * Legacy source parameters. Referenced sources fail with a type mismatch;
+ * use pio_mc_ac_pf_instance_source_boundary_at for both voltage endpoints.
  *
  * # Safety
  * Pointers and handles must satisfy the crate-level safety requirements.
@@ -3846,6 +3860,8 @@ bool pio_mc_ac_pf_instance_source_at(const PioCalculationInstance *instance,
                                      PioError **error);
 
 /**
+ * Legacy earth-referenced terminal voltage. Referenced sources fail with a
+ * type mismatch; use pio_mc_ac_pf_instance_source_boundary_at instead.
  *
  * # Safety
  * Pointers and handles must satisfy the crate-level safety requirements.
@@ -6847,6 +6863,33 @@ PioString *pio_string_retain(const PioString *string);
  * A non-null handle must be owned and unused by concurrent calls.
  */
 void pio_string_release(PioString *string);
+
+/**
+ * Read all source parameters and the explicit voltage reference. None is
+ * indicated by has_reference_terminal=false. Terminal names use the existing
+ * network voltage-source terminal accessor at the same source index.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+bool pio_multiconductor_network_voltage_source_boundary_at(const PioMulticonductorNetwork *network,
+                                                           size_t index,
+                                                           PioVoltageSourceBoundaryView *output,
+                                                           PioError **error);
+
+/**
+ * Read a complete prescribed PF source boundary. The source index and
+ * terminal order match the instance's network; use its voltage-source
+ * terminal accessor to read terminal names. Borrowed arrays and strings
+ * remain valid while their calculation-instance owner is retained.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+bool pio_mc_ac_pf_instance_source_boundary_at(const PioCalculationInstance *instance,
+                                              size_t index,
+                                              PioVoltageSourceBoundaryView *output,
+                                              PioError **error);
 
 #ifdef __cplusplus
 }  // extern "C"

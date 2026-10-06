@@ -1603,6 +1603,42 @@ pub struct PioVoltageSourceView {
     pub has_energy_cost_rate: bool,
 }
 
+/// Complete source boundary without changing the legacy source-view layout.
+/// Source phasors specify V(terminal) - V(reference). A named reference is
+/// on source.bus and does not imply grounding; an absent reference means
+/// earth. Borrowed data lives with the owner.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioVoltageSourceBoundaryView {
+    pub source: PioVoltageSourceView,
+    pub reference_terminal: PioStringView,
+    pub has_reference_terminal: bool,
+}
+
+fn voltage_source_view(source: &powerio_dist::VoltageSource) -> PioVoltageSourceView {
+    PioVoltageSourceView {
+        name: PioStringView::new(&source.name),
+        bus: PioStringView::new(&source.bus),
+        terminal_map_count: source.terminal_map.len(),
+        voltage_magnitude_v: PioF64View::new(&source.v_magnitude),
+        voltage_angle_rad: PioF64View::new(&source.v_angle),
+        energy_cost_rate_per_kwh: PioF64View::new(
+            source.energy_cost_rate.as_deref().unwrap_or(&[]),
+        ),
+        has_energy_cost_rate: source.energy_cost_rate.is_some(),
+    }
+}
+
+fn voltage_source_boundary_view(
+    source: &powerio_dist::VoltageSource,
+) -> PioVoltageSourceBoundaryView {
+    PioVoltageSourceBoundaryView {
+        source: voltage_source_view(source),
+        reference_terminal: PioStringView::new(source.reference_terminal.as_deref().unwrap_or("")),
+        has_reference_terminal: source.reference_terminal.is_some(),
+    }
+}
+
 /// One source object retained without a typed PowerIO representation.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -8025,6 +8061,8 @@ pub unsafe extern "C" fn pio_mc_ac_pf_instance_source_count(
         .map_or(0, |instance| instance.sources().len())
 }
 
+/// Legacy source parameters. Referenced sources fail with a type mismatch;
+/// use pio_mc_ac_pf_instance_source_boundary_at for both voltage endpoints.
 ///
 /// # Safety
 /// Pointers and handles must satisfy the crate-level safety requirements.
@@ -8051,6 +8089,16 @@ pub unsafe extern "C" fn pio_mc_ac_pf_instance_source_at(
                     format!("prescribed source index {index} is out of range"),
                 )
             })?;
+            if instance
+                .source_boundary(index)
+                .and_then(|source| source.reference_terminal)
+                .is_some()
+            {
+                return Err(boundary_error(
+                    &codes::REQUEST_CAPI_TYPE_MISMATCH,
+                    "legacy prescribed source view cannot describe a reference-terminal source",
+                ));
+            }
             *require_output(output, "output")? = PioPrescribedSourceVoltageView {
                 source: PioStringView::new(&source.source),
                 terminal_count: source.terminals.len(),
@@ -8060,6 +8108,8 @@ pub unsafe extern "C" fn pio_mc_ac_pf_instance_source_at(
     }
 }
 
+/// Legacy earth-referenced terminal voltage. Referenced sources fail with a
+/// type mismatch; use pio_mc_ac_pf_instance_source_boundary_at instead.
 ///
 /// # Safety
 /// Pointers and handles must satisfy the crate-level safety requirements.
@@ -8087,6 +8137,16 @@ pub unsafe extern "C" fn pio_mc_ac_pf_instance_source_terminal_at(
                     format!("prescribed source index {source_index} is out of range"),
                 )
             })?;
+            if instance
+                .source_boundary(source_index)
+                .and_then(|source| source.reference_terminal)
+                .is_some()
+            {
+                return Err(boundary_error(
+                    &codes::REQUEST_CAPI_TYPE_MISMATCH,
+                    "legacy prescribed voltage view cannot describe a reference-terminal source",
+                ));
+            }
             let terminal = source.terminals.get(terminal_index).ok_or_else(|| {
                 boundary_error(
                     &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
@@ -16091,17 +16151,13 @@ pub unsafe extern "C" fn pio_multiconductor_network_voltage_source_at(
                     format!("voltage source index {index} is out of range"),
                 )
             })?;
-            *require_output(output, "output")? = PioVoltageSourceView {
-                name: PioStringView::new(&source.name),
-                bus: PioStringView::new(&source.bus),
-                terminal_map_count: source.terminal_map.len(),
-                voltage_magnitude_v: PioF64View::new(&source.v_magnitude),
-                voltage_angle_rad: PioF64View::new(&source.v_angle),
-                energy_cost_rate_per_kwh: PioF64View::new(
-                    source.energy_cost_rate.as_deref().unwrap_or(&[]),
-                ),
-                has_energy_cost_rate: source.energy_cost_rate.is_some(),
-            };
+            if source.reference_terminal.is_some() {
+                return Err(boundary_error(
+                    &codes::REQUEST_CAPI_TYPE_MISMATCH,
+                    "PioVoltageSourceView cannot describe a reference-terminal source",
+                ));
+            }
+            *require_output(output, "output")? = voltage_source_view(source);
             Ok(true)
         })
     }
@@ -19101,6 +19157,72 @@ pub unsafe extern "C" fn pio_string_release(string: *mut PioString) {
     unsafe { PioString::release_raw(string) };
 }
 
+/// Read all source parameters and the explicit voltage reference. None is
+/// indicated by has_reference_terminal=false. Terminal names use the existing
+/// network voltage-source terminal accessor at the same source index.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_voltage_source_boundary_at(
+    network: *const PioMulticonductorNetwork,
+    index: usize,
+    output: *mut PioVoltageSourceBoundaryView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let source = require_multiconductor_network(network)?
+                .sources()
+                .get(index)
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                        format!("voltage source index {index} is out of range"),
+                    )
+                })?;
+            *require_output(output, "output")? = voltage_source_boundary_view(source);
+            Ok(true)
+        })
+    }
+}
+
+/// Read a complete prescribed PF source boundary. The source index and
+/// terminal order match the instance's network; use its voltage-source
+/// terminal accessor to read terminal names. Borrowed arrays and strings
+/// remain valid while their calculation-instance owner is retained.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_mc_ac_pf_instance_source_boundary_at(
+    instance: *const PioCalculationInstance,
+    index: usize,
+    output: *mut PioVoltageSourceBoundaryView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let instance = require_calculation_instance(instance)?
+                .mc_ac_pf()
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::REQUEST_CAPI_TYPE_MISMATCH,
+                        "the calculation instance is not powerio.McAcPfInstance",
+                    )
+                })?;
+            let source = instance.network().sources().get(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("prescribed source index {index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = voltage_source_boundary_view(source);
+            Ok(true)
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -20132,6 +20254,123 @@ mod tests {
             );
             pio_error_release(null_error);
             pio_multiconductor_network_release(retained);
+        }
+    }
+
+    #[test]
+    fn legacy_source_view_refuses_reference_terminal_physics() {
+        unsafe {
+            let mut net = complete_multiconductor_network();
+            net.sources_mut()[0].reference_terminal = Some("n".into());
+            let module = module_handle(powerio::PioModule::new(PioValue::from(net)));
+            let value = pio_module_value(module);
+            let mut error = std::ptr::null_mut();
+            let network = pio_value_multiconductor_network(value, &mut error);
+            assert!(!network.is_null());
+            let mut output = std::mem::MaybeUninit::<PioVoltageSourceView>::uninit();
+            assert!(!pio_multiconductor_network_voltage_source_at(
+                network,
+                0,
+                output.as_mut_ptr(),
+                &mut error
+            ));
+            assert!(error_text(error).contains("reference-terminal"));
+            pio_error_release(error);
+            pio_multiconductor_network_release(network);
+            pio_value_release(value);
+            pio_module_release(module);
+        }
+    }
+
+    #[test]
+    fn source_boundary_views_retain_references_and_owner_rooted_arrays() {
+        unsafe {
+            let mut net = powerio_dist::MulticonductorNetwork::new();
+            net.buses_mut().push(powerio_dist::DistBus::new(
+                "b",
+                vec!["1".into(), "n".into()],
+            ));
+            net.sources_mut().push(
+                powerio_dist::VoltageSource::new(
+                    "s",
+                    "b",
+                    vec!["1".into()],
+                    vec![230.0],
+                    vec![0.0],
+                )
+                .with_reference_terminal("n"),
+            );
+            let instance = powerio_prob::McAcPfInstance::from_network(net).unwrap();
+            let module = module_handle(powerio::PioModule::new(PioValue::from(instance)));
+            let value = pio_module_value(module);
+            let mut error = std::ptr::null_mut();
+            let instance = pio_value_mc_ac_pf_instance(value, &mut error);
+            assert!(!instance.is_null());
+            pio_module_release(module);
+            pio_value_release(value);
+
+            let mut output = std::mem::MaybeUninit::<PioVoltageSourceBoundaryView>::uninit();
+            assert!(pio_mc_ac_pf_instance_source_boundary_at(
+                instance,
+                0,
+                output.as_mut_ptr(),
+                &mut error
+            ));
+            let boundary = output.assume_init();
+            assert!(boundary.has_reference_terminal);
+            assert_eq!(view_text(boundary.reference_terminal), "n");
+            assert_eq!(view_text(boundary.source.bus), "b");
+            assert_eq!(
+                std::slice::from_raw_parts(boundary.source.voltage_magnitude_v.data, 1),
+                [230.0]
+            );
+            let mut old = std::mem::MaybeUninit::<PioPrescribedSourceVoltageView>::uninit();
+            assert!(!pio_mc_ac_pf_instance_source_at(
+                instance,
+                0,
+                old.as_mut_ptr(),
+                &mut error
+            ));
+            assert!(error_text(error).contains("reference-terminal"));
+            pio_error_release(error);
+            error = std::ptr::null_mut();
+            let mut terminal = std::mem::MaybeUninit::<PioTerminalVoltageView>::uninit();
+            assert!(!pio_mc_ac_pf_instance_source_terminal_at(
+                instance,
+                0,
+                0,
+                terminal.as_mut_ptr(),
+                &mut error
+            ));
+            assert!(error_text(error).contains("reference-terminal"));
+            pio_error_release(error);
+            error = std::ptr::null_mut();
+
+            let network = pio_calculation_instance_multiconductor_network(instance, &mut error);
+            assert!(!network.is_null());
+            assert!(pio_multiconductor_network_voltage_source_boundary_at(
+                network,
+                0,
+                output.as_mut_ptr(),
+                &mut error
+            ));
+            let network_boundary = output.assume_init();
+            assert_eq!(
+                network_boundary.source.voltage_magnitude_v.data,
+                boundary.source.voltage_magnitude_v.data
+            );
+            pio_calculation_instance_release(instance);
+            assert_eq!(view_text(network_boundary.reference_terminal), "n");
+            assert_eq!(view_text(network_boundary.source.name), "s");
+            assert!(!pio_multiconductor_network_voltage_source_boundary_at(
+                network,
+                1,
+                output.as_mut_ptr(),
+                &mut error
+            ));
+            assert!(error_text(error).contains("out of range"));
+            pio_error_release(error);
+            pio_multiconductor_network_release(network);
         }
     }
 

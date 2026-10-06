@@ -28,6 +28,27 @@ pub fn require_electrical_readiness(
     Ok(())
 }
 
+/// Refuse a projection that has not implemented terminal-referenced sources.
+/// Consumers that support them must instead retain both voltage endpoints.
+pub fn require_earth_referenced_sources(
+    net: &MulticonductorNetwork,
+) -> Result<(), powerio_core::Error> {
+    if let Some(source) = net
+        .sources()
+        .iter()
+        .find(|s| s.reference_terminal.is_some())
+    {
+        return Err(powerio_core::Error::new(
+            &crate::diagnostics::codes::BUILD_DIST_ELECTRICAL_INCOMPLETE,
+            format!(
+                "source `{}`: this projection does not support reference-terminal voltage constraints",
+                source.name
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Reject source-only electrical equipment that a canonical writer cannot reconstruct.
 pub(crate) fn require_resolved_geometry(
     net: &MulticonductorNetwork,
@@ -200,6 +221,35 @@ pub fn audit_electrical_readiness(net: &MulticonductorNetwork) -> ElectricalRead
     }
 
     audit_lines(net, &buses, &linecodes, identity, &mut report);
+
+    for source in net.sources() {
+        let Some(reference) = &source.reference_terminal else {
+            continue;
+        };
+        let declared = buses.get(&identity(&source.bus)).is_some_and(|bus| {
+            bus.terminals.contains(reference)
+                && source
+                    .terminal_map
+                    .iter()
+                    .all(|t| bus.terminals.contains(t))
+        });
+        let n = source.terminal_map.len();
+        if !declared
+            || n == 0
+            || source.terminal_map.contains(reference)
+            || source.terminal_map.iter().collect::<BTreeSet<_>>().len() != n
+            || source.v_magnitude.len() != n
+            || source.v_angle.len() != n
+            || source
+                .v_magnitude
+                .iter()
+                .any(|v| !v.is_finite() || *v < 0.0)
+            || source.v_angle.iter().any(|v| !v.is_finite())
+        {
+            report.block("READINESS.SOURCE.REFERENCE_INVALID", &source.name,
+                "referenced source needs distinct declared terminals and complete finite voltage differences");
+        }
+    }
 
     report
 }
