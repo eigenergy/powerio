@@ -37,6 +37,77 @@ use crate::network::{
 };
 use crate::{Error, Result};
 
+/// Borrowed lookup indexes for one emission. Preserve first-match semantics
+/// and source ordering; no emitted record is driven by hash-map iteration.
+struct DetailedIndex<'a> {
+    inner: &'a DetailedConnectivity,
+    metadata: HashMap<(&'a str, &'a str), &'a ComponentMetadata>,
+    external_ids: HashMap<&'a str, &'a ComponentMetadata>,
+    transformer_ends: HashMap<&'a str, Vec<&'a ComponentMetadata>>,
+    terminal_index: HashMap<(&'a str, &'a str, usize), &'a Terminal>,
+}
+
+impl<'a> DetailedIndex<'a> {
+    fn new(inner: &'a DetailedConnectivity) -> Self {
+        let mut metadata = HashMap::with_capacity(inner.component_metadata.len());
+        let mut external_ids = HashMap::new();
+        let mut transformer_ends: HashMap<&str, Vec<&ComponentMetadata>> = HashMap::new();
+        for record in &inner.component_metadata {
+            if record
+                .properties
+                .get(CGMES_CLASS_PROPERTY)
+                .is_some_and(|class| class == "PowerTransformerEnd")
+                && let Some(owner) = record
+                    .properties
+                    .get("PowerTransformerEnd.PowerTransformer")
+            {
+                transformer_ends.entry(owner).or_default().push(record);
+            }
+            metadata
+                .entry((
+                    record.component.component_type(),
+                    record.component.local_id(),
+                ))
+                .or_insert(record);
+            for identifier in &record.external_identifiers {
+                if identifier
+                    .authority
+                    .as_deref()
+                    .is_some_and(|authority| authority.eq_ignore_ascii_case("CGMES"))
+                {
+                    external_ids
+                        .entry(identifier.value.as_str())
+                        .or_insert(record);
+                }
+            }
+        }
+        let mut terminal_index = HashMap::with_capacity(inner.terminals.len());
+        for terminal in &inner.terminals {
+            terminal_index
+                .entry((
+                    terminal.equipment.component_type(),
+                    terminal.equipment.local_id(),
+                    usize::from(terminal.terminal),
+                ))
+                .or_insert(terminal);
+        }
+        Self {
+            inner,
+            metadata,
+            external_ids,
+            transformer_ends,
+            terminal_index,
+        }
+    }
+}
+
+impl std::ops::Deref for DetailedIndex<'_> {
+    type Target = DetailedConnectivity;
+    fn deref(&self) -> &Self::Target {
+        self.inner
+    }
+}
+
 /// The emitted profile documents, `(file_name, xml)` in EQ/TP/SSH/SV order,
 /// plus every fidelity loss the writer took.
 #[derive(Debug, Clone)]
@@ -108,17 +179,24 @@ fn mrid_or(kind: &str, name: &str, uid: Option<&str>) -> String {
 }
 
 fn metadata<'a>(
-    detailed: &'a DetailedConnectivity,
+    detailed: &'a DetailedIndex<'_>,
     component: &ComponentId,
 ) -> Option<&'a ComponentMetadata> {
     detailed
-        .component_metadata
-        .iter()
-        .find(|value| value.component == *component)
+        .metadata
+        .get(&(component.component_type(), component.local_id()))
+        .copied()
 }
 
-fn component_mrid(detailed: &DetailedConnectivity, component: &ComponentId) -> String {
-    let imported = metadata(detailed, component).and_then(|value| {
+fn component_mrid(detailed: &DetailedIndex<'_>, component: &ComponentId) -> String {
+    component_mrid_from_metadata(metadata(detailed, component), component)
+}
+
+fn component_mrid_from_metadata(
+    record: Option<&ComponentMetadata>,
+    component: &ComponentId,
+) -> String {
+    let imported = record.and_then(|value| {
         value
             .external_identifiers
             .iter()
@@ -138,7 +216,7 @@ fn component_mrid(detailed: &DetailedConnectivity, component: &ComponentId) -> S
 }
 
 fn transformer_end_mrid(
-    detailed: Option<&DetailedConnectivity>,
+    detailed: Option<&DetailedIndex<'_>>,
     transformer_type: &str,
     transformer_local_id: &str,
     emitted_transformer_mrid: &str,
@@ -167,23 +245,19 @@ fn transformer_end_mrid(
     }
     source_transformer_ids.insert(emitted_transformer_mrid.to_owned());
 
-    let mut matches = detailed.component_metadata.iter().filter(|metadata| {
-        metadata
-            .properties
-            .get(CGMES_CLASS_PROPERTY)
-            .is_some_and(|class| class == "PowerTransformerEnd")
-            && metadata
-                .properties
-                .get("PowerTransformerEnd.PowerTransformer")
-                .is_some_and(|transformer| source_transformer_ids.contains(transformer))
-            && metadata
+    let mut matches = source_transformer_ids
+        .iter()
+        .filter_map(|id| detailed.transformer_ends.get(id.as_str()))
+        .flatten()
+        .filter(|metadata| {
+            metadata
                 .properties
                 .get("TransformerEnd.endNumber")
                 .and_then(|value| value.parse::<f64>().ok())
                 .is_some_and(|value| {
                     value.is_finite() && value.fract().eq(&0.0) && value.eq(&(winding as f64))
                 })
-    });
+        });
     let Some(retained) = matches.next() else {
         return Ok(fallback());
     };
@@ -203,7 +277,7 @@ struct RetainedIdentifiedMetadata {
 }
 
 fn retained_identified_metadata(
-    detailed: Option<&DetailedConnectivity>,
+    detailed: Option<&DetailedIndex<'_>>,
     warnings: &mut CgmesDiagnostics,
 ) -> Arc<HashMap<String, RetainedIdentifiedMetadata>> {
     let Some(detailed) = detailed else {
@@ -270,7 +344,7 @@ fn retained_identified_metadata(
 }
 
 fn component_name<'a>(
-    detailed: &'a DetailedConnectivity,
+    detailed: &'a DetailedIndex<'_>,
     component: &ComponentId,
     fallback: &'a str,
 ) -> &'a str {
@@ -280,46 +354,29 @@ fn component_name<'a>(
 }
 
 fn mapped_component_name<'a>(
-    detailed: Option<&'a DetailedConnectivity>,
+    detailed: Option<&'a DetailedIndex<'_>>,
     component_type: &str,
     local_id: &str,
     fallback: &'a str,
 ) -> &'a str {
-    detailed
-        .and_then(|detailed| {
-            detailed.component_metadata.iter().find(|metadata| {
-                metadata.component.component_type() == component_type
-                    && metadata.component.local_id() == local_id
-            })
-        })
+    mapped_component_metadata(detailed, component_type, local_id)
         .and_then(|metadata| metadata.name.as_deref())
         .unwrap_or(fallback)
 }
 
 fn mapped_component_metadata<'a>(
-    detailed: Option<&'a DetailedConnectivity>,
+    detailed: Option<&'a DetailedIndex<'_>>,
     component_type: &str,
     local_id: &str,
 ) -> Option<&'a ComponentMetadata> {
-    detailed?.component_metadata.iter().find(|metadata| {
-        metadata.component.component_type() == component_type
-            && metadata.component.local_id() == local_id
-    })
+    detailed?.metadata.get(&(component_type, local_id)).copied()
 }
 
 fn cgmes_metadata_by_external_id<'a>(
-    detailed: &'a DetailedConnectivity,
+    detailed: &'a DetailedIndex<'_>,
     external_id: &str,
 ) -> Option<&'a ComponentMetadata> {
-    detailed.component_metadata.iter().find(|metadata| {
-        metadata.external_identifiers.iter().any(|identifier| {
-            identifier.value == external_id
-                && identifier
-                    .authority
-                    .as_deref()
-                    .is_some_and(|authority| authority.eq_ignore_ascii_case("CGMES"))
-        })
-    })
+    detailed.external_ids.get(external_id).copied()
 }
 
 fn has_cgmes_external_identifier(metadata: &ComponentMetadata) -> bool {
@@ -332,7 +389,7 @@ fn has_cgmes_external_identifier(metadata: &ComponentMetadata) -> bool {
 }
 
 fn mapped_generating_unit_metadata<'a>(
-    detailed: Option<&'a DetailedConnectivity>,
+    detailed: Option<&'a DetailedIndex<'_>>,
     generator: &str,
 ) -> Option<&'a ComponentMetadata> {
     let detailed = detailed?;
@@ -354,7 +411,7 @@ const fn generating_unit_class(source: GeneratorEnergySource) -> &'static str {
 }
 
 fn mapped_regulating_control_metadata<'a>(
-    detailed: Option<&'a DetailedConnectivity>,
+    detailed: Option<&'a DetailedIndex<'_>>,
     equipment_type: &str,
     equipment: &str,
 ) -> Option<&'a ComponentMetadata> {
@@ -420,7 +477,7 @@ fn retained_control_target(
 }
 
 fn mapped_equipment_container_mrid(
-    detailed: Option<&DetailedConnectivity>,
+    detailed: Option<&DetailedIndex<'_>>,
     component_type: &str,
     local_id: &str,
     unsupported_fallback: Option<String>,
@@ -461,7 +518,7 @@ fn mapped_equipment_container_mrid(
 }
 
 fn field_was_omitted(
-    detailed: Option<&DetailedConnectivity>,
+    detailed: Option<&DetailedIndex<'_>>,
     component_type: &str,
     local_id: &str,
     field: OmittedFieldName,
@@ -750,21 +807,20 @@ pub(super) fn warn_unemitted_detailed_fields(
 }
 
 fn detailed_terminal<'a>(
-    detailed: &'a DetailedConnectivity,
+    detailed: &'a DetailedIndex<'_>,
     component_type: &str,
     local_id: &str,
     terminal: usize,
 ) -> Option<&'a Terminal> {
-    detailed.terminals.iter().find(|value| {
-        value.equipment.component_type() == component_type
-            && value.equipment.local_id() == local_id
-            && usize::from(value.terminal) == terminal
-    })
+    detailed
+        .terminal_index
+        .get(&(component_type, local_id, terminal))
+        .copied()
 }
 
 fn equipment_mrid(
     network: &BalancedNetwork,
-    detailed: Option<&DetailedConnectivity>,
+    detailed: Option<&DetailedIndex<'_>>,
     component: &ComponentId,
 ) -> Option<String> {
     let local_id = component.local_id();
@@ -869,7 +925,7 @@ fn equipment_mrid(
 
 fn terminal_reference_mrid(
     network: &BalancedNetwork,
-    detailed: Option<&DetailedConnectivity>,
+    detailed: Option<&DetailedIndex<'_>>,
     reference: &TerminalReference,
 ) -> Option<String> {
     let equipment = equipment_mrid(network, detailed, &reference.equipment)?;
@@ -886,7 +942,7 @@ fn terminal_reference_mrid(
     ))
 }
 
-fn configured_bus_mrid(detailed: &DetailedConnectivity, component: &ComponentId) -> String {
+fn configured_bus_mrid(detailed: &DetailedIndex<'_>, component: &ComponentId) -> String {
     component_mrid(detailed, component)
 }
 
@@ -897,7 +953,7 @@ fn generated_voltage_level_mrid(container: &ComponentId) -> String {
     )
 }
 
-fn topology_voltage_level_mrid(detailed: &DetailedConnectivity, container: &ComponentId) -> String {
+fn topology_voltage_level_mrid(detailed: &DetailedIndex<'_>, container: &ComponentId) -> String {
     if container.component_type() == "line" {
         return component_mrid(detailed, container);
     }
@@ -912,7 +968,7 @@ fn topology_voltage_level_mrid(detailed: &DetailedConnectivity, container: &Comp
 }
 
 fn connectivity_node_mrid(
-    detailed: Option<&DetailedConnectivity>,
+    detailed: Option<&DetailedIndex<'_>>,
     terminal: Option<&Terminal>,
     bus: BusId,
     project_mixed_topology: bool,
@@ -945,7 +1001,7 @@ fn connectivity_node_mrid(
 }
 
 fn terminal_voltage_level_topology(
-    detailed: &DetailedConnectivity,
+    detailed: &DetailedIndex<'_>,
     terminal: &Terminal,
 ) -> Option<TopologyKind> {
     detailed
@@ -955,7 +1011,7 @@ fn terminal_voltage_level_topology(
         .map(|level| level.topology_kind)
 }
 
-fn project_mixed_topology(detailed: &DetailedConnectivity) -> bool {
+fn project_mixed_topology(detailed: &DetailedIndex<'_>) -> bool {
     let has_node_breaker = detailed
         .voltage_levels
         .iter()
@@ -1047,6 +1103,18 @@ pub(super) fn warn_pow_sybl_projected_transformer_connections(
     detailed: &DetailedConnectivity,
     warnings: &mut CgmesDiagnostics,
 ) {
+    warn_pow_sybl_projected_transformer_connections_indexed(
+        network,
+        &DetailedIndex::new(detailed),
+        warnings,
+    );
+}
+
+fn warn_pow_sybl_projected_transformer_connections_indexed(
+    network: &BalancedNetwork,
+    detailed: &DetailedIndex<'_>,
+    warnings: &mut CgmesDiagnostics,
+) {
     let affected_converters = converters_in_dc_series_device_islands(detailed);
     if affected_converters.is_empty() {
         return;
@@ -1103,7 +1171,7 @@ pub(super) fn warn_pow_sybl_projected_transformer_connections(
 }
 
 fn terminal_uses_connectivity_node(
-    detailed: &DetailedConnectivity,
+    detailed: &DetailedIndex<'_>,
     terminal: &Terminal,
     project_mixed_topology: bool,
 ) -> bool {
@@ -1126,7 +1194,7 @@ fn terminal_uses_connectivity_node(
 
 fn terminal_topological_node_mrid(
     network: &BalancedNetwork,
-    detailed: Option<&DetailedConnectivity>,
+    detailed: Option<&DetailedIndex<'_>>,
     terminal: Option<&Terminal>,
     bus: BusId,
 ) -> String {
@@ -1144,7 +1212,7 @@ fn terminal_topological_node_mrid(
 }
 
 fn terminal_voltage_level_mrid(
-    detailed: Option<&DetailedConnectivity>,
+    detailed: Option<&DetailedIndex<'_>>,
     terminal: Option<&Terminal>,
     bus: BusId,
 ) -> String {
@@ -1163,10 +1231,10 @@ fn terminal_voltage_level_mrid(
     det_mrid("voltagelevel", &bus.to_string())
 }
 
-fn detailed_voltage_level_for_bus(
-    detailed: &DetailedConnectivity,
+fn detailed_voltage_level_for_bus<'a>(
+    detailed: &'a DetailedIndex<'_>,
     bus: BusId,
-) -> Option<&ComponentId> {
+) -> Option<&'a ComponentId> {
     detailed
         .bus_breaker_buses
         .iter()
@@ -1197,7 +1265,7 @@ fn detailed_voltage_level_for_bus(
 
 fn missing_detailed_terminal_buses(
     network: &BalancedNetwork,
-    detailed: &DetailedConnectivity,
+    detailed: &DetailedIndex<'_>,
 ) -> HashSet<BusId> {
     let mut buses = HashSet::new();
     let mut check = |component_type: &str, local_id: &str, terminal: usize, bus: BusId| {
@@ -1274,7 +1342,7 @@ fn switch_class(kind: SwitchKind) -> &'static str {
     }
 }
 
-fn endpoint_bus(detailed: &DetailedConnectivity, endpoint: &TopologyEndpoint) -> Option<BusId> {
+fn endpoint_bus(detailed: &DetailedIndex<'_>, endpoint: &TopologyEndpoint) -> Option<BusId> {
     match endpoint {
         TopologyEndpoint::Bus(component) => detailed
             .bus_breaker_buses
@@ -1445,7 +1513,7 @@ fn write_sv_voltage(
     sv.close("SvVoltage");
 }
 
-fn retained_sv_status(detailed: &DetailedConnectivity, component: &ComponentId) -> Option<bool> {
+fn retained_sv_status(detailed: &DetailedIndex<'_>, component: &ComponentId) -> Option<bool> {
     metadata(detailed, component)?
         .properties
         .get(super::CGMES_SV_STATUS_PROPERTY)?
@@ -1663,7 +1731,7 @@ fn tap_step(tap: &TapChanger) -> Option<&crate::network::TapChangerStep> {
 }
 
 fn source_tap_changer<'a>(
-    detailed: Option<&'a DetailedConnectivity>,
+    detailed: Option<&'a DetailedIndex<'_>>,
     transformer: &str,
     winding: usize,
     kind: TapChangerKind,
@@ -1677,7 +1745,7 @@ fn source_tap_changer<'a>(
 }
 
 fn source_branch_is_power_transformer(
-    detailed: Option<&DetailedConnectivity>,
+    detailed: Option<&DetailedIndex<'_>>,
     branch_local_id: &str,
 ) -> bool {
     mapped_component_metadata(detailed, "branch", branch_local_id).is_some_and(|metadata| {
@@ -1788,7 +1856,7 @@ fn tap_rated_kv(network: &BalancedNetwork, tap: &TapChanger) -> f64 {
 #[derive(Clone, Copy)]
 struct TapWriteContext<'a> {
     network: &'a BalancedNetwork,
-    detailed: &'a DetailedConnectivity,
+    detailed: &'a DetailedIndex<'a>,
     cim_namespace: &'a str,
     tap: &'a TapChanger,
 }
@@ -2105,7 +2173,13 @@ fn bus_mrid(net: &BalancedNetwork, bus: BusId) -> String {
             .iter()
             .find(|value| value.calculated_bus == Some(bus))
     {
-        return component_mrid(detailed, &configured.component);
+        return component_mrid_from_metadata(
+            detailed
+                .component_metadata
+                .iter()
+                .find(|record| record.component == configured.component),
+            &configured.component,
+        );
     }
     net.buses()
         .iter()
@@ -2120,7 +2194,7 @@ fn term_id(eq: &str, seq: usize) -> String {
 }
 
 fn terminal_mrid(
-    detailed: Option<&DetailedConnectivity>,
+    detailed: Option<&DetailedIndex<'_>>,
     terminal: Option<&Terminal>,
     equipment_mrid: &str,
     sequence: usize,
@@ -2177,7 +2251,7 @@ fn dc_terminal_mrid(owner: &str, sequence: u32) -> String {
 }
 
 fn dc_unit_mrid(
-    detailed: &DetailedConnectivity,
+    detailed: &DetailedIndex<'_>,
     component: Option<&ComponentId>,
     owner: &ComponentId,
 ) -> Result<String> {
@@ -2196,7 +2270,7 @@ fn dc_unit_mrid(
 }
 
 fn dc_topological_node_mrid(
-    detailed: &DetailedConnectivity,
+    detailed: &DetailedIndex<'_>,
     component: Option<&ComponentId>,
     owner: &ComponentId,
 ) -> Result<String> {
@@ -2216,7 +2290,7 @@ fn dc_topological_node_mrid(
 
 fn write_equipment_container(
     eq: &mut Doc,
-    detailed: &DetailedConnectivity,
+    detailed: &DetailedIndex<'_>,
     container: Option<&ComponentId>,
 ) {
     if let Some(container) = container {
@@ -2229,7 +2303,7 @@ fn write_equipment_container(
 
 fn write_required_equipment_container(
     eq: &mut Doc,
-    detailed: &DetailedConnectivity,
+    detailed: &DetailedIndex<'_>,
     container: Option<&ComponentId>,
     owner: &ComponentId,
 ) -> Result<()> {
@@ -2264,7 +2338,7 @@ fn write_dc_terminal(
     eq: &mut Doc,
     tp: &mut Doc,
     ssh: &mut Doc,
-    detailed: &DetailedConnectivity,
+    detailed: &DetailedIndex<'_>,
     owner: &str,
     fallback_sequence: u32,
     terminal: &DcTerminal,
@@ -2332,10 +2406,7 @@ fn write_dc_terminal(
     Ok(())
 }
 
-fn calculated_bus_for_terminal(
-    detailed: &DetailedConnectivity,
-    terminal: &Terminal,
-) -> Option<BusId> {
+fn calculated_bus_for_terminal(detailed: &DetailedIndex<'_>, terminal: &Terminal) -> Option<BusId> {
     terminal
         .bus
         .as_ref()
@@ -2355,7 +2426,7 @@ fn calculated_bus_for_terminal(
         })
 }
 
-fn calculated_bus_for_node(detailed: &DetailedConnectivity, node: &ComponentId) -> Option<BusId> {
+fn calculated_bus_for_node(detailed: &DetailedIndex<'_>, node: &ComponentId) -> Option<BusId> {
     detailed
         .connectivity_nodes
         .iter()
@@ -2373,7 +2444,7 @@ fn calculated_bus_for_node(detailed: &DetailedConnectivity, node: &ComponentId) 
 #[allow(clippy::too_many_arguments)]
 fn write_converter_ac_terminals(
     network: &BalancedNetwork,
-    detailed: &DetailedConnectivity,
+    detailed: &DetailedIndex<'_>,
     eq: &mut Doc,
     tp: &mut Doc,
     ssh: &mut Doc,
@@ -2440,7 +2511,7 @@ fn write_converter_ac_terminals(
 
 #[derive(Clone, Copy)]
 struct CapabilityCurveWriteContext<'a> {
-    detailed: &'a DetailedConnectivity,
+    detailed: &'a DetailedIndex<'a>,
     component: &'a ComponentId,
     owner_mrid: &'a str,
     class: &'static str,
@@ -2520,7 +2591,7 @@ fn write_reactive_capability_curve(
 }
 
 fn retained_equipment_reactive_limits<'a>(
-    detailed: &'a DetailedConnectivity,
+    detailed: &'a DetailedIndex<'_>,
     component: &ComponentId,
 ) -> Result<Option<&'a ReactiveLimits>> {
     let mut matches = detailed
@@ -2555,7 +2626,7 @@ fn warn_min_max_reactive_limit_properties(
 
 fn write_vsc_capability_curve(
     eq: &mut Doc,
-    detailed: &DetailedConnectivity,
+    detailed: &DetailedIndex<'_>,
     converter: &VoltageSourceConverter,
     converter_mrid: &str,
     cim_ns: &str,
@@ -2613,7 +2684,7 @@ fn write_vsc_capability_curve(
 #[allow(clippy::too_many_arguments)]
 fn write_synchronous_machine_reactive_limits(
     eq: &mut Doc,
-    detailed: &DetailedConnectivity,
+    detailed: &DetailedIndex<'_>,
     component: &ComponentId,
     machine_mrid: &str,
     cim_ns: &str,
@@ -2845,7 +2916,7 @@ fn write_common_converter_ssh(
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn write_dc_equipment(
     writer: &mut Writer<'_>,
-    detailed: &DetailedConnectivity,
+    detailed: &DetailedIndex<'_>,
     eq: &mut Doc,
     tp: &mut Doc,
     ssh: &mut Doc,
@@ -3591,7 +3662,7 @@ fn write_dc_equipment(
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn write_line_commutated_converter(
     writer: &mut Writer<'_>,
-    detailed: &DetailedConnectivity,
+    detailed: &DetailedIndex<'_>,
     eq: &mut Doc,
     tp: &mut Doc,
     ssh: &mut Doc,
@@ -3884,7 +3955,11 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             ),
         );
     }
-    let detailed = net.detailed_connectivity().as_deref();
+    let detailed_index = net
+        .detailed_connectivity()
+        .as_deref()
+        .map(DetailedIndex::new);
+    let detailed = detailed_index.as_ref();
     let retained_metadata = retained_identified_metadata(detailed, &mut w.warnings);
     if let Some(detailed) = detailed {
         warn_unemitted_detailed_fields(net, detailed, version, &mut w.warnings);
@@ -6230,12 +6305,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 ),
             );
         }
-        let source_metadata = detailed.and_then(|detailed| {
-            detailed.component_metadata.iter().find(|metadata| {
-                metadata.component.component_type() == "branch"
-                    && metadata.component.local_id() == local_id
-            })
-        });
+        let source_metadata = mapped_component_metadata(detailed, "branch", local_id);
         let source_is_series_compensator = source_metadata.is_some_and(|metadata| {
             metadata
                 .properties

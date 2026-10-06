@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- CGMES fresh emission indexes retained component, terminal, and transformer-end
+  identities once per write, avoiding repeated full-table scans on large grids.
+  Import tracks consumed properties with indexed flags while retaining the same
+  unmapped-field diagnostics.
+
 - Primary files and cumulative referenced-file acquisition now default to
   1 GiB. `POWERIO_MAX_PRIMARY_BYTES` and `POWERIO_MAX_REFERENCED_BYTES` override
   those limits; expanded CGMES archives use the latter too. This allows CIM
