@@ -35,6 +35,7 @@ def test_sever_source_forces_fresh_emission_and_keeps_original(tmp_path):
 
 def test_archive_expansion_uses_the_shared_acquisition_limit(monkeypatch, tmp_path):
     import zipfile
+
     import pytest
 
     module = powerio.parse(DATA / "case14.m")
