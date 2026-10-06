@@ -14,6 +14,7 @@
 //! identity.
 //! Header timestamps are a fixed sentinel for the same reason.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -26,13 +27,13 @@ use quick_xml::reader::NsReader;
 use super::{CGMES_CLASS_PROPERTY, CgmesDiagnostics, CgmesVersion};
 use crate::diagnostics::codes;
 use crate::network::{
-    AcDcConverterControlMode, ActivePowerControl, BalancedNetwork, BusId, BusType, CaseMetadata,
-    ComponentMetadata, CurveStyle, DcConverterOperatingMode, DcPolarity, DcSwitchKind, DcTerminal,
-    DetailedConnectivity, GeneratorEnergySource, LineCommutatedConverter,
+    AcDcConverterControlMode, ActivePowerControl, BalancedNetwork, Bus, BusBreakerBus, BusId,
+    BusType, CaseMetadata, ComponentMetadata, CurveStyle, DcConverterOperatingMode, DcPolarity,
+    DcSwitchKind, DcTerminal, DetailedConnectivity, GeneratorEnergySource, LineCommutatedConverter,
     LineCommutatedConverterOperatingMode, LoadVoltageModel, LoadingLimits, OmittedFieldName,
     ReactiveCapabilityCurve, ReactiveLimits, Shunt, StaticVarCompensatorRegulationMode, SwitchKind,
     SwitchedShuntMode, TapChanger, TapChangerKind, TapChangerRegulationMode, Terminal,
-    TerminalReference, TopologyEndpoint, TopologyKind, VoltageSourceConverter,
+    TerminalReference, TopologyEndpoint, TopologyKind, VoltageLevel, VoltageSourceConverter,
     calc_reactive_limits_at_active_power,
 };
 use crate::{Error, Result};
@@ -45,10 +46,20 @@ struct DetailedIndex<'a> {
     external_ids: HashMap<&'a str, &'a ComponentMetadata>,
     transformer_ends: HashMap<&'a str, Vec<&'a ComponentMetadata>>,
     terminal_index: HashMap<(&'a str, &'a str, usize), &'a Terminal>,
+    voltage_levels_by_id: HashMap<&'a ComponentId, &'a VoltageLevel>,
+    substations_by_id: HashSet<&'a ComponentId>,
+    configured_by_id: HashMap<&'a ComponentId, &'a BusBreakerBus>,
+    configured_by_bus: HashMap<BusId, &'a BusBreakerBus>,
+    calculated_by_node: HashMap<&'a ComponentId, Option<BusId>>,
+    bus_mrids: HashMap<BusId, String>,
+    tap_index: HashMap<(&'a str, usize, bool), &'a TapChanger>,
+    transformers_with_taps: HashSet<&'a str>,
+    equipment_with_limits: HashSet<(&'a str, &'a str)>,
 }
 
 impl<'a> DetailedIndex<'a> {
-    fn new(inner: &'a DetailedConnectivity) -> Self {
+    #[allow(clippy::too_many_lines)] // build one emission's borrowed indexes with first-match semantics
+    fn new(inner: &'a DetailedConnectivity, network: &BalancedNetwork) -> Self {
         let mut metadata = HashMap::with_capacity(inner.component_metadata.len());
         let mut external_ids = HashMap::new();
         let mut transformer_ends: HashMap<&str, Vec<&ComponentMetadata>> = HashMap::new();
@@ -91,12 +102,90 @@ impl<'a> DetailedIndex<'a> {
                 ))
                 .or_insert(terminal);
         }
+        let mut voltage_levels_by_id = HashMap::new();
+        for level in &inner.voltage_levels {
+            voltage_levels_by_id
+                .entry(&level.component)
+                .or_insert(level);
+        }
+        let substations_by_id = inner.substations.iter().map(|s| &s.component).collect();
+        let mut configured_by_id = HashMap::new();
+        let mut configured_by_bus = HashMap::new();
+        for configured in &inner.bus_breaker_buses {
+            configured_by_id
+                .entry(&configured.component)
+                .or_insert(configured);
+            if let Some(bus) = configured.calculated_bus {
+                configured_by_bus.entry(bus).or_insert(configured);
+            }
+        }
+        let mut calculated_by_node = HashMap::new();
+        for node in &inner.connectivity_nodes {
+            calculated_by_node
+                .entry(&node.component)
+                .or_insert(node.calculated_bus);
+        }
+        for bus in &inner.calculated_buses {
+            for node in &bus.nodes {
+                let calculated = calculated_by_node.entry(node).or_insert(None);
+                if calculated.is_none() {
+                    *calculated = Some(bus.calculated_bus);
+                }
+            }
+        }
+        let mut bus_mrids = HashMap::new();
+        for (&bus, configured) in &configured_by_bus {
+            let component = &configured.component;
+            bus_mrids.insert(
+                bus,
+                component_mrid_from_metadata(
+                    metadata
+                        .get(&(component.component_type(), component.local_id()))
+                        .copied(),
+                    component,
+                ),
+            );
+        }
+        for bus in network.buses() {
+            bus_mrids
+                .entry(bus.id)
+                .or_insert_with(|| mrid_or("bus", &bus.id.to_string(), bus.uid.as_deref()));
+        }
+        let mut tap_index = HashMap::new();
+        let mut transformers_with_taps = HashSet::new();
+        for tap in &inner.tap_changers {
+            if tap.transformer.component_type() == "branch" {
+                let id = tap.transformer.local_id();
+                transformers_with_taps.insert(id);
+                tap_index
+                    .entry((
+                        id,
+                        usize::from(tap.winding),
+                        tap.kind == TapChangerKind::Ratio,
+                    ))
+                    .or_insert(tap);
+            }
+        }
+        let equipment_with_limits = inner
+            .operational_limit_groups
+            .iter()
+            .map(|group| (group.equipment.component_type(), group.equipment.local_id()))
+            .collect();
         Self {
             inner,
             metadata,
             external_ids,
             transformer_ends,
             terminal_index,
+            voltage_levels_by_id,
+            substations_by_id,
+            configured_by_id,
+            configured_by_bus,
+            calculated_by_node,
+            bus_mrids,
+            tap_index,
+            transformers_with_taps,
+            equipment_with_limits,
         }
     }
 }
@@ -930,9 +1019,12 @@ fn terminal_reference_mrid(
 ) -> Option<String> {
     let equipment = equipment_mrid(network, detailed, &reference.equipment)?;
     let record = detailed.and_then(|details| {
-        details.terminals.iter().find(|terminal| {
-            terminal.equipment == reference.equipment && terminal.terminal == reference.terminal
-        })
+        detailed_terminal(
+            details,
+            reference.equipment.component_type(),
+            reference.equipment.local_id(),
+            usize::from(reference.terminal),
+        )
     });
     Some(terminal_mrid(
         detailed,
@@ -957,14 +1049,10 @@ fn topology_voltage_level_mrid(detailed: &DetailedIndex<'_>, container: &Compone
     if container.component_type() == "line" {
         return component_mrid(detailed, container);
     }
-    detailed
-        .voltage_levels
-        .iter()
-        .find(|level| level.component == *container)
-        .map_or_else(
-            || generated_voltage_level_mrid(container),
-            |level| component_mrid(detailed, &level.component),
-        )
+    detailed.voltage_levels_by_id.get(container).map_or_else(
+        || generated_voltage_level_mrid(container),
+        |level| component_mrid(detailed, &level.component),
+    )
 }
 
 fn connectivity_node_mrid(
@@ -989,11 +1077,7 @@ fn connectivity_node_mrid(
         {
             return det_mrid("connectivity_node", &configured.to_string());
         }
-        if let Some(configured) = detailed
-            .bus_breaker_buses
-            .iter()
-            .find(|value| value.calculated_bus == Some(bus))
-        {
+        if let Some(configured) = detailed.configured_by_bus.get(&bus) {
             return det_mrid("connectivity_node", &configured.component.to_string());
         }
     }
@@ -1005,9 +1089,8 @@ fn terminal_voltage_level_topology(
     terminal: &Terminal,
 ) -> Option<TopologyKind> {
     detailed
-        .voltage_levels
-        .iter()
-        .find(|level| level.component == terminal.voltage_level)
+        .voltage_levels_by_id
+        .get(&terminal.voltage_level)
         .map(|level| level.topology_kind)
 }
 
@@ -1098,6 +1181,7 @@ fn configured_terminal_bus(terminal: &Terminal) -> Option<&ComponentId> {
     terminal.connectable_bus.as_ref().or(terminal.bus.as_ref())
 }
 
+#[cfg(test)]
 pub(super) fn warn_pow_sybl_projected_transformer_connections(
     network: &BalancedNetwork,
     detailed: &DetailedConnectivity,
@@ -1105,7 +1189,7 @@ pub(super) fn warn_pow_sybl_projected_transformer_connections(
 ) {
     warn_pow_sybl_projected_transformer_connections_indexed(
         network,
-        &DetailedIndex::new(detailed),
+        &DetailedIndex::new(detailed, network),
         warnings,
     );
 }
@@ -1205,10 +1289,10 @@ fn terminal_topological_node_mrid(
         if let Some(node) = terminal.and_then(|value| value.node.as_ref())
             && let Some(calculated_bus) = calculated_bus_for_node(detailed, node)
         {
-            return bus_mrid(network, calculated_bus);
+            return bus_mrid(network, Some(detailed), calculated_bus);
         }
     }
-    bus_mrid(network, bus)
+    bus_mrid(network, detailed, bus)
 }
 
 fn terminal_voltage_level_mrid(
@@ -1236,9 +1320,8 @@ fn detailed_voltage_level_for_bus<'a>(
     bus: BusId,
 ) -> Option<&'a ComponentId> {
     detailed
-        .bus_breaker_buses
-        .iter()
-        .find(|configured| configured.calculated_bus == Some(bus))
+        .configured_by_bus
+        .get(&bus)
         .map(|configured| &configured.voltage_level)
         .or_else(|| {
             detailed
@@ -1345,18 +1428,23 @@ fn switch_class(kind: SwitchKind) -> &'static str {
 fn endpoint_bus(detailed: &DetailedIndex<'_>, endpoint: &TopologyEndpoint) -> Option<BusId> {
     match endpoint {
         TopologyEndpoint::Bus(component) => detailed
-            .bus_breaker_buses
-            .iter()
-            .find(|value| value.component == *component)
+            .configured_by_id
+            .get(component)
             .and_then(|value| value.calculated_bus),
         TopologyEndpoint::Node(component) => calculated_bus_for_node(detailed, component),
     }
 }
 
-fn esc(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
+fn esc(text: &str) -> Cow<'_, str> {
+    if text.bytes().any(|byte| matches!(byte, b'&' | b'<' | b'>')) {
+        Cow::Owned(
+            text.replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;"),
+        )
+    } else {
+        Cow::Borrowed(text)
+    }
 }
 
 /// One profile document under construction.
@@ -1609,6 +1697,7 @@ fn document(
 struct Writer<'a> {
     net: &'a BalancedNetwork,
     p: Profiles,
+    buses: HashMap<BusId, &'a Bus>,
     warnings: CgmesDiagnostics,
 }
 
@@ -1736,12 +1825,10 @@ fn source_tap_changer<'a>(
     winding: usize,
     kind: TapChangerKind,
 ) -> Option<&'a TapChanger> {
-    detailed?.tap_changers.iter().find(|value| {
-        value.transformer.component_type() == "branch"
-            && value.transformer.local_id() == transformer
-            && usize::from(value.winding) == winding
-            && value.kind == kind
-    })
+    detailed?
+        .tap_index
+        .get(&(transformer, winding, kind == TapChangerKind::Ratio))
+        .copied()
 }
 
 fn source_branch_is_power_transformer(
@@ -1753,12 +1840,7 @@ fn source_branch_is_power_transformer(
             .properties
             .get(CGMES_CLASS_PROPERTY)
             .is_some_and(|class| class == "PowerTransformer")
-    }) || detailed.is_some_and(|detailed| {
-        detailed.tap_changers.iter().any(|tap| {
-            tap.transformer.component_type() == "branch"
-                && tap.transformer.local_id() == branch_local_id
-        })
-    })
+    }) || detailed.is_some_and(|detailed| detailed.transformers_with_taps.contains(branch_local_id))
 }
 
 fn tap_neutral_position(tap: &TapChanger) -> i32 {
@@ -2150,10 +2232,8 @@ fn write_source_loading_limits(
 impl Writer<'_> {
     fn kv(&self, bus: BusId) -> Result<f64> {
         let bus = self
-            .net
-            .buses()
-            .iter()
-            .find(|b| b.id == bus)
+            .buses
+            .get(&bus)
             .ok_or_else(|| emission_error(format!("bus {bus} does not exist")))?;
         if !bus.base_kv.is_finite() || bus.base_kv <= 0.0 {
             return Err(emission_error(format!(
@@ -2166,20 +2246,9 @@ impl Writer<'_> {
 }
 
 /// A bus's TopologicalNode id: the imported uid, else deterministic.
-fn bus_mrid(net: &BalancedNetwork, bus: BusId) -> String {
-    if let Some(detailed) = net.detailed_connectivity().as_deref()
-        && let Some(configured) = detailed
-            .bus_breaker_buses
-            .iter()
-            .find(|value| value.calculated_bus == Some(bus))
-    {
-        return component_mrid_from_metadata(
-            detailed
-                .component_metadata
-                .iter()
-                .find(|record| record.component == configured.component),
-            &configured.component,
-        );
+fn bus_mrid(net: &BalancedNetwork, detailed: Option<&DetailedIndex<'_>>, bus: BusId) -> String {
+    if let Some(id) = detailed.and_then(|index| index.bus_mrids.get(&bus)) {
+        return id.clone();
     }
     net.buses()
         .iter()
@@ -2413,9 +2482,8 @@ fn calculated_bus_for_terminal(detailed: &DetailedIndex<'_>, terminal: &Terminal
         .or(terminal.connectable_bus.as_ref())
         .and_then(|bus| {
             detailed
-                .bus_breaker_buses
-                .iter()
-                .find(|value| value.component == *bus)
+                .configured_by_id
+                .get(bus)
                 .and_then(|value| value.calculated_bus)
         })
         .or_else(|| {
@@ -2427,18 +2495,7 @@ fn calculated_bus_for_terminal(detailed: &DetailedIndex<'_>, terminal: &Terminal
 }
 
 fn calculated_bus_for_node(detailed: &DetailedIndex<'_>, node: &ComponentId) -> Option<BusId> {
-    detailed
-        .connectivity_nodes
-        .iter()
-        .find(|value| value.component == *node)
-        .and_then(|value| value.calculated_bus)
-        .or_else(|| {
-            detailed
-                .calculated_buses
-                .iter()
-                .find(|calculated| calculated.nodes.contains(node))
-                .map(|calculated| calculated.calculated_bus)
-        })
+    detailed.calculated_by_node.get(node).copied().flatten()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3936,6 +3993,10 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
     let mut w = Writer {
         net,
         p,
+        buses: net.buses().iter().fold(HashMap::new(), |mut buses, bus| {
+            buses.entry(bus.id).or_insert(bus);
+            buses
+        }),
         warnings: CgmesDiagnostics::new(&codes::EMIT_CGMES.record_dropped),
     };
     if unbounded_reactive_limits > 0 {
@@ -3958,7 +4019,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
     let detailed_index = net
         .detailed_connectivity()
         .as_deref()
-        .map(DetailedIndex::new);
+        .map(|details| DetailedIndex::new(details, net));
     let detailed = detailed_index.as_ref();
     let retained_metadata = retained_identified_metadata(detailed, &mut w.warnings);
     if let Some(detailed) = detailed {
@@ -4008,7 +4069,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             w.warnings.push_as(&codes::EMIT_CGMES.value_substituted, format!(
                 "source detailed connectivity contains both node breaker and bus breaker VoltageLevels; fresh CGMES emission promotes {projected_levels} bus breaker VoltageLevel(s) to node breaker connectivity by adding one ConnectivityNode per TopologicalNode because PowSybl imports one topology mode per CGMES profile set; PowerIO's typed voltage level topology is unchanged"
             ));
-            warn_pow_sybl_projected_transformer_connections(net, detailed, &mut w.warnings);
+            warn_pow_sybl_projected_transformer_connections_indexed(net, detailed, &mut w.warnings);
         }
         for container in detailed
             .component_metadata
@@ -4192,11 +4253,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                                     affected_class: &str,
                                     affected: &ComponentId|
          -> Result<()> {
-            if detailed
-                .voltage_levels
-                .iter()
-                .any(|level| level.component == *container)
-            {
+            if detailed.voltage_levels_by_id.contains_key(container) {
                 return Ok(());
             }
             let source_line = container.component_type() == "line";
@@ -4208,10 +4265,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                     "source ConnectivityNodeContainer `{container}` for {affected_class} `{affected}` has no calculated bus from which to preserve its required voltage base"
                 ))
             })?;
-            let nominal_kv = net
-                .buses()
-                .iter()
-                .find(|candidate| candidate.id == bus)
+            let nominal_kv = w.buses.get(&bus)
                 .ok_or_else(|| {
                     emission_error(format!(
                         "source ConnectivityNodeContainer `{container}` for {affected_class} `{affected}` references unknown calculated bus {bus}"
@@ -4317,12 +4371,10 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
     if use_detailed_topology {
         let detailed = detailed.expect("detailed topology has detailed connectivity");
         let voltage_level_missing_substation = detailed.voltage_levels.iter().any(|level| {
-            level.substation.as_ref().is_none_or(|substation| {
-                !detailed
-                    .substations
-                    .iter()
-                    .any(|value| value.component == *substation)
-            })
+            level
+                .substation
+                .as_ref()
+                .is_none_or(|substation| !detailed.substations_by_id.contains(substation))
         });
         let needs_fallback_substation = voltage_level_missing_substation
             || !generated_voltage_levels.is_empty()
@@ -4371,12 +4423,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             let substation = level
                 .substation
                 .as_ref()
-                .filter(|component| {
-                    detailed
-                        .substations
-                        .iter()
-                        .any(|value| value.component == **component)
-                })
+                .filter(|component| detailed.substations_by_id.contains(*component))
                 .map_or_else(
                     || fallback_substation.clone(),
                     |component| component_mrid(detailed, component),
@@ -4403,10 +4450,9 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             eq.close("VoltageLevel");
         }
         for bus_id in &fallback_calculated_buses {
-            let bus = net
-                .buses()
-                .iter()
-                .find(|bus| bus.id == *bus_id)
+            let bus = w
+                .buses
+                .get(bus_id)
                 .expect("fallback bus exists in the balanced network");
             let id = det_mrid("voltagelevel", &bus.id.to_string());
             eq.named("VoltageLevel", &id, &format!("VL{}", bus.id));
@@ -4441,14 +4487,16 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             eq.close("ConnectivityNode");
             if let Some(bus) = calculated_bus_for_node(detailed, &node.component) {
                 tp.open("ConnectivityNode", &id, true);
-                tp.reference("ConnectivityNode.TopologicalNode", &bus_mrid(net, bus));
+                tp.reference(
+                    "ConnectivityNode.TopologicalNode",
+                    &bus_mrid(net, Some(detailed), bus),
+                );
                 tp.close("ConnectivityNode");
             }
             if node.voltage_level.component_type() != "line"
                 && !detailed
-                    .voltage_levels
-                    .iter()
-                    .any(|level| level.component == node.voltage_level)
+                    .voltage_levels_by_id
+                    .contains_key(&node.voltage_level)
             {
                 let affected = calculated_bus_for_node(detailed, &node.component).map_or_else(
                     || {
@@ -4467,12 +4515,11 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             }
         }
         for (bus, voltage_level, voltage_kv, angle_degrees) in &active_calculated_buses {
-            let balanced_bus = net
-                .buses()
-                .iter()
-                .find(|candidate| candidate.id == *bus)
+            let balanced_bus = w
+                .buses
+                .get(bus)
                 .expect("active calculated bus exists in the balanced network");
-            let id = bus_mrid(net, *bus);
+            let id = bus_mrid(net, Some(detailed), *bus);
             tp.named(
                 "TopologicalNode",
                 &id,
@@ -4500,12 +4547,11 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             );
         }
         for bus_id in &fallback_calculated_buses {
-            let bus = net
-                .buses()
-                .iter()
-                .find(|bus| bus.id == *bus_id)
+            let bus = w
+                .buses
+                .get(bus_id)
                 .expect("fallback bus exists in the balanced network");
-            let id = bus_mrid(net, bus.id);
+            let id = bus_mrid(net, Some(detailed), bus.id);
             let voltage_level = det_mrid("voltagelevel", &bus.id.to_string());
             tp.named(
                 "TopologicalNode",
@@ -4569,7 +4615,10 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             eq.reference("ConnectivityNode.ConnectivityNodeContainer", &container);
             eq.close("ConnectivityNode");
             tp.open("ConnectivityNode", &id, true);
-            tp.reference("ConnectivityNode.TopologicalNode", &bus_mrid(net, *bus_id));
+            tp.reference(
+                "ConnectivityNode.TopologicalNode",
+                &bus_mrid(net, Some(detailed), *bus_id),
+            );
             tp.close("ConnectivityNode");
             if !fallback_calculated_buses.contains(bus_id) {
                 w.warnings.push_as(&codes::EMIT_CGMES.value_defaulted, format!(
@@ -4581,15 +4630,15 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         for configured in &active_bus_breaker_buses {
             let id = configured_bus_mrid(detailed, &configured.component);
             let level = detailed
-                .voltage_levels
-                .iter()
-                .find(|level| level.component == configured.voltage_level);
+                .voltage_levels_by_id
+                .get(&configured.voltage_level)
+                .copied();
             let nominal_kv = level.map_or_else(
                 || {
                     if configured.voltage_level.component_type() == "line" {
                         return configured
                             .calculated_bus
-                            .and_then(|id| net.buses().iter().find(|bus| bus.id == id))
+                            .and_then(|id| w.buses.get(&id))
                             .map(|bus| bus.base_kv)
                             .expect("active source Line TopologicalNode has a calculated bus");
                     }
@@ -4655,7 +4704,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             eq.text("VoltageLevel.highVoltageLimit", bus.vmax * bus.base_kv);
             eq.close("VoltageLevel");
 
-            let tn = bus_mrid(net, bus.id);
+            let tn = bus_mrid(net, detailed, bus.id);
             tp.named(
                 "TopologicalNode",
                 &tn,
@@ -4815,9 +4864,9 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
     if let Some(detailed) = detailed {
         for busbar in &detailed.busbar_sections {
             let level = detailed
-                .voltage_levels
-                .iter()
-                .find(|level| level.component == busbar.voltage_level);
+                .voltage_levels_by_id
+                .get(&busbar.voltage_level)
+                .copied();
             if level.is_some_and(|level| level.topology_kind == TopologyKind::BusBreaker)
                 && !project_mixed_topology
             {
@@ -6570,12 +6619,8 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         }
         write_sv_status(&mut sv, &id, branch.in_service);
 
-        let has_source_limits = detailed.is_some_and(|value| {
-            value.operational_limit_groups.iter().any(|group| {
-                group.equipment.component_type() == "branch"
-                    && group.equipment.local_id() == local_id
-            })
-        });
+        let has_source_limits = detailed
+            .is_some_and(|value| value.equipment_with_limits.contains(&("branch", local_id)));
         if !has_source_limits {
             // PATL and TATL current limits at terminal 1 through √3·kV.
             let mut rate = |mva: f64, limit_type: RateLimitType| {
@@ -7105,10 +7150,13 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         sv.named("TopologicalIsland", &island, "island");
         sv.reference(
             "TopologicalIsland.AngleRefTopologicalNode",
-            &bus_mrid(net, slack.id),
+            &bus_mrid(net, detailed, slack.id),
         );
         for bus in net.buses() {
-            sv.reference("TopologicalIsland.TopologicalNodes", &bus_mrid(net, bus.id));
+            sv.reference(
+                "TopologicalIsland.TopologicalNodes",
+                &bus_mrid(net, detailed, bus.id),
+            );
         }
         sv.close("TopologicalIsland");
     } else {

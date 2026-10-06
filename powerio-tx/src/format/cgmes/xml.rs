@@ -93,9 +93,11 @@ fn prefixed_name(
     let local = String::from_utf8_lossy(local).into_owned();
     match resolve {
         ResolveResult::Bound(ns) => {
-            let uri = String::from_utf8_lossy(ns.as_ref()).into_owned();
+            let uri = String::from_utf8_lossy(ns.as_ref());
             if uri.contains("CIM-schema-cim") || uri.contains("CIM100#") {
-                cim_namespaces.insert(uri.clone());
+                if !cim_namespaces.contains(uri.as_ref()) {
+                    cim_namespaces.insert(uri.into_owned());
+                }
                 local
             } else if uri == MD_NS {
                 format!("md:{local}")
