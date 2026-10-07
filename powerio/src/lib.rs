@@ -108,7 +108,7 @@ pub const IR_MIN_VERSION: u64 = 2;
 
 /// The `$id` of the schema snapshot describing this build's structural types.
 /// The release in the path identifies the catalog, not a new IR version.
-pub const IR_SCHEMA_ID: &str = "https://powerio.dev/schema/pio-ir/2/0.11.4/schema.json";
+pub const IR_SCHEMA_ID: &str = "https://powerio.dev/schema/pio-ir/2/0.11.5/schema.json";
 
 use powerio_tx::format;
 pub use powerio_tx::{

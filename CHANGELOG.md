@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.11.5
 
 - Prepare paired releases from reviewed PowerIO and PowerIO.jl commits, with
   generated version metadata, verified binary hashes, and frozen validation
