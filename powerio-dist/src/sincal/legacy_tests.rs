@@ -288,3 +288,145 @@ fn export_source_zero_sequence_oracle() {
         .unwrap();
     }
 }
+
+#[test]
+fn legacy_inactive_center_tap_defaults_keep_native_data_and_tap_provenance() {
+    let setup = "ALTER TABLE TwoWindingTransformer ADD COLUMN uk_Ct REAL;
+        ALTER TABLE TwoWindingTransformer ADD COLUMN ur_Ct REAL;
+        ALTER TABLE TwoWindingTransformer ADD COLUMN StpCt_ID INTEGER;";
+    let expected = legacy(setup).network().unwrap();
+    for edit in [
+        "UPDATE TwoWindingTransformer SET Flag_Ct=NULL",
+        "UPDATE TwoWindingTransformer SET Flag_Ct=NULL,uk_Ct=0,ur_Ct=0",
+        "UPDATE TwoWindingTransformer SET Flag_Ct=NULL,Flag_Tap=NULL",
+    ] {
+        let db = legacy(&format!("{setup}{edit}"));
+        let mapped = db.network().unwrap();
+        assert_eq!(expected.transformers(), mapped.transformers());
+        assert_eq!(expected.buses(), mapped.buses());
+        assert_eq!(expected.switches(), mapped.switches());
+        assert_eq!(expected.shunts(), mapped.shunts());
+        let defaults = &mapped.defaulted()["TwoWindingTransformer.33"];
+        assert!(defaults.contains(&"Flag_Ct"));
+        assert_eq!(defaults.contains(&"Flag_Tap"), edit.contains("Flag_Tap"));
+        let native: Option<i64> = db
+            .connection
+            .query_row(
+                "SELECT Flag_Ct FROM TwoWindingTransformer WHERE Element_ID=33",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(native, None);
+    }
+    for edit in [
+        "UPDATE TwoWindingTransformer SET Flag_Ct=1",
+        "UPDATE TwoWindingTransformer SET Flag_Ct=2",
+        "UPDATE TwoWindingTransformer SET Flag_Ct=0.5",
+        "UPDATE TwoWindingTransformer SET Flag_Ct='bad'",
+        "UPDATE TwoWindingTransformer SET Flag_Ct=NULL,uk_Ct=16",
+        "UPDATE TwoWindingTransformer SET Flag_Ct=NULL,StpCt_ID=1",
+        "UPDATE TwoWindingTransformer SET Flag_Ct=NULL,ur_Ct=-0.1",
+        "UPDATE TwoWindingTransformer SET Flag_Ct=NULL; ALTER TABLE TwoWindingTransformer DROP COLUMN uk_Ct",
+        "ALTER TABLE TwoWindingTransformer DROP COLUMN Flag_Ct",
+    ] {
+        assert!(
+            legacy(&format!("{setup}{edit}")).network().is_err(),
+            "accepted {edit}"
+        );
+    }
+    let modern = NativeDatabase::decode(
+        &network_database(&format!(
+            "{setup} UPDATE TwoWindingTransformer SET Flag_Ct=NULL"
+        )),
+        None,
+    )
+    .unwrap();
+    assert!(modern.network().is_err());
+}
+
+#[test]
+fn legacy_transformer_optional_defaults_preserve_the_explicit_nominal_circuit() {
+    let fields = [
+        "Flag_ConNode",
+        "Flag_Macro",
+        "AddRotate",
+        "roh",
+        "rohm",
+        "ukr",
+        "alpha",
+        "phi",
+        "Vfe",
+        "i0",
+    ];
+    let explicit = fields
+        .iter()
+        .map(|field| format!("{field}={}", i32::from(*field == "Flag_ConNode")))
+        .collect::<Vec<_>>()
+        .join(",");
+    let absent = fields
+        .iter()
+        .map(|field| format!("{field}=NULL"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let expected = legacy(&format!("UPDATE TwoWindingTransformer SET {explicit}"))
+        .network()
+        .unwrap();
+    let db = legacy(&format!("UPDATE TwoWindingTransformer SET {absent}"));
+    let actual = db.network().unwrap();
+    assert_eq!(actual.buses(), expected.buses());
+    assert_eq!(actual.switches(), expected.switches());
+    assert_eq!(actual.shunts(), expected.shunts());
+    assert_eq!(actual.defaulted()["TwoWindingTransformer.33"], fields);
+    for field in fields {
+        let raw: rusqlite::types::Value = db
+            .connection
+            .query_row(
+                &format!("SELECT {field} FROM TwoWindingTransformer"),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(raw, rusqlite::types::Value::Null);
+        let missing = format!("ALTER TABLE TwoWindingTransformer DROP COLUMN {field}");
+        assert!(
+            legacy(&missing).network().is_err(),
+            "accepted missing {field}"
+        );
+        let invalid = format!("UPDATE TwoWindingTransformer SET {field}='bad'");
+        assert!(legacy(&invalid).network().is_err(), "accepted text {field}");
+        let modern = NativeDatabase::decode(
+            &network_database(&format!("UPDATE TwoWindingTransformer SET {field}=NULL")),
+            None,
+        )
+        .unwrap();
+        assert!(modern.network().is_err(), "accepted modern NULL {field}");
+    }
+    for field in ["Un1", "Un2", "Sn", "uk", "ur", "VecGrp", "Flag_roh"] {
+        assert!(
+            legacy(&format!("UPDATE TwoWindingTransformer SET {field}=NULL"))
+                .network()
+                .is_err(),
+            "defaulted required {field}"
+        );
+    }
+    assert!(
+        legacy("UPDATE TwoWindingTransformer SET Vfe=1,i0=NULL")
+            .network()
+            .is_err()
+    );
+    assert!(
+        legacy("UPDATE TwoWindingTransformer SET Flag_Tap=1,roh1=NULL")
+            .network()
+            .is_err()
+    );
+    let individual =
+        legacy("UPDATE TwoWindingTransformer SET Flag_Tap=1,roh=NULL,roh1=1,roh2=1,roh3=1")
+            .network()
+            .unwrap();
+    assert!(
+        !individual
+            .defaulted()
+            .contains_key("TwoWindingTransformer.33")
+    );
+}

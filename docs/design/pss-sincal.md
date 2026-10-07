@@ -413,6 +413,10 @@ connections. All 19 base variants are audited; none is yet a complete native
 unbalanced parse. CSIRO 01 context still requires autotransformer galvanic
 mapping. Wye star/sequence semantics, partial transformer windings, inconsistent
 core parameters, broader profiles/variants and public integration remain work.
+Schema-11.5 optional transformer defaults now cover the sparse CSIRO03 records
+with explicit provenance; its context advances to unresolved autotransformer
+topology. Its 297 limited-P/Q loads additionally require an exact native
+voltage-reduction curve and a corresponding generic typed representation.
 See `evals/sincal/` for exact scope and independently reproduced evidence.
 
 ### PR 5: experimental fresh writer

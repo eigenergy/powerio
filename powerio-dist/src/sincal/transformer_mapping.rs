@@ -13,7 +13,6 @@ use super::{
     format_error,
     schema::NativeDatabase,
     semantics::State,
-    transformer::integer,
     transformer_impedance::{NominalTransformerInput, ZeroSequenceInput},
 };
 use crate::{DistBus, DistShunt, DistSwitch, Result};
@@ -100,7 +99,7 @@ impl NativeDatabase {
             .query_row([element, self.variant], |row| {
                 let check = || -> Result<()> {
                     if self.newer_integer(row, "Flag_Lf", 1)? != 1
-                        || integer(row, "Flag_Macro")? != 0
+                        || self.legacy_integer(row, "Flag_Macro", 0)? != 0
                         || self.newer_integer(row, "Flag_Boost", 0)? != 0
                         || self.newer_number(row, "C01")? != 0.0
                         || self.newer_number(row, "C02")? != 0.0

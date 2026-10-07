@@ -427,3 +427,38 @@ adds a small numerical neutral-diagonal shunt in
 That diagonal multiplies the constrained zero voltage; it is not an input
 impedance to copy into PowerIO. The oracle retains its original 1e-12 S
 acceptance tolerance and checks earth connectivity separately.
+
+
+### Schema-11.5 transformer defaults and limited-load gap
+
+The April 2014 Database Description (printed pp.45–46) lists zero defaults
+for optional transformer rotation, common tap position/midpoint/increments,
+core loss and no-load current, and selects winding 1 as the default tap side.
+The schema-11.5 reader applies only these enumerated defaults to explicit NULL
+cells. Inactive common-tap values are not reported as defaults when individual
+taps are selected. Applied fields appear under the native transformer ID in
+`network.defaulted`; source cells remain NULL. Required voltage/power ratings,
+series measurements, vector group and regulation mode never take this path.
+Missing columns, malformed values, inconsistent core parameters and modern
+schema NULLs still reject. A NULL centre-tap selector additionally requires
+absent/zero centre-tap measurements and no centre-tap neutral reference.
+
+CSIRO03 contains eight transformers using these legacy omissions. Synthetic
+regressions compare their default profile with fully specified circuits, check
+provenance and source immutability, and exercise each missing/invalid field.
+The updated external audit now passes these NULL-field guards and reaches
+CSIRO03’s unresolved autotransformer topology. It still reports a context
+failure, not a successful whole-network parse or a complete component audit.
+
+All 297 CSIRO03 loads use native `Flag_LoadType=4` (limited/scaled P/Q).
+Siemens Load Flow (April 2014), printed pp.11–12, shows a smooth reduction
+curve below a voltage threshold; it is not constant power or a simple ZIP
+polynomial over the full domain. The public
+[6.0 release notes](https://sincal.simtec.cc/6.0/ReleaseNotes-Eng.pdf) describe
+its introduction, but neither source establishes the exact curve equation.
+The [12.5 release notes](https://sincal.s3.amazonaws.com/12.5/ReleaseNotes-Eng.pdf)
+add slack-power-driven correction of limited loads, so future version support
+must also distinguish that behavior. No limited load is relabeled as constant
+power, no curve is fitted to the illustration/results, and no generic voltage
+model is added until its exact semantics are established. This is a reader
+implementation gap; native writer acceptance is a separate external gate.

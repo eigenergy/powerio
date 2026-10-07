@@ -70,11 +70,36 @@ impl NativeDatabase {
         let value: Option<i64> = row.get(field).map_err(format_error)?;
         match value {
             Some(value) => Ok(value),
-            None if field == "Flag_Tap" && self.version.to_bits() == 11.5_f64.to_bits() => {
+            None if matches!(
+                field,
+                "Flag_Tap" | "Flag_Ct" | "Flag_ConNode" | "Flag_Macro"
+            ) && self.version.to_bits() == 11.5_f64.to_bits() =>
+            {
                 Ok(default)
             }
             None => Err(format_error(format!(
                 "NULL {field} outside schema-11.5 legacy profile"
+            ))),
+        }
+    }
+
+    /// Explicitly enumerated zero defaults in the April 2014 Database
+    /// Description pp.45–46. Required ratings and impedances never use this
+    /// path. Retain NULL in the source and record its interpretation later.
+    pub fn legacy_transformer_number(&self, row: &rusqlite::Row<'_>, field: &str) -> Result<f64> {
+        let value: Option<f64> = row.get(field).map_err(format_error)?;
+        match value {
+            Some(value) if value.is_finite() => Ok(value),
+            None if self.version.to_bits() == 11.5_f64.to_bits()
+                && matches!(
+                    field,
+                    "AddRotate" | "roh" | "rohm" | "ukr" | "alpha" | "phi" | "Vfe" | "i0"
+                ) =>
+            {
+                Ok(0.0)
+            }
+            _ => Err(format_error(format!(
+                "invalid or unresolved transformer {field}"
             ))),
         }
     }

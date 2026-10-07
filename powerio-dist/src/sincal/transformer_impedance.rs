@@ -51,7 +51,9 @@ impl NativeDatabase {
              ON e.Element_ID=t.Element_ID AND e.Variant_ID=t.Variant_ID
              WHERE t.Element_ID=?1 AND t.Variant_ID=?2").map_err(format_error)?;
         let input = statement
-            .query_row([element, self.variant], |row| Ok(decode(row, connection)))
+            .query_row([element, self.variant], |row| {
+                Ok(decode(row, connection, self))
+            })
             .map_err(format_error)??;
         Ok(input)
     }
@@ -60,6 +62,7 @@ impl NativeDatabase {
 fn decode(
     row: &Row<'_>,
     connection: TransformerConnectionInput,
+    db: &NativeDatabase,
 ) -> Result<NominalTransformerInput> {
     let volts_squared = connection.rated_ll_volts[1].powi(2);
     let impedance_base = finite(volts_squared / connection.rated_va, "impedance base")?;
@@ -72,9 +75,9 @@ fn decode(
         impedance_base * resistance,
         impedance_base * quadrature(magnitude, resistance)?,
     ))?;
-    let core_watts = finite(nonnegative(row, "Vfe")? * 1000.0, "core loss")?;
+    let core_watts = finite(legacy_nonnegative(db, row, "Vfe")? * 1000.0, "core loss")?;
     let no_load_va = finite(
-        nonnegative(row, "i0")? / 100.0 * connection.rated_va,
+        legacy_nonnegative(db, row, "i0")? / 100.0 * connection.rated_va,
         "no-load VA",
     )?;
     let no_load_secondary_siemens = checked(Complex64::new(
@@ -88,6 +91,14 @@ fn decode(
         no_load_secondary_siemens,
         zero_sequence,
     })
+}
+
+fn legacy_nonnegative(db: &NativeDatabase, row: &Row<'_>, field: &str) -> Result<f64> {
+    let value = db.legacy_transformer_number(row, field)?;
+    if value < 0.0 {
+        return Err(format_error(format!("negative transformer {field}")));
+    }
+    Ok(value)
 }
 
 fn zero_sequence(

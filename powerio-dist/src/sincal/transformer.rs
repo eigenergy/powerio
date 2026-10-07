@@ -238,7 +238,8 @@ impl NativeDatabase {
                 )));
             }
         }
-        if integer(row, "Flag_Ct")? != 0 {
+        require_no_center_tap(row, self)?;
+        if self.legacy_integer(row, "Flag_Ct", 0)? != 0 {
             return Err(format_error(
                 "center-tapped transformer requires a separate circuit",
             ));
@@ -250,7 +251,9 @@ impl NativeDatabase {
             positive_scaled(row, "Un2", 1000.0)?,
         ];
         let rated_va = positive_scaled(row, "Sn", 1e6)?;
-        let additional_rotation_rad = number(row, "AddRotate")?.to_radians();
+        let additional_rotation_rad = self
+            .legacy_transformer_number(row, "AddRotate")?
+            .to_radians();
         let neutral_points = [reference(row, "Stp_ID1")?, reference(row, "Stp_ID2")?];
         let tap = fixed_tap(row, selected, self)?;
         if rows.next().map_err(format_error)?.is_some() {
@@ -273,13 +276,42 @@ impl NativeDatabase {
     }
 }
 
+// Database Description (April 2014), printed p.46: Flag_Ct defaults to
+// inactive. The schema-11.5 legacy profile admits an explicit NULL only
+// when both centre-tap measurements are NULL/zero, as in CSIRO03. A missing
+// column, newer schema or nonzero ambiguous centre-tap data still rejects.
+fn require_no_center_tap(row: &Row<'_>, db: &NativeDatabase) -> Result<()> {
+    if row
+        .get::<_, Option<i64>>("Flag_Ct")
+        .map_err(format_error)?
+        .is_some()
+    {
+        return Ok(());
+    }
+    db.legacy_integer(row, "Flag_Ct", 0)?;
+    if reference(row, "StpCt_ID")?.is_some() {
+        return Err(format_error(
+            "NULL Flag_Ct with a centre-tap neutral reference is unresolved",
+        ));
+    }
+    for field in ["uk_Ct", "ur_Ct"] {
+        let value: Option<f64> = row.get(field).map_err(format_error)?;
+        if value.is_some_and(|value| value != 0.0) {
+            return Err(format_error(format!(
+                "NULL Flag_Ct requires absent or zero {field}; centre-tap interpretation is unresolved"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn fixed_tap(row: &Row<'_>, selected: &[usize], db: &NativeDatabase) -> Result<FixedTapInput> {
     if integer(row, "Flag_roh")? != 1 {
         return Err(format_error(
             "transformer regulator requires operating-state resolution",
         ));
     }
-    let side = match integer(row, "Flag_ConNode")? {
+    let side = match db.legacy_integer(row, "Flag_ConNode", 1)? {
         1 => 0,
         2 => 1,
         _ => return Err(format_error("unknown transformer tap side")),
@@ -296,15 +328,15 @@ fn fixed_tap(row: &Row<'_>, selected: &[usize], db: &NativeDatabase) -> Result<F
                 ));
             }
         };
-        positions[coil] = Some(number(row, field)?);
+        positions[coil] = Some(db.legacy_transformer_number(row, field)?);
     }
     Ok(FixedTapInput {
         side,
         positions,
-        midpoint: number(row, "rohm")?,
-        step_fraction: number(row, "ukr")? / 100.0,
-        boost_angle_rad: number(row, "alpha")?.to_radians(),
-        rotation_per_step_rad: number(row, "phi")?.to_radians(),
+        midpoint: db.legacy_transformer_number(row, "rohm")?,
+        step_fraction: db.legacy_transformer_number(row, "ukr")? / 100.0,
+        boost_angle_rad: db.legacy_transformer_number(row, "alpha")?.to_radians(),
+        rotation_per_step_rad: db.legacy_transformer_number(row, "phi")?.to_radians(),
     })
 }
 

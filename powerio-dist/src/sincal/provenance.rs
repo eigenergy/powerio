@@ -48,16 +48,38 @@ impl NativeDatabase {
                     serde_json::json!({"type_id": id, "scope": scope, "equipment": kind}),
                 );
             }
-            if kind == "TwoWindingTransformer"
-                && row
-                    .get::<_, Option<i64>>("Flag_Tap")
-                    .map_err(format_error)?
-                    .is_none()
-            {
-                // The electrical decoder has already validated this as the
-                // schema-11.5 common-tap default, never an arbitrary NULL.
-                net.defaulted_mut()
-                    .insert(format!("TwoWindingTransformer.{element}"), vec!["Flag_Tap"]);
+            if kind == "TwoWindingTransformer" {
+                // Electrical decoders have already validated these versioned
+                // defaults, including the inactive centre-tap measurements.
+                let mut defaults = Vec::new();
+                for field in [
+                    "Flag_Tap",
+                    "Flag_Ct",
+                    "Flag_ConNode",
+                    "Flag_Macro",
+                    "AddRotate",
+                    "roh",
+                    "rohm",
+                    "ukr",
+                    "alpha",
+                    "phi",
+                    "Vfe",
+                    "i0",
+                ] {
+                    if field == "roh" && self.legacy_integer(row, "Flag_Tap", 0)? != 0 {
+                        continue;
+                    }
+                    if matches!(
+                        row.get_ref(field).map_err(format_error)?,
+                        rusqlite::types::ValueRef::Null
+                    ) {
+                        defaults.push(field);
+                    }
+                }
+                if !defaults.is_empty() {
+                    net.defaulted_mut()
+                        .insert(format!("TwoWindingTransformer.{element}"), defaults);
+                }
             }
         }
         net.extras_mut().insert(

@@ -3,7 +3,7 @@
   "attribution": "Berry, Adam; Collins, Lyle; Oliver, Erin; Perfumo, Cristian (2015), Representative Australian Electricity Feeders with load and solar generation profiles, v1, CSIRO.",
   "license": "CC-BY-4.0",
   "scope": "Conductor-resolved base-variant development audit; no family inference, independent solve or native execution.",
-  "reader_sha256": "14cdbe158bf9faea782571d3b2ed36eb537a4148db487256a69a2d2a48e20556",
+  "reader_sha256": "be3c7850d736754bd06c6612fa7eb6feefa18a7a96c4167a5e25bdaf5e438c27",
   "cases": [
     {
       "case": 1,
@@ -35,9 +35,9 @@
       "record_sha256": "6fad8c0246e8582367ea26dc712369c25edd9256ca5e31b8e97dc9c2fb086438",
       "schema": 11.5,
       "variant": 1,
-      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"Invalid column type Null at index: 62, name: Flag_Ct\" }",
+      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"autotransformer needs a galvanic circuit mapping\" }",
       "complete_parse": false,
-      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Invalid column type Null at index: 62, name: Flag_Ct\" }",
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"autotransformer needs a galvanic circuit mapping\" }",
       "independently_validated": false,
       "native_execution": false
     },
@@ -93,9 +93,9 @@
       "record_sha256": "f7bf5f04a24e192b02a731816bcef3d82f2850f90d22a86e840afd131e16cd5b",
       "schema": 11.5,
       "variant": 1,
-      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"Invalid column type Null at index: 56, name: AddRotate\" }",
+      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"Invalid column type Null at index: 35, name: Flag_roh\" }",
       "complete_parse": false,
-      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Invalid column type Null at index: 56, name: AddRotate\" }",
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Invalid column type Null at index: 35, name: Flag_roh\" }",
       "independently_validated": false,
       "native_execution": false
     },
