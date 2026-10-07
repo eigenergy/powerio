@@ -4,7 +4,8 @@ Status: local reader implementation and validation in progress, 2026-10-07.
 Both explicit public reader profiles are implemented. Five balanced cases and
 one complete conductor-resolved native feeder have independent electrical
 evidence. Distribution selections include C/Julia; the new balanced Access
-selections currently use Rust. Broader corpus work remains unfinished.
+selections currently use Rust. The user-approved delivery decision below prioritizes
+review of the supported profiles; broader corpus coverage is follow-up work.
 Nothing is published. Research base: `c8184eba` (PowerIO 0.11.4); the local PR
 stack starts at `d5f93763`. The current user-facing capabilities are documented
 in [the guide](../src/sincal.md). Earlier rationale below is dated context,
@@ -33,10 +34,11 @@ Server databases, dynamics, protection calculations, and network-state XML
 patches remain outside the initial electrical profile. An Access-to-table or
 Access-to-SQLite transcription is not an authentic native SQLite export.
 
-The 2026-10-07 PR plan below supersedes earlier ordering that required a fresh
-writer and full explicit-neutral/coupling coverage before public reader
-integration. The reader targets broad corpus coverage; the fresh writer may
-remain experimental. Unsupported electrical modes still fail explicitly.
+The user-approved 2026-10-07 delivery decision below supersedes earlier
+requirements to complete the broad corpus before opening the five PRs. Deliver
+the verified reader profiles and the existing experimental writer subset first;
+retain broader coverage as follow-up work. Unsupported electrical modes still
+fail explicitly. This changes delivery scope, not the evidence for any case.
 
 The user does not currently have SINCAL access. We can establish structural,
 electrical, and cross-tool evidence now, but successful import and calculation
@@ -111,8 +113,11 @@ Public reader integration requires evidence for these cases:
 
 - A declared balanced SINCAL case produces `BalancedNetwork` and supports
   paired SimBench parameter checks plus balanced cross-format/matrix checks.
-- An unbalanced SINCAL case produces `MulticonductorNetwork` and preserves
-  phase/neutral/source constraints through its existing consumers.
+- The native conductor-resolved case and independently checked asymmetric
+  synthetic circuits produce `MulticonductorNetwork` and preserve supported
+  phase/neutral/source constraints through its existing consumers. Record the
+  synthetic origin of asymmetric evidence. An additional authentic mixed-phase
+  feeder is the next coverage milestone, not an initial PR-opening gate.
 - A balanced operating point in a conductor model retains its multiconductor
   type; ambiguous profiles and conflicting declarations do not silently select
   a family; unsupported unbalanced inputs cannot fall back to balanced parsing.
@@ -218,7 +223,7 @@ validation corpus.
   standalone SQLite writer already has a verified construction contract.
   See [§3.2, printed pp. 37–39](https://manualzz.com/doc/2231110/pss-sincal-database-interface-and-automation).
 
-## Five-PR delivery plan: broad readers, experimental writer
+## Five-PR delivery plan: supported profiles first
 
 Updated 2026-10-07 after review: dataset-specific work is grouped into one
 balanced reader PR and one multiconductor reader PR. These five PRs supersede
@@ -228,7 +233,7 @@ explicitly authorizes publication.
 
 | PR | Local branch | Base | Scope |
 | --- | --- | --- | --- |
-| 1 | `codex/sincal-source-references` | Current `origin/main` | Shared source/reference model, matrices, PF, IR and C/Julia compatibility |
+| 1 | `codex/sincal-source-references` | Reviewed base `d5f93763`; check `origin/main` drift | Shared source/reference model, matrices, PF, IR and C/Julia compatibility |
 | 2 | `codex/sincal-infrastructure` | PR 1 | Shared archive/SQLite/Access acquisition, structural schema records and corpus harness |
 | 3 | `codex/sincal-transmission-reader` | PR 2 | Balanced mappings across datasets/schemas and balanced public integration |
 | 4 | `codex/sincal-distribution-reader` | PR 3 | Multiconductor mappings across datasets/schemas and two-family public integration |
@@ -241,13 +246,54 @@ branch must have coherent commits and pass its scoped tests; moving a branch
 pointer without implementing its deliverable does not complete it. PR 1 also
 has a local PowerIO.jl companion with the same branch name.
 
-### Corpus ambition and acceptance accounting
+### Approved delivery priorities and review gates
+
+Decision agreed with the user on 2026-10-07: prepare the existing implementation
+for review instead of treating corpus completion as a prerequisite. Keep the five
+PRs and the two-backend contract. This section supersedes earlier broad-corpus
+acceptance language in this proposal; outstanding cases are not relabeled as
+supported. Updating this roadmap does not authorize pushing or opening PRs.
+
+| Priority | Deliverable | Completion evidence |
+| --- | --- | --- |
+| 1 | Prepare all five local PRs for review | Reviewed base drift and diffs, coherent commits, per-PR supported-profile/limitation tables, concise descriptions and reproducible validation packet; discuss with the user before publication |
+| 2 | Finish balanced Access/variant/snapshot selections in CLI, Python, C and Julia | Same explicit-family behavior as Rust and the existing distribution interfaces; native snapshot/echo/IR checks, wrong-family rejection and relevant binding regressions |
+| 3 | Freeze writer expansion | Keep the existing experimental subset, explicit opt-in, unsupported-mode rejection and read/write/edit/IR tests; add no equipment modes to this delivery |
+| 4 | Validate one additional authentic unbalanced feeder | Follow-up work on partial mixed-winding transformers and Wye loads affecting CSIRO05/06; independently check new circuits and the resulting whole network; account separately for source-input conflicts |
+| 5 | Expand remaining corpus coverage | Follow-up variants, profiles, uncommon equipment and additional cases, selected to answer named gaps rather than to grow counts |
+
+Opening gates: complete the final base/diff review and validation packet, then
+obtain the user's publication authorization. No further dataset search or new
+complete unbalanced feeder is required to open useful draft PRs. PRs 1–2 are
+ready for final review preparation; PRs 3–5 can enter draft review with explicit
+limits. The balanced selection-binding gap can remain visible during draft review
+but must be closed before reader merge readiness is claimed.
+
+Merge gates: maintainer agreement on each declared profile; completion of its
+bounded integration work; passing relevant regressions, fidelity and diagnostic
+checks; and no unresolved correctness defect within that advertised profile.
+Perform a focused maintainability review of shared versus family-owned logic,
+public API footprint and unnecessary abstractions. Do not invent new framework
+work solely to prepare these PRs. Existing evidence can be reused when its code
+and inputs are unchanged; rerun checks affected by edits or base drift.
+
+External acceptance gates: native SINCAL open/save/calculate for generated files
+and any claims of agreement with native execution. These remain unverified and
+are not gates to reviewing or merging the explicitly experimental writer.
+Undocumented electrical meanings still gate support for the affected reader modes,
+not delivery of independently verified profiles. Broader unbalanced support must
+not be advertised on the strength of component counts or synthetic cases alone.
+
+### Follow-up corpus ambition and evidence accounting
+
+This inventory retains the broader ambition. Unfinished rows are follow-up
+coverage, not additional acceptance requirements for the initial five PRs.
 
 | Corpus | Reader target | Evidence/data policy |
 | --- | --- | --- |
 | SimBench | Existing 15-node LV case, then available native LV/MV/HV and mixed-voltage cases representing distinct equipment modes | Balanced mappings compared with paired CSV. Inventory and pin additional archives before promising an exact count; retain ODbL/DbCL notices. |
-| CSIRO 01–07 | Complete unbalanced reading of all seven feeders, led by 06 then 01, including applicable profiles/snapshots | Schema 11.5 Access through explicit optional import. CC BY 4.0, external corpus; resolve active native meanings rather than fitting historical results. |
-| CSIRO 08–19 | Account for every selected family/variant, including inheritance in 10/11/14 and blank terminal fields in 13 | Target all 19 databases and all selectable variants. Three-phase connections and stored balanced results do not determine electrical family. |
+| CSIRO 01–07 | Complete unbalanced reading of all seven feeders; next target is one additional authentic case through CSIRO05/06 semantics, including applicable profiles/snapshots | Schema 11.5 Access through explicit optional import. CC BY 4.0, external corpus; resolve active native meanings rather than fitting historical results. |
+| CSIRO 08–19 | Account for every selected family/variant, including inheritance in 10/11/14 and blank terminal fields in 13 | Follow-up target: all 19 databases and applicable selectable variants. Three-phase connections and stored balanced results do not determine electrical family. |
 | MATLAB LPC European LV/S1a | Mixed-phase schema-12.8 Access compatibility | External local checks while inherited model rights remain unresolved. No stored native results; independently check mapped electrical behavior. |
 | IEEE18/33 and student study | Schema-15.5/16.0 SQLite compatibility | External cases, no fixtures without redistribution rights. Orphan coupling sidecar is not evidence of active coupling semantics. |
 | LoadFlow's 67 databases | Inventory modes and select distinct regressions, including inspected schema-11.2 examples | Stretch coverage, not 67 promised passes; review model-specific rights; no copied GPL implementation or vendor manuals. |
@@ -270,8 +316,8 @@ impact. Unclear data rights prohibit vendoring regardless of code licensing.
 
 ### Delivery feasibility and remaining validation
 
-The broad reader corpus above remains the objective; these are implementation
-and evidence milestones, not a promise that more coding alone can make every
+The broad reader corpus above remains a follow-up objective, not a prerequisite
+for the initial five PRs or a promise that more coding alone can make every
 original database pass. Native SINCAL execution is an external acceptance gate.
 Missing electrical meanings and conflicting native inputs are tracked separately
 because they also limit what can be implemented faithfully without that access.
@@ -291,14 +337,15 @@ Prioritize verified partial mixed-winding and Wye circuits for CSIRO05/06.
 CSIRO05 has seven transformers and two profile conflicts left; CSIRO06 has
 35 Wye loads, nine partial transformers and eleven nameplate conflicts. Resolve
 input-conflict dispositions explicitly; never silently alter an original model
-or call a corrected derivative an original-case pass. The original CSIRO06/01
-checkpoint remains unachieved and is not an unconditional near-term commitment.
+or call a corrected derivative an original-case pass. The original mandatory
+CSIRO06/01 checkpoint is superseded by the approved supported-profile delivery
+gates above; those original cases remain unsupported.
 Investigations must address named gaps using new evidence; repeated rejected
 hypotheses and broad dataset searches do not advance acceptance.
 
-Finish public integration and regression packets for supported profiles while
-those investigations continue. Balanced-compatible Access inputs belong in the
-balanced PR with explicit family selection, not in the distribution completion
+Prioritize public integration and review packets for supported profiles before
+resuming these follow-up investigations. Balanced-compatible Access inputs belong
+in the balanced PR with explicit family selection, not in the distribution completion
 count. The experimental writer retains its declared subset and separate native
 acceptance gate. Publication still requires the user's later permission.
 
@@ -347,16 +394,16 @@ checks. Acquisition alone does not establish electrical support.
 
 ### PR 3: transmission / balanced reader
 
-Own all electrical mapping in `powerio-tx`. Include SimBench and other balanced
-cases, schema adapters, applicable variants and public balanced integration in
-this PR. Cover buses/voltage levels, positive-sequence lines, loads, external
-sources, converter generation, transformer ratios/taps/shifts/losses, terminal
+Own all electrical mapping in `powerio-tx`. Deliver the five currently verified
+balanced cases, their checked schema/profile adapters and public balanced
+integration in this PR. Cover buses/voltage levels, positive-sequence lines, loads,
+external sources, converter generation, transformer ratios/taps/shifts/losses, terminal
 switching and service states. Preserve IDs/provenance; do not require inactive
 zero-sequence fields for balanced inputs.
 
-Use per-dataset commits/checklists inside this PR: initial SimBench mapping;
-expanded SimBench modes; appropriate CSIRO balanced profiles via Access;
-IEEE/student additional schemas; verified variant semantics. Unknown required
+Retain per-dataset commits/checklists for SimBench, CSIRO19 Access and
+IEEE/student inputs. Additional SimBench modes, Access cases, active profiles
+and inherited variants are follow-up scope. Unknown required
 modes fail atomically with component/field diagnostics. A widened accepted
 version range without checked field meanings is not schema support.
 
@@ -381,14 +428,15 @@ Rust, CLI, C and Python. Registered diagnostics distinguish profile selection,
 malformed input, conversion assumptions and source-only data. Binary archive
 and direct-SQLite echo are byte exact; edited and IR-restored modules refuse
 fresh output. Additional schemas, variants/profiles and corpus coverage are
-still outstanding; this does not complete PR 3.
+follow-up work. Balanced Access selection bindings and the final review packet
+remain the initial PR deliverables.
 
 Current balanced corpus progress: the initial public SimBench path is committed.
 IEEE18, IEEE33 and the student study now map all 44/67/84 static equipment
 records with schema-15.5/16.0 adapters and fresh independent checks below
 4.5e-12 pu complex voltage. The student static state has zero demand; profile
 snapshot coverage remains pending. Additional SimBench modes, applicable
-Access cases, active profiles and inherited variants are still required work.
+Access cases, active profiles and inherited variants remain follow-up work.
 
 CSIRO19 now adds a schema-11.5 balanced Access case: all 26 nodes and 33 elements
 (25 lines, seven loads, one source), checked at seven explicit daily snapshots.
@@ -404,32 +452,33 @@ selection options remains an integration task.
 
 ### PR 4: distribution / unbalanced reader
 
-Own all conductor-resolved mapping in `powerio-dist`. Incorporate the existing
-private component mappers, CSIRO 06 then 01 then 02–05/07, remaining applicable
-CSIRO cases, LPC, profiles and variants in this PR. Preserve ordered phases,
-phase pairs, unequal loads, neutral/reference behavior and open/inactive devices.
-Resolve native load-star selection, active source impedance inputs, transformer
-coil-to-conductor maps, autotransformer galvanic paths, core losses and nullable
-tap modes. Neither missing inputs nor source values may be chosen to minimize
-historical-result residuals. New generic model gaps require typed shared fixes,
-not SINCAL-only physics hidden in metadata.
+Own all conductor-resolved mapping in `powerio-dist`. Deliver the existing verified
+component profiles and public multiconductor integration. Preserve ordered phases,
+phase pairs, unequal loads, supported neutral/reference behavior and open/inactive
+devices. Keep verified absolute and common-factor daily snapshots. Unknown active
+modes reject atomically; neither missing inputs nor source values may be chosen
+to minimize historical-result residuals. New generic model gaps require typed
+shared fixes, not SINCAL-only physics hidden in metadata.
 
-Implement per-phase absolute daily profiles/cyclic endpoints and selected
-snapshots through existing time-series types where suitable, retaining one
-network identity. Resolve effective variant inheritance/overrides/deletions,
-with cycles and missing parents rejected. Cover the Representative 01 coupled
-phase-pair counterexamples and Representative 13 blank terminal declarations
-when version evidence establishes their meaning. Do not union stored variants.
+Initial PR acceptance: all 688 CSIRO09 elements parse through the public facade
+at the five verified snapshots; independent OpenDSS comparisons pass on the
+energized network and isolated nodes remain faithfully represented. Five labelled
+asymmetric stress cases and the existing independently checked component circuits
+establish the declared unbalanced profile. Preserve source echo, IR fidelity,
+explicit selection, unsupported-mode diagnostics and existing consumer behavior.
+Report that native CSIRO09 powers are symmetric and that zero of the seven
+priority genuinely unbalanced original feeders currently parses completely.
+These limits must appear in the PR description and supported-profile table.
 
-Acceptance: complete original-MDB parsing of CSIRO 06 and 01 is the first
-checkpoint; complete mappings of all seven unbalanced feeders and all other
-applicable corpus cases are the goal. Report exact successful counts and every
-remaining native-semantic blocker. Validate actual Rust reader output using
-independent OpenDSS circuits/whole-network checks in addition to existing local
-load/line equations. Isolate historical source/transformer disagreements and
-missing native results; they cannot be quietly relabeled as passing or used
-to calibrate inputs. Explicit-neutral/coupling modes absent from the corpus
-remain unsupported until verified, without blocking cases that do not use them.
+Follow-up acceptance: one additional authentic mixed-phase feeder, prioritizing
+CSIRO05/06 partial mixed-winding and Wye semantics, followed by broader coverage.
+All seven priority feeders, remaining applicable CSIRO/LPC cases, additional
+profiles, inherited variants/deletions, Representative 01 coupled charging and
+Representative 13 blank terminals stay on that backlog. Resolve meanings from
+evidence, test actual Rust output independently, never union stored variants,
+and distinguish source-input conflicts from mapper gaps. Full explicit-neutral
+or coupling modes remain unsupported until verified. None of these expansions
+is a gate to opening the initial distribution PR for its declared profile.
 
 Complete two-family facade/CLI/binding integration here. Both authentic family
 cases yield existing typed values; a phase-symmetric conductor model remains
@@ -515,7 +564,7 @@ zero-sequence inputs while automatic completion is disabled. LPC S1a maps 54
 loads; its DC infeeds, library-referenced lines and source/transformer modes
 remain work. Both files stay external because redistribution rights are unresolved.
 
-Remaining implementation work includes Wye star/sequence semantics, coupled
+Follow-up implementation work includes Wye star/sequence semantics, coupled
 reduced-phase charging, partial mixed-winding transformers, additional regulators,
 CSIRO03's 297 limited-P/Q loads, synchronous
 machines, further sparse source/transformer fields, and broader variants/profiles.
@@ -555,15 +604,16 @@ component, even though all 51 transformers satisfy the short-circuit `ur <= uk`
 check. Input-data conflicts need separate acceptance dispositions; no tolerance
 expansion or input repair is applied. Native SINCAL execution remains an external
 acceptance gate, separate from continued reader implementation and independent
-validation. Broader corpus coverage and the final integration packet remain work.
+validation. Broader corpus coverage is follow-up work; the final integration
+and review packet remains part of the initial delivery.
 
 Derived-variant research now establishes complete-row override selection against
 all 9,942 acquired native active input rows across CSIRO10/11/14. All 44 variants
 have structurally consistent terminal/profile references; only the three stored
 active selections have independent cache agreement. See
 `evals/sincal/variant-inheritance.json`. This does not yet enable derived parsing.
-Implement bounded effective-row materialization in the shared storage crate,
-retain original row origins and source bytes, and test both electrical families
+As follow-up work, implement bounded effective-row materialization in the shared
+storage crate, retain original row origins and source bytes, and test both electrical families
 against these selections. Resolve and test the database deletion encoding first:
 `Flag_Variant=0` is a cached inactive selection, not a tombstone, and absence of
 a child override means inheritance. The documented scenario export of deletion
@@ -572,7 +622,11 @@ missing parents, duplicate identities and unknown deletion forms must reject.
 
 ### PR 5: experimental fresh writer
 
-Implement deterministic fresh schema-14.8 SQLite generation and packaging for
+Expansion is frozen for this delivery. Review and stabilize the existing subset;
+additional transformer modes, external neutrals, general primitive shunts and
+other unsupported equipment are follow-up work. Do not add them as merge gates.
+
+Retain deterministic fresh schema-14.8 SQLite generation and packaging for
 a declared static subset of both typed families. Source/line/load/transformer
 support is the starting profile, not a promise to write every parsed network.
 Select electrical validation by family; share only structural writer mechanics.
@@ -587,8 +641,8 @@ Acceptance: typed construction -> fresh write -> read; read -> change load ->
 fresh write -> read; IR -> fresh write, for both families. Assert family,
 electrical equivalence, deterministic bytes, integrity, diagnostics and
 independent circuit checks. Keep opt-in experimental labeling; native
-open/save/calculate remains E2. `FormatInfo.can_emit` must not imply universal
-fresh output when only a separate experimental path exists.
+open/save/calculate remains an external acceptance gate. `FormatInfo.can_emit`
+must not imply universal fresh output when only a separate experimental path exists.
 
 ### Local development and review handoff
 
@@ -601,8 +655,10 @@ parent commits, changed-file scopes, reproducible tests and corpus coverage in
 a local handoff report. No empty branch or plan-only commit represents an
 implemented reader/writer PR.
 
-Once all five local branches meet their scopes, return for discussion with
-that report. No push, PR creation, merge or release is authorized by this goal.
-Reader-native semantics still gate claims for affected cases; SINCAL native
-writer acceptance does not gate local reader delivery. Broader corpus searches
-should serve named mapping gaps rather than delaying implementation.
+Return for discussion when the five branches have reviewable diffs, tables of
+supported profiles, concise PR descriptions and a reproducible validation packet.
+List the balanced selection-binding task explicitly if draft review starts
+before it is finished. Do not wait for follow-up corpus completion or expand
+the writer to make the review packet. No push, PR creation, merge or release is
+authorized by this roadmap update. Native semantics still gate claims for
+affected cases; native writer acceptance remains a separate external gate.
