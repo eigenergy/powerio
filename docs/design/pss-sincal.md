@@ -3,7 +3,8 @@
 Status: local reader implementation and validation in progress, 2026-10-07.
 Both explicit public reader profiles are implemented. Five balanced cases and
 one complete conductor-resolved native feeder have independent electrical
-evidence, including C/Julia selections; broader corpus work remains unfinished.
+evidence. Distribution selections include C/Julia; the new balanced Access
+selections currently use Rust. Broader corpus work remains unfinished.
 Nothing is published. Research base: `c8184eba` (PowerIO 0.11.4); the local PR
 stack starts at `d5f93763`. The current user-facing capabilities are documented
 in [the guide](../src/sincal.md). Earlier rationale below is dated context,
@@ -266,6 +267,40 @@ reports; missing required acceptance data fails the job rather than becoming
 a silent skip. Record optional cases as not run. No fixture over 100 KiB is
 committed without exact-file approval of bytes, lines, source, license and PR
 impact. Unclear data rights prohibit vendoring regardless of code licensing.
+
+### Delivery feasibility and remaining validation
+
+The broad reader corpus above remains the objective; these are implementation
+and evidence milestones, not a promise that more coding alone can make every
+original database pass. Native SINCAL execution is an external acceptance gate.
+Missing electrical meanings and conflicting native inputs are tracked separately
+because they also limit what can be implemented faithfully without that access.
+
+Current end-to-end evidence is five balanced cases (including CSIRO19's seven
+Access snapshots) and one conductor-resolved case, CSIRO09. Its original loads
+are symmetric; five separate synthetic stress cases exercise asymmetry. None of
+the seven priority unbalanced CSIRO01–07 feeders parses completely. Their
+5,472/7,359 mapped components are component coverage, not a completion estimate.
+The 1,887 first rejections comprise 798 coupled reduced-phase charging lines,
+297 limited-P/Q loads, 271 partial mixed-winding transformers, 217 Wye loads,
+ten other transformer/regulator modes, 291 inconsistent core-loss inputs and
+three conflicting profile timestamps. Further failures may follow a resolved
+first rejection.
+
+Prioritize verified partial mixed-winding and Wye circuits for CSIRO05/06.
+CSIRO05 has seven transformers and two profile conflicts left; CSIRO06 has
+35 Wye loads, nine partial transformers and eleven nameplate conflicts. Resolve
+input-conflict dispositions explicitly; never silently alter an original model
+or call a corrected derivative an original-case pass. The original CSIRO06/01
+checkpoint remains unachieved and is not an unconditional near-term commitment.
+Investigations must address named gaps using new evidence; repeated rejected
+hypotheses and broad dataset searches do not advance acceptance.
+
+Finish public integration and regression packets for supported profiles while
+those investigations continue. Balanced-compatible Access inputs belong in the
+balanced PR with explicit family selection, not in the distribution completion
+count. The experimental writer retains its declared subset and separate native
+acceptance gate. Publication still requires the user's later permission.
 
 ### PR 1: source-reference model and consumers
 

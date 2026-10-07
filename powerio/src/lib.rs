@@ -488,7 +488,8 @@ pub fn parse_with_options(
         return Err(powerio_core::Error::new(
             &codes::REQUEST_SINCAL_OPTIONS_PROFILE,
             "SINCAL selections must name exactly one electrical family",
-        ).with_source(source));
+        )
+        .with_source(source));
     }
     if let Some(sincal) = &options.sincal_balanced {
         return powerio_tx::format::parse_sincal_balanced_with_options(source, sincal)

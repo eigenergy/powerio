@@ -259,3 +259,20 @@ fn balanced_selections_are_explicit_and_do_not_override_other_families() {
             .contains("acquired_tables")
     );
 }
+
+#[test]
+fn two_sincal_selection_families_cannot_silently_shadow_each_other() {
+    for format in ["sincal-balanced", "sincal-multiconductor"] {
+        let mut options = ParseOptions::default().format(format).unwrap();
+        options.sincal_balanced = Some(powerio_tx::format::SincalBalancedReadOptions::default());
+        options.sincal_multiconductor = Some(powerio::dist::SincalReadOptions::default());
+        let error = powerio::parse_with_options(source(), &options).unwrap_err();
+        assert!(
+            error
+                .diagnostics()
+                .iter()
+                .any(|d| d.code() == "REQUEST.PARSE.SINCAL_OPTIONS_PROFILE")
+        );
+        assert!(error.retained_source().is_some());
+    }
+}
