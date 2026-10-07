@@ -2,6 +2,7 @@
 from pathlib import Path
 
 import powerio
+import pytest
 
 DATA = Path(__file__).resolve().parents[2] / "tests" / "data"
 
@@ -51,3 +52,9 @@ def test_archive_expansion_uses_the_shared_acquisition_limit(monkeypatch, tmp_pa
     monkeypatch.setenv("POWERIO_MAX_REFERENCED_BYTES", str(expanded_bytes - 1))
     with pytest.raises(powerio.PowerIOError, match="input limit"):
         powerio.parse(path, format="cgmes")
+
+
+def test_component_counts_reject_normalized_equipment_classification():
+    network = powerio.parse(DATA / "case14.m").value.to_normalized()
+    with pytest.raises(ValueError, match="unnormalized network"):
+        network.component_counts()

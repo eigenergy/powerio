@@ -375,6 +375,8 @@ class BalancedNetwork:
         Lines exclude transformer branches. Loads include equivalent injections
         represented as loads. Substations count the source hierarchy, or zero
         when the format supplies no hierarchy. No Python table rows are built.
+        Raises ValueError for normalized networks, whose unity taps no longer
+        distinguish lines from transformers. Count the source network instead.
         """
         return self._inner.component_counts()
 

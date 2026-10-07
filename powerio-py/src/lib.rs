@@ -430,6 +430,15 @@ fn core_open_pyerr(path: &std::path::Path, error: &powerio_core::Error) -> PyErr
     core_error_pyerr(error)
 }
 
+fn ensure_line_classification(network: &BalancedNetwork) -> PyResult<()> {
+    if network.is_normalized() {
+        return Err(PyValueError::new_err(
+            "line counts require an unnormalized network; normalized taps do not retain equipment classification",
+        ));
+    }
+    Ok(())
+}
+
 /// Wrap a parsed module as a `PyBalancedNetwork`, building the index core once
 /// and keeping the reader's findings on the handle.
 fn case_from_module(module: powerio_core::PioModule<BalancedNetwork>) -> PyBalancedNetwork {
@@ -641,6 +650,7 @@ impl PyBalancedNetwork {
     /// Lines exclude transformer branches; loads include equivalent injections
     /// mapped to the load table. Substations are the retained source hierarchy.
     fn component_counts<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        ensure_line_classification(self.inner())?;
         let network = self.inner();
         let counts = PyDict::new(py);
         counts.set_item(
