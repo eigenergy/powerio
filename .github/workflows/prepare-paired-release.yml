@@ -32,6 +32,8 @@ jobs:
           private-key: ${{ secrets.POWERIO_RELEASE_APP_PRIVATE_KEY }}
           owner: eigenergy
           repositories: powerio,PowerIO.jl
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        if: inputs.stage == 'changes'
       - name: Prepare reviewed changes or the frozen candidate
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}

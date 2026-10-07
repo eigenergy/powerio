@@ -47,7 +47,7 @@ Use the [paired release procedure](https://github.com/eigenergy/powerio/blob/mai
 It prepares both repositories for one publication approval and registers the
 exact tested Julia commit independently of later changes to `main`.
 
-Until paired automation is activated after v0.11.2, follow the existing
+Until paired automation is explicitly activated, follow the existing
 version, changelog, release-intent, and tag workflow. Do not mix the two
 release routes. The legacy intent is not a Julia requirement and is not used
 by paired releases.

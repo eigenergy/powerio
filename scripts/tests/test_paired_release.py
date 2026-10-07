@@ -12,10 +12,11 @@ SPEC = importlib.util.spec_from_file_location("paired_release", Path(__file__).p
 pair = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(pair)
 sys.path.insert(0, str(Path(__file__).parents[1]))
+from activate_paired_releases import environment_update  # noqa: E402
 from prepare_release_prs import (  # noqa: E402
     bump_lock_versions,
     bump_workspace_versions,
-    example_metadata,
+    promote_changelog,
 )
 
 
@@ -88,19 +89,43 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "yanked"):
             pair.registry_action(self.manifest, {"0.11.3": {"git-tree-sha1": "d" * 40, "yanked": True}})
 
-    def test_example_bump_preserves_numeric_bytes_and_history(self):
-        provenance = {('powerio_bmopf' if n == 0 else f'powerio_bmopf_{n}'): {'producer_version': '0.11.2', 'schema_commit': str(n)} for n in range(11)}
-        meta = {'case_study_generator': {'tool': 'powerio', 'version': '0.11.2'}, 'provenance': provenance}
-        encoded = json.dumps(meta, indent=2, sort_keys=True).replace('\n', '\n  ')
-        text = '{\n  "bus": {"p": 1.0000000000000001},\n  "meta": ' + encoded + '\n}'
-        changed = example_metadata(text, '0.11.3', retain_history=True)
-        self.assertIn('1.0000000000000001', changed)
-        result = json.loads(changed)['meta']['provenance']
-        for key, record in provenance.items():
-            self.assertEqual(result[key], record)
-        self.assertEqual(result['powerio_bmopf_11']['schema_commit'], '10')
-        self.assertEqual(result['powerio_bmopf_11']['producer_version'], '0.11.3')
-        self.assertEqual(example_metadata(changed, '0.11.3', retain_history=True), changed)
+    def test_activation_preserves_environment_restrictions(self):
+        env = {'can_admins_bypass': False,
+               'deployment_branch_policy': {'protected_branches': False, 'custom_branch_policies': True},
+               'protection_rules': [{'type': 'wait_timer', 'wait_timer': 15},
+                                    {'type': 'required_reviewers', 'reviewers': ['maintainer']}]}
+        changed = environment_update(env)
+        self.assertEqual(changed['reviewers'], [])
+        self.assertEqual(changed['wait_timer'], 15)
+        self.assertFalse(changed['can_admins_bypass'])
+        self.assertEqual(changed['deployment_branch_policy'], env['deployment_branch_policy'])
+
+    def test_changelog_promotion_preserves_notes_and_history(self):
+        text = '# Changelog\n\n## Unreleased\n\n- New behavior.\n\n## 0.11.4\n\n- Earlier.\n'
+        self.assertEqual(promote_changelog(text, '0.11.5'), text.replace('## Unreleased', '## 0.11.5'))
+        for invalid in ('## Unreleased\n\n## 0.11.4\n- Earlier.\n',
+                        '## 0.11.4\n- Earlier.\n',
+                        '## Unreleased\n- TODO: write notes.\n',
+                        '## Unreleased\n- New.\n## 0.11.5\n- Duplicate.\n'):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                promote_changelog(invalid, '0.11.5')
+
+    def test_frozen_tools_reject_later_main(self):
+        with patch.object(pair, 'run', side_effect=['f' * 40]) as command:
+            with self.assertRaisesRegex(ValueError, 'frozen PowerIO'):
+                pair.require_frozen_tools(self.frozen, '/later-main')
+            self.assertEqual(command.call_count, 1)
+        with patch.object(pair, 'run', side_effect=['a' * 40, '']) as command:
+            pair.require_frozen_tools(self.frozen, '/frozen-tag')
+            self.assertEqual(command.call_count, 2)
+
+    def test_validation_evidence_must_name_frozen_powerio_commit(self):
+        evidence = {'status': 'completed', 'conclusion': 'success',
+                    'path': '.github/workflows/complete-paired-release.yml', 'head_sha': 'f' * 40}
+        with patch.object(pair, 'api', return_value=evidence):
+            self.assertFalse(pair.validation_succeeded(self.manifest))
+            evidence['head_sha'] = self.frozen['powerio_sha']
+            self.assertTrue(pair.validation_succeeded(self.manifest))
 
     def test_release_bump_does_not_upgrade_unrelated_dependencies(self):
         cargo = '[workspace.package]\nversion = "0.11.2"\n[workspace.dependencies]\npowerio = { path = "powerio", version = "0.11.2" }\nexternal = { version = "0.11.2" }\n'
@@ -166,7 +191,6 @@ class ReleaseTests(unittest.TestCase):
             if path.endswith('/git/ref/tags/v0.11.3'):
                 return {"object": {"type": "tag", "sha": "f" * 40}}
             if path.endswith('/git/tags/' + 'f' * 40):
-                import json
                 return {"message": json.dumps(old), "object": {"type": "commit", "sha": old['powerio_sha']}}
             if path.endswith('/git/ref/heads/main'):
                 return {"object": {"sha": "a" * 40 if pair.POWERIO in path else "b" * 40}}
@@ -234,7 +258,7 @@ class ReleaseTests(unittest.TestCase):
                  'assets': [{'name': n} for n in pair.ASSETS | {pair.MANIFEST}]}
         with patch.object(pair, 'pages', return_value=[draft]), patch.object(pair, 'api', return_value={'workflow_runs': []}), patch.object(pair, 'tag_pair', return_value=self.frozen), patch.object(pair, 'verify', return_value=self.manifest), patch.object(pair, 'validation_succeeded', return_value=False), patch.object(pair, 'run') as run:
             pair.recover_drafts()
-            run.assert_called_once_with('gh', 'workflow', 'run', 'complete-paired-release.yml', '--repo', pair.POWERIO, '--ref', 'main', '-f', 'tag=v0.11.3')
+            run.assert_called_once_with('gh', 'workflow', 'run', 'complete-paired-release.yml', '--repo', pair.POWERIO, '--ref', 'v0.11.3', '-f', 'tag=v0.11.3')
 
     def test_interrupted_or_wrong_validation_is_not_publication_evidence(self):
         for evidence in (None, {'status': 'completed', 'conclusion': 'cancelled', 'path': '.github/workflows/complete-paired-release.yml'}, {'status': 'completed', 'conclusion': 'success', 'path': '.github/workflows/unrelated.yml'}):

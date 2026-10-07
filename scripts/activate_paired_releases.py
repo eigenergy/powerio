@@ -2,8 +2,9 @@
 """Check paired release setup and activate one approved publication route."""
 
 import argparse
+import json
 
-from paired_release import JULIA, POWERIO, api, require, successful_ci
+from paired_release import JULIA, POWERIO, api, require, run, successful_ci
 
 
 def check():
@@ -31,32 +32,37 @@ def check():
                 f'{name} has custom protection; preserve it through a reviewed settings update')
         environments[name] = env
     print('Paired source CI, App setup, App access, and publishing environments checked')
+    print(json.dumps({'immutable_releases': [POWERIO, JULIA],
+                      'PAIRED_RELEASES': {POWERIO: 'true', JULIA: 'true'},
+                      'publishing_environments': {name: environment_update(env)
+                                                 for name, env in environments.items()}}, indent=2))
     return environments
+
+
+def environment_update(env):
+    wait = next((rule.get('wait_timer', 0) for rule in env['protection_rules']
+                 if rule['type'] == 'wait_timer'), 0)
+    return {'wait_timer': wait, 'prevent_self_review': False, 'reviewers': [],
+            'can_admins_bypass': env['can_admins_bypass'],
+            'deployment_branch_policy': env['deployment_branch_policy']}
 
 
 def activate():
     environments = check()
     for repo in (POWERIO, JULIA):
         # A PUT without a request body enables the repository feature.
-        from paired_release import run
         run('gh', 'api', '--method', 'PUT', f'repos/{repo}/immutable-releases')
         require(api(f'repos/{repo}/immutable-releases')['enabled'], f'immutable releases not enabled for {repo}')
     for repo in (POWERIO, JULIA):
         path = f'repos/{repo}/actions/variables/PAIRED_RELEASES'
         existing = api(path, missing=True)
         if existing:
-            from paired_release import run
             run('gh', 'api', '--method', 'PATCH', path, '-f', 'name=PAIRED_RELEASES', '-f', 'value=true')
         else:
             api(f'repos/{repo}/actions/variables', {'name': 'PAIRED_RELEASES', 'value': 'true'})
     for name, env in environments.items():
-        wait = next((rule.get('wait_timer', 0) for rule in env['protection_rules'] if rule['type'] == 'wait_timer'), 0)
-        import json
-
-        from paired_release import run
         run('gh', 'api', '--method', 'PUT', f'repos/{POWERIO}/environments/{name}', '--input', '-',
-            input=json.dumps({'wait_timer': wait, 'prevent_self_review': False, 'reviewers': [],
-                              'deployment_branch_policy': env['deployment_branch_policy']}))
+            input=json.dumps(environment_update(env)))
     print('Paired releases and immutable publication enabled; existing tag restrictions preserved')
 
 
