@@ -83,6 +83,7 @@ pub fn parse_sincal(
             .map_err(|e| failure(e, &retained))?;
         (snapshot, retained)
     };
+    let inventory = source_inventory(&snapshot).map_err(|e| failure(e, &retained))?;
     let mut database = super::schema::NativeDatabase::from_snapshot(snapshot)
         .map_err(|e| failure(e, &retained))?;
     database.assume_inactive_source_controls = options.assume_inactive_source_controls;
@@ -92,6 +93,66 @@ pub fn parse_sincal(
     };
     let mut network = result.map_err(|e| failure(e, &retained))?;
     *network.source_format_mut() = Some(DistSourceFormat::Sincal);
+    let mut diagnostics = vec![Diagnostic::of(
+        &codes::READ_SINCAL_MULTICONDUCTOR_RETAINED_SOURCE_ONLY,
+        "Only the selected conductor-resolved load-flow profile is typed. Fault, dynamic, protection, diagram, result and other native project data remain in retained source. An acquired-table companion is caller-supplied input, not a native export or independent attestation.",
+    )];
+    diagnostics.extend(inventory);
+    add_provenance(&mut network, database.version, &mut diagnostics)?;
+    PioModule::parsed(network, retained, diagnostics)
+}
+
+fn source_inventory(snapshot: &DatabaseSnapshot) -> powerio_sincal::Result<Vec<Diagnostic>> {
+    snapshot.retention_diagnostics(
+        &codes::READ_SINCAL_MULTICONDUCTOR_RETAINED_SOURCE_ONLY,
+        &[
+            "Version",
+            "Variant",
+            "Node",
+            "Element",
+            "Terminal",
+            "VoltageLevel",
+            "CalcParameter",
+            "Line",
+            "Load",
+            "Infeeder",
+            "TwoWindingTransformer",
+            "DCInfeeder",
+            "OpSer",
+            "OpSerVal",
+            "ShuntCondensator",
+            "LineSeg",
+            "CouplingData",
+            "CoupledLine",
+            "NeutralPointImp",
+            "ShuntImpedance",
+            "ShuntReactor",
+            "ThreeWindingTransformer",
+            "TransformerTap",
+        ],
+        &[
+            (
+                "Infeeder",
+                &[
+                    "Flag_Har",
+                    "HarImp_ID",
+                    "HarVolt_ID",
+                    "HarCur_ID",
+                    "Flag_Reliability",
+                    "SupplyType_ID",
+                ],
+            ),
+            ("Line", &["Flag_Har", "Flag_Reliability"]),
+            ("TwoWindingTransformer", &["Flag_Har", "Flag_Reliability"]),
+        ],
+    )
+}
+
+fn add_provenance(
+    network: &mut MulticonductorNetwork,
+    version: f64,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<(), Error> {
     let assumptions: std::collections::BTreeMap<_, Vec<_>> = network
         .defaulted()
         .iter()
@@ -110,10 +171,6 @@ pub fn parse_sincal(
             (!controls.is_empty()).then(|| (component.clone(), controls))
         })
         .collect();
-    let mut diagnostics = vec![Diagnostic::of(
-        &codes::READ_SINCAL_MULTICONDUCTOR_RETAINED_SOURCE_ONLY,
-        "Only the selected conductor-resolved load-flow profile is typed. Fault, dynamic, protection, diagram, result and other native project data remain in retained source. An acquired-table companion is caller-supplied input, not a native export or independent attestation.",
-    )];
     if let Some(nodes) = network
         .extras()
         .get("sincal_unconnected_nodes")
@@ -126,13 +183,45 @@ pub fn parse_sincal(
         diagnostics.push(Diagnostic::of(
             &codes::READ_SINCAL_ASSUMED_INACTIVE_SOURCE_CONTROLS,
             format!("Experimental compatibility: {component} NULL fields {} assumed zero/inactive; native SINCAL behavior is unverified", fields.join(", ")),
-        ));
+        ).with_details(serde_json::json!({"component":component,"fields":fields,"source_value":null,"assumed_value":0,"native_semantics_verified":false}).as_object().unwrap().clone())?);
     }
     if !assumptions.is_empty() {
         network.extras_mut().insert("sincal_compatibility_assumptions".into(),
-            serde_json::json!({"policy": "schema_11_5_null_source_controls_inactive", "assumed_value": 0, "components": assumptions}));
+            serde_json::json!({"policy": "schema_11_5_null_source_controls_inactive", "assumed_value": 0, "components": &assumptions}));
     }
-    PioModule::parsed(network, retained, diagnostics)
+    let defaults: std::collections::BTreeMap<_, _> = network
+        .defaulted()
+        .iter()
+        .filter_map(|(component, fields)| {
+            let fields: Vec<_> = fields
+                .iter()
+                .copied()
+                .filter(|field| {
+                    !assumptions
+                        .get(component)
+                        .is_some_and(|assumed| assumed.contains(field))
+                })
+                .collect();
+            (!fields.is_empty()).then(|| (component.clone(), fields))
+        })
+        .collect();
+    if !defaults.is_empty() {
+        let detail = serde_json::json!(defaults);
+        network
+            .extras_mut()
+            .insert("sincal_defaulted_fields".into(), detail.clone());
+        let mut diagnostic = Diagnostic::of(
+            &codes::READ_MULTICONDUCTOR_VALUE_DEFAULTED,
+            format!(
+                "Versioned SINCAL field defaults applied to {} records; see structured components",
+                defaults.len()
+            ),
+        );
+        diagnostic.insert_detail("components", detail)?;
+        diagnostic.insert_detail("schema_version", serde_json::json!(version))?;
+        diagnostics.push(diagnostic);
+    }
+    Ok(())
 }
 
 pub(crate) fn is_multiconductor_token(name: &str) -> bool {

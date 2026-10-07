@@ -250,7 +250,7 @@ source has no redistribution license and remains external. These are two
 complete conductor-resolved cases, not complete corpus coverage or native SINCAL
 desktop acceptance. The 12-bus case does not close the larger-case review gate.
 
-### Explicit balanced Access snapshots in Rust and CLI
+### Explicit balanced Access snapshots
 
 The balanced reader also accepts schema-11.5 Access acquisition records through
 `powerio_tx::format::SincalBalancedReadOptions`, carried by
@@ -275,16 +275,28 @@ powerio serialize original.mdb --from sincal-balanced --sincal-variant 1 \
 
 The acquired companion must be beneath the source directory or the explicitly
 selected `--acquisition-root`. Unknown or missing profiles never trigger a
-balanced/multiconductor fallback. Python/C/Julia balanced selection options
-remain work.
+balanced/multiconductor fallback. Python exposes `SincalBalancedReadOptions`
+through `parse(..., sincal_balanced=...)`; Julia uses the same type and keyword.
+C uses `PioSincalBalancedReadOptions` through `PioParseOptions.sincal_balanced`.
+The separate distribution selection type remains `SincalReadOptions`.
+
+```python
+import powerio as pio
+
+module = pio.parse("project/original.mdb", format="sincal-balanced",
+    sincal_balanced=pio.SincalBalancedReadOptions(
+        variant=1, snapshot_hours=12, acquired_tables="acquired.json"))
+pio.serialize(module, "case.pio.json")
+```
 
 ## Experimental legacy source-control compatibility
 
 Rust `SincalReadOptions.assume_inactive_source_controls = true` and the CLI
 `--sincal-assume-inactive-source-controls` allow schema-11.5 NULL values in
 `Infeeder.Flag_LfLimit`, `Flag_LfCtrl`, `Flag_Qctrl`, `Flag_Macro` and `Kr` to be
-interpreted as zero/inactive. The default remains strict. This option currently
-exists in Rust and CLI only; it is not yet exposed in Python/C/Julia selections.
+interpreted as zero/inactive. The default remains strict. Python and Julia expose the same boolean on
+`SincalReadOptions`; C exposes it on `PioSincalReadOptions`. It is unavailable
+on balanced reader options.
 Active controls, missing columns and missing electrical parameters still reject.
 
 ```sh
@@ -303,3 +315,53 @@ Native node records with no declared equipment conductors are retained in
 `extras.sincal_unconnected_nodes`, with `READ.DIST.SINCAL_UNCONNECTED_NODES`,
 instead of inventing phases. Nodes attached to open or inactive equipment remain
 electrical buses; unsourced islands still require explicit downstream handling.
+
+## Fidelity findings and working trial routes
+
+Both readers report source-only tables with row counts and an explicit scope
+(selected native variant or all rows). Enumerated source-only harmonic and
+reliability fields are named separately; this is not an exhaustive field-level
+schema audit. Access tables excluded during acquisition have unknown counts,
+reported as such. Findings have structured diagnostic details, survive IR, and
+are attached to ordinary cross-format loss warnings. The inventory is a
+parse-time description, not a copy of the native payload.
+
+Balanced schema defaults identify affected components and values. Distribution
+defaults identify components and fields in `sincal_defaulted_fields` extras;
+experimental assumptions remain separately identified. Retained native bytes
+are absent from IR, and neither IR nor edited values can recreate native echo.
+
+The installed-wheel trial harness `evals/sincal/check_trial_workflows.py`
+checks these public paths on external models. All four cases preserve original
+source echo and typed IR. Matrix and numerical evidence is in the separate
+case-specific Rust/oracle harnesses.
+
+| Case / selected profile | PF instance preparation | Ordinary target emission and reparse |
+| --- | --- | --- |
+| CSIRO19 / balanced, noon snapshot | Pass | MATPOWER pass, with loss diagnostics |
+| Truong12 / multiconductor | Pass | DSS, PMD JSON and BMOPF JSON pass, with loss diagnostics |
+| CSIRO09 / multiconductor, noon snapshot | Refused: unsourced native islands | Refused: reference-terminal voltage sources |
+| CSIRO12 / multiconductor, noon snapshot, compatibility opt-in | Pass | Refused: reference-terminal voltage sources |
+
+Emission/reparse here establishes a usable format path, not numerical equality
+of the exported target. The OpenDSS numerical oracles independently construct
+circuits from native SINCAL fields; they do not validate PowerIO's target exports.
+PF preparation constructs a calculation instance; PowerIO does not solve it.
+
+For distribution Access cases, keep the original and acquired records together:
+
+```python
+import powerio as pio
+
+module = pio.parse("project/original.mdb", format="sincal-multiconductor",
+    sincal_multiconductor=pio.dist.SincalReadOptions(
+        variant=1, snapshot_hours=12, acquired_tables="acquired.json",
+        assume_inactive_source_controls=True))  # CSIRO12 only; inspect diagnostics
+print(pio.diagnostic_records(module.diagnostics))
+pio.serialize(module, "case.pio.json")
+instance = module.to_mc_ac_pf_instance()  # CSIRO12 succeeds; CSIRO09 rejects islands
+```
+
+CSIRO09's primary file is 69,181,440 bytes. The checked command sets
+`POWERIO_MAX_PRIMARY_BYTES=69181440` explicitly; the default input limit remains
+unchanged. The native models stay external, subject to their own data rights.

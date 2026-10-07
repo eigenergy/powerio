@@ -148,7 +148,22 @@ typedef struct {
      * Relative companion name. NULL/0 omits it; non-NULL empty text is invalid.
      */
     PioStringView acquired_tables;
+    /**
+     * Experimental schema-11.5 NULL source controls as inactive; default false.
+     */
+    bool assume_inactive_source_controls;
 } PioSincalReadOptions;
+
+/**
+ * Explicit balanced SINCAL reader selection; presence flags preserve zero.
+ */
+typedef struct {
+    bool has_variant;
+    int64_t variant;
+    bool has_snapshot_hours;
+    double snapshot_hours;
+    PioStringView acquired_tables;
+} PioSincalBalancedReadOptions;
 
 /**
  * Borrowed parsing options. Zero initialization preserves pio_parse behavior.
@@ -164,6 +179,10 @@ typedef struct {
      * NULL omits SINCAL selection. Otherwise requires sincal-multiconductor.
      */
     const PioSincalReadOptions *sincal_multiconductor;
+    /**
+     * NULL omits balanced selection. Otherwise requires sincal-balanced.
+     */
+    const PioSincalBalancedReadOptions *sincal_balanced;
 } PioParseOptions;
 
 /**

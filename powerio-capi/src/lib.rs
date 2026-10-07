@@ -228,6 +228,19 @@ pub struct PioSincalReadOptions {
     pub snapshot_hours: f64,
     /// Relative companion name. NULL/0 omits it; non-NULL empty text is invalid.
     pub acquired_tables: PioStringView,
+    /// Experimental schema-11.5 NULL source controls as inactive; default false.
+    pub assume_inactive_source_controls: bool,
+}
+
+/// Explicit balanced SINCAL reader selection; presence flags preserve zero.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioSincalBalancedReadOptions {
+    pub has_variant: bool,
+    pub variant: i64,
+    pub has_snapshot_hours: bool,
+    pub snapshot_hours: f64,
+    pub acquired_tables: PioStringView,
 }
 
 /// Borrowed parsing options. Zero initialization preserves pio_parse behavior.
@@ -240,6 +253,8 @@ pub struct PioParseOptions {
     pub acquisition_root: PioStringView,
     /// NULL omits SINCAL selection. Otherwise requires sincal-multiconductor.
     pub sincal_multiconductor: *const PioSincalReadOptions,
+    /// NULL omits balanced selection. Otherwise requires sincal-balanced.
+    pub sincal_balanced: *const PioSincalBalancedReadOptions,
 }
 
 /// Borrowed `double` values.
@@ -4691,7 +4706,22 @@ pub unsafe extern "C" fn pio_parse_with_options(
                         "acquired_tables",
                     )?
                     .map(str::to_owned);
+                    selection.assume_inactive_source_controls =
+                        sincal.assume_inactive_source_controls;
                     options.sincal_multiconductor = Some(selection);
+                }
+                if let Some(sincal) = selections.sincal_balanced.as_ref() {
+                    let mut selection = powerio_tx::format::SincalBalancedReadOptions::default();
+                    selection.variant = sincal.has_variant.then_some(sincal.variant);
+                    selection.snapshot_hours =
+                        sincal.has_snapshot_hours.then_some(sincal.snapshot_hours);
+                    selection.acquired_tables = optional_str(
+                        sincal.acquired_tables.data,
+                        sincal.acquired_tables.len,
+                        "acquired_tables",
+                    )?
+                    .map(str::to_owned);
+                    options.sincal_balanced = Some(selection);
                 }
             }
             powerio::parse_with_options(source.clone(), &options)

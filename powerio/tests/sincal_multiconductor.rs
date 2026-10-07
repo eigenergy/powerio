@@ -213,3 +213,60 @@ fn native_isolated_bus_is_retained_and_generic_calculation_requires_resolution()
                 .contains("island containing bus `sincal:load:31` has no voltage source")
     }));
 }
+
+#[test]
+fn source_inventory_survives_ir_and_explains_cross_format_losses() {
+    let original = parse(
+        r#"
+        CREATE TABLE LFNodeResult(Variant_ID INTEGER, Node_ID INTEGER);
+        INSERT INTO LFNodeResult VALUES(1,10),(1,20),(2,99);
+        CREATE TABLE "quoted""result"(value REAL);
+        INSERT INTO "quoted""result" VALUES(1);
+        ALTER TABLE Infeeder ADD COLUMN Flag_Har INTEGER;
+    "#,
+    );
+    let restored =
+        helpers::deserialize_module_text(&helpers::serialize_module_text(&original).unwrap())
+            .unwrap();
+    for module in [&original, &restored] {
+        let inventory: Vec<_> = module
+            .diagnostics()
+            .iter()
+            .filter(|d| d.details().contains_key("table"))
+            .map(powerio::Diagnostic::details)
+            .collect();
+        let results = inventory
+            .iter()
+            .find(|d| d["table"] == "LFNodeResult")
+            .unwrap();
+        assert_eq!(results["row_count"], 2);
+        assert_eq!(results["scope"], "selected_variant");
+        assert_eq!(results["whole_table"], true);
+        let source = inventory.iter().find(|d| d["table"] == "Infeeder").unwrap();
+        assert_eq!(source["row_count"], 1);
+        assert_eq!(source["fields"], serde_json::json!(["Flag_Har"]));
+        assert_eq!(source["whole_table"], false);
+        assert!(inventory.iter().any(|d| d["table"] == "quoted\"result"));
+        assert!(!inventory.iter().any(|d| d["table"] == "Load"));
+        let emitted = powerio::emit(
+            module,
+            "pmd-json",
+            Destination::memory("case.json").unwrap(),
+        )
+        .unwrap();
+        let loss = emitted
+            .diagnostics()
+            .iter()
+            .find(|d| d.code() == "EMIT.DIST.SINCAL_RETAINED_SOURCE_OMITTED")
+            .unwrap();
+        assert_eq!(
+            loss.details()["source_inventory"],
+            serde_json::json!(inventory)
+        );
+    }
+    assert_eq!(
+        bytes(powerio::emit(&original, "sincal", Destination::memory("copy.db").unwrap()).unwrap()),
+        original.source().unwrap().primary_buffer().unwrap().bytes()
+    );
+    assert!(powerio::emit(&restored, "sincal", Destination::memory("copy.db").unwrap()).is_err());
+}

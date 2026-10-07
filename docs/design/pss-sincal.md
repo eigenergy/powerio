@@ -290,6 +290,24 @@ framework: the existing format-specific option is sufficient for CSIRO12.
 `LinDist3FlowBuildOptions::unsupported` is a calculation-preparation policy;
 its Reject/Lower/Approximate/Permissive modes are not SINCAL parse options.
 
+#### Delivery update (2026-10-08)
+
+Priorities 1–3 are implemented locally: bounded source inventory with structured
+loss details; versioned default and compatibility provenance; separate balanced
+and distribution option types in Python/C/Julia; and case-specific public trial
+checks. The [user guide](../src/sincal.md#fidelity-findings-and-working-trial-routes)
+and [reproducible trial harness](../../evals/sincal/check_trial_workflows.py)
+distinguish source echo, IR, PF preparation and ordinary target emission.
+CSIRO09/12 do not acquire unsupported export capability from their passing
+independent OpenDSS oracles. No new native fixture is added.
+
+Integration uncovered and repaired the missing rusqlite browser-backend feature;
+WebAssembly component compilation now passes. The matching Julia companion
+passes 1,895 assertions (two existing broken tests), and its native CSIRO19/12
+checks pass 18 assertions. The full CI mirror and final writer restack are the
+remaining priority-4 work; the review packet records their eventual outcome.
+The fetched remote base remains `d5f937631a4f7c60460c610a02eb949e35812252`.
+
 #### Next implementation sequence
 
 | Order | Bounded deliverable | Done when |

@@ -466,7 +466,7 @@ pub(crate) fn emit_text_with_options(
     format: DistTargetFormat,
     options: &EmitOptions,
 ) -> Result<TextEmission, powerio_core::Error> {
-    let output = if options.is_default_for(format)
+    let mut output = if options.is_default_for(format)
         && let Some(text) = echo_text(module, format)
     {
         TextEmission::faithful(text)
@@ -475,6 +475,11 @@ pub(crate) fn emit_text_with_options(
         crate::readiness::require_earth_referenced_sources(module.value())?;
         emit_value_text_with_options(module.value(), format, options)
     };
+    powerio_sincal::attach_retention_details(
+        module.diagnostics(),
+        &mut output.diagnostics,
+        "EMIT.DIST.SINCAL_RETAINED_SOURCE_OMITTED",
+    )?;
     Ok(output)
 }
 

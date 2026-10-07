@@ -85,6 +85,7 @@ fn selection() -> PioSincalReadOptions {
         has_snapshot_hours: true,
         snapshot_hours: 6.0,
         acquired_tables: PioStringView::new("records.json"),
+        assume_inactive_source_controls: false,
     }
 }
 
@@ -123,6 +124,7 @@ fn sincal_capi_selections_preserve_snapshot_presence_and_source_ownership() {
             let options = PioParseOptions {
                 acquisition_root: PioStringView::EMPTY,
                 sincal_multiconductor: &selected,
+                sincal_balanced: std::ptr::null(),
             };
             let module = pio_parse_with_options(
                 source,
@@ -167,6 +169,7 @@ fn sincal_capi_refuses_missing_snapshot_bad_family_and_bad_borrowed_views() {
         let options = PioParseOptions {
             acquisition_root: PioStringView::EMPTY,
             sincal_multiconductor: &selected,
+            sincal_balanced: std::ptr::null(),
         };
         assert!(
             pio_parse_with_options(
@@ -184,6 +187,7 @@ fn sincal_capi_refuses_missing_snapshot_bad_family_and_bad_borrowed_views() {
         let options = PioParseOptions {
             acquisition_root: PioStringView::EMPTY,
             sincal_multiconductor: &selected,
+            sincal_balanced: std::ptr::null(),
         };
         for format in ["sincal-balanced", "dss"] {
             assert!(
@@ -209,6 +213,7 @@ fn sincal_capi_refuses_missing_snapshot_bad_family_and_bad_borrowed_views() {
         let options = PioParseOptions {
             acquisition_root: PioStringView::EMPTY,
             sincal_multiconductor: &selected,
+            sincal_balanced: std::ptr::null(),
         };
         assert!(
             pio_parse_with_options(
@@ -248,4 +253,55 @@ fn export_sincal_binding_records() {
         records(),
     )
     .unwrap();
+}
+
+#[test]
+fn balanced_options_preserve_variant_and_family_presence() {
+    unsafe {
+        let original = include_bytes!("../../tests/data/sincal/1-LV-rural1--0-sw.sinx");
+        let mut error = std::ptr::null_mut();
+        let source = pio_source_from_memory(
+            c"case.sinx".as_ptr(),
+            9,
+            original.as_ptr(),
+            original.len(),
+            &mut error,
+        );
+        let mut selected = PioSincalBalancedReadOptions {
+            has_variant: true,
+            variant: 1,
+            has_snapshot_hours: false,
+            snapshot_hours: f64::NAN,
+            acquired_tables: PioStringView::EMPTY,
+        };
+        for (format, variant, ok) in [
+            ("sincal-balanced", 1, true),
+            ("sincal-balanced", 999, false),
+            ("sincal-multiconductor", 1, false),
+        ] {
+            selected.variant = variant;
+            let options = PioParseOptions {
+                acquisition_root: PioStringView::EMPTY,
+                sincal_multiconductor: std::ptr::null(),
+                sincal_balanced: &selected,
+            };
+            let module = pio_parse_with_options(
+                source,
+                format.as_ptr().cast(),
+                format.len(),
+                &options,
+                &mut error,
+            );
+            assert_eq!(!module.is_null(), ok);
+            if ok {
+                assert!(error.is_null());
+                pio_module_release(module);
+            } else {
+                assert!(!error.is_null());
+                pio_error_release(error);
+                error = std::ptr::null_mut();
+            }
+        }
+        pio_source_release(source);
+    }
 }

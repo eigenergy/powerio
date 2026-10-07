@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from ._guard import guard_class as _guard_class
+from ._sincal import _validate_selection
 
 __all__ = ["MulticonductorNetwork", "SincalReadOptions"]
 
@@ -40,19 +41,13 @@ class SincalReadOptions:
     snapshot_hours: Optional[float] = None
     acquired_tables: Optional[str] = None
 
-    def __post_init__(self):
-        if self.variant is not None and (
-            isinstance(self.variant, bool) or not isinstance(self.variant, int)
-        ):
-            raise TypeError("variant must be an integer or None")
-        if self.snapshot_hours is not None and (
-            isinstance(self.snapshot_hours, bool)
-            or not isinstance(self.snapshot_hours, (int, float))
-        ):
-            raise TypeError("snapshot_hours must be a number or None")
-        if self.acquired_tables is not None and not isinstance(self.acquired_tables, str):
-            raise TypeError("acquired_tables must be a relative companion name or None")
+    # Experimental legacy NULL controls; each applied assumption is diagnosed.
+    assume_inactive_source_controls: bool = False
 
+    def __post_init__(self):
+        _validate_selection(self)
+        if not isinstance(self.assume_inactive_source_controls, bool):
+            raise TypeError("assume_inactive_source_controls must be bool")
 
 
 @_guard_class

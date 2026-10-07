@@ -1291,3 +1291,52 @@ python3 evals/sincal/check_unbalanced_paper_constraints.py /tmp/paper-audit.json
 Arif is CC BY; Vinayagam's article is CC BY-NC 4.0. No paper PDF, figure or
 native model was added as a fixture. Only attributed numerical observations,
 our calculations and their explicit limits are recorded.
+
+## Binding and trial workflow verification (2026-10-08)
+
+`check_trial_workflows.py` uses an installed wheel and external native sources.
+It tests source echo, typed IR, PF preparation and ordinary target emission
+separately. It does not solve the exported targets; numerical evidence remains
+in the independent native-input oracles above. Both families use explicit
+selection objects. The distribution compatibility flag is available in Python,
+C and Julia as well as Rust/CLI; balanced Access/snapshot selections are now
+available across those same entry points.
+
+```sh
+POWERIO_MAX_PRIMARY_BYTES=69181440 python3 evals/sincal/check_trial_workflows.py \
+  /external/csiro-representative19.mdb /external/csiro19-balanced-records.json \
+  /external/csiro-representative09.mdb /external/representative09.json \
+  /external/csiro-representative12.mdb /external/representative12-with-shunts.json \
+  /external/truong12/database.db /tmp/trial-workflows.json
+```
+
+The checked noon snapshots yield these distinct outcomes:
+
+| Case | Echo and typed IR | PF instance | Ordinary emission/reparse |
+| --- | --- | --- | --- |
+| CSIRO19 balanced | Pass | Pass | MATPOWER pass, with loss diagnostics |
+| Truong12 multiconductor | Pass | Pass | DSS, PMD and BMOPF pass, with loss diagnostics |
+| CSIRO09 multiconductor | Pass | Unsourced-island refusal | Reference-terminal source refusal |
+| CSIRO12 multiconductor, compatibility opt-in | Pass | Pass | Reference-terminal source refusal |
+
+The per-case matrix/oracle commands remain the ones above. In particular,
+CSIRO09/12's OpenDSS references are generated independently from native tables;
+they are not output from the ordinary DSS writer. No native SINCAL files were
+added to fixtures by this integration work. Source inventory findings enumerate
+retained tables and selected source-only fields, and explicitly mark excluded
+Access tables as having unknown row counts; the inventory is not a complete
+field-level schema audit.
+
+`check_julia_trial_workflows.jl` checks three CSIRO19 balanced snapshots and
+CSIRO12's strict refusal/opt-in success against the same original inputs. Point
+`POWERIO_CAPI` at the current library and `--project` at the matching companion:
+
+```sh
+POWERIO_CAPI=/path/to/libpowerio_capi.dylib \
+  julia --project=/path/to/PowerIO.jl evals/sincal/check_julia_trial_workflows.jl \
+  /external/csiro-representative19.mdb /external/csiro19-balanced-records.json \
+  /external/csiro-representative12.mdb /external/representative12-with-shunts.json
+```
+
+Use the platform's corresponding `.so` or `.dll` on Linux or Windows. These
+are reader/binding checks; fresh SINCAL desktop acceptance remains external.

@@ -234,7 +234,7 @@ impl NativeDatabase {
         Ok((ports, coils))
     }
 
-    /// Decode the connection contract only, not a complete DistTransformer.
+    /// Decode the winding connection only, not a complete DistTransformer.
     pub fn transformer_connection(&self, element: i64) -> Result<TransformerConnectionInput> {
         if self.elements.get(&element).map(String::as_str) != Some("TwoWindingTransformer") {
             return Err(format_error(format!(

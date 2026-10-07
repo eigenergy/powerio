@@ -301,7 +301,7 @@ impl NativeDatabase {
 /// The 2014 Multiple Faults manual, pp. 8–9, eliminates absent series currents
 /// by a Schur complement of the phase admittance. Equivalently, restrict the
 /// impedance to the available phases. Nonzero pi shunts need a separate
-/// contract: both native CSIRO coupled two-phase cases violate the charging
+/// supported profile: both native CSIRO coupled two-phase cases violate the charging
 /// balance of principal-submatrix projection. Only independent phases admit
 /// nonzero shunts here.
 fn select_phases(code: &mut DistLineCode, phases: &[usize]) -> Result<()> {
