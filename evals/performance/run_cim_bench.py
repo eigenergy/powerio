@@ -20,8 +20,12 @@ def main():
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--services", nargs="*")
     p.add_argument("--baseline", action="store_true")
+    p.add_argument("--rounds", type=int, default=3)
+    p.add_argument("--reverse-order", action="store_true")
     p.add_argument("--timeout", type=int, default=900)
     a = p.parse_args()
+    if a.rounds < 1:
+        p.error("--rounds must be positive")
     root = a.cim_bench.resolve()
     out = a.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -49,6 +53,8 @@ def main():
             ),
         )
     )
+    if a.reverse_order:
+        services = dict(reversed(list(services.items())))
     report = {
         "started_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "host": platform.platform(),
@@ -111,7 +117,7 @@ def main():
             "pytest",
             test,
             "--benchmark-only",
-            "--benchmark-min-rounds=3",
+            f"--benchmark-min-rounds={a.rounds}",
             "--benchmark-max-time=1",
             "--benchmark-warmup=off",
             "-p",
