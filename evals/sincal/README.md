@@ -173,3 +173,35 @@ python evals/sincal/check_balanced_access.py \
   /external/csiro-representative19.mdb /external/csiro19-balanced-records.json \
   evals/sincal/balanced-csiro19.json
 ```
+
+## Conductor-resolved reader development
+
+The distribution branch extracts the existing family-local component adapters
+and their synthetic tests, with an explicit internal harness:
+
+```sh
+cargo build -p powerio-dist --example sincal_multiconductor
+# Complete mapping: rejects the entire network when any required mode fails.
+target/debug/examples/sincal_multiconductor records read /tmp/records.json 1
+# Diagnostic audit: component reports are not successful network parses.
+target/debug/examples/sincal_multiconductor records audit /tmp/records.json 1
+```
+
+`native` instead of `records` selects SQLite/archive acquisition explicitly.
+The electrical adapter independently admits its observed 11.5/14.8 schemas;
+shared structural support for 15.5/16.0 does not automatically extend it.
+The reader currently rejects original CSIRO 06 and 01 before assembly because
+referenced `VoltageLevel.Flag_Volt` values are NULL. Their 11.5 version-specific
+voltage/default semantics need mapping; a generic NULL-to-zero conversion or
+silent line-line assumption is not applied. The acquired records preserve these
+NULLs. The April 2015 automation manual confirms general default filling and
+names the voltage selector, but does not by itself establish this field's NULL
+default. MDB Tools `mdb-prop` and `mdb-schema --default-values` show no
+column default for this selector in CSIRO 06, so the MDB schema itself does not
+resolve it. This is implementation work, separate from native desktop acceptance.
+
+Further known work includes load-star selection, source impedance, transformer
+nullable taps/core/partial connections, selected profiles and inherited variants.
+The original research component evidence is retained; component success is not
+presented as complete CSIRO parsing. Fresh writer packaging is reserved for its
+separate branch and has not been pulled into this reader extraction.

@@ -2456,11 +2456,14 @@ dependencies = [
  "libc",
  "num-complex",
  "powerio-core",
+ "powerio-sincal",
+ "rusqlite",
  "schemars",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+ "zip",
 ]
 
 [[package]]

@@ -401,6 +401,13 @@ and IR-without-source have distinct tested behavior. Direct SQLite input and
 optional Access import remain visibly different capabilities. Update diagnostic
 and conversion baselines intentionally, then run full CI clippy and bindings.
 
+Current distribution progress: family-local component adapters and synthetic
+regressions are extracted into `codex/sincal-distribution-reader`, with explicit
+native/Access-record read and audit harnesses. Original CSIRO 06/01 currently
+stop at NULL voltage-basis selectors before network assembly. Resolve the
+schema-11.5 defaults, then continue source/load/transformer/profile mapping;
+these cases are not counted as successful networks.
+
 ### PR 5: experimental fresh writer
 
 Implement deterministic fresh schema-14.8 SQLite generation and packaging for
