@@ -1,0 +1,31 @@
+{
+  "engine": "DSS C-API Library version 0.14.5 revision 87d85c2622c8281b92255335bc7c09b11191b21d based on OpenDSS SVN 3723 [FPC 3.2.2] (64-bit build) MVMULT INCREMENTAL_Y CONTEXT_API PM 20240329033829; License Status: Open \nDSS-Python version: 0.15.7\nOpenDSSDirect.py version: 0.9.4",
+  "numpy": "2.5.3",
+  "native_sincal_execution": false,
+  "ideal_source_engine_approximation_ohms": 1e-06,
+  "opendss_voltage_tolerance_v": 0.001,
+  "cases": [
+    {
+      "case": "grounded",
+      "grounded_reference_counterexample_error_v": null,
+      "export_sha256": "9f45c730f81fb1a3c52943267de973645931e23371c1dfa4e31dc00bd43cc6e5",
+      "opendss_deck_sha256": "47c8051cc0e6255298e3048134395021dfd85ea94effa935a7136620a17e0d7f",
+      "fresh_readback_voltage_error_v": 6.355287432313019e-14,
+      "opendss_voltage_error_v": 1.887914843046563e-05,
+      "original_mna_residual": 8.104527398639334e-13,
+      "fresh_mna_residual": 1.0169555638753394e-12,
+      "passed": true
+    },
+    {
+      "case": "floating",
+      "grounded_reference_counterexample_error_v": 47.74504674199568,
+      "export_sha256": "32c63c4b576e6fe6dc60cac87a2f23749970e8f09fa9f8bba2eccb4511ef2200",
+      "opendss_deck_sha256": "d3b89977d765e5f97cfa5016aded3fc7a76cc0a0cbf406dc15391888f7bea887",
+      "fresh_readback_voltage_error_v": 3.9484700634630496e-13,
+      "opendss_voltage_error_v": 1.5864772702384566e-05,
+      "original_mna_residual": 1.2756978714075478e-12,
+      "fresh_mna_residual": 1.9377084016925627e-12,
+      "passed": true
+    }
+  ]
+}

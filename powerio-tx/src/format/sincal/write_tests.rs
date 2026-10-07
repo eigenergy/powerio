@@ -53,6 +53,21 @@ fn fresh_physical_units_ratios_and_losses_survive_nonstandard_base() {
     let net = constructed();
     let result = write_experimental_balanced(&net).unwrap();
     let db = DatabaseSnapshot::decode(&result.database, None).unwrap();
+    let flags = db
+        .connection
+        .query_row(
+            "SELECT Flag_LFmet, Flag_UsymElm, Flag_DIType FROM CalcParameter",
+            [],
+            |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(flags, (2, 1, 0));
     let values = db
         .connection
         .query_row(

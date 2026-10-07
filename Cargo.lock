@@ -2391,6 +2391,7 @@ dependencies = [
  "powerio-dist",
  "powerio-matrix",
  "powerio-prob",
+ "powerio-sincal",
  "powerio-tx",
  "rusqlite",
  "schemars",

@@ -59,7 +59,9 @@ validate the complete constructed database with its own electrical reader
 before returning an artifact. There is no electrical-family inference here,
 and these helpers do not enable a public `can_emit` capability. The balanced
 backend now supplies a static candidate electrical emitter
-and paired-CSV/pandapower validation in `powerio-tx`; the multiconductor emitter
-and experimental facade/IR integration remain unfinished. See
+and paired-CSV/pandapower validation in `powerio-tx`; a multiconductor candidate
+now covers ideal sources, sequence lines and phase-resolved loads in
+`powerio-dist`. Transformer and other circuit coverage and the experimental
+facade remain unfinished; both typed IR edit paths have staging tests. See
 `evals/sincal/README.md` for the exact electrical profile and evidence. Native
 desktop open/save/calculate is a separate acceptance gate.

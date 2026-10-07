@@ -443,7 +443,60 @@ edits its load, invokes the candidate backend and parses fresh bytes through
 the public balanced reader. It separately verifies byte-exact echo of the new
 output; the old native project cannot enter the backend.
 
-The multiconductor emitter, explicit experimental facade integration,
-multiconductor IR-then-write checks and broader writer subset coverage remain
-unfinished. Canonical balanced transformer rows do not claim conductor/neutral
+Complete multiconductor circuit coverage, explicit experimental facade
+integration and broader writer subset coverage remain unfinished. The
+multiconductor staging implementation and IR evidence are described below. Canonical balanced transformer rows do not claim conductor/neutral
 semantics, and must not be used as an implicit multiconductor writer.
+
+### Multiconductor candidate writer
+
+The family-local hidden staging API now constructs fresh schema-14.8 inputs
+from `MulticonductorNetwork` for ideal positive-sequence sources (earth referenced
+or an isolated floating star), phase-resolved static loads, and sequence-
+representable lines. Unequal Wye and delta branch powers, phase pairs and single
+phases remain unbalanced. Loads split into native one-branch elements, preserving
+individual nominal voltages and PQ/current/impedance behavior. No balanced
+backend is called. Line matrices must fit the declared native sequence profile;
+unsupported conductor matrices are rejected, never approximated as balanced.
+
+`ExperimentalMulticonductorOptions.nominal_ll_volts` explicitly supplies a
+positive line-line voltage for every typed bus; the distribution model does not
+have a bus nominal-voltage field. No operating source voltage, bound or `extras`
+value is silently reinterpreted as nominal. Native node IDs are assigned
+canonically and returned as a bus-ID map. Closed switches collapse only when
+that does not connect an additional conductor. External neutral paths, open
+switches and attached floating references require further native circuit work.
+Native readback introduces explicit device-local buses/switches as needed.
+The candidate explicitly writes `Flag_LFmet=8`, `Flag_UsymElm=3` and
+`Flag_DIType=0`: phase-domain unbalanced calculation, asymmetric elements
+retained, no automatic method fallback. The balanced candidate separately
+writes `2/1/0`. These documented fields are present in the authentic 14.8
+catalog; their construction is tested, but native execution is still unverified.
+
+```sh
+cargo test -p powerio-dist --lib sincal::write_tests
+POWERIO_SINCAL_WRITER_ORACLE_DIR=/tmp/dist-writer-oracle cargo test -p powerio-dist \
+  --lib sincal::write_tests::export_writer_oracle -- --ignored
+python3 evals/sincal/check_multiconductor_writer.py /tmp/dist-writer-oracle \
+  --report /tmp/writer-multiconductor.json
+cargo test -p powerio --test sincal
+```
+
+`writer-multiconductor.json` records two original synthetic unequal-load
+circuits, with earth-referenced and floating-star sources. Dense MNA evaluates
+the typed input and actual fresh-write/read result, independently of PowerIO
+matrix code. A separate OpenDSS circuit uses the original electrical inputs.
+The fresh-readback voltage difference is below 4e-13 V; OpenDSS differs by less
+than 1.9e-5 V with an explicit 1e-6-ohm source-impedance approximation (1e-3 V
+acceptance tolerance). Grounding the floating source is an intentional
+counterexample that the oracle must detect. Neither input nor reference uses
+stored native results. Tests also cover actual IR restoration and editing
+while preserving the floating reference, malformed typed vectors and unsupported
+circuit rejection, deterministic output, and rewriting through closed device
+switches. Test circuits are generated at runtime; no native fixtures were added.
+
+This is incremental PR5 implementation. Native transformer/shunt/generator
+output, open-switch/external-neutral authoring and the experimental public API
+remain unfinished. The complete authentic unbalanced reader corpus targets in
+PR4 are unchanged; these writer tests do not establish their completion. Native
+SINCAL desktop acceptance remains a separate external gate.

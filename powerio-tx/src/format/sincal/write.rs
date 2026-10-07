@@ -232,6 +232,11 @@ pub fn write_experimental_balanced(net: &BalancedNetwork) -> Result<Experimental
         "Flag_UseLA OpSer_ID IncrSer_ID Scenario_ID Flag_UseScenario Flag_UseTimeSer Flag_UseOpSer Flag_UseIncSer Flag_Unit Flag_ABW",
     );
     integer(&mut settings, "CalcParameter_ID", 1);
+    // This backend authors only balanced inputs. Make the native calculation
+    // profile explicit too; no multiconductor value is projected here.
+    integer(&mut settings, "Flag_LFmet", 2);
+    integer(&mut settings, "Flag_UsymElm", 1);
+    integer(&mut settings, "Flag_DIType", 0);
     real(&mut settings, "f", net.base_frequency());
     real(&mut settings, "ull", net.buses()[0].vmin * 100.0);
     real(&mut settings, "uul", net.buses()[0].vmax * 100.0);

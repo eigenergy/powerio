@@ -322,3 +322,85 @@ fn experimental_balanced_backend_writes_edited_ir_without_native_source() {
         .is_err()
     );
 }
+
+#[test]
+fn experimental_multiconductor_backend_writes_edited_ir_with_floating_reference() {
+    use powerio_dist::{
+        Configuration, DistBus, DistLoad, DistLoadVoltageModel, ExperimentalMulticonductorOptions,
+        MulticonductorNetwork, VoltageSource,
+    };
+    let phases = vec!["1".into(), "2".into(), "3".into()];
+    let mut net = MulticonductorNetwork::new();
+    let mut bus = DistBus::new(
+        "b",
+        vec![
+            "1".into(),
+            "2".into(),
+            "3".into(),
+            "star".into(),
+            "earth".into(),
+        ],
+    );
+    bus.grounded.push("earth".into());
+    net.buses_mut().push(bus);
+    net.sources_mut().push(
+        VoltageSource::new(
+            "s",
+            "b",
+            phases,
+            vec![230.0; 3],
+            vec![
+                0.0,
+                -std::f64::consts::TAU / 3.0,
+                std::f64::consts::TAU / 3.0,
+            ],
+        )
+        .with_reference_terminal("star"),
+    );
+    let mut load = DistLoad::new(
+        "l",
+        "b",
+        vec!["1".into(), "2".into(), "3".into(), "earth".into()],
+        Configuration::Wye,
+        vec![1000.0, 2000.0, 3000.0],
+        vec![100.0, 200.0, 300.0],
+    );
+    load.voltage_model = DistLoadVoltageModel::ConstantImpedance {
+        v_nom: vec![230.0; 3],
+    };
+    net.loads_mut().push(load);
+    let module = powerio::PioModule::new(PioValue::from(net));
+    let mut restored =
+        helpers::deserialize_module_text(&helpers::serialize_module_text(&module).unwrap())
+            .unwrap();
+    let PioValue::MulticonductorNetwork(net) = restored.value_mut() else {
+        panic!("IR changed electrical family")
+    };
+    net.loads_mut()[0].p_nom[1] = 2500.0;
+    let options = ExperimentalMulticonductorOptions {
+        nominal_ll_volts: [("b".into(), 400.0)].into(),
+    };
+    let output = powerio_dist::__write_sincal_multiconductor_experimental(net, &options).unwrap();
+    let snapshot = powerio_sincal::DatabaseSnapshot::decode(&output.database, None).unwrap();
+    let readback = powerio_dist::__read_sincal_multiconductor_snapshot(snapshot).unwrap();
+    assert_eq!(readback.loads().len(), 3);
+    assert!((readback.loads()[1].p_nom[0] - 2500.0).abs() < 1e-10);
+    let source = &readback.sources()[0];
+    let reference = source
+        .reference_terminal
+        .as_ref()
+        .expect("floating star retained");
+    assert!(
+        !readback
+            .bus(&source.bus)
+            .unwrap()
+            .grounded
+            .contains(reference)
+    );
+    assert!(
+        output
+            .diagnostics
+            .iter()
+            .any(|d| d.code() == "EMIT.SINCAL.MULTICONDUCTOR_EXPERIMENTAL")
+    );
+}
