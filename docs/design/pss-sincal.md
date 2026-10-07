@@ -424,6 +424,19 @@ conductor declaration. Its 297 limited-P/Q loads additionally require an exact n
 voltage-reduction curve and a corresponding generic typed representation.
 See `evals/sincal/` for exact scope and independently reproduced evidence.
 
+The two LPC Access files are now acquired into external typed records using
+MDB Tools. Their Access memo columns produce `TEXT`, now explicitly recognized
+without accepting executable schema clauses. Original synthetic acquisition
+tests cover multiline memo text, NULLs and rejection of defaults/references.
+The European LV case has 262 elements: 205 lines, 55 loads, one transformer and
+one source. Its transformer has zero excitation and explicit sequence line
+data, making this a useful next complete-case target alongside CSIRO. S1a has
+137 elements including 54 DC infeeds and a transformer with nonzero core loss
+but zero no-load current, so additional semantics/diagnostics are needed.
+Both remain external research inputs with unresolved redistribution rights.
+Schema 12.8 admission and electrical compatibility remain unimplemented; no
+case is accepted by changing its version marker.
+
 ### PR 5: experimental fresh writer
 
 Implement deterministic fresh schema-14.8 SQLite generation and packaging for

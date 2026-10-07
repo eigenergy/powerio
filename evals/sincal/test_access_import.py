@@ -36,6 +36,18 @@ class AccessRecords(unittest.TestCase):
                                 [3, 1.2345678901234567, 'x\ny']])
         self.assertEqual([column['name'] for column in columns], ['Element_ID', 'P', 'Name'])
 
+    def test_memo_text_preserves_newlines_and_nulls(self):
+        # MDB Tools emits Access memo fields as TEXT, observed in LPC 12.8.
+        schema = SCHEMA.replace('`Name` varchar', '`Name` TEXT')
+        columns = columns_from_schema(schema, 'Load')
+        self.assertEqual(columns[-1]['native_type'], 'TEXT')
+        rows = table_rows(json.dumps({'Element_ID': 1, 'Name': 'first\nsecond'})
+                          + '\n' + json.dumps({'Element_ID': 2}), columns, Limits())
+        self.assertEqual(rows, [[1, None, 'first\nsecond'], [2, None, None]])
+        for declaration in ['TEXT DEFAULT 0', 'TEXT COLLATE NOCASE', 'TEXT REFERENCES X']:
+            with self.subTest(declaration=declaration), self.assertRaises(ValueError):
+                columns_from_schema(schema.replace('TEXT', declaration), 'Load')
+
     def test_refuses_schema_programs_and_ambiguous_columns(self):
         for schema in [SCHEMA + 'DROP TABLE Load;',
                        SCHEMA.replace('`P` REAL', '`p` REAL,\n `P` REAL'),
