@@ -1,9 +1,11 @@
 # PSS SINCAL reader and writer proposal
 
-Status: local reader implementation and validation in progress, 2026-10-07.
+Status: local reader implementation and validation in progress, 2026-10-08.
 Both explicit public reader profiles are implemented. Five balanced cases and
-one complete conductor-resolved native feeder have independent electrical
-evidence. Distribution selections include C/Julia; the new balanced Access
+two complete conductor-resolved native cases have independent electrical
+evidence: CSIRO09 and a newly validated asymmetric 12-bus model. The latter is
+smaller than the additional substantial feeders requested, so the review gate
+remains unmet. Distribution selections include C/Julia; the new balanced Access
 selections currently use Rust and CLI. The latest user decision requires one or
 two additional substantial distribution feeders to pass complete parsing and independent end-to-end validation before
 user review. The existing review packet is a draft, not review readiness.
@@ -313,6 +315,7 @@ distribution cases are the immediate review gate; the rest remains follow-up.
 | SimBench | Existing 15-node LV case, then available native LV/MV/HV and mixed-voltage cases representing distinct equipment modes | Balanced mappings compared with paired CSV. Inventory and pin additional archives before promising an exact count; retain ODbL/DbCL notices. |
 | CSIRO 01–07 | Longer-term complete unbalanced reading of all seven feeders; CSIRO05 remains a candidate for the bounded additional-case gate | Schema 11.5 Access through explicit optional import. CC BY 4.0, external corpus; resolve active native meanings rather than fitting historical results. |
 | CSIRO 08–19 | Account for every selected family/variant, including inheritance in 10/11/14 and blank terminal fields in 13 | Follow-up target: all 19 databases and applicable selectable variants. Three-phase connections and stored balanced results do not determine electrical family. |
+| Truong 12-bus | Complete schema-15.0 native SQLite, 45 elements with unequal single-phase loads | New full public-reader/OpenDSS success; no redistribution license, external only; too small to close the larger-case review gate. |
 | MATLAB LPC European LV/S1a | Mixed-phase schema-12.8 Access compatibility | External local checks while inherited model rights remain unresolved. No stored native results; independently check mapped electrical behavior. |
 | IEEE18/33 and student study | Schema-15.5/16.0 SQLite compatibility | External cases, no fixtures without redistribution rights. Orphan coupling sidecar is not evidence of active coupling semantics. |
 | LoadFlow's 67 databases | Inventory modes and select distinct regressions, including inspected schema-11.2 examples | Stretch coverage, not 67 promised passes; review model-specific rights; no copied GPL implementation or vendor manuals. |
@@ -343,8 +346,14 @@ Missing electrical meanings and conflicting native inputs are tracked separately
 because they also limit what can be implemented faithfully without that access.
 
 Current end-to-end evidence is five balanced cases (including CSIRO19's seven
-Access snapshots) and one conductor-resolved case, CSIRO09. Its original loads
-are symmetric; five separate synthetic stress cases exercise asymmetry. None of
+Access snapshots) and two conductor-resolved cases. CSIRO09
+has symmetric original loads; five separate synthetic stress cases exercise
+asymmetry. The new schema-15.0 12-bus case has 33 authentically unequal
+single-phase loads and maps all 45 elements. Public parsing, source echo, IR,
+generic matrix/PF-instance construction, independent OpenDSS complex voltages
+and line-terminal currents/powers pass. Its smaller size does not satisfy the
+requested additional substantial-feeder gate. See
+[the report](../../evals/sincal/truong12-public.json). None of
 the seven priority unbalanced CSIRO01–07 feeders parses completely. Their
 5,472/7,359 mapped components are component coverage, not a completion estimate.
 The 1,887 first rejections comprise 798 coupled reduced-phase charging lines,
@@ -353,7 +362,7 @@ ten other transformer/regulator modes, 291 inconsistent core-loss inputs and
 three conflicting profile timestamps. Further failures may follow a resolved
 first rejection.
 
-The new [candidate search](../../evals/sincal/research-catalog.md#larger-distribution-case-search-2026-10-07)
+The initial [candidate search](../../evals/sincal/research-catalog.md#larger-distribution-case-search-2026-10-07)
 downloaded six additional LoadFlow databases and inspected another European LV
 repository. It found no new ready unbalanced native case: five LoadFlow models
 have MDB decoder errors, the reliable rural model is small and has only code-7
@@ -380,8 +389,16 @@ PowerFactory project was acquired unchanged under CC BY 4.0, but its binary PFD
 has not been decoded and the user has no PowerFactory access. A usable export
 is an optional external evidence route, not a required implementation milestone
 for all SINCAL support. The reviewed vendor download route requires an access
-key; no new public native model was acquired there. These findings add zero
-complete-case successes and no production mapping changes. Resume a candidate
+key; no new public native model was acquired there. Those earlier findings added zero complete-case successes. A subsequent
+GitHub code search found the complete 12-bus asymmetric model described above.
+Its documented global missing-zero-sequence policy is now supported for the
+verified sequence-line and ideal-source profile, with explicit inputs retaining
+precedence and defaults recorded. It does not repair the global-input-only LPC
+or CSIRO sources. Jackcess 5.1.7 now decodes the 294-node LoadFlow candidate, but
+it lacks the required zero-sequence declarations and has no stored ULF results.
+Cross-checking CSIRO05/06/12 with Jackcess confirms the previously observed
+NULLs and nameplates. Two further public converters describe ordinary sequence
+impedances, but do not resolve partial winding semantics. Resume a larger candidate
 when a specific missing meaning, reliable export or independent reference is
 available; retain the additional-case review gate without inventing a delivery
 estimate from component counts.
@@ -586,8 +603,8 @@ components in CSIRO08/10/11/16/17/18; it does not implement those machines, crea
 source constraints or ground their stars. Complete parsing still rejects them.
 CSIRO08/11 acquisition now includes their four capacitor banks, independently
 checked alongside the existing five native banks. Missing acquisition tables
-are not counted as missing native data. CSIRO09 is the one complete conductor-resolved
-native feeder. Five authentic snapshots and five labelled unequal-delta stress
+are not counted as missing native data. CSIRO09 remains the complete conductor-resolved
+native feeder in this CSIRO audit; the separate 12-bus success is recorded above. Five authentic snapshots and five labelled unequal-delta stress
 cases agree with independently constructed OpenDSS circuits within 0.000372 V
 across 617 energized nodes; four native nodes remain isolated behind open
 connections. Authentic snapshot loads are phase-symmetric; the stress cases

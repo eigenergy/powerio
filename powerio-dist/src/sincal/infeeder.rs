@@ -110,6 +110,7 @@ pub(super) struct InfeederInput {
     pub setpoint: InfeederSetpoint,
     pub internal_impedance: InternalImpedance,
     pub grounding: SourceGrounding,
+    pub defaulted: Vec<&'static str>,
     /// Daily, weekly and yearly series. No state is implicitly selected.
     pub operating_series: [Option<i64>; 3],
 }
@@ -205,6 +206,7 @@ impl NativeDatabase {
             setpoint,
             internal_impedance,
             grounding,
+            defaulted: Vec::new(),
             operating_series,
         })
     }

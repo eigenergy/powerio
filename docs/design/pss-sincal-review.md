@@ -1,6 +1,6 @@
 # SINCAL local review packet
 
-Prepared 2026-10-07 against the approved [delivery roadmap](pss-sincal.md).
+Updated 2026-10-08 against the approved [delivery roadmap](pss-sincal.md).
 These are local PR drafts and an evidence index. User review is deferred until
 one or two additional substantial distribution cases pass complete parsing and
 independent end-to-end validation. That gate is not yet met. Preserve the five
@@ -130,12 +130,14 @@ reject the whole network; partial audit counts never become returned feeders.
 | Supported evidence | What it establishes |
 | --- | --- |
 | Original CSIRO09 | All 688 elements, five snapshots, independent OpenDSS comparison on 617 energized nodes; four isolated nodes retained |
+| Published Truong 12-bus | All 45 elements, 33 unequal single-phase loads; public native SQLite parsing, source echo, IR, matrix and PF-instance checks; independent OpenDSS voltages and terminal currents/powers |
 | Five asymmetric stress cases | Unequal-load conductor behavior; these are synthetic modifications, not additional authentic native feeders |
 | Independent component checks | Verified source, line, load, selected transformer, shunt and switch profiles; see the evidence index for exact modes and limitations |
 | Public interfaces | Explicit family/variant/time/acquisition selection, typed access, original-source echo and IR preservation |
 
-**New review gate.** This table still contains only one complete native
-distribution case. Add one or two substantial published cases with whole-network
+**New review gate.** This table now contains two complete native
+distribution cases. The additional 12-bus case is smaller than the requested
+feeders; add one or two substantial published cases with whole-network
 validation before requesting user review; component reports and synthetic stress
 cases cannot satisfy that gate. See the roadmap for the exact evidence packet.
 
@@ -147,7 +149,8 @@ Conflicting native nameplates/profile samples require separate dispositions.
 Generic PF-instance construction correctly rejects CSIRO09's unsourced isolated
 nodes; successful parsing does not imply solver readiness for every retained island.
 
-**Evidence.** [Public CSIRO09 validation](../../evals/sincal/csiro09-public.json),
+**Evidence.** [Public asymmetric 12-bus validation](../../evals/sincal/truong12-public.json),
+[public CSIRO09 validation](../../evals/sincal/csiro09-public.json),
 [component audit](../../evals/sincal/distribution-csiro-profiles.json),
 [Python/CLI checks](../../evals/sincal/csiro09-bindings.json) and the
 [detailed evidence index](../../evals/sincal/README.md). Current reports describe

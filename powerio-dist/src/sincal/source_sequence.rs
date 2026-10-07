@@ -1,5 +1,6 @@
-//! Resolve source zero sequence against selected short-circuit input, never
-//! against the independently specified positive-sequence load-flow impedance.
+//! Resolve explicit source zero sequence against selected short-circuit input.
+//! The separate global Z0=Z1 policy may supplement undeclared zero sequence;
+//! its verified ideal load-flow profile is retained as default provenance.
 use num_complex::Complex64;
 
 use super::{
@@ -13,6 +14,28 @@ use crate::Result;
 
 impl NativeDatabase {
     pub fn resolve_source_sequence(&self, input: &mut InfeederInput) -> Result<()> {
+        if self.zero_sequence_mode()? == 2 {
+            let categories: i64 = self
+                .connection
+                .query_row(
+                    "SELECT Flag_Input FROM Element WHERE Element_ID=?1 AND Variant_ID=?2",
+                    [input.element, self.variant],
+                    |row| row.get(0),
+                )
+                .map_err(format_error)?;
+            if categories & 4 == 0 {
+                if input.internal_impedance != super::infeeder::InternalImpedance::Ideal
+                    || input.grounding != SourceGrounding::Ungrounded
+                {
+                    return Err(format_error(
+                        "global source zero-sequence supplementation requires the verified ideal source profile",
+                    ));
+                }
+                input.grounding =
+                    SourceGrounding::Solid(SourceZeroSequence::DirectOhms(Complex64::default()));
+                input.defaulted.push("zero_sequence_from_positive");
+            }
+        }
         self.require_source_sequence_selection(input)?;
         let SourceGrounding::Solid(sequence) = input.grounding else {
             return Ok(());

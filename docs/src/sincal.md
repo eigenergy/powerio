@@ -48,10 +48,14 @@ source records the selected input profile as `sincal-balanced`.
 
 Use `sincal-multiconductor` to select the conductor-resolved reader. A symmetric
 operating point still produces `MulticonductorNetwork`. The verified electrical
-profiles include schema-14.8 native SQLite/archive inputs and schema-11.5/12.8
+profiles include schema-14.8/15.0 native SQLite/archive inputs and schema-11.5/12.8
 Access acquisition records. Shared structural admission of other versions does
 not imply their electrical support. Unsupported equipment or missing required
 sequence data rejects the complete parse; no partial feeder is returned.
+The documented global `Flag_LFZ0=2` missing-zero-sequence policy is supported
+for three-phase sequence lines and the verified ideal-source profile. Explicit
+zero-sequence inputs retain precedence; applied defaults are recorded. This
+does not enable missing-data supplementation for transformers or finite sources.
 Nominal delta–delta transformers support one, two or three installed coils,
 including reversed polarity and open terminals. Winding selectors expand to
 actual phase pairs; no unused phase is invented. Partial mixed-winding
@@ -237,8 +241,14 @@ OpenDSS comparisons cover every phase at 617 energized native nodes and four
 isolated nodes, with maximum voltage difference below 0.000372 V. The finite
 OpenDSS source approximation is checked separately. The same public path checks
 original MDB echo and IR value preservation; see `evals/sincal/csiro09-public.json`.
-This establishes one complete conductor-resolved case, not complete corpus
-coverage or native SINCAL desktop acceptance.
+A second published native case, Truong’s schema-15.0 12-bus model, maps all
+45 elements, including 33 unequal single-phase loads. Independent OpenDSS
+comparisons cover all 36 phase voltages and 66 line-terminal currents/powers;
+maximum voltage error is below 0.000006 V. Native source echo, IR, generic matrix
+and PF-instance checks also pass; see `evals/sincal/truong12-public.json`. Its
+source has no redistribution license and remains external. These are two
+complete conductor-resolved cases, not complete corpus coverage or native SINCAL
+desktop acceptance. The 12-bus case does not close the larger-case review gate.
 
 ### Explicit balanced Access snapshots in Rust and CLI
 

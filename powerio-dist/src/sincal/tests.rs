@@ -344,7 +344,7 @@ fn balanced_native_fixture_does_not_supply_zero_sequence_data() {
 #[test]
 fn sequence_line_refuses_unresolved_models_and_calculation_overrides() {
     for edit in [
-        "UPDATE CalcParameter SET Flag_LFZ0=2",
+        "UPDATE CalcParameter SET Flag_LFZ0=3",
         "UPDATE CalcParameter SET Variant_ID=2",
         "INSERT INTO CalcParameter VALUES (1, 1)",
         "UPDATE Element SET Flag_Input=3",
@@ -806,4 +806,56 @@ fn unrated_sequence_lines_keep_the_circuit_without_inventing_current_limits() {
         .unwrap();
         assert!(db.sequence_line(30).is_err(), "accepted {edit}");
     }
+}
+
+#[test]
+fn missing_line_sequence_uses_selected_calculation_policy_and_keeps_explicit_inputs() {
+    let supplied = NativeDatabase::decode(&sequence_database(""), None)
+        .unwrap()
+        .sequence_line(30)
+        .unwrap();
+    let mode_two = NativeDatabase::decode(
+        &sequence_database("UPDATE CalcParameter SET Flag_LFZ0=2"),
+        None,
+    )
+    .unwrap()
+    .sequence_line(30)
+    .unwrap();
+    assert_eq!(supplied.code.r_series, mode_two.code.r_series);
+    assert!(mode_two.defaulted.is_empty());
+    let supplemented = NativeDatabase::decode(
+        &sequence_database(
+            "UPDATE CalcParameter SET Flag_LFZ0=2; UPDATE Element SET Flag_Input=3;
+         UPDATE Line SET Flag_Z0_Input=NULL,r0=NULL,x0=NULL,c0=NULL,R0_R1=NULL,X0_X1=NULL;",
+        ),
+        None,
+    )
+    .unwrap()
+    .sequence_line(30)
+    .unwrap();
+    assert_eq!(supplemented.defaulted, ["zero_sequence_from_positive"]);
+    for i in 0..3 {
+        for j in 0..3 {
+            near(
+                supplemented.code.r_series[i][j],
+                if i == j { 0.0003 } else { 0.0 },
+            );
+            near(
+                supplemented.code.x_series[i][j],
+                if i == j { 0.0001 } else { 0.0 },
+            );
+        }
+        near(
+            supplemented.code.b_from[i].iter().sum::<f64>() * 2.0,
+            std::f64::consts::TAU * 50.0 * 10e-12,
+        );
+    }
+    let no_load_flow =
+        sequence_database("UPDATE CalcParameter SET Flag_LFZ0=2; UPDATE Element SET Flag_Input=1;");
+    assert!(
+        NativeDatabase::decode(&no_load_flow, None)
+            .unwrap()
+            .sequence_line(30)
+            .is_err()
+    );
 }

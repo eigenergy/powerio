@@ -108,7 +108,7 @@ fn schema_and_identity_failures_do_not_admit_partial_snapshots() {
 
 #[test]
 fn observed_modern_sqlite_schemas_share_identity_columns_but_unknown_versions_fail() {
-    for version in [15.5, 16.0] {
+    for version in [15.0, 15.5, 16.0] {
         let db = DatabaseSnapshot::decode(
             &snapshot(&format!(
                 "UPDATE Version SET Version_No={version}; UPDATE Element SET Type='Line    ';"

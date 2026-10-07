@@ -16,7 +16,7 @@ impl NativeDatabase {
     pub fn from_snapshot(snapshot: DatabaseSnapshot) -> Result<Self> {
         // Structural admission of modern balanced schemas does not authorize
         // their conductor semantics here. Keep family support independent.
-        if ![11.5_f64, 12.8, 14.8]
+        if ![11.5_f64, 12.8, 14.8, 15.0]
             .iter()
             .any(|v| v.to_bits() == snapshot.version.to_bits())
         {

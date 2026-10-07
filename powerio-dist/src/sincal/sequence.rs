@@ -189,14 +189,16 @@ fn apply_parallel_rating(
 }
 
 impl NativeDatabase {
-    /// Decode one directly supplied sequence line. This does not resolve
-    /// switching, service state, end connections or the network as a whole.
+    /// Decode a sequence line, applying the selected missing-data policy.
+    /// This does not resolve switching, service state, end connections or
+    /// the network as a whole.
     /// Unsupported modes are refused before numerical data is constructed.
+    #[allow(clippy::too_many_lines)] // Keep selected-row validation and circuit conversion together.
     pub fn sequence_line(&self, element: i64) -> Result<SequenceLine> {
         if self.elements.get(&element).map(String::as_str) != Some("Line") {
             return Err(format_error(format!("Element {element} is not a Line")));
         }
-        self.require_input_zero_sequence()?;
+        let zero_mode = self.zero_sequence_mode()?;
         require_table(&self.connection, "Line", &["Element_ID", "Variant_ID"])?;
         let mut statement = self
             .connection
@@ -216,8 +218,16 @@ impl NativeDatabase {
             .map_err(format_error)?
             .ok_or_else(|| format_error(format!("missing Line row for Element {element}")))?;
         let input: i64 = row.get(0).map_err(format_error)?;
-        let zero_input: i64 = row.get(1).map_err(format_error)?;
-        if require_input_categories(input, 6).is_err() || !matches!(zero_input, 1 | 2) {
+        let zero_input: i64 = if input & 4 != 0 {
+            row.get(1).map_err(format_error)?
+        } else {
+            0
+        };
+        let supplied = input & 4 != 0;
+        let synthesize = !supplied && zero_mode == 2;
+        if require_input_categories(input, 2).is_err()
+            || (!synthesize && (!supplied || !matches!(zero_input, 1 | 2)))
+        {
             return Err(format_error(format!(
                 "Line {element}: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
             )));
@@ -251,10 +261,21 @@ impl NativeDatabase {
             c1: row.get(10).map_err(format_error)?,
             r0: 0.0,
             x0: 0.0,
-            c0: row.get(13).map_err(format_error)?,
+            c0: if synthesize {
+                0.0
+            } else {
+                row.get(13).map_err(format_error)?
+            },
             frequency_hz: self.line_optional_number(row, "fn", &mut defaulted)?,
         };
-        (parameters.r0, parameters.x0) = if zero_input == 1 {
+        (parameters.r0, parameters.x0) = if synthesize {
+            // Input Data (April 2014), p.219: mode 2 supplements missing
+            // zero-sequence data with the positive-sequence data. Explicit
+            // component inputs retain precedence over this calculation mode.
+            parameters.c0 = parameters.c1;
+            defaulted.push("zero_sequence_from_positive");
+            (parameters.r1, parameters.x1)
+        } else if zero_input == 1 {
             let r_ratio: f64 = row.get(15).map_err(format_error)?;
             let x_ratio: f64 = row.get(16).map_err(format_error)?;
             if !r_ratio.is_finite() || r_ratio < 0.0 || !x_ratio.is_finite() || x_ratio < 0.0 {
@@ -284,6 +305,15 @@ impl NativeDatabase {
     }
 
     pub(super) fn require_input_zero_sequence(&self) -> Result<()> {
+        if self.zero_sequence_mode()? != 1 {
+            return Err(format_error(
+                "component requires explicit input zero-sequence mode",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn zero_sequence_mode(&self) -> Result<i64> {
         require_table(
             &self.connection,
             "CalcParameter",
@@ -299,11 +329,11 @@ impl NativeDatabase {
             .map_err(format_error)?
             .ok_or_else(|| format_error("missing calculation settings for selected variant"))?;
         let mode: i64 = row.get(0).map_err(format_error)?;
-        if mode != 1 || rows.next().map_err(format_error)?.is_some() {
+        if !matches!(mode, 1 | 2) || rows.next().map_err(format_error)?.is_some() {
             return Err(format_error(
                 "requires one calculation setting with input zero-sequence data",
             ));
         }
-        Ok(())
+        Ok(mode)
     }
 }

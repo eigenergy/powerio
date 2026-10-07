@@ -103,7 +103,7 @@ impl NativeDatabase {
         if let Some(hours) = hours {
             super::load_profile::validate_time(hours)?;
         }
-        self.require_input_zero_sequence()?;
+        self.zero_sequence_mode()?;
         self.require_element_voltage_bases()?;
         let frequency = self.mapping_frequency()?;
         let topology = self.topology_draft()?;
@@ -138,6 +138,7 @@ impl NativeDatabase {
     /// Shared by atomic whole-network assembly and the diagnostic audit.
     /// A failed attempt may have populated its private draft; never return
     /// that draft as a successfully parsed network.
+    #[allow(clippy::too_many_lines)] // Keep component dispatch and completeness accounting together.
     pub(super) fn map_component(
         &self,
         element: i64,
@@ -193,6 +194,10 @@ impl NativeDatabase {
                 "Infeeder" => {
                     let mut input = self.infeeder_input(element)?;
                     self.resolve_source_sequence(&mut input)?;
+                    if !input.defaulted.is_empty() {
+                        net.defaulted_mut()
+                            .insert(format!("Infeeder.{element}"), input.defaulted.clone());
+                    }
                     let node = input.terminal.node;
                     let circuit = input.ideal_boundary_circuit(
                         &buses[&node],

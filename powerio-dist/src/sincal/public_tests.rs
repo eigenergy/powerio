@@ -149,3 +149,60 @@ fn public_access_acquisition_is_explicit_bounded_and_retains_original_primary() 
     options.acquired_tables = Some("../records.json".into());
     assert!(parse_sincal(make_source(&records), &options).is_err());
 }
+
+#[test]
+fn modern_zero_sequence_policy_preserves_family_source_and_default_provenance() {
+    let edit = "UPDATE Version SET Version_No=15.0;
+        UPDATE CalcParameter SET Flag_LFZ0=2;
+        UPDATE Element SET Flag_Input=3 WHERE Type IN ('Line','Infeeder');
+        UPDATE Infeeder SET Flag_Z0=0,xi=0;
+        DELETE FROM Terminal WHERE Element_ID=33;
+        DELETE FROM Element WHERE Element_ID=33;
+        DELETE FROM TwoWindingTransformer WHERE Element_ID=33;";
+    let bytes = network_database(edit);
+    let module = parse_sincal(
+        Source::from_memory("case.db", bytes.clone()).unwrap(),
+        &SincalReadOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        module.source().unwrap().primary_buffer().unwrap().bytes(),
+        bytes
+    );
+    assert_eq!(
+        *module.value().source_format(),
+        Some(DistSourceFormat::Sincal)
+    );
+    assert_eq!(
+        module.value().defaulted().get("Infeeder.32"),
+        Some(&vec!["zero_sequence_from_positive"])
+    );
+    let explicit = parse_sincal(
+        Source::from_memory(
+            "explicit.db",
+            network_database(&format!(
+                "{edit} UPDATE Element SET Flag_Input=7 WHERE Type='Infeeder';"
+            )),
+        )
+        .unwrap(),
+        &SincalReadOptions::default(),
+    )
+    .unwrap();
+    assert!(!explicit.value().defaulted().contains_key("Infeeder.32"));
+    for extra in [
+        "UPDATE Infeeder SET xi=5;",
+        "UPDATE CalcParameter SET Flag_LFZ0=3;",
+        "UPDATE CalcParameter SET Flag_LFZ0=4;",
+        "UPDATE Version SET Version_No=15.1;",
+    ] {
+        let bytes = network_database(&format!("{edit}{extra}"));
+        assert!(
+            parse_sincal(
+                Source::from_memory("bad.db", bytes).unwrap(),
+                &SincalReadOptions::default()
+            )
+            .is_err(),
+            "{extra}"
+        );
+    }
+}

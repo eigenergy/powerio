@@ -958,3 +958,67 @@ states that version downloads require an individual access key. No key was
 requested, no contact message was sent, and no additional model or redistribution
 license was obtained. This closes that particular public-download lead; it does
 not establish that all vendor examples are inaccessible through every route.
+
+
+### New asymmetric SQLite case and alternative decoder (2026-10-08)
+
+A public GitHub code search for native `.sin` project descriptors found
+[Truong812001/Unbalance-Power-Flow](https://github.com/Truong812001/Unbalance-Power-Flow/tree/1459d2be39b3c00aac195b1d6c01bcde16ee357f).
+The unmodified `Update_finalV1_database/12bus/12busbc_files/database.db` is
+2,363,392 bytes, SHA-256
+`fda71fb98e45f118dcea90b61c78db855c822f9b2b8d594bf05bf101ca9dff9a`.
+It has schema 15.0, variant 1, 12 nodes and 45 elements: 11 three-phase sequence
+lines, 33 unequal phase-earth loads and one ideal source. Phase active-power
+totals are 1.430, 1.245 and 0.770 MW. The repository has no published license;
+no native payload, upstream code or spreadsheet is vendored. The accompanying
+Python solver was not executed or used as the acceptance oracle.
+
+All elements now parse through the public multiconductor facade. Independent
+OpenDSS validation of the actual typed circuit passes, as do source echo, IR,
+generic matrix and PF-instance checks. See [the reproducible harness](README.md#complete-asymmetric-native-12-bus-case-2026-10-08)
+and [measured report](truong12-public.json). This is a new authentic asymmetric
+whole-case success, but its size is below the additional substantial feeders
+requested. Keep the larger-case gate open. Stored ULF voltages are secondary
+historical evidence, not proof of native execution on current inputs.
+
+The complete pinned repository tree contains one identified native SINCAL
+network; its larger FEEDER spreadsheets are not additional native SINCAL cases.
+A public `.sinx` code search exposed no additional model archive, and the
+SINCAL/Matlab code search mostly returned unrelated numerical code. These are
+bounded search observations, not proof that no larger public model exists.
+
+A third Access decoder, [Jackcess 5.1.7](https://github.com/spannm/jackcess),
+successfully reads the previously quarantined, unchanged LoadFlow
+`vorstadtnetz_kabel1.mdb`. A portable JDK and read-only database opening were
+used in external research storage; no Java dependency or new acquisition path
+was added to PowerIO. It has 294 nodes, 586 elements (292 lines, 292 loads, one
+transformer and one source), 879 code-7 terminals, 294 balanced LF node results
+and no ULF node results. The native global setting requests input-only zero
+sequence; relevant element declarations omit that category. Static load P/Q/I
+values are zero and profile references are present, so zero static demand must
+not be mistaken for validation of its active study. Successful decoding does
+not make this a supported conductor-resolved case. Earlier MDB Tools warnings
+remain real, but no longer exhaust the available decoding options.
+
+Jackcess also independently cross-checks the Infeeder, TwoWindingTransformer
+and Load tables of original CSIRO05, 06 and 12 against MDB Tools exports. Row
+identities, text and NULL values agree; floating-point differences are at most
+3.71e-16 relative. The source-control NULLs and transformer nameplate conflicts
+are therefore not explained by the MDB Tools decoder. No Access field defaults
+were found that resolve those meanings. No source was modified or repaired.
+
+Two additional public converter trees were inspected without running or copying
+implementation code:
+
+- [cmacana/power-system-utils](https://github.com/cmacana/power-system-utils/tree/6d99a288c2594565cef8daecc527a533abbe5d91):
+  the SINCAL/CIM transformer helper covers ordinary full-winding positive/zero
+  sequence conversions; no partial mixed-winding interpretation or native model
+  archive was identified in the inspected tree.
+- [zepben/evolve-python-sdk-tests](https://github.com/zepben/evolve-python-sdk-tests/tree/a52306cc421ddeaeeba4d06e7d1b3fbb990ca6ac):
+  transformer field/vector-group mappings provide no partial-winding scaling
+  evidence or usable native test model. This is separate from the public SDK
+  already searched.
+
+These leads do not resolve the larger CSIRO feeder blockers. Prioritize another
+populated native model with a documented selected profile or a matched reference
+for a named whole-case gap; do not loosen input validation to manufacture passes.

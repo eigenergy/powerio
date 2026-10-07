@@ -188,7 +188,7 @@ target/debug/examples/sincal_multiconductor records audit /tmp/records.json 1
 ```
 
 `native` instead of `records` selects SQLite/archive acquisition explicitly.
-The electrical adapter independently admits its observed 11.5/14.8 schemas;
+The electrical adapter independently admits its observed 11.5/12.8/14.8/15.0 schemas;
 shared structural support for 15.5/16.0 does not automatically extend it.
 The schema-11.5 adapter now interprets NULL `VoltageLevel.Flag_Volt` using
 Siemens' legacy line-to-line input convention (General Input Data, April 2014,
@@ -1149,3 +1149,49 @@ python evals/sincal/check_balanced_cli.py target/debug/powerio \
   /external/source/csiro-representative19.mdb /external/csiro19-balanced-records.json \
   /external evals/sincal/balanced-csiro19-cli.json
 ```
+
+
+### Complete asymmetric native 12-bus case (2026-10-08)
+
+[`truong12-public.json`](truong12-public.json) records a new complete public
+parse of [Truong812001/Unbalance-Power-Flow](https://github.com/Truong812001/Unbalance-Power-Flow/tree/1459d2be39b3c00aac195b1d6c01bcde16ee357f),
+`Update_finalV1_database/12bus/12busbc_files/database.db`. Pin revision and
+SHA-256 as recorded in the report. The original is 2,363,392 bytes and has no
+published redistribution license; keep it outside the repository. No fixture
+or upstream solver code is incorporated.
+
+The schema-15.0 variant-1 static model has 12 native nodes, 11 sequence lines,
+33 unequal single-phase constant-PQ loads and one ideal source. All 45 elements
+map through `sincal-multiconductor`; original SQLite echo, typed IR round-trip,
+generic matrix construction without omissions and generic PF-instance construction
+pass. Structural admission of 15.0 does not enable the balanced electrical
+adapter: that boundary has its own rejection regression.
+
+The native calculation explicitly selects `Flag_LFZ0=2` (Input Data, April 2014,
+printed p.219): supply missing zero sequence from positive sequence. The reader
+implements that selected policy for the verified line/ideal-source profile and
+records `zero_sequence_from_positive` provenance. Explicit component declarations
+win. This does not turn arbitrary NULLs into defaults, extend transformer or
+finite-source support, or change native global-input-only cases into this mode.
+
+```sh
+cargo build -p powerio --example sincal_native_multiconductor
+# Use an environment with NumPy and OpenDSSDirect.py installed.
+python3 evals/sincal/validate_truong12.py /external/12busbc_files/database.db \
+  target/debug/examples/sincal_native_multiconductor /tmp/truong12-public.json
+```
+
+The wrapper calls the public facade example and solves its actual typed output
+with independent dense MNA. OpenDSS is built separately from native input tables.
+All 36 complex voltages and 66 line-terminal currents and powers are compared;
+tolerances are 0.001 V, 0.001 A and 0.1 VA, with typed KCL residual below 1e-6 A.
+The report records measured maxima, unequal phase demand totals, tool versions,
+source/checker/reader hashes and the ideal-source approximation. Removing a load,
+doubling a line impedance or moving a load to the wrong phase must fail.
+
+Stored ULF voltages agree within 0.087 V after a fixed +30-degree reference
+rotation. Their separate tolerance is the native VDN=.01% of nominal phase
+voltage, not a fitted threshold. Historical results do not attest the current
+input revision; fresh independent solver agreement is the primary evidence.
+No native SINCAL execution is claimed. This is a new authentic asymmetric success,
+but its 12-bus size does **not** satisfy the requested larger-feeder review gate.
