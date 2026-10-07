@@ -2,7 +2,10 @@
 //! validated *after* the caller selects this profile; they never select it.
 //! Electrical meanings belong here, not in the shared acquisition crate.
 
+#[cfg(test)]
+mod access_tests;
 mod equipment;
+mod profile;
 mod rows;
 mod settings;
 pub(super) mod source;
@@ -36,7 +39,25 @@ fn bus_id(id: i64) -> Result<BusId> {
 /// # Errors
 /// Unsupported active input, inconsistent topology, or invalid electrical data.
 pub fn read_balanced_snapshot(db: &DatabaseSnapshot, name: &str) -> Result<BalancedNetwork> {
-    if ![14.8_f64, 15.5, 16.0]
+    read_balanced_snapshot_at(db, name, None)
+}
+
+/// Read a selected daily snapshot; no implicit profile timestamp is chosen.
+///
+/// # Errors
+/// Unsupported electrical/profile semantics or invalid source input.
+pub fn read_balanced_snapshot_at(
+    db: &DatabaseSnapshot,
+    name: &str,
+    hours: Option<f64>,
+) -> Result<BalancedNetwork> {
+    profile::validate_time(hours)?;
+    if hours.is_some() && db.version.to_bits() != 11.5_f64.to_bits() {
+        return Err(error(
+            "selected daily snapshots currently require schema 11.5",
+        ));
+    }
+    if ![11.5_f64, 14.8, 15.5, 16.0]
         .iter()
         .any(|v| v.to_bits() == db.version.to_bits())
     {
@@ -53,7 +74,7 @@ pub fn read_balanced_snapshot(db: &DatabaseSnapshot, name: &str) -> Result<Balan
         .values()
         .next()
         .ok_or_else(|| error("missing calculation settings"))?;
-    let profiles = settings::validate(db, settings)?;
+    let profiles = settings::validate(db, settings, hours)?;
     let frequency = settings.positive("f")?;
     let levels = table(db, "VoltageLevel", "VoltLevel_ID")?;
     let nodes = table(db, "Node", "Node_ID")?;
@@ -79,11 +100,23 @@ fn read_buses(
         node.equals("Flag_Volt", 0)?;
         node.inactive(&["RefNode_ID", "Stp_ID"])?;
         let level = get(levels, node.integer("VoltLevel_ID")?, "VoltageLevel")?;
-        level.equals("Flag_Volt", 1)?;
+        let default_voltage = level.legacy() && level.is_null("Flag_Volt");
+        if !default_voltage {
+            level.equals("Flag_Volt", 1)?;
+        }
         if level.positive("f")?.to_bits() != frequency.to_bits() {
             return Err(level.bad("f", "mixed frequencies"));
         }
         let mut bus = Bus::new(bus_id(id)?, BusType::Pq, level.positive("Un")?);
+        if default_voltage {
+            bus.extras.insert(
+                "sincal_voltage_basis".into(),
+                serde_json::json!({
+                    "voltage_level": node.integer("VoltLevel_ID")?,
+                    "defaulted": "Flag_Volt", "value": 1, "schema": level.schema
+                }),
+            );
+        }
         bus.name = Some(node.text("Name")?);
         bus.uid = Some(format!("sincal:node:{id}"));
         bus.vmin = settings.positive("ull")? / 100.0;
@@ -155,7 +188,13 @@ fn read_elements(
         let uid = format!("sincal:element:{id}");
         match kind.as_str() {
             "Line" => {
-                let branch = equipment::line(input, &ports, network, &uid)?;
+                let branch = equipment::line(
+                    input,
+                    &ports,
+                    network,
+                    &uid,
+                    get(levels, element.integer("VoltLevel_ID")?, "VoltageLevel")?,
+                )?;
                 network.branches_mut().push(branch);
             }
             "TwoWindingTransformer" => {
@@ -169,9 +208,9 @@ fn read_elements(
                     .find(|b| b.id == ports[0])
                     .unwrap()
                     .base_kv;
-                network
-                    .loads_mut()
-                    .push(equipment::load(input, ports[0], base_kv, &uid, profiles)?);
+                network.loads_mut().push(equipment::load(
+                    db, input, ports[0], base_kv, &uid, profiles,
+                )?);
             }
             "Infeeder" | "DCInfeeder" => {
                 if kind == "DCInfeeder" {

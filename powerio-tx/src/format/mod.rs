@@ -67,6 +67,11 @@ mod surge;
 
 #[doc(hidden)]
 pub use sincal::read_balanced_snapshot as __read_sincal_balanced_snapshot;
+#[doc(hidden)]
+pub use sincal::read_balanced_snapshot_at as __read_sincal_balanced_snapshot_at;
+pub use sincal::source::{
+    SincalBalancedReadOptions, parse_with_options as parse_sincal_balanced_with_options,
+};
 mod ucte;
 mod union_find;
 mod xiidm;

@@ -1081,6 +1081,7 @@ fn echo_sincal(
     // SINCAL project and enable an invalid native echo.
     if !primary.bytes().starts_with(b"SQLite format 3\0")
         && !primary.bytes().starts_with(b"PK\x03\x04")
+        && !primary.bytes().starts_with(b"\0\x01\0\0Standard Jet DB\0")
     {
         return Err(Error::new(
             &powerio_tx::diagnostics::codes::EMIT_SINCAL_FRESH_UNSUPPORTED,

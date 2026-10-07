@@ -36,10 +36,15 @@ pub(super) fn line(
     ports: &[BusId],
     network: &BalancedNetwork,
     uid: &str,
+    level: &NativeRow,
 ) -> Result<Branch> {
-    for field in ["Flag_LineTyp", "Flag_ESB", "Flag_Lf"] {
+    for field in ["Flag_LineTyp", "Flag_ESB"] {
         row.equals(field, 1)?;
     }
+    if !row.legacy() || row.has("Flag_Lf") {
+        row.equals("Flag_Lf", 1)?;
+    }
+    row.inactive_newer(&["ElemLoading_ID"])?;
     // Installation and LEIKA system identity do not select r/x/c input mode.
     if !matches!(row.integer("Flag_Vart")?, 1 | 2) {
         return Err(row.bad("Flag_Vart", "unknown installation"));
@@ -56,7 +61,6 @@ pub(super) fn line(
         "Macro_ID",
         "LineTemp_ID",
         "va",
-        "ElemLoading_ID",
     ])?;
     if kv(network, ports[0]).to_bits() != kv(network, ports[1]).to_bits() {
         return Err(row.bad("Un", "line joins unlike voltage bases"));
@@ -65,8 +69,34 @@ pub(super) fn line(
     let length = row.positive("l")?;
     let parallel = row.positive("ParSys")?;
     let scale = finite(length / parallel / base_z, "line impedance base")?;
+    let mut temperature_factor = 1.0;
+    let mut default_temperature = false;
+    if row.legacy() {
+        // The admitted native cable profile uses the voltage-level temperature.
+        // April2014 Input Data line equations; optional NULL defaults to20C.
+        default_temperature = level.is_null("Temp_Cable");
+        let temperature = if default_temperature {
+            20.0
+        } else {
+            level.number("Temp_Cable")?
+        };
+        if temperature.to_bits() != 20.0_f64.to_bits() {
+            temperature_factor = finite(
+                1.0 + row.number("alpha")? * (temperature - 20.0),
+                "line temperature",
+            )?;
+            if temperature_factor <= 0.0 {
+                return Err(row.bad("alpha", "nonpositive temperature factor"));
+            }
+        }
+        if row.positive("Un")? < kv(network, ports[0])
+            || level.positive("Un")?.to_bits() != kv(network, ports[0]).to_bits()
+        {
+            return Err(row.bad("Un", "line voltage level/rating mismatch"));
+        }
+    }
     let r = finite(
-        row.nonnegative("r")? * row.positive("fr")? * scale,
+        row.nonnegative("r")? * row.positive("fr")? * temperature_factor * scale,
         "line resistance",
     )?;
     let x = finite(row.number("x")? * scale, "line reactance")?;
@@ -97,17 +127,35 @@ pub(super) fn line(
         "line thermal rating",
     )?;
     branch.uid = Some(uid.to_owned());
+    if default_temperature {
+        branch.extras.insert(
+            "sincal_defaulted_temperature".into(),
+            serde_json::json!({"field":"VoltageLevel.Temp_Cable", "celsius":20.0}),
+        );
+    }
     Ok(branch)
 }
 
 pub(super) fn load(
+    db: &powerio_sincal::DatabaseSnapshot,
     row: &NativeRow,
     bus: BusId,
     base_kv: f64,
     uid: &str,
     profiles: &StaticProfiles,
 ) -> Result<Load> {
-    profiles.check(row, true)?;
+    if row.legacy() {
+        row.inactive(&["WeekOpSer_ID", "YearOpSer_ID", "IncrSer_ID"])?;
+        if row.reference("DayOpSer_ID")?.is_some() && profiles.hours.is_none() {
+            return Err(row.bad(
+                "DayOpSer_ID",
+                "daily profile requires explicit snapshot_hours",
+            ));
+        }
+    } else {
+        profiles.check(row, true)?;
+    }
+    row.inactive_newer(&["Flag_LA"])?;
     row.equals("Flag_Load", 1)?;
     row.inactive(&[
         "Mpl_ID",
@@ -123,12 +171,11 @@ pub(super) fn load(
         "Flag_ShdP",
         "Ireg",
         "pk",
-        "Flag_LA",
     ])?;
     // These modes explicitly supply total three-phase power. Phase-resolved
     // modes (13/14/15) must never become balanced by adding their values.
     let mode = row.integer("Flag_Lf")?;
-    let (p, q) = match mode {
+    let (mut p, mut q) = match mode {
         1 | 2 => (
             row.number("P")? * row.number("fP")?,
             row.number("Q")? * row.number("fQ")?,
@@ -151,7 +198,22 @@ pub(super) fn load(
         }
         _ => return Err(row.bad("Flag_Lf", "unsupported balanced load mode")),
     };
+    let selected = if row.legacy() {
+        super::profile::absolute_daily(db, row, profiles.hours)?
+    } else {
+        None
+    };
+    if let Some(selection) = &selected {
+        p = selection.p;
+        q = selection.q;
+    }
     let mut load = Load::new(bus, finite(p, "load P")?, finite(q, "load Q")?);
+    if let Some(selection) = selected {
+        load.extras.insert(
+            "sincal_profile".into(),
+            serde_json::to_value(selection).map_err(error)?,
+        );
+    }
     let exponent = match row.integer("Flag_LoadType")? {
         1 => 2.0,
         2 => 0.0,
@@ -181,6 +243,39 @@ pub(super) fn load(
     Ok(load)
 }
 
+fn generator_controls(row: &NativeRow) -> Result<()> {
+    row.inactive_newer(&[
+        "Flag_LimitType",
+        "Flag_Pctrl",
+        "Flag_CtrlPrior",
+        "Qctrl_U_P_ID",
+        "Qctrl_P_Q_ID",
+        "Qctrl_U_Q_ID",
+        "Rlf",
+        "Xlf",
+    ])?;
+    row.inactive(&[
+        "Typ_ID",
+        "Flag_Typ_ID",
+        "Mpl_ID",
+        "Flag_Macro",
+        "Macro_ID",
+        "PowerLimit_ID",
+        "Flag_Qctrl",
+        "Qctrl_PF_U_ID",
+        "Qctrl_PF_P_ID",
+        "Node_ID",
+        "MasterElm_ID",
+        "Flag_ShdU",
+        "Flag_ShdP",
+        "Kr",
+    ])?;
+    if !row.legacy() || row.has("Flag_ChkType") {
+        row.equals("Flag_ChkType", 1)?;
+    }
+    Ok(())
+}
+
 pub(super) fn generator(
     row: &NativeRow,
     bus: BusId,
@@ -189,31 +284,7 @@ pub(super) fn generator(
     network: &mut BalancedNetwork,
     in_service: bool,
 ) -> Result<Generator> {
-    row.inactive(&[
-        "Typ_ID",
-        "Flag_Typ_ID",
-        "Mpl_ID",
-        "Flag_Macro",
-        "Macro_ID",
-        "Flag_LimitType",
-        "PowerLimit_ID",
-        "Flag_Pctrl",
-        "Flag_Qctrl",
-        "Flag_CtrlPrior",
-        "Qctrl_U_P_ID",
-        "Qctrl_PF_U_ID",
-        "Qctrl_PF_P_ID",
-        "Qctrl_P_Q_ID",
-        "Qctrl_U_Q_ID",
-        "Node_ID",
-        "MasterElm_ID",
-        "Flag_ShdU",
-        "Flag_ShdP",
-        "Rlf",
-        "Xlf",
-        "Kr",
-    ])?;
-    row.equals("Flag_ChkType", 1)?;
+    generator_controls(row)?;
     let mut generator = Generator::new(bus);
     generator.uid = Some(uid.to_owned());
     generator.in_service = in_service;
@@ -243,6 +314,10 @@ pub(super) fn generator(
     }
     if external {
         row.inactive(&["Flag_LfCtrl", "xi"])?;
+        if row.legacy() {
+            row.equals("Flag_LfCtrl", 0)?;
+            row.equals("Flag_Qctrl", 0)?;
+        }
         // Source and terminal voltage modes coincide only for the ideal
         // source admitted above (Rlf=Xlf=xi=0).
         generator.vg = match row.integer("Flag_Lf")? {

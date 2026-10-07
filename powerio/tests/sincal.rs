@@ -214,3 +214,48 @@ fn direct_sqlite_input_has_the_same_value_and_echoes_its_database_bytes() {
     let echo = powerio::emit(&module, "sincal", Destination::memory("copy.db").unwrap()).unwrap();
     assert_eq!(bytes(echo), database);
 }
+
+#[test]
+fn balanced_selections_are_explicit_and_do_not_override_other_families() {
+    let mut options = ParseOptions::default();
+    options.sincal_balanced = Some(powerio_tx::format::SincalBalancedReadOptions::default());
+    for format in [
+        None,
+        Some("sincal"),
+        Some("sincal-multiconductor"),
+        Some("matpower"),
+    ] {
+        options.format = format.map(|s| powerio::FormatId::new(s).unwrap());
+        let error = powerio::parse_with_options(source(), &options).unwrap_err();
+        assert!(
+            error
+                .diagnostics()
+                .iter()
+                .any(|d| d.code() == "REQUEST.SINCAL.PROFILE_REQUIRED")
+        );
+    }
+    options = options.format("sincal-balanced").unwrap();
+    assert!(matches!(
+        powerio::parse_with_options(source(), &options)
+            .unwrap()
+            .value(),
+        PioValue::BalancedNetwork(_)
+    ));
+    options.sincal_balanced.as_mut().unwrap().variant = Some(999_999);
+    assert!(powerio::parse_with_options(source(), &options).is_err());
+    options.sincal_balanced.as_mut().unwrap().variant = None;
+    options.sincal_balanced.as_mut().unwrap().acquired_tables = Some("missing.json".into());
+    assert!(powerio::parse_with_options(source(), &options).is_err());
+    options.sincal_balanced.as_mut().unwrap().acquired_tables = None;
+    let native = Source::from_memory(
+        "original.mdb",
+        b"\0\x01\0\0Standard Jet DB\0synthetic".to_vec(),
+    )
+    .unwrap();
+    assert!(
+        powerio::parse_with_options(native, &options)
+            .unwrap_err()
+            .to_string()
+            .contains("acquired_tables")
+    );
+}

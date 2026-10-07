@@ -2,7 +2,7 @@ use super::*;
 
 const ARCHIVE: &[u8] = include_bytes!("../../../../tests/data/sincal/1-LV-rural1--0-sw.sinx");
 
-fn native(edit: &str) -> DatabaseSnapshot {
+pub(super) fn native(edit: &str) -> DatabaseSnapshot {
     let bytes = powerio_sincal::database_bytes(ARCHIVE).unwrap();
     if edit.is_empty() {
         return DatabaseSnapshot::decode(&bytes, None).unwrap();
@@ -49,6 +49,10 @@ fn complete_authentic_simbench_case_preserves_every_element() {
 #[test]
 fn errors_identify_required_input_instead_of_returning_partial_networks() {
     for (sql, field) in [
+        (
+            "UPDATE TwoWindingTransformer SET ElemLoading_ID=1",
+            "TwoWindingTransformer[19].ElemLoading_ID",
+        ),
         (
             "UPDATE Load SET Flag_Lf=13 WHERE Element_ID=1",
             "Load[1].Flag_Lf",

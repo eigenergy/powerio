@@ -8,10 +8,37 @@ use super::{Result, error};
 
 pub(super) struct NativeRow {
     pub label: String,
+    pub schema: f64,
     fields: BTreeMap<String, Value>,
 }
 
 impl NativeRow {
+    pub fn legacy(&self) -> bool {
+        self.schema.to_bits() == 11.5_f64.to_bits()
+    }
+
+    pub fn has(&self, field: &str) -> bool {
+        self.fields.contains_key(&field.to_ascii_lowercase())
+    }
+
+    pub fn is_null(&self, field: &str) -> bool {
+        matches!(
+            self.fields.get(&field.to_ascii_lowercase()),
+            Some(Value::Null)
+        )
+    }
+
+    /// Callers enumerate only fields absent from the observed 11.5 layout.
+    /// A field present in that layout must still pass its ordinary check.
+    pub fn inactive_newer(&self, fields: &[&str]) -> Result<()> {
+        for field in fields {
+            if !self.legacy() || self.has(field) {
+                self.inactive(&[field])?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn number(&self, field: &str) -> Result<f64> {
         let value = match self.fields.get(&field.to_ascii_lowercase()) {
             Some(Value::Integer(v)) => *v as f64,
@@ -134,6 +161,7 @@ pub(super) fn table(
             .collect::<Result<_>>()?;
         let value = NativeRow {
             label: format!("{name}[{key}]"),
+            schema: db.version,
             fields,
         };
         if result.insert(key, value).is_some() {

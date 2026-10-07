@@ -385,6 +385,8 @@ pub use value::{PioScenarioSet, PioTimeSeries, PioValue};
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
 pub struct ParseOptions {
+    /// Explicit native selections for the sincal-balanced format only.
+    pub sincal_balanced: Option<powerio_tx::format::SincalBalancedReadOptions>,
     /// The parser selected by its stable format token rather than inferred
     /// from the input's name and content.
     pub format: Option<powerio_core::FormatId>,
@@ -478,6 +480,10 @@ pub fn parse_with_options(
     }
     if let Some(format) = &options.format {
         source = source.with_format(format.clone());
+    }
+    if let Some(sincal) = &options.sincal_balanced {
+        return powerio_tx::format::parse_sincal_balanced_with_options(source, sincal)
+            .map(|m| m.map_value(PioValue::from));
     }
     match routed_family(&source)? {
         RoutedFamily::Goc3 => parse_goc3(source),

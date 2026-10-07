@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use rusqlite::{Connection, params_from_iter, types::Value};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 use crate::{MAX_BYTES, Result, format_error};
 
@@ -95,6 +96,21 @@ impl TableRecords {
 
     pub fn source_sha256(&self) -> &str {
         &self.source.sha256
+    }
+
+    /// Bind caller-supplied acquisition records to the retained original MDB.
+    /// This detects accidentally paired files; it does not attest that a
+    /// caller or external acquisition tool exported every cell faithfully.
+    pub fn verify_source(&self, bytes: &[u8]) -> Result<()> {
+        if !bytes.starts_with(b"\0\x01\0\0Standard Jet DB\0")
+            || bytes.len() as u64 != self.source.bytes
+            || !format!("{:x}", Sha256::digest(bytes)).eq_ignore_ascii_case(&self.source.sha256)
+        {
+            return Err(format_error(
+                "acquired tables do not match the original Access MDB bytes",
+            ));
+        }
+        Ok(())
     }
 
     /// Tables deliberately not acquired, distinct from absent native tables.
@@ -246,6 +262,30 @@ mod tests {
                 "rows":[[1,0.0,"0"],[2,null,""]]}],
             "excluded_tables":["ULFNodeResult"],"absent_requested_tables":["LineSeg"]
         })
+    }
+
+    #[test]
+    fn acquired_origin_checks_header_length_and_digest_without_claiming_attestation() {
+        // Synthetic header-shaped bytes, not a purported native fixture.
+        let mut source = b"\0\x01\0\0Standard Jet DB\0synthetic origin".to_vec();
+        let mut doc = document();
+        doc["source"]["bytes"] = serde_json::json!(source.len());
+        doc["source"]["sha256"] = serde_json::json!(format!("{:x}", Sha256::digest(&source)));
+        let records = TableRecords::decode(&serde_json::to_vec(&doc).unwrap()).unwrap();
+        records.verify_source(&source).unwrap();
+        source[20] ^= 1;
+        assert!(records.verify_source(&source).is_err());
+        source.push(0);
+        assert!(records.verify_source(&source).is_err());
+        doc["source"]["bytes"] = serde_json::json!(source.len());
+        source[0] = 1;
+        doc["source"]["sha256"] = serde_json::json!(format!("{:x}", Sha256::digest(&source)));
+        assert!(
+            TableRecords::decode(&serde_json::to_vec(&doc).unwrap())
+                .unwrap()
+                .verify_source(&source)
+                .is_err()
+        );
     }
 
     #[test]

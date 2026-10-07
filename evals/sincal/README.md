@@ -2,7 +2,7 @@
 
 This branch supplies model-neutral SQLite/archive acquisition and schema
 validation. The balanced reader branch additionally maps the complete small SimBench case
-and the pinned IEEE18, IEEE33 and student SQLite static inputs
+the pinned IEEE18, IEEE33 and student SQLite static inputs, and CSIRO19 Access snapshots
 through the explicit `sincal-balanced` public parser profile. Acquisition-only reports
 remain distinct from electrical reader validation; none establishes fresh
 writer acceptance. The [delivery plan](../../docs/design/pss-sincal.md) records the
@@ -148,3 +148,28 @@ off. Its 960 historical node rows represent different states. Historical
 comparison is explicitly non-gating and is not presented as aligned native
 validation. The two IEEE comparisons are also reported separately from fresh
 independent checking. Broader profile and variant delivery remains in scope.
+
+## Balanced schema-11.5 Access snapshots
+
+`check_balanced_access.py` checks the original external CSIRO19 MDB through the
+public Rust facade example `sincal_balanced_access`. It maps all 33 components
+at seven times and compares actual mapped output with independently constructed
+pandapower inputs, including native topology, service states, daily interpolation,
+power factors, charging and source voltage. The report is `balanced-csiro19.json`.
+Its maximum complex voltage difference is below 1.98e-11 pu; four deliberate
+parameter mutations are detected. Each invocation also checks byte-exact MDB echo,
+IR typed-value preservation, and wrong-family/missing-time/invalid-variant/changed
+MDB refusal. Native SINCAL acceptance and further unbalanced cases are not claimed.
+
+Acquire the 21 default tables plus `NetworkGroup` and `NetworkGroupTrans`, as
+interchange controls must be visible. The report pins both original and acquired
+hashes; acquisition records are supplied by the caller, not independently attested.
+The CC BY 4.0 original stays external; no new model fixture is vendored.
+
+```sh
+cargo build -p powerio --example sincal_balanced_access
+python evals/sincal/check_balanced_access.py \
+  target/debug/examples/sincal_balanced_access \
+  /external/csiro-representative19.mdb /external/csiro19-balanced-records.json \
+  evals/sincal/balanced-csiro19.json
+```

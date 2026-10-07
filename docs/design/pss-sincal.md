@@ -1,8 +1,10 @@
 # PSS SINCAL reader and writer proposal
 
-Status: research and implementation in progress, 2026-10-07. Public SINCAL
-parsing/emission is not implemented yet. Research base: `c8184eba` (PowerIO 0.11.4); the local PR stack starts at
-`d5f93763`. This infrastructure branch does not contain the electrical adapters.
+Status: balanced reader implementation in progress, 2026-10-07. Public balanced
+SQLite/archive parsing and explicit Rust Access snapshot selection are implemented.
+Five native balanced cases have independent electrical checks; broader modes,
+variants and bindings for the new Access selections remain work. The local PR
+stack starts at `d5f93763`; subsequent branches add distribution and writing.
 
 The expanded search found authentic licensed unbalanced CSIRO data and the
 Siemens database/input manuals. The earlier blanket lack-of-evidence blocker
@@ -349,6 +351,18 @@ records with schema-15.5/16.0 adapters and fresh independent checks below
 4.5e-12 pu complex voltage. The student static state has zero demand; profile
 snapshot coverage remains pending. Additional SimBench modes, applicable
 Access cases, active profiles and inherited variants are still required work.
+
+CSIRO19 now adds a schema-11.5 balanced Access case: all 26 nodes and 33 elements
+(25 lines, seven loads, one source), checked at seven explicit daily snapshots.
+The public Rust facade retains the MDB, checks its identity against the caller's
+acquired records, and preserves the typed value through IR. An independently
+constructed pandapower model agrees within 1.98e-11 pu complex voltage; four
+intentional unit/base/charging/source mutations fail. Exact MDB echo and rejection
+of conflicting family options, missing time, invalid variant and altered original
+bytes are exercised at every snapshot. Native SINCAL execution is not claimed.
+See `evals/sincal/balanced-csiro19.json`. This is balanced coverage and adds no
+complete unbalanced feeder. CLI/Python/C/Julia access to these new balanced
+selection options remains an integration task.
 
 ### PR 4: distribution / unbalanced reader
 

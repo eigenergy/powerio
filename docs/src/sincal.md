@@ -10,7 +10,9 @@ The multiconductor reader is being developed separately in `powerio-dist`.
 
 The `sincal-balanced` input token selects positive-sequence load flow. The
 current profile accepts native SQLite schemas 14.8, 15.5 and 16.0 and `.sinx` archives,
-with one base variant. It covers buses, positive-sequence lines, static loads,
+with one base variant. Rust also accepts explicitly acquired schema-11.5 Access
+records and selected absolute daily snapshots, as described below. It covers
+buses, positive-sequence lines, static loads,
 external sources, converter injections and two-winding transformers with fixed
 common taps, plus fixed capacitor banks. Ideal external sources support absolute
 and relative source/terminal voltage prescriptions and voltage-only limits.
@@ -46,14 +48,16 @@ source records the selected input profile as `sincal-balanced`.
 Native physical quantities use a declared 100 MVA internal conversion base.
 Disabled native generator capability limits become unbounded typed limits,
 not zero capability. Diagnostics identify this and data outside the chosen
-static profile. Disabled profile references do not replace static powers; active
-profile references still require a supported time-series adapter and are rejected.
+snapshot. Disabled modern profile references do not replace static powers.
+Active profiles require a supported adapter and explicit snapshot selection;
+currently only the declared schema-11.5 absolute daily profile is accepted.
 Fault, dynamic, protection, economic, diagram and stored-result
 data remain in the retained source. Cross-format output reports their omission.
 
 An unchanged module can emit `sincal` or `sincal-balanced` to reproduce its
 primary native bytes exactly. A SQLite input echoes SQLite bytes; an archive
-input echoes archive bytes. Use an appropriate destination filename:
+input echoes archive bytes; an acquired MDB input echoes the original MDB.
+Use an appropriate destination filename:
 
 ```sh
 powerio convert case.sinx --from sincal-balanced --to sincal-balanced -o copy.sinx
@@ -68,8 +72,8 @@ acceptance scope.
 
 Access/MDB acquisition currently uses the explicit optional helper under
 `evals/sincal`; ordinary library parsing never starts external programs. Its
-internal typed records are not native SQLite output and are not yet accepted
-by this public balanced profile.
+internal typed records are not native SQLite output. The Rust balanced selection
+API accepts them as a companion to their original MDB.
 
 ## Validation
 
@@ -92,3 +96,21 @@ model files are vendored.
 Additional schemas, active profiles, variants and corpus cases remain under development. Native
 fixtures require redistribution rights; external research models are not
 silently copied into the test suite.
+
+### Explicit balanced Access snapshots in Rust
+
+The balanced reader also accepts schema-11.5 Access acquisition records through
+`powerio_tx::format::SincalBalancedReadOptions`, carried by
+`powerio::ParseOptions::sincal_balanced`. Select `sincal-balanced` explicitly,
+set `variant` and `snapshot_hours` when required, and set `acquired_tables` to
+the relative companion containing `import_access.py` output. Memory sources attach
+that companion with `Source::with_named_buffer`; file sources use the acquisition
+root. Parsing verifies the original MDB header, byte count and SHA-256 against
+those records and never invokes MDB Tools. Include `NetworkGroup` and
+`NetworkGroupTrans` in acquisition so balanced interchange controls are checked.
+
+CSIRO19 is checked at seven daily snapshots through this public path. Profiles
+currently admit absolute daily P/Q with linear or stepped interpolation. Modern
+active profiles, inherited variants and other profile modes still reject.
+Legacy voltage/temperature defaults are narrowly scoped and retained in component
+metadata. Balanced Access selection through CLI/Python/C/Julia is not yet exposed.
