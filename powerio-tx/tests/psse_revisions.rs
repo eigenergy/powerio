@@ -212,7 +212,7 @@ fn revision32_example_fixture_reads_the_stated_records() {
     assert_eq!(switched.bus, BusId(7));
     close(switched.b, 0.0, "BINIT");
     let control = switched.control.as_ref().unwrap();
-    assert_eq!(control.mode, SwitchedShuntMode::Continuous);
+    assert_eq!(control.mode, SwitchedShuntMode::Discrete, "MODSW 1");
     close(control.vhigh, 1.051, "VSWHI");
     close(control.vlow, 1.0, "VSWLO");
     assert_eq!(control.blocks.len(), 1);
@@ -323,7 +323,7 @@ fn hand_written_revision32_case_maps_bus_load_shunt_and_generator_records() {
         .unwrap();
     close(switched.b, 10.0, "BINIT");
     let control = switched.control.as_ref().unwrap();
-    assert_eq!(control.mode, SwitchedShuntMode::Discrete);
+    assert_eq!(control.mode, SwitchedShuntMode::Continuous, "MODSW 2");
     close(control.vhigh, 1.05, "VSWHI");
     close(control.vlow, 0.95, "VSWLO");
     assert_eq!(

@@ -308,11 +308,13 @@ transformers are kept as typed records, and the indexed view lowers each one as
 a star into \\(Y_{\mathrm{bus}}\\)/connectivity; two terminal DC lines map to
 the neutral HVDC model. A switched shunt keeps its steady state susceptance
 `BINIT` as the shunt `b` along with its mode, voltage band, regulated bus, and
-step blocks, and a two winding transformer's magnetizing susceptance survives a
-round trip through `MAG2`. The reader converts `CW` 1/2/3, `CZ` 1/2/3, and `CM`
-1/2 into the neutral tap ratio, system base impedance, and magnetizing
-admittance, and fresh output uses the electrically equivalent canonical
-`CW = CZ = CM = 1` representation.
+step blocks. `MODSW` 0 reads as locked, 1 as discrete, and 2 as continuous
+voltage control; 3 to 6 adjust in discrete steps to control another quantity,
+read as discrete, and keep their code for PSS/E output. A two winding
+transformer's magnetizing susceptance survives a round trip through `MAG2`.
+The reader converts `CW` 1/2/3, `CZ` 1/2/3, and `CM` 1/2 into the neutral tap
+ratio, system base impedance, and magnetizing admittance, and fresh output uses
+the electrically equivalent canonical `CW = CZ = CM = 1` representation.
 
 ### UCTE-DEF
 
