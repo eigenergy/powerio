@@ -398,3 +398,20 @@ POWERIO_CAPI=/path/to/libpowerio_capi.dylib \
 
 Use the platform's corresponding `.so` or `.dll` on Linux or Windows. These
 are reader/binding checks; fresh SINCAL desktop acceptance remains external.
+
+## Experimental writer branch
+
+The local `codex/sincal-experimental-writer` branch starts with shared source-free
+SQLite construction and deterministic candidate packaging in `powerio-sincal`.
+The tests create original small schemas at runtime. They check byte determinism,
+parameterized text (including quotes and newlines), strict integer/real/text
+cells, NULL preservation, bad identity/reference rejection, unsafe archive
+names and rejection of results/views/additional variants. They establish
+storage construction only, not a complete network writer or native acceptance.
+
+The remaining writer implementation stays split by electrical family:
+`BalancedNetwork` lowering in `powerio-tx`, `MulticonductorNetwork` lowering in
+`powerio-dist`, followed by explicit experimental facade access. Each needs
+source-free typed construction, edit-then-write and IR-then-write checks for the
+declared subset. The public format capability remains read-only until that
+contract and the associated diagnostics are implemented and verified.
