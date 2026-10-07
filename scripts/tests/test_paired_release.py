@@ -90,6 +90,21 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "yanked"):
             pair.registry_action(self.manifest, {"0.11.3": {"git-tree-sha1": "d" * 40, "yanked": True}})
 
+    def test_candidate_ci_excludes_only_its_own_preparation_run(self):
+        check = {'status': 'completed', 'conclusion': 'success', 'html_url': 'ci', 'check_suite': {'id': 1}}
+        own = dict(check, status='in_progress', conclusion=None, check_suite={'id': 2})
+        current = {'path': '.github/workflows/prepare-paired-release.yml', 'event': 'workflow_dispatch',
+                   'head_sha': 'a' * 40, 'check_suite_id': 2}
+        env = {'GITHUB_REPOSITORY': pair.POWERIO, 'GITHUB_RUN_ID': '123',
+               'GITHUB_WORKFLOW': 'Prepare paired release'}
+        with patch.dict(pair.os.environ, env), patch.object(pair, 'api', side_effect=[{'check_runs': [check, own]}, current]):
+            self.assertEqual(pair.successful_ci(pair.POWERIO, 'a' * 40), ['ci'])
+        for checks in ([own], [dict(check, status='in_progress'), own],
+                       [dict(check, conclusion='failure'), own]):
+            with self.subTest(checks=checks), patch.dict(pair.os.environ, env), patch.object(pair, 'api', side_effect=[{'check_runs': checks}, current]):
+                with self.assertRaises(ValueError):
+                    pair.successful_ci(pair.POWERIO, 'a' * 40)
+
     def test_preparation_updates_current_schema_tests_without_editing_examples(self):
         root = Path(__file__).resolve().parents[2]
         def local_source(_repo, path, _sha):
@@ -103,6 +118,14 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn('pio-ir/2/0.11.99/schema.json', edits['powerio/tests/ir_reference.rs'])
         self.assertIn(f'"pio-ir/2/{old}/schema.json",', edits['powerio/tests/frozen_schemas.rs'])
         self.assertFalse(any(path.startswith('powerio-dist/examples/bmopf/') for path in edits))
+        for path in ('scripts/check-value-types.sh', 'docs/src/ir-reference.md',
+                     'AGENTS.md'):
+            self.assertIn('pio-ir/2/0.11.99/schema.json', edits[path])
+            self.assertNotIn(f'pio-ir/2/{old}/schema.json', edits[path])
+        self.assertIn('pio-ir/2/0.11.99/schema.json', edits['docs/src/pio-json-schema.md'])
+        self.assertIn('`pio-ir/2/0.11.4/schema.json` adds the fixed-dispatch', edits['docs/src/pio-json-schema.md'])
+        self.assertIn(f'| 2 | v{old} |', edits['docs/schema/README.md'])
+        self.assertIn('The current catalog uses `pio-ir/2/0.11.99/schema.json`', edits['docs/schema/README.md'])
 
     def test_activation_preserves_environment_restrictions(self):
         env = {'can_admins_bypass': False,

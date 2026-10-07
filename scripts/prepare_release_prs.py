@@ -98,6 +98,30 @@ def version_edits(repo, sha, number):
         tests = tests.replace('    for earlier in [',
                               f'    for earlier in [\n        "pio-ir/2/{old}/schema.json",')
         result[path] = tests
+        for path in ('scripts/check-value-types.sh', 'docs/src/ir-reference.md',
+                     'AGENTS.md'):
+            result[path] = source(repo, path, sha).decode().replace(
+                f'pio-ir/2/{old}/schema.json', f'pio-ir/2/{number}/schema.json')
+        path = 'docs/src/pio-json-schema.md'
+        page = source(repo, path, sha).decode().replace(
+            f'pio-ir/2/{old}/schema.json', f'pio-ir/2/{number}/schema.json', 2)
+        result[path] = page.replace(f'PowerIO {old} keeps IR version', f'PowerIO {number} keeps IR version')
+        path = 'docs/schema/README.md'
+        readme = source(repo, path, sha).decode()
+        row = f'| 2 | v{old} | `pio-ir`, version `2` | `pio-ir/2/{old}/schema.json` | yes |'
+        require(row in readme, 'current schema catalog row is missing')
+        readme = readme.replace(row, row + '\n' + row.replace(old, number))
+        readme = readme.replace(f'PowerIO {old} keeps IR version', f'PowerIO {number} keeps IR version')
+        readme = readme.replace(f'Read by {old}', f'Read by {number}')
+        readme = readme.replace(f'Both remain 2 in {old}.', f'Both remain 2 in {number}.')
+        readme = readme.replace(f'The current catalog uses `pio-ir/2/{old}/schema.json`',
+                                f'The current catalog uses `pio-ir/2/{number}/schema.json`')
+        readme = re.sub(r'(currently\n`pio-ir/2/)[0-9.]+(/schema.json`)',
+                        lambda m: m[1] + number + m[2], readme)
+        result[path] = readme
+        path = 'README.md'
+        result[path] = source(repo, path, sha).decode().replace(
+            f'PowerIO {old} keeps PowerIO IR', f'PowerIO {number} keeps PowerIO IR')
         for name in ('case9_arrow_coo.json', 'case30_arrow_coo.json'):
             path = 'tests/data/capi_matrix/' + name
             before = source(repo, path, sha).decode()
