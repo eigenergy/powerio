@@ -1,0 +1,27 @@
+{
+  "scope": "Python/CLI binding selection and native source fidelity; not native SINCAL execution or independent solver evidence",
+  "source_sha256": "d2c41fae2f6fc3b9cdea75c1bcbc50f083b104440148a25274ee6ed7da57a14b",
+  "record_sha256": "fa661a3947bd171683d1b73a4e15c0d073c19c0df473f649fb32d4e8a2068592",
+  "cli_sha256": "a138fe45c9e14c72c5e6dad0c1bcf041342801d86f88fc9e84ab07d009c555c9",
+  "python_extension_sha256": "d86f5a4513ce8ccdc232e160d38758c5a9e4bd91a3f69789c06c53e326d14490",
+  "cases": [
+    {
+      "hours": 0,
+      "loads": 67,
+      "typed_value_equal": true,
+      "python_original_mdb_echo": true,
+      "cli_original_mdb_echo": true
+    },
+    {
+      "hours": 6,
+      "loads": 67,
+      "typed_value_equal": true,
+      "python_original_mdb_echo": true,
+      "cli_original_mdb_echo": true
+    }
+  ],
+  "snapshots_differ": true,
+  "passed": true,
+  "license": "CC-BY-4.0",
+  "attribution": "Berry, Adam; Collins, Lyle; Oliver, Erin; Perfumo, Cristian (2015), Representative Australian Electricity Feeders with load and solar generation profiles, v1, CSIRO."
+}

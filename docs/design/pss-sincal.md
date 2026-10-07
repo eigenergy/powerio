@@ -1,10 +1,13 @@
 # PSS SINCAL reader and writer proposal
 
-Status: balanced reader implementation in progress, 2026-10-07. Public balanced
-SQLite/archive parsing and explicit Rust Access snapshot selection are implemented.
-Five native balanced cases have independent electrical checks; broader modes,
-variants and bindings for the new Access selections remain work. The local PR
-stack starts at `d5f93763`; subsequent branches add distribution and writing.
+Status: local reader implementation and validation in progress, 2026-10-07.
+Both explicit public reader profiles are implemented. Five balanced cases and
+one complete conductor-resolved native feeder have independent electrical
+evidence; broader corpus and C/Julia selection-option work remain unfinished.
+Nothing is published. Research base: `c8184eba` (PowerIO 0.11.4); the local PR
+stack starts at `d5f93763`. The current user-facing capabilities are documented
+in [the guide](../src/sincal.md). Earlier rationale below is dated context,
+not current API authority.
 
 The expanded search found authentic licensed unbalanced CSIRO data and the
 Siemens database/input manuals. The earlier blanket lack-of-evidence blocker
@@ -428,10 +431,15 @@ Wye star/sequence semantics, partial transformer windings, inconsistent
 core parameters and broader profiles/variants remain work. The public facade now
 selects `sincal-multiconductor` explicitly, retaining original native bytes and
 the existing network type. Native SQLite/archive routing is exercised through
-CLI/Python/C; explicit Access/variant/snapshot options currently use Rust.
+CLI/Python/C; explicit Access/variant/snapshot options now use Rust, Python and
+the CLI's summary/convert/serialize commands.
 CSIRO09 public-facade results reproduce the independent electrical checks, MDB
-echo and IR restoration. Selection-option plumbing through the other bindings
-and the remainder of the two-family integration packet remain work.
+echo and IR restoration. Generic admittance assembly succeeds with no omission
+diagnostics. Generic PF-instance construction correctly refuses the full native
+network's four unsourced isolated buses; connected synthetic input constructs
+successfully. Python wheel and CLI checks preserve explicit snapshot choices
+and original MDB echo. Selection-option plumbing through C/Julia and the
+remainder of the two-family integration packet remain work.
 Schema-11.5 optional transformer defaults now cover the sparse CSIRO03 records
 with explicit provenance; its context now advances to an unmapped ShuntReactor
 conductor declaration. Its 297 limited-P/Q loads additionally require an exact native

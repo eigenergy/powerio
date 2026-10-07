@@ -63,8 +63,10 @@ Python's existing `parse(..., format="sincal-multiconductor")` and the C ABI's
 existing `pio_parse` route native SQLite/archive inputs to their established
 multiconductor typed accessors. No ABI entry point or network family is added.
 
-The Rust facade additionally exposes explicit variant/snapshot/acquisition
-selection through `ParseOptions.sincal_multiconductor`. Access parsing requires
+The Rust facade exposes explicit variant/snapshot/acquisition selection through
+`ParseOptions.sincal_multiconductor`. Python uses `dist.SincalReadOptions`, and
+the CLI exposes the same selections on `summary`, `convert` and `serialize`.
+Access parsing requires
 the original MDB plus the optional helper's acquired tables, supplied as a
 relative source companion. Parsing does not run MDB Tools. The recorded original
 length and SHA-256 must match the MDB; this catches mismatched input files, but
@@ -84,8 +86,30 @@ assert!(matches!(module.value(), powerio::PioValue::MulticonductorNetwork(_)));
 
 Create `project/acquired.json` with `evals/sincal/import_access.py`. In-memory
 sources supply the companion with `Source::with_named_buffer`; file companions
-stay under the source's acquisition root. These selection options currently
-require the Rust API; CLI/Python/C selection-option plumbing remains work.
+stay under the source's acquisition root. For example:
+
+```python
+import powerio
+from powerio.dist import SincalReadOptions
+
+module = powerio.parse(
+    "project/original.mdb", format="sincal-multiconductor",
+    sincal_multiconductor=SincalReadOptions(
+        variant=1, snapshot_hours=12, acquired_tables="acquired.json"),
+)
+```
+
+```sh
+powerio summary project/original.mdb --from sincal-multiconductor \
+  --sincal-variant 1 --sincal-snapshot-hours 12 \
+  --sincal-acquired-tables acquired.json
+```
+
+Python memory inputs supply `named_buffers={"acquired.json": records_bytes}`.
+They never read companions from disk. File inputs may explicitly widen the
+root with `acquisition_root=...` in Python or `--acquisition-root` in the CLI;
+the root must contain the primary and referenced files. The normal root is the
+primary file's parent directory. Selection options for C/Julia remain pending.
 Active daily profiles require an explicit snapshot; no midnight default is
 assumed. Generic time-series and inherited variants remain under development.
 

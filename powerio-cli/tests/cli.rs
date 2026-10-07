@@ -1328,3 +1328,70 @@ fn sincal_multiconductor_cli_preserves_family_and_binary_echo() {
         "sincal-balanced",
     ]));
 }
+
+#[test]
+fn sincal_cli_selection_reaches_the_reader_and_requires_its_profile() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("case.db");
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch(include_str!(
+        "../../tests/data/sincal/synthetic-multiconductor.sql"
+    ))
+    .unwrap();
+    drop(db);
+    for command in ["summary", "serialize", "convert"] {
+        let mut args = vec![
+            command,
+            path.to_str().unwrap(),
+            "--from",
+            "sincal-multiconductor",
+            "--sincal-variant",
+            "1",
+            "--sincal-snapshot-hours",
+            "6",
+        ];
+        if command == "convert" {
+            args.extend(["--to", "pmd-json"]);
+        }
+        assert_success(&run(&args));
+        let position = args.iter().position(|arg| *arg == "1").unwrap();
+        args[position] = "999";
+        assert_failure(&run(&args));
+    }
+    for from in ["sincal-balanced", "dss"] {
+        let output = run(&[
+            "--diagnostics-format",
+            "json",
+            "summary",
+            path.to_str().unwrap(),
+            "--from",
+            from,
+            "--sincal-snapshot-hours",
+            "6",
+        ]);
+        assert_failure(&output);
+        assert!(
+            json_diagnostics(&output)
+                .iter()
+                .any(|d| d["code"] == "REQUEST.CLI.OPTION_INVALID")
+        );
+    }
+    for hours in ["NaN", "inf", "-1"] {
+        assert_failure(&run(&[
+            "summary",
+            path.to_str().unwrap(),
+            "--from",
+            "sincal-multiconductor",
+            "--sincal-snapshot-hours",
+            hours,
+        ]));
+    }
+    assert_failure(&run(&[
+        "summary",
+        path.to_str().unwrap(),
+        "--from",
+        "sincal-multiconductor",
+        "--sincal-acquired-tables",
+        "missing.json",
+    ]));
+}

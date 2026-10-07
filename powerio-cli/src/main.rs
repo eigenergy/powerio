@@ -43,6 +43,56 @@ struct Cli {
     diagnostics_format: DiagnosticsFormat,
 }
 
+/// Native SINCAL selection follows the same explicit profile as the facade.
+#[derive(clap::Args, Debug, Default)]
+struct SincalCliOptions {
+    /// Native variant ID; requires --from sincal-multiconductor.
+    #[arg(long)]
+    sincal_variant: Option<i64>,
+    /// Daily snapshot in hours; requires --from sincal-multiconductor.
+    #[arg(long, allow_hyphen_values = true)]
+    sincal_snapshot_hours: Option<f64>,
+    /// Relative acquired-table companion of the original MDB; never runs MDB Tools.
+    #[arg(long)]
+    sincal_acquired_tables: Option<String>,
+    /// Explicit root beneath which input companion files may be acquired.
+    #[arg(long)]
+    acquisition_root: Option<PathBuf>,
+}
+
+impl SincalCliOptions {
+    fn is_empty(&self) -> bool {
+        self.sincal_variant.is_none()
+            && self.sincal_snapshot_hours.is_none()
+            && self.sincal_acquired_tables.is_none()
+            && self.acquisition_root.is_none()
+    }
+
+    fn options(&self, from: Option<FormatArg>) -> anyhow::Result<powerio::ParseOptions> {
+        let mut options = parse_options(from.map(FormatArg::name))?;
+        options.acquisition_root.clone_from(&self.acquisition_root);
+        if self.sincal_variant.is_some()
+            || self.sincal_snapshot_hours.is_some()
+            || self.sincal_acquired_tables.is_some()
+        {
+            if from != Some(FormatArg::SincalMulticonductor) {
+                return Err(cli_failure(
+                    &codes::REQUEST_CLI_OPTION_INVALID,
+                    "SINCAL selection options require --from sincal-multiconductor",
+                ));
+            }
+            let mut selection = powerio_dist::SincalReadOptions::default();
+            selection.variant = self.sincal_variant;
+            selection.snapshot_hours = self.sincal_snapshot_hours;
+            selection
+                .acquired_tables
+                .clone_from(&self.sincal_acquired_tables);
+            options.sincal_multiconductor = Some(selection);
+        }
+        Ok(options)
+    }
+}
+
 /// The stderr rendering of diagnostics, selected once per run.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
 enum DiagnosticsFormat {
@@ -173,6 +223,8 @@ enum Command {
         /// Override the inferred input format.
         #[arg(long, value_enum)]
         from: Option<FormatArg>,
+        #[command(flatten)]
+        selection: SincalCliOptions,
         /// With `--from gridfm`, which scenario to summarize.
         #[arg(long, default_value_t = 0)]
         scenario: i64,
@@ -188,6 +240,8 @@ enum Command {
         /// Override the inferred input format.
         #[arg(long, value_enum)]
         from: Option<FormatArg>,
+        #[command(flatten)]
+        selection: SincalCliOptions,
     },
     /// Run the conversion invariants over a corpus of case files.
     ///
@@ -253,6 +307,8 @@ enum Command {
         /// directory (see `--scenario`).
         #[arg(long, value_enum)]
         from: Option<FormatArg>,
+        #[command(flatten)]
+        selection: SincalCliOptions,
         /// With `--from gridfm`, which scenario to read from the dataset.
         #[arg(long, default_value_t = 0)]
         scenario: i64,
@@ -898,13 +954,15 @@ fn main() -> std::process::ExitCode {
             input,
             from,
             scenario,
-        } => run_summary(&input, from, scenario),
+            selection,
+        } => run_summary(&input, from, scenario, &selection),
         Command::Corpus { action } => run_corpus(action),
         Command::Serialize {
             input,
             output,
             from,
-        } => run_serialize(&input, output.as_deref(), from),
+            selection,
+        } => run_serialize(&input, output.as_deref(), from, &selection),
         Command::Gridfm {
             inputs,
             output,
@@ -924,6 +982,7 @@ fn main() -> std::process::ExitCode {
         ),
         Command::Convert {
             input,
+            selection,
             to,
             output,
             from,
@@ -931,7 +990,7 @@ fn main() -> std::process::ExitCode {
             missing_gen_cost,
             default_gen_cost,
             gen_cost_csv,
-        } => run_convert(
+        } => run_convert_with_selection(
             &input,
             to,
             output.as_deref(),
@@ -942,6 +1001,7 @@ fn main() -> std::process::ExitCode {
                 default_gen_cost.as_deref(),
                 gen_cost_csv.as_deref(),
             ),
+            &selection,
         ),
         Command::Geo { command } => run_geo(command),
         Command::Contingency { command } => run_contingency(command),
@@ -1737,7 +1797,21 @@ fn parse_gridfm_scenario(
     Ok((network.clone(), module.diagnostics().to_vec()))
 }
 
-fn run_summary(input: &Path, from: Option<FormatArg>, scenario: i64) -> anyhow::Result<()> {
+fn run_summary(
+    input: &Path,
+    from: Option<FormatArg>,
+    scenario: i64,
+    selection: &SincalCliOptions,
+) -> anyhow::Result<()> {
+    selection.options(from)?;
+    if !selection.is_empty()
+        && (from == Some(FormatArg::Gridfm) || (from.is_none() && looks_like_gridfm_dir(input)))
+    {
+        fail_with!(
+            REQUEST_CLI_OPTION_INVALID,
+            "input selection options do not apply to GridFM scenarios"
+        );
+    }
     if is_stdin(input) {
         // Refuses a gridfm dataset, which is a directory, before the gridfm
         // branch opens a path named `-`.
@@ -1748,7 +1822,12 @@ fn run_summary(input: &Path, from: Option<FormatArg>, scenario: i64) -> anyhow::
             let (network, diagnostics) = parse_gridfm_scenario(input, scenario)?;
             transmission_summary_json(&network, &powerio_core::render_diagnostics(&diagnostics))
         } else {
-            match parse_family_case(input, from)? {
+            let family = if selection.is_empty() {
+                parse_family_case(input, from)?
+            } else {
+                module_family_case(input, load_module_with_selection(input, from, selection)?)?
+            };
+            match family {
                 FamilyCase::Distribution(module) => {
                     let diagnostics = powerio_core::render_diagnostics(module.diagnostics());
                     distribution_summary_json(module.value(), &diagnostics)
@@ -1767,8 +1846,9 @@ fn run_serialize(
     input: &Path,
     output: Option<&Path>,
     from: Option<FormatArg>,
+    selection: &SincalCliOptions,
 ) -> anyhow::Result<()> {
-    let module = load_module(input, from)?;
+    let module = load_module_with_selection(input, from, selection)?;
     report_diagnostics(module.diagnostics());
     let parse_errors = parse_error_count(module.diagnostics());
     let text = serialize_module_text(&module)?;
@@ -1797,16 +1877,26 @@ fn parse_options(format: Option<&str>) -> anyhow::Result<powerio::ParseOptions> 
     Ok(options)
 }
 
+#[cfg(test)]
 fn load_module(
     input: &Path,
     from: Option<FormatArg>,
-) -> anyhow::Result<powerio_core::PioModule<powerio::PioValue>> {
+) -> anyhow::Result<powerio::PioModule<powerio::PioValue>> {
+    load_module_with_selection(input, from, &SincalCliOptions::default())
+}
+
+fn load_module_with_selection(
+    input: &Path,
+    from: Option<FormatArg>,
+    selection: &SincalCliOptions,
+) -> anyhow::Result<powerio::PioModule<powerio::PioValue>> {
+    let options = selection.options(from)?;
     if is_stdin(input) {
-        let format = stdin_format(from)?;
-        return powerio::parse_with_options(stdin_source()?, &parse_options(Some(format.name()))?)
+        stdin_format(from)?;
+        return powerio::parse_with_options(stdin_source()?, &options)
             .context("parsing standard input");
     }
-    powerio::parse_with_options(input, &parse_options(from.map(FormatArg::name))?)
+    powerio::parse_with_options(input, &options)
         .with_context(|| format!("parsing {}", input.display()))
 }
 
@@ -1940,17 +2030,48 @@ fn looks_like_gridfm_dir(input: &Path) -> bool {
         })
 }
 
+#[cfg(test)]
+fn run_convert(
+    input: &Path,
+    to: FormatArg,
+    output: Option<&Path>,
+    from: Option<FormatArg>,
+    scenario: i64,
+    gen_cost_options: GenCostCliOptions<'_>,
+) -> anyhow::Result<()> {
+    run_convert_with_selection(
+        input,
+        to,
+        output,
+        from,
+        scenario,
+        gen_cost_options,
+        &SincalCliOptions::default(),
+    )
+}
+
 // One conversion pipeline stage per block; splitting it would scatter the
 // stage order this function exists to show.
 #[allow(clippy::too_many_lines)]
-fn run_convert(
+fn run_convert_with_selection(
     input: &std::path::Path,
     to: FormatArg,
     output: Option<&std::path::Path>,
     from: Option<FormatArg>,
     scenario: i64,
     gen_cost_options: GenCostCliOptions<'_>,
+    selection: &SincalCliOptions,
 ) -> anyhow::Result<()> {
+    selection.options(from)?;
+    if !selection.is_empty()
+        && (from == Some(FormatArg::Gridfm)
+            || (from.is_none() && cases::powerio_ir_text(input)?.is_some()))
+    {
+        fail_with!(
+            REQUEST_CLI_OPTION_INVALID,
+            "input selection options apply to grid exchange parsing, not GridFM or PowerIO IR"
+        );
+    }
     if to.is_input_spelling() {
         return Err(cli_failure(
             &codes::REQUEST_CLI_OUTPUT_REQUIRED,
@@ -2034,7 +2155,7 @@ fn run_convert(
     // Parse once through the facade. Static networks retain their established
     // emit options below; calculation instances and solutions stay typed and
     // go through the facade emitter for every target.
-    let module = load_module(input, from)?;
+    let module = load_module_with_selection(input, from, selection)?;
     convert_parsed_module(module, to, output, &gen_cost_options)
 }
 
@@ -2908,7 +3029,13 @@ fn balanced_case(
 /// Deserialize PowerIO IR and adapt a static network to the CLI's family case.
 /// Other values are rejected instead of guessing a projection.
 fn ir_family_case(input: &Path) -> anyhow::Result<FamilyCase> {
-    let module = deserialize_module(input)?;
+    module_family_case(input, deserialize_module(input)?)
+}
+
+fn module_family_case(
+    input: &Path,
+    module: powerio::PioModule<powerio::PioValue>,
+) -> anyhow::Result<FamilyCase> {
     match &module.value() {
         powerio::PioValue::BalancedNetwork(_) => {
             let module = module.map_value(|value| match value {
@@ -3050,8 +3177,8 @@ mod tests {
     use super::cases::{infer_input_family, looks_like_distribution_input};
     use super::{
         BranchSusceptanceFormulaArg, Cli, Command, FamilyCase, FormatArg, GenCostCliOptions,
-        distribution_summary_json, parse_family_case, run_convert, run_serialize, serialize_input,
-        transmission_summary_json,
+        SincalCliOptions, distribution_summary_json, parse_family_case, run_convert, run_serialize,
+        serialize_input, transmission_summary_json,
     };
     use clap::Parser;
     use std::path::Path;
@@ -3274,7 +3401,13 @@ mod tests {
             .as_nanos();
         let output = std::env::temp_dir().join(format!("powerio-package-{stamp}.pio.json"));
 
-        run_serialize(&data("case9.m"), Some(&output), None).unwrap();
+        run_serialize(
+            &data("case9.m"),
+            Some(&output),
+            None,
+            &SincalCliOptions::default(),
+        )
+        .unwrap();
         let text = std::fs::read_to_string(&output).unwrap();
         let module = deserialize_module(&text);
         assert!(matches!(
@@ -3347,7 +3480,7 @@ mpc.branch = [
         )
         .unwrap();
 
-        run_serialize(&input, Some(&output), None).unwrap();
+        run_serialize(&input, Some(&output), None, &SincalCliOptions::default()).unwrap();
         let text = std::fs::read_to_string(&output).unwrap();
         assert!(text.contains("\"angmin\": \"NaN\""), "{text}");
         assert!(text.contains("\"angmax\": \"Infinity\""), "{text}");

@@ -2,7 +2,7 @@
 
 The typed model uses wire coordinates. Supported formats are OpenDSS ``.dss``,
 PowerModelsDistribution ENGINEERING JSON (``pmd-json``), and BMOPF JSON
-(``bmopf-json``). Same format emissions can return retained source bytes. Cross
+(``bmopf-json``), and the explicit ``sincal-multiconductor`` profile. Same format emissions can return retained source bytes. Cross
 format emissions report unsupported fields as diagnostics.
 
     import powerio
@@ -17,11 +17,42 @@ format emissions report unsupported fields as diagnostics.
 from __future__ import annotations
 
 import json as _json
+from dataclasses import dataclass
 from typing import Any, Optional
 
 from ._guard import guard_class as _guard_class
 
-__all__ = ["MulticonductorNetwork"]
+__all__ = ["MulticonductorNetwork", "SincalReadOptions"]
+
+
+@dataclass(frozen=True)
+class SincalReadOptions:
+    """Explicit conductor-resolved SINCAL selection for :func:`powerio.parse`.
+
+    ``variant`` is a native variant ID. ``snapshot_hours`` selects an explicit
+    daily snapshot. ``acquired_tables`` is a relative companion name for the
+    optional Access acquisition helper's output; the primary remains the MDB.
+    The original MDB length and hash must match the acquisition metadata.
+    No external acquisition tool is run by parsing.
+    """
+
+    variant: Optional[int] = None
+    snapshot_hours: Optional[float] = None
+    acquired_tables: Optional[str] = None
+
+    def __post_init__(self):
+        if self.variant is not None and (
+            isinstance(self.variant, bool) or not isinstance(self.variant, int)
+        ):
+            raise TypeError("variant must be an integer or None")
+        if self.snapshot_hours is not None and (
+            isinstance(self.snapshot_hours, bool)
+            or not isinstance(self.snapshot_hours, (int, float))
+        ):
+            raise TypeError("snapshot_hours must be a number or None")
+        if self.acquired_tables is not None and not isinstance(self.acquired_tables, str):
+            raise TypeError("acquired_tables must be a relative companion name or None")
+
 
 
 @_guard_class
@@ -44,7 +75,7 @@ class MulticonductorNetwork:
 
     @property
     def source_format(self) -> Optional[str]:
-        """Format parsed from: ``dss``, ``pmd-json``, or ``bmopf-json``."""
+        """Native format identity: ``dss``, ``pmd-json``, ``bmopf-json``, or ``sincal``."""
         return self._inner.source_format()
 
     @property

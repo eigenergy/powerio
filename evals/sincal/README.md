@@ -660,7 +660,8 @@ native bus belongs in an energized calculation instance.
 The current public Rust options select a variant, daily snapshot and relative
 acquired-table companion. Ordinary native parsing is also available through
 the CLI, Python and C's existing format argument and typed network accessors.
-Selection-option exposure through those bindings remains separate pending work.
+Python and CLI selection options are now checked as described below; equivalent
+C/Julia options remain pending.
 The generic C ABI remains version 7 with no new symbols. The current 0.11.4 IR
 schema adds the SINCAL source-format enum spelling; older schema snapshots are
 unchanged, and no electrical type layout or IR version changes.
@@ -680,3 +681,25 @@ faithfulness. Original synthetic unit tests additionally reject wrong origins,
 missing/escaping companions, unsupported modes and conflicting family options.
 The small original SQL fixture (7,367 bytes, 88 lines) constructs native SQLite
 at test runtime and contains no third-party model payload.
+
+### Python and CLI selection validation
+
+`check_public_bindings.py` uses an installed wheel and the built CLI, with the
+hash-pinned original CSIRO09 MDB and acquired records kept outside the repo.
+At 0h and 6h, it compares complete serialized typed values, requires changed
+load powers across snapshots, and checks original MDB echo through both APIs.
+`csiro09-bindings.json` records these binding checks separately from the
+independent OpenDSS evidence. It does not execute native SINCAL.
+
+```sh
+POWERIO_MAX_PRIMARY_BYTES=69181440 python3 evals/sincal/check_public_bindings.py \
+  /tmp/models/representative09.mdb /tmp/records/representative09.json \
+  target/debug/powerio /tmp/csiro09-bindings.json --acquisition-root /tmp
+```
+
+The CLI exposes selections on `summary`, `serialize` and `convert`. The Python
+wrapper supplies typed `dist.SincalReadOptions` and either file acquisition or
+named memory buffers. Original synthetic Python tests cover four profile times,
+missing snapshots, wrong variants, NaN times, mismatched source hashes, missing
+companions, root confinement, conflicting families and invalid option types.
+The model and matrix APIs remain unchanged. No C ABI symbols are added here.

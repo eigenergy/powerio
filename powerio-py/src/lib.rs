@@ -384,13 +384,25 @@ impl PyBalancedNetwork {
     }
 }
 
-/// The parse options a binding builds from its optional `format` argument.
-fn parse_options(format: Option<&str>) -> PyResult<powerio::ParseOptions> {
+/// Private transport for the Python SincalReadOptions fields.
+type SincalSelection = (Option<i64>, Option<f64>, Option<String>);
+
+fn parse_options(
+    format: Option<&str>,
+    sincal: Option<SincalSelection>,
+) -> PyResult<powerio::ParseOptions> {
     let mut options = powerio::ParseOptions::default();
     if let Some(format) = format {
         options = options
             .format(format)
             .map_err(|error| core_error_pyerr(&error))?;
+    }
+    if let Some((variant, snapshot_hours, acquired_tables)) = sincal {
+        let mut selection = powerio_dist::SincalReadOptions::default();
+        selection.variant = variant;
+        selection.snapshot_hours = snapshot_hours;
+        selection.acquired_tables = acquired_tables;
+        options.sincal_multiconductor = Some(selection);
     }
     Ok(options)
 }
@@ -3843,11 +3855,18 @@ impl PyPioModule {
 
     /// Private path acquisition used by the public `parse` function.
     #[staticmethod]
-    #[pyo3(signature = (path, format=None))]
-    fn _parse_path(path: &str, format: Option<&str>) -> PyResult<Self> {
+    #[pyo3(signature = (path, format=None, sincal=None, acquisition_root=None))]
+    fn _parse_path(
+        path: &str,
+        format: Option<&str>,
+        sincal: Option<SincalSelection>,
+        acquisition_root: Option<&str>,
+    ) -> PyResult<Self> {
         let source = powerio_core::Source::open(Path::new(path))
             .map_err(|error| core_open_pyerr(Path::new(path), &error))?;
-        powerio::parse_with_options(source, &parse_options(format)?)
+        let mut options = parse_options(format, sincal)?;
+        options.acquisition_root = acquisition_root.map(std::path::PathBuf::from);
+        powerio::parse_with_options(source, &options)
             .map(|module| Self {
                 module: Some(module),
             })
@@ -3856,11 +3875,22 @@ impl PyPioModule {
 
     /// Private memory acquisition used for bytes-like and file-like sources.
     #[staticmethod]
-    #[pyo3(signature = (data, name, format=None))]
-    fn _parse_memory(data: &[u8], name: &str, format: Option<&str>) -> PyResult<Self> {
-        let source = powerio_core::Source::from_memory(name, data.to_vec())
+    #[pyo3(signature = (data, name, format=None, sincal=None, named_buffers=None))]
+    fn _parse_memory(
+        data: &[u8],
+        name: &str,
+        format: Option<&str>,
+        sincal: Option<SincalSelection>,
+        named_buffers: Option<Vec<(String, Vec<u8>)>>,
+    ) -> PyResult<Self> {
+        let mut source = powerio_core::Source::from_memory(name, data.to_vec())
             .map_err(|error| core_error_pyerr(&error))?;
-        powerio::parse_with_options(source, &parse_options(format)?)
+        for (name, bytes) in named_buffers.unwrap_or_default() {
+            source = source
+                .with_named_buffer(name, bytes)
+                .map_err(|error| core_error_pyerr(&error))?;
+        }
+        powerio::parse_with_options(source, &parse_options(format, sincal)?)
             .map(|module| Self {
                 module: Some(module),
             })
@@ -4750,9 +4780,14 @@ mod tests {
             ))
             .unwrap();
         let native = connection.serialize("main").unwrap().to_vec();
-        let parsed =
-            super::PyPioModule::_parse_memory(&native, "case.db", Some("sincal-multiconductor"))
-                .unwrap();
+        let parsed = super::PyPioModule::_parse_memory(
+            &native,
+            "case.db",
+            Some("sincal-multiconductor"),
+            None,
+            None,
+        )
+        .unwrap();
         let module = parsed.module().unwrap();
         let powerio::PioValue::MulticonductorNetwork(network) = module.value() else {
             panic!("wrong SINCAL family")
@@ -4767,9 +4802,14 @@ mod tests {
     #[test]
     fn sincal_balanced_reaches_the_existing_python_module_type() {
         const NATIVE: &[u8] = include_bytes!("../../tests/data/sincal/1-LV-rural1--0-sw.sinx");
-        let parsed =
-            super::PyPioModule::_parse_memory(NATIVE, "case.sinx", Some("sincal-balanced"))
-                .unwrap();
+        let parsed = super::PyPioModule::_parse_memory(
+            NATIVE,
+            "case.sinx",
+            Some("sincal-balanced"),
+            None,
+            None,
+        )
+        .unwrap();
         let module = parsed.module().unwrap();
         let powerio::PioValue::BalancedNetwork(network) = module.value() else {
             panic!("SINCAL balanced profile changed value family");
