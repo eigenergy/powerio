@@ -10,6 +10,9 @@
 //! select the appropriate adapter explicitly.
 
 mod acquisition;
+mod connection;
+#[cfg(test)]
+mod connection_tests;
 mod dc_infeeder;
 #[cfg(test)]
 mod dc_infeeder_tests;

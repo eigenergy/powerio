@@ -360,3 +360,42 @@ component exports remain external, with pinned hashes in the compact report.
 `distribution-csiro-profiles.json` separately audits all 19 cases at time zero.
 This does not establish a complete parsed network or a whole-feeder solve;
 unresolved grounding, transformers and other modes remain explicit failures.
+
+### Ideal connection lines
+
+For the steady-state profile, `Line.Flag_LineTyp=3` is an ideal connection,
+represented by an existing `DistSwitch`. Siemens General Input Data (April
+2014), printed p. 153, specifies node fusion for power flow and separately
+states that stored R/X/C apply to dynamics, distance protection and data export.
+The reader therefore does not approximate these connections with a small
+impedance or require their inactive zero-sequence inputs. Original source
+bytes retain those other-study inputs for same-format echo.
+
+The first supported connection profile has two full three-phase ports. It
+preserves A/B/C identity, both native terminal states, service state and any
+positive ampacity (including parallel/rating factors). If either port is open
+or the element is out of service, the typed switch is open. A native neutral
+conductor is neither joined nor grounded. Reduced/neutral-only ports, segments,
+coupling references and active unresolved controls reject explicitly. Ordinary
+cables and overhead lines continue through the existing finite circuit mapper.
+
+```sh
+POWERIO_SINCAL_CONNECTION_RECORDS=/tmp/acquired-records/representative09.json \
+POWERIO_SINCAL_CONNECTION_EXPORT=/tmp/connection-components.json \
+  cargo test -p powerio-dist --lib \
+  sincal::connection_tests::export_csiro_connections -- --ignored
+python3 evals/sincal/check_connections.py /tmp/native-models/csiro-representative09.mdb \
+  /tmp/acquired-records/representative09.json /tmp/connection-components.json \
+  --report /tmp/connections-csiro09.json
+```
+
+`connections-csiro09.json` accounts for all 144 native connections: 140 closed
+and four open, with 420 active phase constraints. An independent union-find
+of the original native ports agrees with SciPy connected components of the
+actual Rust switch/graph output. Each port, phase map, rating and native state
+is also checked directly. Synthetic tests cover all eight combinations of
+service and terminal states, fresh PMD transport, existing graph consumers,
+input immutability, inactive sequence fields and malformed/unsupported inputs.
+This is topology/component evidence, not a complete feeder or native solver
+acceptance. CSIRO 09 now maps all 620 line elements; its source and 66 profiled
+loads still require further work.

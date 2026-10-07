@@ -155,6 +155,10 @@ impl NativeDatabase {
         (|| -> Result<()> {
             match kind.as_str() {
                 "Line" => {
+                    if let Some(switch) = self.connection_switch(element, buses)? {
+                        net.switches_mut().push(switch);
+                        return Ok(());
+                    }
                     let circuit = self.line_circuit(element, buses)?;
                     net.lines_mut().push(circuit.line);
                     net.line_codes_mut().push(circuit.code);

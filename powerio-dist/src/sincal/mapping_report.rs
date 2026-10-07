@@ -120,6 +120,15 @@ impl NativeDatabase {
         fields.extend(self.observed_fields(table, element, &["Flag_Z0_Input"])?);
         fields.extend(self.observed_fields(table, element, parameters)?);
         let mut findings = Vec::new();
+        if kind == "Line" {
+            fields.extend(self.observed_fields("Line", element, &["Flag_LineTyp"])?);
+            if fields["Line.Flag_LineTyp"] == ObservedInput::Integer(3) {
+                // In the steady-state profile all line sequence fields are
+                // inactive for an ideal connection, even if stored for other
+                // studies. Retain the raw evidence without requiring Z0.
+                return Ok(Some(ZeroSequenceEvidence { fields, findings }));
+            }
+        }
         match fields["Element.Flag_Input"] {
             ObservedInput::Integer(value) if value >= 0 && value & 4 != 0 => {
                 let selector = format!("{table}.Flag_Z0_Input");
