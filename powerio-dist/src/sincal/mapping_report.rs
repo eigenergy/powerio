@@ -136,6 +136,14 @@ impl NativeDatabase {
                     }
                 }
             }
+            ObservedInput::Integer(value)
+                if value >= 0
+                    && kind == "Load"
+                    && self
+                        .load_input(element)
+                        .and_then(|input| input.requires_earth())
+                        .ok()
+                        == Some(false) => {}
             ObservedInput::Integer(value) if value >= 0 => findings.push(InputFinding {
                 field: "Element.Flag_Input".into(),
                 reason: "zero-sequence category bit 0x4 is absent; stored values are inactive",

@@ -202,3 +202,20 @@ fn report_does_not_evaluate_a_view_in_place_of_a_native_table() {
     );
     assert!(report.components[1..].iter().all(|c| c.component_maps));
 }
+
+#[test]
+fn phase_pair_load_needs_no_inactive_zero_sequence_fields() {
+    let db = native(
+        "UPDATE Element SET Flag_Input=2 WHERE Element_ID=31; UPDATE Load SET Flag_Lf=15; UPDATE Terminal SET Flag_Terminal=4 WHERE Element_ID=31;",
+    );
+    let report = db.mapping_report().unwrap();
+    let load = report.components.iter().find(|c| c.element == 31).unwrap();
+    assert!(load.component_maps);
+    let evidence = load.zero_sequence.as_ref().unwrap();
+    assert!(evidence.findings.is_empty());
+    assert_eq!(
+        evidence.fields["Element.Flag_Input"],
+        ObservedInput::Integer(2)
+    );
+    assert!(db.network().is_ok());
+}

@@ -95,7 +95,15 @@ impl LoadInput {
                 "load requires neutral-point circuit resolution",
             ));
         }
-        if self.zero_sequence != LoadZeroSequence::SameAsPositive {
+        let (delta, p_nom, q_nom) = branch_powers(&self.power, self.terminal.connection)?;
+        // Input Data (April 2014), pp. 97–98: phase-pair and delta loads
+        // connect only between phases. With no declared zero-sequence input,
+        // their branch incidence already fixes sum(I_phase)=0; no load star
+        // or guessed earth connection is needed. This does not resolve the
+        // missing star selection for phase-to-earth or three-phase Wye loads.
+        if self.zero_sequence != LoadZeroSequence::SameAsPositive
+            && !(delta && self.zero_sequence == LoadZeroSequence::NotDeclared)
+        {
             return Err(format_error(
                 "load requires zero-sequence circuit resolution",
             ));
@@ -121,7 +129,6 @@ impl LoadInput {
                 )));
             }
         }
-        let (delta, p_nom, q_nom) = branch_powers(&self.power, connection)?;
         if !p_nom.iter().chain(&q_nom).all(|v| v.is_finite()) {
             return Err(format_error("nonfinite load branch power"));
         }

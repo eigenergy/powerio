@@ -437,3 +437,79 @@ fn load_sequence_inputs_reject_invalid_active_values() {
         assert!(native(edit).load_input(30).is_err(), "accepted {edit}");
     }
 }
+
+#[test]
+fn undeclared_zero_sequence_does_not_invent_a_star_for_phase_to_phase_loads() {
+    for code in [4, 5, 6, 7] {
+        for mode in [1, 15] {
+            if code == 7 && mode == 1 {
+                continue;
+            }
+            for model in 1..=3 {
+                let decoded = input(&format!(
+                    "UPDATE Element SET Flag_Input=2; UPDATE Terminal SET Flag_Terminal={code}; UPDATE Load SET Flag_Lf={mode},Flag_LoadType={model},Flag_Z0_Input=NULL,R0=NULL,X0=NULL,Z0_Z1=NULL,R0_X0=NULL"
+                ));
+                let circuit = decoded.circuit(&bus(), 400.0).unwrap();
+                assert!(circuit.bus.grounded.is_empty());
+                assert!(!circuit.load.terminal_map.contains(&"0".into()));
+                assert_eq!(
+                    circuit.load.terminal_map.len(),
+                    if code == 7 { 3 } else { 2 }
+                );
+                assert_eq!(circuit.load.p_nom.len(), if code == 7 { 3 } else { 1 });
+            }
+        }
+    }
+    for code in [1, 2, 3, 7] {
+        assert!(
+            input(&format!(
+                "UPDATE Element SET Flag_Input=2; UPDATE Terminal SET Flag_Terminal={code}"
+            ))
+            .circuit(&bus(), 400.0)
+            .is_err()
+        );
+    }
+    for edit in [
+        "UPDATE Load SET Stp_ID=1",
+        "UPDATE Load SET Flag_Z0_Input=2",
+    ] {
+        assert!(
+            input(&format!("UPDATE Terminal SET Flag_Terminal=4; {edit}"))
+                .circuit(&bus(), 400.0)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+#[ignore = "exports authentic CSIRO06 phase-pair load components for independent validation; not a complete network"]
+fn export_csiro_phase_pair_loads() {
+    let path = std::env::var("POWERIO_SINCAL_LOAD_RECORDS").expect("explicit records path");
+    let output = std::env::var("POWERIO_SINCAL_LOAD_EXPORT").expect("explicit export path");
+    let bytes = std::fs::read(path).unwrap();
+    let db = NativeDatabase::from_snapshot(
+        powerio_sincal::DatabaseSnapshot::decode_records(&bytes, Some(1)).unwrap(),
+    )
+    .unwrap();
+    let nodes = db.node_inputs().unwrap();
+    let mut components = Vec::new();
+    for (&id, kind) in &db.elements {
+        if kind != "Load" {
+            continue;
+        }
+        let input = db.load_input(id).unwrap();
+        if input.terminal.connection.phases().unwrap().len() != 2 {
+            continue;
+        }
+        let node = &nodes[&input.terminal.node];
+        let bus = DistBus::new(
+            node.id.to_string(),
+            ["1", "2", "3"].map(str::to_owned).to_vec(),
+        );
+        let circuit = input.circuit(&bus, node.nominal_ll_volts).unwrap();
+        components.push(serde_json::json!({"element":id,"load":circuit.load,"bus":circuit.bus,"switch":circuit.switch}));
+    }
+    assert_eq!(components.len(), 18);
+    let export = serde_json::json!({"scope":"component mapping only; not a complete parsed network","components":components});
+    std::fs::write(output, serde_json::to_vec_pretty(&export).unwrap()).unwrap();
+}

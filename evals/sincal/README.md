@@ -225,8 +225,8 @@ Schema acquisition itself adds bounded nonunique lookup indexes, preserving
 NULLs and duplicates while avoiding full-table scans for every component.
 
 At this checkpoint, CSIRO 06 maps all 113 lines and 27 of 51 transformers;
-its source now maps as well (141/218 total components), while its 53 loads
-and remaining transformers still reject. The full audit
+its source and 18 phase-pair loads now map as well (159/218 total components),
+while its 35 remaining loads and 24 remaining transformers still reject. The full audit
 also reaches individual components in 04, 07, 09 and 19. Indexing removes the
 query-budget failures previously observed in 02, 04 and 09 without increasing
 the SQL instruction allowance. Remaining context-level failures include
@@ -278,3 +278,35 @@ transport and calculation-mode rejection. These are component/circuit checks,
 not complete CSIRO validation. The previously observed discrepancies with
 historical source results remain unresolved; no stored result is used to fit
 or replace an input impedance. Native SINCAL execution remains unperformed.
+
+
+### Native phase-pair loads
+
+An L12/L23/L31 or explicitly delta-connected load needs no inferred star or
+connection to earth when zero-sequence input is undeclared: its branch
+incidence already enforces zero total phase current. The mapper still rejects
+active unresolved grounding/sequence inputs, and this rule does not establish
+a default for Wye loads. Siemens General Input Data (April 2014, printed
+pp. 97–98) defines the phase-pair connections and explicit delta power modes.
+
+The external CSIRO 06 check exercises all 18 native phase-pair loads through
+the production Rust mapper. OpenDSS independently constructs constant-impedance
+loads from the original apparent power, power factor and voltage; the checker
+compares full two-conductor admittances and verifies the absence of a ground
+path. A wrong-grounding counterexample conducts 5 A under common-mode voltage.
+The maximum admittance difference is below 2e-18 S against a 1e-12 S tolerance.
+This is component evidence, not whole-feeder parsing or native SINCAL execution.
+
+```sh
+POWERIO_SINCAL_LOAD_RECORDS=/tmp/acquired-records/representative06.json \
+POWERIO_SINCAL_LOAD_EXPORT=/tmp/csiro06-load-components.json \
+  cargo test -p powerio-dist --lib \
+  sincal::load_mapping_tests::export_csiro_phase_pair_loads -- --ignored
+python3 evals/sincal/check_phase_pair_loads.py \
+  /tmp/acquired-records/representative06.json /tmp/native-models/csiro-representative06.mdb \
+  /tmp/csiro06-load-components.json --report /tmp/load-phase-pairs.json
+```
+
+`load-phase-pairs.json` records input/export hashes, all selected element IDs,
+engine versions and measured errors. Source models remain external; the
+checker verifies their identity against the licensed acquisition manifest.
