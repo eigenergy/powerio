@@ -64,7 +64,8 @@ Every published snapshot keeps its `$id` and original archive path. The
 historical identifiers are `pio-package/0.1`, `pio-package/0.2`,
 `pio-package/0.9/schema.json`, `pio-module/1/schema.json`,
 `pio-ir/2/schema.json`, `pio-ir/2/0.11.1/schema.json`, and
-`pio-ir/2/0.11.3/schema.json` beneath `https://powerio.dev/schema/`.
+`pio-ir/2/0.11.3/schema.json`, and
+`pio-ir/2/0.11.4/schema.json` beneath `https://powerio.dev/schema/`.
 The current catalog uses `pio-ir/2/0.11.5/schema.json` under that same root.
 The documentation site serves the archive paths and published identifiers.
 
