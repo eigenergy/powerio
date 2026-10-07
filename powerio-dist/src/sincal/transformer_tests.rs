@@ -160,7 +160,7 @@ fn transformer_units_rotation_and_active_taps_remain_distinct() {
 #[test]
 fn transformer_connection_rejects_unresolved_or_ambiguous_inputs() {
     for edit in [
-        "UPDATE TwoWindingTransformer SET VecGrp=71",
+        "UPDATE TwoWindingTransformer SET VecGrp=74",
         "UPDATE TwoWindingTransformer SET VecGrp=2",
         "UPDATE TwoWindingTransformer SET Flag_Ct=1",
         "UPDATE TwoWindingTransformer SET TransformerTap_ID=4",

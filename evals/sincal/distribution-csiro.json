@@ -3,7 +3,7 @@
   "attribution": "Berry, Adam; Collins, Lyle; Oliver, Erin; Perfumo, Cristian (2015), Representative Australian Electricity Feeders with load and solar generation profiles, v1, CSIRO.",
   "license": "CC-BY-4.0",
   "scope": "Conductor-resolved base-variant development audit; no family inference, independent solve or native execution.",
-  "reader_sha256": "be3c7850d736754bd06c6612fa7eb6feefa18a7a96c4167a5e25bdaf5e438c27",
+  "reader_sha256": "f94b92ff5a53decd91e6b0610081f8585ed54ae79ca155f4b78ea182ad0e85ca",
   "cases": [
     {
       "case": 1,
@@ -11,11 +11,49 @@
       "record_sha256": "34ba7815a6d87096db9880d0771b5617b6f9b5c17259b888d716fddddb798eaf",
       "schema": 11.5,
       "variant": 1,
-      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"autotransformer needs a galvanic circuit mapping\" }",
+      "context_error": null,
       "complete_parse": false,
-      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"autotransformer needs a galvanic circuit mapping\" }",
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 96 (Load): PSS SINCAL read error: load requires an explicitly resolved profile state\" }",
       "independently_validated": false,
-      "native_execution": false
+      "native_execution": false,
+      "component_count": 1033,
+      "mapped_by_type": {
+        "Infeeder": 1,
+        "Line": 531,
+        "TwoWindingTransformer": 13
+      },
+      "failures": [
+        {
+          "type": "Line",
+          "count": 2,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: coupled reduced-phase line with shunts requires verified missing-conductor mapping"
+        },
+        {
+          "type": "Load",
+          "count": 247,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: load requires an explicitly resolved profile state"
+        },
+        {
+          "type": "TwoWindingTransformer",
+          "count": 2,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Y0 ideal connection requires neutral fixed taps and no rotation/grounding"
+        },
+        {
+          "type": "TwoWindingTransformer",
+          "count": 2,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: autotransformer requires ungrounded Y0 with different rated voltages and no rotation; same-voltage regulators need their characteristic-impedance profile"
+        },
+        {
+          "type": "TwoWindingTransformer",
+          "count": 163,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer primitive requires in-service full windings, nominal taps and resolved solid/no grounding"
+        },
+        {
+          "type": "TwoWindingTransformer",
+          "count": 72,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer real component exceeds stated magnitude"
+        }
+      ]
     },
     {
       "case": 2,
@@ -23,11 +61,55 @@
       "record_sha256": "8de1486a6467fc5972d0c8a7a62bb86f936057d18a98cafebae91d9cac2d0df8",
       "schema": 11.5,
       "variant": 1,
-      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"autotransformer needs a galvanic circuit mapping\" }",
+      "context_error": null,
       "complete_parse": false,
-      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"autotransformer needs a galvanic circuit mapping\" }",
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 238 (Load): PSS SINCAL read error: load requires an explicitly resolved profile state\" }",
       "independently_validated": false,
-      "native_execution": false
+      "native_execution": false,
+      "component_count": 2329,
+      "mapped_by_type": {
+        "Infeeder": 1,
+        "Line": 617,
+        "Load": 20,
+        "TwoWindingTransformer": 54
+      },
+      "failures": [
+        {
+          "type": "Line",
+          "count": 562,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: coupled reduced-phase line with shunts requires verified missing-conductor mapping"
+        },
+        {
+          "type": "Load",
+          "count": 547,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: load requires an explicitly resolved profile state"
+        },
+        {
+          "type": "Load",
+          "count": 7,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: load requires zero-sequence circuit resolution"
+        },
+        {
+          "type": "TwoWindingTransformer",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Y0 ideal connection requires neutral fixed taps and no rotation/grounding"
+        },
+        {
+          "type": "TwoWindingTransformer",
+          "count": 3,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: autotransformer requires ungrounded Y0 with different rated voltages and no rotation; same-voltage regulators need their characteristic-impedance profile"
+        },
+        {
+          "type": "TwoWindingTransformer",
+          "count": 446,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer primitive requires in-service full windings, nominal taps and resolved solid/no grounding"
+        },
+        {
+          "type": "TwoWindingTransformer",
+          "count": 71,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer real component exceeds stated magnitude"
+        }
+      ]
     },
     {
       "case": 3,
@@ -35,9 +117,9 @@
       "record_sha256": "6fad8c0246e8582367ea26dc712369c25edd9256ca5e31b8e97dc9c2fb086438",
       "schema": 11.5,
       "variant": 1,
-      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"autotransformer needs a galvanic circuit mapping\" }",
+      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 3766: no conductor mapping for element type ShuntReactor\" }",
       "complete_parse": false,
-      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"autotransformer needs a galvanic circuit mapping\" }",
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 3766: no conductor mapping for element type ShuntReactor\" }",
       "independently_validated": false,
       "native_execution": false
     },
@@ -93,11 +175,38 @@
       "record_sha256": "f7bf5f04a24e192b02a731816bcef3d82f2850f90d22a86e840afd131e16cd5b",
       "schema": 11.5,
       "variant": 1,
-      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"Invalid column type Null at index: 35, name: Flag_roh\" }",
+      "context_error": null,
       "complete_parse": false,
-      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Invalid column type Null at index: 35, name: Flag_roh\" }",
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 1 (Line): PSS SINCAL read error: Invalid column type Null at index: 0, name: LevelLineTemp\" }",
       "independently_validated": false,
-      "native_execution": false
+      "native_execution": false,
+      "component_count": 1378,
+      "mapped_by_type": {
+        "Infeeder": 1,
+        "Line": 77
+      },
+      "failures": [
+        {
+          "type": "Line",
+          "count": 827,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Invalid column type Null at index: 0, name: LevelLineTemp"
+        },
+        {
+          "type": "Line",
+          "count": 8,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Invalid column type Null at index: 1, name: LevelCableTemp"
+        },
+        {
+          "type": "Load",
+          "count": 458,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: load requires resolution of Mpl_ID"
+        },
+        {
+          "type": "TwoWindingTransformer",
+          "count": 7,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Invalid column type Null at index: 35, name: Flag_roh"
+        }
+      ]
     },
     {
       "case": 6,
@@ -271,11 +380,50 @@
       "record_sha256": "aee7c3c7600edd3f131c4d86a98309ca0a8328ff1633363221160759c10bc3e6",
       "schema": 11.5,
       "variant": 1,
-      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"transformer regulator requires operating-state resolution\" }",
+      "context_error": null,
       "complete_parse": false,
-      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"transformer regulator requires operating-state resolution\" }",
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 1 (Line): PSS SINCAL read error: Invalid column type Null at index: 10, name: Flag_Ll\" }",
       "independently_validated": false,
-      "native_execution": false
+      "native_execution": false,
+      "component_count": 65,
+      "mapped_by_type": {},
+      "failures": [
+        {
+          "type": "Infeeder",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Invalid column type Null at index: 73, name: Flag_LfLimit"
+        },
+        {
+          "type": "Line",
+          "count": 38,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Invalid column type Null at index: 0, name: LevelLineTemp"
+        },
+        {
+          "type": "Line",
+          "count": 2,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Invalid column type Null at index: 1, name: LevelCableTemp"
+        },
+        {
+          "type": "Line",
+          "count": 15,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Invalid column type Null at index: 10, name: Flag_Ll"
+        },
+        {
+          "type": "Load",
+          "count": 7,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: load requires an explicitly resolved profile state"
+        },
+        {
+          "type": "TwoWindingTransformer",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer regulator requires operating-state resolution"
+        },
+        {
+          "type": "TwoWindingTransformer",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer requires resolution of MasterElm_ID"
+        }
+      ]
     },
     {
       "case": 15,
@@ -283,11 +431,45 @@
       "record_sha256": "83148d6a5713184bf64951da16be4131d1ac78c9b5d6b323bc2bda60f67cd425",
       "schema": 11.5,
       "variant": 1,
-      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"transformer regulator requires operating-state resolution\" }",
+      "context_error": null,
       "complete_parse": false,
-      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"transformer regulator requires operating-state resolution\" }",
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 1 (Line): PSS SINCAL read error: Invalid column type Null at index: 10, name: Flag_Ll\" }",
       "independently_validated": false,
-      "native_execution": false
+      "native_execution": false,
+      "component_count": 102,
+      "mapped_by_type": {},
+      "failures": [
+        {
+          "type": "Infeeder",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Invalid column type Null at index: 73, name: Flag_LfLimit"
+        },
+        {
+          "type": "Line",
+          "count": 45,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Invalid column type Null at index: 0, name: LevelLineTemp"
+        },
+        {
+          "type": "Line",
+          "count": 26,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Invalid column type Null at index: 1, name: LevelCableTemp"
+        },
+        {
+          "type": "Line",
+          "count": 18,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Invalid column type Null at index: 10, name: Flag_Ll"
+        },
+        {
+          "type": "Load",
+          "count": 11,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: load requires an explicitly resolved profile state"
+        },
+        {
+          "type": "TwoWindingTransformer",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer regulator requires operating-state resolution"
+        }
+      ]
     },
     {
       "case": 16,

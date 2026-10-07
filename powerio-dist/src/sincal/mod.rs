@@ -10,6 +10,9 @@
 //! select the appropriate adapter explicitly.
 
 mod acquisition;
+mod autotransformer;
+#[cfg(test)]
+mod autotransformer_tests;
 mod connection;
 #[cfg(test)]
 mod connection_tests;

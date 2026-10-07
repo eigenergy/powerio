@@ -27,6 +27,8 @@ pub(super) struct VectorGroup {
     pub primary: WindingKind,
     pub secondary: WindingKind,
     pub clock: u8,
+    /// Conductive connection between the two sides; never an isolated YY/DD.
+    pub autotransformer: bool,
 }
 
 /// Incidence over A, B, C and the winding star point, in that order. The
@@ -49,7 +51,14 @@ impl VectorGroup {
         const YN: WindingKind = Wye {
             grounding_enabled: true,
         };
-        let (primary, secondary, clock) = match code {
+        let autotransformer = matches!(code, 71..=73);
+        let ordinary_code = match code {
+            71 => 6,
+            72 => 5,
+            73 => 1,
+            _ => code,
+        };
+        let (primary, secondary, clock) = match ordinary_code {
             1 => (D, D, 0),
             4 => (YN, Y, 0),
             5 => (YN, YN, 0),
@@ -76,12 +85,6 @@ impl VectorGroup {
             60 => (Y, D, 11),
             61 => (YN, D, 11),
             70 => (D, Y, 1),
-            // Y0/YN0/D0 are autotransformers, not ordinary YY/DD groups.
-            71..=73 => {
-                return Err(format_error(
-                    "autotransformer needs a galvanic circuit mapping",
-                ));
-            }
             _ => {
                 return Err(format_error(format!(
                     "unsupported transformer vector group {code}"
@@ -92,6 +95,7 @@ impl VectorGroup {
             primary,
             secondary,
             clock,
+            autotransformer,
         })
     }
 
@@ -185,6 +189,51 @@ pub(super) struct TransformerConnectionInput {
 }
 
 impl NativeDatabase {
+    /// Topology does not resolve regulator state or electrical impedances.
+    /// Unsupported operating modes still fail atomic electrical assembly.
+    pub fn transformer_topology(
+        &self,
+        element: i64,
+    ) -> Result<(Vec<ElectricalTerminal>, Vec<CoilPair>)> {
+        let ports = self.electrical_terminals(element)?;
+        if ports.len() != 2
+            || ports[0].position != 1
+            || ports[1].position != 2
+            || ports[0].connection != ports[1].connection
+        {
+            return Err(format_error(
+                "transformer requires two matching winding selections",
+            ));
+        }
+        let selected = ports[0]
+            .connection
+            .phases()
+            .ok_or_else(|| format_error("neutral-only transformer winding selection"))?;
+        require_table(
+            &self.connection,
+            "TwoWindingTransformer",
+            &["Element_ID", "Variant_ID", "VecGrp"],
+        )?;
+        let mut stmt = self
+            .connection
+            .prepare(
+                "SELECT VecGrp FROM TwoWindingTransformer WHERE Element_ID=?1 AND Variant_ID=?2",
+            )
+            .map_err(format_error)?;
+        let mut rows = stmt.query([element, self.variant]).map_err(format_error)?;
+        let group = rows
+            .next()
+            .map_err(format_error)?
+            .ok_or_else(|| format_error("missing transformer row"))?
+            .get::<_, i64>(0)
+            .map_err(format_error)?;
+        let coils = VectorGroup::decode(group)?.coils(selected)?;
+        if rows.next().map_err(format_error)?.is_some() {
+            return Err(format_error("duplicate transformer row"));
+        }
+        Ok((ports, coils))
+    }
+
     /// Decode the connection contract only, not a complete DistTransformer.
     pub fn transformer_connection(&self, element: i64) -> Result<TransformerConnectionInput> {
         if self.elements.get(&element).map(String::as_str) != Some("TwoWindingTransformer") {

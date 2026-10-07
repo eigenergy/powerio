@@ -155,11 +155,9 @@ impl NativeDatabase {
             nodes.keys().map(|&id| (id, BTreeSet::new())).collect();
         for (&id, kind) in &self.elements {
             if kind == "TwoWindingTransformer" {
-                let transformer = self.transformer_connection(id)?;
-                for coil in &transformer.coils {
-                    for (port, incidence) in
-                        transformer.ports.iter().zip([coil.primary, coil.secondary])
-                    {
+                let (ports, coils) = self.transformer_topology(id)?;
+                for coil in &coils {
+                    for (port, incidence) in ports.iter().zip([coil.primary, coil.secondary]) {
                         for (phase, coefficient) in incidence[..3].iter().enumerate() {
                             if *coefficient != 0 {
                                 conductors

@@ -79,7 +79,7 @@ impl NativeDatabase {
         shunt.extras.insert(
             "sincal_transformer".into(),
             serde_json::json!({
-                "element": element, "clock":connection.vector_group.clock,
+                "element": element, "clock":connection.vector_group.clock, "autotransformer":connection.vector_group.autotransformer,
                 "terminal_ids":connection.ports.iter().map(|p| p.id).collect::<Vec<_>>()
             }),
         );
@@ -90,7 +90,7 @@ impl NativeDatabase {
         })
     }
 
-    fn require_nominal_transformer_mode(&self, element: i64) -> Result<()> {
+    pub(super) fn require_nominal_transformer_mode(&self, element: i64) -> Result<()> {
         let mut statement = self
             .connection
             .prepare("SELECT * FROM TwoWindingTransformer WHERE Element_ID=?1 AND Variant_ID=?2")
@@ -162,6 +162,10 @@ fn zero_port(input: &NominalTransformerInput, ratio: f64) -> Result<TwoPort> {
     let mut port = [[ZERO; 2]; 2];
     match input.zero_sequence {
         ZeroSequenceInput::NoGroundPath => {}
+        ZeroSequenceInput::Galvanic { impedance_ohm } => {
+            let y = reciprocal(impedance_ohm)?;
+            port = [[y, -y], [-y, y]];
+        }
         ZeroSequenceInput::GroundedSide {
             side,
             impedance_ohm,

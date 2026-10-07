@@ -20,6 +20,9 @@ pub(super) enum ZeroSequenceInput {
     /// Neither winding has native N grounding enabled. No external
     /// zero-sequence ground path; this is not a zero-ohm impedance.
     NoGroundPath,
+    /// Ungrounded Y0 autotransformer: physical longitudinal connection,
+    /// without the rotating-sequence turns ratio in the zero-sequence path.
+    Galvanic { impedance_ohm: Complex64 },
     GroundedSide {
         side: usize,
         impedance_ohm: Complex64,
@@ -64,6 +67,30 @@ fn decode(
     connection: TransformerConnectionInput,
     db: &NativeDatabase,
 ) -> Result<NominalTransformerInput> {
+    if connection.vector_group.autotransformer {
+        if connection.vector_group.primary
+            != (WindingKind::Wye {
+                grounding_enabled: false,
+            })
+            || connection.vector_group.secondary
+                != (WindingKind::Wye {
+                    grounding_enabled: false,
+                })
+            || connection.rated_ll_volts[0].to_bits() == connection.rated_ll_volts[1].to_bits()
+            || connection.additional_rotation_rad != 0.0
+        {
+            return Err(format_error(
+                "autotransformer requires ungrounded Y0 with different rated voltages and no rotation; same-voltage regulators need their characteristic-impedance profile",
+            ));
+        }
+        if db.legacy_transformer_number(row, "Vfe")? != 0.0
+            || db.legacy_transformer_number(row, "i0")? != 0.0
+        {
+            return Err(format_error(
+                "autotransformer excitation requires separate circuit mapping",
+            ));
+        }
+    }
     let volts_squared = connection.rated_ll_volts[1].powi(2);
     let impedance_base = finite(volts_squared / connection.rated_va, "impedance base")?;
     if impedance_base <= 0.0 {
@@ -106,6 +133,20 @@ fn zero_sequence(
     connection: &TransformerConnectionInput,
     secondary: Complex64,
 ) -> Result<ZeroSequenceInput> {
+    if connection.vector_group.autotransformer {
+        require_input_categories(integer(row, "ElementInput")?, 6)?;
+        if integer(row, "Flag_Z0_Input")? != 3 {
+            return Err(format_error(
+                "Y0 autotransformer requires explicit R0/R1 and X0/X1 input",
+            ));
+        }
+        return Ok(ZeroSequenceInput::Galvanic {
+            impedance_ohm: checked(Complex64::new(
+                secondary.re * nonnegative(row, "R0_R1")?,
+                secondary.im * nonnegative(row, "X0_X1")?,
+            ))?,
+        });
+    }
     let grounded = [
         connection.vector_group.primary,
         connection.vector_group.secondary,

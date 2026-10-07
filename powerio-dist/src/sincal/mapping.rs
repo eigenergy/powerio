@@ -206,6 +206,10 @@ impl NativeDatabase {
                     net.switches_mut().push(circuit.switch);
                 }
                 "TwoWindingTransformer" => {
+                    if let Some(switch) = self.ideal_autotransformer_switch(element, buses)? {
+                        net.switches_mut().push(switch);
+                        return Ok(());
+                    }
                     let circuit = self.transformer_circuit(element, buses)?;
                     net.buses_mut().push(circuit.auxiliary_bus);
                     net.shunts_mut().push(circuit.shunt);

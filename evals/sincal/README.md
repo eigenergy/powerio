@@ -446,9 +446,10 @@ absent/zero centre-tap measurements and no centre-tap neutral reference.
 CSIRO03 contains eight transformers using these legacy omissions. Synthetic
 regressions compare their default profile with fully specified circuits, check
 provenance and source immutability, and exercise each missing/invalid field.
-The updated external audit now passes these NULL-field guards and reaches
-CSIRO03’s unresolved autotransformer topology. It still reports a context
-failure, not a successful whole-network parse or a complete component audit.
+The external audit passes these NULL-field guards. With transformer topology
+now decoded independently of operating state, CSIRO03 next rejects the
+unmapped ShuntReactor conductor declaration (element 3766). It still reports a
+context failure, not a whole-network parse or a complete component audit.
 
 All 297 CSIRO03 loads use native `Flag_LoadType=4` (limited/scaled P/Q).
 Siemens Load Flow (April 2014), printed pp.11–12, shows a smooth reduction
@@ -462,3 +463,58 @@ must also distinguish that behavior. No limited load is relabeled as constant
 power, no curve is fitted to the illustration/results, and no generic voltage
 model is added until its exact semantics are established. This is a reader
 implementation gap; native writer acceptance is a separate external gate.
+
+### Ungrounded Y0 autotransformers
+
+Transformer topology now reads the ordered winding/port declarations separately
+from regulator state. Y0, YN0 and D0 remain explicitly marked autotransformers;
+accepting their conductor declarations does not accept their electrical modes.
+Unsupported controls and circuits fail atomic assembly with component identity,
+and the corpus audit can now account for other components in those networks.
+
+Two Y0 electrical profiles are implemented:
+
+- Full windings at different rated voltages, nominal fixed taps, zero excitation,
+  no extra rotation/grounding, and explicit R0/R1 and X0/X1 inputs. Positive and
+  negative sequences use the rated two-port circuit. Zero sequence is a physical
+  longitudinal branch: `I01=(U01-U02)/Z0`, `I02=-I01`, without the turns ratio.
+- Equal rated voltages at the exact neutral tap, zero excitation, a valid
+  characteristic tap range and resolved sequence ratios. The specified
+  `Zact=Zchar*((1-uact)/(1-uchar))^2` is exactly zero. An existing typed switch
+  connects the selected phases; no tiny impedance or ground is introduced.
+  Element/terminal states and native identities are retained.
+
+These rules follow Siemens General Input Data (April 2014), printed pp.180–182
+and 189. Non-neutral same-voltage regulation, active controllers, finite partial
+windings, YN0 and D0 circuits remain unsupported; their topology is not an
+ordinary isolated YY/DD approximation. Ordinary transformer paths are unchanged.
+
+`autotransformers.json` separates its evidence: two synthetic finite Y0
+primitives compare rotating sequences against OpenDSS isolated floating-YY
+circuits (internal star references eliminated), and zero sequence against the
+manual's longitudinal-branch equation. This is **not** a native OpenDSS AutoTrans
+or SINCAL acceptance test. Both voltage directions agree below 5e-16 relative
+primitive error. The two authentic CSIRO01 neutral-tap devices (2451, 2453)
+are checked against the original hash-pinned identities, phases and topology.
+Mutations removing zero-sequence transfer, reversing transfer signs, changing
+a native phase, opening a connection or omitting a device all fail the checker.
+
+The refreshed all-19-case audits still contain zero complete native parses.
+At explicit midnight, CSIRO01 maps 781/1033 components and CSIRO02 maps
+1162/2329. Their remaining failures include partial transformers, inconsistent
+core parameters, Wye load zero-sequence semantics, reduced-phase lines and
+off-neutral regulators. Cases 05, 14 and 15 now reach component-level audits
+instead of stopping on transformer operating-mode fields during topology.
+CSIRO06 remains at 159/218. These counts are mappings, not independent
+whole-feeder electrical validation.
+
+```sh
+POWERIO_SINCAL_AUTO_EXPORT=/tmp/y0-primitives.json cargo test -p powerio-dist --lib \
+  sincal::autotransformer_tests::export_y0_primitives -- --ignored
+POWERIO_SINCAL_AUTO_RECORDS=/tmp/acquired-records/representative01.json \
+POWERIO_SINCAL_AUTO_NATIVE_EXPORT=/tmp/y0-native.json cargo test -p powerio-dist --lib \
+  sincal::autotransformer_tests::export_native_neutral_y0 -- --ignored
+python3 evals/sincal/check_autotransformers.py /tmp/y0-primitives.json \
+  /tmp/acquired-records/representative01.json /tmp/native-models/csiro-representative01.mdb \
+  /tmp/y0-native.json --report /tmp/autotransformers.json
+```

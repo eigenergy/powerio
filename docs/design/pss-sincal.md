@@ -410,12 +410,17 @@ loads and transformers still reject. CSIRO 09 maps all 620 line elements, while
 its source and 66 profiled loads remain unresolved. Independent component checks
 cover 484 native loads at 2,420 selected snapshots and all 144 CSIRO 09 ideal
 connections. All 19 base variants are audited; none is yet a complete native
-unbalanced parse. CSIRO 01 context still requires autotransformer galvanic
-mapping. Wye star/sequence semantics, partial transformer windings, inconsistent
+unbalanced parse. Transformer topology now separates winding declarations
+from operating-state resolution. Two verified Y0 profiles cover finite nominal
+full windings and exact neutral-tap same-voltage connections; active controllers,
+off-neutral same-voltage regulators, YN0 and D0 electrical circuits remain work.
+The explicit-midnight audit maps 781/1033 CSIRO01 and 1162/2329 CSIRO02
+components. These are component counts, not whole-feeder validation.
+Wye star/sequence semantics, partial transformer windings, inconsistent
 core parameters, broader profiles/variants and public integration remain work.
 Schema-11.5 optional transformer defaults now cover the sparse CSIRO03 records
-with explicit provenance; its context advances to unresolved autotransformer
-topology. Its 297 limited-P/Q loads additionally require an exact native
+with explicit provenance; its context now advances to an unmapped ShuntReactor
+conductor declaration. Its 297 limited-P/Q loads additionally require an exact native
 voltage-reduction curve and a corresponding generic typed representation.
 See `evals/sincal/` for exact scope and independently reproduced evidence.
 
