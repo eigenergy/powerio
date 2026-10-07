@@ -290,6 +290,15 @@ Component-only checks, tiny isolated circuits, different times of one feeder,
 writer-generated models and repaired derivatives do not count as additional
 published complete cases. Native SINCAL execution remains a separate claim.
 
+Published paper results are an acceptable additional numerical reference when
+case inputs, selected state and reported quantities can be matched. Use table
+rounding or figure resolution to justify tolerances; distinguish fundamental
+phasors from harmonic RMS/THD and component losses from all-frequency totals.
+Paper aggregates supplement the whole-network phase-resolved checks above;
+they do not alone satisfy that gate. The existing balanced IEEE18 now has a
+[paper cross-check](../../evals/sincal/ieee18-paper.json) independent of native
+result dumps. No additional unbalanced case is claimed from this evidence.
+
 Merge gates: maintainer agreement on each declared profile; completion of its
 bounded integration work; passing relevant regressions, fidelity and diagnostic
 checks; and no unresolved correctness defect within that advertised profile.

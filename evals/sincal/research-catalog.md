@@ -1086,3 +1086,34 @@ A useful request, if later authorized, would ask for the unchanged native
 project with all electrical sidecars, one specified unbalanced operating point,
 per-phase node/terminal results from that same revision, the SINCAL version and
 permission to retain or redistribute the model. No request has been sent.
+
+## Published numerical references (2026-10-08)
+
+**Usable:** the existing native IEEE18 matches the inputs in the earlier
+[IJEEC paper](https://doi.org/10.7251/IJEEC1801011M), including its source setting.
+The [reproducible checker](check_ieee18_paper.py) and [report](ieee18-paper.json)
+compare a fresh solve with its fundamental-frequency loss plot. This is an
+additional independent reference for an existing balanced success, not another
+complete distribution case. Neither native result tables nor SINCAL execution
+are used. Keep paper/source files external pending applicable redistribution
+rights; extracted reference data is not a vendored fixture.
+
+**Do not compare unlike quantities or different IEEE33 variants:**
+
+- The repository-linked [2025 comparison paper](https://doi.org/10.1109/IcETRAN66854.2025.11114093)
+  presents voltage THD in Tables I/II. These are outside the current
+  fundamental-frequency reader validation. Its IEEE33 rectifiers are at buses
+  12 and 24 (0.48 MW / 0.36 Mvar each); the earlier IJEEC case uses buses 5 and
+  26 (1 MW / 0.75 Mvar each). They are not interchangeable operating states.
+- [Amigh's 2019 UVic report](https://dspace.library.uvic.ca/items/a0e8d123-fc3b-440e-9ac8-aef07277cfb8)
+  supplies ordinary load-flow loss results, including 211 kW / 143 kvar from
+  SINCAL in Table 2.2. However, Appendix A lists 1.7114 + j1.2351 ohm for its
+  bus 7–8 line; the corresponding native IEEE33 line has 0.7114 + j0.2351 ohm
+  after adjusting the bus-label offset. The native file also contains the two
+  extra rectifier loads. This is not a matched reference. Do not alter the
+  native input to manufacture a pass against that table.
+
+No paper result has yet been aligned to a further complete native unbalanced
+case. Papers can supply useful independent electrical evidence when input,
+phase convention, snapshot, controls, quantity and precision are identifiable;
+aggregate losses alone cannot validate phase allocation or neutral behavior.

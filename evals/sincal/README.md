@@ -1195,3 +1195,28 @@ voltage, not a fitted threshold. Historical results do not attest the current
 input revision; fresh independent solver agreement is the primary evidence.
 No native SINCAL execution is claimed. This is a new authentic asymmetric success,
 but its 12-bus size does **not** satisfy the requested larger-feeder review gate.
+
+## Paper-based electrical cross-check (2026-10-08)
+
+The [IEEE18 paper report](ieee18-paper.json) adds a result-dump-independent
+check of the existing balanced case. It matches the reader's complete line,
+load and shunt inputs against Table A.I of
+[Milovanović et al., DOI 10.7251/IJEEC1801011M](https://doi.org/10.7251/IJEEC1801011M),
+then compares a fresh solve of the typed model with the fundamental-frequency
+loss bars in Figure 8. Both source files are hash-pinned and remain external.
+
+```sh
+cargo build -p powerio-tx --example sincal_balanced
+# Research environment: numpy, pandapower, pdfplumber==0.11.9
+python3 evals/sincal/check_ieee18_paper.py /external/IEEE18.db \
+  /external/milovanovic2018.pdf target/debug/examples/sincal_balanced \
+  /tmp/ieee18-paper.json
+```
+
+All 17 plotted groups pass a 0.15 kW figure-resolution tolerance; the largest
+observed difference is 0.00156 kW. A 10% load perturbation fails by 8.43 kW.
+Vector extraction avoids manual pixel estimates but does not turn a plot into
+an exact numerical oracle. The two parallel 25–26 lines form one plotted group.
+This validates balanced fundamental-frequency behavior only. It neither adds
+an unbalanced case nor establishes fresh SINCAL execution or harmonic support.
+No PDF, extracted reference table/plot or native model is vendored.
