@@ -4,7 +4,7 @@ Status: local reader implementation and validation in progress, 2026-10-07.
 Both explicit public reader profiles are implemented. Five balanced cases and
 one complete conductor-resolved native feeder have independent electrical
 evidence. Distribution selections include C/Julia; the new balanced Access
-selections currently use Rust. The user-approved delivery decision below prioritizes
+selections currently use Rust and CLI. The user-approved delivery decision below prioritizes
 review of the supported profiles; broader corpus coverage is follow-up work.
 Nothing is published. Research base: `c8184eba` (PowerIO 0.11.4); the local PR
 stack starts at `d5f93763`. The current user-facing capabilities are documented
@@ -450,8 +450,9 @@ intentional unit/base/charging/source mutations fail. Exact MDB echo and rejecti
 of conflicting family options, missing time, invalid variant and altered original
 bytes are exercised at every snapshot. Native SINCAL execution is not claimed.
 See `evals/sincal/balanced-csiro19.json`. This is balanced coverage and adds no
-complete unbalanced feeder. CLI/Python/C/Julia access to these new balanced
-selection options remains an integration task.
+complete unbalanced feeder. CLI selection now covers native CSIRO19 at two times with original MDB echo;
+see `evals/sincal/balanced-csiro19-cli.json`. Python/C/Julia access to these new
+balanced selection options remains an integration task.
 
 ### PR 4: distribution / unbalanced reader
 

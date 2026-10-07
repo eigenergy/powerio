@@ -1133,3 +1133,19 @@ row deletes its ancestor. Next implement bounded effective-row materialization
 in the shared storage crate, with table-specific identities, origin provenance,
 and preserved native bytes, after resolving this deletion contract. Electrical
 mapping remains in the existing transmission/distribution crates.
+
+### Balanced Access selection through the CLI
+
+`balanced-csiro19-cli.json` records two native CSIRO19 snapshots parsed through
+`powerio serialize --from sincal-balanced` with explicit variant, time and
+acquired-table flags. The existing native-input pandapower oracle checks actual
+serialized values. `convert` echoes the original MDB byte-exactly. Missing time,
+invalid variant and a missing acquisition root for an external companion reject.
+This adds CLI coverage for the same case, not a new native-case count.
+
+```sh
+cargo build -p powerio-cli
+python evals/sincal/check_balanced_cli.py target/debug/powerio \
+  /external/source/csiro-representative19.mdb /external/csiro19-balanced-records.json \
+  /external evals/sincal/balanced-csiro19-cli.json
+```

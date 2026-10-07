@@ -240,7 +240,7 @@ original MDB echo and IR value preservation; see `evals/sincal/csiro09-public.js
 This establishes one complete conductor-resolved case, not complete corpus
 coverage or native SINCAL desktop acceptance.
 
-### Explicit balanced Access snapshots in Rust
+### Explicit balanced Access snapshots in Rust and CLI
 
 The balanced reader also accepts schema-11.5 Access acquisition records through
 `powerio_tx::format::SincalBalancedReadOptions`, carried by
@@ -256,4 +256,14 @@ CSIRO19 is checked at seven daily snapshots through this public path. Profiles
 currently admit absolute daily P/Q with linear or stepped interpolation. Modern
 active profiles, inherited variants and other profile modes still reject.
 Legacy voltage/temperature defaults are narrowly scoped and retained in component
-metadata. Balanced Access selection through CLI/Python/C/Julia is not yet exposed.
+metadata. The CLI uses the same selection flags for either explicit family:
+
+```sh
+powerio serialize original.mdb --from sincal-balanced --sincal-variant 1 \
+  --sincal-snapshot-hours 6 --sincal-acquired-tables acquired.json
+```
+
+The acquired companion must be beneath the source directory or the explicitly
+selected `--acquisition-root`. Unknown or missing profiles never trigger a
+balanced/multiconductor fallback. Python/C/Julia balanced selection options
+remain work.

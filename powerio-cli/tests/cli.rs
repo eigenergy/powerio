@@ -1358,7 +1358,7 @@ fn sincal_cli_selection_reaches_the_reader_and_requires_its_profile() {
         args[position] = "999";
         assert_failure(&run(&args));
     }
-    for from in ["sincal-balanced", "dss"] {
+    for from in ["matpower", "dss"] {
         let output = run(&[
             "--diagnostics-format",
             "json",
@@ -1394,4 +1394,44 @@ fn sincal_cli_selection_reaches_the_reader_and_requires_its_profile() {
         "--sincal-acquired-tables",
         "missing.json",
     ]));
+}
+
+#[test]
+fn balanced_sincal_cli_selections_reach_the_balanced_reader() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../tests/data/sincal/1-LV-rural1--0-sw.sinx");
+    for command in ["summary", "serialize", "convert"] {
+        let mut args = vec![
+            command,
+            path.to_str().unwrap(),
+            "--from",
+            "sincal-balanced",
+            "--sincal-variant",
+            "1",
+        ];
+        if command == "convert" {
+            args.extend(["--to", "matpower"]);
+        }
+        assert_success(&run(&args));
+        args[5] = "999";
+        assert_failure(&run(&args));
+    }
+    // A declared balanced profile reaches the balanced reader. It must not
+    // reject all selections at the CLI boundary or retry another family.
+    let output = run(&[
+        "--diagnostics-format",
+        "json",
+        "summary",
+        path.to_str().unwrap(),
+        "--from",
+        "sincal-balanced",
+        "--sincal-snapshot-hours",
+        "6",
+    ]);
+    assert_failure(&output);
+    assert!(
+        json_diagnostics(&output)
+            .iter()
+            .any(|d| d["code"] == "PARSE.SINCAL.MALFORMED")
+    );
 }

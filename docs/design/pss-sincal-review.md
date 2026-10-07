@@ -16,7 +16,8 @@ below remain the review identities across local rebases.
 - [x] Current remote base checked; no merge/rebase onto newer main needed.
 - [x] Draft descriptions, declared profiles and evidence indexed below.
 - [ ] Final maintainability/correctness review of the complete per-PR diffs.
-- [ ] Balanced Access/snapshot selection integration across CLI/Python/C/Julia.
+- [x] Balanced CLI selections: native CSIRO19 snapshots, source echo and failures.
+- [ ] Balanced Access/snapshot selection integration across Python/C/Julia.
 - [ ] Final affected regression packet after integration changes.
 - [ ] User discussion and explicit permission before pushing or opening PRs.
 
@@ -99,6 +100,10 @@ reader stack must complete balanced selection bindings before merge readiness.
 harnesses, mapper tests and `powerio/tests/sincal.rs`. The balanced Access
 milestone recorded 1,035 transmission/shared regression tests, 14 facade/schema/
 graph tests, 19 Python acquisition tests and full CI clippy.
+
+The combined reader stack also checks [balanced CLI snapshots](../../evals/sincal/balanced-csiro19-cli.json)
+against the same independent oracle. This is interface coverage for CSIRO19,
+not another supported native case.
 
 **Review focus.** Declared-family routing, units and conversion base, terminal
 states, fixed taps, active-control refusal, snapshot interpolation and factors,

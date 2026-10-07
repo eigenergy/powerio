@@ -46,10 +46,10 @@ struct Cli {
 /// Native SINCAL selection follows the same explicit profile as the facade.
 #[derive(clap::Args, Debug, Default)]
 struct SincalCliOptions {
-    /// Native variant ID; requires --from sincal-multiconductor.
+    /// Native variant ID; requires an explicit SINCAL --from profile.
     #[arg(long)]
     sincal_variant: Option<i64>,
-    /// Daily snapshot in hours; requires --from sincal-multiconductor.
+    /// Daily snapshot in hours; requires an explicit SINCAL --from profile.
     #[arg(long, allow_hyphen_values = true)]
     sincal_snapshot_hours: Option<f64>,
     /// Relative acquired-table companion of the original MDB; never runs MDB Tools.
@@ -75,19 +75,32 @@ impl SincalCliOptions {
             || self.sincal_snapshot_hours.is_some()
             || self.sincal_acquired_tables.is_some()
         {
-            if from != Some(FormatArg::SincalMulticonductor) {
-                return Err(cli_failure(
-                    &codes::REQUEST_CLI_OPTION_INVALID,
-                    "SINCAL selection options require --from sincal-multiconductor",
-                ));
+            match from {
+                Some(FormatArg::SincalBalanced) => {
+                    let mut selection = powerio_tx::format::SincalBalancedReadOptions::default();
+                    selection.variant = self.sincal_variant;
+                    selection.snapshot_hours = self.sincal_snapshot_hours;
+                    selection
+                        .acquired_tables
+                        .clone_from(&self.sincal_acquired_tables);
+                    options.sincal_balanced = Some(selection);
+                }
+                Some(FormatArg::SincalMulticonductor) => {
+                    let mut selection = powerio_dist::SincalReadOptions::default();
+                    selection.variant = self.sincal_variant;
+                    selection.snapshot_hours = self.sincal_snapshot_hours;
+                    selection
+                        .acquired_tables
+                        .clone_from(&self.sincal_acquired_tables);
+                    options.sincal_multiconductor = Some(selection);
+                }
+                _ => {
+                    return Err(cli_failure(
+                        &codes::REQUEST_CLI_OPTION_INVALID,
+                        "SINCAL selection options require --from sincal-balanced or sincal-multiconductor",
+                    ));
+                }
             }
-            let mut selection = powerio_dist::SincalReadOptions::default();
-            selection.variant = self.sincal_variant;
-            selection.snapshot_hours = self.sincal_snapshot_hours;
-            selection
-                .acquired_tables
-                .clone_from(&self.sincal_acquired_tables);
-            options.sincal_multiconductor = Some(selection);
         }
         Ok(options)
     }
