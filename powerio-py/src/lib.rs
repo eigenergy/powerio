@@ -616,10 +616,11 @@ impl PyBalancedNetwork {
         self.inner().branches().len()
     }
 
-    /// AC line branches, excluding transformers.
+    /// AC line branches in an unnormalized network, excluding transformers.
     #[getter]
-    fn n_lines(&self) -> usize {
-        self.line_count
+    fn n_lines(&self) -> PyResult<usize> {
+        ensure_line_classification(self.inner())?;
+        Ok(self.line_count)
     }
 
     /// Substations in the retained source hierarchy.
@@ -682,7 +683,7 @@ impl PyBalancedNetwork {
     fn component_counts<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         ensure_line_classification(self.inner())?;
         let counts = PyDict::new(py);
-        counts.set_item("lines", self.n_lines())?;
+        counts.set_item("lines", self.n_lines()?)?;
         counts.set_item("generators", self.n_generators())?;
         counts.set_item("loads", self.n_loads())?;
         counts.set_item("substations", self.n_substations())?;

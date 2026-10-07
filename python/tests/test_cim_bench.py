@@ -80,3 +80,9 @@ def test_unrecognized_cgmes_xml_keeps_the_acquisition_limit(monkeypatch, tmp_pat
         powerio.parse(path)
     with pytest.raises(powerio.PowerIOError, match="input limit"):
         powerio.parse(padded, name="eq.xml")
+
+
+def test_native_line_count_rejects_normalized_equipment_classification():
+    network = powerio.parse(DATA / "case14.m").value.to_normalized()
+    with pytest.raises(ValueError, match="unnormalized network"):
+        _ = network.n_lines
