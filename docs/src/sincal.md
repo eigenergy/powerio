@@ -52,6 +52,10 @@ profiles include schema-14.8 native SQLite/archive inputs and schema-11.5/12.8
 Access acquisition records. Shared structural admission of other versions does
 not imply their electrical support. Unsupported equipment or missing required
 sequence data rejects the complete parse; no partial feeder is returned.
+Nominal delta–delta transformers support one, two or three installed coils,
+including reversed polarity and open terminals. Winding selectors expand to
+actual phase pairs; no unused phase is invented. Partial mixed-winding
+transformers and inconsistent native core-loss inputs still reject.
 
 ```sh
 powerio summary case.db --from sincal-multiconductor

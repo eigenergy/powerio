@@ -726,3 +726,51 @@ Julia coverage of all 511 C entry points pass. The two additive C functions
 preserve the existing ABI 7 layouts and ordinary `pio_parse` signature. The
 small Julia acquisition fixture is generated from original PowerIO SQL and
 explicitly licensed under MIT; it is not a redistributed native feeder.
+
+### Partial delta–delta transformer validation
+
+The reader now assembles the installed delta coil pairs for vector groups Dd0
+and Dd6, including one or two coils, nominal fixed taps, and open native ports.
+The native winding selector identifies coils, so W1 connects L1–L2 on both
+sides; it is not a one-conductor connection. Compact four- or six-coordinate
+shunts preserve those circuits through existing multiconductor model types.
+No neutral or absent third phase is introduced. Ratings keep the documented
+three-phase base; they are not multiplied by the number of selected coils.
+
+The basis is Siemens *Load Flow*, April 2014, printed pp.34–35/39 (installed
+coil connections), and *Input Data*, p.180 (nominal impedance/excitation).
+`check_partial_delta.py` independently builds OpenDSS single-phase transformers
+with the appropriate per-coil ratings and separate symmetric excitation
+branches. Twelve original synthetic cases cover all partial winding selections
+and both polarities. Every newly supported native device is checked against
+its original, hash-pinned input rows:
+
+| Case | Newly mapped, independently checked | Rejected inconsistent core inputs | Total mapped components at 0h |
+| --- | ---: | ---: | ---: |
+| CSIRO02 | 363 | 23 | 1525/2329 |
+| CSIRO04 | 95 | 83 | 575/861 |
+| CSIRO06 | 4 | 4 | 163/218 |
+| CSIRO07 | 56 | 25 | 283/456 |
+
+Reports are `partial-delta.json` (06) and `partial-delta-csiro02/04/07.json`.
+Across all 518 accepted native devices, maximum relative primitive error is
+1.883e-13 against a 1e-11 tolerance. Four negative controls check factor-three
+scaling, wrong conductor endpoints, invented grounding and wrong polarity.
+The 135 rejected devices have core real power exceeding declared no-load VA;
+no input is repaired. This is component evidence, not native SINCAL execution
+or complete-feeder acceptance. Partial mixed-winding circuits remain work.
+
+```sh
+POWERIO_SINCAL_PARTIAL_RECORDS=/tmp/records/representative06.json \
+POWERIO_SINCAL_PARTIAL_EXPORT=/tmp/partial-delta-export.json \
+  cargo test -p powerio-dist --lib export_partial_delta_circuits -- --ignored
+python3 evals/sincal/check_partial_delta.py /tmp/partial-delta-export.json \
+  /tmp/records/representative06.json /tmp/models/csiro-representative06.mdb \
+  /tmp/partial-delta.json --case 6
+```
+
+Repeat with cases 2, 4 and 7 for the other reports. The exports and original
+models stay external; only compact derived reports are committed. Both all-19
+base-variant audits were refreshed. Complete native parsing remains one case,
+CSIRO09 with an explicit snapshot. Distribution regressions (592 tests) and
+the full CI Clippy matrix pass.

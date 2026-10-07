@@ -50,6 +50,8 @@ mod topology;
 mod transformer;
 mod transformer_impedance;
 mod transformer_mapping;
+#[cfg(test)]
+mod transformer_partial_tests;
 
 use crate::{Error, Result};
 use powerio_core::Source;

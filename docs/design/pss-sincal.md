@@ -427,8 +427,13 @@ full windings and exact neutral-tap same-voltage connections; active controllers
 off-neutral same-voltage regulators, YN0 and D0 electrical circuits remain work.
 The explicit-midnight audit maps 781/1033 CSIRO01 and 1162/2329 CSIRO02
 components. These are component counts, not whole-feeder validation.
-Wye star/sequence semantics, partial transformer windings, inconsistent
-core parameters and broader profiles/variants remain work. The public facade now
+Nominal partial delta–delta windings now map through the documented coil
+incidence, without renormalizing ratings by the number of installed coils.
+All 518 newly mapped native devices across CSIRO02/04/06/07 pass independent
+OpenDSS component checks. At 0h their mapped totals are now 1525/2329,
+575/861, 163/218 and 283/456 respectively. No additional complete feeder is
+claimed. Wye star/sequence semantics, partial mixed-winding transformers,
+inconsistent core parameters and broader profiles/variants remain work. The public facade now
 selects `sincal-multiconductor` explicitly, retaining original native bytes and
 the existing network type. Native SQLite/archive routing is exercised through
 CLI/Python/C; explicit Access/variant/snapshot options now use Rust, Python, C, Julia and

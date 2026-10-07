@@ -1,6 +1,6 @@
-//! Nominal full-winding transformer primitives, including all three sequences.
+//! Nominal transformer primitives: full sequence circuits and selected delta coils.
 //!
-//! A six-terminal coupled shunt on an auxiliary bus represents the finite
+//! A coupled shunt on an auxiliary bus represents the finite
 //! primitive. Typed switches connect those coordinates to the native ports.
 //! Native star grounding is represented by the zero-sequence circuit, never
 //! by grounding a phase or an unrelated explicit neutral on a native bus.
@@ -13,6 +13,7 @@ use super::{
     format_error,
     schema::NativeDatabase,
     semantics::State,
+    transformer::WindingKind,
     transformer_impedance::{NominalTransformerInput, ZeroSequenceInput},
 };
 use crate::{DistBus, DistShunt, DistSwitch, Result};
@@ -38,16 +39,32 @@ impl NativeDatabase {
         let connection = &input.connection;
         let primitive = phase_admittance(&input)?;
         let bus_id = format!("sincal:transformer:{element}");
-        let coordinates: Vec<String> = ["p1", "p2", "p3", "s1", "s2", "s3"]
-            .map(str::to_owned)
-            .to_vec();
+        // Terminal flags select windings, not necessarily the same numbered
+        // phases. A single delta coil uses two conductors on each side.
+        let active: [Vec<usize>; 2] = std::array::from_fn(|side| {
+            (0..3)
+                .filter(|&phase| {
+                    connection
+                        .coils
+                        .iter()
+                        .any(|coil| [coil.primary, coil.secondary][side][phase] != 0)
+                })
+                .collect()
+        });
+        let indices: Vec<usize> = active
+            .iter()
+            .enumerate()
+            .flat_map(|(side, phases)| phases.iter().map(move |p| 3 * side + p))
+            .collect();
+        let names = ["p1", "p2", "p3", "s1", "s2", "s3"];
+        let coordinates: Vec<String> = indices.iter().map(|&i| names[i].to_owned()).collect();
         let auxiliary_bus = DistBus::new(bus_id.clone(), coordinates.clone());
         let mut switches = Vec::new();
         for (side, port) in connection.ports.iter().enumerate() {
             let bus = buses
                 .get(&port.node)
                 .ok_or_else(|| format_error("transformer bus missing"))?;
-            let phases = ["1", "2", "3"].map(str::to_owned).to_vec();
+            let phases: Vec<String> = active[side].iter().map(|p| (p + 1).to_string()).collect();
             if bus.id != port.node.to_string() || phases.iter().any(|p| !bus.terminals.contains(p))
             {
                 return Err(format_error(
@@ -59,7 +76,10 @@ impl NativeDatabase {
                 bus.id.clone(),
                 bus_id.clone(),
                 phases,
-                coordinates[3 * side..3 * side + 3].to_vec(),
+                active[side]
+                    .iter()
+                    .map(|p| names[3 * side + p].to_owned())
+                    .collect(),
                 port.state == State::Off,
             ));
         }
@@ -67,13 +87,13 @@ impl NativeDatabase {
             element.to_string(),
             bus_id,
             coordinates,
-            primitive
+            indices
                 .iter()
-                .map(|row| row.iter().map(|v| v.re).collect())
+                .map(|&i| indices.iter().map(|&j| primitive[i][j].re).collect())
                 .collect(),
-            primitive
+            indices
                 .iter()
-                .map(|row| row.iter().map(|v| v.im).collect())
+                .map(|&i| indices.iter().map(|&j| primitive[i][j].im).collect())
                 .collect(),
         );
         shunt.extras.insert(
@@ -225,17 +245,18 @@ fn zero_port(input: &NominalTransformerInput, ratio: f64) -> Result<TwoPort> {
 pub(super) fn phase_admittance(input: &NominalTransformerInput) -> Result<[[Complex64; 6]; 6]> {
     let connection = &input.connection;
     if connection.state != State::On
-        || connection.coils.len() != 3
         || connection.neutral_points.iter().any(Option::is_some)
-        || connection
-            .tap
-            .positions
-            .iter()
-            .any(|p| p.is_none_or(|p| p.to_bits() != connection.tap.midpoint.to_bits()))
+        || connection.coils.iter().any(|coil| {
+            connection.tap.positions[coil.winding]
+                .is_none_or(|p| p.to_bits() != connection.tap.midpoint.to_bits())
+        })
     {
         return Err(format_error(
-            "transformer primitive requires in-service full windings, nominal taps and resolved solid/no grounding",
+            "transformer primitive requires in-service windings, nominal taps and resolved solid/no grounding",
         ));
+    }
+    if connection.coils.len() != 3 {
+        return partial_delta_admittance(input);
     }
     // Input Data (April 2014), printed p. 181: the additional rotation
     // adds to the vector-group rotation. The opposite rotating sequence
@@ -281,6 +302,55 @@ pub(super) fn phase_admittance(input: &NominalTransformerInput) -> Result<[[Comp
                             + negative[from][to] * factor.conj())
                             / 3.0,
                     )?;
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
+// Load Flow (April 2014), pp.34–35,39: select installed coil pairs before
+// assembling their conductor incidence. Input Data p.180 defines the nominal
+// sequence impedance on the three-phase rating; a delta coil has three times
+// that impedance. Do not renormalize it by the number of installed coils.
+fn partial_delta_admittance(input: &NominalTransformerInput) -> Result<[[Complex64; 6]; 6]> {
+    let connection = &input.connection;
+    if connection.vector_group.autotransformer
+        || connection.vector_group.primary != WindingKind::Delta
+        || connection.vector_group.secondary != WindingKind::Delta
+        || connection.additional_rotation_rad != 0.0
+        || !matches!(input.zero_sequence, ZeroSequenceInput::NoGroundPath)
+    {
+        return Err(format_error(
+            "partial transformer windings require verified delta-delta nominal circuits",
+        ));
+    }
+    let ratio = connection.rated_ll_volts[0] / connection.rated_ll_volts[1];
+    if !ratio.is_finite() || ratio <= 0.0 {
+        return Err(format_error("invalid partial transformer ratio"));
+    }
+    let series = reciprocal(input.series_secondary_ohm)? / 3.0;
+    let diagonal = checked(series + input.no_load_secondary_siemens / 6.0)?;
+    let port = refer_primary(
+        [[diagonal, -series], [-series, diagonal]],
+        Complex64::new(ratio, 0.0),
+    )?;
+    let mut result = [[ZERO; 6]; 6];
+    for coil in &connection.coils {
+        let incidence = [coil.primary, coil.secondary];
+        for from in 0..2 {
+            for to in 0..2 {
+                for i in 0..3 {
+                    for j in 0..3 {
+                        let row = 3 * from + i;
+                        let col = 3 * to + j;
+                        result[row][col] = checked(
+                            result[row][col]
+                                + port[from][to]
+                                    * f64::from(incidence[from][i])
+                                    * f64::from(incidence[to][j]),
+                        )?;
+                    }
                 }
             }
         }

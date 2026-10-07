@@ -3,7 +3,7 @@
   "attribution": "Berry, Adam; Collins, Lyle; Oliver, Erin; Perfumo, Cristian (2015), Representative Australian Electricity Feeders with load and solar generation profiles, v1, CSIRO.",
   "license": "CC-BY-4.0",
   "scope": "Conductor-resolved base-variant development audit; no family inference, independent solve or native execution.",
-  "reader_sha256": "8f21b69df8f5d0050387cd9080aa3e199cd05e1879ce050a24a002f2a9d30035",
+  "reader_sha256": "cc298308f8be548ccee0be8bee11e9fa5e1b252871c826ea5bd0e868e6d503d1",
   "cases": [
     {
       "case": 1,
@@ -48,7 +48,7 @@
         {
           "type": "TwoWindingTransformer",
           "count": 163,
-          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer primitive requires in-service full windings, nominal taps and resolved solid/no grounding"
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: partial transformer windings require verified delta-delta nominal circuits"
         },
         {
           "type": "TwoWindingTransformer",
@@ -74,7 +74,7 @@
         "Infeeder": 1,
         "Line": 617,
         "Load": 490,
-        "TwoWindingTransformer": 54
+        "TwoWindingTransformer": 417
       },
       "failures": [
         {
@@ -99,8 +99,8 @@
         },
         {
           "type": "TwoWindingTransformer",
-          "count": 446,
-          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer primitive requires in-service full windings, nominal taps and resolved solid/no grounding"
+          "count": 83,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: partial transformer windings require verified delta-delta nominal circuits"
         },
         {
           "type": "TwoWindingTransformer",
@@ -139,7 +139,7 @@
         "Infeeder": 1,
         "Line": 266,
         "Load": 177,
-        "TwoWindingTransformer": 36
+        "TwoWindingTransformer": 131
       },
       "failures": [
         {
@@ -156,11 +156,6 @@
           "type": "Load",
           "count": 57,
           "reason": "PSS SINCAL read error: PSS SINCAL read error: load requires zero-sequence circuit resolution"
-        },
-        {
-          "type": "TwoWindingTransformer",
-          "count": 95,
-          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer primitive requires in-service full windings, nominal taps and resolved solid/no grounding"
         },
         {
           "type": "TwoWindingTransformer",
@@ -226,7 +221,7 @@
         "Infeeder": 1,
         "Line": 113,
         "Load": 18,
-        "TwoWindingTransformer": 27
+        "TwoWindingTransformer": 31
       },
       "failures": [
         {
@@ -236,8 +231,8 @@
         },
         {
           "type": "TwoWindingTransformer",
-          "count": 13,
-          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer primitive requires in-service full windings, nominal taps and resolved solid/no grounding"
+          "count": 9,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: partial transformer windings require verified delta-delta nominal circuits"
         },
         {
           "type": "TwoWindingTransformer",
@@ -263,7 +258,7 @@
         "Infeeder": 1,
         "Line": 122,
         "Load": 82,
-        "TwoWindingTransformer": 22
+        "TwoWindingTransformer": 78
       },
       "failures": [
         {
@@ -275,11 +270,6 @@
           "type": "Load",
           "count": 30,
           "reason": "PSS SINCAL read error: PSS SINCAL read error: load requires zero-sequence circuit resolution"
-        },
-        {
-          "type": "TwoWindingTransformer",
-          "count": 56,
-          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer primitive requires in-service full windings, nominal taps and resolved solid/no grounding"
         },
         {
           "type": "TwoWindingTransformer",
