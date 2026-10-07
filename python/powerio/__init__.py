@@ -310,10 +310,12 @@ _BALANCED_DELEGATED_NAMES = frozenset(
         "n_generators",
         "n_hvdc",
         "n_islands",
+        "n_lines",
         "n_loads",
         "n_shunts",
         "n_static_var_compensators",
         "n_storage",
+        "n_substations",
         "n_switches",
         "n_transformers_3w",
         "name",
@@ -362,7 +364,11 @@ class BalancedNetwork:
             raise AttributeError(
                 f"{type(self).__name__!r} object has no attribute {name!r}"
             )
-        return getattr(self._inner, name)
+        value = getattr(self._inner, name)
+        # Network handles are immutable; scalar counts need no repeated FFI call.
+        if name.startswith("n_"):
+            self.__dict__[name] = value
+        return value
 
     def __repr__(self) -> str:
         # The inner handle's __repr__ already renders the public ``BalancedNetwork(...)``

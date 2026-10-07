@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Python adds `BalancedNetwork.n_lines` and `n_substations` alongside the other
+  native table counts. Immutable network handles cache scalar counts for repeated
+  access without rebuilding Python tables.
+
 - The Python extension uses mimalloc for Rust allocations, reducing allocation
   overhead and memory use when loading and writing large networks. Allocator
   license notices are included in the wheel.
