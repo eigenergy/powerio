@@ -98,6 +98,15 @@ def identity(repo, sha, number):
 def successful_ci(repo, sha):
     checks = api(f"repos/{repo}/commits/{sha}/check-runs?per_page=100")["check_runs"]
     require(checks and len(checks) < 100, f"missing or truncated CI results for {repo}")
+    # Candidate preparation runs on main too. Exclude only that workflow's
+    # current check suite, never another pending or failed validation check.
+    if (repo == os.environ.get("GITHUB_REPOSITORY") and os.environ.get("GITHUB_RUN_ID")
+            and os.environ.get("GITHUB_WORKFLOW") == "Prepare paired release"):
+        current = api(f"repos/{repo}/actions/runs/{os.environ['GITHUB_RUN_ID']}")
+        require(current["path"] == ".github/workflows/prepare-paired-release.yml" and
+                current["event"] == "workflow_dispatch" and current["head_sha"] == sha,
+                "current preparation run does not match the candidate source")
+        checks = [c for c in checks if c["check_suite"]["id"] != current["check_suite_id"]]
     require(all(c["status"] == "completed" and c["conclusion"] in ("success", "neutral", "skipped")
                 for c in checks), f"CI has not passed for {repo}@{sha}")
     require(any(c["conclusion"] == "success" for c in checks), "CI has no successful check")
