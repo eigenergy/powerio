@@ -225,8 +225,8 @@ impl NativeDatabase {
             format_error(format!("missing transformer row for Element {element}"))
         })?;
         require_input_categories(integer(row, "ElementInput")?, 2)?;
+        Self::materialized_type(row)?;
         for field in [
-            "Typ_ID",
             "Macro_ID",
             "MasterElm_ID",
             "TransformerTap_ID",
@@ -252,7 +252,7 @@ impl NativeDatabase {
         let rated_va = positive_scaled(row, "Sn", 1e6)?;
         let additional_rotation_rad = number(row, "AddRotate")?.to_radians();
         let neutral_points = [reference(row, "Stp_ID1")?, reference(row, "Stp_ID2")?];
-        let tap = fixed_tap(row, selected)?;
+        let tap = fixed_tap(row, selected, self)?;
         if rows.next().map_err(format_error)?.is_some() {
             return Err(format_error(format!(
                 "duplicate transformer row for Element {element}"
@@ -273,7 +273,7 @@ impl NativeDatabase {
     }
 }
 
-fn fixed_tap(row: &Row<'_>, selected: &[usize]) -> Result<FixedTapInput> {
+fn fixed_tap(row: &Row<'_>, selected: &[usize], db: &NativeDatabase) -> Result<FixedTapInput> {
     if integer(row, "Flag_roh")? != 1 {
         return Err(format_error(
             "transformer regulator requires operating-state resolution",
@@ -285,7 +285,7 @@ fn fixed_tap(row: &Row<'_>, selected: &[usize]) -> Result<FixedTapInput> {
         _ => return Err(format_error("unknown transformer tap side")),
     };
     let mut positions = [None; 3];
-    let individual = integer(row, "Flag_Tap")?;
+    let individual = db.legacy_integer(row, "Flag_Tap", 0)?;
     for &coil in selected {
         let field = match individual {
             0 => "roh",

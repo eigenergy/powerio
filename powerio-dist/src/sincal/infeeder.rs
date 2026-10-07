@@ -169,7 +169,7 @@ impl NativeDatabase {
             "Flag_Qctrl",
             "Flag_Macro",
         ] {
-            if integer(row, field)? != 0 {
+            if self.newer_integer(row, field, 0)? != 0 {
                 return Err(format_error(format!(
                     "unsupported infeeder control {field}"
                 )));
@@ -182,7 +182,7 @@ impl NativeDatabase {
         }
         // These newer fields are absent from the 2014 definition. Do not guess
         // that they are interchangeable with xi or silently discard them.
-        if number(row, "Rlf")? != 0.0 || number(row, "Xlf")? != 0.0 {
+        if self.newer_number(row, "Rlf")? != 0.0 || self.newer_number(row, "Xlf")? != 0.0 {
             return Err(format_error(
                 "unverified explicit infeeder load-flow impedance",
             ));

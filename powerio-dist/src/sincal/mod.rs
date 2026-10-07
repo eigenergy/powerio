@@ -15,6 +15,8 @@ mod dc_infeeder;
 mod dc_infeeder_tests;
 mod grounding;
 mod infeeder;
+#[cfg(test)]
+mod legacy_tests;
 mod line_mapping;
 mod load;
 mod load_mapping;
@@ -23,6 +25,7 @@ mod mapping_report;
 mod project;
 #[cfg(test)]
 mod project_tests;
+mod provenance;
 mod schema;
 mod semantics;
 mod sequence;

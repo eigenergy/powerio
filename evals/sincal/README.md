@@ -190,15 +190,48 @@ target/debug/examples/sincal_multiconductor records audit /tmp/records.json 1
 `native` instead of `records` selects SQLite/archive acquisition explicitly.
 The electrical adapter independently admits its observed 11.5/14.8 schemas;
 shared structural support for 15.5/16.0 does not automatically extend it.
-The reader currently rejects original CSIRO 06 and 01 before assembly because
-referenced `VoltageLevel.Flag_Volt` values are NULL. Their 11.5 version-specific
-voltage/default semantics need mapping; a generic NULL-to-zero conversion or
-silent line-line assumption is not applied. The acquired records preserve these
-NULLs. The April 2015 automation manual confirms general default filling and
-names the voltage selector, but does not by itself establish this field's NULL
-default. MDB Tools `mdb-prop` and `mdb-schema --default-values` show no
-column default for this selector in CSIRO 06, so the MDB schema itself does not
-resolve it. This is implementation work, separate from native desktop acceptance.
+The schema-11.5 adapter now interprets NULL `VoltageLevel.Flag_Volt` using
+Siemens' legacy line-to-line input convention (General Input Data, April 2014,
+printed pp. 18 and 28, including single-phase networks). A NULL `Flag_Tap`
+selects the common tap in this legacy profile; the Database Description's
+transformer table documents zero as the common-tap default. These rules remain
+version-specific interpretations, not proof from running SINCAL. Missing rows,
+missing selector columns, malformed values and newer-schema NULLs still fail.
+The original acquisition records remain unchanged. Successful typed networks
+record the applied defaults; node metadata also records the legacy voltage
+basis. Controls absent from the older layout have an explicit field whitelist;
+this does not turn arbitrary missing or NULL numeric data into zero.
+
+Selected standard types use the materialized electrical values in the equipment
+row. The adapter validates the local/global selector and records its identity;
+it neither follows library paths nor substitutes catalog data for missing
+stored parameters. Both values and type references are checked in synthetic
+regressions through the typed Access acquisition boundary.
+
+Reproduce the development coverage report with all 19 external, hash-checked
+original MDBs and the already verified acquired records:
+
+```sh
+python3 evals/sincal/audit_distribution.py /tmp/native-models /tmp/acquired-records \
+  /tmp/distribution-csiro.json --reader target/debug/examples/sincal_multiconductor
+```
+
+The committed `distribution-csiro.json` records context errors, component
+coverage and complete parsing separately. It is a development audit, not an
+acceptance test, and currently claims zero complete native unbalanced networks.
+The source and acquired-record hashes must match `access-acquisition.json`;
+missing required files, changed records or tool failures abort the audit.
+Schema acquisition itself adds bounded nonunique lookup indexes, preserving
+NULLs and duplicates while avoiding full-table scans for every component.
+
+At this checkpoint, CSIRO 06 maps all 113 lines and 27 of 51 transformers;
+its 53 loads, source and remaining transformers still reject. The full audit
+also reaches individual components in 04, 07, 09 and 19. Indexing removes the
+query-budget failures previously observed in 02, 04 and 09 without increasing
+the SQL instruction allowance. Remaining context-level failures include
+autotransformers, other NULL selectors, regulation modes and unmapped machine
+or capacitor types. Three-phase connectivity alone is not evidence that a
+case should be routed to the balanced backend.
 
 Further known work includes load-star selection, source impedance, transformer
 nullable taps/core/partial connections, selected profiles and inherited variants.

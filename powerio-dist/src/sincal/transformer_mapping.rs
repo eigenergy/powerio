@@ -13,7 +13,7 @@ use super::{
     format_error,
     schema::NativeDatabase,
     semantics::State,
-    transformer::{integer, number, reference},
+    transformer::integer,
     transformer_impedance::{NominalTransformerInput, ZeroSequenceInput},
 };
 use crate::{DistBus, DistShunt, DistSwitch, Result};
@@ -99,11 +99,11 @@ impl NativeDatabase {
         statement
             .query_row([element, self.variant], |row| {
                 let check = || -> Result<()> {
-                    if integer(row, "Flag_Lf")? != 1
+                    if self.newer_integer(row, "Flag_Lf", 1)? != 1
                         || integer(row, "Flag_Macro")? != 0
-                        || integer(row, "Flag_Boost")? != 0
-                        || number(row, "C01")? != 0.0
-                        || number(row, "C02")? != 0.0
+                        || self.newer_integer(row, "Flag_Boost", 0)? != 0
+                        || self.newer_number(row, "C01")? != 0.0
+                        || self.newer_number(row, "C02")? != 0.0
                     {
                         return Err(format_error(
                             "transformer model/boost/capacitance requires separate mapping",
@@ -116,7 +116,7 @@ impl NativeDatabase {
                         "CompImp_ID",
                         "CtrlRange_ID",
                     ] {
-                        if reference(row, field)?.is_some() {
+                        if self.newer_reference(row, field)?.is_some() {
                             return Err(format_error(format!(
                                 "transformer requires resolution of {field}"
                             )));

@@ -182,7 +182,7 @@ impl NativeDatabase {
             .prepare(
                 "SELECT e.Flag_Input, l.Flag_Z0_Input, l.Typ_ID, l.CoupData_ID,
                     l.ParSys, l.fr, l.l, l.Ith, l.r, l.x, l.c, l.r0, l.x0, l.c0, l.fn,
-                    l.R0_R1, l.X0_X1
+                    l.R0_R1, l.X0_X1, l.*
              FROM Line l JOIN Element e ON e.Element_ID=l.Element_ID AND e.Variant_ID=l.Variant_ID
              WHERE l.Element_ID=?1 AND l.Variant_ID=?2",
             )
@@ -201,9 +201,9 @@ impl NativeDatabase {
                 "Line {element}: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
             )));
         }
-        let kind: i64 = row.get(2).map_err(format_error)?;
-        let coupling: i64 = row.get(3).map_err(format_error)?;
-        if kind != 0 || coupling != 0 {
+        Self::materialized_type(row)?;
+        let coupling: Option<i64> = row.get(3).map_err(format_error)?;
+        if !matches!(coupling, None | Some(0)) {
             return Err(format_error(format!(
                 "Line {element}: referenced type/coupling data must be resolved"
             )));

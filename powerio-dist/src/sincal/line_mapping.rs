@@ -10,7 +10,7 @@ use super::{
     schema::{NativeDatabase, require_table},
     semantics::{Connection, State},
     sequence::LineOperatingPoint,
-    transformer::{integer, number, reference},
+    transformer::{integer, number},
 };
 use crate::{DistBus, DistLine, DistLineCode, DistSwitch, Result};
 
@@ -162,11 +162,7 @@ impl NativeDatabase {
             .map_err(format_error)?
             .ok_or_else(|| format_error("missing line voltage-level/calculation context"))?;
         let kind = integer(row, "Flag_LineTyp")?;
-        if integer(row, "LevelVoltageKind")? != 1 {
-            return Err(format_error(
-                "line voltage level requires line-line Flag_Volt=1",
-            ));
-        }
+        self.line_line_voltage_basis(row.get("LevelVoltageKind").map_err(format_error)?)?;
         let temperature = match kind {
             1 => number(row, "LevelCableTemp")?,
             2 => number(row, "LevelLineTemp")?,
@@ -182,11 +178,11 @@ impl NativeDatabase {
             }
         }
         for field in ["Macro_ID", "LineTemp_ID", "ElemLoading_ID"] {
-            if reference(row, field)?.is_some() {
+            if self.newer_reference(row, field)?.is_some() {
                 return Err(format_error(format!("unresolved line reference {field}")));
             }
         }
-        if integer(row, "Flag_Lf")? != 1 {
+        if self.newer_integer(row, "Flag_Lf", 1)? != 1 {
             return Err(format_error(
                 "line load-flow mode requires additional mapping",
             ));

@@ -46,6 +46,7 @@ pub(super) struct NodeInput {
     pub voltage_level: i64,
     pub nominal_ll_volts: f64,
     pub level_frequency_hz: f64,
+    pub legacy_voltage_basis: bool,
     pub neutral_point: Option<i64>,
 }
 
@@ -71,6 +72,7 @@ impl TopologyDraft {
                     serde_json::json!({
                         "name": node.name, "voltage_level": node.voltage_level,
                         "nominal_ll_volts": node.nominal_ll_volts,
+                        "legacy_voltage_basis": node.legacy_voltage_basis,
                     }),
                 );
                 // A neutral conductor is not implicitly grounded. Neutral-point
@@ -91,7 +93,7 @@ impl NativeDatabase {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT n.Node_ID, n.Name, n.VoltLevel_ID, n.Stp_ID, v.Un, v.f, v.Flag_Volt
+                "SELECT n.Node_ID, n.Name, n.VoltLevel_ID, n.Stp_ID, v.Un, v.f, v.Flag_Volt, v.VoltLevel_ID
              FROM Node n LEFT JOIN VoltageLevel v
              ON v.VoltLevel_ID=n.VoltLevel_ID AND v.Variant_ID=n.Variant_ID
              WHERE n.Variant_ID=?1 ORDER BY n.Node_ID",
@@ -108,11 +110,15 @@ impl NativeDatabase {
             // 1 is line-line, 2 is line-earth. Do not silently apply the
             // existing line-line component formulas to another voltage basis.
             let kind: Option<i64> = row.get(6).map_err(format_error)?;
-            if kind != Some(1) {
+            let level: Option<i64> = row.get(7).map_err(format_error)?;
+            if level.is_none() {
                 return Err(format_error(format!(
-                    "Node {id}: voltage level requires explicit line-line Flag_Volt=1"
+                    "Node {id}: missing referenced voltage level"
                 )));
             }
+            let legacy_voltage_basis = self
+                .line_line_voltage_basis(kind)
+                .map_err(|e| format_error(format!("Node {id}: {e}")))?;
             let voltage: Option<f64> = row.get(4).map_err(format_error)?;
             let frequency: Option<f64> = row.get(5).map_err(format_error)?;
             let voltage = positive(voltage, "nominal voltage", id)? * 1000.0;
@@ -131,6 +137,7 @@ impl NativeDatabase {
                     name: row.get(1).map_err(format_error)?,
                     voltage_level: row.get(2).map_err(format_error)?,
                     nominal_ll_volts: voltage,
+                    legacy_voltage_basis,
                     level_frequency_hz: positive(frequency, "level frequency", id)?,
                     neutral_point,
                 },

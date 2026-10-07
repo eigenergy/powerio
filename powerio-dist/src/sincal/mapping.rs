@@ -60,6 +60,14 @@ impl NativeDatabase {
     pub fn circuit_draft(&self) -> Result<CircuitDraft> {
         let context = self.mapping_context()?;
         let mut draft = CircuitDraft::new(context.frequency);
+        for node in context.topology.nodes.values() {
+            if node.legacy_voltage_basis {
+                draft.network_without_sources.defaulted_mut().insert(
+                    format!("VoltageLevel.{}", node.voltage_level),
+                    vec!["Flag_Volt"],
+                );
+            }
+        }
         for &element in self.elements.keys() {
             self.map_component(element, &context, &mut draft)?;
         }
@@ -67,6 +75,7 @@ impl NativeDatabase {
             .network_without_sources
             .buses_mut()
             .extend(context.buses.into_values());
+        self.record_interpretation(&mut draft.network_without_sources)?;
         Ok(draft)
     }
 
@@ -181,7 +190,7 @@ impl NativeDatabase {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT e.Element_ID, v.Flag_Volt FROM Element e LEFT JOIN VoltageLevel v
+                "SELECT e.Element_ID, v.Flag_Volt, v.VoltLevel_ID FROM Element e LEFT JOIN VoltageLevel v
              ON v.VoltLevel_ID=e.VoltLevel_ID AND v.Variant_ID=e.Variant_ID
              WHERE e.Variant_ID=?1 ORDER BY e.Element_ID",
             )
@@ -191,11 +200,14 @@ impl NativeDatabase {
         while let Some(row) = rows.next().map_err(format_error)? {
             let id: i64 = row.get(0).map_err(format_error)?;
             let kind: Option<i64> = row.get(1).map_err(format_error)?;
-            if previous == Some(id) || kind != Some(1) {
+            let level: Option<i64> = row.get(2).map_err(format_error)?;
+            if previous == Some(id) || level.is_none() {
                 return Err(format_error(format!(
-                    "Element {id}: requires an unambiguous line-line voltage level (Flag_Volt=1)"
+                    "Element {id}: requires an unambiguous referenced voltage level"
                 )));
             }
+            self.line_line_voltage_basis(kind)
+                .map_err(|e| format_error(format!("Element {id}: {e}")))?;
             previous = Some(id);
         }
         Ok(())
