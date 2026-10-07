@@ -57,7 +57,7 @@ impl VoltageSource {
 // Keep the historical body exactly the same for earth-referenced sources.
 // A new source has a tagged wrapper, so a historical reader cannot accept it
 // while ignoring essential physics: its required name/bus/phasor fields are
-// absent at the wrapper level. This works recursively in every IR envelope.
+// absent at the wrapper level. This works recursively in every IR document.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 struct SourceFields {

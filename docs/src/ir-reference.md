@@ -887,7 +887,7 @@ Schema definition: `VoltageSource/anyOf/0` (the earth-referenced branch).
 ### ReferencedVoltageSource
 
 The second source-record alternative has structural identity
-`powerio.ReferencedVoltageSource`. Older IR 2 readers reject this wrapper
+`"powerio.ReferencedVoltageSource"`. Older IR 2 readers reject this wrapper
 because the legacy source fields are absent at its root. Existing records
 remain unchanged. The source can occur anywhere a multiconductor network
 is stored, including collections and calculation instances.
@@ -896,7 +896,7 @@ Schema definition: `ReferencedSourceWire/oneOf/0`.
 
 | field | type | unit | sign | invariant | if absent |
 |---|---|---|---|---|---|
-| `type` | string | | | exactly `powerio.ReferencedVoltageSource` | required |
+| `type` | string | | | exactly `"powerio.ReferencedVoltageSource"` | required |
 | `value` | object | | | referenced source body below | required |
 
 Schema definition: `ReferencedSourceFields`.
