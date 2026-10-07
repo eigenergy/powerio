@@ -24,7 +24,10 @@ impl NativeDatabase {
         }
         let mut types = serde_json::Map::new();
         for (&element, kind) in &self.elements {
-            if !matches!(kind.as_str(), "Line" | "TwoWindingTransformer" | "Infeeder") {
+            if !matches!(
+                kind.as_str(),
+                "Line" | "TwoWindingTransformer" | "Infeeder" | "ShuntReactor" | "ShuntCondensator"
+            ) {
                 continue;
             }
             // Table names come only from the literal matches above.

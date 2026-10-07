@@ -19,13 +19,14 @@ import tempfile
 import time
 
 
-DEFAULT_TABLES = (
+BASE_TABLES = (
     'Version', 'Variant', 'Node', 'Element', 'Terminal', 'VoltageLevel',
     'CalcParameter', 'Line', 'LineSeg', 'Load', 'Infeeder', 'DCInfeeder',
     'TwoWindingTransformer', 'ThreeWindingTransformer', 'ShuntImpedance',
     'CouplingData', 'CoupledLine', 'NeutralPointImp', 'OpSer', 'OpSerVal',
     'TransformerTap',
 )
+DEFAULT_TABLES = BASE_TABLES + ('ShuntReactor', 'ShuntCondensator')
 IDENTIFIER = re.compile(r'[A-Za-z_][A-Za-z_0-9]{0,127}\Z')
 
 

@@ -36,6 +36,9 @@ mod project;
 mod project_tests;
 mod provenance;
 pub(crate) mod public;
+mod rated_shunt;
+#[cfg(test)]
+mod rated_shunt_tests;
 mod schema;
 mod semantics;
 mod sequence;

@@ -10,7 +10,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from import_access import acquire, run_bounded, write_records
+from import_access import BASE_TABLES, acquire, run_bounded, write_records
 
 
 def selected_count(table, variant):
@@ -30,7 +30,9 @@ def check(source_directory, record_directory, inspector, tool_directory):
         source = next((path for path in candidates if path.is_file()), None)
         if source is None:
             raise ValueError(f'missing required corpus case {number:02d}')
-        records = acquire(source, tool_directory=tool_directory)
+        # Keep the established hash-pinned 21-table corpus reproducible as the
+        # general importer grows. Shunt extensions have their own identity report.
+        records = acquire(source, tables=BASE_TABLES, tool_directory=tool_directory)
         if records['source']['sha256'] != case['sha256'] or records['source']['bytes'] != case['bytes']:
             raise ValueError(f'original source digest/size mismatch in case {number:02d}')
         tables = {table['name']: table for table in records['tables']}

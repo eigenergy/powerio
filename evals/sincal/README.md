@@ -817,3 +817,65 @@ python3 evals/sincal/check_csiro06_blockers.py \
   /tmp/models/csiro-representative06.mdb /tmp/records/representative06.json \
   target/debug/examples/sincal_multiconductor /tmp/csiro06-blockers.json
 ```
+
+### Rated reactor and capacitor banks
+
+The distribution reader maps fixed `ShuntReactor` and `ShuntCondensator` banks
+to conductor shunts and port switches. Nominal ratings and losses produce
+fundamental-frequency admittances; fixed steps scale both. Ratings are total
+installed power: a phase-earth bank uses the full rating on that phase, a
+phase-pair bank between its two phases, and a three-phase bank divides it across
+three branches. Floating three-phase stars retain zero common-mode admittance.
+Grounded three-phase banks retain their distinct sequence impedances. Explicit
+neutral impedances, automatic regulation, nontrivial single-phase zero sequence,
+and stepped direct-ohm zero sequence remain rejected. Inactive elements and open
+terminals retain their passive primitive behind an open typed switch.
+
+Only schema 11.5 admits documented NULL zero defaults for optional losses,
+grounding, macro and regulator flags (Database Description, April 2014 pp.29–32).
+Applied fields enter `network.defaulted`; required ratings, active step inputs,
+missing columns and modern NULLs still reject. Capacitor input mode3 is not
+inferred from the reactor enum. Materialized type references keep their source
+provenance. The existing `MulticonductorNetwork` model needs no new public type.
+
+All five native banks in CSIRO03/12/16/17 and 14 original synthetic phase cases
+pass independent OpenDSS constant-impedance checks. Maximum relative primitive
+error is 2.52e-16 against 1e-10; eight mutations detect factor-three, reactive-sign,
+grounding and service-state errors. The oracle reconstructs the neutral return
+row from phase-current KCL instead of interpreting OpenDSS's numerical neutral
+regularizer as a physical grounding path. `rated-shunts.json` records identities,
+versions, tolerances and component results; it does not claim a feeder solve.
+
+`rated-shunt-history.json` independently checks the CSIRO03 reactor against all
+49 aligned historical node/branch snapshots at their recorded terminal voltages.
+Maximum local power error is 2.44e-11 VA and current error 8.89e-16 A. The wrong
+factor-three interpretation differs by at least 13,136 VA. Twelve node records
+have limit violations; result `Flag_State` is a limit-status flag, not equipment
+service state, and is not used as a node/branch join key. No input is calibrated
+to results, and no historical result rows or native models are vendored.
+
+The importer now includes bank tables by default. `check_access_corpus.py`
+explicitly retains the original `BASE_TABLES` profile so its existing identities
+remain reproducible. `acquire_shunt_corpus.py` adds the two tables, verifies every
+base table unchanged, and records the new acquired-document identities in
+`shunt-acquisition.json`. The distribution audit takes
+`--shunt-record-directory` to use those extended cases and marks the profile
+per case. Both all 19 audits are refreshed with those extensions. CSIRO03 now
+maps 2/1084 components (source and reactor); CSIRO12 maps 61/215 (34 lines, 26 loads
+and capacitor). Cases 16/17 still stop at synchronous-machine topology, although
+their three inactive capacitors pass component checks. Complete native parsing
+remains one feeder, CSIRO09 with an explicit snapshot.
+
+```sh
+cargo build -p powerio-dist --example sincal_multiconductor
+python3 evals/sincal/acquire_shunt_corpus.py /tmp/models /tmp/records \
+  /tmp/shunt-records target/debug/examples/sincal_multiconductor \
+  /tmp/shunt-acquisition.json
+POWERIO_SINCAL_SHUNT_RECORDS_DIR=/tmp/shunt-records \
+POWERIO_SINCAL_SHUNT_EXPORT=/tmp/rated-shunt-circuits.json \
+  cargo test -p powerio-dist --lib export_rated_shunt_circuits -- --ignored
+python3 evals/sincal/check_rated_shunts.py /tmp/rated-shunt-circuits.json \
+  /tmp/models /tmp/shunt-records /tmp/records /tmp/rated-shunts.json
+python3 evals/sincal/check_shunt_history.py /tmp/models/csiro-representative03.mdb \
+  /tmp/rated-shunt-circuits.json /tmp/rated-shunt-history.json
+```

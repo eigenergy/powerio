@@ -209,6 +209,17 @@ impl NativeDatabase {
                     net.shunts_mut().push(circuit.shunt);
                     net.switches_mut().push(circuit.switch);
                 }
+                "ShuntReactor" | "ShuntCondensator" => {
+                    let input = self.rated_shunt_input(element)?;
+                    let circuit = input.circuit(&buses[&input.terminal.node])?;
+                    if !input.defaulted.is_empty() {
+                        net.defaulted_mut()
+                            .insert(format!("{kind}.{element}"), input.defaulted);
+                    }
+                    net.buses_mut().push(circuit.bus);
+                    net.shunts_mut().push(circuit.shunt);
+                    net.switches_mut().push(circuit.switch);
+                }
                 "TwoWindingTransformer" => {
                     if let Some(switch) = self.ideal_autotransformer_switch(element, buses)? {
                         net.switches_mut().push(switch);

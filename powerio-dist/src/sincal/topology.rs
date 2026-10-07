@@ -174,7 +174,13 @@ impl NativeDatabase {
             }
             if !matches!(
                 kind.as_str(),
-                "Line" | "Load" | "Infeeder" | "DCInfeeder" | "ShuntImpedance"
+                "Line"
+                    | "Load"
+                    | "Infeeder"
+                    | "DCInfeeder"
+                    | "ShuntImpedance"
+                    | "ShuntReactor"
+                    | "ShuntCondensator"
             ) {
                 return Err(format_error(format!(
                     "Element {id}: no conductor mapping for element type {kind}"

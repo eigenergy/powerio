@@ -37,21 +37,33 @@ def invoke(reader, records, mode, hours=None):
         return None, message.split('Error: ', 1)[1].strip()
 
 
-def audit(source_directory, record_directory, reader, hours=None):
+def audit(source_directory, record_directory, reader, hours=None, shunt_record_directory=None):
     if hours is not None and (not math.isfinite(hours) or hours < 0):
         raise ValueError("snapshot hours must be finite and nonnegative")
     manifest = json.loads(Path(__file__).with_name('access-acquisition.json').read_text())
+    extensions = {}
+    if shunt_record_directory is not None:
+        extensions = {c['case']:c for c in json.loads(Path(__file__).with_name('shunt-acquisition.json').read_text())['cases']}
     cases = []
     for case in manifest['cases']:
         number = case['case']
         source = source_directory / f'csiro-representative{number:02d}.mdb'
+        case = dict(case)
         records = record_directory / f'representative{number:02d}.json'
+        if number in extensions:
+            extension = extensions[number]
+            if extension['source_sha256'] != case['source_sha256'] or not extension['base_tables_unchanged']:
+                raise ValueError('shunt acquisition changed the source or base tables')
+            case.update({k:extension[k] for k in ('record_sha256','record_bytes')})
+            records = shunt_record_directory / f'representative{number:02d}.json'
         for path, prefix in [(source, 'source'), (records, 'record')]:
             if path.stat().st_size != case[f'{prefix}_bytes'] or digest(path) != case[f'{prefix}_sha256']:
                 raise ValueError(f'case {number}: {prefix} identity mismatch')
         report, context_error = invoke(reader, records, 'audit', hours)
         network, parse_error = invoke(reader, records, 'read', hours)
         row = {key: case[key] for key in ('case', 'source_sha256', 'record_sha256')}
+        if number in extensions:
+            row['acquisition_profile'] = 'base_with_shunts'
         row.update({'schema': 11.5, 'variant': 1, 'context_error': context_error,
                     'complete_parse': network is not None, 'parse_error': parse_error,
                     'independently_validated': False, 'native_execution': False})
@@ -84,8 +96,9 @@ def main():
     parser.add_argument('report', type=Path)
     parser.add_argument('--reader', type=Path, required=True)
     parser.add_argument('--snapshot-hours', type=float)
+    parser.add_argument('--shunt-record-directory', type=Path)
     args = parser.parse_args()
-    report = audit(args.source_directory, args.record_directory, args.reader.resolve(), args.snapshot_hours)
+    report = audit(args.source_directory, args.record_directory, args.reader.resolve(), args.snapshot_hours, args.shunt_record_directory)
     args.report.write_text(json.dumps(report, indent=2) + "\n")
     complete = sum(c['complete_parse'] for c in report['cases'])
     print(f"Audited {len(report['cases'])} cases; {complete} complete parses. See per-case limitations.")

@@ -118,7 +118,7 @@ impl NativeDatabase {
     }
 }
 
-fn reciprocal(r: f64, x: f64) -> Result<Complex64> {
+pub(super) fn reciprocal(r: f64, x: f64) -> Result<Complex64> {
     let scale = r.abs().max(x.abs());
     if r < 0.0 || scale == 0.0 {
         return Err(format_error(

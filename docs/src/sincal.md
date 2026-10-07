@@ -136,6 +136,14 @@ and typed network accessors are unchanged.
 Active daily profiles require an explicit snapshot; no midnight default is
 assumed. Generic time-series and inherited variants remain under development.
 
+Fixed reactor and capacitor banks retain their phase connections, losses,
+grounding and open/inactive states as typed shunts and switches. Supported
+three-phase grounded banks retain separate positive- and zero-sequence inputs.
+Explicit neutral impedances, automatic regulators and stepped direct
+zero-sequence impedances still require additional mapping. Documented optional
+schema-11.5 defaults are recorded; required ratings are never filled in.
+The Access acquisition helper includes both bank tables by default.
+
 PowerIO's primary-file limit remains 64 MiB by default. For a known larger input,
 use its existing explicit `POWERIO_MAX_PRIMARY_BYTES` setting. CSIRO09 is
 69,181,440 bytes; its validation uses that exact bound. Acquired table documents

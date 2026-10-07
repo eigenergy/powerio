@@ -1,0 +1,160 @@
+{
+  "scope": "Independent constant-impedance OpenDSS circuits for rated SINCAL shunt banks.\n\nTests actual Rust conductor primitives, port identities and service states.\nOriginal MDB files and acquired records remain external. No native execution.\n",
+  "synthetic": [
+    {
+      "kind": "ShuntReactor",
+      "selection": 1,
+      "relative_error": 1.973970740668304e-16
+    },
+    {
+      "kind": "ShuntReactor",
+      "selection": 2,
+      "relative_error": 1.973970740668304e-16
+    },
+    {
+      "kind": "ShuntReactor",
+      "selection": 3,
+      "relative_error": 1.973970740668304e-16
+    },
+    {
+      "kind": "ShuntReactor",
+      "selection": 4,
+      "relative_error": 1.1564823173178717e-18
+    },
+    {
+      "kind": "ShuntReactor",
+      "selection": 5,
+      "relative_error": 1.1564823173178717e-18
+    },
+    {
+      "kind": "ShuntReactor",
+      "selection": 6,
+      "relative_error": 1.1564823173178717e-18
+    },
+    {
+      "kind": "ShuntReactor",
+      "selection": 7,
+      "relative_error": 4.625929269271487e-18
+    },
+    {
+      "kind": "ShuntCondensator",
+      "selection": 1,
+      "relative_error": 1.9737298215558347e-16
+    },
+    {
+      "kind": "ShuntCondensator",
+      "selection": 2,
+      "relative_error": 1.9737298215558347e-16
+    },
+    {
+      "kind": "ShuntCondensator",
+      "selection": 3,
+      "relative_error": 1.9737298215558347e-16
+    },
+    {
+      "kind": "ShuntCondensator",
+      "selection": 4,
+      "relative_error": 1.1564823173178717e-18
+    },
+    {
+      "kind": "ShuntCondensator",
+      "selection": 5,
+      "relative_error": 1.1564823173178717e-18
+    },
+    {
+      "kind": "ShuntCondensator",
+      "selection": 6,
+      "relative_error": 1.1564823173178717e-18
+    },
+    {
+      "kind": "ShuntCondensator",
+      "selection": 7,
+      "relative_error": 4.9356796205406556e-17
+    }
+  ],
+  "native": [
+    {
+      "case": 3,
+      "element": 3766,
+      "kind": "ShuntReactor",
+      "selection": 1,
+      "opened": false,
+      "defaulted": [],
+      "relative_error": 0.0,
+      "source_sha256": "9eaf7c785fe0962af4e9ea5e6a5efb56477ed7427b660481c5cc66f9460bd759",
+      "record_sha256": "a658a49d68a1832ec0a50e78d4fe714e0b7e063b924eb8468ab78f39873e2369"
+    },
+    {
+      "case": 12,
+      "element": 180,
+      "kind": "ShuntCondensator",
+      "selection": 7,
+      "opened": false,
+      "defaulted": [
+        "Flag_Macro",
+        "Flag_roh",
+        "Vdi"
+      ],
+      "relative_error": 1.5548262266162491e-16,
+      "source_sha256": "7339548baf8bfcf5b891b9d3dbb6b616d9234b8f3df298d959904e150b8cfe91",
+      "record_sha256": "9861c2618515d42a972141097d8d177fa6364349e38a49a44af25d17af4f9f4e"
+    },
+    {
+      "case": 16,
+      "element": 89,
+      "kind": "ShuntCondensator",
+      "selection": 7,
+      "opened": true,
+      "defaulted": [
+        "Flag_Macro",
+        "Flag_roh",
+        "Flag_Z0"
+      ],
+      "relative_error": 2.518818487118323e-16,
+      "source_sha256": "d1b6ce0906accfbfb6f84901ad90fca7e27d83f4f78578675fceca0e026d791c",
+      "record_sha256": "03dda9a86a417db54f31449ce8edaecfaf09a334dcfc77d981e9223a90957aac"
+    },
+    {
+      "case": 16,
+      "element": 92,
+      "kind": "ShuntCondensator",
+      "selection": 7,
+      "opened": true,
+      "defaulted": [
+        "Flag_Macro",
+        "Flag_roh",
+        "Flag_Z0"
+      ],
+      "relative_error": 2.518818487118323e-16,
+      "source_sha256": "d1b6ce0906accfbfb6f84901ad90fca7e27d83f4f78578675fceca0e026d791c",
+      "record_sha256": "03dda9a86a417db54f31449ce8edaecfaf09a334dcfc77d981e9223a90957aac"
+    },
+    {
+      "case": 17,
+      "element": 134,
+      "kind": "ShuntCondensator",
+      "selection": 7,
+      "opened": true,
+      "defaulted": [
+        "Flag_Macro",
+        "Flag_roh",
+        "Flag_Z0"
+      ],
+      "relative_error": 1.6792123247455492e-16,
+      "source_sha256": "a80ce8ec7643e1103c65dc4a79cc6f06f5a1eae8f62fc7e03b952c25d2b2d5d7",
+      "record_sha256": "d0e79bbec9cacc96a6e0563956b87b09438c5d80d959b01b846fc65cc8054bfd"
+    }
+  ],
+  "negative_controls": 8,
+  "maximum_relative_primitive_error": 2.518818487118323e-16,
+  "tolerance": 1e-10,
+  "export_sha256": "265959324fc4d7495c1ee739ce3ec6b87e054124d981733a090dbf353f887491",
+  "attribution": "Berry, Adam; Collins, Lyle; Oliver, Erin; Perfumo, Cristian (2015), Representative Australian Electricity Feeders with load and solar generation profiles, v1, CSIRO.",
+  "collection": "https://doi.org/10.4225/08/5631B1DF6F1A0",
+  "license": "CC-BY-4.0",
+  "engine": "DSS C-API Library version 0.14.5 revision 87d85c2622c8281b92255335bc7c09b11191b21d based on OpenDSS SVN 3723 [FPC 3.2.2] (64-bit build) MVMULT INCREMENTAL_Y CONTEXT_API PM 20240329033829; License Status: Open \nDSS-Python version: 0.15.7\nOpenDSSDirect.py version: 0.9.4",
+  "numpy": "2.5.3",
+  "native_execution": false,
+  "whole_feeder_validation": false,
+  "passed": true
+}

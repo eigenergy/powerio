@@ -476,6 +476,15 @@ pass the independent short-circuit `ur <= uk` check. Missing mapping work and
 inconsistent source data therefore remain separate acceptance dispositions.
 No input repair, rounding-tolerance expansion or complete-feeder claim is made.
 
+Rated-bank progress: all five shunt reactors/capacitors in CSIRO03/12/16/17
+now map, with independent OpenDSS component checks. The three inactive banks
+remain disconnected typed circuits. CSIRO03 and CSIRO12 now reach full component
+audits (2/1084 and 61/215 mapped); cases 16/17 next reject synchronous machines.
+The single-phase CSIRO03 reactor also matches 49 aligned historical local
+voltage/current/power records without fitting inputs. This does not establish
+a complete feeder or native desktop acceptance. The original 21-table corpus
+remains reproducible; explicitly identified 23-table acquisitions add the banks.
+
 ### PR 5: experimental fresh writer
 
 Implement deterministic fresh schema-14.8 SQLite generation and packaging for
