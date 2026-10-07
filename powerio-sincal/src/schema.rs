@@ -19,6 +19,11 @@ pub struct DatabaseSnapshot {
     pub nodes: BTreeSet<i64>,
     pub elements: BTreeMap<i64, String>,
     pub terminals: BTreeMap<i64, TerminalIdentity>,
+    /// Present in the native catalog but deliberately not acquired.
+    pub excluded_tables: Vec<String>,
+    /// Claimed original MDB digest for a tool-assisted acquisition, not a
+    /// cryptographic attestation that the internal records are authentic.
+    pub source_digest: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -31,6 +36,28 @@ pub struct TerminalIdentity {
 impl DatabaseSnapshot {
     pub fn decode(bytes: &[u8], requested_variant: Option<i64>) -> Result<Self> {
         let connection = connect(bytes)?;
+        Self::from_connection(connection, requested_variant, &[14.8])
+    }
+
+    /// Decode explicit Access acquisition records. This does not admit Access
+    /// bytes through `decode` or reinterpret records as a native SQLite export.
+    pub fn decode_records(bytes: &[u8], requested_variant: Option<i64>) -> Result<Self> {
+        let records = crate::TableRecords::decode(bytes)?;
+        let digest = records.source_sha256().to_owned();
+        let excluded = records.excluded_tables().to_vec();
+        let connection = records.into_connection()?;
+        configure_query_snapshot(&connection)?;
+        let mut snapshot = Self::from_connection(connection, requested_variant, &[11.5])?;
+        snapshot.excluded_tables = excluded;
+        snapshot.source_digest = Some(digest);
+        Ok(snapshot)
+    }
+
+    fn from_connection(
+        connection: Connection,
+        requested_variant: Option<i64>,
+        supported_versions: &[f64],
+    ) -> Result<Self> {
         for (table, columns) in [
             ("Version", &["Version_ID", "Version_No", "Calc_Type"][..]),
             (
@@ -52,7 +79,7 @@ impl DatabaseSnapshot {
         ] {
             require_table(&connection, table, columns)?;
         }
-        let version = read_version(&connection)?;
+        let version = read_version(&connection, supported_versions)?;
         let variant = select_variant(&connection, requested_variant)?;
 
         let nodes = read_rows(
@@ -118,11 +145,13 @@ impl DatabaseSnapshot {
             nodes: node_ids,
             elements: element_ids,
             terminals: terminal_ids,
+            excluded_tables: Vec::new(),
+            source_digest: None,
         })
     }
 }
 
-fn read_version(connection: &Connection) -> Result<f64> {
+fn read_version(connection: &Connection, supported: &[f64]) -> Result<f64> {
     let mut versions = connection
         .prepare("SELECT Version_No, Calc_Type FROM Version")
         .map_err(format_error)?;
@@ -138,7 +167,7 @@ fn read_version(connection: &Connection) -> Result<f64> {
     }
     // This pins the observed database schema, not the product release.
     // Accepting another version requires schema evidence and fixtures.
-    if version.to_bits() != 14.8_f64.to_bits() {
+    if !supported.iter().any(|v| v.to_bits() == version.to_bits()) {
         return Err(format_error(format!(
             "unsupported database schema {version}"
         )));
@@ -244,6 +273,11 @@ fn connect(bytes: &[u8]) -> Result<Connection> {
     connection
         .deserialize_read_exact("main", bytes, bytes.len(), true)
         .map_err(format_error)?;
+    configure_query_snapshot(&connection)?;
+    Ok(connection)
+}
+
+fn configure_query_snapshot(connection: &Connection) -> Result<()> {
     connection
         .set_limit(Limit::SQLITE_LIMIT_LENGTH, 1 << 20)
         .map_err(format_error)?;
@@ -267,5 +301,5 @@ fn connect(bytes: &[u8]) -> Result<Connection> {
     connection
         .execute_batch("PRAGMA query_only=ON; PRAGMA trusted_schema=OFF; PRAGMA temp_store=MEMORY;")
         .map_err(format_error)?;
-    Ok(connection)
+    Ok(())
 }

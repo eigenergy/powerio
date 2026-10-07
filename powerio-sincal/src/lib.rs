@@ -8,12 +8,14 @@ mod project;
 mod schema;
 #[cfg(test)]
 mod schema_tests;
+mod tables;
 #[cfg(test)]
 mod tests;
 
 pub use acquisition::{MAX_BYTES, SQLITE_MAGIC, database_bytes};
 pub use project::AcquiredProject;
 pub use schema::{DatabaseSnapshot, TerminalIdentity, require_table};
+pub use tables::TableRecords;
 
 /// Transport/schema failure. The owning adapter supplies its registered diagnostic.
 #[derive(Debug)]
