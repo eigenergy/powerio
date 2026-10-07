@@ -260,30 +260,69 @@ branch must have coherent commits and pass its scoped tests; moving a branch
 pointer without implementing its deliverable does not complete it. PR 1 also
 has a local PowerIO.jl companion with the same branch name.
 
-### Approved delivery priorities and review gates
+### Guideline audit and revised delivery priorities (2026-10-08)
 
-The [local review packet](pss-sincal-review.md) contains the five draft
-descriptions, supported profiles, evidence links and outstanding review checks.
+This update supersedes the earlier case-search-first sequence and the informal
+recommendation to make conversion the default trial workflow. It reconciles
+`AGENTS.md`, the current guide, actual reader/writer/consumer code and the user's
+acceptance of labelled approximations. Design notes are dated evidence, not
+current API authority. The original dirty research checkout was inspected but
+not modified; implementation status below refers to the local reader stack.
 
-Latest user decision, 2026-10-07: no user review until one or two additional
-non-trivial distribution networks parse completely and pass end-to-end
-validation. Aim for two distinct published cases; at least one new complete
-success is required before returning for review discussion. Prefer simpler
-non-CSIRO cases where available, while retaining feasible CSIRO candidates.
-Preserve the five PRs, two-backend contract and experimental writer scope.
-Nothing in this decision authorizes publication.
+#### What PowerIO permits and what this branch actually does
 
-| Priority | Deliverable | Completion evidence |
+| Repository contract / precedent | Actual SINCAL state | Delivery consequence |
 | --- | --- | --- |
-| 1 | Select and complete additional substantial native distribution cases | Hash-pinned published input, reliable acquisition, all selected components mapped, independent whole-network electrical check; target two distinct cases |
-| 2 | Turn each success into reproducible PR evidence | Public parser command, typed result/counts, selection, diagnostics, independent oracle/tolerance/errors, source echo and IR checks, provenance/license and explicit limits |
-| 3 | Finish balanced Access/variant/snapshot selections in Python, C and Julia | CLI is complete; preserve explicit-family behavior and run relevant native snapshot/echo/IR and binding regressions |
-| 4 | Finish the five local review packets | Final base/diff review, coherent commits, supported-profile tables and affected regression packet, after the new distribution gate is met |
-| 5 | Broader corpus and uncommon modes | Follow-up work chosen for named gaps; the full CSIRO collection is not an initial delivery promise |
+| [Bounded format profiles](../src/concepts.md#values) and [known limits](../src/scope-0.11.md): full source-format coverage is not required | Both families have bounded readers; native fresh writing is experimental | Publish precise schema/equipment/selection support, without promising the full CSIRO corpus or native writer acceptance |
+| [Distribution checks](../src/distribution.md) separate parsing, semantic validity and computational support; DSS retains unresolved geometry and blocks analysis (`powerio-dist/tests/electrical_readiness.rs`); BMOPF retains unknown fields with warnings | SINCAL currently rejects unsupported required electrical mappings atomically; this is its profile policy, not a universal PowerIO parsing requirement | Keep malformed identities/dimensions/references fatal. Permit documented defaults and explicitly selected assumptions. Do not make every future readable case contingent on a solver or writer supporting it |
+| The existing model has `untyped`, extras, diagnostics and readiness audits | The generic readiness audit specifically blocks DSS geometry, not every arbitrary untyped electrical object | Simply putting failed SINCAL equipment into `untyped` would be unsafe. A future retained-but-incomplete read needs preserved identities/ports, durable IR state and explicit downstream guards; it is not implemented by this plan |
+| [Format fidelity](../src/format-fidelity.md#format-notes) calls for named table/field losses and affected counts; registered diagnostic details carry machine-readable context | Both SINCAL readers currently issue broad source-only remarks; the compatibility warning names fields in prose and extras | Itemize relevant retained-only tables/fields and counts, plus structured component/field/assumption details. Audit default provenance through IR and cross-format loss reporting; do not treat a generic warning as complete fidelity accounting |
+| [Same-format fidelity](../../AGENTS.md) preserves retained bytes; IR omits those bytes and edits invalidate echo | Native echo and IR value preservation are checked; ordinary fresh SINCAL emission remains unavailable, with `can_emit=false` | Keep echo, IR serialization and experimental fresh emission distinct in commands, examples and capability metadata |
+| Numerical and writer support are separate (`powerio-dist/src/convert.rs::emit_text_with_options`) | Ordinary DSS/PMD/BMOPF emission rejects terminal-referenced voltage sources; CSIRO09/12 use them. Their OpenDSS oracle builds its reference directly from native inputs | Advertise parse → inspect → IR/matrix/PF where supported. Do not advertise generic conversion for these cases. An independent oracle is not evidence of PowerIO export support |
+| [Typed/lazy bindings](../../AGENTS.md), stable names and matching C/Julia layouts | Distribution variant/snapshot/acquisition options already exist in Rust, CLI, Python, C and Julia; balanced options exist in Rust/CLI; the new source-control assumption exists only in Rust/CLI | Complete the specific option gaps instead of rebuilding binding infrastructure. Finalize unpublished C selection additions with the same-named Julia companion; preserve published ABI layouts |
+| [Contributor checks](../src/contributor-workflow.md) require the CI mirror before pushing and surface-specific gates | Recent Rust/Python checks and focused clippy pass, but are not a fresh full CI-mirror packet | Run the required integrated checks on the final stack before publication; record unavailable external tools as missing checks, not passes |
 
-Freeze writer expansion throughout this work. The current local drafts can be
-maintained, but do not ask the user to review them before the additional-case
-gate passes. Publication still needs the user's later authorization.
+The format-fidelity guide already documents reported substitutions/defaults in
+other readers. The user's tolerance for approximations is compatible with that
+practice. It does not authorize a false completeness claim or the silent removal
+of electrical equipment. Nor does it require a general strict/permissive policy
+framework: the existing format-specific option is sufficient for CSIRO12.
+`LinDist3FlowBuildOptions::unsupported` is a calculation-preparation policy;
+its Reject/Lower/Approximate/Permissive modes are not SINCAL parse options.
+
+#### Next implementation sequence
+
+| Order | Bounded deliverable | Done when |
+| --- | --- | --- |
+| 1 | Close fidelity/reporting gaps for the existing supported profiles | Relevant retained-only tables/fields and counts are reported; assumptions/defaults have structured context and survive IR as required; echo/edit/IR behavior and cross-format losses have focused tests |
+| 2 | Finish two-family option integration | Python gets the compatibility flag; balanced Access/variant/snapshot options reach Python/C/Julia; decide and document the compatibility flag's C/Julia exposure in the same unpublished selection-layout pass; typed/lazy access and explicit family selection remain unchanged |
+| 3 | Deliver an accurate trial workflow and capability table | One command sequence per named case reaches its actually supported output: native echo, IR, matrix/PF construction, or an independently tested target format. CSI09's unsourced-island PF refusal and CSI09/12's referenced-source export refusal are explicit |
+| 4 | Assemble the existing five PRs and run integrated gates | Supported profiles, qualified CSIRO12 evidence, known losses, bindings and tests are reviewable together; final base drift and per-PR diffs checked; CI mirror and applicable external checks recorded |
+| Follow-up | Expand retention or equipment only for a named user case | A retained-but-incomplete read is distinguished from an electrical success and blocked at unsupported consumers. Any new approximation has provenance and independent checks. No new broad search, paper parameter fitting or general permissive parser is required for these PRs |
+
+For order 3, start with the working native-source/IR path; a new referenced-source
+DSS/PMD/BMOPF lowering is not a hidden prerequisite. If export becomes the chosen
+trial deliverable, implement and validate one explicit target/profile rather
+than removing its reference-source guard. Keep the experimental SINCAL writer
+subset frozen; reader export to another format is a distinct boundary.
+
+#### Evidence and review gates
+
+The user's earlier request requires one or two additional substantial published
+distribution cases before review. The later acceptance of labelled approximations
+now gives us one such experimental trial case, CSIRO12, with all 215 components
+mapped under five explicit NULL-source-control assumptions. Its native loads are
+symmetric; that does not make its conductor-resolved model a balanced-backend
+case. Native NULL semantics remain unverified. Existing CSIRO09 and asymmetric
+Truong12 evidence remains useful. Do not make another arbitrary case count or
+reproduction of an underspecified paper a prerequisite to the bounded work above.
+The [review packet](pss-sincal-review.md) remains a draft until integration and
+fidelity checks are complete; this update does not request review or publication.
+
+Whole-case electrical validation remains the standard for claiming a complete
+numerically checked feeder. Source retention/inspection, defaulted interpretation,
+consumer readiness, external solver agreement and native SINCAL acceptance must
+be reported separately. No new public value type or status framework is needed.
 
 For a case to count, use an unmodified published native source and its explicitly
 selected variant/snapshot. Acquire every table/sidecar needed by active inputs;
@@ -294,8 +333,10 @@ complex voltages, terminal currents/powers, reference constraints, topology and
 load totals as applicable, with justified tolerances and solver convergence.
 Require zero unreported electrical omissions. Preserve inactive equipment and
 identify unsourced islands explicitly rather than silently dropping them.
-Source echo and IR checks must use the same native case. A larger balanced model
-belongs to the balanced backend and cannot replace this distribution milestone.
+Source echo and IR checks must use the same native case. A balanced-profile
+parse alone cannot replace this distribution milestone. A symmetric operating
+point explicitly parsed as MulticonductorNetwork remains distribution evidence;
+report the limits of its phase-asymmetry coverage.
 Component-only checks, tiny isolated circuits, different times of one feeder,
 writer-generated models and repaired derivatives do not count as additional
 published complete cases. Native SINCAL execution remains a separate claim.
@@ -324,9 +365,10 @@ and inputs are unchanged; rerun checks affected by edits or base drift.
 External acceptance gates: native SINCAL open/save/calculate for generated files
 and any claims of agreement with native execution. These remain unverified and
 are not gates to reviewing or merging the explicitly experimental writer.
-Undocumented electrical meanings still gate support for the affected reader modes,
-while the additional complete-case requirement gates user review. Broader
-unbalanced support must not be advertised on the strength of component counts or synthetic cases alone.
+Undocumented electrical meanings still prevent a verified-native-semantics claim,
+but the user-authorized explicit compatibility assumptions may support an
+experimental profile. Broader unbalanced support must not be advertised on the
+strength of partial component counts or synthetic cases alone.
 
 ### Follow-up corpus ambition and evidence accounting
 

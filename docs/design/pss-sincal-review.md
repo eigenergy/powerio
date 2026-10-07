@@ -1,29 +1,38 @@
 # SINCAL local review packet
 
 Updated 2026-10-08 against the approved [delivery roadmap](pss-sincal.md).
-These are local PR drafts and an evidence index. User review is deferred until
-one or two additional substantial distribution cases pass complete parsing and
-independent end-to-end validation. That gate is not yet met. Preserve the five
-stacked splits below; no PR is published.
+These are local PR drafts and an evidence index. CSIRO12 supplies one additional
+substantial experimental distribution case under the user's accepted assumption
+policy; native NULL semantics are unverified. Final fidelity, binding and
+integration work precedes user review. Preserve the five stacked splits below;
+no PR is published. The [guideline-audited sequence](pss-sincal.md#guideline-audit-and-revised-delivery-priorities-2026-10-08)
+replaces earlier case-search-first recommendations.
 
 ## Base and review status
 
-A fresh `git fetch origin main` confirmed `origin/main` is still
+The last recorded `git fetch origin main` found `origin/main` at
 `d5f937631a4f7c60460c610a02eb949e35812252`, the stack's base. No base drift was
-present at this check. Verify again before eventual publication. Local branch
+present at that check. This guideline audit did not fetch remote state; verify
+again before eventual publication. Local branch
 heads and test logs are recorded in the session handoff manifest; branch names
 below remain the review identities across local rebases.
 
 - [x] Five coherent branches exist with the intended linear ancestry.
 - [x] Current remote base checked; no merge/rebase onto newer main needed.
 - [x] Draft descriptions, declared profiles and evidence indexed below.
-- [ ] One or two additional substantial native distribution cases pass complete
-  parsing and independent end-to-end validation (required before user review).
-- [ ] Add each passing case's pinned source, counts, selection, command, oracle
-  errors/tolerances and licensing disposition to PR 4.
+- [x] One additional substantial experimental distribution case: CSIRO12, all
+  215 components under explicit source-control assumptions; retain the caveats.
+- [x] Pin CSIRO12 source/records, counts, snapshots, command, independent numerical
+  errors/tolerances and licensing disposition in PR 4.
+- [ ] Itemize retained-only source data and structured default/assumption findings;
+  verify their IR/fidelity behavior and cross-format loss reporting.
+- [ ] Test/document the actual per-case consumer/export routes; independent
+  OpenDSS oracle construction is not a PowerIO-to-DSS export test.
 - [ ] Final maintainability/correctness review of the complete per-PR diffs.
 - [x] Balanced CLI selections: native CSIRO19 snapshots, source echo and failures.
 - [ ] Balanced Access/snapshot selection integration across Python/C/Julia.
+- [ ] Compatibility option in Python; finalize/document C/Julia exposure together
+  with unpublished two-family selection layouts, preserving published ABI.
 - [ ] Final affected regression packet after integration changes.
 - [ ] User discussion and explicit permission before pushing or opening PRs.
 
@@ -31,8 +40,10 @@ The current distribution PR is the largest. Much of its diff is synthetic tests,
 external validation harnesses and measured reports. Review its acquisition/API
 boundaries and component mappers first, then the supporting tests and evidence.
 Keep dataset work organized within this PR; do not split it into more dataset
-PRs. Add modes needed by selected whole-case candidates only when independently
-verified. Do not expand equipment coverage merely to improve partial counts.
+PRs. Add modes only for named cases with suitable evidence; label user-authorized
+approximations separately from verified interpretations. A source-retention path
+may be useful without numerical support, but deferred electrical equipment needs
+consumer guards. Do not expand equipment merely to improve partial counts.
 
 ## PR 1 — Preserve source references in multiconductor models and consumers
 
@@ -208,6 +219,14 @@ atomic output and separation of experimental fresh writing from exact source ech
 
 ## Reproducing checks without expanding scope
 
+Follow [contributor-workflow](../src/contributor-workflow.md): before pushing,
+run `scripts/ci-mirror.sh`, including full clippy combinations, and configure
+`POWERIO_JL` for the companion binding checks. Use installed-wheel Python tests,
+C header/smoke and both ABI feature suites for changed bindings, scoped parser/
+writer oracle and roundtrip checks, applicable fuzz smoke, and the documented
+docs build/test checks. Run `evals/validation/run_validation.sh` for the changed
+parser/writer surface alongside the SINCAL-specific oracles; its legacy suite
+alone does not validate SINCAL. No native SINCAL execution is implied.
 Use each branch's applicable unit/integration tests and the exact commands in
 `evals/sincal/README.md`. External jobs require their hash-pinned source files;
 missing required data is a failure, not an implicit pass. Run affected checks
@@ -215,5 +234,6 @@ after integration edits, and the full CI clippy matrix before final handoff.
 Do not rerun unchanged expensive oracles merely to increase a test count.
 
 The original research checkout remains untouched. This packet does not authorize
-publication. The additional distribution-case gate now precedes user review;
-completion of the entire corpus and native writer acceptance remain separate.
+publication. The additional experimental case is now documented; fidelity and
+integration checks remain before review. Full-corpus completion and native writer
+acceptance remain separate.
