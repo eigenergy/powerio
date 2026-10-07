@@ -1294,7 +1294,8 @@ our calculations and their explicit limits are recorded.
 
 ## Binding and trial workflow verification (2026-10-08)
 
-`check_trial_workflows.py` uses an installed wheel and external native sources.
+[The trial report](trial-workflows.json) and [integration packet](priority-verification.json)
+record the final run. `check_trial_workflows.py` uses an installed wheel and external native sources.
 It tests source echo, typed IR, PF preparation and ordinary target emission
 separately. It does not solve the exported targets; numerical evidence remains
 in the independent native-input oracles above. Both families use explicit

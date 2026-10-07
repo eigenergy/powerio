@@ -1,6 +1,6 @@
 # PSS SINCAL reader and writer proposal
 
-Status: local reader implementation and validation in progress, 2026-10-08.
+Status: reader integration and validation complete locally, 2026-10-08.
 Both explicit public reader profiles are implemented. Five balanced cases and
 two complete conductor-resolved native cases have strict-reader electrical
 evidence: CSIRO09 and an asymmetric 12-bus model. The latter is smaller than
@@ -11,10 +11,10 @@ parsing and independent numerical checks under explicit source-control
 assumptions. This is experimental coverage, not verified native NULL behavior
 or another published asymmetric operating point. Keep those qualifications in
 the PR description; do not redefine distribution support to require every
-published snapshot to be asymmetric. Distribution selections include C/Julia;
-the new balanced Access selections and compatibility option currently use Rust
-and CLI. The existing review packet remains a draft pending final integration
-and evidence review. No review or publication is requested by this update.
+published snapshot to be asymmetric. Both families now expose selections in Rust, CLI, Python, C and Julia;
+the narrow distribution compatibility option reaches all five entry points.
+The [review packet](pss-sincal-review.md) records the completed integration
+checks and the five local PR scopes. No PR has been published.
 Nothing is published. Research base: `c8184eba` (PowerIO 0.11.4); the local PR
 stack starts at `d5f93763`. The current user-facing capabilities are documented
 in [the guide](../src/sincal.md). Earlier rationale below is dated context,
@@ -304,8 +304,12 @@ independent OpenDSS oracles. No new native fixture is added.
 Integration uncovered and repaired the missing rusqlite browser-backend feature;
 WebAssembly component compilation now passes. The matching Julia companion
 passes 1,895 assertions (two existing broken tests), and its native CSIRO19/12
-checks pass 18 assertions. The full CI mirror and final writer restack are the
-remaining priority-4 work; the review packet records their eventual outcome.
+checks pass 18 assertions. The CI mirror stages pass, including installed-wheel checks (265 tests passed,
+one skipped); the writer's scoped tests pass and its ten implementation patches
+are preserved through restacking. [The verification record](../../evals/sincal/priority-verification.json)
+and [trial workflow report](../../evals/sincal/trial-workflows.json) record the
+scope and limitations. Priorities 1–4 are complete locally; maintainer review and
+publication permission are the next steps.
 The fetched remote base remains `d5f937631a4f7c60460c610a02eb949e35812252`.
 
 #### Next implementation sequence

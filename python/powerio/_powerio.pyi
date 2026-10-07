@@ -831,10 +831,18 @@ class _PioModule:
         network: _MulticonductorNetwork,
     ) -> "_PioModule": ...
     @staticmethod
-    def _parse_path(path: str, format: Optional[str] = ...) -> "_PioModule": ...
+    def _parse_path(
+        path: str, format: Optional[str] = ...,
+        sincal: Optional[Tuple[Optional[int], Optional[float], Optional[str], bool]] = ...,
+        acquisition_root: Optional[str] = ...,
+        sincal_balanced: Optional[Tuple[Optional[int], Optional[float], Optional[str]]] = ...,
+    ) -> "_PioModule": ...
     @staticmethod
     def _parse_memory(
-        data: bytes, name: str, format: Optional[str] = ...
+        data: bytes, name: str, format: Optional[str] = ...,
+        sincal: Optional[Tuple[Optional[int], Optional[float], Optional[str], bool]] = ...,
+        named_buffers: Optional[List[Tuple[str, bytes]]] = ...,
+        sincal_balanced: Optional[Tuple[Optional[int], Optional[float], Optional[str]]] = ...,
     ) -> "_PioModule": ...
     @staticmethod
     def _deserialize_path(path: str) -> "_PioModule": ...

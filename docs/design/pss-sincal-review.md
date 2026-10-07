@@ -3,17 +3,16 @@
 Updated 2026-10-08 against the approved [delivery roadmap](pss-sincal.md).
 These are local PR drafts and an evidence index. CSIRO12 supplies one additional
 substantial experimental distribution case under the user's accepted assumption
-policy; native NULL semantics are unverified. Final fidelity, binding and
-integration work precedes user review. Preserve the five stacked splits below;
-no PR is published. The [guideline-audited sequence](pss-sincal.md#guideline-audit-and-revised-delivery-priorities-2026-10-08)
+policy; native NULL semantics are unverified. Fidelity reporting, two-family
+binding integration and the integrated checks are complete locally. The five
+stacked splits below are ready for review; no PR is published. The [guideline-audited sequence](pss-sincal.md#guideline-audit-and-revised-delivery-priorities-2026-10-08)
 replaces earlier case-search-first recommendations.
 
 ## Base and review status
 
 The last recorded `git fetch origin main` found `origin/main` at
 `d5f937631a4f7c60460c610a02eb949e35812252`, the stack's base. No base drift was
-present at that check. This guideline audit did not fetch remote state; verify
-again before eventual publication. Local branch
+present at the fresh 2026-10-08 check. Verify again before eventual publication. Local branch
 heads and test logs are recorded in the session handoff manifest; branch names
 below remain the review identities across local rebases.
 
@@ -24,16 +23,17 @@ below remain the review identities across local rebases.
   215 components under explicit source-control assumptions; retain the caveats.
 - [x] Pin CSIRO12 source/records, counts, snapshots, command, independent numerical
   errors/tolerances and licensing disposition in PR 4.
-- [ ] Itemize retained-only source data and structured default/assumption findings;
+- [x] Itemize retained-only source data and structured default/assumption findings;
   verify their IR/fidelity behavior and cross-format loss reporting.
-- [ ] Test/document the actual per-case consumer/export routes; independent
+- [x] Test/document the actual per-case consumer/export routes; independent
   OpenDSS oracle construction is not a PowerIO-to-DSS export test.
-- [ ] Final maintainability/correctness review of the complete per-PR diffs.
+- [x] Audit per-PR ancestry, scoped integration fixes and preserved writer patches.
+- [ ] Maintainer review of the declared electrical profiles and assumptions.
 - [x] Balanced CLI selections: native CSIRO19 snapshots, source echo and failures.
-- [ ] Balanced Access/snapshot selection integration across Python/C/Julia.
-- [ ] Compatibility option in Python; finalize/document C/Julia exposure together
+- [x] Balanced Access/snapshot selection integration across Python/C/Julia.
+- [x] Compatibility option in Python; finalize/document C/Julia exposure together
   with unpublished two-family selection layouts, preserving published ABI.
-- [ ] Final affected regression packet after integration changes.
+- [x] Final affected regression packet after integration changes.
 - [ ] User discussion and explicit permission before pushing or opening PRs.
 
 The current distribution PR is the largest. Much of its diff is synthetic tests,
@@ -110,7 +110,7 @@ snapshots for schema-11.5 acquired Access records through the Rust API.
 **Limits.** Only the documented schema/equipment profiles are claimed.
 Inherited variants, further active profile modes, additional SimBench/Access
 cases and native SINCAL execution remain unsupported or follow-up. The combined
-reader stack must complete balanced selection bindings before merge readiness.
+reader stack completes balanced selection bindings in PR 4, together with distribution options.
 
 **Evidence.** [SimBench](../../evals/sincal/balanced-simbench.json),
 [additional SQLite cases](../../evals/sincal/balanced-external.json),
@@ -151,8 +151,7 @@ native distribution cases; the 12-bus case is smaller than the requested feeders
 The user's subsequent acceptance of labelled approximations now adds CSIRO12
 as one substantial experimental trial case, detailed below. Keep the assumption
 and symmetric native operating point explicit. Component reports and synthetic
-stress cases alone are not additional native feeders. Final integration and
-evidence review remain before presenting the PRs for user review.
+stress cases alone are not additional native feeders. The final integration packet below is ready for maintainer review.
 
 **Limits that must appear in the PR.** CSIRO09's original loads are symmetric.
 Zero of the seven priority genuinely unbalanced original CSIRO feeders parses
@@ -182,7 +181,7 @@ original MDB echo, IR, generic matrix and PF-instance checks. Native-input
 OpenDSS comparisons cover 188 connected native nodes and all 153 nonideal lines;
 three conductor-free node records remain in extras. Maximum complex-voltage
 difference across native snapshots and synthetic unequal-load stress is
-0.000370 V. The Rust/CLI opt-in assumes five NULL source controls inactive,
+0.000370 V. The explicit Rust/CLI/Python/C/Julia opt-in assumes five NULL source controls inactive,
 emits warnings and retains assumptions in IR. This is a usable experimental
 example, not verified native NULL behavior or a new published asymmetric case.
 See [the report](../../evals/sincal/csiro12-compatibility.json).
@@ -217,6 +216,37 @@ unchanged, and the SimBench fresh-writer oracle reproduced its prior report.
 source/template dependency, transformer/switch circuit equivalence, diagnostics,
 atomic output and separation of experimental fresh writing from exact source echo.
 
+## Completed priority packet (2026-10-08)
+
+[Machine-readable verification](../../evals/sincal/priority-verification.json)
+records the final checks; [public trial routes](../../evals/sincal/trial-workflows.json)
+record successful operations and expected refusals for four named native cases.
+No native model payload or new fixture was added.
+
+- Full reader CI-mirror stages pass: workspace/feature tests, full clippy matrix,
+  Rust documentation, C/C++ release smoke checks, header and Julia parity, schema
+  and examples, package verification/license audit, fuzz compilation, browser
+  compilation, mdBook, Python lint/type/stub checks and installed-wheel tests.
+  The run resumed at failed stages after correcting package notices and private
+  Python stubs; 265 Python tests pass and one is skipped.
+- The matching Julia companion passes 1,895 assertions with two existing broken
+  tests; 18 additional assertions cover native CSIRO19 and CSIRO12 integration.
+- Fresh independent numerical checks pass for CSIRO19's seven balanced snapshots,
+  CSIRO09's ten snapshot/stress checks, CSIRO12's ten qualified compatibility
+  checks and Truong12's 36 phase voltages and 66 line-terminal currents/powers.
+  All deliberate mutation controls reject; previously reported error bounds hold.
+- Writer checks pass: six facade, fifteen distribution, six balanced and three
+  storage tests; three external writer tests remain intentionally ignored by the
+  unit suite. Affected-crate clippy passes. These are scoped checks, not a claim
+  of a second full CI mirror over PR 5 or native SINCAL desktop acceptance.
+
+Integration fixes live at the earliest relevant boundary: public terminology
+and quoted IR identity handling in PR 1; browser SQLite and package notices in
+PR 2; balanced guide conventions in PR 3; reporting, both-family bindings and
+trial evidence in PR 4. PR 5 retains its existing writer scope. Before publication,
+run the final branch CI on the agreed publication bases; there are no newly
+required model searches, equipment extensions or paper-fitting tasks.
+
 ## Reproducing checks without expanding scope
 
 Follow [contributor-workflow](../src/contributor-workflow.md): before pushing,
@@ -224,8 +254,9 @@ run `scripts/ci-mirror.sh`, including full clippy combinations, and configure
 `POWERIO_JL` for the companion binding checks. Use installed-wheel Python tests,
 C header/smoke and both ABI feature suites for changed bindings, scoped parser/
 writer oracle and roundtrip checks, applicable fuzz smoke, and the documented
-docs build/test checks. Run `evals/validation/run_validation.sh` for the changed
-parser/writer surface alongside the SINCAL-specific oracles; its legacy suite
+docs build/test checks. `evals/validation/run_validation.sh` covers legacy format
+oracles and was not rerun for this reporting/binding integration; the native
+SINCAL oracles and Rust conversion/roundtrip suites were rerun. Its legacy suite
 alone does not validate SINCAL. No native SINCAL execution is implied.
 Use each branch's applicable unit/integration tests and the exact commands in
 `evals/sincal/README.md`. External jobs require their hash-pinned source files;
@@ -234,6 +265,6 @@ after integration edits, and the full CI clippy matrix before final handoff.
 Do not rerun unchanged expensive oracles merely to increase a test count.
 
 The original research checkout remains untouched. This packet does not authorize
-publication. The additional experimental case is now documented; fidelity and
-integration checks remain before review. Full-corpus completion and native writer
+publication. The additional experimental case, fidelity work and binding
+integration are ready for review. Full-corpus completion and native writer
 acceptance remain separate.
