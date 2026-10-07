@@ -203,14 +203,74 @@ powerio convert case.sinx --from sincal-balanced --to sincal-balanced -o copy.si
 This is source echo, not a fresh writer: format metadata reports `can_emit=false`.
 Editing the value removes its retained native source. PowerIO IR retains typed
 values and provenance, not the original native project bytes. Edited,
-constructed and IR-restored modules therefore refuse native output without
-creating a partial file. The planned experimental writer has a separate
-acceptance scope.
+constructed and IR-restored modules therefore refuse native output through
+ordinary `emit`. Fresh writing requires the explicit experimental option below.
 
 Access/MDB acquisition currently uses the explicit optional helper under
 `evals/sincal`; ordinary library parsing never starts external programs. Its
 internal typed records are not native SQLite output. The Rust balanced selection
 API accepts them as a companion to their original MDB.
+
+## Experimental fresh writer (Rust)
+
+`emit_with_options` accepts an explicit `sincal_experimental` request. It always
+writes the current typed value, even when an unchanged module retains native
+source bytes. The result has `Fidelity::Canonical`, experimental warnings and
+loss diagnostics. Default options are equivalent to ordinary `emit`, including
+byte-exact echo. Unsupported physics or packaging errors produce no partial
+file, and existing destination files are not overwritten.
+
+```rust,no_run
+let module = powerio::parse_with_options(
+    "case.sinx", &powerio::ParseOptions::default().format("sincal-balanced")?,
+)?;
+let mut request = powerio::SincalExperimentalOptions::default();
+request.container = powerio::SincalContainer::Archive {
+    project_name: "converted".into(),
+};
+let mut options = powerio::EmitOptions::default();
+options.sincal_experimental = Some(request);
+let result = powerio::emit_with_options(&module, "sincal", &options, "fresh.sinx")?;
+assert_eq!(result.fidelity(), powerio::Fidelity::Canonical);
+for diagnostic in result.diagnostics() {
+    eprintln!("{}: {}", diagnostic.code(), diagnostic.message());
+}
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+`SincalContainer::Sqlite` (the default) produces a single SQLite database.
+`Archive` produces deterministic candidate `.sinx` packaging containing that
+database and manifests. The project name accepts 1–128 ASCII letters, digits,
+underscores or hyphens. The destination filename does not select the container.
+Neither path writes an Access database, desktop `.sin` file, diagrams or results.
+Native SINCAL open/save/calculation remains an external acceptance gate.
+
+The module's existing electrical type selects the backend. `BalancedNetwork`
+uses the transmission writer. `MulticonductorNetwork` uses the distribution
+writer and requires `request.nominal_ll_volts`: a map from every typed bus ID
+to a finite positive line-line voltage in volts. Transformer auxiliary buses
+that are eliminated during primitive reconstruction span two voltage levels;
+their entries may be omitted. No source voltage, bound or metadata value is
+silently interpreted as bus nominal voltage. A balanced network rejects this
+map, and `sincal-balanced` rejects a multiconductor value. Neither electrical
+family is transformed implicitly or retried through the other backend.
+
+The initial balanced subset covers ideal reference sources, fixed PQ injections,
+static loads, same-voltage lines and fixed two-winding transformers. The
+multiconductor subset covers ideal positive-sequence sources with grounded or
+isolated floating reference, unequal phase and phase-pair static loads,
+sequence-representable lines and finite DD or solid DY/YD transformers with
+fixed taps. Supported native transformer primitives can be rewritten from their
+actual conductor matrices, including after IR restoration and compatible edits.
+Reconstruction reports its canonical nameplate parameter base explicitly.
+Open switches, external neutral circuits, other transformer/core modes, general
+shunts, controls and profiles are not yet covered by this writer subset.
+
+This opt-in is currently exposed by the Rust facade. CLI, Python and C emission
+continue to use their existing ordinary emission path. `can_emit` remains false
+because the experimental subset is not a universal native writer. Public
+multiconductor reader dispatch still awaits complete authentic corpus evidence;
+experimental writing does not imply that reader gate has passed.
 
 ## Validation
 

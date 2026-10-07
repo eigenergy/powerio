@@ -443,8 +443,8 @@ edits its load, invokes the candidate backend and parses fresh bytes through
 the public balanced reader. It separately verifies byte-exact echo of the new
 output; the old native project cannot enter the backend.
 
-Complete multiconductor circuit coverage, explicit experimental facade
-integration and broader writer subset coverage remain unfinished. The
+Complete multiconductor circuit coverage and broader writer subset coverage
+remain unfinished. The explicit Rust facade option is described below. The
 multiconductor staging implementation and IR evidence are described below. Canonical balanced transformer rows do not claim conductor/neutral
 semantics, and must not be used as an implicit multiconductor writer.
 
@@ -497,8 +497,8 @@ switches. Test circuits are generated at runtime; no native fixtures were added.
 
 This is incremental PR5 implementation. Selected typed transformer output is
 implemented below. Other shunt/generator output,
-open-switch/external-neutral authoring and the experimental public API remain
-unfinished. The complete authentic unbalanced reader corpus targets in
+open-switch/external-neutral authoring remain unfinished. The Rust experimental
+facade option is now implemented as described below. The complete authentic unbalanced reader corpus targets in
 PR4 are unchanged; these writer tests do not establish their completion. Native
 SINCAL desktop acceptance remains a separate external gate.
 
@@ -573,3 +573,35 @@ the edited unequal-load voltage difference is below 1.31e-10 V. A facade test
 separately serializes the reader-produced primitive through real PowerIO IR,
 removes provenance, edits the matrices and verifies fresh write/read. The
 ordinary family dispatch and source-echo API remain unchanged.
+
+
+### Explicit experimental facade option
+
+The Rust facade now offers `emit_with_options(module, format, options, destination)`.
+`EmitOptions::default()` is equivalent to `emit`. Setting `sincal_experimental`
+to `Some(SincalExperimentalOptions)` requests a fresh candidate and bypasses
+retained-source echo. Both typed and dynamic modules dispatch through their
+owning electrical backend; the generic `sincal` output target accepts either
+network family, while `sincal-balanced` rejects multiconductor values. Other
+value types and options used with other formats are rejected before writing.
+
+SQLite versus candidate archive packaging is an explicit container option.
+Distribution nominal line-line voltages are mandatory for every non-eliminated
+bus; balanced values reject that map because their bus nominal kV is already
+typed. Both emitters finish validation and packaging before committing output.
+Existing destination files retain the core destination collision behavior.
+The result is always `Fidelity::Canonical`, with experimental and loss warnings.
+The ordinary API still echoes unchanged native sources exactly and refuses
+fresh native output; format metadata intentionally remains `can_emit=false`.
+
+```sh
+cargo test -p powerio --test sincal_emit --test sincal --test crate_graph
+```
+
+Public tests cover both families and containers, deterministic output, actual
+IR edits, typed modules, non-network rejection, explicit family mismatch,
+missing/inapplicable voltage options, invalid archive names, no partial output
+or overwrite, preserved source echo, and unchanged default MATPOWER emission.
+The facade depends on the shared SINCAL crate only for model-neutral packaging;
+backend dependencies remain independent. CLI/Python/C experimental options and
+complete authentic multiconductor reader dispatch are still separate work.

@@ -310,8 +310,8 @@ fn experimental_balanced_backend_writes_edited_ir_without_native_source() {
     let echoed = powerio::emit(&fresh, "sincal", Destination::memory("copy.db").unwrap()).unwrap();
     assert_eq!(echoed.fidelity(), Fidelity::ExactSameFormat);
     assert_eq!(bytes(echoed), candidate.database);
-    // Universal fresh emission is still unavailable until the explicit
-    // experimental facade contract for both families is implemented.
+    // Ordinary emission stays source-echo-only. Fresh output requires the
+    // explicit facade experimental options, tested in sincal_emit.rs.
     assert!(!powerio::resolve_format("sincal-balanced").unwrap().can_emit);
     assert!(
         powerio::emit(
