@@ -154,6 +154,19 @@ def version_edits(repo, sha, number):
     return result
 
 
+def edited_tree_entries(repo, tree, edits):
+    base = api(f'repos/{repo}/git/trees/{tree}?recursive=1')
+    require(not base.get('truncated', False), 'base tree is truncated; cannot preserve file modes')
+    modes = {entry['path']: entry['mode'] for entry in base['tree']}
+    entries = []
+    for path, text in edits.items():
+        mode = modes.get(path, '100644')
+        require(mode in ('100644', '100755'), f'release edit is not a regular file: {path}')
+        blob = api(f'repos/{repo}/git/blobs', {'encoding': 'base64', 'content': base64.b64encode(text.encode()).decode()})
+        entries.append({'path': path, 'mode': mode, 'type': 'blob', 'sha': blob['sha']})
+    return entries
+
+
 def propose(repo, number):
     branch = f'release/{number}'
     existing = api(f'repos/{repo}/pulls?state=all&head=eigenergy:{branch}&base=main')
@@ -165,10 +178,7 @@ def propose(repo, number):
             f'{repo} already has {branch}; inspect it before retrying')
     edits = generated_edits(repo, base, version_edits(repo, base, number))
     tree = api(f'repos/{repo}/git/commits/{base}')['tree']['sha']
-    entries = []
-    for path, text in edits.items():
-        blob = api(f'repos/{repo}/git/blobs', {'encoding': 'base64', 'content': base64.b64encode(text.encode()).decode()})
-        entries.append({'path': path, 'mode': '100644', 'type': 'blob', 'sha': blob['sha']})
+    entries = edited_tree_entries(repo, tree, edits)
     tree = api(f'repos/{repo}/git/trees', {'base_tree': tree, 'tree': entries})['sha']
     commit = api(f'repos/{repo}/git/commits', {'message': f'release: prepare {number}', 'tree': tree, 'parents': [base]})['sha']
     api(f'repos/{repo}/git/refs', {'ref': f'refs/heads/{branch}', 'sha': commit})
