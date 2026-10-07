@@ -17,7 +17,7 @@
 //! base. Everything the mapping does not consume is counted per class into
 //! the parse warnings, never dropped silently.
 
-use std::cell::RefCell;
+use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 
@@ -546,6 +546,8 @@ struct Merged {
 struct Store {
     objects: Vec<Merged>,
     by_id: HashMap<String, usize>,
+    /// Adjacent property reads usually refer to the same object.
+    last_object: Cell<Option<usize>>,
     /// Object positions by class, in first definition order. Built on first
     /// use after every document is merged, so a class scan costs the size of
     /// the class rather than the size of the store.
@@ -558,7 +560,7 @@ struct Store {
     /// Properties successfully read by the source neutral mapping. This lets
     /// the final diagnostic pass distinguish a mapped class from fields on
     /// that class which the mapping did not consume.
-    read_props: RefCell<BTreeSet<(usize, usize)>>,
+    read_props: OnceCell<Vec<Vec<Cell<bool>>>>,
     /// Whether a document declared this writer's modeling authority. The
     /// declaration permits suppressing only the exact container, island, and
     /// subordinate values fresh emission synthesizes; it does not make other
@@ -581,7 +583,9 @@ impl Store {
     fn merge(&mut self, doc: CimDocument) -> Result<()> {
         // The indexes describe the store as merged so far; a further document
         // rebuilds them on the next use.
+        self.last_object.set(None);
         self.by_class.take();
+        self.read_props.take();
         self.by_reference.borrow_mut().clear();
         let modeling_authority_set = doc
             .header
@@ -591,6 +595,10 @@ impl Store {
             Some(super::POWERIO_MODELING_AUTHORITY_SET) => self.own_output = true,
             Some(_) => self.foreign_output = true,
             None => {}
+        }
+        if self.objects.is_empty() {
+            self.objects.reserve(doc.objects.len());
+            self.by_id.reserve(doc.objects.len());
         }
         for CimObject {
             class,
@@ -659,20 +667,29 @@ impl Store {
         Ok(())
     }
 
+    fn object_index(&self, id: &str) -> Option<usize> {
+        if let Some(at) = self.last_object.get()
+            && self.objects[at].id == id
+        {
+            return Some(at);
+        }
+        let at = self.by_id.get(id).copied();
+        self.last_object.set(at);
+        at
+    }
+
     fn class_of(&self, id: &str) -> Option<&str> {
-        self.by_id
-            .get(id)
-            .map(|&at| self.objects[at].class.as_str())
+        self.object_index(id)
+            .map(|at| self.objects[at].class.as_str())
     }
 
     fn modeling_authority_set(&self, id: &str) -> Option<&str> {
-        self.by_id
-            .get(id)
-            .and_then(|&at| self.objects[at].modeling_authority_set.as_deref())
+        self.object_index(id)
+            .and_then(|at| self.objects[at].modeling_authority_set.as_deref())
     }
 
     fn contains(&self, id: &str) -> bool {
-        self.by_id.contains_key(id)
+        self.object_index(id).is_some()
     }
 
     /// Ids of every object of `class`, in first-definition order.
@@ -680,7 +697,11 @@ impl Store {
         let by_class = self.by_class.get_or_init(|| {
             let mut by_class: HashMap<String, Vec<usize>> = HashMap::new();
             for (at, object) in self.objects.iter().enumerate() {
-                by_class.entry(object.class.clone()).or_default().push(at);
+                if let Some(positions) = by_class.get_mut(object.class.as_str()) {
+                    positions.push(at);
+                } else {
+                    by_class.insert(object.class.clone(), vec![at]);
+                }
             }
             by_class
         });
@@ -720,7 +741,7 @@ impl Store {
     }
 
     fn raw_prop(&self, id: &str, key: &str) -> Option<(usize, usize, &PropValue)> {
-        let &at = self.by_id.get(id)?;
+        let at = self.object_index(id)?;
         self.objects[at]
             .props
             .iter()
@@ -730,9 +751,16 @@ impl Store {
     }
 
     fn mark_read(&self, object_at: usize, property_at: usize) {
-        self.read_props
-            .borrow_mut()
-            .insert((object_at, property_at));
+        self.read_properties()[object_at][property_at].set(true);
+    }
+
+    fn read_properties(&self) -> &Vec<Vec<Cell<bool>>> {
+        self.read_props.get_or_init(|| {
+            self.objects
+                .iter()
+                .map(|object| (0..object.props.len()).map(|_| Cell::new(false)).collect())
+                .collect()
+        })
     }
 
     fn text(&self, id: &str, key: &str) -> Option<&str> {
@@ -866,6 +894,40 @@ enum BusSource {
     Calculated,
 }
 
+/// The neutral terminal number is a transformer winding side. CIM permits
+/// ACDCTerminal.sequenceNumber to differ from TransformerEnd.endNumber.
+fn terminal_side(store: &Store, terminal: &str) -> Result<u8> {
+    let sequence = store
+        .f(terminal, "ACDCTerminal.sequenceNumber")?
+        .try_or_else(|| store.f(terminal, "Terminal.sequenceNumber"))?
+        .unwrap_or(1.0) as u8;
+    let Some(equipment) = store.refv(terminal, "Terminal.ConductingEquipment") else {
+        return Ok(sequence);
+    };
+    if store.class_of(equipment) != Some("PowerTransformer") {
+        return Ok(sequence);
+    }
+    let ends = store.referrers("TransformerEnd.Terminal", terminal);
+    let mut matching = ends.into_iter().filter(|end| {
+        store.class_of(end) == Some("PowerTransformerEnd")
+            && store.refv(end, "PowerTransformerEnd.PowerTransformer") == Some(equipment)
+    });
+    let Some(end) = matching.next() else {
+        return Ok(sequence);
+    };
+    if matching.next().is_some() {
+        return Err(Error::FormatRead {
+            format: FMT,
+            message: format!(
+                "Terminal `{terminal}` belongs to multiple PowerTransformerEnd records"
+            ),
+        });
+    }
+    Ok(store
+        .f(end, "TransformerEnd.endNumber")?
+        .map_or(sequence, |number| number as u8))
+}
+
 /// Terminal wiring: equipment → its terminals (sequence order), terminal →
 /// bus node (the topological node, or the connectivity node when buses are
 /// calculated), and the terminal SSH connection value.
@@ -883,10 +945,7 @@ impl Wiring {
             let mut connected = HashMap::new();
             for id in store.of_class("Terminal") {
                 if let Some(eq) = store.refv(id, "Terminal.ConductingEquipment") {
-                    let seq = store
-                        .f(id, "ACDCTerminal.sequenceNumber")?
-                        .try_or_else(|| store.f(id, "Terminal.sequenceNumber"))?
-                        .unwrap_or(1.0);
+                    let seq = f64::from(terminal_side(store, id)?);
                     of_equipment
                         .entry(eq.to_string())
                         .or_default()
@@ -2672,7 +2731,12 @@ fn build_detailed_connectivity(
             .f(id, "ACDCTerminal.sequenceNumber")?
             .try_or_else(|| store.f(id, "Terminal.sequenceNumber"))?
             .unwrap_or(1.0);
-        let terminal = u8::try_from(sequence as u64).unwrap_or(u8::MAX);
+        let terminal = terminal_side(store, id)?;
+        if terminal != sequence as u8 {
+            mapper.warnings.push_as(&codes::READ_CGMES_FIELD_UNMAPPED, format!(
+                "Terminal `{id}` sequenceNumber {sequence} differs from its transformer winding {terminal}; the neutral terminal number follows the winding, and fresh output uses that number"
+            ));
+        }
         let bus = store.refv(id, "Terminal.TopologicalNode");
         let node = store
             .refv(id, "Terminal.ConnectivityNode")
@@ -3773,11 +3837,7 @@ fn terminal_reference(store: &Store, terminal: &str) -> Result<Option<TerminalRe
     let Some(equipment) = store.refv(terminal, "Terminal.ConductingEquipment") else {
         return Ok(None);
     };
-    let sequence = store
-        .f(terminal, "ACDCTerminal.sequenceNumber")?
-        .try_or_else(|| store.f(terminal, "Terminal.sequenceNumber"))?
-        .unwrap_or(1.0);
-    let terminal = u8::try_from(sequence.round() as u64).unwrap_or(u8::MAX);
+    let terminal = terminal_side(store, terminal)?;
     Ok(Some(TerminalReference {
         equipment: component_id(
             component_type(store.class_of(equipment).unwrap_or_default()),
@@ -5852,7 +5912,7 @@ fn warn_unmapped(store: &Store, warnings: &mut CgmesDiagnostics) {
     let own_output = is_own_output(store);
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
     let mut fields: BTreeMap<(&str, &str), (usize, Vec<&str>)> = BTreeMap::new();
-    let read_props = store.read_props.borrow();
+    let read_props = store.read_properties();
     for (object_at, object) in store.objects.iter().enumerate() {
         let class = object.class.as_str();
         if !class_is_consumed(class) {
@@ -5863,7 +5923,7 @@ fn warn_unmapped(store: &Store, warnings: &mut CgmesDiagnostics) {
             continue;
         }
         for (property_at, (property, value)) in object.props.iter().enumerate() {
-            if read_props.contains(&(object_at, property_at)) {
+            if read_props[object_at][property_at].get() {
                 continue;
             }
             if own_output && synthesized_unmapped_property(class, property) {
@@ -5890,7 +5950,9 @@ fn warn_unmapped(store: &Store, warnings: &mut CgmesDiagnostics) {
                 .entry((class, property.as_str()))
                 .or_insert_with(|| (0, Vec::new()));
             *occurrences += 1;
-            if !ids.contains(&object.id.as_str()) {
+            // Each merged object is visited once, with all its properties
+            // together. Repeated values can only repeat the latest ID.
+            if ids.last().copied() != Some(object.id.as_str()) {
                 ids.push(object.id.as_str());
             }
         }
@@ -5960,6 +6022,101 @@ fn warn_regenerated_subordinate_identities(store: &Store, warnings: &mut CgmesDi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transformer_terminal_keeps_sequence_when_winding_number_is_missing() {
+        for (number, expected) in [(None, 2), (Some("1"), 1)] {
+            let mut props = vec![
+                (
+                    "TransformerEnd.Terminal".into(),
+                    PropValue::Ref("terminal".into()),
+                ),
+                (
+                    "PowerTransformerEnd.PowerTransformer".into(),
+                    PropValue::Ref("transformer".into()),
+                ),
+            ];
+            if let Some(number) = number {
+                props.push((
+                    "TransformerEnd.endNumber".into(),
+                    PropValue::Text(number.into()),
+                ));
+            }
+            let mut store = Store::default();
+            store
+                .merge(CimDocument {
+                    cim_namespaces: BTreeSet::new(),
+                    header: None,
+                    objects: vec![
+                        CimObject {
+                            class: "PowerTransformer".into(),
+                            id: "transformer".into(),
+                            definition: true,
+                            props: vec![],
+                        },
+                        CimObject {
+                            class: "Terminal".into(),
+                            id: "terminal".into(),
+                            definition: true,
+                            props: vec![
+                                (
+                                    "Terminal.ConductingEquipment".into(),
+                                    PropValue::Ref("transformer".into()),
+                                ),
+                                (
+                                    "ACDCTerminal.sequenceNumber".into(),
+                                    PropValue::Text("2".into()),
+                                ),
+                            ],
+                        },
+                        CimObject {
+                            class: "PowerTransformerEnd".into(),
+                            id: "end".into(),
+                            definition: true,
+                            props,
+                        },
+                    ],
+                })
+                .unwrap();
+            assert_eq!(terminal_side(&store, "terminal").unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn unmapped_multi_value_fields_count_objects_once_in_source_order() {
+        let mut store = Store::default();
+        store
+            .merge(CimDocument {
+                cim_namespaces: BTreeSet::new(),
+                header: None,
+                objects: (0..7)
+                    .map(|index| CimObject {
+                        class: "TopologicalIsland".into(),
+                        id: format!("island-{index}"),
+                        definition: true,
+                        props: vec![
+                            (
+                                "TopologicalIsland.TopologicalNodes".into(),
+                                PropValue::Ref("node-a".into()),
+                            ),
+                            (
+                                "TopologicalIsland.TopologicalNodes".into(),
+                                PropValue::Ref("node-b".into()),
+                            ),
+                        ],
+                    })
+                    .collect(),
+            })
+            .unwrap();
+        let mut warnings = CgmesDiagnostics::new(&codes::READ_CGMES_RECORD_UNMAPPED);
+        warn_unmapped(&store, &mut warnings);
+        assert_eq!(warnings.len(), 1);
+        let warning = warnings.iter().next().unwrap();
+        assert!(warning.contains("7 TopologicalIsland object(s) state 14"));
+        assert!(warning.contains(
+            "objects: [`island-0`, `island-1`, `island-2`, `island-3`, `island-4`] and 2 more"
+        ));
+    }
 
     fn document_with_literal(class: &str, property: &str, value: &str) -> CimDocument {
         CimDocument {
@@ -6041,7 +6198,15 @@ mod tests {
                 .unwrap(),
             Some(1.0)
         );
-        assert_eq!(number.read_props.borrow().len(), 1);
+        assert_eq!(
+            number
+                .read_properties()
+                .iter()
+                .flatten()
+                .filter(|read| read.get())
+                .count(),
+            1
+        );
         let unread = store(PropValue::Text("bad fallback".into()));
         assert_eq!(
             Some(1.0)
@@ -6049,7 +6214,7 @@ mod tests {
                 .unwrap(),
             Some(1.0)
         );
-        assert!(unread.read_props.borrow().is_empty());
+        assert!(!unread.read_properties().iter().flatten().any(Cell::get));
     }
 
     #[test]

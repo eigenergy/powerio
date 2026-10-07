@@ -93,9 +93,11 @@ fn prefixed_name(
     let local = String::from_utf8_lossy(local).into_owned();
     match resolve {
         ResolveResult::Bound(ns) => {
-            let uri = String::from_utf8_lossy(ns.as_ref()).into_owned();
+            let uri = String::from_utf8_lossy(ns.as_ref());
             if uri.contains("CIM-schema-cim") || uri.contains("CIM100#") {
-                cim_namespaces.insert(uri.clone());
+                if !cim_namespaces.contains(uri.as_ref()) {
+                    cim_namespaces.insert(uri.into_owned());
+                }
                 local
             } else if uri == MD_NS {
                 format!("md:{local}")
@@ -256,13 +258,14 @@ pub(crate) fn parse_cimxml(text: &str) -> Result<CimDocument> {
                                 }
                                 prop_text.clear();
                             } else {
-                                let value = std::mem::take(&mut prop_text);
+                                let value = prop_text.trim().to_string();
+                                prop_text.clear();
                                 push_prop(
                                     in_header,
                                     &mut header,
                                     &mut current,
                                     prop,
-                                    PropValue::Text(value.trim().to_string()),
+                                    PropValue::Text(value),
                                 );
                             }
                         }

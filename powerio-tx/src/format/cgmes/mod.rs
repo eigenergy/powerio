@@ -27,6 +27,7 @@ mod read;
 mod write;
 mod xml;
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::io::{Cursor, Read};
 use std::path::{Component, Path};
@@ -171,7 +172,7 @@ pub(crate) fn parse_text(
     text: &str,
     diagnostics: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
-    reject_unsafe_xml(text.as_bytes())?;
+    reject_unsafe_xml(text)?;
     read_documents(
         vec![(name.to_string(), text.to_string())],
         None,
@@ -327,7 +328,7 @@ fn push_zip(
         push_xml(
             &format!("{archive_name}/{raw_name}"),
             path.as_str(),
-            &content,
+            content,
             documents,
             names,
             total,
@@ -348,15 +349,16 @@ fn is_zip_signature(bytes: &[u8]) -> bool {
     )
 }
 
-fn push_xml(
+fn push_xml<'a>(
     name: &str,
     normalized_name: &str,
-    bytes: &[u8],
+    bytes: impl Into<Cow<'a, [u8]>>,
     documents: &mut Vec<(String, String)>,
     names: &mut BTreeSet<String>,
     total: &mut u64,
     max_bytes: u64,
 ) -> Result<()> {
+    let bytes = bytes.into();
     if documents.len() >= MAX_FILES {
         return Err(format_error(format!(
             "CGMES profile set contains more than {MAX_FILES} XML documents"
@@ -371,16 +373,21 @@ fn push_xml(
                 "CGMES profile data exceeds the {max_bytes} byte input limit"
             ))
         })?;
-    reject_unsafe_xml(bytes)?;
+    let text = match bytes {
+        Cow::Borrowed(bytes) => std::str::from_utf8(bytes)
+            .map(str::to_owned)
+            .map_err(|error| format_error(format!("{name} is not UTF-8 XML: {error}")))?,
+        Cow::Owned(bytes) => String::from_utf8(bytes)
+            .map_err(|error| format_error(format!("{name} is not UTF-8 XML: {error}")))?,
+    };
+    reject_unsafe_xml(&text)?;
     let key = normalized_name.replace('\\', "/").to_ascii_lowercase();
     if !names.insert(key) {
         return Err(format_error(format!(
             "CGMES profile set contains duplicate normalized name {normalized_name}"
         )));
     }
-    let text = std::str::from_utf8(bytes)
-        .map_err(|error| format_error(format!("{name} is not UTF-8 XML: {error}")))?;
-    documents.push((name.to_string(), text.to_string()));
+    documents.push((name.to_string(), text));
     Ok(())
 }
 
@@ -399,9 +406,16 @@ fn strict_archive_path(name: &str) -> Result<ArtifactPath> {
     ArtifactPath::new(name.to_string()).map_err(|error| source_error(&error))
 }
 
-fn reject_unsafe_xml(bytes: &[u8]) -> Result<()> {
-    let text = String::from_utf8_lossy(bytes).to_ascii_lowercase();
-    if text.contains("<!doctype") || text.contains("<!entity") {
+fn reject_unsafe_xml(text: &str) -> Result<()> {
+    if text.match_indices("<!").any(|(at, _)| {
+        let declaration = &text.as_bytes()[at..];
+        declaration
+            .get(..9)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"<!doctype"))
+            || declaration
+                .get(..8)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"<!entity"))
+    }) {
         return Err(format_error(
             "CGMES XML must not contain a DTD or entity declaration",
         ));
@@ -2410,6 +2424,73 @@ mod tests {
         }
         assert!((parsed.mag_g - 0.001).abs() < 1e-10);
         assert!((parsed.mag_b + 0.01).abs() < 1e-10);
+    }
+
+    #[test]
+    fn transformer_winding_order_is_independent_of_terminal_sequence() {
+        let mut network = network();
+        network.buses_mut()[1].base_kv = 115.0;
+        network.branches_mut()[0].tap = 1.05;
+        let mut files = write::write_cgmes(&network, CgmesVersion::V3_0)
+            .unwrap()
+            .files;
+        let eq = files
+            .iter_mut()
+            .find(|(name, _)| name.ends_with("_EQ.xml"))
+            .unwrap();
+        let transformer =
+            eq.1.lines()
+                .find_map(|line| {
+                    line.trim()
+                        .strip_prefix("<cim:PowerTransformer rdf:ID=\"")
+                        .and_then(|tail| tail.split('"').next())
+                        .map(str::to_owned)
+                })
+                .unwrap();
+        eq.1 =
+            eq.1.split("</cim:Terminal>")
+                .map(|part| {
+                    if part.contains(&format!(
+                        "<cim:Terminal.ConductingEquipment rdf:resource=\"#{transformer}\""
+                    )) {
+                        part.replace("sequenceNumber>1<", "sequenceNumber>TEMP<")
+                            .replace("sequenceNumber>2<", "sequenceNumber>1<")
+                            .replace("sequenceNumber>TEMP<", "sequenceNumber>2<")
+                    } else {
+                        part.to_owned()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("</cim:Terminal>");
+        let original = read::read_cgmes_documents(files, Some("reversed-terminal-sequence"))
+            .unwrap()
+            .network;
+        let fresh = write::write_cgmes(&original, CgmesVersion::V3_0).unwrap();
+        let reparsed = read::read_cgmes_documents(fresh.files, Some("fresh-transformer"))
+            .unwrap()
+            .network;
+        let before = &original.branches()[0];
+        let after = &reparsed.branches()[0];
+        let bus_uid = |net: &BalancedNetwork, bus| {
+            net.buses()
+                .iter()
+                .find(|b| b.id == bus)
+                .unwrap()
+                .uid
+                .clone()
+        };
+        assert_eq!(
+            bus_uid(&original, before.from),
+            bus_uid(&reparsed, after.from)
+        );
+        assert_eq!(bus_uid(&original, before.to), bus_uid(&reparsed, after.to));
+        assert!(
+            (before.tap - after.tap).abs() < 1e-10,
+            "tap {} became {}",
+            before.tap,
+            after.tap
+        );
+        assert!((before.rate_a - after.rate_a).abs() < 1e-10);
     }
 
     #[test]
@@ -5751,9 +5832,22 @@ mod tests {
         for xml in [
             "<!DOCTYPE rdf:RDF SYSTEM \"file:///etc/passwd\"><rdf:RDF/>",
             "<!DOCTYPE rdf:RDF [<!ENTITY x \"expanded\">]><rdf:RDF>&x;</rdf:RDF>",
+            "<!-- Ångström -->\n<!DoCtYpE rdf:RDF><rdf:RDF/>",
+            "<!-- 東京 -->\n<!EnTiTy x \"expanded\">",
         ] {
-            assert!(reject_unsafe_xml(xml.as_bytes()).is_err());
+            assert!(reject_unsafe_xml(xml).is_err());
         }
+        for xml in ["<!", "<!-- ordinary comment -->", "<![CDATA[Ångström]]>"] {
+            assert!(reject_unsafe_xml(xml).is_ok());
+        }
+    }
+
+    #[test]
+    fn invalid_utf8_profile_is_refused_before_xml_parsing() {
+        let source =
+            Source::from_memory("invalid.xml", b"<rdf:RDF>\xff</rdf:RDF>".to_vec()).unwrap();
+        let error = acquire_documents(&source).unwrap_err();
+        assert!(error.to_string().contains("not UTF-8 XML"));
     }
 
     #[test]

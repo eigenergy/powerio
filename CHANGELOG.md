@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Python adds `BalancedNetwork.n_lines` and `n_substations` alongside the other
+  native table counts. Immutable network handles cache scalar counts for repeated
+  access without rebuilding Python tables.
+
+- The Python extension uses mimalloc for Rust allocations, reducing allocation
+  overhead and memory use when loading and writing large networks. Allocator
+  license notices are included in the wheel.
+
+- CGMES transformer terminals now follow winding numbers when source terminal
+  sequence numbers differ, preserving winding connectivity, taps, and limits
+  through fresh emission. A synthetic unequal-voltage regression covers the
+  reversed ordering found in CIM bench's RealGrid dataset.
+
+- CGMES fresh emission indexes retained component, terminal, and transformer-end
+  identities once per write, avoiding repeated full-table scans on large grids.
+  Import tracks consumed properties with indexed flags while retaining the same
+  unmapped-field diagnostics.
+
 - Primary files and cumulative referenced-file acquisition now default to
   1 GiB. `POWERIO_MAX_PRIMARY_BYTES` and `POWERIO_MAX_REFERENCED_BYTES` override
   those limits; expanded CGMES archives use the latter too. This allows CIM

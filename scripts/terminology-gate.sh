@@ -62,9 +62,9 @@ public_paths=(
 )
 
 # Vendored third party files keep the vocabulary of their own publisher and
-# are not authored PowerIO text. The only such directory inside the paths
-# above is the schema archive under python/powerio/schemas.
-vendored_excludes=(--exclude-dir=schemas)
+# are not authored PowerIO text. This includes the schema archive under
+# python/powerio/schemas and the allocator's unmodified license notices.
+vendored_excludes=(--exclude-dir=schemas --exclude=NOTICE-mimalloc.txt)
 
 # These words have no defined PowerIO meaning. Protocol specifications and
 # third party source data are outside this authored public text.

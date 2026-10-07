@@ -14,9 +14,11 @@
 //! identity.
 //! Header timestamps are a fixed sentinel for the same reason.
 
+use std::borrow::Cow;
+use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use powerio_core::ComponentId;
 use quick_xml::events::Event;
@@ -26,16 +28,218 @@ use quick_xml::reader::NsReader;
 use super::{CGMES_CLASS_PROPERTY, CgmesDiagnostics, CgmesVersion};
 use crate::diagnostics::codes;
 use crate::network::{
-    AcDcConverterControlMode, ActivePowerControl, BalancedNetwork, BusId, BusType, CaseMetadata,
-    ComponentMetadata, CurveStyle, DcConverterOperatingMode, DcPolarity, DcSwitchKind, DcTerminal,
-    DetailedConnectivity, GeneratorEnergySource, LineCommutatedConverter,
+    AcDcConverterControlMode, ActivePowerControl, BalancedNetwork, Bus, BusBreakerBus, BusId,
+    BusType, CaseMetadata, ComponentMetadata, CurveStyle, DcConverterOperatingMode, DcPolarity,
+    DcSwitchKind, DcTerminal, DetailedConnectivity, GeneratorEnergySource, LineCommutatedConverter,
     LineCommutatedConverterOperatingMode, LoadVoltageModel, LoadingLimits, OmittedFieldName,
     ReactiveCapabilityCurve, ReactiveLimits, Shunt, StaticVarCompensatorRegulationMode, SwitchKind,
     SwitchedShuntMode, TapChanger, TapChangerKind, TapChangerRegulationMode, Terminal,
-    TerminalReference, TopologyEndpoint, TopologyKind, VoltageSourceConverter,
+    TerminalReference, TopologyEndpoint, TopologyKind, VoltageLevel, VoltageSourceConverter,
     calc_reactive_limits_at_active_power,
 };
 use crate::{Error, Result};
+
+/// Borrowed lookup indexes for one emission. Preserve first-match semantics
+/// and source ordering; no emitted record is driven by hash-map iteration.
+struct DetailedIndex<'a> {
+    inner: &'a DetailedConnectivity,
+    metadata: HashMap<(&'a str, &'a str), IndexedMetadata<'a>>,
+    equipment_mrids: HashMap<(&'static str, &'a str), String>,
+    external_ids: HashMap<&'a str, &'a ComponentMetadata>,
+    transformer_ends: HashMap<&'a str, Vec<&'a ComponentMetadata>>,
+    terminal_index: HashMap<(&'a str, &'a str, usize), &'a Terminal>,
+    voltage_levels_by_id: HashMap<&'a ComponentId, &'a VoltageLevel>,
+    substations_by_id: HashSet<&'a ComponentId>,
+    configured_by_id: HashMap<&'a ComponentId, &'a BusBreakerBus>,
+    configured_by_bus: HashMap<BusId, &'a BusBreakerBus>,
+    calculated_by_node: HashMap<&'a ComponentId, Option<BusId>>,
+    bus_mrids: HashMap<BusId, String>,
+    tap_index: HashMap<(&'a str, usize, bool), &'a TapChanger>,
+    transformers_with_taps: HashSet<&'a str>,
+    equipment_with_limits: HashSet<(&'a str, &'a str)>,
+}
+
+struct IndexedMetadata<'a> {
+    record: &'a ComponentMetadata,
+    mrid: OnceCell<String>,
+}
+
+impl<'a> DetailedIndex<'a> {
+    #[allow(clippy::too_many_lines)] // build one emission's borrowed indexes with first-match semantics
+    fn new(inner: &'a DetailedConnectivity, network: &'a BalancedNetwork) -> Self {
+        let mut metadata = HashMap::with_capacity(inner.component_metadata.len());
+        let mut external_ids = HashMap::new();
+        let mut transformer_ends: HashMap<&str, Vec<&ComponentMetadata>> = HashMap::new();
+        for record in &inner.component_metadata {
+            if record
+                .properties
+                .get(CGMES_CLASS_PROPERTY)
+                .is_some_and(|class| class == "PowerTransformerEnd")
+                && let Some(owner) = record
+                    .properties
+                    .get("PowerTransformerEnd.PowerTransformer")
+            {
+                transformer_ends.entry(owner).or_default().push(record);
+            }
+            metadata
+                .entry((
+                    record.component.component_type(),
+                    record.component.local_id(),
+                ))
+                .or_insert_with(|| IndexedMetadata {
+                    record,
+                    mrid: OnceCell::new(),
+                });
+            for identifier in &record.external_identifiers {
+                if identifier
+                    .authority
+                    .as_deref()
+                    .is_some_and(|authority| authority.eq_ignore_ascii_case("CGMES"))
+                {
+                    external_ids
+                        .entry(identifier.value.as_str())
+                        .or_insert(record);
+                }
+            }
+        }
+        let mut equipment_mrids = HashMap::new();
+        let mut register = |component_type: &'static str, id_kind: &str, uid: Option<&'a str>| {
+            if let Some(uid) = uid {
+                equipment_mrids
+                    .entry((component_type, uid))
+                    .or_insert_with(|| mrid_or(id_kind, uid, Some(uid)));
+            }
+        };
+        for load in network.loads() {
+            register("load", "load", load.uid.as_deref());
+        }
+        for generator in network.generators() {
+            register("generator", "generator", generator.uid.as_deref());
+        }
+        for shunt in network.shunts() {
+            register("shunt", "shunt", shunt.uid.as_deref());
+        }
+        for svc in network.static_var_compensators() {
+            register(
+                "static_var_compensator",
+                "static_var_compensator",
+                svc.uid.as_deref(),
+            );
+        }
+        for branch in network.branches() {
+            register("branch", "branch", branch.uid.as_deref());
+        }
+        for transformer in network.transformers_3w() {
+            register("branch", "transformer_3w", transformer.uid.as_deref());
+        }
+        for switch in network.switches() {
+            register("switch", "switch", switch.uid.as_deref());
+        }
+        let mut terminal_index = HashMap::with_capacity(inner.terminals.len());
+        for terminal in &inner.terminals {
+            terminal_index
+                .entry((
+                    terminal.equipment.component_type(),
+                    terminal.equipment.local_id(),
+                    usize::from(terminal.terminal),
+                ))
+                .or_insert(terminal);
+        }
+        let mut voltage_levels_by_id = HashMap::new();
+        for level in &inner.voltage_levels {
+            voltage_levels_by_id
+                .entry(&level.component)
+                .or_insert(level);
+        }
+        let substations_by_id = inner.substations.iter().map(|s| &s.component).collect();
+        let mut configured_by_id = HashMap::new();
+        let mut configured_by_bus = HashMap::new();
+        for configured in &inner.bus_breaker_buses {
+            configured_by_id
+                .entry(&configured.component)
+                .or_insert(configured);
+            if let Some(bus) = configured.calculated_bus {
+                configured_by_bus.entry(bus).or_insert(configured);
+            }
+        }
+        let mut calculated_by_node = HashMap::new();
+        for node in &inner.connectivity_nodes {
+            calculated_by_node
+                .entry(&node.component)
+                .or_insert(node.calculated_bus);
+        }
+        for bus in &inner.calculated_buses {
+            for node in &bus.nodes {
+                let calculated = calculated_by_node.entry(node).or_insert(None);
+                if calculated.is_none() {
+                    *calculated = Some(bus.calculated_bus);
+                }
+            }
+        }
+        let mut bus_mrids = HashMap::new();
+        for (&bus, configured) in &configured_by_bus {
+            let component = &configured.component;
+            bus_mrids.insert(
+                bus,
+                component_mrid_from_metadata(
+                    metadata
+                        .get(&(component.component_type(), component.local_id()))
+                        .map(|entry| entry.record),
+                    component,
+                ),
+            );
+        }
+        for bus in network.buses() {
+            bus_mrids
+                .entry(bus.id)
+                .or_insert_with(|| mrid_or("bus", &bus.id.to_string(), bus.uid.as_deref()));
+        }
+        let mut tap_index = HashMap::new();
+        let mut transformers_with_taps = HashSet::new();
+        for tap in &inner.tap_changers {
+            if tap.transformer.component_type() == "branch" {
+                let id = tap.transformer.local_id();
+                transformers_with_taps.insert(id);
+                tap_index
+                    .entry((
+                        id,
+                        usize::from(tap.winding),
+                        tap.kind == TapChangerKind::Ratio,
+                    ))
+                    .or_insert(tap);
+            }
+        }
+        let equipment_with_limits = inner
+            .operational_limit_groups
+            .iter()
+            .map(|group| (group.equipment.component_type(), group.equipment.local_id()))
+            .collect();
+        Self {
+            inner,
+            metadata,
+            equipment_mrids,
+            external_ids,
+            transformer_ends,
+            terminal_index,
+            voltage_levels_by_id,
+            substations_by_id,
+            configured_by_id,
+            configured_by_bus,
+            calculated_by_node,
+            bus_mrids,
+            tap_index,
+            transformers_with_taps,
+            equipment_with_limits,
+        }
+    }
+}
+
+impl std::ops::Deref for DetailedIndex<'_> {
+    type Target = DetailedConnectivity;
+    fn deref(&self) -> &Self::Target {
+        self.inner
+    }
+}
 
 /// The emitted profile documents, `(file_name, xml)` in EQ/TP/SSH/SV order,
 /// plus every fidelity loss the writer took.
@@ -97,28 +301,48 @@ const RATE_C_LIMIT: RateLimitType = RateLimitType {
 /// are reproducible; imported mRIDs (element `uid`s) take precedence at the
 /// call sites.
 fn det_mrid(kind: &str, name: &str) -> String {
-    let namespace = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, b"https://powerio.dev/cgmes");
-    uuid::Uuid::new_v5(&namespace, format!("{kind}:{name}").as_bytes()).to_string()
+    static NAMESPACE: LazyLock<uuid::Uuid> = LazyLock::new(|| {
+        uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, b"https://powerio.dev/cgmes")
+    });
+    uuid::Uuid::new_v5(&NAMESPACE, format!("{kind}:{name}").as_bytes()).to_string()
 }
 
 /// The imported mRID when the element carries one, else deterministic.
 fn mrid_or(kind: &str, name: &str, uid: Option<&str>) -> String {
-    uid.filter(|value| uuid::Uuid::parse_str(value).is_ok())
+    uid.filter(|value| uuid::Uuid::try_parse(value).is_ok())
         .map_or_else(|| det_mrid(kind, uid.unwrap_or(name)), str::to_owned)
 }
 
 fn metadata<'a>(
-    detailed: &'a DetailedConnectivity,
+    detailed: &'a DetailedIndex<'_>,
     component: &ComponentId,
 ) -> Option<&'a ComponentMetadata> {
     detailed
-        .component_metadata
-        .iter()
-        .find(|value| value.component == *component)
+        .metadata
+        .get(&(component.component_type(), component.local_id()))
+        .map(|entry| entry.record)
 }
 
-fn component_mrid(detailed: &DetailedConnectivity, component: &ComponentId) -> String {
-    let imported = metadata(detailed, component).and_then(|value| {
+fn component_mrid(detailed: &DetailedIndex<'_>, component: &ComponentId) -> String {
+    detailed
+        .metadata
+        .get(&(component.component_type(), component.local_id()))
+        .map_or_else(
+            || component_mrid_from_metadata(None, component),
+            |entry| {
+                entry
+                    .mrid
+                    .get_or_init(|| component_mrid_from_metadata(Some(entry.record), component))
+                    .clone()
+            },
+        )
+}
+
+fn component_mrid_from_metadata(
+    record: Option<&ComponentMetadata>,
+    component: &ComponentId,
+) -> String {
+    let imported = record.and_then(|value| {
         value
             .external_identifiers
             .iter()
@@ -127,7 +351,7 @@ fn component_mrid(detailed: &DetailedConnectivity, component: &ComponentId) -> S
                     .authority
                     .as_deref()
                     .is_some_and(|authority| authority.eq_ignore_ascii_case("CGMES"))
-                    && uuid::Uuid::parse_str(&identifier.value).is_ok()
+                    && uuid::Uuid::try_parse(&identifier.value).is_ok()
             })
             .map(|identifier| identifier.value.as_str())
     });
@@ -138,7 +362,7 @@ fn component_mrid(detailed: &DetailedConnectivity, component: &ComponentId) -> S
 }
 
 fn transformer_end_mrid(
-    detailed: Option<&DetailedConnectivity>,
+    detailed: Option<&DetailedIndex<'_>>,
     transformer_type: &str,
     transformer_local_id: &str,
     emitted_transformer_mrid: &str,
@@ -167,23 +391,19 @@ fn transformer_end_mrid(
     }
     source_transformer_ids.insert(emitted_transformer_mrid.to_owned());
 
-    let mut matches = detailed.component_metadata.iter().filter(|metadata| {
-        metadata
-            .properties
-            .get(CGMES_CLASS_PROPERTY)
-            .is_some_and(|class| class == "PowerTransformerEnd")
-            && metadata
-                .properties
-                .get("PowerTransformerEnd.PowerTransformer")
-                .is_some_and(|transformer| source_transformer_ids.contains(transformer))
-            && metadata
+    let mut matches = source_transformer_ids
+        .iter()
+        .filter_map(|id| detailed.transformer_ends.get(id.as_str()))
+        .flatten()
+        .filter(|metadata| {
+            metadata
                 .properties
                 .get("TransformerEnd.endNumber")
                 .and_then(|value| value.parse::<f64>().ok())
                 .is_some_and(|value| {
                     value.is_finite() && value.fract().eq(&0.0) && value.eq(&(winding as f64))
                 })
-    });
+        });
     let Some(retained) = matches.next() else {
         return Ok(fallback());
     };
@@ -203,7 +423,7 @@ struct RetainedIdentifiedMetadata {
 }
 
 fn retained_identified_metadata(
-    detailed: Option<&DetailedConnectivity>,
+    detailed: Option<&DetailedIndex<'_>>,
     warnings: &mut CgmesDiagnostics,
 ) -> Arc<HashMap<String, RetainedIdentifiedMetadata>> {
     let Some(detailed) = detailed else {
@@ -242,7 +462,7 @@ fn retained_identified_metadata(
                 .as_deref()
                 .is_some_and(|authority| authority.eq_ignore_ascii_case("CGMES"))
             {
-                if uuid::Uuid::parse_str(&identifier.value).is_err() {
+                if uuid::Uuid::try_parse(&identifier.value).is_err() {
                     warnings.push_as(&codes::EMIT_CGMES.value_substituted, format!(
                         "component `{}` has non-UUID CGMES identifier `{}`; fresh CGMES uses a deterministic UUID",
                         metadata.component, identifier.value
@@ -270,7 +490,7 @@ fn retained_identified_metadata(
 }
 
 fn component_name<'a>(
-    detailed: &'a DetailedConnectivity,
+    detailed: &'a DetailedIndex<'_>,
     component: &ComponentId,
     fallback: &'a str,
 ) -> &'a str {
@@ -280,46 +500,32 @@ fn component_name<'a>(
 }
 
 fn mapped_component_name<'a>(
-    detailed: Option<&'a DetailedConnectivity>,
+    detailed: Option<&'a DetailedIndex<'_>>,
     component_type: &str,
     local_id: &str,
     fallback: &'a str,
 ) -> &'a str {
-    detailed
-        .and_then(|detailed| {
-            detailed.component_metadata.iter().find(|metadata| {
-                metadata.component.component_type() == component_type
-                    && metadata.component.local_id() == local_id
-            })
-        })
+    mapped_component_metadata(detailed, component_type, local_id)
         .and_then(|metadata| metadata.name.as_deref())
         .unwrap_or(fallback)
 }
 
 fn mapped_component_metadata<'a>(
-    detailed: Option<&'a DetailedConnectivity>,
+    detailed: Option<&'a DetailedIndex<'_>>,
     component_type: &str,
     local_id: &str,
 ) -> Option<&'a ComponentMetadata> {
-    detailed?.component_metadata.iter().find(|metadata| {
-        metadata.component.component_type() == component_type
-            && metadata.component.local_id() == local_id
-    })
+    detailed?
+        .metadata
+        .get(&(component_type, local_id))
+        .map(|entry| entry.record)
 }
 
 fn cgmes_metadata_by_external_id<'a>(
-    detailed: &'a DetailedConnectivity,
+    detailed: &'a DetailedIndex<'_>,
     external_id: &str,
 ) -> Option<&'a ComponentMetadata> {
-    detailed.component_metadata.iter().find(|metadata| {
-        metadata.external_identifiers.iter().any(|identifier| {
-            identifier.value == external_id
-                && identifier
-                    .authority
-                    .as_deref()
-                    .is_some_and(|authority| authority.eq_ignore_ascii_case("CGMES"))
-        })
-    })
+    detailed.external_ids.get(external_id).copied()
 }
 
 fn has_cgmes_external_identifier(metadata: &ComponentMetadata) -> bool {
@@ -332,7 +538,7 @@ fn has_cgmes_external_identifier(metadata: &ComponentMetadata) -> bool {
 }
 
 fn mapped_generating_unit_metadata<'a>(
-    detailed: Option<&'a DetailedConnectivity>,
+    detailed: Option<&'a DetailedIndex<'_>>,
     generator: &str,
 ) -> Option<&'a ComponentMetadata> {
     let detailed = detailed?;
@@ -354,7 +560,7 @@ const fn generating_unit_class(source: GeneratorEnergySource) -> &'static str {
 }
 
 fn mapped_regulating_control_metadata<'a>(
-    detailed: Option<&'a DetailedConnectivity>,
+    detailed: Option<&'a DetailedIndex<'_>>,
     equipment_type: &str,
     equipment: &str,
 ) -> Option<&'a ComponentMetadata> {
@@ -420,7 +626,7 @@ fn retained_control_target(
 }
 
 fn mapped_equipment_container_mrid(
-    detailed: Option<&DetailedConnectivity>,
+    detailed: Option<&DetailedIndex<'_>>,
     component_type: &str,
     local_id: &str,
     unsupported_fallback: Option<String>,
@@ -461,7 +667,7 @@ fn mapped_equipment_container_mrid(
 }
 
 fn field_was_omitted(
-    detailed: Option<&DetailedConnectivity>,
+    detailed: Option<&DetailedIndex<'_>>,
     component_type: &str,
     local_id: &str,
     field: OmittedFieldName,
@@ -750,24 +956,31 @@ pub(super) fn warn_unemitted_detailed_fields(
 }
 
 fn detailed_terminal<'a>(
-    detailed: &'a DetailedConnectivity,
+    detailed: &'a DetailedIndex<'_>,
     component_type: &str,
     local_id: &str,
     terminal: usize,
 ) -> Option<&'a Terminal> {
-    detailed.terminals.iter().find(|value| {
-        value.equipment.component_type() == component_type
-            && value.equipment.local_id() == local_id
-            && usize::from(value.terminal) == terminal
-    })
+    detailed
+        .terminal_index
+        .get(&(component_type, local_id, terminal))
+        .copied()
 }
 
+#[allow(clippy::too_many_lines)] // fallback covers each network equipment table
 fn equipment_mrid(
     network: &BalancedNetwork,
-    detailed: Option<&DetailedConnectivity>,
+    detailed: Option<&DetailedIndex<'_>>,
     component: &ComponentId,
 ) -> Option<String> {
     let local_id = component.local_id();
+    if let Some(id) = detailed.and_then(|index| {
+        index
+            .equipment_mrids
+            .get(&(component.component_type(), local_id))
+    }) {
+        return Some(id.clone());
+    }
     match component.component_type() {
         "load" => network
             .loads()
@@ -869,14 +1082,17 @@ fn equipment_mrid(
 
 fn terminal_reference_mrid(
     network: &BalancedNetwork,
-    detailed: Option<&DetailedConnectivity>,
+    detailed: Option<&DetailedIndex<'_>>,
     reference: &TerminalReference,
 ) -> Option<String> {
     let equipment = equipment_mrid(network, detailed, &reference.equipment)?;
     let record = detailed.and_then(|details| {
-        details.terminals.iter().find(|terminal| {
-            terminal.equipment == reference.equipment && terminal.terminal == reference.terminal
-        })
+        detailed_terminal(
+            details,
+            reference.equipment.component_type(),
+            reference.equipment.local_id(),
+            usize::from(reference.terminal),
+        )
     });
     Some(terminal_mrid(
         detailed,
@@ -886,7 +1102,7 @@ fn terminal_reference_mrid(
     ))
 }
 
-fn configured_bus_mrid(detailed: &DetailedConnectivity, component: &ComponentId) -> String {
+fn configured_bus_mrid(detailed: &DetailedIndex<'_>, component: &ComponentId) -> String {
     component_mrid(detailed, component)
 }
 
@@ -897,22 +1113,18 @@ fn generated_voltage_level_mrid(container: &ComponentId) -> String {
     )
 }
 
-fn topology_voltage_level_mrid(detailed: &DetailedConnectivity, container: &ComponentId) -> String {
+fn topology_voltage_level_mrid(detailed: &DetailedIndex<'_>, container: &ComponentId) -> String {
     if container.component_type() == "line" {
         return component_mrid(detailed, container);
     }
-    detailed
-        .voltage_levels
-        .iter()
-        .find(|level| level.component == *container)
-        .map_or_else(
-            || generated_voltage_level_mrid(container),
-            |level| component_mrid(detailed, &level.component),
-        )
+    detailed.voltage_levels_by_id.get(container).map_or_else(
+        || generated_voltage_level_mrid(container),
+        |level| component_mrid(detailed, &level.component),
+    )
 }
 
 fn connectivity_node_mrid(
-    detailed: Option<&DetailedConnectivity>,
+    detailed: Option<&DetailedIndex<'_>>,
     terminal: Option<&Terminal>,
     bus: BusId,
     project_mixed_topology: bool,
@@ -933,11 +1145,7 @@ fn connectivity_node_mrid(
         {
             return det_mrid("connectivity_node", &configured.to_string());
         }
-        if let Some(configured) = detailed
-            .bus_breaker_buses
-            .iter()
-            .find(|value| value.calculated_bus == Some(bus))
-        {
+        if let Some(configured) = detailed.configured_by_bus.get(&bus) {
             return det_mrid("connectivity_node", &configured.component.to_string());
         }
     }
@@ -945,17 +1153,16 @@ fn connectivity_node_mrid(
 }
 
 fn terminal_voltage_level_topology(
-    detailed: &DetailedConnectivity,
+    detailed: &DetailedIndex<'_>,
     terminal: &Terminal,
 ) -> Option<TopologyKind> {
     detailed
-        .voltage_levels
-        .iter()
-        .find(|level| level.component == terminal.voltage_level)
+        .voltage_levels_by_id
+        .get(&terminal.voltage_level)
         .map(|level| level.topology_kind)
 }
 
-fn project_mixed_topology(detailed: &DetailedConnectivity) -> bool {
+fn project_mixed_topology(detailed: &DetailedIndex<'_>) -> bool {
     let has_node_breaker = detailed
         .voltage_levels
         .iter()
@@ -1042,9 +1249,22 @@ fn configured_terminal_bus(terminal: &Terminal) -> Option<&ComponentId> {
     terminal.connectable_bus.as_ref().or(terminal.bus.as_ref())
 }
 
+#[cfg(test)]
 pub(super) fn warn_pow_sybl_projected_transformer_connections(
     network: &BalancedNetwork,
     detailed: &DetailedConnectivity,
+    warnings: &mut CgmesDiagnostics,
+) {
+    warn_pow_sybl_projected_transformer_connections_indexed(
+        network,
+        &DetailedIndex::new(detailed, network),
+        warnings,
+    );
+}
+
+fn warn_pow_sybl_projected_transformer_connections_indexed(
+    network: &BalancedNetwork,
+    detailed: &DetailedIndex<'_>,
     warnings: &mut CgmesDiagnostics,
 ) {
     let affected_converters = converters_in_dc_series_device_islands(detailed);
@@ -1103,7 +1323,7 @@ pub(super) fn warn_pow_sybl_projected_transformer_connections(
 }
 
 fn terminal_uses_connectivity_node(
-    detailed: &DetailedConnectivity,
+    detailed: &DetailedIndex<'_>,
     terminal: &Terminal,
     project_mixed_topology: bool,
 ) -> bool {
@@ -1126,7 +1346,7 @@ fn terminal_uses_connectivity_node(
 
 fn terminal_topological_node_mrid(
     network: &BalancedNetwork,
-    detailed: Option<&DetailedConnectivity>,
+    detailed: Option<&DetailedIndex<'_>>,
     terminal: Option<&Terminal>,
     bus: BusId,
 ) -> String {
@@ -1137,14 +1357,14 @@ fn terminal_topological_node_mrid(
         if let Some(node) = terminal.and_then(|value| value.node.as_ref())
             && let Some(calculated_bus) = calculated_bus_for_node(detailed, node)
         {
-            return bus_mrid(network, calculated_bus);
+            return bus_mrid(network, Some(detailed), calculated_bus);
         }
     }
-    bus_mrid(network, bus)
+    bus_mrid(network, detailed, bus)
 }
 
 fn terminal_voltage_level_mrid(
-    detailed: Option<&DetailedConnectivity>,
+    detailed: Option<&DetailedIndex<'_>>,
     terminal: Option<&Terminal>,
     bus: BusId,
 ) -> String {
@@ -1163,14 +1383,13 @@ fn terminal_voltage_level_mrid(
     det_mrid("voltagelevel", &bus.to_string())
 }
 
-fn detailed_voltage_level_for_bus(
-    detailed: &DetailedConnectivity,
+fn detailed_voltage_level_for_bus<'a>(
+    detailed: &'a DetailedIndex<'_>,
     bus: BusId,
-) -> Option<&ComponentId> {
+) -> Option<&'a ComponentId> {
     detailed
-        .bus_breaker_buses
-        .iter()
-        .find(|configured| configured.calculated_bus == Some(bus))
+        .configured_by_bus
+        .get(&bus)
         .map(|configured| &configured.voltage_level)
         .or_else(|| {
             detailed
@@ -1197,7 +1416,7 @@ fn detailed_voltage_level_for_bus(
 
 fn missing_detailed_terminal_buses(
     network: &BalancedNetwork,
-    detailed: &DetailedConnectivity,
+    detailed: &DetailedIndex<'_>,
 ) -> HashSet<BusId> {
     let mut buses = HashSet::new();
     let mut check = |component_type: &str, local_id: &str, terminal: usize, bus: BusId| {
@@ -1274,21 +1493,36 @@ fn switch_class(kind: SwitchKind) -> &'static str {
     }
 }
 
-fn endpoint_bus(detailed: &DetailedConnectivity, endpoint: &TopologyEndpoint) -> Option<BusId> {
+fn endpoint_bus(detailed: &DetailedIndex<'_>, endpoint: &TopologyEndpoint) -> Option<BusId> {
     match endpoint {
         TopologyEndpoint::Bus(component) => detailed
-            .bus_breaker_buses
-            .iter()
-            .find(|value| value.component == *component)
+            .configured_by_id
+            .get(component)
             .and_then(|value| value.calculated_bus),
         TopologyEndpoint::Node(component) => calculated_bus_for_node(detailed, component),
     }
 }
 
-fn esc(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
+fn esc(text: &str) -> Cow<'_, str> {
+    if text.bytes().any(|byte| matches!(byte, b'&' | b'<' | b'>')) {
+        Cow::Owned(
+            text.replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;"),
+        )
+    } else {
+        Cow::Borrowed(text)
+    }
+}
+
+/// Escape formatted XML text directly into the output buffer.
+struct EscapedText<'a>(&'a mut String);
+
+impl std::fmt::Write for EscapedText<'_> {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        self.0.push_str(&esc(text));
+        Ok(())
+    }
 }
 
 /// One profile document under construction.
@@ -1307,21 +1541,21 @@ impl Doc {
 
     /// Open an object element (`rdf:ID` definition or `rdf:about` extension).
     fn open(&mut self, class: &str, id: &str, about: bool) {
-        let attr = if about {
-            format!("rdf:about=\"#_{id}\"")
+        let (attr, prefix) = if about {
+            ("rdf:about", "#_")
         } else {
-            format!("rdf:ID=\"_{id}\"")
+            ("rdf:ID", "_")
         };
-        let _ = writeln!(self.body, "  <cim:{class} {attr}>");
-        if !about && let Some(metadata) = self.retained_metadata.get(id).cloned() {
-            if let Some(name) = metadata.name {
-                self.text("IdentifiedObject.name", name);
+        let _ = writeln!(self.body, "  <cim:{class} {attr}=\"{prefix}{id}\">");
+        if !about && let Some(metadata) = self.retained_metadata.get(id) {
+            if let Some(name) = &metadata.name {
+                Self::write_text(&mut self.body, "IdentifiedObject.name", name);
             }
-            if let Some(short_name) = metadata.short_name {
-                self.text("IdentifiedObject.shortName", short_name);
+            if let Some(short_name) = &metadata.short_name {
+                Self::write_text(&mut self.body, "IdentifiedObject.shortName", short_name);
             }
             if metadata.fictitious {
-                self.text("IdentifiedObject.isFictitious", true);
+                Self::write_text(&mut self.body, "IdentifiedObject.isFictitious", true);
             }
         }
     }
@@ -1331,11 +1565,13 @@ impl Doc {
     }
 
     fn text(&mut self, prop: &str, value: impl std::fmt::Display) {
-        let _ = writeln!(
-            self.body,
-            "    <cim:{prop}>{}</cim:{prop}>",
-            esc(&value.to_string())
-        );
+        Self::write_text(&mut self.body, prop, value);
+    }
+
+    fn write_text(body: &mut String, prop: &str, value: impl std::fmt::Display) {
+        let _ = write!(body, "    <cim:{prop}>");
+        let _ = write!(EscapedText(body), "{value}");
+        let _ = writeln!(body, "</cim:{prop}>");
     }
 
     /// A property in a non-`cim` namespace (`entsoe:`/`eu:` extensions).
@@ -1445,7 +1681,7 @@ fn write_sv_voltage(
     sv.close("SvVoltage");
 }
 
-fn retained_sv_status(detailed: &DetailedConnectivity, component: &ComponentId) -> Option<bool> {
+fn retained_sv_status(detailed: &DetailedIndex<'_>, component: &ComponentId) -> Option<bool> {
     metadata(detailed, component)?
         .properties
         .get(super::CGMES_SV_STATUS_PROPERTY)?
@@ -1541,6 +1777,7 @@ fn document(
 struct Writer<'a> {
     net: &'a BalancedNetwork,
     p: Profiles,
+    buses: HashMap<BusId, &'a Bus>,
     warnings: CgmesDiagnostics,
 }
 
@@ -1663,21 +1900,19 @@ fn tap_step(tap: &TapChanger) -> Option<&crate::network::TapChangerStep> {
 }
 
 fn source_tap_changer<'a>(
-    detailed: Option<&'a DetailedConnectivity>,
+    detailed: Option<&'a DetailedIndex<'_>>,
     transformer: &str,
     winding: usize,
     kind: TapChangerKind,
 ) -> Option<&'a TapChanger> {
-    detailed?.tap_changers.iter().find(|value| {
-        value.transformer.component_type() == "branch"
-            && value.transformer.local_id() == transformer
-            && usize::from(value.winding) == winding
-            && value.kind == kind
-    })
+    detailed?
+        .tap_index
+        .get(&(transformer, winding, kind == TapChangerKind::Ratio))
+        .copied()
 }
 
 fn source_branch_is_power_transformer(
-    detailed: Option<&DetailedConnectivity>,
+    detailed: Option<&DetailedIndex<'_>>,
     branch_local_id: &str,
 ) -> bool {
     mapped_component_metadata(detailed, "branch", branch_local_id).is_some_and(|metadata| {
@@ -1685,12 +1920,7 @@ fn source_branch_is_power_transformer(
             .properties
             .get(CGMES_CLASS_PROPERTY)
             .is_some_and(|class| class == "PowerTransformer")
-    }) || detailed.is_some_and(|detailed| {
-        detailed.tap_changers.iter().any(|tap| {
-            tap.transformer.component_type() == "branch"
-                && tap.transformer.local_id() == branch_local_id
-        })
-    })
+    }) || detailed.is_some_and(|detailed| detailed.transformers_with_taps.contains(branch_local_id))
 }
 
 fn tap_neutral_position(tap: &TapChanger) -> i32 {
@@ -1788,7 +2018,7 @@ fn tap_rated_kv(network: &BalancedNetwork, tap: &TapChanger) -> f64 {
 #[derive(Clone, Copy)]
 struct TapWriteContext<'a> {
     network: &'a BalancedNetwork,
-    detailed: &'a DetailedConnectivity,
+    detailed: &'a DetailedIndex<'a>,
     cim_namespace: &'a str,
     tap: &'a TapChanger,
 }
@@ -2082,10 +2312,8 @@ fn write_source_loading_limits(
 impl Writer<'_> {
     fn kv(&self, bus: BusId) -> Result<f64> {
         let bus = self
-            .net
-            .buses()
-            .iter()
-            .find(|b| b.id == bus)
+            .buses
+            .get(&bus)
             .ok_or_else(|| emission_error(format!("bus {bus} does not exist")))?;
         if !bus.base_kv.is_finite() || bus.base_kv <= 0.0 {
             return Err(emission_error(format!(
@@ -2098,14 +2326,9 @@ impl Writer<'_> {
 }
 
 /// A bus's TopologicalNode id: the imported uid, else deterministic.
-fn bus_mrid(net: &BalancedNetwork, bus: BusId) -> String {
-    if let Some(detailed) = net.detailed_connectivity().as_deref()
-        && let Some(configured) = detailed
-            .bus_breaker_buses
-            .iter()
-            .find(|value| value.calculated_bus == Some(bus))
-    {
-        return component_mrid(detailed, &configured.component);
+fn bus_mrid(net: &BalancedNetwork, detailed: Option<&DetailedIndex<'_>>, bus: BusId) -> String {
+    if let Some(id) = detailed.and_then(|index| index.bus_mrids.get(&bus)) {
+        return id.clone();
     }
     net.buses()
         .iter()
@@ -2120,7 +2343,7 @@ fn term_id(eq: &str, seq: usize) -> String {
 }
 
 fn terminal_mrid(
-    detailed: Option<&DetailedConnectivity>,
+    detailed: Option<&DetailedIndex<'_>>,
     terminal: Option<&Terminal>,
     equipment_mrid: &str,
     sequence: usize,
@@ -2177,7 +2400,7 @@ fn dc_terminal_mrid(owner: &str, sequence: u32) -> String {
 }
 
 fn dc_unit_mrid(
-    detailed: &DetailedConnectivity,
+    detailed: &DetailedIndex<'_>,
     component: Option<&ComponentId>,
     owner: &ComponentId,
 ) -> Result<String> {
@@ -2196,7 +2419,7 @@ fn dc_unit_mrid(
 }
 
 fn dc_topological_node_mrid(
-    detailed: &DetailedConnectivity,
+    detailed: &DetailedIndex<'_>,
     component: Option<&ComponentId>,
     owner: &ComponentId,
 ) -> Result<String> {
@@ -2216,7 +2439,7 @@ fn dc_topological_node_mrid(
 
 fn write_equipment_container(
     eq: &mut Doc,
-    detailed: &DetailedConnectivity,
+    detailed: &DetailedIndex<'_>,
     container: Option<&ComponentId>,
 ) {
     if let Some(container) = container {
@@ -2229,7 +2452,7 @@ fn write_equipment_container(
 
 fn write_required_equipment_container(
     eq: &mut Doc,
-    detailed: &DetailedConnectivity,
+    detailed: &DetailedIndex<'_>,
     container: Option<&ComponentId>,
     owner: &ComponentId,
 ) -> Result<()> {
@@ -2264,7 +2487,7 @@ fn write_dc_terminal(
     eq: &mut Doc,
     tp: &mut Doc,
     ssh: &mut Doc,
-    detailed: &DetailedConnectivity,
+    detailed: &DetailedIndex<'_>,
     owner: &str,
     fallback_sequence: u32,
     terminal: &DcTerminal,
@@ -2332,19 +2555,15 @@ fn write_dc_terminal(
     Ok(())
 }
 
-fn calculated_bus_for_terminal(
-    detailed: &DetailedConnectivity,
-    terminal: &Terminal,
-) -> Option<BusId> {
+fn calculated_bus_for_terminal(detailed: &DetailedIndex<'_>, terminal: &Terminal) -> Option<BusId> {
     terminal
         .bus
         .as_ref()
         .or(terminal.connectable_bus.as_ref())
         .and_then(|bus| {
             detailed
-                .bus_breaker_buses
-                .iter()
-                .find(|value| value.component == *bus)
+                .configured_by_id
+                .get(bus)
                 .and_then(|value| value.calculated_bus)
         })
         .or_else(|| {
@@ -2355,25 +2574,14 @@ fn calculated_bus_for_terminal(
         })
 }
 
-fn calculated_bus_for_node(detailed: &DetailedConnectivity, node: &ComponentId) -> Option<BusId> {
-    detailed
-        .connectivity_nodes
-        .iter()
-        .find(|value| value.component == *node)
-        .and_then(|value| value.calculated_bus)
-        .or_else(|| {
-            detailed
-                .calculated_buses
-                .iter()
-                .find(|calculated| calculated.nodes.contains(node))
-                .map(|calculated| calculated.calculated_bus)
-        })
+fn calculated_bus_for_node(detailed: &DetailedIndex<'_>, node: &ComponentId) -> Option<BusId> {
+    detailed.calculated_by_node.get(node).copied().flatten()
 }
 
 #[allow(clippy::too_many_arguments)]
 fn write_converter_ac_terminals(
     network: &BalancedNetwork,
-    detailed: &DetailedConnectivity,
+    detailed: &DetailedIndex<'_>,
     eq: &mut Doc,
     tp: &mut Doc,
     ssh: &mut Doc,
@@ -2440,7 +2648,7 @@ fn write_converter_ac_terminals(
 
 #[derive(Clone, Copy)]
 struct CapabilityCurveWriteContext<'a> {
-    detailed: &'a DetailedConnectivity,
+    detailed: &'a DetailedIndex<'a>,
     component: &'a ComponentId,
     owner_mrid: &'a str,
     class: &'static str,
@@ -2520,7 +2728,7 @@ fn write_reactive_capability_curve(
 }
 
 fn retained_equipment_reactive_limits<'a>(
-    detailed: &'a DetailedConnectivity,
+    detailed: &'a DetailedIndex<'_>,
     component: &ComponentId,
 ) -> Result<Option<&'a ReactiveLimits>> {
     let mut matches = detailed
@@ -2555,7 +2763,7 @@ fn warn_min_max_reactive_limit_properties(
 
 fn write_vsc_capability_curve(
     eq: &mut Doc,
-    detailed: &DetailedConnectivity,
+    detailed: &DetailedIndex<'_>,
     converter: &VoltageSourceConverter,
     converter_mrid: &str,
     cim_ns: &str,
@@ -2613,7 +2821,7 @@ fn write_vsc_capability_curve(
 #[allow(clippy::too_many_arguments)]
 fn write_synchronous_machine_reactive_limits(
     eq: &mut Doc,
-    detailed: &DetailedConnectivity,
+    detailed: &DetailedIndex<'_>,
     component: &ComponentId,
     machine_mrid: &str,
     cim_ns: &str,
@@ -2845,7 +3053,7 @@ fn write_common_converter_ssh(
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn write_dc_equipment(
     writer: &mut Writer<'_>,
-    detailed: &DetailedConnectivity,
+    detailed: &DetailedIndex<'_>,
     eq: &mut Doc,
     tp: &mut Doc,
     ssh: &mut Doc,
@@ -3591,7 +3799,7 @@ fn write_dc_equipment(
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn write_line_commutated_converter(
     writer: &mut Writer<'_>,
-    detailed: &DetailedConnectivity,
+    detailed: &DetailedIndex<'_>,
     eq: &mut Doc,
     tp: &mut Doc,
     ssh: &mut Doc,
@@ -3865,6 +4073,10 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
     let mut w = Writer {
         net,
         p,
+        buses: net.buses().iter().fold(HashMap::new(), |mut buses, bus| {
+            buses.entry(bus.id).or_insert(bus);
+            buses
+        }),
         warnings: CgmesDiagnostics::new(&codes::EMIT_CGMES.record_dropped),
     };
     if unbounded_reactive_limits > 0 {
@@ -3884,7 +4096,11 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             ),
         );
     }
-    let detailed = net.detailed_connectivity().as_deref();
+    let detailed_index = net
+        .detailed_connectivity()
+        .as_deref()
+        .map(|details| DetailedIndex::new(details, net));
+    let detailed = detailed_index.as_ref();
     let retained_metadata = retained_identified_metadata(detailed, &mut w.warnings);
     if let Some(detailed) = detailed {
         warn_unemitted_detailed_fields(net, detailed, version, &mut w.warnings);
@@ -3933,7 +4149,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             w.warnings.push_as(&codes::EMIT_CGMES.value_substituted, format!(
                 "source detailed connectivity contains both node breaker and bus breaker VoltageLevels; fresh CGMES emission promotes {projected_levels} bus breaker VoltageLevel(s) to node breaker connectivity by adding one ConnectivityNode per TopologicalNode because PowSybl imports one topology mode per CGMES profile set; PowerIO's typed voltage level topology is unchanged"
             ));
-            warn_pow_sybl_projected_transformer_connections(net, detailed, &mut w.warnings);
+            warn_pow_sybl_projected_transformer_connections_indexed(net, detailed, &mut w.warnings);
         }
         for container in detailed
             .component_metadata
@@ -4117,11 +4333,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                                     affected_class: &str,
                                     affected: &ComponentId|
          -> Result<()> {
-            if detailed
-                .voltage_levels
-                .iter()
-                .any(|level| level.component == *container)
-            {
+            if detailed.voltage_levels_by_id.contains_key(container) {
                 return Ok(());
             }
             let source_line = container.component_type() == "line";
@@ -4133,10 +4345,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                     "source ConnectivityNodeContainer `{container}` for {affected_class} `{affected}` has no calculated bus from which to preserve its required voltage base"
                 ))
             })?;
-            let nominal_kv = net
-                .buses()
-                .iter()
-                .find(|candidate| candidate.id == bus)
+            let nominal_kv = w.buses.get(&bus)
                 .ok_or_else(|| {
                     emission_error(format!(
                         "source ConnectivityNodeContainer `{container}` for {affected_class} `{affected}` references unknown calculated bus {bus}"
@@ -4242,12 +4451,10 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
     if use_detailed_topology {
         let detailed = detailed.expect("detailed topology has detailed connectivity");
         let voltage_level_missing_substation = detailed.voltage_levels.iter().any(|level| {
-            level.substation.as_ref().is_none_or(|substation| {
-                !detailed
-                    .substations
-                    .iter()
-                    .any(|value| value.component == *substation)
-            })
+            level
+                .substation
+                .as_ref()
+                .is_none_or(|substation| !detailed.substations_by_id.contains(substation))
         });
         let needs_fallback_substation = voltage_level_missing_substation
             || !generated_voltage_levels.is_empty()
@@ -4296,12 +4503,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             let substation = level
                 .substation
                 .as_ref()
-                .filter(|component| {
-                    detailed
-                        .substations
-                        .iter()
-                        .any(|value| value.component == **component)
-                })
+                .filter(|component| detailed.substations_by_id.contains(*component))
                 .map_or_else(
                     || fallback_substation.clone(),
                     |component| component_mrid(detailed, component),
@@ -4328,10 +4530,9 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             eq.close("VoltageLevel");
         }
         for bus_id in &fallback_calculated_buses {
-            let bus = net
-                .buses()
-                .iter()
-                .find(|bus| bus.id == *bus_id)
+            let bus = w
+                .buses
+                .get(bus_id)
                 .expect("fallback bus exists in the balanced network");
             let id = det_mrid("voltagelevel", &bus.id.to_string());
             eq.named("VoltageLevel", &id, &format!("VL{}", bus.id));
@@ -4366,14 +4567,16 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             eq.close("ConnectivityNode");
             if let Some(bus) = calculated_bus_for_node(detailed, &node.component) {
                 tp.open("ConnectivityNode", &id, true);
-                tp.reference("ConnectivityNode.TopologicalNode", &bus_mrid(net, bus));
+                tp.reference(
+                    "ConnectivityNode.TopologicalNode",
+                    &bus_mrid(net, Some(detailed), bus),
+                );
                 tp.close("ConnectivityNode");
             }
             if node.voltage_level.component_type() != "line"
                 && !detailed
-                    .voltage_levels
-                    .iter()
-                    .any(|level| level.component == node.voltage_level)
+                    .voltage_levels_by_id
+                    .contains_key(&node.voltage_level)
             {
                 let affected = calculated_bus_for_node(detailed, &node.component).map_or_else(
                     || {
@@ -4392,12 +4595,11 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             }
         }
         for (bus, voltage_level, voltage_kv, angle_degrees) in &active_calculated_buses {
-            let balanced_bus = net
-                .buses()
-                .iter()
-                .find(|candidate| candidate.id == *bus)
+            let balanced_bus = w
+                .buses
+                .get(bus)
                 .expect("active calculated bus exists in the balanced network");
-            let id = bus_mrid(net, *bus);
+            let id = bus_mrid(net, Some(detailed), *bus);
             tp.named(
                 "TopologicalNode",
                 &id,
@@ -4425,12 +4627,11 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             );
         }
         for bus_id in &fallback_calculated_buses {
-            let bus = net
-                .buses()
-                .iter()
-                .find(|bus| bus.id == *bus_id)
+            let bus = w
+                .buses
+                .get(bus_id)
                 .expect("fallback bus exists in the balanced network");
-            let id = bus_mrid(net, bus.id);
+            let id = bus_mrid(net, Some(detailed), bus.id);
             let voltage_level = det_mrid("voltagelevel", &bus.id.to_string());
             tp.named(
                 "TopologicalNode",
@@ -4494,7 +4695,10 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             eq.reference("ConnectivityNode.ConnectivityNodeContainer", &container);
             eq.close("ConnectivityNode");
             tp.open("ConnectivityNode", &id, true);
-            tp.reference("ConnectivityNode.TopologicalNode", &bus_mrid(net, *bus_id));
+            tp.reference(
+                "ConnectivityNode.TopologicalNode",
+                &bus_mrid(net, Some(detailed), *bus_id),
+            );
             tp.close("ConnectivityNode");
             if !fallback_calculated_buses.contains(bus_id) {
                 w.warnings.push_as(&codes::EMIT_CGMES.value_defaulted, format!(
@@ -4506,15 +4710,15 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         for configured in &active_bus_breaker_buses {
             let id = configured_bus_mrid(detailed, &configured.component);
             let level = detailed
-                .voltage_levels
-                .iter()
-                .find(|level| level.component == configured.voltage_level);
+                .voltage_levels_by_id
+                .get(&configured.voltage_level)
+                .copied();
             let nominal_kv = level.map_or_else(
                 || {
                     if configured.voltage_level.component_type() == "line" {
                         return configured
                             .calculated_bus
-                            .and_then(|id| net.buses().iter().find(|bus| bus.id == id))
+                            .and_then(|id| w.buses.get(&id))
                             .map(|bus| bus.base_kv)
                             .expect("active source Line TopologicalNode has a calculated bus");
                     }
@@ -4580,7 +4784,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             eq.text("VoltageLevel.highVoltageLimit", bus.vmax * bus.base_kv);
             eq.close("VoltageLevel");
 
-            let tn = bus_mrid(net, bus.id);
+            let tn = bus_mrid(net, detailed, bus.id);
             tp.named(
                 "TopologicalNode",
                 &tn,
@@ -4740,9 +4944,9 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
     if let Some(detailed) = detailed {
         for busbar in &detailed.busbar_sections {
             let level = detailed
-                .voltage_levels
-                .iter()
-                .find(|level| level.component == busbar.voltage_level);
+                .voltage_levels_by_id
+                .get(&busbar.voltage_level)
+                .copied();
             if level.is_some_and(|level| level.topology_kind == TopologyKind::BusBreaker)
                 && !project_mixed_topology
             {
@@ -5254,7 +5458,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         let control = source_control.map_or_else(
             || {
                 source_control_id
-                    .filter(|value| uuid::Uuid::parse_str(value).is_ok())
+                    .filter(|value| uuid::Uuid::try_parse(value).is_ok())
                     .cloned()
                     .unwrap_or_else(|| det_mrid("regcontrol", &id))
             },
@@ -5709,7 +5913,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             source_control.map_or_else(
                 || {
                     source_control_id
-                        .filter(|value| uuid::Uuid::parse_str(value).is_ok())
+                        .filter(|value| uuid::Uuid::try_parse(value).is_ok())
                         .cloned()
                         .unwrap_or_else(|| det_mrid("regcontrol", &id))
                 },
@@ -5953,7 +6157,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         let control = source_control.map_or_else(
             || {
                 source_control_id
-                    .filter(|value| uuid::Uuid::parse_str(value).is_ok())
+                    .filter(|value| uuid::Uuid::try_parse(value).is_ok())
                     .cloned()
                     .unwrap_or_else(|| det_mrid("regcontrol", &id))
             },
@@ -6230,12 +6434,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 ),
             );
         }
-        let source_metadata = detailed.and_then(|detailed| {
-            detailed.component_metadata.iter().find(|metadata| {
-                metadata.component.component_type() == "branch"
-                    && metadata.component.local_id() == local_id
-            })
-        });
+        let source_metadata = mapped_component_metadata(detailed, "branch", local_id);
         let source_is_series_compensator = source_metadata.is_some_and(|metadata| {
             metadata
                 .properties
@@ -6500,12 +6699,8 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         }
         write_sv_status(&mut sv, &id, branch.in_service);
 
-        let has_source_limits = detailed.is_some_and(|value| {
-            value.operational_limit_groups.iter().any(|group| {
-                group.equipment.component_type() == "branch"
-                    && group.equipment.local_id() == local_id
-            })
-        });
+        let has_source_limits = detailed
+            .is_some_and(|value| value.equipment_with_limits.contains(&("branch", local_id)));
         if !has_source_limits {
             // PATL and TATL current limits at terminal 1 through √3·kV.
             let mut rate = |mva: f64, limit_type: RateLimitType| {
@@ -7035,10 +7230,13 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         sv.named("TopologicalIsland", &island, "island");
         sv.reference(
             "TopologicalIsland.AngleRefTopologicalNode",
-            &bus_mrid(net, slack.id),
+            &bus_mrid(net, detailed, slack.id),
         );
         for bus in net.buses() {
-            sv.reference("TopologicalIsland.TopologicalNodes", &bus_mrid(net, bus.id));
+            sv.reference(
+                "TopologicalIsland.TopologicalNodes",
+                &bus_mrid(net, detailed, bus.id),
+            );
         }
         sv.close("TopologicalIsland");
     } else {
@@ -7175,10 +7373,10 @@ pub(super) fn validate_rdf_graph(files: &[(String, String)]) -> Result<()> {
     const RDF_NS: &[u8] = b"http://www.w3.org/1999/02/22-rdf-syntax-ns#";
     const MD_NS: &[u8] = b"http://iec.ch/TC57/61970-552/ModelDescription/1#";
 
-    let mut fragment_definitions = HashMap::<String, String>::new();
-    let mut model_definitions = HashMap::<String, String>::new();
-    let mut fragment_references = Vec::<(String, &'static str, String)>::new();
-    let mut model_references = Vec::<(String, String)>::new();
+    let mut fragment_definitions = HashMap::<String, &str>::new();
+    let mut model_definitions = HashMap::<String, &str>::new();
+    let mut fragment_references = Vec::<(&str, &'static str, String)>::new();
+    let mut model_references = Vec::<(&str, String)>::new();
 
     for (name, xml) in files {
         let mut reader = NsReader::from_str(xml);
@@ -7246,7 +7444,7 @@ pub(super) fn validate_rdf_graph(files: &[(String, String)]) -> Result<()> {
                             b"about" => {
                                 if let Some(id) = rdf_object_reference_id(value) {
                                     fragment_references.push((
-                                        name.clone(),
+                                        name.as_str(),
                                         "rdf:about",
                                         id.to_owned(),
                                     ));
@@ -7258,12 +7456,12 @@ pub(super) fn validate_rdf_graph(files: &[(String, String)]) -> Result<()> {
                                         "generated CGMES model dependency in `{name}` has rdf:resource `{value}` instead of a urn:uuid identifier"
                                     ))
                                 })?;
-                                model_references.push((name.clone(), id.to_owned()));
+                                model_references.push((name.as_str(), id.to_owned()));
                             }
                             b"resource" => {
                                 if let Some(id) = rdf_object_reference_id(value) {
                                     fragment_references.push((
-                                        name.clone(),
+                                        name.as_str(),
                                         "rdf:resource",
                                         id.to_owned(),
                                     ));
@@ -7301,10 +7499,10 @@ pub(super) fn validate_rdf_graph(files: &[(String, String)]) -> Result<()> {
     Ok(())
 }
 
-fn register_rdf_definition(
-    definitions: &mut HashMap<String, String>,
+fn register_rdf_definition<'a>(
+    definitions: &mut HashMap<String, &'a str>,
     id: &str,
-    file: &str,
+    file: &'a str,
     kind: &str,
 ) -> Result<()> {
     if id.is_empty() {
@@ -7312,7 +7510,7 @@ fn register_rdf_definition(
             "generated CGMES file `{file}` defines an empty {kind}"
         )));
     }
-    if let Some(first_file) = definitions.insert(id.to_owned(), file.to_owned()) {
+    if let Some(first_file) = definitions.insert(id.to_owned(), file) {
         return Err(emission_error(format!(
             "generated CGMES defines {kind} `{id}` more than once: first in `{first_file}`, then in `{file}`"
         )));

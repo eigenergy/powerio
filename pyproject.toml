@@ -85,6 +85,7 @@ strip = true
 # manifest lives in the powerio-py subcrate); without these, PyPI rejects the
 # sdist for declaring a License-File it doesn't carry.
 include = [
+    { path = "python/powerio/NOTICE-mimalloc.txt", format = "sdist" },
     { path = "powerio-dist/schemas/bmopf/**/*", format = "sdist" },
     { path = "python/powerio/schemas/bmopf/**/*", format = "sdist" },
     { path = "LICENSE-APACHE", format = "sdist" },
