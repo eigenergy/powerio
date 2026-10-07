@@ -277,3 +277,29 @@ The acquired companion must be beneath the source directory or the explicitly
 selected `--acquisition-root`. Unknown or missing profiles never trigger a
 balanced/multiconductor fallback. Python/C/Julia balanced selection options
 remain work.
+
+## Experimental legacy source-control compatibility
+
+Rust `SincalReadOptions.assume_inactive_source_controls = true` and the CLI
+`--sincal-assume-inactive-source-controls` allow schema-11.5 NULL values in
+`Infeeder.Flag_LfLimit`, `Flag_LfCtrl`, `Flag_Qctrl`, `Flag_Macro` and `Kr` to be
+interpreted as zero/inactive. The default remains strict. This option currently
+exists in Rust and CLI only; it is not yet exposed in Python/C/Julia selections.
+Active controls, missing columns and missing electrical parameters still reject.
+
+```sh
+powerio summary project/original.mdb --from sincal-multiconductor \
+  --sincal-acquired-tables acquired.json --sincal-variant 1 \
+  --sincal-snapshot-hours 12 --sincal-assume-inactive-source-controls
+```
+
+An applied assumption emits `READ.DIST.SINCAL_ASSUMED_INACTIVE_SOURCE_CONTROLS`.
+The affected component and fields survive IR serialization in
+`extras.sincal_compatibility_assumptions`. Original MDB echo remains byte exact.
+These assumptions admit the complete CSIRO12 feeder, with independent OpenDSS
+checks, but do not establish what native SINCAL does with these NULLs.
+
+Native node records with no declared equipment conductors are retained in
+`extras.sincal_unconnected_nodes`, with `READ.DIST.SINCAL_UNCONNECTED_NODES`,
+instead of inventing phases. Nodes attached to open or inactive equipment remain
+electrical buses; unsourced islands still require explicit downstream handling.

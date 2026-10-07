@@ -5,7 +5,10 @@ Both explicit public reader profiles are implemented. Five balanced cases and
 two complete conductor-resolved native cases have independent electrical
 evidence: CSIRO09 and a newly validated asymmetric 12-bus model. The latter is
 smaller than the additional substantial feeders requested, so the review gate
-remains unmet. Distribution selections include C/Julia; the new balanced Access
+remains unmet. A third native feeder, CSIRO12, now has complete 215-element
+public parsing and independent numerical checks under an explicitly requested
+experimental source-control assumption; it is not a strict/native-semantics pass
+or another published asymmetric operating point. Distribution selections include C/Julia; the new balanced Access
 selections currently use Rust and CLI. The latest user decision requires one or
 two additional substantial distribution feeders to pass complete parsing and independent end-to-end validation before
 user review. The existing review packet is a draft, not review readiness.
@@ -42,7 +45,11 @@ review sequence: earn one or two more substantial complete distribution cases
 before asking the user to review. This is a bounded reader milestone, not a
 requirement to finish the entire CSIRO collection. Keep the five PR splits and
 the existing experimental writer subset. Unsupported electrical modes still
-fail explicitly; the new gate does not change the evidence for any case.
+fail explicitly. The 2026-10-08 user decision additionally permits labelled
+parsing approximations to encourage trials. Prioritize small, case-backed
+compatibility improvements with explicit opt-in, diagnostics and IR-persistent
+assumption metadata. Do not silently invent impedances, omit equipment or change
+network family. Report strict and assumed-circuit evidence separately.
 
 The user does not currently have SINCAL access. We can establish structural,
 electrical, and cross-tool evidence now, but successful import and calculation
@@ -298,6 +305,10 @@ Paper aggregates supplement the whole-network phase-resolved checks above;
 they do not alone satisfy that gate. The existing balanced IEEE18 now has a
 [paper cross-check](../../evals/sincal/ieee18-paper.json) independent of native
 result dumps. No additional unbalanced case is claimed from this evidence.
+The subsequent [unbalanced-paper audit](../../evals/sincal/unbalanced-paper-constraints.json)
+reconstructs output phasors where possible, but neither Arif 2013 nor Vinayagam
+2015 provides enough matched input/state detail for an exact load-flow replication.
+Do not spend further effort fitting missing parameters to these output figures.
 
 Merge gates: maintainer agreement on each declared profile; completion of its
 bounded integration work; passing relevant regressions, fidelity and diagnostic
@@ -390,8 +401,12 @@ validate the proposed leakage model. A separate sequence-aware CSIRO06 circuit
 hypothesis also failed all nine historical component comparisons. Stop extending
 these hypotheses without new documented semantics or matched reference evidence.
 CSIRO06 still has 35 Wye loads, nine partial transformers and eleven nameplate
-conflicts. CSIRO12 needs verified source-control NULL semantics and would not
-alone demonstrate mixed-phase operation.
+conflicts. CSIRO12 now has a bounded experimental route: assume five schema-11.5 NULL
+source controls inactive, with warnings. Its 215 components, five snapshots,
+three unused node records and independent OpenDSS comparisons are covered in
+[the compatibility report](../../evals/sincal/csiro12-compatibility.json).
+Native NULL semantics remain unverified. Its native loads are symmetric, so it
+does not alone demonstrate another published mixed-phase operating point.
 
 A second MDB decoder failed on the larger LoadFlow candidate. The paired CSIRO
 PowerFactory project was acquired unchanged under CC BY 4.0, but its binary PFD
@@ -596,7 +611,7 @@ At midnight, current component coverage is:
 | 09 | 688 / 688 | Yes |
 | 10 | 99 / 124 | No |
 | 11 | 87 / 104 | No |
-| 12 | 214 / 215 | No |
+| 12 | 214 / 215 strict; 215 / 215 opt-in | Experimental assumptions only |
 | 14 | 55 / 65 | No |
 | 15 | 89 / 102 | No |
 | 16 | 90 / 103 | No |
@@ -641,10 +656,14 @@ Follow-up implementation work includes Wye star/sequence semantics, coupled
 reduced-phase charging, partial mixed-winding transformers, additional regulators,
 CSIRO03's 297 limited-P/Q loads, synchronous
 machines, further sparse source/transformer fields, and broader variants/profiles.
-CSIRO12 now maps all lines, loads and its capacitor; its source's NULL controls
-remain unresolved. A balanced stored source result confirms its specified
-positive-sequence voltage but does not establish the unknown control field's
-conductor-domain behavior. No source-control default is inferred from that result.
+CSIRO12 maps all lines, loads and its capacitor in strict mode. The explicit
+`assume_inactive_source_controls` option additionally admits its source while
+recording five NULL-to-zero assumptions. Original source bytes remain unchanged.
+Three nodes with no declared equipment conductors are preserved in extras;
+no actual unsourced electrical island is removed. Public parse, source echo,
+IR, generic matrix/PF construction and five independent OpenDSS snapshots pass;
+unequal-load stress tests are labelled synthetic. This does not verify native
+NULL semantics or use a stored balanced result to infer them.
 
 CSIRO05 now maps 456 additional loads with stored UI-manipulator references.
 Independent interpolation and OpenDSS terminal-current checks cover all 2,280

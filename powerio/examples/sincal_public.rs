@@ -4,14 +4,15 @@ use powerio::{Destination, EmittedOutput, ParseOptions, PioValue, Source};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    if args.len() != 3 {
-        return Err("expected original.mdb acquired-records.json snapshot-hours".into());
+    if !(args.len() == 3 || (args.len() == 4 && args[3] == "--assume-inactive-source-controls")) {
+        return Err("expected original.mdb acquired-records.json snapshot-hours [--assume-inactive-source-controls]".into());
     }
     let native = Source::open(&args[0])?.primary_buffer()?;
     let records = Source::open(&args[1])?.primary_buffer()?;
     let source = Source::from_memory("original.mdb", native.shared_bytes())?
         .with_named_buffer("acquired.json", records.shared_bytes())?;
     let mut selection = powerio_dist::SincalReadOptions::default();
+    selection.assume_inactive_source_controls = args.len() == 4;
     selection.variant = Some(1);
     selection.snapshot_hours = Some(args[2].parse()?);
     selection.acquired_tables = Some("acquired.json".into());
@@ -74,6 +75,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!(
         "{}",
         serde_json::json!({
+            "reader_diagnostics": module.diagnostics().iter().map(|d| serde_json::json!({"code": d.code(), "message": d.message()})).collect::<Vec<_>>(),
             "generic_matrix_diagnostics": admittance.diagnostics().len(),
             "power_flow_instance": pf,
         })

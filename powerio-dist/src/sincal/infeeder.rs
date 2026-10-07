@@ -116,6 +116,12 @@ pub(super) struct InfeederInput {
 }
 
 impl NativeDatabase {
+    fn assume_inactive_control(&self, row: &Row<'_>, field: &str) -> bool {
+        self.assume_inactive_source_controls
+            && self.version.to_bits() == 11.5_f64.to_bits()
+            && matches!(row.get_ref(field), Ok(rusqlite::types::ValueRef::Null))
+    }
+
     pub fn infeeder_input(&self, element: i64) -> Result<InfeederInput> {
         if self.elements.get(&element).map(String::as_str) != Some("Infeeder") {
             return Err(format_error(format!(
@@ -163,6 +169,7 @@ impl NativeDatabase {
                 )));
             }
         }
+        let mut defaulted = Vec::new();
         for field in [
             "Flag_LfLimit",
             "Flag_LfCtrl",
@@ -170,13 +177,20 @@ impl NativeDatabase {
             "Flag_Qctrl",
             "Flag_Macro",
         ] {
-            if self.newer_integer(row, field, 0)? != 0 {
+            // Opt-in schema-11.5 compatibility: SQL NULL is an assumption,
+            // not proof of the application default. Never accept active values,
+            // missing columns, or NULLs in unrelated/newer controls.
+            if field != "Flag_Pctrl" && self.assume_inactive_control(row, field) {
+                defaulted.push(field);
+            } else if self.newer_integer(row, field, 0)? != 0 {
                 return Err(format_error(format!(
                     "unsupported infeeder control {field}"
                 )));
             }
         }
-        if number(row, "Kr")? != 0.0 {
+        if self.assume_inactive_control(row, "Kr") {
+            defaulted.push("Kr");
+        } else if number(row, "Kr")? != 0.0 {
             return Err(format_error(
                 "infeeder frequency control requires additional mapping",
             ));
@@ -206,7 +220,7 @@ impl NativeDatabase {
             setpoint,
             internal_impedance,
             grounding,
-            defaulted: Vec::new(),
+            defaulted,
             operating_series,
         })
     }

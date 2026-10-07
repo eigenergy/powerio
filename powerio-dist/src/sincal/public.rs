@@ -20,6 +20,11 @@ pub struct SincalReadOptions {
     /// Memory sources supply this companion using Source::with_named_buffer;
     /// file sources acquire it beneath their configured acquisition root.
     pub acquired_tables: Option<String>,
+    /// Experimental schema-11.5 compatibility: assume NULL Flag_LfLimit,
+    /// Flag_LfCtrl, Flag_Qctrl, Flag_Macro and Kr mean inactive (zero).
+    /// Active values and missing columns still reject. Applied assumptions emit
+    /// warnings and survive IR serialization in network extras. Default: false.
+    pub assume_inactive_source_controls: bool,
 }
 
 fn failure(error: impl std::fmt::Display, source: &Source) -> Error {
@@ -78,20 +83,56 @@ pub fn parse_sincal(
             .map_err(|e| failure(e, &retained))?;
         (snapshot, retained)
     };
+    let mut database = super::schema::NativeDatabase::from_snapshot(snapshot)
+        .map_err(|e| failure(e, &retained))?;
+    database.assume_inactive_source_controls = options.assume_inactive_source_controls;
     let result = match options.snapshot_hours {
-        Some(hours) => super::read_snapshot_at(snapshot, hours),
-        None => super::read_snapshot(snapshot),
+        Some(hours) => database.network_at(hours),
+        None => database.network(),
     };
     let mut network = result.map_err(|e| failure(e, &retained))?;
     *network.source_format_mut() = Some(DistSourceFormat::Sincal);
-    PioModule::parsed(
-        network,
-        retained,
-        vec![Diagnostic::of(
-            &codes::READ_SINCAL_MULTICONDUCTOR_RETAINED_SOURCE_ONLY,
-            "Only the selected conductor-resolved load-flow profile is typed. Fault, dynamic, protection, diagram, result and other native project data remain in retained source. An acquired-table companion is caller-supplied input, not a native export or independent attestation.",
-        )],
-    )
+    let assumptions: std::collections::BTreeMap<_, Vec<_>> = network
+        .defaulted()
+        .iter()
+        .filter(|(component, _)| component.starts_with("Infeeder."))
+        .filter_map(|(component, fields)| {
+            let controls: Vec<_> = fields
+                .iter()
+                .copied()
+                .filter(|field| {
+                    matches!(
+                        *field,
+                        "Flag_LfLimit" | "Flag_LfCtrl" | "Flag_Qctrl" | "Flag_Macro" | "Kr"
+                    )
+                })
+                .collect();
+            (!controls.is_empty()).then(|| (component.clone(), controls))
+        })
+        .collect();
+    let mut diagnostics = vec![Diagnostic::of(
+        &codes::READ_SINCAL_MULTICONDUCTOR_RETAINED_SOURCE_ONLY,
+        "Only the selected conductor-resolved load-flow profile is typed. Fault, dynamic, protection, diagram, result and other native project data remain in retained source. An acquired-table companion is caller-supplied input, not a native export or independent attestation.",
+    )];
+    if let Some(nodes) = network
+        .extras()
+        .get("sincal_unconnected_nodes")
+        .and_then(|v| v.as_array())
+    {
+        diagnostics.push(Diagnostic::of(&codes::READ_SINCAL_UNCONNECTED_NODES,
+            format!("{} native nodes have no declared equipment conductors; preserved as sincal_unconnected_nodes in extras, without inventing electrical terminals", nodes.len())));
+    }
+    for (component, fields) in &assumptions {
+        diagnostics.push(Diagnostic::of(
+            &codes::READ_SINCAL_ASSUMED_INACTIVE_SOURCE_CONTROLS,
+            format!("Experimental compatibility: {component} NULL fields {} assumed zero/inactive; native SINCAL behavior is unverified", fields.join(", ")),
+        ));
+    }
+    if !assumptions.is_empty() {
+        network.extras_mut().insert("sincal_compatibility_assumptions".into(),
+            serde_json::json!({"policy": "schema_11_5_null_source_controls_inactive", "assumed_value": 0, "components": assumptions}));
+    }
+    PioModule::parsed(network, retained, diagnostics)
 }
 
 pub(crate) fn is_multiconductor_token(name: &str) -> bool {

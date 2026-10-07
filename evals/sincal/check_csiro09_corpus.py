@@ -39,7 +39,8 @@ def validate(records, source, reader, public_reader=False):
                             }],
                         },
                     }
-                    if consumer != expected:
+                    comparison = {k: v for k, v in consumer.items() if k != 'reader_diagnostics'}
+                    if comparison != expected:
                         raise ValueError(f'unexpected generic consumer outcome: {consumer}')
                     consumers.append({'hours': hours, **consumer})
             for stress in [False, True]:

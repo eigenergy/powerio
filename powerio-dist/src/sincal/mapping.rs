@@ -80,10 +80,21 @@ impl NativeDatabase {
         for &element in self.elements.keys() {
             self.map_component(element, &context, &mut draft)?;
         }
-        draft
-            .network_without_sources
-            .buses_mut()
-            .extend(context.buses.into_values());
+        // Native Node records with no declared equipment conductors are
+        // placeholders, not electrical buses. Preserve their identity/metadata
+        // without inventing phases or feeding empty terminals to consumers.
+        // Open/inactive equipment still declares conductors and remains a bus.
+        let (unconnected, buses): (Vec<_>, Vec<_>) = context
+            .buses
+            .into_values()
+            .partition(|bus| bus.terminals.is_empty());
+        draft.network_without_sources.buses_mut().extend(buses);
+        if !unconnected.is_empty() {
+            draft.network_without_sources.extras_mut().insert(
+                "sincal_unconnected_nodes".into(),
+                serde_json::json!(unconnected),
+            );
+        }
         self.record_interpretation(&mut draft.network_without_sources)?;
         if let Some(hours) = hours {
             draft

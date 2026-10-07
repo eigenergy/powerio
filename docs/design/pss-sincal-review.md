@@ -163,6 +163,17 @@ component-to-model fidelity; selection plumbing and C/Julia ownership/layout.
 The C selection structs are new in this unpublished PR, absent from current
 `origin/main`; finalize their two-family shape with Julia before publication.
 
+**Experimental compatibility evidence (2026-10-08).** CSIRO12 now parses all 215
+elements through the public multiconductor reader at five snapshots, with
+original MDB echo, IR, generic matrix and PF-instance checks. Native-input
+OpenDSS comparisons cover 188 connected native nodes and all 153 nonideal lines;
+three conductor-free node records remain in extras. Maximum complex-voltage
+difference across native snapshots and synthetic unequal-load stress is
+0.000370 V. The Rust/CLI opt-in assumes five NULL source controls inactive,
+emits warnings and retains assumptions in IR. This is a usable experimental
+example, not verified native NULL behavior or a new published asymmetric case.
+See [the report](../../evals/sincal/csiro12-compatibility.json).
+
 ## PR 5 — Add opt-in experimental fresh SINCAL output
 
 Branch: `codex/sincal-experimental-writer`; base: PR 4.

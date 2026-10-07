@@ -1220,3 +1220,73 @@ an exact numerical oracle. The two parallel 25–26 lines form one plotted group
 This validates balanced fundamental-frequency behavior only. It neither adds
 an unbalanced case nor establishes fresh SINCAL execution or harmonic support.
 No PDF, extracted reference table/plot or native model is vendored.
+
+## Experimental CSIRO12 compatibility and paper audit (2026-10-08)
+
+The user authorized explicitly labelled parsing approximations for trial use.
+The new Rust/CLI `assume_inactive_source_controls` option admits five NULL
+schema-11.5 source controls as inactive: `Flag_LfLimit`, `Flag_LfCtrl`,
+`Flag_Qctrl`, `Flag_Macro`, `Kr`. Siemens' April 2014 Database Description,
+Infeeder table pp.15–16, lists zero defaults for four of these; it does not
+establish SQL NULL behavior, and its Infeeder table does not define `Flag_LfCtrl`.
+All five interpretations are therefore explicit compatibility assumptions,
+never an unconditional manual-backed claim. Nonzero controls, missing columns,
+newer-schema NULLs and missing required electrical values still reject.
+
+[CSIRO12 compatibility evidence](csiro12-compatibility.json) covers the original
+CC BY 4.0 MDB with unmodified, hash-pinned acquired tables. All 215 components
+are accounted for: 187 lines/connections, 26 loads, one capacitor and one source.
+Of 191 native nodes, 188 have equipment conductors and three unused records
+(35, 153, 173) remain in `extras.sincal_unconnected_nodes`. No electrical island
+is silently removed or supplied with invented phases.
+
+Five native snapshots (0, 0.25, 12, 23.75, 24 h) pass public facade parsing,
+byte-exact MDB echo, IR value preservation including assumption metadata,
+generic matrix construction and generic PF-instance construction. Independently
+constructed native-input OpenDSS circuits agree with sparse MNA solves of the
+actual typed output. Five additional unequal-delta-load stress cases are
+**synthetic**. Across all ten checks, 564 native complex phase voltages and
+918 line terminal currents/powers per check give maxima of 0.000370 V,
+8.27e-8 A and 0.00309 VA. Current/power comparison matches the small finite
+OpenDSS source impedance; the report separates that approximation's voltage
+impact. Four negative controls detect missing loads/capacitor, missing mutual
+impedance and incorrect load factors. Native loads are symmetric: this does not
+satisfy the further published asymmetric-feeder gate or prove native NULL semantics.
+
+```sh
+cargo build -p powerio --example sincal_public
+python3 evals/sincal/check_csiro12_compatibility.py \
+  /external/representative12-complete-records.json \
+  /external/csiro-representative12.mdb target/debug/examples/sincal_public \
+  /tmp/csiro12-compatibility.json
+```
+
+Use acquisition including `ShuntCondensator`; the earlier acquisition manifest
+omitted that table. The checker pins the complete record digest separately.
+The native model remains external; no additional native fixture is vendored.
+The existing CSIRO09 five-snapshot/five-stress public oracle was rerun after
+shared harness changes and still passes (maximum 0.000372 V).
+
+[The unbalanced-paper audit](unbalanced-paper-constraints.json) is deliberately
+weaker evidence: output reconstruction, not a reproduced power flow. For
+[Arif et al. 2013](https://file.scirp.org/Html/14-6401233_32197.htm), Table 5 supplies
+phase magnitudes and angle differences. These imply approximately 1.079% and
+1.444% negative/positive sequence voltage ratios in the PV/storage scenarios;
+those ratios are derived here, not reported benchmarks. Figure 4 and the text do
+not supply the line/neutral impedances and full transformer equivalent needed
+for independent network reconstruction.
+
+[Vinayagam et al. 2015](https://www.atlantis-press.com/article/25841476.pdf) reports
+about 1.48% VUF. Interpreting Figure 12's magnitudes as phase voltages with exact
+120-degree spacing gives 0.9954%; interpreting them as a closed line-line set
+gives 1.9913%. Neither assumption reproduces 1.48%. Missing phase angles and
+precise voltage basis/state prevent a unique reconstruction; this is not a
+claim that the paper is wrong. No model parameters were fitted to reported outputs.
+
+```sh
+python3 evals/sincal/check_unbalanced_paper_constraints.py /tmp/paper-audit.json
+```
+
+Arif is CC BY; Vinayagam's article is CC BY-NC 4.0. No paper PDF, figure or
+native model was added as a fixture. Only attributed numerical observations,
+our calculations and their explicit limits are recorded.

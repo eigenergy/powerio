@@ -58,6 +58,9 @@ struct SincalCliOptions {
     /// Explicit root beneath which input companion files may be acquired.
     #[arg(long)]
     acquisition_root: Option<PathBuf>,
+    /// Experimental: assume schema-11.5 NULL source controls inactive; emits warnings.
+    #[arg(long)]
+    sincal_assume_inactive_source_controls: bool,
 }
 
 impl SincalCliOptions {
@@ -66,6 +69,7 @@ impl SincalCliOptions {
             && self.sincal_snapshot_hours.is_none()
             && self.sincal_acquired_tables.is_none()
             && self.acquisition_root.is_none()
+            && !self.sincal_assume_inactive_source_controls
     }
 
     fn options(&self, from: Option<FormatArg>) -> anyhow::Result<powerio::ParseOptions> {
@@ -74,9 +78,16 @@ impl SincalCliOptions {
         if self.sincal_variant.is_some()
             || self.sincal_snapshot_hours.is_some()
             || self.sincal_acquired_tables.is_some()
+            || self.sincal_assume_inactive_source_controls
         {
             match from {
                 Some(FormatArg::SincalBalanced) => {
+                    if self.sincal_assume_inactive_source_controls {
+                        return Err(cli_failure(
+                            &codes::REQUEST_CLI_OPTION_INVALID,
+                            "--sincal-assume-inactive-source-controls requires --from sincal-multiconductor",
+                        ));
+                    }
                     let mut selection = powerio_tx::format::SincalBalancedReadOptions::default();
                     selection.variant = self.sincal_variant;
                     selection.snapshot_hours = self.sincal_snapshot_hours;
@@ -87,6 +98,8 @@ impl SincalCliOptions {
                 }
                 Some(FormatArg::SincalMulticonductor) => {
                     let mut selection = powerio_dist::SincalReadOptions::default();
+                    selection.assume_inactive_source_controls =
+                        self.sincal_assume_inactive_source_controls;
                     selection.variant = self.sincal_variant;
                     selection.snapshot_hours = self.sincal_snapshot_hours;
                     selection
@@ -3209,6 +3222,26 @@ mod tests {
         let source =
             powerio::Source::from_memory("module.pio.json", text.as_bytes().to_vec()).unwrap();
         powerio::deserialize(source).unwrap()
+    }
+
+    #[test]
+    fn sincal_source_assumptions_require_the_multiconductor_profile() {
+        let selection = SincalCliOptions {
+            sincal_assume_inactive_source_controls: true,
+            ..Default::default()
+        };
+        assert!(!selection.is_empty());
+        assert!(selection.options(None).is_err());
+        assert!(selection.options(Some(FormatArg::SincalBalanced)).is_err());
+        let options = selection
+            .options(Some(FormatArg::SincalMulticonductor))
+            .unwrap();
+        assert!(
+            options
+                .sincal_multiconductor
+                .unwrap()
+                .assume_inactive_source_controls
+        );
     }
 
     #[test]

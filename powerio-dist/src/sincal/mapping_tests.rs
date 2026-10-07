@@ -511,7 +511,7 @@ fn unsupported_elements_and_physics_reject_the_whole_network_with_identity() {
 }
 
 #[test]
-fn delta_loads_do_not_create_an_earth_coordinate_and_isolated_nodes_remain() {
+fn delta_loads_do_not_create_earth_and_unused_node_records_remain_in_extras() {
     let net = native(
         "UPDATE Load SET Flag_Lf=14;
         INSERT INTO Node (Node_ID,Variant_ID) VALUES (99,1)",
@@ -521,16 +521,11 @@ fn delta_loads_do_not_create_an_earth_coordinate_and_isolated_nodes_remain() {
     assert_eq!(net.loads()[0].configuration, Configuration::Delta);
     assert_eq!(net.loads()[0].terminal_map, ["1", "2", "3"]);
     assert!(net.buses().iter().all(|b| b.grounded.is_empty()));
-    let isolated = net.buses().iter().find(|b| b.id == "99").unwrap();
-    assert!(isolated.terminals.is_empty());
-    // Parsing preserves the node without inventing conductors or silently
-    // deleting it. The existing numerical-readiness gate remains separate.
-    assert!(
-        crate::require_electrical_readiness(&net)
-            .unwrap_err()
-            .to_string()
-            .contains("READINESS.BUS.TERMINALS_EMPTY 99")
-    );
+    assert!(net.bus("99").is_none());
+    let isolated = &net.extras()["sincal_unconnected_nodes"][0];
+    assert_eq!(isolated["id"], "99");
+    assert_eq!(isolated["terminals"], serde_json::json!([]));
+    crate::require_electrical_readiness(&net).unwrap();
 }
 
 #[test]

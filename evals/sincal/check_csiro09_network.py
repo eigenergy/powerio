@@ -110,10 +110,12 @@ def tables(path):
     return {t['name']:[dict(zip([c['name'] for c in t['columns']],r,strict=True)) for r in t['rows'] if dict(zip([c['name'] for c in t['columns']],r)).get('Variant_ID',1)==1] for t in json.loads(path.read_text())['tables']}
 
 
-def native_reference(t,hours,stress=False):
+def native_reference(t,hours,stress=False,assume_inactive_source_controls=False):
     if len(t['CalcParameter'])!=1 or any(t['CalcParameter'][0][k]!=v for k,v in [('Flag_ScType',1),('Flag_LFZ0',1),('f',50),('Temp_Cond',20)]):
         raise ValueError('unexpected native calculation context')
-    if any(v['f']!=50 or v['Temp_Line']!=20 or v['Temp_Cable']!=20 for v in t['VoltageLevel']):
+    used_levels={r['VoltLevel_ID'] for r in t['Node']} | {r['VoltLevel_ID'] for r in t['Element']}
+    legacy=t['Version'][0]['Version_No']==11.5
+    if any(v['f']!=50 or any(v[k]!=20 and not (legacy and v[k] is None) for k in ['Temp_Line','Temp_Cable']) for v in t['VoltageLevel'] if v['VoltLevel_ID'] in used_levels):
         raise ValueError('unapplied native frequency/temperature correction')
     if any(e['Flag_State']!=1 for e in t['Element']):
         raise ValueError('unexpected inactive native element')
@@ -130,12 +132,23 @@ def native_reference(t,hours,stress=False):
             union.join(ps[0]['Node_ID'],ps[1]['Node_ID'])
     def bus(node): return 'n'+str(union.root(node))
     source = t['Infeeder'][0]
-    if (len(t['Infeeder'])!=1 or source['Flag_Typ']!=1 or source['Flag_Z0_Input']!=1
-            or source['xi']!=0 or source['Flag_Lf']!=6 or source['Flag_Typ_ID']!=0):
+    if assume_inactive_source_controls:
+        if t['Version'][0]['Version_No']!=11.5 or any(source[k] is not None for k in
+                ['Flag_LfLimit','Flag_LfCtrl','Flag_Qctrl','Flag_Macro','Kr']):
+            raise ValueError('expected exactly the documented legacy NULL-control experiment')
+    elif any(source.get(k) not in (0,) for k in ['Flag_LfLimit','Flag_LfCtrl','Flag_Qctrl','Flag_Macro','Kr']):
+        raise ValueError('native source controls require an explicit assumption')
+    if (len(t['Infeeder'])!=1 or source['Flag_Typ']!=1 or source['Flag_Z0']!=1
+            or source['xi']!=0 or source['Flag_Lf']!=6
+            or (source['Typ_ID'] not in (None,0) and source['Flag_Typ_ID']!=0)):
         raise ValueError('unexpected native source profile')
-    zabs = np.hypot(source['R'],source['X'])*source['Z0_Z1']
-    angle = np.arctan2(1,source['R0_X0'])
-    z0 = cmath.rect(zabs,angle)
+    if source['Flag_Z0_Input']==1:
+        zabs = np.hypot(source['R'],source['X'])*source['Z0_Z1']
+        angle = np.arctan2(1,source['R0_X0'])
+        z0 = cmath.rect(zabs,angle)
+    elif source['Flag_Z0_Input']==2:
+        z0 = complex(source['R0'],source['X0'])
+    else: raise ValueError('unexpected source zero-sequence input')
     deck=['Clear','Set DefaultBaseFrequency=50',f'New Circuit.check phases=3 bus1={bus(ports[source["Element_ID"]][0]["Node_ID"])}.1.2.3 basekv={source["Ug"]:.17g} pu=1 angle={source["delta"]:.17g} frequency=50',
           f'Edit Vsource.source r1={EPS} x1={EPS} r0={z0.real:.17g} x0={z0.imag:.17g}']
     for row in t['Line']:
@@ -146,6 +159,15 @@ def native_reference(t,hours,stress=False):
             raise ValueError('unexpected native line profile')
         a,b=[bus(p['Node_ID']) for p in ps]
         deck.append(f'New Line.e{row["Element_ID"]} phases=3 bus1={a}.1.2.3 bus2={b}.1.2.3 units=km length={row["l"]:.17g} r1={row["r"]:.17g} x1={row["x"]:.17g} r0={row["r0"]:.17g} x0={row["x0"]:.17g} c1={row["c"]:.17g} c0={row["c0"]:.17g}')
+    for row in t.get('ShuntCondensator',[]):
+        ps=ports[row['Element_ID']]
+        if (len(ps)!=1 or ps[0]['Flag_Terminal']!=7 or ps[0]['Flag_State']!=1
+                or row['Flag_Z0']!=1 or row['Flag_Z0_Input']!=1
+                or row['Z0_Z1']!=1 or row['R0_X0']!=0
+                or any(row[k] not in (None,0) for k in ['Vdi','Flag_roh','Flag_Macro','Macro_ID','Stp_ID','Node_ID','Terminal_ID'])):
+            raise ValueError('unexpected grounded lossless fixed capacitor profile')
+        # Native Sn is three-phase MVAr at the line-line nameplate kV.
+        deck.append(f'New Capacitor.e{row["Element_ID"]} phases=3 bus1={bus(ps[0]["Node_ID"])}.1.2.3 conn=wye kv={row["Un"]:.17g} kvar={row["Sn"]*1000:.17g}')
     profiles={p['OpSer_ID']:p for p in t['OpSer']};points={}
     for p in t['OpSerVal']:points.setdefault(p['OpSer_ID'],[]).append(p)
     levels={v['VoltLevel_ID']:v for v in t['VoltageLevel']};nodes={n['Node_ID']:n for n in t['Node']}

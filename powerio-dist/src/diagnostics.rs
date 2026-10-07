@@ -24,6 +24,10 @@ pub mod codes {
             "the selected conductor-resolved SINCAL profile cannot be parsed", category = Parse;
         READ_SINCAL_MULTICONDUCTOR_RETAINED_SOURCE_ONLY = "READ.DIST.SINCAL_RETAINED_SOURCE_ONLY", Remark,
             "native data outside the selected conductor-resolved profile remain only in source";
+        READ_SINCAL_UNCONNECTED_NODES = "READ.DIST.SINCAL_UNCONNECTED_NODES", Remark,
+            "native nodes with no declared conductors remain in network extras";
+        READ_SINCAL_ASSUMED_INACTIVE_SOURCE_CONTROLS = "READ.DIST.SINCAL_ASSUMED_INACTIVE_SOURCE_CONTROLS", Warning,
+            "legacy NULL source controls were explicitly assumed inactive";
         EMIT_SINCAL_MULTICONDUCTOR_RETAINED_SOURCE_OMITTED = "EMIT.DIST.SINCAL_RETAINED_SOURCE_OMITTED", Warning,
             "native SINCAL source-only data are omitted from cross-format emission";
         // PARSE: the source text could not be decoded as given.

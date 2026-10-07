@@ -1117,3 +1117,22 @@ No paper result has yet been aligned to a further complete native unbalanced
 case. Papers can supply useful independent electrical evidence when input,
 phase convention, snapshot, controls, quantity and precision are identifiable;
 aggregate losses alone cannot validate phase allocation or neutral behavior.
+
+## Bounded replication and compatibility follow-up, 2026-10-08
+
+The [unbalanced-paper audit](unbalanced-paper-constraints.json) records the
+attempt to reconstruct Arif 2013 Table 5 and Vinayagam 2015 Figure 12/Table V.
+It reproduces output-derived quantities only; missing network inputs and phase
+state prevent independent full load-flow replication. Do not fit impedances to
+force a match or count either paper as a native reader success.
+
+The user now permits explicitly identified approximations. A narrow opt-in for
+schema-11.5 NULL source controls enables complete CSIRO12 public parsing and
+independent assumed-circuit validation; see
+[the experiment and limitations](README.md#experimental-csiro12-compatibility-and-paper-audit-2026-10-08).
+The Database Description's inactive defaults motivate the experiment but do not
+prove native SQL NULL semantics. Five original snapshots and five synthetic
+asymmetric stress tests pass. Source bytes remain unchanged, all 215 components
+are mapped, and three unused node records survive in IR metadata. Native loads
+are symmetric; native SINCAL execution and its NULL interpretation remain unverified.
+No additional model or paper payload was vendored.

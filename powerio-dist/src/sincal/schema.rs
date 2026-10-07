@@ -10,7 +10,10 @@ use crate::Result;
 
 // Keep electrical interpretation as inherent methods of this local owner.
 // The shared snapshot supplies identities and the bounded query-only database.
-pub(super) struct NativeDatabase(DatabaseSnapshot);
+pub(super) struct NativeDatabase {
+    snapshot: DatabaseSnapshot,
+    pub assume_inactive_source_controls: bool,
+}
 
 impl NativeDatabase {
     pub fn from_snapshot(snapshot: DatabaseSnapshot) -> Result<Self> {
@@ -25,7 +28,10 @@ impl NativeDatabase {
                 snapshot.version
             )));
         }
-        Ok(Self(snapshot))
+        Ok(Self {
+            snapshot,
+            assume_inactive_source_controls: false,
+        })
     }
 
     /// The verified 11.5/12.8 Access layouts retain line-line input when
@@ -158,7 +164,7 @@ impl Deref for NativeDatabase {
     type Target = DatabaseSnapshot;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.snapshot
     }
 }
 
