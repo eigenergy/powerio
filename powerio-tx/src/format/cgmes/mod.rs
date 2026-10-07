@@ -172,7 +172,7 @@ pub(crate) fn parse_text(
     text: &str,
     diagnostics: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
-    reject_unsafe_xml(text.as_bytes())?;
+    reject_unsafe_xml(text)?;
     read_documents(
         vec![(name.to_string(), text.to_string())],
         None,
@@ -373,13 +373,6 @@ fn push_xml<'a>(
                 "CGMES profile data exceeds the {max_bytes} byte input limit"
             ))
         })?;
-    reject_unsafe_xml(&bytes)?;
-    let key = normalized_name.replace('\\', "/").to_ascii_lowercase();
-    if !names.insert(key) {
-        return Err(format_error(format!(
-            "CGMES profile set contains duplicate normalized name {normalized_name}"
-        )));
-    }
     let text = match bytes {
         Cow::Borrowed(bytes) => std::str::from_utf8(bytes)
             .map(str::to_owned)
@@ -387,6 +380,13 @@ fn push_xml<'a>(
         Cow::Owned(bytes) => String::from_utf8(bytes)
             .map_err(|error| format_error(format!("{name} is not UTF-8 XML: {error}")))?,
     };
+    reject_unsafe_xml(&text)?;
+    let key = normalized_name.replace('\\', "/").to_ascii_lowercase();
+    if !names.insert(key) {
+        return Err(format_error(format!(
+            "CGMES profile set contains duplicate normalized name {normalized_name}"
+        )));
+    }
     documents.push((name.to_string(), text));
     Ok(())
 }
@@ -406,8 +406,7 @@ fn strict_archive_path(name: &str) -> Result<ArtifactPath> {
     ArtifactPath::new(name.to_string()).map_err(|error| source_error(&error))
 }
 
-fn reject_unsafe_xml(bytes: &[u8]) -> Result<()> {
-    let text = String::from_utf8_lossy(bytes);
+fn reject_unsafe_xml(text: &str) -> Result<()> {
     if text.match_indices("<!").any(|(at, _)| {
         let declaration = &text.as_bytes()[at..];
         declaration
@@ -5836,11 +5835,19 @@ mod tests {
             "<!-- Ångström -->\n<!DoCtYpE rdf:RDF><rdf:RDF/>",
             "<!-- 東京 -->\n<!EnTiTy x \"expanded\">",
         ] {
-            assert!(reject_unsafe_xml(xml.as_bytes()).is_err());
+            assert!(reject_unsafe_xml(xml).is_err());
         }
         for xml in ["<!", "<!-- ordinary comment -->", "<![CDATA[Ångström]]>"] {
-            assert!(reject_unsafe_xml(xml.as_bytes()).is_ok());
+            assert!(reject_unsafe_xml(xml).is_ok());
         }
+    }
+
+    #[test]
+    fn invalid_utf8_profile_is_refused_before_xml_parsing() {
+        let source =
+            Source::from_memory("invalid.xml", b"<rdf:RDF>\xff</rdf:RDF>".to_vec()).unwrap();
+        let error = acquire_documents(&source).unwrap_err();
+        assert!(error.to_string().contains("not UTF-8 XML"));
     }
 
     #[test]
