@@ -133,6 +133,12 @@ before returning; caller buffers may then be released. These additions require
 the matching development library and Julia companion. Existing ABI 7 layouts
 and typed network accessors are unchanged.
 
+Legacy UI-manipulator references on loads retain their IDs as provenance. Their
+edits are already stored in the load input fields, so stored power factors apply
+once; the UI definition is not evaluated again. This follows
+[Siemens Release Notes 21.0, pp. 4–6](https://sincal.s3.amazonaws.com/21.0/ReleaseNotes-Eng.pdf).
+Conflicting daily timestamps remain errors.
+
 Active daily profiles require an explicit snapshot; no midnight default is
 assumed. Generic time-series and inherited variants remain under development.
 

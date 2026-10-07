@@ -184,13 +184,26 @@ impl LoadInput {
             q_nom,
         );
         load.voltage_model = voltage_model;
+        self.retain_input_selection(&mut load)?;
+        Ok(load)
+    }
+
+    fn retain_input_selection(&self, load: &mut DistLoad) -> Result<()> {
+        if let Some(id) = self.manipulation {
+            load.extras.insert(
+                "sincal_manipulation".into(),
+                serde_json::json!({
+                    "id": id, "semantics": "materialized_input",
+                }),
+            );
+        }
         if let Some(selection) = &self.profile_selection {
             load.extras.insert(
                 "sincal_profile".into(),
                 serde_json::to_value(selection).map_err(format_error)?,
             );
         }
-        Ok(load)
+        Ok(())
     }
 }
 

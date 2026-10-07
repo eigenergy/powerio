@@ -957,3 +957,40 @@ POWERIO_SINCAL_SPARSE_LINE_EXPORT=/tmp/sparse-line-circuits.json \
 python3 evals/sincal/check_sparse_lines.py /tmp/models /tmp/records \
   /tmp/sparse-line-circuits.json /tmp/sparse-lines.json
 ```
+
+### Materialized load manipulators: CSIRO05
+
+`materialized-loads.json` verifies 456 native loads at five selected times
+(2,280 snapshots): 368 three-phase delta loads and 88 phase-pair loads. Siemens
+[Release Notes 21.0, pp. 4–6](https://sincal.s3.amazonaws.com/21.0/ReleaseNotes-Eng.pdf)
+distinguish permanent UI edits from runtime operating-point factors. The reader
+therefore uses the stored electrical fields, applies each load's `fP`/`fQ` once,
+and retains `Mpl_ID` as provenance. It neither requires the UI definition nor
+reapplies it. Synthetic tests cover all supported electrical schema profiles,
+conflicting saved UI factors, unchanged source bytes, invalid references,
+required inputs, daily selection and typed serialization.
+
+The independent checker derives profile interpolation and connections from
+hash-pinned acquired native tables and builds OpenDSS constant-power loads.
+It compares every mapped branch power and terminal current at the independently
+solved voltage. Maximum errors are 1.82e-12 W/var and 2.98e-13 A, respectively.
+Applying the stored factor twice gives a counterexample at every nonzero-power
+snapshot (2,265); the remaining 15 snapshots have exactly zero power.
+
+Two native loads still reject: element 841/profile 853 has conflicting values
+at 4h, and element 1007/profile 656 at 2h. The checker independently inventories
+these conflicts instead of skipping unspecified failures. CSIRO05 now maps
+1,369/1,378 components; those two loads and seven transformers remain unresolved.
+This is component evidence, not a complete feeder solve or native acceptance.
+
+```sh
+POWERIO_SINCAL_MANIPULATOR_RECORDS="$records/representative05.json" \
+POWERIO_SINCAL_MANIPULATOR_EXPORT="$output/csiro05-loads.json" \
+cargo test -p powerio-dist --lib export_csiro05_materialized_loads -- --ignored
+python evals/sincal/check_materialized_loads.py \
+  "$sources/csiro-representative05.mdb" "$records/representative05.json" \
+  "$output/csiro05-loads.json" --report "$output/materialized-loads.json"
+```
+
+Native files and acquired tables remain external; only the small derived report
+is committed. The original CSIRO data is CC BY 4.0, with attribution in the report.

@@ -75,6 +75,9 @@ pub(super) struct LoadInput {
     /// Daily, weekly, yearly operating series; resolve the selected state.
     pub operating_series: [Option<i64>; 3],
     pub profile_selection: Option<super::load_profile::LoadProfileSelection>,
+    /// UI manipulator whose edits are already materialized in the load inputs.
+    /// It is provenance, not an additional runtime multiplication.
+    pub manipulation: Option<i64>,
 }
 
 impl NativeDatabase {
@@ -143,6 +146,7 @@ impl NativeDatabase {
             reference(row, "WeekOpSer_ID")?,
             reference(row, "YearOpSer_ID")?,
         ];
+        let manipulation = reference(row, "Mpl_ID")?;
         if rows.next().map_err(format_error)?.is_some() {
             return Err(format_error(format!(
                 "duplicate Load row for Element {element}"
@@ -160,22 +164,21 @@ impl NativeDatabase {
             negative_sequence_power,
             operating_series,
             profile_selection: None,
+            manipulation,
         })
     }
 }
 
+// Siemens Release Notes 21.0, pp.4–6, explicitly distinguishes the old UI
+// manipulator from runtime operating-point factors. It permanently edits the
+// element's stored fields. Read those fields once and retain Mpl_ID as provenance;
+// never evaluate the UI definition again or require it as a solver dependency.
+// https://sincal.s3.amazonaws.com/21.0/ReleaseNotes-Eng.pdf
 fn check_static_input(row: &Row<'_>) -> Result<()> {
     if integer(row, "Flag_Load")? != 1 {
         return Err(format_error("house-connection load requires customer data"));
     }
-    for field in [
-        "Typ_ID",
-        "Mpl_ID",
-        "Gang_ID",
-        "Load_ID",
-        "IncrSer_ID",
-        "Macro_ID",
-    ] {
+    for field in ["Typ_ID", "Gang_ID", "Load_ID", "IncrSer_ID", "Macro_ID"] {
         if reference(row, field)?.is_some() {
             return Err(format_error(format!("load requires resolution of {field}")));
         }

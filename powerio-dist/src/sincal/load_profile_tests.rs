@@ -261,3 +261,130 @@ fn absolute_profile_factors_apply_once_after_sampling_and_preserve_connection() 
         );
     }
 }
+
+#[test]
+fn materialized_load_manipulators_never_multiply_static_inputs_twice() {
+    for version in [11.5_f64, 12.8, 14.8] {
+        let make = |edit: &str| {
+            if version.to_bits() == 14.8_f64.to_bits() {
+                super::mapping_tests::native(edit)
+            } else {
+                super::legacy_tests::acquired_version(edit, version)
+            }
+        };
+        let edit = "UPDATE Load SET Mpl_ID=7,fP=0.28,fQ=0.5;";
+        let db = make(edit);
+        let source_before = db.connection.serialize("main").unwrap().to_vec();
+        let actual = db.network().unwrap();
+        let expected = make("UPDATE Load SET fP=0.28,fQ=0.5;").network().unwrap();
+        assert_eq!(actual.loads()[0].p_nom, expected.loads()[0].p_nom);
+        assert_eq!(actual.loads()[0].q_nom, expected.loads()[0].q_nom);
+        assert_eq!(
+            actual.loads()[0].extras["sincal_manipulation"],
+            serde_json::json!({"id":7,"semantics":"materialized_input"})
+        );
+        assert_eq!(
+            db.connection.serialize("main").unwrap().to_vec(),
+            source_before
+        );
+        // A saved UI definition is not applied again, even if a user later
+        // changes it without committing edits into the electrical inputs.
+        let with_ui = make(&format!(
+            "{edit}
+            CREATE TABLE Manipulation (Mpl_ID INTEGER, Variant_ID INTEGER, fP REAL, fQ REAL);
+            INSERT INTO Manipulation VALUES (7,1,17,23);"
+        ))
+        .network()
+        .unwrap();
+        assert_eq!(with_ui.loads(), actual.loads());
+    }
+    for edit in [
+        "Mpl_ID=-1",
+        "Mpl_ID='bad'",
+        "Mpl_ID=7,fP=NULL",
+        "Mpl_ID=7,P1=NULL",
+    ] {
+        assert!(
+            legacy(&format!("UPDATE Load SET {edit}"))
+                .network()
+                .is_err(),
+            "invalid {edit}"
+        );
+    }
+}
+
+#[test]
+fn materialized_load_manipulators_preserve_daily_selection_and_typed_serialization() {
+    let db = legacy(&format!(
+        "{PROFILE} UPDATE Load SET Mpl_ID=7,fP=0.28,fQ=0.5;"
+    ));
+    for (hours, p, q) in [
+        (0.0, 1680.0, -1500.0),
+        (6.0, 3360.0, 1500.0),
+        (24.0, 1680.0, -1500.0),
+    ] {
+        let (actual_p, actual_q) = powers(&db, hours);
+        assert!((actual_p - p).abs() < 1e-10);
+        assert!((actual_q - q).abs() < 1e-10);
+        let net = db.network_at(hours).unwrap();
+        let load = &net.loads()[0];
+        assert!((load.p_nom.iter().sum::<f64>() - p).abs() < 1e-10);
+        assert!((load.q_nom.iter().sum::<f64>() - q).abs() < 1e-10);
+        assert_eq!(
+            load.extras["sincal_profile"]["power_factors"],
+            serde_json::json!([0.28, 0.5])
+        );
+        assert_eq!(load.extras["sincal_manipulation"]["id"], 7);
+        let value = serde_json::to_value(&net).unwrap();
+        let restored: crate::MulticonductorNetwork = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.loads(), net.loads());
+    }
+    assert!(db.network().is_err()); // A UI manipulator never selects a daily snapshot.
+}
+
+#[test]
+#[ignore = "exports external CSIRO05 materialized load snapshots; not a complete native network"]
+fn export_csiro05_materialized_loads() {
+    let path = std::env::var_os("POWERIO_SINCAL_MANIPULATOR_RECORDS").expect("record path");
+    let output = std::env::var_os("POWERIO_SINCAL_MANIPULATOR_EXPORT").expect("export path");
+    let bytes = std::fs::read(path).unwrap();
+    let db = NativeDatabase::from_snapshot(
+        powerio_sincal::DatabaseSnapshot::decode_records(&bytes, Some(1)).unwrap(),
+    )
+    .unwrap();
+    let nodes = db.node_inputs().unwrap();
+    let mut components = Vec::new();
+    let mut rejected = Vec::new();
+    for (&id, kind) in &db.elements {
+        if kind != "Load" {
+            continue;
+        }
+        let raw = db.load_input(id).unwrap();
+        if let Err(error) = db.load_input_at(id, 0.0) {
+            rejected.push(serde_json::json!({"element":id,"profile":raw.operating_series[0],"error":error.to_string()}));
+            continue;
+        }
+        let node = &nodes[&raw.terminal.node];
+        let bus = crate::DistBus::new(
+            node.id.to_string(),
+            ["1", "2", "3"].map(str::to_owned).to_vec(),
+        );
+        for hours in [0.0, 0.25, 0.5, 23.75, 24.0] {
+            let circuit = db
+                .load_input_at(id, hours)
+                .unwrap()
+                .circuit(&bus, node.nominal_ll_volts)
+                .unwrap();
+            components.push(serde_json::json!({"element":id,"hours":hours,"load":circuit.load,"bus":circuit.bus,"switch":circuit.switch}));
+        }
+    }
+    assert_eq!(components.len() / 5 + rejected.len(), 458);
+    std::fs::write(
+        output,
+        serde_json::to_vec_pretty(
+            &serde_json::json!({"case":5,"components":components,"rejected":rejected}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+}

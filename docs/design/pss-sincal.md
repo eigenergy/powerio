@@ -432,7 +432,7 @@ At midnight, current component coverage is:
 | 02 | 1525 / 2329 | No |
 | 03 | 776 / 1084 | No |
 | 04 | 575 / 861 | No |
-| 05 | 913 / 1378 | No |
+| 05 | 1369 / 1378 | No |
 | 06 | 163 / 218 | No |
 | 07 | 283 / 456 | No |
 | 09 | 688 / 688 | Yes |
@@ -468,12 +468,24 @@ remain work. Both files stay external because redistribution rights are unresolv
 
 Remaining implementation work includes Wye star/sequence semantics, coupled
 reduced-phase charging, partial mixed-winding transformers, additional regulators,
-CSIRO03's 297 limited-P/Q loads, CSIRO05's referenced load multipliers, synchronous
+CSIRO03's 297 limited-P/Q loads, synchronous
 machines, further sparse source/transformer fields, and broader variants/profiles.
 CSIRO12 now maps all lines, loads and its capacitor; its source's NULL controls
 remain unresolved. A balanced stored source result confirms its specified
 positive-sequence voltage but does not establish the unknown control field's
 conductor-domain behavior. No source-control default is inferred from that result.
+
+CSIRO05 now maps 456 additional loads with stored UI-manipulator references.
+Independent interpolation and OpenDSS terminal-current checks cover all 2,280
+snapshots (368 three-phase delta loads and 88 phase-pair loads). The stored
+power factors apply once; manipulator IDs remain provenance. Two further loads
+have conflicting native profile timestamps and still reject, alongside seven
+transformers with unresolved NULL tap-status fields. This is 1,369/1,378 component
+coverage, not another complete feeder. See `evals/sincal/materialized-loads.json`.
+All seven transformers use DYN11 (`VecGrp=59`) with L1 selected at both terminals;
+they therefore also need verified partial mixed-winding circuits. The April 2014
+database manual p.46 documents fixed status as the `Flag_roh` default, but admitting
+that legacy NULL alone will not establish those circuits.
 
 CSIRO06's 55 remaining rejections are explicitly classified: 35 Wye loads,
 nine partial YNd1 transformers and eleven inconsistent core-loss nameplates.

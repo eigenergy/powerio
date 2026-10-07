@@ -3,7 +3,7 @@
   "attribution": "Berry, Adam; Collins, Lyle; Oliver, Erin; Perfumo, Cristian (2015), Representative Australian Electricity Feeders with load and solar generation profiles, v1, CSIRO.",
   "license": "CC-BY-4.0",
   "scope": "Conductor-resolved base-variant development audit; no family inference, independent solve or native execution.",
-  "reader_sha256": "06e5a7d86014c4d161f32e0e9335ece56a8c3dac3325b0c159b28e527ca13db0",
+  "reader_sha256": "0ce5cf92604521947812b0eb48270ee90c47d700d51e140d47bfff9640c7a62b",
   "cases": [
     {
       "case": 1,
@@ -196,7 +196,7 @@
       "variant": 1,
       "context_error": null,
       "complete_parse": false,
-      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 832 (Load): PSS SINCAL read error: load requires resolution of Mpl_ID\" }",
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 832 (Load): PSS SINCAL read error: load requires an explicitly resolved profile state\" }",
       "independently_validated": false,
       "native_execution": false,
       "component_count": 1378,
@@ -208,7 +208,7 @@
         {
           "type": "Load",
           "count": 458,
-          "reason": "PSS SINCAL read error: PSS SINCAL read error: load requires resolution of Mpl_ID"
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: load requires an explicitly resolved profile state"
         },
         {
           "type": "TwoWindingTransformer",
