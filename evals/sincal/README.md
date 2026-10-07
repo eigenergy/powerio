@@ -634,3 +634,49 @@ python3 evals/sincal/check_csiro09_corpus.py \
   /tmp/native-models/csiro-representative09.mdb \
   target/debug/examples/sincal_multiconductor /tmp/csiro09-network.json
 ```
+
+
+### Public multiconductor facade validation
+
+`csiro09-public.json` repeats the complete five-snapshot/five-stress comparison
+through `powerio::parse_with_options` with the explicit `sincal-multiconductor`
+profile and caller-supplied Access tables. The `sincal_public` example checks
+byte-exact original MDB emission, typed IR restoration, and refusal to echo
+native bytes after IR restoration before exporting the actual typed network.
+No intermediate JSON is relabelled as native SQLite or MDB. The independent
+checker and its original electrical tolerances are unchanged.
+
+The example also runs the generic multiconductor admittance assembly with zero
+omission diagnostics. The generic power-flow instance constructor correctly
+rejects the full native network: four isolated native buses have no source
+(the first reported bus is `2178`). The report pins that diagnostic at every
+snapshot. Parsing retains those buses; no reference or energization is invented.
+The independent electrical comparison covers the 617 energized native nodes.
+The connected synthetic public-reader test additionally verifies successful
+construction through the same generic power-flow API. These are separate
+claims: complete parsing and matrix assembly do not imply that every retained
+native bus belongs in an energized calculation instance.
+
+The current public Rust options select a variant, daily snapshot and relative
+acquired-table companion. Ordinary native parsing is also available through
+the CLI, Python and C's existing format argument and typed network accessors.
+Selection-option exposure through those bindings remains separate pending work.
+The generic C ABI remains version 7 with no new symbols. The current 0.11.4 IR
+schema adds the SINCAL source-format enum spelling; older schema snapshots are
+unchanged, and no electrical type layout or IR version changes.
+
+```sh
+cargo build -p powerio --example sincal_public
+POWERIO_MAX_PRIMARY_BYTES=69181440 python3 evals/sincal/check_csiro09_corpus.py \
+  /tmp/acquired-records/representative09.json \
+  /tmp/native-models/csiro-representative09.mdb \
+  target/debug/examples/sincal_public /tmp/csiro09-public.json --public-reader
+```
+
+The explicit primary bound equals the original case's size; the normal 64 MiB
+file limit and the 64 MiB acquired-table limit are unchanged. Acquired origin
+checks verify the original length/hash and Jet header, not the external tool's
+faithfulness. Original synthetic unit tests additionally reject wrong origins,
+missing/escaping companions, unsupported modes and conflicting family options.
+The small original SQL fixture (7,367 bytes, 88 lines) constructs native SQLite
+at test runtime and contains no third-party model payload.

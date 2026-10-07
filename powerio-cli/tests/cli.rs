@@ -1280,3 +1280,51 @@ fn sincal_balanced_cli_parses_converts_and_echoes_without_inference() {
     let stdin = run_with_stdin(&["summary", "-", "--from", "sincal-balanced"], &native);
     assert_success(&stdin);
 }
+
+#[test]
+fn sincal_multiconductor_cli_preserves_family_and_binary_echo() {
+    let tmp = tempfile::tempdir().unwrap();
+    let case = tmp.path().join("case.db");
+    let connection = rusqlite::Connection::open(&case).unwrap();
+    connection
+        .execute_batch(include_str!(
+            "../../tests/data/sincal/synthetic-multiconductor.sql"
+        ))
+        .unwrap();
+    drop(connection);
+    let path = case.to_str().unwrap();
+    let summary = run(&["summary", path, "--from", "sincal-multiconductor"]);
+    assert_success(&summary);
+    let converted = run(&[
+        "convert",
+        path,
+        "--from",
+        "sincal-multiconductor",
+        "--to",
+        "pmd-json",
+    ]);
+    assert_success(&converted);
+    let json: serde_json::Value = serde_json::from_slice(&converted.stdout).unwrap();
+    assert_eq!(json["data_model"], "ENGINEERING");
+    let copy = tmp.path().join("copy.db");
+    let echo = run(&[
+        "convert",
+        path,
+        "--from",
+        "sincal-multiconductor",
+        "--to",
+        "sincal-multiconductor",
+        "-o",
+        copy.to_str().unwrap(),
+    ]);
+    assert_success(&echo);
+    assert_eq!(std::fs::read(copy).unwrap(), std::fs::read(&case).unwrap());
+    assert_failure(&run(&[
+        "convert",
+        path,
+        "--from",
+        "sincal-multiconductor",
+        "--to",
+        "sincal-balanced",
+    ]));
+}

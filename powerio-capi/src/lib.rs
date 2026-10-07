@@ -23381,6 +23381,51 @@ mod tests {
     }
 
     #[test]
+    fn sincal_multiconductor_uses_existing_owner_rooted_handles_and_echo() {
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(include_str!(
+                "../../tests/data/sincal/synthetic-multiconductor.sql"
+            ))
+            .unwrap();
+        let native = connection.serialize("main").unwrap().to_vec();
+        unsafe {
+            let mut error = std::ptr::null_mut();
+            let source = pio_source_from_memory(
+                c"case.db".as_ptr(),
+                7,
+                native.as_ptr(),
+                native.len(),
+                &mut error,
+            );
+            assert!(!source.is_null(), "{}", error_text(error));
+            let format = b"sincal-multiconductor";
+            let module = pio_parse(source, format.as_ptr().cast(), format.len(), &mut error);
+            pio_source_release(source);
+            assert!(!module.is_null(), "{}", error_text(error));
+            let value = pio_module_value(module);
+            let network = pio_value_multiconductor_network(value, &mut error);
+            assert!(!network.is_null(), "{}", error_text(error));
+            let destination = pio_destination_memory(c"copy.db".as_ptr(), 7, &mut error);
+            let emitted = pio_emit(module, c"sincal".as_ptr(), 6, destination, &mut error);
+            pio_destination_release(destination);
+            assert!(!emitted.is_null(), "{}", error_text(error));
+            assert_eq!(pio_emit_result_artifact_count(emitted), 1);
+            let artifact = pio_emit_result_artifact(emitted, 0, &mut error);
+            let bytes = pio_artifact_bytes(artifact);
+            assert_eq!(std::slice::from_raw_parts(bytes.data, bytes.len), native);
+            pio_artifact_release(artifact);
+            pio_emit_result_release(emitted);
+            pio_value_release(value);
+            pio_module_release(module);
+            assert_eq!(pio_multiconductor_network_load_count(network), 1);
+            assert_eq!(pio_multiconductor_network_line_count(network), 1);
+            pio_multiconductor_network_release(network);
+            assert!(error.is_null());
+        }
+    }
+
+    #[test]
     fn sincal_balanced_uses_existing_typed_handles_and_binary_echo() {
         const NATIVE: &[u8] = include_bytes!("../../tests/data/sincal/1-LV-rural1--0-sw.sinx");
         unsafe {

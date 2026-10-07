@@ -1,6 +1,6 @@
-//! Private conductor-resolved SINCAL adapter and acquisition staging.
+//! Explicit conductor-resolved SINCAL adapter and acquisition staging.
 //!
-//! Internal until conductor semantics and the electrical mapper are complete.
+//! Only verified electrical profiles are accepted; unsupported modes fail atomically.
 //! Successful schema decoding does not imply electrical-model support.
 //! SINCAL also carries balanced profiles, whose mapper belongs in powerio-tx.
 //! This module must not become the facade's unconditional SINCAL route or a
@@ -35,6 +35,7 @@ mod project;
 #[cfg(test)]
 mod project_tests;
 mod provenance;
+pub(crate) mod public;
 mod schema;
 mod semantics;
 mod sequence;
@@ -126,3 +127,6 @@ pub(crate) fn audit_snapshot_at(
 
 #[cfg(test)]
 mod lpc_tests;
+
+#[cfg(test)]
+mod public_tests;

@@ -425,7 +425,13 @@ off-neutral same-voltage regulators, YN0 and D0 electrical circuits remain work.
 The explicit-midnight audit maps 781/1033 CSIRO01 and 1162/2329 CSIRO02
 components. These are component counts, not whole-feeder validation.
 Wye star/sequence semantics, partial transformer windings, inconsistent
-core parameters, broader profiles/variants and public integration remain work.
+core parameters and broader profiles/variants remain work. The public facade now
+selects `sincal-multiconductor` explicitly, retaining original native bytes and
+the existing network type. Native SQLite/archive routing is exercised through
+CLI/Python/C; explicit Access/variant/snapshot options currently use Rust.
+CSIRO09 public-facade results reproduce the independent electrical checks, MDB
+echo and IR restoration. Selection-option plumbing through the other bindings
+and the remainder of the two-family integration packet remain work.
 Schema-11.5 optional transformer defaults now cover the sparse CSIRO03 records
 with explicit provenance; its context now advances to an unmapped ShuntReactor
 conductor declaration. Its 297 limited-P/Q loads additionally require an exact native

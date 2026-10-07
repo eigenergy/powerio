@@ -167,6 +167,19 @@ fn the_generation_two_catalog_only_adds_structural_types() {
                     .find(|v| v["const"] == "sincal")
                     .unwrap();
                 assert_eq!(sincal["type"], "string");
+            } else if name == "DistSourceFormat" {
+                // Match the balanced format policy above for the other
+                // nonexhaustive source-format enum. Only the new SINCAL
+                // spelling is additive; every existing rule stays identical.
+                let mut without_sincal = current_defs[name].clone();
+                let formats = without_sincal["enum"].as_array_mut().unwrap();
+                let before = formats.len();
+                formats.retain(|value| value != "sincal");
+                assert_eq!(before, formats.len() + 1);
+                assert_eq!(
+                    &without_sincal, definition,
+                    "{earlier}: existing distribution format changed"
+                );
             } else if name == "VoltageSource" {
                 // IR 2 also admits a distinctly tagged nested source type.
                 // Keep the legacy branch byte-for-byte equivalent as JSON;

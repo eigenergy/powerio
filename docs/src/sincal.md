@@ -4,7 +4,8 @@ SINCAL is one native project format capable of holding both balanced and
 conductor-resolved networks. Select the electrical profile explicitly. The
 current balanced reader produces the existing `BalancedNetwork`; it does not
 infer balance from equal phase values or automatically reduce unbalanced data.
-The multiconductor reader is being developed separately in `powerio-dist`.
+The explicit multiconductor profile produces `MulticonductorNetwork` through
+`powerio-dist`; neither profile silently retries the other family.
 
 ## Balanced reader
 
@@ -43,9 +44,60 @@ unsupported terminal or load modes are errors, with no fallback to another
 family. The native model's source-format identity is `sincal`; the retained
 source records the selected input profile as `sincal-balanced`.
 
+## Multiconductor reader
+
+Use `sincal-multiconductor` to select the conductor-resolved reader. A symmetric
+operating point still produces `MulticonductorNetwork`. The verified electrical
+profiles include schema-14.8 native SQLite/archive inputs and schema-11.5/12.8
+Access acquisition records. Shared structural admission of other versions does
+not imply their electrical support. Unsupported equipment or missing required
+sequence data rejects the complete parse; no partial feeder is returned.
+
+```sh
+powerio summary case.db --from sincal-multiconductor
+powerio convert case.db --from sincal-multiconductor --to pmd-json -o case.json
+powerio convert case.db --from sincal-multiconductor --to sincal-multiconductor -o copy.db
+```
+
+Python's existing `parse(..., format="sincal-multiconductor")` and the C ABI's
+existing `pio_parse` route native SQLite/archive inputs to their established
+multiconductor typed accessors. No ABI entry point or network family is added.
+
+The Rust facade additionally exposes explicit variant/snapshot/acquisition
+selection through `ParseOptions.sincal_multiconductor`. Access parsing requires
+the original MDB plus the optional helper's acquired tables, supplied as a
+relative source companion. Parsing does not run MDB Tools. The recorded original
+length and SHA-256 must match the MDB; this catches mismatched input files, but
+is not an attestation that caller-supplied table contents are authentic.
+
+```rust,no_run
+let mut selection = powerio::dist::SincalReadOptions::default();
+selection.variant = Some(1);
+selection.snapshot_hours = Some(12.0);
+selection.acquired_tables = Some("acquired.json".into());
+let mut options = powerio::ParseOptions::default().format("sincal-multiconductor")?;
+options.sincal_multiconductor = Some(selection);
+let module = powerio::parse_with_options("project/original.mdb", &options)?;
+assert!(matches!(module.value(), powerio::PioValue::MulticonductorNetwork(_)));
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Create `project/acquired.json` with `evals/sincal/import_access.py`. In-memory
+sources supply the companion with `Source::with_named_buffer`; file companions
+stay under the source's acquisition root. These selection options currently
+require the Rust API; CLI/Python/C selection-option plumbing remains work.
+Active daily profiles require an explicit snapshot; no midnight default is
+assumed. Generic time-series and inherited variants remain under development.
+
+PowerIO's primary-file limit remains 64 MiB by default. For a known larger input,
+use its existing explicit `POWERIO_MAX_PRIMARY_BYTES` setting. CSIRO09 is
+69,181,440 bytes; its validation uses that exact bound. Acquired table documents
+retain their separate 64 MiB limit. The library does not silently raise either.
+
 ## Fidelity and output
 
-Native physical quantities use a declared 100 MVA internal conversion base.
+In the balanced profile, native physical quantities use a declared 100 MVA
+internal conversion base. The multiconductor model uses its usual SI units.
 Disabled native generator capability limits become unbounded typed limits,
 not zero capability. Diagnostics identify this and data outside the chosen
 snapshot. Disabled modern profile references do not replace static powers.
@@ -54,10 +106,11 @@ currently only the declared schema-11.5 absolute daily profile is accepted.
 Fault, dynamic, protection, economic, diagram and stored-result
 data remain in the retained source. Cross-format output reports their omission.
 
-An unchanged module can emit `sincal` or `sincal-balanced` to reproduce its
-primary native bytes exactly. A SQLite input echoes SQLite bytes; an archive
-input echoes archive bytes; an acquired MDB input echoes the original MDB.
-Use an appropriate destination filename:
+An unchanged module can emit `sincal` or its matching explicit profile token
+to reproduce its primary native bytes exactly. A SQLite input echoes SQLite
+bytes; an archive echoes archive bytes; an explicitly acquired Access case
+echoes the original MDB, never the intermediate tables. An explicit output
+profile for the other network family is refused. Use an appropriate destination filename:
 
 ```sh
 powerio convert case.sinx --from sincal-balanced --to sincal-balanced -o copy.sinx
@@ -96,6 +149,16 @@ model files are vendored.
 Additional schemas, active profiles, variants and corpus cases remain under development. Native
 fixtures require redistribution rights; external research models are not
 silently copied into the test suite.
+
+The public multiconductor facade maps all 688 CSIRO09 elements at five selected
+daily snapshots. Its original powers are symmetric; five separately labelled
+unequal-delta-branch stress cases exercise asymmetric behavior. Independent
+OpenDSS comparisons cover every phase at 617 energized native nodes and four
+isolated nodes, with maximum voltage difference below 0.000372 V. The finite
+OpenDSS source approximation is checked separately. The same public path checks
+original MDB echo and IR value preservation; see `evals/sincal/csiro09-public.json`.
+This establishes one complete conductor-resolved case, not complete corpus
+coverage or native SINCAL desktop acceptance.
 
 ### Explicit balanced Access snapshots in Rust
 

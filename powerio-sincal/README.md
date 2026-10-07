@@ -7,12 +7,13 @@ supported SQLite schema's version, base variant, node/element identities and
 ordered terminal references on a bounded query-only snapshot. It does not
 interpret electrical fields, select a model family, or produce a network.
 Its interfaces are implementation details, not a supported parsing
-API. Public SINCAL parsing and emission remain under development.
+API. The owning family adapters expose explicit public reader profiles; fresh
+writing remains a separately experimental capability.
 
 Direct SQLite structural admission is pinned to observed electrical schema
 14.8, 15.5 and 16.0. The identity columns are checked against the pinned
 SimBench, IEEE18/33 and student databases; electrical support remains
-profile-specific. Explicit MDB Tools acquisition records admit schema 11.5. Both select an
+profile-specific. Explicit MDB Tools acquisition records admit schemas 11.5 and 12.8. Both select an
 explicit base variant (or the sole variant); derived-variant inheritance and
 other schema versions remain unsupported. The database connection retains
 the existing query budget, attachment ban, size limits and query-only mode.
@@ -36,3 +37,9 @@ values and no column affinity or native SQL declarations. The record document
 is not PowerIO IR or an authentic native SQLite export, and its claimed MDB
 digest is provenance metadata rather than an authenticity guarantee. Keep the
 original source separately; the document cannot reproduce original MDB bytes.
+
+`TableRecords::verify_source` checks the claimed length/SHA-256 against a retained
+original Jet MDB and refuses a mismatched pair. The public multiconductor reader
+requires this check when callers explicitly supply acquired tables. It does not
+attest the table contents or launch the acquisition tool. The original MDB and
+records remain separately retained buffers; source echo returns the MDB.

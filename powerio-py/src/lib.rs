@@ -4742,6 +4742,29 @@ mod tests {
     use super::module_with_records;
 
     #[test]
+    fn sincal_multiconductor_reaches_the_existing_python_module_type() {
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(include_str!(
+                "../../tests/data/sincal/synthetic-multiconductor.sql"
+            ))
+            .unwrap();
+        let native = connection.serialize("main").unwrap().to_vec();
+        let parsed =
+            super::PyPioModule::_parse_memory(&native, "case.db", Some("sincal-multiconductor"))
+                .unwrap();
+        let module = parsed.module().unwrap();
+        let powerio::PioValue::MulticonductorNetwork(network) = module.value() else {
+            panic!("wrong SINCAL family")
+        };
+        assert_eq!(network.loads()[0].p_nom, [2000.0, 4000.0, 6000.0]);
+        assert_eq!(
+            module.source().unwrap().primary_buffer().unwrap().bytes(),
+            native
+        );
+    }
+
+    #[test]
     fn sincal_balanced_reaches_the_existing_python_module_type() {
         const NATIVE: &[u8] = include_bytes!("../../tests/data/sincal/1-LV-rural1--0-sw.sinx");
         let parsed =

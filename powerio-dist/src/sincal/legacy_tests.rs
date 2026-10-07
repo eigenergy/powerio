@@ -10,7 +10,7 @@ pub(super) fn legacy(edit: &str) -> NativeDatabase {
     acquired_version(edit, 11.5)
 }
 
-pub(super) fn acquired_version(edit: &str, version: f64) -> NativeDatabase {
+pub(super) fn acquired_records(edit: &str, version: f64) -> Value {
     let snapshot = DatabaseSnapshot::decode(&network_database(edit), None).unwrap();
     let names: Vec<String> = snapshot
         .connection
@@ -58,6 +58,11 @@ pub(super) fn acquired_version(edit: &str, version: f64) -> NativeDatabase {
         "tools": {"mdb-json": "synthetic", "mdb-schema": "synthetic", "mdb-tables": "synthetic"}, "tables": tables,
         "excluded_tables": [], "absent_requested_tables": [],
     });
+    records
+}
+
+pub(super) fn acquired_version(edit: &str, version: f64) -> NativeDatabase {
+    let records = acquired_records(edit, version);
     NativeDatabase::from_snapshot(
         DatabaseSnapshot::decode_records(&serde_json::to_vec(&records).unwrap(), None).unwrap(),
     )

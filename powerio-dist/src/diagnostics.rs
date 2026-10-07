@@ -20,6 +20,12 @@ pub use powerio_core::{
 
 pub mod codes {
     powerio_core::diagnostic_codes! {
+        PARSE_SINCAL_MULTICONDUCTOR = "PARSE.DIST.SINCAL", Error,
+            "the selected conductor-resolved SINCAL profile cannot be parsed", category = Parse;
+        READ_SINCAL_MULTICONDUCTOR_RETAINED_SOURCE_ONLY = "READ.DIST.SINCAL_RETAINED_SOURCE_ONLY", Remark,
+            "native data outside the selected conductor-resolved profile remain only in source";
+        EMIT_SINCAL_MULTICONDUCTOR_RETAINED_SOURCE_OMITTED = "EMIT.DIST.SINCAL_RETAINED_SOURCE_OMITTED", Warning,
+            "native SINCAL source-only data are omitted from cross-format emission";
         // PARSE: the source text could not be decoded as given.
         PARSE_DSS_SOURCE_MALFORMED = "PARSE.DSS.SOURCE_MALFORMED", Warning,
             "a dss command, object spec, or property assignment does not parse";

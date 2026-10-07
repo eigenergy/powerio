@@ -2,6 +2,8 @@
 //! rather than a loose string.
 
 powerio_core::diagnostic_codes! {
+    REQUEST_SINCAL_OPTIONS_PROFILE = "REQUEST.PARSE.SINCAL_OPTIONS_PROFILE", Error,
+        "multiconductor SINCAL options require the matching explicit profile", category = Request;
     REQUEST_PARSE_POWERIO_IR = "REQUEST.PARSE.POWERIO_IR", Error,
         "PowerIO IR is decoded with deserialize, not parse", category = Request;
     READ_MODULE_UNSUPPORTED = "READ.MODULE.UNSUPPORTED", Error,

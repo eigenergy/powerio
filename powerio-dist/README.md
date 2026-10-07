@@ -7,6 +7,14 @@ IEEE PES Task Force on Benchmarking Multiconductor OPF published at
 <https://github.com/distribution-system-opt/dsopt-schema>. It reads schema
 0.1.0 and 0.2.0 and writes 0.2.0.
 
+The explicit `sincal-multiconductor` reader maps verified native SINCAL profiles
+to the same model. Native SQLite/archive input uses `parse` with a declared
+format; `parse_sincal` and `SincalReadOptions` additionally select a variant,
+daily snapshot and explicitly acquired Access tables. Unsupported modes reject
+atomically. The `powerio` facade handles byte-exact native echo; a fresh SINCAL
+writer has a separate experimental scope. See the workspace SINCAL guide and
+`evals/sincal/` for exact supported profiles and independent validation.
+
 Emitting back to the source format reproduces the retained bytes; emitting to
 a different format reports the fields the target cannot represent. The DSS
 reader expands OpenDSS class defaults into explicit model values and remembers

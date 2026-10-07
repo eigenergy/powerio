@@ -55,7 +55,7 @@ pub fn parse_with_options(
         .and_then(|f| parse_transmission_format(f.as_str()));
     if selected != Some(TransmissionFormat::SincalBalanced) {
         return Err(Error::new(&codes::REQUEST_SINCAL_PROFILE_REQUIRED,
-            "SINCAL can contain balanced or multiconductor networks; select format 'sincal-balanced' for an explicitly positive-sequence interpretation. Unbalanced inputs must use their conductor-resolved reader; there is no balancing fallback.")
+            "SINCAL can contain balanced or multiconductor networks; select 'sincal-balanced' for positive sequence or 'sincal-multiconductor' for conductor-resolved interpretation. There is no balancing fallback.")
             .with_source(source));
     }
     let source = source.with_format(FormatId::new("sincal-balanced")?);

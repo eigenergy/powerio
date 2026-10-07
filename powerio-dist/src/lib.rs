@@ -60,7 +60,7 @@ pub mod lindist3flow;
 pub mod model;
 pub mod pmd;
 pub mod readiness;
-// Family-local native adapters; public routing follows complete corpus mapping.
+// Family-local native adapters; only explicitly selected verified profiles map.
 #[allow(dead_code)]
 mod sincal;
 #[cfg(test)]
@@ -100,6 +100,7 @@ pub use readiness::{
     ElectricalReadiness, ReadinessFinding, ReadinessSeverity, audit_electrical_readiness,
     require_electrical_readiness,
 };
+pub use sincal::public::{SincalReadOptions, parse_sincal};
 
 /// Internal SINCAL validation entry point; callers must explicitly choose the
 /// conductor-resolved profile. Unsupported inputs reject the whole network.
