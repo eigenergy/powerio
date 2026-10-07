@@ -326,3 +326,39 @@ six transformer topologies with OpenDSS `Yprim` through an intermediate PowerIO
 IR document. BMOPFTools' 0.11 adapter uses an equivalent bus-shunt matrix and
 retains the original coil object in provenance. Successful parsing alone does
 not establish support for a transformer calculation.
+
+
+### Per-coil capacitor arrays and regulator edits
+
+BMOPF capacitor `q_rated` arrays state vars per coil at the stated coil voltage
+`v_nom`. The reader lowers these arrays exactly into a `DistShunt` terminal
+susceptance matrix: each coil contributes `q / v_nom²` to its two diagonal
+entries and the negative value to the two cross entries. WYE coils use the last
+mapped terminal as the return; DELTA uses the ordered cyclic pairs (one pair
+for a two-terminal device). A lone WYE terminal connects to ground.
+
+The generated name starts with `__bmopf_capacitor_` and receives a suffix if
+needed to avoid a declared shunt. `READ.BMOPF.CAPACITOR_LOWERED` records this exact
+representation change. Canonical emission writes the shunt; source-preserving
+module emission still follows the existing source-fidelity contract. Invalid
+array shapes, negative/nonfinite ratings, nonpositive voltage, repeated terminals,
+and more than 64 terminals fail parsing rather than approximating a bank.
+Scalar bank capacitors retain the existing `DistCapacitor` contract.
+
+No hidden capacitor metadata carries electrical coefficients. Editing the
+canonical shunt changes the emitted electrical data directly. Y-bus assembly,
+LinDist3Flow lowering, and IVR preparation consume the same terminal matrix.
+Open-delta regulators retain their original map only while it agrees with both
+canonical winding maps; otherwise emission writes separate regulator legs and
+reports the loss of the original grouping. N-winding `s_max` remains on its
+original winding axis in the existing winding metadata.
+
+
+### Scalar single-coil IBR bounds
+
+The reader accepts scalar `p_min`, `p_max`, `q_min`, `q_max`, `s_max` and `i_max`
+as one-entry vectors, matching the reference engine's single-coil convention.
+In particular, `p_max: 0` is an enforced zero-availability bound, not an absent
+field. Scalars are not broadcast across multiple coils; downstream cardinality
+validation still applies. Malformed scalar values remain nonfinite and invalid,
+rather than disappearing from the prepared problem.

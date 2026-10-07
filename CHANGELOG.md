@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Preserve BMOPF per-coil capacitor ratings as exact terminal shunts shared by
+  matrix and distribution preparation consumers. Retain custom open-delta
+  terminal maps and n-winding apparent-power bounds; edited winding maps cannot
+  be overwritten by retained source metadata during emission. Scalar single-coil
+  IBR bounds are retained, including zero available PV power.
+
 - PSS/E switched shunt `MODSW` 1 and 2 now read as PSS/E defines them: 1 is
   discrete and 2 is continuous adjustment of the regulated voltage. The RAW
   and RAWX readers had the two swapped, so a continuously adjusted shunt, such
