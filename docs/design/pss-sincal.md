@@ -248,6 +248,9 @@ has a local PowerIO.jl companion with the same branch name.
 
 ### Approved delivery priorities and review gates
 
+The [local review packet](pss-sincal-review.md) contains the five draft
+descriptions, supported profiles, evidence links and outstanding review checks.
+
 Decision agreed with the user on 2026-10-07: prepare the existing implementation
 for review instead of treating corpus completion as a prerequisite. Keep the five
 PRs and the two-backend contract. This section supersedes earlier broad-corpus
