@@ -34,6 +34,8 @@ powerio-tx.workspace = true
 # only the C ABI gates it behind a feature.
 powerio-dist.workspace = true
 pyo3 = { version = "0.29", features = ["abi3-py39"] }
+# The extension is loaded dynamically, including after other native modules.
+mimalloc = { version = "0.1.52", features = ["local_dynamic_tls"] }
 # Must track powerio-matrix's sprs so `CsMat<f64>` is the same type across the
 # boundary. No numpy: the matrix methods hand back COO triplets as plain Python
 # lists, which the pure-Python layer assembles into scipy.sparse.
