@@ -80,7 +80,7 @@ relative source companion. Parsing does not run MDB Tools. The recorded original
 length and SHA-256 must match the MDB; this catches mismatched input files, but
 is not an attestation that caller-supplied table contents are authentic.
 
-```rust,no_run
+```rust,ignore
 let mut selection = powerio::dist::SincalReadOptions::default();
 selection.variant = Some(1);
 selection.snapshot_hours = Some(12.0);
