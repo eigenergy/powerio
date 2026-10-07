@@ -149,7 +149,7 @@ only when an existing representation changes incompatibly. `producer.version` re
 that wrote the document; the reader reports it and ignores it when deciding
 compatibility.
 
-PowerIO 0.11.4 keeps IR version 2. `powerio::IR_VERSION` and
+PowerIO 0.11.5 keeps IR version 2. `powerio::IR_VERSION` and
 `powerio::IR_MIN_VERSION` are both `2`. Additive structural types do not change
 the IR version: older readers continue to accept existing types and reject
 types they do not implement. An incompatible change to an existing record's
@@ -159,7 +159,7 @@ Schema snapshots describe the structural types available in a release.
 `pio-ir/2/schema.json` is the frozen 0.11.0 catalog,
 `pio-ir/2/0.11.1/schema.json` adds the LinDist3Flow OPF instance and solution
 types, `pio-ir/2/0.11.3/schema.json` adds the three PSS/E contingency
-analysis files, and `pio-ir/2/0.11.5/schema.json` adds the fixed-dispatch
+analysis files, and `pio-ir/2/0.11.4/schema.json` adds the fixed-dispatch
 LinDist3Flow instance and solution types.
 The release in that path identifies the snapshot, not another document version.
 Patch releases without catalog changes can reuse the same snapshot.
