@@ -752,7 +752,7 @@ it adds no parser validation result and does not satisfy native writer gate E2.
 
 The subsequent [prioritized verification run](README.md#prioritized-authentic-unbalanced-verification-2026-10-07)
 uses fresh CSIRO 06 and 01 table exports, with source hashes checked against
-the inventory. Its [derived packet](unbalanced-verification.json) records
+the inventory. Its external `unbalanced-verification.json` packet records
 per-phase static-load comparisons, existing line/profile/source reruns, and
 stored port-current balance with explicit coverage exclusions. It exposes
 a phase-power discrepancy hidden by matching load totals and retains the
@@ -825,3 +825,84 @@ therefore currently parses its **zero-demand saved static state**, not its
 historical time-series results. This is recorded explicitly in the report and
 does not count as time-series compatibility. Future snapshot support must use
 input profile records, not stored result demand.
+
+
+## Larger distribution-case search, 2026-10-07
+
+The user now requires one or two additional substantial distribution cases with
+complete parsing and independent end-to-end validation before review. This
+follow-up searched publication/model links and inspected additional native
+files; **it adds zero complete-case successes**. The compact, payload-free
+[inventory](larger-case-search.json) pins file hashes, sizes, table counts,
+decoder warnings and dispositions. All downloaded databases remain temporary
+external research inputs. No license decision here authorizes a fixture.
+
+Six further native files were acquired from LoadFlow revision
+`2d95494327123de7eaa9c6fe0bc09990038ee364`, under the integration-test directory
+already cited above:
+
+| Case | Bytes | Reliable observation | Disposition |
+| --- | ---: | --- | --- |
+| `landnetz_freileitung1` | 6,684,672 | 55 code-7 terminals, no ULF node rows; Node/Element decoding warns | Quarantine incomplete exports |
+| `landnetz_freileitung2` | 6,553,600 | 35 code-7 terminals, no ULF node rows; Node/Element decoding warns | Quarantine incomplete exports |
+| `landnetz_kabel1` | 3,919,872 | 18 nodes, 34 elements, 51 code-7 terminals, no ULF node rows; inspected tables export without warnings | Small three-phase-port case; no demonstrated mixed-phase validation value |
+| `landnetz_kabel2` | 6,684,672 | 87 code-7 terminals, no ULF node rows; Node/Element decoding warns | Quarantine incomplete exports |
+| `vorstadtnetz_kabel1` | 7,733,248 | 879 code-7 terminals, no ULF node rows; Node/Element decoding warns | Potential larger case only after reliable decoding and phase/sequence audit |
+| `vorstadtnetz_kabel2` | 7,733,248 | 867 code-7 terminals, no ULF node rows; Node/Element decoding warns | Same limitation; not a passing case |
+
+Zero exported rows with decoder warnings must never be reported as a native
+empty network. Code-7 ports alone do not classify the electrical family. None
+of these inspections establishes unbalanced solver agreement, usable sequence
+inputs or full mapper coverage. The upstream code license is not evidence of
+model-specific redistribution rights.
+
+A previously uninspected author repository,
+[CreateSincalGridsFromMatlab](https://github.com/lik1212/CreateSincalGridsFromMatlab/tree/d895d218be690877e96e777e3a27f9440dbe646d),
+contains a committed European LV MDB, but its Node, Element and Terminal tables
+are all empty. It is a construction starting point, not another populated
+native feeder. Its MATLAB script and preparation helpers are useful provenance:
+the source and transformer helpers initialize `Element.Flag_Input=3`, matching
+the missing sequence categories in the populated LPC database already audited.
+The transformer preparation also initializes zero sequence ratios to zero.
+This confirms how the incomplete declarations could arise; it does not supply
+missing native physics or authorize overriding them. The script makes topology
+changes and aggregates nodes, so a common IEEE feeder name is not sufficient
+for a paired-model equivalence claim.
+
+The repository root has MIT terms, but
+[European_LV_CSV/ReadMe.txt](https://github.com/lik1212/CreateSincalGridsFromMatlab/blob/d895d218be690877e96e777e3a27f9440dbe646d/European_LV_CSV/ReadMe.txt)
+explicitly says the example CSVs are not the author's work and points to the
+IEEE test-feeder site. Keep inherited model licensing separate. The GitHub API
+listed no forks for either this repository or Matlab2Sincal_LPC-Tool at this
+inspection. Related author repository metadata exposed no additional identified
+native release; this is a bounded search, not a claim that none exists.
+
+The [Zepben documentation](https://zepben.github.io/evolve/docs/) describes a
+SINCAL exporter. Its listed public repositories did not expose an exporter
+repository; the inspected public Python SDK tree has no native SINCAL model
+archive. This is a possible future acquisition lead, not an available test case.
+Further paper searches still led mainly to report-only publications and the
+already catalogued CSIRO/Milos collections. No author or vendor was contacted.
+
+Next work should target a specific available release or a resolvable whole-case
+gap. The populated LPC European LV case remains 260/262, not complete. CSIRO05
+remains an existing large mixed-phase candidate with seven partial DYN11
+transformers and two profile conflicts. Unlike the rejected CSIRO06 partial
+YNd1 candidate, these DYN11 rows declare zero/positive impedance magnitude ratio
+one and no excitation; investigate that exact profile using its own native
+records and independently derived circuits. Do not reuse a failed hypothesis,
+change native inputs, or count another balanced case toward the new gate.
+
+
+A subsequent exploratory CSIRO05 check aligned all 49 saved snapshots for each
+of the seven partial DYN11 transformers (343 component snapshots). Their maximum
+stored terminal currents are only 0.0000780–0.0001574 A; the independently
+computed nominal coil voltage drops are below 1e-7 V. The simple no-excitation
+coil hypothesis still differs by roughly 1.01–2.07 VA from those saved powers.
+These nearly unloaded records cannot establish leakage-impedance/rating
+correctness or attest that current inputs produced the results. They must not
+be promoted to a successful mapping by using a loose absolute tolerance.
+Next test loaded circuits derived from documented winding and sequence rules;
+keep native historical comparison and independent implementation checks distinct.
+The exploratory script and unaccepted results remain in temporary research
+storage, and no production mapper was changed.

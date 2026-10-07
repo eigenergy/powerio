@@ -1,8 +1,10 @@
 # SINCAL local review packet
 
 Prepared 2026-10-07 against the approved [delivery roadmap](pss-sincal.md).
-These are local PR drafts and an evidence index, not published PRs or a claim
-that final review is complete. Preserve the five stacked splits below.
+These are local PR drafts and an evidence index. User review is deferred until
+one or two additional substantial distribution cases pass complete parsing and
+independent end-to-end validation. That gate is not yet met. Preserve the five
+stacked splits below; no PR is published.
 
 ## Base and review status
 
@@ -15,6 +17,10 @@ below remain the review identities across local rebases.
 - [x] Five coherent branches exist with the intended linear ancestry.
 - [x] Current remote base checked; no merge/rebase onto newer main needed.
 - [x] Draft descriptions, declared profiles and evidence indexed below.
+- [ ] One or two additional substantial native distribution cases pass complete
+  parsing and independent end-to-end validation (required before user review).
+- [ ] Add each passing case's pinned source, counts, selection, command, oracle
+  errors/tolerances and licensing disposition to PR 4.
 - [ ] Final maintainability/correctness review of the complete per-PR diffs.
 - [x] Balanced CLI selections: native CSIRO19 snapshots, source echo and failures.
 - [ ] Balanced Access/snapshot selection integration across Python/C/Julia.
@@ -24,8 +30,9 @@ below remain the review identities across local rebases.
 The current distribution PR is the largest. Much of its diff is synthetic tests,
 external validation harnesses and measured reports. Review its acquisition/API
 boundaries and component mappers first, then the supporting tests and evidence.
-Keep dataset work organized by its existing commits within this PR; do not split
-it into more dataset-specific PRs or add new modes to reduce the perceived gaps.
+Keep dataset work organized within this PR; do not split it into more dataset
+PRs. Add modes needed by selected whole-case candidates only when independently
+verified. Do not expand equipment coverage merely to improve partial counts.
 
 ## PR 1 — Preserve source references in multiconductor models and consumers
 
@@ -127,6 +134,11 @@ reject the whole network; partial audit counts never become returned feeders.
 | Independent component checks | Verified source, line, load, selected transformer, shunt and switch profiles; see the evidence index for exact modes and limitations |
 | Public interfaces | Explicit family/variant/time/acquisition selection, typed access, original-source echo and IR preservation |
 
+**New review gate.** This table still contains only one complete native
+distribution case. Add one or two substantial published cases with whole-network
+validation before requesting user review; component reports and synthetic stress
+cases cannot satisfy that gate. See the roadmap for the exact evidence packet.
+
 **Limits that must appear in the PR.** CSIRO09's original loads are symmetric.
 Zero of the seven priority genuinely unbalanced original CSIRO feeders parses
 completely. Mixed partial transformers, Wye star/sequence modes, coupled reduced-
@@ -187,5 +199,5 @@ after integration edits, and the full CI clippy matrix before final handoff.
 Do not rerun unchanged expensive oracles merely to increase a test count.
 
 The original research checkout remains untouched. This packet does not authorize
-publication. Broader corpus work and native writer acceptance remain distinct
-from the initial supported-profile review and merge gates.
+publication. The additional distribution-case gate now precedes user review;
+completion of the entire corpus and native writer acceptance remain separate.

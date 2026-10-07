@@ -4,8 +4,9 @@ Status: local reader implementation and validation in progress, 2026-10-07.
 Both explicit public reader profiles are implemented. Five balanced cases and
 one complete conductor-resolved native feeder have independent electrical
 evidence. Distribution selections include C/Julia; the new balanced Access
-selections currently use Rust and CLI. The user-approved delivery decision below prioritizes
-review of the supported profiles; broader corpus coverage is follow-up work.
+selections currently use Rust and CLI. The latest user decision requires one or
+two additional substantial distribution feeders to pass complete parsing and independent end-to-end validation before
+user review. The existing review packet is a draft, not review readiness.
 Nothing is published. Research base: `c8184eba` (PowerIO 0.11.4); the local PR
 stack starts at `d5f93763`. The current user-facing capabilities are documented
 in [the guide](../src/sincal.md). Earlier rationale below is dated context,
@@ -34,11 +35,12 @@ Server databases, dynamics, protection calculations, and network-state XML
 patches remain outside the initial electrical profile. An Access-to-table or
 Access-to-SQLite transcription is not an authentic native SQLite export.
 
-The user-approved 2026-10-07 delivery decision below supersedes earlier
-requirements to complete the broad corpus before opening the five PRs. Deliver
-the verified reader profiles and the existing experimental writer subset first;
-retain broader coverage as follow-up work. Unsupported electrical modes still
-fail explicitly. This changes delivery scope, not the evidence for any case.
+The latest 2026-10-07 decision supersedes the earlier supported-profile-first
+review sequence: earn one or two more substantial complete distribution cases
+before asking the user to review. This is a bounded reader milestone, not a
+requirement to finish the entire CSIRO collection. Keep the five PR splits and
+the existing experimental writer subset. Unsupported electrical modes still
+fail explicitly; the new gate does not change the evidence for any case.
 
 The user does not currently have SINCAL access. We can establish structural,
 electrical, and cross-tool evidence now, but successful import and calculation
@@ -117,7 +119,7 @@ Public reader integration requires evidence for these cases:
   synthetic circuits produce `MulticonductorNetwork` and preserve supported
   phase/neutral/source constraints through its existing consumers. Record the
   synthetic origin of asymmetric evidence. An additional authentic mixed-phase
-  feeder is the next coverage milestone, not an initial PR-opening gate.
+  feeder is now a prerequisite for user review; aim for two additional cases.
 - A balanced operating point in a conductor model retains its multiconductor
   type; ambiguous profiles and conflicting declarations do not silently select
   a family; unsupported unbalanced inputs cannot fall back to balanced parsing.
@@ -251,26 +253,40 @@ has a local PowerIO.jl companion with the same branch name.
 The [local review packet](pss-sincal-review.md) contains the five draft
 descriptions, supported profiles, evidence links and outstanding review checks.
 
-Decision agreed with the user on 2026-10-07: prepare the existing implementation
-for review instead of treating corpus completion as a prerequisite. Keep the five
-PRs and the two-backend contract. This section supersedes earlier broad-corpus
-acceptance language in this proposal; outstanding cases are not relabeled as
-supported. Updating this roadmap does not authorize pushing or opening PRs.
+Latest user decision, 2026-10-07: no user review until one or two additional
+non-trivial distribution networks parse completely and pass end-to-end
+validation. Aim for two distinct published cases; at least one new complete
+success is required before returning for review discussion. Prefer simpler
+non-CSIRO cases where available, while retaining feasible CSIRO candidates.
+Preserve the five PRs, two-backend contract and experimental writer scope.
+Nothing in this decision authorizes publication.
 
 | Priority | Deliverable | Completion evidence |
 | --- | --- | --- |
-| 1 | Prepare all five local PRs for review | Reviewed base drift and diffs, coherent commits, per-PR supported-profile/limitation tables, concise descriptions and reproducible validation packet; discuss with the user before publication |
-| 2 | Finish balanced Access/variant/snapshot selections in CLI, Python, C and Julia | Same explicit-family behavior as Rust and the existing distribution interfaces; native snapshot/echo/IR checks, wrong-family rejection and relevant binding regressions |
-| 3 | Freeze writer expansion | Keep the existing experimental subset, explicit opt-in, unsupported-mode rejection and read/write/edit/IR tests; add no equipment modes to this delivery |
-| 4 | Validate one additional authentic unbalanced feeder | Follow-up work on partial mixed-winding transformers and Wye loads affecting CSIRO05/06; independently check new circuits and the resulting whole network; account separately for source-input conflicts |
-| 5 | Expand remaining corpus coverage | Follow-up variants, profiles, uncommon equipment and additional cases, selected to answer named gaps rather than to grow counts |
+| 1 | Select and complete additional substantial native distribution cases | Hash-pinned published input, reliable acquisition, all selected components mapped, independent whole-network electrical check; target two distinct cases |
+| 2 | Turn each success into reproducible PR evidence | Public parser command, typed result/counts, selection, diagnostics, independent oracle/tolerance/errors, source echo and IR checks, provenance/license and explicit limits |
+| 3 | Finish balanced Access/variant/snapshot selections in Python, C and Julia | CLI is complete; preserve explicit-family behavior and run relevant native snapshot/echo/IR and binding regressions |
+| 4 | Finish the five local review packets | Final base/diff review, coherent commits, supported-profile tables and affected regression packet, after the new distribution gate is met |
+| 5 | Broader corpus and uncommon modes | Follow-up work chosen for named gaps; the full CSIRO collection is not an initial delivery promise |
 
-Opening gates: complete the final base/diff review and validation packet, then
-obtain the user's publication authorization. No further dataset search or new
-complete unbalanced feeder is required to open useful draft PRs. PRs 1–2 are
-ready for final review preparation; PRs 3–5 can enter draft review with explicit
-limits. The balanced selection-binding gap can remain visible during draft review
-but must be closed before reader merge readiness is claimed.
+Freeze writer expansion throughout this work. The current local drafts can be
+maintained, but do not ask the user to review them before the additional-case
+gate passes. Publication still needs the user's later authorization.
+
+For a case to count, use an unmodified published native source and its explicitly
+selected variant/snapshot. Acquire every table/sidecar needed by active inputs;
+parse the entire selected model through the public conductor-resolved profile;
+account for every node, component, phase and switch state; and compare the actual
+PowerIO output against an independently constructed circuit and solve. Report
+complex voltages, terminal currents/powers, reference constraints, topology and
+load totals as applicable, with justified tolerances and solver convergence.
+Require zero unreported electrical omissions. Preserve inactive equipment and
+identify unsourced islands explicitly rather than silently dropping them.
+Source echo and IR checks must use the same native case. A larger balanced model
+belongs to the balanced backend and cannot replace this distribution milestone.
+Component-only checks, tiny isolated circuits, different times of one feeder,
+writer-generated models and repaired derivatives do not count as additional
+published complete cases. Native SINCAL execution remains a separate claim.
 
 Merge gates: maintainer agreement on each declared profile; completion of its
 bounded integration work; passing relevant regressions, fidelity and diagnostic
@@ -284,18 +300,18 @@ External acceptance gates: native SINCAL open/save/calculate for generated files
 and any claims of agreement with native execution. These remain unverified and
 are not gates to reviewing or merging the explicitly experimental writer.
 Undocumented electrical meanings still gate support for the affected reader modes,
-not delivery of independently verified profiles. Broader unbalanced support must
-not be advertised on the strength of component counts or synthetic cases alone.
+while the additional complete-case requirement gates user review. Broader
+unbalanced support must not be advertised on the strength of component counts or synthetic cases alone.
 
 ### Follow-up corpus ambition and evidence accounting
 
-This inventory retains the broader ambition. Unfinished rows are follow-up
-coverage, not additional acceptance requirements for the initial five PRs.
+This inventory retains the broader ambition. One or two additional complete
+distribution cases are the immediate review gate; the rest remains follow-up.
 
 | Corpus | Reader target | Evidence/data policy |
 | --- | --- | --- |
 | SimBench | Existing 15-node LV case, then available native LV/MV/HV and mixed-voltage cases representing distinct equipment modes | Balanced mappings compared with paired CSV. Inventory and pin additional archives before promising an exact count; retain ODbL/DbCL notices. |
-| CSIRO 01–07 | Complete unbalanced reading of all seven feeders; next target is one additional authentic case through CSIRO05/06 semantics, including applicable profiles/snapshots | Schema 11.5 Access through explicit optional import. CC BY 4.0, external corpus; resolve active native meanings rather than fitting historical results. |
+| CSIRO 01–07 | Longer-term complete unbalanced reading of all seven feeders; CSIRO05 remains a candidate for the bounded additional-case gate | Schema 11.5 Access through explicit optional import. CC BY 4.0, external corpus; resolve active native meanings rather than fitting historical results. |
 | CSIRO 08–19 | Account for every selected family/variant, including inheritance in 10/11/14 and blank terminal fields in 13 | Follow-up target: all 19 databases and applicable selectable variants. Three-phase connections and stored balanced results do not determine electrical family. |
 | MATLAB LPC European LV/S1a | Mixed-phase schema-12.8 Access compatibility | External local checks while inherited model rights remain unresolved. No stored native results; independently check mapped electrical behavior. |
 | IEEE18/33 and student study | Schema-15.5/16.0 SQLite compatibility | External cases, no fixtures without redistribution rights. Orphan coupling sidecar is not evidence of active coupling semantics. |
@@ -319,9 +335,10 @@ impact. Unclear data rights prohibit vendoring regardless of code licensing.
 
 ### Delivery feasibility and remaining validation
 
-The broad reader corpus above remains a follow-up objective, not a prerequisite
-for the initial five PRs or a promise that more coding alone can make every
-original database pass. Native SINCAL execution is an external acceptance gate.
+Completing the entire reader corpus remains a follow-up objective, not a
+prerequisite for the five PRs or a promise that more coding alone can make every
+original database pass. The additional distribution-case gate does apply.
+Native SINCAL execution is an external acceptance gate.
 Missing electrical meanings and conflicting native inputs are tracked separately
 because they also limit what can be implemented faithfully without that access.
 
@@ -336,21 +353,33 @@ ten other transformer/regulator modes, 291 inconsistent core-loss inputs and
 three conflicting profile timestamps. Further failures may follow a resolved
 first rejection.
 
-Prioritize verified partial mixed-winding and Wye circuits for CSIRO05/06.
-CSIRO05 has seven transformers and two profile conflicts left; CSIRO06 has
-35 Wye loads, nine partial transformers and eleven nameplate conflicts. Resolve
-input-conflict dispositions explicitly; never silently alter an original model
-or call a corrected derivative an original-case pass. The original mandatory
-CSIRO06/01 checkpoint is superseded by the approved supported-profile delivery
-gates above; those original cases remain unsupported.
-Investigations must address named gaps using new evidence; repeated rejected
-hypotheses and broad dataset searches do not advance acceptance.
+The new [candidate search](../../evals/sincal/research-catalog.md#larger-distribution-case-search-2026-10-07)
+downloaded six additional LoadFlow databases and inspected another European LV
+repository. It found no new ready unbalanced native case: five LoadFlow models
+have MDB decoder errors, the reliable rural model is small and has only code-7
+ports, and the new European LV database is empty. Related author repositories
+and forks did not reveal another populated native release. Do not count these
+as acceptance successes or continue the same broad searches without a new lead.
 
-Prioritize public integration and review packets for supported profiles before
-resuming these follow-up investigations. Balanced-compatible Access inputs belong
-in the balanced PR with explicit family selection, not in the distribution completion
-count. The experimental writer retains its declared subset and separate native
-acceptance gate. Publication still requires the user's later permission.
+The populated MATLAB LPC European LV case remains 260/262 components, with
+168 nodes and 55 single-phase loads. Newly inspected upstream construction code
+corroborates the source/transformer category omissions; it does not resolve them.
+Prioritize a concrete new model release or documented semantics over bypassing
+those declarations. CSIRO05 remains the strongest existing larger mixed-phase
+candidate: seven partial DYN11 transformers and two profile conflicts remain.
+Check its own winding/rating/sequence evidence; the rejected CSIRO06 partial
+YNd1 hypothesis is not a validation of this different profile. CSIRO06 still
+has 35 Wye loads, nine partial transformers and eleven nameplate conflicts.
+CSIRO12 is structurally close but needs verified source-control NULL semantics
+and would not alone demonstrate mixed-phase operation.
+
+Resolve source conflicts explicitly. Never alter an original model silently or
+call a corrected derivative an original-case pass. Work on a candidate only when
+there is a concrete route to whole-case verification; report failed hypotheses
+and unresolved source meanings separately. Balanced-compatible Access inputs
+remain in the balanced family and never inflate distribution completion counts.
+Keep integration work bounded behind the new whole-case priority. Publication
+still requires the user's later permission.
 
 ### PR 1: source-reference model and consumers
 
@@ -464,7 +493,7 @@ modes reject atomically; neither missing inputs nor source values may be chosen
 to minimize historical-result residuals. New generic model gaps require typed
 shared fixes, not SINCAL-only physics hidden in metadata.
 
-Initial PR acceptance: all 688 CSIRO09 elements parse through the public facade
+Existing baseline: all 688 CSIRO09 elements parse through the public facade
 at the five verified snapshots; independent OpenDSS comparisons pass on the
 energized network and isolated nodes remain faithfully represented. Five labelled
 asymmetric stress cases and the existing independently checked component circuits
@@ -474,15 +503,16 @@ Report that native CSIRO09 powers are symmetric and that zero of the seven
 priority genuinely unbalanced original feeders currently parses completely.
 These limits must appear in the PR description and supported-profile table.
 
-Follow-up acceptance: one additional authentic mixed-phase feeder, prioritizing
-CSIRO05/06 partial mixed-winding and Wye semantics, followed by broader coverage.
+User-review acceptance now additionally requires one or two substantial published
+distribution feeders with complete end-to-end validation as defined above. New
+non-CSIRO candidates are welcome; CSIRO05 remains a concrete existing candidate.
 All seven priority feeders, remaining applicable CSIRO/LPC cases, additional
 profiles, inherited variants/deletions, Representative 01 coupled charging and
 Representative 13 blank terminals stay on that backlog. Resolve meanings from
 evidence, test actual Rust output independently, never union stored variants,
 and distinguish source-input conflicts from mapper gaps. Full explicit-neutral
-or coupling modes remain unsupported until verified. None of these expansions
-is a gate to opening the initial distribution PR for its declared profile.
+or coupling modes remain unsupported until verified. Broader completion beyond
+the additional-case review gate remains follow-up work.
 
 Complete two-family facade/CLI/binding integration here. Both authentic family
 cases yield existing typed values; a phase-symmetric conductor model remains
@@ -608,8 +638,9 @@ component, even though all 51 transformers satisfy the short-circuit `ur <= uk`
 check. Input-data conflicts need separate acceptance dispositions; no tolerance
 expansion or input repair is applied. Native SINCAL execution remains an external
 acceptance gate, separate from continued reader implementation and independent
-validation. Broader corpus coverage is follow-up work; the final integration
-and review packet remains part of the initial delivery.
+validation. One or two additional whole-case successes now gate user review;
+broader corpus coverage beyond that remains follow-up. Final integration and
+review checks remain part of initial delivery.
 
 Derived-variant research now establishes complete-row override selection against
 all 9,942 acquired native active input rows across CSIRO10/11/14. All 44 variants
@@ -659,10 +690,9 @@ parent commits, changed-file scopes, reproducible tests and corpus coverage in
 a local handoff report. No empty branch or plan-only commit represents an
 implemented reader/writer PR.
 
-Return for discussion when the five branches have reviewable diffs, tables of
-supported profiles, concise PR descriptions and a reproducible validation packet.
-List the balanced selection-binding task explicitly if draft review starts
-before it is finished. Do not wait for follow-up corpus completion or expand
-the writer to make the review packet. No push, PR creation, merge or release is
-authorized by this roadmap update. Native semantics still gate claims for
-affected cases; native writer acceptance remains a separate external gate.
+Return for user review only after the additional complete-distribution-case gate
+passes and the five branches have reviewable diffs, supported-profile tables,
+concise PR descriptions and a reproducible validation packet. Record the remaining
+balanced selection-binding work honestly; do not let it displace whole-case
+validation. No push, PR creation, merge or release is authorized by this roadmap
+update. Native writer acceptance remains a separate external gate.
