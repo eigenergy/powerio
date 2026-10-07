@@ -2,7 +2,7 @@
 
 This branch supplies model-neutral SQLite/archive acquisition and schema
 validation. The balanced reader branch additionally maps the complete small SimBench case
-through an explicit internal profile entry point. Acquisition-only reports
+through the explicit `sincal-balanced` public parser profile. Acquisition-only reports
 remain distinct from electrical reader validation; none establishes fresh
 writer acceptance. The [delivery plan](../../docs/design/pss-sincal.md) records the
 five local PR scopes and dataset targets. The [research catalog](research-catalog.md)
@@ -84,7 +84,8 @@ execution time are observations for this corpus, not portability guarantees.
 
 The Rust `sincal_balanced` example explicitly selects positive sequence and
 exports the actual typed reader output for validation. It is not automatic
-family detection or the final facade API. The current schema adapter accepts
+family detection. The facade accepts the same case with the explicit
+`sincal-balanced` format argument; see [the user guide](../../docs/src/sincal.md). The current schema adapter accepts
 14.8 and maps all 32 equipment records of the licensed 15-node SimBench case.
 Unknown active modes fail with native table, record and field context.
 
@@ -112,6 +113,7 @@ normalized to demand at the nominal bus voltage.
 
 Still required for the complete transmission PR: additional SimBench modes
 and corpus cases, verified Access/other-schema adapters, profile/variant
-selection, registered diagnostics, facade/CLI/binding integration, retained
-binary-source echo and IR behavior. This first mapped case does not establish
+selection and expanded public input options. Registered diagnostics,
+facade/CLI/C/Python parsing, retained binary-source echo, edited-module refusal
+and IR-without-native-source behavior now have focused integration tests. This first mapped case does not establish
 those capabilities, unbalanced reading, or native SINCAL writer acceptance.

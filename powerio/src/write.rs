@@ -235,7 +235,26 @@ where
     T: Clone + Into<PioValue>,
 {
     let module = module.clone().map_value(Into::into);
-    emit_dynamic(&module, format, output.into_destination()?)
+    let result = emit_dynamic(&module, format, output.into_destination()?)?;
+    let from_sincal = module.sources().iter().any(|source| {
+        source
+            .format()
+            .is_some_and(|f| is_sincal_format(f.as_str()))
+    });
+    if from_sincal
+        && !is_sincal_format(format)
+        && !result
+            .diagnostics()
+            .iter()
+            .any(|d| d.code() == "EMIT.SINCAL.RETAINED_SOURCE_OMITTED")
+    {
+        Ok(result.__with_diagnostics(vec![Diagnostic::of(
+            &powerio_tx::diagnostics::codes::EMIT_SINCAL_RETAINED_SOURCE_OMITTED,
+            "Cross-format emission includes the typed electrical profile; fault, dynamic, protection, diagram, result and other native source-only data are omitted.",
+        )]))
+    } else {
+        Ok(result)
+    }
 }
 
 fn calculation_data_omitted(value_type: &str, format: &str) -> Diagnostic {
@@ -1041,11 +1060,52 @@ fn emit_versioned_bmopf(
     .map(|result| result.__with_diagnostics(diagnostics))
 }
 
+fn is_sincal_format(format: &str) -> bool {
+    crate::resolve_format(format).is_some_and(|f| matches!(f.token, "sincal" | "sincal-balanced"))
+}
+
+/// Binary retained-source echo is separate from fresh electrical writing.
+fn echo_sincal(
+    module: &PioModule<PioValue>,
+    destination: Destination,
+) -> Result<EmitResult, Error> {
+    if !matches!(module.value(), PioValue::BalancedNetwork(_)) {
+        return Err(unsupported_type(module, "sincal"));
+    }
+    let source = module.source().filter(|source| source.format().is_some_and(|f| is_sincal_format(f.as_str())))
+        .ok_or_else(|| Error::new(&powerio_tx::diagnostics::codes::EMIT_SINCAL_FRESH_UNSUPPORTED,
+            "SINCAL currently supports unchanged retained-source echo only. Edited, constructed, or IR-restored networks require the separate experimental fresh writer."))?;
+    let primary = source.primary_buffer()?;
+    // deserialize retains the IR document as its acquired source. A caller
+    // supplying a native format hint must not relabel those JSON bytes as a
+    // SINCAL project and enable an invalid native echo.
+    if !primary.bytes().starts_with(b"SQLite format 3\0")
+        && !primary.bytes().starts_with(b"PK\x03\x04")
+    {
+        return Err(Error::new(
+            &powerio_tx::diagnostics::codes::EMIT_SINCAL_FRESH_UNSUPPORTED,
+            "The retained bytes are not a native SINCAL database or archive; source metadata alone cannot enable native echo.",
+        ));
+    }
+    destination.__commit_artifacts(
+        false,
+        powerio_core::Fidelity::ExactSameFormat,
+        vec![powerio_core::MemoryArtifact::new(
+            powerio_core::ArtifactPath::new("case.sinx")?,
+            primary.bytes().to_vec(),
+        )],
+        Vec::new(),
+    )
+}
+
 fn emit_dynamic(
     module: &PioModule<PioValue>,
     format: &str,
     destination: Destination,
 ) -> Result<EmitResult, Error> {
+    if is_sincal_format(format) {
+        return echo_sincal(module, destination);
+    }
     if let Some(version) = format.strip_prefix("bmopf-json@") {
         return emit_versioned_bmopf(module, version, destination);
     }

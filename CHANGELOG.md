@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Add the explicit `sincal-balanced` parser profile for schema-14.8 SQLite
+  projects and `.sinx` archives, producing `BalancedNetwork`. The first complete
+  validated case is the 15-node SimBench LV model. Unqualified SINCAL input
+  requires profile selection; unsupported phase modes never fall back to a
+  balanced projection. Unchanged modules echo native bytes exactly, while
+  edited and IR-restored modules refuse fresh native output. Cross-format
+  emission reports omitted source-only data. The writer remains a separate
+  experimental milestone; other schemas and unbalanced reading are in progress.
+
 - Multiconductor voltage sources can prescribe voltages relative to an explicit
   terminal, preserving floating-star displacement and reference current in the
   sparse matrix constraints. IR 2 carries these as distinct tagged source
@@ -25,7 +34,6 @@
   equipment. Leakage, non-WYE connections, implicit neutral impedances, core
   losses and tap controls remain outside this matrix builder's supported profile.
 
-## Unreleased
 
 - PSS/E switched shunt `MODSW` 1 and 2 now read as PSS/E defines them: 1 is
   discrete and 2 is continuous adjustment of the regulated voltage. The RAW

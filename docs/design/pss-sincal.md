@@ -336,8 +336,12 @@ pandapower 3.2.2 pi-transformer comparison (maximum complex voltage difference
 6.3e-14 pu). Derived nonzero primary/secondary tap cases also pass, below
 5.1e-11 pu. Open-terminal and inactive-device retention and refusal of unsupported
 active modes have focused Rust tests. The reproducible harness and exact report
-are under `evals/sincal/`. Public dispatch, source echo, additional schemas and
-corpus coverage are still outstanding; this does not complete PR 3.
+are under `evals/sincal/`. Public `sincal-balanced` dispatch now reaches the existing typed model through
+Rust, CLI, C and Python. Registered diagnostics distinguish profile selection,
+malformed input, conversion assumptions and source-only data. Binary archive
+and direct-SQLite echo are byte exact; edited and IR-restored modules refuse
+fresh output. Additional schemas, variants/profiles and corpus coverage are
+still outstanding; this does not complete PR 3.
 
 ### PR 4: distribution / unbalanced reader
 

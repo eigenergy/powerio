@@ -1,0 +1,216 @@
+mod helpers;
+
+use powerio::{Destination, EmittedOutput, Fidelity, ParseOptions, PioValue, Source};
+
+const ARCHIVE: &[u8] = include_bytes!("../../tests/data/sincal/1-LV-rural1--0-sw.sinx");
+
+fn source() -> Source {
+    Source::from_memory("case.sinx", ARCHIVE.to_vec()).unwrap()
+}
+fn parsed() -> powerio::PioModule<PioValue> {
+    powerio::parse_with_options(
+        source(),
+        &ParseOptions::default().format("sincal-balanced").unwrap(),
+    )
+    .unwrap()
+}
+fn bytes(result: powerio::EmitResult) -> Vec<u8> {
+    let EmittedOutput::Memory { mut artifacts } = result.into_output() else {
+        panic!("memory output")
+    };
+    assert_eq!(artifacts.len(), 1);
+    artifacts.remove(0).into_bytes()
+}
+
+#[test]
+fn balanced_profile_produces_the_existing_network_type_and_retained_binary_source() {
+    let module = parsed();
+    let PioValue::BalancedNetwork(net) = module.value() else {
+        panic!("balanced profile type")
+    };
+    assert_eq!(net.buses().len(), 15);
+    assert_eq!(net.loads().len(), 13);
+    assert_eq!(net.branches().len(), 14);
+    assert_eq!(net.generators().len(), 5);
+    assert_eq!(net.source_format(), powerio::SourceFormat::Sincal);
+    assert!(
+        module
+            .diagnostics()
+            .iter()
+            .any(|d| d.code() == "READ.SINCAL.RETAINED_SOURCE_ONLY")
+    );
+    assert!(
+        module.sources().len() > 1,
+        "archive companions have provenance"
+    );
+    for format in ["sincal", "sincal-balanced", "SINCAL_BALANCED"] {
+        let info = powerio::resolve_format(format).unwrap();
+        assert!(!info.can_emit, "source echo is not a fresh writer");
+        let result =
+            powerio::emit(&module, format, Destination::memory("copy.sinx").unwrap()).unwrap();
+        assert_eq!(result.fidelity(), Fidelity::ExactSameFormat);
+        assert!(result.diagnostics().is_empty());
+        assert_eq!(bytes(result), ARCHIVE);
+    }
+}
+
+#[test]
+fn an_undeclared_family_is_refused_before_electrical_mapping() {
+    for format in [None, Some("sincal")] {
+        let options = match format {
+            None => ParseOptions::default(),
+            Some(f) => ParseOptions::default().format(f).unwrap(),
+        };
+        let error = powerio::parse_with_options(source(), &options).unwrap_err();
+        assert!(
+            error
+                .diagnostics()
+                .iter()
+                .any(|d| d.code() == "REQUEST.SINCAL.PROFILE_REQUIRED")
+        );
+        assert_eq!(
+            error
+                .retained_source()
+                .unwrap()
+                .primary_buffer()
+                .unwrap()
+                .bytes(),
+            ARCHIVE
+        );
+    }
+    assert_eq!(
+        powerio_tx::format::routing::classify_format_name("sincal"),
+        powerio::Detection::Ambiguous
+    );
+    // A declaration for another format takes precedence over a .sinx suffix.
+    let error = powerio::parse_with_options(
+        source(),
+        &ParseOptions::default().format("matpower").unwrap(),
+    )
+    .unwrap_err();
+    assert!(
+        !error
+            .diagnostics()
+            .iter()
+            .any(|d| d.code() == "REQUEST.SINCAL.PROFILE_REQUIRED")
+    );
+}
+
+#[test]
+fn changed_or_ir_restored_modules_cannot_echo_stale_native_bytes() {
+    let original = parsed();
+    let text = helpers::serialize_module_text(&original).unwrap();
+    let restored = helpers::deserialize_module_text(&text).unwrap();
+    // deserialize retains its IR document for provenance, never the native
+    // project that the original module retained.
+    assert_ne!(
+        restored.source().unwrap().primary_buffer().unwrap().bytes(),
+        ARCHIVE
+    );
+    assert_eq!(restored.value().type_name(), original.value().type_name());
+    let mut changed = original.clone();
+    let PioValue::BalancedNetwork(net) = changed.value_mut() else {
+        unreachable!()
+    };
+    net.loads_mut()[0].p += 0.001;
+    for module in [&changed, &restored] {
+        let output = tempfile::tempdir().unwrap();
+        let path = output.path().join("refused.sinx");
+        let error = powerio::emit(module, "sincal", &path).unwrap_err();
+        assert!(
+            error
+                .diagnostics()
+                .iter()
+                .any(|d| d.code() == "EMIT.SINCAL.FRESH_UNSUPPORTED")
+        );
+        assert!(!path.exists());
+        let converted =
+            powerio::emit(module, "matpower", Destination::memory("case.m").unwrap()).unwrap();
+        assert_eq!(
+            converted
+                .diagnostics()
+                .iter()
+                .filter(|d| d.code() == "EMIT.SINCAL.RETAINED_SOURCE_OMITTED")
+                .count(),
+            1
+        );
+        let reloaded =
+            powerio::parse(Source::from_memory("case.m", bytes(converted)).unwrap()).unwrap();
+        assert!(matches!(reloaded.value(), PioValue::BalancedNetwork(_)));
+    }
+    assert_eq!(
+        bytes(
+            powerio::emit(
+                &original,
+                "sincal",
+                Destination::memory("original.sinx").unwrap()
+            )
+            .unwrap()
+        ),
+        ARCHIVE
+    );
+}
+
+#[test]
+fn malformed_native_bytes_report_registered_sincal_error_with_source() {
+    let input = Source::from_memory("broken.sinx", b"not a ZIP or SQLite file".to_vec()).unwrap();
+    let error = powerio::parse_with_options(
+        input,
+        &ParseOptions::default().format("sincal-balanced").unwrap(),
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .diagnostics()
+            .iter()
+            .any(|d| d.code() == "PARSE.SINCAL.MALFORMED")
+    );
+    assert!(error.retained_source().is_some());
+}
+
+#[test]
+fn ir_input_cannot_be_relabelled_as_native_echo() {
+    let text = helpers::serialize_module_text(&parsed()).unwrap();
+    let source = Source::from_memory("case.pio.json", text.into_bytes())
+        .unwrap()
+        .with_format(powerio::FormatId::new("sincal-balanced").unwrap());
+    let restored = powerio::deserialize(source).unwrap();
+    assert!(
+        powerio::emit(
+            &restored,
+            "sincal",
+            Destination::memory("bad.sinx").unwrap()
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn direct_sqlite_input_has_the_same_value_and_echoes_its_database_bytes() {
+    use std::io::Read;
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(ARCHIVE)).unwrap();
+    let names = archive
+        .file_names()
+        .filter(|name| name.ends_with("/database.db"))
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    assert_eq!(names.len(), 1);
+    let mut database = Vec::new();
+    archive
+        .by_name(&names[0])
+        .unwrap()
+        .read_to_end(&mut database)
+        .unwrap();
+    let source = Source::from_memory("database.db", database.clone()).unwrap();
+    let module = powerio::parse_with_options(
+        source,
+        &ParseOptions::default().format("sincal-balanced").unwrap(),
+    )
+    .unwrap();
+    let PioValue::BalancedNetwork(network) = module.value() else {
+        panic!("balanced")
+    };
+    assert_eq!(network.buses().len(), 15);
+    let echo = powerio::emit(&module, "sincal", Destination::memory("copy.db").unwrap()).unwrap();
+    assert_eq!(bytes(echo), database);
+}

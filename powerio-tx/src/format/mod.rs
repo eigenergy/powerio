@@ -264,6 +264,7 @@ pub fn parse_target_format(name: &str) -> Option<TargetFormat> {
         TransmissionFormat::Cgmes => TargetFormat::Cgmes,
         TransmissionFormat::Ucte => TargetFormat::Ucte,
         TransmissionFormat::PypsaCsv
+        | TransmissionFormat::SincalBalanced
         | TransmissionFormat::Pwb
         | TransmissionFormat::Gridfm
         | TransmissionFormat::IeeeCdf => {
@@ -390,6 +391,9 @@ pub fn parse_with_json_class(
     source: powerio_core::Source,
     json_class: Option<routing::JsonClass>,
 ) -> std::result::Result<PioModule<BalancedNetwork>, powerio_core::Error> {
+    if sincal::source::handles(&source) {
+        return sincal::source::parse(source);
+    }
     // Classify JSON once so the facade can pass the answer through without a
     // second scan over the same bytes.
     let json_class = json_class.or_else(|| {
@@ -1085,6 +1089,13 @@ fn echo_text(module: &PioModule<BalancedNetwork>, target: TargetFormat) -> Optio
     Some(text.to_owned())
 }
 
+fn sincal_source_omitted(net: &BalancedNetwork) -> Option<Diagnostic> {
+    (net.source_format() == SourceFormat::Sincal).then(|| Diagnostic::of(
+        &codes::EMIT_SINCAL_RETAINED_SOURCE_OMITTED,
+        "Cross-format emission includes the typed electrical profile; fault, dynamic, protection, diagram, result and other native source-only data are omitted.",
+    ))
+}
+
 /// Serialize a typed network to `format` with no source echo.
 pub(crate) fn emit_value_text(net: &BalancedNetwork, format: TargetFormat) -> Result<TextEmission> {
     let mut conv = match format {
@@ -1131,6 +1142,7 @@ pub(crate) fn emit_value_text(net: &BalancedNetwork, format: TargetFormat) -> Re
         }
         TargetFormat::Ucte => ucte::write_ucte(net)?,
     };
+    conv.diagnostics.extend(sincal_source_omitted(net));
     warn_normalized_tap(net, format, &mut conv);
     warn_missing_reference(net, format, &mut conv);
     warn_dropped_frequency(net, format, &mut conv);
@@ -1245,6 +1257,7 @@ pub fn emit_with_options(
         };
         let (artifacts, format_diagnostics) = cgmes::artifacts(&working).map_err(core_error)?;
         diagnostics.extend(format_diagnostics.into_records());
+        diagnostics.extend(sincal_source_omitted(&working));
         return destination.__commit_artifacts(
             true,
             powerio_core::Fidelity::Canonical,
@@ -1296,6 +1309,7 @@ pub fn __emit_pypsa_csv_with_options(
     let (artifacts, format_diagnostics) =
         pypsa::pypsa_csv_artifacts(working.as_ref().unwrap_or(module.value()));
     diagnostics.extend(format_diagnostics);
+    diagnostics.extend(sincal_source_omitted(module.value()));
     let artifacts = artifacts
         .into_iter()
         .map(|(name, text)| {

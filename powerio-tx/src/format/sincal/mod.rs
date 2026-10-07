@@ -4,6 +4,7 @@
 
 mod equipment;
 mod rows;
+pub(super) mod source;
 #[cfg(test)]
 mod tests;
 

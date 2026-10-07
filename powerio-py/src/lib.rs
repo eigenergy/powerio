@@ -4742,6 +4742,24 @@ mod tests {
     use super::module_with_records;
 
     #[test]
+    fn sincal_balanced_reaches_the_existing_python_module_type() {
+        const NATIVE: &[u8] = include_bytes!("../../tests/data/sincal/1-LV-rural1--0-sw.sinx");
+        let parsed =
+            super::PyPioModule::_parse_memory(NATIVE, "case.sinx", Some("sincal-balanced"))
+                .unwrap();
+        let module = parsed.module().unwrap();
+        let powerio::PioValue::BalancedNetwork(network) = module.value() else {
+            panic!("SINCAL balanced profile changed value family");
+        };
+        assert_eq!(network.buses().len(), 15);
+        assert_eq!(network.loads().len(), 13);
+        assert_eq!(
+            module.source().unwrap().primary_buffer().unwrap().bytes(),
+            NATIVE
+        );
+    }
+
+    #[test]
     fn typed_module_copy_keeps_every_common_record_and_retained_source() {
         use powerio_core::{
             Diagnostic, DiagnosticCode, DiagnosticSeverity, HistoryEntry, HistoryId, HistoryKind,
