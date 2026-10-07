@@ -166,6 +166,10 @@ impl NativeDatabase {
                         net.lines_mut().push(circuit.line);
                         net.line_codes_mut().push(circuit.code);
                     }
+                    if !circuit.defaulted.is_empty() {
+                        net.defaulted_mut()
+                            .insert(format!("Line.{element}"), circuit.defaulted);
+                    }
                     net.buses_mut().extend(circuit.auxiliary_buses);
                     net.switches_mut().extend(circuit.terminal_switches);
                 }

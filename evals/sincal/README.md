@@ -860,8 +860,8 @@ remain reproducible. `acquire_shunt_corpus.py` adds the two tables, verifies eve
 base table unchanged, and records the new acquired-document identities in
 `shunt-acquisition.json`. The distribution audit takes
 `--shunt-record-directory` to use those extended cases and marks the profile
-per case. Both all 19 audits are refreshed with those extensions. CSIRO03 now
-maps 2/1084 components (source and reactor); CSIRO12 maps 61/215 (34 lines, 26 loads
+per case. At the bank checkpoint, both all-19 audits used those extensions. CSIRO03
+mapped 2/1084 components (source and reactor); CSIRO12 mapped 61/215 (34 lines, 26 loads
 and capacitor). Cases 16/17 still stop at synchronous-machine topology, although
 their three inactive capacitors pass component checks. Complete native parsing
 remains one feeder, CSIRO09 with an explicit snapshot.
@@ -878,4 +878,38 @@ python3 evals/sincal/check_rated_shunts.py /tmp/rated-shunt-circuits.json \
   /tmp/models /tmp/shunt-records /tmp/records /tmp/rated-shunts.json
 python3 evals/sincal/check_shunt_history.py /tmp/models/csiro-representative03.mdb \
   /tmp/rated-shunt-circuits.json /tmp/rated-shunt-history.json
+```
+
+### Legacy line temperatures
+
+The schema-11.5 reader now applies the documented 20 C `VoltageLevel.Temp_Line`
+or `Temp_Cable` default only when the field selected by the line kind is NULL.
+The Database Description (April 2014), VoltageLevel table, assigns 20 C to both.
+Explicit temperatures still apply their resistance correction; the other line
+kind's temperature is inactive. Missing columns, invalid/nonfinite values and
+modern NULLs remain errors. Applied defaults are recorded under `Line.<id>` in
+`network.defaulted`, while retained source/acquisition data keep the original NULL.
+
+`legacy-temperatures.json` checks all 186 newly mapped native line circuits:
+25 in CSIRO03, eight in CSIRO05 and 153 in CSIRO12. Independent OpenDSS circuits
+agree within 9.55e-16 relative admittance error (tolerance 1e-10), including 28
+single-phase lines and three open terminals. Using 70 C instead of 20 C produces
+at least 0.0898 relative error in every checked case. The oracle pins source and
+acquisition identities, exact candidate sets, connectivity, ratings and defaults.
+No native files or result rows are redistributed.
+
+The refreshed midnight component totals are 27/1084 for CSIRO03, 86/1378 for
+CSIRO05 and 214/215 for CSIRO12. The latter maps every line, load and capacitor;
+its source still rejects nullable control fields. CSIRO03/05 now expose additional
+NULL line flags, loss and parallel-count fields that need separate documented
+interpretation; load and transformer gaps also remain. This is component evidence,
+not another complete feeder or native SINCAL acceptance. The complete-feeder count
+remains one (CSIRO09 at a selected snapshot).
+
+```sh
+POWERIO_SINCAL_TEMPERATURE_RECORDS=/tmp/records \
+POWERIO_SINCAL_TEMPERATURE_EXPORT=/tmp/line-temperature-circuits.json \
+  cargo test -p powerio-dist --lib export_legacy_temperature_lines -- --ignored
+python3 evals/sincal/check_legacy_temperatures.py /tmp/models /tmp/records \
+  /tmp/line-temperature-circuits.json /tmp/legacy-temperatures.json
 ```

@@ -20,6 +20,7 @@ pub(super) struct LineCircuit {
     pub auxiliary_buses: Vec<DistBus>,
     pub terminal_switches: Vec<DistSwitch>,
     pub frequency_hz: f64,
+    pub defaulted: Vec<&'static str>,
 }
 
 impl LineCircuit {
@@ -70,7 +71,7 @@ impl NativeDatabase {
         element: i64,
         buses: &BTreeMap<i64, DistBus>,
     ) -> Result<LineCircuit> {
-        let operating_point = self.line_mapping_context(element)?;
+        let (operating_point, defaulted) = self.line_mapping_context(element)?;
         if self.element_state(element)? != State::On {
             return Err(format_error(
                 "out-of-service line requires inactive-equipment retention",
@@ -152,6 +153,7 @@ impl NativeDatabase {
             auxiliary_buses,
             terminal_switches,
             frequency_hz: operating_point.frequency_hz,
+            defaulted,
         })
     }
 
@@ -179,10 +181,31 @@ impl NativeDatabase {
         Ok(())
     }
 
+    /// Database Description (April 2014), VoltageLevel: both temperatures
+    /// default to 20 degrees C. Acquired schema 11.5 may store that as NULL.
+    /// Missing columns, modern NULLs and nonnumeric/nonfinite values reject.
+    fn line_temperature(
+        &self,
+        row: &rusqlite::Row<'_>,
+        field: (&str, &'static str),
+    ) -> Result<(f64, Vec<&'static str>)> {
+        match row.get::<_, Option<f64>>(field.0).map_err(format_error)? {
+            Some(value) if value.is_finite() => Ok((value, Vec::new())),
+            None if self.version.to_bits() == 11.5_f64.to_bits() => Ok((20.0, vec![field.1])),
+            _ => Err(format_error(format!(
+                "invalid or unresolved line temperature {}",
+                field.1
+            ))),
+        }
+    }
+
     /// Guard modes/corrections not yet applied by the raw sequence helper.
     /// The 2014 Input Data pp. 152–154 uses the element's voltage-level
     /// temperature and calculation frequency, not a node's initial voltage.
-    fn line_mapping_context(&self, element: i64) -> Result<LineOperatingPoint> {
+    fn line_mapping_context(
+        &self,
+        element: i64,
+    ) -> Result<(LineOperatingPoint, Vec<&'static str>)> {
         self.require_line_mapping_tables()?;
         let mut statement = self
             .connection
@@ -205,15 +228,16 @@ impl NativeDatabase {
             .ok_or_else(|| format_error("missing line voltage-level/calculation context"))?;
         let kind = integer(row, "Flag_LineTyp")?;
         self.line_line_voltage_basis(row.get("LevelVoltageKind").map_err(format_error)?)?;
-        let temperature = match kind {
-            1 => number(row, "LevelCableTemp")?,
-            2 => number(row, "LevelLineTemp")?,
+        let field = match kind {
+            1 => ("LevelCableTemp", "VoltageLevel.Temp_Cable"),
+            2 => ("LevelLineTemp", "VoltageLevel.Temp_Line"),
             _ => {
                 return Err(format_error(
                     "ideal-connection or coupled line needs its own circuit mapping",
                 ));
             }
         };
+        let (temperature, defaulted) = self.line_temperature(row, field)?;
         for field in ["Flag_Ll", "Flag_Ground", "Flag_Macro"] {
             if integer(row, field)? != 0 {
                 return Err(format_error(format!("unresolved line model {field}")));
@@ -260,7 +284,7 @@ impl NativeDatabase {
         if has_segments {
             return Err(format_error("line segments require explicit assembly"));
         }
-        Ok(operating_point)
+        Ok((operating_point, defaulted))
     }
 }
 

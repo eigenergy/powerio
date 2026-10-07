@@ -485,6 +485,14 @@ voltage/current/power records without fitting inputs. This does not establish
 a complete feeder or native desktop acceptance. The original 21-table corpus
 remains reproducible; explicitly identified 23-table acquisitions add the banks.
 
+Legacy temperature progress: documented 20 C defaults for NULL voltage-level
+line/cable temperatures now map another 186 native lines in CSIRO03/05/12.
+All pass independent OpenDSS primitive checks, including 28 single-phase lines
+and three open terminals. Applied defaults retain provenance and never change
+source inputs. Current totals are 27/1084, 86/1378 and 214/215 respectively;
+CSIRO12's source still rejects NULL controls. Additional sparse line fields and
+load/transformer profiles remain work. No additional complete feeder is claimed.
+
 ### PR 5: experimental fresh writer
 
 Implement deterministic fresh schema-14.8 SQLite generation and packaging for

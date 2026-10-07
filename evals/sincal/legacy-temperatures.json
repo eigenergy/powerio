@@ -1,0 +1,46 @@
+{
+  "scope": "Check native lines with schema-11.5 temperature defaults against OpenDSS.\n\nOnly local line circuits are checked; no complete feeder or native execution.\nThe original MDB and its acquired NULL fields are never rewritten.\n",
+  "cases": [
+    {
+      "case": 3,
+      "lines": 25,
+      "single_phase_lines": 24,
+      "open_terminals": 0,
+      "maximum_relative_primitive_error": 3.682586763447867e-16,
+      "minimum_wrong_temperature_relative_error": 0.11795714645695232,
+      "source_sha256": "9eaf7c785fe0962af4e9ea5e6a5efb56477ed7427b660481c5cc66f9460bd759",
+      "record_sha256": "6fad8c0246e8582367ea26dc712369c25edd9256ca5e31b8e97dc9c2fb086438"
+    },
+    {
+      "case": 5,
+      "lines": 8,
+      "single_phase_lines": 4,
+      "open_terminals": 3,
+      "maximum_relative_primitive_error": 6.506587990757067e-16,
+      "minimum_wrong_temperature_relative_error": 0.08981326035902816,
+      "source_sha256": "26dfb51d491e0333c45613e7eafa35d9c4c3ad07e1170d8c644e80584bafdaf8",
+      "record_sha256": "f7bf5f04a24e192b02a731816bcef3d82f2850f90d22a86e840afd131e16cd5b"
+    },
+    {
+      "case": 12,
+      "lines": 153,
+      "single_phase_lines": 0,
+      "open_terminals": 0,
+      "maximum_relative_primitive_error": 9.540121093241001e-16,
+      "minimum_wrong_temperature_relative_error": 0.08981326035902795,
+      "source_sha256": "7339548baf8bfcf5b891b9d3dbb6b616d9234b8f3df298d959904e150b8cfe91",
+      "record_sha256": "163c6bc083e11a46e2de443b49ef07c4848f45757c6f104596bd4850a8f22c30"
+    }
+  ],
+  "relative_tolerance": 1e-10,
+  "default_temperature_c": 20,
+  "export_sha256": "6d1032ac6c74ae573c0a8c675df0122da9cb0bb7ce3697b01d2311c1fb904990",
+  "collection": "https://doi.org/10.4225/08/5631B1DF6F1A0",
+  "attribution": "Berry, Adam; Collins, Lyle; Oliver, Erin; Perfumo, Cristian (2015), Representative Australian Electricity Feeders with load and solar generation profiles, v1, CSIRO.",
+  "license": "CC-BY-4.0",
+  "engine": "DSS C-API Library version 0.14.5 revision 87d85c2622c8281b92255335bc7c09b11191b21d based on OpenDSS SVN 3723 [FPC 3.2.2] (64-bit build) MVMULT INCREMENTAL_Y CONTEXT_API PM 20240329033829; License Status: Open \nDSS-Python version: 0.15.7\nOpenDSSDirect.py version: 0.9.4",
+  "numpy": "2.5.3",
+  "native_execution": false,
+  "whole_feeder_validation": false,
+  "passed": true
+}

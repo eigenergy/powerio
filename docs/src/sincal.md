@@ -143,6 +143,9 @@ Explicit neutral impedances, automatic regulators and stepped direct
 zero-sequence impedances still require additional mapping. Documented optional
 schema-11.5 defaults are recorded; required ratings are never filled in.
 The Access acquisition helper includes both bank tables by default.
+For schema 11.5, a NULL voltage-level line/cable temperature uses its documented
+20 C default. The selected field is recorded in `network.defaulted`; explicit
+temperatures retain their correction, and missing columns or modern NULLs fail.
 
 PowerIO's primary-file limit remains 64 MiB by default. For a known larger input,
 use its existing explicit `POWERIO_MAX_PRIMARY_BYTES` setting. CSIRO09 is

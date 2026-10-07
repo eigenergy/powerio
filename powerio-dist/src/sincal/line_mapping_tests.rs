@@ -582,3 +582,99 @@ fn open_line_circuit_survives_fresh_pmd_emission() {
         }
     }
 }
+
+#[test]
+fn legacy_line_temperatures_use_only_documented_selected_defaults() {
+    for (kind, selected, inactive) in [
+        (1, "Temp_Cable", "Temp_Line"),
+        (2, "Temp_Line", "Temp_Cable"),
+    ] {
+        let explicit = super::legacy_tests::legacy(&format!("UPDATE Line SET Flag_LineTyp={kind}"))
+            .line_circuit(30, &buses())
+            .unwrap();
+        let legacy = format!("UPDATE Line SET Flag_LineTyp={kind};");
+        let null = super::legacy_tests::legacy(&format!(
+            "{legacy} UPDATE VoltageLevel SET {selected}=NULL,{inactive}=91"
+        ))
+        .line_circuit(30, &buses())
+        .unwrap();
+        assert_eq!(null.code, explicit.code);
+        assert_eq!(null.defaulted, [format!("VoltageLevel.{selected}")]);
+        let warmer = super::legacy_tests::legacy(&format!(
+            "{legacy} UPDATE VoltageLevel SET {selected}=70,{inactive}=NULL"
+        ))
+        .line_circuit(30, &buses())
+        .unwrap();
+        assert!(warmer.defaulted.is_empty());
+        assert!((warmer.code.r_series[0][0] / explicit.code.r_series[0][0] - 1.2).abs() < 1e-12);
+        for bad in ["NULL", "'unknown'", "1e999"] {
+            let db = native(&format!(
+                "UPDATE Line SET Flag_LineTyp={kind}; UPDATE VoltageLevel SET {selected}={bad}"
+            ));
+            assert!(db.line_circuit(30, &buses()).is_err());
+        }
+        let absent = super::legacy_tests::legacy(&format!(
+            "{legacy} ALTER TABLE VoltageLevel DROP COLUMN {selected}"
+        ));
+        assert!(absent.line_circuit(30, &buses()).is_err());
+    }
+}
+
+#[test]
+fn network_records_applied_line_temperature_defaults() {
+    let net =
+        super::legacy_tests::legacy("UPDATE VoltageLevel SET Temp_Cable=NULL WHERE VoltLevel_ID=1")
+            .network()
+            .unwrap();
+    assert_eq!(net.defaulted()["Line.30"], ["VoltageLevel.Temp_Cable"]);
+    let explicit = super::legacy_tests::legacy("").network().unwrap();
+    assert_eq!(net.line_codes(), explicit.line_codes());
+    assert_eq!(net.sources(), explicit.sources());
+    assert_eq!(net.loads(), explicit.loads());
+}
+
+#[test]
+#[ignore = "exports native lines using documented legacy temperature defaults"]
+fn export_legacy_temperature_lines() {
+    let directory = std::path::PathBuf::from(
+        std::env::var_os("POWERIO_SINCAL_TEMPERATURE_RECORDS").expect("records directory"),
+    );
+    let output = std::env::var_os("POWERIO_SINCAL_TEMPERATURE_EXPORT").expect("output path");
+    let mut cases = Vec::new();
+    for case in [3, 5, 12] {
+        let path = directory.join(format!("representative{case:02}.json"));
+        let db = NativeDatabase::from_snapshot(
+            powerio_sincal::DatabaseSnapshot::decode_records(
+                &std::fs::read(path).unwrap(),
+                Some(1),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let buses = db
+            .node_inputs()
+            .unwrap()
+            .keys()
+            .map(|id| {
+                (
+                    *id,
+                    DistBus::new(id.to_string(), ["1", "2", "3"].map(str::to_owned).to_vec()),
+                )
+            })
+            .collect();
+        let mut lines = Vec::new();
+        for (&id, kind) in &db.elements {
+            if kind != "Line" {
+                continue;
+            }
+            if let Ok(c) = db.line_circuit(id, &buses)
+                && !c.defaulted.is_empty()
+            {
+                lines.push(serde_json::json!({"element":id,"line":c.line,"code":c.code,
+                    "auxiliary_buses":c.auxiliary_buses,"switches":c.terminal_switches,"defaulted":c.defaulted}));
+            }
+        }
+        cases.push(serde_json::json!({"case":case,"lines":lines}));
+    }
+    std::fs::write(output, serde_json::to_vec_pretty(&cases).unwrap()).unwrap();
+}
