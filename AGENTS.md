@@ -124,8 +124,8 @@ pip install dist/*.whl && pytest python/tests  # an editable install is shadowed
 ## Release flow
 
 Follow `docs/src/paired-releases.md`. Before paired automation is activated,
-finish v0.11.2 through the existing reviewed Julia intent and tag workflow.
-Do not tag that release until the maintainer approves its final paired diff
+use the existing reviewed Julia intent and tag workflow.
+Do not tag a release until the maintainer approves its final paired diff
 and test results.
 
 After activation, version preparation opens paired PRs. Candidate preparation

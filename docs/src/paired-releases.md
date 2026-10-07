@@ -9,8 +9,10 @@ crates.io, PyPI, and Julia's General registry.
 ## Prepare and approve
 
 1. Run **Prepare paired release**, stage `changes`, with the intended version.
-   It opens draft `release/X.Y.Z` PRs in both repositories. Write the curated
-   changelog entries, review the compatibility implications, and merge both
+   First write curated `Unreleased` entries in both repositories. Preparation
+   promotes those entries, rejects unfinished notes, and runs the existing BMOPF
+   and IR schema generators. It opens draft `release/X.Y.Z` PRs in both
+   repositories. Review the compatibility implications, and merge both
    PRs after CI passes. No version or compatibility assessment is inferred.
 2. Run the same workflow, stage `candidate`. It checks both `main` versions,
    notes, and CI, then creates an annotated tag containing the exact source
@@ -28,7 +30,8 @@ crates.io, PyPI, and Julia's General registry.
 The manifest records the source pairing, exact Julia candidate tree,
 `Artifacts.toml` hash, binary hashes, changelog hashes, and validation run.
 The tag annotation and published immutable assets identify the approved
-candidate. Editing release-body prose does not authorize different code.
+candidate. Validation, reconciliation, and registration execute PowerIO tooling
+from that tag and verify its commit against the annotation and manifest. Editing release-body prose does not authorize different code.
 New `main` commits do not change the candidate or block its registration.
 
 ## Retry and recovery
@@ -62,10 +65,10 @@ A synchronization PR brings the approved artifact references back to Julia
 `main`; its timing does not affect the already approved package. General
 registration remains subject to that community's checks and review.
 
-## One-time activation after v0.11.2
+## One-time activation
 
-Keep the existing release route active until v0.11.2 finishes and the paired
-workflow PRs pass CI. The new workflows require `PAIRED_RELEASES=true` in both
+Keep the existing release route active until both paired workflow PRs and
+release preparation PRs are reviewed, merged, and pass current-main CI. The new workflows require `PAIRED_RELEASES=true` in both
 repositories. The legacy Julia artifact and registration jobs stop when that
 variable is enabled, leaving one release authority.
 
@@ -85,8 +88,11 @@ check access to both repositories. Then run
 `python3 scripts/activate_paired_releases.py --check` to inspect the
 settings, then `--activate` to enable immutable releases and paired dispatch.
 The activation command preserves publishing environment names and tag rules,
-and removes their separate reviewer lists only after checking that the paired
-workflow files, App configuration, and immutable release setting exist.
+and administrator-bypass settings. It removes the `crates-io` and `pypi`
+reviewer lists; `--check` prints the exact proposed payloads for maintainer
+approval before `--activate` makes any change. Activation checks that the paired
+workflow files and App configuration exist and current-main CI and App access
+have passed, then enables immutable releases in both repositories.
 The human Publish release action then serves as the paired publication
 approval. Do not activate while a legacy release is still running.
 

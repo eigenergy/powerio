@@ -82,7 +82,8 @@ def notes(text, number):
     matches = [part.partition('\n')[2].strip() for part in sections[1:]
                if part.partition('\n')[0] == number]
     require(len(matches) == 1 and matches[0], f"missing unique changelog section {number}")
-    require("REVIEW REQUIRED" not in matches[0], "release notes still need review")
+    require(not re.search(r"REVIEW REQUIRED|\b(?:TODO|TBD|FIXME)\b", matches[0], re.I),
+            "release notes still need review")
     return matches[0]
 
 
@@ -116,6 +117,13 @@ def tag_pair(tag):
     commit_sha(pair["powerio_sha"])
     commit_sha(pair["julia_source_sha"])
     return pair
+
+
+def require_frozen_tools(pair, root=None):
+    root = Path(root) if root is not None else Path(__file__).resolve().parents[1]
+    require(run('git', 'rev-parse', 'HEAD', cwd=root) == pair['powerio_sha'],
+            'release tooling checkout differs from frozen PowerIO commit')
+    run('git', 'diff', '--exit-code', 'HEAD', '--', 'scripts', cwd=root)
 
 
 def create_tag(number, *, replace=False):
@@ -200,7 +208,8 @@ def validation_succeeded(manifest):
     validation_id = manifest["validation"]["url"].rsplit("/", 1)[1]
     evidence = api(f"repos/{POWERIO}/actions/runs/{validation_id}", missing=True)
     return bool(evidence and evidence["status"] == "completed" and evidence["conclusion"] == "success" and
-                evidence["path"] == ".github/workflows/complete-paired-release.yml")
+                evidence["path"] == ".github/workflows/complete-paired-release.yml" and
+                evidence["head_sha"] == manifest["powerio_sha"])
 
 
 def verify(tag, *, published=True, validation=True):
@@ -477,7 +486,7 @@ def recover_drafts():
             continue
         active = any(r["display_title"] == "Complete paired draft " + tag and r["status"] != "completed" for r in complete_runs)
         if not active:
-            run("gh", "workflow", "run", "complete-paired-release.yml", "--repo", POWERIO, "--ref", "main", "-f", "tag=" + tag)
+            run("gh", "workflow", "run", "complete-paired-release.yml", "--repo", POWERIO, "--ref", tag, "-f", "tag=" + tag)
     builds = api(f"repos/{POWERIO}/actions/workflows/release-binaries.yml/runs?per_page=100")["workflow_runs"]
     seen = set()
     for build in builds:
@@ -519,6 +528,8 @@ def main():
     parser.add_argument("--julia-root", default="PowerIO.jl")
     parser.add_argument("--expected-sha")
     args = parser.parse_args()
+    if args.command in ('metadata', 'complete', 'verify', 'register', 'status', 'request-registration'):
+        require_frozen_tools(tag_pair(args.version_or_tag))
     if args.command == "recover":
         recover_drafts()
     elif args.command == "replace-unpublished":
