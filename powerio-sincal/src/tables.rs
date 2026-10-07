@@ -202,6 +202,28 @@ impl TableRecords {
                     .execute(params_from_iter(row.iter().map(|cell| &cell.0)))
                     .map_err(format_error)?;
             }
+            // Tool records omit native indexes. Repeated component lookups
+            // otherwise scan whole tables and exhaust the shared query budget
+            // on valid large feeders. These nonunique internal indexes preserve
+            // duplicate/NULL evidence for the structural and electrical checks.
+            if table.columns.iter().any(|c| c.name == "Variant_ID") {
+                for field in [
+                    "Element_ID",
+                    "Node_ID",
+                    "VoltLevel_ID",
+                    "Line_ID",
+                    "OpSer_ID",
+                ] {
+                    if table.columns.iter().any(|c| c.name == field) {
+                        transaction
+                            .execute_batch(&format!(
+                                "CREATE INDEX \"pio_{}_{}\" ON \"{}\" (Variant_ID, \"{field}\")",
+                                table.name, field, table.name,
+                            ))
+                            .map_err(format_error)?;
+                    }
+                }
+            }
         }
         transaction.commit().map_err(format_error)?;
         Ok(connection)
@@ -224,6 +246,49 @@ mod tests {
                 "rows":[[1,0.0,"0"],[2,null,""]]}],
             "excluded_tables":["ULFNodeResult"],"absent_requested_tables":["LineSeg"]
         })
+    }
+
+    #[test]
+    fn component_lookups_stay_bounded_without_hiding_duplicate_or_null_cells() {
+        let mut d = document();
+        let mut rows: Vec<_> = (0..5000).map(|id| serde_json::json!([id, 1, id])).collect();
+        rows.push(serde_json::json!([7, 2, null]));
+        rows.push(serde_json::json!([7, 2, "0"]));
+        d["tables"] = serde_json::json!([{
+            "name": "Line", "columns": [
+                {"name": "Element_ID", "native_type": "INTEGER"},
+                {"name": "Variant_ID", "native_type": "INTEGER"},
+                {"name": "r", "native_type": "REAL"}], "rows": rows
+        }]);
+        let connection = TableRecords::decode(&serde_json::to_vec(&d).unwrap())
+            .unwrap()
+            .into_connection()
+            .unwrap();
+        let duplicates: (i64, i64, i64) = connection.query_row(
+            "SELECT count(*), sum(r IS NULL), sum(typeof(r)='text') FROM Line WHERE Variant_ID=2 AND Element_ID=7",
+            [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        ).unwrap();
+        assert_eq!(duplicates, (2, 1, 1));
+        let mut remaining = 1000_u32;
+        connection
+            .progress_handler(
+                1000,
+                Some(move || {
+                    remaining = remaining.saturating_sub(1);
+                    remaining == 0
+                }),
+            )
+            .unwrap();
+        for id in 0..1000_i64 {
+            let value: i64 = connection
+                .query_row(
+                    "SELECT r FROM Line WHERE Variant_ID=1 AND Element_ID=?1",
+                    [id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(value, id);
+        }
     }
 
     #[test]
