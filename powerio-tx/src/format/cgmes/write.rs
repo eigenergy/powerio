@@ -309,7 +309,7 @@ fn det_mrid(kind: &str, name: &str) -> String {
 
 /// The imported mRID when the element carries one, else deterministic.
 fn mrid_or(kind: &str, name: &str, uid: Option<&str>) -> String {
-    uid.filter(|value| uuid::Uuid::parse_str(value).is_ok())
+    uid.filter(|value| uuid::Uuid::try_parse(value).is_ok())
         .map_or_else(|| det_mrid(kind, uid.unwrap_or(name)), str::to_owned)
 }
 
@@ -351,7 +351,7 @@ fn component_mrid_from_metadata(
                     .authority
                     .as_deref()
                     .is_some_and(|authority| authority.eq_ignore_ascii_case("CGMES"))
-                    && uuid::Uuid::parse_str(&identifier.value).is_ok()
+                    && uuid::Uuid::try_parse(&identifier.value).is_ok()
             })
             .map(|identifier| identifier.value.as_str())
     });
@@ -462,7 +462,7 @@ fn retained_identified_metadata(
                 .as_deref()
                 .is_some_and(|authority| authority.eq_ignore_ascii_case("CGMES"))
             {
-                if uuid::Uuid::parse_str(&identifier.value).is_err() {
+                if uuid::Uuid::try_parse(&identifier.value).is_err() {
                     warnings.push_as(&codes::EMIT_CGMES.value_substituted, format!(
                         "component `{}` has non-UUID CGMES identifier `{}`; fresh CGMES uses a deterministic UUID",
                         metadata.component, identifier.value
@@ -5458,7 +5458,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         let control = source_control.map_or_else(
             || {
                 source_control_id
-                    .filter(|value| uuid::Uuid::parse_str(value).is_ok())
+                    .filter(|value| uuid::Uuid::try_parse(value).is_ok())
                     .cloned()
                     .unwrap_or_else(|| det_mrid("regcontrol", &id))
             },
@@ -5913,7 +5913,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             source_control.map_or_else(
                 || {
                     source_control_id
-                        .filter(|value| uuid::Uuid::parse_str(value).is_ok())
+                        .filter(|value| uuid::Uuid::try_parse(value).is_ok())
                         .cloned()
                         .unwrap_or_else(|| det_mrid("regcontrol", &id))
                 },
@@ -6157,7 +6157,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         let control = source_control.map_or_else(
             || {
                 source_control_id
-                    .filter(|value| uuid::Uuid::parse_str(value).is_ok())
+                    .filter(|value| uuid::Uuid::try_parse(value).is_ok())
                     .cloned()
                     .unwrap_or_else(|| det_mrid("regcontrol", &id))
             },
