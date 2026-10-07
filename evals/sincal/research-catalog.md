@@ -902,7 +902,59 @@ coil hypothesis still differs by roughly 1.01–2.07 VA from those saved powers.
 These nearly unloaded records cannot establish leakage-impedance/rating
 correctness or attest that current inputs produced the results. They must not
 be promoted to a successful mapping by using a loose absolute tolerance.
-Next test loaded circuits derived from documented winding and sequence rules;
-keep native historical comparison and independent implementation checks distinct.
+Loaded independent circuits would test an implementation of a chosen mapping,
+but do not resolve the native mapping by themselves. The follow-up below records
+why this route now needs additional semantics or matched reference evidence.
 The exploratory script and unaccepted results remain in temporary research
 storage, and no production mapper was changed.
+
+
+### Follow-up: decoder, paired model and partial-winding evidence
+
+A second reader (`access-parser` 0.0.6) was tried on the unchanged
+`vorstadtnetz_kabel1.mdb`. Node, Load, Line and Infeeder decoding raises
+truncated-buffer errors. Its 586 Element rows contain corrupted variable-length
+text, so the apparent row count is not a successful alternative acquisition.
+Do not trim those bytes or repair the source to create a passing native case.
+
+The already authorized CSIRO collection also publishes
+`/DataRelease/FeederModels/PowerFactory/Models Release.pfd` (file 48262793,
+4,595,984 bytes, SHA-256
+`c5d5e8a2273e2db876a293328ccc270cbefd348531b97c6c66f422eaa2b37359`).
+The original was downloaded to external storage under the collection's CC BY
+4.0 license. It is a binary PFD, not text DGS or a ZIP archive. It has not been
+decoded, so no per-case correspondence or transformer parameters are claimed.
+[DIgSILENT's converter documentation](https://www.digsilent.de/en/data-converter.html)
+identifies DGS as the open data-exchange route and lists native SINCAL import.
+The user confirmed no PowerFactory access currently. A usable DGS/CSV export
+or native application access would make this a concrete independent reference;
+its present availability as PFD alone does not close a reader evidence gap.
+No PowerFactory decoder or generalized conversion framework is being added.
+
+A separate, explicitly unaccepted CSIRO06 experiment tested selecting a partial
+coil from a sequence-coupled impedance instead of independent coils. On the
+delta voltage base the proposed one-coil series impedance is
+`2*Z1 + Z0*(Un2/Un1)^2`, retaining the previous nominal excitation split.
+All nine components still disagree with their saved results: maximum errors
+per component span 1.67–4.07 kVA and 3.59–8.25 A. This does not establish the
+correct alternative or attest the input revision used for the saved results.
+The equation, results and rejection are recorded in the search inventory;
+the exploratory script remains in temporary research storage. No mapper changed.
+
+The manuals establish selected coil connections, rated positive-sequence
+impedance and complete-transformer zero-sequence input conventions. They have
+not yet resolved their combination for the partial mixed-winding candidates.
+An independently solved circuit is insufficient when the native-to-circuit
+mapping itself remains unverified. Do not keep extending hypotheses without
+new native meaning or matched reference evidence. This limits the current
+CSIRO05 route; it is not a blanket requirement for native SINCAL execution on
+other documented reader profiles or the experimental writer.
+
+The remaining vendor-example search lead described examples bundled with SINCAL
+and the already known SimBench archive; it exposed no direct native-model
+attachment. Following its support link reached the
+[official SimTec download page](https://www.simtec.cc/en/updates.aspx), which
+states that version downloads require an individual access key. No key was
+requested, no contact message was sent, and no additional model or redistribution
+license was obtained. This closes that particular public-download lead; it does
+not establish that all vendor examples are inaccessible through every route.

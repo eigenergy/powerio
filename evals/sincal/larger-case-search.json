@@ -296,5 +296,45 @@
     ],
     "scope": "Exploratory unaccepted nominal-coil hypothesis, not a parser or whole-network check. No source/result revision attestation.",
     "disposition": "Nearly unloaded historical records cannot validate impedance or rating; require loaded independent circuits and documented partial mixed-winding/sequence semantics."
+  },
+  "second_decoder_check": {
+    "case": "vorstadtnetz_kabel1",
+    "reader": "access-parser 0.0.6",
+    "result": "Rejected: Node, Load, Line and Infeeder decode raise truncated-buffer errors; Element strings contain trailing binary garbage. Returning 586 Element rows is not successful decoding.",
+    "source_changed": false,
+    "usable_acquisition_added": false
+  },
+  "paired_powerfactory": {
+    "collection": "https://doi.org/10.4225/08/5631B1DF6F1A0",
+    "source_path": "/DataRelease/FeederModels/PowerFactory/Models Release.pfd",
+    "file_id": 48262793,
+    "bytes": 4595984,
+    "sha256": "c5d5e8a2273e2db876a293328ccc270cbefd348531b97c6c66f422eaa2b37359",
+    "license": "CC-BY-4.0",
+    "transport_observation": "Binary PFD, not a ZIP archive or text DGS export. No compatible decoder available in this research environment.",
+    "user_access": "User confirmed no PowerFactory access currently.",
+    "disposition": "Retain external original for future native inspection or DGS/CSV export; no electrical parameters or counterpart agreement claimed."
+  },
+  "sequence_coil_experiment": {
+    "case": 6,
+    "components": 9,
+    "hypothesis": "For a single YNd1 winding, replace the delta-referred coil series impedance 3*Z1 with 2*Z1+Z0*(Un2/Un1)^2, retaining the earlier nominal core split. This tests principal selection of a sequence-coupled impedance, not an established SINCAL rule.",
+    "maximum_power_error_range_va": [
+      1669.8042484597215,
+      4072.0873895769923
+    ],
+    "maximum_current_magnitude_error_range_a": [
+      3.594238105049489,
+      8.246222695579633
+    ],
+    "accepted": false,
+    "production_mapping_added": false,
+    "stored_results_attest_current_inputs": false,
+    "disposition": "All nine still disagree with stored results. Do not fit the impedance/rating or promote this hypothesis based only on a self-consistent independent circuit."
+  },
+  "vendor_example_followup": {
+    "download_page": "https://www.simtec.cc/en/updates.aspx",
+    "observation": "Official version downloads require an individual access key; inspected example announcement exposed no direct native-model attachment.",
+    "disposition": "No model acquired, no license established, no vendor contacted. Zero additional complete-case successes."
   }
 }

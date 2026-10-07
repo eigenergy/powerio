@@ -365,13 +365,26 @@ The populated MATLAB LPC European LV case remains 260/262 components, with
 168 nodes and 55 single-phase loads. Newly inspected upstream construction code
 corroborates the source/transformer category omissions; it does not resolve them.
 Prioritize a concrete new model release or documented semantics over bypassing
-those declarations. CSIRO05 remains the strongest existing larger mixed-phase
-candidate: seven partial DYN11 transformers and two profile conflicts remain.
-Check its own winding/rating/sequence evidence; the rejected CSIRO06 partial
-YNd1 hypothesis is not a validation of this different profile. CSIRO06 still
-has 35 Wye loads, nine partial transformers and eleven nameplate conflicts.
-CSIRO12 is structurally close but needs verified source-control NULL semantics
-and would not alone demonstrate mixed-phase operation.
+those declarations. CSIRO05 is structurally close, with seven partial DYN11
+transformers and two profile conflicts, but it is not a verified implementation
+route yet. Its 343 saved transformer snapshots are nearly unloaded and do not
+validate the proposed leakage model. A separate sequence-aware CSIRO06 circuit
+hypothesis also failed all nine historical component comparisons. Stop extending
+these hypotheses without new documented semantics or matched reference evidence.
+CSIRO06 still has 35 Wye loads, nine partial transformers and eleven nameplate
+conflicts. CSIRO12 needs verified source-control NULL semantics and would not
+alone demonstrate mixed-phase operation.
+
+A second MDB decoder failed on the larger LoadFlow candidate. The paired CSIRO
+PowerFactory project was acquired unchanged under CC BY 4.0, but its binary PFD
+has not been decoded and the user has no PowerFactory access. A usable export
+is an optional external evidence route, not a required implementation milestone
+for all SINCAL support. The reviewed vendor download route requires an access
+key; no new public native model was acquired there. These findings add zero
+complete-case successes and no production mapping changes. Resume a candidate
+when a specific missing meaning, reliable export or independent reference is
+available; retain the additional-case review gate without inventing a delivery
+estimate from component counts.
 
 Resolve source conflicts explicitly. Never alter an original model silently or
 call a corrected derivative an original-case pass. Work on a candidate only when
