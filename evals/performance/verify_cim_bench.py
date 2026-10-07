@@ -75,6 +75,8 @@ def bus_identities(network):
                     identity = external["value"]
                     break
                 except ValueError:
+                    # Match the writer: skip invalid external UUIDs and keep
+                    # searching; otherwise retain the deterministic fallback.
                     pass
         identities[at] = identity
     return identities
