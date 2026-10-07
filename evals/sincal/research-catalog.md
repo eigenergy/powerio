@@ -1,6 +1,7 @@
 # Native SINCAL research corpus
 
-Research update: 2026-10-07. This catalog records discoveries and inspection
+Historical research record (2026-10-07–08). For current support and final
+validation, use [the evidence index](README.md). This catalog records discoveries and inspection
 results, not supported PowerIO formats. The additional CSIRO and repository
 cases were not added to `tests/data`; their downloads and decoded tables remain
 outside the repository in `/private/tmp/powerio-sincal-research`. The earlier
@@ -750,7 +751,7 @@ instructions do not supply a redistribution license.
 This search changes corpus priorities and records concrete acquisition leads;
 it adds no parser validation result and does not satisfy native writer gate E2.
 
-The subsequent [prioritized verification run](README.md#prioritized-authentic-unbalanced-verification-2026-10-07)
+The subsequent [prioritized verification run](corpus-history.md)
 uses fresh CSIRO 06 and 01 table exports, with source hashes checked against
 the inventory. Its external `unbalanced-verification.json` packet records
 per-phase static-load comparisons, existing line/profile/source reruns, and

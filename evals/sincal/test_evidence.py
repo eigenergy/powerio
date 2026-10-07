@@ -1,7 +1,7 @@
 """Native-package and independently represented SimBench parameter checks.
 
 These tests establish schema evidence. They do not call a PowerIO SINCAL
-reader (not implemented yet) or claim fresh-output acceptance by SINCAL.
+reader or claim fresh-output acceptance by SINCAL.
 """
 
 import csv

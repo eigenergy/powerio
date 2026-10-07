@@ -163,7 +163,7 @@ nodes; successful parsing does not imply solver readiness for every retained isl
 
 **Evidence.** [Public asymmetric 12-bus validation](../../evals/sincal/truong12-public.json),
 [public CSIRO09 validation](../../evals/sincal/csiro09-public.json),
-[component audit](../../evals/sincal/distribution-csiro-profiles.json),
+[historical component audit](../../evals/sincal/corpus-history.md),
 [Python/CLI checks](../../evals/sincal/csiro09-bindings.json) and the
 [detailed evidence index](../../evals/sincal/README.md). Current reports describe
 successful profiles and explicit rejections separately. Preserve the license
