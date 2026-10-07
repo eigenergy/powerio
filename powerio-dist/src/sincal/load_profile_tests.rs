@@ -22,6 +22,110 @@ fn powers(db: &NativeDatabase, time: f64) -> (f64, f64) {
     }
 }
 
+const RELATIVE: &str = "UPDATE OpSer SET Flag_Typ=1,Reduce_b2=1;
+    UPDATE OpSerVal SET Factor=OpTime/6, P=NULL, Q=NULL;";
+
+fn relative_unequal(mode: i64, model: i64, extra: &str) -> NativeDatabase {
+    legacy(&format!(
+        "{PROFILE}{RELATIVE}
+        UPDATE Load SET Flag_Lf={mode},Flag_LoadType={model},fP=2,fQ=3,
+        P1=.003,P2=.006,P3=.009,Q1=-.001,Q2=.002,Q3=.003,
+        P12=.003,P23=.006,P31=.009,Q12=-.001,Q23=.002,Q31=.003; {extra}"
+    ))
+}
+
+#[test]
+fn relative_daily_profiles_preserve_unequal_wye_and_delta_branch_powers() {
+    for (mode, configuration) in [
+        (13, crate::Configuration::Wye),
+        (14, crate::Configuration::Delta),
+    ] {
+        for model in [1, 2, 3] {
+            let db = relative_unequal(mode, model, "");
+            let before = db.connection.serialize("main").unwrap().to_vec();
+            assert!(db.network().is_err());
+            for (hours, factor) in [
+                (0.0, 0.0),
+                (3.0, 0.5),
+                (6.0, 1.0),
+                (12.0, 2.0),
+                (23.5, 2.0),
+                (24.0, 0.0),
+                (30.0, 1.0),
+            ] {
+                let net = db.network_at(hours).unwrap();
+                let load = &net.loads()[0];
+                assert_eq!(load.configuration, configuration);
+                for (actual, expected) in load.p_nom.iter().zip([6000.0, 12000.0, 18000.0]) {
+                    assert!((actual - expected * factor).abs() < 1e-8);
+                }
+                for (actual, expected) in load.q_nom.iter().zip([-3000.0, 6000.0, 9000.0]) {
+                    assert!((actual - expected * factor).abs() < 1e-8);
+                }
+                let selection = &load.extras["sincal_profile"];
+                assert_eq!(selection["relative_factor"], factor);
+                assert!(selection.get("power_factors").is_none());
+                assert_eq!(selection["requested_hours"], hours);
+                assert!(matches!(
+                    (&load.voltage_model, model),
+                    (crate::DistLoadVoltageModel::ConstantImpedance { .. }, 1)
+                        | (crate::DistLoadVoltageModel::ConstantPower { .. }, 2)
+                        | (crate::DistLoadVoltageModel::ConstantCurrent { .. }, 3)
+                ));
+            }
+            assert_eq!(db.connection.serialize("main").unwrap().to_vec(), before);
+        }
+    }
+}
+
+#[test]
+fn relative_profiles_scale_the_selected_base_input_once() {
+    let db = legacy(&format!(
+        "{PROFILE}{RELATIVE}
+        UPDATE Load SET Flag_Lf=3,S=.01,fS=4,cosphi=.6,fP=19,fQ=23;"
+    ));
+    let PowerInput::Total { p, q } = db.load_input_at(31, 3.0).unwrap().power else {
+        panic!("connection changed")
+    };
+    assert!((p - 12000.0).abs() < 1e-8);
+    assert!((q - 16000.0).abs() < 1e-8);
+    for selection in 1..=7 {
+        let db = legacy(&format!(
+            "{PROFILE}{RELATIVE}
+            UPDATE Load SET Flag_Lf=1,P=.012,Q=-.006,fP=2,fQ=3;
+            UPDATE Terminal SET Flag_Terminal={selection} WHERE Element_ID=31;"
+        ));
+        let net = db.network_at(3.0).unwrap();
+        let load = &net.loads()[0];
+        assert!((load.p_nom.iter().sum::<f64>() - 12000.0).abs() < 1e-8);
+        assert!((load.q_nom.iter().sum::<f64>() + 9000.0).abs() < 1e-8);
+    }
+}
+
+#[test]
+fn malformed_relative_profiles_and_unverified_functions_reject_atomically() {
+    for edit in [
+        "UPDATE OpSerVal SET Factor=NULL;",
+        "UPDATE OpSerVal SET Factor=-1;",
+        "UPDATE OpSerVal SET Factor='bad';",
+        "UPDATE OpSerVal SET Factor=1e999;",
+        "UPDATE OpSerVal SET Factor=1e308; UPDATE Load SET P=1;",
+        "UPDATE OpSerVal SET Factor=1e-300; UPDATE Load SET P=1e-300;",
+        "ALTER TABLE OpSerVal DROP COLUMN Factor;",
+        "UPDATE OpSer SET Flag_Typ=2;",
+        "UPDATE OpSer SET Flag_Typ=4;",
+        "UPDATE OpSer SET Flag_Typ=5;",
+        "UPDATE OpSer SET Power_b1=1;",
+        "UPDATE OpSer SET Reduce_a2=1;",
+        "UPDATE OpSer SET Reduce_b2=0;",
+        "INSERT INTO OpSerVal SELECT * FROM OpSerVal WHERE OpTime=0;",
+        "INSERT INTO OpSerVal VALUES(3,7,1,1,24,1,1,NULL,NULL,NULL);",
+    ] {
+        let db = legacy(&format!("{PROFILE}{RELATIVE}{edit}"));
+        assert!(db.network_at(3.0).is_err(), "accepted {edit}");
+    }
+}
+
 #[test]
 fn exact_interpolated_discrete_and_cyclic_daily_powers_use_si() {
     let db = legacy(PROFILE);
@@ -387,4 +491,71 @@ fn export_csiro05_materialized_loads() {
         .unwrap(),
     )
     .unwrap();
+}
+
+#[test]
+#[ignore = "exports original relative-profile cases for independent OpenDSS checks"]
+fn export_relative_daily_profiles() {
+    let mut cases = Vec::new();
+    for mode in [13, 14] {
+        for model in [1, 2, 3] {
+            let db = relative_unequal(mode, model, "UPDATE OpSerVal SET Flag_Curve=1;");
+            for hours in [0.0, 3.0, 6.0, 12.0, 18.0, 24.0, 30.0] {
+                let network = db.network_at(hours).unwrap();
+                let load = &network.loads()[0];
+                let bus = network
+                    .buses()
+                    .iter()
+                    .find(|bus| bus.id == load.bus)
+                    .unwrap();
+                cases.push(serde_json::json!({"mode":mode,"model":model,"hours":hours,"load":load,"bus":bus}));
+            }
+        }
+    }
+    std::fs::write(
+        std::env::var_os("POWERIO_SINCAL_RELATIVE_EXPORT").unwrap(),
+        serde_json::to_vec_pretty(&cases).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn public_relative_snapshot_retains_original_source_and_conductor_family() {
+    use powerio_core::Source;
+    use sha2::{Digest, Sha256};
+    let original =
+        b"\0\x01\0\0Standard Jet DB\0original synthetic source for relative-profile test";
+    let mut records = super::legacy_tests::acquired_records(
+        &format!(
+            "{PROFILE}{RELATIVE} UPDATE Load SET Flag_Lf=14,fP=2,
+         P12=.003,P23=.006,P31=.009;"
+        ),
+        11.5,
+    );
+    records["source"]["bytes"] = serde_json::json!(original.len());
+    records["source"]["sha256"] = serde_json::json!(format!("{:x}", Sha256::digest(original)));
+    let source = Source::from_memory("relative.mdb", original.to_vec())
+        .unwrap()
+        .with_named_buffer("records.json", serde_json::to_vec(&records).unwrap())
+        .unwrap();
+    let mut options = crate::SincalReadOptions {
+        acquired_tables: Some("records.json".into()),
+        ..Default::default()
+    };
+    assert!(crate::parse_sincal(source.clone(), &options).is_err());
+    options.snapshot_hours = Some(3.0);
+    let module = crate::parse_sincal(source, &options).unwrap();
+    assert_eq!(
+        module.value().loads()[0].configuration,
+        crate::Configuration::Delta
+    );
+    assert_eq!(module.value().loads()[0].p_nom, [3000.0, 6000.0, 9000.0]);
+    assert_eq!(
+        *module.value().source_format(),
+        Some(crate::DistSourceFormat::Sincal)
+    );
+    assert_eq!(
+        module.source().unwrap().primary_buffer().unwrap().bytes(),
+        original
+    );
 }

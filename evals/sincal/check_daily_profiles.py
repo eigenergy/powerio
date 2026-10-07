@@ -101,7 +101,9 @@ def check(sources, records, exported):
                 raise ValueError('invalid mapped voltage or powers')
             power_error = max(power_error, float(np.max(np.abs(actual_pq - np.array(pq) * 1000))))
             selection = load['extras']['sincal_profile']
-            if selection != {'profile': row['DayOpSer_ID'], 'requested_hours': component['hours'], 'cyclic_hours': t, 'period_hours': period}:
+            if selection != {'profile': row['DayOpSer_ID'], 'requested_hours': component['hours'],
+                             'cyclic_hours': t, 'period_hours': period,
+                             'power_factors': [row['fP'], row['fQ']]}:
                 raise ValueError('snapshot selection provenance mismatch')
             dss('Clear\nNew Circuit.profiles basekv=0.5 phases=3 bus1=test\n'
                 f'New Load.subject phases=1 bus1=test.{phases[0]}.{phases[1]} conn={"wye" if grounded else "delta"} '

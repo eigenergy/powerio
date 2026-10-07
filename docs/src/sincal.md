@@ -140,7 +140,15 @@ once; the UI definition is not evaluated again. This follows
 Conflicting daily timestamps remain errors.
 
 Active daily profiles require an explicit snapshot; no midnight default is
-assumed. Generic time-series and inherited variants remain under development.
+assumed. In schema 11.5, absolute P/Q profiles replace aggregate powers, while
+common relative-factor profiles scale the defined powers, preserving unequal
+Wye or delta branches and their voltage dependence. Relative profiles currently
+require the documented direct-scaling coefficient settings: `Power_a1=0`,
+`Power_b1=0`, `Reduce_a2=0`, `Reduce_b2=1`. They accept finite nonnegative factors,
+linear or step interpolation and cyclic repetition. Separate P/Q-factor modes,
+topology-dependent coincidence and absolute-profile allocation to unequal
+branches remain unsupported. Generic time-series and inherited variants remain
+under development.
 
 Schema-11.5 NULL transformer tap status uses the documented fixed-status default
 and records that interpretation. Active controllers and unresolved partial

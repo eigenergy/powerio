@@ -1053,3 +1053,39 @@ independently constructed OpenDSS circuits, retaining the 14 synthetic cases and
 eight mutation controls. Re-run both distribution audits with this extended
 record directory; do not use the older four-case directory with the new manifest.
 Original models and acquired tables remain external research data.
+
+## Relative daily profiles with unequal branch powers
+
+Schema-11.5 daily common-factor profiles (`OpSer.Flag_Typ=1`) now scale the
+already decoded base powers. The mapper retains unequal Wye/delta branch powers,
+phase order, voltage dependence and the selected input mode's power factors.
+General Input Data (April 2014), pp.292–295, defines the common factor, cyclic
+period and direct-scaling coefficient profile. This path requires zero
+`Power_a1`, `Power_b1` and `Reduce_a2`, with `Reduce_b2=1`; it does not infer
+energy conversion or topology-dependent coincidence. Factors must be finite and
+nonnegative. Function 2 (separate P/Q factors) remains unsupported because its
+legacy field storage is not established by the inspected database manual.
+
+`relative-profiles.json` records 42 original synthetic snapshots: unequal Wye
+and delta branches, all three admitted voltage models, interpolation, zero
+power, peak factors and cyclic repetition. NumPy samples the independently
+specified curve; OpenDSS supplies branch currents for separate phase loads.
+Ten corruption controls detect duplicate scaling, phase averaging, wrong ground,
+wrong voltage model and incorrect provenance. This adds no native-corpus or
+native SINCAL acceptance claim: all audited CSIRO load profiles are absolute.
+
+```sh
+POWERIO_SINCAL_RELATIVE_EXPORT="$output/relative-profiles.json" \
+cargo test -p powerio-dist --lib export_relative_daily_profiles -- --ignored
+python evals/sincal/check_relative_profiles.py \
+  "$output/relative-profiles.json" "$output/relative-profile-check.json"
+```
+
+The public acquired-source path requires an explicit time and retains the
+original bytes. Unit tests also reject malformed factors, unsupported coefficient
+settings, conflicting cyclic endpoints, unknown functions and arithmetic
+underflow/overflow. Absolute-profile output keeps its existing provenance layout;
+its 484 native loads/2,420 snapshots were independently rechecked. The older
+absolute checker now explicitly verifies the already-present native `power_factors`
+provenance instead of rejecting that additional field. The CSIRO05 export of
+456 loads/2,280 snapshots remains byte-exact against its prior export.

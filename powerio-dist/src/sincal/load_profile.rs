@@ -1,4 +1,4 @@
-//! Explicit daily absolute-power snapshots. General Input Data (April 2014)
+//! Explicit daily absolute-power and common-factor snapshots. General Input Data (April 2014)
 //! pp. 292–295 and Database Description pp. 84–85 define units and selectors;
 //! Load Flow pp. 48–50 defines cyclic repetition. No stored result is used.
 
@@ -18,7 +18,16 @@ pub(super) struct LoadProfileSelection {
     pub requested_hours: f64,
     pub cyclic_hours: f64,
     pub period_hours: f64,
-    pub power_factors: [f64; 2],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub power_factors: Option<[f64; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relative_factor: Option<f64>,
+}
+
+#[derive(Clone, Copy)]
+enum ProfileFunction {
+    CommonFactor,
+    AbsolutePower,
 }
 
 pub(super) fn validate_time(hours: f64) -> Result<()> {
@@ -47,8 +56,43 @@ impl NativeDatabase {
                 "load snapshot requires a single daily profile; weekly/yearly composition is unresolved",
             ));
         };
+        let (period, function) = self.daily_power_period(profile)?;
+        let points = self.daily_power_points(profile, period, function)?;
+        let time = hours.rem_euclid(period);
+        let sampled = sample(&points, period, time)?;
+        let (power_factors, relative_factor) = match function {
+            ProfileFunction::CommonFactor => {
+                // The base powers already include the input mode's fP/fQ or
+                // fS. Scale each existing branch once, without redistributing
+                // total power or replacing its Wye/delta connection.
+                scale_power(&mut input.power, sampled[0])?;
+                (None, Some(sampled[0]))
+            }
+            ProfileFunction::AbsolutePower => {
+                let factors = self.absolute_profile_power(element, sampled, &mut input.power)?;
+                (Some(factors), None)
+            }
+        };
+        input.operating_series = [None; 3];
+        input.profile_selection = Some(LoadProfileSelection {
+            profile,
+            requested_hours: hours,
+            cyclic_hours: time,
+            period_hours: period,
+            power_factors,
+            relative_factor,
+        });
+        Ok(input)
+    }
+
+    fn absolute_profile_power(
+        &self,
+        element: i64,
+        sampled: [f64; 2],
+        power: &mut PowerInput,
+    ) -> Result<[f64; 2]> {
         if !matches!(
-            input.power,
+            power,
             PowerInput::Total { .. } | PowerInput::DeltaTotal { .. }
         ) {
             return Err(format_error(
@@ -72,17 +116,13 @@ impl NativeDatabase {
                 "absolute profile requires finite nonnegative P/Q factors",
             ));
         }
-        let period = self.daily_power_period(profile)?;
-        let points = self.daily_power_points(profile, period)?;
-        let time = hours.rem_euclid(period);
-        let sampled = sample(&points, period, time)?;
         let values = [sampled[0] * factors[0], sampled[1] * factors[1]];
         if values.iter().any(|v| !v.is_finite())
             || (0..2).any(|i| sampled[i] != 0.0 && factors[i] != 0.0 && values[i] == 0.0)
         {
             return Err(format_error("scaled profile power overflows or underflows"));
         }
-        input.power = match input.power {
+        *power = match power {
             PowerInput::DeltaTotal { .. } => PowerInput::DeltaTotal {
                 p: values[0],
                 q: values[1],
@@ -92,18 +132,11 @@ impl NativeDatabase {
                 q: values[1],
             },
         };
-        input.operating_series = [None; 3];
-        input.profile_selection = Some(LoadProfileSelection {
-            profile,
-            requested_hours: hours,
-            cyclic_hours: time,
-            period_hours: period,
-            power_factors: factors,
-        });
-        Ok(input)
+        Ok(factors)
     }
 
-    fn daily_power_period(&self, profile: i64) -> Result<f64> {
+    #[allow(clippy::float_cmp)] // Exact native coefficient profiles, not approximate numerical tests.
+    fn daily_power_period(&self, profile: i64) -> Result<(f64, ProfileFunction)> {
         require_table(&self.connection, "OpSer", &["OpSer_ID", "Variant_ID"])?;
         let mut stmt = self
             .connection
@@ -114,20 +147,31 @@ impl NativeDatabase {
             .next()
             .map_err(format_error)?
             .ok_or_else(|| format_error(format!("missing OpSer {profile}")))?;
-        if integer(row, "Flag_Typ")? != 3
-            || integer(row, "Flag_Ser")? != 1
-            || integer(row, "Flag_Variant")? != 1
-        {
-            return Err(format_error(
-                "snapshot requires a local absolute-power daily profile",
-            ));
+        let function = match integer(row, "Flag_Typ")? {
+            1 => ProfileFunction::CommonFactor,
+            3 => ProfileFunction::AbsolutePower,
+            _ => return Err(format_error("unsupported daily profile function")),
+        };
+        if integer(row, "Flag_Ser")? != 1 || integer(row, "Flag_Variant")? != 1 {
+            return Err(format_error("snapshot requires a local daily profile"));
         }
-        for field in ["Power_a1", "Power_b1", "Reduce_a2", "Reduce_b2"] {
+        for field in ["Power_a1", "Power_b1", "Reduce_a2"] {
             if number(row, field)? != 0.0 {
                 return Err(format_error(format!(
                     "profile requires resolution of {field}"
                 )));
             }
+        }
+        // Input Data p.294 explicitly gives direct scaling for a2=0, b2=1.
+        // Do not infer topology-dependent coincidence for relative profiles.
+        // Absolute-power profiles retain the separately verified zero/zero
+        // coefficient profile used by the native CSIRO corpus.
+        let reduction_b = match function {
+            ProfileFunction::CommonFactor => 1.0,
+            ProfileFunction::AbsolutePower => 0.0,
+        };
+        if number(row, "Reduce_b2")? != reduction_b {
+            return Err(format_error("profile requires resolution of Reduce_b2"));
         }
         let period = match number(row, "BaseT")? {
             0.0 => 24.0,
@@ -136,11 +180,16 @@ impl NativeDatabase {
         if period <= 0.0 || rows.next().map_err(format_error)?.is_some() {
             return Err(format_error("invalid or duplicate daily profile"));
         }
-        Ok(period)
+        Ok((period, function))
     }
 
     #[allow(clippy::float_cmp)] // Exact timestamps/endpoints; never merge nearby native samples.
-    fn daily_power_points(&self, profile: i64, period: f64) -> Result<Vec<Point>> {
+    fn daily_power_points(
+        &self,
+        profile: i64,
+        period: f64,
+        function: ProfileFunction,
+    ) -> Result<Vec<Point>> {
         require_table(&self.connection, "OpSerVal", &["OpSer_ID", "Variant_ID"])?;
         let mut stmt = self
             .connection
@@ -173,7 +222,18 @@ impl NativeDatabase {
                     "invalid, duplicate or unsupported daily profile sample",
                 ));
             }
-            let values = [number(row, "P")? * 1000.0, number(row, "Q")? * 1000.0];
+            let values = match function {
+                ProfileFunction::CommonFactor => {
+                    let factor = number(row, "Factor")?;
+                    if factor < 0.0 {
+                        return Err(format_error("negative daily profile factor"));
+                    }
+                    [factor; 2]
+                }
+                ProfileFunction::AbsolutePower => {
+                    [number(row, "P")? * 1000.0, number(row, "Q")? * 1000.0]
+                }
+            };
             if !values.iter().all(|v| v.is_finite()) {
                 return Err(format_error("daily profile power overflows SI units"));
             }
@@ -202,6 +262,31 @@ struct Point {
     time: f64,
     values: [f64; 2],
     curve: i64,
+}
+
+fn scale_power(power: &mut PowerInput, factor: f64) -> Result<()> {
+    let scale = |value: &mut f64| -> Result<()> {
+        let scaled = *value * factor;
+        if !scaled.is_finite() || (*value != 0.0 && factor != 0.0 && scaled == 0.0) {
+            return Err(format_error(
+                "relative profile power overflows or underflows",
+            ));
+        }
+        *value = scaled;
+        Ok(())
+    };
+    match power {
+        PowerInput::Total { p, q } | PowerInput::DeltaTotal { p, q } => {
+            scale(p)?;
+            scale(q)?;
+        }
+        PowerInput::Wye { p, q } | PowerInput::Delta { p, q } => {
+            for value in p.iter_mut().chain(q) {
+                scale(value)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[allow(clippy::float_cmp)] // Exact knots select their declared value; all other times interpolate.

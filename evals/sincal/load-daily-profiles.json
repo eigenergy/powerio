@@ -3,7 +3,7 @@
   "attribution": "Berry, Adam; Collins, Lyle; Oliver, Erin; Perfumo, Cristian (2015), Representative Australian Electricity Feeders with load and solar generation profiles, v1, CSIRO.",
   "license": "CC-BY-4.0",
   "scope": "Profiled single-phase and phase-pair load components only; no complete feeder parsing or solve.",
-  "export_sha256": "92c92f461bf01ae2d72c2de6de9204c33117220fe152ca0d9e5daac36fef0eba",
+  "export_sha256": "d57de6b885044597597c15ebd976ad5c4e62c42bc85803bcbe02080686f28e4f",
   "hours": [
     0.0,
     0.25,

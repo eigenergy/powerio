@@ -1,0 +1,351 @@
+{
+  "scope": "Check original unequal-phase relative-profile cases against OpenDSS.\n\nNumPy samples the independently specified factor curve. Separate single-phase\nOpenDSS loads preserve each Wye or delta branch, including capacitive demand.\nThe actual Rust output supplies the circuit being tested, never oracle inputs.\nThis is synthetic component validation, not additional native corpus coverage.\n",
+  "cases": [
+    {
+      "mode": 13,
+      "model": 1,
+      "hours": 0.0,
+      "relative_factor": 0.0,
+      "maximum_power_error_w_var": 0.0,
+      "maximum_terminal_current_error_a": 0.0
+    },
+    {
+      "mode": 13,
+      "model": 1,
+      "hours": 3.0,
+      "relative_factor": 0.5,
+      "maximum_power_error_w_var": 9.094947017729282e-13,
+      "maximum_terminal_current_error_a": 1.4762209355896038e-14
+    },
+    {
+      "mode": 13,
+      "model": 1,
+      "hours": 6.0,
+      "relative_factor": 1.0,
+      "maximum_power_error_w_var": 1.8189894035458565e-12,
+      "maximum_terminal_current_error_a": 1.831026719408895e-14
+    },
+    {
+      "mode": 13,
+      "model": 1,
+      "hours": 12.0,
+      "relative_factor": 2.0,
+      "maximum_power_error_w_var": 3.637978807091713e-12,
+      "maximum_terminal_current_error_a": 2.864289338439558e-14
+    },
+    {
+      "mode": 13,
+      "model": 1,
+      "hours": 18.0,
+      "relative_factor": 1.0,
+      "maximum_power_error_w_var": 1.8189894035458565e-12,
+      "maximum_terminal_current_error_a": 1.831026719408895e-14
+    },
+    {
+      "mode": 13,
+      "model": 1,
+      "hours": 24.0,
+      "relative_factor": 0.0,
+      "maximum_power_error_w_var": 0.0,
+      "maximum_terminal_current_error_a": 0.0
+    },
+    {
+      "mode": 13,
+      "model": 1,
+      "hours": 30.0,
+      "relative_factor": 1.0,
+      "maximum_power_error_w_var": 1.8189894035458565e-12,
+      "maximum_terminal_current_error_a": 1.831026719408895e-14
+    },
+    {
+      "mode": 13,
+      "model": 2,
+      "hours": 0.0,
+      "relative_factor": 0.0,
+      "maximum_power_error_w_var": 0.0,
+      "maximum_terminal_current_error_a": 0.0
+    },
+    {
+      "mode": 13,
+      "model": 2,
+      "hours": 3.0,
+      "relative_factor": 0.5,
+      "maximum_power_error_w_var": 9.094947017729282e-13,
+      "maximum_terminal_current_error_a": 8.881784197001252e-15
+    },
+    {
+      "mode": 13,
+      "model": 2,
+      "hours": 6.0,
+      "relative_factor": 1.0,
+      "maximum_power_error_w_var": 1.8189894035458565e-12,
+      "maximum_terminal_current_error_a": 2.112595431543483e-13
+    },
+    {
+      "mode": 13,
+      "model": 2,
+      "hours": 12.0,
+      "relative_factor": 2.0,
+      "maximum_power_error_w_var": 3.637978807091713e-12,
+      "maximum_terminal_current_error_a": 3.181526013993717e-12
+    },
+    {
+      "mode": 13,
+      "model": 2,
+      "hours": 18.0,
+      "relative_factor": 1.0,
+      "maximum_power_error_w_var": 1.8189894035458565e-12,
+      "maximum_terminal_current_error_a": 2.112595431543483e-13
+    },
+    {
+      "mode": 13,
+      "model": 2,
+      "hours": 24.0,
+      "relative_factor": 0.0,
+      "maximum_power_error_w_var": 0.0,
+      "maximum_terminal_current_error_a": 0.0
+    },
+    {
+      "mode": 13,
+      "model": 2,
+      "hours": 30.0,
+      "relative_factor": 1.0,
+      "maximum_power_error_w_var": 1.8189894035458565e-12,
+      "maximum_terminal_current_error_a": 2.112595431543483e-13
+    },
+    {
+      "mode": 13,
+      "model": 3,
+      "hours": 0.0,
+      "relative_factor": 0.0,
+      "maximum_power_error_w_var": 0.0,
+      "maximum_terminal_current_error_a": 0.0
+    },
+    {
+      "mode": 13,
+      "model": 3,
+      "hours": 3.0,
+      "relative_factor": 0.5,
+      "maximum_power_error_w_var": 9.094947017729282e-13,
+      "maximum_terminal_current_error_a": 7.160723346098895e-15
+    },
+    {
+      "mode": 13,
+      "model": 3,
+      "hours": 6.0,
+      "relative_factor": 1.0,
+      "maximum_power_error_w_var": 1.8189894035458565e-12,
+      "maximum_terminal_current_error_a": 2.1390168887322673e-14
+    },
+    {
+      "mode": 13,
+      "model": 3,
+      "hours": 12.0,
+      "relative_factor": 2.0,
+      "maximum_power_error_w_var": 3.637978807091713e-12,
+      "maximum_terminal_current_error_a": 3.1569714405680426e-13
+    },
+    {
+      "mode": 13,
+      "model": 3,
+      "hours": 18.0,
+      "relative_factor": 1.0,
+      "maximum_power_error_w_var": 1.8189894035458565e-12,
+      "maximum_terminal_current_error_a": 2.1390168887322673e-14
+    },
+    {
+      "mode": 13,
+      "model": 3,
+      "hours": 24.0,
+      "relative_factor": 0.0,
+      "maximum_power_error_w_var": 0.0,
+      "maximum_terminal_current_error_a": 0.0
+    },
+    {
+      "mode": 13,
+      "model": 3,
+      "hours": 30.0,
+      "relative_factor": 1.0,
+      "maximum_power_error_w_var": 1.8189894035458565e-12,
+      "maximum_terminal_current_error_a": 2.1390168887322673e-14
+    },
+    {
+      "mode": 14,
+      "model": 1,
+      "hours": 0.0,
+      "relative_factor": 0.0,
+      "maximum_power_error_w_var": 0.0,
+      "maximum_terminal_current_error_a": 0.0
+    },
+    {
+      "mode": 14,
+      "model": 1,
+      "hours": 3.0,
+      "relative_factor": 0.5,
+      "maximum_power_error_w_var": 9.094947017729282e-13,
+      "maximum_terminal_current_error_a": 1.5072887603364242e-14
+    },
+    {
+      "mode": 14,
+      "model": 1,
+      "hours": 6.0,
+      "relative_factor": 1.0,
+      "maximum_power_error_w_var": 1.8189894035458565e-12,
+      "maximum_terminal_current_error_a": 1.5888218580782548e-14
+    },
+    {
+      "mode": 14,
+      "model": 1,
+      "hours": 12.0,
+      "relative_factor": 2.0,
+      "maximum_power_error_w_var": 3.637978807091713e-12,
+      "maximum_terminal_current_error_a": 1.7763568394002505e-14
+    },
+    {
+      "mode": 14,
+      "model": 1,
+      "hours": 18.0,
+      "relative_factor": 1.0,
+      "maximum_power_error_w_var": 1.8189894035458565e-12,
+      "maximum_terminal_current_error_a": 1.5888218580782548e-14
+    },
+    {
+      "mode": 14,
+      "model": 1,
+      "hours": 24.0,
+      "relative_factor": 0.0,
+      "maximum_power_error_w_var": 0.0,
+      "maximum_terminal_current_error_a": 0.0
+    },
+    {
+      "mode": 14,
+      "model": 1,
+      "hours": 30.0,
+      "relative_factor": 1.0,
+      "maximum_power_error_w_var": 1.8189894035458565e-12,
+      "maximum_terminal_current_error_a": 1.5888218580782548e-14
+    },
+    {
+      "mode": 14,
+      "model": 2,
+      "hours": 0.0,
+      "relative_factor": 0.0,
+      "maximum_power_error_w_var": 0.0,
+      "maximum_terminal_current_error_a": 0.0
+    },
+    {
+      "mode": 14,
+      "model": 2,
+      "hours": 3.0,
+      "relative_factor": 0.5,
+      "maximum_power_error_w_var": 9.094947017729282e-13,
+      "maximum_terminal_current_error_a": 3.972054645195637e-15
+    },
+    {
+      "mode": 14,
+      "model": 2,
+      "hours": 6.0,
+      "relative_factor": 1.0,
+      "maximum_power_error_w_var": 1.8189894035458565e-12,
+      "maximum_terminal_current_error_a": 3.8263897345803626e-14
+    },
+    {
+      "mode": 14,
+      "model": 2,
+      "hours": 12.0,
+      "relative_factor": 2.0,
+      "maximum_power_error_w_var": 3.637978807091713e-12,
+      "maximum_terminal_current_error_a": 8.135016162988059e-13
+    },
+    {
+      "mode": 14,
+      "model": 2,
+      "hours": 18.0,
+      "relative_factor": 1.0,
+      "maximum_power_error_w_var": 1.8189894035458565e-12,
+      "maximum_terminal_current_error_a": 3.8263897345803626e-14
+    },
+    {
+      "mode": 14,
+      "model": 2,
+      "hours": 24.0,
+      "relative_factor": 0.0,
+      "maximum_power_error_w_var": 0.0,
+      "maximum_terminal_current_error_a": 0.0
+    },
+    {
+      "mode": 14,
+      "model": 2,
+      "hours": 30.0,
+      "relative_factor": 1.0,
+      "maximum_power_error_w_var": 1.8189894035458565e-12,
+      "maximum_terminal_current_error_a": 3.8263897345803626e-14
+    },
+    {
+      "mode": 14,
+      "model": 3,
+      "hours": 0.0,
+      "relative_factor": 0.0,
+      "maximum_power_error_w_var": 0.0,
+      "maximum_terminal_current_error_a": 0.0
+    },
+    {
+      "mode": 14,
+      "model": 3,
+      "hours": 3.0,
+      "relative_factor": 0.5,
+      "maximum_power_error_w_var": 9.094947017729282e-13,
+      "maximum_terminal_current_error_a": 3.972054645195637e-15
+    },
+    {
+      "mode": 14,
+      "model": 3,
+      "hours": 6.0,
+      "relative_factor": 1.0,
+      "maximum_power_error_w_var": 1.8189894035458565e-12,
+      "maximum_terminal_current_error_a": 7.944109290391274e-15
+    },
+    {
+      "mode": 14,
+      "model": 3,
+      "hours": 12.0,
+      "relative_factor": 2.0,
+      "maximum_power_error_w_var": 3.637978807091713e-12,
+      "maximum_terminal_current_error_a": 9.664426065637204e-14
+    },
+    {
+      "mode": 14,
+      "model": 3,
+      "hours": 18.0,
+      "relative_factor": 1.0,
+      "maximum_power_error_w_var": 1.8189894035458565e-12,
+      "maximum_terminal_current_error_a": 7.944109290391274e-15
+    },
+    {
+      "mode": 14,
+      "model": 3,
+      "hours": 24.0,
+      "relative_factor": 0.0,
+      "maximum_power_error_w_var": 0.0,
+      "maximum_terminal_current_error_a": 0.0
+    },
+    {
+      "mode": 14,
+      "model": 3,
+      "hours": 30.0,
+      "relative_factor": 1.0,
+      "maximum_power_error_w_var": 1.8189894035458565e-12,
+      "maximum_terminal_current_error_a": 7.944109290391274e-15
+    }
+  ],
+  "negative_controls": 10,
+  "maximum_power_error_w_var": 3.637978807091713e-12,
+  "maximum_terminal_current_error_a": 3.181526013993717e-12,
+  "current_tolerance_a": 1e-08,
+  "export_sha256": "e94bc87be1169f26b99986902da2f5589fbefb3ec000b5fdde3c14cd7cf86cc2",
+  "engine": "DSS C-API Library version 0.14.5 revision 87d85c2622c8281b92255335bc7c09b11191b21d based on OpenDSS SVN 3723 [FPC 3.2.2] (64-bit build) MVMULT INCREMENTAL_Y CONTEXT_API PM 20240329033829; License Status: Open \nDSS-Python version: 0.15.7\nOpenDSSDirect.py version: 0.9.4",
+  "numpy": "2.5.3",
+  "native_execution": false,
+  "native_corpus_coverage_added": false,
+  "passed": true
+}

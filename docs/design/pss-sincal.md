@@ -412,7 +412,7 @@ IR restoration are verified. No unbalanced failure falls back to a balanced pars
 
 The implemented conductor profiles cover directly supplied sequence lines,
 verified reduced-phase circuits, ideal connections, phase-earth and phase-pair
-loads, selected absolute daily load profiles, ideal positive-sequence sources
+loads, selected absolute and common-factor daily load profiles, ideal positive-sequence sources
 with explicit zero-sequence circuits, several full-winding transformer groups,
 nominal partial delta-delta windings, verified Y0 autotransformer profiles, and
 fixed reactor/capacitor banks. Open ports preserve their electrical primitives
