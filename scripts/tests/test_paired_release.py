@@ -12,6 +12,7 @@ SPEC = importlib.util.spec_from_file_location("paired_release", Path(__file__).p
 pair = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(pair)
 sys.path.insert(0, str(Path(__file__).parents[1]))
+import prepare_release_prs as preparation  # noqa: E402
 from activate_paired_releases import environment_update  # noqa: E402
 from prepare_release_prs import (  # noqa: E402
     bump_lock_versions,
@@ -88,6 +89,20 @@ class ReleaseTests(unittest.TestCase):
     def test_yanked_registration_requires_attention(self):
         with self.assertRaisesRegex(ValueError, "yanked"):
             pair.registry_action(self.manifest, {"0.11.3": {"git-tree-sha1": "d" * 40, "yanked": True}})
+
+    def test_preparation_updates_current_schema_tests_without_editing_examples(self):
+        root = Path(__file__).resolve().parents[2]
+        def local_source(_repo, path, _sha):
+            if path == 'CHANGELOG.md':
+                return b'# Changelog\n\n## Unreleased\n\n- Reviewed change.\n'
+            return (root / path).read_bytes()
+        old = preparation.tomllib.loads((root / 'Cargo.toml').read_text())['workspace']['package']['version']
+        with patch.object(preparation, 'source', side_effect=local_source):
+            edits = preparation.version_edits(pair.POWERIO, 'a' * 40, '0.11.99')
+        self.assertIn('docs/release-notes/0.11.99.md', edits)
+        self.assertIn('pio-ir/2/0.11.99/schema.json', edits['powerio/tests/ir_reference.rs'])
+        self.assertIn(f'"pio-ir/2/{old}/schema.json",', edits['powerio/tests/frozen_schemas.rs'])
+        self.assertFalse(any(path.startswith('powerio-dist/examples/bmopf/') for path in edits))
 
     def test_activation_preserves_environment_restrictions(self):
         env = {'can_admins_bypass': False,
