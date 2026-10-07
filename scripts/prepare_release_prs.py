@@ -97,6 +97,10 @@ def version_edits(repo, sha, number):
                               f'            "pio-ir/2/{old}/schema.json",\n            CURRENT_SCHEMA,')
         tests = tests.replace('    for earlier in [',
                               f'    for earlier in [\n        "pio-ir/2/{old}/schema.json",')
+        history_start = tests.index('fn historical_schemas_preserve_their_original_identifiers()')
+        tests = tests[:history_start] + tests[history_start:].replace(
+            '    ] {', f'        (\n            "pio-ir/2/{old}/schema.json",\n'
+            f'            "https://powerio.dev/schema/pio-ir/2/{old}/schema.json",\n        ),\n    ] {{', 1)
         result[path] = tests
         for path in ('scripts/check-value-types.sh', 'docs/src/ir-reference.md',
                      'AGENTS.md'):
@@ -112,6 +116,8 @@ def version_edits(repo, sha, number):
         require(row in readme, 'current schema catalog row is missing')
         readme = readme.replace(row, row + '\n' + row.replace(old, number))
         readme = readme.replace(f'PowerIO {old} keeps IR version', f'PowerIO {number} keeps IR version')
+        readme = readme.replace('` beneath `https://powerio.dev/schema/`.',
+                                f'`, and\n`pio-ir/2/{old}/schema.json` beneath `https://powerio.dev/schema/`.')
         readme = readme.replace(f'Read by {old}', f'Read by {number}')
         readme = readme.replace(f'Both remain 2 in {old}.', f'Both remain 2 in {number}.')
         readme = readme.replace(f'The current catalog uses `pio-ir/2/{old}/schema.json`',

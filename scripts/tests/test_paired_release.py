@@ -125,6 +125,8 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn('pio-ir/2/0.11.99/schema.json', edits['docs/src/pio-json-schema.md'])
         self.assertIn('`pio-ir/2/0.11.4/schema.json` adds the fixed-dispatch', edits['docs/src/pio-json-schema.md'])
         self.assertIn(f'| 2 | v{old} |', edits['docs/schema/README.md'])
+        self.assertIn(f'https://powerio.dev/schema/pio-ir/2/{old}/schema.json', edits['powerio/tests/frozen_schemas.rs'])
+        self.assertIn(f'`pio-ir/2/{old}/schema.json` beneath', edits['docs/schema/README.md'])
         self.assertIn('The current catalog uses `pio-ir/2/0.11.99/schema.json`', edits['docs/schema/README.md'])
 
     def test_activation_preserves_environment_restrictions(self):
