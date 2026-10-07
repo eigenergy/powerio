@@ -26,8 +26,8 @@ both sides consume PowerIO values, including calculation instances, solutions,
 time series, and scenario sets.
 
 The generated JSON Schema is checked in at
-`docs/schema/pio-ir/2/0.11.4/schema.json` and served from
-`https://powerio.dev/schema/pio-ir/2/0.11.4/schema.json`. That schema, the
+`docs/schema/pio-ir/2/0.11.5/schema.json` and served from
+`https://powerio.dev/schema/pio-ir/2/0.11.5/schema.json`. That schema, the
 serializer, and the deserializer are all tested from the same Rust types.
 `docs/schema/README.md` lists the earlier `pio-package` and
 `powerio.module` documents as one history under `pio-ir`.
@@ -149,7 +149,7 @@ only when an existing representation changes incompatibly. `producer.version` re
 that wrote the document; the reader reports it and ignores it when deciding
 compatibility.
 
-PowerIO 0.11.4 keeps IR version 2. `powerio::IR_VERSION` and
+PowerIO 0.11.5 keeps IR version 2. `powerio::IR_VERSION` and
 `powerio::IR_MIN_VERSION` are both `2`. Additive structural types do not change
 the IR version: older readers continue to accept existing types and reject
 types they do not implement. An incompatible change to an existing record's
