@@ -522,6 +522,19 @@ expansion or input repair is applied. Native SINCAL execution remains an externa
 acceptance gate, separate from continued reader implementation and independent
 validation. Broader corpus coverage and the final integration packet remain work.
 
+Derived-variant research now establishes complete-row override selection against
+all 9,942 acquired native active input rows across CSIRO10/11/14. All 44 variants
+have structurally consistent terminal/profile references; only the three stored
+active selections have independent cache agreement. See
+`evals/sincal/variant-inheritance.json`. This does not yet enable derived parsing.
+Implement bounded effective-row materialization in the shared storage crate,
+retain original row origins and source bytes, and test both electrical families
+against these selections. Resolve and test the database deletion encoding first:
+`Flag_Variant=0` is a cached inactive selection, not a tombstone, and absence of
+a child override means inheritance. The documented scenario export of deletion
+as out-of-order does not establish the original database encoding. Cycles,
+missing parents, duplicate identities and unknown deletion forms must reject.
+
 ### PR 5: experimental fresh writer
 
 Implement deterministic fresh schema-14.8 SQLite generation and packaging for

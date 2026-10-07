@@ -1089,3 +1089,47 @@ its 484 native loads/2,420 snapshots were independently rechecked. The older
 absolute checker now explicitly verifies the already-present native `power_factors`
 provenance instead of rejecting that additional field. The CSIRO05 export of
 456 loads/2,280 snapshots remains byte-exact against its prior export.
+
+## Derived-variant structural evidence
+
+`audit_variants.py` reconstructs complete input rows along the selected parent
+chain. Siemens' [6.0 release notes, §1.3, pp.4–5](https://sincal.s3.amazonaws.com/6.0/ReleaseNotes-Eng.pdf)
+document that an override stores the whole row, including inherited fields.
+A NULL child cell therefore stays NULL. `Flag_Variant` marks membership in the
+stored active selection; it is not a per-variant deletion marker and does not
+select an arbitrary requested variant.
+
+The hash-pinned CSIRO10, 11 and 14 inputs contain 44 variants. The audit's
+reconstruction of the stored active variant agrees byte-for-value with all
+9,942 acquired input rows independently marked active by the native database:
+4,862 rows in case10 (variant14), 3,403 in case11 (variant14) and 1,677 in case14
+(variant2). Terminal-to-node/element and load/profile-point-to-profile references
+resolve in all 44 reconstructed selections. The other 41 selections do not have
+an independent active-row comparison; reference consistency alone is weaker.
+
+Parent-wins precedence, child-only extraction, and numeric union of all
+variants each disagree with the native active selections. A dangling profile
+control is detected. Six original synthetic tests check the documented branch
+shape, retained NULLs, sibling exclusion, invalid ancestry, duplicate identities,
+and ambiguous active caches. Nonpositive row identities and undocumented flags
+reject rather than being assigned hypothetical deletion semantics.
+
+```sh
+python3 -m unittest discover -s evals/sincal -p 'test_variant_audit.py'
+python3 evals/sincal/audit_variants.py "$sources" "$base_records" \
+  "$output/variant-inheritance.json"
+```
+
+This is structural evidence, not production derived-variant support or another
+complete feeder. The acquisition excludes nonselected tables, including machine
+data, so the comparison does not cover every table in the original projects.
+No native rows or manuals are vendored; the report is a CC BY 4.0 derived summary.
+Deletion encoding still requires primary evidence and a distinguishing native
+case. [Siemens 15.5 Update 7, p.8](https://sincal.s3.amazonaws.com/15.5/SincalUpd_15.5.7.Eng.pdf)
+confirms that deletion in a variant exists and can export as out-of-order in a
+scenario; it does not specify how deletion is encoded in the network database.
+Do not equate a cached inactive row with a deletion, or assume an omitted child
+row deletes its ancestor. Next implement bounded effective-row materialization
+in the shared storage crate, with table-specific identities, origin provenance,
+and preserved native bytes, after resolving this deletion contract. Electrical
+mapping remains in the existing transmission/distribution crates.
