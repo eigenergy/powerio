@@ -58,6 +58,7 @@ impl NativeDatabase {
                 for field in [
                     "Flag_Tap",
                     "Flag_Ct",
+                    "Flag_roh",
                     "Flag_ConNode",
                     "Flag_Macro",
                     "AddRotate",

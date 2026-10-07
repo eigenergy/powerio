@@ -357,6 +357,7 @@ fn legacy_inactive_center_tap_defaults_keep_native_data_and_tap_provenance() {
 #[test]
 fn legacy_transformer_optional_defaults_preserve_the_explicit_nominal_circuit() {
     let fields = [
+        "Flag_roh",
         "Flag_ConNode",
         "Flag_Macro",
         "AddRotate",
@@ -370,7 +371,12 @@ fn legacy_transformer_optional_defaults_preserve_the_explicit_nominal_circuit() 
     ];
     let explicit = fields
         .iter()
-        .map(|field| format!("{field}={}", i32::from(*field == "Flag_ConNode")))
+        .map(|field| {
+            format!(
+                "{field}={}",
+                i32::from(matches!(*field, "Flag_ConNode" | "Flag_roh"))
+            )
+        })
         .collect::<Vec<_>>()
         .join(",");
     let absent = fields
@@ -411,7 +417,7 @@ fn legacy_transformer_optional_defaults_preserve_the_explicit_nominal_circuit() 
         .unwrap();
         assert!(modern.network().is_err(), "accepted modern NULL {field}");
     }
-    for field in ["Un1", "Un2", "Sn", "uk", "ur", "VecGrp", "Flag_roh"] {
+    for field in ["Un1", "Un2", "Sn", "uk", "ur", "VecGrp"] {
         assert!(
             legacy(&format!("UPDATE TwoWindingTransformer SET {field}=NULL"))
                 .network()
@@ -584,4 +590,34 @@ fn source_sequence_ratios_use_fault_impedance_even_for_an_ideal_load_flow_source
             "accepted {edit}"
         );
     }
+}
+
+#[test]
+fn legacy_fixed_tap_status_does_not_resolve_partial_mixed_winding_physics() {
+    for group in [14, 59] {
+        let db = legacy(&format!(
+            "UPDATE TwoWindingTransformer SET VecGrp={group},Flag_roh=NULL;
+             UPDATE Terminal SET Flag_Terminal=1 WHERE Element_ID=33;"
+        ));
+        let error = db
+            .network()
+            .expect_err("partial mixed windings remain unresolved")
+            .to_string();
+        assert!(error.contains("partial transformer windings"), "{error}");
+    }
+    for value in ["0", "2", "6", "-1", "0.5", "'bad'"] {
+        assert!(
+            legacy(&format!(
+                "UPDATE TwoWindingTransformer SET Flag_roh={value}"
+            ))
+            .network()
+            .is_err(),
+            "accepted {value}"
+        );
+    }
+    assert!(
+        acquired_version("UPDATE TwoWindingTransformer SET Flag_roh=NULL", 12.8)
+            .network()
+            .is_err()
+    );
 }

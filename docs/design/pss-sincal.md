@@ -480,12 +480,24 @@ Independent interpolation and OpenDSS terminal-current checks cover all 2,280
 snapshots (368 three-phase delta loads and 88 phase-pair loads). The stored
 power factors apply once; manipulator IDs remain provenance. Two further loads
 have conflicting native profile timestamps and still reject, alongside seven
-transformers with unresolved NULL tap-status fields. This is 1,369/1,378 component
+transformers with unresolved partial mixed-winding circuits. This is 1,369/1,378 component
 coverage, not another complete feeder. See `evals/sincal/materialized-loads.json`.
 All seven transformers use DYN11 (`VecGrp=59`) with L1 selected at both terminals;
-they therefore also need verified partial mixed-winding circuits. The April 2014
-database manual p.46 documents fixed status as the `Flag_roh` default, but admitting
-that legacy NULL alone will not establish those circuits.
+they therefore need verified partial mixed-winding circuits. The April 2014
+database manual p.46 documents fixed status as the `Flag_roh` default. That default
+is now implemented for schema-11.5 NULLs, with source preservation and provenance;
+explicit controllers, invalid fields, missing columns and other-schema NULLs
+remain errors. Admitting that default does not establish the partial circuits.
+
+`evals/sincal/partial-mixed-history.json` audits all nine CSIRO06 partial YNd1
+transformers against their aligned historical terminal records. An independent
+single-coil OpenDSS hypothesis (Sn/3 per installed coil, nominal pi excitation,
+without the separate native zero-sequence impedance) disagrees in every case:
+maximum terminal power discrepancies range from 1.95 to 4.75 kVA. This is a rejected
+acceptance hypothesis, not validation of reader output. Historical records do not
+attest that the current input revision produced them. Distinct zero-sequence,
+excitation and rating treatment must be resolved before expanding the mapper;
+no parameter fitting or source repair is used.
 
 CSIRO06's 55 remaining rejections are explicitly classified: 35 Wye loads,
 nine partial YNd1 transformers and eleven inconsistent core-loss nameplates.

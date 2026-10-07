@@ -142,6 +142,10 @@ Conflicting daily timestamps remain errors.
 Active daily profiles require an explicit snapshot; no midnight default is
 assumed. Generic time-series and inherited variants remain under development.
 
+Schema-11.5 NULL transformer tap status uses the documented fixed-status default
+and records that interpretation. Active controllers and unresolved partial
+mixed-winding circuits still reject; the default does not supply missing physics.
+
 Fixed reactor and capacitor banks retain their phase connections, losses,
 grounding and open/inactive states as typed shunts and switches. Supported
 three-phase grounded banks retain separate positive- and zero-sequence inputs.

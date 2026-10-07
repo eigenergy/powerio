@@ -80,7 +80,7 @@ impl NativeDatabase {
             Some(value) => Ok(value),
             None if matches!(
                 field,
-                "Flag_Tap" | "Flag_Ct" | "Flag_ConNode" | "Flag_Macro"
+                "Flag_Tap" | "Flag_Ct" | "Flag_roh" | "Flag_ConNode" | "Flag_Macro"
             ) && self.version.to_bits() == 11.5_f64.to_bits() =>
             {
                 Ok(default)

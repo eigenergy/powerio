@@ -994,3 +994,36 @@ python evals/sincal/check_materialized_loads.py \
 
 Native files and acquired tables remain external; only the small derived report
 is committed. The original CSIRO data is CC BY 4.0, with attribution in the report.
+
+### Partial mixed-winding investigation and fixed tap-status defaults
+
+`partial-mixed-history.json` audits all nine native CSIRO06 partial YNd1
+transformers using the original MDB's aligned node and branch results. The
+independent OpenDSS candidate uses one coil rated at Sn/3, phase-earth voltage
+on the Wye side, phase-pair voltage on the Delta side, and split nominal pi
+excitation. It deliberately does not model the distinct native zero-sequence
+impedance. The candidate disagrees with every historical case: maximum terminal
+power errors range from 1.95 to 4.75 kVA and current-magnitude errors from 4.19
+to 9.62 A. The selected phase and return connections cover W1, W2 and W3.
+
+This is evidence against accepting that simple hypothesis, **not** a passing
+transformer mapping or proof that the stored results used the current inputs.
+The report records `candidate_accepted=false`, `production_mapping_added=false`
+and `stored_results_attest_current_inputs=false`. No native input is edited,
+no value is fitted, and no SINCAL process is run. The next circuit work must
+resolve the distinct sequence impedances, excitation and rating conventions.
+
+```sh
+python evals/sincal/audit_partial_mixed_history.py \
+  "$sources/csiro-representative06.mdb" "$records/representative06.json" \
+  "$output/partial-mixed-history.json"
+```
+
+Separately, Database Description (April 2014), p.46 documents `Flag_roh=1`
+(fixed tap) as the default. The schema-11.5 reader now accepts a stored NULL
+with that interpretation, preserves the original cell and records it in
+`network.defaulted`. Synthetic tests verify electrical equivalence to explicit
+fixed status and reject controllers, invalid values, missing fields and NULLs
+in other schema profiles. CSIRO05's seven transformers now reach the explicit
+partial mixed-winding rejection. Component coverage and complete-feeder counts
+are unchanged; there is no new feeder acceptance claim.

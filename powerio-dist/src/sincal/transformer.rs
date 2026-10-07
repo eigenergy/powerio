@@ -355,7 +355,10 @@ fn require_no_center_tap(row: &Row<'_>, db: &NativeDatabase) -> Result<()> {
 }
 
 fn fixed_tap(row: &Row<'_>, selected: &[usize], db: &NativeDatabase) -> Result<FixedTapInput> {
-    if integer(row, "Flag_roh")? != 1 {
+    // Database Description (April 2014), p.46: fixed tap status defaults
+    // to 1. The schema-11.5 adapter retains a stored NULL and records this
+    // interpretation; active controller modes still require resolution.
+    if db.legacy_integer(row, "Flag_roh", 1)? != 1 {
         return Err(format_error(
             "transformer regulator requires operating-state resolution",
         ));
