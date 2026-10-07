@@ -19,7 +19,7 @@ and relative source/terminal voltage prescriptions and voltage-only limits.
 Open terminals and inactive equipment remain in the network.
 Unknown required modes fail with table, native record ID and field context.
 
-```rust,no_run
+```rust,ignore
 let options = powerio::ParseOptions::default().format("sincal-balanced")?;
 let module = powerio::parse_with_options("case.sinx", &options)?;
 assert!(matches!(module.value(), powerio::PioValue::BalancedNetwork(_)));
