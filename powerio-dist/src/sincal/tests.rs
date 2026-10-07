@@ -358,7 +358,7 @@ fn sequence_line_refuses_unresolved_models_and_calculation_overrides() {
         "UPDATE Line SET c0=-1",
         "UPDATE Line SET fn=0",
         "UPDATE Line SET l=0",
-        "UPDATE Line SET Ith=0",
+        "UPDATE Line SET Ith=-1",
         "UPDATE Line SET Variant_ID=2",
         "INSERT INTO Line SELECT * FROM Line",
     ] {
@@ -772,5 +772,38 @@ fn shared_balanced_schema_admission_does_not_select_conductor_semantics() {
                 .to_string()
                 .contains("unsupported multiconductor electrical schema")
         );
+    }
+}
+
+#[test]
+fn unrated_sequence_lines_keep_the_circuit_without_inventing_current_limits() {
+    let rated = NativeDatabase::decode(&sequence_database("UPDATE Line SET ParSys=2;"), None)
+        .unwrap()
+        .sequence_line(30)
+        .unwrap();
+    let unrated =
+        NativeDatabase::decode(&sequence_database("UPDATE Line SET Ith=0,ParSys=2;"), None)
+            .unwrap()
+            .sequence_line(30)
+            .unwrap();
+    assert_eq!(unrated.code.i_max, None);
+    assert_eq!(rated.code.r_series, unrated.code.r_series);
+    assert_eq!(rated.code.x_series, unrated.code.x_series);
+    assert_eq!(rated.code.b_from, unrated.code.b_from);
+    assert_eq!(rated.code.b_to, unrated.code.b_to);
+    assert_eq!(rated.length_m.to_bits(), unrated.length_m.to_bits());
+    for edit in [
+        "Ith=NULL",
+        "Ith=-1",
+        "Ith=1e308",
+        "Ith=0,fr=0",
+        "Ith=0,ParSys=0",
+    ] {
+        let db = NativeDatabase::decode(
+            &sequence_database(&format!("UPDATE Line SET {edit};")),
+            None,
+        )
+        .unwrap();
+        assert!(db.sequence_line(30).is_err(), "accepted {edit}");
     }
 }

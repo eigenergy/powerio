@@ -424,18 +424,19 @@ conductor declaration. Its 297 limited-P/Q loads additionally require an exact n
 voltage-reduction curve and a corresponding generic typed representation.
 See `evals/sincal/` for exact scope and independently reproduced evidence.
 
-The two LPC Access files are now acquired into external typed records using
-MDB Tools. Their Access memo columns produce `TEXT`, now explicitly recognized
-without accepting executable schema clauses. Original synthetic acquisition
-tests cover multiline memo text, NULLs and rejection of defaults/references.
-The European LV case has 262 elements: 205 lines, 55 loads, one transformer and
-one source. Its transformer has zero excitation and explicit sequence line
-data, making this a useful next complete-case target alongside CSIRO. S1a has
-137 elements including 54 DC infeeds and a transformer with nonzero core loss
-but zero no-load current, so additional semantics/diagnostics are needed.
-Both remain external research inputs with unresolved redistribution rights.
-Schema 12.8 admission and electrical compatibility remain unimplemented; no
-case is accepted by changing its version marker.
+Both LPC Access files are acquired into external typed records, with schema
+12.8 admitted only through that explicit acquisition boundary. The conductor
+reader preserves its distinct control layout and records legacy line-line
+voltage defaults. The European LV case maps 260/262 components: all 205 lines
+and 55 single-phase constant-power loads. Their actual Rust mappings agree
+with independent OpenDSS line primitives and load currents. Unspecified line
+thermal ratings stay absent rather than becoming invented limits.
+The two remaining components, source and transformer, lack declared
+zero-sequence input while automatic completion is disabled. No complete native
+unbalanced parse or solver agreement is claimed. S1a maps 54 loads; its 54 DC
+infeeds, 27 library-referenced lines, source and inconsistent transformer core
+inputs still reject. Both files remain external research inputs with unresolved
+redistribution rights; no version marker or electrical input is rewritten.
 
 ### PR 5: experimental fresh writer
 

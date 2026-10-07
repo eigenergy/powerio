@@ -157,6 +157,13 @@ fn apply_parallel_rating(
     ] {
         scale_matrix(matrix, parallel)?;
     }
+    // Database Description (April 2014), p.19: Ith defaults to zero.
+    // Keep an unspecified thermal rating absent in the generic model; do
+    // not invent a positive limit or a zero-current electrical constraint.
+    if amperes == 0.0 {
+        code.i_max = None;
+        return Ok(());
+    }
     let limit = amperes * rating * parallel;
     if !limit.is_finite() || limit <= 0.0 {
         return Err(format_error(
@@ -216,11 +223,11 @@ impl NativeDatabase {
             || length <= 0.0
             || !(length * 1000.0).is_finite()
             || !current.is_finite()
-            || current <= 0.0
+            || current < 0.0
             || !(current * 1000.0).is_finite()
         {
             return Err(format_error(format!(
-                "Line {element}: positive finite length and ampacity required"
+                "Line {element}: positive finite length and nonnegative finite ampacity required"
             )));
         }
         let mut parameters = SequenceParameters {

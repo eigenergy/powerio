@@ -47,7 +47,7 @@ impl DatabaseSnapshot {
         let excluded = records.excluded_tables().to_vec();
         let connection = records.into_connection()?;
         configure_query_snapshot(&connection)?;
-        let mut snapshot = Self::from_connection(connection, requested_variant, &[11.5])?;
+        let mut snapshot = Self::from_connection(connection, requested_variant, &[11.5, 12.8])?;
         snapshot.excluded_tables = excluded;
         snapshot.source_digest = Some(digest);
         Ok(snapshot)

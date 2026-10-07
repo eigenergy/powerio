@@ -122,3 +122,6 @@ pub(crate) fn audit_snapshot_at(
     let report = NativeDatabase::from_snapshot(snapshot)?.mapping_report_at(Some(hours))?;
     serde_json::to_string_pretty(&report).map_err(format_error)
 }
+
+#[cfg(test)]
+mod lpc_tests;

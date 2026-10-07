@@ -3,7 +3,7 @@
   "attribution": "Berry, Adam; Collins, Lyle; Oliver, Erin; Perfumo, Cristian (2015), Representative Australian Electricity Feeders with load and solar generation profiles, v1, CSIRO.",
   "license": "CC-BY-4.0",
   "scope": "Conductor-resolved base-variant development audit; no family inference, independent solve or native execution.",
-  "reader_sha256": "f94b92ff5a53decd91e6b0610081f8585ed54ae79ca155f4b78ea182ad0e85ca",
+  "reader_sha256": "fd69ee3201c29096977c4a8e338c246e0c27a9fa20b92b993b19b81c8e3294e8",
   "cases": [
     {
       "case": 1,

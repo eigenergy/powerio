@@ -16,7 +16,7 @@ impl NativeDatabase {
     pub fn from_snapshot(snapshot: DatabaseSnapshot) -> Result<Self> {
         // Structural admission of modern balanced schemas does not authorize
         // their conductor semantics here. Keep family support independent.
-        if ![11.5_f64, 14.8]
+        if ![11.5_f64, 12.8, 14.8]
             .iter()
             .any(|v| v.to_bits() == snapshot.version.to_bits())
         {
@@ -28,19 +28,25 @@ impl NativeDatabase {
         Ok(Self(snapshot))
     }
 
-    /// Schema 11.5 retains the legacy line-line input convention when the
-    /// later voltage-kind selector is NULL. Siemens General Input Data,
-    /// April 2014 pp.18,28 explicitly defines network-level Un as line-line,
-    /// including single-phase networks. Do not extend this legacy default to
-    /// newer schemas or confuse a missing referenced row with a NULL field.
+    /// The verified 11.5/12.8 Access layouts retain line-line input when
+    /// the voltage-kind selector is NULL. Input Data (April 2014), pp.18,28
+    /// defines Un as line-line, including single-phase networks; the 14.0
+    /// release notes pp.19–20 introduce voltage-kind selection. Missing
+    /// referenced rows/columns and modern NULLs are not legacy defaults.
     pub fn line_line_voltage_basis(&self, selector: Option<i64>) -> Result<bool> {
         match selector {
             Some(1) => Ok(false),
-            None if self.version.to_bits() == 11.5_f64.to_bits() => Ok(true),
+            None if self.legacy_field_layout() => Ok(true),
             _ => Err(format_error(
-                "voltage level requires line-line Flag_Volt=1 or the recorded schema-11.5 legacy default",
+                "voltage level requires line-line Flag_Volt=1 or the recorded schema-11.5/12.8 legacy default",
             )),
         }
+    }
+
+    fn legacy_field_layout(&self) -> bool {
+        [11.5_f64, 12.8]
+            .iter()
+            .any(|v| v.to_bits() == self.version.to_bits())
     }
 
     /// Standard-type selection fills the equipment's stored fields. Read
@@ -104,21 +110,22 @@ impl NativeDatabase {
         }
     }
 
-    /// A control added after 11.5 is not an active input in that layout.
-    /// Call sites enumerate the affected controls; missing fields in newer
-    /// schemas and explicit NULL/non-numeric values still fail validation.
+    /// Only enumerated columns absent from an acquired historical layout
+    /// use its earlier model. In 12.8, boost and controller references already
+    /// exist and must be read. Explicit NULL/non-numeric values still reject.
     pub fn newer_integer(&self, row: &rusqlite::Row<'_>, field: &str, legacy: i64) -> Result<i64> {
-        if matches!(field, "Flag_Pctrl" | "Flag_Boost" | "Flag_Lf")
-            && self.version.to_bits() == 11.5_f64.to_bits()
-            && row.as_ref().column_index(field).is_err()
-        {
+        let absent = (self.version.to_bits() == 11.5_f64.to_bits()
+            && matches!(field, "Flag_Pctrl" | "Flag_Boost" | "Flag_Lf"))
+            || (self.version.to_bits() == 12.8_f64.to_bits()
+                && matches!(field, "Flag_Pctrl" | "Flag_Lf"));
+        if absent && row.as_ref().column_index(field).is_err() {
             return Ok(legacy);
         }
         super::transformer::integer(row, field)
     }
     pub fn newer_number(&self, row: &rusqlite::Row<'_>, field: &str) -> Result<f64> {
         if matches!(field, "Rlf" | "Xlf" | "C01" | "C02")
-            && self.version.to_bits() == 11.5_f64.to_bits()
+            && self.legacy_field_layout()
             && row.as_ref().column_index(field).is_err()
         {
             return Ok(0.0);
@@ -126,12 +133,13 @@ impl NativeDatabase {
         super::transformer::number(row, field)
     }
     pub fn newer_reference(&self, row: &rusqlite::Row<'_>, field: &str) -> Result<Option<i64>> {
-        if matches!(
-            field,
-            "ElemLoading_ID" | "Ctrl_OpSer_ID" | "Ctrl_OpPnt_ID" | "CtrlRange_ID"
-        ) && self.version.to_bits() == 11.5_f64.to_bits()
-            && row.as_ref().column_index(field).is_err()
-        {
+        let absent = (self.version.to_bits() == 11.5_f64.to_bits()
+            && matches!(
+                field,
+                "ElemLoading_ID" | "Ctrl_OpSer_ID" | "Ctrl_OpPnt_ID" | "CtrlRange_ID"
+            ))
+            || (self.version.to_bits() == 12.8_f64.to_bits() && field == "ElemLoading_ID");
+        if absent && row.as_ref().column_index(field).is_err() {
             return Ok(None);
         }
         super::transformer::reference(row, field)

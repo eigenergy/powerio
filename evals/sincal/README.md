@@ -518,3 +518,59 @@ python3 evals/sincal/check_autotransformers.py /tmp/y0-primitives.json \
   /tmp/acquired-records/representative01.json /tmp/native-models/csiro-representative01.mdb \
   /tmp/y0-native.json --report /tmp/autotransformers.json
 ```
+
+
+### Schema-12.8 LPC component compatibility
+
+`DatabaseSnapshot::decode_records` now structurally admits 12.8 acquired Access
+records while direct native SQLite admission stays unchanged. The distribution
+reader independently admits the verified static field layout. Absent later
+`Flag_Lf`, `Flag_Pctrl`, `Rlf`/`Xlf`, `C01`/`C02` and `ElemLoading_ID` fields
+retain the older circuit. In contrast, 12.8 boost and controller-reference
+columns already exist and cannot be silently omitted. Explicit NULL controls
+and required electrical data still reject; the schema-11.5 transformer NULL
+defaults are not extended to 12.8.
+
+The NULL voltage-kind selector retains line-line voltage with provenance. This
+uses the General Input Data (April 2014), printed pp.18,28 convention;
+[14.0 release notes, pp.19–20](https://sincal.s3.amazonaws.com/14.0/ReleaseNotes-Eng.pdf)
+document the later voltage-kind selection. Schema numbers are retained as found
+and are not treated as product release numbers. Synthetic tests compare explicit
+and historical layouts and reject missing 12.8 controls and modern NULLs.
+
+The Database Description (April 2014), printed p.19, gives zero as the default
+thermal line rating `Ith`. Such an unspecified rating now maps to `i_max=None`;
+it does not change the conductor matrix or create an arbitrary current limit.
+Negative, NULL, nonfinite and overflowing ratings, nonpositive lengths and
+invalid parallel/rating factors still reject.
+
+`lpc-european-components.json` checks **all 205 lines and 55 loads** in the
+original European LV model against independently built OpenDSS circuits. Every
+conductor matrix entry, endpoint and missing thermal rating is checked. The
+load check covers native P/power-factor input, selected phase, explicit earth,
+constant-power behavior and both terminal currents. Line relative error is
+below 7e-16; load current error is below 4e-13 A. Wrong mutual coupling, omitted
+line, invented rating, wrong load phase, missing earth and wrong load power
+mutations all fail the checker. Source, acquisition and export hashes are pinned.
+
+This is **260/262 component coverage, not a complete network parse**. The source
+and transformer have `Flag_Input=3`, omitting the zero-sequence category, with
+`CalcParameter.Flag_LFZ0=1` (input data only). Input Data pp.219 and Database
+Description p.3 distinguish missing sequence input from entered zero values.
+The reader still rejects those components; no ratios are guessed. S1a maps its
+54 loads but still rejects DC-infeed schema differences, library-selected lines,
+missing source sequence input and inconsistent transformer core parameters.
+All 19 CSIRO audits were rerun; their component counts are unchanged.
+
+The LPC models are **external research inputs only**. Repository code licensing
+does not establish redistribution rights for inherited network models. No MDB,
+acquired table file or mapped component export is committed.
+
+```sh
+python3 evals/sincal/import_access.py /tmp/matlab-lpc-eu.mdb /tmp/lpc-eu-records.json
+POWERIO_SINCAL_LPC_RECORDS=/tmp/lpc-eu-records.json \
+POWERIO_SINCAL_LPC_EXPORT=/tmp/lpc-eu-components.json cargo test -p powerio-dist --lib \
+  export_lpc_european_components -- --ignored
+python3 evals/sincal/check_lpc_components.py /tmp/lpc-eu-records.json \
+  /tmp/matlab-lpc-eu.mdb /tmp/lpc-eu-components.json --report /tmp/lpc-components.json
+```

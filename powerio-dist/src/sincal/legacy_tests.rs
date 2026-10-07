@@ -7,6 +7,10 @@ use super::{mapping_tests::network_database, schema::NativeDatabase};
 // Original synthetic SQL -> typed acquisition records, exercising the same
 // boundary as MDB Tools without inventing a native SQLite schema-11.5 export.
 pub(super) fn legacy(edit: &str) -> NativeDatabase {
+    acquired_version(edit, 11.5)
+}
+
+pub(super) fn acquired_version(edit: &str, version: f64) -> NativeDatabase {
     let snapshot = DatabaseSnapshot::decode(&network_database(edit), None).unwrap();
     let names: Vec<String> = snapshot
         .connection
@@ -42,7 +46,7 @@ pub(super) fn legacy(edit: &str) -> NativeDatabase {
                 });
             }
             if name == "Version" {
-                cells[1] = json!(11.5);
+                cells[1] = json!(version);
             }
             rows.push(cells);
         }
@@ -429,4 +433,57 @@ fn legacy_transformer_optional_defaults_preserve_the_explicit_nominal_circuit() 
             .defaulted()
             .contains_key("TwoWindingTransformer.33")
     );
+}
+
+#[test]
+fn access_12_8_retains_its_own_control_presence_and_voltage_provenance() {
+    let edit = "UPDATE VoltageLevel SET Flag_Volt=NULL;
+        ALTER TABLE Line DROP COLUMN Flag_Lf;
+        ALTER TABLE Line DROP COLUMN ElemLoading_ID;
+        ALTER TABLE Infeeder DROP COLUMN Flag_Pctrl;
+        ALTER TABLE Infeeder DROP COLUMN Rlf;
+        ALTER TABLE Infeeder DROP COLUMN Xlf;
+        ALTER TABLE TwoWindingTransformer DROP COLUMN Flag_Lf;
+        ALTER TABLE TwoWindingTransformer DROP COLUMN C01;
+        ALTER TABLE TwoWindingTransformer DROP COLUMN C02;
+        ALTER TABLE TwoWindingTransformer DROP COLUMN ElemLoading_ID;";
+    let db = acquired_version(edit, 12.8);
+    let net = db.network().unwrap();
+    let explicit = acquired_version("", 12.8).network().unwrap();
+    assert_eq!(net.lines(), explicit.lines());
+    assert_eq!(net.line_codes(), explicit.line_codes());
+    assert_eq!(net.loads(), explicit.loads());
+    assert_eq!(net.sources(), explicit.sources());
+    assert_eq!(net.shunts(), explicit.shunts());
+    assert_eq!(net.defaulted()["VoltageLevel.1"], ["Flag_Volt"]);
+    assert_eq!(net.defaulted()["VoltageLevel.2"], ["Flag_Volt"]);
+    let original: Option<i64> = db
+        .connection
+        .query_row(
+            "SELECT Flag_Volt FROM VoltageLevel WHERE VoltLevel_ID=1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(original, None);
+    for invalid in [
+        "ALTER TABLE TwoWindingTransformer DROP COLUMN Flag_Boost",
+        "ALTER TABLE TwoWindingTransformer DROP COLUMN CtrlRange_ID",
+        "ALTER TABLE TwoWindingTransformer DROP COLUMN Ctrl_OpSer_ID",
+        "ALTER TABLE TwoWindingTransformer DROP COLUMN Ctrl_OpPnt_ID",
+        "UPDATE TwoWindingTransformer SET Flag_Boost=NULL",
+        "UPDATE TwoWindingTransformer SET Flag_Boost=1",
+        "UPDATE TwoWindingTransformer SET CtrlRange_ID=5",
+        "UPDATE TwoWindingTransformer SET Flag_Tap=NULL",
+        "UPDATE TwoWindingTransformer SET Vfe=NULL",
+        "UPDATE Infeeder SET Flag_Pctrl=NULL",
+        "UPDATE Infeeder SET Rlf=NULL",
+        "UPDATE Line SET Flag_Lf=NULL",
+        "ALTER TABLE VoltageLevel DROP COLUMN Flag_Volt",
+    ] {
+        assert!(
+            acquired_version(invalid, 12.8).network().is_err(),
+            "accepted {invalid}"
+        );
+    }
 }
