@@ -758,3 +758,21 @@ stored port-current balance with explicit coverage exclusions. It exposes
 a phase-power discrepancy hidden by matching load totals and retains the
 source/transformer gaps. The MATLAB LPC candidates were rechecked for stored
 results and still have none. No model payload was added to the fixture corpus.
+
+## Balanced adapter follow-up, 2026-10-07
+
+The April 2014 Siemens database manual was rechecked visually at PDF pages
+12, 20 and 63 (printed pages 6, 14 and 57). `Node.Un` is an initial voltage
+in kV and `Phi` an initial angle in degrees. Infeeder LF modes 3/6 prescribe
+relative/absolute source voltage, and 8/9 relative/absolute terminal voltage,
+with `delta` in degrees. They must remain distinct when internal impedance is
+present. `CalcParameter.Flag_Unit` enables zone interchange control; it is
+**not a power-unit selector**. The initial balanced adapter requires this
+control to be off. Later support for the IEEE/student cases must examine
+zone controls rather than changing MW scaling based on that flag.
+
+External case inspection found trailing fixed-width spaces in IEEE18 element
+type names, active source mode 8 and limits in IEEE18/33, nonzero node voltage
+start values in all three additional SQLite cases, and assigned load profiles
+in the student case. These are explicit follow-up mapping requirements, not
+passing-reader coverage. No native payloads or manual pages were vendored.

@@ -62,7 +62,11 @@ pub(crate) mod psse;
 mod pypsa;
 mod rawx;
 pub mod routing;
+mod sincal;
 mod surge;
+
+#[doc(hidden)]
+pub use sincal::read_balanced_snapshot as __read_sincal_balanced_snapshot;
 mod ucte;
 mod union_find;
 mod xiidm;

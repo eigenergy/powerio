@@ -329,6 +329,16 @@ SINCAL an unconditional transmission format. Combined public release follows
 PR 4's two-family checks. Include CLI/typed binding/IR/echo tests applicable to
 this path; a fresh writer is not required.
 
+Current local progress (2026-10-07): the internal schema-14.8 balanced mapper
+now covers all 15 nodes and 32 equipment records of the licensed small SimBench
+archive. The actual Rust output passes paired-CSV parameter checks and a fresh
+pandapower 3.2.2 pi-transformer comparison (maximum complex voltage difference
+6.3e-14 pu). Derived nonzero primary/secondary tap cases also pass, below
+5.1e-11 pu. Open-terminal and inactive-device retention and refusal of unsupported
+active modes have focused Rust tests. The reproducible harness and exact report
+are under `evals/sincal/`. Public dispatch, source echo, additional schemas and
+corpus coverage are still outstanding; this does not complete PR 3.
+
 ### PR 4: distribution / unbalanced reader
 
 Own all conductor-resolved mapping in `powerio-dist`. Incorporate the existing

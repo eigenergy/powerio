@@ -12859,6 +12859,11 @@
           "type": "string"
         },
         {
+          "const": "sincal",
+          "description": "A SINCAL project read using the explicitly selected balanced profile.",
+          "type": "string"
+        },
+        {
           "const": "psse-rawx",
           "description": "Read from the PSS/E revision 35 JSON grid exchange format.",
           "type": "string"

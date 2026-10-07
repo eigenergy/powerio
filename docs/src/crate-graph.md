@@ -11,7 +11,7 @@ powerio-core          Source, FormatId, Diagnostic, Error, PioModule<T>,
 └── powerio-dist      MulticonductorNetwork and the OpenDSS, PMD, and BMOPF converters
 
 powerio-sincal        internal model-neutral SINCAL transport and schema validation;
-                      depends on core; electrical adapters follow in separate changes
+                      depends on core; tx uses it for its explicit balanced SINCAL adapter
 
 powerio-prob          operating points, updates, the seven instances, the eight
                       solutions, and GO Challenge 3, OPFData, and BMOPF assembly;
