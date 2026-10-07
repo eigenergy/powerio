@@ -91,6 +91,10 @@ fn historical_schemas_preserve_their_original_identifiers() {
             "pio-ir/2/0.11.3/schema.json",
             "https://powerio.dev/schema/pio-ir/2/0.11.3/schema.json",
         ),
+        (
+            "pio-ir/2/0.11.4/schema.json",
+            "https://powerio.dev/schema/pio-ir/2/0.11.4/schema.json",
+        ),
     ] {
         let schema: serde_json::Value = serde_json::from_str(&read_schema_file(path)).unwrap();
         assert_eq!(schema["$id"], expected_id, "historical schema {path}");
