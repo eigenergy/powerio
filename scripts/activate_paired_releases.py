@@ -7,15 +7,38 @@ import json
 from paired_release import JULIA, POWERIO, api, require, run, successful_ci
 
 
+def active_legacy_release(repo, workflow):
+    if workflow['status'] == 'completed':
+        return False
+    path = workflow['path'].split('@', 1)[0].rsplit('/', 1)[-1]
+    if workflow['event'] == 'release':
+        return True
+    if repo == JULIA:
+        return path in ('update-artifacts.yml', 'register.yml')
+    return ((path in ('python.yml', 'crates.yml') and workflow['event'] == 'workflow_dispatch') or
+            (path == 'release-binaries.yml' and workflow['event'] == 'push'))
+
+
+def check_no_active_legacy_release(repo):
+    # Query every unfinished status so old waiting runs cannot fall outside
+    # the most recent page of normal CI runs.
+    for status in ('queued', 'in_progress', 'waiting', 'pending', 'requested'):
+        page = 1
+        while True:
+            runs = api(f'repos/{repo}/actions/runs?status={status}&per_page=100&page={page}')['workflow_runs']
+            require(not any(active_legacy_release(repo, workflow) for workflow in runs),
+                    f'{repo} has an active legacy release')
+            if len(runs) < 100:
+                break
+            page += 1
+
+
 def check():
     for repo in (POWERIO, JULIA):
         head = api(f'repos/{repo}/git/ref/heads/main')['object']['sha']
         api(f'repos/{repo}/contents/.github/paired-release.json?ref={head}')
         successful_ci(repo, head)
-        runs = api(f'repos/{repo}/actions/runs?per_page=100')['workflow_runs']
-        require(not any(r['status'] != 'completed' and
-                        (r['event'] == 'release' or r['name'] in ('Update artifacts', 'Register Package')) for r in runs),
-                f'{repo} has an active legacy release')
+        check_no_active_legacy_release(repo)
     variable = api(f'repos/{POWERIO}/actions/variables/POWERIO_RELEASE_APP_ID')
     require(variable['value'].isdigit(), 'release App ID is missing or invalid')
     names = {s['name'] for s in api(f'repos/{POWERIO}/actions/secrets?per_page=100')['secrets']}

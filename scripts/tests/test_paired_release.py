@@ -12,6 +12,7 @@ SPEC = importlib.util.spec_from_file_location("paired_release", Path(__file__).p
 pair = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(pair)
 sys.path.insert(0, str(Path(__file__).parents[1]))
+import activate_paired_releases as activation  # noqa: E402
 import prepare_release_prs as preparation  # noqa: E402
 from activate_paired_releases import environment_update  # noqa: E402
 from prepare_release_prs import (  # noqa: E402
@@ -139,6 +140,51 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(changed['wait_timer'], 15)
         self.assertFalse(changed['can_admins_bypass'])
         self.assertEqual(changed['deployment_branch_policy'], env['deployment_branch_policy'])
+
+    def test_activation_detects_legacy_publication_events(self):
+        for repo, path, event in (
+            (pair.POWERIO, 'python.yml', 'workflow_dispatch'),
+            (pair.POWERIO, 'crates.yml', 'workflow_dispatch'),
+            (pair.POWERIO, 'release-binaries.yml', 'push'),
+            (pair.POWERIO, 'python.yml', 'release'),
+            (pair.JULIA, 'update-artifacts.yml', 'repository_dispatch'),
+            (pair.JULIA, 'update-artifacts.yml', 'schedule'),
+            (pair.JULIA, 'register.yml', 'workflow_dispatch'),
+        ):
+            workflow = {'path': '.github/workflows/' + path, 'event': event, 'status': 'waiting'}
+            with self.subTest(path=path, event=event):
+                self.assertTrue(activation.active_legacy_release(repo, workflow))
+                workflow['status'] = 'completed'
+                self.assertFalse(activation.active_legacy_release(repo, workflow))
+        for path, event in (('python.yml', 'pull_request'), ('python.yml', 'push'),
+                            ('release-binaries.yml', 'workflow_dispatch')):
+            self.assertFalse(activation.active_legacy_release(pair.POWERIO, {
+                'path': '.github/workflows/' + path, 'event': event, 'status': 'in_progress'}))
+
+    def test_activation_checks_all_pages_of_unfinished_runs(self):
+        ordinary = {'path': '.github/workflows/python.yml', 'event': 'pull_request', 'status': 'queued'}
+        legacy = dict(ordinary, event='workflow_dispatch')
+        with patch.object(activation, 'api', side_effect=[{'workflow_runs': [ordinary] * 100},
+                                                        {'workflow_runs': [legacy]}]) as api:
+            with self.assertRaisesRegex(ValueError, 'active legacy release'):
+                activation.check_no_active_legacy_release(pair.POWERIO)
+            self.assertIn('page=2', api.call_args.args[0])
+        with patch.object(activation, 'api', return_value={'workflow_runs': []}) as api:
+            activation.check_no_active_legacy_release(pair.POWERIO)
+            self.assertEqual(api.call_count, 5)
+
+    def test_preparation_preserves_existing_executable_modes(self):
+        tree = {'tree': [{'path': 'scripts/check-value-types.sh', 'mode': '100755'},
+                         {'path': 'Cargo.toml', 'mode': '100644'}], 'truncated': False}
+        edits = {'scripts/check-value-types.sh': '#!/bin/sh\n', 'Cargo.toml': 'updated',
+                 'docs/schema/new.json': '{}'}
+        with patch.object(preparation, 'api', side_effect=[tree] + [{'sha': 'b' * 40}] * 3):
+            entries = preparation.edited_tree_entries(pair.POWERIO, 'a' * 40, edits)
+        self.assertEqual([entry['mode'] for entry in entries], ['100755', '100644', '100644'])
+        with patch.object(preparation, 'api', return_value=dict(tree, truncated=True)) as api:
+            with self.assertRaisesRegex(ValueError, 'truncated'):
+                preparation.edited_tree_entries(pair.POWERIO, 'a' * 40, edits)
+            self.assertEqual(api.call_count, 1)
 
     def test_changelog_promotion_preserves_notes_and_history(self):
         text = '# Changelog\n\n## Unreleased\n\n- New behavior.\n\n## 0.11.4\n\n- Earlier.\n'
