@@ -460,15 +460,11 @@ fn undeclared_zero_sequence_does_not_invent_a_star_for_phase_to_phase_loads() {
             }
         }
     }
-    for code in [1, 2, 3, 7] {
-        assert!(
-            input(&format!(
-                "UPDATE Element SET Flag_Input=2; UPDATE Terminal SET Flag_Terminal={code}"
-            ))
+    assert!(
+        input("UPDATE Element SET Flag_Input=2; UPDATE Terminal SET Flag_Terminal=7")
             .circuit(&bus(), 400.0)
             .is_err()
-        );
-    }
+    );
     for edit in [
         "UPDATE Load SET Stp_ID=1",
         "UPDATE Load SET Flag_Z0_Input=2",
@@ -512,4 +508,63 @@ fn export_csiro_phase_pair_loads() {
     assert_eq!(components.len(), 18);
     let export = serde_json::json!({"scope":"component mapping only; not a complete parsed network","components":components});
     std::fs::write(output, serde_json::to_vec_pretty(&export).unwrap()).unwrap();
+}
+
+#[test]
+fn undeclared_sequence_single_phase_load_uses_explicit_earth_without_grounding_neutral() {
+    for code in 1..=3 {
+        for model in 1..=3 {
+            let edit = format!(
+                "UPDATE Element SET Flag_Input=2; UPDATE Terminal SET Flag_Terminal={code}; UPDATE Load SET Flag_LoadType={model},Flag_Z0_Input=NULL,R0=NULL,X0=NULL"
+            );
+            let native_bus = DistBus::new("10", ["3", "n", "1", "2"].map(str::to_owned).to_vec());
+            let original = native_bus.clone();
+            let mapped = input(&edit).circuit(&native_bus, 400.0).unwrap();
+            assert_eq!(native_bus, original);
+            assert_eq!(mapped.bus.terminals, [code.to_string(), "0".into()]);
+            assert_eq!(mapped.bus.grounded, ["0"]);
+            assert_eq!(mapped.load.terminal_map, mapped.bus.terminals);
+            assert_eq!(mapped.load.configuration, Configuration::SinglePhase);
+            assert_eq!(mapped.switch.terminal_map_from, [code.to_string()]);
+            assert_eq!(mapped.switch.terminal_map_to, [code.to_string()]);
+            near(mapped.load.p_nom[0], 12000.0);
+            near(mapped.load.q_nom[0], 1000.0);
+            near(mapped.load.voltage_model.v_nom()[0], 400.0 / 3.0_f64.sqrt());
+            let open = input(&format!("{edit}; UPDATE Terminal SET Flag_State=0"))
+                .circuit(&native_bus, 400.0)
+                .unwrap();
+            assert!(open.switch.open);
+            assert_eq!(open.load, mapped.load);
+            for invalid in [
+                "UPDATE Load SET Stp_ID=1",
+                "UPDATE Element SET Flag_Input=6; UPDATE Load SET Flag_Z0_Input=1",
+                "UPDATE Element SET Flag_Input=6; UPDATE Load SET Flag_Z0_Input=2,R0=1,X0=1",
+                "UPDATE Element SET Flag_Input=10; UPDATE Load SET Pneg=0.001",
+            ] {
+                assert!(
+                    input(&format!("{edit}; {invalid}"))
+                        .circuit(&native_bus, 400.0)
+                        .is_err()
+                );
+            }
+            let mut net = MulticonductorNetwork::new();
+            net.buses_mut().extend([native_bus, mapped.bus]);
+            net.loads_mut().push(mapped.load);
+            net.switches_mut().push(mapped.switch);
+            crate::require_electrical_readiness(&net).unwrap();
+            let emitted = crate::convert::emit_value_text(&net, crate::DistTargetFormat::PmdJson);
+            let restored = crate::testkit::parse_str(&emitted.text, "pmd-json").unwrap();
+            assert_eq!(
+                restored.loads()[0].terminal_map,
+                net.loads()[0].terminal_map
+            );
+            assert_eq!(
+                restored.loads()[0].voltage_model,
+                net.loads()[0].voltage_model
+            );
+            assert_eq!(restored.loads()[0].p_nom, net.loads()[0].p_nom);
+            assert_eq!(restored.buses()[0].grounded, net.buses()[0].grounded);
+            crate::require_electrical_readiness(&restored).unwrap();
+        }
+    }
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate actual Rust CSIRO daily phase-pair load snapshots using OpenDSS.
+"""Validate actual Rust CSIRO daily single-phase and phase-pair load snapshots using OpenDSS.
 
 All selected loads in cases 01/04/07 are accounted for: valid profiles at five
 declared times, conflicting native timestamps as explicit rejections.
@@ -15,7 +15,7 @@ import numpy as np
 from opendssdirect import dss
 
 TIMES = [0.0, 0.25, 0.5, 23.75, 24.0]
-PAIRS = {4: ['1', '2'], 5: ['2', '3'], 6: ['3', '1']}
+CONNECTIONS = {1: ['1', '0'], 2: ['2', '0'], 3: ['3', '0'], 4: ['1', '2'], 5: ['2', '3'], 6: ['3', '1']}
 
 
 def digest(path):
@@ -42,7 +42,7 @@ def check(sources, records, exported):
             tables[table['name']] = [dict(zip(columns, row, strict=True)) for row in table['rows']]
         ports = {r['Element_ID']: r for r in tables['Terminal'] if r['Variant_ID'] == 1 and r['TerminalNo'] == 1}
         selected = {r['Element_ID']: r for r in tables['Load'] if r['Variant_ID'] == 1
-                    and ports[r['Element_ID']]['Flag_Terminal'] in PAIRS and r['DayOpSer_ID']}
+                    and ports[r['Element_ID']]['Flag_Terminal'] in CONNECTIONS and r['DayOpSer_ID']}
         profiles = {r['OpSer_ID']: r for r in tables['OpSer'] if r['Variant_ID'] == 1}
         points = {}
         for row in tables['OpSerVal']:
@@ -81,43 +81,59 @@ def check(sources, records, exported):
             t = component['hours'] % period
             pq = [float(np.interp(t, times + [period], [p[k] for p in samples] + [samples[0][k]])) for k in ['P', 'Q']]
             port = ports[component['element']]
-            phases = PAIRS[port['Flag_Terminal']]
+            phases = CONNECTIONS[port['Flag_Terminal']]
+            grounded = port['Flag_Terminal'] in [1, 2, 3]
+            switched = phases[:1] if grounded else phases
+            kv = row['Ul'] / np.sqrt(3) if grounded else row['Ul']
             load, bus, switch = [component[k] for k in ['load', 'bus', 'switch']]
             if (load['configuration'] != 'single_phase' or load['terminal_map'] != phases
-                    or bus['terminals'] != phases or bus['grounded'] or load['bus'] != bus['id']
+                    or bus['terminals'] != phases or bus['grounded'] != (['0'] if grounded else [])
+                    or load['bus'] != bus['id']
                     or switch['bus_from'] != str(port['Node_ID']) or switch['bus_to'] != bus['id']
-                    or switch['terminal_map_from'] != phases or switch['terminal_map_to'] != phases
+                    or switch['terminal_map_from'] != switched or switch['terminal_map_to'] != switched
                     or switch['open'] or port['Flag_State'] != 1
                     or load['voltage_model']['model'] != 'constant_impedance'
                     or any(len(a) != 1 for a in [load['p_nom'], load['q_nom'], load['voltage_model']['v_nom']])):
                 raise ValueError('mapped load changed its electrical connection or voltage model')
             voltage = load['voltage_model']['v_nom'][0]
             actual_pq = np.array([load['p_nom'][0], load['q_nom'][0]])
-            if not np.isfinite(voltage) or voltage != row['Ul'] * 1000 or not np.all(np.isfinite(actual_pq)):
+            if not np.isfinite(voltage) or not np.isclose(voltage, kv * 1000, rtol=1e-14, atol=0) or not np.all(np.isfinite(actual_pq)):
                 raise ValueError('invalid mapped voltage or powers')
             power_error = max(power_error, float(np.max(np.abs(actual_pq - np.array(pq) * 1000))))
             selection = load['extras']['sincal_profile']
             if selection != {'profile': row['DayOpSer_ID'], 'requested_hours': component['hours'], 'cyclic_hours': t, 'period_hours': period}:
                 raise ValueError('snapshot selection provenance mismatch')
             dss('Clear\nNew Circuit.profiles basekv=0.5 phases=3 bus1=test\n'
-                f'New Load.subject phases=1 bus1=test.{phases[0]}.{phases[1]} conn=delta '
-                f'kv={row["Ul"]:.17g} kw={pq[0]:.17g} kvar={pq[1]:.17g} model=2 status=fixed\nSolve')
+                f'New Load.subject phases=1 bus1=test.{phases[0]}.{phases[1]} conn={"wye" if grounded else "delta"} '
+                f'kv={kv:.17g} kw={pq[0]:.17g} kvar={pq[1]:.17g} model=2 status=fixed\nSolve')
             dss.Circuit.SetActiveElement('Load.subject')
+            if dss.CktElement.NodeOrder() != [int(p) for p in phases]:
+                raise ValueError('unexpected OpenDSS phase/earth terminal order')
             raw = np.array(dss.CktElement.YPrim())
             expected = (raw[::2] + 1j * raw[1::2]).reshape(2, 2, order='F')
             actual = complex(*[actual_pq[0], -actual_pq[1]]) / voltage**2 * np.array([[1, -1], [-1, 1]])
             if not np.all(np.isfinite(expected)) or not np.all(np.isfinite(actual)):
                 raise ValueError('nonfinite primitive')
-            maximum = max(maximum, float(np.max(np.abs(actual - expected))))
+            # For phase-to-earth loads V_earth is constrained to zero. Check
+            # both terminal-current rows against every unconstrained voltage
+            # column. OpenDSS adds a numerical shunt only to its neutral
+            # diagonal (Load.pas, CalcYPrimMatrix, DSS C-API 0.14.5); that
+            # diagonal multiplies zero here. No fitted correction or looser
+            # tolerance is applied to the electrical response.
+            columns = [0] if grounded else [0, 1]
+            maximum = max(maximum, float(np.max(np.abs(actual[:, columns] - expected[:, columns]))))
         reports.append({'case': case, 'source_sha256': identity['source_sha256'],
                         'record_sha256': identity['record_sha256'], 'load_count': len(selected),
+                        'single_phase_load_count': sum(ports[e]['Flag_Terminal'] in [1, 2, 3] for e in selected),
                         'snapshot_count': len(components), 'rejected_conflicting_profiles': observed_rejections, 'maximum_power_error_w_var': power_error,
                         'maximum_admittance_error_s': maximum,
                         'passed': maximum < 1e-12 and power_error < 1e-8})
     return {'collection': manifest['collection'], 'attribution': manifest['attribution'],
-            'license': manifest['license'], 'scope': 'Profiled phase-pair load components only; no complete feeder parsing or solve.',
+            'license': manifest['license'], 'scope': 'Profiled single-phase and phase-pair load components only; no complete feeder parsing or solve.',
             'export_sha256': digest(exported), 'hours': TIMES, 'engine': dss.Basic.Version(),
-            'numpy': np.__version__, 'admittance_tolerance_s': 1e-12, 'power_tolerance_w_var': 1e-8,
+            'numpy': np.__version__, 'admittance_tolerance_s': 1e-12,
+            'grounded_comparison': 'Both current rows over unconstrained voltage columns; native earth and OpenDSS node 0 constrained to zero.',
+            'oracle_source': 'https://github.com/dss-extensions/dss_capi/blob/0.14.5/src/PCElements/Load.pas', 'power_tolerance_w_var': 1e-8,
             'native_execution': False, 'historical_results_used': False, 'cases': reports,
             'passed': all(c['passed'] for c in reports)}
 

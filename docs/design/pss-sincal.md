@@ -401,12 +401,19 @@ and IR-without-source have distinct tested behavior. Direct SQLite input and
 optional Access import remain visibly different capabilities. Update diagnostic
 and conversion baselines intentionally, then run full CI clippy and bindings.
 
-Current distribution progress: family-local component adapters and synthetic
-regressions are extracted into `codex/sincal-distribution-reader`, with explicit
-native/Access-record read and audit harnesses. Original CSIRO 06/01 currently
-stop at NULL voltage-basis selectors before network assembly. Resolve the
-schema-11.5 defaults, then continue source/load/transformer/profile mapping;
-these cases are not counted as successful networks.
+Current distribution progress: the local branch includes verified schema-11.5
+voltage-basis defaults, finite direct source zero-sequence mapping, explicit
+phase-pair and single-phase-earth loads, selected absolute daily load snapshots,
+and ideal connection lines represented by typed switches. CSIRO 06 maps 159/218
+components (113 lines, 27 transformers, one source and 18 loads); its remaining
+loads and transformers still reject. CSIRO 09 maps all 620 line elements, while
+its source and 66 profiled loads remain unresolved. Independent component checks
+cover 484 native loads at 2,420 selected snapshots and all 144 CSIRO 09 ideal
+connections. All 19 base variants are audited; none is yet a complete native
+unbalanced parse. CSIRO 01 context still requires autotransformer galvanic
+mapping. Wye star/sequence semantics, partial transformer windings, inconsistent
+core parameters, broader profiles/variants and public integration remain work.
+See `evals/sincal/` for exact scope and independently reproduced evidence.
 
 ### PR 5: experimental fresh writer
 

@@ -22,6 +22,19 @@ impl LoadInput {
         branch_powers(&self.power, self.terminal.connection).map(|(delta, _, _)| !delta)
     }
 
+    pub fn connection_resolves_absent_sequence(&self) -> Result<bool> {
+        // Input Data (April 2014), pp. 97–98 explicitly connects L1/L2/L3
+        // to earth and L12/L23/L31 between phases. These two-terminal
+        // connections need no inferred star when sequence input is absent.
+        // Three-phase Wye still needs its separate star/sequence resolution;
+        // active nontrivial sequence impedances must never be discarded.
+        Ok(!self.requires_earth()?
+            || matches!(
+                self.terminal.connection,
+                Connection::L1 | Connection::L2 | Connection::L3
+            ))
+    }
+
     pub fn lower_static(
         &self,
         bus: &DistBus,
@@ -96,13 +109,9 @@ impl LoadInput {
             ));
         }
         let (delta, p_nom, q_nom) = branch_powers(&self.power, self.terminal.connection)?;
-        // Input Data (April 2014), pp. 97–98: phase-pair and delta loads
-        // connect only between phases. With no declared zero-sequence input,
-        // their branch incidence already fixes sum(I_phase)=0; no load star
-        // or guessed earth connection is needed. This does not resolve the
-        // missing star selection for phase-to-earth or three-phase Wye loads.
         if self.zero_sequence != LoadZeroSequence::SameAsPositive
-            && !(delta && self.zero_sequence == LoadZeroSequence::NotDeclared)
+            && !(self.connection_resolves_absent_sequence()?
+                && self.zero_sequence == LoadZeroSequence::NotDeclared)
         {
             return Err(format_error(
                 "load requires zero-sequence circuit resolution",

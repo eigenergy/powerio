@@ -346,12 +346,12 @@ python3 evals/sincal/audit_distribution.py /tmp/native-models /tmp/acquired-reco
   --snapshot-hours 0
 ```
 
-`load-daily-profiles.json` validates 482 profiled phase-pair loads across
-CSIRO 01/04/07 at five times (2,410 snapshots), including interpolation and
+`load-daily-profiles.json` validates 484 profiled loads (482 phase-pair and
+two phase-to-earth) across CSIRO 01/04/07 at five times (2,420 snapshots), including interpolation and
 the cyclic boundary. NumPy independently interpolates the publisher's input
 powers; OpenDSS independently constructs each load's primitive. Maximum
-power error is below 1.9e-12 W/var and admittance error below 1.5e-17 S.
-All 483 selected loads are accounted for: one load in CSIRO 04 (Element 543,
+power error is below 7.3e-12 W/var and admittance error below 1.5e-17 S.
+All 485 selected loads are accounted for: one load in CSIRO 04 (Element 543,
 OpSer 598) rejects because two different native values share time 7.5 hours.
 The checker verifies that rejection against the original acquired records;
 it does not choose or average a conflicting row. The source files and generated
@@ -399,3 +399,31 @@ input immutability, inactive sequence fields and malformed/unsupported inputs.
 This is topology/component evidence, not a complete feeder or native solver
 acceptance. CSIRO 09 now maps all 620 line elements; its source and 66 profiled
 loads still require further work.
+
+
+### Explicit single-phase earth loads
+
+Siemens General Input Data (April 2014), printed p. 97, defines L1/L2/L3
+load connections as phase-to-earth. With no declared zero-sequence input,
+these explicit two-terminal connections now map to a `SinglePhase` load and
+an internal grounded terminal. The native bus neutral remains untouched;
+only the selected phase crosses the native terminal switch. Nominal branch
+voltage is the native line-to-line base divided by the square root of three.
+Three-phase Wye loads still require their own star/sequence resolution, and
+active unresolved sequence or star-point impedances continue to reject.
+
+Synthetic tests exercise every single phase and P/I/Z voltage model, open
+terminals, floating native neutrals, rejection of active unresolved inputs,
+and PMD transport. The daily profile oracle additionally checks both authentic
+CSIRO 01 single-phase loads at all five snapshot times against independently
+constructed OpenDSS phase-to-earth primitives. It verifies the explicit earth
+and phase-switch maps, as well as powers and admittances. This adds ten native
+component checks; it does not establish a complete parsed feeder.
+
+For the phase-to-earth comparison, both terminal-current rows are checked
+over all unconstrained voltage columns with earth fixed at zero. OpenDSS
+adds a small numerical neutral-diagonal shunt in
+[`Load.pas`, `CalcYPrimMatrix`](https://github.com/dss-extensions/dss_capi/blob/0.14.5/src/PCElements/Load.pas#L1206-L1210).
+That diagonal multiplies the constrained zero voltage; it is not an input
+impedance to copy into PowerIO. The oracle retains its original 1e-12 S
+acceptance tolerance and checks earth connectivity separately.

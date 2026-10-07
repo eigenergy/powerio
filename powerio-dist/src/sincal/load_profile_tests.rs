@@ -173,7 +173,7 @@ fn export_csiro_daily_loads() {
                 continue;
             }
             let raw = db.load_input(id).unwrap();
-            if raw.terminal.connection.phases().unwrap().len() != 2
+            if raw.terminal.connection.phases().unwrap().len() > 2
                 || raw.operating_series == [None; 3]
             {
                 continue;
@@ -196,7 +196,7 @@ fn export_csiro_daily_loads() {
         assert!(!components.is_empty());
         cases.push(serde_json::json!({"case":case,"components":components,"rejected":rejected}));
     }
-    std::fs::write(output,serde_json::to_vec_pretty(&serde_json::json!({"scope":"profiled phase-pair load components only; no complete network","cases":cases})).unwrap()).unwrap();
+    std::fs::write(output,serde_json::to_vec_pretty(&serde_json::json!({"scope":"profiled single-phase and phase-pair load components only; no complete network","cases":cases})).unwrap()).unwrap();
 }
 
 #[test]
