@@ -215,7 +215,7 @@ docs/                         the mdBook guide, the schema archive, release note
   IR version; older readers reject types they do not implement. Existing
   type layouts and meanings stay compatible throughout 0.11.x. The DTOs in
   `powerio/src/stored/dto.rs` define the document layout. Regenerate the schema
-  named by `IR_SCHEMA_ID`, currently `docs/schema/pio-ir/2/0.11.4/schema.json`.
+  named by `IR_SCHEMA_ID`, currently `docs/schema/pio-ir/2/0.11.5/schema.json`.
   Published snapshots, including `pio-ir/2/schema.json` from 0.11.0, remain
   byte-exact. The release in a catalog path is not a new IR version.
 - **Bindings stay typed and lazy.** C calls `pio_module_value`, checks the

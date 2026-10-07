@@ -26,8 +26,8 @@ both sides consume PowerIO values, including calculation instances, solutions,
 time series, and scenario sets.
 
 The generated JSON Schema is checked in at
-`docs/schema/pio-ir/2/0.11.4/schema.json` and served from
-`https://powerio.dev/schema/pio-ir/2/0.11.4/schema.json`. That schema, the
+`docs/schema/pio-ir/2/0.11.5/schema.json` and served from
+`https://powerio.dev/schema/pio-ir/2/0.11.5/schema.json`. That schema, the
 serializer, and the deserializer are all tested from the same Rust types.
 `docs/schema/README.md` lists the earlier `pio-package` and
 `powerio.module` documents as one history under `pio-ir`.
@@ -159,7 +159,7 @@ Schema snapshots describe the structural types available in a release.
 `pio-ir/2/schema.json` is the frozen 0.11.0 catalog,
 `pio-ir/2/0.11.1/schema.json` adds the LinDist3Flow OPF instance and solution
 types, `pio-ir/2/0.11.3/schema.json` adds the three PSS/E contingency
-analysis files, and `pio-ir/2/0.11.4/schema.json` adds the fixed-dispatch
+analysis files, and `pio-ir/2/0.11.5/schema.json` adds the fixed-dispatch
 LinDist3Flow instance and solution types.
 The release in that path identifies the snapshot, not another document version.
 Patch releases without catalog changes can reuse the same snapshot.
