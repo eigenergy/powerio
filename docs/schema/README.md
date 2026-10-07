@@ -29,7 +29,7 @@ The current document begins:
 
 ## Compatibility
 
-PowerIO 0.11.4 keeps IR version 2 and every existing record layout. The
+PowerIO 0.11.5 keeps IR version 2 and every existing record layout. The
 LinDist3Flow OPF instance and solution types added in 0.11.1, the three PSS/E
 contingency analysis files added in 0.11.3, and the fixed-dispatch LinDist3Flow
 instance and solution types added in 0.11.4 use distinct structural type names.
@@ -77,5 +77,3 @@ cargo run -p powerio --example generate_schemas --features schema -- docs/schema
 The generator writes the path named by `powerio::IR_SCHEMA_ID`, currently
 `pio-ir/2/0.11.5/schema.json`. It leaves earlier snapshots untouched. CI fails
 if the generated catalog differs from the committed file.
-
-PowerIO 0.11.5 adds no structural types or layout changes to IR version 2.
