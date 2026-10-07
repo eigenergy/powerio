@@ -774,3 +774,46 @@ models stay external; only compact derived reports are committed. Both all-19
 base-variant audits were refreshed. Complete native parsing remains one case,
 CSIRO09 with an explicit snapshot. Distribution regressions (592 tests) and
 the full CI Clippy matrix pass.
+
+### CSIRO06 remaining-input audit
+
+`check_csiro06_blockers.py` classifies all 55 rejected components at the explicit
+midnight snapshot against the original hash-pinned MDB and acquired records.
+The current reader maps 163/218 components. This audit does not turn a rejection
+into a successful network or make missing-input assumptions:
+
+- 35 three-phase Wye loads have no active zero-sequence category and no explicit
+  star-point reference. Native `Flag_LFZ0=1` disables sequence completion. Their
+  connection semantics still require resolution.
+- Nine partial YNd1 transformers declare direct zero-sequence ohms on the
+  grounded primary. Their positive-sequence magnitudes are approximately
+  1607–2280 ohms, while zero-sequence magnitudes are 2.20–3.59 ohms. The existing
+  independent delta-coil model cannot simply be reused while dropping these
+  inputs. The report does not classify this difference as invalid data.
+- Eleven transformers have core loss greater than apparent no-load power.
+  Decimal arithmetic confirms three repeated conflicts: 32 W versus 30.72 VA,
+  726 W versus 725.76 VA, and 30 W versus 27 VA. These exceed floating-point
+  roundoff. Siemens General Input Data (April 2014), printed p.180, uses
+  `Pcore = Vfe * 1000` W and `S0 = i0 / 100 * Sn * 1e6` VA. No real reactive
+  core component can satisfy those nameplates. All 51 transformers separately
+  satisfy `ur <= uk`, so the current conflicts are excitation inputs, not
+  short-circuit impedance inputs.
+
+The reader now names `ur/uk` or `Vfe/i0/Sn` in the corresponding error. The
+core-loss tolerance and accepted electrical profiles are unchanged. A complete
+strict read of the unchanged case needs a documented native handling rule for
+the inconsistent inputs, or an explicitly identified corrected derivative;
+completing the missing mappings alone is insufficient.
+
+`csiro06-blockers.json` records component IDs, derived quantities, identities,
+attribution and four negative controls against missing accounting, accepted
+invalid excitation, wrong error classification and ignored load failures.
+The report is a development blocker audit, not independent electrical or native
+SINCAL acceptance. No native model, manual or corrected fixture is vendored.
+
+```sh
+cargo build -p powerio-dist --example sincal_multiconductor
+python3 evals/sincal/check_csiro06_blockers.py \
+  /tmp/models/csiro-representative06.mdb /tmp/records/representative06.json \
+  target/debug/examples/sincal_multiconductor /tmp/csiro06-blockers.json
+```

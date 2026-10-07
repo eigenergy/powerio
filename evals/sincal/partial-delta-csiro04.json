@@ -189,7 +189,7 @@
   "negative_controls": 4,
   "source_sha256": "19da5cd451e00e30a598fff58661172a964df36f7b8ac70767c4cc49068017dc",
   "record_sha256": "d3b9b20ee495aba0df56e4a059008d9368e419e63a5a4b5e4561234553abcb4f",
-  "export_sha256": "ee98ebef1f70b5baadf631ec09b8685363c255941a002dfc1a94d7c6d3db5567",
+  "export_sha256": "1f1581ea27b879e3fbdfec6f8baf3177594193cc3ae2d0e80b608996e87d39fe",
   "collection": "https://doi.org/10.4225/08/5631B1DF6F1A0",
   "attribution": "Berry, Adam; Collins, Lyle; Oliver, Erin; Perfumo, Cristian (2015), Representative Australian Electricity Feeders with load and solar generation profiles, v1, CSIRO.",
   "license": "CC-BY-4.0",

@@ -104,7 +104,7 @@ def check(export, records, source, case_number=6):
     for c in rows['native']:
         eid = c['element']; r = native[eid]
         if 'error' in c:
-            if r['Vfe'] * 1000 <= r['i0'] / 100 * r['Sn'] * 1e6 or 'real component exceeds stated magnitude' not in c['error']:
+            if r['Vfe'] * 1000 <= r['i0'] / 100 * r['Sn'] * 1e6 or 'no-load core loss Vfe exceeds apparent power from i0 and Sn' not in c['error']:
                 raise ValueError('unexpected native rejection')
             rejected.append(eid)
             continue

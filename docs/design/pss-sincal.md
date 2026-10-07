@@ -467,6 +467,15 @@ infeeds, 27 library-referenced lines, source and inconsistent transformer core
 inputs still reject. Both files remain external research inputs with unresolved
 redistribution rights; no version marker or electrical input is rewritten.
 
+CSIRO06 blocker accounting is now explicit in `evals/sincal/csiro06-blockers.json`:
+at the selected midnight snapshot, all 55 rejections comprise 35 Wye loads
+without declared sequence inputs, nine partial YNd1 transformers, and eleven
+core-loss nameplate conflicts. The published excitation formula confirms those
+eleven inputs cannot yield a real reactive core component; all 51 transformers
+pass the independent short-circuit `ur <= uk` check. Missing mapping work and
+inconsistent source data therefore remain separate acceptance dispositions.
+No input repair, rounding-tolerance expansion or complete-feeder claim is made.
+
 ### PR 5: experimental fresh writer
 
 Implement deterministic fresh schema-14.8 SQLite generation and packaging for

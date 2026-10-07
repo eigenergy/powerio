@@ -3,7 +3,7 @@
   "attribution": "Berry, Adam; Collins, Lyle; Oliver, Erin; Perfumo, Cristian (2015), Representative Australian Electricity Feeders with load and solar generation profiles, v1, CSIRO.",
   "license": "CC-BY-4.0",
   "scope": "Conductor-resolved base-variant development audit; no family inference, independent solve or native execution.",
-  "reader_sha256": "cc298308f8be548ccee0be8bee11e9fa5e1b252871c826ea5bd0e868e6d503d1",
+  "reader_sha256": "99687691433200f716510676f9471be12dff46bb1c4a0de29820e55d37d6fbcb",
   "cases": [
     {
       "case": 1,
@@ -53,7 +53,7 @@
         {
           "type": "TwoWindingTransformer",
           "count": 72,
-          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer real component exceeds stated magnitude"
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer no-load core loss Vfe exceeds apparent power from i0 and Sn"
         }
       ]
     },
@@ -105,7 +105,7 @@
         {
           "type": "TwoWindingTransformer",
           "count": 71,
-          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer real component exceeds stated magnitude"
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer no-load core loss Vfe exceeds apparent power from i0 and Sn"
         }
       ]
     },
@@ -160,7 +160,7 @@
         {
           "type": "TwoWindingTransformer",
           "count": 104,
-          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer real component exceeds stated magnitude"
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer no-load core loss Vfe exceeds apparent power from i0 and Sn"
         }
       ]
     },
@@ -237,7 +237,7 @@
         {
           "type": "TwoWindingTransformer",
           "count": 11,
-          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer real component exceeds stated magnitude"
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer no-load core loss Vfe exceeds apparent power from i0 and Sn"
         }
       ]
     },
@@ -274,7 +274,7 @@
         {
           "type": "TwoWindingTransformer",
           "count": 33,
-          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer real component exceeds stated magnitude"
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer no-load core loss Vfe exceeds apparent power from i0 and Sn"
         }
       ]
     },

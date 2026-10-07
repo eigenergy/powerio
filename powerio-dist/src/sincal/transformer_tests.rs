@@ -404,3 +404,24 @@ fn nominal_core_boundary_allows_only_relative_floating_point_roundoff() {
             < 0.0
     );
 }
+
+#[test]
+fn nominal_transformer_conflicts_identify_the_active_nameplate_fields() {
+    for (edit, expected) in [
+        (
+            "UPDATE TwoWindingTransformer SET uk=2,ur=3",
+            "short-circuit resistance ur exceeds magnitude uk",
+        ),
+        (
+            "UPDATE TwoWindingTransformer SET Sn=0.01,i0=0.1,Vfe=0.02",
+            "no-load core loss Vfe exceeds apparent power from i0 and Sn",
+        ),
+    ] {
+        let native = NativeDatabase::decode(&impedance_database(edit), None).unwrap();
+        let error = match native.transformer_nominal(30) {
+            Ok(_) => panic!("accepted inconsistent nameplate: {edit}"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains(expected), "{error}");
+    }
+}

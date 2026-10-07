@@ -100,7 +100,12 @@ fn decode(
     let resistance = nonnegative(row, "ur")? / 100.0;
     let series_secondary_ohm = checked(Complex64::new(
         impedance_base * resistance,
-        impedance_base * quadrature(magnitude, resistance)?,
+        impedance_base
+            * quadrature(
+                magnitude,
+                resistance,
+                "short-circuit resistance ur exceeds magnitude uk",
+            )?,
     ))?;
     let core_watts = finite(legacy_nonnegative(db, row, "Vfe")? * 1000.0, "core loss")?;
     let no_load_va = finite(
@@ -109,7 +114,11 @@ fn decode(
     )?;
     let no_load_secondary_siemens = checked(Complex64::new(
         core_watts / volts_squared,
-        -quadrature(no_load_va, core_watts)? / volts_squared,
+        -quadrature(
+            no_load_va,
+            core_watts,
+            "no-load core loss Vfe exceeds apparent power from i0 and Sn",
+        )? / volts_squared,
     ))?;
     let zero_sequence = zero_sequence(row, &connection, series_secondary_ohm)?;
     Ok(NominalTransformerInput {
@@ -223,7 +232,7 @@ fn from_magnitude_rx(magnitude: f64, rx: f64) -> Result<Complex64> {
     ))
 }
 
-fn quadrature(magnitude: f64, real: f64) -> Result<f64> {
+fn quadrature(magnitude: f64, real: f64, conflict: &str) -> Result<f64> {
     if real > magnitude {
         // Independently scaled nameplate quantities can straddle an exact
         // P=|S| (or R=|Z|) boundary by a few floating-point rounding errors.
@@ -232,9 +241,7 @@ fn quadrature(magnitude: f64, real: f64) -> Result<f64> {
         if magnitude > 0.0 && real - magnitude <= 8.0 * f64::EPSILON * real {
             return Ok(0.0);
         }
-        return Err(format_error(
-            "transformer real component exceeds stated magnitude",
-        ));
+        return Err(format_error(format!("transformer {conflict}")));
     }
     if magnitude == 0.0 {
         return Ok(0.0);
