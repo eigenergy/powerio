@@ -86,6 +86,18 @@ def version_edits(repo, sha, number):
                                   lambda m: m[1] + number + m[2], library)
         require(count == 1, 'current IR schema catalog identifier is missing')
         result[path] = library
+        path = 'powerio/tests/ir_reference.rs'
+        result[path] = source(repo, path, sha).decode().replace(
+            f'pio-ir/2/{old}/schema.json', f'pio-ir/2/{number}/schema.json')
+        path = 'powerio/tests/frozen_schemas.rs'
+        tests = source(repo, path, sha).decode().replace(
+            f'const CURRENT_SCHEMA: &str = "pio-ir/2/{old}/schema.json";',
+            f'const CURRENT_SCHEMA: &str = "pio-ir/2/{number}/schema.json";')
+        tests = tests.replace('            CURRENT_SCHEMA,',
+                              f'            "pio-ir/2/{old}/schema.json",\n            CURRENT_SCHEMA,')
+        tests = tests.replace('    for earlier in [',
+                              f'    for earlier in [\n        "pio-ir/2/{old}/schema.json",')
+        result[path] = tests
         for name in ('case9_arrow_coo.json', 'case30_arrow_coo.json'):
             path = 'tests/data/capi_matrix/' + name
             before = source(repo, path, sha).decode()
