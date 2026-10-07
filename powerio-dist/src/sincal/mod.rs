@@ -54,6 +54,7 @@ mod topology;
 mod write;
 mod write_equipment;
 mod write_topology;
+mod write_transformer;
 mod write_validate;
 pub use write::{
     ExperimentalMulticonductorOptions, ExperimentalMulticonductorOutput,
@@ -146,3 +147,6 @@ mod lpc_tests;
 
 #[cfg(test)]
 mod public_tests;
+
+#[cfg(test)]
+mod write_transformer_tests;

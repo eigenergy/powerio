@@ -1,0 +1,223 @@
+{
+  "engine": "DSS C-API Library version 0.14.5 revision 87d85c2622c8281b92255335bc7c09b11191b21d based on OpenDSS SVN 3723 [FPC 3.2.2] (64-bit build) MVMULT INCREMENTAL_Y CONTEXT_API PM 20240329033829; License Status: Open \nDSS-Python version: 0.15.7\nOpenDSSDirect.py version: 0.9.4",
+  "numpy": "2.5.3",
+  "native_sincal_execution": false,
+  "cases": [
+    {
+      "case": "transformer-0-false-false-false",
+      "export_sha256": "8bb5b0f7dc9f55d316850c5085e0b54bfc212fd2c5a6b2bee66a58637c1380a7",
+      "opendss_deck_sha256": "b3ee9071d7d6b1c54e7d798a28ab6daa457ce939a10e193c294c98ba58fa6b49",
+      "primitive_relative_error": 1.8118839761882554e-16,
+      "unequal_load_voltage_error_v": 1.2340554372010775e-12,
+      "reversed_rotation_counterexample_v": null,
+      "passed": true
+    },
+    {
+      "case": "transformer-0-false-false-true",
+      "export_sha256": "49a08937829d2ec07edee6f45c9916e59f5759e59a137527259a869d2770f63c",
+      "opendss_deck_sha256": "893ffcf5aa8e8d40f576bbe445a5421fe79dc5f01ef110dafa14cd24f02165fc",
+      "primitive_relative_error": 1.7224222048639606e-16,
+      "unequal_load_voltage_error_v": 4.800161892131833e-12,
+      "reversed_rotation_counterexample_v": null,
+      "passed": true
+    },
+    {
+      "case": "transformer-0-false-true-false",
+      "export_sha256": "514062c85c970d3a2ec2dea0f727b816fe8ce83162b1217228095313528cc066",
+      "opendss_deck_sha256": "ff8f5b13640fdb05e794109890218cb87734794ea9ca76afac3b59aca1fea4b8",
+      "primitive_relative_error": 1.8118839761882554e-16,
+      "unequal_load_voltage_error_v": 1.2340554372010775e-12,
+      "reversed_rotation_counterexample_v": null,
+      "passed": true
+    },
+    {
+      "case": "transformer-0-false-true-true",
+      "export_sha256": "da86df267c2d4051bd4aac451a3826d5ff033b8a18813620a722f770b9ef7df2",
+      "opendss_deck_sha256": "20cd690086b1e056a3ee7a2b5e06ee1e7cc0076e11500ed050e61814cffeb6da",
+      "primitive_relative_error": 1.7224222048639606e-16,
+      "unequal_load_voltage_error_v": 4.800161892131833e-12,
+      "reversed_rotation_counterexample_v": null,
+      "passed": true
+    },
+    {
+      "case": "transformer-0-true-false-false",
+      "export_sha256": "095c698e11d9e647b097c8d71179bf2dbab1156155d5f33827d5d5dfa3bfd159",
+      "opendss_deck_sha256": "d10dbfd496511134417b188549288ff1bed9625d05f2dbf04bfefb4cac8863ae",
+      "primitive_relative_error": 1.8118839761882554e-16,
+      "unequal_load_voltage_error_v": 9.41052370380773e-11,
+      "reversed_rotation_counterexample_v": null,
+      "passed": true
+    },
+    {
+      "case": "transformer-0-true-false-true",
+      "export_sha256": "e94e84a064984593c3c28e1fb8063bb670dc31f0ae00c5b9df2bc827f14f5880",
+      "opendss_deck_sha256": "ee90131fecedb3c7bfa046c60a1fcffee481e578becdbccb67777db7f8d9f76f",
+      "primitive_relative_error": 3.9060805955700905e-16,
+      "unequal_load_voltage_error_v": 6.78294203558325e-11,
+      "reversed_rotation_counterexample_v": null,
+      "passed": true
+    },
+    {
+      "case": "transformer-0-true-true-false",
+      "export_sha256": "6ab47207d40ae585e1b017dedd65930505e5619d12a587f2f80d6e59287d3881",
+      "opendss_deck_sha256": "7f0d950a011adc72f476fc5928075c19d6d3b502fc514dd165e6231ed27f2d87",
+      "primitive_relative_error": 1.8118839761882554e-16,
+      "unequal_load_voltage_error_v": 9.41052370380773e-11,
+      "reversed_rotation_counterexample_v": null,
+      "passed": true
+    },
+    {
+      "case": "transformer-0-true-true-true",
+      "export_sha256": "c9f74e4d4c2f44e63c94e28aeedeb8a86c189be5fc358ffe76b85c79de26aacb",
+      "opendss_deck_sha256": "a15e2c4840d2c1a8535b54491133dbc45971344bbffe6e5537a0d73d7225625b",
+      "primitive_relative_error": 3.9060805955700905e-16,
+      "unequal_load_voltage_error_v": 6.78294203558325e-11,
+      "reversed_rotation_counterexample_v": null,
+      "passed": true
+    },
+    {
+      "case": "transformer-1-false-false-false",
+      "export_sha256": "77633c9023e7d51b21dffebf887889ba9df4a2d99151daf8c36ec4b0c186a2d7",
+      "opendss_deck_sha256": "ec3cfdc986fa3fff6044600eaae4e12bbe31951acbada859262fa37e30b7cfb2",
+      "primitive_relative_error": 1.8118839761882554e-16,
+      "unequal_load_voltage_error_v": 2.195519565469733e-12,
+      "reversed_rotation_counterexample_v": 262.2441583298385,
+      "passed": true
+    },
+    {
+      "case": "transformer-1-false-false-true",
+      "export_sha256": "b12b3aaddecd2cfa1d4995b58b7055276d073ceddb077b6869355efb572438c8",
+      "opendss_deck_sha256": "d166e4903dd243280cb280b8c659ed769cb638b2480c8aaeb93d16d212d512b0",
+      "primitive_relative_error": 1.7224222048639606e-16,
+      "unequal_load_voltage_error_v": 7.976645287493062e-12,
+      "reversed_rotation_counterexample_v": 243.52126699302258,
+      "passed": true
+    },
+    {
+      "case": "transformer-1-false-true-false",
+      "export_sha256": "c4ca53afcd87da56d55f1e80a7b843a5d6f80022e098e572e0f96d24224771c4",
+      "opendss_deck_sha256": "017c1453dcf9810abc59d1089243b19235d30277b420161b9f62fd1e26975038",
+      "primitive_relative_error": 1.8118839761882554e-16,
+      "unequal_load_voltage_error_v": 1.933511993194651e-12,
+      "reversed_rotation_counterexample_v": 262.24415832983897,
+      "passed": true
+    },
+    {
+      "case": "transformer-1-false-true-true",
+      "export_sha256": "6f6b2f76ad4a1f3b56f7deeeec3615cbf5709e6f4ca368b200359f969ea74e3c",
+      "opendss_deck_sha256": "e1a30f9da6ab8ff4295ce78b4f924cc9031dac759c54cd53a3b53ee14108dc26",
+      "primitive_relative_error": 1.7224222048639606e-16,
+      "unequal_load_voltage_error_v": 4.5739750260287144e-12,
+      "reversed_rotation_counterexample_v": 243.5212669930212,
+      "passed": true
+    },
+    {
+      "case": "transformer-1-true-false-false",
+      "export_sha256": "5c4079545e6803f7c364ab42bee47fc78321972cf2f75c1527668298eb2c9205",
+      "opendss_deck_sha256": "a31b8379516a73a05390067e77df8b2d363c34e7412dc7a10b2ea531899519fb",
+      "primitive_relative_error": 3.808535576370503e-16,
+      "unequal_load_voltage_error_v": 1.1448439546900147e-10,
+      "reversed_rotation_counterexample_v": 7211.714354070598,
+      "passed": true
+    },
+    {
+      "case": "transformer-1-true-false-true",
+      "export_sha256": "a287d4ab9df350d4de40a462902a12d87562d9def76571a04c03991089d532a6",
+      "opendss_deck_sha256": "d6c9baa40e8ef716a95ce9b6b686e014821ccd5e1b18aa98a51cd6f039b79701",
+      "primitive_relative_error": 2.6040537303800616e-16,
+      "unequal_load_voltage_error_v": 9.396999432881067e-11,
+      "reversed_rotation_counterexample_v": 6696.8348423079715,
+      "passed": true
+    },
+    {
+      "case": "transformer-1-true-true-false",
+      "export_sha256": "3ba7109b191e398c943fe5d475249bbddb29384be230526d56089b6bc185bf3a",
+      "opendss_deck_sha256": "b3c0fa4c144c4e4af82561e2efc0e263ad962f80fb6152d53bba8dffa2d5c430",
+      "primitive_relative_error": 6.039613253960854e-16,
+      "unequal_load_voltage_error_v": 1.1768471349809404e-10,
+      "reversed_rotation_counterexample_v": 7211.714354070551,
+      "passed": true
+    },
+    {
+      "case": "transformer-1-true-true-true",
+      "export_sha256": "d2256f36f760efaa9fcfea4018e883cd9e677529a77f1b6dbe503bd33fdf039b",
+      "opendss_deck_sha256": "b110401b79f8c6c3548d307b0433667b64c57c6faffae66b1ddbd4896f2c3d38",
+      "primitive_relative_error": 2.7596543697788315e-16,
+      "unequal_load_voltage_error_v": 1.0498657848634317e-10,
+      "reversed_rotation_counterexample_v": 6696.8348423080315,
+      "passed": true
+    },
+    {
+      "case": "transformer-2-false-false-false",
+      "export_sha256": "5e917b67cb826af38e4365f431244c4fce49a12deeeca975ca7946262bd37f9c",
+      "opendss_deck_sha256": "23dec30b7022ec486781b084b94b486438227c412e1c443d511268217aa60ec0",
+      "primitive_relative_error": 6.207801692478e-16,
+      "unequal_load_voltage_error_v": 9.099386826154683e-14,
+      "reversed_rotation_counterexample_v": 239.35610738513643,
+      "passed": true
+    },
+    {
+      "case": "transformer-2-false-false-true",
+      "export_sha256": "b5044ed4fc81d44a65c40ef3674acc6138d70a8146eaf28a908a4e76de6f35df",
+      "opendss_deck_sha256": "82dd76b268f4a67b6185fe503640dbc18ecb946d8383a798b9672869ac94c1e9",
+      "primitive_relative_error": 2.6273558586779626e-16,
+      "unequal_load_voltage_error_v": 5.859285502108464e-14,
+      "reversed_rotation_counterexample_v": 222.26295827338834,
+      "passed": true
+    },
+    {
+      "case": "transformer-2-false-true-false",
+      "export_sha256": "23b896833c7df7d7e98890e756eaf9e755af8599dbdb38095874c835618e469a",
+      "opendss_deck_sha256": "c89e3795b27f519e9086b47b0c2efd9fd235000da75c8114342caddfa26ecaeb",
+      "primitive_relative_error": 6.207801692478e-16,
+      "unequal_load_voltage_error_v": 1.797546735911271e-13,
+      "reversed_rotation_counterexample_v": 239.35610738513662,
+      "passed": true
+    },
+    {
+      "case": "transformer-2-false-true-true",
+      "export_sha256": "7463bcb6324e37b971b81b74fff04431f28902b69c7c3a3f7d63ee3540aa7435",
+      "opendss_deck_sha256": "e248433dfb0d4d273133baf31fee2ead43336b921daa400e21353d8befb4ea3a",
+      "primitive_relative_error": 2.6273558586779626e-16,
+      "unequal_load_voltage_error_v": 1.0658141036401503e-13,
+      "reversed_rotation_counterexample_v": 222.2629582733884,
+      "passed": true
+    },
+    {
+      "case": "transformer-2-true-false-false",
+      "export_sha256": "c56ac40d2434b2e3550f1ae4e60109aad228b3ef3fe190f3c720ba92c70ab289",
+      "opendss_deck_sha256": "b1e41aa1bc81931e07ba4b7028c1a51e2e4d48429d50e971ed4fb21cd41daeff",
+      "primitive_relative_error": 1.877315897808728e-16,
+      "unequal_load_voltage_error_v": 4.897778860262864e-12,
+      "reversed_rotation_counterexample_v": 6582.292953091254,
+      "passed": true
+    },
+    {
+      "case": "transformer-2-true-false-true",
+      "export_sha256": "bc8f097d563e0442989222cd6dca1ac71ba4a2720ce5049a2658a1c8e70b1281",
+      "opendss_deck_sha256": "3cce819369c42d21c589260c9772c520c6be2a2a474faf2c928e1efd0e44509c",
+      "primitive_relative_error": 5.89407122144487e-16,
+      "unequal_load_voltage_error_v": 4.067383956680332e-12,
+      "reversed_rotation_counterexample_v": 6112.231352518182,
+      "passed": true
+    },
+    {
+      "case": "transformer-2-true-true-false",
+      "export_sha256": "9f000d234bd74a6e5cbade8d547bbec7c691b37a38f9c5f966beb14414510c97",
+      "opendss_deck_sha256": "98751e8b71bf8420ae19a2ea5b3c04aaf947705c52844625b40a468826434b64",
+      "primitive_relative_error": 1.8118839761882554e-16,
+      "unequal_load_voltage_error_v": 2.7661201467245603e-12,
+      "reversed_rotation_counterexample_v": 6582.29295309125,
+      "passed": true
+    },
+    {
+      "case": "transformer-2-true-true-true",
+      "export_sha256": "a548ff07bc4d6983703e586c028426a83359679e6c991f934731de014d69dc5b",
+      "opendss_deck_sha256": "2d9569dba14c8c997fa1dbfc3223b4fccedd08783b09d16c3cee0f02db9ab81f",
+      "primitive_relative_error": 3.9060805955700905e-16,
+      "unequal_load_voltage_error_v": 3.2792297820051222e-12,
+      "reversed_rotation_counterexample_v": 6112.231352518178,
+      "passed": true
+    }
+  ]
+}

@@ -70,6 +70,7 @@ pub(super) struct Tables {
     pub loads: Vec<ExpectedLoad>,
     pub sources: Vec<(i64, usize, bool)>,
     pub lines: Vec<(i64, usize)>,
+    pub transformers: Vec<super::write_transformer::ExpectedTransformer>,
 }
 impl Tables {
     pub fn push(&mut self, name: &'static str, row: Row) {
@@ -192,8 +193,7 @@ pub fn write_experimental_multiconductor(
     if net.buses().is_empty() {
         return Err(error("candidate output requires at least one bus"));
     }
-    if !net.transformers().is_empty()
-        || !net.shunts().is_empty()
+    if !net.shunts().is_empty()
         || !net.capacitors().is_empty()
         || !net.generators().is_empty()
         || !net.ibrs().is_empty()
@@ -201,7 +201,7 @@ pub fn write_experimental_multiconductor(
         || !net.untyped_objects().is_empty()
     {
         return Err(error(
-            "candidate multiconductor writer currently implements ideal sources, sequence-representable lines and static loads; transformer, shunt, generation and control authoring remains unfinished",
+            "candidate multiconductor writer currently implements ideal sources, sequence-representable lines, static loads and selected finite transformers; shunt, generation and control authoring remains unfinished",
         ));
     }
     let topology = Topology::new(net, options)?;
@@ -241,6 +241,7 @@ pub fn write_experimental_multiconductor(
     super::write_equipment::sources(net, &topology, &mut tables)?;
     super::write_equipment::loads(net, &topology, &mut tables)?;
     super::write_equipment::lines(net, &topology, &mut tables)?;
+    super::write_transformer::transformers(net, &topology, &mut tables)?;
     let database = tables.database()?;
     let snapshot = DatabaseSnapshot::decode(&database, None).map_err(error)?;
     let recovered = super::read_snapshot(snapshot).map_err(error)?;
@@ -335,6 +336,7 @@ fn verify(
         }
     }
     verify_lines(original, recovered, topology, tables)?;
+    super::write_transformer::verify(recovered, &tables.transformers)?;
     Ok(())
 }
 

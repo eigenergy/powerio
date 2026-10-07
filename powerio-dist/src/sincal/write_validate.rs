@@ -61,6 +61,11 @@ pub(super) fn validate(net: &MulticonductorNetwork) -> Result<()> {
         port(&load.bus, &load.terminal_map)?;
         validate_load(load)?;
     }
+    for transformer in net.transformers() {
+        for winding in &transformer.windings {
+            port(&winding.bus, &winding.terminal_map)?;
+        }
+    }
     for switch in net.switches() {
         port(&switch.bus_from, &switch.terminal_map_from)?;
         port(&switch.bus_to, &switch.terminal_map_to)?;

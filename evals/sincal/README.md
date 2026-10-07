@@ -495,8 +495,58 @@ while preserving the floating reference, malformed typed vectors and unsupported
 circuit rejection, deterministic output, and rewriting through closed device
 switches. Test circuits are generated at runtime; no native fixtures were added.
 
-This is incremental PR5 implementation. Native transformer/shunt/generator
-output, open-switch/external-neutral authoring and the experimental public API
-remain unfinished. The complete authentic unbalanced reader corpus targets in
+This is incremental PR5 implementation. Selected typed transformer output is
+implemented below. Native primitive rewriting, other shunt/generator output,
+open-switch/external-neutral authoring and the experimental public API remain
+unfinished. The complete authentic unbalanced reader corpus targets in
 PR4 are unchanged; these writer tests do not establish their completion. Native
 SINCAL desktop acceptance remains a separate external gate.
+
+
+### Multiconductor transformer writer evidence
+
+The candidate now writes finite, three-phase, two-winding delta/delta and
+solidly grounded delta/Wye or Wye/delta transformers with equal VA ratings,
+nonnegative leakage resistance/reactance, and positive fixed taps. Winding
+resistances combine on their common base. Effective winding voltages include
+both taps, preserving the terminal-referred impedance as well as the turns
+ratio. Nominal bus voltage remains independently supplied by the caller.
+
+The generic winding convention follows the existing OpenDSS writer: mixed
+windings default to ANSI/lag; `leadlag` selects lead/Euro when present. The
+higher rated winding determines the direction, including when the primary
+winding is the lower-voltage side. This follows the
+[OpenDSS transformer property definition](https://dss-extensions.org/dss-format/Transformer.html).
+Nonzero core/anti-float/neutral physics and unmapped transformer extras fail
+explicitly. Wye/Wye, floating Wye stars, ideal zero-leakage transformers,
+autotransformers and partial windings still require separate representations.
+
+Every authored transformer is read back and checked against a direct coil-
+incidence primitive, independently of the reader's symmetrical-component
+construction. This checks all six phase coordinates and both terminal-switch
+connections, including negative- and zero-sequence behavior. The generic
+PowerIO matrix builder's ideal-Wye transformer support is not used to validate
+these finite transformer circuits.
+
+```sh
+cargo test -p powerio-dist --lib sincal::write_transformer_tests
+POWERIO_SINCAL_WRITER_ORACLE_DIR=/tmp/transformer-writer-oracle cargo test \
+  -p powerio-dist --lib sincal::write_transformer_tests::export_transformer_writer_oracle -- --ignored
+python3 evals/sincal/check_transformer_writer.py /tmp/transformer-writer-oracle \
+  --report /tmp/writer-transformer.json
+```
+
+`writer-transformer.json` records 24 original synthetic combinations of three
+connection arrangements, step-up/down winding order, lead/lag rotation and
+fixed taps. The oracle constructs OpenDSS from the original typed winding
+values, extracts its full six-phase YPrim, and compares the actual Rust
+fresh-write/read result. Maximum relative primitive error is 6.21e-16.
+Unequal-load solves with positive, negative and zero-sequence excitation agree
+within 1.18e-10 V. Reversed-rotation counterexamples must fail the mixed-winding
+cases. All 24 expected files are required; missing cases fail the harness.
+
+This establishes typed construction and source-free serde restoration/editing
+for the selected transformer subset. It does **not** yet establish transformer
+read/edit/rewrite: native reading produces a coupled shunt and auxiliary
+switches, whose canonical fresh authoring is still pending. The report is
+small derived validation metadata; no native model fixtures were added.
