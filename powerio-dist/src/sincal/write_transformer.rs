@@ -177,7 +177,7 @@ pub(super) fn transformers(
 /// Direct winding-incidence construction, independent of the native reader's
 /// symmetrical-component transformation. Zero-sequence current is eliminated
 /// on delta ports by the coil incidence itself, not by balancing the circuit.
-fn coil_primitive(t: &DistTransformer, reverse: bool) -> Result<[[Complex64; 6]; 6]> {
+pub(super) fn coil_primitive(t: &DistTransformer, reverse: bool) -> Result<[[Complex64; 6]; 6]> {
     let mut incidence = [[0.0; 6]; 3];
     let mixed = t.windings[0].conn != t.windings[1].conn;
     for (side, w) in t.windings.iter().enumerate() {

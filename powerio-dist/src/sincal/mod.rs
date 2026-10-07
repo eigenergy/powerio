@@ -53,6 +53,7 @@ mod source_sequence;
 mod topology;
 mod write;
 mod write_equipment;
+mod write_primitive;
 mod write_topology;
 mod write_transformer;
 mod write_validate;

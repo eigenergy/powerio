@@ -20,6 +20,8 @@ pub(super) type Row = BTreeMap<&'static str, Value>;
 #[derive(Default)]
 pub struct ExperimentalMulticonductorOptions {
     /// One finite positive line-line voltage (volts) for every typed bus.
+    /// Eliminated transformer auxiliary buses span two voltage levels; their
+    /// entries may be omitted and are ignored when supplied.
     pub nominal_ll_volts: BTreeMap<String, f64>,
 }
 
@@ -28,6 +30,8 @@ pub struct ExperimentalMulticonductorOutput {
     pub diagnostics: Vec<Diagnostic>,
     /// Original bus IDs to the freshly assigned native node IDs. Closed
     /// ideal switches can make this map many-to-one; phases remain distinct.
+    /// Eliminated transformer auxiliary buses contain two native ports and
+    /// are omitted from this node map.
     pub bus_ids: BTreeMap<String, i64>,
 }
 
@@ -193,8 +197,7 @@ pub fn write_experimental_multiconductor(
     if net.buses().is_empty() {
         return Err(error("candidate output requires at least one bus"));
     }
-    if !net.shunts().is_empty()
-        || !net.capacitors().is_empty()
+    if !net.capacitors().is_empty()
         || !net.generators().is_empty()
         || !net.ibrs().is_empty()
         || !net.control_profiles().is_empty()
@@ -204,6 +207,8 @@ pub fn write_experimental_multiconductor(
             "candidate multiconductor writer currently implements ideal sources, sequence-representable lines, static loads and selected finite transformers; shunt, generation and control authoring remains unfinished",
         ));
     }
+    let canonical = super::write_primitive::canonicalize(net, options)?;
+    let (net, options) = canonical.as_ref().map_or((net, options), |(n, o)| (n, o));
     let topology = Topology::new(net, options)?;
     let mut tables = Tables::default();
     let mut settings = row("");
@@ -247,7 +252,7 @@ pub fn write_experimental_multiconductor(
     let recovered = super::read_snapshot(snapshot).map_err(error)?;
     crate::require_electrical_readiness(&recovered).map_err(error)?;
     verify(net, &recovered, &topology, &tables)?;
-    let diagnostics = vec![
+    let mut diagnostics = vec![
         Diagnostic::of(
             &codes::EMIT_SINCAL_MULTICONDUCTOR_EXPERIMENTAL,
             "Candidate conductor-resolved schema-14.8 output; native SINCAL open/save/calculation is unverified. Nominal voltage levels were supplied explicitly.",
@@ -257,6 +262,12 @@ pub fn write_experimental_multiconductor(
             "Fresh IDs are assigned; closed ideal switches are collapsed without joining additional conductors; load branches become separate native elements. Metadata, geometry, bounds, costs, switch ampacities, apparent-power ratings and extras are omitted. Native readback may introduce device-local buses and switches.",
         ),
     ];
+    if canonical.is_some() {
+        diagnostics.push(Diagnostic::of(
+            &codes::EMIT_SINCAL_MULTICONDUCTOR_LOSS,
+            "Verified transformer primitives use a canonical 1 MVA parameter base, not a recovered thermal rating; auxiliary buses/switches are replaced by native transformer ports. Nameplate data and original winding-resistance allocation are not recoverable from the primitive.",
+        ));
+    }
     Ok(ExperimentalMulticonductorOutput {
         database,
         diagnostics,

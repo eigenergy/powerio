@@ -404,3 +404,83 @@ fn experimental_multiconductor_backend_writes_edited_ir_with_floating_reference(
             .any(|d| d.code() == "EMIT.SINCAL.MULTICONDUCTOR_EXPERIMENTAL")
     );
 }
+
+#[test]
+fn experimental_transformer_primitives_rewrite_after_real_ir_and_edit() {
+    use powerio_dist::{
+        DistBus, DistTransformer, DistWinding, DistWindingConn, ExperimentalMulticonductorOptions,
+        MulticonductorNetwork,
+    };
+    let mut net = MulticonductorNetwork::new();
+    let phases = ["1", "2", "3"].map(str::to_owned).to_vec();
+    net.buses_mut().push(DistBus::new("hv", phases.clone()));
+    let mut terminals = phases.clone();
+    terminals.push("earth".into());
+    let mut lv = DistBus::new("lv", terminals.clone());
+    lv.grounded.push("earth".into());
+    net.buses_mut().push(lv);
+    let mut windings = vec![
+        DistWinding::new("hv", phases, DistWindingConn::Delta, 11000.0, 100_000.0),
+        DistWinding::new("lv", terminals, DistWindingConn::Wye, 400.0, 100_000.0),
+    ];
+    windings[0].r_pct = 0.5;
+    windings[1].r_pct = 0.5;
+    net.transformers_mut()
+        .push(DistTransformer::new("tx", windings, vec![4.0], 3));
+    let options = ExperimentalMulticonductorOptions {
+        nominal_ll_volts: [("hv".into(), 11000.0), ("lv".into(), 400.0)].into(),
+    };
+    let first = powerio_dist::__write_sincal_multiconductor_experimental(&net, &options).unwrap();
+    let read = |bytes: &[u8]| {
+        powerio_dist::__read_sincal_multiconductor_snapshot(
+            powerio_sincal::DatabaseSnapshot::decode(bytes, None).unwrap(),
+        )
+        .unwrap()
+    };
+    let recovered = read(&first.database);
+    let levels = ExperimentalMulticonductorOptions {
+        nominal_ll_volts: recovered
+            .buses()
+            .iter()
+            .map(|b| {
+                let volts = if b.id == first.bus_ids["hv"].to_string() {
+                    11000.0
+                } else if b.id == first.bus_ids["lv"].to_string() {
+                    400.0
+                } else {
+                    1.0
+                };
+                (b.id.clone(), volts)
+            })
+            .collect(),
+    };
+    let module = powerio::PioModule::new(PioValue::from(recovered));
+    let mut restored =
+        helpers::deserialize_module_text(&helpers::serialize_module_text(&module).unwrap())
+            .unwrap();
+    let PioValue::MulticonductorNetwork(net) = restored.value_mut() else {
+        panic!("IR changed family");
+    };
+    let shunt = &mut net.shunts_mut()[0];
+    shunt.extras.clear();
+    for v in shunt.g.iter_mut().chain(&mut shunt.b).flatten() {
+        *v *= 1.2;
+    }
+    let changed = powerio_dist::__write_sincal_multiconductor_experimental(net, &levels).unwrap();
+    let second = read(&changed.database);
+    assert_eq!(second.shunts().len(), 1);
+    for (a, b) in [&net.shunts()[0].g, &net.shunts()[0].b]
+        .into_iter()
+        .zip([&second.shunts()[0].g, &second.shunts()[0].b])
+    {
+        for (a, b) in a.iter().flatten().zip(b.iter().flatten()) {
+            assert!((a - b).abs() < 1e-10);
+        }
+    }
+    assert!(
+        changed
+            .diagnostics
+            .iter()
+            .any(|d| d.message().contains("canonical 1 MVA"))
+    );
+}

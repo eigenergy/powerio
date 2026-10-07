@@ -8,6 +8,7 @@ The source is ideal in this algebraic circuit; there is no source-impedance
 approximation. Native SINCAL execution remains a separate acceptance gate.
 """
 import argparse
+import copy
 import hashlib
 import itertools
 import json
@@ -59,27 +60,43 @@ def loaded_voltage(y, transformer):
     return np.linalg.solve(y[3:, 3:]+loads, -y[3:, :3]@supply)
 
 
-def check(path):
-    doc = json.loads(path.read_text())
-    t = doc['input']['transformers'][0]
-    fresh = doc['fresh_readback']
+def matrix(fresh, nodes):
     if len(fresh['shunts']) != 1 or fresh['transformers']:
         raise ValueError('expected one actual reader-produced transformer primitive')
     shunt = fresh['shunts'][0]
     if shunt['terminal_map'] != ['p1', 'p2', 'p3', 's1', 's2', 's3']:
         raise ValueError('unexpected phase coordinates')
-    for side in range(2):
-        node = str(doc['bus_ids'][t['windings'][side]['bus']])
-        if not any(s['bus_from'] == node and s['bus_to'] == shunt['bus']
+    for side, node in enumerate(nodes):
+        if not any(s['bus_from'] == str(node) and s['bus_to'] == shunt['bus']
                    and not s['open'] and s['terminal_map_from'] == ['1','2','3']
                    and s['terminal_map_to'] == shunt['terminal_map'][3*side:3*side+3]
                    for s in fresh['switches']):
             raise ValueError('fresh transformer port does not preserve conductor connectivity')
-    actual = np.array(shunt['g'])+1j*np.array(shunt['b'])
+    return np.array(shunt['g'])+1j*np.array(shunt['b'])
+
+
+def check(path):
+    doc = json.loads(path.read_text())
+    t = doc['input']['transformers'][0]
+    nodes = [doc['bus_ids'][w['bus']] for w in t['windings']]
+    actual = matrix(doc['fresh_readback'], nodes)
+    rewritten = matrix(doc['rewritten_readback'], [doc['rewrite_bus_ids'][str(n)] for n in nodes])
+    edited = matrix(doc['edited_readback'], [doc['edit_bus_ids'][str(n)] for n in nodes])
     expected, deck_hash = oracle(t)
     primitive_error = float(np.max(np.abs(actual-expected))/np.max(np.abs(expected)))
     volts = loaded_voltage(expected, t)
     voltage_error = float(np.max(np.abs(loaded_voltage(actual,t)-volts)))
+    rewrite_error = float(np.max(np.abs(rewritten-expected))/np.max(np.abs(expected)))
+    # Editing the typed primitive by multiplying admittance by 1.2 is
+    # independently equivalent to dividing both winding leakage R and X by
+    # 1.2. Rebuild OpenDSS from those changed original physical parameters.
+    changed = copy.deepcopy(t)
+    for winding in changed['windings']:
+        winding['r_pct'] /= 1.2
+    changed['xsc_pct'][0] /= 1.2
+    changed_reference, changed_hash = oracle(changed)
+    edit_error = float(np.max(np.abs(edited-changed_reference))/np.max(np.abs(changed_reference)))
+    edit_voltage_error = float(np.max(np.abs(loaded_voltage(edited,changed)-loaded_voltage(changed_reference,changed))))
     # Conjugating only the cross-port phase ordering reverses the vector
     # group while retaining positive impedance. This must fail mixed cases.
     mixed = t['windings'][0]['conn'] != t['windings'][1]['conn']
@@ -94,7 +111,11 @@ def check(path):
             'primitive_relative_error': primitive_error,
             'unequal_load_voltage_error_v': voltage_error,
             'reversed_rotation_counterexample_v': counterexample,
-            'passed': primitive_error < 1e-10 and voltage_error < 1e-7}
+            'rewrite_primitive_relative_error': rewrite_error,
+            'edited_opendss_deck_sha256': changed_hash,
+            'edited_primitive_relative_error': edit_error,
+            'edited_voltage_error_v': edit_voltage_error,
+            'passed': max(primitive_error,rewrite_error,edit_error) < 1e-10 and max(voltage_error,edit_voltage_error) < 1e-7}
 
 
 def main():

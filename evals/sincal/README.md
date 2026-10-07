@@ -496,7 +496,7 @@ circuit rejection, deterministic output, and rewriting through closed device
 switches. Test circuits are generated at runtime; no native fixtures were added.
 
 This is incremental PR5 implementation. Selected typed transformer output is
-implemented below. Native primitive rewriting, other shunt/generator output,
+implemented below. Other shunt/generator output,
 open-switch/external-neutral authoring and the experimental public API remain
 unfinished. The complete authentic unbalanced reader corpus targets in
 PR4 are unchanged; these writer tests do not establish their completion. Native
@@ -546,7 +546,30 @@ within 1.18e-10 V. Reversed-rotation counterexamples must fail the mixed-winding
 cases. All 24 expected files are required; missing cases fail the harness.
 
 This establishes typed construction and source-free serde restoration/editing
-for the selected transformer subset. It does **not** yet establish transformer
-read/edit/rewrite: native reading produces a coupled shunt and auxiliary
-switches, whose canonical fresh authoring is still pending. The report is
-small derived validation metadata; no native model fixtures were added.
+for the selected transformer subset. The report is small derived validation
+metadata; no native model fixtures were added.
+
+The writer also recognizes equivalent six-conductor transformer primitives
+from native reading. It requires an exclusive auxiliary bus and exactly two
+closed three-phase terminal switches. Switch direction and coordinate names
+do not supply winding physics. Candidate scalar parameters come from the
+matrix, and acceptance compares every conductor entry in each port block,
+including negative/zero sequence and sequence coupling. Incompatible edits,
+core terms, open ports and additional attached equipment are rejected. Native
+provenance is never used to reconstruct electrical values.
+
+Primitive shunts have no recoverable VA nameplate or split of winding losses.
+The candidate reports its canonical 1 MVA parameter base and equal resistance
+allocation explicitly; these choices reproduce the circuit and do not claim
+original thermal ratings. Eliminated auxiliary buses span two voltage levels,
+so their nominal-voltage option entries may be omitted and they have no single
+entry in the returned native node-ID map. All remaining bus levels are explicit.
+
+All 24 oracle cases now also check read/write/read and edited-primitives against
+OpenDSS. Multiplying typed admittance by 1.2 is independently checked by reducing
+the original OpenDSS winding resistances/reactance by that factor. Maximum
+relative primitive error is 6.00e-16 for rewriting and 1.17e-15 after editing;
+the edited unequal-load voltage difference is below 1.31e-10 V. A facade test
+separately serializes the reader-produced primitive through real PowerIO IR,
+removes provenance, edits the matrices and verifies fresh write/read. The
+ordinary family dispatch and source-echo API remain unchanged.

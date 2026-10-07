@@ -171,7 +171,18 @@ fn export_transformer_writer_oracle() {
                     )
                     .unwrap();
                     let case = format!("transformer-{kind}-{step_up}-{lead}-{tapped}");
-                    let value = serde_json::json!({"input":net,"fresh_readback":recovered,"bus_ids":output.bus_ids});
+                    let levels = rewrite_options(&recovered, &options, &output.bus_ids);
+                    let rewritten = write_experimental_multiconductor(&recovered, &levels).unwrap();
+                    let mut edited = recovered.clone();
+                    let shunt = &mut edited.shunts_mut()[0];
+                    shunt.extras.clear();
+                    for value in shunt.g.iter_mut().chain(&mut shunt.b).flatten() {
+                        *value *= 1.2;
+                    }
+                    let changed = write_experimental_multiconductor(&edited, &levels).unwrap();
+                    let value = serde_json::json!({"input":net,"fresh_readback":recovered,"bus_ids":output.bus_ids,
+                        "rewritten_readback":read(&rewritten.database), "rewrite_bus_ids":rewritten.bus_ids,
+                        "edited_readback":read(&changed.database), "edit_bus_ids":changed.bus_ids});
                     std::fs::write(
                         directory.join(format!("{case}.json")),
                         serde_json::to_vec_pretty(&value).unwrap(),
@@ -180,5 +191,120 @@ fn export_transformer_writer_oracle() {
                 }
             }
         }
+    }
+}
+
+fn read(bytes: &[u8]) -> MulticonductorNetwork {
+    super::read_snapshot(powerio_sincal::DatabaseSnapshot::decode(bytes, None).unwrap()).unwrap()
+}
+fn rewrite_options(
+    net: &MulticonductorNetwork,
+    original: &ExperimentalMulticonductorOptions,
+    ids: &std::collections::BTreeMap<String, i64>,
+) -> ExperimentalMulticonductorOptions {
+    let levels = ids
+        .iter()
+        .map(|(name, id)| (id.to_string(), original.nominal_ll_volts[name]))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    ExperimentalMulticonductorOptions {
+        nominal_ll_volts: net
+            .buses()
+            .iter()
+            .filter_map(|b| levels.get(&b.id).map(|v| (b.id.clone(), *v)))
+            .collect(),
+    }
+}
+fn compare_primitives(a: &MulticonductorNetwork, b: &MulticonductorNetwork) {
+    for (a, b) in a.shunts().iter().zip(b.shunts()) {
+        for (a, b) in [&a.g, &a.b].into_iter().zip([&b.g, &b.b]) {
+            let scale = a.iter().flatten().map(|v| v.abs()).fold(0.0_f64, f64::max);
+            for (a, b) in a.iter().flatten().zip(b.iter().flatten()) {
+                assert!((a - b).abs() <= 1e-10 * scale, "{a} != {b}");
+            }
+        }
+    }
+}
+
+#[test]
+fn transformer_primitives_rewrite_after_edits_without_provenance() {
+    for kind in 0..3 {
+        for up in [false, true] {
+            for lead in [false, true] {
+                for tapped in [false, true] {
+                    let (net, options) = constructed(kind, up, lead, tapped);
+                    let first = write_experimental_multiconductor(&net, &options).unwrap();
+                    let recovered = read(&first.database);
+                    let levels = rewrite_options(&recovered, &options, &first.bus_ids);
+                    let second = write_experimental_multiconductor(&recovered, &levels).unwrap();
+                    assert!(!second.bus_ids.contains_key(&recovered.shunts()[0].bus));
+                    compare_primitives(&recovered, &read(&second.database));
+                    let mut edited = recovered.clone();
+                    edited.shunts_mut()[0].extras.clear();
+                    let shunt = &mut edited.shunts_mut()[0];
+                    for v in shunt.g.iter_mut().chain(&mut shunt.b).flatten() {
+                        *v *= 1.2;
+                    }
+                    let third = write_experimental_multiconductor(&edited, &levels).unwrap();
+                    assert_ne!(second.database, third.database);
+                    compare_primitives(&edited, &read(&third.database));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn primitive_port_directions_are_electrical_but_extra_connections_are_not_discarded() {
+    let (mut original, options) = constructed(2, false, false, false);
+    for w in &mut original.transformers_mut()[0].windings {
+        w.r_pct = 0.0;
+    }
+    let first = write_experimental_multiconductor(&original, &options).unwrap();
+    let mut net = read(&first.database);
+    let levels = rewrite_options(&net, &options, &first.bus_ids);
+    for s in net.switches_mut() {
+        std::mem::swap(&mut s.bus_from, &mut s.bus_to);
+        std::mem::swap(&mut s.terminal_map_from, &mut s.terminal_map_to);
+    }
+    let out = write_experimental_multiconductor(&net, &levels).unwrap();
+    compare_primitives(&net, &read(&out.database));
+    for mutate in [
+        |n: &mut MulticonductorNetwork| {
+            n.switches_mut()[0].open = true;
+        },
+        |n: &mut MulticonductorNetwork| {
+            n.shunts_mut()[0].g[0][1] += 0.01;
+        },
+        |n: &mut MulticonductorNetwork| {
+            n.shunts_mut()[0].b[3][3] += 0.001;
+        },
+        |n: &mut MulticonductorNetwork| {
+            let other = n.switches()[0].clone();
+            n.switches_mut().push(other);
+        },
+        |n: &mut MulticonductorNetwork| {
+            n.shunts_mut()[0].g.pop();
+        },
+        |n: &mut MulticonductorNetwork| {
+            let mut other = n.shunts()[0].clone();
+            other.name = "other".into();
+            n.shunts_mut().push(other);
+        },
+        |n: &mut MulticonductorNetwork| {
+            let shunt = &n.shunts()[0];
+            let load = crate::DistLoad::new(
+                "external",
+                shunt.bus.clone(),
+                shunt.terminal_map[..2].to_vec(),
+                crate::Configuration::SinglePhase,
+                vec![10.0],
+                vec![0.0],
+            );
+            n.loads_mut().push(load);
+        },
+    ] {
+        let mut invalid = net.clone();
+        mutate(&mut invalid);
+        assert!(write_experimental_multiconductor(&invalid, &levels).is_err());
     }
 }
