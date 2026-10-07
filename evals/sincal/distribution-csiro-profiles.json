@@ -3,7 +3,7 @@
   "attribution": "Berry, Adam; Collins, Lyle; Oliver, Erin; Perfumo, Cristian (2015), Representative Australian Electricity Feeders with load and solar generation profiles, v1, CSIRO.",
   "license": "CC-BY-4.0",
   "scope": "Conductor-resolved base-variant development audit; no family inference, independent solve or native execution.",
-  "reader_sha256": "125811958a72633c013419d4d2b5e62d36400d44e0d8f66fcab78a8be16a5ef2",
+  "reader_sha256": "06e5a7d86014c4d161f32e0e9335ece56a8c3dac3325b0c159b28e527ca13db0",
   "cases": [
     {
       "case": 1,
@@ -125,15 +125,10 @@
       "component_count": 1084,
       "mapped_by_type": {
         "Infeeder": 1,
-        "Line": 25,
+        "Line": 774,
         "ShuntReactor": 1
       },
       "failures": [
-        {
-          "type": "Line",
-          "count": 749,
-          "reason": "PSS SINCAL read error: PSS SINCAL read error: Invalid column type Null at index: 16, name: Flag_Ll"
-        },
         {
           "type": "Load",
           "count": 297,
@@ -201,21 +196,16 @@
       "variant": 1,
       "context_error": null,
       "complete_parse": false,
-      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 1 (Line): PSS SINCAL read error: Invalid column type Null at index: 16, name: Flag_Ll\" }",
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 832 (Load): PSS SINCAL read error: load requires resolution of Mpl_ID\" }",
       "independently_validated": false,
       "native_execution": false,
       "snapshot_hours": 0.0,
       "component_count": 1378,
       "mapped_by_type": {
         "Infeeder": 1,
-        "Line": 85
+        "Line": 912
       },
       "failures": [
-        {
-          "type": "Line",
-          "count": 827,
-          "reason": "PSS SINCAL read error: PSS SINCAL read error: Invalid column type Null at index: 16, name: Flag_Ll"
-        },
         {
           "type": "Load",
           "count": 458,
@@ -409,27 +399,19 @@
       "variant": 1,
       "context_error": null,
       "complete_parse": false,
-      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 1 (Line): PSS SINCAL read error: Invalid column type Null at index: 10, name: Flag_Ll\" }",
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 56 (Infeeder): PSS SINCAL read error: Invalid column type Null at index: 73, name: Flag_LfLimit\" }",
       "independently_validated": false,
       "native_execution": false,
       "snapshot_hours": 0.0,
       "component_count": 65,
-      "mapped_by_type": {},
+      "mapped_by_type": {
+        "Line": 55
+      },
       "failures": [
         {
           "type": "Infeeder",
           "count": 1,
           "reason": "PSS SINCAL read error: PSS SINCAL read error: Invalid column type Null at index: 73, name: Flag_LfLimit"
-        },
-        {
-          "type": "Line",
-          "count": 15,
-          "reason": "PSS SINCAL read error: PSS SINCAL read error: Invalid column type Null at index: 10, name: Flag_Ll"
-        },
-        {
-          "type": "Line",
-          "count": 40,
-          "reason": "PSS SINCAL read error: PSS SINCAL read error: Invalid column type Null at index: 16, name: Flag_Ll"
         },
         {
           "type": "Load",
@@ -456,27 +438,19 @@
       "variant": 1,
       "context_error": null,
       "complete_parse": false,
-      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 1 (Line): PSS SINCAL read error: Invalid column type Null at index: 10, name: Flag_Ll\" }",
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 90 (Infeeder): PSS SINCAL read error: Invalid column type Null at index: 73, name: Flag_LfLimit\" }",
       "independently_validated": false,
       "native_execution": false,
       "snapshot_hours": 0.0,
       "component_count": 102,
-      "mapped_by_type": {},
+      "mapped_by_type": {
+        "Line": 89
+      },
       "failures": [
         {
           "type": "Infeeder",
           "count": 1,
           "reason": "PSS SINCAL read error: PSS SINCAL read error: Invalid column type Null at index: 73, name: Flag_LfLimit"
-        },
-        {
-          "type": "Line",
-          "count": 18,
-          "reason": "PSS SINCAL read error: PSS SINCAL read error: Invalid column type Null at index: 10, name: Flag_Ll"
-        },
-        {
-          "type": "Line",
-          "count": 71,
-          "reason": "PSS SINCAL read error: PSS SINCAL read error: Invalid column type Null at index: 16, name: Flag_Ll"
         },
         {
           "type": "Load",

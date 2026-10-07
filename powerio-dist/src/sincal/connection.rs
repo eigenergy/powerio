@@ -19,7 +19,7 @@ impl NativeDatabase {
         &self,
         element: i64,
         buses: &BTreeMap<i64, DistBus>,
-    ) -> Result<Option<DistSwitch>> {
+    ) -> Result<Option<(DistSwitch, Vec<&'static str>)>> {
         require_table(
             &self.connection,
             "Line",
@@ -43,7 +43,8 @@ impl NativeDatabase {
         if integer(row, "Flag_LineTyp")? != 3 {
             return Ok(None);
         }
-        let limit = self.connection_inputs(row)?;
+        let mut defaulted = Vec::new();
+        let limit = self.connection_inputs(row, &mut defaulted)?;
         if rows.next().map_err(format_error)?.is_some() {
             return Err(format_error("duplicate ideal-connection line row"));
         }
@@ -103,13 +104,17 @@ impl NativeDatabase {
                 "profile":"steady_state_ideal_connection",
             }),
         );
-        Ok(Some(switch))
+        Ok(Some((switch, defaulted)))
     }
-    fn connection_inputs(&self, row: &rusqlite::Row<'_>) -> Result<f64> {
+    fn connection_inputs(
+        &self,
+        row: &rusqlite::Row<'_>,
+        defaulted: &mut Vec<&'static str>,
+    ) -> Result<f64> {
         require_input_categories(integer(row, "ElementInput")?, 2)?;
         Self::materialized_type(row)?;
         for field in ["Flag_Ll", "Flag_Ground", "Flag_Macro"] {
-            if integer(row, field)? != 0 {
+            if self.line_optional_flag(row, field, defaulted)? != 0 {
                 return Err(format_error(format!(
                     "ideal connection requires resolution of {field}"
                 )));
@@ -133,8 +138,8 @@ impl NativeDatabase {
             ));
         }
         let amperes = number(row, "Ith")? * 1000.0;
-        let parallel = number(row, "ParSys")?;
-        let reduction = number(row, "fr")?;
+        let parallel = self.line_optional_number(row, "ParSys", defaulted)?;
+        let reduction = self.line_optional_number(row, "fr", defaulted)?;
         let limit = amperes * parallel * reduction;
         if amperes < 0.0
             || parallel <= 0.0

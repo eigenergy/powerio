@@ -61,7 +61,7 @@ fn both_terminal_states_and_service_state_control_the_ideal_path() {
                     UPDATE Terminal SET Flag_State={to} WHERE TerminalNo=2;
                     UPDATE Line SET Ith=0.2,fr=0.8,ParSys=2;"
                 ));
-                let switch = db.connection_switch(30, &buses()).unwrap().unwrap();
+                let (switch, _) = db.connection_switch(30, &buses()).unwrap().unwrap();
                 assert_eq!(switch.open, service == 0 || from == 0 || to == 0);
                 assert_eq!(switch.i_max, Some(vec![320.0; 3]));
                 assert!(!switch.terminal_map_from.contains(&"n".into()));
@@ -103,6 +103,7 @@ fn both_terminal_states_and_service_state_control_the_ideal_path() {
             .connection_switch(30, &buses())
             .unwrap()
             .unwrap()
+            .0
             .i_max
             .is_none()
     );
@@ -166,7 +167,7 @@ fn export_csiro_connections() {
     let mut network = MulticonductorNetwork::new();
     for (&id, kind) in &db.elements {
         if kind == "Line"
-            && let Some(switch) = db.connection_switch(id, &buses).unwrap()
+            && let Some((switch, _)) = db.connection_switch(id, &buses).unwrap()
         {
             network.switches_mut().push(switch);
         }
@@ -230,6 +231,29 @@ fn ordinary_zero_impedance_lines_keep_exact_connectivity_ratings_and_open_ports(
         assert!(
             db.network().is_err(),
             "underflow became an ideal connection: {edit}"
+        );
+    }
+}
+
+#[test]
+fn sparse_legacy_connections_keep_ratings_and_record_only_active_defaults() {
+    let sparse = "UPDATE Line SET Flag_LineTyp=3,Flag_Ll=NULL,Flag_Ground=NULL,Flag_Macro=NULL,ParSys=NULL,fr=NULL,va=NULL,alpha=NULL;";
+    let actual = super::legacy_tests::legacy(sparse).network().unwrap();
+    let expected = super::legacy_tests::legacy("UPDATE Line SET Flag_LineTyp=3")
+        .network()
+        .unwrap();
+    assert_eq!(actual.switches(), expected.switches());
+    assert_eq!(
+        actual.defaulted()["Line.30"],
+        ["Flag_Ll", "Flag_Ground", "Flag_Macro", "ParSys", "fr"]
+    );
+    assert!(mapping_tests::native(sparse).network().is_err());
+    for field in ["Flag_Ll", "Flag_Ground", "Flag_Macro", "ParSys", "fr"] {
+        let value = if field.starts_with("Flag") { "1" } else { "0" };
+        assert!(
+            super::legacy_tests::legacy(&format!("{sparse} UPDATE Line SET {field}={value}"))
+                .network()
+                .is_err()
         );
     }
 }

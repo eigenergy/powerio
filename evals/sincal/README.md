@@ -913,3 +913,47 @@ POWERIO_SINCAL_TEMPERATURE_EXPORT=/tmp/line-temperature-circuits.json \
 python3 evals/sincal/check_legacy_temperatures.py /tmp/models /tmp/records \
   /tmp/line-temperature-circuits.json /tmp/legacy-temperatures.json
 ```
+
+### Sparse legacy line inputs
+
+The schema-11.5 profile now reads additional optional NULL fields using the
+Database Description (April 2014), pp.18–19: `Flag_Ll`, `Flag_Ground`, `Flag_Macro`
+and dielectric losses `va` default to zero; `ParSys` and `fr` to one; `alpha` to
+0.004 per C; and rated frequency `fn` to 50 Hz. Explicit values remain authoritative.
+The temperature coefficient is read only when a temperature correction is active.
+Modern NULLs in active fields, missing columns, malformed values, required
+impedances/length/voltage and unknown active modes still reject. Applied defaults
+enter `network.defaulted` for both finite lines and ideal connections. The original
+source and typed acquisition remain unchanged.
+
+`sparse-lines.json` verifies all 1,720 newly mapped native line elements across
+CSIRO03/05/14/15. Of these, 1,658 finite circuits agree with independent OpenDSS
+primitives within 8.30e-16 relative error (tolerance 1e-10). This includes 157
+coupled single-phase series-only lines: the oracle eliminates absent currents
+from OpenDSS's full three-phase admittance, fixing one unused endpoint per absent
+conductor as a zero-current gauge. It does not project the full admittance by
+simply deleting rows. Reduced-phase charging remains limited to independent
+phases. OpenDSS's numerically regularized open-conductor primitive is not used as
+a physical grounding circuit.
+
+The remaining 29 exact-zero ordinary lines and 33 declared connections retain
+exact switches, native ratings and port states. Declared connection partitions
+are checked through native union-find versus SciPy graph components. All exports
+pin native identities, candidate sets, phases, endpoints, limits and default
+provenance. The earlier 186 temperature-only line exports remain byte-identical.
+No native files or result rows are vendored.
+
+Current midnight totals are 776/1084 for CSIRO03, 913/1378 for CSIRO05, 55/65 for
+CSIRO14 and 89/102 for CSIRO15; every line in those four cases now maps. Their
+remaining loads, sources and transformers still reject. CSIRO12 remains 214/215,
+and CSIRO09 is still the only complete conductor-resolved native parse. Local
+inspection found no unbalanced stored results for CSIRO12; its single balanced
+source result alone cannot establish the unresolved source-control semantics.
+
+```sh
+POWERIO_SINCAL_SPARSE_LINE_RECORDS=/tmp/records \
+POWERIO_SINCAL_SPARSE_LINE_EXPORT=/tmp/sparse-line-circuits.json \
+  cargo test -p powerio-dist --lib export_sparse_legacy_lines -- --ignored
+python3 evals/sincal/check_sparse_lines.py /tmp/models /tmp/records \
+  /tmp/sparse-line-circuits.json /tmp/sparse-lines.json
+```

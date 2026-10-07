@@ -155,7 +155,11 @@ impl NativeDatabase {
         (|| -> Result<()> {
             match kind.as_str() {
                 "Line" => {
-                    if let Some(switch) = self.connection_switch(element, buses)? {
+                    if let Some((switch, defaulted)) = self.connection_switch(element, buses)? {
+                        if !defaulted.is_empty() {
+                            net.defaulted_mut()
+                                .insert(format!("Line.{element}"), defaulted);
+                        }
                         net.switches_mut().push(switch);
                         return Ok(());
                     }

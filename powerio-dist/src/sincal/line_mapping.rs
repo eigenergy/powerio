@@ -71,7 +71,7 @@ impl NativeDatabase {
         element: i64,
         buses: &BTreeMap<i64, DistBus>,
     ) -> Result<LineCircuit> {
-        let (operating_point, defaulted) = self.line_mapping_context(element)?;
+        let (operating_point, mut defaulted) = self.line_mapping_context(element)?;
         if self.element_state(element)? != State::On {
             return Err(format_error(
                 "out-of-service line requires inactive-equipment retention",
@@ -108,6 +108,9 @@ impl NativeDatabase {
         if ports[0].connection != Connection::L123 {
             select_phases(&mut decoded.code, positions)?;
         }
+        defaulted.extend(decoded.defaulted);
+        defaulted.sort_unstable();
+        defaulted.dedup();
         let mut auxiliary_buses = Vec::new();
         let mut terminal_switches = Vec::new();
         let mut ends = [ports[0].node.to_string(), ports[1].node.to_string()];
@@ -237,9 +240,9 @@ impl NativeDatabase {
                 ));
             }
         };
-        let (temperature, defaulted) = self.line_temperature(row, field)?;
+        let (temperature, mut defaulted) = self.line_temperature(row, field)?;
         for field in ["Flag_Ll", "Flag_Ground", "Flag_Macro"] {
-            if integer(row, field)? != 0 {
+            if self.line_optional_flag(row, field, &mut defaulted)? != 0 {
                 return Err(format_error(format!("unresolved line model {field}")));
             }
         }
@@ -269,7 +272,14 @@ impl NativeDatabase {
                 "line rated voltage is below its voltage level",
             ));
         }
-        let operating_point = corrections(row, temperature, frequency, rated_voltage)?;
+        let operating_point = corrections(
+            self,
+            row,
+            temperature,
+            frequency,
+            rated_voltage,
+            &mut defaulted,
+        )?;
         if rows.next().map_err(format_error)?.is_some() {
             return Err(format_error("ambiguous line calculation context"));
         }
@@ -331,21 +341,23 @@ fn select_phases(code: &mut DistLineCode, phases: &[usize]) -> Result<()> {
 }
 
 fn corrections(
+    db: &NativeDatabase,
     row: &rusqlite::Row<'_>,
     temperature: f64,
     frequency: f64,
     rated_voltage: f64,
+    defaulted: &mut Vec<&'static str>,
 ) -> Result<LineOperatingPoint> {
     let resistance_factor = if temperature.to_bits() == 20.0_f64.to_bits() {
         1.0
     } else {
-        1.0 + (temperature - 20.0) * number(row, "alpha")?
+        1.0 + (temperature - 20.0) * db.line_optional_number(row, "alpha", defaulted)?
     };
     if !resistance_factor.is_finite() || resistance_factor <= 0.0 {
         return Err(format_error("invalid line temperature correction"));
     }
-    let losses = number(row, "va")?;
-    let parallel = number(row, "ParSys")?;
+    let losses = db.line_optional_number(row, "va", defaulted)?;
+    let parallel = db.line_optional_number(row, "ParSys", defaulted)?;
     // va is kW/km, Un is line-line kV. The manual's full shunt is
     // va*1e-3/Un² S/km, then convert km to metres and apply ParSys.
     let conductance = losses / rated_voltage / rated_voltage * 1e-6 * parallel;

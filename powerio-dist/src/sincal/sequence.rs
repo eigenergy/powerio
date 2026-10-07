@@ -89,6 +89,7 @@ pub(super) struct SequenceLine {
     pub length_m: f64,
     pub code: DistLineCode,
     pub frequency_hz: f64,
+    pub defaulted: Vec<&'static str>,
 }
 
 /// Corrections evaluated from variant-local native operating data.
@@ -228,8 +229,9 @@ impl NativeDatabase {
                 "Line {element}: referenced type/coupling data must be resolved"
             )));
         }
-        let parallel: f64 = row.get(4).map_err(format_error)?;
-        let rating_factor: f64 = row.get(5).map_err(format_error)?;
+        let mut defaulted = Vec::new();
+        let parallel = self.line_optional_number(row, "ParSys", &mut defaulted)?;
+        let rating_factor = self.line_optional_number(row, "fr", &mut defaulted)?;
         let length: f64 = row.get(6).map_err(format_error)?;
         let current: f64 = row.get(7).map_err(format_error)?;
         if !length.is_finite()
@@ -250,7 +252,7 @@ impl NativeDatabase {
             r0: 0.0,
             x0: 0.0,
             c0: row.get(13).map_err(format_error)?,
-            frequency_hz: row.get(14).map_err(format_error)?,
+            frequency_hz: self.line_optional_number(row, "fn", &mut defaulted)?,
         };
         (parameters.r0, parameters.x0) = if zero_input == 1 {
             let r_ratio: f64 = row.get(15).map_err(format_error)?;
@@ -277,6 +279,7 @@ impl NativeDatabase {
             length_m: length * 1000.0,
             code,
             frequency_hz: parameters.frequency_hz,
+            defaulted,
         })
     }
 

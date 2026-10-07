@@ -404,94 +404,85 @@ and IR-without-source have distinct tested behavior. Direct SQLite input and
 optional Access import remain visibly different capabilities. Update diagnostic
 and conversion baselines intentionally, then run full CI clippy and bindings.
 
-Current distribution progress: the local branch includes verified schema-11.5
-voltage-basis defaults, finite direct source zero-sequence mapping, explicit
-phase-pair and single-phase-earth loads, selected absolute daily load snapshots,
-and ideal connection lines represented by typed switches. CSIRO 06 maps 159/218
-components (113 lines, 27 transformers, one source and 18 loads); its remaining
-loads and transformers still reject. CSIRO 09 now maps all 688 native elements
-at an explicitly selected daily snapshot. Five authentic snapshots and five
-separately labelled unequal-delta-load stress cases agree with independently
-constructed OpenDSS networks to below 0.000372 V across all 617 energized nodes.
-Four native nodes behind open connections remain isolated. The source's finite
-OpenDSS approximation is measured separately; no native SINCAL run is claimed.
-The selected authentic loads are phase-symmetric, so asymmetric evidence comes
-from the explicit stress cases, not an assertion about their original powers.
-Independent component checks additionally cover 484 native loads at 2,420
-selected snapshots and all 144 declared CSIRO 09 ideal connections. Four exactly
-zero ordinary line primitives now also map to exact typed switches, preserving
-ratings and terminal states. All 19 base variants remain audited, with one
-complete native conductor-resolved parse at an explicit snapshot. Transformer topology now separates winding declarations
-from operating-state resolution. Two verified Y0 profiles cover finite nominal
-full windings and exact neutral-tap same-voltage connections; active controllers,
-off-neutral same-voltage regulators, YN0 and D0 electrical circuits remain work.
-The explicit-midnight audit maps 781/1033 CSIRO01 and 1162/2329 CSIRO02
-components. These are component counts, not whole-feeder validation.
-Nominal partial delta–delta windings now map through the documented coil
-incidence, without renormalizing ratings by the number of installed coils.
-All 518 newly mapped native devices across CSIRO02/04/06/07 pass independent
-OpenDSS component checks. At 0h their mapped totals are now 1525/2329,
-575/861, 163/218 and 283/456 respectively. No additional complete feeder is
-claimed. Wye star/sequence semantics, partial mixed-winding transformers,
-inconsistent core parameters and broader profiles/variants remain work. The public facade now
-selects `sincal-multiconductor` explicitly, retaining original native bytes and
-the existing network type. Native SQLite/archive routing is exercised through
-CLI/Python/C; explicit Access/variant/snapshot options now use Rust, Python, C, Julia and
-the CLI's summary/convert/serialize commands.
-CSIRO09 public-facade results reproduce the independent electrical checks, MDB
-echo and IR restoration. Generic admittance assembly succeeds with no omission
-diagnostics. Generic PF-instance construction correctly refuses the full native
-network's four unsourced isolated buses; connected synthetic input constructs
-successfully. Python wheel and CLI checks preserve explicit snapshot choices
-and original MDB echo. C/Julia selection plumbing now passes the complete C
-and Julia suites, header/entry-point parity, and an external CSIRO09 comparison
-at 0h/6h against the CLI, including typed IR restoration and original MDB echo.
-Broader corpus coverage and the remainder of the integration packet remain work.
-Schema-11.5 optional transformer defaults now cover the sparse CSIRO03 records
-with explicit provenance; its context now advances to an unmapped ShuntReactor
-conductor declaration. Its 297 limited-P/Q loads additionally require an exact native
-voltage-reduction curve and a corresponding generic typed representation.
-See `evals/sincal/` for exact scope and independently reproduced evidence.
+Current distribution progress: both public electrical families are integrated.
+The conductor reader returns the existing `MulticonductorNetwork`; the balanced
+reader returns `BalancedNetwork`. Rust, Python, CLI, C and Julia support explicit
+family, Access acquisition, variant and daily-snapshot selection. MDB echo and
+IR restoration are verified. No unbalanced failure falls back to a balanced parse.
 
-Both LPC Access files are acquired into external typed records, with schema
-12.8 admitted only through that explicit acquisition boundary. The conductor
-reader preserves its distinct control layout and records legacy line-line
-voltage defaults. The European LV case maps 260/262 components: all 205 lines
-and 55 single-phase constant-power loads. Their actual Rust mappings agree
-with independent OpenDSS line primitives and load currents. Unspecified line
-thermal ratings stay absent rather than becoming invented limits.
-The two remaining components, source and transformer, lack declared
-zero-sequence input while automatic completion is disabled. No complete LPC
-parse or LPC whole-network solver agreement is claimed. S1a maps 54 loads; its 54 DC
-infeeds, 27 library-referenced lines, source and inconsistent transformer core
-inputs still reject. Both files remain external research inputs with unresolved
-redistribution rights; no version marker or electrical input is rewritten.
+The implemented conductor profiles cover directly supplied sequence lines,
+verified reduced-phase circuits, ideal connections, phase-earth and phase-pair
+loads, selected absolute daily load profiles, ideal positive-sequence sources
+with explicit zero-sequence circuits, several full-winding transformer groups,
+nominal partial delta-delta windings, verified Y0 autotransformer profiles, and
+fixed reactor/capacitor banks. Open ports preserve their electrical primitives
+behind switches. Exact-zero ordinary lines become exact typed connections.
+Documented schema-11.5 defaults cover sparse voltage bases, selected transformer
+fields, optional shunt fields, line temperatures, line-model flags, dielectric
+losses, temperature coefficients, parallel counts, rating factors and rated
+frequency. Applied defaults retain provenance; source bytes and acquired NULLs
+are unchanged. Required impedances, ratings and sequence declarations are not
+filled in merely to achieve a successful parse.
 
-CSIRO06 blocker accounting is now explicit in `evals/sincal/csiro06-blockers.json`:
-at the selected midnight snapshot, all 55 rejections comprise 35 Wye loads
-without declared sequence inputs, nine partial YNd1 transformers, and eleven
-core-loss nameplate conflicts. The published excitation formula confirms those
-eleven inputs cannot yield a real reactive core component; all 51 transformers
-pass the independent short-circuit `ur <= uk` check. Missing mapping work and
-inconsistent source data therefore remain separate acceptance dispositions.
-No input repair, rounding-tolerance expansion or complete-feeder claim is made.
+At midnight, current component coverage is:
 
-Rated-bank progress: all five shunt reactors/capacitors in CSIRO03/12/16/17
-now map, with independent OpenDSS component checks. The three inactive banks
-remain disconnected typed circuits. CSIRO03 and CSIRO12 now reach full component
-audits (2/1084 and 61/215 mapped); cases 16/17 next reject synchronous machines.
-The single-phase CSIRO03 reactor also matches 49 aligned historical local
-voltage/current/power records without fitting inputs. This does not establish
-a complete feeder or native desktop acceptance. The original 21-table corpus
-remains reproducible; explicitly identified 23-table acquisitions add the banks.
+| CSIRO case | Mapped / total | Complete parse |
+|---|---:|:---:|
+| 01 | 781 / 1033 | No |
+| 02 | 1525 / 2329 | No |
+| 03 | 776 / 1084 | No |
+| 04 | 575 / 861 | No |
+| 05 | 913 / 1378 | No |
+| 06 | 163 / 218 | No |
+| 07 | 283 / 456 | No |
+| 09 | 688 / 688 | Yes |
+| 12 | 214 / 215 | No |
+| 14 | 55 / 65 | No |
+| 15 | 89 / 102 | No |
 
-Legacy temperature progress: documented 20 C defaults for NULL voltage-level
-line/cable temperatures now map another 186 native lines in CSIRO03/05/12.
-All pass independent OpenDSS primitive checks, including 28 single-phase lines
-and three open terminals. Applied defaults retain provenance and never change
-source inputs. Current totals are 27/1084, 86/1378 and 214/215 respectively;
-CSIRO12's source still rejects NULL controls. Additional sparse line fields and
-load/transformer profiles remain work. No additional complete feeder is claimed.
+All 19 base variants remain audited. Cases with topology-level errors do not
+receive invented component totals. CSIRO09 is the one complete conductor-resolved
+native feeder. Five authentic snapshots and five labelled unequal-delta stress
+cases agree with independently constructed OpenDSS circuits within 0.000372 V
+across 617 energized nodes; four native nodes remain isolated behind open
+connections. Authentic snapshot loads are phase-symmetric; the stress cases
+supply asymmetric evidence. Generic admittance assembly has no omissions.
+Generic PF-instance construction rejects the four unsourced isolated buses,
+as required, while connected synthetic input constructs successfully.
+
+Additional independent evidence covers 484 native loads at 2,420 snapshots,
+518 partial delta-delta transformers, all 144 CSIRO09 ideal connections, five
+rated shunt banks, 186 lines with temperature defaults, and 1,658 further finite
+line circuits with sparse inputs. The latter includes 157 coupled single-phase
+series-only lines checked by eliminating absent currents from OpenDSS's full
+three-phase admittance. Their 29 exact-zero ordinary lines and 33 declared
+connections retain exact topology and ratings. The CSIRO03 reactor also matches
+49 historical local records at measured terminal voltages without fitting.
+These component checks do not establish additional complete feeder solutions.
+
+LPC European LV maps 260/262 components: all 205 lines and 55 single-phase loads,
+with independent OpenDSS checks. Its source and transformer lack declared
+zero-sequence inputs while automatic completion is disabled. LPC S1a maps 54
+loads; its DC infeeds, library-referenced lines and source/transformer modes
+remain work. Both files stay external because redistribution rights are unresolved.
+
+Remaining implementation work includes Wye star/sequence semantics, coupled
+reduced-phase charging, partial mixed-winding transformers, additional regulators,
+CSIRO03's 297 limited-P/Q loads, CSIRO05's referenced load multipliers, synchronous
+machines, further sparse source/transformer fields, and broader variants/profiles.
+CSIRO12 now maps all lines, loads and its capacitor; its source's NULL controls
+remain unresolved. A balanced stored source result confirms its specified
+positive-sequence voltage but does not establish the unknown control field's
+conductor-domain behavior. No source-control default is inferred from that result.
+
+CSIRO06's 55 remaining rejections are explicitly classified: 35 Wye loads,
+nine partial YNd1 transformers and eleven inconsistent core-loss nameplates.
+The excitation formula confirms the latter cannot produce a real reactive core
+component, even though all 51 transformers satisfy the short-circuit `ur <= uk`
+check. Input-data conflicts need separate acceptance dispositions; no tolerance
+expansion or input repair is applied. Native SINCAL execution remains an external
+acceptance gate, separate from continued reader implementation and independent
+validation. Broader corpus coverage and the final integration packet remain work.
 
 ### PR 5: experimental fresh writer
 

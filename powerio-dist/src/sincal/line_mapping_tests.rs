@@ -639,9 +639,32 @@ fn export_legacy_temperature_lines() {
     let directory = std::path::PathBuf::from(
         std::env::var_os("POWERIO_SINCAL_TEMPERATURE_RECORDS").expect("records directory"),
     );
-    let output = std::env::var_os("POWERIO_SINCAL_TEMPERATURE_EXPORT").expect("output path");
+    let output = std::path::PathBuf::from(
+        std::env::var_os("POWERIO_SINCAL_TEMPERATURE_EXPORT").expect("output path"),
+    );
+    export_defaulted_lines(&[3, 5, 12], &directory, &output, false);
+}
+
+#[test]
+#[ignore = "exports native sparse line circuits and ideal connections"]
+fn export_sparse_legacy_lines() {
+    let directory = std::path::PathBuf::from(
+        std::env::var_os("POWERIO_SINCAL_SPARSE_LINE_RECORDS").expect("records directory"),
+    );
+    let output = std::path::PathBuf::from(
+        std::env::var_os("POWERIO_SINCAL_SPARSE_LINE_EXPORT").expect("output path"),
+    );
+    export_defaulted_lines(&[3, 5, 14, 15], &directory, &output, true);
+}
+
+fn export_defaulted_lines(
+    case_numbers: &[i32],
+    directory: &std::path::Path,
+    output: &std::path::Path,
+    sparse: bool,
+) {
     let mut cases = Vec::new();
-    for case in [3, 5, 12] {
+    for &case in case_numbers {
         let path = directory.join(format!("representative{case:02}.json"));
         let db = NativeDatabase::from_snapshot(
             powerio_sincal::DatabaseSnapshot::decode_records(
@@ -651,7 +674,7 @@ fn export_legacy_temperature_lines() {
             .unwrap(),
         )
         .unwrap();
-        let buses = db
+        let buses: BTreeMap<i64, DistBus> = db
             .node_inputs()
             .unwrap()
             .keys()
@@ -663,18 +686,165 @@ fn export_legacy_temperature_lines() {
             })
             .collect();
         let mut lines = Vec::new();
+        let mut connections = Vec::new();
+        let mut graph_network = crate::MulticonductorNetwork::new();
+        graph_network.buses_mut().extend(buses.values().cloned());
         for (&id, kind) in &db.elements {
             if kind != "Line" {
                 continue;
             }
+            if sparse && let Some((switch, defaulted)) = db.connection_switch(id, &buses).unwrap() {
+                if !defaulted.is_empty() {
+                    graph_network.switches_mut().push(switch.clone());
+                    connections.push(
+                        serde_json::json!({"element":id,"switch":switch,"defaulted":defaulted}),
+                    );
+                }
+                continue;
+            }
             if let Ok(c) = db.line_circuit(id, &buses)
                 && !c.defaulted.is_empty()
+                && c.defaulted.iter().any(|f| !f.starts_with("VoltageLevel.")) == sparse
             {
-                lines.push(serde_json::json!({"element":id,"line":c.line,"code":c.code,
-                    "auxiliary_buses":c.auxiliary_buses,"switches":c.terminal_switches,"defaulted":c.defaulted}));
+                let mut value = serde_json::json!({"element":id,"line":c.line,"code":c.code,
+                    "auxiliary_buses":c.auxiliary_buses,"switches":c.terminal_switches,"defaulted":c.defaulted});
+                if sparse {
+                    value["ideal_switch"] = serde_json::to_value(c.ideal_connection()).unwrap();
+                }
+                lines.push(value);
             }
         }
-        cases.push(serde_json::json!({"case":case,"lines":lines}));
+        cases.push(if sparse {
+            serde_json::json!({"case":case,"lines":lines,"connections":connections,"graph":graph_network.to_graph()})
+        } else {
+            serde_json::json!({"case":case,"lines":lines})
+        });
     }
     std::fs::write(output, serde_json::to_vec_pretty(&cases).unwrap()).unwrap();
+}
+
+#[test]
+fn sparse_legacy_line_fields_preserve_explicit_electrical_values_and_provenance() {
+    let sparse = "UPDATE Line SET Flag_Ll=NULL,Flag_Ground=NULL,Flag_Macro=NULL,ParSys=NULL,va=NULL,alpha=NULL;";
+    for temperature in [20, 70] {
+        let context = format!("UPDATE VoltageLevel SET Temp_Cable={temperature};");
+        let explicit = super::legacy_tests::legacy(&context).network().unwrap();
+        let actual = super::legacy_tests::legacy(&format!("{context}{sparse}"))
+            .network()
+            .unwrap();
+        assert_eq!(actual.line_codes(), explicit.line_codes());
+        assert_eq!(actual.lines(), explicit.lines());
+        assert_eq!(actual.loads(), explicit.loads());
+        let mut fields = vec!["Flag_Ground", "Flag_Ll", "Flag_Macro", "ParSys", "va"];
+        if temperature != 20 {
+            fields.insert(4, "alpha");
+        }
+        assert_eq!(actual.defaulted()["Line.30"], fields);
+    }
+    let parallel = super::legacy_tests::legacy("UPDATE Line SET ParSys=2")
+        .network()
+        .unwrap();
+    let single = super::legacy_tests::legacy("UPDATE Line SET ParSys=NULL")
+        .network()
+        .unwrap();
+    assert!(
+        (single.line_codes()[0].r_series[0][0] / parallel.line_codes()[0].r_series[0][0] - 2.0)
+            .abs()
+            < 1e-12
+    );
+    assert!(!parallel.defaulted().contains_key("Line.30"));
+    let lossy = super::legacy_tests::legacy("UPDATE Line SET va=0.5")
+        .network()
+        .unwrap();
+    assert!(lossy.line_codes()[0].g_from[0][0] > 0.0);
+    assert!(
+        single.line_codes()[0]
+            .g_from
+            .iter()
+            .flatten()
+            .all(|v| *v == 0.0)
+    );
+}
+
+#[test]
+fn sparse_line_defaults_never_replace_required_inputs_or_modern_nulls() {
+    // Nonfinite numbers cannot be expressed in acquisition JSON. Exercise
+    // their direct SQLite rejection without serializing them into JSON NULL.
+    for field in ["va", "alpha", "ParSys", "fr", "fn"] {
+        assert!(
+            super::mapping_tests::native(&format!(
+                "UPDATE VoltageLevel SET Temp_Cable=70; UPDATE Line SET {field}=1e999"
+            ))
+            .network()
+            .is_err()
+        );
+    }
+
+    for field in [
+        "Flag_Ll",
+        "Flag_Ground",
+        "Flag_Macro",
+        "ParSys",
+        "fr",
+        "fn",
+        "va",
+        "alpha",
+    ] {
+        let edit = format!("UPDATE VoltageLevel SET Temp_Cable=70; UPDATE Line SET {field}=NULL;");
+        assert!(
+            super::mapping_tests::native(&edit).network().is_err(),
+            "modern NULL {field}"
+        );
+        assert!(
+            super::legacy_tests::legacy(&edit).network().is_ok(),
+            "legacy NULL {field}"
+        );
+        let missing =
+            format!("UPDATE VoltageLevel SET Temp_Cable=70; ALTER TABLE Line DROP COLUMN {field}");
+        assert!(
+            super::legacy_tests::legacy(&missing).network().is_err(),
+            "missing {field}"
+        );
+        let bad = format!("UPDATE VoltageLevel SET Temp_Cable=70; UPDATE Line SET {field}='bad'");
+        assert!(
+            super::legacy_tests::legacy(&bad).network().is_err(),
+            "bad {field}"
+        );
+    }
+    for field in [
+        "r",
+        "x",
+        "r0",
+        "x0",
+        "l",
+        "Un",
+        "Flag_Z0_Input",
+        "Flag_LineTyp",
+    ] {
+        assert!(
+            super::legacy_tests::legacy(&format!("UPDATE Line SET {field}=NULL"))
+                .network()
+                .is_err(),
+            "required {field}"
+        );
+    }
+    for edit in [
+        "Flag_Ll=1",
+        "Flag_Ground=1",
+        "Flag_Macro=1",
+        "ParSys=0",
+        "ParSys=-1",
+        "va=-1",
+        "fr=0",
+        "fn=0",
+    ] {
+        assert!(
+            super::legacy_tests::legacy(&format!(
+                "UPDATE VoltageLevel SET Temp_Cable=70; UPDATE Line SET {edit}"
+            ))
+            .network()
+            .is_err(),
+            "invalid/unsupported {edit}"
+        );
+    }
 }

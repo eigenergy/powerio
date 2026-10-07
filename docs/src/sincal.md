@@ -146,6 +146,10 @@ The Access acquisition helper includes both bank tables by default.
 For schema 11.5, a NULL voltage-level line/cable temperature uses its documented
 20 C default. The selected field is recorded in `network.defaulted`; explicit
 temperatures retain their correction, and missing columns or modern NULLs fail.
+The same legacy profile admits documented defaults for optional line flags,
+dielectric losses, parallel counts, rating factors, rated frequency and active
+temperature coefficients. Required impedances and sequence declarations remain
+strict. Ideal connections record their applied defaults as well.
 
 PowerIO's primary-file limit remains 64 MiB by default. For a known larger input,
 use its existing explicit `POWERIO_MAX_PRIMARY_BYTES` setting. CSIRO09 is
