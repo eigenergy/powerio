@@ -1,5 +1,5 @@
-//! Explicit ideal-source boundary; finite and sequence-selective impedances
-//! require separate circuits, never metadata on an ideal voltage source.
+//! Ideal positive/negative-sequence boundary with an explicit zero-sequence
+//! circuit. Finite positive-sequence impedance still requires separate mapping.
 
 use std::f64::consts::TAU;
 
@@ -13,7 +13,7 @@ use super::{
     load_mapping::resolve_voltage,
     semantics::{Connection, State},
 };
-use crate::{DistBus, DistSwitch, Result, VoltageSource};
+use crate::{DistBus, DistShunt, DistSwitch, Result, VoltageSource};
 
 pub(super) struct SourceCircuit {
     pub bus: DistBus,
@@ -88,6 +88,8 @@ pub(super) struct IdealSourceCircuit {
     pub bus: DistBus,
     pub boundary: IdealVoltageBoundary,
     pub switch: DistSwitch,
+    /// Finite native Z0 represented by Z0/3 from the local source star to earth.
+    pub grounding_shunt: Option<DistShunt>,
 }
 
 impl IdealSourceCircuit {
@@ -127,16 +129,30 @@ impl InfeederInput {
         // xi=0 establishes only the positive-sequence ideal boundary. An
         // ungrounded source has no zero-sequence current path; its star is
         // an unknown, not an earth-referenced prescribed voltage.
-        let reference = match self.grounding {
-            SourceGrounding::Ungrounded => VoltageReference::Terminal("star".into()),
+        let (reference, grounding_admittance) = match self.grounding {
+            SourceGrounding::Ungrounded => (VoltageReference::Terminal("star".into()), None),
             SourceGrounding::Solid(SourceZeroSequence::DirectOhms(z))
                 if z.re == 0.0 && z.im == 0.0 =>
             {
-                VoltageReference::Earth
+                (VoltageReference::Earth, None)
+            }
+            SourceGrounding::Solid(SourceZeroSequence::DirectOhms(z)) => {
+                // I_star=3 I0 and V0=-Z0 I0 for current delivered to the
+                // network, hence the local grounding admittance is 3/Z0.
+                // Scale the reciprocal to avoid squaring a large impedance.
+                let scale = z.re.abs().max(z.im.abs());
+                let unit = z / scale;
+                let y = (3.0 / scale) * unit.conj() / unit.norm_sqr();
+                if !y.re.is_finite() || !y.im.is_finite() || y == Complex64::default() {
+                    return Err(format_error(
+                        "source grounding admittance overflows or underflows",
+                    ));
+                }
+                (VoltageReference::Terminal("star".into()), Some(y))
             }
             _ => {
                 return Err(format_error(
-                    "ideal source requires solid grounding and explicit zero R0/X0, or an ungrounded star",
+                    "source requires direct solid-grounding R0/X0 or an ungrounded star",
                 ));
             }
         };
@@ -182,10 +198,54 @@ impl InfeederInput {
         if let VoltageReference::Terminal(terminal) = &boundary.reference {
             local_bus.terminals.push(terminal.clone());
         }
+        let grounding_shunt = grounding_admittance.map(|y| {
+            DistShunt::new(
+                format!("sincal:infeeder:{}:zero-sequence", self.element),
+                local_bus.id.clone(),
+                vec!["star".into()],
+                vec![vec![y.re]],
+                vec![vec![y.im]],
+            )
+        });
         Ok(IdealSourceCircuit {
             bus: local_bus,
             boundary,
             switch,
+            grounding_shunt,
         })
+    }
+}
+
+impl super::schema::NativeDatabase {
+    /// Direct native R0/X0 refers to the selected short-circuit data set.
+    /// Only the current-data selection is implemented. Min/max selection must
+    /// not reuse these fields. Siemens Input Data (2014), printed pp. 50–51.
+    pub fn require_source_sequence_selection(&self, input: &InfeederInput) -> Result<()> {
+        if let SourceGrounding::Solid(SourceZeroSequence::DirectOhms(z)) = input.grounding
+            && z != Complex64::default()
+        {
+            if self.version.to_bits() != 11.5_f64.to_bits() {
+                return Err(format_error(
+                    "finite source zero sequence requires the verified schema-11.5 profile",
+                ));
+            }
+            let mut statement = self
+                .connection
+                .prepare("SELECT Flag_ScType FROM CalcParameter WHERE Variant_ID=?1")
+                .map_err(format_error)?;
+            let mut rows = statement.query([self.variant]).map_err(format_error)?;
+            let row = rows
+                .next()
+                .map_err(format_error)?
+                .ok_or_else(|| format_error("missing source calculation settings"))?;
+            if row.get::<_, i64>(0).map_err(format_error)? != 1
+                || rows.next().map_err(format_error)?.is_some()
+            {
+                return Err(format_error(
+                    "source zero sequence requires unambiguous current short-circuit data selection",
+                ));
+            }
+        }
+        Ok(())
     }
 }

@@ -206,3 +206,85 @@ fn absent_coupling_references_preserve_lines_but_active_references_require_mappi
         assert!(legacy(edit).network().is_err(), "accepted {edit}");
     }
 }
+
+#[test]
+fn finite_source_sequence_requires_the_current_variant_local_input_selection() {
+    let base = "ALTER TABLE CalcParameter ADD COLUMN Flag_ScType INTEGER DEFAULT 1;
+        UPDATE Infeeder SET R0=0.3, X0=0.6;";
+    let net = legacy(base).network().unwrap();
+    crate::require_electrical_readiness(&net).unwrap();
+    let source = &net.sources()[0];
+    assert_eq!(source.reference_terminal.as_deref(), Some("star"));
+    let shunt = net
+        .shunts()
+        .iter()
+        .find(|s| s.name == "sincal:infeeder:32:zero-sequence")
+        .unwrap();
+    assert_eq!(shunt.terminal_map, ["star"]);
+    assert_eq!(shunt.bus, source.bus);
+    assert!((shunt.g[0][0] - 2.0).abs() < 1e-12);
+    assert!((shunt.b[0][0] + 4.0).abs() < 1e-12);
+    for edit in [
+        "UPDATE CalcParameter SET Flag_ScType=2",
+        "UPDATE CalcParameter SET Flag_ScType=3",
+        "UPDATE CalcParameter SET Flag_ScType=NULL",
+        "DELETE FROM CalcParameter",
+        "INSERT INTO CalcParameter SELECT * FROM CalcParameter",
+    ] {
+        assert!(
+            legacy(&format!("{base}{edit}")).network().is_err(),
+            "accepted {edit}"
+        );
+    }
+    assert!(
+        legacy("UPDATE Infeeder SET R0=0.3,X0=0.6")
+            .network()
+            .is_err()
+    );
+    assert!(
+        NativeDatabase::decode(&network_database(base), None)
+            .unwrap()
+            .network()
+            .is_err()
+    );
+    let restored: crate::MulticonductorNetwork =
+        serde_json::from_value(serde_json::to_value(&net).unwrap()).unwrap();
+    assert_eq!(restored.sources(), net.sources());
+    assert_eq!(restored.shunts(), net.shunts());
+}
+
+#[test]
+#[ignore = "exports original synthetic finite-source circuits for the independent OpenDSS check"]
+fn export_source_zero_sequence_oracle() {
+    let directory = std::path::PathBuf::from(
+        std::env::var_os("POWERIO_SINCAL_SOURCE_ORACLE_DIR")
+            .expect("POWERIO_SINCAL_SOURCE_ORACLE_DIR"),
+    );
+    std::fs::create_dir_all(&directory).unwrap();
+    for (name, r, x) in [
+        ("resistive", 0.3, 0.0),
+        ("inductive", 0.3, 0.6),
+        ("capacitive", 0.3, -0.6),
+    ] {
+        let net = legacy(&format!(
+            "ALTER TABLE CalcParameter ADD COLUMN Flag_ScType INTEGER DEFAULT 1;
+             DELETE FROM Terminal WHERE Element_ID IN (30,33);
+             DELETE FROM Element WHERE Element_ID IN (30,33);
+             UPDATE Terminal SET Node_ID=10 WHERE Element_ID=31;
+             DELETE FROM Node WHERE Node_ID IN (20,30);
+             UPDATE VoltageLevel SET Un=0.4;
+             UPDATE Infeeder SET Ug=0.4,delta=0,R0={r},X0={x};
+             UPDATE Load SET fP=1,fQ=1,P1=0.002,P2=0.004,P3=0.006,Q1=0.001,Q2=0.002,Q3=0.003;"
+        ))
+        .network()
+        .unwrap();
+        crate::require_electrical_readiness(&net).unwrap();
+        let value = json!({"network": net, "native_input": {"r0": r, "x0": x,
+            "voltage_ll_v": 400.0, "phase_p_w": [2000.0,4000.0,6000.0], "phase_q_var": [1000.0,2000.0,3000.0]}});
+        std::fs::write(
+            directory.join(format!("{name}.json")),
+            serde_json::to_vec_pretty(&value).unwrap(),
+        )
+        .unwrap();
+    }
+}

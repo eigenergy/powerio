@@ -3,7 +3,7 @@
   "attribution": "Berry, Adam; Collins, Lyle; Oliver, Erin; Perfumo, Cristian (2015), Representative Australian Electricity Feeders with load and solar generation profiles, v1, CSIRO.",
   "license": "CC-BY-4.0",
   "scope": "Conductor-resolved base-variant development audit; no family inference, independent solve or native execution.",
-  "reader_sha256": "83b4a2b73e2403a3166316ac8d4bc0e39de5cef3314d2d0ad8404abf7c826024",
+  "reader_sha256": "8c933eb0835f5119e2f6ec1538334c8ab3754e7378651a16e4a053112c3238b5",
   "cases": [
     {
       "case": 1,
@@ -49,20 +49,16 @@
       "variant": 1,
       "context_error": null,
       "complete_parse": false,
-      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 5 (Infeeder): PSS SINCAL read error: ideal source requires solid grounding and explicit zero R0/X0, or an ungrounded star\" }",
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 380 (Load): PSS SINCAL read error: load requires an explicitly resolved profile state\" }",
       "independently_validated": false,
       "native_execution": false,
       "component_count": 861,
       "mapped_by_type": {
+        "Infeeder": 1,
         "Line": 266,
         "TwoWindingTransformer": 36
       },
       "failures": [
-        {
-          "type": "Infeeder",
-          "count": 1,
-          "reason": "PSS SINCAL read error: PSS SINCAL read error: ideal source requires solid grounding and explicit zero R0/X0, or an ungrounded star"
-        },
         {
           "type": "Line",
           "count": 124,
@@ -110,20 +106,16 @@
       "variant": 1,
       "context_error": null,
       "complete_parse": false,
-      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 1 (Infeeder): PSS SINCAL read error: ideal source requires solid grounding and explicit zero R0/X0, or an ungrounded star\" }",
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 4 (Load): PSS SINCAL read error: load requires zero-sequence circuit resolution\" }",
       "independently_validated": false,
       "native_execution": false,
       "component_count": 218,
       "mapped_by_type": {
+        "Infeeder": 1,
         "Line": 113,
         "TwoWindingTransformer": 27
       },
       "failures": [
-        {
-          "type": "Infeeder",
-          "count": 1,
-          "reason": "PSS SINCAL read error: PSS SINCAL read error: ideal source requires solid grounding and explicit zero R0/X0, or an ungrounded star"
-        },
         {
           "type": "Load",
           "count": 53,
@@ -149,20 +141,16 @@
       "variant": 1,
       "context_error": null,
       "complete_parse": false,
-      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 3 (Infeeder): PSS SINCAL read error: ideal source requires solid grounding and explicit zero R0/X0, or an ungrounded star\" }",
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 45 (Load): PSS SINCAL read error: load requires an explicitly resolved profile state\" }",
       "independently_validated": false,
       "native_execution": false,
       "component_count": 456,
       "mapped_by_type": {
+        "Infeeder": 1,
         "Line": 122,
         "TwoWindingTransformer": 22
       },
       "failures": [
-        {
-          "type": "Infeeder",
-          "count": 1,
-          "reason": "PSS SINCAL read error: PSS SINCAL read error: ideal source requires solid grounding and explicit zero R0/X0, or an ungrounded star"
-        },
         {
           "type": "Line",
           "count": 110,

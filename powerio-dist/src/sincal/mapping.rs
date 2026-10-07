@@ -148,6 +148,7 @@ impl NativeDatabase {
                 }
                 "Infeeder" => {
                     let input = self.infeeder_input(element)?;
+                    self.require_source_sequence_selection(&input)?;
                     let node = input.terminal.node;
                     let circuit = input.ideal_boundary_circuit(
                         &buses[&node],
@@ -155,6 +156,7 @@ impl NativeDatabase {
                     )?;
                     net.buses_mut().push(circuit.bus);
                     source_boundaries.push(circuit.boundary);
+                    net.shunts_mut().extend(circuit.grounding_shunt);
                     net.switches_mut().push(circuit.switch);
                 }
                 "DCInfeeder" => {

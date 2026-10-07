@@ -225,7 +225,8 @@ Schema acquisition itself adds bounded nonunique lookup indexes, preserving
 NULLs and duplicates while avoiding full-table scans for every component.
 
 At this checkpoint, CSIRO 06 maps all 113 lines and 27 of 51 transformers;
-its 53 loads, source and remaining transformers still reject. The full audit
+its source now maps as well (141/218 total components), while its 53 loads
+and remaining transformers still reject. The full audit
 also reaches individual components in 04, 07, 09 and 19. Indexing removes the
 query-budget failures previously observed in 02, 04 and 09 without increasing
 the SQL instruction allowance. Remaining context-level failures include
@@ -238,3 +239,42 @@ nullable taps/core/partial connections, selected profiles and inherited variants
 The original research component evidence is retained; component success is not
 presented as complete CSIRO parsing. Fresh writer packaging is reserved for its
 separate branch and has not been pulled into this reader extraction.
+
+
+### Finite source zero sequence
+
+The schema-11.5 current-data profile now supports an ideal positive/negative-
+sequence source with directly specified finite `R0+jX0`. It uses the existing
+referenced voltage source and a shunt from its local star to earth, with
+admittance `3/Z0`. This preserves the rotating-sequence voltage constraints,
+zero-sequence voltage drop and grounding losses without adding electrical
+behavior to metadata. The source star is not connected to an external neutral.
+Minimum/maximum short-circuit selection, ambiguous settings, unresolved neutral
+impedances and other source impedance modes still reject.
+
+The mapping follows the direct zero-sequence and grounding definitions in the
+Siemens General Input Data manual (April 2014, printed pp. 50–51). Do not infer
+legacy defaults from later versions: [Siemens 14.5 release information, p. 13](https://sincal.s3.amazonaws.com/14.5/ReleaseNotes-Eng.pdf)
+explicitly changed handling of activated zero-sequence inputs containing zeros.
+The finite profile is therefore independently version-gated.
+
+Reproduce the independent circuit check (NumPy/OpenDSSDirect are optional
+evaluation dependencies):
+
+```sh
+POWERIO_SINCAL_SOURCE_ORACLE_DIR=/tmp/source-oracle cargo test -p powerio-dist \
+  sincal::legacy_tests::export_source_zero_sequence_oracle --lib -- --ignored
+python3 evals/sincal/check_source_zero_sequence.py /tmp/source-oracle \
+  --report /tmp/source-zero-sequence.json
+```
+
+`source-zero-sequence.json` records three original synthetic cases (resistive,
+inductive and capacitive zero sequence). A dense MNA solve uses the actual Rust
+reader output; a separate OpenDSS circuit uses the original source/load inputs.
+The maximum complex-voltage difference is below 7.1e-7 V. OpenDSS's required
+small positive/negative impedance approximation is recorded explicitly.
+Rust tests also cover current balance, losses, numerical extremes, typed
+transport and calculation-mode rejection. These are component/circuit checks,
+not complete CSIRO validation. The previously observed discrepancies with
+historical source results remain unresolved; no stored result is used to fit
+or replace an input impedance. Native SINCAL execution remains unperformed.

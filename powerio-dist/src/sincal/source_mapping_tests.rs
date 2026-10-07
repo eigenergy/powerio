@@ -45,6 +45,15 @@ fn solve(
     } else {
         assert_eq!(star_admittance, Complex64::default());
     }
+    if let Some(shunt) = &source.grounding_shunt {
+        for (i, from) in shunt.terminal_map.iter().enumerate() {
+            for (j, to) in shunt.terminal_map.iter().enumerate() {
+                let a = terminals.iter().position(|t| t == from).unwrap();
+                let b = terminals.iter().position(|t| t == to).unwrap();
+                matrix[a][b] += Complex64::new(shunt.g[i][j], shunt.b[i][j]);
+            }
+        }
+    }
     for (row, equation) in source.boundary.equations().iter().enumerate() {
         let constraint = nodes + row;
         for (terminal, coefficient) in [
@@ -209,7 +218,6 @@ fn native_floating_infeeder_produces_constraints_without_claiming_network_suppor
 fn floating_boundary_does_not_admit_finite_impedance_or_unresolved_controls() {
     for edit in [
         "UPDATE Infeeder SET xi=10",
-        "UPDATE Infeeder SET Flag_Z0=1,R0=1,X0=0",
         "UPDATE Infeeder SET Flag_Z0=2,Stp_ID=5",
         "UPDATE Infeeder SET Flag_Lf=2",
         "UPDATE Element SET Flag_State=0",
@@ -224,4 +232,58 @@ fn floating_boundary_does_not_admit_finite_impedance_or_unresolved_controls() {
             "accepted {edit}"
         );
     }
+}
+
+#[test]
+fn finite_native_zero_sequence_keeps_ideal_rotating_sequences_and_ground_current() {
+    for (r, x) in [(0.3, 0.6), (0.0, 0.6), (0.3, 0.0), (0.3, -0.6)] {
+        let source = circuit(&format!("UPDATE Infeeder SET Flag_Z0=1,R0={r},X0={x}"));
+        let shunt = source.grounding_shunt.as_ref().unwrap();
+        assert_eq!(shunt.terminal_map, ["star"]);
+        assert!(source.bus.grounded.is_empty());
+        let admittance = [
+            Complex64::new(0.01, -0.003),
+            Complex64::new(0.02, -0.004),
+            Complex64::new(0.04, 0.002),
+        ];
+        let solved = solve(&source, admittance, Complex64::default()).unwrap();
+        let currents = std::array::from_fn::<_, 3, _>(|i| admittance[i] * solved[i]);
+        let v0 = solved[..3].iter().sum::<Complex64>() / 3.0;
+        let i0 = currents.iter().sum::<Complex64>() / 3.0;
+        near(v0, -Complex64::new(r, x) * i0);
+        near(solved[3], v0);
+        for phase in 0..3 {
+            let next = (phase + 1) % 3;
+            let emf = source.boundary.equations();
+            near(
+                solved[phase] - solved[next],
+                emf[phase].voltage - emf[next].voltage,
+            );
+        }
+        let absorbed = v0 * currents.iter().sum::<Complex64>().conj() * -1.0;
+        near(absorbed, 3.0 * Complex64::new(r, x) * i0.norm_sqr());
+        assert!(source.into_grounded().is_err());
+    }
+}
+
+#[test]
+fn finite_grounding_admittance_scales_without_overflowing_the_impedance_square() {
+    let source = circuit("UPDATE Infeeder SET Flag_Z0=1,R0=1e200,X0=1e200");
+    let shunt = source.grounding_shunt.unwrap();
+    assert!((shunt.g[0][0] / 1.5e-200 - 1.0).abs() < 1e-14);
+    assert!((shunt.b[0][0] / -1.5e-200 - 1.0).abs() < 1e-14);
+    let db = NativeDatabase::decode(
+        &infeeder_database("UPDATE Infeeder SET Flag_Z0=1,R0=1e-310,X0=0"),
+        None,
+    )
+    .unwrap();
+    assert!(
+        db.infeeder_input(30)
+            .unwrap()
+            .ideal_boundary_circuit(
+                &crate::DistBus::new("10", vec!["1".into(), "2".into(), "3".into()]),
+                400.0
+            )
+            .is_err()
+    );
 }
