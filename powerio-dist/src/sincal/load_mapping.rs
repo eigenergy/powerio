@@ -175,6 +175,12 @@ impl LoadInput {
             q_nom,
         );
         load.voltage_model = voltage_model;
+        if let Some(selection) = &self.profile_selection {
+            load.extras.insert(
+                "sincal_profile".into(),
+                serde_json::to_value(selection).map_err(format_error)?,
+            );
+        }
         Ok(load)
     }
 }

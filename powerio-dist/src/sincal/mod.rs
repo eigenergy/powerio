@@ -20,6 +20,9 @@ mod legacy_tests;
 mod line_mapping;
 mod load;
 mod load_mapping;
+mod load_profile;
+#[cfg(test)]
+mod load_profile_tests;
 mod mapping;
 mod mapping_report;
 mod project;
@@ -96,5 +99,20 @@ pub(crate) fn read_snapshot(
 
 pub(crate) fn audit_snapshot(snapshot: powerio_sincal::DatabaseSnapshot) -> Result<String> {
     let report = NativeDatabase::from_snapshot(snapshot)?.mapping_report()?;
+    serde_json::to_string_pretty(&report).map_err(format_error)
+}
+
+pub(crate) fn read_snapshot_at(
+    snapshot: powerio_sincal::DatabaseSnapshot,
+    hours: f64,
+) -> Result<crate::MulticonductorNetwork> {
+    NativeDatabase::from_snapshot(snapshot)?.network_at(hours)
+}
+
+pub(crate) fn audit_snapshot_at(
+    snapshot: powerio_sincal::DatabaseSnapshot,
+    hours: f64,
+) -> Result<String> {
+    let report = NativeDatabase::from_snapshot(snapshot)?.mapping_report_at(Some(hours))?;
     serde_json::to_string_pretty(&report).map_err(format_error)
 }

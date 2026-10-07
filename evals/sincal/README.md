@@ -310,3 +310,53 @@ python3 evals/sincal/check_phase_pair_loads.py \
 `load-phase-pairs.json` records input/export hashes, all selected element IDs,
 engine versions and measured errors. Source models remain external; the
 checker verifies their identity against the licensed acquisition manifest.
+
+### Explicit daily load snapshots
+
+The internal distribution reader/audit accepts an optional snapshot time in
+hours. Without it, active profiles still reject instead of silently selecting
+midnight or using base powers. Selection currently supports schema-11.5 local
+absolute-power daily profiles (`OpSer.Flag_Typ=3`, `Flag_Ser=1`) with no power
+or diversity corrections and unity load P/Q factors. Profile kW/kvar replace
+aggregate input powers; the base apparent-power factor `fS` does not scale the
+replacement. Connections and constant-P/I/Z voltage behavior are preserved.
+
+`BaseT=0` means 24 hours. Continuous segments interpolate linearly; discrete
+segments retain the preceding value. The last segment wraps to the first
+sample. A time-zero sample is required; an explicit sample at the period must
+agree with it. Duplicate IDs/times, conflicting endpoints, malformed values,
+unsupported selectors, weekly/yearly composition and allocation over explicit
+per-phase input arrays reject. Original inputs remain unchanged, and selected
+profile/time/period provenance accompanies the mapped load. These are selected
+static snapshots; automatic `TimeSeries` construction remains future work.
+
+The definitions are in Siemens General Input Data (April 2014), printed
+pp. 292–295; Database Description pp. 84–85; and Load Flow pp. 48–50.
+
+```sh
+POWERIO_SINCAL_PROFILE_RECORDS=/tmp/acquired-records \
+POWERIO_SINCAL_PROFILE_EXPORT=/tmp/profile-components.json \
+  cargo test -p powerio-dist --lib \
+  sincal::load_profile_tests::export_csiro_daily_loads -- --ignored
+python3 evals/sincal/check_daily_profiles.py /tmp/native-models /tmp/acquired-records \
+  /tmp/profile-components.json --report /tmp/load-daily-profiles.json
+cargo build -p powerio-dist --example sincal_multiconductor
+python3 evals/sincal/audit_distribution.py /tmp/native-models /tmp/acquired-records \
+  /tmp/distribution-csiro-profiles.json --reader target/debug/examples/sincal_multiconductor \
+  --snapshot-hours 0
+```
+
+`load-daily-profiles.json` validates 482 profiled phase-pair loads across
+CSIRO 01/04/07 at five times (2,410 snapshots), including interpolation and
+the cyclic boundary. NumPy independently interpolates the publisher's input
+powers; OpenDSS independently constructs each load's primitive. Maximum
+power error is below 1.9e-12 W/var and admittance error below 1.5e-17 S.
+All 483 selected loads are accounted for: one load in CSIRO 04 (Element 543,
+OpSer 598) rejects because two different native values share time 7.5 hours.
+The checker verifies that rejection against the original acquired records;
+it does not choose or average a conflicting row. The source files and generated
+component exports remain external, with pinned hashes in the compact report.
+
+`distribution-csiro-profiles.json` separately audits all 19 cases at time zero.
+This does not establish a complete parsed network or a whole-feeder solve;
+unresolved grounding, transformers and other modes remain explicit failures.

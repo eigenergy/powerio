@@ -1,0 +1,501 @@
+{
+  "collection": "https://doi.org/10.4225/08/5631B1DF6F1A0",
+  "attribution": "Berry, Adam; Collins, Lyle; Oliver, Erin; Perfumo, Cristian (2015), Representative Australian Electricity Feeders with load and solar generation profiles, v1, CSIRO.",
+  "license": "CC-BY-4.0",
+  "scope": "Conductor-resolved base-variant development audit; no family inference, independent solve or native execution.",
+  "reader_sha256": "ca56e08ebc418e26a1d490edd507a5316f94d16238630b2fac9b7b8617e7466a",
+  "cases": [
+    {
+      "case": 1,
+      "source_sha256": "eb1fb68ba654f70f5dfb0a39dcd04831b3f1db42aa0448c29824da2997e42b40",
+      "record_sha256": "34ba7815a6d87096db9880d0771b5617b6f9b5c17259b888d716fddddb798eaf",
+      "schema": 11.5,
+      "variant": 1,
+      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"autotransformer needs a galvanic circuit mapping\" }",
+      "complete_parse": false,
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"autotransformer needs a galvanic circuit mapping\" }",
+      "independently_validated": false,
+      "native_execution": false,
+      "snapshot_hours": 0.0
+    },
+    {
+      "case": 2,
+      "source_sha256": "3e792c54b81c135b63bf9dbd5cbea2aa4057a9818edd7d608acb607bd49694b6",
+      "record_sha256": "8de1486a6467fc5972d0c8a7a62bb86f936057d18a98cafebae91d9cac2d0df8",
+      "schema": 11.5,
+      "variant": 1,
+      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"autotransformer needs a galvanic circuit mapping\" }",
+      "complete_parse": false,
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"autotransformer needs a galvanic circuit mapping\" }",
+      "independently_validated": false,
+      "native_execution": false,
+      "snapshot_hours": 0.0
+    },
+    {
+      "case": 3,
+      "source_sha256": "9eaf7c785fe0962af4e9ea5e6a5efb56477ed7427b660481c5cc66f9460bd759",
+      "record_sha256": "6fad8c0246e8582367ea26dc712369c25edd9256ca5e31b8e97dc9c2fb086438",
+      "schema": 11.5,
+      "variant": 1,
+      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"Invalid column type Null at index: 62, name: Flag_Ct\" }",
+      "complete_parse": false,
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Invalid column type Null at index: 62, name: Flag_Ct\" }",
+      "independently_validated": false,
+      "native_execution": false,
+      "snapshot_hours": 0.0
+    },
+    {
+      "case": 4,
+      "source_sha256": "19da5cd451e00e30a598fff58661172a964df36f7b8ac70767c4cc49068017dc",
+      "record_sha256": "d3b9b20ee495aba0df56e4a059008d9368e419e63a5a4b5e4561234553abcb4f",
+      "schema": 11.5,
+      "variant": 1,
+      "context_error": null,
+      "complete_parse": false,
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 380 (Load): PSS SINCAL read error: load requires zero-sequence circuit resolution\" }",
+      "independently_validated": false,
+      "native_execution": false,
+      "snapshot_hours": 0.0,
+      "component_count": 861,
+      "mapped_by_type": {
+        "Infeeder": 1,
+        "Line": 266,
+        "Load": 177,
+        "TwoWindingTransformer": 36
+      },
+      "failures": [
+        {
+          "type": "Line",
+          "count": 124,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: coupled reduced-phase line with shunts requires verified missing-conductor mapping"
+        },
+        {
+          "type": "Load",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: OpSer 598: duplicate or unordered OpTime 7.5"
+        },
+        {
+          "type": "Load",
+          "count": 57,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: load requires zero-sequence circuit resolution"
+        },
+        {
+          "type": "TwoWindingTransformer",
+          "count": 95,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer primitive requires in-service full windings, nominal taps and resolved solid/no grounding"
+        },
+        {
+          "type": "TwoWindingTransformer",
+          "count": 104,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer real component exceeds stated magnitude"
+        }
+      ]
+    },
+    {
+      "case": 5,
+      "source_sha256": "26dfb51d491e0333c45613e7eafa35d9c4c3ad07e1170d8c644e80584bafdaf8",
+      "record_sha256": "f7bf5f04a24e192b02a731816bcef3d82f2850f90d22a86e840afd131e16cd5b",
+      "schema": 11.5,
+      "variant": 1,
+      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"Invalid column type Null at index: 56, name: AddRotate\" }",
+      "complete_parse": false,
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Invalid column type Null at index: 56, name: AddRotate\" }",
+      "independently_validated": false,
+      "native_execution": false,
+      "snapshot_hours": 0.0
+    },
+    {
+      "case": 6,
+      "source_sha256": "6c6eb3caaaa517fcb424965d5e15819edaa7bd20da15a32d85a02b4ddef4eff8",
+      "record_sha256": "082bb93d85781682d7f34c01d5ce3c0ff9ee68682383a015320d82bbb393cf17",
+      "schema": 11.5,
+      "variant": 1,
+      "context_error": null,
+      "complete_parse": false,
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 4 (Load): PSS SINCAL read error: load requires zero-sequence circuit resolution\" }",
+      "independently_validated": false,
+      "native_execution": false,
+      "snapshot_hours": 0.0,
+      "component_count": 218,
+      "mapped_by_type": {
+        "Infeeder": 1,
+        "Line": 113,
+        "Load": 18,
+        "TwoWindingTransformer": 27
+      },
+      "failures": [
+        {
+          "type": "Load",
+          "count": 35,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: load requires zero-sequence circuit resolution"
+        },
+        {
+          "type": "TwoWindingTransformer",
+          "count": 13,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer primitive requires in-service full windings, nominal taps and resolved solid/no grounding"
+        },
+        {
+          "type": "TwoWindingTransformer",
+          "count": 11,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer real component exceeds stated magnitude"
+        }
+      ]
+    },
+    {
+      "case": 7,
+      "source_sha256": "fc9d41945e1bc935ea762e15d9d44e418fa6c116a9e115397df2260c5c1e8b58",
+      "record_sha256": "f398fb1ab79f442595927cdb8cc9694c71acec91a275ec016eb9b4487ea91736",
+      "schema": 11.5,
+      "variant": 1,
+      "context_error": null,
+      "complete_parse": false,
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 45 (Load): PSS SINCAL read error: load requires zero-sequence circuit resolution\" }",
+      "independently_validated": false,
+      "native_execution": false,
+      "snapshot_hours": 0.0,
+      "component_count": 456,
+      "mapped_by_type": {
+        "Infeeder": 1,
+        "Line": 122,
+        "Load": 82,
+        "TwoWindingTransformer": 22
+      },
+      "failures": [
+        {
+          "type": "Line",
+          "count": 110,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: coupled reduced-phase line with shunts requires verified missing-conductor mapping"
+        },
+        {
+          "type": "Load",
+          "count": 30,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: load requires zero-sequence circuit resolution"
+        },
+        {
+          "type": "TwoWindingTransformer",
+          "count": 56,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer primitive requires in-service full windings, nominal taps and resolved solid/no grounding"
+        },
+        {
+          "type": "TwoWindingTransformer",
+          "count": 33,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer real component exceeds stated magnitude"
+        }
+      ]
+    },
+    {
+      "case": 8,
+      "source_sha256": "7534155ddb30c122719bd742af91ff87f8bca09256942c1839ca9843fba5473e",
+      "record_sha256": "cf62b483876d50127136d508f4001361154cd407e325d53c5c331bb7ff2045ab",
+      "schema": 11.5,
+      "variant": 1,
+      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 264: no conductor mapping for element type SynchronousMachine\" }",
+      "complete_parse": false,
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 264: no conductor mapping for element type SynchronousMachine\" }",
+      "independently_validated": false,
+      "native_execution": false,
+      "snapshot_hours": 0.0
+    },
+    {
+      "case": 9,
+      "source_sha256": "d2c41fae2f6fc3b9cdea75c1bcbc50f083b104440148a25274ee6ed7da57a14b",
+      "record_sha256": "fa661a3947bd171683d1b73a4e15c0d073c19c0df473f649fb32d4e8a2068592",
+      "schema": 11.5,
+      "variant": 1,
+      "context_error": null,
+      "complete_parse": false,
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 4 (Infeeder): PSS SINCAL read error: infeeder requires resolution of Typ_ID\" }",
+      "independently_validated": false,
+      "native_execution": false,
+      "snapshot_hours": 0.0,
+      "component_count": 688,
+      "mapped_by_type": {
+        "Line": 476,
+        "Load": 1
+      },
+      "failures": [
+        {
+          "type": "Infeeder",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: infeeder requires resolution of Typ_ID"
+        },
+        {
+          "type": "Line",
+          "count": 144,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: ideal-connection or coupled line needs its own circuit mapping"
+        },
+        {
+          "type": "Load",
+          "count": 66,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: absolute profile requires verified unity load factors"
+        }
+      ]
+    },
+    {
+      "case": 10,
+      "source_sha256": "09098007af02fea6215b2c2d0fc993ba49920a35815b110f68f0f3bb5a6fd9d6",
+      "record_sha256": "a8b7ff3c4a8c01fce8b3e24f4701e741a268b076f9949fcfe34cdb5b4b671229",
+      "schema": 11.5,
+      "variant": 1,
+      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 100: no conductor mapping for element type SynchronousMachine\" }",
+      "complete_parse": false,
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 100: no conductor mapping for element type SynchronousMachine\" }",
+      "independently_validated": false,
+      "native_execution": false,
+      "snapshot_hours": 0.0
+    },
+    {
+      "case": 11,
+      "source_sha256": "4ad08f2eaf1bab4863aa0a6c2b72c6bdea9a7d0027626c49f224b960e6c667d7",
+      "record_sha256": "5d266c3905b5e7a049f118052a90fc8da91511913acb26369210ac20eda93552",
+      "schema": 11.5,
+      "variant": 1,
+      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 89: no conductor mapping for element type SynchronousMachine\" }",
+      "complete_parse": false,
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 89: no conductor mapping for element type SynchronousMachine\" }",
+      "independently_validated": false,
+      "native_execution": false,
+      "snapshot_hours": 0.0
+    },
+    {
+      "case": 12,
+      "source_sha256": "7339548baf8bfcf5b891b9d3dbb6b616d9234b8f3df298d959904e150b8cfe91",
+      "record_sha256": "163c6bc083e11a46e2de443b49ef07c4848f45757c6f104596bd4850a8f22c30",
+      "schema": 11.5,
+      "variant": 1,
+      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 180: no conductor mapping for element type ShuntCondensator\" }",
+      "complete_parse": false,
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 180: no conductor mapping for element type ShuntCondensator\" }",
+      "independently_validated": false,
+      "native_execution": false,
+      "snapshot_hours": 0.0
+    },
+    {
+      "case": 13,
+      "source_sha256": "a0f2b5c1ca1c944c959033f3dc1cdeb623ad643ab830b877dac7b47f65d8aa7f",
+      "record_sha256": "4991ce3babc2818a0dac3ca6c3b3860229e5fe8e07ba00f274ba6e51fc9779f6",
+      "schema": 11.5,
+      "variant": 1,
+      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"Invalid column type Null at index: 1, name: Flag_Terminal\" }",
+      "complete_parse": false,
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Invalid column type Null at index: 1, name: Flag_Terminal\" }",
+      "independently_validated": false,
+      "native_execution": false,
+      "snapshot_hours": 0.0
+    },
+    {
+      "case": 14,
+      "source_sha256": "024921716247315468611028d09f6dff6ff438e5399ae2773cd9ed004d05f7b6",
+      "record_sha256": "aee7c3c7600edd3f131c4d86a98309ca0a8328ff1633363221160759c10bc3e6",
+      "schema": 11.5,
+      "variant": 1,
+      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"transformer regulator requires operating-state resolution\" }",
+      "complete_parse": false,
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"transformer regulator requires operating-state resolution\" }",
+      "independently_validated": false,
+      "native_execution": false,
+      "snapshot_hours": 0.0
+    },
+    {
+      "case": 15,
+      "source_sha256": "ed665a4e4e6fbd2c37509705e13be0a5c23d2ed321dcb5798a13aed9080dbb94",
+      "record_sha256": "83148d6a5713184bf64951da16be4131d1ac78c9b5d6b323bc2bda60f67cd425",
+      "schema": 11.5,
+      "variant": 1,
+      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"transformer regulator requires operating-state resolution\" }",
+      "complete_parse": false,
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"transformer regulator requires operating-state resolution\" }",
+      "independently_validated": false,
+      "native_execution": false,
+      "snapshot_hours": 0.0
+    },
+    {
+      "case": 16,
+      "source_sha256": "d1b6ce0906accfbfb6f84901ad90fca7e27d83f4f78578675fceca0e026d791c",
+      "record_sha256": "e7cb229f62809a66cc4fe8a479654f0339746a6bbb7626b612c6057853ae0488",
+      "schema": 11.5,
+      "variant": 1,
+      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 89: no conductor mapping for element type ShuntCondensator\" }",
+      "complete_parse": false,
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 89: no conductor mapping for element type ShuntCondensator\" }",
+      "independently_validated": false,
+      "native_execution": false,
+      "snapshot_hours": 0.0
+    },
+    {
+      "case": 17,
+      "source_sha256": "a80ce8ec7643e1103c65dc4a79cc6f06f5a1eae8f62fc7e03b952c25d2b2d5d7",
+      "record_sha256": "36d6a7eb71206544dd681ed53442cb81f9fc08bb6f5eeffe8579ba23119b2178",
+      "schema": 11.5,
+      "variant": 1,
+      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 134: no conductor mapping for element type ShuntCondensator\" }",
+      "complete_parse": false,
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 134: no conductor mapping for element type ShuntCondensator\" }",
+      "independently_validated": false,
+      "native_execution": false,
+      "snapshot_hours": 0.0
+    },
+    {
+      "case": 18,
+      "source_sha256": "e37c1979cf37913fee5f2dbe7498eb05108b8efa835f3e54777d9f6f18cde262",
+      "record_sha256": "e613579be64a387d871efdc95bc327438ca5e31b39b64dc497a8f6c9df842da3",
+      "schema": 11.5,
+      "variant": 1,
+      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 2180: no conductor mapping for element type SynchronousMachine\" }",
+      "complete_parse": false,
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 2180: no conductor mapping for element type SynchronousMachine\" }",
+      "independently_validated": false,
+      "native_execution": false,
+      "snapshot_hours": 0.0
+    },
+    {
+      "case": 19,
+      "source_sha256": "5540e956effe9a8e6e691f834e79f62c86d96924fdd38092e5fd5c6fa84789c4",
+      "record_sha256": "414074919e4a2c33704b2fed6cb9df62bf2d74f6229d3ebde79f86a56fef238a",
+      "schema": 11.5,
+      "variant": 1,
+      "context_error": null,
+      "complete_parse": false,
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 3 (Line): PSS SINCAL read error: Line 3: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)\" }",
+      "independently_validated": false,
+      "native_execution": false,
+      "snapshot_hours": 0.0,
+      "component_count": 33,
+      "mapped_by_type": {
+        "Infeeder": 1
+      },
+      "failures": [
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 10: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 12: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 13: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 14: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 15: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 16: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 17: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 20: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 21: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 22: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 24: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 25: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 26: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 27: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 28: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 30: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 31: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 33: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 34: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 3: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 4: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 5: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 6: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 7: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 8: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Load",
+          "count": 7,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: load requires zero-sequence circuit resolution"
+        }
+      ]
+    }
+  ]
+}

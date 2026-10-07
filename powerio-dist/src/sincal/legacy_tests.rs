@@ -6,7 +6,7 @@ use super::{mapping_tests::network_database, schema::NativeDatabase};
 
 // Original synthetic SQL -> typed acquisition records, exercising the same
 // boundary as MDB Tools without inventing a native SQLite schema-11.5 export.
-fn legacy(edit: &str) -> NativeDatabase {
+pub(super) fn legacy(edit: &str) -> NativeDatabase {
     let snapshot = DatabaseSnapshot::decode(&network_database(edit), None).unwrap();
     let names: Vec<String> = snapshot
         .connection

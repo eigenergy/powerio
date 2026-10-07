@@ -25,6 +25,7 @@ pub(super) struct CircuitDraft {
 
 pub(super) struct MappingContext {
     pub frequency: f64,
+    pub snapshot_hours: Option<f64>,
     topology: TopologyDraft,
     buses: BTreeMap<i64, DistBus>,
 }
@@ -57,8 +58,16 @@ impl NativeDatabase {
         Ok(self.circuit_draft()?.into_network())
     }
 
+    pub fn network_at(&self, hours: f64) -> Result<MulticonductorNetwork> {
+        Ok(self.circuit_draft_at(Some(hours))?.into_network())
+    }
+
     pub fn circuit_draft(&self) -> Result<CircuitDraft> {
-        let context = self.mapping_context()?;
+        self.circuit_draft_at(None)
+    }
+
+    fn circuit_draft_at(&self, hours: Option<f64>) -> Result<CircuitDraft> {
+        let context = self.mapping_context_at(hours)?;
         let mut draft = CircuitDraft::new(context.frequency);
         for node in context.topology.nodes.values() {
             if node.legacy_voltage_basis {
@@ -76,10 +85,24 @@ impl NativeDatabase {
             .buses_mut()
             .extend(context.buses.into_values());
         self.record_interpretation(&mut draft.network_without_sources)?;
+        if let Some(hours) = hours {
+            draft
+                .network_without_sources
+                .extras_mut()
+                .get_mut("sincal")
+                .unwrap()["snapshot_hours"] = hours.into();
+        }
         Ok(draft)
     }
 
     pub(super) fn mapping_context(&self) -> Result<MappingContext> {
+        self.mapping_context_at(None)
+    }
+
+    pub(super) fn mapping_context_at(&self, hours: Option<f64>) -> Result<MappingContext> {
+        if let Some(hours) = hours {
+            super::load_profile::validate_time(hours)?;
+        }
         self.require_input_zero_sequence()?;
         self.require_element_voltage_bases()?;
         let frequency = self.mapping_frequency()?;
@@ -106,6 +129,7 @@ impl NativeDatabase {
             .collect();
         Ok(MappingContext {
             frequency,
+            snapshot_hours: hours,
             topology,
             buses,
         })
@@ -138,7 +162,11 @@ impl NativeDatabase {
                     net.switches_mut().extend(circuit.terminal_switches);
                 }
                 "Load" => {
-                    let input = self.load_input(element)?;
+                    let input = if let Some(hours) = context.snapshot_hours {
+                        self.load_input_at(element, hours)?
+                    } else {
+                        self.load_input(element)?
+                    };
                     let node = input.terminal.node;
                     let circuit =
                         input.circuit(&buses[&node], topology.nodes[&node].nominal_ll_volts)?;

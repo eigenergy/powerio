@@ -74,6 +74,7 @@ pub(super) struct LoadInput {
     pub negative_sequence_power: Option<Complex64>,
     /// Daily, weekly, yearly operating series; resolve the selected state.
     pub operating_series: [Option<i64>; 3],
+    pub profile_selection: Option<super::load_profile::LoadProfileSelection>,
 }
 
 impl NativeDatabase {
@@ -158,6 +159,7 @@ impl NativeDatabase {
             zero_sequence,
             negative_sequence_power,
             operating_series,
+            profile_selection: None,
         })
     }
 }

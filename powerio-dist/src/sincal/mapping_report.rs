@@ -63,6 +63,8 @@ pub(super) struct ComponentMapping {
 pub(super) struct MappingReport {
     pub schema_version: f64,
     pub variant: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_hours: Option<f64>,
     pub components: Vec<ComponentMapping>,
 }
 
@@ -79,7 +81,11 @@ impl NativeDatabase {
     /// does, every element uses the same assembler as `network`, even after
     /// other elements fail. Source bytes and the query-only DB are untouched.
     pub fn mapping_report(&self) -> Result<MappingReport> {
-        let context = self.mapping_context()?;
+        self.mapping_report_at(None)
+    }
+
+    pub fn mapping_report_at(&self, hours: Option<f64>) -> Result<MappingReport> {
+        let context = self.mapping_context_at(hours)?;
         let mut components = Vec::with_capacity(self.elements.len());
         for (&element, kind) in &self.elements {
             let mut scratch = CircuitDraft::new(context.frequency);
@@ -95,6 +101,7 @@ impl NativeDatabase {
         Ok(MappingReport {
             schema_version: self.version,
             variant: self.variant,
+            snapshot_hours: hours,
             components,
         })
     }

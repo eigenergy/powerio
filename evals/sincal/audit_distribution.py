@@ -9,6 +9,7 @@ import argparse
 from collections import Counter
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 
@@ -20,9 +21,12 @@ def digest(path):
         return hashlib.file_digest(source, 'sha256').hexdigest()
 
 
-def invoke(reader, records, mode):
+def invoke(reader, records, mode, hours=None):
     try:
-        return json.loads(run_bounded([str(reader), 'records', mode, str(records), '1'],
+        command = [str(reader), 'records', mode, str(records), '1']
+        if hours is not None:
+            command.append(str(hours))
+        return json.loads(run_bounded(command,
                                      byte_limit=32 * 1024 * 1024, seconds=30)), None
     except ValueError as error:
         message = str(error)
@@ -33,7 +37,9 @@ def invoke(reader, records, mode):
         return None, message.split('Error: ', 1)[1].strip()
 
 
-def audit(source_directory, record_directory, reader):
+def audit(source_directory, record_directory, reader, hours=None):
+    if hours is not None and (not math.isfinite(hours) or hours < 0):
+        raise ValueError("snapshot hours must be finite and nonnegative")
     manifest = json.loads(Path(__file__).with_name('access-acquisition.json').read_text())
     cases = []
     for case in manifest['cases']:
@@ -43,15 +49,18 @@ def audit(source_directory, record_directory, reader):
         for path, prefix in [(source, 'source'), (records, 'record')]:
             if path.stat().st_size != case[f'{prefix}_bytes'] or digest(path) != case[f'{prefix}_sha256']:
                 raise ValueError(f'case {number}: {prefix} identity mismatch')
-        report, context_error = invoke(reader, records, 'audit')
-        network, parse_error = invoke(reader, records, 'read')
+        report, context_error = invoke(reader, records, 'audit', hours)
+        network, parse_error = invoke(reader, records, 'read', hours)
         row = {key: case[key] for key in ('case', 'source_sha256', 'record_sha256')}
         row.update({'schema': 11.5, 'variant': 1, 'context_error': context_error,
                     'complete_parse': network is not None, 'parse_error': parse_error,
                     'independently_validated': False, 'native_execution': False})
+        if hours is not None:
+            row["snapshot_hours"] = hours
         if report is not None:
             components = report['components']
             if (report['schema_version'] != 11.5 or report['variant'] != 1
+                    or report.get('snapshot_hours') != hours
                     or len(components) != case['structural_counts']['elements']
                     or len({c['element'] for c in components}) != len(components)):
                 raise ValueError(f'case {number}: inconsistent Rust component accounting')
@@ -74,8 +83,9 @@ def main():
     parser.add_argument('record_directory', type=Path)
     parser.add_argument('report', type=Path)
     parser.add_argument('--reader', type=Path, required=True)
+    parser.add_argument('--snapshot-hours', type=float)
     args = parser.parse_args()
-    report = audit(args.source_directory, args.record_directory, args.reader.resolve())
+    report = audit(args.source_directory, args.record_directory, args.reader.resolve(), args.snapshot_hours)
     args.report.write_text(json.dumps(report, indent=2) + "\n")
     complete = sum(c['complete_parse'] for c in report['cases'])
     print(f"Audited {len(report['cases'])} cases; {complete} complete parses. See per-case limitations.")

@@ -123,3 +123,27 @@ pub fn __audit_sincal_multiconductor_snapshot(
 ) -> Result<String> {
     sincal::audit_snapshot(snapshot)
 }
+
+/// Internal SINCAL snapshot selection in hours for verified daily load profiles.
+///
+/// # Errors
+/// Unsupported profiles or components, invalid time, or inconsistent inputs.
+#[doc(hidden)]
+pub fn __read_sincal_multiconductor_at(
+    snapshot: powerio_sincal::DatabaseSnapshot,
+    hours: f64,
+) -> Result<MulticonductorNetwork> {
+    sincal::read_snapshot_at(snapshot, hours)
+}
+
+/// Internal component audit at an explicit daily-profile time; not a partial network.
+///
+/// # Errors
+/// Unsupported common context or invalid snapshot time.
+#[doc(hidden)]
+pub fn __audit_sincal_multiconductor_at(
+    snapshot: powerio_sincal::DatabaseSnapshot,
+    hours: f64,
+) -> Result<String> {
+    sincal::audit_snapshot_at(snapshot, hours)
+}

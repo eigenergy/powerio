@@ -1,0 +1,215 @@
+//! Explicit daily absolute-power snapshots. General Input Data (April 2014)
+//! pp. 292–295 and Database Description pp. 84–85 define units and selectors;
+//! Load Flow pp. 48–50 defines cyclic repetition. No stored result is used.
+
+use std::collections::BTreeSet;
+
+use super::{
+    format_error,
+    load::{LoadInput, PowerInput},
+    schema::{NativeDatabase, require_table},
+    transformer::{integer, number, reference},
+};
+use crate::Result;
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub(super) struct LoadProfileSelection {
+    pub profile: i64,
+    pub requested_hours: f64,
+    pub cyclic_hours: f64,
+    pub period_hours: f64,
+}
+
+pub(super) fn validate_time(hours: f64) -> Result<()> {
+    if !hours.is_finite() || hours < 0.0 {
+        return Err(format_error(
+            "snapshot time must be finite nonnegative hours",
+        ));
+    }
+    Ok(())
+}
+
+impl NativeDatabase {
+    pub fn load_input_at(&self, element: i64, hours: f64) -> Result<LoadInput> {
+        validate_time(hours)?;
+        let mut input = self.load_input(element)?;
+        if input.operating_series == [None; 3] {
+            return Ok(input);
+        }
+        if self.version.to_bits() != 11.5_f64.to_bits() {
+            return Err(format_error(
+                "daily load profile semantics require verified schema 11.5",
+            ));
+        }
+        let [Some(profile), None, None] = input.operating_series else {
+            return Err(format_error(
+                "load snapshot requires a single daily profile; weekly/yearly composition is unresolved",
+            ));
+        };
+        if !matches!(
+            input.power,
+            PowerInput::Total { .. } | PowerInput::DeltaTotal { .. }
+        ) {
+            return Err(format_error(
+                "absolute profile allocation over per-phase input powers is unresolved",
+            ));
+        }
+        // Factors in an absolute profile must not accidentally be inherited
+        // from the aggregate P/Q/S input mode. Only unity P/Q scaling is verified here; fS scales the replaced base S,
+        // not the absolute profile values.
+        let mut stmt = self
+            .connection
+            .prepare("SELECT fP,fQ FROM Load WHERE Element_ID=?1 AND Variant_ID=?2")
+            .map_err(format_error)?;
+        stmt.query_row([element, self.variant], |row| {
+            Ok((0..2).all(|index| {
+                row.get::<_, f64>(index)
+                    .is_ok_and(|v| v.to_bits() == 1.0_f64.to_bits())
+            }))
+        })
+        .map_err(format_error)?
+        .then_some(())
+        .ok_or_else(|| format_error("absolute profile requires verified unity load factors"))?;
+        let period = self.daily_power_period(profile)?;
+        let points = self.daily_power_points(profile, period)?;
+        let time = hours.rem_euclid(period);
+        let values = sample(&points, period, time)?;
+        input.power = match input.power {
+            PowerInput::DeltaTotal { .. } => PowerInput::DeltaTotal {
+                p: values[0],
+                q: values[1],
+            },
+            _ => PowerInput::Total {
+                p: values[0],
+                q: values[1],
+            },
+        };
+        input.operating_series = [None; 3];
+        input.profile_selection = Some(LoadProfileSelection {
+            profile,
+            requested_hours: hours,
+            cyclic_hours: time,
+            period_hours: period,
+        });
+        Ok(input)
+    }
+
+    fn daily_power_period(&self, profile: i64) -> Result<f64> {
+        require_table(&self.connection, "OpSer", &["OpSer_ID", "Variant_ID"])?;
+        let mut stmt = self
+            .connection
+            .prepare("SELECT * FROM OpSer WHERE OpSer_ID=?1 AND Variant_ID=?2")
+            .map_err(format_error)?;
+        let mut rows = stmt.query([profile, self.variant]).map_err(format_error)?;
+        let row = rows
+            .next()
+            .map_err(format_error)?
+            .ok_or_else(|| format_error(format!("missing OpSer {profile}")))?;
+        if integer(row, "Flag_Typ")? != 3
+            || integer(row, "Flag_Ser")? != 1
+            || integer(row, "Flag_Variant")? != 1
+        {
+            return Err(format_error(
+                "snapshot requires a local absolute-power daily profile",
+            ));
+        }
+        for field in ["Power_a1", "Power_b1", "Reduce_a2", "Reduce_b2"] {
+            if number(row, field)? != 0.0 {
+                return Err(format_error(format!(
+                    "profile requires resolution of {field}"
+                )));
+            }
+        }
+        let period = match number(row, "BaseT")? {
+            0.0 => 24.0,
+            value => value,
+        };
+        if period <= 0.0 || rows.next().map_err(format_error)?.is_some() {
+            return Err(format_error("invalid or duplicate daily profile"));
+        }
+        Ok(period)
+    }
+
+    #[allow(clippy::float_cmp)] // Exact timestamps/endpoints; never merge nearby native samples.
+    fn daily_power_points(&self, profile: i64, period: f64) -> Result<Vec<Point>> {
+        require_table(&self.connection, "OpSerVal", &["OpSer_ID", "Variant_ID"])?;
+        let mut stmt = self
+            .connection
+            .prepare("SELECT * FROM OpSerVal WHERE OpSer_ID=?1 AND Variant_ID=?2 ORDER BY OpTime")
+            .map_err(format_error)?;
+        let mut rows = stmt.query([profile, self.variant]).map_err(format_error)?;
+        let mut points: Vec<Point> = Vec::new();
+        let mut ids = BTreeSet::new();
+        while let Some(row) = rows.next().map_err(format_error)? {
+            if points.len() == 100_000 {
+                return Err(format_error("daily profile exceeds sample budget"));
+            }
+            let id = integer(row, "OpSerVal_ID")?;
+            let time = number(row, "OpTime")?;
+            let curve = integer(row, "Flag_Curve")?;
+            if points.last().is_some_and(|p| time <= p.time) {
+                return Err(format_error(format!(
+                    "OpSer {profile}: duplicate or unordered OpTime {time}"
+                )));
+            }
+            if id <= 0
+                || !ids.insert(id)
+                || time < 0.0
+                || time > period
+                || !matches!(curve, 1 | 2)
+                || integer(row, "Flag_Variant")? != 1
+                || reference(row, "Op_ID")?.is_some()
+            {
+                return Err(format_error(
+                    "invalid, duplicate or unsupported daily profile sample",
+                ));
+            }
+            let values = [number(row, "P")? * 1000.0, number(row, "Q")? * 1000.0];
+            if !values.iter().all(|v| v.is_finite()) {
+                return Err(format_error("daily profile power overflows SI units"));
+            }
+            points.push(Point {
+                time,
+                values,
+                curve,
+            });
+        }
+        if points.first().is_none_or(|p| p.time != 0.0) {
+            return Err(format_error(
+                "daily snapshot requires a sample at time zero",
+            ));
+        }
+        if points.last().is_some_and(|p| p.time == period) {
+            if points.last().unwrap().values != points[0].values {
+                return Err(format_error("ambiguous daily profile cyclic endpoint"));
+            }
+            points.pop();
+        }
+        Ok(points)
+    }
+}
+
+struct Point {
+    time: f64,
+    values: [f64; 2],
+    curve: i64,
+}
+
+#[allow(clippy::float_cmp)] // Exact knots select their declared value; all other times interpolate.
+fn sample(points: &[Point], period: f64, time: f64) -> Result<[f64; 2]> {
+    let index = points.partition_point(|p| p.time <= time) - 1;
+    let left = &points[index];
+    if time == left.time || left.curve == 2 {
+        return Ok(left.values);
+    }
+    let (right_time, right) = points
+        .get(index + 1)
+        .map_or((period, &points[0]), |p| (p.time, p));
+    let fraction = (time - left.time) / (right_time - left.time);
+    let values =
+        std::array::from_fn(|i| (1.0 - fraction) * left.values[i] + fraction * right.values[i]);
+    if !values.iter().all(|v| v.is_finite()) {
+        return Err(format_error("interpolated daily load power overflows"));
+    }
+    Ok(values)
+}
