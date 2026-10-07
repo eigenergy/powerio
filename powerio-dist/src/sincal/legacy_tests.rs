@@ -182,7 +182,7 @@ fn materialized_standard_types_use_stored_parameters_and_retain_the_selection() 
     );
     for edit in [
         "UPDATE Line SET r=NULL",
-        "UPDATE Line SET Flag_Typ_ID=0",
+        "UPDATE Line SET Flag_Typ_ID=3",
         "UPDATE Line SET Flag_Typ_ID=NULL",
         "UPDATE TwoWindingTransformer SET Sn=NULL",
         "UPDATE TwoWindingTransformer SET Flag_Typ_ID=3",
@@ -484,6 +484,99 @@ fn access_12_8_retains_its_own_control_presence_and_voltage_provenance() {
         assert!(
             acquired_version(invalid, 12.8).network().is_err(),
             "accepted {invalid}"
+        );
+    }
+}
+
+#[test]
+fn no_type_status_ignores_retained_library_ids_but_keeps_materialized_values() {
+    for version in [11.5, 12.8] {
+        let expected = acquired_version("", version).network().unwrap();
+        let setup = "ALTER TABLE Line ADD COLUMN Flag_Typ_ID INTEGER DEFAULT 0;
+            ALTER TABLE TwoWindingTransformer ADD COLUMN Flag_Typ_ID INTEGER DEFAULT 0;
+            ALTER TABLE Infeeder ADD COLUMN Flag_Typ_ID INTEGER DEFAULT 0;
+            UPDATE Line SET Typ_ID=101;
+            UPDATE TwoWindingTransformer SET Typ_ID=202;
+            UPDATE Infeeder SET Typ_ID=303;";
+        let net = acquired_version(setup, version).network().unwrap();
+        assert_eq!(net.line_codes(), expected.line_codes());
+        assert_eq!(net.shunts(), expected.shunts());
+        assert_eq!(net.sources(), expected.sources());
+        for id in ["30", "32", "33"] {
+            assert_eq!(net.extras()["sincal"]["materialized_types"][id]["scope"], 0);
+        }
+        for scope in [1, 2] {
+            assert!(
+                acquired_version(
+                    &format!("{setup} UPDATE Infeeder SET Flag_Typ_ID={scope}"),
+                    version
+                )
+                .network()
+                .is_ok()
+            );
+        }
+        for edit in [
+            "Flag_Typ_ID=NULL",
+            "Flag_Typ_ID=3",
+            "Flag_Typ_ID=-1",
+            "Ug=NULL",
+        ] {
+            assert!(
+                acquired_version(&format!("{setup} UPDATE Infeeder SET {edit}"), version)
+                    .network()
+                    .is_err()
+            );
+        }
+    }
+}
+
+#[test]
+fn source_sequence_ratios_use_fault_impedance_even_for_an_ideal_load_flow_source() {
+    let base = "ALTER TABLE CalcParameter ADD COLUMN Flag_ScType INTEGER DEFAULT 1;
+        UPDATE Element SET Flag_Input=7 WHERE Element_ID=32;
+        UPDATE Infeeder SET Flag_Typ=1,R=3,X=4,Flag_Z0_Input=1,Z0_Z1=2,R0_X0=0.75,R0=999,X0=999;";
+    let ratio = legacy(base).network().unwrap();
+    let direct = legacy(&format!(
+        "{base} UPDATE Infeeder SET Flag_Z0_Input=2,R0=6,X0=8;"
+    ))
+    .network()
+    .unwrap();
+    assert_eq!(ratio.sources(), direct.sources());
+    assert_eq!(ratio.shunts(), direct.shunts());
+    let same = legacy(&format!("{base} UPDATE Infeeder SET Flag_Z0_Input=3;"))
+        .network()
+        .unwrap();
+    let direct_same = legacy(&format!(
+        "{base} UPDATE Infeeder SET Flag_Z0_Input=2,R0=3,X0=4;"
+    ))
+    .network()
+    .unwrap();
+    assert_eq!(same.shunts(), direct_same.shunts());
+    let ideal_zero = legacy(&format!("{base} UPDATE Infeeder SET Z0_Z1=0;"))
+        .network()
+        .unwrap();
+    assert!(ideal_zero.sources()[0].reference_terminal.is_none());
+    let db = legacy(base);
+    let before = db.infeeder_input(32).unwrap();
+    assert!(matches!(
+        before.grounding,
+        super::infeeder::SourceGrounding::Solid(
+            super::infeeder::SourceZeroSequence::MagnitudeRatio { .. }
+        )
+    ));
+    for edit in [
+        "UPDATE Infeeder SET Flag_Typ=2",
+        "UPDATE Infeeder SET R=NULL",
+        "UPDATE Infeeder SET R=-1",
+        "UPDATE Infeeder SET R=0,X=0",
+        "UPDATE Infeeder SET Z0_Z1=1e308",
+        "UPDATE Element SET Flag_Input=6 WHERE Element_ID=32",
+        "UPDATE CalcParameter SET Flag_ScType=2",
+        "UPDATE CalcParameter SET Flag_ScType=3",
+    ] {
+        assert!(
+            legacy(&format!("{base}{edit}")).network().is_err(),
+            "accepted {edit}"
         );
     }
 }

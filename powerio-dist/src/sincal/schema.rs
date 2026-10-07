@@ -49,6 +49,8 @@ impl NativeDatabase {
             .any(|v| v.to_bits() == self.version.to_bits())
     }
 
+    /// Flag_Typ_ID=0 means no selected type, even if Typ_ID retains an ID.
+    /// Database Description (April 2014), Infeeder/Line/Transformer tables.
     /// Standard-type selection fills the equipment's stored fields. Read
     /// those materialized electrical values strictly; do not follow the UI's
     /// local/global library path or substitute values from another catalog.
@@ -58,9 +60,9 @@ impl NativeDatabase {
             let scope: i64 = row
                 .get("Flag_Typ_ID")
                 .map_err(|e| format_error(format!("Typ_ID requires valid Flag_Typ_ID: {e}")))?;
-            if !matches!(scope, 1 | 2) {
+            if !matches!(scope, 0..=2) {
                 return Err(format_error(
-                    "Typ_ID requires local/global materialized type selection",
+                    "Typ_ID requires a valid no-type/local/global selection",
                 ));
             }
         }

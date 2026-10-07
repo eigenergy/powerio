@@ -53,6 +53,19 @@ impl SequenceParameters {
         let factor = TAU * self.frequency_hz * 1e-12 / 2.0;
         code.b_from = phase_matrix(self.c1 * factor, self.c0 * factor);
         code.b_to.clone_from(&code.b_from);
+        for (positive, zero, matrix) in [
+            (self.r1, self.r0, &code.r_series),
+            (self.x1, self.x0, &code.x_series),
+            (self.c1, self.c0, &code.b_from),
+        ] {
+            if (positive != 0.0 || zero != 0.0)
+                && matrix.iter().flatten().all(|value| *value == 0.0)
+            {
+                return Err(format_error(
+                    "nonzero line parameter underflows SI phase matrix",
+                ));
+            }
+        }
         if code.b_from.iter().flatten().any(|value| !value.is_finite()) {
             return Err(format_error("line charging overflows SI units"));
         }

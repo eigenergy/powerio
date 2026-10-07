@@ -116,7 +116,7 @@ fn malformed_or_unverified_profiles_reject_without_defaults_or_repairs() {
         "UPDATE OpSer SET BaseT=NULL;",
         "UPDATE OpSer SET Reduce_b2=1;",
         "UPDATE OpSer SET Power_a1=1;",
-        "UPDATE Load SET fP=2;",
+        "UPDATE Load SET fP=-1;",
         "UPDATE Load SET fQ=NULL;",
         "UPDATE Load SET Flag_Lf=13;",
         "UPDATE Load SET WeekOpSer_ID=7;",
@@ -224,5 +224,40 @@ fn selected_profile_preserves_phase_connections_and_each_voltage_model() {
                     | (crate::DistLoadVoltageModel::ConstantCurrent { .. }, 3)
             ));
         }
+    }
+}
+
+#[test]
+fn absolute_profile_factors_apply_once_after_sampling_and_preserve_connection() {
+    let edit = format!("{PROFILE} UPDATE Load SET fP=2,fQ=3,fS=999;");
+    let db = legacy(&edit);
+    assert_eq!(powers(&db, 6.0), (24000.0, 9000.0));
+    assert_eq!(powers(&db, 24.0), (12000.0, -9000.0));
+    let net = db.network_at(6.0).unwrap();
+    assert_eq!(net.loads()[0].p_nom, vec![8000.0; 3]);
+    assert_eq!(net.loads()[0].q_nom, vec![3000.0; 3]);
+    assert_eq!(
+        net.loads()[0].extras["sincal_profile"]["power_factors"],
+        serde_json::json!([2.0, 3.0])
+    );
+    assert_eq!(
+        powers(
+            &legacy(&format!("{PROFILE} UPDATE Load SET fP=0,fQ=0;")),
+            6.0
+        ),
+        (0.0, 0.0)
+    );
+    for edit in [
+        "UPDATE Load SET fP=NULL",
+        "UPDATE Load SET fQ=-1",
+        "UPDATE Load SET P=0, fP=1e308",
+        "UPDATE OpSerVal SET P=1e-300; UPDATE Load SET fP=1e-300",
+    ] {
+        assert!(
+            legacy(&format!("{PROFILE}{edit}"))
+                .load_input_at(31, 0.0)
+                .is_err(),
+            "accepted {edit}"
+        );
     }
 }

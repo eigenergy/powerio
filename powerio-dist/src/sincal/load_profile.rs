@@ -18,6 +18,7 @@ pub(super) struct LoadProfileSelection {
     pub requested_hours: f64,
     pub cyclic_hours: f64,
     pub period_hours: f64,
+    pub power_factors: [f64; 2],
 }
 
 pub(super) fn validate_time(hours: f64) -> Result<()> {
@@ -54,26 +55,33 @@ impl NativeDatabase {
                 "absolute profile allocation over per-phase input powers is unresolved",
             ));
         }
-        // Factors in an absolute profile must not accidentally be inherited
-        // from the aggregate P/Q/S input mode. Only unity P/Q scaling is verified here; fS scales the replaced base S,
-        // not the absolute profile values.
+        // Input Data pp.94 and 292–295: an absolute profile supplies P/Q;
+        // the load's respective P/Q input factors still multiply those values.
+        // fS belongs to the replaced apparent-power input, not to this profile.
         let mut stmt = self
             .connection
             .prepare("SELECT fP,fQ FROM Load WHERE Element_ID=?1 AND Variant_ID=?2")
             .map_err(format_error)?;
-        stmt.query_row([element, self.variant], |row| {
-            Ok((0..2).all(|index| {
-                row.get::<_, f64>(index)
-                    .is_ok_and(|v| v.to_bits() == 1.0_f64.to_bits())
-            }))
-        })
-        .map_err(format_error)?
-        .then_some(())
-        .ok_or_else(|| format_error("absolute profile requires verified unity load factors"))?;
+        let factors = stmt
+            .query_row([element, self.variant], |row| {
+                Ok([row.get::<_, f64>(0)?, row.get::<_, f64>(1)?])
+            })
+            .map_err(format_error)?;
+        if factors.iter().any(|f| !f.is_finite() || *f < 0.0) {
+            return Err(format_error(
+                "absolute profile requires finite nonnegative P/Q factors",
+            ));
+        }
         let period = self.daily_power_period(profile)?;
         let points = self.daily_power_points(profile, period)?;
         let time = hours.rem_euclid(period);
-        let values = sample(&points, period, time)?;
+        let sampled = sample(&points, period, time)?;
+        let values = [sampled[0] * factors[0], sampled[1] * factors[1]];
+        if values.iter().any(|v| !v.is_finite())
+            || (0..2).any(|i| sampled[i] != 0.0 && factors[i] != 0.0 && values[i] == 0.0)
+        {
+            return Err(format_error("scaled profile power overflows or underflows"));
+        }
         input.power = match input.power {
             PowerInput::DeltaTotal { .. } => PowerInput::DeltaTotal {
                 p: values[0],
@@ -90,6 +98,7 @@ impl NativeDatabase {
             requested_hours: hours,
             cyclic_hours: time,
             period_hours: period,
+            power_factors: factors,
         });
         Ok(input)
     }

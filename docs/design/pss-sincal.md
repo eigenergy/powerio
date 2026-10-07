@@ -406,11 +406,19 @@ voltage-basis defaults, finite direct source zero-sequence mapping, explicit
 phase-pair and single-phase-earth loads, selected absolute daily load snapshots,
 and ideal connection lines represented by typed switches. CSIRO 06 maps 159/218
 components (113 lines, 27 transformers, one source and 18 loads); its remaining
-loads and transformers still reject. CSIRO 09 maps all 620 line elements, while
-its source and 66 profiled loads remain unresolved. Independent component checks
-cover 484 native loads at 2,420 selected snapshots and all 144 CSIRO 09 ideal
-connections. All 19 base variants are audited; none is yet a complete native
-unbalanced parse. Transformer topology now separates winding declarations
+loads and transformers still reject. CSIRO 09 now maps all 688 native elements
+at an explicitly selected daily snapshot. Five authentic snapshots and five
+separately labelled unequal-delta-load stress cases agree with independently
+constructed OpenDSS networks to below 0.000372 V across all 617 energized nodes.
+Four native nodes behind open connections remain isolated. The source's finite
+OpenDSS approximation is measured separately; no native SINCAL run is claimed.
+The selected authentic loads are phase-symmetric, so asymmetric evidence comes
+from the explicit stress cases, not an assertion about their original powers.
+Independent component checks additionally cover 484 native loads at 2,420
+selected snapshots and all 144 declared CSIRO 09 ideal connections. Four exactly
+zero ordinary line primitives now also map to exact typed switches, preserving
+ratings and terminal states. All 19 base variants remain audited, with one
+complete native conductor-resolved parse at an explicit snapshot. Transformer topology now separates winding declarations
 from operating-state resolution. Two verified Y0 profiles cover finite nominal
 full windings and exact neutral-tap same-voltage connections; active controllers,
 off-neutral same-voltage regulators, YN0 and D0 electrical circuits remain work.
@@ -432,8 +440,8 @@ and 55 single-phase constant-power loads. Their actual Rust mappings agree
 with independent OpenDSS line primitives and load currents. Unspecified line
 thermal ratings stay absent rather than becoming invented limits.
 The two remaining components, source and transformer, lack declared
-zero-sequence input while automatic completion is disabled. No complete native
-unbalanced parse or solver agreement is claimed. S1a maps 54 loads; its 54 DC
+zero-sequence input while automatic completion is disabled. No complete LPC
+parse or LPC whole-network solver agreement is claimed. S1a maps 54 loads; its 54 DC
 infeeds, 27 library-referenced lines, source and inconsistent transformer core
 inputs still reject. Both files remain external research inputs with unresolved
 redistribution rights; no version marker or electrical input is rewritten.

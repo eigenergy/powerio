@@ -221,8 +221,12 @@ impl super::schema::NativeDatabase {
     /// Only the current-data selection is implemented. Min/max selection must
     /// not reuse these fields. Siemens Input Data (2014), printed pp. 50–51.
     pub fn require_source_sequence_selection(&self, input: &InfeederInput) -> Result<()> {
-        if let SourceGrounding::Solid(SourceZeroSequence::DirectOhms(z)) = input.grounding
-            && z != Complex64::default()
+        if matches!(
+            input.grounding,
+            SourceGrounding::Solid(
+                SourceZeroSequence::MagnitudeRatio { .. } | SourceZeroSequence::SameAsPositive
+            )
+        ) || matches!(input.grounding, SourceGrounding::Solid(SourceZeroSequence::DirectOhms(z)) if z != Complex64::default())
         {
             if self.version.to_bits() != 11.5_f64.to_bits() {
                 return Err(format_error(

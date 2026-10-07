@@ -218,7 +218,9 @@ python3 evals/sincal/audit_distribution.py /tmp/native-models /tmp/acquired-reco
 
 The committed `distribution-csiro.json` records context errors, component
 coverage and complete parsing separately. It is a development audit, not an
-acceptance test, and currently claims zero complete native unbalanced networks.
+acceptance test. Without an explicit snapshot, active profiles still reject.
+The separate snapshot audit and complete CSIRO09 electrical check below now
+establish one complete conductor-resolved case.
 The source and acquired-record hashes must match `access-acquisition.json`;
 missing required files, changed records or tool failures abort the audit.
 Schema acquisition itself adds bounded nonunique lookup indexes, preserving
@@ -499,7 +501,8 @@ are checked against the original hash-pinned identities, phases and topology.
 Mutations removing zero-sequence transfer, reversing transfer signs, changing
 a native phase, opening a connection or omitting a device all fail the checker.
 
-The refreshed all-19-case audits still contain zero complete native parses.
+At the autotransformer checkpoint the all-19-case audits contained zero complete
+native parses; the later CSIRO09 snapshot milestone below supersedes that count.
 At explicit midnight, CSIRO01 maps 781/1033 components and CSIRO02 maps
 1162/2329. Their remaining failures include partial transformers, inconsistent
 core parameters, Wye load zero-sequence semantics, reduced-phase lines and
@@ -573,4 +576,61 @@ POWERIO_SINCAL_LPC_EXPORT=/tmp/lpc-eu-components.json cargo test -p powerio-dist
   export_lpc_european_components -- --ignored
 python3 evals/sincal/check_lpc_components.py /tmp/lpc-eu-records.json \
   /tmp/matlab-lpc-eu.mdb /tmp/lpc-eu-components.json --report /tmp/lpc-components.json
+```
+
+
+### Complete CSIRO09 snapshots and asymmetric stress validation
+
+`csiro09-network.json` records five complete native snapshots (0, 0.25, 12,
+23.75 and 24 hours) and five separately labelled synthetic stress cases. The
+reader maps all **688 native elements**: 620 line/connection records, 67 loads
+and one source. Of the 621 native nodes, 617 are energized and four remain
+isolated behind open connections. None is silently discarded from the model.
+The native loads in this case are phase-symmetric; the stress run multiplies
+its three delta-branch powers by 2, 0.5 and 1 in both independent constructions.
+This deliberately tests asymmetry but is not presented as authentic source data.
+
+Three documented input selections unblock the source and daily loads:
+
+- Database Description (April 2014), Infeeder/Line/Transformer type selectors:
+  `Flag_Typ_ID=0` means no selected type even when a retained `Typ_ID` is nonzero.
+  Materialized values remain authoritative and the inactive ID remains provenance.
+- Input Data (April 2014), pp.50–51: source zero-sequence ratios use the selected
+  short-circuit R/X input, independently of the ideal load-flow voltage boundary.
+  This profile requires current explicit R/X and refuses unresolved min/max modes.
+- Input Data p.94 and pp.292–295: absolute daily P/Q samples are multiplied by
+  their respective native fP/fQ factors once. Interpolation, phase allocation and
+  factors are independently checked; the unrelated fS factor is not applied.
+
+Four ordinary native lines have exactly zero series and charging matrices.
+After all ordinary-line validation/corrections they become typed ideal switches,
+with current limits, length/provenance and separate terminal switching retained.
+The conversion uses exact zero tests; small nonzero impedances, nonzero charging
+and other singular matrices are not silently fused.
+
+The checker solves the actual Rust network using sparse MNA and constant-power
+current iteration, then independently builds OpenDSS from the hash-pinned acquired
+native records. It compares every energized native phase, isolated-node identity
+and load power. Maximum voltage difference is below **0.000372 V**, with a fixed
+0.001 V tolerance; maximum power difference is below 2e-10 VA. OpenDSS uses explicit
+1e-6 ohm positive/negative-sequence R/X for the ideal source. A second MNA solve
+with that same finite boundary measures numerical agreement separately from the
+physical approximation to the ideal source; matched-boundary error must remain
+below 1e-4 V. Exploratory smaller impedances worsened numerical conditioning,
+so they are not treated as stronger evidence. The voltage tolerance was not relaxed.
+The source zero-sequence impedance is unchanged in all these comparisons.
+
+Four deliberately corrupted mappings (profile scaling, mutual impedance, an open
+connection and a missing load) are rejected. Both all-19-case audits are refreshed;
+only CSIRO09 currently completes at an explicit snapshot. This is external OpenDSS
+validation, not native SINCAL acceptance or a claim of complete corpus coverage.
+Original MDBs and acquired/mapped model files remain external; only derived
+validation evidence is committed, with CSIRO CC BY 4.0 attribution.
+
+```sh
+cargo build -p powerio-dist --example sincal_multiconductor
+python3 evals/sincal/check_csiro09_corpus.py \
+  /tmp/acquired-records/representative09.json \
+  /tmp/native-models/csiro-representative09.mdb \
+  target/debug/examples/sincal_multiconductor /tmp/csiro09-network.json
 ```

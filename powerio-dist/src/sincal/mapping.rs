@@ -160,8 +160,12 @@ impl NativeDatabase {
                         return Ok(());
                     }
                     let circuit = self.line_circuit(element, buses)?;
-                    net.lines_mut().push(circuit.line);
-                    net.line_codes_mut().push(circuit.code);
+                    if let Some(switch) = circuit.ideal_connection() {
+                        net.switches_mut().push(switch);
+                    } else {
+                        net.lines_mut().push(circuit.line);
+                        net.line_codes_mut().push(circuit.code);
+                    }
                     net.buses_mut().extend(circuit.auxiliary_buses);
                     net.switches_mut().extend(circuit.terminal_switches);
                 }
@@ -179,8 +183,8 @@ impl NativeDatabase {
                     net.switches_mut().push(circuit.switch);
                 }
                 "Infeeder" => {
-                    let input = self.infeeder_input(element)?;
-                    self.require_source_sequence_selection(&input)?;
+                    let mut input = self.infeeder_input(element)?;
+                    self.resolve_source_sequence(&mut input)?;
                     let node = input.terminal.node;
                     let circuit = input.ideal_boundary_circuit(
                         &buses[&node],

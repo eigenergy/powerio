@@ -22,6 +22,48 @@ pub(super) struct LineCircuit {
     pub frequency_hz: f64,
 }
 
+impl LineCircuit {
+    /// An exactly zero series and shunt primitive is an ideal connection.
+    /// Test all entries, without tolerances: small impedances, charging and
+    /// rank-deficient nonzero primitives must not disappear. Open native
+    /// terminals remain separate switches on the auxiliary end buses.
+    pub fn ideal_connection(&self) -> Option<DistSwitch> {
+        if self.code.s_max.is_some()
+            || [
+                &self.code.r_series,
+                &self.code.x_series,
+                &self.code.g_from,
+                &self.code.b_from,
+                &self.code.g_to,
+                &self.code.b_to,
+            ]
+            .into_iter()
+            .flat_map(|m| m.iter().flatten())
+            .any(|v| *v != 0.0)
+        {
+            return None;
+        }
+        let mut switch = DistSwitch::new(
+            self.line.name.clone(),
+            self.line.bus_from.clone(),
+            self.line.bus_to.clone(),
+            self.line.terminal_map_from.clone(),
+            self.line.terminal_map_to.clone(),
+            false,
+        );
+        switch.i_max.clone_from(&self.code.i_max);
+        switch.extras.clone_from(&self.line.extras);
+        switch.extras.insert(
+            "sincal_zero_impedance_line".into(),
+            serde_json::json!({
+                "length_m": self.line.length, "linecode": self.code,
+                "profile": "exact_zero_series_and_shunts",
+            }),
+        );
+        Some(switch)
+    }
+}
+
 impl NativeDatabase {
     pub fn line_circuit(
         &self,

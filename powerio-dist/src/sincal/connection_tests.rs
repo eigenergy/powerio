@@ -177,3 +177,59 @@ fn export_csiro_connections() {
     let data = serde_json::json!({"scope":"connection components only; no complete feeder","switches":network.switches(),"graph":network.to_graph()});
     std::fs::write(output, serde_json::to_vec_pretty(&data).unwrap()).unwrap();
 }
+
+#[test]
+fn ordinary_zero_impedance_lines_keep_exact_connectivity_ratings_and_open_ports() {
+    for kind in [1, 2] {
+        for phase in [1, 4, 7] {
+            for open in [0, 1] {
+                let db = mapping_tests::native(&format!(
+                    "UPDATE Line SET Flag_LineTyp={kind},r=0,x=0,r0=0,x0=0,c=0,c0=0,va=0,Ith=0.2,ParSys=2,fr=0.8;
+                     UPDATE Terminal SET Flag_Terminal={phase} WHERE Element_ID=30;
+                     UPDATE Terminal SET Flag_State={open} WHERE Element_ID=30 AND TerminalNo=2;"
+                ));
+                let net = db.network().unwrap();
+                assert!(net.lines().is_empty());
+                assert!(net.line_codes().is_empty());
+                let switch = net.switches().iter().find(|s| s.name == "30").unwrap();
+                assert!(!switch.open);
+                assert_eq!(
+                    switch.i_max,
+                    Some(vec![320.0; switch.terminal_map_from.len()])
+                );
+                assert!(switch.extras.contains_key("sincal_zero_impedance_line"));
+                if open == 0 {
+                    let terminal = net
+                        .switches()
+                        .iter()
+                        .find(|s| s.name == "sincal:terminal:50")
+                        .unwrap();
+                    assert!(terminal.open);
+                    assert_eq!(switch.bus_to, terminal.bus_to);
+                } else {
+                    assert_eq!(switch.bus_to, "20");
+                }
+                crate::require_electrical_readiness(&net).unwrap();
+            }
+        }
+    }
+    // Neither nonzero charging nor an arbitrarily small series impedance is
+    // an ideal connection. Keep every matrix entry for the consuming model.
+    for edit in ["c=1", "c0=1", "va=1", "r=1e-15", "x0=1e-15"] {
+        let db = mapping_tests::native(&format!(
+            "UPDATE Line SET r=0,x=0,r0=0,x0=0,c=0,c0=0,va=0; UPDATE Line SET {edit};"
+        ));
+        let net = db.network().unwrap();
+        assert_eq!(net.lines().len(), 1, "incorrectly fused {edit}");
+        assert!(!net.switches().iter().any(|s| s.name == "30"));
+    }
+    for edit in ["r=1e-323", "x0=1e-323", "c=1e-320", "c0=1e-320"] {
+        let db = mapping_tests::native(&format!(
+            "UPDATE Line SET r=0,x=0,r0=0,x0=0,c=0,c0=0,va=0; UPDATE Line SET {edit};"
+        ));
+        assert!(
+            db.network().is_err(),
+            "underflow became an ideal connection: {edit}"
+        );
+    }
+}

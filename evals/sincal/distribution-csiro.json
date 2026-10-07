@@ -3,7 +3,7 @@
   "attribution": "Berry, Adam; Collins, Lyle; Oliver, Erin; Perfumo, Cristian (2015), Representative Australian Electricity Feeders with load and solar generation profiles, v1, CSIRO.",
   "license": "CC-BY-4.0",
   "scope": "Conductor-resolved base-variant development audit; no family inference, independent solve or native execution.",
-  "reader_sha256": "fd69ee3201c29096977c4a8e338c246e0c27a9fa20b92b993b19b81c8e3294e8",
+  "reader_sha256": "8f21b69df8f5d0050387cd9080aa3e199cd05e1879ce050a24a002f2a9d30035",
   "cases": [
     {
       "case": 1,
@@ -305,20 +305,16 @@
       "variant": 1,
       "context_error": null,
       "complete_parse": false,
-      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 4 (Infeeder): PSS SINCAL read error: infeeder requires resolution of Typ_ID\" }",
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 2463 (Load): PSS SINCAL read error: load requires an explicitly resolved profile state\" }",
       "independently_validated": false,
       "native_execution": false,
       "component_count": 688,
       "mapped_by_type": {
+        "Infeeder": 1,
         "Line": 620,
         "Load": 1
       },
       "failures": [
-        {
-          "type": "Infeeder",
-          "count": 1,
-          "reason": "PSS SINCAL read error: PSS SINCAL read error: infeeder requires resolution of Typ_ID"
-        },
         {
           "type": "Load",
           "count": 66,

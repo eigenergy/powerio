@@ -147,8 +147,8 @@ impl NativeDatabase {
             .map_err(format_error)?
             .ok_or_else(|| format_error("missing Infeeder row"))?;
         require_input_categories(integer(row, "ElementInput")?, 2)?;
+        Self::materialized_type(row)?;
         for field in [
-            "Typ_ID",
             "Mpl_ID",
             "IncrSer_ID",
             "Macro_ID",
