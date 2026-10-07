@@ -276,3 +276,49 @@ fn two_sincal_selection_families_cannot_silently_shadow_each_other() {
         assert!(error.retained_source().is_some());
     }
 }
+
+#[test]
+fn experimental_balanced_backend_writes_edited_ir_without_native_source() {
+    let original = parsed();
+    let text = helpers::serialize_module_text(&original).unwrap();
+    let mut restored = helpers::deserialize_module_text(&text).unwrap();
+    let PioValue::BalancedNetwork(network) = restored.value_mut() else {
+        panic!("balanced IR value")
+    };
+    network.loads_mut()[0].p += 0.017;
+    let expected_power = network.loads()[0].p;
+    // The candidate backend takes only the typed value. The module's native
+    // source bytes are absent after IR transport and cannot enter this API.
+    let candidate = powerio_tx::format::__write_sincal_balanced_experimental(network).unwrap();
+    assert!(
+        candidate
+            .diagnostics
+            .iter()
+            .any(|d| d.code() == "EMIT.SINCAL.EXPERIMENTAL")
+    );
+    assert_ne!(candidate.database, ARCHIVE);
+    let fresh = powerio::parse_with_options(
+        Source::from_memory("fresh.db", candidate.database.clone()).unwrap(),
+        &ParseOptions::default().format("sincal-balanced").unwrap(),
+    )
+    .unwrap();
+    let PioValue::BalancedNetwork(network) = fresh.value() else {
+        panic!("fresh output retained balanced family")
+    };
+    assert!((network.loads()[0].p - expected_power).abs() < 1e-15);
+    assert_eq!(network.branches().len(), 14);
+    let echoed = powerio::emit(&fresh, "sincal", Destination::memory("copy.db").unwrap()).unwrap();
+    assert_eq!(echoed.fidelity(), Fidelity::ExactSameFormat);
+    assert_eq!(bytes(echoed), candidate.database);
+    // Universal fresh emission is still unavailable until the explicit
+    // experimental facade contract for both families is implemented.
+    assert!(!powerio::resolve_format("sincal-balanced").unwrap().can_emit);
+    assert!(
+        powerio::emit(
+            &restored,
+            "sincal",
+            Destination::memory("no-implicit-write.db").unwrap()
+        )
+        .is_err()
+    );
+}

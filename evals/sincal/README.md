@@ -409,9 +409,41 @@ cells, NULL preservation, bad identity/reference rejection, unsafe archive
 names and rejection of results/views/additional variants. They establish
 storage construction only, not a complete network writer or native acceptance.
 
-The remaining writer implementation stays split by electrical family:
-`BalancedNetwork` lowering in `powerio-tx`, `MulticonductorNetwork` lowering in
-`powerio-dist`, followed by explicit experimental facade access. Each needs
-source-free typed construction, edit-then-write and IR-then-write checks for the
-declared subset. The public format capability remains read-only until that
-contract and the associated diagnostics are implemented and verified.
+The balanced backend now authors fresh schema-14.8 rows for an explicitly
+selected static positive-sequence profile: ideal reference sources, fixed-PQ
+converters, PQ/current/impedance loads, lines and fixed two-winding transformers.
+It uses physical native units, preserves non-100-MVA electrical quantities and
+service states, and checks recovered electrical values before returning bytes.
+Unknown active controls, asymmetric branch shunts, PV buses and components
+outside the declared subset fail atomically. Unsupported metadata, capability
+limits and stored source/branch results produce explicit loss diagnostics.
+The staging API is hidden in `powerio-tx`; universal fresh emission stays off.
+
+Runtime-generated tests cover construction, deterministic bytes/packaging,
+source-free serde restoration and edits, numerical-loss rejection, fixed
+transformer loss/ratio/rotation and service states. The existing licensed
+SimBench fixture also passes fresh write/read without a template. No additional
+native model fixtures were added.
+
+```sh
+cargo test -p powerio-tx --lib sincal::write_tests
+cargo build -p powerio-tx --example sincal_balanced
+python3 evals/sincal/check_balanced_simbench.py target/debug/examples/sincal_balanced \
+  /tmp/writer-balanced-simbench.json --fresh
+```
+
+`writer-balanced-simbench.json` records an independent comparison of the actual
+fresh-write/read result with publisher CSV inputs and pandapower 3.2.2, including
+separate HV/LV fixed-tap perturbations. Baseline complex voltage error is below
+6.3e-14 pu; tap cases are below 5.1e-11 pu (2e-8 pu acceptance tolerance).
+These are electrical interoperability checks, not native desktop acceptance.
+
+An integration test restores a balanced module through the real PowerIO IR,
+edits its load, invokes the candidate backend and parses fresh bytes through
+the public balanced reader. It separately verifies byte-exact echo of the new
+output; the old native project cannot enter the backend.
+
+The multiconductor emitter, explicit experimental facade integration,
+multiconductor IR-then-write checks and broader writer subset coverage remain
+unfinished. Canonical balanced transformer rows do not claim conductor/neutral
+semantics, and must not be used as an implicit multiconductor writer.

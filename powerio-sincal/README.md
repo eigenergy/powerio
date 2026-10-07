@@ -57,7 +57,9 @@ Repeated construction has deterministic database and ZIP bytes.
 This is writer infrastructure only. A backend must map its typed network and
 validate the complete constructed database with its own electrical reader
 before returning an artifact. There is no electrical-family inference here,
-and these helpers do not enable a public `can_emit` capability. Fresh balanced
-and multiconductor emitters, their fidelity diagnostics, edited/IR transport
-checks and independent electrical validation remain part of the experimental
-writer branch. Native desktop open/save/calculate is a separate acceptance gate.
+and these helpers do not enable a public `can_emit` capability. The balanced
+backend now supplies a static candidate electrical emitter
+and paired-CSV/pandapower validation in `powerio-tx`; the multiconductor emitter
+and experimental facade/IR integration remain unfinished. See
+`evals/sincal/README.md` for the exact electrical profile and evidence. Native
+desktop open/save/calculate is a separate acceptance gate.
