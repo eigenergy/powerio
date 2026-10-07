@@ -48,12 +48,6 @@ impl Topology {
             phases.insert(bus.id.clone(), selected);
         }
         for switch in net.switches() {
-            if switch.open {
-                return Err(error(format!(
-                    "switch {}: open-switch authoring not yet implemented",
-                    switch.name
-                )));
-            }
             if switch.terminal_map_from != switch.terminal_map_to {
                 return Err(error(format!(
                     "switch {}: conductor permutation requires explicit mapping",
@@ -72,6 +66,11 @@ impl Topology {
                 return Err(error(
                     "switching a reference/neutral conductor requires explicit native circuit mapping",
                 ));
+            }
+            if switch.open {
+                // An open path declares conductor endpoints but creates no
+                // equality constraint and must not merge native nodes.
+                continue;
             }
             let a = root(&mut parent, &switch.bus_from);
             let b = root(&mut parent, &switch.bus_to);

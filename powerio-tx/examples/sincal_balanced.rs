@@ -4,8 +4,13 @@ use powerio_sincal::{DatabaseSnapshot, database_bytes};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     let fresh_requested = args.iter().any(|a| a == "--fresh");
-    let inputs = args.iter().filter(|a| a.as_str() != "--fresh").collect::<Vec<_>>();
-    let path = inputs.first().ok_or("usage: sincal_balanced <SQLite, sinx or MDB> [acquired.json] [hours] [--fresh]")?;
+    let inputs = args
+        .iter()
+        .filter(|a| a.as_str() != "--fresh")
+        .collect::<Vec<_>>();
+    let path = inputs
+        .first()
+        .ok_or("usage: sincal_balanced <SQLite, sinx or MDB> [acquired.json] [hours] [--fresh]")?;
     if inputs.len() > 3 {
         return Err("too many arguments".into());
     }

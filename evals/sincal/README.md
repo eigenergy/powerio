@@ -497,7 +497,8 @@ switches. Test circuits are generated at runtime; no native fixtures were added.
 
 This is incremental PR5 implementation. Selected typed transformer output is
 implemented below. Other shunt/generator output,
-open-switch/external-neutral authoring remain unfinished. The Rust experimental
+external-neutral and general shunt authoring remain unfinished. Canonical open
+phase switches now have the verified writer profile described below. The Rust experimental
 facade option is now implemented as described below. The complete authentic unbalanced reader corpus targets in
 PR4 are unchanged; these writer tests do not establish their completion. Native
 SINCAL desktop acceptance remains a separate external gate.
@@ -603,5 +604,39 @@ IR edits, typed modules, non-network rejection, explicit family mismatch,
 missing/inapplicable voltage options, invalid archive names, no partial output
 or overwrite, preserved source echo, and unchanged default MATPOWER emission.
 The facade depends on the shared SINCAL crate only for model-neutral packaging;
-backend dependencies remain independent. CLI/Python/C experimental options and
-complete authentic multiconductor reader dispatch are still separate work.
+backend dependencies remain independent. CLI/Python/C experimental writer
+options remain separate work.
+
+### Experimental open-switch output
+
+Open switches now write for canonical phase selections L1/L2/L3/L12/L23/L31/L123.
+Their endpoints stay separate even when they carry unequal declared voltages.
+The canonical native representation is a one-metre ordinary line with exactly
+zero series and shunt parameters and an explicitly open first terminal. The
+reader represents it with an auxiliary bus, a closed ideal connection and an
+open terminal switch; it introduces no finite impedance or charging. A supplied
+uniform positive ampacity is retained on the ideal connection. No ampacity is
+invented when absent. Closed-switch collapse, including collapse of a readback
+carrier on a subsequent write, still reports omitted closed-switch ratings.
+Neutral switching, conductor permutations, nonuniform ampacities and unsafe
+partial closed-switch collapse remain explicit errors.
+
+Original synthetic tests cover all seven phase selections, optional ratings,
+deterministic bytes, read/edit/write, malformed limits, and source-free IR
+restoration followed by fresh SQLite/archive emission. `check_open_switch_writer.py`
+compares the actual original and fresh-readback typed circuits through independent
+dense MNA, then compares them with OpenDSS on the physical feeder with its tie
+open. Maximum fresh-readback voltage error is 6.36e-14 V; OpenDSS error is
+1.89e-5 V with the documented 1e-6-ohm ideal-source approximation. Closing each
+recovered tie changes voltage by at least 0.117 V. `writer-open-switches.json`
+records the seven cases, negative controls, tool versions and hashes. This
+establishes electrical writer/readback equivalence, not native SINCAL acceptance.
+
+```sh
+POWERIO_SINCAL_OPEN_SWITCH_EXPORT=/tmp/open-switch-circuits \
+  cargo test -p powerio-dist --lib export_open_switch_writer_oracle -- --ignored
+python3 evals/sincal/check_open_switch_writer.py /tmp/open-switch-circuits \
+  /tmp/writer-open-switches.json
+```
+
+No third-party model or new fixture is required; synthetic exports stay external.

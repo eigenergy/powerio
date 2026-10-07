@@ -373,3 +373,54 @@ fn typed_balanced_modules_and_edited_ir_write_but_non_network_values_do_not() {
             .any(|d| d.code() == "REQUEST.MODULE.WRONG_MODEL_KIND")
     );
 }
+
+#[test]
+fn open_phase_switch_survives_ir_edit_and_experimental_native_output() {
+    let mut original = multiconductor();
+    let PioValue::MulticonductorNetwork(net) = original.value_mut() else {
+        panic!("family")
+    };
+    net.buses_mut()
+        .push(powerio::dist::DistBus::new("isolated", vec!["2".into()]));
+    net.switches_mut().push(powerio::dist::DistSwitch::new(
+        "open-phase",
+        "bus",
+        "isolated",
+        vec!["2".into()],
+        vec!["2".into()],
+        true,
+    ));
+    let mut restored =
+        helpers::deserialize_module_text(&helpers::serialize_module_text(&original).unwrap())
+            .unwrap();
+    let PioValue::MulticonductorNetwork(net) = restored.value_mut() else {
+        panic!("family")
+    };
+    net.loads_mut()[0].p_nom[0] = 1500.0;
+    for container in [
+        SincalContainer::Sqlite,
+        SincalContainer::Archive {
+            project_name: "open-switch".into(),
+        },
+    ] {
+        let opts = options(
+            container,
+            [("bus".into(), 400.0), ("isolated".into(), 400.0)].into(),
+        );
+        let output = bytes(fresh(&restored, &opts));
+        let recovered = powerio::parse_with_options(
+            Source::from_memory("fresh", output).unwrap(),
+            &ParseOptions::default()
+                .format("sincal-multiconductor")
+                .unwrap(),
+        )
+        .unwrap();
+        let PioValue::MulticonductorNetwork(net) = recovered.value() else {
+            panic!("family")
+        };
+        let open: Vec<_> = net.switches().iter().filter(|s| s.open).collect();
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].terminal_map_from, ["2"]);
+        assert_eq!(net.loads()[0].p_nom, [1500.0]);
+    }
+}

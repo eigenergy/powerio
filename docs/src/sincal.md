@@ -264,8 +264,15 @@ sequence-representable lines and finite DD or solid DY/YD transformers with
 fixed taps. Supported native transformer primitives can be rewritten from their
 actual conductor matrices, including after IR restoration and compatible edits.
 Reconstruction reports its canonical nameplate parameter base explicitly.
-Open switches, external neutral circuits, other transformer/core modes, general
+External neutral circuits, other transformer/core modes, general
 shunts, controls and profiles are not yet covered by this writer subset.
+
+Open switches on canonical phase selections retain separate endpoints and
+explicit open native terminal states. Optional uniform ampacities are preserved.
+Native readback may introduce auxiliary buses and ideal connections;
+closed-switch collapse can omit those connections' ratings on a subsequent
+fresh write, with loss diagnostics. Neutral switching, conductor permutations
+and nonuniform switch ratings remain unsupported.
 
 This opt-in is currently exposed by the Rust facade. CLI, Python and C emission
 continue to use their existing ordinary emission path. `can_emit` remains false

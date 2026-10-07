@@ -72,6 +72,14 @@ pub(super) fn validate(net: &MulticonductorNetwork) -> Result<()> {
         if switch.terminal_map_from.len() != switch.terminal_map_to.len() {
             return Err(error("switch port lengths differ"));
         }
+        if let Some(limits) = &switch.i_max
+            && (limits.len() != switch.terminal_map_from.len()
+                || limits.iter().any(|a| !a.is_finite() || *a <= 0.0))
+        {
+            return Err(error(
+                "switch ampacity must be positive, finite and match its conductor count",
+            ));
+        }
     }
     for line in net.lines() {
         port(&line.bus_from, &line.terminal_map_from)?;

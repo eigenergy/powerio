@@ -225,7 +225,7 @@ fn malformed_and_unsupported_inputs_fail_without_panics() {
                 "supply",
                 "load",
                 names(&["1", "2", "3"]),
-                names(&["1", "2", "3"]),
+                names(&["2", "1", "3"]),
                 true,
             ));
         },
@@ -308,4 +308,181 @@ fn sequence_capacitance_and_ampacity_survive_unit_conversion() {
     close(code.b_from[0][0], 2e-9);
     close(code.b_from[0][1], -0.5e-9);
     assert_eq!(code.i_max.as_ref().unwrap(), &[200.0; 3]);
+}
+
+#[test]
+fn open_phase_switches_survive_fresh_write_with_exact_topology_and_ratings() {
+    for phases in [
+        vec!["1"],
+        vec!["2"],
+        vec!["3"],
+        vec!["1", "2"],
+        vec!["2", "3"],
+        vec!["3", "1"],
+        vec!["1", "2", "3"],
+    ] {
+        for rated in [false, true] {
+            let (mut net, options) = constructed(false);
+            let mut switch = DistSwitch::new(
+                "normally-open",
+                "supply",
+                "load",
+                names(&phases),
+                names(&phases),
+                true,
+            );
+            switch.i_max = rated.then(|| vec![150.0; phases.len()]);
+            net.switches_mut().push(switch);
+            let output = write_experimental_multiconductor(&net, &options).unwrap();
+            assert_ne!(output.bus_ids["supply"], output.bus_ids["load"]);
+            let recovered = read(&output.database);
+            let open: Vec<_> = recovered.switches().iter().filter(|s| s.open).collect();
+            assert_eq!(open.len(), 1);
+            assert_eq!(open[0].terminal_map_from, phases);
+            assert_eq!(open[0].bus_from, output.bus_ids["supply"].to_string());
+            let carrier = recovered
+                .switches()
+                .iter()
+                .find(|s| !s.open && s.bus_from == open[0].bus_to)
+                .unwrap();
+            assert_eq!(carrier.bus_to, output.bus_ids["load"].to_string());
+            assert_eq!(carrier.i_max, rated.then(|| vec![150.0; phases.len()]));
+            assert_eq!(recovered.lines().len(), 1); // Only the original finite feeder.
+            assert_eq!(
+                output.database,
+                write_experimental_multiconductor(&net, &options)
+                    .unwrap()
+                    .database
+            );
+            // Fresh read/edit/write keeps the open path even with additional
+            // reader-local buses. Closed-carrier rating loss is diagnosed.
+            let choices = ExperimentalMulticonductorOptions {
+                nominal_ll_volts: recovered
+                    .buses()
+                    .iter()
+                    .map(|b| (b.id.clone(), 400.0))
+                    .collect(),
+            };
+            let rewritten = write_experimental_multiconductor(&recovered, &choices).unwrap();
+            assert_eq!(
+                read(&rewritten.database)
+                    .switches()
+                    .iter()
+                    .filter(|s| s.open)
+                    .count(),
+                1
+            );
+            assert!(
+                rewritten
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.code() == "EMIT.DIST.SINCAL_LOSS")
+            );
+        }
+    }
+}
+
+#[test]
+fn open_switch_rating_errors_and_neutral_connections_are_not_silently_written() {
+    for limits in [
+        Some(vec![]),
+        Some(vec![100.0]),
+        Some(vec![100.0, 101.0, 100.0]),
+        Some(vec![f64::NAN; 3]),
+        Some(vec![0.0; 3]),
+    ] {
+        let (mut net, options) = constructed(false);
+        let mut s = DistSwitch::new(
+            "open",
+            "supply",
+            "load",
+            names(&["1", "2", "3"]),
+            names(&["1", "2", "3"]),
+            true,
+        );
+        s.i_max = limits;
+        net.switches_mut().push(s);
+        assert!(write_experimental_multiconductor(&net, &options).is_err());
+    }
+    let (mut net, options) = constructed(false);
+    net.buses_mut()[0].terminals.push("earth".into());
+    net.buses_mut()[0].grounded.push("earth".into());
+    net.switches_mut().push(DistSwitch::new(
+        "neutral",
+        "supply",
+        "load",
+        names(&["earth"]),
+        names(&["earth"]),
+        true,
+    ));
+    assert!(write_experimental_multiconductor(&net, &options).is_err());
+}
+
+#[test]
+#[ignore = "exports original open-switch circuits and fresh readbacks for independent electrical validation"]
+fn export_open_switch_writer_oracle() {
+    let dir =
+        std::path::PathBuf::from(std::env::var_os("POWERIO_SINCAL_OPEN_SWITCH_EXPORT").unwrap());
+    std::fs::create_dir_all(&dir).unwrap();
+    for (number, phases) in [
+        vec!["1"],
+        vec!["2"],
+        vec!["3"],
+        vec!["1", "2"],
+        vec!["2", "3"],
+        vec!["3", "1"],
+        vec!["1", "2", "3"],
+    ]
+    .iter()
+    .enumerate()
+    {
+        let (mut net, options) = constructed(false);
+        net.switches_mut().push(DistSwitch::new(
+            "tie",
+            "supply",
+            "load",
+            names(phases),
+            names(phases),
+            true,
+        ));
+        let output = write_experimental_multiconductor(&net, &options).unwrap();
+        let document = serde_json::json!({"input":net,"fresh_readback":read(&output.database),"bus_ids":output.bus_ids,"phases":phases});
+        std::fs::write(
+            dir.join(format!("case{number}.json")),
+            serde_json::to_vec_pretty(&document).unwrap(),
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn open_switch_does_not_merge_different_voltage_levels() {
+    let (mut net, mut options) = constructed(false);
+    net.buses_mut()
+        .push(DistBus::new("other-level", names(&["1", "2", "3"])));
+    options
+        .nominal_ll_volts
+        .insert("other-level".into(), 11000.0);
+    net.switches_mut().push(DistSwitch::new(
+        "voltage-tie",
+        "supply",
+        "other-level",
+        names(&["1", "2", "3"]),
+        names(&["1", "2", "3"]),
+        true,
+    ));
+    let output = write_experimental_multiconductor(&net, &options).unwrap();
+    assert_ne!(output.bus_ids["supply"], output.bus_ids["other-level"]);
+    let snapshot = powerio_sincal::DatabaseSnapshot::decode(&output.database, None).unwrap();
+    let voltage: f64 = snapshot
+        .connection
+        .query_row(
+            "SELECT Un FROM VoltageLevel WHERE VoltLevel_ID=?1",
+            [output.bus_ids["other-level"]],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!((voltage - 11.0).abs() < 1e-12);
+    net.switches_mut()[0].open = false;
+    assert!(write_experimental_multiconductor(&net, &options).is_err());
 }

@@ -1,6 +1,6 @@
 //! Electrical inverse mappings for the declared candidate conductor profile.
 use super::{
-    write::{ExpectedLoad, Result, Tables, error, integer, near, real, row},
+    write::{ExpectedLoad, Result, Row, Tables, error, integer, near, real, row},
     write_topology::{Topology, connection},
 };
 use crate::{ConductorMatrix, Configuration, DistLoadVoltageModel, MulticonductorNetwork};
@@ -222,15 +222,7 @@ pub(super) fn lines(
                 "candidate native line requires uniform positive ampacity",
             ));
         }
-        let mut input = row(
-            "Typ_ID Flag_Typ_ID CoupData_ID Flag_Ll Flag_Ground Flag_Macro Macro_ID LineTemp_ID ElemLoading_ID R0_R1 X0_X1 va alpha",
-        );
-        integer(&mut input, "Flag_LineTyp", 1);
-        integer(&mut input, "Flag_ESB", 1);
-        integer(&mut input, "Flag_Vart", 1);
-        integer(&mut input, "Flag_Cond", 1);
-        integer(&mut input, "Flag_Lf", 1);
-        integer(&mut input, "Flag_Z0_Input", 2);
+        let mut input = line_row(voltage, net.base_frequency());
         for (key, value) in [
             ("Un", voltage / 1000.0),
             ("ParSys", 1.0),
@@ -292,4 +284,112 @@ fn load_pairs(load: &crate::DistLoad, bus: &crate::DistBus) -> Result<Vec<Vec<St
             .collect(),
     };
     Ok(pairs)
+}
+
+// Share one concrete Line schema for finite lines and zero-impedance switch
+// carriers. One canonical metre with exactly zero R/X/C introduces no finite
+// electrical path; its first terminal is open. No small-impedance approximation.
+fn line_row(voltage: f64, frequency: f64) -> Row {
+    let mut input = row(
+        "Typ_ID Flag_Typ_ID CoupData_ID Flag_Ll Flag_Ground Flag_Macro Macro_ID LineTemp_ID ElemLoading_ID R0_R1 X0_X1 va alpha",
+    );
+    for key in [
+        "Flag_LineTyp",
+        "Flag_ESB",
+        "Flag_Vart",
+        "Flag_Cond",
+        "Flag_Lf",
+    ] {
+        integer(&mut input, key, 1);
+    }
+    integer(&mut input, "Flag_Z0_Input", 2);
+    for (key, value) in [
+        ("Un", voltage / 1000.0),
+        ("ParSys", 1.0),
+        ("fr", 1.0),
+        ("l", 0.001),
+        ("Ith", 0.0),
+        ("r", 0.0),
+        ("r0", 0.0),
+        ("x", 0.0),
+        ("x0", 0.0),
+        ("c", 0.0),
+        ("c0", 0.0),
+        ("fn", frequency),
+    ] {
+        real(&mut input, key, value);
+    }
+    input
+}
+
+pub(super) fn open_switches(
+    net: &MulticonductorNetwork,
+    topology: &Topology,
+    tables: &mut Tables,
+) -> Result<()> {
+    for (index, switch) in net.switches().iter().enumerate().filter(|(_, s)| s.open) {
+        let flag = connection(&switch.terminal_map_from)?;
+        let from = topology.bus_ids[&switch.bus_from];
+        let to = topology.bus_ids[&switch.bus_to];
+        let mut input = line_row(
+            topology.nodes[&from].0.max(topology.nodes[&to].0),
+            net.base_frequency(),
+        );
+        if let Some(limits) = &switch.i_max {
+            let amperes = limits[0];
+            if limits.iter().any(|a| a.to_bits() != amperes.to_bits()) {
+                return Err(error(
+                    "open switch requires uniform ampacity for native output",
+                ));
+            }
+            real(&mut input, "Ith", amperes / 1000.0);
+        }
+        let id = tables.element("Line", input, &[(from, flag), (to, flag)], &switch.name)?;
+        tables.open_port(id, 1)?;
+        tables.open_switches.push((id, index));
+    }
+    Ok(())
+}
+
+pub(super) fn verify_open_switches(
+    original: &MulticonductorNetwork,
+    recovered: &MulticonductorNetwork,
+    topology: &Topology,
+    tables: &Tables,
+) -> Result<()> {
+    for &(id, index) in &tables.open_switches {
+        let input = &original.switches()[index];
+        let carrier = recovered
+            .switches()
+            .iter()
+            .find(|s| s.name == id.to_string())
+            .ok_or_else(|| error("missing open-switch carrier"))?;
+        let phases = &input.terminal_map_from;
+        if carrier.open
+            || carrier.bus_to != topology.bus_ids[&input.bus_to].to_string()
+            || &carrier.terminal_map_from != phases
+            || &carrier.terminal_map_to != phases
+        {
+            return Err(error("candidate changes open-switch carrier connectivity"));
+        }
+        if !recovered.switches().iter().any(|s| {
+            s.open
+                && s.bus_from == topology.bus_ids[&input.bus_from].to_string()
+                && s.bus_to == carrier.bus_from
+                && &s.terminal_map_from == phases
+                && &s.terminal_map_to == phases
+        }) {
+            return Err(error("candidate changes open-switch terminal state"));
+        }
+        match (&carrier.i_max, &input.i_max) {
+            (None, None) => {}
+            (Some(actual), Some(expected)) if actual.len() == expected.len() => {
+                for (a, b) in actual.iter().zip(expected) {
+                    near(*a, *b, "switch ampacity")?;
+                }
+            }
+            _ => return Err(error("candidate changes open-switch ampacity")),
+        }
+    }
+    Ok(())
 }

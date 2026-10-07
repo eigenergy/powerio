@@ -74,6 +74,7 @@ pub(super) struct Tables {
     pub loads: Vec<ExpectedLoad>,
     pub sources: Vec<(i64, usize, bool)>,
     pub lines: Vec<(i64, usize)>,
+    pub open_switches: Vec<(i64, usize)>,
     pub transformers: Vec<super::write_transformer::ExpectedTransformer>,
 }
 impl Tables {
@@ -115,6 +116,20 @@ impl Tables {
             self.push("Terminal", port);
         }
         Ok(id)
+    }
+    pub fn open_port(&mut self, element: i64, position: i64) -> Result<()> {
+        let port = self
+            .rows
+            .get_mut("Terminal")
+            .and_then(|rows| {
+                rows.iter_mut().find(|r| {
+                    r.get("Element_ID") == Some(&Value::Integer(element))
+                        && r.get("TerminalNo") == Some(&Value::Integer(position))
+                })
+            })
+            .ok_or_else(|| error("missing authored switch terminal"))?;
+        integer(port, "Flag_State", 0);
+        Ok(())
     }
     fn database(&self) -> Result<Vec<u8>> {
         let mut db = InputDatabase::new().map_err(error)?;
@@ -246,6 +261,7 @@ pub fn write_experimental_multiconductor(
     super::write_equipment::sources(net, &topology, &mut tables)?;
     super::write_equipment::loads(net, &topology, &mut tables)?;
     super::write_equipment::lines(net, &topology, &mut tables)?;
+    super::write_equipment::open_switches(net, &topology, &mut tables)?;
     super::write_transformer::transformers(net, &topology, &mut tables)?;
     let database = tables.database()?;
     let snapshot = DatabaseSnapshot::decode(&database, None).map_err(error)?;
@@ -259,7 +275,7 @@ pub fn write_experimental_multiconductor(
         ),
         Diagnostic::of(
             &codes::EMIT_SINCAL_MULTICONDUCTOR_LOSS,
-            "Fresh IDs are assigned; closed ideal switches are collapsed without joining additional conductors; load branches become separate native elements. Metadata, geometry, bounds, costs, switch ampacities, apparent-power ratings and extras are omitted. Native readback may introduce device-local buses and switches.",
+            "Fresh IDs are assigned; closed ideal switches are collapsed without joining additional conductors; load branches become separate native elements. Metadata, geometry, bounds, costs, closed-switch ampacities, apparent-power ratings and extras are omitted. Native readback may introduce device-local buses and switches.",
         ),
     ];
     if canonical.is_some() {
@@ -347,6 +363,7 @@ fn verify(
         }
     }
     verify_lines(original, recovered, topology, tables)?;
+    super::write_equipment::verify_open_switches(original, recovered, topology, tables)?;
     super::write_transformer::verify(recovered, &tables.transformers)?;
     Ok(())
 }
