@@ -296,7 +296,7 @@ fn export_rated_shunt_circuits() {
     let mut native_cases = Vec::new();
     let dir =
         std::path::PathBuf::from(std::env::var_os("POWERIO_SINCAL_SHUNT_RECORDS_DIR").unwrap());
-    for case in [3, 12, 16, 17] {
+    for case in [3, 8, 11, 12, 16, 17] {
         let bytes = std::fs::read(dir.join(format!("representative{case:02}.json"))).unwrap();
         let db = NativeDatabase::from_snapshot(
             powerio_sincal::DatabaseSnapshot::decode_records(&bytes, Some(1)).unwrap(),

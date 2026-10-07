@@ -435,13 +435,27 @@ At midnight, current component coverage is:
 | 05 | 1369 / 1378 | No |
 | 06 | 163 / 218 | No |
 | 07 | 283 / 456 | No |
+| 08 | 265 / 309 | No |
 | 09 | 688 / 688 | Yes |
+| 10 | 99 / 124 | No |
+| 11 | 87 / 104 | No |
 | 12 | 214 / 215 | No |
 | 14 | 55 / 65 | No |
 | 15 | 89 / 102 | No |
+| 16 | 90 / 103 | No |
+| 17 | 130 / 142 | No |
+| 18 | 169 / 295 | No |
+| 19 | 1 / 33 | No |
 
-All 19 base variants remain audited. Cases with topology-level errors do not
-receive invented component totals. CSIRO09 is the one complete conductor-resolved
+All 19 base variants remain audited. Eighteen now have component dispositions;
+CSIRO13's unresolved terminal declaration still prevents a topology-level audit.
+Synchronous-machine port declarations follow the ordinary conductor selectors
+documented in Input Data (April 2014), p.60. This lets the audit evaluate the other
+components in CSIRO08/10/11/16/17/18; it does not implement those machines, create
+source constraints or ground their stars. Complete parsing still rejects them.
+CSIRO08/11 acquisition now includes their four capacitor banks, independently
+checked alongside the existing five native banks. Missing acquisition tables
+are not counted as missing native data. CSIRO09 is the one complete conductor-resolved
 native feeder. Five authentic snapshots and five labelled unequal-delta stress
 cases agree with independently constructed OpenDSS circuits within 0.000372 V
 across 617 energized nodes; four native nodes remain isolated behind open
@@ -451,7 +465,7 @@ Generic PF-instance construction rejects the four unsourced isolated buses,
 as required, while connected synthetic input constructs successfully.
 
 Additional independent evidence covers 484 native loads at 2,420 snapshots,
-518 partial delta-delta transformers, all 144 CSIRO09 ideal connections, five
+518 partial delta-delta transformers, all 144 CSIRO09 ideal connections, nine
 rated shunt banks, 186 lines with temperature defaults, and 1,658 further finite
 line circuits with sparse inputs. The latter includes 157 coupled single-phase
 series-only lines checked by eliminating absent currents from OpenDSS's full

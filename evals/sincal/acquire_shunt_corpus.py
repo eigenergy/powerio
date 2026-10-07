@@ -12,7 +12,7 @@ def run(source_dir, original_records_dir, output_dir, reader):
     manifest = json.loads(Path(__file__).with_name('access-acquisition.json').read_text())
     output_dir.mkdir(parents=True, exist_ok=False)
     cases = []
-    for n in (3,12,16,17):
+    for n in (3,8,11,12,16,17):
         identity = next(c for c in manifest['cases'] if c['case']==n)
         source = source_dir/f'csiro-representative{n:02}.mdb'
         base_path = original_records_dir/f'representative{n:02}.json'

@@ -3,7 +3,7 @@
   "attribution": "Berry, Adam; Collins, Lyle; Oliver, Erin; Perfumo, Cristian (2015), Representative Australian Electricity Feeders with load and solar generation profiles, v1, CSIRO.",
   "license": "CC-BY-4.0",
   "scope": "Conductor-resolved base-variant development audit; no family inference, independent solve or native execution.",
-  "reader_sha256": "a319b958b4bf7faaa32a93f841413a8962350e45ba599108ecf6678d3cc2ef8e",
+  "reader_sha256": "09e96b75d31c5dec73118fba6075d405bd2bda83c278ad8a6af7fd3e8d3fe0ee",
   "cases": [
     {
       "case": 1,
@@ -301,15 +301,48 @@
     {
       "case": 8,
       "source_sha256": "7534155ddb30c122719bd742af91ff87f8bca09256942c1839ca9843fba5473e",
-      "record_sha256": "cf62b483876d50127136d508f4001361154cd407e325d53c5c331bb7ff2045ab",
+      "record_sha256": "9929472ce974c5602a3416779de30b57c9ef8fe62bb2386e5b789f77597d809f",
+      "acquisition_profile": "base_with_shunts",
       "schema": 11.5,
       "variant": 1,
-      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 264: no conductor mapping for element type SynchronousMachine\" }",
+      "context_error": null,
       "complete_parse": false,
-      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 264: no conductor mapping for element type SynchronousMachine\" }",
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 264 (SynchronousMachine): PSS SINCAL read error: unmapped element type SynchronousMachine\" }",
       "independently_validated": false,
       "native_execution": false,
-      "snapshot_hours": 0.0
+      "snapshot_hours": 0.0,
+      "component_count": 309,
+      "mapped_by_type": {
+        "Line": 263,
+        "ShuntCondensator": 2
+      },
+      "failures": [
+        {
+          "type": "Infeeder",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: missing required input categories 0x4 in Flag_Input=3"
+        },
+        {
+          "type": "Load",
+          "count": 39,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: load requires zero-sequence circuit resolution"
+        },
+        {
+          "type": "SynchronousMachine",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: unmapped element type SynchronousMachine"
+        },
+        {
+          "type": "TwoWindingTransformer",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer regulator requires operating-state resolution"
+        },
+        {
+          "type": "TwoWindingTransformer",
+          "count": 2,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer requires resolution of MasterElm_ID"
+        }
+      ]
     },
     {
       "case": 9,
@@ -337,25 +370,69 @@
       "record_sha256": "a8b7ff3c4a8c01fce8b3e24f4701e741a268b076f9949fcfe34cdb5b4b671229",
       "schema": 11.5,
       "variant": 1,
-      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 100: no conductor mapping for element type SynchronousMachine\" }",
+      "context_error": null,
       "complete_parse": false,
-      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 100: no conductor mapping for element type SynchronousMachine\" }",
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 100 (SynchronousMachine): PSS SINCAL read error: unmapped element type SynchronousMachine\" }",
       "independently_validated": false,
       "native_execution": false,
-      "snapshot_hours": 0.0
+      "snapshot_hours": 0.0,
+      "component_count": 124,
+      "mapped_by_type": {
+        "Line": 99
+      },
+      "failures": [
+        {
+          "type": "Infeeder",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Invalid column type Null at index: 73, name: Flag_LfLimit"
+        },
+        {
+          "type": "Load",
+          "count": 23,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: load requires zero-sequence circuit resolution"
+        },
+        {
+          "type": "SynchronousMachine",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: unmapped element type SynchronousMachine"
+        }
+      ]
     },
     {
       "case": 11,
       "source_sha256": "4ad08f2eaf1bab4863aa0a6c2b72c6bdea9a7d0027626c49f224b960e6c667d7",
-      "record_sha256": "5d266c3905b5e7a049f118052a90fc8da91511913acb26369210ac20eda93552",
+      "record_sha256": "4b260f6c1e592f510995b9e3a0cc7b902497a3c9097caa3fd9a5ce08750885e1",
+      "acquisition_profile": "base_with_shunts",
       "schema": 11.5,
       "variant": 1,
-      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 89: no conductor mapping for element type SynchronousMachine\" }",
+      "context_error": null,
       "complete_parse": false,
-      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 89: no conductor mapping for element type SynchronousMachine\" }",
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 88 (Infeeder): PSS SINCAL read error: Invalid column type Null at index: 73, name: Flag_LfLimit\" }",
       "independently_validated": false,
       "native_execution": false,
-      "snapshot_hours": 0.0
+      "snapshot_hours": 0.0,
+      "component_count": 104,
+      "mapped_by_type": {
+        "Line": 85,
+        "ShuntCondensator": 2
+      },
+      "failures": [
+        {
+          "type": "Infeeder",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Invalid column type Null at index: 73, name: Flag_LfLimit"
+        },
+        {
+          "type": "Load",
+          "count": 15,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: load requires zero-sequence circuit resolution"
+        },
+        {
+          "type": "SynchronousMachine",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: unmapped element type SynchronousMachine"
+        }
+      ]
     },
     {
       "case": 12,
@@ -477,12 +554,39 @@
       "acquisition_profile": "base_with_shunts",
       "schema": 11.5,
       "variant": 1,
-      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 91: no conductor mapping for element type SynchronousMachine\" }",
+      "context_error": null,
       "complete_parse": false,
-      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 91: no conductor mapping for element type SynchronousMachine\" }",
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 90 (Load): PSS SINCAL read error: Invalid column type Null at index: 39, name: Ireg\" }",
       "independently_validated": false,
       "native_execution": false,
-      "snapshot_hours": 0.0
+      "snapshot_hours": 0.0,
+      "component_count": 103,
+      "mapped_by_type": {
+        "Line": 88,
+        "ShuntCondensator": 2
+      },
+      "failures": [
+        {
+          "type": "Infeeder",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Invalid column type Null at index: 73, name: Flag_LfLimit"
+        },
+        {
+          "type": "Load",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Invalid column type Null at index: 39, name: Ireg"
+        },
+        {
+          "type": "Load",
+          "count": 10,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: load requires zero-sequence circuit resolution"
+        },
+        {
+          "type": "SynchronousMachine",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: unmapped element type SynchronousMachine"
+        }
+      ]
     },
     {
       "case": 17,
@@ -491,12 +595,39 @@
       "acquisition_profile": "base_with_shunts",
       "schema": 11.5,
       "variant": 1,
-      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 136: no conductor mapping for element type SynchronousMachine\" }",
+      "context_error": null,
       "complete_parse": false,
-      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 136: no conductor mapping for element type SynchronousMachine\" }",
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 130 (Load): PSS SINCAL read error: load requires zero-sequence circuit resolution\" }",
       "independently_validated": false,
       "native_execution": false,
-      "snapshot_hours": 0.0
+      "snapshot_hours": 0.0,
+      "component_count": 142,
+      "mapped_by_type": {
+        "Line": 129,
+        "ShuntCondensator": 1
+      },
+      "failures": [
+        {
+          "type": "Infeeder",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Invalid column type Null at index: 73, name: Flag_LfLimit"
+        },
+        {
+          "type": "Load",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Invalid column type Null at index: 39, name: Ireg"
+        },
+        {
+          "type": "Load",
+          "count": 9,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: load requires zero-sequence circuit resolution"
+        },
+        {
+          "type": "SynchronousMachine",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: unmapped element type SynchronousMachine"
+        }
+      ]
     },
     {
       "case": 18,
@@ -504,12 +635,398 @@
       "record_sha256": "e613579be64a387d871efdc95bc327438ca5e31b39b64dc497a8f6c9df842da3",
       "schema": 11.5,
       "variant": 1,
-      "context_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 2180: no conductor mapping for element type SynchronousMachine\" }",
+      "context_error": null,
       "complete_parse": false,
-      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 2180: no conductor mapping for element type SynchronousMachine\" }",
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 51 (Line): PSS SINCAL read error: Line 51: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)\" }",
       "independently_validated": false,
       "native_execution": false,
-      "snapshot_hours": 0.0
+      "snapshot_hours": 0.0,
+      "component_count": 295,
+      "mapped_by_type": {
+        "Line": 169
+      },
+      "failures": [
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1042: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1049: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1103: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1112: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1113: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1124: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1246: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1271: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1278: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1288: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1355: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1362: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1379: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1416: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1428: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1439: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1440: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1455: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1483: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1494: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1536: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1542: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1549: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1553: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1610: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1636: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1668: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1722: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1723: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1738: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1749: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1792: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 1797: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 201: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 250: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 262: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 288: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 320: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 330: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 352: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 410: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 473: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 493: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 496: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 504: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 51: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 521: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 565: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 578: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 587: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 59: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 600: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 604: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 614: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 66: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 675: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 683: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 697: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 702: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 703: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 722: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 756: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 780: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 782: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 790: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 796: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 816: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 910: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 950: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 957: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 964: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 965: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Line",
+          "count": 1,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: Line 997: explicit zero-sequence data required (load-flow/zero-sequence input bits, Flag_Z0_Input=1 or 2)"
+        },
+        {
+          "type": "Load",
+          "count": 13,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: load requires zero-sequence circuit resolution"
+        },
+        {
+          "type": "SynchronousMachine",
+          "count": 2,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: unmapped element type SynchronousMachine"
+        },
+        {
+          "type": "TwoWindingTransformer",
+          "count": 38,
+          "reason": "PSS SINCAL read error: PSS SINCAL read error: transformer regulator requires operating-state resolution"
+        }
+      ]
     },
     {
       "case": 19,

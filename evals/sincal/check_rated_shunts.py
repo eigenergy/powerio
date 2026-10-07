@@ -102,7 +102,7 @@ def check(export, source_dir, records_dir, original_records_dir):
                 else: raise ValueError('corrupted bank mapping accepted')
     native = []
     expected_ids = set()
-    for case in (3,12,16,17):
+    for case in (3,8,11,12,16,17):
         identity = identities[case]
         source = source_dir/f'csiro-representative{case:02}.mdb'
         old_path = original_records_dir/f'representative{case:02}.json'

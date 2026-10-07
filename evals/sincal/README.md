@@ -838,7 +838,7 @@ missing columns and modern NULLs still reject. Capacitor input mode3 is not
 inferred from the reactor enum. Materialized type references keep their source
 provenance. The existing `MulticonductorNetwork` model needs no new public type.
 
-All five native banks in CSIRO03/12/16/17 and 14 original synthetic phase cases
+All nine native banks in CSIRO03/08/11/12/16/17 and 14 original synthetic phase cases
 pass independent OpenDSS constant-impedance checks. Maximum relative primitive
 error is 2.52e-16 against 1e-10; eight mutations detect factor-three, reactive-sign,
 grounding and service-state errors. The oracle reconstructs the neutral return
@@ -1027,3 +1027,29 @@ fixed status and reject controllers, invalid values, missing fields and NULLs
 in other schema profiles. CSIRO05's seven transformers now reach the explicit
 partial mixed-winding rejection. Component coverage and complete-feeder counts
 are unchanged; there is no new feeder acceptance claim.
+
+## Machine terminal topology and broader corpus accounting
+
+The General Input Data manual (April 2014), p.60, declares the ordinary
+phase/phase-pair port connections for synchronous machines. The topology reader
+now collects those conductors without pretending to implement a machine's
+positive-, negative- or zero-sequence circuit. No source, ground or partial
+network is returned for an unsupported machine. Synthetic tests cover all seven
+phase selections, isolated machine nodes, source-byte preservation and rejection
+of unknown or missing terminal declarations.
+
+This removes the audit's early stop in CSIRO08/10/11/16/17/18. All 19 cases are
+still audited, with component dispositions for 18; CSIRO13's unresolved terminal
+selector remains a global error. The new midnight counts are 265/309, 99/124,
+87/104, 90/103, 130/142 and 169/295 respectively. These are newly measured
+component counts, not newly supported complete feeders. Every machine remains
+an explicit component rejection, and only CSIRO09 parses completely.
+
+`acquire_shunt_corpus.py` now includes CSIRO08/11 in addition to 03/12/16/17.
+Its source hashes and every original acquired table must match the base manifest.
+The extended acquisition adds the four capacitor banks that the old table set
+omitted. The rated-bank export/checker verifies all nine native banks against
+independently constructed OpenDSS circuits, retaining the 14 synthetic cases and
+eight mutation controls. Re-run both distribution audits with this extended
+record directory; do not use the older four-case directory with the new manifest.
+Original models and acquired tables remain external research data.

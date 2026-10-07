@@ -177,6 +177,12 @@ impl NativeDatabase {
                 "Line"
                     | "Load"
                     | "Infeeder"
+                    // General Input Data (April 2014), p.60: machines use
+                    // the ordinary phase/phase-pair terminal selectors. This
+                    // resolves only their bus conductors; map_component still
+                    // rejects their unsupported electrical model. In particular,
+                    // do not create an ideal source or ground their star here.
+                    | "SynchronousMachine"
                     | "DCInfeeder"
                     | "ShuntImpedance"
                     | "ShuntReactor"

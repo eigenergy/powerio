@@ -127,6 +127,66 @@ fn global_context_failure_prevents_claiming_component_readiness() {
 }
 
 #[test]
+fn known_machine_ports_allow_audit_but_never_a_partial_network() {
+    for (selector, expected) in [
+        (1, vec!["1"]),
+        (2, vec!["2"]),
+        (3, vec!["3"]),
+        (4, vec!["1", "2"]),
+        (5, vec!["2", "3"]),
+        (6, vec!["1", "3"]),
+        (7, vec!["1", "2", "3"]),
+    ] {
+        // Move the source port to its own native node so no other equipment
+        // can accidentally supply the machine's phase declaration.
+        let db = native(&format!(
+            "INSERT INTO Node SELECT * FROM Node WHERE Node_ID=10;
+             UPDATE Node SET Node_ID=90 WHERE rowid=(SELECT MAX(rowid) FROM Node);
+             UPDATE Element SET Type='SynchronousMachine' WHERE Element_ID=32;
+             UPDATE Terminal SET Node_ID=90, Flag_Terminal={selector} WHERE Element_ID=32;"
+        ));
+        let before = db.connection.serialize("main").unwrap().to_vec();
+        let topology = db.topology_draft().unwrap();
+        let buses = topology.buses();
+        let machine_bus = buses.iter().find(|bus| bus.id == "90").unwrap();
+        assert_eq!(machine_bus.terminals, expected);
+        assert!(machine_bus.grounded.is_empty());
+        let report = db.mapping_report().unwrap();
+        assert_eq!(report.components.len(), 4);
+        assert!(!report.all_components_map());
+        for component in &report.components {
+            assert_eq!(component.component_maps, component.element != 32);
+        }
+        let machine = &report.components[2];
+        assert_eq!(machine.element_type, "SynchronousMachine");
+        assert!(
+            machine
+                .first_error
+                .as_ref()
+                .unwrap()
+                .contains("SynchronousMachine")
+        );
+        assert!(db.network().is_err());
+        assert_eq!(db.connection.serialize("main").unwrap().to_vec(), before);
+    }
+}
+
+#[test]
+fn machine_port_admission_does_not_guess_unknown_or_missing_connections() {
+    for edit in [
+        "UPDATE Terminal SET Flag_Terminal=NULL WHERE Element_ID=32;",
+        "UPDATE Terminal SET Flag_Terminal=99 WHERE Element_ID=32;",
+        "UPDATE Element SET Type='UnknownMachine' WHERE Element_ID=32;",
+    ] {
+        let db = native(&format!(
+            "UPDATE Element SET Type='SynchronousMachine' WHERE Element_ID=32; {edit}"
+        ));
+        assert!(db.mapping_report().is_err());
+        assert!(db.network().is_err());
+    }
+}
+
+#[test]
 fn licensed_native_report_accounts_for_all_components_and_missing_categories() {
     let bytes = include_bytes!("../../../tests/data/sincal/1-LV-rural1--0-sw.sinx");
     let source = Source::from_memory("native.sinx", bytes.to_vec()).unwrap();
