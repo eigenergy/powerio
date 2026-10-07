@@ -1,8 +1,9 @@
 """Public capabilities used by external CGMES benchmark integrations."""
 from pathlib import Path
 
-import powerio
 import pytest
+
+import powerio
 
 DATA = Path(__file__).resolve().parents[2] / "tests" / "data"
 
