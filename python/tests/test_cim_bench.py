@@ -13,6 +13,8 @@ def test_component_counts_exclude_transformers():
     counts = network.component_counts()
     assert counts == {"lines": 17, "generators": 5, "loads": 11, "substations": 0}
     assert network.n_branches == 20
+    assert network.n_lines == 17
+    assert network.n_substations == 0
 
 
 def test_sever_source_forces_fresh_emission_and_keeps_original(tmp_path):
@@ -29,6 +31,9 @@ def test_sever_source_forces_fresh_emission_and_keeps_original(tmp_path):
     # A CGMES directory source must also become actual writer output.
     powerio.emit(original, "cgmes", tmp_path / "cgmes")
     cgmes = powerio.parse(tmp_path / "cgmes", format="cgmes")
+    counts = cgmes.value.component_counts()
+    assert cgmes.value.n_lines == counts["lines"]
+    assert cgmes.value.n_substations == counts["substations"] > 0
     assert powerio.emit(cgmes, "cgmes").fidelity == "exact_same_format"
     result = powerio.emit(cgmes.sever_source(), "cgmes")
     assert result.fidelity != "exact_same_format"

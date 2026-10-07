@@ -218,25 +218,29 @@ def verify(key, oracle):
         "dataset": key,
         "inputs": manifest,
         "source_classes": classes,
-        "native_counts": loaded.counts,
+        "native_counts": loaded.network.component_counts(),
         "load_seconds_observation": time.perf_counter() - start,
         "parse_diagnostics": diagnostic_summary(loaded.module.diagnostics),
     }
-    report.update(adapter.prepare_export(loaded))
     with tempfile.TemporaryDirectory(prefix="powerio-cim-verify-") as tmp:
         destination = Path(tmp) / "fresh"
+        destination.mkdir()
+        emitted = powerio.emit(loaded.module.sever_source(), "cgmes")
         start = time.perf_counter()
-        emitted = powerio.emit(loaded.fresh, "cgmes", destination)
+        adapter.export(loaded, destination / "export_output.xml")
         report["fresh_seconds_observation"] = time.perf_counter() - start
         assert emitted.fidelity == "canonical"
         fresh_files = [
             (p.name, p.read_bytes()) for p in sorted(destination.glob("*.xml"))
         ]
         assert len(fresh_files) == 4
+        assert dict(fresh_files) == {
+            Path(artifact.name).name: artifact.data for artifact in emitted.artifacts
+        }
         report["fresh_files"], report["fresh_classes"] = inventory(fresh_files)
         report["emit_diagnostics"] = diagnostic_summary(emitted.diagnostics)
         reparsed = powerio.parse(destination, format="cgmes").value
-        assert reparsed.component_counts() == loaded.counts
+        assert reparsed.component_counts() == report["native_counts"]
         original = loaded.module.value
         original_buses, reparsed_buses = (
             bus_identities(original),

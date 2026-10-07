@@ -863,6 +863,8 @@ class BalancedNetwork:
     ]
     n_buses: int
     n_branches: int
+    n_lines: int
+    n_substations: int
     n_generators: int
     n_loads: int
     n_shunts: int
