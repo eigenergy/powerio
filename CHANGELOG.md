@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Primary files and cumulative referenced-file acquisition now default to
+  1 GiB. `POWERIO_MAX_PRIMARY_BYTES` and `POWERIO_MAX_REFERENCED_BYTES` override
+  those limits; expanded CGMES archives use the latter too. This allows CIM
+  bench's RealGrid profiles to load with defaults. Python adds
+  `BalancedNetwork.component_counts()` and `PioModule.sever_source()` for
+  native counts and fresh emission. Thanks to [Mohamed Numair](https://github.com/MohamedNumair)
+  for the original CGMES implementation and the CIM bench suggestion in #456.
+
 - PSS/E switched shunt `MODSW` 1 and 2 now read as PSS/E defines them: 1 is
   discrete and 2 is continuous adjustment of the regulated voltage. The RAW
   and RAWX readers had the two swapped, so a continuously adjusted shunt, such

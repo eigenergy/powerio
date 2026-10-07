@@ -130,9 +130,15 @@ refuses. Time series and scenario sets carry at most 65,536 entries each, as
 do the three winding transformer power records of a solution. A stored
 operating point names at most 64 quantities.
 
-These bounds count entries, not bytes. `deserialize` applies the primary file
-limit to a path, 64 MiB unless `POWERIO_MAX_PRIMARY_BYTES` sets another byte
-count, and no byte limit to content already in memory.
+These bounds count entries, not bytes. Path-based input defaults to 1 GiB for
+both raw formats (including BMOPF) and stored IR; `POWERIO_MAX_PRIMARY_BYTES`
+sets a different positive decimal byte count. Referenced files and expanded
+CGMES archives share `POWERIO_MAX_REFERENCED_BYTES`, also 1 GiB by default.
+Caller-owned memory has no whole-document cap; format and record limits still
+apply. Stored solutions embed their instance and network, so they can exceed
+the raw input's size. Consumers should check the actual serialized byte length
+against their reload limit before saving, and choose a smaller limit for
+memory-constrained applications. The byte limit does not bound process memory.
 
 ## IR versions
 

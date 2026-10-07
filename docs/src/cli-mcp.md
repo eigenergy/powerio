@@ -132,8 +132,9 @@ exchange path, or grid exchange content in memory. Filesystem reads and writes d
 to the directory captured at server startup. `POWERIO_MCP_ALLOWED_ROOTS`
 selects explicit directories instead. Remote URI schemes are rejected.
 
-Primary files default to a 64 MiB acquisition limit, checked before reserving
+Primary files default to a 1 GiB acquisition limit, checked before reserving
 memory. Set `POWERIO_MAX_PRIMARY_BYTES` in the host environment to a positive
 decimal byte count for larger inputs. This setting also applies to ordinary
-Rust, C, Python, and Julia path-based source acquisition. Referenced files
-retain their separate cumulative limit.
+Rust, C, Python, and Julia path-based source acquisition. Referenced files and expanded CGMES archives
+share a separate cumulative limit, also 1 GiB by default, configurable through
+`POWERIO_MAX_REFERENCED_BYTES`.

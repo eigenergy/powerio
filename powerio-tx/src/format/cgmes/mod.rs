@@ -38,7 +38,6 @@ use crate::network::BalancedNetwork;
 use crate::{Error, Result};
 
 const MAX_FILES: usize = 4_096;
-const MAX_BYTES: u64 = 64 << 20;
 const MAX_COMPRESSION_RATIO: u64 = 200;
 /// The modeling authority set fresh CGMES output states. A header carrying it
 /// was synthesized by this writer, so its identity, version, creation time,
@@ -181,6 +180,13 @@ pub(crate) fn parse_text(
 }
 
 fn acquire_documents(source: &Source) -> Result<Vec<(String, String)>> {
+    let max_bytes = source
+        .acquisition_byte_limit()
+        .map_err(|error| source_error(&error))?;
+    acquire_documents_with_limit(source, max_bytes)
+}
+
+fn acquire_documents_with_limit(source: &Source, max_bytes: u64) -> Result<Vec<(String, String)>> {
     let mut documents = Vec::new();
     let mut names = BTreeSet::new();
     let mut total = 0_u64;
@@ -196,6 +202,7 @@ fn acquire_documents(source: &Source) -> Result<Vec<(String, String)>> {
                         &mut documents,
                         &mut names,
                         &mut total,
+                        max_bytes,
                     )?;
                 }
                 Some("zip") => {
@@ -206,6 +213,7 @@ fn acquire_documents(source: &Source) -> Result<Vec<(String, String)>> {
                         &mut documents,
                         &mut names,
                         &mut total,
+                        max_bytes,
                     )?;
                 }
                 _ => {}
@@ -224,6 +232,7 @@ fn acquire_documents(source: &Source) -> Result<Vec<(String, String)>> {
                 &mut documents,
                 &mut names,
                 &mut total,
+                max_bytes,
             )?;
         } else {
             push_xml(
@@ -233,6 +242,7 @@ fn acquire_documents(source: &Source) -> Result<Vec<(String, String)>> {
                 &mut documents,
                 &mut names,
                 &mut total,
+                max_bytes,
             )?;
         }
     }
@@ -250,10 +260,11 @@ fn push_zip(
     documents: &mut Vec<(String, String)>,
     names: &mut BTreeSet<String>,
     total: &mut u64,
+    max_bytes: u64,
 ) -> Result<()> {
-    if bytes.len() as u64 > MAX_BYTES {
+    if bytes.len() as u64 > max_bytes {
         return Err(format_error(format!(
-            "archive {archive_name} exceeds the {MAX_BYTES} byte input limit"
+            "archive {archive_name} exceeds the {max_bytes} byte input limit"
         )));
     }
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
@@ -284,7 +295,7 @@ fn push_zip(
         }
         let size = file.size();
         let compressed = file.compressed_size();
-        if size > MAX_BYTES || exceeds_compression_ratio(size, compressed) {
+        if size > max_bytes || exceeds_compression_ratio(size, compressed) {
             return Err(format_error(format!(
                 "archive entry {raw_name} exceeds the CGMES decompression limits"
             )));
@@ -301,11 +312,11 @@ fn push_zip(
         if extension(path.as_str()) != Some("xml") {
             continue;
         }
-        let remaining = MAX_BYTES.saturating_sub(*total);
+        let remaining = max_bytes.saturating_sub(*total);
         if size > remaining {
-            return Err(format_error(
-                "CGMES profile data exceeds the 64 MiB input limit",
-            ));
+            return Err(format_error(format!(
+                "CGMES profile data exceeds the {max_bytes} byte input limit"
+            )));
         }
         let mut content = Vec::with_capacity(usize::try_from(size).unwrap_or(0));
         content.extend_from_slice(&prefix);
@@ -320,6 +331,7 @@ fn push_zip(
             documents,
             names,
             total,
+            max_bytes,
         )?;
     }
     Ok(())
@@ -343,6 +355,7 @@ fn push_xml(
     documents: &mut Vec<(String, String)>,
     names: &mut BTreeSet<String>,
     total: &mut u64,
+    max_bytes: u64,
 ) -> Result<()> {
     if documents.len() >= MAX_FILES {
         return Err(format_error(format!(
@@ -352,8 +365,12 @@ fn push_xml(
     let size = bytes.len() as u64;
     *total = total
         .checked_add(size)
-        .filter(|sum| *sum <= MAX_BYTES)
-        .ok_or_else(|| format_error("CGMES profile data exceeds the 64 MiB input limit"))?;
+        .filter(|sum| *sum <= max_bytes)
+        .ok_or_else(|| {
+            format_error(format!(
+                "CGMES profile data exceeds the {max_bytes} byte input limit"
+            ))
+        })?;
     reject_unsafe_xml(bytes)?;
     let key = normalized_name.replace('\\', "/").to_ascii_lowercase();
     if !names.insert(key) {
@@ -5602,6 +5619,40 @@ mod tests {
         let parsed = read::read_cgmes_documents(documents, Some("generic-equipment")).unwrap();
         assert_eq!(parsed.network.loads().len(), 1);
         assert!(parsed.network.loads()[0].in_service);
+    }
+
+    #[test]
+    fn configurable_acquisition_limit_bounds_directory_and_archive_xml() {
+        let output = write::write_cgmes(&network(), CgmesVersion::V3_0).unwrap();
+        let limit = output.files.iter().map(|(_, text)| text.len() as u64).sum();
+        let directory = tempfile::tempdir().unwrap();
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, text) in &output.files {
+            std::fs::write(directory.path().join(name), text).unwrap();
+            writer
+                .start_file(
+                    name,
+                    zip::write::SimpleFileOptions::default()
+                        .compression_method(zip::CompressionMethod::Deflated),
+                )
+                .unwrap();
+            writer.write_all(text.as_bytes()).unwrap();
+        }
+        let archive =
+            Source::from_memory("profiles.zip", writer.finish().unwrap().into_inner()).unwrap();
+        let directory = Source::open(directory.path()).unwrap();
+        for source in [directory, archive] {
+            assert_eq!(
+                acquire_documents_with_limit(&source, limit).unwrap().len(),
+                output.files.len()
+            );
+            assert!(
+                acquire_documents_with_limit(&source, limit - 1)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("input limit")
+            );
+        }
     }
 
     #[test]
