@@ -923,7 +923,9 @@ fn terminal_side(store: &Store, terminal: &str) -> Result<u8> {
             ),
         });
     }
-    Ok(store.f(end, "TransformerEnd.endNumber")?.unwrap_or(1.0) as u8)
+    Ok(store
+        .f(end, "TransformerEnd.endNumber")?
+        .map_or(sequence, |number| number as u8))
 }
 
 /// Terminal wiring: equipment → its terminals (sequence order), terminal →
@@ -6020,6 +6022,65 @@ fn warn_regenerated_subordinate_identities(store: &Store, warnings: &mut CgmesDi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transformer_terminal_keeps_sequence_when_winding_number_is_missing() {
+        for (number, expected) in [(None, 2), (Some("1"), 1)] {
+            let mut props = vec![
+                (
+                    "TransformerEnd.Terminal".into(),
+                    PropValue::Ref("terminal".into()),
+                ),
+                (
+                    "PowerTransformerEnd.PowerTransformer".into(),
+                    PropValue::Ref("transformer".into()),
+                ),
+            ];
+            if let Some(number) = number {
+                props.push((
+                    "TransformerEnd.endNumber".into(),
+                    PropValue::Text(number.into()),
+                ));
+            }
+            let mut store = Store::default();
+            store
+                .merge(CimDocument {
+                    cim_namespaces: BTreeSet::new(),
+                    header: None,
+                    objects: vec![
+                        CimObject {
+                            class: "PowerTransformer".into(),
+                            id: "transformer".into(),
+                            definition: true,
+                            props: vec![],
+                        },
+                        CimObject {
+                            class: "Terminal".into(),
+                            id: "terminal".into(),
+                            definition: true,
+                            props: vec![
+                                (
+                                    "Terminal.ConductingEquipment".into(),
+                                    PropValue::Ref("transformer".into()),
+                                ),
+                                (
+                                    "ACDCTerminal.sequenceNumber".into(),
+                                    PropValue::Text("2".into()),
+                                ),
+                            ],
+                        },
+                        CimObject {
+                            class: "PowerTransformerEnd".into(),
+                            id: "end".into(),
+                            definition: true,
+                            props,
+                        },
+                    ],
+                })
+                .unwrap();
+            assert_eq!(terminal_side(&store, "terminal").unwrap(), expected);
+        }
+    }
 
     #[test]
     fn unmapped_multi_value_fields_count_objects_once_in_source_order() {
