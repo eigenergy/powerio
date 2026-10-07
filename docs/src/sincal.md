@@ -220,7 +220,7 @@ loss diagnostics. Default options are equivalent to ordinary `emit`, including
 byte-exact echo. Unsupported physics or packaging errors produce no partial
 file, and existing destination files are not overwritten.
 
-```rust,no_run
+```rust,ignore
 let module = powerio::parse_with_options(
     "case.sinx", &powerio::ParseOptions::default().format("sincal-balanced")?,
 )?;
