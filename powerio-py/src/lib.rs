@@ -21,6 +21,10 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
 use sprs::CsMat;
 
+// Keep the many short-lived parser allocations in the extension's own heap.
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use powerio::{BalancedNetwork, BranchSusceptanceFormula, PwdDisplay};
 use powerio_matrix::matrix::{
     BuildOptions, Scheme, SensitivityOptions, SensitivitySolver, calc_adjacency_matrix,

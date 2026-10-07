@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The Python extension uses mimalloc for Rust allocations, reducing allocation
+  overhead and memory use when loading and writing large networks. Allocator
+  license notices are included in the wheel.
+
 - CGMES transformer terminals now follow winding numbers when source terminal
   sequence numbers differ, preserving winding connectivity, taps, and limits
   through fresh emission. A synthetic unequal-voltage regression covers the
