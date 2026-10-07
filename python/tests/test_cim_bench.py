@@ -62,3 +62,9 @@ def test_component_counts_reject_normalized_equipment_classification():
     network = powerio.parse(DATA / "case14.m").value.to_normalized()
     with pytest.raises(ValueError, match="unnormalized network"):
         network.component_counts()
+
+
+def test_native_line_count_rejects_normalized_equipment_classification():
+    network = powerio.parse(DATA / "case14.m").value.to_normalized()
+    with pytest.raises(ValueError, match="unnormalized network"):
+        _ = network.n_lines
