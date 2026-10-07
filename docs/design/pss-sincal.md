@@ -3,7 +3,7 @@
 Status: local reader implementation and validation in progress, 2026-10-07.
 Both explicit public reader profiles are implemented. Five balanced cases and
 one complete conductor-resolved native feeder have independent electrical
-evidence; broader corpus and C/Julia selection-option work remain unfinished.
+evidence, including C/Julia selections; broader corpus work remains unfinished.
 Nothing is published. Research base: `c8184eba` (PowerIO 0.11.4); the local PR
 stack starts at `d5f93763`. The current user-facing capabilities are documented
 in [the guide](../src/sincal.md). Earlier rationale below is dated context,
@@ -431,15 +431,17 @@ Wye star/sequence semantics, partial transformer windings, inconsistent
 core parameters and broader profiles/variants remain work. The public facade now
 selects `sincal-multiconductor` explicitly, retaining original native bytes and
 the existing network type. Native SQLite/archive routing is exercised through
-CLI/Python/C; explicit Access/variant/snapshot options now use Rust, Python and
+CLI/Python/C; explicit Access/variant/snapshot options now use Rust, Python, C, Julia and
 the CLI's summary/convert/serialize commands.
 CSIRO09 public-facade results reproduce the independent electrical checks, MDB
 echo and IR restoration. Generic admittance assembly succeeds with no omission
 diagnostics. Generic PF-instance construction correctly refuses the full native
 network's four unsourced isolated buses; connected synthetic input constructs
 successfully. Python wheel and CLI checks preserve explicit snapshot choices
-and original MDB echo. Selection-option plumbing through C/Julia and the
-remainder of the two-family integration packet remain work.
+and original MDB echo. C/Julia selection plumbing now passes the complete C
+and Julia suites, header/entry-point parity, and an external CSIRO09 comparison
+at 0h/6h against the CLI, including typed IR restoration and original MDB echo.
+Broader corpus coverage and the remainder of the integration packet remain work.
 Schema-11.5 optional transformer defaults now cover the sparse CSIRO03 records
 with explicit provenance; its context now advances to an unmapped ShuntReactor
 conductor declaration. Its 297 limited-P/Q loads additionally require an exact native

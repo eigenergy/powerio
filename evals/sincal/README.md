@@ -660,8 +660,7 @@ native bus belongs in an energized calculation instance.
 The current public Rust options select a variant, daily snapshot and relative
 acquired-table companion. Ordinary native parsing is also available through
 the CLI, Python and C's existing format argument and typed network accessors.
-Python and CLI selection options are now checked as described below; equivalent
-C/Julia options remain pending.
+Python, CLI, C and Julia selection options are now checked as described below.
 The generic C ABI remains version 7 with no new symbols. The current 0.11.4 IR
 schema adds the SINCAL source-format enum spelling; older schema snapshots are
 unchanged, and no electrical type layout or IR version changes.
@@ -703,3 +702,27 @@ named memory buffers. Original synthetic Python tests cover four profile times,
 missing snapshots, wrong variants, NaN times, mismatched source hashes, missing
 companions, root confinement, conflicting families and invalid option types.
 The model and matrix APIs remain unchanged. No C ABI symbols are added here.
+
+### C and Julia selection validation
+
+`check_julia_bindings.jl` uses the matching Julia companion and C library to
+parse the external, hash-pinned CSIRO09 MDB at 0h and 6h. It compares the complete
+typed value with CLI serialization, verifies different native load powers,
+checks original MDB echo, and verifies typed IR restoration. The derived
+`csiro09-julia-bindings.json` report contains no native model. These are binding
+checks; independent electrical evidence remains in `csiro09-public.json`.
+
+```sh
+POWERIO_MAX_PRIMARY_BYTES=69181440 POWERIO_CAPI=/path/to/libpowerio_capi.dylib \
+  julia --project=/path/to/PowerIO.jl evals/sincal/check_julia_bindings.jl \
+  /tmp/models/representative09.mdb /tmp/records/representative09.json \
+  target/debug/powerio /tmp /tmp/csiro09-julia-bindings.json
+```
+
+The complete C suite passes 48 tests (one optional synthetic exporter ignored).
+The Julia suite passes 1,896 assertions with one skipped check, including 41 new
+selection assertions. The full CI Clippy matrix, regenerated header parity and
+Julia coverage of all 511 C entry points pass. The two additive C functions
+preserve the existing ABI 7 layouts and ordinary `pio_parse` signature. The
+small Julia acquisition fixture is generated from original PowerIO SQL and
+explicitly licensed under MIT; it is not a redistributed native feeder.

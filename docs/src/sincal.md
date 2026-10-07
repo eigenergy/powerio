@@ -109,7 +109,26 @@ Python memory inputs supply `named_buffers={"acquired.json": records_bytes}`.
 They never read companions from disk. File inputs may explicitly widen the
 root with `acquisition_root=...` in Python or `--acquisition-root` in the CLI;
 the root must contain the primary and referenced files. The normal root is the
-primary file's parent directory. Selection options for C/Julia remain pending.
+primary file's parent directory. Julia uses the same keywords with its exported
+`SincalReadOptions`:
+
+```julia
+using PowerIO
+module_ = parse("project/original.mdb"; format="sincal-multiconductor",
+    sincal_multiconductor=SincalReadOptions(
+        variant=1, snapshot_hours=12, acquired_tables="acquired.json"))
+```
+
+Julia memory/IO inputs take `named_buffers=Dict("acquired.json" => records_bytes)`.
+C uses `pio_parse_with_options` with borrowed `PioParseOptions` and
+`PioSincalReadOptions`; zero initialization leaves optional values absent, and
+presence flags distinguish an omitted snapshot from explicit midnight. The
+existing `pio_parse` remains unchanged. For memory inputs,
+`pio_source_from_memory_with_buffers` copies the primary and named companions
+before returning; caller buffers may then be released. These additions require
+the matching development library and Julia companion. Existing ABI 7 layouts
+and typed network accessors are unchanged.
+
 Active daily profiles require an explicit snapshot; no midnight default is
 assumed. Generic time-series and inherited variants remain under development.
 
