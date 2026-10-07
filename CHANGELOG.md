@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Prepare paired releases from reviewed PowerIO and PowerIO.jl commits, with
+  generated version metadata, verified binary hashes, and frozen validation
+  tooling. Activation remains a separate maintainer decision.
+
 - Python adds `BalancedNetwork.n_lines` and `n_substations` alongside the other
   native table counts. Immutable network handles cache scalar counts for repeated
   access without rebuilding Python tables.

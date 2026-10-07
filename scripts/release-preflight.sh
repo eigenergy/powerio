@@ -7,6 +7,9 @@ cd "$(dirname "$0")/.."
 
 run() { echo "=== $* ==="; "$@"; }
 
+run python3 -m unittest discover -s scripts/tests -v
+run python3 -m py_compile scripts/paired_release.py scripts/prepare_release_prs.py \
+    scripts/activate_paired_releases.py scripts/attach_release_assets.py scripts/check_bmopf_upstream.py
 run bash scripts/check-release-versions.sh
 run bash scripts/check-release-features.sh
 run bash scripts/deprecated-inventory.sh --assert-empty
