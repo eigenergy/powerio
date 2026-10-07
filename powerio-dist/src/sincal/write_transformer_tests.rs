@@ -308,3 +308,36 @@ fn primitive_port_directions_are_electrical_but_extra_connections_are_not_discar
         assert!(write_experimental_multiconductor(&invalid, &levels).is_err());
     }
 }
+
+#[test]
+fn galvanic_y0_primitive_is_not_rewritten_as_an_isolated_transformer() {
+    let db = super::legacy_tests::legacy(
+        "UPDATE TwoWindingTransformer SET VecGrp=71,Vfe=0,i0=0,Flag_Z0_Input=3,R0_R1=1,X0_X1=1,uk=5,ur=1;",
+    );
+    let mut net = db.network().unwrap();
+    let options = ExperimentalMulticonductorOptions {
+        nominal_ll_volts: net
+            .buses()
+            .iter()
+            .map(|b| (b.id.clone(), if b.id == "20" { 11000.0 } else { 400.0 }))
+            .collect(),
+    };
+    for retain_provenance in [true, false] {
+        if !retain_provenance {
+            for shunt in net.shunts_mut() {
+                shunt.extras.clear();
+            }
+        }
+        // The conductor matrix itself must prevent DD/DY/YD reconstruction,
+        // including after IR restoration or removal of source provenance.
+        let error = super::write_primitive::canonicalize(&net, &options)
+            .err()
+            .expect("galvanic primitive must reject isolated transformer candidates");
+        assert!(
+            error
+                .to_string()
+                .contains("no verified delta/delta or solid delta/Wye")
+        );
+        assert!(write_experimental_multiconductor(&net, &options).is_err());
+    }
+}
