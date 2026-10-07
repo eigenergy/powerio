@@ -1022,3 +1022,67 @@ implementation code:
 These leads do not resolve the larger CSIRO feeder blockers. Prioritize another
 populated native model with a documented selected profile or a matched reference
 for a named whole-case gap; do not loosen input validation to manufacture passes.
+
+
+### Additional candidate screening, 2026-10-08
+
+The follow-up search after the coverage discussion found **zero additional
+qualified larger native unbalanced cases**. See the compact
+[screening report](candidate-screen-20261008.json). No production mapping changed,
+no model was repaired, no native fixture was added, and nobody was contacted.
+
+The two previously uninspected LoadFlow databases `vorstadt_konvergenzgrenze`
+and `vorstadt_konvergenzgrenze_version2` each contain 294 nodes and 586 elements.
+Both were downloaded unchanged from the previously pinned revision and decoded
+read-only with Jackcess 5.1.7. Their source and transformer have `Flag_Input=3`,
+while `Flag_LFZ0=1` selects input-only zero sequence. Both have 294 balanced LF
+node rows and zero ULF rows. They do not resolve the existing conductor-model
+input gap; their similar topology also should not be counted as two distinct
+accepted feeders. The same reader recovers `dorfnetz` as 116 nodes and 230
+elements, with the same source/transformer declarations and only 80 historical
+LF node rows. Successful acquisition is not complete electrical validation.
+
+[DaNussi/CPE-KS](https://github.com/DaNussi/CPE-KS/tree/28169e96105a04d5f3b8542a6ea1c5fb7f668649)
+does publish a native SQLite database under repository MIT terms. Inspection
+shows three nodes and six elements: two lines, one transformer, one source,
+one asynchronous machine and one synchronous machine. It has no loads or ULF
+node rows and is too small for the feeder objective. Keep the 2,351,104-byte
+source external; its existence does not justify expanding machine support here.
+
+New repository inventories also screened:
+
+- [ivenguzel/EE474_PSS_Sincal_Simulation](https://github.com/ivenguzel/EE474_PSS_Sincal_Simulation/tree/451b927d8efec2e4cc0fa83fc088ac834df9c58d):
+  two project PDFs and README, no native database.
+- [KIR007-glitch/PSS-Sincal](https://github.com/KIR007-glitch/PSS-Sincal/tree/ef2cc1215edd53571ecbe3fb9fbe347cc4eab5d0):
+  automation code and Element/Terminal/network spreadsheets, no full native
+  electrical model.
+- [ivanovdrenergorazvitie/scripts_for_sincal](https://github.com/ivanovdrenergorazvitie/scripts_for_sincal/tree/f3d9101de7e30c6dac2d82aa8698d8713e283e65)
+  and [Mohamedkrs/CIM_Data_Manager_sincal_powerfactory](https://github.com/Mohamedkrs/CIM_Data_Manager_sincal_powerfactory/tree/12c9d256a4225aae54bfc94d0bc755c82b67f701):
+  scripts/converter sources; no native model archive in the complete inspected
+  trees. Public name/code searches are incomplete discovery mechanisms, so these
+  observations do not establish that no other public source exists.
+
+A newly located reference is
+[TUWien_LV_TestGrids](https://data.mendeley.com/datasets/hgh8c99tnx/1),
+DOI `10.17632/hgh8c99tnx.1`, CC BY 4.0. Its public file manifest lists four
+workbooks: `175Urban`, `61Rural`, `20Cable` and `20OverheadLine`. The publisher
+provides topology, positive-sequence parameters and a solved load flow.
+[The later SINCAL study](https://www.mdpi.com/1996-1073/15/5/1950) links this
+dataset, but that link does not make the spreadsheets native SINCAL exports or
+establish unbalanced sequence data. Do not generate a SINCAL database from them
+and count it as an independent native-reader success.
+
+A more directly relevant acquisition lead is Aslan and Kılıç's 2026 paper,
+[Investigation of the Effects of Single-Phase Electric Vehicle On-Board Chargers
+on Low Voltage Grid](https://jes.ksu.edu.tr/tr/pub/article/1898213),
+DOI `10.17780/ksujes.1898213`. It explicitly describes a European LV feeder in
+SINCAL and phase-unbalance studies. No native attachment was found on the
+indexed publisher page; direct live-page retrieval failed certificate
+validation. The article license does not establish native-model availability
+or redistribution permission. Treat it as an author-export lead, not an
+available test case or promised implementation milestone.
+
+A useful request, if later authorized, would ask for the unchanged native
+project with all electrical sidecars, one specified unbalanced operating point,
+per-phase node/terminal results from that same revision, the SINCAL version and
+permission to retain or redistribute the model. No request has been sent.
