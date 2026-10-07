@@ -2,16 +2,19 @@
 
 Status: local reader implementation and validation in progress, 2026-10-08.
 Both explicit public reader profiles are implemented. Five balanced cases and
-two complete conductor-resolved native cases have independent electrical
-evidence: CSIRO09 and a newly validated asymmetric 12-bus model. The latter is
-smaller than the additional substantial feeders requested, so the review gate
-remains unmet. A third native feeder, CSIRO12, now has complete 215-element
-public parsing and independent numerical checks under an explicitly requested
-experimental source-control assumption; it is not a strict/native-semantics pass
-or another published asymmetric operating point. Distribution selections include C/Julia; the new balanced Access
-selections currently use Rust and CLI. The latest user decision requires one or
-two additional substantial distribution feeders to pass complete parsing and independent end-to-end validation before
-user review. The existing review packet is a draft, not review readiness.
+two complete conductor-resolved native cases have strict-reader electrical
+evidence: CSIRO09 and an asymmetric 12-bus model. The latter is smaller than
+the additional substantial feeders requested. Following the user's 2026-10-08
+acceptance of labelled inaccuracies for trial use, CSIRO12 now supplies one
+additional substantial distribution example: all 215 elements pass public
+parsing and independent numerical checks under explicit source-control
+assumptions. This is experimental coverage, not verified native NULL behavior
+or another published asymmetric operating point. Keep those qualifications in
+the PR description; do not redefine distribution support to require every
+published snapshot to be asymmetric. Distribution selections include C/Julia;
+the new balanced Access selections and compatibility option currently use Rust
+and CLI. The existing review packet remains a draft pending final integration
+and evidence review. No review or publication is requested by this update.
 Nothing is published. Research base: `c8184eba` (PowerIO 0.11.4); the local PR
 stack starts at `d5f93763`. The current user-facing capabilities are documented
 in [the guide](../src/sincal.md). Earlier rationale below is dated context,

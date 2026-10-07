@@ -135,11 +135,13 @@ reject the whole network; partial audit counts never become returned feeders.
 | Independent component checks | Verified source, line, load, selected transformer, shunt and switch profiles; see the evidence index for exact modes and limitations |
 | Public interfaces | Explicit family/variant/time/acquisition selection, typed access, original-source echo and IR preservation |
 
-**New review gate.** This table now contains two complete native
-distribution cases. The additional 12-bus case is smaller than the requested
-feeders; add one or two substantial published cases with whole-network
-validation before requesting user review; component reports and synthetic stress
-cases cannot satisfy that gate. See the roadmap for the exact evidence packet.
+**Additional-case milestone.** The strict-reader table contains two complete
+native distribution cases; the 12-bus case is smaller than the requested feeders.
+The user's subsequent acceptance of labelled approximations now adds CSIRO12
+as one substantial experimental trial case, detailed below. Keep the assumption
+and symmetric native operating point explicit. Component reports and synthetic
+stress cases alone are not additional native feeders. Final integration and
+evidence review remain before presenting the PRs for user review.
 
 **Limits that must appear in the PR.** CSIRO09's original loads are symmetric.
 Zero of the seven priority genuinely unbalanced original CSIRO feeders parses

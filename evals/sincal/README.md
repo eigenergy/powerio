@@ -1250,8 +1250,9 @@ actual typed output. Five additional unequal-delta-load stress cases are
 8.27e-8 A and 0.00309 VA. Current/power comparison matches the small finite
 OpenDSS source impedance; the report separates that approximation's voltage
 impact. Four negative controls detect missing loads/capacitor, missing mutual
-impedance and incorrect load factors. Native loads are symmetric: this does not
-satisfy the further published asymmetric-feeder gate or prove native NULL semantics.
+impedance and incorrect load factors. Native loads are symmetric: this is one
+additional substantial experimental distribution case, but does not independently
+validate a published asymmetric operating point or prove native NULL semantics.
 
 ```sh
 cargo build -p powerio --example sincal_public
