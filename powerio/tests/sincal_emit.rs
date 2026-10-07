@@ -169,16 +169,27 @@ fn edited_multiconductor_ir_uses_its_own_backend_and_requires_nominal_levels() {
             result
                 .diagnostics()
                 .iter()
-                .any(|d| d.code() == "EMIT.SINCAL.MULTICONDUCTOR_EXPERIMENTAL")
+                .any(|d| d.code() == "EMIT.DIST.SINCAL_EXPERIMENTAL")
         );
         let output = bytes(result);
-        let data = powerio_sincal::database_bytes(&output).unwrap();
-        // The native multiconductor reader remains staged until its authentic
-        // corpus gates pass. This test does not enable public reader dispatch.
-        let recovered = powerio_dist::__read_sincal_multiconductor_snapshot(
-            powerio_sincal::DatabaseSnapshot::decode(&data, None).unwrap(),
+        let explicit = powerio::emit_with_options(
+            &module,
+            "sincal-multiconductor",
+            &opts,
+            Destination::memory("explicit").unwrap(),
         )
         .unwrap();
+        assert_eq!(bytes(explicit), output);
+        let parsed = powerio::parse_with_options(
+            Source::from_memory("fresh", output).unwrap(),
+            &ParseOptions::default()
+                .format("sincal-multiconductor")
+                .unwrap(),
+        )
+        .unwrap();
+        let PioValue::MulticonductorNetwork(recovered) = parsed.value() else {
+            panic!("reader changed the electrical family");
+        };
         let powers = recovered
             .loads()
             .iter()
@@ -216,7 +227,7 @@ fn default_options_preserve_other_emitters_and_experimental_options_do_not_leak(
     assert_eq!(a.fidelity(), b.fidelity());
     assert_eq!(a.diagnostics(), b.diagnostics());
     assert_eq!(bytes(a), bytes(b));
-    for format in ["matpower", "dss", "not-a-format"] {
+    for format in ["matpower", "dss", "not-a-format", "sincal-multiconductor"] {
         let error = powerio::emit_with_options(
             &module,
             format,
@@ -262,7 +273,7 @@ fn invalid_profile_and_container_never_create_or_replace_a_file() {
         error
             .diagnostics()
             .iter()
-            .any(|d| d.code() == "EMIT.SINCAL.PACKAGING_FAILED")
+            .any(|d| d.code() == "EMIT.MODULE.SINCAL_PACKAGING_FAILED")
     );
     assert!(!path.exists());
     std::fs::write(&path, b"existing artifact").unwrap();

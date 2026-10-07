@@ -47,13 +47,21 @@ pub(crate) fn emit(
     destination: Destination,
 ) -> Result<EmitResult, Error> {
     let selected = crate::resolve_format(format).map(|f| f.token);
-    if !matches!(selected, Some("sincal" | "sincal-balanced")) {
+    if !matches!(
+        selected,
+        Some("sincal" | "sincal-balanced" | "sincal-multiconductor")
+    ) {
         return Err(invalid(
             "experimental SINCAL options require a SINCAL target",
         ));
     }
     let (database, mut diagnostics) = match module.value() {
         PioValue::BalancedNetwork(net) => {
+            if selected == Some("sincal-multiconductor") {
+                return Err(invalid(
+                    "sincal-multiconductor cannot write a BalancedNetwork; use sincal-balanced with experimental options",
+                ));
+            }
             if !options.nominal_ll_volts.is_empty() {
                 return Err(invalid(
                     "balanced SINCAL output uses typed bus nominal kV; nominal_ll_volts is only a multiconductor option",
@@ -65,7 +73,7 @@ pub(crate) fn emit(
         PioValue::MulticonductorNetwork(net) => {
             if selected == Some("sincal-balanced") {
                 return Err(invalid(
-                    "sincal-balanced cannot write a MulticonductorNetwork; use sincal with experimental options to retain its conductor model",
+                    "sincal-balanced cannot write a MulticonductorNetwork; use sincal-multiconductor with experimental options to retain its conductor model",
                 ));
             }
             let output = powerio_dist::__write_sincal_multiconductor_experimental(

@@ -97,7 +97,7 @@ powerio_core::diagnostic_codes! {
 
     REQUEST_EMIT_INVALID_OPTIONS = "REQUEST.EMIT.INVALID_OPTIONS", Error,
         "emission options do not apply to the requested format or value", category = Request;
-    EMIT_SINCAL_PACKAGING_FAILED = "EMIT.SINCAL.PACKAGING_FAILED", Error,
+    EMIT_SINCAL_PACKAGING_FAILED = "EMIT.MODULE.SINCAL_PACKAGING_FAILED", Error,
         "experimental native SINCAL container construction failed", category = Output;
 
     // Failures.

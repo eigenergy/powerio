@@ -252,7 +252,8 @@ to a finite positive line-line voltage in volts. Transformer auxiliary buses
 that are eliminated during primitive reconstruction span two voltage levels;
 their entries may be omitted. No source voltage, bound or metadata value is
 silently interpreted as bus nominal voltage. A balanced network rejects this
-map, and `sincal-balanced` rejects a multiconductor value. Neither electrical
+map. Explicit `sincal-balanced` and `sincal-multiconductor` targets reject a
+value from the other family; the bare `sincal` target uses the typed family. Neither electrical
 family is transformed implicitly or retried through the other backend.
 
 The initial balanced subset covers ideal reference sources, fixed PQ injections,
@@ -268,9 +269,10 @@ shunts, controls and profiles are not yet covered by this writer subset.
 
 This opt-in is currently exposed by the Rust facade. CLI, Python and C emission
 continue to use their existing ordinary emission path. `can_emit` remains false
-because the experimental subset is not a universal native writer. Public
-multiconductor reader dispatch still awaits complete authentic corpus evidence;
-experimental writing does not imply that reader gate has passed.
+because the experimental subset is not a universal native writer. Fresh
+multiconductor output is verified through the public reader described above.
+Neither internal readback nor independent electrical validation establishes
+native SINCAL desktop acceptance.
 
 ## Validation
 

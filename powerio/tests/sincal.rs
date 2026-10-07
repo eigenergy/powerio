@@ -401,7 +401,7 @@ fn experimental_multiconductor_backend_writes_edited_ir_with_floating_reference(
         output
             .diagnostics
             .iter()
-            .any(|d| d.code() == "EMIT.SINCAL.MULTICONDUCTOR_EXPERIMENTAL")
+            .any(|d| d.code() == "EMIT.DIST.SINCAL_EXPERIMENTAL")
     );
 }
 
