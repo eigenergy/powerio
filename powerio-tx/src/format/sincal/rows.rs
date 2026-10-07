@@ -32,6 +32,14 @@ impl NativeRow {
         }
     }
 
+    pub fn reference(&self, field: &str) -> Result<Option<i64>> {
+        match self.fields.get(&field.to_ascii_lowercase()) {
+            Some(Value::Null | Value::Integer(0)) => Ok(None),
+            Some(Value::Integer(id)) if *id > 0 => Ok(Some(*id)),
+            _ => Err(self.bad(field, "expected NULL, zero or a positive reference ID")),
+        }
+    }
+
     pub fn text(&self, field: &str) -> Result<String> {
         match self.fields.get(&field.to_ascii_lowercase()) {
             Some(Value::Text(v)) => Ok(v.clone()),

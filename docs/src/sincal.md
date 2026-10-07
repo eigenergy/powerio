@@ -9,10 +9,12 @@ The multiconductor reader is being developed separately in `powerio-dist`.
 ## Balanced reader
 
 The `sincal-balanced` input token selects positive-sequence load flow. The
-current profile accepts schema-14.8 native SQLite files and `.sinx` archives,
+current profile accepts native SQLite schemas 14.8, 15.5 and 16.0 and `.sinx` archives,
 with one base variant. It covers buses, positive-sequence lines, static loads,
 external sources, converter injections and two-winding transformers with fixed
-common taps. Open terminals and inactive equipment remain in the network.
+common taps, plus fixed capacitor banks. Ideal external sources support absolute
+and relative source/terminal voltage prescriptions and voltage-only limits.
+Open terminals and inactive equipment remain in the network.
 Unknown required modes fail with table, native record ID and field context.
 
 ```rust,no_run
@@ -44,7 +46,9 @@ source records the selected input profile as `sincal-balanced`.
 Native physical quantities use a declared 100 MVA internal conversion base.
 Disabled native generator capability limits become unbounded typed limits,
 not zero capability. Diagnostics identify this and data outside the chosen
-static profile. Fault, dynamic, protection, economic, diagram and stored-result
+static profile. Disabled profile references do not replace static powers; active
+profile references still require a supported time-series adapter and are rejected.
+Fault, dynamic, protection, economic, diagram and stored-result
 data remain in the retained source. Cross-format output reports their omission.
 
 An unchanged module can emit `sincal` or `sincal-balanced` to reproduce its
@@ -77,6 +81,14 @@ against paired publisher CSV inputs and a fresh pandapower 3.2.2 calculation,
 including derived nonzero taps on either winding. Stored native results are
 separate evidence; no SINCAL desktop execution has been performed.
 
-Other schemas, profiles and corpus cases remain under development. Native
+Three external cases also map completely: IEEE18 (18 native nodes, 44 elements),
+IEEE33 (33 nodes, 67 elements), and the student study (40 nodes, 84 elements).
+Their fresh independent pandapower comparisons agree within 4.5e-12 pu in
+complex bus voltage. The student file's saved static load powers are zero with
+profiles disabled; its historical profile results are not the state parsed here.
+The external validation report records this distinction. No external native
+model files are vendored.
+
+Additional schemas, active profiles, variants and corpus cases remain under development. Native
 fixtures require redistribution rights; external research models are not
 silently copied into the test suite.

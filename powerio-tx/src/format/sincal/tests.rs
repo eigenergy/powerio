@@ -75,7 +75,7 @@ fn errors_identify_required_input_instead_of_returning_partial_networks() {
             "TwoWindingTransformer[19].Flag_Tap",
         ),
         (
-            "UPDATE Load SET DayOpSer_ID=1 WHERE Element_ID=1",
+            "UPDATE CalcParameter SET Flag_UseTimeSer=1; UPDATE Load SET DayOpSer_ID=1 WHERE Element_ID=1",
             "Load[1].DayOpSer_ID",
         ),
     ] {
@@ -155,4 +155,102 @@ fn opening_a_transformer_at_the_slack_does_not_create_a_second_slack() {
     let auxiliary = net.buses().iter().find(|b| b.id == switch.to).unwrap();
     assert_eq!(auxiliary.kind, BusType::Pq);
     assert!(!switch.closed);
+}
+
+#[test]
+fn documented_modern_source_modes_and_voltage_only_limits_preserve_capability() {
+    for (version, mode, voltage) in [(15.5, 8, 1.04), (16.0, 9, 1.05), (14.8, 6, 1.05)] {
+        let db = native(&format!(
+            "UPDATE Version SET Version_No={version};
+             UPDATE Infeeder SET Flag_Lf={mode}, u=104, Ug=21, Flag_LfLimit=1, ull=95, uul=107;
+             UPDATE Element SET Type='Infeeder   ' WHERE Type='Infeeder';"
+        ));
+        let net = read_balanced_snapshot(&db, "source modes").unwrap();
+        let bus = net.buses().iter().find(|b| b.kind == BusType::Ref).unwrap();
+        assert!((bus.vm - voltage).abs() < 1e-12);
+        assert_eq!((bus.vmin, bus.vmax), (0.95, 1.07));
+        let source = net.generators().iter().find(|g| g.bus == bus.id).unwrap();
+        assert_eq!(source.pmax.to_bits(), f64::INFINITY.to_bits());
+        assert_eq!(source.qmin.to_bits(), f64::NEG_INFINITY.to_bits());
+    }
+    let invalid = native("UPDATE Infeeder SET Flag_Lf=8, Xlf=0.1");
+    assert!(
+        read_balanced_snapshot(&invalid, "nonideal")
+            .unwrap_err()
+            .to_string()
+            .contains("Xlf")
+    );
+}
+
+#[test]
+fn initial_voltage_is_absolute_and_only_used_without_flat_start() {
+    let db = native(
+        "UPDATE Node SET Un=0.38, Phi=12 WHERE Node_ID=1; UPDATE CalcParameter SET Flag_ABW=0",
+    );
+    let net = read_balanced_snapshot(&db, "start").unwrap();
+    let bus = net.buses().iter().find(|b| b.id == BusId(1)).unwrap();
+    assert!((bus.vm - 0.95).abs() < 1e-12);
+    assert_eq!(bus.va.to_bits(), 12.0_f64.to_bits());
+    assert_eq!(bus.base_kv.to_bits(), 0.4_f64.to_bits());
+    let flat = native(
+        "UPDATE Node SET Un=0.38, Phi=12 WHERE Node_ID=1; UPDATE CalcParameter SET Flag_ABW=1",
+    );
+    let net = read_balanced_snapshot(&flat, "flat").unwrap();
+    let bus = net.buses().iter().find(|b| b.id == BusId(1)).unwrap();
+    assert_eq!((bus.vm, bus.va), (1.0, 0.0));
+}
+
+#[test]
+fn inactive_profiles_and_interchange_are_distinct_from_active_controls() {
+    let baseline = read_balanced_snapshot(&native(""), "controls").unwrap();
+    let harmless = native(
+        "UPDATE Load SET DayOpSer_ID=123 WHERE Element_ID=1;
+        UPDATE CalcParameter SET Flag_UseTimeSer=0, Flag_Unit=1;
+        UPDATE Line SET Flag_Cond=3, Flag_Vart=2;",
+    );
+    let unchanged = read_balanced_snapshot(&harmless, "controls").unwrap();
+    assert_eq!(baseline.loads(), unchanged.loads());
+    assert_eq!(baseline.branches(), unchanged.branches());
+    for (sql, field) in [
+        (
+            "UPDATE CalcParameter SET Flag_Unit=1; UPDATE NetworkGroup SET Flag_IC=1",
+            "Flag_IC",
+        ),
+        ("UPDATE NetworkGroup SET Flag_Temp=1", "Flag_Temp"),
+        (
+            "UPDATE CalcParameter SET Flag_UseTimeSer=1; UPDATE Load SET DayOpSer_ID=123 WHERE Element_ID=1",
+            "DayOpSer_ID",
+        ),
+        (
+            "UPDATE CalcParameter SET Flag_UseTimeSer=2",
+            "Flag_UseTimeSer",
+        ),
+    ] {
+        assert!(
+            read_balanced_snapshot(&native(sql), "active")
+                .unwrap_err()
+                .to_string()
+                .contains(field)
+        );
+    }
+}
+
+#[test]
+fn fixed_capacitor_step_scales_loss_and_reactive_admittance() {
+    // Original toy capacitor values, inserted into the existing licensed
+    // schema. No data from the unlicensed external models are vendored.
+    let db = native("INSERT INTO Element (Element_ID,Variant_ID,Flag_Variant,Type,Flag_Input,Flag_State,Name)
+          VALUES (999,1,1,'ShuntCondensator',2,1,'toy capacitor');
+        INSERT INTO Terminal (Terminal_ID,Variant_ID,Element_ID,Node_ID,TerminalNo,Flag_Terminal,Flag_State,Flag_Switch)
+          VALUES (999,1,999,1,1,7,1,0);
+        INSERT INTO ShuntCondensator (Element_ID,Variant_ID,Flag_Lf,Flag_roh,Typ_ID,Flag_Typ_ID,Flag_Macro,Macro_ID,
+          Flag_Step,Ctrl_OpSer_ID,Ctrl_OpPnt_ID,Node_ID,Terminal_ID,Sn,Vdi,Un,deltaS,roh,rohm)
+          VALUES (999,1,1,1,0,0,0,0,0,0,0,0,0,0.2,2,0.5,0.01,3,1);");
+    let net = read_balanced_snapshot(&db, "capacitor").unwrap();
+    let cap = &net.shunts()[0];
+    // S=0.22 MVA, P=0.0022 MW at 0.5 kV; bus base is 0.4 kV.
+    assert!((cap.g - 0.0022 * 0.64).abs() < 1e-12);
+    assert!((cap.b - (0.22_f64.powi(2) - 0.0022_f64.powi(2)).sqrt() * 0.64).abs() < 1e-12);
+    assert_eq!(cap.uid.as_deref(), Some("sincal:element:999"));
+    assert!(cap.in_service);
 }

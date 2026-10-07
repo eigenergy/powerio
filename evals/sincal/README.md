@@ -2,6 +2,7 @@
 
 This branch supplies model-neutral SQLite/archive acquisition and schema
 validation. The balanced reader branch additionally maps the complete small SimBench case
+and the pinned IEEE18, IEEE33 and student SQLite static inputs
 through the explicit `sincal-balanced` public parser profile. Acquisition-only reports
 remain distinct from electrical reader validation; none establishes fresh
 writer acceptance. The [delivery plan](../../docs/design/pss-sincal.md) records the
@@ -117,3 +118,33 @@ selection and expanded public input options. Registered diagnostics,
 facade/CLI/C/Python parsing, retained binary-source echo, edited-module refusal
 and IR-without-native-source behavior now have focused integration tests. This first mapped case does not establish
 those capabilities, unbalanced reading, or native SINCAL writer acceptance.
+
+## Additional balanced SQLite cases
+
+`check_balanced_external.py` requires all three original databases identified in
+[research-catalog.md](research-catalog.md), supplied externally with exact hashes.
+It invokes the actual Rust reader, checks every native equipment identity,
+terminal topology, service state and load power, builds pandapower independently
+from native physical inputs, and compares a fresh calculation with separate
+nodal equations over the mapped network. Capacitor admittance and closed
+terminal switches participate in those equations. No historical result is used
+as input. Missing or mismatched files fail this check.
+
+```sh
+cargo build -p powerio-tx --example sincal_balanced
+python3 evals/sincal/check_balanced_external.py \
+  target/debug/examples/sincal_balanced /external/sqlite-cases /tmp/balanced-external.json
+```
+
+The compact measured report is [balanced-external.json](balanced-external.json).
+All 44/67/84 native elements map for IEEE18/IEEE33/student respectively. Their
+fresh voltage errors are below 4.5e-12 pu. IEEE18 has ten fixed capacitor banks;
+IEEE18/33 each retain one explicit closed terminal switch. Schema 15.5 and 16.0
+use the same checked electrical columns as the admitted 14.8 subset; newly
+observed columns are recorded in the catalog, not guessed from version numbers.
+
+The student model's static P/Q values are zero and saved profile enables are
+off. Its 960 historical node rows represent different states. Historical
+comparison is explicitly non-gating and is not presented as aligned native
+validation. The two IEEE comparisons are also reported separately from fresh
+independent checking. Broader profile and variant delivery remains in scope.

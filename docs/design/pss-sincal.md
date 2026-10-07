@@ -343,6 +343,13 @@ and direct-SQLite echo are byte exact; edited and IR-restored modules refuse
 fresh output. Additional schemas, variants/profiles and corpus coverage are
 still outstanding; this does not complete PR 3.
 
+Current balanced corpus progress: the initial public SimBench path is committed.
+IEEE18, IEEE33 and the student study now map all 44/67/84 static equipment
+records with schema-15.5/16.0 adapters and fresh independent checks below
+4.5e-12 pu complex voltage. The student static state has zero demand; profile
+snapshot coverage remains pending. Additional SimBench modes, applicable
+Access cases, active profiles and inherited variants are still required work.
+
 ### PR 4: distribution / unbalanced reader
 
 Own all conductor-resolved mapping in `powerio-dist`. Incorporate the existing

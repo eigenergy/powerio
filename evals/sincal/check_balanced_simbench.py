@@ -126,12 +126,21 @@ def check_parameters(model, root):
     assert len(model['loads']) + len(model['generators']) + len(model['branches']) == 32
 
 
-def solve_mapped(model):
+def solve_mapped(model, power_tolerance=1e-13):
     """Nodal current-injection iteration, independent of PowerIO matrix code."""
-    index = {b['id']: i for i, b in enumerate(model['buses'])}
-    n = len(index)
+    parent = {b['id']: b['id'] for b in model['buses']}
+    def root(bus):
+        while parent[bus] != bus:
+            bus = parent[bus]
+        return bus
+    for switch in model['switches']:
+        if switch['closed']:
+            parent[root(switch['to'])] = root(switch['from'])
+    canonical = list(dict.fromkeys(root(b['id']) for b in model['buses']))
+    dense = {bus: i for i, bus in enumerate(canonical)}
+    index = {b['id']: dense[root(b['id'])] for b in model['buses']}
+    n = len(canonical)
     ybus = np.zeros((n, n), dtype=complex)
-    assert not model['switches']
     for b in model['branches']:
         if not b['in_service']:
             continue
@@ -143,6 +152,10 @@ def solve_mapped(model):
         ybus[j,j] += y + complex(c['g_to'],c['b_to'])
         ybus[i,j] -= y / t.conjugate()
         ybus[j,i] -= y / t
+    for shunt in model.get('shunts', []):
+        if shunt['in_service']:
+            i = index[shunt['bus']]
+            ybus[i, i] += complex(shunt['g'], shunt['b']) / model['base_mva']
     s = np.zeros(n, dtype=complex)
     for load in model['loads']:
         assert load['voltage_model'] is None
@@ -151,10 +164,11 @@ def solve_mapped(model):
     for gen in model['generators']:
         if gen['in_service'] and not gen['voltage_regulation_on']:
             s[index[gen['bus']]] += complex(gen['pg'], gen['qg']) / model['base_mva']
-    slack = [i for i, b in enumerate(model['buses']) if b['kind'] == 'REF']
+    slack_buses = [b for b in model['buses'] if b['kind'] == 'REF']
+    slack = [index[b['id']] for b in slack_buses]
     assert len(slack) == 1, slack
     free = [i for i in range(n) if i not in slack]
-    b = model['buses'][slack[0]]
+    b = slack_buses[0]
     v = np.ones(n, dtype=complex)
     v[slack] = b['vm'] * np.exp(1j * np.deg2rad(b['va']))
     # The no-load network solution initializes large phase shifts correctly.
@@ -163,8 +177,8 @@ def solve_mapped(model):
     for iteration in range(1000):
         v[free] = np.linalg.solve(yll, np.conj(s[free] / v[free]) - yls @ v[slack])
         mismatch = float(np.max(np.abs(v[free] * np.conj((ybus @ v)[free]) - s[free])))
-        if mismatch < 1e-13:
-            return v, iteration + 1, mismatch
+        if mismatch < power_tolerance:
+            return np.array([v[index[b['id']]] for b in model['buses']]), iteration + 1, mismatch
     raise AssertionError(f'mapped load flow failed: mismatch={mismatch}')
 
 

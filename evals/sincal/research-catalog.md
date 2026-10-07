@@ -776,3 +776,52 @@ type names, active source mode 8 and limits in IEEE18/33, nonzero node voltage
 start values in all three additional SQLite cases, and assigned load profiles
 in the student case. These are explicit follow-up mapping requirements, not
 passing-reader coverage. No native payloads or manual pages were vendored.
+
+
+### Implemented balanced adapters for the pinned modern SQLite cases
+
+The transmission reader now maps all 44 IEEE18, 67 IEEE33 and 84 student
+static-input elements. Native bytes stay external under the existing rights
+policy. `balanced-external.json` records exact hashes, counts and independent
+fresh calculations; `check_balanced_external.py` reproduces them. The three
+complex-voltage differences against separately constructed pandapower 3.2.2
+circuits are below 4.5e-12 pu. Historical result differences remain a separate
+measurement, with no input fitting and no SINCAL desktop execution.
+
+Schema inspection relative to the authentic 14.8 archive found unchanged
+columns in `Line`, `Load`, `Infeeder`, and `ShuntCondensator` for both 15.5 and
+16.0. `Node` and `VoltageLevel` add `tkr` (outside the static input profile).
+`CalcParameter` adds `Flag_Converter`, `Flag_DynReference`, and
+`Flag_VoltSupport`. None establishes a new electrical family. Shared identity
+validation admits only these observed versions, still enforces all required
+columns and base-variant relationships, and trims only fixed trailing ASCII
+spaces from element type labels.
+
+Rules applied from the previously acquired Siemens April 2014 primary manuals:
+
+- Database description printed pp. 14–15: ideal Infeeder modes 3/8 use relative
+  voltage; 6/9 use absolute voltage. Source/terminal forms are equivalent only
+  with admitted zero `Rlf`, `Xlf`, `xi`. `Flag_LfLimit=1` enables voltage bounds,
+  not the zero-filled P/Q capability fields. Other capability modes remain
+  explicit mapping work.
+- General input data printed p. 24 and database description p. 56: nonzero node
+  `Un` is an absolute initial voltage, used with `Phi` only when `Flag_ABW=0`.
+  It never replaces the voltage-level nominal base.
+- Database description pp. 19, 57, 65–66: line `Flag_Cond` is a LEIKA system
+  identity, `Flag_Vart` distinguishes earth/air installation; neither changes
+  direct positive-sequence r/x/c inputs. `Flag_Unit` controls interchange.
+  Enabled global interchange is inert without active `NetworkGroup.Flag_IC`
+  or `NetworkGroupTrans.Flag_State`; active transfers and group temperature
+  corrections are rejected pending mapping.
+- General input data pp. 135–136: fixed capacitor apparent power is nominal
+  power plus the step difference times deltaS; dielectric loss scales with that
+  power, and reactive power follows its apparent/active components. Admittance
+  is referred from rated voltage to the network nominal base.
+
+The static selector respects disabled per-element profiles. An enabled global
+profile switch with no assigned profiles is inert; enabled assigned profiles
+remain errors until their snapshot mapping is implemented. The student study
+therefore currently parses its **zero-demand saved static state**, not its
+historical time-series results. This is recorded explicitly in the report and
+does not count as time-series compatibility. Future snapshot support must use
+input profile records, not stored result demand.

@@ -1,9 +1,9 @@
 //! Positive-sequence physical units to the balanced network's MW/kV/pu basis.
-use super::{error, rows::NativeRow};
+use super::{error, rows::NativeRow, settings::StaticProfiles};
 use crate::Result;
 use crate::network::{
     BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, BusId, BusType, Generator, Load,
-    LoadVoltageModel,
+    LoadVoltageModel, Shunt,
 };
 
 fn kv(network: &BalancedNetwork, bus: BusId) -> f64 {
@@ -37,14 +37,15 @@ pub(super) fn line(
     network: &BalancedNetwork,
     uid: &str,
 ) -> Result<Branch> {
-    for field in [
-        "Flag_LineTyp",
-        "Flag_Cond",
-        "Flag_Vart",
-        "Flag_ESB",
-        "Flag_Lf",
-    ] {
+    for field in ["Flag_LineTyp", "Flag_ESB", "Flag_Lf"] {
         row.equals(field, 1)?;
+    }
+    // Installation and LEIKA system identity do not select r/x/c input mode.
+    if !matches!(row.integer("Flag_Vart")?, 1 | 2) {
+        return Err(row.bad("Flag_Vart", "unknown installation"));
+    }
+    if row.integer("Flag_Cond")? < 1 {
+        return Err(row.bad("Flag_Cond", "invalid LEIKA system identity"));
     }
     row.inactive(&[
         "Flag_Typ_ID",
@@ -99,17 +100,20 @@ pub(super) fn line(
     Ok(branch)
 }
 
-pub(super) fn load(row: &NativeRow, bus: BusId, base_kv: f64, uid: &str) -> Result<Load> {
+pub(super) fn load(
+    row: &NativeRow,
+    bus: BusId,
+    base_kv: f64,
+    uid: &str,
+    profiles: &StaticProfiles,
+) -> Result<Load> {
+    profiles.check(row, true)?;
     row.equals("Flag_Load", 1)?;
     row.inactive(&[
         "Mpl_ID",
         "Macro_ID",
         "Flag_Macro",
         "Load_ID",
-        "DayOpSer_ID",
-        "WeekOpSer_ID",
-        "YearOpSer_ID",
-        "IncrSer_ID",
         "TransformerTap_ID",
         "Stp_ID",
         "Typ_ID",
@@ -191,10 +195,6 @@ pub(super) fn generator(
         "Mpl_ID",
         "Flag_Macro",
         "Macro_ID",
-        "DayOpSer_ID",
-        "WeekOpSer_ID",
-        "YearOpSer_ID",
-        "Flag_LfLimit",
         "Flag_LimitType",
         "PowerLimit_ID",
         "Flag_Pctrl",
@@ -222,10 +222,37 @@ pub(super) fn generator(
     generator.pmax = f64::INFINITY;
     generator.qmin = f64::NEG_INFINITY;
     generator.qmax = f64::INFINITY;
+    // U-only bounds do not enable zero-valued inactive P/Q bounds.
+    let limits = row.integer("Flag_LfLimit")?;
+    if !matches!(limits, 0 | 1) {
+        return Err(row.bad("Flag_LfLimit", "only no limits or U-only limits supported"));
+    }
+    if limits == 1 && in_service {
+        let low = row.positive("ull")? / 100.0;
+        let high = row.positive("uul")? / 100.0;
+        let node = network
+            .buses_mut()
+            .iter_mut()
+            .find(|b| b.id == bus)
+            .unwrap();
+        node.vmin = node.vmin.max(low);
+        node.vmax = node.vmax.min(high);
+        if node.vmin > node.vmax {
+            return Err(row.bad("ull/uul", "incompatible voltage limits"));
+        }
+    }
     if external {
-        row.equals("Flag_Lf", 3)?;
-        row.inactive(&["IncrSer_ID", "Flag_LfCtrl", "xi"])?;
-        generator.vg = row.positive("u")? / 100.0;
+        row.inactive(&["Flag_LfCtrl", "xi"])?;
+        // Source and terminal voltage modes coincide only for the ideal
+        // source admitted above (Rlf=Xlf=xi=0).
+        generator.vg = match row.integer("Flag_Lf")? {
+            3 | 8 => row.positive("u")? / 100.0,
+            6 | 9 => row.positive("Ug")? / kv(network, bus),
+            _ => return Err(row.bad("Flag_Lf", "unsupported external source mode")),
+        };
+        if !generator.vg.is_finite() || generator.vg <= 0.0 {
+            return Err(row.bad("u/Ug", "per-unit source voltage overflows or underflows"));
+        }
         let angle = row.number("delta")?;
         if in_service {
             let bus = network
@@ -370,4 +397,48 @@ pub(super) fn transformer(
     branch.rate_a = sn;
     branch.uid = Some(uid.to_owned());
     Ok(branch)
+}
+
+/// Native fixed capacitor: S changes with the fixed step; dielectric loss
+/// scales with S, and admittance is referred to the declared rated voltage.
+pub(super) fn capacitor(
+    row: &NativeRow,
+    bus: BusId,
+    network: &BalancedNetwork,
+    uid: &str,
+) -> Result<Shunt> {
+    row.equals("Flag_Lf", 1)?;
+    row.equals("Flag_roh", 1)?;
+    row.inactive(&[
+        "Typ_ID",
+        "Flag_Typ_ID",
+        "Flag_Macro",
+        "Macro_ID",
+        "Flag_Step",
+        "Ctrl_OpSer_ID",
+        "Ctrl_OpPnt_ID",
+        "Node_ID",
+        "Terminal_ID",
+    ])?;
+    let rated = row.positive("Sn")?;
+    let current = finite(
+        rated + row.number("deltaS")? * (row.number("roh")? - row.number("rohm")?),
+        "capacitor power",
+    )?;
+    if current < 0.0 {
+        return Err(row.bad("roh/deltaS", "negative capacitor rating"));
+    }
+    let loss = finite(
+        row.nonnegative("Vdi")? / 1000.0 * current / rated,
+        "capacitor loss",
+    )?;
+    let reactive = quadrature(current, loss, "capacitor apparent power")?;
+    let scale = (kv(network, bus) / row.positive("Un")?).powi(2);
+    let mut shunt = Shunt::new(
+        bus,
+        finite(loss * scale, "capacitor G")?,
+        finite(reactive * scale, "capacitor B")?,
+    );
+    shunt.uid = Some(uid.to_owned());
+    Ok(shunt)
 }

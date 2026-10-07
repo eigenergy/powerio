@@ -13,7 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "profile":"balanced", "schema":snapshot.version, "variant":snapshot.variant,
         "base_mva":net.base_mva(), "frequency":net.base_frequency(),
         "buses":net.buses(), "loads":net.loads(), "generators":net.generators(),
-        "branches":net.branches(), "switches":net.switches(),
+        "branches":net.branches(), "switches":net.switches(), "shunts":net.shunts(),
     });
     println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(())

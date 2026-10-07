@@ -4,6 +4,7 @@
 
 mod equipment;
 mod rows;
+mod settings;
 pub(super) mod source;
 #[cfg(test)]
 mod tests;
@@ -12,6 +13,7 @@ use crate::Result;
 use crate::network::{BalancedNetwork, Bus, BusId, BusType, SourceFormat, Switch};
 use powerio_sincal::DatabaseSnapshot;
 use rows::{NativeRow, get, table};
+use settings::StaticProfiles;
 use std::collections::BTreeMap;
 
 fn error(message: impl std::fmt::Display) -> crate::Error {
@@ -34,7 +36,10 @@ fn bus_id(id: i64) -> Result<BusId> {
 /// # Errors
 /// Unsupported active input, inconsistent topology, or invalid electrical data.
 pub fn read_balanced_snapshot(db: &DatabaseSnapshot, name: &str) -> Result<BalancedNetwork> {
-    if db.version.to_bits() != 14.8_f64.to_bits() {
+    if ![14.8_f64, 15.5, 16.0]
+        .iter()
+        .any(|v| v.to_bits() == db.version.to_bits())
+    {
         return Err(error(format!(
             "balanced electrical adapter does not yet support schema {}",
             db.version
@@ -48,17 +53,7 @@ pub fn read_balanced_snapshot(db: &DatabaseSnapshot, name: &str) -> Result<Balan
         .values()
         .next()
         .ok_or_else(|| error("missing calculation settings"))?;
-    settings.equals("Flag_Unit", 0)?;
-    settings.inactive(&[
-        "Flag_UseTimeSer",
-        "Flag_UseOpSer",
-        "Flag_UseIncSer",
-        "Flag_UseLA",
-        "OpSer_ID",
-        "IncrSer_ID",
-        "Scenario_ID",
-        "Flag_UseScenario",
-    ])?;
+    let profiles = settings::validate(db, settings)?;
     let frequency = settings.positive("f")?;
     let levels = table(db, "VoltageLevel", "VoltLevel_ID")?;
     let nodes = table(db, "Node", "Node_ID")?;
@@ -68,7 +63,7 @@ pub fn read_balanced_snapshot(db: &DatabaseSnapshot, name: &str) -> Result<Balan
     *network.source_format_mut() = SourceFormat::Sincal;
     *network.base_frequency_mut() = frequency;
     read_buses(&nodes, &levels, settings, frequency, &mut network)?;
-    read_elements(db, &levels, &mut network)?;
+    read_elements(db, &levels, &profiles, &mut network)?;
     network.check_references("sincal")?;
     Ok(network)
 }
@@ -96,9 +91,18 @@ fn read_buses(
         if bus.vmin > bus.vmax {
             return Err(settings.bad("ull/uul", "inverted limits"));
         }
-        // Node.Un is a load-flow start value, not nominal voltage. Zero
-        // requests the normal flat start; nonzero modes need decoding.
-        node.inactive(&["Un", "Phi", "Uul", "Ull"])?;
+        // Native nonzero start voltage is absolute kV, not the nominal base.
+        // Respect Flat Start; values in the inactive fields remain in source.
+        let start = node.nonnegative("Un")?;
+        let angle = node.number("Phi")?;
+        if !settings.state("Flag_ABW")? && start > 0.0 {
+            bus.vm = start / bus.base_kv;
+            if !bus.vm.is_finite() || bus.vm <= 0.0 {
+                return Err(node.bad("Un", "initial per-unit voltage overflows or underflows"));
+            }
+            bus.va = angle;
+        }
+        node.inactive(&["Uul", "Ull"])?;
         network.buses_mut().push(bus);
     }
     Ok(())
@@ -107,6 +111,7 @@ fn read_buses(
 fn read_elements(
     db: &DatabaseSnapshot,
     levels: &BTreeMap<i64, NativeRow>,
+    profiles: &StaticProfiles,
     network: &mut BalancedNetwork,
 ) -> Result<()> {
     let elements = table(db, "Element", "Element_ID")?;
@@ -117,6 +122,7 @@ fn read_elements(
         "Infeeder",
         "DCInfeeder",
         "TwoWindingTransformer",
+        "ShuntCondensator",
     ];
     let mut data = BTreeMap::new();
     for kind in kinds {
@@ -165,13 +171,14 @@ fn read_elements(
                     .base_kv;
                 network
                     .loads_mut()
-                    .push(equipment::load(input, ports[0], base_kv, &uid)?);
+                    .push(equipment::load(input, ports[0], base_kv, &uid, profiles)?);
             }
             "Infeeder" | "DCInfeeder" => {
                 if kind == "DCInfeeder" {
                     get(levels, element.integer("VoltLevel_ID")?, "VoltageLevel")?
                         .equals("Flag_DCInfeeder", 0)?;
                 }
+                profiles.check(input, kind == "Infeeder")?;
                 let generator = equipment::generator(
                     input,
                     ports[0],
@@ -181,6 +188,11 @@ fn read_elements(
                     in_service,
                 )?;
                 network.generators_mut().push(generator);
+            }
+            "ShuntCondensator" => {
+                let mut shunt = equipment::capacitor(input, ports[0], network, &uid)?;
+                shunt.in_service = in_service;
+                network.shunts_mut().push(shunt);
             }
             _ => unreachable!(),
         }
