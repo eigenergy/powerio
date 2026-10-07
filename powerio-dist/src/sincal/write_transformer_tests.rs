@@ -341,3 +341,34 @@ fn galvanic_y0_primitive_is_not_rewritten_as_an_isolated_transformer() {
         assert!(write_experimental_multiconductor(&net, &options).is_err());
     }
 }
+
+#[test]
+fn partial_delta_coils_are_not_rewritten_as_a_full_three_phase_transformer() {
+    for group in [1, 35] {
+        for selection in 1..=6 {
+            let db = super::legacy_tests::legacy(&format!(
+                "UPDATE TwoWindingTransformer SET VecGrp={group},Vfe=0,i0=0;
+                 UPDATE Terminal SET Flag_Terminal={selection} WHERE Element_ID=33;"
+            ));
+            let mut net = db.network().unwrap();
+            let options = ExperimentalMulticonductorOptions {
+                nominal_ll_volts: net
+                    .buses()
+                    .iter()
+                    .map(|b| (b.id.clone(), if b.id == "20" { 11000.0 } else { 400.0 }))
+                    .collect(),
+            };
+            for retain_provenance in [true, false] {
+                if !retain_provenance {
+                    for shunt in net.shunts_mut() {
+                        shunt.extras.clear();
+                    }
+                }
+                // One coil has four coordinates; two coils have six but their
+                // non-circulant primitive still cannot become a full winding.
+                assert!(super::write_primitive::canonicalize(&net, &options).is_err());
+                assert!(write_experimental_multiconductor(&net, &options).is_err());
+            }
+        }
+    }
+}
