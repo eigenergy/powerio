@@ -179,18 +179,113 @@ fn source_free_ir_and_edited_output_keep_contact_physics_and_points() {
 }
 
 #[test]
-fn unspecified_fbs_contacts_stay_ideal_without_an_unverified_writer_approximation() {
+fn unspecified_fbs_contacts_stay_ideal_in_source_free_output() {
     for module in [
         "",
         "solver_method FBS;",
         "solver_method NR; solver_method FBS;",
     ] {
-        let net = read(&deck(module, "A", ""));
+        let net = read(&deck(module, "ABC", ""));
         assert!(net.lines().is_empty());
         assert_eq!(net.switches().len(), 1);
         assert!(!net.switches()[0].open);
-        let error = emit_canonical(&net, Destination::memory("case.glm").unwrap()).unwrap_err();
-        assert!(error.to_string().contains("ideal closed switch"));
+        let output = canonical(&net);
+        assert!(output.contains("solver_method FBS"));
+        assert!(output.contains("switch_impedance 0+0j"));
+        let restored = read(&output);
+        assert!(restored.lines().is_empty());
+        assert!(!restored.switches()[0].open);
+    }
+}
+
+fn canonical(net: &MulticonductorNetwork) -> String {
+    let result = emit_canonical(net, Destination::memory("fresh.glm").unwrap()).unwrap();
+    let EmittedOutput::Memory { artifacts } = result.output() else {
+        panic!("not memory")
+    };
+    String::from_utf8(artifacts[0].bytes().to_vec()).unwrap()
+}
+
+fn ideal_tree() -> MulticonductorNetwork {
+    read("module powerflow { solver_method FBS; }
+object node { name source; phases ABCN; bustype SWING; nominal_voltage 240; }
+object node { name middle; phases ABCN; nominal_voltage 240; }
+object load { name sink; phases ABCN; nominal_voltage 240; constant_impedance_A 20+5j; }
+object line_configuration { name code; z11 1+0.5j; z22 1+0.5j; z33 1+0.5j; }
+object overhead_line { name upstream; phases ABCN; from middle; to source; length 1 mile; configuration code; }
+object switch { name contact; phases ABCN; from sink; to middle; operating_mode INDIVIDUAL; phase_B_state OPEN; latitude 0; }")
+}
+
+#[test]
+fn ideal_output_orients_edges_groups_disjoint_contacts_and_retains_points() {
+    let net = ideal_tree();
+    let before = serde_json::to_value(&net).unwrap();
+    let restored: MulticonductorNetwork = serde_json::from_value(before.clone()).unwrap();
+    let output = canonical(&restored);
+    let again = read(&output);
+    assert_eq!(again.lines()[0].bus_from, "source");
+    assert_eq!(again.lines()[0].bus_to, "middle");
+    assert_eq!(again.switches().len(), 2);
+    for switch in again.switches() {
+        assert_eq!(switch.bus_from, "middle");
+        assert_eq!(switch.bus_to, "sink");
+        assert_eq!(switch.open, switch.terminal_map_from == ["2"]);
+    }
+    assert_eq!(again.component_locations().len(), 2);
+    assert!(
+        again
+            .component_locations()
+            .iter()
+            .all(|p| p.point.latitude == Some(0.0))
+    );
+    let repeated = read(&canonical(&again));
+    for (a, b) in again.switches().iter().zip(repeated.switches()) {
+        assert_eq!(a.name, b.name);
+        assert_eq!(a.terminal_map_from, b.terminal_map_from);
+        assert_eq!(a.open, b.open);
+    }
+    assert_eq!(serde_json::to_value(&net).unwrap(), before);
+}
+
+#[test]
+fn ideal_output_rejects_unqualified_topology_and_conflicting_points() {
+    let base = ideal_tree();
+    let mut cyclic = base.clone();
+    let mut extra = cyclic.lines()[0].clone();
+    extra.name = "extra".into();
+    extra.bus_from = "source".into();
+    extra.bus_to = "sink".into();
+    cyclic.lines_mut().push(extra);
+    let mut parallel = base.clone();
+    let mut contact = parallel.switches()[0].clone();
+    contact.name = "parallel".into();
+    parallel.switches_mut().push(contact);
+    let incomplete = read(&deck("solver_method FBS;", "A", ""));
+    let mut conflicting = base.clone();
+    conflicting.component_locations_mut()[0].point.latitude = Some(1.0);
+    let mut multiple_sources = base.clone();
+    let mut source = multiple_sources.sources()[0].clone();
+    source.name = "middle_source".into();
+    source.bus = "middle".into();
+    multiple_sources.sources_mut().push(source);
+    let mut open_tie = base.clone();
+    open_tie.switches_mut().push(powerio_dist::DistSwitch::new(
+        "open_tie",
+        "source",
+        "sink",
+        vec!["1".into()],
+        vec!["1".into()],
+        true,
+    ));
+    for net in [
+        cyclic,
+        parallel,
+        incomplete,
+        conflicting,
+        open_tie,
+        multiple_sources,
+    ] {
+        assert!(emit_canonical(&net, Destination::memory("case.glm").unwrap()).is_err());
     }
 }
 
@@ -222,4 +317,24 @@ fn invalid_assignments_are_not_hidden_by_later_values_or_open_states() {
             .is_err()
         );
     }
+}
+
+#[test]
+fn ideal_output_rejects_native_noncommuting_shunt_error_without_dropping_capacitance() {
+    let mut net = ideal_tree();
+    let code = &mut net.line_codes_mut()[0];
+    code.r_series[1][1] *= 2.0;
+    for i in 0..3 {
+        code.b_from[i][i] = 0.001;
+        code.b_to[i][i] = 0.001;
+    }
+    let commuting = canonical(&net);
+    assert!(commuting.contains("solver_method FBS"));
+    assert!(commuting.contains("c11"));
+    let code = &mut net.line_codes_mut()[0];
+    code.b_from[0][1] = -0.0001;
+    code.b_from[1][0] = -0.0001;
+    code.b_to = code.b_from.clone();
+    let error = emit_canonical(&net, Destination::memory("case.glm").unwrap()).unwrap_err();
+    assert!(error.to_string().contains("do not commute"));
 }

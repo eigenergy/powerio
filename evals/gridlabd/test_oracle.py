@@ -14,9 +14,41 @@ from object_oracle import source_graph
 from oracle import add, analytic, cases, compare, parse_complex, recorded
 from quantity_oracle import check_values, reference as quantity_reference
 from switch_roundtrip_oracle import impedance_run
+from ideal_switch_oracle import (
+    parameters as ideal_parameters,
+    reference as ideal_reference,
+    variants as ideal_variants,
+)
 
 
 class OracleTests(unittest.TestCase):
+    def test_ideal_contact_reference_satisfies_zip_kcl_and_detects_epsilon(self):
+        for spec in ideal_variants():
+            for edited in (False, True):
+                _, phases, closed, zip_load, coupled, _ = spec
+                _, _, loads, power, amps, _, _ = ideal_parameters(
+                    phases, closed, zip_load, coupled, edited
+                )
+                result = ideal_reference(spec, edited)
+                for i, phase in enumerate(phases):
+                    v = complex(*result[f"sink.{phase}"]["value"])
+                    current = complex(*result[f"contact.current_in_{phase}"]["value"])
+                    if phase in closed:
+                        demand = (
+                            v / loads[i]
+                            + amps[i] * v / abs(v)
+                            + (power[i] / v).conjugate()
+                        )
+                        self.assertLess(abs(current - demand), 1e-10)
+                        self.assertEqual(
+                            result[f"middle.{phase}"], result[f"sink.{phase}"]
+                        )
+                    else:
+                        self.assertEqual((v, current), (0j, 0j))
+                self.assertFalse(
+                    compare(ideal_reference(spec, edited, 1e-4), result)["passed"]
+                )
+
     def test_successful_engine_exit_does_not_hide_a_nonfinite_switch_result(self):
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp) / "nonfinite"

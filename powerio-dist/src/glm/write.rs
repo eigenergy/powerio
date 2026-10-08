@@ -14,11 +14,14 @@ use super::read::{nominal_phasor, phase_name};
 
 const METERS_PER_MILE: f64 = 1609.344;
 
+mod ideal;
+
 /// Emit fresh GLM from the current typed network, without retained-source echo.
 ///
 /// The initial profile supports phase-to-earth P/I/Z loads, ideal fixed sources,
-/// explicit phase line matrices and fixed open contacts. Unsupported electrical
-/// behavior fails
+/// explicit phase line matrices and fixed contacts. Ideal closed contacts select
+/// exact FBS output on a checked forest with one source bus per component.
+/// Unsupported electrical behavior fails
 /// before the destination is written; omitted non-electrical metadata is
 /// reported. This entry point deliberately takes a value, not a source module.
 pub fn emit_canonical(
@@ -54,11 +57,21 @@ pub(crate) fn emit_text(network: &MulticonductorNetwork) -> Result<TextEmission,
             .map(|p| ((p.target, p.name.as_str()), p))
             .collect(),
         written_locations: BTreeSet::new(),
+        ideal_plan: None,
     };
     writer.inventory()?;
     writer.sources()?;
+    writer.prepare_ideal_contacts()?;
     writer.nominal_voltages()?;
-    writer.out.push_str("// Canonical PowerIO static network.\nmodule powerflow { solver_method NR; line_capacitance TRUE; }\n\n");
+    let solver = if writer.ideal_plan.is_some() {
+        "FBS"
+    } else {
+        "NR"
+    };
+    let _ = writeln!(
+        writer.out,
+        "// Canonical PowerIO static network.\nmodule powerflow {{ solver_method {solver}; line_capacitance TRUE; }}\n"
+    );
     writer.buses()?;
     writer.lines()?;
     writer.switches()?;
@@ -81,6 +94,7 @@ struct Writer<'a> {
     nominal: BTreeMap<&'a str, f64>,
     locations: BTreeMap<(crate::DistLocationTarget, &'a str), &'a crate::DistComponentLocation>,
     written_locations: BTreeSet<(crate::DistLocationTarget, &'a str)>,
+    ideal_plan: Option<ideal::IdealPlan<'a>>,
 }
 
 fn unsupported(message: impl Into<String>) -> Error {
@@ -197,12 +211,6 @@ impl Writer<'_> {
         }
         for switch in self.net.switches() {
             self.reserve(&switch.name)?;
-            if !switch.open {
-                return Err(unsupported(format!(
-                    "ideal closed switch {} needs a verified exact GLM output equivalent; native NR contacts are finite",
-                    switch.name
-                )));
-            }
         }
         Ok(())
     }
@@ -295,6 +303,12 @@ impl Writer<'_> {
                 .or_default()
                 .push(&line.bus_from);
         }
+        if let Some(plan) = &self.ideal_plan {
+            for group in &plan.groups {
+                neighbors.entry(group.from).or_default().push(group.to);
+                neighbors.entry(group.to).or_default().push(group.from);
+            }
+        }
         let mut queue = VecDeque::new();
         for (&bus, voltages) in &self.source_voltages {
             let nominal = voltages
@@ -376,7 +390,23 @@ impl Writer<'_> {
         Ok(terminals)
     }
 
+    fn link_endpoints<'b>(&self, name: &str, from: &'b str, to: &'b str) -> (&'b str, &'b str) {
+        if self
+            .ideal_plan
+            .as_ref()
+            .is_some_and(|p| p.reversed.contains(name))
+        {
+            (to, from)
+        } else {
+            (from, to)
+        }
+    }
+
     fn switches(&mut self) -> Result<(), Error> {
+        if let Some(plan) = self.ideal_plan.take() {
+            self.ideal_contacts(plan);
+            return Ok(());
+        }
         for switch in self.net.switches() {
             if !switch.extras.is_empty() {
                 return Err(unsupported(format!(
@@ -478,13 +508,14 @@ impl Writer<'_> {
                 }
             }
             self.out.push_str("}\n");
+            let (from, to) = self.link_endpoints(&line.name, &line.bus_from, &line.bus_to);
             let _ = writeln!(
                 self.out,
                 "object overhead_line {{ name \"{}\"; phases {}N; from \"{}\"; to \"{}\"; length {} m; configuration \"{config}\";",
                 line.name,
                 flags(&phase_order),
-                line.bus_from,
-                line.bus_to,
+                from,
+                to,
                 line.length
             );
             self.coordinates(crate::DistLocationTarget::Line, &line.name);

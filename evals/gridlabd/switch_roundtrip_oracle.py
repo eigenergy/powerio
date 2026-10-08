@@ -77,8 +77,8 @@ def check_impedances(args, report):
     for profile in ("pnnl", "arras"):
         for name, _, _, impedance in impedance_variants():
             if impedance == 0:
-                # Ideal FBS contacts remain typed switches; their canonical NR
-                # equivalent is still unresolved and must not be approximated.
+                # This harness qualifies finite contact impedances. Exact FBS
+                # output is covered separately by ideal_switch_oracle.py.
                 continue
             key = f"{profile}/impedance_{name}"
             source = args.impedance_calibration / profile / name / "model.glm"

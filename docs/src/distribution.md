@@ -220,11 +220,25 @@ FBS, whose unspecified contacts are ideal. NR uses the module's
 components become positive `default_resistance`. Supported numeric global
 overrides must be finite and positive. Scalar impedance aliases follow native
 assignment order and unit interpretation. Canonical GLM emits finite contacts
-as overhead-line equivalents and fixed open contacts as open switches. Ideal
-closed-contact output still requires a verified exact equivalent and fails
-explicitly; it is never replaced with a small arbitrary impedance.
+as overhead-line equivalents and fixed open contacts as open switches.
 
-Canonical output selects NR. The pinned engines can return NaN results for
+Ideal closed contacts select FBS and emit explicit zero contact impedance.
+The complete link graph, including open contacts, must form a forest with one
+source bus per component. Links are oriented away from their sources, and
+disjoint switch phases between the same buses are grouped into one native
+object. Endpoint reversal and grouped identities are reported. Matching
+component points survive grouping; conflicting points fail explicitly.
+Cycles, parallel contacts on the same phase, multiple source buses in one
+component and bus phases absent from the incoming link require additional
+exact equivalents and currently fail. No small impedance replaces an ideal
+constraint, and the input network is unchanged.
+
+FBS output also requires the line impedance and end-shunt matrices to commute.
+The pinned engines otherwise compute incorrect source-end currents despite
+correct receiving voltages. These cases fail before output is written until
+an exact end-shunt equivalent is available; capacitance is never discarded.
+
+Output without ideal closed contacts selects NR. The pinned engines can return NaN results for
 some valid circuits even with a successful process exit. One qualified
 impedance case reproduces this with either a native switch or its line
 equivalent; FBS solves the same circuit and matches the analytic solution.

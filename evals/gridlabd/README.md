@@ -372,9 +372,8 @@ python evals/gridlabd/switch_roundtrip_oracle.py \
 
 The optional `--impedance-calibration` directory must come from a successful
 `switch_oracle.py` run; it adds NR default/zero and explicit NR/FBS finite-contact
-round trips. Ideal FBS contacts import as ideal typed switches, but their
-canonical NR output equivalent remains unresolved and is explicitly excluded
-from successful writer claims. Split-phase switches, explicit neutral contacts,
+round trips. Ideal FBS contacts import as ideal typed switches and are qualified
+by the separate FBS harness below. Split-phase switches, explicit neutral contacts,
 active controls/protection and additional global profiles remain unqualified.
 
 The expanded impedance run currently exits nonzero: both pinned engines return
@@ -386,7 +385,39 @@ The native switch also fails; FBS matches all seven analytic electrical
 quantities. A successful alternate-solver check never changes the primary NR
 result to passed. This engine limitation is distinct from successful fresh
 and restored runs and from the 72 state round trips. No tolerance or electrical
-parameter is changed to hide it. The separate ideal-contact writer gap remains.
+parameter is changed to hide it.
+
+`ideal_switch_oracle.py` checks ideal closed-contact output on a source-oriented
+forest. Ten supported circuits per fork cover single A/C phases, AC subsets, three-phase
+and mixed phase states, coupled impedances, mixed P/I/Z loads and reversed input
+links and commuting line end-shunt matrices. The baseline uses native ideal contacts; fresh, IR-restored, edited,
+nominally rebased and grounded-reference output are solved independently.
+Linear solves and scalar ZIP equations provide the reference. A `1e-4` ohm
+contact replacement must disagree, so a finite NR approximation cannot pass.
+
+```sh
+python evals/gridlabd/ideal_switch_oracle.py \
+  --output /tmp/ideal-switches --bridge target/debug/examples/glm_roundtrip \
+  --pnnl-root "$GLD_ROOT"
+```
+
+FBS output recombines disjoint phase groups and orients every link away from its
+source. Native probes showed that separate mixed groups can fail and reversed
+links can produce wrong voltages even with exit zero. The writer checks the
+whole link forest, including open ties, and requires one source per component
+and incoming phase coverage. Cycles, overlapping parallel contacts, conflicting
+grouped points and disconnected phase attachments remain explicit output gaps.
+The writer does not modify the network or replace ideal constraints by epsilon
+impedances. This qualification does not resolve the NR numerical failure above.
+
+The full run deliberately includes an additional noncommuting capacitance case
+and exits nonzero. Both native FBS engines produce correct voltages but wrong
+source-end currents and losses. The discrepancy matches `(Z Y - Y Z) I_out`,
+where `Y` is the one-end shunt admittance: the native line uses `d=a`, while an
+exact π line needs `a=I+Z Y` and `d=I+Y Z`. The report retains that quantitative
+witness. Canonical emission now rejects this case before writing; an exact
+end-shunt expansion is still required. `--case` selects named circuits for
+focused investigation, but a selected passing subset is not full qualification.
 
 `quantity_oracle.py` compares `GlmProject::quantity` with native property
 readbacks and the analytic single-phase circuit. Build the `glm_quantities`
