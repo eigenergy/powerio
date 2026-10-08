@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Behavior change: PSS/E loads read as PSS/E defines them. `YQ` is the
+  reactive power of the constant admittance part at 1 p.u. voltage and is
+  negative for an inductive load, so a load draws `QL + IQ·V − YQ·V²` Mvar.
+  The RAW and RAWX readers added `YQ` instead, so every load with an
+  admittance part read `2·YQ` Mvar off in `Load::q`, and
+  `q_constant_impedance` had the wrong sign. Revision 34 and 35 loads also
+  state distributed generation: while `DGENF` is 1, `DGENP` and `DGENQ` serve
+  part of the constant power demand, and the readers now subtract them from
+  `PL` and `QL`. They used to keep them only as extras. `Load::p`, `Load::q`,
+  and the ZIP parts therefore change for any PSS/E load with a nonzero `YQ`
+  or with distributed generation switched on. The writer reverses both, so a
+  RAW or RAWX case written back states its own `PL`, `QL`, `YQ`, `DGENP`,
+  `DGENQ`, and `DGENF`. Revision 33 output, which has no distributed
+  generation columns, states the load net of it and reports that. A PowerIO
+  IR document an earlier release wrote from a PSS/E case carries the old
+  values, so read the case again.
+
 - PSS/E switched shunt `MODSW` 1 and 2 now read as PSS/E defines them: 1 is
   discrete and 2 is continuous adjustment of the regulated voltage. The RAW
   and RAWX readers had the two swapped, so a continuously adjusted shunt, such

@@ -395,6 +395,28 @@ fn write_psse_rev_inner(
             .unwrap_or(bus_zone);
         let id = quoted_device_id(&l.extras, l.bus, &mut load_ids, &mut sanitized_quoted);
         let (pl, ql, ip, iq, yp, yq) = load_components_for_write(l, &id, &mut warnings);
+        let yq = psse_yq_consumption(yq);
+        // Revisions 34 and 35 state distributed generation in its own columns,
+        // so PL and QL carry the demand it serves; revision 33 has no such
+        // columns and states the load net of it.
+        let (pdgen, qdgen) = load_distributed_generation(&l.extras);
+        let (pl, ql) = if modern {
+            (
+                gross_load_power(pl, pdgen, extra_f64(&l.extras, "psse_pl")),
+                gross_load_power(ql, qdgen, extra_f64(&l.extras, "psse_ql")),
+            )
+        } else {
+            if pdgen != 0.0 || qdgen != 0.0 {
+                warnings.push(
+                    &F.value_collapsed,
+                    format!(
+                        "PSS/E load at bus {} id {id:?}: distributed generation {} MW, {} Mvar has no revision 33 field; PL and QL state the load net of it",
+                        l.bus, pdgen, qdgen
+                    ),
+                );
+            }
+            (pl, ql)
+        };
         let owner = extra_i64(&l.extras, "psse_owner").unwrap_or(1);
         let scal = typed_psse_scal(l, &id, &mut warnings)
             .or_else(|| extra_i64(&l.extras, "psse_scal"))
@@ -3400,6 +3422,13 @@ fn read_load(f: &[Cow<'_, str>], raw_rev: u32, warnings: &mut Diagnostics) -> Re
     let iq = num_at(f, 8, 0.0)?;
     let yp = num_at(f, 9, 0.0)?;
     let yq = num_at(f, 10, 0.0)?;
+    // Distributed generation joins the record at revision 34; while DGENF is
+    // on, DGENP and DGENQ serve part of the constant power demand.
+    let (pdgen, qdgen) = if raw_rev >= 34 && int_at(f, 16, 0)? != 0 {
+        (num_at(f, 14, 0.0)?, num_at(f, 15, 0.0)?)
+    } else {
+        (0.0, 0.0)
+    };
     let mut extras = device_extras(f, 1);
     for (field, key) in [(3, "psse_area"), (4, "psse_zone")] {
         let value = id_at(f, field, 0)?;
@@ -3407,11 +3436,13 @@ fn read_load(f: &[Cow<'_, str>], raw_rev: u32, warnings: &mut Diagnostics) -> Re
             extras.insert(key.into(), Value::from(value as u64));
         }
     }
-    // A record with zero I/Y components states the constant-power pair alone,
-    // and that pair is exactly the typed p/q the writer falls back to — so the
-    // six components are retained only when one of the distributing terms is
-    // nonzero and the split genuinely says more than the total.
-    if [ip, iq, yp, yq].iter().any(|v| *v != 0.0) {
+    // A record with zero I/Y components and no distributed generation states
+    // the constant-power pair alone, and that pair is exactly the typed p/q the
+    // writer falls back to — so the six components are retained only when one
+    // of the distributing terms is nonzero and the split genuinely says more
+    // than the total, or when distributed generation nets out of PL and QL and
+    // the writer needs them to restate the record exactly.
+    if [ip, iq, yp, yq, pdgen, qdgen].iter().any(|v| *v != 0.0) {
         for (key, value) in [
             ("psse_pl", pl),
             ("psse_ql", ql),
@@ -3459,15 +3490,21 @@ fn read_load(f: &[Cow<'_, str>], raw_rev: u32, warnings: &mut Diagnostics) -> Re
     } else {
         None
     };
+    // PSS/E states YQ as an admittance, negative for an inductive load, while
+    // every other component counts consumption; the load draws QL + IQ·V −
+    // YQ·V². Distributed generation that DGENF switches on serves part of the
+    // constant power demand.
+    let q_impedance = psse_yq_consumption(yq);
+    let (p_power, q_power) = (pl - pdgen, ql - qdgen);
     let has_zip_components = [ip, iq, yp, yq].iter().any(|v| *v != 0.0);
     let voltage_model =
         (has_zip_components || scal != 1 || load_type.is_some()).then_some(LoadVoltageModel::Zip {
-            p_constant_power: pl,
-            q_constant_power: ql,
+            p_constant_power: p_power,
+            q_constant_power: q_power,
             p_constant_current: ip,
             q_constant_current: iq,
             p_constant_impedance: yp,
-            q_constant_impedance: yq,
+            q_constant_impedance: q_impedance,
             v_nom: None,
             load_type,
             scaling: (scal != 1).then_some(scal as f64),
@@ -3483,13 +3520,45 @@ fn read_load(f: &[Cow<'_, str>], raw_rev: u32, warnings: &mut Diagnostics) -> Re
     }
     Ok(Load {
         bus: BusId(bus),
-        p: pl + ip + yp,
-        q: ql + iq + yq,
+        p: p_power + ip + yp,
+        q: q_power + iq + q_impedance,
         voltage_model,
         in_service: on_at(f, 2, true)?,
         uid: None,
         extras,
     })
+}
+
+/// PSS/E `YQ` as consumed reactive power at 1 p.u. voltage, and the reverse:
+/// PSS/E states the admittance part's reactive power negative for an
+/// inductive load. `0.0 - yq` rather than `-yq`, so a zero stays `+0.0`.
+fn psse_yq_consumption(yq: f64) -> f64 {
+    0.0 - yq
+}
+
+/// The distributed generation `(DGENP, DGENQ)` a PSS/E load nets out of its
+/// constant power part while `DGENF` is on, and zero while it is off. The
+/// reader retains the three fields as `psse_pdgen`, `psse_qdgen`, and
+/// `psse_flagstatus`.
+fn load_distributed_generation(extras: &Extras) -> (f64, f64) {
+    if extra_i64(extras, "psse_flagstatus").unwrap_or(0) == 0 {
+        return (0.0, 0.0);
+    }
+    (
+        extra_f64(extras, "psse_pdgen").unwrap_or(0.0),
+        extra_f64(extras, "psse_qdgen").unwrap_or(0.0),
+    )
+}
+
+/// The PL or QL a record states for the constant power demand `net` that
+/// distributed generation `dg` serves part of: the retained source field when
+/// it still nets to `net`, so an unedited load restates its record exactly,
+/// else `net + dg`.
+#[allow(clippy::float_cmp)]
+fn gross_load_power(net: f64, dg: f64, retained: Option<f64>) -> f64 {
+    retained
+        .filter(|gross| gross - dg == net)
+        .unwrap_or(net + dg)
 }
 
 fn read_shunt(f: &[Cow<'_, str>]) -> Result<Shunt> {
@@ -4676,6 +4745,9 @@ fn typed_psse_load_type(model: &LoadVoltageModel) -> Option<String> {
     }
 }
 
+/// The six load components in consumption terms, the constant power pair net
+/// of any distributed generation: the caller turns them into PL, QL, IP, IQ,
+/// YP, and YQ.
 fn load_components_for_write(
     l: &Load,
     id: &str,
@@ -4732,12 +4804,15 @@ fn load_components_for_write(
         return (l.p, l.q, 0.0, 0.0, 0.0, 0.0);
     }
 
-    let pl = extra_f64(&l.extras, "psse_pl").unwrap_or(l.p);
-    let ql = extra_f64(&l.extras, "psse_ql").unwrap_or(l.q);
+    // The retained fields are the record's own: PL and QL before distributed
+    // generation and YQ in the PSS/E sign.
+    let (pdgen, qdgen) = load_distributed_generation(&l.extras);
+    let pl = extra_f64(&l.extras, "psse_pl").map_or(l.p, |pl| pl - pdgen);
+    let ql = extra_f64(&l.extras, "psse_ql").map_or(l.q, |ql| ql - qdgen);
     let ip = extra_f64(&l.extras, "psse_ip").unwrap_or(0.0);
     let iq = extra_f64(&l.extras, "psse_iq").unwrap_or(0.0);
     let yp = extra_f64(&l.extras, "psse_yp").unwrap_or(0.0);
-    let yq = extra_f64(&l.extras, "psse_yq").unwrap_or(0.0);
+    let yq = extra_f64(&l.extras, "psse_yq").map_or(0.0, psse_yq_consumption);
     let has_components = [
         "psse_pl", "psse_ql", "psse_ip", "psse_iq", "psse_yp", "psse_yq",
     ]
@@ -5285,8 +5360,10 @@ Q
         let net = parse_psse_source(raw, None, &mut warnings).unwrap();
 
         assert_eq!(net.loads().len(), 1);
-        close(net.loads()[0].p, 13.0);
-        close(net.loads()[0].q, 5.0);
+        // DGENF 1 nets DGENP 4 and DGENQ 2 out of PL and QL, and YQ 1.5 is
+        // capacitive: P = 10 - 4 + 1 + 2 and Q = 3 - 2 + 0.5 - 1.5.
+        close(net.loads()[0].p, 9.0);
+        close(net.loads()[0].q, 0.0);
         let Some(LoadVoltageModel::Zip {
             p_constant_power,
             q_constant_current,
@@ -5296,7 +5373,7 @@ Q
         else {
             panic!("missing typed ZIP load model");
         };
-        close(*p_constant_power, 10.0);
+        close(*p_constant_power, 6.0);
         close(*q_constant_current, 0.5);
         close(*p_constant_impedance, 2.0);
         assert!(
@@ -5317,8 +5394,8 @@ Q
             "modern load tail was not replayed: {text}"
         );
         let net2 = parse_psse(&text).unwrap();
-        close(net2.loads()[0].p, 13.0);
-        close(net2.loads()[0].q, 5.0);
+        close(net2.loads()[0].p, 9.0);
+        close(net2.loads()[0].q, 0.0);
     }
 
     #[test]
@@ -5417,6 +5494,107 @@ Q
         assert_eq!(*load_type, Some(7));
     }
 
+    /// PSS/E defines YQ as the admittance part's reactive power at 1 p.u.,
+    /// negative for an inductive load, so the load consumes QL + IQ·V − YQ·V².
+    /// DGENP and DGENQ serve part of the constant power demand while DGENF is
+    /// on. Each record writes back field for field at revisions 34 and 35 and
+    /// through RAWX; revision 33 has no DG columns and states the load net of it.
+    #[test]
+    fn load_yq_sign_and_distributed_generation_read_as_psse_defines_them() {
+        let records = [
+            // Inductive YQ with distributed generation switched on.
+            "2,'L1',1,1,1,10.1,3.3,1.0,0.5,2.0,-1.7,1,1,0,4.3,1.1,1,''",
+            // Capacitive YQ; distributed generation stated but switched off.
+            "2,'L2',1,1,1,5.0,1.0,0.0,0.0,0.0,0.9,1,1,0,2.0,0.4,0,''",
+            // Constant power only, distributed generation switched on.
+            "3,'L3',1,1,1,7.0,2.0,0.0,0.0,0.0,0.0,1,1,0,1.5,0.25,1,''",
+        ];
+        let raw = format!(
+            "0, 100.00, 35, 0, 1, 60.00 / synthetic
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,'BUS1        ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'BUS2        ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+3,'BUS3        ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+{}
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+Q
+",
+            records.join("\n")
+        );
+        let net = parse_psse(&raw).unwrap();
+        let zip = |load: &Load| match &load.voltage_model {
+            Some(LoadVoltageModel::Zip {
+                p_constant_power,
+                q_constant_power,
+                q_constant_impedance,
+                ..
+            }) => Some((*p_constant_power, *q_constant_power, *q_constant_impedance)),
+            _ => None,
+        };
+        let [l1, l2, l3] = [&net.loads()[0], &net.loads()[1], &net.loads()[2]];
+        close(l1.p, 10.1 - 4.3 + 1.0 + 2.0);
+        close(l1.q, 3.3 - 1.1 + 0.5 + 1.7);
+        let (p_power, q_power, q_impedance) = zip(l1).unwrap();
+        close(p_power, 10.1 - 4.3);
+        close(q_power, 3.3 - 1.1);
+        close(q_impedance, 1.7);
+        close(l2.p, 5.0);
+        close(l2.q, 1.0 - 0.9);
+        close(zip(l2).unwrap().2, -0.9);
+        close(l3.p, 7.0 - 1.5);
+        close(l3.q, 2.0 - 0.25);
+        assert_eq!(zip(l3), None);
+
+        let load_fields = |text: &str| {
+            text.lines()
+                .filter(|line| line.contains("'L"))
+                .map(|line| {
+                    fields(line)[5..17]
+                        .iter()
+                        .map(|field| field.parse::<f64>().unwrap())
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        };
+        let stated = load_fields(&raw);
+        for revision in [34, 35] {
+            let emitted = write_psse_rev(&net, revision);
+            assert_eq!(load_fields(&emitted.text), stated, "revision {revision}");
+            let back = parse_psse(&emitted.text).unwrap();
+            assert_eq!(back.loads(), net.loads(), "revision {revision}");
+        }
+
+        // RAWX assigns each load a stable identity; the record is otherwise
+        // the same.
+        let rawx = super::super::rawx::write_rawx(&net).unwrap();
+        let mut back =
+            super::super::rawx::parse_rawx_source(&rawx.text, None, &mut Diagnostics::new())
+                .unwrap();
+        for load in back.loads_mut() {
+            load.uid = None;
+        }
+        assert_eq!(back.loads(), net.loads(), "RAWX");
+
+        let rev33 = write_psse_rev(&net, 33);
+        let collapsed = rev33
+            .render_diagnostics()
+            .iter()
+            .filter(|line| {
+                line.contains("EMIT.PSSE.VALUE_COLLAPSED")
+                    && line.contains("distributed generation")
+            })
+            .count();
+        assert_eq!(collapsed, 2, "{:?}", rev33.render_diagnostics());
+        let back = parse_psse(&rev33.text).unwrap();
+        for (before, after) in net.loads().iter().zip(back.loads()) {
+            close(after.p, before.p);
+            close(after.q, before.q);
+        }
+    }
+
     #[test]
     fn mutated_load_does_not_replay_stale_psse_zip_extras() {
         let raw = r"0, 100.00, 35, 0, 1, 60.00 / synthetic
@@ -5436,8 +5614,10 @@ Q
 
         let conv = write_psse_rev(&net, 35);
 
+        // The typed p/q are net of the load's distributed generation (DGENF 1,
+        // DGENP 4, DGENQ 2), which the record states in its own columns.
         assert!(
-            conv.text.contains("20.0, 7.0, 0.0, 0.0, 0.0, 0.0"),
+            conv.text.contains("24.0, 9.0, 0.0, 0.0, 0.0, 0.0"),
             "typed p/q were not written as constant power: {}",
             conv.text
         );

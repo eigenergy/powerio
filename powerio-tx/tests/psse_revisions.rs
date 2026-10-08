@@ -299,7 +299,7 @@ fn hand_written_revision32_case_maps_bus_load_shunt_and_generator_records() {
         .find(|load| load.bus == BusId(4))
         .unwrap();
     close(zip.p, 48.0, "PL + IP + YP");
-    close(zip.q, 13.0, "QL + IQ + YQ");
+    close(zip.q, 11.0, "QL + IQ - YQ");
     let Some(LoadVoltageModel::Zip {
         p_constant_current,
         q_constant_impedance,
@@ -309,7 +309,7 @@ fn hand_written_revision32_case_maps_bus_load_shunt_and_generator_records() {
         panic!("the ZIP load is typed");
     };
     close(*p_constant_current, 5.0, "IP");
-    close(*q_constant_impedance, 1.0, "YQ");
+    close(*q_constant_impedance, -1.0, "YQ 1 is capacitive");
     let fixed = net
         .shunts()
         .iter()
