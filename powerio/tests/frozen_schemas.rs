@@ -112,11 +112,55 @@ fn the_current_powerio_ir_schema_is_committed() {
     );
 }
 
-/// Additive type catalogs preserve every existing record and document rule.
-/// Each earlier IR version 2 snapshot is checked against the current one, so
-/// a catalog that renames or reshapes a published record fails here.
+/// Published IR records remain backward compatible as the current catalog grows.
+/// Existing properties, required fields, variants, and their schemas cannot
+/// change. A current record may add optional properties, and a current
+/// discriminated catalog may add new variants. This keeps historical schema
+/// snapshots intact without treating every additive field as an IR break.
 #[test]
-fn the_generation_two_catalog_only_adds_structural_types() {
+fn the_generation_two_catalog_preserves_published_shapes() {
+    fn discriminator(value: &serde_json::Value) -> Option<&serde_json::Value> {
+        value["properties"]["kind"]["const"]
+            .as_str()
+            .map(|_| &value["properties"]["kind"]["const"])
+            .or_else(|| {
+                value["properties"]["type"]["const"]
+                    .as_str()
+                    .map(|_| &value["properties"]["type"]["const"])
+            })
+    }
+
+    fn assert_preserved(published: &serde_json::Value, current: &serde_json::Value, path: &str) {
+        match (published, current) {
+            (serde_json::Value::Object(old), serde_json::Value::Object(new)) => {
+                for (name, value) in old {
+                    let current_value = new.get(name).unwrap_or_else(|| {
+                        panic!("{path}.{name}: published schema member was removed")
+                    });
+                    assert_preserved(value, current_value, &format!("{path}.{name}"));
+                }
+            }
+            (serde_json::Value::Array(old), serde_json::Value::Array(new)) => {
+                let discriminated = old.iter().all(|value| discriminator(value).is_some());
+                if discriminated {
+                    for value in old {
+                        let key = discriminator(value).unwrap();
+                        let current_value = new
+                            .iter()
+                            .find(|candidate| discriminator(candidate) == Some(key))
+                            .unwrap_or_else(|| {
+                                panic!("{path}: published discriminated variant {key} was removed")
+                            });
+                        assert_preserved(value, current_value, path);
+                    }
+                } else {
+                    assert_eq!(old, new, "{path}: non-discriminated array changed");
+                }
+            }
+            _ => assert_eq!(published, current, "{path}: published schema changed"),
+        }
+    }
+
     for earlier in [
         "pio-ir/2/schema.json",
         "pio-ir/2/0.11.1/schema.json",
@@ -130,29 +174,17 @@ fn the_generation_two_catalog_only_adds_structural_types() {
         let current_defs = current.as_object_mut().unwrap().remove("$defs").unwrap();
         published.as_object_mut().unwrap().remove("$id");
         current.as_object_mut().unwrap().remove("$id");
-        assert_eq!(published, current, "{earlier}: document rules changed");
+        assert_preserved(&published, &current, earlier);
 
         for (name, definition) in published_defs.as_object().unwrap() {
-            if name == "StoredValue" {
-                for variant in definition["oneOf"].as_array().unwrap() {
-                    let type_name = &variant["properties"]["type"]["const"];
-                    let matching = current_defs[name]["oneOf"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .find(|candidate| candidate["properties"]["type"]["const"] == *type_name);
-                    assert_eq!(
-                        matching,
-                        Some(variant),
-                        "{earlier}: type {type_name} changed"
-                    );
-                }
-            } else {
-                assert_eq!(
-                    &current_defs[name], definition,
-                    "{earlier}: record {name} changed"
-                );
-            }
+            let current_definition = current_defs
+                .get(name)
+                .unwrap_or_else(|| panic!("{earlier}: record {name} was removed"));
+            assert_preserved(
+                definition,
+                current_definition,
+                &format!("{earlier}: record {name}"),
+            );
         }
     }
 }

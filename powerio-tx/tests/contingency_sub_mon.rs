@@ -626,15 +626,22 @@ fn a_generated_monitored_element_file_reads_every_statement() {
     assert_eq!(
         statements[0],
         MonitorStatement::VoltageRange {
-            scope: MonitorScope::Subsystem { name: "A1".into() },
+            scope: MonitorScope::Subsystem {
+                name: "A1".into(),
+                kv: None,
+            },
             vmin: 0.95,
             vmax: 1.05,
+            pre: None,
         }
     );
     assert_eq!(
         statements[1],
         MonitorStatement::VoltageDeviation {
-            scope: MonitorScope::Subsystem { name: "A1".into() },
+            scope: MonitorScope::Subsystem {
+                name: "A1".into(),
+                kv: None
+            },
             down: 0.03,
             up: Some(0.06),
         }
@@ -644,6 +651,7 @@ fn a_generated_monitored_element_file_reads_every_statement() {
         MonitorStatement::BranchesInSubsystem {
             subsystem: "A1".into(),
             low_voltage_3w: true,
+            kv_range: None,
         }
     );
     // LINES is the BRANCHES synonym.
@@ -652,12 +660,14 @@ fn a_generated_monitored_element_file_reads_every_statement() {
         MonitorStatement::BranchesInSubsystem {
             subsystem: "A2".into(),
             low_voltage_3w: false,
+            kv_range: None,
         }
     );
     assert_eq!(
         statements[4],
         MonitorStatement::TiesFromSubsystem {
             subsystem: "A1".into(),
+            kv_range: None,
         }
     );
     assert_eq!(
@@ -666,6 +676,7 @@ fn a_generated_monitored_element_file_reads_every_statement() {
             scope: MonitorScope::AllBuses,
             vmin: 0.94,
             vmax: 1.06,
+            pre: None,
         }
     );
     // A deviation statement may name one value.
@@ -778,6 +789,7 @@ fn the_block_forms_read_their_branches() {
         MonitorStatement::BranchesInSubsystem {
             subsystem: "NOSUCH".into(),
             low_voltage_3w: false,
+            kv_range: None,
         }
     );
     assert_eq!(parsed.set.retained.len(), 1);
@@ -838,6 +850,7 @@ fn a_voltage_range_stated_high_to_low_is_kept_as_text() {
             scope: MonitorScope::AllBuses,
             vmin: 0.95,
             vmax: 1.05,
+            pre: None,
         }]
     );
     assert_eq!(
@@ -917,6 +930,151 @@ fn a_statement_read_inside_a_block_is_kept_in_that_block() {
         vec!["MONITOR VOLTAGE RANGE ALL BUSES 0.9 1.1"]
     );
     assert_eq!(again.set.statements.len(), 1);
+}
+
+#[test]
+fn monitored_kv_qualified_forms_parse_and_round_trip() {
+    let parsed = MonitoredSet::parse(
+        "MONITOR BRANCHES IN SUBSYSTEM 'A1' KVRANGE 200 240\n\
+MONITOR TIES FROM SUBSYSTEM 'A1' KVRANGE 200 240\n\
+MONITOR VOLTAGE RANGE SUBSYSTEM 'A1' KV 230 0.95 1.05\n\
+END\n",
+    )
+    .expect("parse kV-qualified monitors");
+    assert!(parsed.diagnostics.is_empty(), "{:?}", mon_codes(&parsed));
+    assert_eq!(
+        parsed.set.statements,
+        vec![
+            MonitorStatement::BranchesInSubsystem {
+                subsystem: "A1".into(),
+                low_voltage_3w: false,
+                kv_range: Some((200.0, 240.0)),
+            },
+            MonitorStatement::TiesFromSubsystem {
+                subsystem: "A1".into(),
+                kv_range: Some((200.0, 240.0)),
+            },
+            MonitorStatement::VoltageRange {
+                scope: MonitorScope::Subsystem {
+                    name: "A1".into(),
+                    kv: Some(230.0),
+                },
+                vmin: 0.95,
+                vmax: 1.05,
+                pre: None,
+            },
+        ]
+    );
+
+    let written = check_mon_fixed_point(&parsed);
+    assert!(written.contains("MONITOR BRANCHES IN SUBSYSTEM 'A1' KVRANGE 200.0 240.0\n"));
+    assert!(written.contains("MONITOR TIES FROM SUBSYSTEM 'A1' KVRANGE 200.0 240.0\n"));
+    assert!(written.contains("MONITOR VOLTAGE RANGE SUBSYSTEM 'A1' KV 230.0 0.95 1.05\n"));
+}
+
+#[test]
+fn monitored_kv_qualified_forms_filter_resolution() {
+    let parsed = MonitoredSet::parse(
+        "MONITOR BRANCHES IN SUBSYSTEM 'A1' KVRANGE 200 240\n\
+MONITOR TIES FROM SUBSYSTEM 'A1' KVRANGE 200 240\n\
+MONITOR VOLTAGE RANGE SUBSYSTEM 'A1' KV 230 0.95 1.05\n\
+END\n",
+    )
+    .expect("parse kV-qualified monitors");
+    let net = select_network();
+    let subsystems = parse_sub("selectors.sub").set;
+    let resolution = parsed.set.resolve(&net, &subsystems);
+
+    assert_eq!(rows(&resolution.branch_rows), [0, 1]);
+    assert_eq!(rows(&resolution.tie_rows), [5]);
+    assert_eq!(
+        resolution.voltage_ranges[0].bus_rows,
+        [0, 1].into_iter().collect()
+    );
+}
+
+#[test]
+fn monitored_kv_qualified_forms_keep_invalid_ranges_as_text() {
+    let reversed = MonitoredSet::parse("MONITOR BRANCHES IN SUBSYSTEM 'A1' KVRANGE 240 200\nEND\n")
+        .expect("parse reversed kV range");
+    assert_eq!(
+        mon_codes(&reversed),
+        vec!["READ.MON.STATEMENT_UNRECOGNIZED"]
+    );
+    assert_eq!(
+        reversed.set.retained[0].text,
+        "MONITOR BRANCHES IN SUBSYSTEM 'A1' KVRANGE 240 200"
+    );
+
+    let nonfinite =
+        MonitoredSet::parse("MONITOR TIES FROM SUBSYSTEM 'A1' KVRANGE Infinity 240\nEND\n")
+            .expect("parse non-finite kV range");
+    assert_eq!(
+        mon_codes(&nonfinite),
+        vec!["READ.MON.STATEMENT_UNRECOGNIZED"]
+    );
+}
+
+#[test]
+fn monitored_subsystem_kv_scope_uses_kv_tolerance() {
+    let net = select_network();
+    let subsystems = parse_sub("selectors.sub").set;
+    let exact =
+        MonitoredSet::parse("MONITOR VOLTAGE RANGE SUBSYSTEM 'A1' KV 230.0000005 0.95 1.05\nEND\n")
+            .expect("parse tolerant kV scope");
+    let resolution = exact.set.resolve(&net, &subsystems);
+    assert_eq!(
+        resolution.voltage_ranges[0].bus_rows,
+        [0, 1].into_iter().collect()
+    );
+}
+
+#[test]
+fn monitored_four_value_voltage_range_round_trips_and_resolves() {
+    let parsed = MonitoredSet::parse(
+        "MONITOR VOLTAGE RANGE SUBSYSTEM 'A1' KV 230 0.9000 1.0500 0.9500 1.0500\nEND\n",
+    )
+    .expect("parse four-value voltage range");
+    assert!(parsed.diagnostics.is_empty(), "{:?}", mon_codes(&parsed));
+    assert_eq!(
+        parsed.set.statements,
+        vec![MonitorStatement::VoltageRange {
+            scope: MonitorScope::Subsystem {
+                name: "A1".into(),
+                kv: Some(230.0),
+            },
+            vmin: 0.9,
+            vmax: 1.05,
+            pre: Some((0.95, 1.05)),
+        }]
+    );
+
+    let written = check_mon_fixed_point(&parsed);
+    assert!(written.contains("MONITOR VOLTAGE RANGE SUBSYSTEM 'A1' KV 230.0 0.9 1.05 0.95 1.05\n"));
+
+    let net = select_network();
+    let subsystems = parse_sub("selectors.sub").set;
+    let resolution = parsed.set.resolve(&net, &subsystems);
+    assert_eq!(resolution.voltage_ranges.len(), 1);
+    assert_eq!(
+        resolution.voltage_ranges[0].bus_rows,
+        [0, 1].into_iter().collect()
+    );
+    assert_eq!(resolution.voltage_ranges[0].low, 0.9);
+    assert_eq!(resolution.voltage_ranges[0].high, Some(1.05));
+    assert_eq!(resolution.voltage_ranges[0].pre, Some((0.95, 1.05)));
+}
+
+#[test]
+fn monitored_four_value_voltage_range_rejects_invalid_bands() {
+    for line in [
+        "MONITOR VOLTAGE RANGE ALL BUSES 1.05 0.95 0.95 1.05\\nEND\\n",
+        "MONITOR VOLTAGE RANGE ALL BUSES 0.95 1.05 1.05 0.95\\nEND\\n",
+    ] {
+        let parsed = MonitoredSet::parse(line).expect("parse invalid range");
+        assert_eq!(mon_codes(&parsed), vec!["READ.MON.STATEMENT_UNRECOGNIZED"]);
+        assert_eq!(parsed.set.retained.len(), 1);
+    }
 }
 
 #[test]

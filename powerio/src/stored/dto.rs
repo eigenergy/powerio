@@ -1860,7 +1860,7 @@ fn validate_subsystem_set(set: &powerio_tx::SubsystemSet) -> Result<(), String> 
 /// `.sub` file states or by a finite base kV level.
 fn validate_monitor_scope(index: usize, scope: &powerio_tx::MonitorScope) -> Result<(), String> {
     match scope {
-        powerio_tx::MonitorScope::Subsystem { name } if name.trim().is_empty() => Err(format!(
+        powerio_tx::MonitorScope::Subsystem { name, .. } if name.trim().is_empty() => Err(format!(
             "monitor statement {index} states a scope that names no subsystem"
         )),
         powerio_tx::MonitorScope::Kv { kv } if !kv.is_finite() => Err(format!(
@@ -1884,7 +1884,9 @@ fn validate_monitored_set(set: &powerio_tx::MonitoredSet) -> Result<(), String> 
             validate_retained(&format!("monitor statement {index}"), retained)?;
         }
         match statement {
-            powerio_tx::MonitorStatement::VoltageRange { scope, vmin, vmax } => {
+            powerio_tx::MonitorStatement::VoltageRange {
+                scope, vmin, vmax, ..
+            } => {
                 if !(vmin.is_finite() && vmax.is_finite() && vmin <= vmax) {
                     return Err(format!(
                         "monitor statement {index} states a voltage range that does not run low to high"
@@ -1901,7 +1903,7 @@ fn validate_monitored_set(set: &powerio_tx::MonitoredSet) -> Result<(), String> 
                 validate_monitor_scope(index, scope)?;
             }
             powerio_tx::MonitorStatement::BranchesInSubsystem { subsystem, .. }
-            | powerio_tx::MonitorStatement::TiesFromSubsystem { subsystem } => {
+            | powerio_tx::MonitorStatement::TiesFromSubsystem { subsystem, .. } => {
                 if subsystem.trim().is_empty() {
                     return Err(format!("monitor statement {index} names no subsystem"));
                 }

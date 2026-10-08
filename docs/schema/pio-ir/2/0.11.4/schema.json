@@ -9266,6 +9266,26 @@
               "const": "subsystem",
               "type": "string"
             },
+            "kv": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ],
+              "description": "Optional base-kV filter on the subsystem's buses."
+            },
             "name": {
               "type": "string"
             }
@@ -9388,6 +9408,49 @@
               "const": "branches_in_subsystem",
               "type": "string"
             },
+            "kv_range": {
+              "description": "Optional inclusive base-kV filter on both branch terminals.",
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "anyOf": [
+                    {
+                      "format": "double",
+                      "type": "number"
+                    },
+                    {
+                      "enum": [
+                        "Infinity",
+                        "-Infinity",
+                        "NaN"
+                      ],
+                      "type": "string"
+                    }
+                  ]
+                },
+                {
+                  "anyOf": [
+                    {
+                      "format": "double",
+                      "type": "number"
+                    },
+                    {
+                      "enum": [
+                        "Infinity",
+                        "-Infinity",
+                        "NaN"
+                      ],
+                      "type": "string"
+                    }
+                  ]
+                }
+              ],
+              "type": [
+                "array",
+                "null"
+              ]
+            },
             "low_voltage_3w": {
               "description": "`3WLOWVOLTAGE`: also the three winding transformers whose lowest\nvoltage winding sits in the subsystem.",
               "type": "boolean"
@@ -9409,6 +9472,49 @@
             "kind": {
               "const": "ties_from_subsystem",
               "type": "string"
+            },
+            "kv_range": {
+              "description": "Optional inclusive base-kV filter. The terminal inside the\nsubsystem must have a base kV in this range.",
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "anyOf": [
+                    {
+                      "format": "double",
+                      "type": "number"
+                    },
+                    {
+                      "enum": [
+                        "Infinity",
+                        "-Infinity",
+                        "NaN"
+                      ],
+                      "type": "string"
+                    }
+                  ]
+                },
+                {
+                  "anyOf": [
+                    {
+                      "format": "double",
+                      "type": "number"
+                    },
+                    {
+                      "enum": [
+                        "Infinity",
+                        "-Infinity",
+                        "NaN"
+                      ],
+                      "type": "string"
+                    }
+                  ]
+                }
+              ],
+              "type": [
+                "array",
+                "null"
+              ]
             },
             "subsystem": {
               "type": "string"
@@ -9502,6 +9608,49 @@
             "kind": {
               "const": "voltage_range",
               "type": "string"
+            },
+            "pre": {
+              "description": "Optional pre-contingency voltage band. The two-value form is\npost-contingency only; the four-value form adds this band.",
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "anyOf": [
+                    {
+                      "format": "double",
+                      "type": "number"
+                    },
+                    {
+                      "enum": [
+                        "Infinity",
+                        "-Infinity",
+                        "NaN"
+                      ],
+                      "type": "string"
+                    }
+                  ]
+                },
+                {
+                  "anyOf": [
+                    {
+                      "format": "double",
+                      "type": "number"
+                    },
+                    {
+                      "enum": [
+                        "Infinity",
+                        "-Infinity",
+                        "NaN"
+                      ],
+                      "type": "string"
+                    }
+                  ]
+                }
+              ],
+              "type": [
+                "array",
+                "null"
+              ]
             },
             "scope": {
               "$ref": "#/$defs/MonitorScope"
