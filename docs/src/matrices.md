@@ -86,7 +86,12 @@ that solved the case.
 - **Device side.** Generators at their stated `pg` and `qg`, loads through
   their voltage model at the stored magnitude, static VAR compensators and
   storage at their stated terminal power, and HVDC lines as fixed
-  injections unless `HvdcTreatment::Ignore` is selected.
+  injections unless `HvdcTreatment::Ignore` is selected. Each converter of a
+  line read from a PSS/E two-terminal record draws the reactive power its
+  bridge equations give at the stored AC voltages
+  (`Hvdc::calc_lcc_operating_point`: firing and extinction angles, overlap,
+  and the fundamental power factor), unless `LccReactivePower::Stated` keeps
+  the line's stated reactive powers.
 - **Sign.** A bus mismatch is the power the network draws at the stored
   voltages minus the stated injection, MW and MVAr, the mismatch MATPOWER's
   `newtonpf` drives to zero. An injection equal to it closes the bus, and

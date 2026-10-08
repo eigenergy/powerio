@@ -380,6 +380,7 @@ class BalancedNetwork:
         hvdc: str = "fixed_injection",
         low_impedance_threshold: float = 1e-3,
         merge_zero_impedance: bool = False,
+        lcc_reactive_power: str = "converter_model",
     ) -> dict[str, Any]:
         """Evaluate every bus's AC balance at the voltages the case stores.
 
@@ -396,13 +397,18 @@ class BalancedNetwork:
         ``top`` (row indices of the largest mismatches), and the totals.
         ``merge_zero_impedance`` first merges the buses joined by in-service
         zero-impedance branches, whose flows the stored voltages cannot
-        determine; without it such a branch raises.
+        determine; without it such a branch raises. ``lcc_reactive_power``
+        selects where a PSS/E two-terminal converter's reactive demand comes
+        from: its bridge equations at the stored voltages
+        (``"converter_model"``) or the line's stated reactive powers
+        (``"stated"``).
         """
         return self._inner.calc_stated_state_mismatch(
             top_k=top_k,
             hvdc=hvdc,
             low_impedance_threshold=low_impedance_threshold,
             merge_zero_impedance=merge_zero_impedance,
+            lcc_reactive_power=lcc_reactive_power,
         )
 
     def calc_stated_branch_flows(self) -> dict[str, Any]:

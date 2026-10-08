@@ -137,8 +137,9 @@ pub use pipeline::{
     calc_zero_impedance_skips_for_kind, sanitize_stem, select_zero_impedance_rule_for_kind,
 };
 pub use stated_state::{
-    ClosureInjection, StatedBranchFlows, StatedBusFlags, StatedBusMismatch, StatedIslandMismatch,
-    StatedStateMismatch, StatedStateOptions, calc_stated_branch_flows, calc_stated_state_mismatch,
+    ClosureInjection, LccReactivePower, StatedBranchFlows, StatedBusFlags, StatedBusMismatch,
+    StatedIslandMismatch, StatedStateMismatch, StatedStateOptions, calc_stated_branch_flows,
+    calc_stated_state_mismatch,
 };
 
 #[cfg(feature = "gridfm")]

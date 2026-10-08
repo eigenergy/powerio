@@ -4,8 +4,9 @@
 
 use num_complex::Complex64;
 use powerio_matrix::{
-    BuildOptions, Error, IndexedNetwork, StatedBusFlags, StatedStateMismatch, StatedStateOptions,
-    calc_admittance_matrix, calc_stated_branch_flows, calc_stated_state_mismatch,
+    BuildOptions, Error, IndexedNetwork, LccReactivePower, StatedBusFlags, StatedStateMismatch,
+    StatedStateOptions, calc_admittance_matrix, calc_stated_branch_flows,
+    calc_stated_state_mismatch,
 };
 use powerio_tx::{
     BalancedNetwork, Branch, Bus, BusId, BusType, Generator, Hvdc, HvdcTreatment, Impedance, Load,
@@ -410,6 +411,67 @@ fn a_low_impedance_branch_flags_both_terminals() {
         looser.buses[row_of(&looser, 11)].flags,
         StatedBusFlags::NONE
     );
+}
+
+#[test]
+fn an_lcc_converter_record_draws_its_bridge_reactive_power() {
+    // A line with no converter record is unaffected by the converter model.
+    let net = solved();
+    let model = calc_stated_state_mismatch(&net, &StatedStateOptions::default()).unwrap();
+    let stated = calc_stated_state_mismatch(
+        &net,
+        &StatedStateOptions::default().with_lcc_reactive_power(LccReactivePower::Stated),
+    )
+    .unwrap();
+    assert_eq!(model, stated);
+
+    // With a PSS/E two-terminal record, each converter draws what its
+    // bridge equations give at the stored voltages, on top of the stated
+    // (zero for PSS/E) `qf` and `qt`.
+    let mut net = solved();
+    let line = &mut net.hvdc_mut()[0];
+    let tail = |values: &[&str]| {
+        serde_json::Value::Array(
+            values
+                .iter()
+                .map(|v| serde_json::Value::String((*v).into()))
+                .collect(),
+        )
+    };
+    line.extras
+        .insert("psse_dc_rdc".into(), serde_json::Value::from(2.0));
+    line.extras
+        .insert("psse_dc_vschd".into(), serde_json::Value::from(150.0));
+    let converter = tail(&[
+        "2", "17.5", "12.5", "0.1", "8.0", "230.0", "0.35", "1.0", "1.2", "0.9", "0.0125", "0",
+        "0", "0", "1", "0.0",
+    ]);
+    line.extras
+        .insert("psse_dc_rectifier_tail".into(), converter.clone());
+    line.extras
+        .insert("psse_dc_inverter_tail".into(), converter);
+    let point = net.hvdc()[0]
+        .calc_lcc_operating_point(net.buses()[2].vm, net.buses()[6].vm)
+        .expect("the converters reach the schedule");
+    let model = calc_stated_state_mismatch(&net, &StatedStateOptions::default()).unwrap();
+    let stated = calc_stated_state_mismatch(
+        &net,
+        &StatedStateOptions::default().with_lcc_reactive_power(LccReactivePower::Stated),
+    )
+    .unwrap();
+    let (from, to) = (row_of(&model, 3), row_of(&model, 7));
+    let qf = net.hvdc()[0].qf;
+    let qt = net.hvdc()[0].qt;
+    assert!(
+        (model.buses[from].q_mvar - stated.buses[from].q_mvar - (point.rectifier.q_mvar + qf))
+            .abs()
+            < 1e-9
+    );
+    assert!(
+        (model.buses[to].q_mvar - stated.buses[to].q_mvar - (point.inverter.q_mvar + qt)).abs()
+            < 1e-9
+    );
+    assert!(point.rectifier.q_mvar > 0.0 && point.inverter.q_mvar > 0.0);
 }
 
 #[test]

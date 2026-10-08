@@ -122,6 +122,23 @@ impl std::ops::BitOrAssign for StatedBusFlags {
     }
 }
 
+/// Where a line-commutated (LCC) converter's reactive demand comes from in
+/// [`calc_stated_state_mismatch`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum LccReactivePower {
+    /// The converter bridge equations at the stored AC voltages
+    /// ([`Hvdc::calc_lcc_operating_point`](powerio_tx::Hvdc::calc_lcc_operating_point)):
+    /// each converter of a line read from a PSS/E two-terminal record draws
+    /// the reactive power its firing or extinction angle and overlap imply.
+    /// A line without such a record keeps its stated `qf` and `qt`, and a
+    /// normalized network, whose powers are per unit, keeps them throughout.
+    #[default]
+    ConverterModel,
+    /// The line's stated `qf` and `qt`, which a PSS/E record leaves at zero.
+    Stated,
+}
+
 /// Options for [`calc_stated_state_mismatch`].
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -141,6 +158,8 @@ pub struct StatedStateOptions {
     /// leaves such a branch's flow uncertain by about one MW on a 100 MVA
     /// base.
     pub low_impedance_threshold: f64,
+    /// Where an LCC converter's reactive demand comes from.
+    pub lcc_reactive_power: LccReactivePower,
 }
 
 impl Default for StatedStateOptions {
@@ -150,6 +169,7 @@ impl Default for StatedStateOptions {
             top_k: 20,
             merged_buses: BTreeMap::new(),
             low_impedance_threshold: 1e-3,
+            lcc_reactive_power: LccReactivePower::default(),
         }
     }
 }
@@ -176,6 +196,12 @@ impl StatedStateOptions {
     #[must_use]
     pub const fn with_low_impedance_threshold(mut self, threshold: f64) -> Self {
         self.low_impedance_threshold = threshold;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_lcc_reactive_power(mut self, source: LccReactivePower) -> Self {
+        self.lcc_reactive_power = source;
         self
     }
 }
@@ -469,7 +495,8 @@ fn is_voltage_dependent(load: &powerio_tx::Load) -> bool {
 /// and `qg`, every in service load at the stored voltage through its voltage
 /// model, every in service static VAR compensator and storage unit at its
 /// stated terminal power, and every HVDC line under
-/// [`StatedStateOptions::hvdc_treatment`].
+/// [`StatedStateOptions::hvdc_treatment`], with an LCC converter's reactive
+/// demand from [`StatedStateOptions::lcc_reactive_power`].
 ///
 /// # Errors
 /// [`Error::UnmergedZeroImpedance`] for an in service branch or winding with
@@ -573,6 +600,23 @@ pub fn calc_stated_state_mismatch(
     if opts.hvdc_treatment == HvdcTreatment::FixedInjection {
         for ((injection, p), q) in stated.iter_mut().zip(view.p_hvdc()).zip(view.q_hvdc()) {
             *injection += Complex64::new(*p, *q) / base;
+        }
+        if opts.lcc_reactive_power == LccReactivePower::ConverterModel && !net.is_normalized() {
+            // Each injecting line states its from end, then its to end.
+            for ends in view.hvdc_injections().terminals.chunks(2) {
+                let [from, to] = ends else { continue };
+                let line = &view.network().hvdc()[from.row];
+                let (Some(f), Some(t)) = (view.bus_index(from.bus), view.bus_index(to.bus)) else {
+                    continue;
+                };
+                let Some(point) =
+                    line.calc_lcc_operating_point(voltages[f].norm(), voltages[t].norm())
+                else {
+                    continue;
+                };
+                stated[f] += Complex64::new(0.0, -point.rectifier.q_mvar - line.qf) / base;
+                stated[t] += Complex64::new(0.0, -point.inverter.q_mvar - line.qt) / base;
+            }
         }
     }
     for line in view.network().hvdc().iter().filter(|line| line.in_service) {
