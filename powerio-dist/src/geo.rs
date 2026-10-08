@@ -3,9 +3,11 @@
 use serde::{Deserialize, Serialize};
 
 mod component;
+mod transform;
 pub use component::{
     DistComponentLocation, DistGeographicPoint, DistLocationTarget, MAX_COMPONENT_LOCATIONS,
 };
+pub(crate) use transform::ComponentLocationEdits;
 
 /// A point attached to one model element.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

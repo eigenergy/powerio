@@ -230,6 +230,15 @@ accessors borrow the typed table; edits copy shared network tables only on the
 first write. IR preserves these points in calculation and collection envelopes
 as well as standalone networks.
 
+Neutral reduction and LinDist3Flow preparation validate point attachments on
+entry and exit. A replacement line, shunt or generator keeps the original
+device's point, including partial axes, datum and origin. A split line
+configuration copies its point to each derived configuration. When a component
+is removed, its complete point stays in the corresponding action's
+`details.source_location`; it is no longer an attachment in the output network.
+These actions are also retained in the network's transformation metadata for
+IR storage. Point metadata never changes the transformation's electrical data.
+
 The [GridLAB-D oracle harness](https://github.com/eigenergy/powerio/tree/main/evals/gridlabd)
 documents pinned engines, supported physics, canonical and project checks,
 and remaining limitations.

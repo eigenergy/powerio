@@ -9,6 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::DistLocationTarget;
+use crate::geo::ComponentLocationEdits;
 use crate::{
     Configuration, DistCapacitor, DistGenerator, DistIbr, DistLine, DistLineCode,
     DistLoadVoltageModel, DistShunt, Error, IbrPrimeMover, IbrTopology, MulticonductorNetwork,
@@ -297,6 +299,7 @@ fn lower_switches(
     network: &mut MulticonductorNetwork,
     report: &mut LinDist3FlowPreparationReport,
 ) -> Result<()> {
+    let mut locations = ComponentLocationEdits::new(network);
     let switches = std::mem::take(network.switches_mut());
     let mut line_names = network
         .lines()
@@ -311,11 +314,18 @@ fn lower_switches(
     for switch in switches {
         let source = format!("switch.{}", switch.name);
         if switch.open {
-            report.actions.push(LinDist3FlowPreparationAction::new(
+            let mut action = LinDist3FlowPreparationAction::new(
                 LinDist3FlowPreparationActionKind::OpenSwitchOmitted,
                 source,
                 None,
-            ));
+            );
+            locations.rewrite(
+                DistLocationTarget::Switch,
+                &switch.name,
+                None,
+                &mut action.details,
+            );
+            report.actions.push(action);
             continue;
         }
         let n = switch.terminal_map_from.len();
@@ -365,8 +375,15 @@ fn lower_switches(
             "flow_identity".to_owned(),
             json!("independent_contact_flow"),
         );
+        locations.rewrite(
+            DistLocationTarget::Switch,
+            &switch.name,
+            Some((DistLocationTarget::Line, &line_name)),
+            &mut action.details,
+        );
         report.actions.push(action);
     }
+    locations.apply(network);
     Ok(())
 }
 
@@ -428,6 +445,7 @@ fn lower_capacitors(
     network: &mut MulticonductorNetwork,
     report: &mut LinDist3FlowPreparationReport,
 ) -> Result<()> {
+    let mut locations = ComponentLocationEdits::new(network);
     let capacitors = std::mem::take(network.capacitors_mut());
     let mut names = network
         .shunts()
@@ -444,12 +462,20 @@ fn lower_capacitors(
             zero_matrix(matrix.len()),
             matrix,
         ));
-        report.actions.push(LinDist3FlowPreparationAction::new(
+        let mut action = LinDist3FlowPreparationAction::new(
             LinDist3FlowPreparationActionKind::CapacitorLowered,
             format!("capacitor.{}", capacitor.name),
             Some(format!("shunt.{name}")),
-        ));
+        );
+        locations.rewrite(
+            DistLocationTarget::Capacitor,
+            &capacitor.name,
+            Some((DistLocationTarget::Shunt, &name)),
+            &mut action.details,
+        );
+        report.actions.push(action);
     }
+    locations.apply(network);
     Ok(())
 }
 
@@ -569,6 +595,7 @@ fn approximate_ibrs(
     network: &mut MulticonductorNetwork,
     report: &mut LinDist3FlowPreparationReport,
 ) -> Result<()> {
+    let mut locations = ComponentLocationEdits::new(network);
     let ibrs = std::mem::take(network.ibrs_mut());
     let mut names = network
         .generators()
@@ -642,6 +669,12 @@ fn approximate_ibrs(
         action
             .details
             .insert("control_profile".to_owned(), json!(&ibr.control_profile));
+        locations.rewrite(
+            DistLocationTarget::Ibr,
+            &ibr.name,
+            Some((DistLocationTarget::Generator, &name)),
+            &mut action.details,
+        );
         report.actions.push(action);
         if let Some(profile) = &ibr.control_profile {
             report.actions.push(LinDist3FlowPreparationAction::new(
@@ -651,6 +684,7 @@ fn approximate_ibrs(
             ));
         }
     }
+    locations.apply(network);
     Ok(())
 }
 
@@ -706,6 +740,8 @@ fn omit_controls_and_untyped(
 /// shunts. Current and exponential load behavior is linearized in squared
 /// voltage at nominal voltage. IBRs become static generators; their dynamic
 /// controls and storage state are not represented.
+/// Component points follow replacement devices. Omitted devices' points remain
+/// in the corresponding audit action's `details.source_location`.
 ///
 /// # Errors
 /// A selected transformation cannot preserve or explicitly approximate the
@@ -714,6 +750,9 @@ pub fn prepare_lindist3flow_network(
     network: &MulticonductorNetwork,
     policy: LinDist3FlowPreparationPolicy,
 ) -> Result<LinDist3FlowPreparedNetwork> {
+    network
+        .validate_component_locations()
+        .map_err(|error| fail(error.to_string()))?;
     let mut prepared = network.clone();
     let mut report = LinDist3FlowPreparationReport {
         policy,
@@ -746,6 +785,9 @@ pub fn prepare_lindist3flow_network(
         approximate_ibrs(&mut prepared, &mut report)?;
     }
     omit_controls_and_untyped(&mut prepared, policy, &mut report);
+    prepared
+        .validate_component_locations()
+        .map_err(|error| fail(error.to_string()))?;
     prepared.extras_mut().insert(
         "powerio_lindist3flow_preparation".to_owned(),
         json!({
