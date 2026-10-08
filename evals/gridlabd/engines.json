@@ -1,0 +1,58 @@
+{
+  "pnnl": {
+    "repository": "https://github.com/gridlab-d/gridlab-d",
+    "commit": "1b2e463d3c149e999a2c5f04213477f545e01dc6",
+    "version": "GridLAB-D 5.3.0-20095 (1b2e463:HEAD) 64-bit MACOSX RELEASE",
+    "archive_url": "https://github.com/gridlab-d/gridlab-d/releases/download/v5.3.0/GridLAB-D-5.3.0-MacOS.tar.gz",
+    "archive_sha256": "d8c1b20998aeeee0bbda1f664bc2356105e1beae72202c893cf7ba77788d9fe4",
+    "files": [
+      {
+        "path": "bin/gridlabd",
+        "sha256": "d7c0792f681d0281085312d9639a4083ae14299a6d3e86716fe95bcfe7bc86b6"
+      },
+      {
+        "path": "lib/powerflow.dylib",
+        "sha256": "f4f2c8a9111204f66472d3875b244fce89b38673d127799fdb85b4f10ea0842e"
+      },
+      {
+        "path": "lib/assert.dylib",
+        "sha256": "e7c628525ecb034f2a4014e531e12eadeca035b8cf672d10e937ae34a9862e43"
+      },
+      {
+        "path": "lib/glsolvers.dylib",
+        "sha256": "b808d96e62f8ebfc64924194bf03f7db913bc7411ab49dd0ec76f176b4cf13f5"
+      },
+      {
+        "path": "lib/tape.dylib",
+        "sha256": "960eeba69996799d10345d4d149d88ac5e4b37800fbeaf7d1198e9feea88c9cd"
+      },
+      {
+        "path": "lib/tape_file.dylib",
+        "sha256": "ac2cbe977ee31b06272d287fd1708d4c217e6f59726b2632aeb4a6a2166bef86"
+      },
+      {
+        "path": "share/unitfile.txt",
+        "sha256": "a730c7c74fc02af84e4f2fa4d49e824b2e7ec459b1d5e647b60e44740a564f6a"
+      },
+      {
+        "path": "share/tzinfo.txt",
+        "sha256": "2050b96518e6fb9dfaf30c92b7406ad4f8668a077e2200fe43bffb902f7daec3"
+      }
+    ]
+  },
+  "arras": {
+    "repository": "https://github.com/arras-energy/gridlabd",
+    "commit": "076e78a6c16b2fbe472a31854f87bfee6deae5a9",
+    "version": "Arras Energy 4.3.17-260816",
+    "image": "lfenergy/arras@sha256:365f823425dfeca419a9e7bb7b6c93b4e74f03177e38ed8f632c0c077166ae44"
+  },
+  "dss": {
+    "version": "DSS C-API Library version 0.14.5 revision 87d85c2622c8281b92255335bc7c09b11191b21d based on OpenDSS SVN 3723"
+  },
+  "python": {
+    "opendssdirect.py": "0.9.4",
+    "dss-python": "0.15.7",
+    "dss-python-backend": "0.14.5",
+    "numpy": "2.5.3"
+  }
+}
