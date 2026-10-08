@@ -101,6 +101,31 @@ do not establish floating-neutral or triplex-cable equivalence.
 
 ## Published references and limits
 
+`preprocess_oracle.py` compares native include/define/conditional projects with
+PowerIO-preprocessed text in both engines, and checks both against the analytic
+single-phase reference. Build its driver with
+`cargo build -p powerio-dist --example glm_preprocess`, then pass the resulting
+executable using `--preprocessor`, along with `--pnnl-root` and a new `--output`
+directory. This verifies preprocessing and source syntax, not canonical network
+conversion. The identical input selects a 20+j5 ohm load in PNNL and a 40+j5 ohm
+load in Arras: PNNL dereferences the left operand, while Arras defaults to a
+literal left operand. Both compare strings, not numbers. Select `pnnl` or
+`arras` when invoking the Rust driver directly. The case also shares definitions
+across nested includes and excludes deliberately invalid inactive syntax.
+
+The frontend resolves includes relative to the primary file, matching an engine
+launched in that directory. Native GridLAB-D parses includes as declarations;
+they are not arbitrary property fragments. Includes inside unfinished
+declarations are currently rejected to avoid changing an independently created
+object into a nested child. Environment variables, implicit `GLPATH` searches,
+general typed global evaluation through `#set`, generated directives, executable macros
+and remote includes remain unsupported and require further profile work.
+The original project bytes and expansion source map remain separate from the
+expanded text. The boolean preprocessing switches `reinclude`, `literal_if` and
+`relax_undefined_if` are handled explicitly where the dialect supports them.
+Line-comment stripping follows native preprocessing, including
+its handling of comment markers before quoted-string syntax is parsed.
+
 `coordinate_oracle.py` qualifies common object-header latitude and longitude in
 both pinned GridLAB-D forks. Run it with `--output <new-directory>` and
 `--pnnl-root <installation-directory>`. It checks signed decimal, hemisphere
@@ -124,6 +149,10 @@ test begins downstream of the regulator and checks line-line voltages within
 0.5 V. These native regression passes establish engine sanity; their original
 controls and solver settings remain intact. They are not evidence of frozen
 state conversion or high-precision feeder equivalence.
+Passing `--preprocessor <glm_preprocess-executable>` runs the assertions against
+PowerIO-preprocessed copies instead. The report records the executed hash and
+marks that mode explicitly; this still checks only preprocessing and syntax,
+without electrical network conversion or frozen controls.
 
 Only generated, original microcases are used for analytic calibration. Public
 feeder inputs and generated engine outputs remain outside git. Other transformer

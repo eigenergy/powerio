@@ -31,6 +31,8 @@ pub mod codes {
             "a GLM source contains invalid or incomplete syntax", category = Parse;
         PARSE_GLM_LIMIT_EXCEEDED = "PARSE.GLM.LIMIT_EXCEEDED", Error,
             "a GLM source exceeds the bounded parser resources", category = Parse;
+        PARSE_GLM_PREPROCESSING = "PARSE.GLM.PREPROCESSING", Error,
+            "a GLM preprocessing operation is invalid or requires unsupported external semantics", category = Parse;
 
         // READ.DSS: decoded, but not representable in the multiconductor model.
         /// A `Redirect`/`Compile`/`Buscoords` include the reader refused

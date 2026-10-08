@@ -20,6 +20,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--pnnl-root", type=Path, required=True)
+    parser.add_argument(
+        "--preprocessor",
+        type=Path,
+        help="optionally validate PowerIO-preprocessed GLM using the original assertions",
+    )
     args = parser.parse_args()
     output, root = args.output.resolve(), args.pnnl_root.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -57,8 +62,21 @@ def main() -> int:
             != item["tolerances_V"]
         ):
             raise ValueError("assertion tolerance inventory mismatch")
-        command([exe, path.name], path.parent, env)
-        report["cases"][path.name] = dict(item, passed=True)
+        run_path = path
+        if args.preprocessor:
+            expanded = command(
+                [str(args.preprocessor.resolve()), str(path), "pnnl", str(output)],
+                path.parent,
+            )
+            run_path = path.with_name(path.stem + "_expanded.glm")
+            run_path.write_text(expanded)
+        command([exe, run_path.name], path.parent, env)
+        report["cases"][path.name] = dict(
+            item,
+            passed=True,
+            powerio_preprocessed=bool(args.preprocessor),
+            executed_sha256=hashlib.sha256(run_path.read_bytes()).hexdigest(),
+        )
         print(path.name, "PASS", item["assertions"], "original assertions")
     (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     return 0

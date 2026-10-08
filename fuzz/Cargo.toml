@@ -121,3 +121,9 @@ name = "ucte"
 path = "fuzz_targets/ucte.rs"
 test = false
 bench = false
+
+[[bin]]
+name = "glm_preprocess"
+path = "fuzz_targets/glm_preprocess.rs"
+test = false
+bench = false
