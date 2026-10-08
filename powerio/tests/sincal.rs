@@ -49,7 +49,7 @@ fn balanced_profile_produces_the_existing_network_type_and_retained_binary_sourc
         let result =
             powerio::emit(&module, format, Destination::memory("copy.sinx").unwrap()).unwrap();
         assert_eq!(result.fidelity(), Fidelity::ExactSameFormat);
-        assert!(result.diagnostics().is_empty());
+        assert_eq!(result.diagnostics(), []);
         assert_eq!(bytes(result), ARCHIVE);
     }
 }
