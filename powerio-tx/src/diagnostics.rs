@@ -191,6 +191,8 @@ pub mod codes {
             "a required SINCAL record or electrical mode is invalid or unsupported", category = Parse;
         READ_SINCAL_CONVERSION_BASE = "READ.SINCAL.CONVERSION_BASE", Remark,
             "physical SINCAL quantities use a declared internal MVA conversion base";
+        READ_SINCAL_GEOMETRY = "READ.SINCAL.GEOMETRY", Warning,
+            "optional SINCAL drawing geometry retains native view metadata and reports mapping limits";
         READ_SINCAL_VALUE_DEFAULTED = "READ.SINCAL.VALUE_DEFAULTED", Warning,
             "a versioned SINCAL field default was applied";
         READ_SINCAL_LIMITS_UNSPECIFIED = "READ.SINCAL.LIMITS_UNSPECIFIED", Remark,

@@ -83,6 +83,9 @@ pub fn parse_sincal(
             .map_err(|e| failure(e, &retained))?;
         (snapshot, retained)
     };
+    let geometry = snapshot
+        .drawing_geometry()
+        .map_err(|e| failure(e, &retained))?;
     let inventory = source_inventory(&snapshot).map_err(|e| failure(e, &retained))?;
     let mut database = super::schema::NativeDatabase::from_snapshot(snapshot)
         .map_err(|e| failure(e, &retained))?;
@@ -95,11 +98,21 @@ pub fn parse_sincal(
     *network.source_format_mut() = Some(DistSourceFormat::Sincal);
     let mut diagnostics = vec![Diagnostic::of(
         &codes::READ_SINCAL_MULTICONDUCTOR_RETAINED_SOURCE_ONLY,
-        "Only the selected conductor-resolved load-flow profile is typed. Fault, dynamic, protection, diagram, result and other native project data remain in retained source. An acquired-table companion is caller-supplied input, not a native export or independent attestation.",
+        "Only the selected conductor-resolved load-flow profile is typed. Fault, dynamic, protection, untyped graphic fields, results and other native project data remain in retained source. An acquired-table companion is caller-supplied input, not a native export or independent attestation.",
     )];
     diagnostics.extend(inventory);
+    let (points, routes) = super::geometry::apply(&mut network, &geometry);
+    if !geometry.points.is_empty() || !geometry.routes.is_empty() || !geometry.findings.is_empty() {
+        let mut report = geometry.diagnostic(&codes::READ_SINCAL_GEOMETRY)?;
+        report.insert_detail("mapped_points", serde_json::json!(points))?;
+        report.insert_detail("mapped_routes", serde_json::json!(routes))?;
+        geometry.annotate_retention(&mut diagnostics, points, routes)?;
+        diagnostics.push(report);
+    }
     add_provenance(&mut network, database.version, &mut diagnostics)?;
-    PioModule::parsed(network, retained, diagnostics)
+    let mut module = PioModule::parsed(network, retained, diagnostics)?;
+    geometry.retain_view(&mut module)?;
+    Ok(module)
 }
 
 fn source_inventory(snapshot: &DatabaseSnapshot) -> powerio_sincal::Result<Vec<Diagnostic>> {

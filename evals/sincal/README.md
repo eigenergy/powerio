@@ -640,3 +640,68 @@ python3 evals/sincal/check_open_switch_writer.py /tmp/open-switch-circuits \
 ```
 
 No third-party model or new fixture is required; synthetic exports stay external.
+
+## Drawing geometry validation
+
+`geometry-validation.json` records the 2026-10-08 reader checks for five collected
+models. `verify_geometry.py` uses original SQLite rows or independent MDB CSV
+exports, compares every mapped point/route and view metadata, checks public echo/IR/geo export, and
+compares all electrical fields with a temporary graphics-free baseline. Three
+negative controls test axes, native identity and route vertices. No external
+model or manual is added to Git.
+
+```sh
+cargo build -p powerio --example sincal_geometry
+python evals/sincal/verify_geometry.py \
+  --binary target/debug/examples/sincal_geometry \
+  --native tests/data/sincal/1-LV-rural1--0-sw.sinx \
+  --family balanced --output /tmp/simbench-geometry.json
+
+# Use the same electrical table selection as previous case validation.
+python evals/sincal/import_access.py original.mdb acquired.json --include-graphics
+POWERIO_MAX_PRIMARY_BYTES=268435456 python evals/sincal/verify_geometry.py \
+  --binary target/debug/examples/sincal_geometry \
+  --native original.mdb --records acquired.json \
+  --family multiconductor --output /tmp/distribution-geometry.json
+```
+
+CSIRO09 needs the larger explicit primary-byte budget. CSIRO12 additionally
+needs `--assume-inactive-source-controls`, with the same limitations as the
+existing electrical checks. CSIRO19 uses `--family balanced` and its previously
+selected `NetworkGroup`/`NetworkGroupTrans` tables as well as the five graphics
+tables. The importer's repeatable `--table` replaces the default list; preserve
+all previously selected electrical tables when adding those groups.
+
+The Rust probe emits a JSON object with `network`, `layer`, diagnostics and
+round-trip outcomes. Extract `network` for the existing numerical checkers:
+`check_truong12.py`, `check_csiro09_network.py`,
+`check_csiro12_compatibility.compare` and `check_balanced_access.check_model`.
+The four fresh checks use original hash-pinned electrical records to build
+independent OpenDSS/pandapower references. CSIRO checks here use hour 0 only;
+they do not relabel the earlier multi-snapshot packet as newly rerun.
+
+The supported profile uses **Diagram** for declared schematic views and
+**Unknown** otherwise, one graphic area, native node/terminal identities, and
+ordered bends on both ports. Module extensions retain native view metadata
+through IR. Comparison permits only the few-ULP differences between independent
+MDB exporters (relative 2e-15, absolute 1e-12); identity and vertex counts are exact.
+Verified geographic CRS and native desktop appearance remain separate gates.
+
+The separate drawing-only probe validates shared decoding even when electrical
+adapters do not support the full case. CSIRO03 passes 774 routes with up to 40
+vertices; CSIRO13 passes 874 nondegenerate routes and reports 889 collapsed routes.
+Both detect deliberately swapped bend ordering. Neither is counted as a complete
+electrical-parser success. Acquired records must include the normal minimum
+identity tables plus the five graphics tables.
+
+```sh
+cargo build -p powerio-sincal --example sincal_drawing
+POWERIO_MAX_PRIMARY_BYTES=268435456 python evals/sincal/verify_geometry.py \
+  --binary target/debug/examples/sincal_drawing \
+  --native original.mdb --records acquired.json --family multiconductor \
+  --drawing-only --output /tmp/drawing-only.json
+```
+
+The family option has no electrical effect in drawing-only mode. Reports include
+source hashes, view classifications, route counts and omission findings, but no
+public echo/IR or numerical claims for these two cases.
