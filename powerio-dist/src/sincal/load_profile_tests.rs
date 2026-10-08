@@ -297,7 +297,7 @@ fn export_csiro_daily_loads() {
                 components.push(serde_json::json!({"element":id,"hours":hours,"load":circuit.load,"bus":circuit.bus,"switch":circuit.switch}));
             }
         }
-        assert_ne!(components.as_slice(), []);
+        assert_ne!(components, Vec::<serde_json::Value>::new());
         cases.push(serde_json::json!({"case":case,"components":components,"rejected":rejected}));
     }
     std::fs::write(output,serde_json::to_vec_pretty(&serde_json::json!({"scope":"profiled single-phase and phase-pair load components only; no complete network","cases":cases})).unwrap()).unwrap();

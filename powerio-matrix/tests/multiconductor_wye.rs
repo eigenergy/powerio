@@ -266,7 +266,7 @@ fn merged_unity_windings_do_not_create_a_redundant_constraint() {
         false,
     ));
     let system = calc_multiconductor_admittance_matrix(&net).unwrap();
-    assert_eq!(system.augmented().labels.as_slice(), []);
+    assert_eq!(system.augmented().labels, Vec::<String>::new());
     assert_eq!(system.augmented().constraint_re.nnz(), 0);
     net.transformers_mut()[0].windings[0].v_ref = 480.0;
     let system = calc_multiconductor_admittance_matrix(&net).unwrap();
