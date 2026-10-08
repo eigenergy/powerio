@@ -23,7 +23,7 @@ fn complete_authentic_simbench_case_preserves_every_element() {
     assert_eq!(net.loads().len(), 13);
     assert_eq!(net.generators().len(), 5);
     assert_eq!(net.branches().len(), 14);
-    assert!(net.switches().is_empty());
+    assert_eq!(net.switches().as_slice(), []);
     let ids = net
         .loads()
         .iter()
