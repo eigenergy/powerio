@@ -90,7 +90,7 @@ impl BalancedNetwork {
             .filter(|b| sel.matches(b))
             .map(|b| b.id)
             .collect();
-        self.subset_scope(&in_scope, keep_boundary)
+        self.subset_scope(&in_scope, keep_boundary, &HashSet::new())
     }
 
     /// Carve out the sub-network on exactly `buses`, such as one island of
@@ -99,20 +99,59 @@ impl BalancedNetwork {
     /// branch, switch, HVDC line, or 3-winding transformer is kept when every
     /// bus it touches is in the set. Ids the network does not declare are
     /// ignored.
+    ///
+    /// A 3-winding transformer with a winding in the set is also kept when
+    /// each of its other windings is dead: its bus is typed isolated, or the
+    /// winding is stated out of service (`extras["winding_in_service"]`).
+    /// That winding's bus comes along as an isolated stub (tagged
+    /// `extras["tie_bus"]`), so an island that such a transformer joins stays
+    /// one island.
     #[must_use]
     pub fn subset_buses(&self, buses: &std::collections::BTreeSet<BusId>) -> BalancedNetwork {
         let in_scope: HashSet<BusId> = buses.iter().copied().collect();
-        self.subset_scope(&in_scope, false)
+        let isolated: HashSet<BusId> = self
+            .buses()
+            .iter()
+            .filter(|bus| bus.kind == BusType::Isolated)
+            .map(|bus| bus.id)
+            .collect();
+        let mut stubs = HashSet::new();
+        for transformer in self.transformers_3w().iter().filter(|t| t.in_service) {
+            let windings = || {
+                transformer
+                    .windings
+                    .iter()
+                    .zip(crate::islands::winding_connected(transformer))
+            };
+            let touches = windings().any(|(w, _)| in_scope.contains(&w.bus));
+            let dead_outside = windings().all(|(w, connected)| {
+                in_scope.contains(&w.bus) || !connected || isolated.contains(&w.bus)
+            });
+            if touches && dead_outside {
+                stubs.extend(
+                    windings()
+                        .map(|(w, _)| w.bus)
+                        .filter(|bus| !in_scope.contains(bus)),
+                );
+            }
+        }
+        self.subset_scope(&in_scope, false, &stubs)
     }
 
     /// [`subset`](BalancedNetwork::subset) over a bus set already chosen.
+    /// `stubs` are out-of-scope buses kept as isolated tie buses.
     // A flat filter pipeline, one stanza per element table; splitting it would add
     // indirection without clarity.
     #[expect(clippy::too_many_lines)]
-    fn subset_scope(&self, in_scope: &HashSet<BusId>, keep_boundary: bool) -> BalancedNetwork {
+    fn subset_scope(
+        &self,
+        in_scope: &HashSet<BusId>,
+        keep_boundary: bool,
+        stubs: &HashSet<BusId>,
+    ) -> BalancedNetwork {
         // Boundary: the out-of-scope endpoint of any branch/HVDC with exactly one
-        // endpoint in scope.
-        let mut boundary: HashSet<BusId> = HashSet::new();
+        // endpoint in scope, plus the stubs.
+        let mut boundary: HashSet<BusId> = stubs.clone();
         if keep_boundary {
             let mut edge = |a: BusId, b: BusId| match (in_scope.contains(&a), in_scope.contains(&b))
             {
@@ -141,6 +180,9 @@ impl BalancedNetwork {
                 let mut b = b.clone();
                 if boundary.contains(&b.id) {
                     b.extras.insert("tie_bus".into(), Value::Bool(true));
+                }
+                if stubs.contains(&b.id) {
+                    b.kind = BusType::Isolated;
                 }
                 b
             })

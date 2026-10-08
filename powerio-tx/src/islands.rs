@@ -12,8 +12,10 @@
 use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as _;
 
+use serde::Deserialize as _;
+
 use crate::diagnostics::{Diagnostic, codes};
-use crate::network::{BalancedNetwork, BusId, BusType, Generator};
+use crate::network::{BalancedNetwork, BusId, BusType, Generator, Transformer3W};
 
 /// How normalization and [`BalancedNetwork::assign_island_references`] treat
 /// the reference buses of a network with several islands.
@@ -91,6 +93,17 @@ pub struct IslandReferenceReport {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+/// Whether each winding of `transformer` is connected, in winding order: the
+/// per winding status kept under `extras["winding_in_service"]` as three
+/// booleans, every winding in service when the entry is absent or malformed.
+pub(crate) fn winding_connected(transformer: &Transformer3W) -> [bool; 3] {
+    transformer
+        .extras
+        .get("winding_in_service")
+        .and_then(|value| <[bool; 3]>::deserialize(value).ok())
+        .unwrap_or([true; 3])
+}
+
 /// The `pmax` order the reference choice uses: a NaN bound never wins, and an
 /// unbounded `+Inf` wins as the largest capacity.
 fn pmax_key(generator: &Generator) -> f64 {
@@ -156,9 +169,12 @@ impl BalancedNetwork {
     /// switches, and in-service three winding transformers joins them. HVDC
     /// lines do not join islands: they tie asynchronous systems. Buses typed
     /// isolated belong to no island and are listed apart, and an element that
-    /// touches one does not join anything through it, except that a three
-    /// winding transformer with one winding on an isolated bus still joins its
-    /// other two windings, as the matrix view's star expansion does.
+    /// touches one does not join anything through it. A three winding
+    /// transformer joins the buses of its connected windings, so one whose
+    /// tertiary sits on an isolated bus, or is stated out of service
+    /// (`extras["winding_in_service"]`), still joins the other two. Carve an
+    /// island out with [`subset_buses`](BalancedNetwork::subset_buses), which
+    /// keeps such a transformer.
     #[must_use]
     pub fn calc_islands(&self) -> IslandPartition {
         self.calc_islands_where(true)
@@ -166,9 +182,9 @@ impl BalancedNetwork {
 
     /// [`calc_islands`](BalancedNetwork::calc_islands), where
     /// `partial_transformers_3w` decides whether a three winding transformer
-    /// with a winding on an isolated bus still joins its other two windings.
-    /// Normalization drops such a transformer whole, so it partitions without
-    /// it.
+    /// with a winding on an isolated bus still joins its other windings.
+    /// Normalization drops such a transformer whole (`norm_transformers_3w`),
+    /// so it partitions without it; keep the two rules together.
     pub(crate) fn calc_islands_where(&self, partial_transformers_3w: bool) -> IslandPartition {
         let buses = self.buses();
         let index_of: HashMap<BusId, usize> = buses
@@ -190,11 +206,24 @@ impl BalancedNetwork {
             join(switch.from, switch.to);
         }
         for transformer in self.transformers_3w().iter().filter(|t| t.in_service) {
-            let [a, b, c] = &transformer.windings;
-            if partial_transformers_3w || [a, b, c].iter().all(|w| index_of.contains_key(&w.bus)) {
-                join(a.bus, b.bus);
-                join(b.bus, c.bus);
-                join(a.bus, c.bus);
+            let energized = transformer
+                .windings
+                .iter()
+                .all(|w| index_of.contains_key(&w.bus));
+            if !partial_transformers_3w && !energized {
+                continue;
+            }
+            let connected: Vec<BusId> = transformer
+                .windings
+                .iter()
+                .zip(winding_connected(transformer))
+                .filter(|(_, connected)| *connected)
+                .map(|(winding, _)| winding.bus)
+                .collect();
+            for (i, &a) in connected.iter().enumerate() {
+                for &b in &connected[i + 1..] {
+                    join(a, b);
+                }
             }
         }
         let labels = sets.into_labeling();
@@ -680,6 +709,71 @@ mod tests {
         crate::IndexedNetwork::new(&per_island.network)
             .check_reference_coverage()
             .unwrap();
+    }
+
+    /// Buses 1-2-3 in a line, the reference on bus 1, and a three winding
+    /// transformer on buses 2, 4, and 5.
+    fn line_with_a_tertiary(tertiary: BusType) -> BalancedNetwork {
+        let mut buses: Vec<Bus> = (1..=5)
+            .map(|id| Bus::new(BusId(id), BusType::Pq, 230.0))
+            .collect();
+        buses[0].kind = BusType::Ref;
+        buses[4].kind = tertiary;
+        let line = |from, to| Branch::new(BusId(from), BusId(to), 0.01, 0.1);
+        let mut net =
+            BalancedNetwork::in_memory("tertiary", 100.0, buses, vec![line(1, 2), line(2, 3)]);
+        net.transformers_3w_mut().push(Transformer3W::new(
+            [2, 4, 5].map(|bus| Winding::new(BusId(bus))),
+            [Impedance::new(0.0, 0.1, 100.0); 3],
+        ));
+        net.generators_mut().push(generator(1, 100.0));
+        net
+    }
+
+    #[test]
+    fn an_island_joined_through_a_dead_tertiary_carves_out_whole() {
+        let net = line_with_a_tertiary(BusType::Isolated);
+        let partition = net.calc_islands();
+        assert_eq!(partition.islands.len(), 1);
+        assert_eq!(
+            partition.islands[0].buses,
+            [BusId(1), BusId(2), BusId(3), BusId(4)]
+        );
+        assert_eq!(partition.isolated, [BusId(5)]);
+
+        let island: BTreeSet<BusId> = partition.islands[0].buses.iter().copied().collect();
+        let mut sub = net.subset_buses(&island);
+        assert_eq!(sub.transformers_3w().len(), 1, "the transformer is kept");
+        let stub = sub.buses().iter().find(|b| b.id == BusId(5)).unwrap();
+        assert_eq!(stub.kind, BusType::Isolated);
+        assert_eq!(
+            stub.extras.get("tie_bus"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        sub.validate().unwrap();
+        let again = sub.calc_islands();
+        assert_eq!(again.islands.len(), 1);
+        assert_eq!(again.islands[0].buses, partition.islands[0].buses);
+        let report = sub.assign_island_references(IslandReferencePolicy::PerIsland);
+        assert_eq!(report.diagnostics.as_slice(), []);
+    }
+
+    #[test]
+    fn a_winding_stated_out_of_service_joins_nothing() {
+        let mut net = line_with_a_tertiary(BusType::Pq);
+        net.transformers_3w_mut()[0].extras.insert(
+            "winding_in_service".into(),
+            serde_json::json!([true, true, false]),
+        );
+        let partition = net.calc_islands();
+        assert_eq!(partition.islands.len(), 2);
+        assert_eq!(partition.islands[1].buses, [BusId(5)]);
+
+        let island: BTreeSet<BusId> = partition.islands[0].buses.iter().copied().collect();
+        let sub = net.subset_buses(&island);
+        assert_eq!(sub.transformers_3w().len(), 1);
+        assert_eq!(sub.calc_islands().islands.len(), 1);
+        sub.validate().unwrap();
     }
 
     #[test]
