@@ -45,6 +45,7 @@ pub fn parse(
         quantities: BTreeMap::new(),
         phases: BTreeMap::new(),
         nominal: BTreeMap::new(),
+        attachments: BTreeMap::new(),
         line_capacitance: false,
     };
     // Profile identity belongs to the module's source descriptors and context.
@@ -55,6 +56,7 @@ pub fn parse(
     reader.buses()?;
     reader.loads_and_sources()?;
     reader.lines()?;
+    reader.coordinates()?;
     crate::require_electrical_readiness(&reader.net)
         .map_err(|e| e.with_source(project.source().clone()))?;
     let mut module = PioModule::parsed(
@@ -86,6 +88,7 @@ struct Reader<'a> {
     quantities: BTreeMap<(ObjectKey, String), Complex64>,
     phases: BTreeMap<ObjectKey, Vec<usize>>,
     nominal: BTreeMap<ObjectKey, f64>,
+    attachments: BTreeMap<ObjectKey, Vec<(crate::DistLocationTarget, String)>>,
     line_capacitance: bool,
 }
 
@@ -319,6 +322,10 @@ impl Reader<'_> {
             let mut bus = DistBus::new(&self.names[&key], terminals);
             bus.grounded.push("n".into());
             self.net.buses_mut().push(bus);
+            self.attachments
+                .entry(key)
+                .or_default()
+                .push((crate::DistLocationTarget::Bus, self.names[&key].clone()));
             self.phases.insert(key, phases);
             self.nominal.insert(key, nominal);
         }
@@ -451,6 +458,12 @@ impl Reader<'_> {
                 "current" => DistLoadVoltageModel::ConstantCurrent { v_nom },
                 _ => DistLoadVoltageModel::ConstantImpedance { v_nom },
             };
+            if key != root {
+                self.attachments
+                    .entry(key)
+                    .or_default()
+                    .push((crate::DistLocationTarget::Load, load.name.clone()));
+            }
             self.net.loads_mut().push(load);
         }
         Ok(())
@@ -516,38 +529,22 @@ impl Reader<'_> {
             if length <= 0.0 || !length.is_finite() {
                 return Err(self.error(key, "line length must be finite and positive"));
             }
-            let n = phases.len();
-            let mut resistance = vec![vec![0.0; n]; n];
-            let mut reactance = resistance.clone();
-            let mut susceptance = resistance.clone();
-            self.require_explicit_matrix(config)?;
-            for (row, &a) in phases.iter().enumerate() {
-                for (col, &c) in phases.iter().enumerate() {
-                    let z = self
-                        .quantity(config, &format!("z{}{}", a + 1, c + 1))
-                        .unwrap_or_default()
-                        / METERS_PER_MILE;
-                    let capacitance = self
-                        .real(config, &format!("c{}{}", a + 1, c + 1))
-                        .unwrap_or_default();
-                    if capacitance != 0.0 && !self.line_capacitance {
-                        return Err(self.error(config, "stated line capacitance with the native switch disabled needs explicit ignored-capacitance handling"));
-                    }
-                    resistance[row][col] = z.re;
-                    reactance[row][col] = z.im;
-                    susceptance[row][col] =
-                        std::f64::consts::PI * self.net.base_frequency() * capacitance * 1e-9
-                            / METERS_PER_MILE;
-                }
-            }
             let code_name = allocate_name(
                 &mut self.identities,
                 &format!("{}__glm_linecode", self.names[&key]),
             );
-            let mut code = DistLineCode::new(&code_name, resistance, reactance);
-            code.b_from.clone_from(&susceptance);
-            code.b_to = susceptance;
+            let code = self.line_code(config, &phases, &code_name)?;
             self.net.line_codes_mut().push(code);
+            self.attach(
+                config,
+                crate::DistLocationTarget::LineCode,
+                code_name.clone(),
+            );
+            self.attach(
+                key,
+                crate::DistLocationTarget::Line,
+                self.names[&key].clone(),
+            );
             let terminals = phases
                 .iter()
                 .map(|p| (p + 1).to_string())
@@ -563,6 +560,82 @@ impl Reader<'_> {
             ));
         }
         Ok(())
+    }
+
+    fn line_code(
+        &self,
+        config: ObjectKey,
+        phases: &[usize],
+        name: &str,
+    ) -> Result<DistLineCode, Error> {
+        let n = phases.len();
+        let mut resistance = vec![vec![0.0; n]; n];
+        let mut reactance = resistance.clone();
+        let mut susceptance = resistance.clone();
+        self.require_explicit_matrix(config)?;
+        for (row, &a) in phases.iter().enumerate() {
+            for (col, &c) in phases.iter().enumerate() {
+                let z = self
+                    .quantity(config, &format!("z{}{}", a + 1, c + 1))
+                    .unwrap_or_default()
+                    / METERS_PER_MILE;
+                let capacitance = self
+                    .real(config, &format!("c{}{}", a + 1, c + 1))
+                    .unwrap_or_default();
+                if capacitance != 0.0 && !self.line_capacitance {
+                    return Err(self.error(config, "stated line capacitance with the native switch disabled needs explicit ignored-capacitance handling"));
+                }
+                resistance[row][col] = z.re;
+                reactance[row][col] = z.im;
+                susceptance[row][col] =
+                    std::f64::consts::PI * self.net.base_frequency() * capacitance * 1e-9
+                        / METERS_PER_MILE;
+            }
+        }
+        let mut code = DistLineCode::new(name, resistance, reactance);
+        code.b_from.clone_from(&susceptance);
+        code.b_to = susceptance;
+        Ok(code)
+    }
+
+    fn coordinates(&mut self) -> Result<(), Error> {
+        if !self.index.objects().iter().any(|o| {
+            o.properties()
+                .iter()
+                .any(|p| matches!(p.name, "latitude" | "longitude"))
+        }) {
+            return Ok(());
+        }
+        let points = self.index.declared_coordinates()?;
+        for object in self.index.objects() {
+            let point = points[object.key().ordinal()];
+            if point.latitude.is_none() && point.longitude.is_none() {
+                continue;
+            }
+            let Some(targets) = self.attachments.get(&object.key()) else {
+                return Err(self.error(
+                    object.key(),
+                    "coordinate-bearing object has no typed component attachment yet",
+                ));
+            };
+            for (target, name) in targets {
+                let mut location = crate::DistComponentLocation::new(
+                    *target,
+                    name,
+                    crate::DistGeographicPoint::new(point.latitude, point.longitude),
+                );
+                location.kind = Some(crate::DistCoordsKind::Source);
+                self.net.component_locations_mut().push(location);
+            }
+        }
+        self.net.validate_component_locations()
+    }
+
+    fn attach(&mut self, key: ObjectKey, target: crate::DistLocationTarget, name: String) {
+        self.attachments
+            .entry(key)
+            .or_default()
+            .push((target, name));
     }
 }
 
@@ -621,18 +694,20 @@ fn matrix_property(name: &str) -> bool {
         && (b'1'..=b'3').contains(&bytes[2])
 }
 fn allowed_property(class: &str, name: &str) -> bool {
-    matches!(name, "name" | "parent" | "groupid")
-        || (matches!(class, "node" | "meter" | "load")
-            && matches!(
-                name,
-                "phases"
-                    | "bustype"
-                    | "nominal_voltage"
-                    | "maximum_voltage_error"
-                    | "voltage_A"
-                    | "voltage_B"
-                    | "voltage_C"
-            ))
+    matches!(
+        name,
+        "name" | "parent" | "groupid" | "latitude" | "longitude"
+    ) || (matches!(class, "node" | "meter" | "load")
+        && matches!(
+            name,
+            "phases"
+                | "bustype"
+                | "nominal_voltage"
+                | "maximum_voltage_error"
+                | "voltage_A"
+                | "voltage_B"
+                | "voltage_C"
+        ))
         || (class == "load"
             && [
                 "constant_power_",

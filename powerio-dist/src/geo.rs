@@ -2,6 +2,11 @@
 
 use serde::{Deserialize, Serialize};
 
+mod component;
+pub use component::{
+    DistComponentLocation, DistGeographicPoint, DistLocationTarget, MAX_COMPONENT_LOCATIONS,
+};
+
 /// A point attached to one model element.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

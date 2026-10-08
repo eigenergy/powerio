@@ -78,7 +78,10 @@ pub use convert::{
 pub use diagnostics::{Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticStage};
 pub use dss::{DssEmitOptions, DssLoadVoltageBounds};
 pub use error::{Error, Result};
-pub use geo::{CoordinateSpace, DistCanvas, DistCoordsKind, DistGeoMeta, DistLocation};
+pub use geo::{
+    CoordinateSpace, DistCanvas, DistComponentLocation, DistCoordsKind, DistGeoMeta,
+    DistGeographicPoint, DistLocation, DistLocationTarget,
+};
 pub use graph::{
     DistGraph, DistGraphAttachment, DistGraphAttachmentKind, DistGraphBus, DistGraphEdge,
     DistGraphEdgeKind,

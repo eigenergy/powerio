@@ -162,6 +162,26 @@ fn ir_version_2_schemas_only_add() {
                         "{earlier}: type {type_name} changed"
                     );
                 }
+            } else if name == "MulticonductorNetwork" {
+                // Component geography uses a new mandatory nested type tag.
+                // The legacy network branch and the nested electrical body
+                // keep every published field and meaning unchanged.
+                let branches = current_defs[name]["anyOf"].as_array().unwrap();
+                assert_eq!(branches.len(), 2);
+                assert_eq!(
+                    &branches[0], definition,
+                    "{earlier}: legacy network changed"
+                );
+                assert_eq!(branches[1]["$ref"], "#/$defs/LocatedNetworkWire");
+                assert_eq!(&current_defs["MulticonductorNetworkBody"], definition);
+                assert_eq!(
+                    current_defs["LocatedNetworkTag"]["enum"],
+                    serde_json::json!(["powerio.LocatedMulticonductorNetwork"])
+                );
+                assert_eq!(
+                    current_defs["LocatedNetworkWire"]["required"],
+                    serde_json::json!(["type", "value"])
+                );
             } else if name == "VoltageSource" {
                 // IR 2 also admits a distinctly tagged nested source type.
                 // Keep the legacy branch byte-for-byte equivalent as JSON;

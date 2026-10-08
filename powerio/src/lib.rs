@@ -157,8 +157,9 @@ pub type Result<T> = std::result::Result<T, powerio_core::Error>;
 /// available at the facade root.
 pub use powerio_dist as dist;
 pub use powerio_dist::{
-    BmopfEmitOptions, BmopfSchemaVersion, ConductorMatrix, DistGeoMeta, DistGraphEdgeKind,
-    MulticonductorNetwork, NeutralKronOptions, NeutralKronReport,
+    BmopfEmitOptions, BmopfSchemaVersion, ConductorMatrix, DistComponentLocation, DistGeoMeta,
+    DistGeographicPoint, DistGraphEdgeKind, DistLocationTarget, MulticonductorNetwork,
+    NeutralKronOptions, NeutralKronReport,
 };
 
 pub use powerio_prob::solution::{SocwrOpfDuals, SocwrOpfSolution, SocwrOpfValues};

@@ -53,6 +53,10 @@ pub mod codes {
             "retained GLM project bytes cannot be replayed as a portable output inventory", category = Output;
         EMIT_GLM_REPLAY_CONTEXT_REQUIRED = "EMIT.GLM.REPLAY_CONTEXT_REQUIRED", Remark,
             "exact GLM project replay requires the original explicit preprocessing inputs";
+        VALIDATE_DIST_COORDINATES_INVALID = "VALIDATE.DIST.COORDINATES_INVALID", Error,
+            "component geographic coordinates or their attachment identities are invalid", category = Data;
+        EMIT_DIST_COMPONENT_COORDINATES_DROPPED = "EMIT.DIST.COMPONENT_COORDINATES_DROPPED", Warning,
+            "the target cannot carry typed component geographic coordinates";
 
         // READ.DSS: decoded, but not representable in the multiconductor model.
         /// A `Redirect`/`Compile`/`Buscoords` include the reader refused

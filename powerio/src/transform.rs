@@ -211,6 +211,12 @@ pub fn to_balanced_network_report(
     check_switches(net, &mut report);
     check_transformers(net, &mut report);
     check_untyped_objects(net, &mut report);
+    if !net.component_locations().is_empty() {
+        report.diagnostics.push(Diagnostic::of(
+            &codes::TRANSFORM_MULTI_TO_BALANCED_COMPONENT_COORDINATES_DROPPED,
+            format!("{} component geographic point(s) are omitted by this balanced projection; the original network retains them", net.component_locations().len()),
+        ));
+    }
     report
 }
 
