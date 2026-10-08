@@ -1154,3 +1154,95 @@ fn a_scope_naming_nothing_in_the_network_names_no_row() {
         [] as [powerio_tx::UnresolvedMonitor; 0]
     );
 }
+
+#[test]
+fn the_contingency_file_branch_spelling_reads_in_a_block_and_on_its_own_line() {
+    let text = "MONITOR BRANCH FROM BUS 101 TO BUS 102 CIRCUIT 2\n\
+                MONITOR LINE FROM BUS 102 TO BUS 103\n\
+                MONITOR BRANCHES\n\
+                BRANCH FROM BUS 103 TO BUS 201 CIRCUIT '1'\n\
+                FROM BUS 201 TO BUS 202 CKT 1\n\
+                101 102 1\n\
+                END\n\
+                MONITOR INTERFACE 'WEST' RATING 200 MW\n\
+                LINE FROM BUS 102 TO BUS 201\n\
+                END\n\
+                END\n";
+    let parsed = MonitoredSet::parse(text).expect("parse");
+    assert_eq!(mon_codes(&parsed), [] as [&str; 0]);
+    let branch = |from: usize, to: usize, circuit: &str| BranchRef {
+        from: BusId(from),
+        to: BusId(to),
+        circuit: circuit.into(),
+    };
+    // A branch on its own line is the one-branch list a block states.
+    assert_eq!(
+        parsed.set.statements,
+        [
+            MonitorStatement::Branches {
+                branches: vec![branch(101, 102, "2")],
+                retained: Vec::new(),
+            },
+            MonitorStatement::Branches {
+                branches: vec![branch(102, 103, "1")],
+                retained: Vec::new(),
+            },
+            MonitorStatement::Branches {
+                branches: vec![
+                    branch(103, 201, "1"),
+                    branch(201, 202, "1"),
+                    branch(101, 102, "1"),
+                ],
+                retained: Vec::new(),
+            },
+            MonitorStatement::Interface {
+                name: "WEST".into(),
+                rating_mw: Some(200.0),
+                branches: vec![branch(102, 201, "1")],
+                retained: Vec::new(),
+            },
+        ]
+    );
+    assert_eq!(parsed.set.retained, []);
+    check_mon_fixed_point(&parsed);
+
+    // Every one of them binds, and nothing is kept as text or left unresolved.
+    let net = select_network();
+    let resolution = parsed.set.resolve(&net, &parse_sub("selectors.sub").set);
+    assert_eq!(rows(&resolution.branch_rows), [0, 1, 2, 3, 4]);
+    assert_eq!(resolution.interfaces[0].members.len(), 1);
+    assert!(
+        resolution.unresolved.is_empty(),
+        "{:?}",
+        resolution.unresolved
+    );
+}
+
+#[test]
+fn a_three_bus_monitor_branch_line_stays_text() {
+    // A third `TO BUS k` names a three winding transformer, which a branch
+    // reference cannot hold, so the line is kept and reported.
+    let parsed = MonitoredSet::parse(
+        "MONITOR BRANCH FROM BUS 101 TO BUS 102 TO BUS 103 CIRCUIT 1\n\
+         MONITOR BRANCHES\n\
+         FROM BUS 101 TO BUS 102 TO BUS 103\n\
+         END\n",
+    )
+    .expect("parse");
+    assert_eq!(
+        mon_codes(&parsed),
+        [
+            "READ.MON.STATEMENT_UNRECOGNIZED",
+            "READ.MON.SOURCE_MALFORMED"
+        ]
+    );
+    assert_eq!(
+        kept_text(&parsed.set.retained),
+        ["MONITOR BRANCH FROM BUS 101 TO BUS 102 TO BUS 103 CIRCUIT 1"]
+    );
+    let MonitorStatement::Branches { branches, retained } = &parsed.set.statements[0] else {
+        panic!("a branch block");
+    };
+    assert_eq!(branches, &[]);
+    assert_eq!(kept_text(retained), ["FROM BUS 101 TO BUS 102 TO BUS 103"]);
+}
