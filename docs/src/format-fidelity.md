@@ -306,7 +306,15 @@ format emission and produce counted diagnostics. Unknown RAWX tables and
 diagnoses detailed records and fields that RAWX cannot carry. Three winding
 transformers are kept as typed records, and the indexed view lowers each one as
 a star into \\(Y_{\mathrm{bus}}\\)/connectivity; two terminal DC lines map to
-the neutral HVDC model. A switched shunt keeps its steady state susceptance
+the neutral HVDC model. VSC DC lines (RAW section and RAWX `vscdc` table) map
+to it too: the MW-controlling converter (`TYPE 2`) states the schedule, the DC
+voltage-controlling converter (`TYPE 1`) takes the remainder after both
+converters' `ALOSS`/`BLOSS`/`MINLOSS` losses and the `RDC` drop, a fixed power
+factor converter (`MODE 2`) injects the reactive power its factor implies, and
+an AC voltage-controlling one (`MODE 1`) records its regulation and states no
+reactive power. An `RMPCT` outside \\((0, 100]\\) reads as 100 with a
+diagnostic. The converter control fields ride in extras, and PSS/E and RAWX
+output restate the record in its own section. A switched shunt keeps its steady state susceptance
 `BINIT` as the shunt `b` along with its mode, voltage band, regulated bus, and
 step blocks. `MODSW` 0 reads as locked, 1 as discrete, and 2 as continuous
 voltage control; 3 to 6 adjust in discrete steps to control another quantity,
