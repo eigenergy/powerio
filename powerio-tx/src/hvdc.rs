@@ -119,16 +119,17 @@ impl HvdcInjections {
         if n > 0 {
             let sent = self.calc_sent_power();
             let delivered = self.calc_delivered_power();
-            let reactive = self.calc_reactive_injection();
+            let lost = amount(sent - delivered);
+            let reactive = amount(self.calc_reactive_injection());
+            let (sent, delivered) = (amount(sent), amount(delivered));
             diagnostics.push(match treatment {
                 HvdcTreatment::FixedInjection => Diagnostic::of(
                     &codes::BUILD_HVDC_FIXED_INJECTION,
                     format!(
                         "{n} in service HVDC line(s) enter the bus balance as fixed injections: \
                          {sent} {p_unit} withdrawn at the from buses, {delivered} {p_unit} \
-                         delivered at the to buses ({} {p_unit} lost), and {reactive} {q_unit} \
-                         reactive injection over both ends",
-                        sent - delivered
+                         delivered at the to buses ({lost} {p_unit} lost), and {reactive} \
+                         {q_unit} reactive injection over both ends"
                     ),
                 ),
                 HvdcTreatment::Ignore => Diagnostic::of(
@@ -151,6 +152,18 @@ impl HvdcInjections {
             ));
         }
         diagnostics
+    }
+}
+
+/// A power total for a message: at most six decimals, trailing zeros
+/// dropped, so a sum's rounding noise does not reach the text.
+fn amount(value: f64) -> String {
+    let text = format!("{value:.6}");
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    if text == "-0" {
+        "0".to_owned()
+    } else {
+        text.to_owned()
     }
 }
 
