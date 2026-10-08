@@ -808,43 +808,8 @@ impl DistTransformer {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[non_exhaustive]
-pub struct VoltageSource {
-    pub name: String,
-    pub bus: String,
-    pub terminal_map: Vec<String>,
-    /// Volts per terminal (0.0 on grounded terminals).
-    pub v_magnitude: Vec<f64>,
-    /// Radians per terminal.
-    pub v_angle: Vec<f64>,
-    /// Energy cost rate in $/kWh, one entry per phase in terminal-map order.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub energy_cost_rate: Option<Vec<f64>>,
-    pub extras: Extras,
-}
-
-impl VoltageSource {
-    #[must_use]
-    pub fn new(
-        name: impl Into<String>,
-        bus: impl Into<String>,
-        terminal_map: Vec<String>,
-        v_magnitude: Vec<f64>,
-        v_angle: Vec<f64>,
-    ) -> Self {
-        Self {
-            name: name.into(),
-            bus: bus.into(),
-            terminal_map,
-            v_magnitude,
-            v_angle,
-            energy_cost_rate: None,
-            extras: Extras::new(),
-        }
-    }
-}
+mod voltage_source;
+pub use voltage_source::VoltageSource;
 
 /// An object the reader recognized but does not type: preserved by class,
 /// name, and raw property text so conversions can warn precisely.

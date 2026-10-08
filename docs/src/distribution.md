@@ -22,6 +22,19 @@ loads and generators attach per terminal. Impedance and shunt matrices are in
 SI units, per unit length, on line codes. An element the reader has no typed
 slot for stays verbatim in the `untyped` table and is reported.
 
+Rust `VoltageSource::with_reference_terminal` specifies phase voltages relative
+to a declared terminal on the source bus. That terminal can float: it is not
+implicitly connected to earth or an external neutral. The multiconductor
+matrix builder retains the voltage differences and the equal opposite
+reference currents. IR 2 uses a distinct tagged source record, so older readers
+reject this new physics; ordinary earth-referenced records are unchanged.
+`McAcPfInstance::source_boundary` borrows both voltage endpoints and their
+phasor differences. The additive C `PioVoltageSourceBoundaryView` serves
+network and PF instance callers without changing the existing ABI 7 layouts.
+Legacy C source views reject references they cannot describe. Exchange-format
+writers, balanced/LinDist3Flow projections and neutral Kron reduction also
+reject referenced sources until their integration is complete.
+
 The OpenDSS profile is the static circuit, meaning the element definitions
 and their electrical data. Load shapes, solve commands, monitors, and other
 calculation instructions are outside it; they stay in the retained source,
@@ -119,9 +132,16 @@ The unreleased ABI 7 layout and Julia definitions are updated together.
 Parsing, structural schema validity, semantic consistency and computational
 support are separate checks. Contradictory versions, invalid dimensions,
 unknown electrical references and inconsistent bounds produce error diagnostics.
-The native multiconductor admittance builder supports ideal grounded-WYE
-transformer coupling and rejects leakage, other winding connections, floating
-neutrals, core shunts or tap decisions that need a different formulation.
+The native multiconductor admittance builder supports ideal two-winding WYE
+transformers with grounded or explicitly floating neutral terminals. Each
+phase constrains `(Vp - Vpn) = ratio * (Vs - Vsn)`; the transpose supplies
+both phase and neutral currents to nodal balance. Fixed taps enter the ratio.
+A one-terminal single-phase winding keeps its implicit-ground meaning;
+otherwise the final terminal is the neutral, and only an explicit ground or
+closed grounding switch grounds it. The builder rejects leakage, other winding
+connections, winding-neutral impedance parameters requiring an additional
+circuit, core shunts and tap-control decisions. Malformed winding maps and
+invalid ratios fail instead of producing an incomplete matrix.
 
 The BMOPF proposal schema is pinned to
 [`664b494`](https://github.com/distribution-system-opt/dsopt-schema/commit/664b494f2ee31ee76f8f78e7852cdb1f1c9a8e7d),

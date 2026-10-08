@@ -466,6 +466,7 @@ pub(crate) fn emit_text_with_options(
         TextEmission::faithful(text)
     } else {
         crate::readiness::require_resolved_geometry(module.value())?;
+        crate::readiness::require_earth_referenced_sources(module.value())?;
         emit_value_text_with_options(module.value(), format, options)
     };
     Ok(output)

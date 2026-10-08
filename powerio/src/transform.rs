@@ -2688,6 +2688,20 @@ fn is_neutral_terminal(
 }
 
 fn check_phase_reference(net: &MulticonductorNetwork, report: &mut MulticonductorToBalancedReport) {
+    for (index, source) in net.sources().iter().enumerate() {
+        if source.reference_terminal.is_some() {
+            report.diagnostics.push(
+                Diagnostic::of(
+                    &codes::TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_OBJECT,
+                    format!(
+                        "voltage source {} requires reference-terminal-aware balanced projection",
+                        source.name
+                    ),
+                )
+                .with_value_target(format!("/sources/{index}/reference_terminal")),
+            );
+        }
+    }
     let neutral_terminals = global_neutral_terminals(net);
     let has_three_phase_source = net.sources().iter().any(|source| {
         let bus = net.bus(&source.bus);

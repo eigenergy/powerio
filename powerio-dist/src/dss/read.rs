@@ -839,6 +839,7 @@ impl Reader<'_> {
             extras.insert("pu".into(), pu.into());
         }
         VoltageSource {
+            reference_terminal: None,
             name: obj.name.clone(),
             bus: spec.name,
             terminal_map: map,

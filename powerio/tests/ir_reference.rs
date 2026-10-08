@@ -119,6 +119,9 @@ fn every_documented_field_exists_and_every_schema_field_is_documented() {
         for definition in &table.definitions {
             let Some(properties) = definitions
                 .get(definition)
+                // A documented object may be one explicitly named branch
+                // of an additive tagged union. Still compare every field.
+                .or_else(|| schema["$defs"].pointer(&format!("/{definition}")))
                 .and_then(|entry| entry["properties"].as_object())
             else {
                 problems.push(format!(

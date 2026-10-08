@@ -147,6 +147,20 @@ fn the_generation_two_catalog_only_adds_structural_types() {
                         "{earlier}: type {type_name} changed"
                     );
                 }
+            } else if name == "VoltageSource" {
+                // IR 2 also admits a distinctly tagged nested source type.
+                // Keep the legacy branch byte-for-byte equivalent as JSON;
+                // do not generally permit arbitrary changes to record unions.
+                let branches = current_defs[name]["anyOf"].as_array().unwrap();
+                assert_eq!(branches.len(), 2);
+                assert_eq!(&branches[0], definition, "{earlier}: legacy source changed");
+                assert_eq!(branches[1]["$ref"], "#/$defs/ReferencedSourceWire");
+                let new_source = &current_defs["ReferencedSourceWire"]["oneOf"][0];
+                assert_eq!(
+                    new_source["properties"]["type"]["const"],
+                    "powerio.ReferencedVoltageSource"
+                );
+                assert_eq!(new_source["required"], serde_json::json!(["type", "value"]));
             } else {
                 assert_eq!(
                     &current_defs[name], definition,
