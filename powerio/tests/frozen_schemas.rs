@@ -147,6 +147,26 @@ fn the_generation_two_catalog_only_adds_structural_types() {
                         "{earlier}: type {type_name} changed"
                     );
                 }
+            } else if name == "SourceFormat" {
+                // The public format enum is nonexhaustive. Adding one new
+                // format must leave every existing spelling and schema rule
+                // intact; this is not permission to change arbitrary records.
+                let mut without_sincal = current_defs[name].clone();
+                let alternatives = without_sincal["oneOf"].as_array_mut().unwrap();
+                let before = alternatives.len();
+                alternatives.retain(|v| v["const"] != "sincal");
+                assert_eq!(before, alternatives.len() + 1);
+                assert_eq!(
+                    &without_sincal, definition,
+                    "{earlier}: existing format changed"
+                );
+                let sincal = current_defs[name]["oneOf"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|v| v["const"] == "sincal")
+                    .unwrap();
+                assert_eq!(sincal["type"], "string");
             } else if name == "VoltageSource" {
                 // IR 2 also admits a distinctly tagged nested source type.
                 // Keep the legacy branch byte-for-byte equivalent as JSON;

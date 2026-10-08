@@ -36,7 +36,7 @@ pub struct TerminalIdentity {
 impl DatabaseSnapshot {
     pub fn decode(bytes: &[u8], requested_variant: Option<i64>) -> Result<Self> {
         let connection = connect(bytes)?;
-        Self::from_connection(connection, requested_variant, &[14.8])
+        Self::from_connection(connection, requested_variant, &[14.8, 15.5, 16.0])
     }
 
     /// Decode explicit Access acquisition records. This does not admit Access
@@ -102,6 +102,12 @@ impl DatabaseSnapshot {
         )?;
         let mut element_ids = BTreeMap::new();
         for (id, kind) in elements {
+            // Older exports pad the symbolic type to a fixed field width.
+            // Only trailing ASCII spaces are padding, not arbitrary whitespace.
+            let kind = kind.trim_end_matches(' ').to_owned();
+            if kind.is_empty() {
+                return Err(format_error(format!("empty element type at Element {id}")));
+            }
             if element_ids.insert(id, kind).is_some() {
                 return Err(format_error(format!("duplicate Element_ID {id}")));
             }

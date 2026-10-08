@@ -2524,6 +2524,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "zip",
 ]
 
@@ -2535,7 +2536,9 @@ dependencies = [
  "lexical-core",
  "petgraph",
  "powerio-core",
+ "powerio-sincal",
  "quick-xml",
+ "rusqlite",
  "schemars",
  "serde",
  "serde_json",

@@ -22,6 +22,8 @@ schema = ["dep:schemars", "powerio-core/schema"]
 
 [dependencies]
 powerio-core = { workspace = true }
+powerio-sincal.workspace = true
+rusqlite.workspace = true
 thiserror = "2"
 # Byte-slice float parsing for numeric matrix rows, avoiding UTF-8 allocation.
 lexical-core = "1"

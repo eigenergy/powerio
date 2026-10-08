@@ -1228,3 +1228,55 @@ fn a_typed_library_failure_exits_with_its_category_and_code() {
 
     std::fs::remove_file(case).unwrap();
 }
+
+#[test]
+fn sincal_balanced_cli_parses_converts_and_echoes_without_inference() {
+    let path = repo_file("tests/data/sincal/1-LV-rural1--0-sw.sinx");
+    let path = path.to_str().unwrap();
+    let refused = run(&["--diagnostics-format", "json", "summary", path]);
+    assert_failure(&refused);
+    assert!(
+        json_diagnostics(&refused)
+            .iter()
+            .any(|d| d["code"] == "REQUEST.SINCAL.PROFILE_REQUIRED")
+    );
+    let summary = run(&["summary", path, "--from", "sincal-balanced"]);
+    assert_success(&summary);
+    let summary: serde_json::Value = serde_json::from_slice(&summary.stdout).unwrap();
+    assert_eq!(summary["elements"]["buses"], 15);
+    assert_eq!(summary["elements"]["branches"], 14);
+    let converted = run(&[
+        "--diagnostics-format",
+        "json",
+        "convert",
+        path,
+        "--from",
+        "sincal-balanced",
+        "--to",
+        "matpower",
+    ]);
+    assert_success(&converted);
+    assert!(String::from_utf8_lossy(&converted.stdout).contains("mpc.bus"));
+    assert!(
+        json_diagnostics(&converted)
+            .iter()
+            .any(|d| d["code"] == "EMIT.SINCAL.RETAINED_SOURCE_OMITTED")
+    );
+    let tmp = tempfile::tempdir().unwrap();
+    let copy = tmp.path().join("copy.sinx");
+    let output = run(&[
+        "convert",
+        path,
+        "--from",
+        "sincal-balanced",
+        "--to",
+        "sincal-balanced",
+        "-o",
+        copy.to_str().unwrap(),
+    ]);
+    assert_success(&output);
+    assert_eq!(std::fs::read(copy).unwrap(), std::fs::read(path).unwrap());
+    let native = std::fs::read(path).unwrap();
+    let stdin = run_with_stdin(&["summary", "-", "--from", "sincal-balanced"], &native);
+    assert_success(&stdin);
+}

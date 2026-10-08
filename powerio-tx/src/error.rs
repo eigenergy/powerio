@@ -148,6 +148,9 @@ impl Error {
             | Error::BadFloat { .. }
             | Error::BadId { .. }
             | Error::UnbalancedBrackets(_) => &codes::PARSE_MATPOWER_MALFORMED,
+            Error::FormatRead {
+                format: "sincal", ..
+            } => &codes::PARSE_SINCAL_MALFORMED,
             Error::FormatRead { .. } => &codes::PARSE_SOURCE_MALFORMED,
             Error::Emit { .. } => &codes::EMIT_FORMAT_REQUIRED_VALUE_MISSING,
             Error::Io(_) => &codes::READ_IO_FAILED,

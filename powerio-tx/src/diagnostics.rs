@@ -185,6 +185,20 @@ pub mod codes {
     emit_family!(EMIT_UNSUPPORTED, "UNSUPPORTED", "a read only format");
 
     powerio_core::diagnostic_codes! {
+        REQUEST_SINCAL_PROFILE_REQUIRED = "REQUEST.SINCAL.PROFILE_REQUIRED", Error,
+            "SINCAL requires an explicit electrical profile", category = Request;
+        PARSE_SINCAL_MALFORMED = "PARSE.SINCAL.MALFORMED", Error,
+            "a required SINCAL record or electrical mode is invalid or unsupported", category = Parse;
+        READ_SINCAL_CONVERSION_BASE = "READ.SINCAL.CONVERSION_BASE", Remark,
+            "physical SINCAL quantities use a declared internal MVA conversion base";
+        READ_SINCAL_LIMITS_UNSPECIFIED = "READ.SINCAL.LIMITS_UNSPECIFIED", Remark,
+            "inactive native generator capability limits are represented as unbounded";
+        READ_SINCAL_RETAINED_SOURCE_ONLY = "READ.SINCAL.RETAINED_SOURCE_ONLY", Remark,
+            "native data outside the selected steady-state profile remains in retained source";
+        EMIT_SINCAL_RETAINED_SOURCE_OMITTED = "EMIT.SINCAL.RETAINED_SOURCE_OMITTED", Warning,
+            "native data retained only in SINCAL source is not included in cross-format output";
+        EMIT_SINCAL_FRESH_UNSUPPORTED = "EMIT.SINCAL.FRESH_UNSUPPORTED", Error,
+            "fresh SINCAL emission is not available through the universal emitter", category = Output;
         // PARSE: the source text could not be decoded as given.
         PARSE_MATPOWER_MALFORMED = "PARSE.MATPOWER.MALFORMED", Error,
             "a MATPOWER matrix is missing, short, unparseable, or unbalanced", category = Parse;

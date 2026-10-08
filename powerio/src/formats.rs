@@ -53,6 +53,9 @@ const fn info(
 ///
 #[must_use]
 pub fn resolve_format(name: &str) -> Option<FormatInfo> {
+    if name.eq_ignore_ascii_case("sincal") {
+        return Some(info("sincal", Some("sinx"), false, false));
+    }
     match name {
         "bmopf-json@0.1.0" => return Some(info("bmopf-json@0.1.0", Some("json"), false, true)),
         "bmopf-json@0.2.0" => return Some(info("bmopf-json@0.2.0", Some("json"), false, true)),
@@ -93,6 +96,9 @@ pub fn resolve_format(name: &str) -> Option<FormatInfo> {
     }
 
     match powerio_tx::format::routing::parse_transmission_format(name) {
+        Some(TransmissionFormat::SincalBalanced) => {
+            Some(info("sincal-balanced", Some("sinx"), false, false))
+        }
         Some(TransmissionFormat::PypsaCsv) => Some(info("pypsa-csv", None, true, true)),
         Some(TransmissionFormat::Pwb) => Some(info("pwb", Some("pwb"), false, false)),
         Some(TransmissionFormat::Gridfm) => Some(info("gridfm", None, true, true)),

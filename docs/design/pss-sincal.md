@@ -1,8 +1,10 @@
 # PSS SINCAL reader and writer proposal
 
-Status: research and implementation in progress, 2026-10-07. Public SINCAL
-parsing/emission is not implemented yet. Research base: `c8184eba` (PowerIO 0.11.4); the local PR stack starts at
-`d5f93763`. This infrastructure branch does not contain the electrical adapters.
+Status: balanced reader implementation in progress, 2026-10-07. Public balanced
+SQLite/archive parsing and explicit Rust Access snapshot selection are implemented.
+Five native balanced cases have independent electrical checks; broader modes,
+variants and bindings for the new Access selections remain work. The local PR
+stack starts at `d5f93763`; subsequent branches add distribution and writing.
 
 The expanded search found authentic licensed unbalanced CSIRO data and the
 Siemens database/input manuals. The earlier blanket lack-of-evidence blocker
@@ -328,6 +330,39 @@ requires explicit or verified unambiguous profile selection; it must not make
 SINCAL an unconditional transmission format. Combined public release follows
 PR 4's two-family checks. Include CLI/typed binding/IR/echo tests applicable to
 this path; a fresh writer is not required.
+
+Current local progress (2026-10-07): the internal schema-14.8 balanced mapper
+now covers all 15 nodes and 32 equipment records of the licensed small SimBench
+archive. The actual Rust output passes paired-CSV parameter checks and a fresh
+pandapower 3.2.2 pi-transformer comparison (maximum complex voltage difference
+6.3e-14 pu). Derived nonzero primary/secondary tap cases also pass, below
+5.1e-11 pu. Open-terminal and inactive-device retention and refusal of unsupported
+active modes have focused Rust tests. The reproducible harness and exact report
+are under `evals/sincal/`. Public `sincal-balanced` dispatch now reaches the existing typed model through
+Rust, CLI, C and Python. Registered diagnostics distinguish profile selection,
+malformed input, conversion assumptions and source-only data. Binary archive
+and direct-SQLite echo are byte exact; edited and IR-restored modules refuse
+fresh output. Additional schemas, variants/profiles and corpus coverage are
+still outstanding; this does not complete PR 3.
+
+Current balanced corpus progress: the initial public SimBench path is committed.
+IEEE18, IEEE33 and the student study now map all 44/67/84 static equipment
+records with schema-15.5/16.0 adapters and fresh independent checks below
+4.5e-12 pu complex voltage. The student static state has zero demand; profile
+snapshot coverage remains pending. Additional SimBench modes, applicable
+Access cases, active profiles and inherited variants are still required work.
+
+CSIRO19 now adds a schema-11.5 balanced Access case: all 26 nodes and 33 elements
+(25 lines, seven loads, one source), checked at seven explicit daily snapshots.
+The public Rust facade retains the MDB, checks its identity against the caller's
+acquired records, and preserves the typed value through IR. An independently
+constructed pandapower model agrees within 1.98e-11 pu complex voltage; four
+intentional unit/base/charging/source mutations fail. Exact MDB echo and rejection
+of conflicting family options, missing time, invalid variant and altered original
+bytes are exercised at every snapshot. Native SINCAL execution is not claimed.
+See `evals/sincal/balanced-csiro19.json`. This is balanced coverage and adds no
+complete unbalanced feeder. CLI/Python/C/Julia access to these new balanced
+selection options remains an integration task.
 
 ### PR 4: distribution / unbalanced reader
 
