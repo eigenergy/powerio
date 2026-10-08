@@ -258,3 +258,15 @@ fn fixed_capacitor_step_scales_loss_and_reactive_admittance() {
     assert_eq!(cap.uid.as_deref(), Some("sincal:element:999"));
     assert!(cap.in_service);
 }
+
+#[test]
+fn distribution_schema_admission_does_not_expand_the_balanced_profile() {
+    let db = native("UPDATE Version SET Version_No=15.0");
+    let error = read_balanced_snapshot(&db, "distribution schema")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("balanced electrical adapter does not yet support schema 15"),
+        "{error}"
+    );
+}

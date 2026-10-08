@@ -22,7 +22,7 @@ working evidence for that period and are kept only in the repository history.
 
 Later focused design reviews live beside that 1.0 record:
 
-- [PSS SINCAL](pss-sincal.md) proposes balanced and multiconductor native
+- [PSS SINCAL](pss-sincal.md) records the delivery roadmap for balanced and multiconductor native
   reading and writing through the existing backends, prioritizes unbalanced
   verification, records example-file provenance, and identifies interoperability gaps.
 - [Multiconductor LinDist3Flow](lindist3flow-multiconductor.md) records the

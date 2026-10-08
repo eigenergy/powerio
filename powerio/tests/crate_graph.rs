@@ -81,7 +81,7 @@ fn the_dependency_graph_matches_the_settled_layout() {
     );
     assert_eq!(
         workspace_deps_of(&graph, "powerio-dist"),
-        BTreeSet::from(["powerio-core"])
+        BTreeSet::from(["powerio-core", "powerio-sincal"])
     );
 
     // Problem data reads both models and stays matrix free.

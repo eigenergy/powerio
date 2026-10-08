@@ -20,6 +20,8 @@ from typing import (
     overload,
 )
 
+from ._sincal import SincalBalancedReadOptions as SincalBalancedReadOptions
+
 _T = TypeVar("_T")
 __all__ = [
     "AcOpfInstance",
@@ -1216,7 +1218,11 @@ def apply_bus_load_active_power(
 ) -> UpdateReport: ...
 
 def parse(
-    source: Any, *, format: Optional[Format] = ..., name: Optional[str] = ...
+    source: Any, *, format: Optional[Format] = ..., name: Optional[str] = ...,
+    sincal_multiconductor: Optional[dist.SincalReadOptions] = ...,
+    sincal_balanced: Optional[SincalBalancedReadOptions] = ...,
+    acquisition_root: Optional[Any] = ...,
+    named_buffers: Optional[Mapping[str, bytes]] = ...,
 ) -> PioModule[Any]: ...
 def emit(
     module: PioModule[Any], format: Format, destination: Optional[Any] = ...

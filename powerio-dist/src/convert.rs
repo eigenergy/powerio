@@ -348,6 +348,12 @@ pub fn classify_distribution_json(text: &str) -> crate::Result<DistTargetFormat>
 pub fn parse(
     source: powerio_core::Source,
 ) -> std::result::Result<powerio_core::PioModule<MulticonductorNetwork>, powerio_core::Error> {
+    if source
+        .format()
+        .is_some_and(|f| crate::sincal::public::is_multiconductor_token(f.as_str()))
+    {
+        return crate::parse_sincal(source, &crate::SincalReadOptions::default());
+    }
     let mut warnings = crate::collect::Diagnostics::new();
     match parse_to_network(&source, &mut warnings) {
         Ok(network) => {
@@ -460,7 +466,7 @@ pub(crate) fn emit_text_with_options(
     format: DistTargetFormat,
     options: &EmitOptions,
 ) -> Result<TextEmission, powerio_core::Error> {
-    let output = if options.is_default_for(format)
+    let mut output = if options.is_default_for(format)
         && let Some(text) = echo_text(module, format)
     {
         TextEmission::faithful(text)
@@ -469,6 +475,11 @@ pub(crate) fn emit_text_with_options(
         crate::readiness::require_earth_referenced_sources(module.value())?;
         emit_value_text_with_options(module.value(), format, options)
     };
+    powerio_sincal::attach_retention_details(
+        module.diagnostics(),
+        &mut output.diagnostics,
+        "EMIT.DIST.SINCAL_RETAINED_SOURCE_OMITTED",
+    )?;
     Ok(output)
 }
 
@@ -507,6 +518,12 @@ pub(crate) fn emit_value_text_with_options(
         }
         DistTargetFormat::PmdJson => crate::pmd::emit_pmd_json_text(net),
     };
+    if *net.source_format() == Some(DistSourceFormat::Sincal) {
+        conv.push(
+            &crate::diagnostics::codes::EMIT_SINCAL_MULTICONDUCTOR_RETAINED_SOURCE_OMITTED,
+            "Native SINCAL source-only data are omitted from the typed electrical conversion.",
+        );
+    }
     // No distribution format carries line routes; report the loss the
     // way bus locations already do (`.pio.json` keeps them).
     let routed = net

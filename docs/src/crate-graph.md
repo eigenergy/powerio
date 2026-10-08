@@ -36,8 +36,10 @@ matrix crate without creating a cycle. CI checks these edges against
 The internal `powerio-sincal` crate shares acquisition and retained archive
 bytes and bounded structural schema validation without introducing a dependency
 between the network crates. It owns no electrical model, profile selection,
-mapper or solver. The SINCAL electrical adapters and public dispatch are still being developed; the shared
-transport does not advertise them as supported formats.
+mapper or solver. The balanced SINCAL profile is exposed by `powerio-tx`; the conductor-resolved
+adapter is being completed in `powerio-dist`. Both depend on this shared crate,
+never on each other. Shared structural admission does not imply that a family
+adapter supports all of the admitted schemas or electrical modes.
 The architecture gate also rejects cross-dependencies between the two network
 crates and any internal workspace dependency of `powerio-sincal` other than
 `powerio-core`, even if a proposed diagram draws such an edge.

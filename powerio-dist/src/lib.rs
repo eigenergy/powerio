@@ -60,6 +60,9 @@ pub mod lindist3flow;
 pub mod model;
 pub mod pmd;
 pub mod readiness;
+// Family-local native adapters; only explicitly selected verified profiles map.
+#[allow(dead_code)]
+mod sincal;
 #[cfg(test)]
 pub(crate) mod testkit;
 
@@ -97,3 +100,51 @@ pub use readiness::{
     ElectricalReadiness, ReadinessFinding, ReadinessSeverity, audit_electrical_readiness,
     require_electrical_readiness,
 };
+pub use sincal::public::{SincalReadOptions, parse_sincal};
+
+/// Internal SINCAL validation entry point; callers must explicitly choose the
+/// conductor-resolved profile. Unsupported inputs reject the whole network.
+///
+/// # Errors
+/// Unverified schema, unsupported electrical modes or inconsistent inputs.
+#[doc(hidden)]
+pub fn __read_sincal_multiconductor_snapshot(
+    snapshot: powerio_sincal::DatabaseSnapshot,
+) -> Result<MulticonductorNetwork> {
+    sincal::read_snapshot(snapshot)
+}
+
+/// Internal component audit. A successful report is not a parsed network.
+///
+/// # Errors
+/// Unsupported schema or inability to establish the common mapping context.
+#[doc(hidden)]
+pub fn __audit_sincal_multiconductor_snapshot(
+    snapshot: powerio_sincal::DatabaseSnapshot,
+) -> Result<String> {
+    sincal::audit_snapshot(snapshot)
+}
+
+/// Internal SINCAL snapshot selection in hours for verified daily load profiles.
+///
+/// # Errors
+/// Unsupported profiles or components, invalid time, or inconsistent inputs.
+#[doc(hidden)]
+pub fn __read_sincal_multiconductor_at(
+    snapshot: powerio_sincal::DatabaseSnapshot,
+    hours: f64,
+) -> Result<MulticonductorNetwork> {
+    sincal::read_snapshot_at(snapshot, hours)
+}
+
+/// Internal component audit at an explicit daily-profile time; not a partial network.
+///
+/// # Errors
+/// Unsupported common context or invalid snapshot time.
+#[doc(hidden)]
+pub fn __audit_sincal_multiconductor_at(
+    snapshot: powerio_sincal::DatabaseSnapshot,
+    hours: f64,
+) -> Result<String> {
+    sincal::audit_snapshot_at(snapshot, hours)
+}

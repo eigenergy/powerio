@@ -42,3 +42,6 @@ serde_json.workspace = true
 
 # No workspace pedantic lints here: pyo3 macro-generated code trips them, and
 # the i32 index narrowing is deliberate (and guarded) for scipy compatibility.
+
+[dev-dependencies]
+rusqlite.workspace = true

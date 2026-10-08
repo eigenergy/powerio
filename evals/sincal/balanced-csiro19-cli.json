@@ -1,0 +1,35 @@
+{
+  "scope": "Check CSIRO19 balanced Access selection and original-source echo through the CLI.\n\nUses the existing independent native-input pandapower oracle. This adds interface\ncoverage for an already validated case, not another supported native case.\n",
+  "source_sha256": "5540e956effe9a8e6e691f834e79f62c86d96924fdd38092e5fd5c6fa84789c4",
+  "record_sha256": "c762c848f4f239fa751b2f30cd4bfce10912afbcad64ae5fa4f5782965aea0fd",
+  "cli_sha256": "67b797b3b2a5c7c976ed71dd4e1ef97222aa006835e09e8e60de67d8d6619f3d",
+  "snapshots": [
+    {
+      "hours": 0,
+      "original_mdb_echo": true,
+      "maximum_complex_voltage_error_pu": 1.7432432386749607e-11,
+      "maximum_power_error_mw_mvar": 0.0,
+      "nodal_iterations": 4,
+      "nodal_power_mismatch_pu": 1.7147513181508973e-13
+    },
+    {
+      "hours": 6,
+      "original_mdb_echo": true,
+      "maximum_complex_voltage_error_pu": 1.674582528296167e-11,
+      "maximum_power_error_mw_mvar": 5.551115123125783e-17,
+      "nodal_iterations": 4,
+      "nodal_power_mismatch_pu": 1.6933954486317475e-13
+    }
+  ],
+  "snapshots_differ": true,
+  "rejected": [
+    "missing_snapshot",
+    "invalid_variant",
+    "missing_acquisition_root"
+  ],
+  "native_sincal_execution": false,
+  "additional_native_cases": 0,
+  "passed": true,
+  "license": "CC-BY-4.0",
+  "attribution": "Berry, Adam; Collins, Lyle; Oliver, Erin; Perfumo, Cristian (2015), Representative Australian Electricity Feeders with load and solar generation profiles, v1, CSIRO."
+}

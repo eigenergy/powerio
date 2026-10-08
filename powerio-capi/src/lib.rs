@@ -52,6 +52,9 @@ use crate::diagnostics::codes;
 
 pub mod diagnostics;
 
+#[cfg(test)]
+mod parse_options_tests;
+
 /// C ABI version.
 pub const PIO_ABI_VERSION: u32 = 7;
 
@@ -202,6 +205,56 @@ impl PioByteView {
             len: bytes.len(),
         }
     }
+}
+
+/// One caller-owned companion for an in-memory source. Both views are copied
+/// during source construction; no filesystem acquisition is permitted.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioNamedBufferView {
+    pub name: PioStringView,
+    pub bytes: PioByteView,
+}
+
+/// Explicit conductor-resolved SINCAL reader selection. Zero initialization
+/// means no selected variant, no snapshot, and no acquired-table companion.
+/// The presence flags distinguish omission from an explicit zero.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioSincalReadOptions {
+    pub has_variant: bool,
+    pub variant: i64,
+    pub has_snapshot_hours: bool,
+    pub snapshot_hours: f64,
+    /// Relative companion name. NULL/0 omits it; non-NULL empty text is invalid.
+    pub acquired_tables: PioStringView,
+    /// Experimental schema-11.5 NULL source controls as inactive; default false.
+    pub assume_inactive_source_controls: bool,
+}
+
+/// Explicit balanced SINCAL reader selection; presence flags preserve zero.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioSincalBalancedReadOptions {
+    pub has_variant: bool,
+    pub variant: i64,
+    pub has_snapshot_hours: bool,
+    pub snapshot_hours: f64,
+    pub acquired_tables: PioStringView,
+}
+
+/// Borrowed parsing options. Zero initialization preserves pio_parse behavior.
+/// All nested pointers need remain valid only during the call. These layouts
+/// are fixed; a future incompatible layout requires a new ABI or input type.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioParseOptions {
+    /// Optional explicit file acquisition root (NULL/0 means default).
+    pub acquisition_root: PioStringView,
+    /// NULL omits SINCAL selection. Otherwise requires sincal-multiconductor.
+    pub sincal_multiconductor: *const PioSincalReadOptions,
+    /// NULL omits balanced selection. Otherwise requires sincal-balanced.
+    pub sincal_balanced: *const PioSincalBalancedReadOptions,
 }
 
 /// Borrowed `double` values.
@@ -3029,6 +3082,51 @@ pub unsafe extern "C" fn pio_source_from_memory(
     }
 }
 
+/// Construct a memory source with explicitly supplied relative companions.
+/// Copies the primary and companion bytes before returning an owned handle.
+/// This source never reads referenced files from the filesystem.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// buffers addresses buffers_len readable views; NULL is valid only at zero length.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_source_from_memory_with_buffers(
+    name: *const c_char,
+    name_len: usize,
+    data: *const u8,
+    data_len: usize,
+    buffers: *const PioNamedBufferView,
+    buffers_len: usize,
+    error: *mut *mut PioError,
+) -> *mut PioSource {
+    unsafe {
+        entry(error, std::ptr::null_mut(), || {
+            let name = required_str(name, name_len, "name")?;
+            let bytes = input_bytes(data, data_len, "data")?;
+            let buffers = if buffers_len == 0 {
+                &[]
+            } else if buffers.is_null() {
+                return Err(boundary_error(
+                    &codes::BIND_CAPI_NULL_ARGUMENT,
+                    "buffers is NULL with a nonzero length",
+                ));
+            } else {
+                std::slice::from_raw_parts(buffers, buffers_len)
+            };
+            let mut source = Source::from_memory(name, bytes.to_vec())
+                .map_err(|failure| error_from_core(&failure))?;
+            for buffer in buffers {
+                let name = required_str(buffer.name.data, buffer.name.len, "buffer name")?;
+                let bytes = input_bytes(buffer.bytes.data, buffer.bytes.len, "buffer bytes")?;
+                source = source
+                    .with_named_buffer(name, bytes.to_vec())
+                    .map_err(|failure| error_from_core(&failure))?;
+            }
+            Ok(PioSource::new_raw(source))
+        })
+    }
+}
+
 ///
 /// # Safety
 /// Pointers and handles must satisfy the crate-level safety requirements.
@@ -4559,6 +4657,25 @@ pub unsafe extern "C" fn pio_parse(
     format_len: usize,
     error: *mut *mut PioError,
 ) -> *mut PioModule {
+    unsafe { pio_parse_with_options(source, format, format_len, std::ptr::null(), error) }
+}
+
+/// Parse with optional typed reader and acquisition selections. NULL options
+/// is identical to pio_parse. Explicit SINCAL options require the matching
+/// format token and never select or balance a network family implicitly.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// Non-NULL options and nested selections must be readable for their declared
+/// types, with all borrowed strings valid through the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_parse_with_options(
+    source: *const PioSource,
+    format: *const c_char,
+    format_len: usize,
+    selections: *const PioParseOptions,
+    error: *mut *mut PioError,
+) -> *mut PioModule {
     unsafe {
         entry(error, std::ptr::null_mut(), || {
             let source = PioSource::get(source).ok_or_else(|| {
@@ -4570,6 +4687,42 @@ pub unsafe extern "C" fn pio_parse(
                 options = options
                     .format(format)
                     .map_err(|failure| error_from_core(&failure))?;
+            }
+            if let Some(selections) = selections.as_ref() {
+                options.acquisition_root = optional_str(
+                    selections.acquisition_root.data,
+                    selections.acquisition_root.len,
+                    "acquisition_root",
+                )?
+                .map(PathBuf::from);
+                if let Some(sincal) = selections.sincal_multiconductor.as_ref() {
+                    let mut selection = powerio_dist::SincalReadOptions::default();
+                    selection.variant = sincal.has_variant.then_some(sincal.variant);
+                    selection.snapshot_hours =
+                        sincal.has_snapshot_hours.then_some(sincal.snapshot_hours);
+                    selection.acquired_tables = optional_str(
+                        sincal.acquired_tables.data,
+                        sincal.acquired_tables.len,
+                        "acquired_tables",
+                    )?
+                    .map(str::to_owned);
+                    selection.assume_inactive_source_controls =
+                        sincal.assume_inactive_source_controls;
+                    options.sincal_multiconductor = Some(selection);
+                }
+                if let Some(sincal) = selections.sincal_balanced.as_ref() {
+                    let mut selection = powerio_tx::format::SincalBalancedReadOptions::default();
+                    selection.variant = sincal.has_variant.then_some(sincal.variant);
+                    selection.snapshot_hours =
+                        sincal.has_snapshot_hours.then_some(sincal.snapshot_hours);
+                    selection.acquired_tables = optional_str(
+                        sincal.acquired_tables.data,
+                        sincal.acquired_tables.len,
+                        "acquired_tables",
+                    )?
+                    .map(str::to_owned);
+                    options.sincal_balanced = Some(selection);
+                }
             }
             powerio::parse_with_options(source.clone(), &options)
                 .map(module_handle)
@@ -23377,6 +23530,51 @@ mod tests {
             pio_subsystem_set_release(subsystems);
             pio_balanced_network_release(network);
             pio_module_release(network_module);
+        }
+    }
+
+    #[test]
+    fn sincal_multiconductor_uses_existing_owner_rooted_handles_and_echo() {
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(include_str!(
+                "../../tests/data/sincal/synthetic-multiconductor.sql"
+            ))
+            .unwrap();
+        let native = connection.serialize("main").unwrap().to_vec();
+        unsafe {
+            let mut error = std::ptr::null_mut();
+            let source = pio_source_from_memory(
+                c"case.db".as_ptr(),
+                7,
+                native.as_ptr(),
+                native.len(),
+                &mut error,
+            );
+            assert!(!source.is_null(), "{}", error_text(error));
+            let format = b"sincal-multiconductor";
+            let module = pio_parse(source, format.as_ptr().cast(), format.len(), &mut error);
+            pio_source_release(source);
+            assert!(!module.is_null(), "{}", error_text(error));
+            let value = pio_module_value(module);
+            let network = pio_value_multiconductor_network(value, &mut error);
+            assert!(!network.is_null(), "{}", error_text(error));
+            let destination = pio_destination_memory(c"copy.db".as_ptr(), 7, &mut error);
+            let emitted = pio_emit(module, c"sincal".as_ptr(), 6, destination, &mut error);
+            pio_destination_release(destination);
+            assert!(!emitted.is_null(), "{}", error_text(error));
+            assert_eq!(pio_emit_result_artifact_count(emitted), 1);
+            let artifact = pio_emit_result_artifact(emitted, 0, &mut error);
+            let bytes = pio_artifact_bytes(artifact);
+            assert_eq!(std::slice::from_raw_parts(bytes.data, bytes.len), native);
+            pio_artifact_release(artifact);
+            pio_emit_result_release(emitted);
+            pio_value_release(value);
+            pio_module_release(module);
+            assert_eq!(pio_multiconductor_network_load_count(network), 1);
+            assert_eq!(pio_multiconductor_network_line_count(network), 1);
+            pio_multiconductor_network_release(network);
+            assert!(error.is_null());
         }
     }
 

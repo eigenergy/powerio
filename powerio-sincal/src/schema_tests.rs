@@ -85,6 +85,7 @@ fn query_only_and_attachment_limits_survive_shared_ownership() {
 fn schema_and_identity_failures_do_not_admit_partial_snapshots() {
     for edit in [
         "UPDATE Version SET Version_No=11.5",
+        "UPDATE Version SET Version_No=12.8",
         "UPDATE Version SET Calc_Type=2",
         "INSERT INTO Version VALUES (2,14.8,1)",
         "UPDATE Variant SET ParentVariant_ID=2",
@@ -107,7 +108,7 @@ fn schema_and_identity_failures_do_not_admit_partial_snapshots() {
 
 #[test]
 fn observed_modern_sqlite_schemas_share_identity_columns_but_unknown_versions_fail() {
-    for version in [15.5, 16.0] {
+    for version in [15.0, 15.5, 16.0] {
         let db = DatabaseSnapshot::decode(
             &snapshot(&format!(
                 "UPDATE Version SET Version_No={version}; UPDATE Element SET Type='Line    ';"

@@ -40,3 +40,14 @@ against this independent representation, with explicit units and tolerances.
 The CSV representation includes bus sections joined by switches; the native
 model has already collapsed those connections. It must not be mistaken for
 byte-exact preservation of the CSV topology.
+
+## Original synthetic multiconductor circuit
+
+`synthetic-multiconductor.sql` is original PowerIO test code/data under the
+repository's MIT/Apache-2.0 licenses, independent of the SimBench licenses above.
+It combines the existing original component test schemas into a three-node
+circuit with one source, line, transformer and unequal three-phase load.
+Tests construct an in-memory SQLite database at runtime; no native third-party
+model or binary database was copied. The SQL is 7,367 bytes and 88 lines.
+It verifies public routing, source echo and typed/IR behavior; it is not an
+independent electrical oracle. External CSIRO09 supplies that separate evidence.

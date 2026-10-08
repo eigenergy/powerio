@@ -6,6 +6,12 @@ it. When you need a calculation, construct an `McAcPfInstance`,
 `McAcOpfInstance`, or `LinDist3FlowOpfInstance` from it explicitly (see
 [Calculation instances and solutions](instances.md)).
 
+The explicit [SINCAL multiconductor profile](sincal.md) also produces this
+existing type, including when its selected powers happen to be symmetric.
+Required unsupported SINCAL components reject the entire parse rather than
+returning a partial network. Its balanced profile belongs to the separate
+transmission backend; neither path silently falls back to the other.
+
 ```julia
 using PowerIO
 feeder = parse("IEEE13Nodeckt.dss")        # PioModule{MulticonductorNetwork}

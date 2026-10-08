@@ -1,0 +1,340 @@
+{
+  "scope": "Candidate discovery and bounded native-table inspection only; no additional complete parse or independent whole-network success.",
+  "date": "2026-10-07",
+  "loadflow": {
+    "repository": "https://github.com/benediktibk/loadflow",
+    "revision": "2d95494327123de7eaa9c6fe0bc09990038ee364",
+    "path_prefix": "source/Interfaces/SincalConnectorIntegrationTest/testdata/",
+    "reader": "MDB Tools 1.0.1",
+    "license_disposition": "External research only; source GPL does not establish redistribution rights for every model. No fixtures added.",
+    "models": [
+      {
+        "file": "landnetz_freileitung1.mdb",
+        "bytes": 6684672,
+        "sha256": "1b7490691271ca9abd055eb0f050b821fcf86cbe831b54af459a66fca2bef15b",
+        "tables": {
+          "Version": {
+            "rows": 1,
+            "stderr_lines": 0,
+            "version": [
+              11
+            ]
+          },
+          "Node": {
+            "rows": 0,
+            "stderr_lines": 15
+          },
+          "Element": {
+            "rows": 0,
+            "stderr_lines": 41,
+            "types": {}
+          },
+          "Terminal": {
+            "rows": 55,
+            "stderr_lines": 0,
+            "flags": {
+              "7": 55
+            }
+          },
+          "ULFNodeResult": {
+            "rows": 0,
+            "stderr_lines": 0
+          },
+          "Infeeder": {
+            "rows": 1,
+            "stderr_lines": 0
+          },
+          "TwoWindingTransformer": {
+            "rows": 1,
+            "stderr_lines": 0
+          }
+        }
+      },
+      {
+        "file": "landnetz_freileitung2.mdb",
+        "bytes": 6553600,
+        "sha256": "a56037d2af73a473b350e4bb499de8d4d3ba0372b2fb61a479f559e3bead14d1",
+        "tables": {
+          "Version": {
+            "rows": 1,
+            "stderr_lines": 0,
+            "version": [
+              11
+            ]
+          },
+          "Node": {
+            "rows": 0,
+            "stderr_lines": 10
+          },
+          "Element": {
+            "rows": 0,
+            "stderr_lines": 26,
+            "types": {}
+          },
+          "Terminal": {
+            "rows": 35,
+            "stderr_lines": 0,
+            "flags": {
+              "7": 35
+            }
+          },
+          "ULFNodeResult": {
+            "rows": 0,
+            "stderr_lines": 0
+          },
+          "Infeeder": {
+            "rows": 1,
+            "stderr_lines": 0
+          },
+          "TwoWindingTransformer": {
+            "rows": 1,
+            "stderr_lines": 0
+          }
+        }
+      },
+      {
+        "file": "landnetz_kabel1.mdb",
+        "bytes": 3919872,
+        "sha256": "012885711a4c95301ff6c6979e856e2ac084ab3fa469bbb73854f3ad5ab6a683",
+        "tables": {
+          "Version": {
+            "rows": 1,
+            "stderr_lines": 0,
+            "version": [
+              11
+            ]
+          },
+          "Node": {
+            "rows": 18,
+            "stderr_lines": 0
+          },
+          "Element": {
+            "rows": 34,
+            "stderr_lines": 0,
+            "types": {
+              "Infeeder                                          ": 1,
+              "TwoWindingTransformer                             ": 1,
+              "Line                                              ": 16,
+              "Load                                              ": 16
+            }
+          },
+          "Terminal": {
+            "rows": 51,
+            "stderr_lines": 0,
+            "flags": {
+              "7": 51
+            }
+          },
+          "ULFNodeResult": {
+            "rows": 0,
+            "stderr_lines": 0
+          },
+          "Infeeder": {
+            "rows": 1,
+            "stderr_lines": 0
+          },
+          "TwoWindingTransformer": {
+            "rows": 1,
+            "stderr_lines": 0
+          }
+        }
+      },
+      {
+        "file": "landnetz_kabel2.mdb",
+        "bytes": 6684672,
+        "sha256": "bdad02e0b24ba5c54fef0b49d8d4eb2307d0ecddd360be43e3befa151f0e2b5a",
+        "tables": {
+          "Version": {
+            "rows": 1,
+            "stderr_lines": 0,
+            "version": [
+              11
+            ]
+          },
+          "Node": {
+            "rows": 0,
+            "stderr_lines": 30
+          },
+          "Element": {
+            "rows": 0,
+            "stderr_lines": 58,
+            "types": {}
+          },
+          "Terminal": {
+            "rows": 87,
+            "stderr_lines": 0,
+            "flags": {
+              "7": 87
+            }
+          },
+          "ULFNodeResult": {
+            "rows": 0,
+            "stderr_lines": 0
+          },
+          "Infeeder": {
+            "rows": 1,
+            "stderr_lines": 0
+          },
+          "TwoWindingTransformer": {
+            "rows": 1,
+            "stderr_lines": 0
+          }
+        }
+      },
+      {
+        "file": "vorstadtnetz_kabel1.mdb",
+        "bytes": 7733248,
+        "sha256": "e524e22c77c3033b9be7a8b66eb994cad4f8863aa3d60101bb17d95ee28482ec",
+        "tables": {
+          "Version": {
+            "rows": 1,
+            "stderr_lines": 0,
+            "version": [
+              11
+            ]
+          },
+          "Node": {
+            "rows": 0,
+            "stderr_lines": 294
+          },
+          "Element": {
+            "rows": 0,
+            "stderr_lines": 586,
+            "types": {}
+          },
+          "Terminal": {
+            "rows": 879,
+            "stderr_lines": 0,
+            "flags": {
+              "7": 879
+            }
+          },
+          "ULFNodeResult": {
+            "rows": 0,
+            "stderr_lines": 0
+          },
+          "Infeeder": {
+            "rows": 1,
+            "stderr_lines": 0
+          },
+          "TwoWindingTransformer": {
+            "rows": 1,
+            "stderr_lines": 0
+          }
+        }
+      },
+      {
+        "file": "vorstadtnetz_kabel2.mdb",
+        "bytes": 7733248,
+        "sha256": "84a2ba8a01cda73cdd22049a946a7cdc45b8cac1f621203e2561b2daea3792be",
+        "tables": {
+          "Version": {
+            "rows": 1,
+            "stderr_lines": 0,
+            "version": [
+              11
+            ]
+          },
+          "Node": {
+            "rows": 0,
+            "stderr_lines": 290
+          },
+          "Element": {
+            "rows": 0,
+            "stderr_lines": 578,
+            "types": {}
+          },
+          "Terminal": {
+            "rows": 867,
+            "stderr_lines": 0,
+            "flags": {
+              "7": 867
+            }
+          },
+          "ULFNodeResult": {
+            "rows": 0,
+            "stderr_lines": 0
+          },
+          "Infeeder": {
+            "rows": 1,
+            "stderr_lines": 0
+          },
+          "TwoWindingTransformer": {
+            "rows": 1,
+            "stderr_lines": 0
+          }
+        }
+      }
+    ]
+  },
+  "european_lv_generator": {
+    "repository": "https://github.com/lik1212/CreateSincalGridsFromMatlab",
+    "revision": "d895d218be690877e96e777e3a27f9440dbe646d",
+    "path": "SincalGrid/IEEE_LV_EU_TestFeeder_files/database.mdb",
+    "bytes": 3395584,
+    "sha256": "db80668f2dadbbdd38bee74304852816ce0f7870c0f839219d316f9ef6002675",
+    "nodes": 0,
+    "elements": 0,
+    "terminals": 0,
+    "unbalanced_node_results": 0,
+    "license_disposition": "Root MIT; European_LV_CSV/ReadMe.txt explicitly excludes inherited IEEE example data from author work. External only.",
+    "disposition": "Empty native database, construction script is not a populated native case."
+  },
+  "whole_case_successes_added": 0,
+  "production_mapping_changed": false,
+  "native_payloads_vendored": false,
+  "csiro05_next_candidate": {
+    "elements": 7,
+    "aligned_snapshots_per_element": 49,
+    "maximum_stored_current_range_a": [
+      7.801553986777581e-05,
+      0.0001574421104206391
+    ],
+    "candidate_power_error_range_va": [
+      1.0144938551104528,
+      2.065849976534896
+    ],
+    "scope": "Exploratory unaccepted nominal-coil hypothesis, not a parser or whole-network check. No source/result revision attestation.",
+    "disposition": "Nearly unloaded historical records cannot validate impedance or rating; require loaded independent circuits and documented partial mixed-winding/sequence semantics."
+  },
+  "second_decoder_check": {
+    "case": "vorstadtnetz_kabel1",
+    "reader": "access-parser 0.0.6",
+    "result": "Rejected: Node, Load, Line and Infeeder decode raise truncated-buffer errors; Element strings contain trailing binary garbage. Returning 586 Element rows is not successful decoding.",
+    "source_changed": false,
+    "usable_acquisition_added": false
+  },
+  "paired_powerfactory": {
+    "collection": "https://doi.org/10.4225/08/5631B1DF6F1A0",
+    "source_path": "/DataRelease/FeederModels/PowerFactory/Models Release.pfd",
+    "file_id": 48262793,
+    "bytes": 4595984,
+    "sha256": "c5d5e8a2273e2db876a293328ccc270cbefd348531b97c6c66f422eaa2b37359",
+    "license": "CC-BY-4.0",
+    "transport_observation": "Binary PFD, not a ZIP archive or text DGS export. No compatible decoder available in this research environment.",
+    "user_access": "User confirmed no PowerFactory access currently.",
+    "disposition": "Retain external original for future native inspection or DGS/CSV export; no electrical parameters or counterpart agreement claimed."
+  },
+  "sequence_coil_experiment": {
+    "case": 6,
+    "components": 9,
+    "hypothesis": "For a single YNd1 winding, replace the delta-referred coil series impedance 3*Z1 with 2*Z1+Z0*(Un2/Un1)^2, retaining the earlier nominal core split. This tests principal selection of a sequence-coupled impedance, not an established SINCAL rule.",
+    "maximum_power_error_range_va": [
+      1669.8042484597215,
+      4072.0873895769923
+    ],
+    "maximum_current_magnitude_error_range_a": [
+      3.594238105049489,
+      8.246222695579633
+    ],
+    "accepted": false,
+    "production_mapping_added": false,
+    "stored_results_attest_current_inputs": false,
+    "disposition": "All nine still disagree with stored results. Do not fit the impedance/rating or promote this hypothesis based only on a self-consistent independent circuit."
+  },
+  "vendor_example_followup": {
+    "download_page": "https://www.simtec.cc/en/updates.aspx",
+    "observation": "Official version downloads require an individual access key; inspected example announcement exposed no direct native-model attachment.",
+    "disposition": "No model acquired, no license established, no vendor contacted. Zero additional complete-case successes."
+  }
+}

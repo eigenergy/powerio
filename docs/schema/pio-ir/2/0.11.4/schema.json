@@ -5944,6 +5944,7 @@
     "DistSourceFormat": {
       "description": "Where the network came from; fixes the echo tier target.",
       "enum": [
+        "sincal",
         "dss",
         "bmopf-json",
         "pmd-json"

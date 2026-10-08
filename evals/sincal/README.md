@@ -1,34 +1,41 @@
-# SINCAL acquisition and corpus evidence
+# SINCAL validation evidence
 
-This branch supplies model-neutral SQLite/archive acquisition and schema
-validation. The balanced reader branch additionally maps the complete small SimBench case
-the pinned IEEE18, IEEE33 and student SQLite static inputs, and CSIRO19 Access snapshots
-through the explicit `sincal-balanced` public parser profile. Acquisition-only reports
-remain distinct from electrical reader validation; none establishes fresh
-writer acceptance. The [delivery plan](../../docs/design/pss-sincal.md) records the
-five local PR scopes and dataset targets. The [research catalog](research-catalog.md)
-records prior inspections and data rights; its deeper electrical investigations
-belong to the reader branches and are not all implemented in this branch.
+Use the [user guide](../../docs/src/sincal.md) for API usage and supported
+profiles, and the [review packet](../../docs/design/pss-sincal-review.md) for
+PR scope. This directory contains reproducible acquisition and electrical
+checks, source hashes, licensing provenance and measured results. PowerIO has
+no solver; numerical checks use independent downstream calculations.
 
-Run the small licensed archive and paired SimBench evidence checks with:
+## Evidence to review first
+
+| Evidence | What it establishes |
+| --- | --- |
+| [Final integration](priority-verification.json) | CI stages, Python/Julia checks, fresh numerical reruns and explicit exclusions |
+| [Trial workflows](trial-workflows.json) | Per-case echo, IR, PF preparation and emission/reparse; not export numerical equivalence |
+| [Balanced SimBench](balanced-simbench.json), [other SQLite cases](balanced-external.json), [CSIRO19](balanced-csiro19.json) | Five complete balanced cases, with case-specific independent references |
+| [CSIRO09 public reader](csiro09-public.json) | All 688 elements at five native snapshots, plus five synthetic asymmetric stress cases |
+| [Truong12](truong12-public.json) | Complete native asymmetric 12-bus case |
+| [CSIRO12](csiro12-compatibility.json) | All 215 elements under explicit compatibility assumptions; native NULL semantics remain unverified |
+| [Historical corpus summary](corpus-history.md) | Earlier partial-coverage audits; not current reader acceptance results |
+| [Source catalog](research-catalog.md) and [CSIRO inventory](csiro-inventory.json) | Source URLs, licensing disposition and identities; not support claims |
+
+Retain the small licensed SimBench fixture and synthetic unit tests. External
+MDB/SQLite models, paper PDFs, decoded records and solver environments are not
+fixtures. No license is inferred from a repository's code license. Source
+rights and notices are recorded in the catalog and
+[fixture README](../../tests/data/sincal/README.md).
+
+Run acquisition regressions without external model downloads:
 
 ```sh
 python3 -m unittest discover -s evals/sincal -v
-python3 evals/sincal/inspect_native.py tests/data/sincal/1-LV-rural1--0-sw.sinx
 cargo test -p powerio-sincal
 ```
 
-The fixture's provenance and ODbL/DbCL notices live in
-[tests/data/sincal](../../tests/data/sincal/README.md). The 88,876-byte archive
-is unmodified; its larger unpacked database is not vendored. Original synthetic
-unit tests exercise malformed inputs without copying additional native models.
-
-The [CSIRO inventory](csiro-inventory.json) contains hashes, counts and raw
-observations for 19 external CC BY 4.0 databases. It contains no model payloads.
-Access acquisition is explicit and optional, as described below. These
-historical counts are all stored rows, not effective selected-variant sizes.
-External corpora remain outside the repository, and a source-code license
-alone does not establish model redistribution rights.
+Component checks remain available in the adjacent scripts; their original
+commands are indexed in [component checks](component-checks.md). Historical
+investigations explain unsupported modes but do not enlarge the advertised
+profile. The full pre-cleanup narrative is recoverable at Git commit `1e95be55`.
 
 ## Explicit Access acquisition
 
@@ -147,7 +154,7 @@ The student model's static P/Q values are zero and saved profile enables are
 off. Its 960 historical node rows represent different states. Historical
 comparison is explicitly non-gating and is not presented as aligned native
 validation. The two IEEE comparisons are also reported separately from fresh
-independent checking. Broader profile and variant delivery remains in scope.
+independent checking. Broader profiles and variants are follow-up work.
 
 ## Balanced schema-11.5 Access snapshots
 
@@ -173,3 +180,221 @@ python evals/sincal/check_balanced_access.py \
   /external/csiro-representative19.mdb /external/csiro19-balanced-records.json \
   evals/sincal/balanced-csiro19.json
 ```
+
+## Complete CSIRO09 public reader
+
+The public oracle checks all 688 native elements at five daily snapshots and
+five separately labelled synthetic asymmetric stress cases. The native loads
+are symmetric. Four isolated native nodes remain in the typed network; generic
+PF preparation refuses the unsourced islands. Ordinary DSS/PMD/BMOPF export
+refuses terminal-referenced sources. These refusals are expected, not full
+conversion successes.
+
+The checker solves the actual typed network and independently constructs
+OpenDSS from native input tables. The report records tolerances, ideal-source
+approximation, hashes and negative controls. OpenDSS is not fed a PowerIO DSS
+export. See [the detailed public report](csiro09-public.json) and the latest
+[numerical rerun](priority-verification.json).
+
+```sh
+cargo build -p powerio --example sincal_public
+POWERIO_MAX_PRIMARY_BYTES=69181440 python3 evals/sincal/check_csiro09_corpus.py \
+  /external/representative09.json /external/csiro-representative09.mdb \
+  target/debug/examples/sincal_public /tmp/csiro09-public.json --public-reader
+```
+
+Use an environment with NumPy, SciPy and OpenDSSDirect.py; tool versions are
+pinned by the recorded reports. Keep original MDBs and hash-matching acquired
+records outside the repository. No native SINCAL execution is claimed.
+
+### Complete asymmetric native 12-bus case (2026-10-08)
+
+[`truong12-public.json`](truong12-public.json) records a new complete public
+parse of [Truong812001/Unbalance-Power-Flow](https://github.com/Truong812001/Unbalance-Power-Flow/tree/1459d2be39b3c00aac195b1d6c01bcde16ee357f),
+`Update_finalV1_database/12bus/12busbc_files/database.db`. Pin revision and
+SHA-256 as recorded in the report. The original is 2,363,392 bytes and has no
+published redistribution license; keep it outside the repository. No fixture
+or upstream solver code is incorporated.
+
+The schema-15.0 variant-1 static model has 12 native nodes, 11 sequence lines,
+33 unequal single-phase constant-PQ loads and one ideal source. All 45 elements
+map through `sincal-multiconductor`; original SQLite echo, typed IR round-trip,
+generic matrix construction without omissions and generic PF-instance construction
+pass. Structural admission of 15.0 does not enable the balanced electrical
+adapter: that boundary has its own rejection regression.
+
+The native calculation explicitly selects `Flag_LFZ0=2` (Input Data, April 2014,
+printed p.219): supply missing zero sequence from positive sequence. The reader
+implements that selected policy for the verified line/ideal-source profile and
+records `zero_sequence_from_positive` provenance. Explicit component declarations
+win. This does not turn arbitrary NULLs into defaults, extend transformer or
+finite-source support, or change native global-input-only cases into this mode.
+
+```sh
+cargo build -p powerio --example sincal_native_multiconductor
+# Use an environment with NumPy and OpenDSSDirect.py installed.
+python3 evals/sincal/validate_truong12.py /external/12busbc_files/database.db \
+  target/debug/examples/sincal_native_multiconductor /tmp/truong12-public.json
+```
+
+The wrapper calls the public facade example and solves its actual typed output
+with independent dense MNA. OpenDSS is built separately from native input tables.
+All 36 complex voltages and 66 line-terminal currents and powers are compared;
+tolerances are 0.001 V, 0.001 A and 0.1 VA, with typed KCL residual below 1e-6 A.
+The report records measured maxima, unequal phase demand totals, tool versions,
+source/checker/reader hashes and the ideal-source approximation. Removing a load,
+doubling a line impedance or moving a load to the wrong phase must fail.
+
+Stored ULF voltages agree within 0.087 V after a fixed +30-degree reference
+rotation. Their separate tolerance is the native VDN=.01% of nominal phase
+voltage, not a fitted threshold. Historical results do not attest the current
+input revision; fresh independent solver agreement is the primary evidence.
+No native SINCAL execution is claimed. This is a new authentic asymmetric success,
+but its 12-bus size does **not** satisfy the requested larger-feeder review gate.
+
+## Paper-based electrical cross-check (2026-10-08)
+
+The [IEEE18 paper report](ieee18-paper.json) adds a result-dump-independent
+check of the existing balanced case. It matches the reader's complete line,
+load and shunt inputs against Table A.I of
+[Milovanović et al., DOI 10.7251/IJEEC1801011M](https://doi.org/10.7251/IJEEC1801011M),
+then compares a fresh solve of the typed model with the fundamental-frequency
+loss bars in Figure 8. Both source files are hash-pinned and remain external.
+
+```sh
+cargo build -p powerio-tx --example sincal_balanced
+# Research environment: numpy, pandapower, pdfplumber==0.11.9
+python3 evals/sincal/check_ieee18_paper.py /external/IEEE18.db \
+  /external/milovanovic2018.pdf target/debug/examples/sincal_balanced \
+  /tmp/ieee18-paper.json
+```
+
+All 17 plotted groups pass a 0.15 kW figure-resolution tolerance; the largest
+observed difference is 0.00156 kW. A 10% load perturbation fails by 8.43 kW.
+Vector extraction avoids manual pixel estimates but does not turn a plot into
+an exact numerical oracle. The two parallel 25–26 lines form one plotted group.
+This validates balanced fundamental-frequency behavior only. It neither adds
+an unbalanced case nor establishes fresh SINCAL execution or harmonic support.
+No PDF, extracted reference table/plot or native model is vendored.
+
+## Experimental CSIRO12 compatibility and paper audit (2026-10-08)
+
+The user authorized explicitly labelled parsing approximations for trial use.
+The `assume_inactive_source_controls` option (Rust, CLI, Python, C and Julia)
+admits five NULL
+schema-11.5 source controls as inactive: `Flag_LfLimit`, `Flag_LfCtrl`,
+`Flag_Qctrl`, `Flag_Macro`, `Kr`. Siemens' April 2014 Database Description,
+Infeeder table pp.15–16, lists zero defaults for four of these; it does not
+establish SQL NULL behavior, and its Infeeder table does not define `Flag_LfCtrl`.
+All five interpretations are therefore explicit compatibility assumptions,
+never an unconditional manual-backed claim. Nonzero controls, missing columns,
+newer-schema NULLs and missing required electrical values still reject.
+
+[CSIRO12 compatibility evidence](csiro12-compatibility.json) covers the original
+CC BY 4.0 MDB with unmodified, hash-pinned acquired tables. All 215 components
+are accounted for: 187 lines/connections, 26 loads, one capacitor and one source.
+Of 191 native nodes, 188 have equipment conductors and three unused records
+(35, 153, 173) remain in `extras.sincal_unconnected_nodes`. No electrical island
+is silently removed or supplied with invented phases.
+
+Five native snapshots (0, 0.25, 12, 23.75, 24 h) pass public facade parsing,
+byte-exact MDB echo, IR value preservation including assumption metadata,
+generic matrix construction and generic PF-instance construction. Independently
+constructed native-input OpenDSS circuits agree with sparse MNA solves of the
+actual typed output. Five additional unequal-delta-load stress cases are
+**synthetic**. Across all ten checks, 564 native complex phase voltages and
+918 line terminal currents/powers per check give maxima of 0.000370 V,
+8.27e-8 A and 0.00309 VA. Current/power comparison matches the small finite
+OpenDSS source impedance; the report separates that approximation's voltage
+impact. Four negative controls detect missing loads/capacitor, missing mutual
+impedance and incorrect load factors. Native loads are symmetric: this is one
+additional substantial experimental distribution case, but does not independently
+validate a published asymmetric operating point or prove native NULL semantics.
+
+```sh
+cargo build -p powerio --example sincal_public
+python3 evals/sincal/check_csiro12_compatibility.py \
+  /external/representative12-complete-records.json \
+  /external/csiro-representative12.mdb target/debug/examples/sincal_public \
+  /tmp/csiro12-compatibility.json
+```
+
+Use acquisition including `ShuntCondensator`; the earlier acquisition manifest
+omitted that table. The checker pins the complete record digest separately.
+The native model remains external; no additional native fixture is vendored.
+The existing CSIRO09 five-snapshot/five-stress public oracle was rerun after
+shared harness changes and still passes (maximum 0.000372 V).
+
+[The unbalanced-paper audit](unbalanced-paper-constraints.json) is deliberately
+weaker evidence: output reconstruction, not a reproduced power flow. For
+[Arif et al. 2013](https://file.scirp.org/Html/14-6401233_32197.htm), Table 5 supplies
+phase magnitudes and angle differences. These imply approximately 1.079% and
+1.444% negative/positive sequence voltage ratios in the PV/storage scenarios;
+those ratios are derived here, not reported benchmarks. Figure 4 and the text do
+not supply the line/neutral impedances and full transformer equivalent needed
+for independent network reconstruction.
+
+[Vinayagam et al. 2015](https://www.atlantis-press.com/article/25841476.pdf) reports
+about 1.48% VUF. Interpreting Figure 12's magnitudes as phase voltages with exact
+120-degree spacing gives 0.9954%; interpreting them as a closed line-line set
+gives 1.9913%. Neither assumption reproduces 1.48%. Missing phase angles and
+precise voltage basis/state prevent a unique reconstruction; this is not a
+claim that the paper is wrong. No model parameters were fitted to reported outputs.
+
+```sh
+python3 evals/sincal/check_unbalanced_paper_constraints.py /tmp/paper-audit.json
+```
+
+Arif is CC BY; Vinayagam's article is CC BY-NC 4.0. No paper PDF, figure or
+native model was added as a fixture. Only attributed numerical observations,
+our calculations and their explicit limits are recorded.
+
+## Binding and trial workflow verification (2026-10-08)
+
+[The trial report](trial-workflows.json) and [integration packet](priority-verification.json)
+record the final run. `check_trial_workflows.py` uses an installed wheel and external native sources.
+It tests source echo, typed IR, PF preparation and ordinary target emission
+separately. It does not solve the exported targets; numerical evidence remains
+in the independent native-input oracles above. Both families use explicit
+selection objects. The distribution compatibility flag is available in Python,
+C and Julia as well as Rust/CLI; balanced Access/snapshot selections are now
+available across those same entry points.
+
+```sh
+POWERIO_MAX_PRIMARY_BYTES=69181440 python3 evals/sincal/check_trial_workflows.py \
+  /external/csiro-representative19.mdb /external/csiro19-balanced-records.json \
+  /external/csiro-representative09.mdb /external/representative09.json \
+  /external/csiro-representative12.mdb /external/representative12-with-shunts.json \
+  /external/truong12/database.db /tmp/trial-workflows.json
+```
+
+The checked noon snapshots yield these distinct outcomes:
+
+| Case | Echo and typed IR | PF instance | Ordinary emission/reparse |
+| --- | --- | --- | --- |
+| CSIRO19 balanced | Pass | Pass | MATPOWER pass, with loss diagnostics |
+| Truong12 multiconductor | Pass | Pass | DSS, PMD and BMOPF pass, with loss diagnostics |
+| CSIRO09 multiconductor | Pass | Unsourced-island refusal | Reference-terminal source refusal |
+| CSIRO12 multiconductor, compatibility opt-in | Pass | Pass | Reference-terminal source refusal |
+
+The per-case matrix/oracle commands are listed above and in component-checks.md. In particular,
+CSIRO09/12's OpenDSS references are generated independently from native tables;
+they are not output from the ordinary DSS writer. No native SINCAL files were
+added to fixtures by this integration work. Source inventory findings enumerate
+retained tables and selected source-only fields, and explicitly mark excluded
+Access tables as having unknown row counts; the inventory is not a complete
+field-level schema audit.
+
+`check_julia_trial_workflows.jl` checks three CSIRO19 balanced snapshots and
+CSIRO12's strict refusal/opt-in success against the same original inputs. Point
+`POWERIO_CAPI` at the current library and `--project` at the matching companion:
+
+```sh
+POWERIO_CAPI=/path/to/libpowerio_capi.dylib \
+  julia --project=/path/to/PowerIO.jl evals/sincal/check_julia_trial_workflows.jl \
+  /external/csiro-representative19.mdb /external/csiro19-balanced-records.json \
+  /external/csiro-representative12.mdb /external/representative12-with-shunts.json
+```
+
+Use the platform's corresponding `.so` or `.dll` on Linux or Windows. These
+are reader/binding checks; fresh SINCAL desktop acceptance remains external.
