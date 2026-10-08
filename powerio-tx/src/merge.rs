@@ -1744,6 +1744,19 @@ mod tests {
         let mut area = Area::new(1);
         area.slack_bus = Some(BusId(2));
         network.areas_mut().push(area);
+        network
+            .static_var_compensators_mut()
+            .push(crate::network::StaticVarCompensator::new(
+                BusId(2),
+                -0.01,
+                0.01,
+            ));
+        network
+            .storage_mut()
+            .push(crate::network::Storage::new(BusId(2)));
+        network
+            .switches_mut()
+            .push(Switch::new(BusId(2), BusId(4), false));
 
         let merge = network.merge_buses(&PSSE).unwrap();
         let merged = &merge.network;
@@ -1758,6 +1771,9 @@ mod tests {
         assert_eq!(merged.hvdc()[0].from, BusId(1));
         assert_eq!(merged.transformers_3w()[0].windings[0].bus, BusId(1));
         assert_eq!(merged.areas()[0].slack_bus, Some(BusId(1)));
+        assert_eq!(merged.static_var_compensators()[0].bus, BusId(1));
+        assert_eq!(merged.storage()[0].bus, BusId(1));
+        assert_eq!(merged.switches()[0].from, BusId(1));
         merged.validate().unwrap();
         // The input is untouched.
         assert_eq!(network.loads()[0].bus, BusId(2));
