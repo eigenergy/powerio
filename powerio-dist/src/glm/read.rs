@@ -15,6 +15,7 @@ use crate::{
 
 const METERS_PER_MILE: f64 = 1609.344;
 
+mod loads;
 mod switches;
 
 /// Read the initial static GLM electrical profile. Unknown physical
@@ -405,6 +406,7 @@ impl Reader<'_> {
                 continue;
             }
             self.load_terms(key, root, &phases, nominal)?;
+            self.explicit_load_terms(key, root, &phases, nominal)?;
         }
         Ok(())
     }
@@ -425,7 +427,8 @@ impl Reader<'_> {
                         .is_some()
                 })
             })
-            .count();
+            .count()
+            + self.explicit_load_term_count(key);
         for law in laws {
             let mut values = Vec::new();
             let mut stated = false;
@@ -732,8 +735,9 @@ fn allowed_property(class: &str, name: &str) -> bool {
             ]
             .iter()
             .any(|prefix| {
-                name.strip_prefix(prefix)
-                    .is_some_and(|v| matches!(v, "A" | "B" | "C"))
+                name.strip_prefix(prefix).is_some_and(|v| {
+                    matches!(v, "A" | "B" | "C" | "AB" | "BC" | "CA" | "AN" | "BN" | "CN")
+                })
             }))
         || (class == "overhead_line"
             && matches!(name, "phases" | "from" | "to" | "length" | "configuration"))
@@ -776,10 +780,12 @@ fn quantity_spec(class: &str, name: &str) -> Option<(GlmQuantityKind, &'static s
             ("constant_current_", "A"),
             ("constant_impedance_", "Ohm"),
         ] {
-            if name
-                .strip_prefix(prefix)
-                .is_some_and(|phase| matches!(phase, "A" | "B" | "C"))
-            {
+            if name.strip_prefix(prefix).is_some_and(|phase| {
+                matches!(
+                    phase,
+                    "A" | "B" | "C" | "AB" | "BC" | "CA" | "AN" | "BN" | "CN"
+                )
+            }) {
                 return Some((Complex, unit));
             }
         }

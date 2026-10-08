@@ -204,6 +204,16 @@ constitute explicit line neutrals. Geometry, transformers, split-phase and
 additional static devices remain unfinished and fail explicitly. Full OpenDSS
 static compatibility is not yet established.
 
+Loads support legacy A/B/C terms and explicit AB/BC/CA/AN/BN/CN power,
+current and impedance terms. Terms add independently, including legacy and
+explicit terms on the same connection. Explicit pairs map to two-terminal
+typed loads; current terms follow the connection voltage angle. Canonical
+output preserves each load's voltage base and can express a complete typed
+three-channel delta load as explicit pairs. It reports the resulting component
+identity split and any terminal orientation normalization. Traditional GLM D
+flags, scalar real/reactive aliases and incomplete delta channel layouts are
+not yet supported.
+
 Ordinary-phase `switch` objects import their fixed status, banked or individual
 phase states and native contact impedance. Finite closed contacts become exact
 uncoupled line equivalents with unit normalization length and a diagnostic;

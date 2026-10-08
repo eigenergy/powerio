@@ -105,7 +105,8 @@ do not establish floating-neutral or triplex-cable equivalence.
 
 `powerio_dist::glm::parse` returns `PioModule<MulticonductorNetwork>` for an
 initial static profile: phase-to-earth node/meter/load objects, fixed SWING
-phasors, independent constant P/I/Z load terms, and overhead lines with explicit
+phasors, independent constant P/I/Z load terms (legacy A/B/C and explicit
+AB/BC/CA/AN/BN/CN connections), and overhead lines with explicit
 phase impedance matrices. It materializes an earth return on buses; this is
 not an explicit line-neutral model. Phase subsets retain their A/B/C identities.
 Parented loads share their root electrical bus. Line impedances become ohms
@@ -115,7 +116,7 @@ Numeric setters are validated in source order even when later overwritten or
 assigned to an inactive phase.
 
 The reader rejects unmodeled physical properties, unknown globals, active
-device classes, geometry-dependent lines, delta/split-phase flags, conflicting
+device classes, geometry-dependent lines, traditional D and split-phase flags, conflicting
 child nominal voltages and names that collide under the current canonical
 case-insensitive lookup. Coordinates attach to root buses, parented loads,
 lines and used line configurations. Unmapped coordinate-bearing objects still
@@ -150,7 +151,7 @@ output and cross-format engine validation need separate checks.
 `powerio_dist::glm::emit_canonical` takes a `MulticonductorNetwork` and a
 destination. It generates one fresh GLM file from the current typed value;
 there is no retained-source path in this API. It supports the reader's initial
-phase-to-earth P/I/Z and explicit line-matrix profile. An unsupported electrical
+phase-to-earth and explicit phase-pair P/I/Z and line-matrix profile. An unsupported electrical
 feature fails before any artifact is written. Non-electrical metadata losses,
 including legacy drawing coordinates, optimization bounds, ratings and source
 cost data, are reported. Typed component geographic points are emitted on the
@@ -184,6 +185,35 @@ result and satisfy the edited network equations. Constant-impedance cases also
 match a separately solved analytic circuit. These checks qualify 80 canonical
 engine solves, not just parser acceptance or retained-source echo. OpenDSS
 cross-format equivalence remains unqualified.
+
+## Explicit phase-pair loads
+
+The explicit `constant_power_*`, `constant_current_*` and
+`constant_impedance_*` properties for AB/BC/CA/AN/BN/CN map to ordered
+two-terminal loads. Legacy A/B/C and explicit terms are additive. Current
+coefficients follow the actual connection voltage angle; they are not fixed
+current phasors. The writer reconstructs each connection's physical coefficient
+from its own nominal voltage. It also emits complete three-channel typed delta
+loads as explicit pairs, diagnosing the identity split on subsequent import.
+Traditional GLM D flags, scalar real/reactive aliases and incomplete/open-delta
+channel layouts still require additional mapping.
+
+```sh
+cargo build -p powerio --example glm_roundtrip
+python evals/gridlabd/pair_load_oracle.py --pnnl-root "$PNNL_ROOT" \
+  --bridge target/debug/examples/glm_roundtrip --output /tmp/gld-pairs
+```
+
+Eight circuits exercise pure pair impedances, angle-following currents, mixed
+legacy/explicit P/I/Z and capacitive pairs. Both pinned forks run NR and FBS;
+FBS cases include an exact ideal contact. Each native baseline and five canonical
+variants (fresh, IR-restored, edited, rebased and grounded-reference) must match
+an independent nonlinear circuit solve: 192 runs and 5,376 complex comparisons.
+The reference checks KCL to 1e-9 A. Every case must reject a changed connection;
+current cases must also reject a fixed-phasor interpretation. Merely reversing
+an impedance's terminals is electrically identical and is not a valid negative
+control. This qualifies explicit connection laws, not broader delta/split-phase
+or cross-format compatibility.
 
 ## Facade profiles and source-project replay
 

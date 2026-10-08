@@ -19,9 +19,29 @@ from ideal_switch_oracle import (
     reference as ideal_reference,
     variants as ideal_variants,
 )
+from pair_load_oracle import reference as pair_reference, variants as pair_variants
 
 
 class OracleTests(unittest.TestCase):
+    def test_phase_pair_reference_detects_wrong_connections_and_fixed_current(self):
+        for name, terms in pair_variants().items():
+            for edited in (False, True):
+                with self.subTest(case=name, edited=edited):
+                    result, metadata = pair_reference(terms, edited)
+                    self.assertLess(metadata["kcl_residual_amperes"], 1e-9)
+                    wrong, _ = pair_reference(terms, edited, wrong_connection=True)
+                    self.assertFalse(compare(result, wrong)["passed"])
+                    if any(law == "current" for law, _, _ in terms):
+                        fixed, _ = pair_reference(terms, edited, fixed_current=True)
+                        self.assertFalse(compare(result, fixed)["passed"])
+
+    def test_passive_pair_terminal_reversal_is_electrically_identical(self):
+        # A negative control must move the connection, not merely reverse the
+        # two terminals of a passive impedance (which leaves its stamp equal).
+        forward, _ = pair_reference([("impedance", "AB", 80 + 20j)])
+        reverse, _ = pair_reference([("impedance", "BA", 80 + 20j)])
+        self.assertTrue(compare(forward, reverse)["passed"])
+
     def test_ideal_contact_reference_satisfies_zip_kcl_and_detects_epsilon(self):
         for spec in ideal_variants():
             for edited in (False, True):

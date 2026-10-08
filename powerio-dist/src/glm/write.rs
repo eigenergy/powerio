@@ -15,6 +15,7 @@ use super::read::{nominal_phasor, phase_name};
 const METERS_PER_MILE: f64 = 1609.344;
 
 mod ideal;
+mod loads;
 
 /// Emit fresh GLM from the current typed network, without retained-source echo.
 ///
@@ -538,6 +539,10 @@ impl Writer<'_> {
 
     fn loads(&mut self) -> Result<(), Error> {
         for load in self.net.loads() {
+            if load.configuration != Configuration::Wye {
+                self.pair_load(load)?;
+                continue;
+            }
             if load.configuration != Configuration::Wye
                 || load.terminal_map.last().map(String::as_str) != Some("n")
             {
