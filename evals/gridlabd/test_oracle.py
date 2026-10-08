@@ -36,6 +36,14 @@ class OracleTests(unittest.TestCase):
 
     def test_coordinate_negative_controls(self):
         check_coordinates(expected_coordinates())
+        declared = copy.deepcopy(expected_coordinates())
+        declared["line"] = {"latitude": 10, "longitude": 20}
+        check_coordinates(declared, declared=True)
+        with self.assertRaises(ValueError):
+            check_coordinates(expected_coordinates(), declared=True)
+        declared["copied"]["latitude"] = 2
+        with self.assertRaises(ValueError):
+            check_coordinates(declared, declared=True)
         for defect in (
             "axis",
             "missing_zero",

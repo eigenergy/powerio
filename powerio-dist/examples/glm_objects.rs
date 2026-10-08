@@ -27,6 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     )?;
     let index = project.index_objects()?;
+    let coordinates = index.declared_coordinates()?;
     let mut objects = Vec::new();
     for object in index.objects() {
         let mut references = serde_json::Map::new();
@@ -46,6 +47,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "key": object.key().ordinal(), "class": object.class_name(), "name": object.name(),
             "explicit_id": object.explicit_id(), "parent": index.parent(object.key()).map(ObjectKey::ordinal),
             "references": references,
+            "declared_coordinates": {
+                "latitude": coordinates[object.key().ordinal()].latitude,
+                "longitude": coordinates[object.key().ordinal()].longitude,
+            },
         }));
     }
     println!("{}", serde_json::to_string_pretty(&objects)?);

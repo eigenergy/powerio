@@ -10,6 +10,13 @@ fuzz_target!(|bytes: &[u8]| {
     let dialect = if bytes.first().is_some_and(|b| b & 1 == 1) { GlmDialect::Arras4_3 } else { GlmDialect::Pnnl5_3 };
     if let Ok(project) = parse_project(source, PreprocessOptions { dialect, ..Default::default() }) {
         if let Ok(index) = project.index_objects() {
+            if let Ok(points) = index.declared_coordinates() {
+                assert_eq!(points.len(), index.objects().len());
+                for point in points {
+                    assert!(point.latitude.is_none_or(|v| v.is_finite() && v.abs() <= 90.0));
+                    assert!(point.longitude.is_none_or(|v| v.is_finite() && v.abs() <= 180.0));
+                }
+            }
             for (ordinal, object) in index.objects().iter().enumerate().take(1024) {
                 assert_eq!(object.key().ordinal(), ordinal);
                 if let Some(parent) = index.parent(object.key()) { assert!(index.get(parent).is_some()); }

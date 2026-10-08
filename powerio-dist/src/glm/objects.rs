@@ -128,6 +128,10 @@ impl GlmProject {
 }
 
 impl<'a> ObjectIndex<'a> {
+    pub(super) fn fail(&self, span: &SourceSpan, message: impl Into<String>) -> Error {
+        self.project.fail(span, message)
+    }
+
     #[must_use]
     pub fn objects(&self) -> &[GlmObject<'a>] {
         &self.objects
