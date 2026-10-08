@@ -116,6 +116,29 @@ fn round_trip(value: PioValue, label: &str) -> String {
 }
 
 #[test]
+fn a_dc_pf_instance_that_ignores_injecting_hvdc_is_refused_rather_than_changed() {
+    // The stored DC power flow instance re-derives its injections under the
+    // fixed injection treatment, so writing one that leaves an in service
+    // line out would read back with the line in.
+    let mut net = network();
+    let mut line = powerio_tx::Hvdc::new(BusId(1), BusId(2));
+    line.pf = 10.0;
+    line.pt = 9.5;
+    net.hvdc_mut().push(line);
+    let ignored =
+        DcPfInstance::from_network_with_hvdc(net.clone(), powerio_tx::HvdcTreatment::Ignore)
+            .unwrap();
+    let error = serialize(&PioModule::new(PioValue::DcPfInstance(ignored))).unwrap_err();
+    assert!(error.to_string().contains("HVDC"), "{error}");
+
+    // With the line out of service there is nothing to ignore.
+    net.hvdc_mut()[0].in_service = false;
+    let ignored =
+        DcPfInstance::from_network_with_hvdc(net, powerio_tx::HvdcTreatment::Ignore).unwrap();
+    serialize(&PioModule::new(PioValue::DcPfInstance(ignored))).unwrap();
+}
+
+#[test]
 fn every_instance_kind_round_trips() {
     let net = network();
     let objective = Objective::default().with_term(ObjectiveTerm::NetworkGeneratorCost);

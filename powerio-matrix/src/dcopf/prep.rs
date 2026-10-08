@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use powerio_tx::{BalancedNetwork, BranchSusceptanceFormula, BusId, IndexedNetwork};
+use powerio_tx::{BalancedNetwork, BranchSusceptanceFormula, BusId, HvdcTreatment, IndexedNetwork};
 
 use crate::{AnalysisBranchSource, Error, Result};
 use powerio_prob::ReferenceBuses;
@@ -79,6 +79,9 @@ pub struct DcOpfOptions {
     /// branch angle difference intervals in the prepared arrays.
     #[serde(default = "default_true")]
     pub correct_angle_difference_bounds: bool,
+    /// How in service HVDC lines enter the fixed withdrawal.
+    #[serde(default)]
+    pub hvdc_treatment: HvdcTreatment,
     /// The already validated instance objective to compile into the arrays.
     pub objective: PreparedObjective,
 }
@@ -95,6 +98,7 @@ impl Default for DcOpfOptions {
             skip_zero_impedance: false,
             synthesize_unrated_limits: false,
             correct_angle_difference_bounds: true,
+            hvdc_treatment: HvdcTreatment::default(),
             objective: PreparedObjective::default(),
         }
     }
@@ -227,8 +231,25 @@ pub struct DcOpfPreparation {
     /// beside [`Self::p_d`], as MATPOWER `runpf` does.
     pub g_s: Vec<f64>,
     /// Nodal phase shift injection in dense bus order. The complete fixed
-    /// withdrawal in `L theta = Cg pg - fixed` is `p_d + g_s + p_shift`.
+    /// withdrawal in `L theta = Cg pg - fixed` is
+    /// `p_d + g_s + p_shift - p_hvdc`.
     pub p_shift: Vec<f64>,
+    /// How in service HVDC lines entered [`Self::p_hvdc`].
+    ///
+    /// `#[serde(default)]` keeps documents written before this field
+    /// readable.
+    #[serde(default)]
+    pub hvdc_treatment: HvdcTreatment,
+    /// Nodal fixed HVDC injection in dense bus order: `-pf` at each in
+    /// service line's from bus and `+pt` at its to bus
+    /// ([`IndexedNetwork::p_hvdc`]). All zero under
+    /// [`HvdcTreatment::Ignore`]. An injection, so the fixed withdrawal
+    /// subtracts it.
+    ///
+    /// `#[serde(default)]`: a document written before this field reads as
+    /// empty, which [`Self::calc_fixed_nodal_withdrawal`] takes as zero.
+    #[serde(default)]
+    pub p_hvdc: Vec<f64>,
     pub generators: DcGeneratorParameters,
     pub branches: DcBranchParameters,
 }
@@ -248,11 +269,14 @@ impl DcOpfPreparation {
     ///
     /// With `A` oriented from bus to bus and
     /// `L = A diag(b) A^T`, the DC balance is
-    /// `L theta = Cg pg - (p_d + g_s + p_shift)`.
+    /// `L theta = Cg pg - (p_d + g_s + p_shift - p_hvdc)`.
     #[must_use]
     pub fn calc_fixed_nodal_withdrawal(&self) -> Vec<f64> {
         (0..self.n_buses)
-            .map(|bus| self.p_d[bus] + self.g_s[bus] + self.p_shift[bus])
+            .map(|bus| {
+                let p_hvdc = self.p_hvdc.get(bus).copied().unwrap_or(0.0);
+                self.p_d[bus] + self.g_s[bus] + self.p_shift[bus] - p_hvdc
+            })
             .collect()
     }
 
@@ -490,6 +514,15 @@ pub(crate) fn preparation_from_view(
         .iter()
         .map(|&row| case.gs()[row] * p_scale)
         .collect();
+    let p_hvdc = match options.hvdc_treatment {
+        HvdcTreatment::Ignore => vec![0.0; n_buses],
+        // A future treatment must state its own withdrawal; until then the
+        // stated injection is the only one this preparation knows.
+        _ => bus_analysis_rows
+            .iter()
+            .map(|&row| case.p_hvdc()[row] * p_scale)
+            .collect(),
+    };
     let bus_source_rows = bus_analysis_rows.iter().copied().map(Some).collect();
     Ok(DcOpfPreparation {
         name: case.name().to_owned(),
@@ -510,6 +543,8 @@ pub(crate) fn preparation_from_view(
         p_d,
         g_s,
         p_shift,
+        hvdc_treatment: options.hvdc_treatment,
+        p_hvdc,
         generators: DcGeneratorParameters {
             identities: generator_identities,
             bus_of_gen,
