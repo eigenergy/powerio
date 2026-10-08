@@ -2725,6 +2725,16 @@ fn winding_ratio_value(
     }
 }
 
+/// The branch tap `t1 / t2` of a two winding transformer and the winding 2
+/// ratio `t2` it divides by, both in per unit of the terminal bus base
+/// voltages.
+///
+/// PSS/E places an ideal `t1 : 1` transformer at winding 1 and an ideal
+/// `1 : t2` one at winding 2, with the series impedance between them. The
+/// neutral branch has one tap at its from end and the impedance at its to
+/// end, so moving the winding 2 ratio across the impedance scales the
+/// impedance by `t2²` ([`read_transformer`] applies it). A zero `t2` is
+/// refused as a divisor and reads as 1.
 #[expect(clippy::too_many_arguments)]
 fn two_winding_tap(
     l1: &[Cow<'_, str>],
@@ -2735,7 +2745,7 @@ fn two_winding_tap(
     cw: i64,
     bus_base_kv: &BTreeMap<BusId, f64>,
     warnings: &mut Diagnostics,
-) -> Result<f64> {
+) -> Result<(f64, f64)> {
     let label = transformer_label(l1);
     let ratio1 = winding_ratio(l3, from, cw, bus_base_kv, &label, "winding 1", warnings)?;
     let ratio2 = winding_ratio(l4, to, cw, bus_base_kv, &label, "winding 2", warnings)?;
@@ -2743,9 +2753,9 @@ fn two_winding_tap(
         warnings.push(&codes::READ_PSSE_VALUE_SUBSTITUTED, format!(
             "PSS/E transformer {label}: winding 2 ratio is zero; used winding 1 ratio as the branch tap"
         ));
-        Ok(ratio1)
+        Ok((ratio1, 1.0))
     } else {
-        Ok(ratio1 / ratio2)
+        Ok((ratio1 / ratio2, ratio2))
     }
 }
 
@@ -4028,9 +4038,12 @@ fn read_transformer(
         "1-2",
         warnings,
     );
-    let tap = two_winding_tap(l1, l3, l4, from, to, cw, bus_base_kv, warnings)?;
+    let (tap, ratio2) = two_winding_tap(l1, l3, l4, from, to, cw, bus_base_kv, warnings)?;
+    // The impedance sits between the two winding ratios; the branch states it
+    // behind its one tap, on the winding 2 side of that ratio.
+    let (r, x) = (r * ratio2 * ratio2, x * ratio2 * ratio2);
     let modern = raw_rev >= 34;
-    let (control, control_node) = read_transformer_control(
+    let (mut control, control_node) = read_transformer_control(
         l3,
         raw_rev,
         sbase,
@@ -4041,6 +4054,17 @@ fn read_transformer(
         "winding 1",
         warnings,
     )?;
+    // The control moves winding 1's ratio, so in branch tap terms its range
+    // divides by the winding 2 ratio exactly as the tap does.
+    if let Some(control) = control.as_mut()
+        && matches!(
+            control.mode,
+            TransformerControlMode::Voltage | TransformerControlMode::ReactiveFlow
+        )
+    {
+        control.tap_min /= ratio2;
+        control.tap_max /= ratio2;
+    }
     let bus_kv = bus_base_kv.get(&from).copied().unwrap_or(0.0);
     let (mag_g, mag_b) = convert_transformer_magnetizing_admittance(
         num_at(l1, 7, 0.0)?,
@@ -5560,6 +5584,95 @@ Q
         close(br.r, 0.02);
         close(br.x, 0.20);
         close(br.tap, 1.05);
+    }
+
+    /// A winding 2 ratio off one moves across the series impedance: PSS/E
+    /// states `t1 : 1` at winding 1, the impedance, then `1 : t2` at winding
+    /// 2, and the branch has one tap `t1 / t2` with the impedance behind it,
+    /// so the impedance scales by `t2²`. The branch's two port admittance
+    /// must equal the PSS/E circuit's under every winding code.
+    #[test]
+    #[allow(clippy::many_single_char_names)] // the circuit's own notation
+    fn a_winding_2_ratio_scales_the_impedance_behind_the_branch_tap() {
+        let record = |cw: u8, w1: &str, w2: &str| {
+            format!(
+                "0, 100.00, 33, 0, 0, 60.00 / synthetic
+CASE
+COMMENT
+1,'BUS1        ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'BUS2        ', 115.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+1,2,0,'1 ',{cw},1,1,0,0,1,'xf',1
+0.01,0.10,100.0
+{w1},0.0,100.0,90.0,80.0,1,2,1.15,0.95,1.05,0.95,33
+{w2}
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+"
+            )
+        };
+        // (CW, winding 1, winding 2, t1, t2) in per unit of the bus bases.
+        let cases = [
+            (1, "1.04, 0.0", "0.98, 0.0", 1.04, 0.98),
+            (2, "241.5, 0.0", "112.7, 0.0", 241.5 / 230.0, 112.7 / 115.0),
+            // CW 3 states the ratio on the winding's own nominal voltage.
+            (
+                3,
+                "1.0, 240.0",
+                "0.96, 120.0",
+                240.0 / 230.0,
+                0.96 * 120.0 / 115.0,
+            ),
+        ];
+        for (cw, w1, w2, t1, t2) in cases {
+            let br = parse_psse(&record(cw, w1, w2)).unwrap().branches()[0].clone();
+            let z = (0.01_f64, 0.10_f64);
+            let y = |r: f64, x: f64| {
+                let d = r * r + x * x;
+                (r / d, -x / d)
+            };
+            // PSS/E circuit: Y = y·[[1/t1², -1/(t1 t2)], [-1/(t1 t2), 1/t2²]].
+            let (g, b) = y(z.0, z.1);
+            let psse = [
+                (g / (t1 * t1), b / (t1 * t1)),
+                (-g / (t1 * t2), -b / (t1 * t2)),
+                (g / (t2 * t2), b / (t2 * t2)),
+            ];
+            // Neutral branch: Y = y'·[[1/t², -1/t], [-1/t, 1]].
+            let t = br.tap;
+            let (g2, b2) = y(br.r, br.x);
+            let branch = [(g2 / (t * t), b2 / (t * t)), (-g2 / t, -b2 / t), (g2, b2)];
+            for (a, b) in psse.iter().zip(&branch) {
+                assert!(
+                    (a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).abs() < 1e-9,
+                    "CW {cw}: {psse:?} vs {branch:?}"
+                );
+            }
+            assert!((br.tap - t1 / t2).abs() < 1e-12, "CW {cw}");
+            // The winding 1 tap range reads in branch tap terms too.
+            let control = br.control.as_ref().unwrap();
+            // RMA and RMI take the winding's own units: kV under CW 2.
+            let range = |v: f64| match cw {
+                2 => v / 230.0 / t2,
+                3 => v * 240.0 / 230.0 / t2,
+                _ => v / t2,
+            };
+            assert!((control.tap_max - range(1.15)).abs() < 1e-12, "CW {cw}");
+            assert!((control.tap_min - range(0.95)).abs() < 1e-12, "CW {cw}");
+
+            // The canonical write states the same circuit with winding 2 at one.
+            let back = parse_psse(&write_psse(&parse_psse(&record(cw, w1, w2)).unwrap()).text)
+                .unwrap()
+                .branches()[0]
+                .clone();
+            for (a, b) in [(back.r, br.r), (back.x, br.x), (back.tap, br.tap)] {
+                assert!((a - b).abs() < 1e-12, "CW {cw}: {a} != {b}");
+            }
+        }
     }
 
     #[test]

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- PSS/E and RAWX two winding transformers whose winding 2 ratio is not one
+  now read with the admittance PSS/E solves with. PSS/E places the series
+  impedance between an ideal `t1 : 1` at winding 1 and an ideal `1 : t2` at
+  winding 2; the neutral branch states one tap `t1 / t2` with the impedance
+  behind it, and the reader divided the ratios without moving the impedance
+  across `t2`, so a transformer whose `WINDV2` (with `CW` 2 or 3, after
+  conversion to its bus base) differed from one read with an impedance off by
+  `t2²`. The impedance now scales by `t2²` and a winding 1 tap control range
+  divides by `t2`, so the branch's two port admittance equals the PSS/E
+  circuit's. A transformer with `t2 = 1`, which every PSS/E file PowerIO
+  writes states, reads as before.
+
 - PSS/E switched shunt `MODSW` 1 and 2 now read as PSS/E defines them: 1 is
   discrete and 2 is continuous adjustment of the regulated voltage. The RAW
   and RAWX readers had the two swapped, so a continuously adjusted shunt, such

@@ -314,7 +314,12 @@ read as discrete, and keep their code for PSS/E output. A two winding
 transformer's magnetizing susceptance survives a round trip through `MAG2`.
 The reader converts `CW` 1/2/3, `CZ` 1/2/3, and `CM` 1/2 into the neutral tap
 ratio, system base impedance, and magnetizing admittance, and fresh output uses
-the electrically equivalent canonical `CW = CZ = CM = 1` representation.
+the electrically equivalent canonical `CW = CZ = CM = 1` representation. A two
+winding transformer's branch tap is the winding 1 ratio over the winding 2
+ratio \\(t_1 / t_2\\), each in per unit of its bus base voltage, and its series
+impedance and tap control range are referred across \\(t_2\\): the impedance
+scales by \\(t_2^2\\) and the range divides by \\(t_2\\), so the branch states
+the same two port admittance as the PSS/E circuit.
 
 ### UCTE-DEF
 
