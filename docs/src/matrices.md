@@ -71,6 +71,46 @@ The sensitivity and DC OPF builders use a transposed incidence factor
 internally, and that factor stays internal rather than becoming a second
 public incidence API.
 
+## Stated-state balance
+
+A case saved from a converged power flow stores bus voltages that balance
+its injections. `calc_stated_state_mismatch` evaluates every bus's AC
+balance at those stored voltages, with each device at its stated output, so
+a residual points at equipment PowerIO reads differently from the program
+that solved the case.
+
+- **Network side.** Every in service branch and three winding transformer
+  winding at its stated tap and shift, and every in service fixed and
+  switched shunt at its stated admittance, through the same branch
+  admittances as `calc_admittance_matrix`.
+- **Device side.** Generators at their stated `pg` and `qg`, loads through
+  their voltage model at the stored magnitude, static VAR compensators and
+  storage at their stated terminal power, and HVDC lines as fixed
+  injections unless `HvdcTreatment::Ignore` is selected.
+- **Sign.** A bus mismatch is the power the network draws at the stored
+  voltages minus the stated injection, MW and MVAr, the mismatch MATPOWER's
+  `newtonpf` drives to zero. An injection equal to it closes the bus, and
+  `closure_injections(mask)` returns that injection at every bus carrying a
+  flag in `mask`.
+- **Flags.** Each bus carries `StatedBusFlags` naming the attached equipment a
+  residual is commonly traced to: `hvdc`, `vsc`, `facts`,
+  `generator_on_pq_bus`, `star_bus`, `merged_group`, `voltage_dependent_load`,
+  `switched_shunt`, `reference`, `storage`, and `low_impedance_branch` (a
+  branch below `low_impedance_threshold`, default \(10^{-3}\) per unit, whose
+  flow the rounding of the stored voltages can move).
+- **Totals.** The result sums each island of the in service topology,
+  largest first, and ranks the `top_k` largest bus mismatches. A bus typed
+  isolated has no balance and belongs to no island.
+- **Refusal.** The stored voltages do not determine the flow through a
+  branch with zero series impedance, so such a branch is refused with
+  `Error::UnmergedZeroImpedance`; merge the buses it joins first.
+
+`calc_stated_branch_flows` returns the active and reactive power entering
+both ends of every branch and winding at the stored voltages. From the
+command line, `powerio verify case.raw --stated-state` prints the island
+totals and the largest bus mismatches with their flags, and Python exposes
+both calculations on `BalancedNetwork`.
+
 ## GridFM datasets
 
 Reading and writing GridFM needs the `gridfm` cargo feature; the CLI and the

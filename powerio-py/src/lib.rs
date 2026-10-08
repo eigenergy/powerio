@@ -895,6 +895,121 @@ impl PyBalancedNetwork {
         Ok(d)
     }
 
+    /// The AC bus balance at the voltages this case stores, with every
+    /// device at its stated output: per bus columns in analysis bus order,
+    /// island totals, and the ranked largest mismatches.
+    #[pyo3(signature = (*, top_k=20, hvdc="fixed_injection", low_impedance_threshold=1e-3, merge_zero_impedance=false))]
+    fn calc_stated_state_mismatch<'py>(
+        &self,
+        py: Python<'py>,
+        top_k: usize,
+        hvdc: &str,
+        low_impedance_threshold: f64,
+        merge_zero_impedance: bool,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let treatment = match normalize(hvdc).as_str() {
+            "fixedinjection" => powerio_tx::HvdcTreatment::FixedInjection,
+            "ignore" => powerio_tx::HvdcTreatment::Ignore,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown hvdc treatment {other:?}; expected 'fixed_injection' or 'ignore'"
+                )));
+            }
+        };
+        let mut options = powerio_matrix::StatedStateOptions::default()
+            .with_hvdc_treatment(treatment)
+            .with_top_k(top_k)
+            .with_low_impedance_threshold(low_impedance_threshold);
+        let merged;
+        let network = if merge_zero_impedance {
+            let (network, merge, _) = powerio_prob::merge_zero_impedance_buses(self.inner())
+                .map_err(|error| core_error_pyerr(&error))?;
+            options = options.with_merged_buses(merge.merged_buses);
+            merged = network;
+            &merged
+        } else {
+            self.inner()
+        };
+        let mismatch =
+            powerio_matrix::calc_stated_state_mismatch(network, &options).map_err(to_pyerr)?;
+        let d = PyDict::new(py);
+        d.set_item(
+            "bus_ids",
+            mismatch.buses.iter().map(|b| b.bus.0).collect::<Vec<_>>(),
+        )?;
+        d.set_item(
+            "island",
+            mismatch.buses.iter().map(|b| b.island).collect::<Vec<_>>(),
+        )?;
+        d.set_item(
+            "p_mw",
+            mismatch.buses.iter().map(|b| b.p_mw).collect::<Vec<_>>(),
+        )?;
+        d.set_item(
+            "q_mvar",
+            mismatch.buses.iter().map(|b| b.q_mvar).collect::<Vec<_>>(),
+        )?;
+        d.set_item(
+            "flags",
+            mismatch
+                .buses
+                .iter()
+                .map(|b| b.flags.names())
+                .collect::<Vec<_>>(),
+        )?;
+        let islands = PyList::empty(py);
+        for island in &mismatch.islands {
+            let row = PyDict::new(py);
+            row.set_item("n_buses", island.n_buses)?;
+            row.set_item("p_mw", island.p_mw)?;
+            row.set_item("q_mvar", island.q_mvar)?;
+            row.set_item("abs_p_mw", island.abs_p_mw)?;
+            row.set_item("abs_q_mvar", island.abs_q_mvar)?;
+            row.set_item("largest_bus", island.largest_bus.0)?;
+            islands.append(row)?;
+        }
+        d.set_item("islands", islands)?;
+        d.set_item("top", mismatch.top.clone())?;
+        d.set_item("total_abs_p_mw", mismatch.calc_total_abs_p_mw())?;
+        d.set_item("total_abs_q_mvar", mismatch.calc_total_abs_q_mvar())?;
+        d.set_item("max_magnitude_mva", mismatch.calc_max_magnitude_mva())?;
+        Ok(d)
+    }
+
+    /// Active and reactive power entering every analysis branch at both
+    /// ends, at the voltages this case stores, MW and MVAr.
+    fn calc_stated_branch_flows<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let flows = powerio_matrix::calc_stated_branch_flows(self.inner()).map_err(to_pyerr)?;
+        let d = PyDict::new(py);
+        let sources = PyList::empty(py);
+        for source in &flows.sources {
+            let row = PyDict::new(py);
+            match *source {
+                powerio_matrix::AnalysisBranchSource::Branch { row: branch } => {
+                    row.set_item("kind", "branch")?;
+                    row.set_item("row", branch)?;
+                }
+                powerio_matrix::AnalysisBranchSource::ThreeWindingTransformerWinding {
+                    transformer_row,
+                    winding,
+                } => {
+                    row.set_item("kind", "three_winding_transformer_winding")?;
+                    row.set_item("row", transformer_row)?;
+                    row.set_item("winding", winding)?;
+                }
+                _ => row.set_item("kind", "other")?,
+            }
+            sources.append(row)?;
+        }
+        d.set_item("sources", sources)?;
+        d.set_item("in_service", flows.in_service)?;
+        d.set_item("p_from_mw", flows.p_from_mw)?;
+        d.set_item("q_from_mvar", flows.q_from_mvar)?;
+        d.set_item("p_to_mw", flows.p_to_mw)?;
+        d.set_item("q_to_mvar", flows.q_to_mvar)?;
+        Ok(d)
+    }
+
     /// A normalized, computation-ready copy of this case: per unit, radians,
     /// out-of-service filtered, densely reindexed (1-based), bus types
     /// canonicalized. The raw case is unchanged; the result carries no retained

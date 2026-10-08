@@ -2117,6 +2117,34 @@ def test_reference_bus_index(case9):
     assert case9.reference_bus_indices() == [0]
 
 
+def test_stated_state_mismatch_ranks_buses_and_counts_hvdc():
+    case = load("t_case9_dcline")
+    fixed = case.calc_stated_state_mismatch(top_k=3)
+    assert len(fixed["bus_ids"]) == case.n_buses
+    assert sum(island["n_buses"] for island in fixed["islands"]) == case.n_buses
+    magnitudes = [
+        (fixed["p_mw"][row] ** 2 + fixed["q_mvar"][row] ** 2) ** 0.5
+        for row in fixed["top"]
+    ]
+    assert len(magnitudes) == 3
+    assert magnitudes == sorted(magnitudes, reverse=True)
+    row = fixed["bus_ids"].index(30)
+    assert "hvdc" in fixed["flags"][row]
+    # Bus 30 sends 10 MW into the dcline; ignoring the line drops that
+    # withdrawal from the stated injection.
+    ignored = case.calc_stated_state_mismatch(hvdc="ignore")
+    assert ignored["p_mw"][row] - fixed["p_mw"][row] == pytest.approx(-10.0)
+    with pytest.raises(ValueError):
+        case.calc_stated_state_mismatch(hvdc="bogus")
+
+
+def test_stated_branch_flows_cover_every_branch(case9):
+    flows = case9.calc_stated_branch_flows()
+    assert len(flows["p_from_mw"]) == case9.n_branches
+    assert flows["sources"][0] == {"kind": "branch", "row": 0}
+    assert all(flows["in_service"])
+
+
 def test_reference_bus_error_on_two_refs():
     two_ref = TINY.replace("\t3\t2\t0", "\t3\t3\t0")  # bus 3: PV -> ref
     case = _parse(

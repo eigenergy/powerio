@@ -373,6 +373,47 @@ class BalancedNetwork:
         """Calculate the in-service topology summary."""
         return self._inner.calc_connectivity_report()
 
+    def calc_stated_state_mismatch(
+        self,
+        *,
+        top_k: int = 20,
+        hvdc: str = "fixed_injection",
+        low_impedance_threshold: float = 1e-3,
+        merge_zero_impedance: bool = False,
+    ) -> dict[str, Any]:
+        """Evaluate every bus's AC balance at the voltages the case stores.
+
+        Each device sits at its stated output: generators at ``pg``/``qg``,
+        loads through their voltage model at the stored magnitude, shunts at
+        their stated admittance, and HVDC lines as fixed injections (or not,
+        with ``hvdc="ignore"``). A bus mismatch is the power the network draws
+        at the stored voltages minus the stated injection, MW and MVAr, so an
+        injection equal to it closes the bus.
+
+        The result holds per bus columns in analysis bus order (``bus_ids``,
+        ``island``, ``p_mw``, ``q_mvar``, and ``flags``, the attached
+        equipment a residual is traced to), ``islands`` totals largest first,
+        ``top`` (row indices of the largest mismatches), and the totals.
+        ``merge_zero_impedance`` first merges the buses joined by in-service
+        zero-impedance branches, whose flows the stored voltages cannot
+        determine; without it such a branch raises.
+        """
+        return self._inner.calc_stated_state_mismatch(
+            top_k=top_k,
+            hvdc=hvdc,
+            low_impedance_threshold=low_impedance_threshold,
+            merge_zero_impedance=merge_zero_impedance,
+        )
+
+    def calc_stated_branch_flows(self) -> dict[str, Any]:
+        """Calculate the power entering every branch end at the stored voltages.
+
+        Columns follow analysis branch order: every branch row, then the three
+        windings of each in-service three-winding transformer, as ``sources``
+        states. Powers are MW and MVAr; an out-of-service branch carries zero.
+        """
+        return self._inner.calc_stated_branch_flows()
+
     def to_geo_layer(self) -> dict[str, Any]:
         """Transform coordinates to a canonical GeoJSON FeatureCollection.
 
