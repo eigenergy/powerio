@@ -226,6 +226,16 @@ Schema definition: `Branch`.
 | `route` | array of `Location` or null | network coordinate space | | | null |
 | `extras` | object | | | | required |
 
+A transformer's impedance correction table rides in `extras`.
+`impedance_correction` holds `{table, variable, points}`. `variable` is
+`ratio` or `angle` (degrees), and each point is `{value, factor_re,
+factor_im}`, the complex factor that multiplies the nominal series impedance
+at that ratio or angle. A three winding transformer keeps three such entries,
+one per winding or `null`, and its factor scales that winding's star
+impedance. `impedance_correction_nominal` holds the nominal impedance once
+`apply_impedance_correction` has scaled it: `[r, x]` on a branch and the three
+pairwise `[r, x]` on a three winding transformer.
+
 Schema definition: `BranchCharging`.
 
 | field | type | unit | sign | invariant | if absent |

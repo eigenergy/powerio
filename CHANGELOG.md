@@ -20,6 +20,30 @@
   nothing scaled twice. A PowerIO IR document an earlier release wrote from
   such a case carries the old impedance, so read the case again.
 
+- PSS/E transformer impedance correction tables are read, kept, and written
+  back. The reader parses the section in both layouts: one line of eleven
+  real `T, F` pairs before revision 34, and complex `T, Re(F), Im(F)` points
+  over as many lines as a table takes, ended by `0.0, 0.0, 0.0`, from
+  revision 34. Each transformer winding that names a table through `TAB`
+  carries it, read through `Branch::impedance_correction` and
+  `Transformer3W::winding_impedance_correction`. The factor is tabulated
+  against the phase shift for a winding that controls active power flow or
+  states a fixed phase shift, and against winding 1's turns ratio otherwise;
+  turns ratios convert to the branch tap's per unit terms with the winding's
+  own `CW` and its winding 2 ratio. The new
+  `BalancedNetwork::apply_impedance_correction` scales each transformer's
+  series impedance by the factor interpolated at its present ratio or angle:
+  `r + jx` for a two winding transformer, a complex factor that commutes
+  with the reader's referral of that impedance across the winding 2 ratio,
+  and the winding's star impedance for a three winding transformer. It records the nominal impedance and
+  scales from it, so a second call changes nothing. The PSS/E writer states
+  the nominal impedance beside each table, renumbering a table whose per unit
+  points differ between windings, and revision 33 output reports the
+  imaginary parts and the points past eleven it cannot state. Tables no
+  transformer names, and table numbers no table answers, are reported. RAWX
+  output reports the tables it drops. The tables live in `extras`, so the
+  PowerIO IR schema is unchanged.
+
 - PSS/E switched shunt `MODSW` 1 and 2 now read as PSS/E defines them: 1 is
   discrete and 2 is continuous adjustment of the regulated voltage. The RAW
   and RAWX readers had the two swapped, so a continuously adjusted shunt, such
