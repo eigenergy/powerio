@@ -132,10 +132,7 @@ fn generated_names_do_not_shadow_explicit_source_identities() {
         .iter()
         .map(|load| load.name.as_str())
         .collect();
-    assert_eq!(
-        names,
-        ["sink__glm_impedance_1", "sink__glm_impedance__glm_power"]
-    );
+    assert_eq!(names, ["sink__glm_impedance_1", "sink__glm_impedance"]);
 }
 
 #[test]
@@ -196,4 +193,17 @@ fn matrix_quantity_diagnostic_is_emitted_once_per_native_assignment() {
         module.value().line_codes()[0].r_series[0][0] * 1609.344,
         1.0,
     );
+}
+
+#[test]
+fn underflowing_load_power_is_not_mistaken_for_an_open_circuit() {
+    let text = SINGLE
+        .replace("nominal_voltage 240", "nominal_voltage 1e-200")
+        .replace("nominal_voltage .24 kV", "nominal_voltage 1e-200");
+    let error = read(&text).unwrap_err();
+    assert_eq!(
+        error.diagnostics()[0].code(),
+        "READ.GLM.ELECTRICAL_UNSUPPORTED"
+    );
+    assert!(error.to_string().contains("underflows"));
 }

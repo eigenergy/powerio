@@ -127,6 +127,14 @@ def residuals(net, directory, phases):
     for i, terminal in enumerate(line["terminal_map_to"]):
         check(f"sink.{terminal}.kcl", to_current[i] + load_currents[terminal], 0, 2e-7)
     for source in net["sources"]:
+        if source.get("type") == "powerio.ReferencedVoltageSource":
+            source = source["value"]
+        reference_terminal = source.get("reference_terminal")
+        reference = (
+            0j
+            if reference_terminal is None
+            else voltages[source["bus"]][reference_terminal]
+        )
         for terminal, magnitude, angle in zip(
             source["terminal_map"],
             source["v_magnitude"],
@@ -136,7 +144,7 @@ def residuals(net, directory, phases):
             check(
                 f"source.{terminal}.voltage",
                 magnitude * np.exp(1j * angle),
-                voltages["source"][terminal],
+                voltages[source["bus"]][terminal] - reference,
                 1e-8,
             )
     return checks

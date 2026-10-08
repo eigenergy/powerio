@@ -2,8 +2,9 @@
 
 These tools calibrate independent engines against analytic static circuits,
 then validate specific PowerIO conversion profiles. Electrical reader and IR
-checks cover the initial profile described below. They do not establish full
-format compatibility, canonical GLM writing or OpenDSS conversion equivalence.
+checks cover the initial profile described below, including canonical GLM
+output. They do not establish full format compatibility or OpenDSS conversion
+equivalence.
 
 `engines.json` pins the PNNL 5.3.0 macOS archive and runtime files, the Arras
 4.3.17 Linux amd64 container by digest, and OpenDSSDirect 0.9.4 with DSS C-API
@@ -119,8 +120,7 @@ child nominal voltages and names that collide under the current canonical
 case-insensitive lookup. Coordinates are available through the separate source
 API; network attachment remains unfinished and currently fails explicitly.
 Instrumentation remains in retained source with a remark. No recorder, assertion
-or controller executes during parsing. Facade format dispatch and canonical GLM
-emission remain unfinished.
+or controller executes during parsing. Facade format dispatch remains unfinished.
 
 Build and run the reader qualification with:
 
@@ -142,6 +142,44 @@ capacitance errors must fail. Reports include engine identity, input hashes,
 typed network data, IR equality and each residual's absolute-plus-relative
 bound. This qualifies reader physics and IR preservation; fresh/edited GLM
 output and cross-format engine validation need separate checks.
+
+## Canonical GLM output
+
+`powerio_dist::glm::emit_canonical` takes a `MulticonductorNetwork` and a
+destination. It generates one fresh GLM file from the current typed value;
+there is no retained-source path in this API. It supports the reader's initial
+phase-to-earth P/I/Z and explicit line-matrix profile. An unsupported electrical
+feature fails before any artifact is written. Non-electrical metadata losses,
+including coordinates, optimization bounds, ratings and source cost data, are
+reported. Facade format registration and exact source-project replay remain
+separate unfinished work.
+
+The writer derives bus nominal voltages from connected fixed sources and
+reconstructs each load's coefficients using its own stated nominal voltage.
+Nonuniform load bases therefore retain the same physical law. Matrix indices
+and source/load properties follow explicit phase identities even when model
+terminal order differs from native A/B/C order. A source reference on an
+already perfectly grounded terminal has the exact earth-referenced equivalent;
+floating references are refused. Source zero phasors, noncapacitive or unequal
+line end shunts, non-60-Hz cases, uninterpreted electrical extras, additional
+device families and unqualified object-name escaping remain explicit gaps.
+
+```sh
+cargo build -p powerio --example glm_roundtrip
+python evals/gridlabd/roundtrip_oracle.py --pnnl-root "$PNNL_ROOT" \
+  --bridge target/debug/examples/glm_roundtrip --output /tmp/gld-canonical
+```
+
+For each of the eight reader cases and both engines, this bridge emits five
+variants: fresh, IR-restored, edited, electrically equivalent load-base changes
+and grounded source references. The harness runs the bare canonical file as
+well as a separately instrumented copy. Fresh and IR-restored files must be
+byte-identical; native electrical results of equivalent variants must match the
+original case. Edits to loads, line length and source voltage must change the
+result and satisfy the edited network equations. Constant-impedance cases also
+match a separately solved analytic circuit. These checks qualify 80 canonical
+engine solves, not just parser acceptance or retained-source echo. OpenDSS
+cross-format equivalence remains unqualified.
 
 ## Published references and limits
 

@@ -364,48 +364,77 @@ impl Reader<'_> {
             if class(&self.index.objects()[key.ordinal()]) != "load" {
                 continue;
             }
-            for law in ["power", "current", "impedance"] {
-                let mut values = Vec::new();
-                for &phase in &phases {
-                    let value = self
-                        .quantity(key, &format!("constant_{law}_{}", phase_name(phase)))
-                        .unwrap_or_default();
-                    let power = match law {
-                        "power" => value,
-                        "current" => nominal_phasor(nominal, phase) * value.conj(),
-                        _ if value == Complex64::default() => Complex64::default(),
-                        _ => nominal * nominal / value.conj(),
-                    };
-                    if !power.re.is_finite() || !power.im.is_finite() {
-                        return Err(self.error(key, "load power normalization overflows"));
-                    }
-                    values.push(power);
+            self.load_terms(key, root, &phases, nominal)?;
+        }
+        Ok(())
+    }
+
+    fn load_terms(
+        &mut self,
+        key: ObjectKey,
+        root: ObjectKey,
+        phases: &[usize],
+        nominal: f64,
+    ) -> Result<(), Error> {
+        let laws = ["power", "current", "impedance"];
+        let law_count = laws
+            .iter()
+            .filter(|law| {
+                phases.iter().any(|&phase| {
+                    self.quantity(key, &format!("constant_{law}_{}", phase_name(phase)))
+                        .is_some()
+                })
+            })
+            .count();
+        for law in laws {
+            let mut values = Vec::new();
+            let mut stated = false;
+            for &phase in phases {
+                let value = self.quantity(key, &format!("constant_{law}_{}", phase_name(phase)));
+                stated |= value.is_some();
+                let value = value.unwrap_or_default();
+                let power = match law {
+                    "power" => value,
+                    "current" => nominal_phasor(nominal, phase) * value.conj(),
+                    _ if value == Complex64::default() => Complex64::default(),
+                    _ => nominal * nominal / value.conj(),
+                };
+                if !power.re.is_finite() || !power.im.is_finite() {
+                    return Err(self.error(key, "load power normalization overflows"));
                 }
-                if values.iter().all(|v| *v == Complex64::default()) {
-                    continue;
+                if value != Complex64::default() && power == Complex64::default() {
+                    return Err(self.error(key, "load power normalization underflows to zero"));
                 }
-                let mut terminals: Vec<_> = phases.iter().map(|p| (p + 1).to_string()).collect();
-                terminals.push("n".into());
-                let name = allocate_name(
+                values.push(power);
+            }
+            if !stated {
+                continue;
+            }
+            let mut terminals: Vec<_> = phases.iter().map(|p| (p + 1).to_string()).collect();
+            terminals.push("n".into());
+            let name = if key != root && law_count == 1 {
+                self.names[&key].clone()
+            } else {
+                allocate_name(
                     &mut self.identities,
                     &format!("{}__glm_{law}", self.names[&key]),
-                );
-                let mut load = DistLoad::new(
-                    name,
-                    &self.names[&root],
-                    terminals,
-                    Configuration::Wye,
-                    values.iter().map(|v| v.re).collect(),
-                    values.iter().map(|v| v.im).collect(),
-                );
-                let v_nom = vec![nominal; phases.len()];
-                load.voltage_model = match law {
-                    "power" => DistLoadVoltageModel::ConstantPower { v_nom },
-                    "current" => DistLoadVoltageModel::ConstantCurrent { v_nom },
-                    _ => DistLoadVoltageModel::ConstantImpedance { v_nom },
-                };
-                self.net.loads_mut().push(load);
-            }
+                )
+            };
+            let mut load = DistLoad::new(
+                name,
+                &self.names[&root],
+                terminals,
+                Configuration::Wye,
+                values.iter().map(|v| v.re).collect(),
+                values.iter().map(|v| v.im).collect(),
+            );
+            let v_nom = vec![nominal; phases.len()];
+            load.voltage_model = match law {
+                "power" => DistLoadVoltageModel::ConstantPower { v_nom },
+                "current" => DistLoadVoltageModel::ConstantCurrent { v_nom },
+                _ => DistLoadVoltageModel::ConstantImpedance { v_nom },
+            };
+            self.net.loads_mut().push(load);
         }
         Ok(())
     }

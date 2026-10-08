@@ -15,6 +15,7 @@ mod quantities;
 mod read;
 mod syntax;
 mod units;
+mod write;
 
 pub use coordinates::GlmCoordinates;
 pub use objects::{GlmObject, GlmProperty, GlmPropertyValue, ObjectIndex, ObjectKey};
@@ -25,3 +26,4 @@ pub use project::{GlmProject, parse_project};
 pub use quantities::{GlmQuantity, GlmQuantityKind};
 pub use read::parse;
 pub use syntax::{RawGlm, Statement, Token, TokenKind, parse_raw_source};
+pub use write::emit_canonical;

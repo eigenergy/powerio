@@ -43,6 +43,12 @@ pub mod codes {
             "a GLM electrical feature has no verified static mapping", category = Data;
         READ_GLM_SOURCE_ONLY = "READ.GLM.SOURCE_ONLY", Remark,
             "non-electrical GLM data remains in the retained source";
+        EMIT_GLM_UNSUPPORTED = "EMIT.GLM.UNSUPPORTED", Error,
+            "the GLM writer cannot yet represent this electrical feature", category = Data;
+        EMIT_GLM_FIELD_DROPPED = "EMIT.GLM.FIELD_DROPPED", Warning,
+            "non-electrical metadata has no expression in canonical GLM output";
+        EMIT_GLM_VALUE_REBASED = "EMIT.GLM.VALUE_REBASED", Remark,
+            "a GLM nominal voltage or identity was materialized without changing electrical behavior";
 
         // READ.DSS: decoded, but not representable in the multiconductor model.
         /// A `Redirect`/`Compile`/`Buscoords` include the reader refused
