@@ -9,7 +9,9 @@ mod coordinates;
 mod objects;
 mod preprocess;
 mod project;
+mod quantities;
 mod syntax;
+mod units;
 
 pub use coordinates::GlmCoordinates;
 pub use objects::{GlmObject, GlmProperty, GlmPropertyValue, ObjectIndex, ObjectKey};
@@ -17,4 +19,5 @@ pub use preprocess::{
     ExpansionOrigin, GlmDialect, PreparedGlm, PreprocessOptions, preprocess_source,
 };
 pub use project::{GlmProject, parse_project};
+pub use quantities::{GlmQuantity, GlmQuantityKind};
 pub use syntax::{RawGlm, Statement, Token, TokenKind, parse_raw_source};

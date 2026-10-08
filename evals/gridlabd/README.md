@@ -169,6 +169,31 @@ with original-source spans; the native engine's permissive numeric-prefix parsin
 is not silently reproduced. Mapping these source points into the electrical
 network and fresh/edited/IR conversion remain to be implemented and verified.
 
+`quantity_oracle.py` compares `GlmProject::quantity` with native property
+readbacks and the analytic single-phase circuit. Build the `glm_quantities`
+example and supply it with `--reader`, alongside `--pnnl-root` and a new
+`--output` directory. This validation schema covers selected properties only;
+it is not a network reader or a canonical writer.
+
+Quantity interpretation requires the native property kind and unit. It supports
+finite decimal/exponent literals, rectangular and polar phasors, and a bounded
+electrical/geometry unit profile with SI prefixes, lengths, powers, per-length
+parameters and pinned native temperature/angle definitions. Unsupported units,
+expressions and property references fail with original-source spans. Unit
+expressions are bounded to 256 bytes, 32 factors and integer powers 2 through 16.
+
+Quoting is significant: native GLM converts `5 kVA` in a complex property to
+5000 VA, but the quoted string `"5 kVA"` takes a different conversion path and
+retains 5 VA. PowerIO preserves this distinction and emits
+`READ.GLM.UNIT_IGNORED` for the ignored suffix. Consumers must carry quantity
+diagnostics into the resulting module. Arras also accepts quoted parenthesized
+complex strings; unquoted parentheses require other expression semantics.
+The harness uses 15-digit output and each complex value's own notation: forcing
+rectangular output in the pinned Arras build can mislabel polar properties.
+Source quantities and native readbacks use a relative tolerance of `1e-12`
+with an absolute floor of `1e-12`; electrical checks retain the analytic
+harness's quantity-specific tolerances.
+
 `upstream.json` records original PNNL source URLs, commit, hashes, license and
 assertion inventories. `upstream.py` runs the unmodified IEEE 13 NR and FBS
 regressions (32 complex assertions each) and IEEE 37 NR (six). The 13-node

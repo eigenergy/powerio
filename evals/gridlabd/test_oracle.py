@@ -11,9 +11,25 @@ from coordinate_oracle import check as check_coordinates
 from coordinate_oracle import expected as expected_coordinates
 from object_oracle import source_graph
 from oracle import add, analytic, cases, compare, parse_complex, recorded
+from quantity_oracle import check_values, reference as quantity_reference
 
 
 class OracleTests(unittest.TestCase):
+    def test_quantity_comparator_rejects_units_notation_and_missing_values(self):
+        reference = quantity_reference()
+        check_values(reference, reference, 1e-12)
+        for key, wrong in [
+            ("probe.z11", 5000),
+            ("probe.z32", 5),
+            ("probe.z21", 5 + 0.927295218j),
+            ("probe.c11", float("nan")),
+        ]:
+            actual = dict(reference, **{key: wrong})
+            with self.assertRaises(ValueError):
+                check_values(actual, reference, 1e-12)
+        with self.assertRaises(ValueError):
+            check_values({}, reference, 1e-12)
+
     def test_object_graph_rejects_ambiguous_or_missing_identity(self):
         node = {
             "key": 0,

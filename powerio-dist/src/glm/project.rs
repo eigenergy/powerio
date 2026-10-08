@@ -1,7 +1,8 @@
-use powerio_core::{DiagnosticInfo, Error, Source, SourceId, SourceSpan};
+use powerio_core::{Diagnostic, DiagnosticInfo, Error, Source, SourceId, SourceSpan};
 
 use super::{
-    PreparedGlm, PreprocessOptions, RawGlm, Statement, parse_raw_source, preprocess_source,
+    GlmDialect, PreparedGlm, PreprocessOptions, RawGlm, Statement, parse_raw_source,
+    preprocess_source,
 };
 use crate::diagnostics::codes;
 
@@ -12,9 +13,15 @@ use crate::diagnostics::codes;
 pub struct GlmProject {
     prepared: PreparedGlm,
     syntax: RawGlm,
+    dialect: GlmDialect,
 }
 
 impl GlmProject {
+    #[must_use]
+    pub const fn dialect(&self) -> GlmDialect {
+        self.dialect
+    }
+
     #[must_use]
     pub fn source(&self) -> &Source {
         &self.prepared.source
@@ -45,6 +52,31 @@ impl GlmProject {
     pub(crate) fn fail(&self, span: &SourceSpan, message: impl Into<String>) -> Error {
         mapped_error(&self.prepared, &codes::PARSE_GLM_OBJECT, span, message)
     }
+
+    pub(super) fn quantity_error(&self, span: &SourceSpan, message: &str) -> Error {
+        mapped_error(&self.prepared, &codes::PARSE_GLM_QUANTITY, span, message)
+    }
+
+    pub(super) fn ignored_quantity_unit(
+        &self,
+        span: &SourceSpan,
+        suffix: &str,
+    ) -> Result<Diagnostic, Error> {
+        let mut diagnostic = Diagnostic::of(
+            &codes::READ_GLM_UNIT_IGNORED,
+            format!(
+                "native quantity conversion ignores suffix {suffix:?}; retained the native numeric value"
+            ),
+        );
+        for original in self
+            .prepared
+            .original_span_iter(span.byte_start() as usize..span.byte_end() as usize)
+            .take(powerio_core::limits::MAX_DIAGNOSTIC_SPANS + 1)
+        {
+            diagnostic = diagnostic.with_span(original)?;
+        }
+        Ok(diagnostic)
+    }
 }
 
 fn mapped_error(
@@ -67,10 +99,15 @@ fn mapped_error(
 /// Failures retain the original project and point into original buffers rather
 /// than presenting expanded byte offsets as if they belonged to an input file.
 pub fn parse_project(source: Source, options: PreprocessOptions) -> Result<GlmProject, Error> {
+    let dialect = options.dialect;
     let prepared = preprocess_source(source, options)?;
     let expanded = Source::from_memory("expanded.glm", prepared.text().as_bytes())?;
     match parse_raw_source(expanded) {
-        Ok(syntax) => Ok(GlmProject { prepared, syntax }),
+        Ok(syntax) => Ok(GlmProject {
+            prepared,
+            syntax,
+            dialect,
+        }),
         Err(error) => {
             let Some(first) = error.diagnostics().first() else {
                 return Err(error.with_source(prepared.source));

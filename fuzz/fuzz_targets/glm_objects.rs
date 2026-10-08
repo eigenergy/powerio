@@ -2,7 +2,7 @@
 
 use libfuzzer_sys::fuzz_target;
 use powerio_core::Source;
-use powerio_dist::glm::{GlmDialect, PreprocessOptions, parse_project};
+use powerio_dist::glm::{GlmDialect, GlmQuantityKind, PreprocessOptions, parse_project};
 
 fuzz_target!(|bytes: &[u8]| {
     if bytes.len() > 8192 { return; }
@@ -10,6 +10,15 @@ fuzz_target!(|bytes: &[u8]| {
     let dialect = if bytes.first().is_some_and(|b| b & 1 == 1) { GlmDialect::Arras4_3 } else { GlmDialect::Pnnl5_3 };
     if let Ok(project) = parse_project(source, PreprocessOptions { dialect, ..Default::default() }) {
         if let Ok(index) = project.index_objects() {
+            for object in index.objects().iter().take(32) {
+                for property in object.properties().iter().take(16) {
+                    for kind in [GlmQuantityKind::Real, GlmQuantityKind::Complex] {
+                        if let Ok(quantity) = project.quantity(property, kind, Some("Ohm/mile")) {
+                            assert!(quantity.value.re.is_finite() && quantity.value.im.is_finite());
+                        }
+                    }
+                }
+            }
             if let Ok(points) = index.declared_coordinates() {
                 assert_eq!(points.len(), index.objects().len());
                 for point in points {
