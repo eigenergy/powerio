@@ -406,7 +406,10 @@ fn a_low_impedance_branch_flags_both_terminals() {
         &StatedStateOptions::default().with_low_impedance_threshold(1e-4),
     )
     .unwrap();
-    assert!(looser.buses[row_of(&looser, 11)].flags.is_empty());
+    assert_eq!(
+        looser.buses[row_of(&looser, 11)].flags,
+        StatedBusFlags::NONE
+    );
 }
 
 #[test]
