@@ -121,7 +121,7 @@ fn out_of_service_lines_inject_nothing() {
     let instance = DcPfInstance::from_network(network).unwrap();
     close(dc_injection(&instance, 2), -50.0);
     close(dc_injection(&instance, 4), -97.0);
-    assert!(instance.hvdc_diagnostics().is_empty());
+    assert_eq!(instance.hvdc_diagnostics(), []);
 }
 
 #[test]

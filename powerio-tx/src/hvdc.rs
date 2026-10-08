@@ -293,10 +293,6 @@ mod tests {
             BalancedNetwork::in_memory("empty", 100.0, vec![bus(1, BusType::Ref)], Vec::new());
         let injections = net.calc_hvdc_injections();
         assert_eq!(injections, HvdcInjections::default());
-        assert!(
-            injections
-                .to_diagnostics(HvdcTreatment::FixedInjection)
-                .is_empty()
-        );
+        assert_eq!(injections.to_diagnostics(HvdcTreatment::FixedInjection), []);
     }
 }

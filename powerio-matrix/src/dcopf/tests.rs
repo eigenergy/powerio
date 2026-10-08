@@ -402,7 +402,7 @@ fn a_preparation_written_before_the_hvdc_field_reads_as_no_injection() {
     object.remove("p_hvdc");
     object.remove("hvdc_treatment");
     let older: super::DcOpfPreparation = serde_json::from_value(json).expect("deserialize");
-    assert!(older.p_hvdc.is_empty());
+    assert_eq!(older.p_hvdc, Vec::<f64>::new());
     assert_eq!(
         older.calc_fixed_nodal_withdrawal(),
         problem.calc_fixed_nodal_withdrawal()
