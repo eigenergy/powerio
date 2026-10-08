@@ -8,7 +8,11 @@ mod acquisition;
 pub mod authoring;
 #[cfg(test)]
 mod authoring_tests;
+mod geometry;
+#[cfg(test)]
+mod geometry_tests;
 mod project;
+pub use geometry::{DrawingGeometry, DrawingPoint, GRAPHICS_TABLES};
 mod retention;
 mod schema;
 #[cfg(test)]

@@ -187,8 +187,8 @@ not zero capability. Diagnostics identify this and data outside the chosen
 snapshot. Disabled modern profile references do not replace static powers.
 Active profiles require a supported adapter and explicit snapshot selection;
 currently only the declared schema-11.5 absolute daily profile is accepted.
-Fault, dynamic, protection, economic, diagram and stored-result
-data remain in the retained source. Cross-format output reports their omission.
+Fault, dynamic, protection, economic, untyped diagram and stored-result
+data remain in the retained source. Selected drawing coordinates are typed as described below. Cross-format output reports their omission.
 
 An unchanged module can emit `sincal` or its matching explicit profile token
 to reproduce its primary native bytes exactly. A SQLite input echoes SQLite
@@ -434,3 +434,52 @@ instance = module.to_mc_ac_pf_instance()  # CSIRO12 succeeds; CSIRO09 rejects is
 CSIRO09's primary file is 69,181,440 bytes. The checked command sets
 `POWERIO_MAX_PRIMARY_BYTES=69181440` explicitly; the default input limit remains
 unchanged. The native models stay external, subject to their own data rights.
+
+
+## Drawing coordinates and line routes
+
+Both reader families populate the existing bus-location and line-route fields
+from native graphic tables. Coordinates are labelled **Unknown** space: this
+profile does not infer WGS84, a projected CRS, or the meaning of `Node.lat/lon`
+and `Node.hr/hh`. Use them as native layouts unless you independently establish
+the coordinate reference system.
+
+A point-shaped node keeps its source point. An extended busbar uses a derived
+midpoint; `extras.sincal_geometry` preserves its two native endpoints. Lines use
+native terminal identities and attachment positions, with at most one bend per
+port (`NoPoint=1`). More complex bend ordering is diagnosed and left unmapped.
+Conflicting drawings, invalid optional records and multiple areas do not change
+the electrical model. No position is fabricated for generated auxiliary buses.
+
+SQLite databases and `.sinx` archives supply graphics directly. For Access,
+include optional graphics in the explicitly acquired companion:
+
+```sh
+python evals/sincal/import_access.py model.mdb acquired.json --include-graphics
+```
+
+Keep any additional electrical table selections your case already requires.
+Electrical-only companions still work; omitted graphics are reported.
+`READ.SINCAL.GEOMETRY` or `READ.DIST.SINCAL_GEOMETRY` reports the mapping counts,
+unknown coordinate space and any omissions. Graphical style and artwork remain
+only in source. Unchanged native echo stays byte-exact; IR retains mapped geometry.
+Fresh experimental SINCAL output still omits it with a diagnostic.
+
+Existing extraction paths work without new options or binding types:
+
+```sh
+powerio geo extract case.sinx --from sincal-balanced -o case.geo.json
+powerio geo extract case.db --from sincal-multiconductor -o case.geo.json
+```
+
+For Access or another input requiring snapshot/compatibility selections, first
+serialize the selected module to IR, then extract that IR's geometry. Canonical
+geo JSON carries Unknown space; it is not an earth-referenced GIS layer.
+Rust uses `BalancedNetwork::to_geo_layer()` or
+`powerio::dist_geo::to_dist_geo_layer(&network)`.
+
+Validation covers SimBench, CSIRO09/12/19 and the externally held Truong model:
+862 typed locations and 674 routes, including three native bends. All preserve
+electrical fields, native echo and IR. CSIRO12 retains its existing explicit
+compatibility assumptions. See the [implementation and evidence](../design/pss-sincal-geospatial.md)
+for case accounting and the deferred georeferencing and desktop acceptance gates.

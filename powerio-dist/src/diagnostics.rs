@@ -24,6 +24,8 @@ pub mod codes {
             "the selected conductor-resolved SINCAL profile cannot be parsed", category = Parse;
         READ_SINCAL_MULTICONDUCTOR_RETAINED_SOURCE_ONLY = "READ.DIST.SINCAL_RETAINED_SOURCE_ONLY", Remark,
             "native data outside the selected conductor-resolved profile remain only in source";
+        READ_SINCAL_GEOMETRY = "READ.DIST.SINCAL_GEOMETRY", Warning,
+            "optional SINCAL drawing geometry has unknown CRS or incomplete mapping";
         READ_SINCAL_UNCONNECTED_NODES = "READ.DIST.SINCAL_UNCONNECTED_NODES", Remark,
             "native nodes with no declared conductors remain in network extras";
         READ_SINCAL_ASSUMED_INACTIVE_SOURCE_CONTROLS = "READ.DIST.SINCAL_ASSUMED_INACTIVE_SOURCE_CONTROLS", Warning,

@@ -91,44 +91,11 @@ pub fn parse_with_options(
             .map_err(|e| failure(e, &retained))?;
         (snapshot, retained)
     };
-    let inventory = snapshot
-        .retention_diagnostics(
-            &codes::READ_SINCAL_RETAINED_SOURCE_ONLY,
-            &[
-                "Version",
-                "Variant",
-                "Node",
-                "Element",
-                "Terminal",
-                "VoltageLevel",
-                "CalcParameter",
-                "Line",
-                "Load",
-                "Infeeder",
-                "TwoWindingTransformer",
-                "DCInfeeder",
-                "OpSer",
-                "OpSerVal",
-                "ShuntCondensator",
-            ],
-            &[
-                (
-                    "Infeeder",
-                    &[
-                        "Flag_Har",
-                        "HarImp_ID",
-                        "HarVolt_ID",
-                        "HarCur_ID",
-                        "Flag_Reliability",
-                        "SupplyType_ID",
-                    ],
-                ),
-                ("Line", &["Flag_Har", "Flag_Reliability"]),
-                ("TwoWindingTransformer", &["Flag_Har", "Flag_Reliability"]),
-            ],
-        )
+    let geometry = snapshot
+        .drawing_geometry()
         .map_err(|e| failure(e, &retained))?;
-    let network =
+    let inventory = retention_inventory(&snapshot).map_err(|e| failure(e, &retained))?;
+    let mut network =
         super::read_balanced_snapshot_at(&snapshot, retained.name(), options.snapshot_hours)
             .map_err(|e| failure(e, &retained))?;
     let mut diagnostics = vec![
@@ -138,10 +105,11 @@ pub fn parse_with_options(
         ),
         Diagnostic::of(
             &codes::READ_SINCAL_RETAINED_SOURCE_ONLY,
-            "Fault, dynamic, protection, economic and diagram data, stored calculation results, and native settings outside the selected load-flow snapshot remain only in retained source. They are not part of the typed balanced network. An acquired-table companion is caller-supplied input, not a native export or independent attestation.",
+            "Fault, dynamic, protection, economic and untyped graphic data, stored calculation results, and native settings outside the selected load-flow snapshot remain only in retained source. They are not part of the typed balanced network. An acquired-table companion is caller-supplied input, not a native export or independent attestation.",
         ),
     ];
     diagnostics.extend(inventory);
+    super::geometry::attach(&mut network, &geometry, &mut diagnostics)?;
     diagnostics.extend(default_diagnostics(&network)?);
     if !network.generators().is_empty() {
         diagnostics.push(Diagnostic::of(&codes::READ_SINCAL_LIMITS_UNSPECIFIED,
@@ -174,4 +142,42 @@ fn default_diagnostics(
         diagnostic.insert_detail("default", value.clone())?;
         Ok(diagnostic)
     }).collect()
+}
+
+fn retention_inventory(snapshot: &DatabaseSnapshot) -> powerio_sincal::Result<Vec<Diagnostic>> {
+    snapshot.retention_diagnostics(
+        &codes::READ_SINCAL_RETAINED_SOURCE_ONLY,
+        &[
+            "Version",
+            "Variant",
+            "Node",
+            "Element",
+            "Terminal",
+            "VoltageLevel",
+            "CalcParameter",
+            "Line",
+            "Load",
+            "Infeeder",
+            "TwoWindingTransformer",
+            "DCInfeeder",
+            "OpSer",
+            "OpSerVal",
+            "ShuntCondensator",
+        ],
+        &[
+            (
+                "Infeeder",
+                &[
+                    "Flag_Har",
+                    "HarImp_ID",
+                    "HarVolt_ID",
+                    "HarCur_ID",
+                    "Flag_Reliability",
+                    "SupplyType_ID",
+                ],
+            ),
+            ("Line", &["Flag_Har", "Flag_Reliability"]),
+            ("TwoWindingTransformer", &["Flag_Har", "Flag_Reliability"]),
+        ],
+    )
 }

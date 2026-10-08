@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Read optional SINCAL drawing locations and line routes through both electrical
+  backends. Native bus/terminal identities, derived busbar midpoints and bounded
+  omission diagnostics preserve the existing model split and source echo.
+  Coordinates remain Unknown space; geographic CRS and multi-bend ordering are
+  not inferred. Access acquisition can opt into graphics with `--include-graphics`.
+  IR and existing geo-layer extraction retain the mapped geometry.
+
 - Add the explicit `sincal-balanced` parser profile for schema-14.8/15.5/16.0 SQLite
   projects and `.sinx` archives, producing `BalancedNetwork`. The first complete
   validated cases include SimBench LV, IEEE18/33 and the student static model.

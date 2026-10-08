@@ -27,6 +27,7 @@ BASE_TABLES = (
     'TransformerTap',
 )
 DEFAULT_TABLES = BASE_TABLES + ('ShuntReactor', 'ShuntCondensator')
+GRAPHICS_TABLES = ('GraphicNode', 'GraphicElement', 'GraphicTerminal', 'GraphicBucklePoint')
 IDENTIFIER = re.compile(r'[A-Za-z_][A-Za-z_0-9]{0,127}\Z')
 
 
@@ -229,9 +230,13 @@ def main():
     parser.add_argument('output', type=Path)
     parser.add_argument('--table', action='append', help='select native table (repeatable)')
     parser.add_argument('--tool-directory', type=Path)
+    parser.add_argument('--include-graphics', action='store_true', help='also acquire optional drawing tables; no geographic CRS inference')
     arguments = parser.parse_args()
     try:
-        record = acquire(arguments.source, tables=arguments.table or DEFAULT_TABLES,
+        tables = tuple(arguments.table or DEFAULT_TABLES)
+        if arguments.include_graphics:
+            tables = tuple(dict.fromkeys(tables + GRAPHICS_TABLES))
+        record = acquire(arguments.source, tables=tables,
                          tool_directory=arguments.tool_directory)
         write_records(record, arguments.output)
     except (OSError, ValueError) as error:
