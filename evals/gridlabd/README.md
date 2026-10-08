@@ -323,7 +323,7 @@ source-coordinate harness alone does not establish them.
 PowerIO conversion. Run it with `--output <new-directory>` and
 `--pnnl-root <installation-directory>`; `--profiles pnnl arras` is the default.
 It uses a single-phase constant-impedance circuit, explicit module
-`default_resistance 0.0001`, and five variants per engine:
+`default_resistance 0.0001`, and the following base variants per engine:
 
 | Solver and property | Effective series impedance (ohms) |
 |---|---|
@@ -333,6 +333,9 @@ It uses a single-phase constant-impedance circuit, explicit module
 | FBS, unspecified switch impedance | `0` |
 | FBS, explicit `switch_impedance 1+0.5j` | `1 + 0.5j` |
 
+Three additional variants per engine check scalar-alias unit conversion,
+complex/scalar assignment order and the fallback for negative components.
+
 The harness compares complex terminal voltages, currents, powers and losses
 against independent analytic solutions. It infers impedance from solved voltage
 drop and current, and verifies that an ideal-switch assumption fails for every
@@ -341,6 +344,49 @@ NR's zero-component fallback must not silently become an ideal canonical switch;
 finite contacts need their actual impedance or a verified equivalent. This
 calibration does not establish per-phase or banked switching, open contacts,
 protection, controls, or PowerIO switch read/write support.
+
+`switch_state_oracle.py` separately qualifies twelve NR phase-state cases per
+fork: individual and banked contacts, majority decisions, two-phase ties,
+overall status precedence, phase subsets and open contacts. Its coupled bypass
+uses two series sections and an intermediate bus: the pinned solver rejects
+a directly parallel switch/link as a duplicate admittance entry. The two-section
+circuit retains the same analytic end-to-end impedance. The harness compares
+32 complex electrical quantities per case, native saved phase states, and a
+deliberately reversed contact-state reference. Arras omits default `CLOSED`
+fields from its save; these omissions are recorded explicitly and conduction
+is independently checked through the electrical measurements.
+
+`switch_roundtrip_oracle.py` consumes the hashed successful state calibration
+and the Rust `glm_roundtrip` bridge to check fresh, IR-restored and edited
+canonical GLM. It aggregates contact measurements when mixed states have
+become separate typed groups. Its independent reference applies the bridge's
+explicit source, line-impedance and load-admittance edits. For example:
+
+```sh
+python evals/gridlabd/switch_state_oracle.py --output /tmp/switch-states --pnnl-root "$GLD_ROOT"
+python evals/gridlabd/switch_roundtrip_oracle.py \
+  --calibration /tmp/switch-states --impedance-calibration /tmp/switch-impedance \
+  --output /tmp/switch-roundtrip --bridge target/debug/examples/glm_roundtrip \
+  --pnnl-root "$GLD_ROOT"
+```
+
+The optional `--impedance-calibration` directory must come from a successful
+`switch_oracle.py` run; it adds NR default/zero and explicit NR/FBS finite-contact
+round trips. Ideal FBS contacts import as ideal typed switches, but their
+canonical NR output equivalent remains unresolved and is explicitly excluded
+from successful writer claims. Split-phase switches, explicit neutral contacts,
+active controls/protection and additional global profiles remain unqualified.
+
+The expanded impedance run currently exits nonzero: both pinned engines return
+NaNs for the edited `nr_complex_alias_last` case under the emitted NR settings.
+Its source is 247.2 V, series impedance is `6.6+7.7j` ohm, and load impedance is
+`16+4j` ohm. The report retains each failed primary run and diagnostic runs
+using a native switch under NR and the unchanged electrical circuit under FBS.
+The native switch also fails; FBS matches all seven analytic electrical
+quantities. A successful alternate-solver check never changes the primary NR
+result to passed. This engine limitation is distinct from successful fresh
+and restored runs and from the 72 state round trips. No tolerance or electrical
+parameter is changed to hide it. The separate ideal-contact writer gap remains.
 
 `quantity_oracle.py` compares `GlmProject::quantity` with native property
 readbacks and the analytic single-phase circuit. Build the `glm_quantities`

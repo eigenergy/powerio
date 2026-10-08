@@ -15,12 +15,16 @@ use crate::{
 
 const METERS_PER_MILE: f64 = 1609.344;
 
+mod switches;
+
 /// Read the initial static GLM electrical profile. Unknown physical
 /// classes, properties and globals fail explicitly; they are not silently
 /// omitted from an apparently usable network. The source project is retained.
 ///
 /// This initial profile covers ordinary phase-to-earth node/load/meter objects,
-/// fixed source phasors, P/I/Z loads and explicitly parameterized overhead lines.
+/// fixed source phasors, P/I/Z loads, explicitly parameterized overhead lines
+/// and fixed ordinary-phase switch contacts. Finite contacts use exact line
+/// equivalents; ideal and open contacts remain typed switches.
 /// Other conductor/device profiles remain under implementation.
 pub fn parse(
     source: Source,
@@ -47,6 +51,8 @@ pub fn parse(
         nominal: BTreeMap::new(),
         attachments: BTreeMap::new(),
         line_capacitance: false,
+        newton_raphson: false,
+        switch_default_resistance: 1e-4,
     };
     // Profile identity belongs to the module's source descriptors and context.
     // Extending the legacy network source-format enum would change a frozen
@@ -56,6 +62,7 @@ pub fn parse(
     reader.buses()?;
     reader.loads_and_sources()?;
     reader.lines()?;
+    reader.switches()?;
     reader.coordinates()?;
     crate::require_electrical_readiness(&reader.net)
         .map_err(|e| e.with_source(project.source().clone()))?;
@@ -90,6 +97,8 @@ struct Reader<'a> {
     nominal: BTreeMap<ObjectKey, f64>,
     attachments: BTreeMap<ObjectKey, Vec<(crate::DistLocationTarget, String)>>,
     line_capacitance: bool,
+    newton_raphson: bool,
+    switch_default_resistance: f64,
 }
 
 impl Reader<'_> {
@@ -137,7 +146,14 @@ impl Reader<'_> {
                                 .electrical_error(span, "powerflow setting requires one value"));
                         }
                         match (tokens[0].text(), tokens[1].text()) {
-                            ("solver_method", "NR" | "FBS") => {}
+                            ("solver_method", "NR") => self.newton_raphson = true,
+                            ("solver_method", "FBS") => self.newton_raphson = false,
+                            ("default_resistance", value) => {
+                                self.switch_default_resistance = value.parse::<f64>().ok()
+                                    .filter(|v| v.is_finite() && *v > 0.0)
+                                    .ok_or_else(|| self.project.electrical_error(span,
+                                        "default_resistance requires a finite positive scalar in ohms"))?;
+                            }
                             ("line_capacitance", "TRUE") => self.line_capacitance = true,
                             ("line_capacitance", "FALSE") => self.line_capacitance = false,
                             _ => {
@@ -242,7 +258,7 @@ impl Reader<'_> {
             }
             if !matches!(
                 class,
-                "node" | "meter" | "load" | "overhead_line" | "line_configuration"
+                "node" | "meter" | "load" | "overhead_line" | "line_configuration" | "switch"
             ) {
                 return Err(self.error(
                     object.key(),
@@ -722,9 +738,31 @@ fn allowed_property(class: &str, name: &str) -> bool {
         || (class == "overhead_line"
             && matches!(name, "phases" | "from" | "to" | "length" | "configuration"))
         || (class == "line_configuration" && matrix_property(name))
+        || (class == "switch"
+            && matches!(
+                name,
+                "phases"
+                    | "from"
+                    | "to"
+                    | "status"
+                    | "operating_mode"
+                    | "phase_A_state"
+                    | "phase_B_state"
+                    | "phase_C_state"
+                    | "switch_impedance"
+                    | "switch_resistance"
+                    | "switch_reactance"
+            ))
 }
 fn quantity_spec(class: &str, name: &str) -> Option<(GlmQuantityKind, &'static str)> {
     use GlmQuantityKind::{Complex, Real};
+    if class == "switch" {
+        match name {
+            "switch_impedance" => return Some((Complex, "Ohm")),
+            "switch_resistance" | "switch_reactance" => return Some((Real, "Ohm")),
+            _ => {}
+        }
+    }
     if bus_class(class) {
         match name {
             "nominal_voltage" | "maximum_voltage_error" => return Some((Real, "V")),

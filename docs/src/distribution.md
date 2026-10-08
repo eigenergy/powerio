@@ -204,12 +204,40 @@ constitute explicit line neutrals. Geometry, transformers, split-phase and
 additional static devices remain unfinished and fail explicitly. Full OpenDSS
 static compatibility is not yet established.
 
+Ordinary-phase `switch` objects import their fixed status, banked or individual
+phase states and native contact impedance. Finite closed contacts become exact
+uncoupled line equivalents with unit normalization length and a diagnostic;
+open and ideal closed contacts remain typed switches. A mixed state splits
+into closed and open phase groups, each retaining the original object's point.
+Banked initialization applies majority state, uses overall status to break a
+two-phase tie, and honors an overall open status. Any change from the stated
+phase states is reported; no controller or protection sequence is executed.
+
+The solver setting affects impedance defaults. Both pinned profiles default to
+FBS, whose unspecified contacts are ideal. NR uses the module's
+`default_resistance` (default `1e-4` ohm); unspecified resistance/reactance become
+`+default_resistance` and `-default_resistance`, while explicitly zero NR
+components become positive `default_resistance`. Supported numeric global
+overrides must be finite and positive. Scalar impedance aliases follow native
+assignment order and unit interpretation. Canonical GLM emits finite contacts
+as overhead-line equivalents and fixed open contacts as open switches. Ideal
+closed-contact output still requires a verified exact equivalent and fails
+explicitly; it is never replaced with a small arbitrary impedance.
+
+Canonical output selects NR. The pinned engines can return NaN results for
+some valid circuits even with a successful process exit. One qualified
+impedance case reproduces this with either a native switch or its line
+equivalent; FBS solves the same circuit and matches the analytic solution.
+Engine validation therefore checks finite voltages, currents and powers, and
+reports these NR failures separately from successful electrical comparisons.
+
 GridLAB-D object latitude and longitude map to the network's typed
 `component_locations` table. Each point identifies its component table and exact
 name, with optional latitude, longitude, datum and point origin. Missing axes
 are distinct from zero; an absent datum stays unknown. This geography is
 independent of legacy bus drawing positions and line routes. The current GLM
-mapping covers root buses, parented loads, lines and used line configurations.
+mapping covers root buses, parented loads, lines, fixed switch groups and used
+line configurations.
 Coordinates on a parented node/meter without a mapped device, unused equipment
 or source-only instrumentation still require additional attachment support and
 are refused explicitly.

@@ -5,6 +5,7 @@ import math
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 from coordinate_oracle import check as check_coordinates
@@ -12,9 +13,24 @@ from coordinate_oracle import expected as expected_coordinates
 from object_oracle import source_graph
 from oracle import add, analytic, cases, compare, parse_complex, recorded
 from quantity_oracle import check_values, reference as quantity_reference
+from switch_roundtrip_oracle import impedance_run
 
 
 class OracleTests(unittest.TestCase):
+    def test_successful_engine_exit_does_not_hide_a_nonfinite_switch_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp) / "nonfinite"
+            with (
+                patch("switch_roundtrip_oracle.run_glm", return_value="pinned engine"),
+                patch("switch_oracle.snapshot", side_effect=ValueError("nannand")),
+            ):
+                result = impedance_run("pnnl", directory, "input", {}, {}, None)
+            self.assertFalse(result["passed"])
+            self.assertEqual(result["version"], "pinned engine")
+            self.assertEqual(result["error"], "nannand")
+            self.assertEqual(len(result["input_sha256"]), 64)
+            self.assertEqual((directory / "model.glm").read_text(), "input")
+
     def test_quantity_comparator_rejects_units_notation_and_missing_values(self):
         reference = quantity_reference()
         check_values(reference, reference, 1e-12)
@@ -91,7 +107,16 @@ class OracleTests(unittest.TestCase):
             ("1e-3-2e-4j", 0.001 - 0.0002j),
         ):
             self.assertAlmostEqual(parse_complex(text), expected)
-        for text in ("nan", "inf+0j", "bad", "1+2x", "1+2+3d"):
+        for text in (
+            "nan",
+            "inf+0j",
+            "bad",
+            "1+2x",
+            "1+2+3d",
+            "nannand",
+            "-nan-nand",
+            "-nan-nanj",
+        ):
             with self.assertRaises(ValueError):
                 parse_complex(text)
 

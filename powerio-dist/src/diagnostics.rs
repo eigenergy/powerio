@@ -43,6 +43,10 @@ pub mod codes {
             "a GLM electrical feature has no verified static mapping", category = Data;
         READ_GLM_SOURCE_ONLY = "READ.GLM.SOURCE_ONLY", Remark,
             "non-electrical GLM data remains in the retained source";
+        READ_GLM_SWITCH_STATE_NORMALIZED = "READ.GLM.SWITCH_STATE_NORMALIZED", Remark,
+            "static switch status and banked initialization determine contact states";
+        READ_GLM_SWITCH_EQUIVALENT = "READ.GLM.SWITCH_EQUIVALENT", Remark,
+            "finite closed switch contacts use an exact static line equivalent";
         EMIT_GLM_UNSUPPORTED = "EMIT.GLM.UNSUPPORTED", Error,
             "the GLM writer cannot yet represent this electrical feature", category = Data;
         EMIT_GLM_FIELD_DROPPED = "EMIT.GLM.FIELD_DROPPED", Warning,

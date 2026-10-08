@@ -16,8 +16,9 @@ const METERS_PER_MILE: f64 = 1609.344;
 
 /// Emit fresh GLM from the current typed network, without retained-source echo.
 ///
-/// The initial profile supports phase-to-earth P/I/Z loads, ideal fixed sources
-/// and explicit phase line matrices. Unsupported electrical behavior fails
+/// The initial profile supports phase-to-earth P/I/Z loads, ideal fixed sources,
+/// explicit phase line matrices and fixed open contacts. Unsupported electrical
+/// behavior fails
 /// before the destination is written; omitted non-electrical metadata is
 /// reported. This entry point deliberately takes a value, not a source module.
 pub fn emit_canonical(
@@ -60,6 +61,7 @@ pub(crate) fn emit_text(network: &MulticonductorNetwork) -> Result<TextEmission,
     writer.out.push_str("// Canonical PowerIO static network.\nmodule powerflow { solver_method NR; line_capacitance TRUE; }\n\n");
     writer.buses()?;
     writer.lines()?;
+    writer.switches()?;
     writer.loads()?;
     writer.remaining_locations();
     Ok(TextEmission::new(
@@ -131,7 +133,6 @@ impl Writer<'_> {
             ));
         }
         if !self.net.transformers().is_empty()
-            || !self.net.switches().is_empty()
             || !self.net.generators().is_empty()
             || !self.net.ibrs().is_empty()
             || !self.net.shunts().is_empty()
@@ -193,6 +194,15 @@ impl Writer<'_> {
         }
         for load in self.net.loads() {
             self.reserve(&load.name)?;
+        }
+        for switch in self.net.switches() {
+            self.reserve(&switch.name)?;
+            if !switch.open {
+                return Err(unsupported(format!(
+                    "ideal closed switch {} needs a verified exact GLM output equivalent; native NR contacts are finite",
+                    switch.name
+                )));
+            }
         }
         Ok(())
     }
@@ -269,7 +279,13 @@ impl Writer<'_> {
     fn nominal_voltages(&mut self) -> Result<(), Error> {
         let mut neighbors: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
         for line in self.net.lines() {
-            self.line_phases(line)?;
+            self.link_phases(
+                &line.name,
+                &line.bus_from,
+                &line.bus_to,
+                &line.terminal_map_from,
+                &line.terminal_map_to,
+            )?;
             neighbors
                 .entry(&line.bus_from)
                 .or_default()
@@ -332,26 +348,71 @@ impl Writer<'_> {
         Ok(())
     }
 
-    fn line_phases(&self, line: &DistLine) -> Result<Vec<usize>, Error> {
-        if line.terminal_map_from != line.terminal_map_to {
+    fn link_phases(
+        &self,
+        name: &str,
+        from: &str,
+        to: &str,
+        from_map: &[String],
+        to_map: &[String],
+    ) -> Result<Vec<usize>, Error> {
+        if from_map != to_map {
             return Err(unsupported(format!(
-                "line {} permutes endpoint phase identities",
-                line.name
+                "link {name} permutes endpoint phase identities"
             )));
         }
-        let terminals = phases(&line.terminal_map_from)?;
-        for bus in [&line.bus_from, &line.bus_to] {
-            let available = self.phases.get(bus.as_str()).ok_or_else(|| {
-                unsupported(format!("line {} has no exact endpoint {bus}", line.name))
-            })?;
+        let terminals = phases(from_map)?;
+        for bus in [from, to] {
+            let available = self
+                .phases
+                .get(bus)
+                .ok_or_else(|| unsupported(format!("link {name} has no exact endpoint {bus}")))?;
             if terminals.iter().any(|p| !available.contains(p)) {
                 return Err(unsupported(format!(
-                    "line {} uses an absent endpoint phase",
-                    line.name
+                    "link {name} uses an absent endpoint phase"
                 )));
             }
         }
         Ok(terminals)
+    }
+
+    fn switches(&mut self) -> Result<(), Error> {
+        for switch in self.net.switches() {
+            if !switch.extras.is_empty() {
+                return Err(unsupported(format!(
+                    "switch {} has uninterpreted electrical extras",
+                    switch.name
+                )));
+            }
+            let phase_order = self.link_phases(
+                &switch.name,
+                &switch.bus_from,
+                &switch.bus_to,
+                &switch.terminal_map_from,
+                &switch.terminal_map_to,
+            )?;
+            let phase_flags: String = phase_order
+                .iter()
+                .map(|&p| super::read::phase_name(p))
+                .collect();
+            let _ = writeln!(
+                self.out,
+                "object switch {{\n    name {};\n    phases {phase_flags}N;\n    from {};\n    to {};\n    operating_mode INDIVIDUAL;\n    status OPEN;",
+                switch.name, switch.bus_from, switch.bus_to
+            );
+            for phase in phase_flags.chars() {
+                let _ = writeln!(self.out, "    phase_{phase}_state OPEN;");
+            }
+            self.coordinates(crate::DistLocationTarget::Switch, &switch.name);
+            self.out.push_str("}\n\n");
+            if switch.i_max.is_some() {
+                self.dropped(format!(
+                    "switch {}: contact current ratings are not emitted",
+                    switch.name
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn lines(&mut self) -> Result<(), Error> {
@@ -363,7 +424,13 @@ impl Writer<'_> {
             .collect();
         let mut used_codes = BTreeSet::new();
         for line in self.net.lines() {
-            let phase_order = self.line_phases(line)?;
+            let phase_order = self.link_phases(
+                &line.name,
+                &line.bus_from,
+                &line.bus_to,
+                &line.terminal_map_from,
+                &line.terminal_map_to,
+            )?;
             let code = codes.get(line.linecode.as_str()).ok_or_else(|| {
                 unsupported(format!("line {} has no exact linecode identity", line.name))
             })?;

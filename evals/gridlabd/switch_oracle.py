@@ -24,6 +24,24 @@ def variants():
         ("nr_given", "NR", "switch_impedance 1+0.5j;", complex(1, 0.5)),
         ("fbs_default", "FBS", "", 0j),
         ("fbs_given", "FBS", "switch_impedance 1+0.5j;", complex(1, 0.5)),
+        (
+            "nr_scalar_aliases",
+            "NR",
+            "switch_impedance 2+3j; switch_resistance 4000 mOhm; switch_reactance 5;",
+            complex(4, 5),
+        ),
+        (
+            "nr_complex_alias_last",
+            "NR",
+            "switch_impedance 1+1j; switch_resistance 4; switch_impedance 6+7j;",
+            complex(6, 7),
+        ),
+        (
+            "nr_negative_components",
+            "NR",
+            "switch_impedance -1-2j;",
+            complex(0.0001, -0.0001),
+        ),
     ]
 
 
