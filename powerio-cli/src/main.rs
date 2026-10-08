@@ -143,6 +143,10 @@ enum Command {
         /// CSV with columns gen_index,bus,c2,c1,c0 and optional startup,shutdown.
         #[arg(long)]
         gen_cost_csv: Option<PathBuf>,
+        /// How in-service HVDC lines enter the fixed withdrawal: as fixed
+        /// injections at their stated terminal powers, or not at all.
+        #[arg(long, value_enum, default_value = "fixed-injection")]
+        hvdc: HvdcArg,
     },
     /// Emit DC sensitivity matrices (PTDF, LODF) for one case.
     Sensitivities {
@@ -786,6 +790,21 @@ impl From<UnitsArg> for Units {
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
+enum HvdcArg {
+    FixedInjection,
+    Ignore,
+}
+
+impl From<HvdcArg> for powerio_tx::HvdcTreatment {
+    fn from(value: HvdcArg) -> Self {
+        match value {
+            HvdcArg::FixedInjection => Self::FixedInjection,
+            HvdcArg::Ignore => Self::Ignore,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
 enum RhsArg {
     None,
     Random,
@@ -859,6 +878,7 @@ fn main() -> std::process::ExitCode {
             missing_gen_cost,
             default_gen_cost,
             gen_cost_csv,
+            hvdc,
         } => run_dcopf(
             &input,
             from,
@@ -868,6 +888,7 @@ fn main() -> std::process::ExitCode {
             missing_gen_cost,
             default_gen_cost.as_deref(),
             gen_cost_csv.as_deref(),
+            hvdc.into(),
         ),
         Command::Sensitivities {
             input,
@@ -1524,6 +1545,7 @@ fn run_dcopf(
     missing_gen_cost: MissingGenCostArg,
     default_gen_cost: Option<&str>,
     gen_cost_csv: Option<&Path>,
+    hvdc: powerio_tx::HvdcTreatment,
 ) -> anyhow::Result<()> {
     let mpc = balanced_case(input, from).with_context(|| format!("parse {}", input.display()))?;
     let cost_opts = emit_options(missing_gen_cost, default_gen_cost, gen_cost_csv)?;
@@ -1533,8 +1555,15 @@ fn run_dcopf(
     let instance = powerio_prob::DcOpfInstance::from_network(policy_network)
         .with_context(|| format!("build DC OPF instance for {}", input.display()))?
         .with_branch_susceptance_formula(formula);
-    let mut assembly = DcOpfAssemblyOptions::default();
-    assembly.units = units;
+    let assembly = DcOpfAssemblyOptions::default()
+        .with_units(units)
+        .with_hvdc_treatment(hvdc);
+    report_diagnostics(
+        &instance
+            .network()
+            .calc_hvdc_injections()
+            .to_diagnostics(hvdc),
+    );
     let bundle_options = DcOpfBundleOptions {
         assembly,
         metadata: DcOpfBundleMetadata {

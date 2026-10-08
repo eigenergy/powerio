@@ -9,7 +9,8 @@
 //! Keeping this off `BalancedNetwork` is what stops `BalancedNetwork` from turning into a god
 //! type: data on one side, derived analysis on the other.
 //!
-//! The derived core is one `HashMap` and four `Vec<f64>`. One-shot callers use
+//! The derived core is one `HashMap`, six `Vec<f64>`, and the HVDC injection
+//! record. One-shot callers use
 //! [`IndexedNetwork::new`], which builds and owns a throwaway core. A long-lived
 //! handle (the Python and C ABI wrappers) builds an [`IndexCore`] once at parse
 //! time and rebinds a borrowing view per query with
@@ -21,6 +22,7 @@ use std::collections::HashMap;
 
 use petgraph::graph::UnGraph;
 
+use crate::hvdc::HvdcInjections;
 use crate::network::{BalancedNetwork, Branch, BusId, BusType, Generator};
 use crate::{Error, Result};
 
@@ -40,6 +42,12 @@ pub struct IndexCore {
     gs: Vec<f64>,
     /// Shunt susceptance summed per bus (MVAr at V = 1 p.u.).
     bs: Vec<f64>,
+    /// Fixed HVDC active injection summed per bus (MW).
+    p_hvdc: Vec<f64>,
+    /// Fixed HVDC reactive injection summed per bus (MVAr).
+    q_hvdc: Vec<f64>,
+    /// The per line record behind `p_hvdc` and `q_hvdc`.
+    hvdc: HvdcInjections,
 }
 
 impl IndexCore {
@@ -47,7 +55,9 @@ impl IndexCore {
     /// load and shunt onto its bus. An out-of-service load or shunt draws
     /// nothing, so it is left out of `pd/qd/gs/bs` and of every matrix built
     /// from them, the same rule the power flow instances apply to loads and
-    /// generators.
+    /// generators. Each in service HVDC line folds its fixed terminal
+    /// injections into `p_hvdc/q_hvdc` by the rule
+    /// [`BalancedNetwork::calc_hvdc_injections`] states.
     ///
     /// # Correctness
     /// Bus ids must be unique; a duplicate collapses two buses onto one dense
@@ -86,12 +96,24 @@ impl IndexCore {
                 bs[idx] += s.b;
             }
         }
+        let hvdc = net.calc_hvdc_injections();
+        let mut p_hvdc = vec![0.0; n];
+        let mut q_hvdc = vec![0.0; n];
+        for terminal in &hvdc.terminals {
+            if let Some(&idx) = bus_id_to_idx.get(&terminal.bus) {
+                p_hvdc[idx] += terminal.p;
+                q_hvdc[idx] += terminal.q;
+            }
+        }
         Self {
             bus_id_to_idx,
             pd,
             qd,
             gs,
             bs,
+            p_hvdc,
+            q_hvdc,
+            hvdc,
         }
     }
 }
@@ -251,6 +273,31 @@ impl<'n> IndexedNetwork<'n> {
         &self.core.bs
     }
 
+    /// Nodal fixed HVDC active injection, length `n`: `-pf` at each in
+    /// service line's from bus and `+pt` at its to bus, summed per bus, in
+    /// the unit of [`pd`](Self::pd). A calculation under
+    /// [`HvdcTreatment::FixedInjection`](crate::HvdcTreatment) adds it to the
+    /// net injection beside generation minus demand.
+    #[inline]
+    pub fn p_hvdc(&self) -> &[f64] {
+        &self.core.p_hvdc
+    }
+
+    /// Nodal fixed HVDC reactive injection, length `n`: `+qf` at each in
+    /// service line's from bus and `+qt` at its to bus, summed per bus, in
+    /// the unit of [`qd`](Self::qd).
+    #[inline]
+    pub fn q_hvdc(&self) -> &[f64] {
+        &self.core.q_hvdc
+    }
+
+    /// The per line record behind [`p_hvdc`](Self::p_hvdc) and
+    /// [`q_hvdc`](Self::q_hvdc), including the lines that inject nothing.
+    #[inline]
+    pub fn hvdc_injections(&self) -> &HvdcInjections {
+        &self.core.hvdc
+    }
+
     /// In-service branches with their index into [`branches`](Self::branches).
     pub fn in_service_branches(&self) -> impl Iterator<Item = (usize, &Branch)> {
         self.net
@@ -403,7 +450,7 @@ impl ConnectivityReport {
 mod tests {
     use super::{IndexCore, IndexedNetwork};
     use crate::network::{
-        BalancedNetwork, Bus, BusId, BusType, Extras, Impedance, Load, Shunt, Transformer3W,
+        BalancedNetwork, Bus, BusId, BusType, Extras, Hvdc, Impedance, Load, Shunt, Transformer3W,
         Winding,
     };
 
@@ -622,5 +669,39 @@ mod tests {
         let net = agg_net();
         let core = IndexCore::build(&net);
         assert_aggregates(&IndexedNetwork::with_core(&net, &core));
+    }
+
+    #[test]
+    fn hvdc_lines_fold_into_fixed_injections_per_bus() {
+        // Two lines leave bus 1 for bus 2; the out of service one is left
+        // out. The from end withdraws pf and injects qf, the to end injects
+        // pt and qt.
+        let mut net = agg_net();
+        let mut line = Hvdc::new(BusId(1), BusId(2));
+        line.pf = 100.0;
+        line.pt = 97.0;
+        line.qf = -40.0;
+        line.qt = -35.0;
+        let mut second = line.clone();
+        second.pf = 20.0;
+        second.pt = 19.0;
+        second.qf = 0.0;
+        second.qt = 0.0;
+        let mut off = line.clone();
+        off.in_service = false;
+        net.hvdc_mut().extend([line, second, off]);
+        let view = IndexedNetwork::new(&net);
+        let (i, j) = (
+            view.bus_index(BusId(1)).unwrap(),
+            view.bus_index(BusId(2)).unwrap(),
+        );
+        assert!((view.p_hvdc()[i] + 120.0).abs() < 1e-12);
+        assert!((view.p_hvdc()[j] - 116.0).abs() < 1e-12);
+        assert!((view.q_hvdc()[i] + 40.0).abs() < 1e-12);
+        assert!((view.q_hvdc()[j] + 35.0).abs() < 1e-12);
+        assert_eq!(view.hvdc_injections().n_injecting(), 2);
+        assert_eq!(view.hvdc_injections().out_of_service, vec![2]);
+        // Loads and shunts are untouched by the HVDC fold.
+        assert_aggregates(&view);
     }
 }

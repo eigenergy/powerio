@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- HVDC lines no longer vanish from the balanced calculations. Every reader
+  stores an `Hvdc` line in the MATPOWER `dcline` convention, and
+  `IndexedNetwork::p_hvdc` and `q_hvdc` now fold each in-service line onto
+  its terminal buses as a fixed injection at its stated operating point: the
+  from end withdraws `pf` and injects `qf`, the to end injects `pt` and `qt`.
+  `DcPfInstance` and `AcPfInstance` add the injections to each bus's stated
+  net injection, and the DC OPF preparation carries them as `p_hvdc`, so
+  `fixed_withdrawal` is now `pd + gs + p_shift - p_hvdc` and the bundle adds
+  `p_hvdc.mtx`. A PSS/E two-terminal DC line therefore moves its scheduled
+  power between the AC systems it joins, and a MATPOWER `dcline` row injects
+  what MATPOWER's `toggle_dcline` injects. A line that is out of service, or
+  whose terminal bus is isolated or undeclared, injects nothing.
+  `HvdcTreatment::Ignore` gives the earlier result through
+  `DcPfInstance::from_network_with_hvdc`,
+  `AcPfInstance::from_network_with_hvdc`,
+  `DcOpfAssemblyOptions::with_hvdc_treatment`, and `powerio dcopf --hvdc
+  ignore`. `BalancedNetwork::calc_hvdc_injections` lists the injections, and
+  the `BUILD.HVDC.FIXED_INJECTION`, `BUILD.HVDC.IGNORED`, and
+  `BUILD.HVDC.TERMINAL_INACTIVE` diagnostics state what was injected or left
+  out. A PowerIO IR `DcPfInstance` derives its injections from its network
+  on read, so one an earlier release wrote from a network with in-service
+  HVDC lines now reads back with them; `serialize` refuses a `DcPfInstance`
+  that ignores an injecting line rather than store it changed.
+  `pio_build_dc_opf_preparation` keeps HVDC lines out, because the ABI 7 bus
+  view has no column to state their injection.
+
 - PSS/E switched shunt `MODSW` 1 and 2 now read as PSS/E defines them: 1 is
   discrete and 2 is continuous adjustment of the regulated voltage. The RAW
   and RAWX readers had the two swapped, so a continuously adjusted shunt, such

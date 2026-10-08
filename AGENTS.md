@@ -184,8 +184,8 @@ powerio-core/src              module.rs (PioModule<T>), source.rs, output.rs,
                               time_series.rs, scenario.rs, component_id.rs,
                               validation.rs (limits), bounded.rs, nonfinite.rs
 powerio-tx/src                network.rs (BalancedNetwork and its tables),
-                              indexed.rs, normalize.rs, operations.rs, dc.rs,
-                              gen_cost.rs, geo/ (layer.rs, pwd.rs),
+                              indexed.rs, hvdc.rs, normalize.rs, operations.rs,
+                              dc.rs, gen_cost.rs, geo/ (layer.rs, pwd.rs),
                               contingency/ (mod.rs, lexer.rs), collect.rs,
                               diagnostics.rs, version.rs
 powerio-tx/src/format         mod.rs (parse, emit, TargetFormat, EmitOptions),
