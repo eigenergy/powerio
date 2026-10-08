@@ -165,8 +165,8 @@ Nonuniform load bases therefore retain the same physical law. Matrix indices
 and source/load properties follow explicit phase identities even when model
 terminal order differs from native A/B/C order. A source reference on an
 already perfectly grounded terminal has the exact earth-referenced equivalent;
-floating references are refused. Source zero phasors, noncapacitive or unequal
-line end shunts, non-60-Hz cases, uninterpreted electrical extras, additional
+floating references are refused. Source zero phasors, nonreciprocal end-shunt
+equivalents, non-60-Hz cases, uninterpreted electrical extras, additional
 device families and unqualified object-name escaping remain explicit gaps.
 
 ```sh
@@ -445,9 +445,34 @@ and exits nonzero. Both native FBS engines produce correct voltages but wrong
 source-end currents and losses. The discrepancy matches `(Z Y - Y Z) I_out`,
 where `Y` is the one-end shunt admittance: the native line uses `d=a`, while an
 exact π line needs `a=I+Z Y` and `d=I+Y Z`. The report retains that quantitative
-witness. Canonical emission now rejects this case before writing; an exact
-end-shunt expansion is still required. `--case` selects named circuits for
+witness. Canonical emission uses exact end-shunt loads and passes the physical
+pi-line reference in both forks, while the original native failures remain
+visible. `--case` selects named circuits for
 focused investigation, but a selected passing subset is not full qualification.
+
+`line_shunt_oracle.py` qualifies conductive, inductive and unequal end shunts,
+including source-only, sink-only and reversed-line cases under NR and FBS.
+The `glm_roundtrip` validation bridge accepts an optional fourth argument with
+typed per-metre `g_from`, `b_from`, `g_to` and `b_to` matrices, applied before IR
+serialization. Five variants in each of eight solver/case combinations run in
+both forks. For example:
+
+```sh
+python evals/gridlabd/line_shunt_oracle.py --pnnl-root "$PNNL_ROOT" \
+  --bridge target/debug/examples/glm_roundtrip --output /tmp/gld-end-shunts
+```
+
+The reference independently solves the full pi circuit and checks KCL. The
+observable line ports aggregate the generated shunts and native series link.
+FBS uses zero-drop parented meters for each shunt. Arras NR silently ignores
+grandchild loads below a parented meter, so NR keeps the original hierarchy,
+reads native impedance coefficients and solved voltages, and checks an
+independent root-meter source-current witness. The witness accounts for native
+meter accumulation of outgoing links when a line is reversed. Expected shunt
+currents are never inserted into observed totals. Omitted shunts, swapped ends
+and bare series-link port comparisons must all fail.
+Each fresh case also runs without the shunt-meter instrumentation; all bus
+voltages and bare series-link currents, powers and losses must stay unchanged.
 
 `quantity_oracle.py` compares `GlmProject::quantity` with native property
 readbacks and the analytic single-phase circuit. Build the `glm_quantities`

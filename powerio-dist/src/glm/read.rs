@@ -553,6 +553,10 @@ impl Reader<'_> {
                 &format!("{}__glm_linecode", self.names[&key]),
             );
             let code = self.line_code(config, &phases, &code_name)?;
+            if !self.newton_raphson && !super::line_physics::fbs_shunts_commute(&code) {
+                self.diagnostics.push(Diagnostic::of(&codes::READ_GLM_NATIVE_LINE_DISCREPANCY,
+                    format!("line {}: this FBS source has noncommuting impedance/capacitance matrices; the typed network preserves the physical pi-line law, while pinned PNNL/Arras native line currents and losses differ; canonical FBS output uses exact end-shunt equivalents", self.names[&key])));
+            }
             self.net.line_codes_mut().push(code);
             self.attach(
                 config,

@@ -320,7 +320,7 @@ fn invalid_assignments_are_not_hidden_by_later_values_or_open_states() {
 }
 
 #[test]
-fn ideal_output_rejects_native_noncommuting_shunt_error_without_dropping_capacitance() {
+fn ideal_output_expands_noncommuting_shunts_without_dropping_capacitance() {
     let mut net = ideal_tree();
     let code = &mut net.line_codes_mut()[0];
     code.r_series[1][1] *= 2.0;
@@ -335,6 +335,118 @@ fn ideal_output_rejects_native_noncommuting_shunt_error_without_dropping_capacit
     code.b_from[0][1] = -0.0001;
     code.b_from[1][0] = -0.0001;
     code.b_to = code.b_from.clone();
-    let error = emit_canonical(&net, Destination::memory("case.glm").unwrap()).unwrap_err();
-    assert!(error.to_string().contains("do not commute"));
+    let output = canonical(&net);
+    assert!(output.contains("constant_impedance_AB"));
+    assert!(output.contains("__glm_shunt_from"));
+    assert!(output.contains("__glm_shunt_to"));
+    let again = read(&output);
+    assert!(
+        again.line_codes()[0]
+            .b_from
+            .iter()
+            .flatten()
+            .all(|b| *b == 0.0)
+    );
+    assert_eq!(
+        again.component_locations().len(),
+        net.component_locations().len()
+    );
+    assert!(
+        again
+            .component_locations()
+            .iter()
+            .all(|p| p.point.latitude == Some(0.0))
+    );
+}
+
+#[test]
+fn unequal_conductive_shunts_keep_physical_ends_under_fbs_reversal() {
+    let mut net = ideal_tree();
+    let line = net.lines()[0].clone();
+    let code = &mut net.line_codes_mut()[0];
+    code.g_from = vec![
+        vec![0.0002, -0.0001, 0.0],
+        vec![-0.0001, 0.0003, -0.00005],
+        vec![0.0, -0.00005, 0.0004],
+    ];
+    code.b_from = vec![
+        vec![0.0006, -0.0002, 0.00003],
+        vec![-0.0002, -0.0007, -0.00004],
+        vec![0.00003, -0.00004, 0.0008],
+    ];
+    code.g_to = code
+        .g_from
+        .iter()
+        .map(|r| r.iter().map(|v| v * 0.5).collect())
+        .collect();
+    code.b_to = code
+        .b_from
+        .iter()
+        .map(|r| r.iter().map(|v| v * 1.5).collect())
+        .collect();
+    let code = code.clone();
+    let before = serde_json::to_value(&net).unwrap();
+    let output = canonical(&net);
+    assert_eq!(before, serde_json::to_value(&net).unwrap());
+    let again = read(&output);
+    assert_eq!(again.lines()[0].bus_from, line.bus_to);
+    for (bus, side, g, b) in [
+        (&line.bus_from, "from", &code.g_from, &code.b_from),
+        (&line.bus_to, "to", &code.g_to, &code.b_to),
+    ] {
+        let mut y = vec![vec![Complex64::default(); 3]; 3];
+        for load in again.loads().iter().filter(|l| {
+            l.name
+                .starts_with(&format!("{}__glm_shunt_{side}", line.name))
+        }) {
+            assert_eq!(&load.bus, bus);
+            let powerio_dist::DistLoadVoltageModel::ConstantImpedance { v_nom } =
+                &load.voltage_model
+            else {
+                panic!("not impedance")
+            };
+            let admittance = Complex64::new(load.p_nom[0], -load.q_nom[0]) / v_nom[0].powi(2);
+            let mut incidence = [0.0; 3];
+            incidence[load.terminal_map[0].parse::<usize>().unwrap() - 1] = 1.0;
+            if load.terminal_map[1] != "n" {
+                incidence[load.terminal_map[1].parse::<usize>().unwrap() - 1] = -1.0;
+            }
+            for i in 0..3 {
+                for j in 0..3 {
+                    y[i][j] += admittance * incidence[i] * incidence[j];
+                }
+            }
+        }
+        for i in 0..3 {
+            for j in 0..3 {
+                assert!((y[i][j] - Complex64::new(g[i][j], b[i][j]) * line.length).norm() < 1e-12);
+            }
+        }
+    }
+    net.line_codes_mut()[0].g_from[0][1] *= 2.0;
+    let error = emit_canonical(&net, Destination::memory("bad.glm").unwrap()).unwrap_err();
+    assert!(error.to_string().contains("nonsymmetric"));
+}
+
+#[test]
+fn source_fbs_noncommuting_line_reports_native_discrepancy() {
+    let text = "module powerflow { solver_method FBS; line_capacitance TRUE; }
+object node { name a; phases ABN; bustype SWING; nominal_voltage 240; }
+object node { name b; phases ABN; nominal_voltage 240; }
+object line_configuration { name c; z11 1+0j; z22 2+0j; c11 100; c22 100; c12 -10; c21 -10; }
+object overhead_line { name l; phases ABN; from a; to b; configuration c; length 1 mile; }";
+    for (solver, expected) in [("FBS", true), ("NR", false)] {
+        let module = parse(
+            Source::from_memory("case.glm", text.replace("FBS", solver).as_bytes()).unwrap(),
+            PreprocessOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            module
+                .diagnostics()
+                .iter()
+                .any(|d| d.code() == "READ.GLM.NATIVE_LINE_DISCREPANCY"),
+            expected
+        );
+    }
 }

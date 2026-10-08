@@ -161,10 +161,10 @@ fn unrepresented_physics_fails_before_writing_any_artifact() {
     let original = network();
     let mut cases = Vec::new();
     let mut net = original.clone();
-    net.line_codes_mut()[0].g_from[0][0] = 0.01;
+    net.line_codes_mut()[0].g_from[0][1] = 0.01;
     cases.push(net);
     let mut net = original.clone();
-    net.line_codes_mut()[0].b_from[0][0] = 0.01;
+    net.line_codes_mut()[0].b_from[0][1] = 0.01;
     cases.push(net);
     let mut net = original.clone();
     net.sources_mut()[0].v_magnitude[0] = 0.0;

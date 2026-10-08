@@ -2,8 +2,7 @@
 
 use super::{Writer, flags, phase_name, unsupported, validate_line_matrices};
 use crate::diagnostics::codes;
-use crate::{DistComponentLocation, DistLine, DistLineCode, DistLocationTarget, DistSwitch};
-use num_complex::Complex64;
+use crate::{DistComponentLocation, DistLocationTarget, DistSwitch};
 use powerio_core::Error;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write as _;
@@ -127,7 +126,7 @@ impl<'a> Writer<'a> {
             let code = codes.get(line.linecode.as_str()).ok_or_else(|| {
                 unsupported(format!("line {} has no exact linecode identity", line.name))
             })?;
-            validate_fbs_line(line, code, phases.len())?;
+            validate_line_matrices(line, code, phases.len())?;
             edge_phases.insert(line.name.as_str(), phases);
         }
         for group in groups {
@@ -228,41 +227,4 @@ impl<'a> Writer<'a> {
             }
         }
     }
-}
-
-fn validate_fbs_line(line: &DistLine, code: &DistLineCode, n: usize) -> Result<(), Error> {
-    validate_line_matrices(line, code, n)?;
-    // The pinned native FBS implementations use d=a, where the exact pi-line
-    // equations require a=I+Z*Y/2 and d=I+Y*Z/2. This is valid only when the
-    // series impedance and shunt admittance commute. Do not emit a known
-    // incorrect branch-current law while an exact shunt equivalent is pending.
-    for i in 0..n {
-        for j in 0..n {
-            let mut zy = Complex64::new(0.0, 0.0);
-            let mut yz = zy;
-            let mut scale = 0.0;
-            for k in 0..n {
-                let a = Complex64::new(code.r_series[i][k], code.x_series[i][k])
-                    * Complex64::new(0.0, code.b_from[k][j]);
-                let b = Complex64::new(0.0, code.b_from[i][k])
-                    * Complex64::new(code.r_series[k][j], code.x_series[k][j]);
-                zy += a;
-                yz += b;
-                scale += a.norm() + b.norm();
-            }
-            if !scale.is_finite()
-                || !zy.re.is_finite()
-                || !zy.im.is_finite()
-                || !yz.re.is_finite()
-                || !yz.im.is_finite()
-                || (zy - yz).norm() > 32.0 * f64::EPSILON * scale
-            {
-                return Err(unsupported(format!(
-                    "line {}: native FBS impedance/shunt matrices do not commute; an exact end-shunt equivalent is required to preserve branch currents",
-                    line.name
-                )));
-            }
-        }
-    }
-    Ok(())
 }

@@ -16,6 +16,7 @@ from pathlib import Path
 
 import numpy as np
 from oracle import add, command, compare, literal, recorded, run_glm
+from shunt_measurement import instrument as instrument_shunts, measurements
 
 
 def variants():
@@ -181,7 +182,8 @@ def instrumentation(text, phases):
         )
         extra += f'object recorder {{ parent {parent}; property {props},power_losses; interval 1; file "{label}.csv"; }}\n'
         outputs.append(label + ".csv")
-    return text + extra, tuple(outputs)
+    text, shunt_outputs = instrument_shunts(text + extra, phases)
+    return text, tuple(outputs) + shunt_outputs
 
 
 def snapshot(directory, phases):
@@ -192,6 +194,14 @@ def snapshot(directory, phases):
             add(result, f"{bus}.{p}", "V", row["voltage_" + p])
     for branch in ("upstream", "contact"):
         row = recorded(directory / (branch + ".csv"))
+        if branch == "upstream":
+            for _, bus, voltages, currents in measurements(directory, phases):
+                side, sign = ("in", 1) if bus == "source" else ("out", -1)
+                for p, voltage, current in zip(phases, voltages, currents, strict=True):
+                    power = voltage * current.conjugate()
+                    row[f"current_{side}_{p}"] += sign * current
+                    row[f"power_{side}_{p}"] += sign * power
+                    row["power_losses"] += power
         for p in phases:
             for side, sign in (("in", 1), ("out", -1)):
                 for quantity, unit in (("current", "A"), ("power", "VA")):

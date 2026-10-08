@@ -12,6 +12,7 @@
 mod connections;
 mod coordinates;
 mod emit_project;
+mod line_physics;
 mod objects;
 mod preprocess;
 mod project;

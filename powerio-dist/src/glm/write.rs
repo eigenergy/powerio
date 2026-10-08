@@ -16,12 +16,16 @@ const METERS_PER_MILE: f64 = 1609.344;
 
 mod ideal;
 mod loads;
+mod shunts;
 
 /// Emit fresh GLM from the current typed network, without retained-source echo.
 ///
-/// The initial profile supports phase-to-earth P/I/Z loads, ideal fixed sources,
+/// The initial profile supports earth/phase-pair P/I/Z loads, ideal fixed sources,
 /// explicit phase line matrices and fixed contacts. Ideal closed contacts select
 /// exact FBS output on a checked forest with one source bus per component.
+/// Symmetric line end shunts use exact admittance-load equivalents when native
+/// line parameters cannot preserve their port equations. Returned diagnostics
+/// identify the generated loads that contribute to physical line port flows.
 /// Unsupported electrical behavior fails
 /// before the destination is written; omitted non-electrical metadata is
 /// reported. This entry point deliberately takes a value, not a source module.
@@ -485,6 +489,7 @@ impl Writer<'_> {
                 ));
             }
             validate_line_matrices(line, code, phase_order.len())?;
+            let expanded_shunts = self.expand_line_shunts(code);
             let config = self.generated_name(&format!("{}__glm_configuration", line.name));
             let _ = writeln!(self.out, "object line_configuration {{ name \"{config}\";");
             self.coordinates(crate::DistLocationTarget::LineCode, &code.name);
@@ -493,7 +498,11 @@ impl Writer<'_> {
                     let z = Complex64::new(code.r_series[row][col], code.x_series[row][col])
                         * METERS_PER_MILE;
                     let literal = complex_literal(z)?;
-                    let capacitance = code.b_from[row][col] * METERS_PER_MILE
+                    let capacitance = if expanded_shunts {
+                        0.0
+                    } else {
+                        code.b_from[row][col]
+                    } * METERS_PER_MILE
                         / (std::f64::consts::PI * self.net.base_frequency() * 1e-9);
                     if !capacitance.is_finite() {
                         return Err(unsupported("line capacitance conversion overflows"));
@@ -521,6 +530,9 @@ impl Writer<'_> {
             );
             self.coordinates(crate::DistLocationTarget::Line, &line.name);
             self.out.push_str("}\n");
+            if expanded_shunts {
+                self.line_shunts(line, code, &phase_order)?;
+            }
             self.diagnostics.push(
                 &codes::EMIT_GLM_VALUE_REBASED,
                 format!(
@@ -686,19 +698,6 @@ fn validate_line_matrices(line: &DistLine, code: &DistLineCode, n: usize) -> Res
                 line.name
             )));
         }
-    }
-    if code
-        .g_from
-        .iter()
-        .flatten()
-        .chain(code.g_to.iter().flatten())
-        .any(|&v| v != 0.0)
-        || code.b_from != code.b_to
-    {
-        return Err(unsupported(format!(
-            "line {} needs noncapacitive or unequal end-shunt equivalents",
-            line.name
-        )));
     }
     if (0..n).all(|i| code.r_series[i][i] == 0.0 && code.x_series[i][i] == 0.0) {
         return Err(unsupported(format!(

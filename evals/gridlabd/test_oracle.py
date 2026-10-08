@@ -20,9 +20,42 @@ from ideal_switch_oracle import (
     variants as ideal_variants,
 )
 from pair_load_oracle import reference as pair_reference, variants as pair_variants
+from line_shunt_oracle import reference as shunt_reference
+from shunt_measurement import measurements as shunt_measurements
 
 
 class OracleTests(unittest.TestCase):
+    def test_line_shunt_reference_rejects_omission_and_swapped_ends(self):
+        for case in ("source_only", "sink_only", "unequal_lossy", "reversed_lossy"):
+            for edited in (False, True):
+                expected, residual = shunt_reference(case, edited)
+                self.assertLess(residual, 1e-9)
+                for defect in ("omit", "swap"):
+                    wrong, _ = shunt_reference(case, edited, defect)
+                    self.assertFalse(compare(expected, wrong)["passed"])
+
+    def test_native_shunt_readback_stamps_pair_and_earth_currents(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            (directory / "model.glm").write_text(
+                'module powerflow { solver_method NR; } object load { name "line__glm_shunt_from"; parent "source"; }'
+            )
+            (directory / "line__glm_shunt_from.csv").write_text(
+                "# timestamp,voltage_A,voltage_B,voltage_C,constant_impedance_AB,constant_impedance_BC,constant_impedance_CA,constant_impedance_AN,constant_impedance_BN,constant_impedance_CN\nt0,12+0j,8+0j,0+0j,2+0j,0+0j,0+0j,4+0j,0+0j,0+0j\n"
+            )
+            result = list(shunt_measurements(directory, "ABC"))
+            self.assertEqual(
+                result,
+                [
+                    (
+                        "line__glm_shunt_from",
+                        "source",
+                        [12 + 0j, 8 + 0j, 0j],
+                        [5 + 0j, -2 + 0j, 0j],
+                    )
+                ],
+            )
+
     def test_phase_pair_reference_detects_wrong_connections_and_fixed_current(self):
         for name, terms in pair_variants().items():
             for edited in (False, True):

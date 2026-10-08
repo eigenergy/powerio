@@ -243,10 +243,19 @@ component and bus phases absent from the incoming link require additional
 exact equivalents and currently fail. No small impedance replaces an ideal
 constraint, and the input network is unchanged.
 
-FBS output also requires the line impedance and end-shunt matrices to commute.
-The pinned engines otherwise compute incorrect source-end currents despite
-correct receiving voltages. These cases fail before output is written until
-an exact end-shunt equivalent is available; capacitance is never discarded.
+For noncommuting line impedance and capacitance matrices, the pinned FBS engines
+compute incorrect source-end currents despite correct receiving voltages.
+Import reports this native discrepancy and retains the physical pi-line model.
+Canonical FBS output replaces native line capacitance with exact phase-pair and
+earth-return impedance loads at each end. Conductive or unequal end shunts use
+the same equivalent in either solver. End-shunt expansion requires symmetric
+matrices; a nonreciprocal equivalent needs additional mapping and fails explicitly.
+
+Generated shunts remain attached to their physical ends when a line reverses
+for FBS. Line coordinates stay on the series link. Diagnostics name the
+generated loads: physical line port currents, powers and losses include these
+loads as well as the series link. Reimport preserves the equivalent circuit
+as separate typed loads rather than reconstructing the original line identity.
 
 Output without ideal closed contacts selects NR. The pinned engines can return NaN results for
 some valid circuits even with a successful process exit. One qualified
