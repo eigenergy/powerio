@@ -203,7 +203,7 @@ powerio-matrix/src            matrix/ (bprime, bdoubleprime, ybus, lacpf,
                               multiconductor, triplet), dc_operators.rs,
                               ac_jacobian.rs, dcopf/ (prep, nodal, limits, bundle),
                               acopf.rs, opf.rs, io/ (mtx, meta, sensitivity, gridfm),
-                              pipeline.rs, synth/
+                              pipeline.rs, stated_state.rs, synth/
 powerio/src                   lib.rs (parse, emit), value.rs (PioValue), ir.rs,
                               stored/ (dto.rs, convert.rs), formats.rs, transform.rs,
                               write.rs, gridfm.rs, dist_geo.rs, codes.rs

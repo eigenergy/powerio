@@ -71,6 +71,16 @@ pub enum Error {
     #[error("invalid DC sensitivity option: {reason}")]
     InvalidSensitivityOptions { reason: String },
 
+    #[error(
+        "{element} between buses {from} and {to} has zero series impedance, so the stored voltages do not determine its flow; merge the buses it joins before evaluating the stated state (powerio_prob::merge_zero_impedance_buses)"
+    )]
+    UnmergedZeroImpedance {
+        /// The branch or three winding transformer winding, as text.
+        element: String,
+        from: powerio_tx::BusId,
+        to: powerio_tx::BusId,
+    },
+
     #[error("case has no generators; DC-OPF requires an `mpc.gen` block")]
     NoGenerators,
 
@@ -174,6 +184,9 @@ impl Error {
             Error::DuplicateElementIdentity { .. } => &codes::BUILD_OPF_ELEMENT_IDENTITY_DUPLICATE,
             Error::SingularNetwork => &codes::BUILD_SENSITIVITY_SINGULAR,
             Error::InvalidSensitivityOptions { .. } => &codes::BUILD_SENSITIVITY_INVALID_OPTION,
+            Error::UnmergedZeroImpedance { .. } => {
+                &powerio_tx::diagnostics::codes::BUILD_BRANCH_ZERO_IMPEDANCE
+            }
             Error::EmptyScenarioBatch => &codes::BUILD_GRIDFM_EMPTY_BATCH,
             Error::ScenarioIdOverflow { .. } => &codes::BUILD_GRIDFM_SCENARIO_ID_OVERFLOW,
             Error::NormalizedGridfmSnapshot { .. } => &codes::BUILD_GRIDFM_NORMALIZED_SNAPSHOT,
@@ -219,6 +232,7 @@ impl Error {
             | Error::DuplicateElementIdentity { .. }
             | Error::SingularNetwork
             | Error::InvalidSensitivityOptions { .. }
+            | Error::UnmergedZeroImpedance { .. }
             | Error::EmptyScenarioBatch
             | Error::ScenarioIdOverflow { .. }
             | Error::NormalizedGridfmSnapshot { .. }

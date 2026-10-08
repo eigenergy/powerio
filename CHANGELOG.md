@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- `calc_stated_state_mismatch` evaluates every bus's AC balance at the
+  voltages a case stores, with each device at its stated output: generators
+  at `pg` and `qg`, loads through their voltage model at the stored
+  magnitude, shunts at their stated admittance, static VAR compensators and
+  storage at their stated terminal power, and HVDC lines as fixed
+  injections. A case saved from a converged solution closes to the rounding
+  of its stored values wherever PowerIO reads the equipment as the solving
+  program did, so the residual measures read fidelity. Each bus mismatch is
+  the power the network draws minus the stated injection, flagged with the
+  attached equipment a residual is commonly traced to (`StatedBusFlags`:
+  HVDC and VSC terminals, static VAR compensators, generators on PQ buses,
+  three winding transformer star points, merge survivors, voltage dependent
+  loads, switched shunts, reference buses, storage, and terminals of
+  branches below an impedance threshold), summed per island, and ranked.
+  `closure_injections` returns the fixed injections that close the mismatch
+  at the flagged buses, and `calc_stated_branch_flows` returns the power
+  entering both ends of every branch and winding at the stored voltages. A
+  branch with zero series impedance is refused with
+  `Error::UnmergedZeroImpedance` until the buses it joins are merged. The
+  CLI runs it as `powerio verify --stated-state` (with `--top`, `--hvdc`,
+  and `--merge-zero-impedance`), and Python as
+  `BalancedNetwork.calc_stated_state_mismatch` and
+  `BalancedNetwork.calc_stated_branch_flows`.
+
 - HVDC lines no longer vanish from the balanced calculations. Every reader
   stores an `Hvdc` line in the MATPOWER `dcline` convention, and
   `IndexedNetwork::p_hvdc` and `q_hvdc` now fold each in-service line onto

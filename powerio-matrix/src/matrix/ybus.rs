@@ -213,7 +213,6 @@ pub(crate) fn branch_admittance(
 ///
 /// At a converged operating point these are the line flows; powerio computes them
 /// at the case's stored voltages (the parsed snapshot), not from a fresh solve.
-#[cfg(feature = "gridfm")]
 pub(crate) fn branch_flows(
     y: &[Complex64; 4],
     vi: Complex64,

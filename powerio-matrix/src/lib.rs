@@ -69,6 +69,7 @@ mod lindist3flow_standard;
 pub mod matrix;
 mod opf;
 pub mod pipeline;
+mod stated_state;
 pub mod synth;
 
 pub use ac_jacobian::{PowerFlowJacobian, VoltageCoordinates, calc_power_flow_jacobian};
@@ -134,6 +135,10 @@ pub use matrix::{
 pub use pipeline::{
     MatrixKind, Pipeline, PipelineOutputs, RhsKind, calc_matrix, calc_matrix_stats_for_kind,
     calc_zero_impedance_skips_for_kind, sanitize_stem, select_zero_impedance_rule_for_kind,
+};
+pub use stated_state::{
+    ClosureInjection, StatedBranchFlows, StatedBusFlags, StatedBusMismatch, StatedIslandMismatch,
+    StatedStateMismatch, StatedStateOptions, calc_stated_branch_flows, calc_stated_state_mismatch,
 };
 
 #[cfg(feature = "gridfm")]

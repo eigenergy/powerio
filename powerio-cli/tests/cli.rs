@@ -1181,6 +1181,63 @@ fn convert_writes_a_deserialized_distribution_module_through_the_writer() {
     std::fs::remove_file(ir).unwrap();
 }
 
+/// `verify --stated-state` refuses an unmerged zero-impedance branch with its
+/// code, and balances the case after `--merge-zero-impedance`.
+#[test]
+fn verify_stated_state_refuses_then_merges_a_zero_impedance_branch() {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let case = std::env::temp_dir().join(format!("powerio-cli-stated-state-{stamp}.m"));
+    // Bus 2's load is served across a zero impedance branch at equal
+    // voltages, so the merged case balances exactly.
+    std::fs::write(
+        &case,
+        "function mpc = stated\n\
+         mpc.version = '2';\n\
+         mpc.baseMVA = 100;\n\
+         mpc.bus = [\n\
+         1 3 0 0 0 0 1 1 0 230 1 1.1 0.9;\n\
+         2 1 10 5 0 0 1 1 0 230 1 1.1 0.9;\n\
+         ];\n\
+         mpc.gen = [\n\
+         1 10 5 100 -100 1 100 1 100 0 0 0 0 0 0 0 0 0 0 0 0;\n\
+         ];\n\
+         mpc.branch = [\n\
+         1 2 0 0 0 100 100 100 0 0 1 -360 360;\n\
+         ];\n",
+    )
+    .unwrap();
+    let path = case.to_str().unwrap();
+    let refused = run(&[
+        "--diagnostics-format",
+        "json",
+        "verify",
+        path,
+        "--stated-state",
+    ]);
+    assert_eq!(refused.status.code(), Some(5));
+    let records = json_diagnostics(&refused);
+    assert_eq!(
+        records[0]["code"], "BUILD.BRANCH.ZERO_IMPEDANCE",
+        "{records:?}"
+    );
+
+    let merged = run(&["verify", path, "--stated-state", "--merge-zero-impedance"]);
+    assert!(
+        merged.status.success(),
+        "{}",
+        String::from_utf8_lossy(&merged.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&merged.stdout);
+    assert!(stdout.contains("1 buses in 1 islands"), "{stdout}");
+    assert!(stdout.contains("max |dS| = 0.000 MVA"), "{stdout}");
+    assert!(stdout.contains("merged_group"), "{stdout}");
+
+    std::fs::remove_file(case).unwrap();
+}
+
 /// A failure raised by a typed library error inside a matrix command exits
 /// with that error's category and names its code, not the unclassified one.
 #[test]
