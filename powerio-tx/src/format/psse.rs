@@ -5664,12 +5664,40 @@ Q
             assert!((control.tap_max - range(1.15)).abs() < 1e-12, "CW {cw}");
             assert!((control.tap_min - range(0.95)).abs() < 1e-12, "CW {cw}");
 
-            // The canonical write states the same circuit with winding 2 at one.
-            let back = parse_psse(&write_psse(&parse_psse(&record(cw, w1, w2)).unwrap()).text)
+            // Writing back to the same format echoes the source record, so its
+            // WINDV, NOMV, and impedance fields come back exactly as stated.
+            let text = record(cw, w1, w2);
+            let source = powerio_core::Source::from_memory("case.raw", text.as_bytes().to_vec())
+                .unwrap()
+                .with_format(powerio_core::FormatId::new("psse").unwrap());
+            let module = crate::format::parse(source).unwrap();
+            let echo =
+                crate::format::emit_text(&module, crate::TargetFormat::Psse { rev: 33 }).unwrap();
+            assert_eq!(echo.text, text, "CW {cw}: the same format write echoes");
+
+            // The canonical write states the same circuit with winding 2 at
+            // one, so a read of it scales nothing, and a second write and read
+            // leave the branch where the first left it.
+            let written = write_psse(&parse_psse(&text).unwrap()).text;
+            let winding2 = written
+                .lines()
+                .skip_while(|line| !line.contains("BEGIN TRANSFORMER DATA"))
+                .nth(4)
+                .unwrap();
+            assert!(winding2.starts_with("1.0, "), "CW {cw}: {winding2}");
+            let back = parse_psse(&written).unwrap().branches()[0].clone();
+            let again = parse_psse(&write_psse(&parse_psse(&written).unwrap()).text)
                 .unwrap()
                 .branches()[0]
                 .clone();
-            for (a, b) in [(back.r, br.r), (back.x, br.x), (back.tap, br.tap)] {
+            for (a, b) in [
+                (back.r, br.r),
+                (back.x, br.x),
+                (back.tap, br.tap),
+                (again.r, br.r),
+                (again.x, br.x),
+                (again.tap, br.tap),
+            ] {
                 assert!((a - b).abs() < 1e-12, "CW {cw}: {a} != {b}");
             }
         }
