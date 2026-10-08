@@ -129,12 +129,18 @@ def typed(document, elements):
     result = {}
     for name, ports in elements.items():
         cls, identifier = name.split(".", 1)
-        if cls == "vsource":
-            current = -currents[f"_pio_vsource_{identifier}_impedance"]
+        key = f"_pio_vsource_{identifier}_impedance" if cls == "vsource" else identifier
+        coupled = f"_pio_vsource__pio_coupled_{key}_impedance"
+        if coupled in currents:
+            current = -currents[coupled]
         else:
-            current = currents[identifier]
+            current = currents[key]
+        if cls == "vsource":
+            current = -current
         current = np.r_[current, -current]
-        assert len(ports) == len(current)
+        assert len(ports) == len(current), (
+            f"{name}: typed equivalent conductor count changed"
+        )
         for i, ((bus, node), amp) in enumerate(zip(ports, current, strict=True)):
             voltage = 0j if node == "0" else volts[(bus, node)]
             add(result, f"{name}.{i}.voltage", "V", voltage)
@@ -143,7 +149,50 @@ def typed(document, elements):
     return result, residual
 
 
-def evaluate(output, powerio):
+def canonical_snapshot(path, elements):
+    engine = dss.NewContext()
+    engine.Basic.AllowChangeDir(False)
+    if LOCK["dss"]["version"] not in engine.Basic.Version():
+        raise ValueError("unpinned OpenDSS engine")
+    engine.Text.Command(f'redirect "{path.resolve()}"')
+    if not engine.Solution.Converged():
+        raise ValueError("canonical native circuit did not converge")
+    known = {name.lower() for name in engine.Circuit.AllElementNames()}
+    result = {}
+    for name, ports in elements.items():
+        cls, identifier = name.split(".", 1)
+        target = (
+            f"line._pio_vsource_{identifier}_impedance" if cls == "vsource" else name
+        )
+        if target not in known:
+            target = "vsource._pio_coupled_" + target.split(".", 1)[1]
+            if target not in known:
+                raise ValueError(f"canonical circuit lost {target}")
+        engine.Circuit.SetActiveElement(target)
+        current = complex_array(engine.CktElement.Currents())
+        if cls == "vsource":
+            current = -current
+        assert len(ports) == len(current), f"{target}: conductor count changed"
+        for i, ((bus, node), amp) in enumerate(zip(ports, current, strict=True)):
+            voltage = 0j
+            if node != "0":
+                if engine.Circuit.SetActiveBus(bus) < 0:
+                    raise ValueError(f"canonical circuit lost bus {bus}")
+                voltages = dict(
+                    zip(
+                        engine.Bus.Nodes(),
+                        complex_array(engine.Bus.Voltages()),
+                        strict=True,
+                    )
+                )
+                voltage = voltages[int(node)]
+            add(result, f"{name}.{i}.voltage", "V", voltage)
+            add(result, f"{name}.{i}.current", "A", amp)
+            add(result, f"{name}.{i}.power", "VA", voltage * amp.conjugate())
+    return result
+
+
+def evaluate(output, powerio, canonical=None):
     inputs = json.loads((output / "inputs.json").read_text())
     networks = json.loads((output / "networks.json").read_text())
     assert inputs.keys() == networks.keys() and inputs
@@ -155,7 +204,8 @@ def evaluate(output, powerio):
         }
         try:
             expected, elements, version = native(Path(path))
-            directory = Path(path).parent
+            directory = output / name
+            directory.mkdir(parents=True, exist_ok=True)
             original = directory / "original.pio.json"
             command(
                 [
@@ -231,8 +281,29 @@ def evaluate(output, powerio):
                     json.dumps(networks[name], sort_keys=True).encode()
                 ).hexdigest(),
             )
+            if canonical is not None:
+                written = canonical / name / "case.dss"
+                observed = canonical_snapshot(written, elements)
+                canonical_check = compare(expected, observed)
+                result["canonical_comparison"] = canonical_check
+                reimport = json.loads((canonical / name / "reimport.json").read_text())
+                roundtrip = {
+                    "value": {"type": "powerio.MulticonductorNetwork", "data": reimport}
+                }
+                reimported, residual = typed(roundtrip, elements)
+                reimport_check = compare(expected, reimported)
+                result.update(
+                    canonical_comparison=canonical_check,
+                    canonical_reimport_comparison=reimport_check,
+                    canonical_sha256=hashlib.sha256(written.read_bytes()).hexdigest(),
+                    canonical_reimport_residual=residual,
+                    passed=result["passed"]
+                    and canonical_check["passed"]
+                    and reimport_check["passed"],
+                )
         except Exception as error:
-            result["error"] = str(error)
+            result["error"] = f"{type(error).__name__}: {error}"
+            result["passed"] = False
         report["cases"][name] = result
         (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     passed = sum(v["passed"] for v in report["cases"].values())
@@ -245,11 +316,12 @@ if __name__ == "__main__":
     parser.add_argument("action", choices=("prepare", "evaluate"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--powerio", type=Path)
+    parser.add_argument("--canonical", type=Path)
     args = parser.parse_args()
     if args.action == "evaluate" and args.powerio is None:
         parser.error("evaluate requires --powerio for facade IR validation")
     raise SystemExit(
         prepare(args.output)
         if args.action == "prepare"
-        else evaluate(args.output, args.powerio)
+        else evaluate(args.output, args.powerio, args.canonical)
     )

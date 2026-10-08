@@ -28,6 +28,16 @@ use crate::model::{
 use super::read::delta_edges;
 use super::{lex, prop};
 
+#[cfg(test)]
+mod sources;
+
+#[derive(Clone, Copy)]
+enum SourceEmission {
+    Legacy,
+    #[cfg(test)]
+    Exact,
+}
+
 /// Options for canonical OpenDSS output.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -77,6 +87,14 @@ pub(crate) fn emit_dss_text_with_options(
     net: &MulticonductorNetwork,
     options: &DssEmitOptions,
 ) -> TextEmission {
+    emit_with_sources(net, options, SourceEmission::Legacy)
+}
+
+fn emit_with_sources(
+    net: &MulticonductorNetwork,
+    options: &DssEmitOptions,
+    sources: SourceEmission,
+) -> TextEmission {
     let mut w = DssWriter {
         out: String::new(),
         sidecars: Vec::new(),
@@ -94,8 +112,18 @@ pub(crate) fn emit_dss_text_with_options(
             .collect(),
         kv_estimate: estimate_bus_kv(net),
     };
-    w.network(net);
+    w.network(net, sources);
     TextEmission::new(w.out, w.sidecars, w.warnings)
+}
+
+#[cfg(test)]
+pub(super) fn emit_staged_sources(net: &MulticonductorNetwork) -> Result<TextEmission, String> {
+    sources::validate(net)?;
+    Ok(emit_with_sources(
+        net,
+        &DssEmitOptions::default(),
+        SourceEmission::Exact,
+    ))
 }
 
 struct DssWriter {
@@ -830,7 +858,7 @@ impl DssWriter {
         }
     }
 
-    fn network(&mut self, net: &MulticonductorNetwork) {
+    fn network(&mut self, net: &MulticonductorNetwork, sources: SourceEmission) {
         self.line_out("Clear");
         self.line_out(&format!(
             "Set DefaultBaseFrequency={}",
@@ -838,23 +866,9 @@ impl DssWriter {
         ));
         self.out.push('\n');
 
-        for source in net
-            .sources()
-            .iter()
-            .filter(|source| source.energy_cost_rate.is_some())
-        {
-            self.warn(
-                &C::EMIT_DSS_FIELD_DROPPED,
-                format!(
-                    "voltage source {}: energy_cost_rate has no target field",
-                    source.name
-                ),
-            );
-        }
-        self.buscoords(net);
-        self.sources(net);
-        self.line_codes(net);
-        self.lines(net);
+        self.source_elements(net, sources);
+        self.line_codes(net, sources);
+        self.lines(net, sources);
         self.switches(net);
         self.transformers(net);
         self.loads(net);
@@ -945,6 +959,12 @@ impl DssWriter {
             self.line_out(&format!("Set VoltageBases=[{}]", list.join(", ")));
             self.line_out("Calcvoltagebases");
         }
+        // Buscoords addresses the engine's bus list, which does not exist
+        // before the circuit and its equipment have been constructed.
+        if net.buses().iter().any(|bus| bus.location.is_some()) {
+            self.line_out("Makebuslist");
+        }
+        self.buscoords(net);
         self.line_out("Solve");
     }
 
@@ -1045,6 +1065,27 @@ impl DssWriter {
         self.sidecars.push(TextSidecar { path, text });
     }
 
+    fn source_elements(&mut self, net: &MulticonductorNetwork, sources: SourceEmission) {
+        for source in net
+            .sources()
+            .iter()
+            .filter(|s| s.energy_cost_rate.is_some())
+        {
+            self.warn(
+                &C::EMIT_DSS_FIELD_DROPPED,
+                format!(
+                    "voltage source {}: energy_cost_rate has no target field",
+                    source.name,
+                ),
+            );
+        }
+        match sources {
+            SourceEmission::Legacy => self.sources(net),
+            #[cfg(test)]
+            SourceEmission::Exact => self.exact_sources(net),
+        }
+    }
+
     fn sources(&mut self, net: &MulticonductorNetwork) {
         let mut order: Vec<usize> = (0..net.sources().len()).collect();
         if let Some(source_idx) = net
@@ -1118,9 +1159,27 @@ impl DssWriter {
         self.out.push('\n');
     }
 
-    fn line_codes(&mut self, net: &MulticonductorNetwork) {
+    fn line_codes(&mut self, net: &MulticonductorNetwork, sources: SourceEmission) {
+        #[cfg(not(test))]
+        let _ = sources;
         let omega_nf = std::f64::consts::TAU * net.base_frequency() * 1e-9;
         for c in net.line_codes() {
+            #[cfg(test)]
+            if matches!(sources, SourceEmission::Exact) && sources::asymmetric(c) {
+                self.warn(&C::EMIT_DSS_RECORD_DROPPED, format!(
+                    "linecode {}: asymmetric library definition is not regenerated; instantiated line impedances use equivalent sources", c.name,
+                ));
+                if c.source.is_some() {
+                    self.warn(
+                        &C::EMIT_DSS_EXTRAS_DROPPED,
+                        format!(
+                            "linecode {}: matrix provenance `source` has no DSS field; dropped",
+                            c.name,
+                        ),
+                    );
+                }
+                continue; // its complete impedance is emitted on a zero-EMF Vsource
+            }
             self.emit_linecode(c, omega_nf);
         }
         // #307: a line whose unique grounded return is not the last conductor
@@ -1146,6 +1205,10 @@ impl DssWriter {
             else {
                 continue;
             };
+            #[cfg(test)]
+            if matches!(sources, SourceEmission::Exact) && sources::asymmetric(code) {
+                continue;
+            }
             if code.n_conductors != l.terminal_map_from.len()
                 || !permuted.insert((code.name.to_ascii_lowercase(), k))
             {
@@ -1232,8 +1295,14 @@ impl DssWriter {
     // One block per record family; splitting the reorder decision from the
     // emission would thread five locals through helpers.
     #[allow(clippy::too_many_lines)]
-    fn lines(&mut self, net: &MulticonductorNetwork) {
+    fn lines(&mut self, net: &MulticonductorNetwork, sources: SourceEmission) {
+        #[cfg(not(test))]
+        let _ = sources;
         for l in net.lines() {
+            #[cfg(test)]
+            if matches!(sources, SourceEmission::Exact) && self.sequence_impedance_branch(net, l) {
+                continue;
+            }
             self.check_name("line", &l.name);
             // #307: with an agreed return conductor before the end and a
             // matching permuted linecode emitted, the node lists and the

@@ -245,7 +245,47 @@ fn export_staged_source_networks() {
         serde_json::from_slice(&std::fs::read(manifest).unwrap()).unwrap();
     let mut networks = BTreeMap::new();
     for (name, path) in paths {
-        let net = staged_read(&std::fs::read_to_string(path).unwrap());
+        let text = std::fs::read_to_string(&path).unwrap();
+        let is_glm = std::path::Path::new(&path)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("glm"));
+        let net = if is_glm {
+            crate::glm::parse(
+                powerio_core::Source::from_memory("case.glm", text.as_bytes()).unwrap(),
+                crate::glm::PreprocessOptions::default(),
+            )
+            .unwrap()
+            .value()
+            .clone()
+        } else {
+            staged_read(&text)
+        };
+        if let Ok(root) = std::env::var("POWERIO_SOURCE_CANONICAL_DIR") {
+            let directory = std::path::Path::new(&root).join(&name);
+            std::fs::create_dir_all(&directory).unwrap();
+            write_staged_network(&net, &directory, "case");
+            if is_glm {
+                let mut edited = net.clone();
+                edited.sources_mut()[0].v_magnitude[0] *= 1.03;
+                edited.lines_mut()[0].length *= 1.1;
+                for load in edited.loads_mut() {
+                    for value in load.p_nom.iter_mut().chain(load.q_nom.iter_mut()) {
+                        *value *= 1.25;
+                    }
+                }
+                edited
+                    .buses_mut()
+                    .iter_mut()
+                    .find(|b| b.id == "source")
+                    .unwrap()
+                    .location = Some(DistLocation {
+                    x: 0.0,
+                    y: -27.5,
+                    kind: None,
+                });
+                write_staged_network(&edited, &directory, "edited");
+            }
+        }
         let encoded = serde_json::to_value(&net).unwrap();
         let restored: MulticonductorNetwork = serde_json::from_value(encoded.clone()).unwrap();
         assert_eq!(encoded, serde_json::to_value(&restored).unwrap());
@@ -253,4 +293,52 @@ fn export_staged_source_networks() {
     }
     let output = std::env::var("POWERIO_SOURCE_LOWERING_OUTPUT").expect("output path");
     std::fs::write(output, serde_json::to_vec_pretty(&networks).unwrap()).unwrap();
+}
+
+fn write_staged_network(net: &MulticonductorNetwork, directory: &std::path::Path, stem: &str) {
+    let emitted = crate::dss::write::emit_staged_sources(net).unwrap();
+    let typed = serde_json::to_value(net).unwrap();
+    let restored: MulticonductorNetwork = serde_json::from_value(typed.clone()).unwrap();
+    assert_eq!(
+        emitted.text,
+        crate::dss::write::emit_staged_sources(&restored)
+            .unwrap()
+            .text
+    );
+    let path = directory.join(format!("{stem}.dss"));
+    std::fs::write(&path, &emitted.text).unwrap();
+    std::fs::write(
+        directory.join(format!("{stem}.typed.json")),
+        serde_json::to_vec_pretty(&typed).unwrap(),
+    )
+    .unwrap();
+    for sidecar in emitted.sidecars {
+        std::fs::write(directory.join(sidecar.path), sidecar.text).unwrap();
+    }
+    let raw = crate::dss::raw::__parse_raw_file(&path).unwrap();
+    let (reimported, diagnostics) =
+        to_network_with_source_reader(&raw, Some(|rd, raw| rd.resolved_sources(raw).unwrap()));
+    assert!(
+        diagnostics
+            .iter()
+            .all(|d| d.severity() != powerio_core::DiagnosticSeverity::Error)
+    );
+    let target = if stem == "case" {
+        "reimport.json".to_owned()
+    } else {
+        format!("{stem}.reimport.json")
+    };
+    std::fs::write(
+        directory.join(target),
+        serde_json::to_vec_pretty(&reimported).unwrap(),
+    )
+    .unwrap();
+    let second = crate::dss::write::emit_staged_sources(&reimported).unwrap();
+    std::fs::write(directory.join(format!("{stem}.reimport.dss")), second.text).unwrap();
+    for sidecar in second.sidecars {
+        assert_eq!(
+            std::fs::read_to_string(directory.join(sidecar.path)).unwrap(),
+            sidecar.text
+        );
+    }
 }

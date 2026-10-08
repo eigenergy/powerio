@@ -82,6 +82,10 @@ pub mod codes {
             "a line names a linecode the case does not declare";
 
         // EMIT.DSS: what the canonical dss writer cannot state.
+        EMIT_DSS_SOURCE_EQUIVALENT = "EMIT.DSS.SOURCE_EQUIVALENT", Remark,
+            "an ideal source is emitted as an exact finite-impedance circuit equivalent";
+        EMIT_DSS_IMPEDANCE_EQUIVALENT = "EMIT.DSS.IMPEDANCE_EQUIVALENT", Remark,
+            "a conductor impedance is emitted as an exact zero-EMF source equivalent";
         EMIT_DSS_FIELD_DROPPED = "EMIT.DSS.FIELD_DROPPED", Warning,
             "a field the dss object model has no property for was dropped";
         EMIT_DSS_RECORD_DROPPED = "EMIT.DSS.RECORD_DROPPED", Warning,
