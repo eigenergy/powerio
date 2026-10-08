@@ -440,6 +440,14 @@ Schema definition: `Transformer3W`.
 | `uid` | string or null | | | unique within `transformers_3w` | assigned at serialization |
 | `extras` | object | | | | required |
 
+Two `extras` entries carry per winding data, in winding order. Each is present
+only when it differs from its default. `winding_in_service` holds three
+booleans; a winding that is out leaves the other two coupled through the star
+point, and an absent entry means every winding is in service.
+`winding_rating_sets` holds three arrays of `{name, rate_mva}` objects with the
+MVA ratings beyond `rate_a`, `rate_b`, and `rate_c`, named as in
+`Branch.rating_sets`.
+
 Schema definition: `Winding`.
 
 | field | type | unit | sign | invariant | if absent |

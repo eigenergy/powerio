@@ -3442,6 +3442,13 @@ impl Impedance {
     }
 }
 
+/// The [`Transformer3W::extras`] key behind
+/// [`Transformer3W::winding_in_service`].
+pub(crate) const WINDING_IN_SERVICE_EXTRA: &str = "winding_in_service";
+/// The [`Transformer3W::extras`] key behind
+/// [`Transformer3W::winding_rating_sets`].
+pub(crate) const WINDING_RATING_SETS_EXTRA: &str = "winding_rating_sets";
+
 /// One winding of a [`Transformer3W`]: its terminal bus, off-nominal ratio, phase
 /// shift, nominal voltage, and thermal ratings.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -3546,12 +3553,80 @@ impl Transformer3W {
         ]
     }
 
+    /// Whether each winding is connected while the transformer is in service,
+    /// in winding order. [`in_service`](Self::in_service) takes the whole
+    /// transformer out; a winding that is out leaves the other two coupled
+    /// through the star point.
+    ///
+    /// The status is kept as three booleans under
+    /// `extras["winding_in_service"]`, absent while every winding is in
+    /// service. An absent or malformed entry reads as every winding in service.
+    #[must_use]
+    pub fn winding_in_service(&self) -> [bool; 3] {
+        self.extras
+            .get(WINDING_IN_SERVICE_EXTRA)
+            .and_then(|value| <[bool; 3]>::deserialize(value).ok())
+            .unwrap_or([true; 3])
+    }
+
+    /// Set [`winding_in_service`](Self::winding_in_service).
+    pub fn set_winding_in_service(&mut self, in_service: [bool; 3]) {
+        if in_service == [true; 3] {
+            self.extras.remove(WINDING_IN_SERVICE_EXTRA);
+        } else {
+            self.extras.insert(
+                WINDING_IN_SERVICE_EXTRA.to_owned(),
+                Value::from(in_service.to_vec()),
+            );
+        }
+    }
+
+    /// The MVA rating sets of winding `winding` (0, 1, or 2) beyond `rate_a`,
+    /// `rate_b`, and `rate_c`, named as on [`Branch::rating_sets`]: PSS/E
+    /// states `RATE4` to `RATE12`.
+    ///
+    /// The sets are kept under `extras["winding_rating_sets"]` as three arrays
+    /// of `{name, rate_mva}` objects in winding order, absent while no winding
+    /// has one. An absent or malformed entry reads as no sets.
+    ///
+    /// # Panics
+    /// If `winding` is 3 or more.
+    #[must_use]
+    pub fn winding_rating_sets(&self, winding: usize) -> Vec<BranchRatingSet> {
+        let mut sets = self.stored_winding_rating_sets();
+        std::mem::take(&mut sets[winding])
+    }
+
+    /// Set [`winding_rating_sets`](Self::winding_rating_sets) for one winding.
+    ///
+    /// # Panics
+    /// If `winding` is 3 or more.
+    pub fn set_winding_rating_sets(&mut self, winding: usize, rating_sets: Vec<BranchRatingSet>) {
+        let mut sets = self.stored_winding_rating_sets();
+        sets[winding] = rating_sets;
+        if sets.iter().all(Vec::is_empty) {
+            self.extras.remove(WINDING_RATING_SETS_EXTRA);
+        } else {
+            let value = serde_json::to_value(sets).expect("rating sets serialize to JSON");
+            self.extras
+                .insert(WINDING_RATING_SETS_EXTRA.to_owned(), value);
+        }
+    }
+
+    fn stored_winding_rating_sets(&self) -> [Vec<BranchRatingSet>; 3] {
+        self.extras
+            .get(WINDING_RATING_SETS_EXTRA)
+            .and_then(|value| <[Vec<BranchRatingSet>; 3]>::deserialize(value).ok())
+            .unwrap_or_default()
+    }
+
     /// Expand into a synthetic star [`Bus`] (id `star_id`) plus three [`Branch`]es,
     /// one per winding, for a consumer that works in the bus-branch model.
     /// [`IndexedNetwork`](crate::IndexedNetwork) calls this via
     /// `BalancedNetwork::expand_transformers_3w` when assembling matrix inputs. The star
     /// bus carries the stored star voltage and the magnetizing shunt is left to the
-    /// caller; each branch takes its winding's tap, phase shift, and ratings.
+    /// caller; each branch takes its winding's tap, phase shift, ratings, and
+    /// status, so a winding out of service gives an out of service branch.
     #[must_use]
     pub fn to_star_expansion(&self, star_id: BusId) -> (Bus, [Branch; 3]) {
         let star = Bus {
@@ -3596,11 +3671,16 @@ impl Transformer3W {
             route: None,
             extras: Extras::new(),
         };
-        let branches = [
+        let mut branches = [
             branch(&self.windings[0], zs[0]),
             branch(&self.windings[1], zs[1]),
             branch(&self.windings[2], zs[2]),
         ];
+        let windings_in_service = self.winding_in_service();
+        for (k, branch) in branches.iter_mut().enumerate() {
+            branch.in_service &= windings_in_service[k];
+            branch.rating_sets = self.winding_rating_sets(k);
+        }
         (star, branches)
     }
 }
@@ -5977,6 +6057,85 @@ mod tests {
         }
         close(branches[2].r, 0.02);
         close(branches[2].x, 0.20);
+    }
+
+    #[test]
+    fn star_expansion_carries_winding_status_and_rating_sets() {
+        let mut t = transformer_3w();
+        t.set_winding_in_service([true, false, true]);
+        t.set_winding_rating_sets(2, vec![BranchRatingSet::new("RATE4", 75.0)]);
+        let (_, branches) = t.to_star_expansion(BusId(99));
+        assert_eq!(
+            branches.each_ref().map(|br| br.in_service),
+            [true, false, true]
+        );
+        assert_eq!(
+            branches[2].rating_sets,
+            [BranchRatingSet::new("RATE4", 75.0)]
+        );
+        assert_eq!(branches[0].rating_sets, []);
+
+        // The transformer status still takes every winding out.
+        t.in_service = false;
+        let (_, branches) = t.to_star_expansion(BusId(99));
+        assert!(branches.iter().all(|br| !br.in_service));
+
+        // The lowering keeps all three branches of a partly in service
+        // transformer, so analysis rows still map to windings one for one.
+        t.in_service = true;
+        let mut net =
+            BalancedNetwork::in_memory("t", 100.0, vec![bus(1), bus(2), bus(3)], Vec::new());
+        net.transformers_3w_mut().push(t);
+        let lowered = net.expand_transformers_3w();
+        assert_eq!(
+            lowered
+                .branches()
+                .iter()
+                .map(|br| (br.from, br.in_service))
+                .collect::<Vec<_>>(),
+            [(BusId(1), true), (BusId(2), false), (BusId(3), true)]
+        );
+        assert_eq!(net.lowered_lengths().branches, lowered.branches().len());
+    }
+
+    #[test]
+    fn winding_status_and_rating_sets_live_in_extras_only_when_stated() {
+        let mut t = transformer_3w();
+        assert_eq!(t.winding_in_service(), [true; 3]);
+        assert_eq!(t.winding_rating_sets(1), []);
+
+        t.set_winding_in_service([false, true, true]);
+        t.set_winding_rating_sets(1, vec![BranchRatingSet::new("RATE4", 75.0)]);
+        assert_eq!(
+            t.extras["winding_in_service"],
+            serde_json::json!([false, true, true])
+        );
+        assert_eq!(
+            t.extras["winding_rating_sets"],
+            serde_json::json!([[], [{"name": "RATE4", "rate_mva": 75.0}], []])
+        );
+        let mut net =
+            BalancedNetwork::in_memory("t", 100.0, vec![bus(1), bus(2), bus(3)], Vec::new());
+        net.transformers_3w_mut().push(t.clone());
+        let back = serde_round_trip(&net);
+        assert_eq!(
+            back.transformers_3w()[0].winding_in_service(),
+            [false, true, true]
+        );
+        assert_eq!(
+            back.transformers_3w()[0].winding_rating_sets(1),
+            [BranchRatingSet::new("RATE4", 75.0)]
+        );
+
+        // Restating the defaults removes both entries.
+        t.set_winding_in_service([true; 3]);
+        t.set_winding_rating_sets(1, Vec::new());
+        assert!(t.extras.is_empty(), "{:?}", t.extras);
+
+        // A malformed entry reads as the default rather than failing.
+        t.extras
+            .insert("winding_in_service".to_owned(), Value::from("open"));
+        assert_eq!(t.winding_in_service(), [true; 3]);
     }
 
     #[test]

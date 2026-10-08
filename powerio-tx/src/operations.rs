@@ -578,8 +578,10 @@ impl BalancedNetwork {
             connected.insert(d.to);
         }
         for t in self.transformers_3w().iter().filter(|t| t.in_service) {
-            for w in &t.windings {
-                connected.insert(w.bus);
+            for (w, in_service) in t.windings.iter().zip(t.winding_in_service()) {
+                if in_service {
+                    connected.insert(w.bus);
+                }
             }
         }
         let mut retyped = 0;
