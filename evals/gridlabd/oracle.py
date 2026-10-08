@@ -350,7 +350,12 @@ def command(args: list[str], cwd: Path, env=None) -> str:
     return run.stdout
 
 
-def run_glm(profile: str, directory: Path, pnnl_root: Path | None) -> str:
+def run_glm(
+    profile: str,
+    directory: Path,
+    pnnl_root: Path | None,
+    outputs: tuple[str, ...] = ("source.csv", "sink.csv", "line.csv", "impedance.xml"),
+) -> str:
     if profile == "pnnl":
         if pnnl_root is None:
             raise ValueError("--pnnl-root is required")
@@ -405,7 +410,7 @@ def run_glm(profile: str, directory: Path, pnnl_root: Path | None) -> str:
                 raise RuntimeError(f"Arras exited {status.strip()}")
             # Copy only engine outputs: copying the whole directory would
             # overwrite the host log with its stale pre-run container copy.
-            for name in ("source.csv", "sink.csv", "line.csv", "impedance.xml"):
+            for name in outputs:
                 command(
                     [
                         "docker",

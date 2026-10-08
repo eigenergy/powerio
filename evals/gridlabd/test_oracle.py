@@ -7,10 +7,30 @@ import unittest
 from pathlib import Path
 
 import numpy as np
+from coordinate_oracle import check as check_coordinates
+from coordinate_oracle import expected as expected_coordinates
 from oracle import add, analytic, cases, compare, parse_complex, recorded
 
 
 class OracleTests(unittest.TestCase):
+    def test_coordinate_negative_controls(self):
+        check_coordinates(expected_coordinates())
+        for defect in ("axis", "missing_zero", "invented_zero", "nonfinite", "declared_line"):
+            with self.subTest(defect=defect):
+                actual = copy.deepcopy(expected_coordinates())
+                if defect == "axis":
+                    actual["northern"] = {"latitude": -120.25, "longitude": 45.5}
+                elif defect == "missing_zero":
+                    del actual["zero"]["latitude"]
+                elif defect == "invented_zero":
+                    actual["absent"]["latitude"] = 0
+                elif defect == "nonfinite":
+                    actual["source"]["latitude"] = float("nan")
+                else:
+                    actual["line"] = {"latitude": 10, "longitude": 20}
+                with self.assertRaises(ValueError):
+                    check_coordinates(actual)
+
     def test_complex_conventions(self):
         for text, expected in (
             ("3-4j", 3 - 4j),

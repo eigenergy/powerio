@@ -101,6 +101,21 @@ do not establish floating-neutral or triplex-cable equivalence.
 
 ## Published references and limits
 
+`coordinate_oracle.py` qualifies common object-header latitude and longitude in
+both pinned GridLAB-D forks. Run it with `--output <new-directory>` and
+`--pnnl-root <installation-directory>`. It checks signed decimal, hemisphere
+decimal-minute and degree-minute-second literals, coordinate references, missing
+and partial points, and explicit zero coordinates. The comparison decodes native
+saved GLM; its tolerance accounts for the engine writer's hundredth-of-an-arcsecond
+rounding. The two forks use different saved object and quoting syntax.
+
+Both engines replace the test line's declared location with its endpoint
+midpoint during initialization. Thus the saved engine location is derived state,
+not evidence that an importer preserved the declared location. The case records
+both. It does not establish a geographic datum, a route polyline, a conductor
+spacing, or an electrical line length. These checks calibrate the oracle only;
+PowerIO coordinate mapping and fresh/edited/IR conversion remain to be verified.
+
 `upstream.json` records original PNNL source URLs, commit, hashes, license and
 assertion inventories. `upstream.py` runs the unmodified IEEE 13 NR and FBS
 regressions (32 complex assertions each) and IEEE 37 NR (six). The 13-node
