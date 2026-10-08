@@ -113,6 +113,7 @@ fn find(parent: &mut [usize], mut node: usize) -> usize {
 /// the OPF preparation will actually contain. In-service branches touching an
 /// isolated bus are excluded with that bus, matching PowerIO normalization.
 pub(crate) fn active_bus_index(case: &IndexedNetwork<'_>) -> Result<ActiveBusIndex> {
+    case.check_closed_switches()?;
     let mut analysis_rows = Vec::new();
     let mut dense_by_analysis = vec![None; case.n()];
     let mut bus_ids = Vec::new();

@@ -26,6 +26,23 @@
   elements. Python has `BalancedNetwork.merge_buses` and `BusMerge`, and
   `powerio convert`, `summary`, and `verify` take `--merge-buses SPEC`.
 
+- Closed switches count as connections. `IndexedNetwork::calc_island_labels`,
+  `calc_island_count`, `check_reference_coverage`, `is_radial`, and
+  `calc_connectivity_report`, and `BalancedNetwork::retype_isolated_buses`,
+  join the two buses of a closed switch, so a bus reached only through one is
+  no longer its own island or retyped isolated. The matrix builders, the DC
+  operators, the DC and AC OPF preparations, and the GridFM export model no
+  switches, and they used to leave a closed switch's buses apart without a
+  word; they now refuse it with `BUILD.SWITCH.CLOSED`, which names
+  `merge_buses`. `IndexedNetwork::check_closed_switches` states the check.
+  Open switches change nothing.
+
+- The contingency resolver binds a branch statement that names no line or two
+  winding transformer to a system switching device on the same buses and
+  circuit id, so `OPEN BRANCH FROM BUS i TO BUS j CIRCUIT '@1'` resolves to
+  component type `switch`. `PsseEquipmentIndex` gains `switch_ids` and
+  `switch_rows`, using the RAW writer's switching device id allocation.
+
 - `reduce_zero_impedance` and `merge_zero_impedance_buses` now run through
   `merge_buses`, so they are linear rather than quadratic in the bus count and
   rewrite every element reference: `merge_zero_impedance_buses` used to leave

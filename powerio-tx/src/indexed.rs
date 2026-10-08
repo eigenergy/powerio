@@ -21,7 +21,7 @@ use std::collections::HashMap;
 
 use petgraph::graph::UnGraph;
 
-use crate::network::{BalancedNetwork, Branch, BusId, BusType, Generator};
+use crate::network::{BalancedNetwork, Branch, BusId, BusType, Generator, Switch};
 use crate::{Error, Result};
 
 /// The owned, network-independent derivation behind [`IndexedNetwork`]: the
@@ -307,20 +307,59 @@ impl<'n> IndexedNetwork<'n> {
         g
     }
 
-    /// Number of connected components in the in-service topology.
+    /// In-service switches that are closed and join two distinct buses, with
+    /// their index into the network's switch table. A closed switch is an
+    /// ideal connection: its two buses are one electrical node.
+    pub fn closed_switches(&self) -> impl Iterator<Item = (usize, &Switch)> {
+        self.net
+            .switches()
+            .iter()
+            .enumerate()
+            .filter(|(_, switch)| switch.closed && switch.from != switch.to)
+    }
+
+    /// Error if a closed switch joins two buses.
+    ///
+    /// The matrix builders and solver preparations stamp branches only, so a
+    /// closed switch would silently leave its two buses apart. They call this
+    /// first and refuse such a network; merge the switch's buses with
+    /// [`merge_buses`](BalancedNetwork::merge_buses) under a rule that merges
+    /// closed switches before building.
+    ///
+    /// # Errors
+    /// [`Error::ClosedSwitch`] naming the first closed switch.
+    pub fn check_closed_switches(&self) -> Result<()> {
+        match self.closed_switches().next() {
+            Some((row, switch)) => Err(Error::ClosedSwitch {
+                row,
+                from: switch.from,
+                to: switch.to,
+            }),
+            None => Ok(()),
+        }
+    }
+
+    /// Number of connected components in the in-service topology: buses
+    /// joined by in-service branches or closed switches.
     pub fn calc_island_count(&self) -> usize {
-        petgraph::algo::connected_components(&self.to_petgraph())
+        let labels = self.calc_island_labels();
+        (0..labels.len()).filter(|&i| labels[i] == i).count()
     }
 
     /// Connected-component label per dense bus index (in-service topology): two
-    /// buses share a label iff an in-service branch path joins them, and an
-    /// isolated bus is its own component. Labels are representative indices in
-    /// `[0, n)`, not a dense `[0, k)` range — use them for equality grouping
-    /// (e.g. checking every island carries a reference bus to ground).
+    /// buses share a label iff a path of in-service branches and closed
+    /// switches joins them, and an isolated bus is its own component. Labels
+    /// are representative indices in `[0, n)`, not a dense `[0, k)` range — use
+    /// them for equality grouping (e.g. checking every island carries a
+    /// reference bus to ground).
     pub fn calc_island_labels(&self) -> Vec<usize> {
         let mut uf = petgraph::unionfind::UnionFind::new(self.n());
-        for (_, br) in self.in_service_branches() {
-            if let (Some(i), Some(j)) = (self.bus_index(br.from), self.bus_index(br.to)) {
+        let edges = self
+            .in_service_branches()
+            .map(|(_, br)| (br.from, br.to))
+            .chain(self.closed_switches().map(|(_, sw)| (sw.from, sw.to)));
+        for (from, to) in edges {
+            if let (Some(i), Some(j)) = (self.bus_index(from), self.bus_index(to)) {
                 uf.union(i, j);
             }
         }
@@ -333,6 +372,8 @@ impl<'n> IndexedNetwork<'n> {
     /// null vector in the system, so the reference-grounded Laplacian stays
     /// singular. With one reference in a single island it reduces to the
     /// single slack requirement. Reports the count of ungrounded components.
+    /// Closed switches join their buses here as they do in
+    /// [`calc_island_labels`](Self::calc_island_labels).
     pub fn check_reference_coverage(&self) -> Result<()> {
         let labels = self.calc_island_labels();
         // Mark each component (by its representative index in `[0, n)`) that holds
@@ -355,27 +396,32 @@ impl<'n> IndexedNetwork<'n> {
         Ok(())
     }
 
-    /// True iff the in-service topology is a forest (`|E| = |V| - components`).
+    /// True iff the in-service topology, branches and closed switches alike,
+    /// is a forest (`|E| = |V| - components`).
     pub fn is_radial(&self) -> bool {
-        let g = self.to_petgraph();
-        let n_components = petgraph::algo::connected_components(&g);
-        g.edge_count() == g.node_count().saturating_sub(n_components)
+        let edges = self.in_service_branches().count() + self.closed_switches().count();
+        edges == self.n().saturating_sub(self.calc_island_count())
     }
 
-    /// Calculate a one-shot topological diagnostic.
+    /// Calculate a one-shot topological diagnostic. Closed switches join their
+    /// buses as they do in [`calc_island_labels`](Self::calc_island_labels).
     pub fn calc_connectivity_report(&self) -> ConnectivityReport {
-        let g = self.to_petgraph();
-        let n_components = petgraph::algo::connected_components(&g);
-        let isolated: Vec<usize> = g
-            .node_indices()
-            .filter(|n| g.neighbors(*n).next().is_none())
-            .map(|n| g[n])
-            .collect();
+        let mut connected = vec![false; self.n()];
+        let edges = self
+            .in_service_branches()
+            .map(|(_, br)| (br.from, br.to))
+            .chain(self.closed_switches().map(|(_, sw)| (sw.from, sw.to)));
+        for (from, to) in edges {
+            if let (Some(i), Some(j)) = (self.bus_index(from), self.bus_index(to)) {
+                connected[i] = true;
+                connected[j] = true;
+            }
+        }
         ConnectivityReport {
             n_buses: self.n(),
             n_branches_in_service: self.net.branches().iter().filter(|b| b.in_service).count(),
-            n_components,
-            isolated_buses: isolated,
+            n_components: self.calc_island_count(),
+            isolated_buses: (0..self.n()).filter(|&i| !connected[i]).collect(),
         }
     }
 }
@@ -388,7 +434,8 @@ pub struct ConnectivityReport {
     pub n_buses: usize,
     pub n_branches_in_service: usize,
     pub n_components: usize,
-    /// Dense bus indices with no incident in-service branch.
+    /// Dense bus indices with no incident in-service branch or closed switch
+    /// to another bus.
     pub isolated_buses: Vec<usize>,
 }
 
@@ -614,6 +661,49 @@ mod tests {
         assert_aggregates(&IndexedNetwork::new(&net));
         let core = IndexCore::build(&net);
         assert_aggregates(&IndexedNetwork::with_core(&net, &core));
+    }
+
+    #[test]
+    fn a_bus_reached_only_through_a_closed_switch_is_not_islanded() {
+        // Bus 1 (reference) - bus 2 by a line; bus 3 hangs off bus 2 by a
+        // closed switch and bus 4 by an open one.
+        let mut net = BalancedNetwork::in_memory(
+            "switches",
+            100.0,
+            vec![
+                bus(1, BusType::Ref),
+                bus(2, BusType::Pq),
+                bus(3, BusType::Pq),
+                bus(4, BusType::Pq),
+            ],
+            vec![crate::network::Branch::new(BusId(1), BusId(2), 0.0, 0.1)],
+        );
+        net.switches_mut().extend([
+            crate::network::Switch::new(BusId(2), BusId(3), true),
+            crate::network::Switch::new(BusId(2), BusId(4), false),
+        ]);
+        let view = IndexedNetwork::new(&net);
+        let labels = view.calc_island_labels();
+        assert_eq!(labels[0], labels[2], "the closed switch joins bus 3");
+        assert_ne!(labels[0], labels[3], "the open switch does not join bus 4");
+        assert_eq!(view.calc_island_count(), 2);
+        let report = view.calc_connectivity_report();
+        assert_eq!(report.n_components, 2);
+        assert_eq!(report.isolated_buses, vec![3]);
+        assert!(view.is_radial());
+        let error = view.check_reference_coverage().unwrap_err();
+        assert!(matches!(
+            error,
+            crate::Error::UngroundedComponent { components: 1 }
+        ));
+
+        // The matrix builders model no switches, so the view refuses the
+        // closed one rather than leaving bus 3 apart.
+        let error = view.check_closed_switches().unwrap_err();
+        assert_eq!(error.code().code, "BUILD.SWITCH.CLOSED");
+        assert!(error.to_string().contains("merge_buses"));
+        net.switches_mut()[0].closed = false;
+        IndexedNetwork::new(&net).check_closed_switches().unwrap();
     }
 
     #[test]

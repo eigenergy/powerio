@@ -6,8 +6,8 @@
 use powerio_matrix::DcOperators;
 use powerio_prob::DcPfInstance;
 use powerio_tx::{
-    BalancedNetwork, Branch, Bus, BusId, BusMergeRule, BusType, Generator, Load, MergedFlows,
-    RemovedFlowMethod, Switch, ZeroImpedanceRule,
+    BalancedNetwork, Branch, BranchSusceptanceFormula, Bus, BusId, BusMergeRule, BusType,
+    Generator, Load, MergedFlows, RemovedFlowMethod, Switch, ZeroImpedanceRule,
 };
 
 /// The jumper reactance of the unmerged network, per unit: far below the
@@ -170,4 +170,64 @@ fn merged_dc_angles_and_recovered_flows_match_the_unmerged_case() {
     assert!((switch.p_from - unmerged_flows[7]).abs() < 1e-3);
     assert!((switch.p_from - 20.0).abs() < 1e-3);
     assert_eq!(switch.method, RemovedFlowMethod::Tree);
+}
+
+/// A reference bus 1 feeding bus 2 by a line; bus 3, with a load, hangs off
+/// bus 2 through a closed switch.
+fn switched_network() -> BalancedNetwork {
+    let mut buses: Vec<Bus> = (1..=3)
+        .map(|id| Bus::new(BusId(id), BusType::Pq, 230.0))
+        .collect();
+    buses[0].kind = BusType::Ref;
+    let mut net = BalancedNetwork::in_memory(
+        "switched",
+        100.0,
+        buses,
+        vec![Branch::new(BusId(1), BusId(2), 0.0, 0.1)],
+    );
+    net.switches_mut()
+        .push(Switch::new(BusId(2), BusId(3), true));
+    let mut slack = Generator::new(BusId(1));
+    slack.pg = 30.0;
+    slack.pmax = 100.0;
+    net.generators_mut().push(slack);
+    net.loads_mut().push(Load::new(BusId(3), 30.0, 0.0));
+    net
+}
+
+#[test]
+fn analysis_on_unmerged_closed_switches_is_refused_with_a_code() {
+    use powerio_matrix::IndexedNetwork;
+    use powerio_matrix::matrix::{BuildOptions, calc_admittance_matrix, calc_ptdf};
+
+    let net = switched_network();
+    let view = IndexedNetwork::new(&net);
+    let code = |error: powerio_matrix::Error| error.code().code;
+    assert_eq!(
+        code(calc_admittance_matrix(&view, &BuildOptions::default()).unwrap_err()),
+        "BUILD.SWITCH.CLOSED"
+    );
+    assert_eq!(
+        code(calc_ptdf(&view, BranchSusceptanceFormula::default()).unwrap_err()),
+        "BUILD.SWITCH.CLOSED"
+    );
+    let instance = DcPfInstance::from_network(net.clone()).unwrap();
+    let error = DcOperators::build(&instance).unwrap_err();
+    assert_eq!(error.info().unwrap().code, "BUILD.SWITCH.CLOSED");
+    assert!(error.to_string().contains("merge_buses"));
+    let opf = powerio_prob::DcOpfInstance::from_network(net.clone()).unwrap();
+    let options = powerio_matrix::DcOpfAssemblyOptions::default();
+    let error = powerio_matrix::build_dc_opf_preparation(&opf, &options).unwrap_err();
+    assert_eq!(code(error), "BUILD.SWITCH.CLOSED");
+
+    // Merging the switch resolves it: the merged network builds and the
+    // switch carries the load.
+    let merge = net.merge_buses(&BusMergeRule::closed_switches()).unwrap();
+    let (_, flows) = solve_dc(&merge.network);
+    assert!((flows[0] - 30.0).abs() < 1e-9);
+    let p_to: Vec<f64> = flows.iter().map(|p| -p).collect();
+    let recovered = merge
+        .calc_removed_flows(&MergedFlows::new(&flows, &p_to))
+        .unwrap();
+    assert!((recovered.switches[0].p_from - 30.0).abs() < 1e-9);
 }

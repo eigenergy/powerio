@@ -95,6 +95,13 @@ pub enum Error {
     )]
     UngroundedComponent { components: usize },
 
+    /// A closed switch joins two buses that a calculation which models no
+    /// switches would leave apart.
+    #[error(
+        "switch row {row} between buses {from} and {to} is closed, and this calculation does not model switches; merge its buses with merge_buses first"
+    )]
+    ClosedSwitch { row: usize, from: BusId, to: BusId },
+
     /// A [`BusMergeRule`](crate::BusMergeRule) that cannot be applied.
     #[error("invalid bus merge rule: {message}")]
     BusMergeRule { message: String },
@@ -177,6 +184,7 @@ impl Error {
             Error::InvalidBaseMva { .. } => &codes::CANONICALIZE_NORMALIZE_INVALID_BASE_MVA,
             Error::InvalidNormalizeOption { .. } => &codes::CANONICALIZE_NORMALIZE_INVALID_OPTION,
             Error::UngroundedComponent { .. } => &codes::BUILD_INDEX_UNGROUNDED_COMPONENT,
+            Error::ClosedSwitch { .. } => &codes::BUILD_SWITCH_CLOSED,
             Error::BusMergeRule { .. } => &codes::CANONICALIZE_MERGE_INVALID_RULE,
             Error::MergedFlowShape { .. } => &codes::CANONICALIZE_MERGE_FLOW_SHAPE_MISMATCH,
             Error::UnlocatedElements { .. } => &codes::BUILD_GEO_UNLOCATED_ELEMENTS,
@@ -223,6 +231,7 @@ impl Error {
             | Error::InvalidBaseMva { .. }
             | Error::InvalidNormalizeOption { .. }
             | Error::UngroundedComponent { .. }
+            | Error::ClosedSwitch { .. }
             | Error::BusMergeRule { .. }
             | Error::MergedFlowShape { .. }
             | Error::UnlocatedElements { .. } => C::Data,
@@ -299,6 +308,11 @@ mod tests {
                 value: 0.0,
             },
             Error::UngroundedComponent { components: 1 },
+            Error::ClosedSwitch {
+                row: 0,
+                from: BusId(1),
+                to: BusId(2),
+            },
             Error::BusMergeRule {
                 message: "threshold".into(),
             },

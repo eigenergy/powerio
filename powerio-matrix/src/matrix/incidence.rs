@@ -51,6 +51,7 @@ pub(crate) fn build_incidence(
     formula: BranchSusceptanceFormula,
     opts: &BuildOptions,
 ) -> Result<IncidenceParts> {
+    case.check_closed_switches()?;
     let n = case.n();
 
     // Pass 1: resolve and filter, fixing the column order.

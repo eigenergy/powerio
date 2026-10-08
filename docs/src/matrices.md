@@ -137,7 +137,13 @@ between produces none of these findings.
   `BalancedNetwork::merge_buses` resolves them explicitly instead, together
   with closed switches (see [Merging buses](transmission.md#merging-buses)).
 - **Reference coverage.** `IndexedNetwork::check_reference_coverage` verifies that
-  every in service island has a reference bus.
+  every in service island has a reference bus. Islands are joined by in
+  service branches and closed switches.
+- **Closed switches.** The builders stamp branches only, so a closed switch
+  that joins two buses fails every matrix, DC operator, OPF preparation, and
+  GridFM export with `BUILD.SWITCH.CLOSED` instead of leaving its buses apart.
+  Merge its buses first with `merge_buses` (see
+  [Merging buses](transmission.md#merging-buses)).
 - **Branch susceptance formulas.** `BranchSusceptanceFormula` selects the
   branch susceptance vector \\(b\\) and, for formulas that include phase shifts,
   the phase shift injection. In the PowerModels form,

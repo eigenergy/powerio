@@ -71,6 +71,9 @@ pub(crate) fn build_ybus_with_flags(case: &IndexedNetwork, flags: YbusFlags) -> 
     // shunt-free buses, since `CooBuilder::add` skips only exact zero — and
     // the matrix shipped with no error.
     case.network().check_base_mva()?;
+    // Branches are all this kernel stamps, so a closed switch would leave its
+    // two buses apart.
+    case.check_closed_switches()?;
     let n = case.n();
     let mut g_coo = CooBuilder::with_capacity(n, 4 * case.branches().len() + n);
     let mut b_coo = CooBuilder::with_capacity(n, 4 * case.branches().len() + n);
