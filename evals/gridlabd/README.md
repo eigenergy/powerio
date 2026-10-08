@@ -101,6 +101,64 @@ warning that a supplied 2×2 matrix cannot determine neutral/ground currents.
 The center-tapped tests establish grounded service-terminal conventions; they
 do not establish floating-neutral or triplex-cable equivalence.
 
+## Overhead conductor geometry calibration
+
+`overhead_geometry_oracle.py` checks synthetic A/AN, BC/BCN and ABC/ABCN
+cross sections at 60 Hz, plus ABCN at 50 Hz. These conductor positions are
+cross-section dimensions in feet; they are unrelated to geographic component
+latitude/longitude. The harness does not yet qualify PowerIO geometry import.
+
+```sh
+python evals/gridlabd/overhead_geometry_oracle.py --pnnl-root "$PNNL_ROOT" \
+  --output /tmp/gld-overhead
+```
+
+The seven circuits exercise both pinned GridLAB-D forks using NR with/without
+capacitance and FBS without capacitance: 42 native runs. Independent modified
+Carson and image-potential calculations check series impedance, total shunt
+admittance, complex voltages, both-end currents/powers and losses. The shunt
+readback comes from the native `a` and `b` matrices, without inserting expected
+capacitances into the observations. Neutral-removal negative controls expose
+the effect of the return conductor.
+
+Fourteen OpenDSS checks cover full and explicitly reduced conductor matrices
+under SimpleCarson. The engine's rounded SI constants differ from GridLAB-D's
+rounded imperial constants; each profile is checked against its own equations.
+Setting the OpenDSS default earth model alone does not activate that model for
+the geometry API. The harness first solves a line explicitly selecting Carson,
+then reads its geometry matrices. Deri and FullCarson remain outside this
+calibration, rather than being relabeled equivalent.
+
+For both pinned GridLAB-D forks, series neutral reduction is the Schur
+complement and shunt reduction takes the phase block of the full admittance.
+An independent four-conductor calculation verifies the corresponding
+zero-neutral-voltage boundary condition, including nonzero neutral current.
+This does not establish arbitrary floating-neutral or finite-grounding support.
+
+All 42 native matrix/voltage cases match, but only 28 match every physical port
+quantity. Fourteen retain reported-current or loss discrepancies: coupled
+capacitance uses `d=a=I+ZY/2` in native link-current reporting where a physical
+pi circuit requires `d=I+YZ/2`; NR's matching bus voltages do not validate those
+reported currents. Native total loss also sums the absolute real loss of each
+phase, overstating dissipation when mutual coupling transfers real power
+between phases. Separate `native_readback_equations` comparisons reproduce
+these behaviors in all 42 cases. They never replace the physical comparisons.
+The complete calibration intentionally exits nonzero while those physical
+discrepancies remain. FBS with coupled capacitance has separate earlier
+qualification and is not covered by these 42 runs.
+
+`--native-evidence /tmp/gld-overhead` rechecks acquired native results after
+verifying every generated input hash and pinned version; OpenDSS matrix checks
+still execute. Both the original evidence hash and each native output directory
+are recorded. No failed physical comparison becomes a successful conversion.
+
+The equations and readback behavior were audited in the commits pinned by
+`engines.json`: GridLAB-D `overhead_line.cpp`, `line.h`, `line.cpp` and
+`link.cpp`; DSS `LineConstants.pas`, `LineGeometry.pas` and
+`CAPI_LineGeometries.pas`. Geometry-derived neutral reduction, native readback
+discrepancies and cross-engine earth-model differences require explicit
+provenance or diagnostics when conversion support is added.
+
 ## Electrical reader and IR
 
 `powerio_dist::glm::parse` returns `PioModule<MulticonductorNetwork>` for an
