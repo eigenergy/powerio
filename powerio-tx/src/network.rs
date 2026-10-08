@@ -3946,14 +3946,15 @@ impl BalancedNetwork {
     /// 3-winding transformer becomes a synthetic star bus, its three winding
     /// branches, and (when present) its magnetizing shunt, so the matrix builders
     /// and connectivity see it. Returns the network unchanged (borrowed) when
-    /// there are no 3-winding transformers, so the common case allocates nothing.
+    /// no 3-winding transformer is in service, so a network without one, or
+    /// with only out-of-service units, allocates nothing.
     ///
     /// The canonical `BalancedNetwork` keeps the typed [`Transformer3W`] records; this is
     /// the derived analysis form that [`IndexedNetwork`](crate::IndexedNetwork)
     /// builds behind the scenes, so callers never see the synthetic buses in the
     /// model they read or write.
     pub(crate) fn expand_transformers_3w(&self) -> std::borrow::Cow<'_, BalancedNetwork> {
-        if self.transformers_3w().is_empty() {
+        if !self.transformers_3w().iter().any(|t| t.in_service) {
             return std::borrow::Cow::Borrowed(self);
         }
         let mut net = self.clone();
@@ -5990,6 +5991,28 @@ mod tests {
         assert_eq!(back.transformers_3w().len(), 1);
         close(back.transformers_3w()[0].z[1].x, 0.20);
         assert_eq!(back.transformers_3w()[0].windings[2].bus, BusId(3));
+    }
+
+    #[test]
+    fn a_network_with_only_out_of_service_three_winding_units_is_not_copied() {
+        let mut out_of_service = transformer_3w();
+        out_of_service.in_service = false;
+        let mut net =
+            BalancedNetwork::in_memory("t", 100.0, vec![bus(1), bus(2), bus(3)], Vec::new());
+        net.transformers_3w_mut().push(out_of_service);
+        assert!(matches!(
+            net.expand_transformers_3w(),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        // A cached core serves the view as is.
+        let core = crate::IndexCore::build(&net);
+        let view = crate::IndexedNetwork::with_core(&net, &core);
+        assert!(std::ptr::eq(view.network(), std::ptr::from_ref(&net)));
+        net.transformers_3w_mut()[0].in_service = true;
+        assert!(matches!(
+            net.expand_transformers_3w(),
+            std::borrow::Cow::Owned(_)
+        ));
     }
 
     #[test]

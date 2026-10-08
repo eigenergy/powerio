@@ -21,7 +21,7 @@
 //! dropped. Same format emission is byte exact through the retained source (see
 //! [`crate::emit`]); this serializer is the cross format path.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 
 use serde_json::Value;
@@ -3839,17 +3839,24 @@ fn attach_generator_source_metadata(
             .as_mut()
             .expect("detailed connectivity was initialized"),
     );
+    // One lookup per generator: a linear search of the metadata already
+    // attached made this quadratic in the generator count, a third of the
+    // whole read on a case with tens of thousands of machines.
+    let mut attached: HashMap<powerio_core::ComponentId, usize> =
+        HashMap::with_capacity(detailed.component_metadata.len());
+    for (row, metadata) in detailed.component_metadata.iter().enumerate() {
+        attached.entry(metadata.component.clone()).or_insert(row);
+    }
     for (component, properties) in component_ids.into_iter().zip(generator_metadata) {
         if properties.is_empty() {
             continue;
         }
-        if let Some(existing) = detailed
-            .component_metadata
-            .iter_mut()
-            .find(|metadata| metadata.component == component)
-        {
-            existing.properties.extend(properties);
+        if let Some(&row) = attached.get(&component) {
+            detailed.component_metadata[row]
+                .properties
+                .extend(properties);
         } else {
+            attached.insert(component.clone(), detailed.component_metadata.len());
             detailed.component_metadata.push(ComponentMetadata {
                 component,
                 name: None,
