@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Behavior change: PSS/E and RAWX two winding transformers whose winding 2
+  ratio `t2` is not one now read with the admittance PSS/E solves with. `t2`
+  is `WINDV2` under `CW` 1, `WINDV2` over the winding 2 bus base kV under
+  `CW` 2, and `WINDV2·NOMV2` over that base under `CW` 3. PSS/E places the
+  series impedance between an ideal `t1 : 1` at winding 1 and an ideal
+  `1 : t2` at winding 2; the neutral branch states one tap `t1 / t2` with the
+  impedance behind it, and the reader divided the ratios without moving the
+  impedance across `t2`, so every such transformer read with an impedance off
+  by `t2²`. The impedance now scales by `t2²` and a winding 1 tap control
+  range divides by `t2`, so the branch's two port admittance equals the PSS/E
+  circuit's, and the branch `r`, `x`, and tap limits of these transformers
+  change. A transformer with `t2 = 1` reads as before. Writing back to PSS/E
+  is consistent: the same format write echoes the source record byte for
+  byte, and fresh output states the canonical `CW = 1` record with winding 2
+  at one and the scaled impedance, which reads back to the same branch with
+  nothing scaled twice. A PowerIO IR document an earlier release wrote from
+  such a case carries the old impedance, so read the case again.
+
 - PSS/E switched shunt `MODSW` 1 and 2 now read as PSS/E defines them: 1 is
   discrete and 2 is continuous adjustment of the regulated voltage. The RAW
   and RAWX readers had the two swapped, so a continuously adjusted shunt, such
