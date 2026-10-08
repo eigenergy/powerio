@@ -574,7 +574,7 @@ mod tests {
     fn each_island_gets_one_reference_and_an_unsupplied_one_is_de_energized() {
         let mut net = three_islands();
         let unchanged = net.assign_island_references(IslandReferencePolicy::Stated);
-        assert!(unchanged.diagnostics.is_empty());
+        assert_eq!(unchanged.diagnostics.as_slice(), []);
         assert_eq!(kind(&net, 5), BusType::Pq);
 
         let report = net.assign_island_references(IslandReferencePolicy::PerIsland);
@@ -611,7 +611,7 @@ mod tests {
 
         // A second pass has nothing left to do.
         let again = net.assign_island_references(IslandReferencePolicy::PerIsland);
-        assert!(again.diagnostics.is_empty());
+        assert_eq!(again.diagnostics.as_slice(), []);
     }
 
     #[test]
@@ -673,7 +673,7 @@ mod tests {
             .map(|bus| bus.id)
             .collect();
         assert_eq!(references, [BusId(1), BusId(5)]);
-        assert!(per_island.network.hvdc().is_empty());
+        assert_eq!(per_island.network.hvdc().as_slice(), []);
         let found = codes(&per_island.diagnostics);
         assert!(found.contains(&"CANONICALIZE.ISLAND.DE_ENERGIZED"));
         assert!(found.contains(&"CANONICALIZE.ISLAND.REFERENCE_DESIGNATED"));
@@ -693,7 +693,7 @@ mod tests {
         assert_eq!(sub.switches().len(), 1);
         assert_eq!(sub.generators().len(), 2);
         assert_eq!(sub.loads().len(), 1);
-        assert!(sub.hvdc().is_empty());
+        assert_eq!(sub.hvdc().as_slice(), []);
         sub.validate().unwrap();
     }
 }
