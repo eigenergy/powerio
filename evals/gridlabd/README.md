@@ -315,8 +315,32 @@ spacing, or an electrical line length. `ObjectIndex::declared_coordinates`
 evaluates the supported source profile without assigning a CRS or inventing a
 missing axis. Invalid ranges, nonfinite values and trailing junk fail explicitly
 with original-source spans; the native engine's permissive numeric-prefix parsing
-is not silently reproduced. Mapping these source points into the electrical
-network and fresh/edited/IR conversion remain to be implemented and verified.
+is not silently reproduced. Typed network attachment and fresh/edited/IR
+conversion are qualified separately by `location_roundtrip_oracle.py`; this
+source-coordinate harness alone does not establish them.
+
+`switch_oracle.py` qualifies native closed-switch impedances independently of
+PowerIO conversion. Run it with `--output <new-directory>` and
+`--pnnl-root <installation-directory>`; `--profiles pnnl arras` is the default.
+It uses a single-phase constant-impedance circuit, explicit module
+`default_resistance 0.0001`, and five variants per engine:
+
+| Solver and property | Effective series impedance (ohms) |
+|---|---|
+| NR, unspecified switch impedance | `0.0001 - 0.0001j` |
+| NR, explicit `switch_impedance 0+0j` | `0.0001 + 0.0001j` |
+| NR, explicit `switch_impedance 1+0.5j` | `1 + 0.5j` |
+| FBS, unspecified switch impedance | `0` |
+| FBS, explicit `switch_impedance 1+0.5j` | `1 + 0.5j` |
+
+The harness compares complex terminal voltages, currents, powers and losses
+against independent analytic solutions. It infers impedance from solved voltage
+drop and current, and verifies that an ideal-switch assumption fails for every
+nonzero case. The pinned PNNL and Arras implementations agree on these cases.
+NR's zero-component fallback must not silently become an ideal canonical switch;
+finite contacts need their actual impedance or a verified equivalent. This
+calibration does not establish per-phase or banked switching, open contacts,
+protection, controls, or PowerIO switch read/write support.
 
 `quantity_oracle.py` compares `GlmProject::quantity` with native property
 readbacks and the analytic single-phase circuit. Build the `glm_quantities`
