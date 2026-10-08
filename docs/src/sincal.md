@@ -439,15 +439,17 @@ unchanged. The native models stay external, subject to their own data rights.
 ## Drawing coordinates and line routes
 
 Both reader families populate the existing bus-location and line-route fields
-from native graphic tables. Coordinates are labelled **Unknown** space: this
-profile does not infer WGS84, a projected CRS, or the meaning of `Node.lat/lon`
+from native graphic tables. A declared schematic view (`GraphicAreaTile.Flag=2`)
+uses **Diagram** space; other views remain **Unknown**. This profile does not
+infer WGS84, a projected CRS, or the meaning of `Node.lat/lon`
 and `Node.hr/hh`. Use them as native layouts unless you independently establish
 the coordinate reference system.
 
 A point-shaped node keeps its source point. An extended busbar uses a derived
 midpoint; `extras.sincal_geometry` preserves its two native endpoints. Lines use
-native terminal identities and attachment positions, with at most one bend per
-port (`NoPoint=1`). More complex bend ordering is diagnosed and left unmapped.
+native terminal identities and attachment positions, with ordered bends on
+both ports (`NoPoint=1..n`), following the Siemens database-interface manual.
+Gaps, duplicate orders and collapsed routes are diagnosed and omitted.
 Conflicting drawings, invalid optional records and multiple areas do not change
 the electrical model. No position is fabricated for generated auxiliary buses.
 
@@ -461,7 +463,12 @@ python evals/sincal/import_access.py model.mdb acquired.json --include-graphics
 Keep any additional electrical table selections your case already requires.
 Electrical-only companions still work; omitted graphics are reported.
 `READ.SINCAL.GEOMETRY` or `READ.DIST.SINCAL_GEOMETRY` reports the mapping counts,
-unknown coordinate space and any omissions. Graphical style and artwork remain
+coordinate space and any omissions. View identity, origin, page dimensions,
+scales and optional CRS/reference fields are retained as native values in
+the module’s SINCAL view metadata extension and survive IR (the full extension
+key is documented in the implementation guide below). No origin or
+scale transform is applied; page centimetres do not define a metre-space canvas.
+Graphical style and artwork remain
 only in source. Unchanged native echo stays byte-exact; IR retains mapped geometry.
 Fresh experimental SINCAL output still omits it with a diagnostic.
 
@@ -474,12 +481,17 @@ powerio geo extract case.db --from sincal-multiconductor -o case.geo.json
 
 For Access or another input requiring snapshot/compatibility selections, first
 serialize the selected module to IR, then extract that IR's geometry. Canonical
-geo JSON carries Unknown space; it is not an earth-referenced GIS layer.
+geo JSON carries Diagram or Unknown space; it is not an earth-referenced GIS
+layer. Full native view metadata is retained on the module and in IR, rather
+than on the extracted geometry layer.
 Rust uses `BalancedNetwork::to_geo_layer()` or
 `powerio::dist_geo::to_dist_geo_layer(&network)`.
 
 Validation covers SimBench, CSIRO09/12/19 and the externally held Truong model:
 862 typed locations and 674 routes, including three native bends. All preserve
 electrical fields, native echo and IR. CSIRO12 retains its existing explicit
-compatibility assumptions. See the [implementation and evidence](../design/pss-sincal-geospatial.md)
+compatibility assumptions. Additional shared-decoder checks cover CSIRO03
+(774 routes, up to 40 vertices) and CSIRO13 (874 routes); these are geometry-only
+checks and do not claim complete electrical parsing of either case. See the
+[implementation and evidence](../design/pss-sincal-geospatial.md)
 for case accounting and the deferred georeferencing and desktop acceptance gates.

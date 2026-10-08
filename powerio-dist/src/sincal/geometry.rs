@@ -56,7 +56,11 @@ pub(super) fn apply(
     }
     if points > 0 || routes > 0 {
         *network.geo_mut() = Some(DistGeoMeta {
-            space: CoordinateSpace::Unknown,
+            space: if geometry.schematic {
+                CoordinateSpace::Diagram { canvas: None }
+            } else {
+                CoordinateSpace::Unknown
+            },
             kind: Some(DistCoordsKind::Source),
         });
     }

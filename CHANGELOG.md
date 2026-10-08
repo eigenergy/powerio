@@ -5,8 +5,10 @@
 - Read optional SINCAL drawing locations and line routes through both electrical
   backends. Native bus/terminal identities, derived busbar midpoints and bounded
   omission diagnostics preserve the existing model split and source echo.
-  Coordinates remain Unknown space; geographic CRS and multi-bend ordering are
-  not inferred. Access acquisition can opt into graphics with `--include-graphics`.
+  Declared schematic views use Diagram space; other views remain Unknown.
+  Ordered bends follow the native manual, and module extensions preserve view
+  origin, dimensions, scale and optional CRS fields without transforming them.
+  Access acquisition can opt into graphics with `--include-graphics`.
   IR and existing geo-layer extraction retain the mapped geometry.
 
 - Add the explicit `sincal-balanced` parser profile for schema-14.8/15.5/16.0 SQLite

@@ -115,7 +115,9 @@ pub fn parse_with_options(
         diagnostics.push(Diagnostic::of(&codes::READ_SINCAL_LIMITS_UNSPECIFIED,
             "Native generator capability limits are disabled in this profile; typed P/Q limits are unbounded. This does not establish OPF capability data."));
     }
-    PioModule::parsed(network, retained, diagnostics)
+    let mut module = PioModule::parsed(network, retained, diagnostics)?;
+    geometry.retain_view(&mut module)?;
+    Ok(module)
 }
 
 fn default_diagnostics(

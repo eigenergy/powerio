@@ -110,7 +110,9 @@ pub fn parse_sincal(
         diagnostics.push(report);
     }
     add_provenance(&mut network, database.version, &mut diagnostics)?;
-    PioModule::parsed(network, retained, diagnostics)
+    let mut module = PioModule::parsed(network, retained, diagnostics)?;
+    geometry.retain_view(&mut module)?;
+    Ok(module)
 }
 
 fn source_inventory(snapshot: &DatabaseSnapshot) -> powerio_sincal::Result<Vec<Diagnostic>> {

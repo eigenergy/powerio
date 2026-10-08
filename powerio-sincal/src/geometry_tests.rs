@@ -77,9 +77,9 @@ fn invalid_optional_geometry_is_diagnosed_without_breaking_snapshot() {
     assert_eq!(g.points.len(), 0);
 }
 #[test]
-fn unverified_multiple_bends_invalid_order_and_cross_element_ports_refuse_route() {
+fn invalid_order_and_cross_element_ports_refuse_route() {
     for edit in [
-        "INSERT INTO GraphicBucklePoint VALUES(3,1,1,11,2,2,2)",
+        "INSERT INTO GraphicBucklePoint VALUES(3,1,1,11,3,2,2)",
         "INSERT INTO GraphicBucklePoint VALUES(3,1,1,11,1,2,2)",
         "UPDATE GraphicBucklePoint SET PosX=NULL",
         "UPDATE GraphicTerminal SET Terminal_ID=999 WHERE Terminal_ID=10",
@@ -133,4 +133,84 @@ fn invalid_duplicate_node_record_cannot_leave_a_plausible_partial_location() {
         assert!(!g.points.contains_key(&100));
         assert!(!g.findings.is_empty());
     }
+}
+
+#[test]
+fn multiple_bends_follow_symbol_to_node_numbering_on_each_port_not_row_order() {
+    let g=database("INSERT INTO GraphicBucklePoint VALUES(6,1,1,22,3,12,4),(3,1,1,11,3,-2,0),(5,1,1,22,2,12,2),(4,1,1,11,2,-2,2)").drawing_geometry().unwrap();
+    assert_eq!(
+        g.routes[&50],
+        [
+            [0., 0.],
+            [-2., 0.],
+            [-2., 2.],
+            [0., 2.],
+            [10., 2.],
+            [12., 2.],
+            [12., 4.],
+            [10., 4.]
+        ]
+    );
+    let invalid = database("UPDATE GraphicBucklePoint SET GraphicPoint_ID=1")
+        .drawing_geometry()
+        .unwrap();
+    assert!(invalid.routes.is_empty());
+}
+
+const VIEW: &str = "CREATE TABLE GraphicAreaTile(GraphicArea_ID,Variant_ID,Flag,Name,VectorX,VectorY,AreaWidth,AreaHeight,ScalePaper,ScaleReal);
+INSERT INTO GraphicAreaTile VALUES(1,1,2,'drawing',100,-50,42,29.7,100,1);";
+
+#[test]
+fn view_classification_preserves_native_metadata_without_transforming_points() {
+    let g = database(VIEW).drawing_geometry().unwrap();
+    assert!(g.schematic);
+    assert_eq!(g.points[&100].point(), [0., 0.]);
+    assert_eq!(g.view.as_ref().unwrap()["native_fields"]["VectorX"], 100);
+    assert_eq!(g.view.as_ref().unwrap()["native_fields"]["AreaWidth"], 42);
+    let mut module = powerio_core::PioModule::new(());
+    g.retain_view(&mut module).unwrap();
+    assert_eq!(
+        module.extensions()["powerio.sincal.graphic_view"],
+        *g.view.as_ref().unwrap()
+    );
+    for edit in [
+        "UPDATE GraphicAreaTile SET Flag=1",
+        "UPDATE GraphicAreaTile SET Flag=NULL",
+        "INSERT INTO GraphicAreaTile SELECT * FROM GraphicAreaTile",
+        "UPDATE GraphicAreaTile SET GraphicArea_ID=2",
+    ] {
+        let g = database(&format!("{VIEW}{edit}"))
+            .drawing_geometry()
+            .unwrap();
+        assert!(!g.schematic);
+        assert!(!g.findings.is_empty());
+        assert_eq!(g.points.len(), 2);
+    }
+}
+
+#[test]
+fn optional_newer_crs_fields_are_retained_without_inferring_projection_or_schema_support() {
+    let g = database(&format!(
+        "{VIEW}
+        ALTER TABLE GraphicAreaTile ADD COLUMN CoordSys;
+        ALTER TABLE GraphicAreaTile ADD COLUMN RefLat;
+        UPDATE GraphicAreaTile SET Flag=1,CoordSys='EPSG:3857',RefLat=48.2;"
+    ))
+    .drawing_geometry()
+    .unwrap();
+    assert!(!g.schematic);
+    assert_eq!(
+        g.view.as_ref().unwrap()["native_fields"]["CoordSys"],
+        "EPSG:3857"
+    );
+    let g = database(&format!("{VIEW} UPDATE GraphicAreaTile SET VectorX=1e999;"))
+        .drawing_geometry()
+        .unwrap();
+    assert!(g.schematic);
+    assert!(
+        g.view.as_ref().unwrap()["native_fields"]
+            .get("VectorX")
+            .is_none()
+    );
+    assert!(g.findings.contains_key("GraphicAreaTile.invalid_field"));
 }

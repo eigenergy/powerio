@@ -27,7 +27,7 @@ BASE_TABLES = (
     'TransformerTap',
 )
 DEFAULT_TABLES = BASE_TABLES + ('ShuntReactor', 'ShuntCondensator')
-GRAPHICS_TABLES = ('GraphicNode', 'GraphicElement', 'GraphicTerminal', 'GraphicBucklePoint')
+GRAPHICS_TABLES = ('GraphicNode', 'GraphicElement', 'GraphicTerminal', 'GraphicBucklePoint', 'GraphicAreaTile')
 IDENTIFIER = re.compile(r'[A-Za-z_][A-Za-z_0-9]{0,127}\Z')
 
 

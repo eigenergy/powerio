@@ -1,7 +1,7 @@
 //! Optional native drawing geometry, independent of either electrical family.
 //!
 //! Node position selectors and CRS/datum metadata are not yet verified. Drawing
-//! coordinates therefore have unknown space, never inferred geographic space.
+//! views are classified only from native metadata, never coordinate ranges.
 use std::collections::{BTreeMap, BTreeSet};
 
 use powerio_core::{Diagnostic, DiagnosticInfo};
@@ -17,10 +17,11 @@ pub const GRAPHICS_TABLES: &[&str] = &[
     "GraphicElement",
     "GraphicTerminal",
     "GraphicBucklePoint",
+    "GraphicAreaTile",
 ];
 
 /// A native graphic node; extended busbars use a derived midpoint.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DrawingPoint {
     pub start: [f64; 2],
     pub end: [f64; 2],
@@ -40,7 +41,7 @@ impl DrawingPoint {
         self.start != self.end
     }
     pub fn provenance(&self) -> serde_json::Value {
-        json!({"profile":"native_drawing_unknown_crs", "start":self.start,"end":self.end,
+        json!({"profile":"native_drawing", "start":self.start,"end":self.end,
             "representative":if self.derived(){"midpoint"}else{"source_point"}})
     }
 }
@@ -52,16 +53,18 @@ pub struct GeometryFinding {
 }
 
 /// Variant-local coordinates keyed by native identity, not name or row order.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Serialize)]
 pub struct DrawingGeometry {
     pub points: BTreeMap<i64, DrawingPoint>,
     pub routes: BTreeMap<i64, Vec<[f64; 2]>>,
     pub findings: BTreeMap<String, GeometryFinding>,
     pub area: Option<i64>,
+    pub view: Option<serde_json::Value>,
+    pub schematic: bool,
 }
 
 impl DrawingGeometry {
-    fn note(&mut self, reason: &str, id: i64) {
+    pub(super) fn note(&mut self, reason: &str, id: i64) {
         let finding = self.findings.entry(reason.to_owned()).or_default();
         finding.count += 1;
         if finding.sample_ids.len() < 8 {
@@ -76,10 +79,14 @@ impl DrawingGeometry {
     ) -> std::result::Result<Diagnostic, powerio_core::Error> {
         let mut diagnostic = Diagnostic::of(
             code,
-            "Optional SINCAL drawing coordinates use unknown CRS; busbar midpoints are derived. Geographic node fields, styles and unsupported geometry remain in source.",
+            "Optional SINCAL drawing geometry preserves declared schematic views; geographic CRS is not inferred. Busbar midpoints are derived; untyped graphic fields remain in source.",
         );
-        diagnostic.insert_detail("profile", json!("native_drawing_unknown_crs"))?;
+        diagnostic.insert_detail("profile", json!("native_drawing"))?;
         diagnostic.insert_detail("area", json!(self.area))?;
+        diagnostic.insert_detail(
+            "space",
+            json!(if self.schematic { "diagram" } else { "unknown" }),
+        )?;
         diagnostic.insert_detail("native_points", json!(self.points.len()))?;
         diagnostic.insert_detail("native_line_routes", json!(self.routes.len()))?;
         diagnostic.insert_detail("findings", json!(self.findings))?;
@@ -102,7 +109,8 @@ impl DrawingGeometry {
             };
             if !GRAPHICS_TABLES.contains(&table)
                 || (table == "GraphicNode" && mapped_points == 0)
-                || (table != "GraphicNode" && mapped_routes == 0)
+                || (table != "GraphicNode" && table != "GraphicAreaTile" && mapped_routes == 0)
+                || (table == "GraphicAreaTile" && self.view.is_none())
             {
                 continue;
             }
@@ -216,11 +224,12 @@ impl DatabaseSnapshot {
             result.points.remove(&id);
             result.note("GraphicNode.conflicting_positions", id);
         }
+        self.drawing_view(&mut result)?;
         self.drawing_routes(&mut result)?;
         Ok(result)
     }
 
-    fn geometry_rows(
+    pub(super) fn geometry_rows(
         &self,
         table: &str,
         columns: &[&str],
@@ -241,19 +250,39 @@ impl DatabaseSnapshot {
             }
             return Ok(None);
         }
-        if columns
-            .iter()
-            .chain(["Variant_ID", "Flag_Variant"].iter())
-            .any(|c| !available.contains(*c))
+        // GraphicAreaTile has no Flag_Variant in legacy schemas. Its optional
+        // fields also evolve independently of the electrical schema.
+        let view = table == "GraphicAreaTile";
+        let required = if view {
+            &["GraphicArea_ID", "Flag", "Variant_ID"][..]
+        } else {
+            columns
+        };
+        if required.iter().any(|c| !available.contains(*c))
+            || !available.contains("Variant_ID")
+            || (!view && !available.contains("Flag_Variant"))
         {
             result.note(&format!("{table}.unsupported_columns"), 0);
             return Ok(None);
         }
-        // Table and column identifiers are internal constants, never input SQL.
-        let sql = format!(
-            "SELECT {} FROM {table} WHERE Variant_ID=?1 AND Flag_Variant=1 LIMIT 100001",
-            columns.join(",")
-        );
+        let active = if available.contains("Flag_Variant") {
+            " AND Flag_Variant=1"
+        } else {
+            ""
+        };
+        // All identifiers are internal constants, never input SQL.
+        let fields = columns
+            .iter()
+            .map(|c| {
+                if available.contains(*c) {
+                    (*c).to_owned()
+                } else {
+                    format!("NULL AS {c}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!("SELECT {fields} FROM {table} WHERE Variant_ID=?1{active} LIMIT 100001");
         let mut statement = self.connection.prepare(&sql).map_err(format_error)?;
         let rows: Vec<Vec<Value>> = statement
             .query_map([self.variant], |r| {
@@ -403,7 +432,8 @@ impl DatabaseSnapshot {
                 result.note("GraphicTerminal.duplicate", element);
             }
         }
-        let mut vertices: BTreeMap<i64, Vec<[f64; 2]>> = BTreeMap::new();
+        let mut vertices: BTreeMap<i64, BTreeMap<i64, [f64; 2]>> = BTreeMap::new();
+        let mut point_owners = BTreeMap::new();
         for row in bends {
             let Some(id) = integer(&row[1]) else {
                 result.note("GraphicBucklePoint.invalid_identity", 0);
@@ -413,15 +443,26 @@ impl DatabaseSnapshot {
                 result.note("GraphicBucklePoint.unknown_terminal", id);
                 continue;
             };
-            if integer(&row[2]) != Some(1) || point(&row[3..5]).is_none() {
+            let Some((point_id, order, position)) =
+                (|| Some((integer(&row[0])?, integer(&row[2])?, point(&row[3..5])?)))()
+            else {
                 bad_elements.insert(element);
-                result.note("GraphicBucklePoint.unsupported_order_or_value", element);
+                result.note("GraphicBucklePoint.invalid_fields", element);
                 continue;
-            }
-            vertices
+            };
+            let previous = point_owners.insert(point_id, element);
+            let duplicate = vertices
                 .entry(id)
                 .or_default()
-                .push(point(&row[3..5]).unwrap());
+                .insert(order, position)
+                .is_some();
+            if order < 1 || duplicate || previous.is_some() {
+                bad_elements.insert(element);
+                if let Some(previous) = previous {
+                    bad_elements.insert(previous);
+                }
+                result.note("GraphicBucklePoint.invalid_or_duplicate_order", element);
+            }
         }
         for (element, ports) in ports {
             if bad_elements.contains(&element) {
@@ -431,18 +472,25 @@ impl DatabaseSnapshot {
                 result.note("GraphicTerminal.incomplete_line", element);
                 continue;
             };
-            let va = vertices.get(&a).map_or(&[][..], Vec::as_slice);
-            let vb = vertices.get(&b).map_or(&[][..], Vec::as_slice);
-            // Native multi-bend direction is not yet independently verified.
-            // One bend per side needs no ordering guess; symbol centers are not
-            // waypoints. Preserve terminal endpoints, not busbar midpoints.
-            if va.len() > 1 || vb.len() > 1 {
-                result.note("GraphicBucklePoint.multiple_per_port", element);
+            let empty = BTreeMap::new();
+            let va = vertices.get(&a).unwrap_or(&empty);
+            let vb = vertices.get(&b).unwrap_or(&empty);
+            if [va, vb].iter().any(|v| {
+                v.keys()
+                    .copied()
+                    .zip(1_i64..)
+                    .any(|(actual, expected)| actual != expected)
+            }) {
+                result.note("GraphicBucklePoint.gapped_order", element);
                 continue;
             }
+            // Siemens Database Interface and Automation (April 2015), §2.5.2:
+            // each port is numbered from the element symbol toward its node.
+            // Traverse port 1 inward, then port 2 outward. A symbol center is
+            // separate artwork, not automatically an extra line bend.
             let mut route = vec![start];
-            route.extend_from_slice(va);
-            route.extend(vb.iter().rev().copied());
+            route.extend(va.values().rev().copied());
+            route.extend(vb.values().copied());
             route.push(end);
             route.dedup();
             if route.len() < 2 {

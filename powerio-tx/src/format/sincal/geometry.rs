@@ -58,7 +58,11 @@ pub(super) fn apply(network: &mut BalancedNetwork, geometry: &DrawingGeometry) -
     }
     if points > 0 || routes > 0 {
         *network.geo_mut() = Some(GeoMeta {
-            space: CoordinateSpace::Unknown,
+            space: if geometry.schematic {
+                CoordinateSpace::Diagram { canvas: None }
+            } else {
+                CoordinateSpace::Unknown
+            },
             kind: Some(CoordsKind::Source),
         });
     }

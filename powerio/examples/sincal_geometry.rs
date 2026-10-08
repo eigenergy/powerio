@@ -67,6 +67,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
         _ => return Err("wrong network family".into()),
     };
+    if module.extensions() != restored.extensions() {
+        return Err("IR view metadata differs".into());
+    }
     if network != copy {
         return Err("IR value differs".into());
     }
@@ -83,7 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!(
         "{}",
-        serde_json::json!({"network":network,"layer":layer,"source_echo":true,"typed_ir":true,"geo_export":!layer.features.is_empty(),"diagnostics":module.diagnostics()})
+        serde_json::json!({"network":network,"extensions":module.extensions(),"layer":layer,"source_echo":true,"typed_ir":true,"geo_export":!layer.features.is_empty(),"diagnostics":module.diagnostics()})
     );
     Ok(())
 }

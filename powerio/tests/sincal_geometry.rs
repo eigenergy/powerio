@@ -13,6 +13,8 @@ CREATE TABLE GraphicTerminal(GraphicTerminal_ID,Variant_ID,Flag_Variant,GraphicE
 INSERT INTO GraphicTerminal VALUES(11,1,1,5,40,1,0,0),(22,1,1,5,50,1,10,4);
 CREATE TABLE GraphicBucklePoint(GraphicPoint_ID,Variant_ID,Flag_Variant,GraphicTerminal_ID,NoPoint,PosX,PosY);
 INSERT INTO GraphicBucklePoint VALUES(1,1,1,22,1,8,2);
+CREATE TABLE GraphicAreaTile(GraphicArea_ID,Variant_ID,Flag,VectorX,VectorY,ScalePaper,ScaleReal);
+INSERT INTO GraphicAreaTile VALUES(1,1,2,100,200,100,1);
 ";
 
 fn dist(edit: &str) -> powerio::PioModule<PioValue> {
@@ -34,6 +36,7 @@ fn dist(edit: &str) -> powerio::PioModule<PioValue> {
 fn check_roundtrips(module: &powerio::PioModule<PioValue>, layer: &GeoLayer) {
     let restored =
         helpers::deserialize_module_text(&helpers::serialize_module_text(module).unwrap()).unwrap();
+    assert_eq!(module.extensions(), restored.extensions());
     match (module.value(), restored.value()) {
         (PioValue::BalancedNetwork(a), PioValue::BalancedNetwork(b)) => assert_eq!(
             serde_json::to_value(a).unwrap(),
@@ -82,6 +85,10 @@ fn licensed_simbench_geometry_uses_existing_balanced_geo_and_roundtrip_surfaces(
     );
     assert_eq!(net.geo().as_ref().unwrap().space, CoordinateSpace::Unknown);
     assert!(net.branches().iter().any(|b| b.route.is_some()));
+    assert_eq!(
+        module.extensions()["powerio.sincal.graphic_view"]["native_fields"]["Flag"],
+        1
+    );
     check_roundtrips(&module, &net.to_geo_layer());
     let projected =
         powerio::emit(&module, "matpower", Destination::memory("case.m").unwrap()).unwrap();
@@ -143,7 +150,7 @@ fn distribution_geometry_is_optional_and_does_not_change_electrical_values() {
     );
     assert_eq!(
         net.geo().as_ref().unwrap().space,
-        powerio_dist::CoordinateSpace::Unknown
+        powerio_dist::CoordinateSpace::Diagram { canvas: None }
     );
     check_roundtrips(&module, &powerio::dist_geo::to_dist_geo_layer(net));
     let mut electrical = net.clone();

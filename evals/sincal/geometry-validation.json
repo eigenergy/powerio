@@ -1,13 +1,14 @@
 {
   "date": "2026-10-08",
-  "profile": "native_drawing_unknown_crs",
-  "claim": "Public-reader native table agreement and electrical non-regression; no geographic CRS or native desktop acceptance.",
+  "profile": "native_drawing",
+  "claim": "Five public-reader native-table and electrical-regression checks; two additional drawing-only checks. No verified geographic CRS or native desktop acceptance.",
   "method": {
-    "geometry": "verify_geometry.py; original SQLite tables or independent mdb-export CSV; variant 1; exact coordinate comparisons",
-    "electrical_non_regression": "Delete only four graphic tables in temporary inputs; compare all typed electrical fields and topology, excluding input name and geometry metadata",
-    "ir_and_echo": "Public parse, unchanged native emit, serialize/deserialize and GeoLayer export/reparse; existing display-name trimming permitted",
+    "geometry": "verify_geometry.py; original SQLite tables or independent mdb-export CSV; variant 1; exact identity/vertex counts, coordinate relative tolerance 2e-15 and absolute tolerance 1e-12",
+    "electrical_non_regression": "Delete only five graphic tables in temporary inputs; compare all typed electrical fields and topology, excluding input name and geometry metadata",
+    "ir_and_echo": "Public parse, unchanged native emit, serialize/deserialize including module view extension and GeoLayer export/reparse; existing display-name trimming permitted",
     "numerical": "Fresh geometry-bearing public output at hour 0 (CSIRO) or native static state (Truong); existing independent native-input OpenDSS and pandapower oracles",
-    "fixtures": "No new native models vendored; existing 88,876-byte licensed SimBench archive plus synthetic test code"
+    "fixtures": "No new native models vendored; existing 88,876-byte licensed SimBench archive plus synthetic test code",
+    "drawing_only": "Shared model-neutral decoder compared to independent native tables; native/acquired source digest checked; no full electrical parsing, public echo/IR or solver claim for these cases"
   },
   "cases": {
     "simbench": {
@@ -21,6 +22,8 @@
       "derived_midpoints": 0,
       "mapped_line_routes": 13,
       "mapped_bend_vertices": 0,
+      "space": "unknown",
+      "view_metadata_verified": true,
       "source_echo": true,
       "typed_ir": true,
       "geo_export": true,
@@ -30,19 +33,31 @@
         "wrong_node_identity",
         "wrong_route_vertex"
       ],
+      "coordinate_tolerance": {
+        "relative": 2e-15,
+        "absolute": 1e-12
+      },
       "geometry_diagnostics": [
         {
           "code": "READ.SINCAL.GEOMETRY",
           "details": {
             "area": 1,
-            "findings": {},
+            "findings": {
+              "GraphicAreaTile.geographic_crs_unverified": {
+                "count": 1,
+                "sample_ids": [
+                  1
+                ]
+              }
+            },
             "mapped_points": 15,
             "mapped_routes": 13,
             "native_line_routes": 13,
             "native_points": 15,
-            "profile": "native_drawing_unknown_crs"
+            "profile": "native_drawing",
+            "space": "unknown"
           },
-          "message": "Optional SINCAL drawing coordinates use unknown CRS; busbar midpoints are derived. Geographic node fields, styles and unsupported geometry remain in source.",
+          "message": "Optional SINCAL drawing geometry preserves declared schematic views; geographic CRS is not inferred. Busbar midpoints are derived; untyped graphic fields remain in source.",
           "severity": "warning"
         }
       ],
@@ -61,6 +76,8 @@
       "derived_midpoints": 0,
       "mapped_line_routes": 472,
       "mapped_bend_vertices": 0,
+      "space": "diagram",
+      "view_metadata_verified": true,
       "source_echo": true,
       "typed_ir": true,
       "geo_export": true,
@@ -70,6 +87,10 @@
         "wrong_node_identity",
         "wrong_route_vertex"
       ],
+      "coordinate_tolerance": {
+        "relative": 2e-15,
+        "absolute": 1e-12
+      },
       "geometry_diagnostics": [
         {
           "code": "READ.DIST.SINCAL_GEOMETRY",
@@ -80,9 +101,10 @@
             "mapped_routes": 472,
             "native_line_routes": 620,
             "native_points": 621,
-            "profile": "native_drawing_unknown_crs"
+            "profile": "native_drawing",
+            "space": "diagram"
           },
-          "message": "Optional SINCAL drawing coordinates use unknown CRS; busbar midpoints are derived. Geographic node fields, styles and unsupported geometry remain in source.",
+          "message": "Optional SINCAL drawing geometry preserves declared schematic views; geographic CRS is not inferred. Busbar midpoints are derived; untyped graphic fields remain in source.",
           "severity": "warning"
         }
       ],
@@ -113,6 +135,8 @@
       "derived_midpoints": 0,
       "mapped_line_routes": 153,
       "mapped_bend_vertices": 0,
+      "space": "diagram",
+      "view_metadata_verified": true,
       "source_echo": true,
       "typed_ir": true,
       "geo_export": true,
@@ -122,6 +146,10 @@
         "wrong_node_identity",
         "wrong_route_vertex"
       ],
+      "coordinate_tolerance": {
+        "relative": 2e-15,
+        "absolute": 1e-12
+      },
       "geometry_diagnostics": [
         {
           "code": "READ.DIST.SINCAL_GEOMETRY",
@@ -132,9 +160,10 @@
             "mapped_routes": 153,
             "native_line_routes": 187,
             "native_points": 191,
-            "profile": "native_drawing_unknown_crs"
+            "profile": "native_drawing",
+            "space": "diagram"
           },
-          "message": "Optional SINCAL drawing coordinates use unknown CRS; busbar midpoints are derived. Geographic node fields, styles and unsupported geometry remain in source.",
+          "message": "Optional SINCAL drawing geometry preserves declared schematic views; geographic CRS is not inferred. Busbar midpoints are derived; untyped graphic fields remain in source.",
           "severity": "warning"
         }
       ],
@@ -166,6 +195,8 @@
       "derived_midpoints": 9,
       "mapped_line_routes": 25,
       "mapped_bend_vertices": 0,
+      "space": "diagram",
+      "view_metadata_verified": true,
       "source_echo": true,
       "typed_ir": true,
       "geo_export": true,
@@ -175,6 +206,10 @@
         "wrong_node_identity",
         "wrong_route_vertex"
       ],
+      "coordinate_tolerance": {
+        "relative": 2e-15,
+        "absolute": 1e-12
+      },
       "geometry_diagnostics": [
         {
           "code": "READ.SINCAL.GEOMETRY",
@@ -185,9 +220,10 @@
             "mapped_routes": 25,
             "native_line_routes": 25,
             "native_points": 26,
-            "profile": "native_drawing_unknown_crs"
+            "profile": "native_drawing",
+            "space": "diagram"
           },
-          "message": "Optional SINCAL drawing coordinates use unknown CRS; busbar midpoints are derived. Geographic node fields, styles and unsupported geometry remain in source.",
+          "message": "Optional SINCAL drawing geometry preserves declared schematic views; geographic CRS is not inferred. Busbar midpoints are derived; untyped graphic fields remain in source.",
           "severity": "warning"
         }
       ],
@@ -211,6 +247,8 @@
       "derived_midpoints": 12,
       "mapped_line_routes": 11,
       "mapped_bend_vertices": 3,
+      "space": "diagram",
+      "view_metadata_verified": true,
       "source_echo": true,
       "typed_ir": true,
       "geo_export": true,
@@ -220,6 +258,10 @@
         "wrong_node_identity",
         "wrong_route_vertex"
       ],
+      "coordinate_tolerance": {
+        "relative": 2e-15,
+        "absolute": 1e-12
+      },
       "geometry_diagnostics": [
         {
           "code": "READ.DIST.SINCAL_GEOMETRY",
@@ -230,15 +272,17 @@
             "mapped_routes": 11,
             "native_line_routes": 11,
             "native_points": 12,
-            "profile": "native_drawing_unknown_crs"
+            "profile": "native_drawing",
+            "space": "diagram"
           },
-          "message": "Optional SINCAL drawing coordinates use unknown CRS; busbar midpoints are derived. Geographic node fields, styles and unsupported geometry remain in source.",
+          "message": "Optional SINCAL drawing geometry preserves declared schematic views; geographic CRS is not inferred. Busbar midpoints are derived; untyped graphic fields remain in source.",
           "severity": "warning"
         }
       ],
       "license": "No license found; external research only, no redistribution",
       "source": "https://github.com/Truong812001/Unbalance-Power-Flow",
       "attribution": "Truong 12-bus native model; see truong12-public.json for repository revision and provenance.",
+      "revision": "1459d2be39b3c00aac195b1d6c01bcde16ee357f",
       "numerical_regression": {
         "compared_phase_voltages": 36,
         "maximum_opendss_voltage_error_v": 5.329433940073175e-06,
@@ -252,13 +296,12 @@
         "maximum_opendss_power_error_va": 0.0005635190366624837,
         "opendss_power_tolerance_va": 0.1,
         "passed": true
-      },
-      "revision": "1459d2be39b3c00aac195b1d6c01bcde16ee357f"
+      }
     }
   },
   "validation": {
     "rust": "SINCAL-filtered tx/dist/facade tests; complete shared-crate library suite; facade sincal, sincal_multiconductor and sincal_geometry integration suites",
-    "new_geometry_tests": 11,
+    "new_geometry_tests": 14,
     "python_acquisition_tests": 7,
     "cli_extraction": [
       "SimBench balanced",
@@ -266,6 +309,101 @@
     ],
     "clippy": "scripts/ci-clippy.sh full seven-target matrix passed, rustc 1.96.0",
     "documentation": "check-doc-symbols.py and terminology-gate.sh passed",
-    "native_sincal_executed": false
+    "native_sincal_executed": false,
+    "shared_geometry_tests": 11,
+    "public_geometry_tests": 3
+  },
+  "drawing_only_cases": {
+    "csiro03": {
+      "source_sha256": "9eaf7c785fe0962af4e9ea5e6a5efb56477ed7427b660481c5cc66f9460bd759",
+      "source_bytes": 76427264,
+      "electrical_mapping_performed": false,
+      "native_graphic_nodes": 785,
+      "mapped_line_routes": 774,
+      "mapped_bend_vertices": 1973,
+      "maximum_route_vertices": 40,
+      "space": "unknown",
+      "view_metadata_verified": true,
+      "bend_order_negative_control_detected": true,
+      "coordinate_tolerance": {
+        "relative": 2e-15,
+        "absolute": 1e-12
+      },
+      "findings": {
+        "GraphicAreaTile.geographic_crs_unverified": {
+          "count": 1,
+          "sample_ids": [
+            1
+          ]
+        }
+      },
+      "license": "CC BY 4.0; external only",
+      "source": "https://doi.org/10.4225/08/5631B1DF6F1A0",
+      "attribution": "Berry, Adam; Collins, Lyle; Oliver, Erin; Perfumo, Cristian (2015), Representative Australian Electricity Feeders with load and solar generation profiles, v1, CSIRO."
+    },
+    "csiro13": {
+      "source_sha256": "a0f2b5c1ca1c944c959033f3dc1cdeb623ad643ab830b877dac7b47f65d8aa7f",
+      "source_bytes": 19111936,
+      "electrical_mapping_performed": false,
+      "native_graphic_nodes": 1769,
+      "mapped_line_routes": 874,
+      "mapped_bend_vertices": 23,
+      "maximum_route_vertices": 4,
+      "space": "diagram",
+      "view_metadata_verified": true,
+      "bend_order_negative_control_detected": true,
+      "coordinate_tolerance": {
+        "relative": 2e-15,
+        "absolute": 1e-12
+      },
+      "findings": {
+        "GraphicTerminal.degenerate_route": {
+          "count": 889,
+          "sample_ids": [
+            12,
+            14,
+            19,
+            21,
+            23,
+            55,
+            60,
+            92
+          ]
+        }
+      },
+      "license": "CC BY 4.0; external only",
+      "source": "https://doi.org/10.4225/08/5631B1DF6F1A0",
+      "attribution": "Berry, Adam; Collins, Lyle; Oliver, Erin; Perfumo, Cristian (2015), Representative Australian Electricity Feeders with load and solar generation profiles, v1, CSIRO."
+    }
+  },
+  "manual_evidence": [
+    {
+      "manual": "Siemens Database Description, April 2014",
+      "section": "printed page 274; File Formats 3.1.9",
+      "supports": "GraphicAreaTile.Flag; origin metres vs page centimetres; separate symbol center and contour points",
+      "url": "https://raw.githubusercontent.com/benediktibk/loadflow/2d95494327123de7eaa9c6fe0bc09990038ee364/documents/external/sincal/Datenbankbeschreibung.pdf"
+    },
+    {
+      "manual": "Siemens Database Interface and Automation, April 2015",
+      "section": "2.5.2",
+      "supports": "NoPoint ordering from element symbol toward node/busbar",
+      "url": "https://manualzz.com/doc/2231110/pss-sincal-database-interface-and-automation"
+    },
+    {
+      "manual": "Siemens SINCAL 22.0 Release Information",
+      "section": "pages 3, 9-12, 41",
+      "supports": "Projection support and optional CoordSys/reference fields; names bundled geographic samples",
+      "url": "https://sincal.s3.amazonaws.com/22.0/ReleaseNotes-Eng.pdf"
+    }
+  ],
+  "georeferencing_gate": {
+    "status": "No usable declared-CRS native sample acquired",
+    "search": "Targeted public web and repository searches for CoordSys, RefPosX, native 22.0 archives and Example NMM found documentation but no usable standalone native payload. This is not proof that none exists.",
+    "candidate_bundled_samples": [
+      "Example Imp Excel",
+      "Example NMM",
+      "Example Gas"
+    ],
+    "implementation_boundary": "Retain optional metadata without inferring projection, transforming coordinates or admitting newer electrical schemas"
   }
 }
