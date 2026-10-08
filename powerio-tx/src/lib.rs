@@ -54,6 +54,7 @@ pub mod gen_cost;
 pub mod geo;
 pub mod hvdc;
 pub mod indexed;
+pub mod lcc;
 pub mod network;
 mod normalize;
 mod operations;
@@ -132,6 +133,7 @@ pub use geo::{
 };
 pub use hvdc::{HvdcInjections, HvdcTerminalInjection, HvdcTreatment};
 pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork};
+pub use lcc::{LccConverterState, LccOperatingPoint};
 pub use network::{
     AcDcConverterControlMode, ActivePowerControl, Area, BalancedNetwork, BoundaryLine,
     BoundaryLineGeneration, Branch, BranchCharging, BranchCurrentRatings, BranchRatingSet,

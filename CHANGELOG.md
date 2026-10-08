@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- `Hvdc::calc_lcc_operating_point` solves a PSS/E two-terminal (LCC) DC
+  line at its AC terminal voltages: the DC current and voltages from the
+  record's schedule (`SETVL`, `VSCHD`, `RCOMP`, `RDC`, `MDC`), and each
+  converter's firing or extinction angle, commutation overlap, and the
+  reactive power it draws, from the six-pulse bridge equations over the
+  converter's bridges, commutating resistance and reactance, and transformer
+  base, ratio, and tap. The `Hvdc` record states no converter reactive power,
+  so this is the analysis-time source for it; nothing new is serialized.
+  `calc_stated_state_mismatch` uses it by default for every line with a
+  converter record (`LccReactivePower::ConverterModel`, or `Stated` for the
+  line's stated `qf` and `qt`), also as `powerio verify --stated-state --lcc-q`
+  and the Python `lcc_reactive_power` argument. A line without a converter
+  record, with capacitor commutation, or at a point no angle reaches keeps its
+  stated reactive powers.
+
 - `calc_stated_state_mismatch` evaluates every bus's AC balance at the
   voltages a case stores, with each device at its stated output: generators
   at `pg` and `qg`, loads through their voltage model at the stored

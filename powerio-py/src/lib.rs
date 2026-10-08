@@ -898,7 +898,8 @@ impl PyBalancedNetwork {
     /// The AC bus balance at the voltages this case stores, with every
     /// device at its stated output: per bus columns in analysis bus order,
     /// island totals, and the ranked largest mismatches.
-    #[pyo3(signature = (*, top_k=20, hvdc="fixed_injection", low_impedance_threshold=1e-3, merge_zero_impedance=false))]
+    #[pyo3(signature = (*, top_k=20, hvdc="fixed_injection", low_impedance_threshold=1e-3, merge_zero_impedance=false, lcc_reactive_power="converter_model"))]
+    #[allow(clippy::too_many_arguments)]
     fn calc_stated_state_mismatch<'py>(
         &self,
         py: Python<'py>,
@@ -906,7 +907,17 @@ impl PyBalancedNetwork {
         hvdc: &str,
         low_impedance_threshold: f64,
         merge_zero_impedance: bool,
+        lcc_reactive_power: &str,
     ) -> PyResult<Bound<'py, PyDict>> {
+        let lcc = match normalize(lcc_reactive_power).as_str() {
+            "convertermodel" => powerio_matrix::LccReactivePower::ConverterModel,
+            "stated" => powerio_matrix::LccReactivePower::Stated,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown lcc_reactive_power {other:?}; expected 'converter_model' or 'stated'"
+                )));
+            }
+        };
         let treatment = match normalize(hvdc).as_str() {
             "fixedinjection" => powerio_tx::HvdcTreatment::FixedInjection,
             "ignore" => powerio_tx::HvdcTreatment::Ignore,
@@ -919,7 +930,8 @@ impl PyBalancedNetwork {
         let mut options = powerio_matrix::StatedStateOptions::default()
             .with_hvdc_treatment(treatment)
             .with_top_k(top_k)
-            .with_low_impedance_threshold(low_impedance_threshold);
+            .with_low_impedance_threshold(low_impedance_threshold)
+            .with_lcc_reactive_power(lcc);
         let merged;
         let network = if merge_zero_impedance {
             let (network, merge, _) = powerio_prob::merge_zero_impedance_buses(self.inner())
