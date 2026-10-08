@@ -424,7 +424,6 @@ fn hand_written_revision32_case_maps_area_dc_and_skipped_records() {
         "ZONE section (2 record line(s))",
         "OWNER section (1 record line(s))",
         "INTER-AREA TRANSFER section (1 record line(s))",
-        "IMPEDANCE CORRECTION section (1 record line(s))",
     ] {
         assert!(
             lines.iter().any(|line| {
@@ -433,6 +432,14 @@ fn hand_written_revision32_case_maps_area_dc_and_skipped_records() {
             "{section}: {lines:?}"
         );
     }
+    // The impedance correction table is read; no transformer names it.
+    assert!(
+        lines.iter().any(|line| {
+            line.starts_with("READ.PSSE.RETAINED_SOURCE_ONLY")
+                && line.contains("1 PSS/E impedance correction table(s) that no transformer names")
+        }),
+        "{lines:?}"
+    );
     assert!(
         !lines
             .iter()
