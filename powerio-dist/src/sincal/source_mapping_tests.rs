@@ -174,7 +174,7 @@ fn floating_star_is_local_and_never_connected_by_the_external_phase_switch() {
             source.boundary.reference,
             VoltageReference::Terminal("star".into())
         );
-        assert_eq!(source.bus.grounded.as_slice(), []);
+        assert_eq!(source.bus.grounded, Vec::<String>::new());
         assert_eq!(source.switch.bus_from, "10");
         assert_eq!(source.switch.bus_to, source.bus.id);
         assert_eq!(source.switch.terminal_map_from, ["1", "2", "3"]);
@@ -240,7 +240,7 @@ fn finite_native_zero_sequence_keeps_ideal_rotating_sequences_and_ground_current
         let source = circuit(&format!("UPDATE Infeeder SET Flag_Z0=1,R0={r},X0={x}"));
         let shunt = source.grounding_shunt.as_ref().unwrap();
         assert_eq!(shunt.terminal_map, ["star"]);
-        assert_eq!(source.bus.grounded.as_slice(), []);
+        assert_eq!(source.bus.grounded, Vec::<String>::new());
         let admittance = [
             Complex64::new(0.01, -0.003),
             Complex64::new(0.02, -0.004),

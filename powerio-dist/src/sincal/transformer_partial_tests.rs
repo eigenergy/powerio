@@ -74,7 +74,7 @@ fn partial_delta_ports_connect_coil_endpoints_and_preserve_open_state() {
         let circuit = db.transformer_circuit(30, &buses).unwrap();
         assert_eq!(circuit.shunt.terminal_map.len(), phases.len() * 2);
         assert_eq!(circuit.auxiliary_bus.terminals, circuit.shunt.terminal_map);
-        assert_eq!(circuit.auxiliary_bus.grounded.as_slice(), []);
+        assert_eq!(circuit.auxiliary_bus.grounded, Vec::<String>::new());
         for (side, switch) in circuit.terminal_switches.iter().enumerate() {
             assert_eq!(switch.terminal_map_from, phases);
             assert_eq!(switch.open, side == 1);

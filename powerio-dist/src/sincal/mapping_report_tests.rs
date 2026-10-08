@@ -150,7 +150,7 @@ fn known_machine_ports_allow_audit_but_never_a_partial_network() {
         let buses = topology.buses();
         let machine_bus = buses.iter().find(|bus| bus.id == "90").unwrap();
         assert_eq!(machine_bus.terminals, expected);
-        assert_eq!(machine_bus.grounded.as_slice(), []);
+        assert_eq!(machine_bus.grounded, Vec::<String>::new());
         let report = db.mapping_report().unwrap();
         assert_eq!(report.components.len(), 4);
         assert!(!report.all_components_map());
