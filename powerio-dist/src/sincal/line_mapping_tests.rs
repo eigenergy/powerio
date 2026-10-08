@@ -98,7 +98,7 @@ fn independent_reduced_phase_lines_keep_order_units_ratings_and_open_ports() {
             assert_eq!(circuit.auxiliary_buses.len(), usize::from(open));
             if open {
                 assert_eq!(circuit.auxiliary_buses[0].terminals, phases);
-                assert!(circuit.auxiliary_buses[0].grounded.is_empty());
+                assert_eq!(circuit.auxiliary_buses[0].grounded.as_slice(), []);
                 assert!(circuit.terminal_switches[0].open);
                 assert_eq!(circuit.terminal_switches[0].terminal_map_from, phases);
             }
@@ -279,8 +279,8 @@ fn closed_line_maps_native_port_order_and_retains_coupled_pi_data() {
     assert!((circuit.line.length - 250.0).abs() < 1e-12);
     assert!((circuit.frequency_hz - 50.0).abs() < 1e-12);
     assert!(circuit.code.r_series[0][1] > 0.0);
-    assert!(circuit.auxiliary_buses.is_empty());
-    assert!(circuit.terminal_switches.is_empty());
+    assert_eq!(circuit.auxiliary_buses.as_slice(), []);
+    assert_eq!(circuit.terminal_switches.as_slice(), []);
     assert_eq!(circuit.code.i_max, Some(vec![200.0; 3]));
 }
 
@@ -431,7 +431,7 @@ fn open_terminals_keep_full_line_and_isolate_only_their_native_ports() {
                     .find(|b| &b.id == end)
                     .unwrap();
                 assert_eq!(internal.terminals, ["1", "2", "3"]);
-                assert!(internal.grounded.is_empty());
+                assert_eq!(internal.grounded.as_slice(), []);
                 let switch = circuit
                     .terminal_switches
                     .iter()
@@ -605,7 +605,7 @@ fn legacy_line_temperatures_use_only_documented_selected_defaults() {
         ))
         .line_circuit(30, &buses())
         .unwrap();
-        assert!(warmer.defaulted.is_empty());
+        assert_eq!(warmer.defaulted.as_slice(), []);
         assert!((warmer.code.r_series[0][0] / explicit.code.r_series[0][0] - 1.2).abs() < 1e-12);
         for bad in ["NULL", "'unknown'", "1e999"] {
             let db = native(&format!(

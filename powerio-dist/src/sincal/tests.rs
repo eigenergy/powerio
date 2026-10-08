@@ -822,7 +822,7 @@ fn missing_line_sequence_uses_selected_calculation_policy_and_keeps_explicit_inp
     .sequence_line(30)
     .unwrap();
     assert_eq!(supplied.code.r_series, mode_two.code.r_series);
-    assert!(mode_two.defaulted.is_empty());
+    assert_eq!(mode_two.defaulted.as_slice(), []);
     let supplemented = NativeDatabase::decode(
         &sequence_database(
             "UPDATE CalcParameter SET Flag_LFZ0=2; UPDATE Element SET Flag_Input=3;

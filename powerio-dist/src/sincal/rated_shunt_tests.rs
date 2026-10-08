@@ -81,7 +81,7 @@ fn rated_banks_preserve_total_rating_and_reactive_sign_for_every_port() {
                 .sum();
             assert!((s.re - 600.0).abs() < 1e-9, "{kind} {selection}: {s}");
             assert!((s.im - sign * (60_000.0_f64.powi(2) - 600.0_f64.powi(2)).sqrt()).abs() < 1e-9);
-            assert!(bus().grounded.is_empty());
+            assert_eq!(bus().grounded.as_slice(), []);
             assert!(
                 !circuit
                     .switch
@@ -148,7 +148,7 @@ fn bank_fixed_steps_zero_steps_and_service_states_remain_explicit() {
 fn floating_banks_do_not_consume_common_mode_current() {
     let input=native("ShuntReactor","UPDATE ShuntReactor SET Flag_Z0=0,Flag_Z0_Input=999; UPDATE Element SET Flag_Input=2 WHERE Element_ID=34").rated_shunt_input(34).unwrap();
     let circuit = input.circuit(&bus()).unwrap();
-    assert!(circuit.bus.grounded.is_empty());
+    assert_eq!(circuit.bus.grounded.as_slice(), []);
     assert_eq!(circuit.bus.terminals.len(), 3);
     for row in circuit.shunt.g.iter().chain(&circuit.shunt.b) {
         assert!(row.iter().sum::<f64>().abs() < 1e-12);

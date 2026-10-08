@@ -115,7 +115,7 @@ fn converter_connections_preserve_total_power_order_and_explicit_earth() {
         assert!((generator.q_nom.iter().sum::<f64>() + 60_000.0).abs() < 1e-9);
         assert_eq!(generator.p_nom.len(), if code == 7 { 3 } else { 1 });
         assert_eq!(circuit.bus.grounded.is_empty(), (4..=6).contains(&code));
-        assert!(native_bus.grounded.is_empty());
+        assert_eq!(native_bus.grounded.as_slice(), []);
         assert!(
             !circuit
                 .switch

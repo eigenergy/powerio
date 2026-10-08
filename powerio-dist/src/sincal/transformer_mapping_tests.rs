@@ -377,7 +377,7 @@ fn transformer_switches_isolate_native_ports_without_mutating_bus_neutrals() {
         .unwrap();
         assert_eq!(circuit.shunt, baseline.shunt);
         assert_eq!(circuit.auxiliary_bus.id, "sincal:transformer:30");
-        assert!(circuit.auxiliary_bus.grounded.is_empty());
+        assert_eq!(circuit.auxiliary_bus.grounded.as_slice(), []);
         assert_eq!(circuit.terminal_switches.len(), 2);
         for (side, switch) in circuit.terminal_switches.iter().enumerate() {
             assert_eq!(switch.name, format!("sincal:terminal:{}", [40, 50][side]));
