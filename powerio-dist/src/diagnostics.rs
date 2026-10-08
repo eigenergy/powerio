@@ -48,7 +48,9 @@ pub mod codes {
         READ_GLM_SWITCH_EQUIVALENT = "READ.GLM.SWITCH_EQUIVALENT", Remark,
             "finite closed switch contacts use an exact static line equivalent";
         READ_GLM_NATIVE_LINE_DISCREPANCY = "READ.GLM.NATIVE_LINE_DISCREPANCY", Warning,
-            "native FBS line currents differ from the physical pi-line model for noncommuting matrices";
+            "native reported line currents differ from the physical pi-line model for noncommuting matrices";
+        READ_GLM_GEOMETRY_MATERIALIZED = "READ.GLM.GEOMETRY_MATERIALIZED", Remark,
+            "overhead conductor geometry is materialized as phase matrices with explicit reduction provenance";
         EMIT_GLM_UNSUPPORTED = "EMIT.GLM.UNSUPPORTED", Error,
             "the GLM writer cannot yet represent this electrical feature", category = Data;
         EMIT_GLM_FIELD_DROPPED = "EMIT.GLM.FIELD_DROPPED", Warning,

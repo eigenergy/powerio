@@ -128,15 +128,28 @@ def loads():
     return np.array([20 + 5j, 35 + 12j, 15 + 3j])
 
 
-def reference(flags, frequency, capacitance, omit_neutral=False, native_readback=False):
+def reference(
+    flags,
+    frequency,
+    capacitance,
+    omit_neutral=False,
+    native_readback=False,
+    edited=False,
+):
     phases = flags.replace("N", "")
     idx = ["ABC".index(p) for p in phases]
     z, y = reduced(phases if omit_neutral else flags, frequency)
     if not capacitance:
         y *= 0
     source = 240 * np.exp(1j * np.array([0, -2 * math.pi / 3, 2 * math.pi / 3]))[idx]
+    demand = loads()[idx].copy()
+    if edited:
+        source[0] *= 1.03
+        z *= 1.1
+        y *= 1.1
+        demand /= 1.25
     series = np.linalg.inv(z)
-    sink = np.linalg.solve(series + y / 2 + np.diag(1 / loads()[idx]), series @ source)
+    sink = np.linalg.solve(series + y / 2 + np.diag(1 / demand), series @ source)
     current = series @ (source - sink)
     cin, cout = current + y @ source / 2, -current + y @ sink / 2
     if native_readback:
@@ -157,7 +170,7 @@ def reference(flags, frequency, capacitance, omit_neutral=False, native_readback
         # Native reporting makes each real phase loss positive before summing.
         losses = abs(losses.real) + 1j * losses.imag
     add(result, "line.loss", "VA", sum(losses))
-    residual = float(max(abs(cout + sink / loads()[idx])))
+    residual = float(max(abs(cout + sink / demand)))
     assert residual < 1e-9
     return result, residual
 

@@ -1,21 +1,21 @@
 use super::{Writer, complex_literal, flags, unsupported};
 use crate::diagnostics::codes;
 use crate::glm::connections::EXPLICIT;
-use crate::glm::line_physics::fbs_shunts_commute;
+use crate::glm::line_physics::line_shunts_commute;
 use crate::{DistLine, DistLineCode};
 use num_complex::Complex64;
 use powerio_core::Error;
 use std::fmt::Write as _;
 
 impl Writer<'_> {
-    pub(super) fn expand_line_shunts(&self, code: &DistLineCode) -> bool {
+    pub(super) fn expand_line_shunts(code: &DistLineCode) -> bool {
         code.g_from
             .iter()
             .flatten()
             .chain(code.g_to.iter().flatten())
             .any(|&v| v != 0.0)
             || code.b_from != code.b_to
-            || (self.ideal_plan.is_some() && !fbs_shunts_commute(code))
+            || !line_shunts_commute(code)
     }
 
     #[allow(clippy::float_cmp)] // Exact reciprocity; no unrequested symmetrization.

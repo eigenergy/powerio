@@ -159,6 +159,56 @@ The equations and readback behavior were audited in the commits pinned by
 discrepancies and cross-engine earth-model differences require explicit
 provenance or diagnostics when conversion support is added.
 
+## Overhead geometry conversion
+
+The reader materializes `overhead_line_conductor` and `line_spacing` references
+as linecode phase matrices, retaining the native reduced-neutral calculation
+in linecode provenance and reporting `READ.GLM.GEOMETRY_MATERIALIZED`.
+GMR, resistance, diameter and spacing use native units with normal unit
+conversion. Explicit nonzero diagonal configuration impedances select the
+native matrix path before geometry. Active geometry requires positive finite
+GMR/resistance/distances; enabled capacitance additionally requires diameters
+and heights. Unsupported native invalid-value fallbacks fail explicitly.
+
+Ordinary 50/60-Hz module globals survive import, IR and canonical output.
+Canonical geometry output uses current matrices, with a diagnostic for the
+original conductor/spacing provenance that cannot be reconstructed. Map points
+on the line/configuration retain their typed attachment. Points on conductor
+or spacing objects without a typed attachment still fail explicitly.
+
+```sh
+python evals/gridlabd/overhead_roundtrip_oracle.py --pnnl-root "$PNNL_ROOT" \
+  --bridge target/debug/examples/glm_roundtrip --output /tmp/gld-geometry-roundtrip
+```
+
+Seven phase/frequency cases, each with capacitance on/off, run in both forks.
+Fresh, IR-restored, edited, voltage-rebased and grounded-source-reference output
+is checked against independent physical circuit equations. Edits change source
+voltage, load admittance and line length (both series and shunt quantities).
+Noncommuting shunts use exact endpoint load equivalents in NR as well as FBS.
+The oracle aggregates native series currents and native end-shunt coefficient
+readback, then separately checks an independent root-meter source current.
+Total physical loss is the signed sum of observed physical port powers; native
+`power_losses` remains recorded separately. Geometry neutral reduction is
+verified for its stated source boundary condition, not claimed as full
+explicit-neutral or arbitrary-grounding support.
+
+The companion cross-format audit uses the existing CLI and preserves the
+original fixed-source reference:
+
+```sh
+python evals/gridlabd/overhead_dss_oracle.py --powerio target/debug/powerio \
+  --output /tmp/gld-geometry-dss
+```
+
+All 14 line-matrix comparisons pass, but all 14 complete-circuit comparisons
+currently fail. The DSS writer leaves unspecified source impedance at native
+finite defaults, and B/C sources emitted as two-phase acquire a 180-degree
+phase separation instead of the original 120 degrees. Actual source settings
+and voltages are recorded. No tolerance relaxation or substitution of observed
+source voltage is used to declare cross-format success. These source-export
+gaps remain unresolved and prevent an OpenDSS compatibility claim.
+
 ## Electrical reader and IR
 
 `powerio_dist::glm::parse` returns `PioModule<MulticonductorNetwork>` for an
@@ -174,7 +224,7 @@ Numeric setters are validated in source order even when later overwritten or
 assigned to an inactive phase.
 
 The reader rejects unmodeled physical properties, unknown globals, active
-device classes, geometry-dependent lines, split-phase flags, conflicting
+device classes, unqualified geometry/cable models, split-phase flags, conflicting
 child nominal voltages and names that collide under the current canonical
 case-insensitive lookup. Coordinates attach to root buses, parented loads,
 lines and used line configurations. Unmapped coordinate-bearing objects still
@@ -253,7 +303,7 @@ and source/load properties follow explicit phase identities even when model
 terminal order differs from native A/B/C order. A source reference on an
 already perfectly grounded terminal has the exact earth-referenced equivalent;
 floating references are refused. Source zero phasors, nonreciprocal end-shunt
-equivalents, non-60-Hz cases, uninterpreted electrical extras, additional
+equivalents, frequencies outside 50/60 Hz, uninterpreted electrical extras, additional
 device families and unqualified object-name escaping remain explicit gaps.
 
 ```sh

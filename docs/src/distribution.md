@@ -198,9 +198,17 @@ network value. Emission validates physical support before writing any output.
 
 The currently qualified electrical profile covers phase-to-earth sources,
 node/meter/load objects, independent P/I/Z load terms, parented loads, and
-overhead lines with explicit phase impedance and capacitance matrices.
+overhead lines with explicit phase matrices or conductor/spacing configurations
+at 50 or 60 Hz. Geometry uses the pinned modified-Carson constants and enabled
+image-potential capacitance. The resulting linecode records its calculation
+and neutral-reduction provenance; canonical output writes current matrices.
+Diagnostics report materialization and the loss of geometry provenance on
+canonical emission. Map coordinates never determine conductor spacing or length.
 Three-phase subsets keep their A/B/C identities. Bus earth returns do not
-constitute explicit line neutrals. Geometry, transformers, split-phase and
+constitute explicit line neutrals. A geometry configuration with a neutral
+imports GridLAB-D's reduced phase circuit, with zero neutral voltage at both
+ends; it does not provide separately solved neutral voltage/current values.
+Other geometry/earth models, transformers, split-phase and
 additional static devices remain unfinished and fail explicitly. Full OpenDSS
 static compatibility is not yet established.
 
@@ -258,10 +266,10 @@ component and bus phases absent from the incoming link require additional
 exact equivalents and currently fail. No small impedance replaces an ideal
 constraint, and the input network is unchanged.
 
-For noncommuting line impedance and capacitance matrices, the pinned FBS engines
-compute incorrect source-end currents despite correct receiving voltages.
+For noncommuting line impedance and capacitance matrices, the pinned engines
+report incorrect source-end currents in NR and FBS despite correct receiving voltages.
 Import reports this native discrepancy and retains the physical pi-line model.
-Canonical FBS output replaces native line capacitance with exact phase-pair and
+Canonical output replaces native line capacitance with exact phase-pair and
 earth-return impedance loads at each end. Conductive or unequal end shunts use
 the same equivalent in either solver. End-shunt expansion requires symmetric
 matrices; a nonreciprocal equivalent needs additional mapping and fails explicitly.
@@ -271,6 +279,8 @@ for FBS. Line coordinates stay on the series link. Diagnostics name the
 generated loads: physical line port currents, powers and losses include these
 loads as well as the series link. Reimport preserves the equivalent circuit
 as separate typed loads rather than reconstructing the original line identity.
+Native `power_losses` also makes each phase's real loss positive before summing;
+with mutual coupling, physical total loss must use signed powers at both ports.
 
 Output without ideal closed contacts selects NR. The pinned engines can return NaN results for
 some valid circuits even with a successful process exit. One qualified
