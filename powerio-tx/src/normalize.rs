@@ -617,14 +617,19 @@ fn norm_transformers_3w(
                 w.rate_b /= base;
                 w.rate_c /= base;
             }
-            Some((
-                Transformer3W {
-                    windings,
-                    star_va: t.star_va * DEG_TO_RAD,
-                    ..t.clone()
-                },
-                Some(row),
-            ))
+            let mut transformer = Transformer3W {
+                windings,
+                star_va: t.star_va * DEG_TO_RAD,
+                ..t.clone()
+            };
+            for winding in 0..3 {
+                let mut sets = t.winding_rating_sets(winding);
+                for set in &mut sets {
+                    set.rate_mva /= base;
+                }
+                transformer.set_winding_rating_sets(winding, sets);
+            }
+            Some((transformer, Some(row)))
         })
         .unzip()
 }

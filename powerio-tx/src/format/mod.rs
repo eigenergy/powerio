@@ -43,7 +43,9 @@ use powerio_core::PioModule;
 
 use crate::diagnostics::{Diagnostic, DiagnosticInfo, Diagnostics, EmitFamily, codes};
 use crate::gen_cost::{GenCostPatch, MissingGenCostPolicy};
-use crate::network::{BalancedNetwork, Branch, BranchRatingSet, Bus, BusId, BusType, SourceFormat};
+use crate::network::{
+    BalancedNetwork, Branch, BranchRatingSet, Bus, BusId, BusType, SourceFormat, Transformer3W,
+};
 use crate::{Error, Result};
 use routing::{Detection, JsonClass, SourceFormat as DetectedFormat, TransmissionFormat};
 
@@ -1858,6 +1860,58 @@ pub(super) fn warn_extra_branch_rating_sets(
                 branch_rating_set_drop_warning(target, branch_index, branch, rating),
             );
         }
+    }
+}
+
+/// Warn for every three winding transformer winding rating set `target` has
+/// no field for, the winding counterpart of [`warn_extra_branch_rating_sets`].
+pub(super) fn warn_winding_rating_sets(
+    family: &'static EmitFamily,
+    target: &str,
+    net: &BalancedNetwork,
+    warnings: &mut Diagnostics,
+) {
+    for transformer in net.transformers_3w() {
+        let [i, j, k] = transformer.windings.each_ref().map(|winding| winding.bus);
+        for index in 0..3 {
+            for rating in transformer.winding_rating_sets(index) {
+                warnings.push(
+                    &family.rating_set_dropped,
+                    format!(
+                        "three winding transformer {i}-{j}-{k} winding {} rating set {}={} MVA dropped: {target} has no field for winding rating sets beyond rate_a, rate_b, and rate_c",
+                        index + 1,
+                        rating.name,
+                        rating.rate_mva
+                    ),
+                );
+            }
+        }
+    }
+}
+
+/// Warn once when the `target` writer states one status per three winding
+/// transformer, so a winding out of service in an in service transformer is
+/// written in service.
+pub(super) fn warn_winding_status_collapsed(
+    family: &'static EmitFamily,
+    target: &str,
+    net: &BalancedNetwork,
+    warnings: &mut Diagnostics,
+) {
+    let windings = net
+        .transformers_3w()
+        .iter()
+        .filter(|transformer| transformer.in_service)
+        .flat_map(Transformer3W::winding_in_service)
+        .filter(|in_service| !in_service)
+        .count();
+    if windings > 0 {
+        warnings.push(
+            &family.value_collapsed,
+            format!(
+                "{windings} out of service three winding transformer winding(s) written in service: the {target} writer states one status per three winding transformer"
+            ),
+        );
     }
 }
 
