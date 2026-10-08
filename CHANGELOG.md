@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- PSS/E reading no longer slows quadratically with the generator count. The
+  reader attached each generator's retained source fields by searching the
+  metadata already attached, so a case with tens of thousands of machines
+  spent about a quarter of its read in that search; one hash lookup per
+  generator replaces it. On the new synthetic 100,000 bus benchmark case the
+  read drops from 1.09 s to 0.84 s. The indexed view no longer copies a network whose three winding transformers
+  are all out of service, and a cached `IndexCore` serves such a network
+  directly. A new `large_case` benchmark times the PSS/E reader and the
+  indexed view on a synthetic 100,000 bus revision 35 case, and on PGLib's
+  case78484 when `POWERIO_PGLIB_CASE78484` names it.
+
 - PSS/E switched shunt `MODSW` 1 and 2 now read as PSS/E defines them: 1 is
   discrete and 2 is continuous adjustment of the regulated voltage. The RAW
   and RAWX readers had the two swapped, so a continuously adjusted shunt, such

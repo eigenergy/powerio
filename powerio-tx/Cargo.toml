@@ -43,5 +43,9 @@ criterion = { version = "0.8", default-features = false, features = ["cargo_benc
 name = "parse"
 harness = false
 
+[[bench]]
+name = "large_case"
+harness = false
+
 [lints]
 workspace = true
