@@ -85,7 +85,7 @@ fn floating_secondary() -> MulticonductorNetwork {
 fn floating_star_preserves_voltage_displacement_kcl_and_power() {
     let net = floating_secondary();
     let system = calc_multiconductor_admittance_matrix(&net).unwrap();
-    assert!(system.diagnostics().is_empty());
+    assert_eq!(system.diagnostics(), []);
     let index = system.index();
     let neutral_node = node(index, "s", "n");
     let angles = [
@@ -266,7 +266,7 @@ fn merged_unity_windings_do_not_create_a_redundant_constraint() {
         false,
     ));
     let system = calc_multiconductor_admittance_matrix(&net).unwrap();
-    assert!(system.augmented().labels.is_empty());
+    assert_eq!(system.augmented().labels.as_slice(), []);
     assert_eq!(system.augmented().constraint_re.nnz(), 0);
     net.transformers_mut()[0].windings[0].v_ref = 480.0;
     let system = calc_multiconductor_admittance_matrix(&net).unwrap();

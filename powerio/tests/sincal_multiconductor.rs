@@ -50,7 +50,7 @@ fn explicit_family_and_binary_echo_preserve_conductors_without_balancing() {
         let admittance =
             powerio_matrix::matrix::multiconductor::calc_multiconductor_admittance_matrix(net)
                 .unwrap();
-        assert!(admittance.diagnostics().is_empty());
+        assert_eq!(admittance.diagnostics(), []);
         powerio::to_mc_ac_pf_instance(&module).unwrap();
         for format in ["sincal", "sincal-multiconductor", "SINCAL_MULTICONDUCTOR"] {
             assert!(!powerio::resolve_format(format).unwrap().can_emit);
@@ -204,7 +204,7 @@ fn native_isolated_bus_is_retained_and_generic_calculation_requires_resolution()
     assert!(net.buses().iter().any(|bus| bus.id == "40"));
     let admittance =
         powerio_matrix::matrix::multiconductor::calc_multiconductor_admittance_matrix(net).unwrap();
-    assert!(admittance.diagnostics().is_empty());
+    assert_eq!(admittance.diagnostics(), []);
     let error = powerio::to_mc_ac_pf_instance(&module).unwrap_err();
     // The load port is the first bus in this island; native bus 40 remains.
     assert!(error.diagnostics().iter().any(|d| {

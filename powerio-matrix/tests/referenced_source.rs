@@ -42,7 +42,7 @@ fn network() -> MulticonductorNetwork {
 fn referenced_source_matrix_matches_neutral_displacement_and_nodal_kcl() {
     let net = network();
     let system = calc_multiconductor_admittance_matrix(&net).unwrap();
-    assert!(system.diagnostics().is_empty());
+    assert_eq!(system.diagnostics(), []);
     let row = |terminal: &str| match system.index().resolve("b", terminal).unwrap() {
         NodeRef::Node(n) => n,
         NodeRef::Ground => panic!("unexpected earth"),

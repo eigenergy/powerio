@@ -75,7 +75,7 @@ fn declared_topology_keeps_open_ports_neutral_only_wires_and_isolated_nodes() {
     let buses = topology.buses();
     assert_eq!(buses[0].terminals, ["1", "3", "n"]);
     assert_eq!(buses[1].terminals, ["1", "3", "n"]);
-    assert!(buses[2].terminals.is_empty());
+    assert_eq!(buses[2].terminals.as_slice(), []);
     assert_eq!(buses[2].id, "99");
     assert!(buses.iter().all(|b| b.grounded.is_empty()));
 }

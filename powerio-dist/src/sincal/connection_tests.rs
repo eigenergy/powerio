@@ -32,8 +32,8 @@ fn steady_state_connection_is_an_exact_switch_not_a_small_impedance_line() {
         UPDATE Element SET Flag_Input=2 WHERE Element_ID=30;");
     let before = db.connection.serialize("main").unwrap().to_vec();
     let net = db.network().unwrap();
-    assert!(net.lines().is_empty());
-    assert!(net.line_codes().is_empty());
+    assert_eq!(net.lines().as_slice(), []);
+    assert_eq!(net.line_codes().as_slice(), []);
     let switch = net.switches().iter().find(|s| s.name == "30").unwrap();
     assert_eq!(switch.bus_from, "10");
     assert_eq!(switch.bus_to, "20");
@@ -190,8 +190,8 @@ fn ordinary_zero_impedance_lines_keep_exact_connectivity_ratings_and_open_ports(
                      UPDATE Terminal SET Flag_State={open} WHERE Element_ID=30 AND TerminalNo=2;"
                 ));
                 let net = db.network().unwrap();
-                assert!(net.lines().is_empty());
-                assert!(net.line_codes().is_empty());
+                assert_eq!(net.lines().as_slice(), []);
+                assert_eq!(net.line_codes().as_slice(), []);
                 let switch = net.switches().iter().find(|s| s.name == "30").unwrap();
                 assert!(!switch.open);
                 assert_eq!(
