@@ -172,7 +172,7 @@ def native_snapshot(path, count, floating):
     return result, version
 
 
-def typed_linear_snapshot(document, count, floating):
+def typed_linear_solution(document):
     """Independent MNA of the actual typed Z-load microcase, excluding extras.
 
     This is a bounded oracle for this generator, not a general PowerIO solver.
@@ -192,12 +192,15 @@ def typed_linear_snapshot(document, count, floating):
         if t not in b["grounded"]
     ]
     indexes = {key: i for i, key in enumerate(nodes)}
+    declared = {(b["id"], t) for b in net["buses"] for t in b["terminals"]}
     size = len(nodes)
     y = np.zeros((size, size), dtype=complex)
 
     def incidence(start, end=None):
         a = np.zeros(size)
         for key, sign in [(start, 1), (end, -1)]:
+            if key is not None and key not in declared:
+                raise ValueError(f"undeclared typed terminal {key}")
             if key in indexes:
                 a[indexes[key]] += sign
         return a
@@ -205,16 +208,22 @@ def typed_linear_snapshot(document, count, floating):
     codes = {c["name"]: c for c in net["linecodes"]}
     for line in net["lines"]:
         code = codes[line["linecode"]]
-        assert code["n_conductors"] == 1
         assert all(
             np.count_nonzero(code[k]) == 0 for k in ("g_from", "g_to", "b_from", "b_to")
         )
-        z = complex(code["r_series"][0][0], code["x_series"][0][0]) * line["length"]
-        a = incidence(
-            (line["bus_from"], line["terminal_map_from"][0]),
-            (line["bus_to"], line["terminal_map_to"][0]),
+        z = (np.array(code["r_series"]) + 1j * np.array(code["x_series"])) * line[
+            "length"
+        ]
+        a = np.array(
+            [
+                incidence((line["bus_from"], start), (line["bus_to"], end))
+                for start, end in zip(
+                    line["terminal_map_from"], line["terminal_map_to"], strict=True
+                )
+            ]
         )
-        y += np.outer(a, a) / z
+        assert a.shape[0] == code["n_conductors"]
+        y += a.T @ np.linalg.solve(z, a)
     for load in net["loads"]:
         assert load["voltage_model"]["model"] == "constant_impedance"
         assert len(load["terminal_map"]) == 2 and len(load["p_nom"]) == 1
@@ -250,7 +259,27 @@ def typed_linear_snapshot(document, count, floating):
     residual = float(max(abs(matrix @ solved - rhs)))
     if residual > 1e-8:
         raise ValueError(f"typed MNA residual {residual}")
-    volts = {key: solved[i] for key, i in indexes.items()}
+    volts = {key: solved[indexes[key]] if key in indexes else 0j for key in declared}
+    currents = {}
+    for line in net["lines"]:
+        code = codes[line["linecode"]]
+        z = (np.array(code["r_series"]) + 1j * np.array(code["x_series"])) * line[
+            "length"
+        ]
+        drop = np.array(
+            [
+                volts[(line["bus_from"], start)] - volts[(line["bus_to"], end)]
+                for start, end in zip(
+                    line["terminal_map_from"], line["terminal_map_to"], strict=True
+                )
+            ]
+        )
+        currents[line["name"]] = np.linalg.solve(z, drop)
+    return volts, currents, residual
+
+
+def typed_linear_snapshot(document, count, floating):
+    volts, _, residual = typed_linear_solution(document)
     result = {}
     add(
         result,

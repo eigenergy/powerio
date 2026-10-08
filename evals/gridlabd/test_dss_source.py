@@ -9,11 +9,113 @@ from dss_source_oracle import (
     materialize_probe_sources,
     parameters,
     reference,
+    typed_linear_solution,
     typed_linear_snapshot,
 )
 
 
 class SourceOracleTests(unittest.TestCase):
+    def test_coupled_typed_source_matches_loop_equations_with_separate_returns(self):
+        emf = np.array([240, 230j])
+        z = np.array([[0.3 + 0.7j, 0.2 - 0.1j], [0.1 + 0.05j, 0.6 + 0.9j]])
+        ground = np.array([7.0, 3.0])
+        nominal = np.array([240.0, 230.0])
+        power = np.array([480 + 120j, 350 - 30j])
+        load_z = nominal**2 / power.conjugate()
+        expected = np.linalg.solve(z + np.diag(ground + load_z), emf)
+
+        def code(name, impedance):
+            zero = np.zeros(impedance.shape).tolist()
+            return dict(
+                name=name,
+                n_conductors=len(impedance),
+                r_series=impedance.real.tolist(),
+                x_series=impedance.imag.tolist(),
+                g_from=zero,
+                g_to=zero,
+                b_from=zero,
+                b_to=zero,
+            )
+
+        net = {
+            "buses": [
+                {"id": "feed", "terminals": ["1", "2", "0"], "grounded": ["0"]},
+                {
+                    "id": "return",
+                    "terminals": ["1", "2", "3", "4", "0"],
+                    "grounded": ["0"],
+                },
+            ],
+            "linecodes": [
+                code("source", z),
+                code("ground", np.diag(ground).astype(complex)),
+            ],
+            "lines": [
+                dict(
+                    name="source",
+                    bus_from="return",
+                    bus_to="feed",
+                    terminal_map_from=["3", "4"],
+                    terminal_map_to=["1", "2"],
+                    linecode="source",
+                    length=1,
+                ),
+                dict(
+                    name="ground",
+                    bus_from="return",
+                    bus_to="return",
+                    terminal_map_from=["1", "2"],
+                    terminal_map_to=["0", "0"],
+                    linecode="ground",
+                    length=1,
+                ),
+            ],
+            "sources": [
+                {
+                    "type": "powerio.ReferencedVoltageSource",
+                    "value": {
+                        "bus": "return",
+                        "terminal_map": [str(i + 3)],
+                        "reference_terminal": str(i + 1),
+                        "v_magnitude": [abs(e)],
+                        "v_angle": [np.angle(e)],
+                    },
+                }
+                for i, e in enumerate(emf)
+            ],
+            "loads": [
+                dict(
+                    bus="feed",
+                    terminal_map=[str(i + 1), "0"],
+                    p_nom=[s.real],
+                    q_nom=[s.imag],
+                    voltage_model=dict(model="constant_impedance", v_nom=[nominal[i]]),
+                )
+                for i, s in enumerate(power)
+            ],
+            **{
+                name: []
+                for name in (
+                    "switches",
+                    "transformers",
+                    "generators",
+                    "shunts",
+                    "untyped",
+                )
+            },
+        }
+        document = {"value": {"type": "powerio.MulticonductorNetwork", "data": net}}
+        volts, currents, _ = typed_linear_solution(document)
+        np.testing.assert_allclose(currents["source"], expected, rtol=1e-12)
+        np.testing.assert_allclose(currents["ground"], -expected, rtol=1e-12)
+        for i in range(2):
+            self.assertLess(
+                abs(volts[("feed", str(i + 1))] - load_z[i] * expected[i]), 1e-10
+            )
+            self.assertLess(
+                abs(volts[("return", str(i + 1))] + ground[i] * expected[i]), 1e-10
+            )
+
     def test_load_laws_scale_and_follow_voltage_angle(self):
         nominal = np.array([240.0])
         power = np.array([480 + 120j])

@@ -30,6 +30,11 @@ use crate::model::{
     open_delta_pairable, pair_keys, square_from_rows, winding_phase_pair,
 };
 
+// The calibrated source decomposition stays private until its canonical
+// writer and static-profile validation are qualified together.
+#[cfg(test)]
+mod sources;
+
 /// Upper bound on any count property (`phases`, conductors, `windings`, tap
 /// counts). `phases` sizes a dense n×n matrix and the winding count drives a
 /// per-winding vector, so an unbounded value from a few bytes of input could
@@ -91,6 +96,16 @@ pub(crate) fn parse_dss_collecting(
 pub fn to_network_from_raw(
     raw: &RawDss,
 ) -> (MulticonductorNetwork, Vec<crate::diagnostics::Diagnostic>) {
+    to_network_with_source_reader(raw, None)
+}
+
+// An internal hook lets oracle tests exercise the real element reader and
+// final bus materialization without changing the production source profile.
+#[allow(clippy::too_many_lines)]
+fn to_network_with_source_reader(
+    raw: &RawDss,
+    source_reader: Option<fn(&mut Reader<'_>, &RawDss)>,
+) -> (MulticonductorNetwork, Vec<crate::diagnostics::Diagnostic>) {
     let mut diags = crate::collect::Diagnostics::new();
     diags.absorb(raw.diagnostics.iter().cloned());
     let mut rd = Reader {
@@ -138,9 +153,11 @@ pub fn to_network_from_raw(
         let lc = rd.linecode(obj);
         rd.net.line_codes_mut().push(lc);
     }
-    for obj in raw.of_class("vsource") {
-        let vs = rd.vsource(obj);
-        rd.net.sources_mut().push(vs);
+    if source_reader.is_none() {
+        for obj in raw.of_class("vsource") {
+            let vs = rd.vsource(obj);
+            rd.net.sources_mut().push(vs);
+        }
     }
     for obj in raw.of_class("line") {
         rd.line(obj);
@@ -171,6 +188,11 @@ pub fn to_network_from_raw(
         rd.regcontrol(obj);
     }
     rd.classify_regulators();
+    if let Some(read) = source_reader {
+        // All original terminals must be registered before allocating any
+        // virtual source terminal, including terminals on later sources.
+        read(&mut rd, raw);
+    }
     let mut outside_profile: std::collections::BTreeMap<&str, usize> =
         std::collections::BTreeMap::new();
     for obj in &raw.objects {
@@ -319,6 +341,9 @@ fn finish_buses(
     }
     for v in net.sources_mut() {
         rewrite(&v.bus, &mut v.terminal_map);
+        if let Some(reference) = &mut v.reference_terminal {
+            rewrite(&v.bus, std::slice::from_mut(reference));
+        }
     }
     for t in net.transformers_mut() {
         for w in &mut t.windings {
