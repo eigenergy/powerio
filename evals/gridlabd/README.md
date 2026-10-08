@@ -146,6 +146,35 @@ typed network data, IR equality and each residual's absolute-plus-relative
 bound. This qualifies reader physics and IR preservation; fresh/edited GLM
 output and cross-format engine validation need separate checks.
 
+## Electrical parent chains
+
+`parent_oracle.py` separately calibrates electrical parent chains through
+node/meter/load ancestors. It retains a direct sibling demand while testing
+two- and three-level chains, phase subsets, leaf-first declarations and
+independent P/I/Z demands at intermediate levels. Across both forks and NR/FBS,
+43 of 56 native inputs match the full independent circuit. Arras NR omits deeper
+loads in six inputs and crashes in seven; these outcomes remain visible and
+the full calibration exits nonzero. The reader explicitly refuses those
+Arras NR hierarchies rather than silently flattening a different circuit.
+
+```sh
+python evals/gridlabd/parent_oracle.py --pnnl-root "$PNNL_ROOT" \
+  --output /tmp/gld-parents
+python evals/gridlabd/parent_roundtrip_oracle.py --pnnl-root "$PNNL_ROOT" \
+  --native-report /tmp/gld-parents/report.json \
+  --bridge target/debug/examples/glm_roundtrip --output /tmp/gld-parent-output
+```
+
+The second harness rechecks native records and input hashes, verifies all
+thirteen source refusals occur before any IR/GLM artifact is written, and
+checks five canonical variants for each of the 43 accepted inputs. Identical
+canonical bytes share one native execution per fork; this is reported as
+215 output/reference checks over twelve distinct canonical engine runs, not
+215 separate executions. Omitting the nested demand must fail the reference.
+Fresh/IR output equality and edited coefficients are checked independently of
+retained-source echo. The native Arras NR limitation is not resolved by these
+canonical results. `--case` selects named inputs for focused investigation.
+
 ## Canonical GLM output
 
 `powerio_dist::glm::emit_canonical` takes a `MulticonductorNetwork` and a

@@ -204,6 +204,16 @@ constitute explicit line neutrals. Geometry, transformers, split-phase and
 additional static devices remain unfinished and fail explicitly. Full OpenDSS
 static compatibility is not yet established.
 
+Electrical parents are zero-length bus attachments. Qualified node/meter/load
+chains flatten onto their root bus while retaining each load's own P/I/Z law
+and geographic point. Canonical output attaches loads directly to that bus.
+PNNL 5.3 NR and both FBS profiles are qualified for two- and three-level chains,
+including phase subsets, reversed declaration order and intermediate demands.
+Arras 4.3 NR rejects electrical parent chains deeper than one level: the pinned
+engine can omit descendants or crash, so flattening would not preserve its
+source behavior. Direct child loads remain supported. This native profile gap
+is unresolved; parsing never silently turns omitted descendants into zero loads.
+
 Loads support legacy A/B/C terms and explicit AB/BC/CA/AN/BN/CN power,
 current and impedance terms. Terms add independently, including legacy and
 explicit terms on the same connection. Explicit pairs map to two-terminal

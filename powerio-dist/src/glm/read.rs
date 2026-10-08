@@ -316,6 +316,20 @@ impl Reader<'_> {
                 self.roots.insert(descendant, root);
             }
         }
+        self.validate_parent_profile()
+    }
+
+    fn validate_parent_profile(&self) -> Result<(), Error> {
+        if self.newton_raphson && self.project.dialect() == super::GlmDialect::Arras4_3 {
+            for (&key, &root) in &self.roots {
+                if key != root && self.index.parent(key) != Some(root) {
+                    return Err(self.error(key, format!(
+                        "Arras 4.3 NR nested electrical parents are not qualified: {} has a parent below root {}; the pinned engine can omit descendant loads or fail; flattening would change source behavior",
+                        self.names[&key], self.names[&root]
+                    )));
+                }
+            }
+        }
         Ok(())
     }
 
