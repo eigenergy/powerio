@@ -256,6 +256,7 @@ pub struct RawDss {
     // an appended property history alone cannot restore. Reset markers refer
     // to offsets in the existing flattened history; no extra history tree.
     source_replay: BTreeMap<usize, SourceReplay>,
+    frequency: super::frequency::FrequencyState,
     /// Diagnostic records retained, against `MAX_TOTAL_DIAGNOSTICS`. Survives
     /// `clear` with the channel it counts.
     total_diagnostics: usize,
@@ -275,6 +276,9 @@ pub(super) struct SourceReplay {
 }
 
 impl RawDss {
+    pub(super) fn snapshot_frequency(&self) -> f64 {
+        self.frequency.snapshot()
+    }
     #[cfg(test)]
     pub(super) fn source_replay(&self, object: &RawObject) -> &SourceReplay {
         let index = self.index[&(object.class.clone(), object.name.to_ascii_lowercase())];
@@ -356,10 +360,13 @@ impl RawDss {
         );
         let (total_diagnostics, halted) = (self.total_diagnostics, self.halted);
         let vars_generation = self.vars_generation.wrapping_add(1);
+        let mut frequency = std::mem::take(&mut self.frequency);
+        frequency.clear();
         *self = RawDss {
             vars_generation,
             warnings,
             diagnostics,
+            frequency,
             total_diagnostics,
             halted,
             ..RawDss::default()
@@ -583,9 +590,24 @@ impl<L: Loader> Executor<'_, L> {
             Some("//") => {}
             Some(canonical) => {
                 if self.raw.charge_preserved() {
+                    let args = scan.remainder().to_string();
+                    if canonical == "solve" {
+                        let mut position = 0;
+                        while let Some(p) = scan.next_param() {
+                            if p.value.text.is_empty() {
+                                break;
+                            }
+                            self.raw.frequency.assignment(
+                                &mut position,
+                                &p.name.unwrap_or_default().to_ascii_lowercase(),
+                                &p.value,
+                                &self.raw.vars,
+                            );
+                        }
+                    }
                     self.raw.commands.push(RawCommand {
                         verb: canonical.to_string(),
-                        args: scan.remainder().to_string(),
+                        args,
                     });
                 }
             }
@@ -757,6 +779,7 @@ impl<L: Loader> Executor<'_, L> {
             // sourcebus etc.) stay implicit here so the reader can tell
             // written values from materialized defaults.
             self.raw.circuit_name = Some(name);
+            self.raw.frequency.new_circuit();
             let idx = self.make_object("vsource", "source".into());
             self.consume_and_apply(idx, scan, ctx);
             return;
@@ -818,12 +841,16 @@ impl<L: Loader> Executor<'_, L> {
     }
 
     fn do_set(&mut self, scan: &mut Scanner) {
+        let mut position = 0;
         while let Some(p) = scan.next_param() {
             if p.value.text.is_empty() && p.name.is_none() {
                 break;
             }
             let name = p.name.unwrap_or_default().to_ascii_lowercase();
             if self.raw.charge_preserved() {
+                self.raw
+                    .frequency
+                    .assignment(&mut position, &name, &p.value, &self.raw.vars);
                 self.raw.options.push((name, p.value));
             }
         }
@@ -1163,18 +1190,7 @@ impl<L: Loader> Executor<'_, L> {
             edits: Vec::new(),
         });
         if self.raw.objects[idx].class == "vsource" {
-            let frequency = self
-                .raw
-                .options
-                .iter()
-                .rev()
-                .find(|(name, _)| {
-                    name.len() >= "defaultb".len()
-                        && "defaultbasefrequency".starts_with(name.as_str())
-                })
-                .map_or(super::defaults::BASE_FREQUENCY, |(_, value)| {
-                    value.to_f64(Some(&self.raw.vars)).unwrap_or(f64::NAN)
-                });
+            let frequency = self.raw.frequency.constructor();
             self.raw.source_replay.insert(
                 idx,
                 SourceReplay {

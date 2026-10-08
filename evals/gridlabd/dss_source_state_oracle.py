@@ -153,6 +153,30 @@ def cases():
         "source",
         "New Circuit.c bus1=feed z1=[1 2]\nEdit Vsource.source r1=0 x1=0 like=source z1=[1 2]\n",
     )
+    ordered = {
+        "late_default": "New Circuit.c\nSet DefaultBaseFrequency=50",
+        "clear_default": "Set DefaultBaseFrequency=50\nNew Circuit.old\nClear\nNew Circuit.c",
+        "clearall_default": "Set DefaultBaseFrequency=50\nNew Circuit.old\nClearall\nNew Circuit.c",
+        "base_then_source": "New Circuit.c\nSet BaseFrequency=50\nNew Vsource.copy bus1=copyfeed",
+        "base_then_clear": "New Circuit.old\nSet BaseFrequency=50\nClear\nNew Circuit.c",
+        "snapshot_then_source": "New Circuit.c\nSet Frequency=50\nNew Vsource.copy bus1=copyfeed",
+        "snapshot_then_mode": "New Circuit.c\nSet Frequency=70\nSet Mode=snapshot",
+        "snapshot_then_default": "New Circuit.c\nSet Frequency=70\nSet DefaultBaseFrequency=50",
+        "solve_options": "New Circuit.c\nSet Frequency=70\nSolve mode=snapshot frequency=55",
+        "solve_default": "New Circuit.c\nSolve defaultbasefrequency=50",
+        "abbreviations": "New Circuit.c\nSet basef=50\nSet f=55",
+        "base_abbreviation": "New Circuit.c\nSet b=50\nNew Vsource.copy bus1=copyfeed",
+        "default_abbreviation": "Set defaultb=50\nNew Circuit.c",
+        "set_order": "New Circuit.c\nSet frequency=70 defaultbasefrequency=50 frequency=55",
+        "positional_frequency": "New Circuit.c\nSet year=0 55",
+        "positional_default": "New Circuit.c\nSet numallociterations=2 50",
+        "voltagebases": "New Circuit.c\nSet Frequency=70\nCalcvoltagebases",
+        "variable_snapshot": "New Circuit.c\nvar @hz=55\nSet f=@hz\nvar @hz=65",
+        "copy_base_frequency": "New Circuit.c\nSet BaseFrequency=50\nNew Vsource.copy like=source bus1=copyfeed",
+    }
+    for name, script in ordered.items():
+        target = "copy" if "New Vsource.copy" in script else "source"
+        yield "ordered/" + name, 60, None, target, script + "\n"
 
 
 def complex_array(raw):
@@ -185,6 +209,10 @@ def main():
         try:
             for line in deck.splitlines():
                 d.Text.Command(line)
+            if operating is None:
+                operating = d.Solution.Frequency()
+                result["snapshot_frequency"] = operating
+                result["ordered_frequency"] = True
             d.Circuit.SetActiveElement("vsource." + target)
             buses = d.CktElement.BusNames()
             n = d.CktElement.NumPhases()

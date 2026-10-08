@@ -6,6 +6,7 @@
 //! and the TRPNCalc expression calculator.
 
 pub mod defaults;
+mod frequency;
 pub mod lex;
 pub mod prop;
 pub mod raw;

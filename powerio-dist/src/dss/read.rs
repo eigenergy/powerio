@@ -111,7 +111,11 @@ fn to_network_with_source_reader(
     let mut rd = Reader {
         net: MulticonductorNetwork::from_tables(MulticonductorNetworkTables {
             name: raw.circuit_name.clone(),
-            base_frequency: dd::BASE_FREQUENCY,
+            base_frequency: if source_reader.is_some() {
+                raw.snapshot_frequency()
+            } else {
+                dd::BASE_FREQUENCY
+            },
             source_format: Some(DistSourceFormat::Dss),
             ..MulticonductorNetworkTables::default()
         }),
@@ -131,7 +135,8 @@ fn to_network_with_source_reader(
         // `Set defaultb=50` is DefaultBaseFrequency but anything shorter
         // ("default", "d") binds DefaultDaily; the bound sits at the unique
         // resolution point.
-        if name.len() >= "defaultb".len()
+        if source_reader.is_none()
+            && name.len() >= "defaultb".len()
             && "defaultbasefrequency".starts_with(name.as_str())
             && let Ok(f) = value.to_f64(Some(rd.vars))
         {

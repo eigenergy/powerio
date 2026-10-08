@@ -475,6 +475,8 @@ mod tests {
             script: String,
             constructor_frequency: f64,
             snapshot_frequency: f64,
+            #[serde(default)]
+            ordered_frequency: bool,
             target: String,
             #[serde(default)]
             error: Option<String>,
@@ -506,7 +508,17 @@ mod tests {
             let result = resolve(
                 &raw,
                 raw.find("vsource", &case.target).unwrap(),
-                case.snapshot_frequency,
+                if case.ordered_frequency {
+                    // These literal option assignments must survive exactly.
+                    assert_eq!(
+                        raw.snapshot_frequency().to_bits(),
+                        case.snapshot_frequency.to_bits(),
+                        "{name}"
+                    );
+                    raw.snapshot_frequency()
+                } else {
+                    case.snapshot_frequency
+                },
             );
             let mut failures = Vec::new();
             if let Some(error) = case.error {
