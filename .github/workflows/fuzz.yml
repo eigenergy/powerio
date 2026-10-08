@@ -11,6 +11,7 @@ on:
       - "powerio-tx/src/format/**"
       - "powerio-tx/src/geo/**"
       - "powerio-dist/src/**"
+      - "powerio-sincal/src/**"
       - "fuzz/**"
       - ".github/workflows/fuzz.yml"
   schedule:
