@@ -298,9 +298,13 @@ control mode, regulated terminal, limits, tap position and range, and number of
 tap positions. A positive `COD` enables automatic adjustment, a negative `COD`
 keeps the same mode with automatic adjustment disabled, and zero is fixed;
 `|COD| = 4` controls a DC line quantity on a two winding transformer, and
-`|COD| = 5` controls asymmetric active power flow. Unsupported RAWX tables,
-including multiterminal DC, FACTS, GNE, induction machine, multisection line,
-zone, owner, and interarea transfer records, remain only in byte exact same
+`|COD| = 5` controls asymmetric active power flow. A shunt FACTS device
+(`J = 0`) reads as a static var compensator: `SHMX` bounds its susceptance at
+the bus base kV, `VSET` sets its voltage, `MODE 0` takes it out of service, and
+PSS/E output writes each static var compensator back as one. Series FACTS
+devices are not modeled. Unsupported RAWX tables, including multiterminal DC,
+GNE, induction machine, multisection line, zone, owner, and interarea transfer
+records, and series FACTS devices, remain only in byte exact same
 format emission and produce counted diagnostics. Unknown RAWX tables and
 `caseid` fields get the same retained source diagnostic, and fresh output
 diagnoses detailed records and fields that RAWX cannot carry. Three winding

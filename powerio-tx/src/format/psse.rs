@@ -15,8 +15,9 @@
 //! the serializer emits the canonical `CZ = 1`, `CW = 1` form.
 //! Two-terminal DC lines parse and emit as the neutral
 //! [`Hvdc`] (power-setpoint model; converter firing-angle/transformer detail
-//! rides through in extras). The other advanced sections (VSC and multi-terminal
-//! DC, FACTS, GNE) are not modeled: during emission they become empty sections,
+//! rides through in extras). A shunt FACTS device reads and writes as a
+//! [`StaticVarCompensator`]. The other advanced sections (VSC and multi-terminal
+//! DC, series FACTS, GNE) are not modeled: during emission they become empty sections,
 //! on read they're skipped, and storage carried on the `BalancedNetwork` is reported as
 //! dropped. Same format emission is byte exact through the retained source (see
 //! [`crate::emit`]); this serializer is the cross format path.
@@ -38,8 +39,9 @@ use crate::network::{
     Area, BalancedNetwork, BalancedNetworkTables, Branch, BranchCharging, BranchRatingSet, Bus,
     BusId, BusType, ComponentMetadata, DetailedConnectivity, Extras, Generator,
     GeneratorEnergySource, Hvdc, Impedance, Load, LoadVoltageModel, Shunt, ShuntBlock,
-    SolverParams, SourceFormat, Switch, SwitchedShuntControl, SwitchedShuntMode, TerminalReference,
-    Transformer3W, TransformerControl, TransformerControlMode, Winding,
+    SolverParams, SourceFormat, StaticVarCompensator, StaticVarCompensatorRegulationMode, Switch,
+    SwitchedShuntControl, SwitchedShuntMode, TerminalReference, Transformer3W, TransformerControl,
+    TransformerControlMode, Winding,
 };
 use crate::{Error, Result};
 
@@ -177,6 +179,157 @@ fn warn_generator_energy_sources_dropped(net: &BalancedNetwork, warnings: &mut D
             "{total} generator energy source value(s) dropped ({summary}): PSS/E RAW and RAWX generator records have no energy source field"
         ),
     );
+}
+
+/// Write each static var compensator as a shunt FACTS device record
+/// (`J = 0`), the inverse of [`read_shunt_facts`], and report what the
+/// records cannot state.
+fn write_shunt_facts(
+    out: &mut String,
+    net: &BalancedNetwork,
+    rev: u32,
+    num: &mut impl FnMut(f64) -> String,
+    warnings: &mut Diagnostics,
+    sanitized_quoted: &mut usize,
+) {
+    let mut asymmetric = 0usize;
+    let mut stated_output = 0usize;
+    let mut other_control = 0usize;
+    let mut defaulted_setpoint = 0usize;
+    for (index, svc) in net.static_var_compensators().iter().enumerate() {
+        let limit = svc.b_max_siemens.abs().max(svc.b_min_siemens.abs());
+        asymmetric +=
+            usize::from((svc.b_max_siemens + svc.b_min_siemens).abs() > 1e-9 * limit.max(1.0));
+        stated_output += usize::from(svc.p != 0.0 || svc.q != 0.0);
+        other_control += usize::from(
+            svc.regulation_mode != StaticVarCompensatorRegulationMode::Voltage || !svc.regulating,
+        );
+        defaulted_setpoint += usize::from(svc.voltage_setpoint_kv <= 0.0);
+        let record = shunt_facts_record(net, svc, index, rev, num, warnings, sanitized_quoted);
+        let _ = writeln!(out, "{record}");
+    }
+    for (count, code, what) in [
+        (
+            asymmetric,
+            &F.value_collapsed,
+            "state unequal capacitive and inductive limits; a shunt FACTS device states one limit, SHMX, so the larger was written",
+        ),
+        (
+            stated_output,
+            &F.field_dropped,
+            "state terminal power; a FACTS device record states none",
+        ),
+        (
+            other_control,
+            &F.value_substituted,
+            "do not regulate voltage; each was written as a shunt FACTS device, which regulates voltage",
+        ),
+        (
+            defaulted_setpoint,
+            &F.value_defaulted,
+            "state no voltage setpoint; VSET 1.0 was written",
+        ),
+    ] {
+        if count > 0 {
+            warnings.push(code, format!("{count} static var compensator(s) {what}"));
+        }
+    }
+}
+
+/// One shunt FACTS device record: `SHMX` is the larger susceptance limit at
+/// the bus base kV, `VSET` the voltage setpoint in p.u., and the fields the
+/// compensator has no home for come from the retained source fields or the
+/// PSS/E defaults.
+#[allow(clippy::float_cmp)] // exact: a retained field is restated only when it maps to the typed value
+fn shunt_facts_record(
+    net: &BalancedNetwork,
+    svc: &StaticVarCompensator,
+    index: usize,
+    rev: u32,
+    num: &mut impl FnMut(f64) -> String,
+    warnings: &mut Diagnostics,
+    sanitized_quoted: &mut usize,
+) -> String {
+    let kv = net
+        .buses()
+        .iter()
+        .find(|bus| bus.id == svc.bus)
+        .map(|bus| bus.base_kv)
+        .filter(|kv| kv.is_finite() && *kv > 0.0)
+        .unwrap_or(1.0);
+    let mut quoted = |key: &str, fallback: &str| {
+        let raw = svc
+            .extras
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or(fallback);
+        let value = sanitize_quoted(raw, NAME_FORBIDDEN, ' ');
+        *sanitized_quoted += usize::from(matches!(value, std::borrow::Cow::Owned(_)));
+        value.into_owned()
+    };
+    let name = quoted("psse_name", &format!("SVC{}", index + 1));
+    let mname = quoted("psse_mname", "");
+    let mode = if svc.in_service {
+        extra_i64(&svc.extras, "psse_mode").unwrap_or(1)
+    } else {
+        0
+    };
+    let vset = if svc.voltage_setpoint_kv > 0.0 {
+        extra_f64(&svc.extras, "psse_vset")
+            .filter(|vset| vset * kv == svc.voltage_setpoint_kv)
+            .unwrap_or(svc.voltage_setpoint_kv / kv)
+    } else {
+        1.0
+    };
+    let (regulated, node) = regulating_target(
+        net,
+        svc.regulating_terminal.as_ref(),
+        facts_regulated_bus(&svc.extras),
+        format_args!("FACTS device at bus {}", svc.bus),
+        warnings,
+    );
+    let regulation = if rev >= 35 {
+        format!("{regulated}, {node}")
+    } else {
+        if node != 0 {
+            warnings.push(
+                &F.field_dropped,
+                format!(
+                    "PSS/E FACTS device at bus {}: regulating node {node} has no NREG field before revision 35; emitted only REMOT",
+                    svc.bus
+                ),
+            );
+        }
+        regulated.to_string()
+    };
+    let float = |key: &str, default: f64| extra_f64(&svc.extras, key).unwrap_or(default);
+    let limit = svc.b_max_siemens.abs().max(svc.b_min_siemens.abs());
+    let shmx = extra_f64(&svc.extras, "psse_shmx")
+        .filter(|shmx| shmx / (kv * kv) == limit)
+        .unwrap_or(limit * (kv * kv));
+    let fields = [
+        float("psse_pdes", 0.0),
+        float("psse_qdes", 0.0),
+        vset,
+        shmx,
+        float("psse_trmx", 9999.0),
+        float("psse_vtmn", 0.9),
+        float("psse_vtmx", 1.1),
+        float("psse_vsmx", 1.0),
+        float("psse_imx", 0.0),
+        float("psse_linx", 0.05),
+        float("psse_rmpct", 100.0),
+    ]
+    .map(&mut *num)
+    .join(", ");
+    let owner = extra_i64(&svc.extras, "psse_owner").unwrap_or(1);
+    let set1 = num(float("psse_set1", 0.0));
+    let set2 = num(float("psse_set2", 0.0));
+    let vsref = extra_i64(&svc.extras, "psse_vsref").unwrap_or(0);
+    format!(
+        "'{name}', {}, 0, {mode}, {fields}, {owner}, {set1}, {set2}, {vsref}, {regulation}, '{mname}'",
+        svc.bus
+    )
 }
 
 /// Characters that would corrupt a single-quoted PSS/E name field. The quote
@@ -1132,10 +1285,20 @@ fn write_psse_rev_inner(
         let _ = writeln!(s, "{}, {rect_tail}", dc.from);
         let _ = writeln!(s, "{}, {inv_tail}", dc.to);
     }
-    // Sections up to and including the SWITCHED SHUNT begin marker.
-    for line in &EMPTY_SECTIONS[1..=9] {
+    // Sections up to and including the SWITCHED SHUNT begin marker, with the
+    // static var compensators as shunt FACTS devices.
+    for line in &EMPTY_SECTIONS[1..=8] {
         let _ = writeln!(s, "{line}");
     }
+    write_shunt_facts(
+        &mut s,
+        net,
+        rev,
+        &mut num,
+        &mut warnings,
+        &mut sanitized_quoted,
+    );
+    let _ = writeln!(s, "{}", EMPTY_SECTIONS[9]);
     // Switched shunts: BINIT becomes the susceptance, the control record the rest.
     // v35 inserts a quoted shunt ID at field 1 and NREG after SWREG, and its step
     // blocks are (S, N, B) triples with a leading per-block status; v33/34 have
@@ -1882,7 +2045,9 @@ fn revision32_shape(section: Section) -> Option<Revision32Shape> {
         Section::Transformer => Revision32Shape::new("TRANSFORMER DATA", 12, "STAT"),
         Section::TwoTerminalDc => Revision32Shape::new("TWO-TERMINAL DC DATA", 5, "VSCHD"),
         Section::Area => Revision32Shape::new("AREA DATA", 4, "PTOL"),
-        Section::SystemSwitch | Section::SystemWide | Section::Skip => return None,
+        Section::SystemSwitch | Section::Facts | Section::SystemWide | Section::Skip => {
+            return None;
+        }
     })
 }
 
@@ -1912,6 +2077,7 @@ fn check_revision32_width(f: &[Cow<'_, str>], shape: Revision32Shape, warnings: 
 enum RegulatingNodeTarget {
     Generator(usize),
     SwitchedShunt(usize),
+    StaticVarCompensator(usize),
     Transformer(usize),
     ThreeWindingTransformer { transformer: usize, winding: usize },
 }
@@ -1949,6 +2115,15 @@ fn apply_pending_regulating_nodes(
                         &mut control.regulating_terminal,
                         control.control_bus.unwrap_or(shunt.bus),
                         format!("PSS/E switched shunt at bus {}", shunt.bus),
+                    )
+                }
+                RegulatingNodeTarget::StaticVarCompensator(index) => {
+                    let svc = &mut net.static_var_compensators_mut()[index];
+                    let bus = facts_regulated_bus(&svc.extras).unwrap_or(svc.bus);
+                    (
+                        &mut svc.regulating_terminal,
+                        bus,
+                        format!("PSS/E FACTS device at bus {}", svc.bus),
                     )
                 }
                 RegulatingNodeTarget::Transformer(index) => {
@@ -2120,6 +2295,8 @@ fn parse_psse_source_inner(
     let mut bus_area_zone: BTreeMap<BusId, (usize, usize)> = BTreeMap::new();
     let mut unmodeled_sections: BTreeMap<String, usize> = BTreeMap::new();
     let mut regulating_nodes = Vec::new();
+    let mut static_var_compensators = Vec::new();
+    let mut series_facts = 0usize;
 
     // Sections appear in fixed order, each ended by a record whose first field is
     // `0`. We read the ones we model and treat the rest as skipped.
@@ -2328,6 +2505,21 @@ fn parse_psse_source_inner(
                 )?);
             }
             Section::Area => areas.push(read_area(&f)?),
+            Section::Facts => {
+                let index = static_var_compensators.len();
+                match read_shunt_facts(&f, raw_rev, &bus_base_kv, warnings)? {
+                    Some((svc, node)) => {
+                        static_var_compensators.push(svc);
+                        if node != 0 {
+                            regulating_nodes.push(PendingRegulatingNode {
+                                target: RegulatingNodeTarget::StaticVarCompensator(index),
+                                node,
+                            });
+                        }
+                    }
+                    None => series_facts += 1,
+                }
+            }
             Section::SystemWide => parse_solver_line(&f, &mut solver, warnings),
             Section::Skip => {
                 if let Some(name) = skipped_section_name.as_ref() {
@@ -2343,6 +2535,15 @@ fn parse_psse_source_inner(
         unmodeled_sections.retain(|name, _| !name.starts_with("SUBSTATION"));
     }
     warn_unmodeled_sections(unmodeled_sections, raw_rev, warnings);
+    if series_facts > 0 {
+        warnings.push(
+            &codes::READ_PSSE_SECTION_UNSUPPORTED,
+            format!(
+                "PSS/E FACTS DEVICE section: {series_facts} series device record(s) (J nonzero) are not modeled: {}",
+                unmodeled_retention(raw_rev)
+            ),
+        );
+    }
 
     let mut net = BalancedNetwork::from_tables(BalancedNetworkTables {
         name,
@@ -2355,7 +2556,7 @@ fn parse_psse_source_inner(
         buses: buses.into(),
         loads: loads.into(),
         shunts: shunts.into(),
-        static_var_compensators: Vec::new().into(),
+        static_var_compensators: static_var_compensators.into(),
         branches: branches.into(),
         switches: switches.into(),
         generators: generators.into(),
@@ -2390,6 +2591,7 @@ enum Section {
     Transformer,
     TwoTerminalDc,
     Area,
+    Facts,
     SystemWide,
     Skip,
 }
@@ -2420,6 +2622,7 @@ fn section_after_marker(line: &str, rev: u32) -> Section {
         Some("SYSTEM SWITCHING DEVICE") => Section::Transformer,
         Some("TRANSFORMER" | "TRANSFORMER BRANCH") => Section::Area,
         Some("AREA" | "AREA INTERCHANGE") => Section::TwoTerminalDc,
+        Some("OWNER") => Section::Facts,
         Some("FACTS DEVICE" | "FACTS CONTROL DEVICE") => Section::SwitchedShunt,
         _ => Section::Skip,
     }
@@ -2439,6 +2642,7 @@ fn section_from_name(name: &str) -> Section {
             Section::TwoTerminalDc
         }
         "AREA" | "AREA INTERCHANGE" => Section::Area,
+        "FACTS DEVICE" | "FACTS CONTROL DEVICE" | "FACTS" => Section::Facts,
         _ => Section::Skip,
     }
 }
@@ -2794,16 +2998,21 @@ fn warn_unmodeled_sections(
     raw_rev: u32,
     warnings: &mut Diagnostics,
 ) {
-    let retention = if raw_rev == 32 {
-        "retained only in the module source; fresh output uses revision 33 or later and drops it"
-    } else {
-        "preserved only in a same-format .raw echo, dropped on any other write"
-    };
+    let retention = unmodeled_retention(raw_rev);
     for (name, rows) in totals {
         warnings.push(
             &codes::READ_PSSE_SECTION_UNSUPPORTED,
             format!("PSS/E {name} section ({rows} record line(s)) is not modeled: {retention}"),
         );
+    }
+}
+
+/// Where a record the reader does not model survives.
+fn unmodeled_retention(raw_rev: u32) -> &'static str {
+    if raw_rev == 32 {
+        "retained only in the module source; fresh output uses revision 33 or later and drops it"
+    } else {
+        "preserved only in a same-format .raw echo, dropped on any other write"
     }
 }
 
@@ -3633,6 +3842,114 @@ fn mode_to_modsw(mode: SwitchedShuntMode) -> i64 {
         SwitchedShuntMode::Discrete => 1,
         SwitchedShuntMode::Continuous => 2,
     }
+}
+
+/// The bus a FACTS device's `FCREG` (`REMOT` before revision 35) names
+/// beside its own, retained under `psse_fcreg`.
+fn facts_regulated_bus(extras: &Extras) -> Option<BusId> {
+    extra_i64(extras, "psse_fcreg")
+        .and_then(|bus| usize::try_from(bus).ok())
+        .map(BusId)
+}
+
+/// Read a FACTS device record. A shunt device (`J = 0`) becomes a
+/// [`StaticVarCompensator`] with its regulating node, or `None` for a series
+/// device, which the model has no element for.
+///
+/// `SHMX`, the shunt element's limit in MVA at unity voltage, bounds the
+/// susceptance at `±SHMX / kV²` siemens on the bus base, and `VSET`, the
+/// voltage setpoint in p.u., becomes kV. `MODE 0` is out of service; a shunt
+/// device regulates voltage at its own bus, or at `FCREG` when that names
+/// another. The fields the compensator has no home for are retained for a
+/// PSS/E write.
+#[allow(clippy::float_cmp)] // exact: a retained field is restated only when it maps to the typed value
+fn read_shunt_facts(
+    f: &[Cow<'_, str>],
+    raw_rev: u32,
+    bus_base_kv: &BTreeMap<BusId, f64>,
+    warnings: &mut Diagnostics,
+) -> Result<Option<(StaticVarCompensator, i32)>> {
+    // NAME, I, J, MODE, PDES, QDES, VSET, SHMX, TRMX, VTMN, VTMX, VSMX, IMX,
+    // LINX, RMPCT, OWNER, SET1, SET2, VSREF, then REMOT and MNAME before
+    // revision 35 and FCREG, NREG, and MNAME from it.
+    if id_at(f, 2, 0)? != 0 {
+        return Ok(None);
+    }
+    let bus = BusId(id_at(f, 1, 0)?);
+    let name = f.first().map_or("", |name| name.trim());
+    let kv = bus_base_kv.get(&bus).copied().unwrap_or(0.0);
+    let kv = if kv.is_finite() && kv > 0.0 {
+        kv
+    } else {
+        warnings.push(
+            &codes::READ_PSSE_VALUE_SUBSTITUTED,
+            format!(
+                "PSS/E FACTS device {name:?} at bus {bus}: the bus states no base kV; read SHMX and VSET on a 1 kV base"
+            ),
+        );
+        1.0
+    };
+    let mode = int_at(f, 3, 1)?;
+    let shmx = num_at(f, 7, 9999.0)?;
+    let vset = num_at(f, 6, 1.0)?;
+    let mut svc = StaticVarCompensator::new(bus, -shmx / (kv * kv), shmx / (kv * kv));
+    svc.in_service = mode != 0;
+    svc.regulating = true;
+    svc.voltage_setpoint_kv = vset * kv;
+    let mut extras = Extras::new();
+    // Converting back to p.u. and MVA can land an ulp away; the stated field
+    // is kept wherever it would, so a written record restates it.
+    if svc.b_max_siemens * (kv * kv) != shmx {
+        extras.insert("psse_shmx".into(), jnum(shmx));
+    }
+    if svc.voltage_setpoint_kv / kv != vset {
+        extras.insert("psse_vset".into(), jnum(vset));
+    }
+    retain_string_extra(&mut extras, f, 0, "psse_name");
+    if !matches!(mode, 0 | 1) {
+        extras.insert("psse_mode".into(), Value::from(mode));
+    }
+    for (index, key, default) in [
+        (4, "psse_pdes", 0.0),
+        (5, "psse_qdes", 0.0),
+        (8, "psse_trmx", 9999.0),
+        (9, "psse_vtmn", 0.9),
+        (10, "psse_vtmx", 1.1),
+        (11, "psse_vsmx", 1.0),
+        (12, "psse_imx", 0.0),
+        (13, "psse_linx", 0.05),
+        (14, "psse_rmpct", 100.0),
+        (16, "psse_set1", 0.0),
+        (17, "psse_set2", 0.0),
+    ] {
+        retain_float_extra(&mut extras, f, index, key, default)?;
+    }
+    retain_integer_extra(&mut extras, f, 15, "psse_owner", 1)?;
+    retain_integer_extra(&mut extras, f, 18, "psse_vsref", 0)?;
+    let regulated = id_at(f, 19, 0)?;
+    if regulated != 0 && regulated != bus.0 {
+        extras.insert("psse_fcreg".into(), Value::from(regulated as u64));
+    }
+    let (node, mname) = if raw_rev >= 35 {
+        let node = i32::try_from(int_at(f, 20, 0)?).map_err(|_| Error::FormatRead {
+            format: FMT,
+            message: "FACTS device NREG is outside the i32 range".into(),
+        })?;
+        (node, 21)
+    } else {
+        (0, 20)
+    };
+    retain_string_extra(&mut extras, f, mname, "psse_mname");
+    if regulated != 0 && regulated != bus.0 && node == 0 {
+        warnings.push(
+            &codes::READ_PSSE_FIELD_DROPPED,
+            format!(
+                "PSS/E FACTS device {name:?} at bus {bus} regulates bus {regulated}, which a static var compensator names only through a regulating terminal; retained for PSS/E output and read as regulating its own bus"
+            ),
+        );
+    }
+    svc.extras = extras;
+    Ok(Some((svc, node)))
 }
 
 fn read_area(f: &[Cow<'_, str>]) -> Result<Area> {
@@ -7665,6 +7982,186 @@ Q
                 .unwrap()
                 .controlled_bus_on_winding_side
         );
+    }
+
+    /// Two shunt FACTS devices and a series one in a revision 35 case. The
+    /// first regulates its own bus; the second is out of service, regulates
+    /// bus 2, and states fields away from their defaults.
+    const FACTS_RECORDS: [&str; 3] = [
+        "'STATCOM A', 2, 0, 1, 0.0, 0.0, 1.02, 100.0, 9999.0, 0.9, 1.1, 1.0, 0.0, 0.05, 100.0, 1, 0.0, 0.0, 0, 0, 0, ''",
+        "'STATCOM B', 3, 0, 0, 0.0, 0.0, 0.98, 50.0, 9999.0, 0.95, 1.05, 1.1, 0.0, 0.1, 60.0, 2, 0.0, 0.0, 1, 2, 0, 'UNIT 1'",
+        "'SERIES 1', 2, 3, 1, 50.0, 10.0, 1.0, 9999.0, 9999.0, 0.9, 1.1, 1.0, 0.0, 0.05, 100.0, 1, 0.0, 0.0, 0, 0, 0, ''",
+    ];
+
+    fn facts_case(records: &[&str]) -> String {
+        format!(
+            "0, 100.00, 35, 0, 1, 60.00 / synthetic
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+3,'B3          ', 115.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN SYSTEM SWITCHING DEVICE DATA
+0 / END OF SYSTEM SWITCHING DEVICE DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA
+0 / END OF TWO-TERMINAL DC DATA, BEGIN VSC DC LINE DATA
+0 / END OF VSC DC LINE DATA, BEGIN IMPEDANCE CORRECTION DATA
+0 / END OF IMPEDANCE CORRECTION DATA, BEGIN MULTI-TERMINAL DC DATA
+0 / END OF MULTI-TERMINAL DC DATA, BEGIN MULTI-SECTION LINE DATA
+0 / END OF MULTI-SECTION LINE DATA, BEGIN ZONE DATA
+0 / END OF ZONE DATA, BEGIN INTER-AREA TRANSFER DATA
+0 / END OF INTER-AREA TRANSFER DATA, BEGIN OWNER DATA
+0 / END OF OWNER DATA, BEGIN FACTS DEVICE DATA
+{}
+0 / END OF FACTS DEVICE DATA, BEGIN SWITCHED SHUNT DATA
+0 / END OF SWITCHED SHUNT DATA, BEGIN GNE DEVICE DATA
+Q
+",
+            records.join("\n")
+        )
+    }
+
+    /// The FACTS device records in `text`, each as its name and its numbers.
+    fn facts_records(text: &str) -> Vec<(String, Vec<f64>, String)> {
+        let start = text.find("BEGIN FACTS DEVICE DATA").unwrap();
+        text[start..]
+            .lines()
+            .skip(1)
+            .take_while(|line| !line.starts_with("0 /"))
+            .map(|line| {
+                let f = fields(line);
+                let numbers = f[1..f.len() - 1]
+                    .iter()
+                    .map(|field| field.parse::<f64>().unwrap())
+                    .collect();
+                (f[0].to_string(), numbers, f[f.len() - 1].to_string())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn shunt_facts_devices_read_as_static_var_compensators() {
+        let raw = facts_case(&FACTS_RECORDS);
+        let mut warnings = Diagnostics::new();
+        let net = parse_psse_source(&raw, None, &mut warnings).unwrap();
+        let svcs = net.static_var_compensators();
+        assert_eq!(svcs.len(), 2, "the series device is not a compensator");
+        let [a, b] = [&svcs[0], &svcs[1]];
+        assert_eq!((a.bus, b.bus), (BusId(2), BusId(3)));
+        // SHMX MVA at unity voltage on the bus base: ±100 / 230² S.
+        close(a.b_max_siemens, 100.0 / (230.0 * 230.0));
+        close(a.b_min_siemens, -100.0 / (230.0 * 230.0));
+        close(a.voltage_setpoint_kv, 1.02 * 230.0);
+        assert!(a.in_service && a.regulating);
+        assert_eq!(
+            a.regulation_mode,
+            StaticVarCompensatorRegulationMode::Voltage
+        );
+        assert_eq!(a.regulating_terminal, None);
+        assert_eq!(a.extras["psse_name"], Value::from("STATCOM A"));
+        assert_eq!(a.extras.len(), 1, "{:?}", a.extras);
+        close(b.b_max_siemens, 50.0 / (115.0 * 115.0));
+        close(b.voltage_setpoint_kv, 0.98 * 115.0);
+        assert!(!b.in_service);
+        for (key, value) in [
+            ("psse_fcreg", Value::from(2)),
+            ("psse_owner", Value::from(2)),
+            ("psse_vsref", Value::from(1)),
+            ("psse_mname", Value::from("UNIT 1")),
+        ] {
+            assert_eq!(b.extras[key], value, "{key}");
+        }
+        close(b.extras["psse_rmpct"].as_f64().unwrap(), 60.0);
+        let lines = warnings.lines();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("READ.PSSE.FIELD_DROPPED")
+                    && line.contains("regulates bus 2")),
+            "{lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("READ.PSSE.SECTION_UNSUPPORTED")
+                    && line.contains("1 series device record(s)")),
+            "{lines:?}"
+        );
+
+        // Revisions 35 and 33 (REMOT, no NREG) restate the shunt records
+        // field for field; the series device has no element to write from.
+        let stated = facts_records(&raw)[..2].to_vec();
+        for revision in [33, 35] {
+            let emitted = write_psse_rev(&net, revision);
+            // Revision 33 has no NREG, the 20th number.
+            let expected = stated
+                .iter()
+                .cloned()
+                .map(|(name, mut numbers, mname)| {
+                    if revision == 33 {
+                        numbers.remove(19);
+                    }
+                    (name, numbers, mname)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                facts_records(&emitted.text),
+                expected,
+                "revision {revision}"
+            );
+            let back = parse_psse(&emitted.text).unwrap();
+            assert_eq!(
+                back.static_var_compensators(),
+                net.static_var_compensators()
+            );
+        }
+
+        let rawx = super::super::rawx::write_rawx(&net).unwrap();
+        let mut back =
+            super::super::rawx::parse_rawx_source(&rawx.text, None, &mut Diagnostics::new())
+                .unwrap();
+        for svc in back.static_var_compensators_mut() {
+            svc.uid = None;
+        }
+        assert_eq!(
+            back.static_var_compensators(),
+            net.static_var_compensators(),
+            "RAWX"
+        );
+    }
+
+    #[test]
+    fn static_var_compensators_from_other_sources_write_as_shunt_facts() {
+        let mut net = parse_psse(&facts_case(&[])).unwrap();
+        let mut svc = StaticVarCompensator::new(BusId(2), -0.001, 0.002);
+        svc.voltage_setpoint_kv = 234.6;
+        svc.regulation_mode = StaticVarCompensatorRegulationMode::ReactivePower;
+        svc.q = -12.0;
+        net.static_var_compensators_mut().push(svc);
+        let emitted = write_psse_rev(&net, 35);
+        let [(name, numbers, _)] = facts_records(&emitted.text).try_into().unwrap();
+        assert_eq!(name, "SVC1");
+        // J 0, MODE 1, VSET 234.6 / 230, SHMX the larger limit at 230 kV.
+        assert_eq!(numbers[1..3], [0.0, 1.0]);
+        close(numbers[5], 1.02);
+        close(numbers[6], 0.002 * 230.0 * 230.0);
+        let lines = emitted.render_diagnostics();
+        for expected in [
+            "unequal capacitive and inductive limits",
+            "state terminal power",
+            "do not regulate voltage",
+        ] {
+            assert!(
+                lines.iter().any(|line| line.contains(expected)),
+                "{expected}: {lines:?}"
+            );
+        }
     }
 
     #[test]
