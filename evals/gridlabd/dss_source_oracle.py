@@ -182,8 +182,12 @@ def typed_linear_solution(document):
     value = document["value"]
     assert value["type"] == "powerio.MulticonductorNetwork"
     net = value["data"]
-    assert not any(
-        net[k] for k in ("switches", "transformers", "generators", "shunts", "untyped")
+    assert not any(net[k] for k in ("switches", "transformers", "generators", "shunts"))
+    # Only explicitly inactive source records may remain outside the typed
+    # circuit in these microcases. Their properties never supply physics.
+    assert all(
+        obj["class"] == "vsource" and obj["props"][-1] == ["enabled", "no"]
+        for obj in net["untyped"]
     )
     nodes = [
         (b["id"], t)
@@ -252,11 +256,11 @@ def typed_linear_solution(document):
                 continue
             constraints.append(a)
             emfs.append(mag * np.exp(1j * angle))
-    c = np.array(constraints)
+    c = np.array(constraints, dtype=complex).reshape((len(constraints), size))
     matrix = np.block([[y, c.T], [c, np.zeros((len(c), len(c)))]])
     rhs = np.r_[np.zeros(size), emfs]
     solved = np.linalg.solve(matrix, rhs)
-    residual = float(max(abs(matrix @ solved - rhs)))
+    residual = float(np.max(abs(matrix @ solved - rhs), initial=0))
     if residual > 1e-8:
         raise ValueError(f"typed MNA residual {residual}")
     volts = {key: solved[indexes[key]] if key in indexes else 0j for key in declared}

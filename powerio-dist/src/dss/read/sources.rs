@@ -20,11 +20,26 @@ struct Ports {
 }
 
 impl Reader<'_> {
+    fn retain_disabled_sources(&mut self, raw: &RawDss) {
+        for object in raw
+            .of_class("vsource")
+            .filter(|object| !raw.source_replay(object).enabled)
+        {
+            let mut retained = UntypedObject::from(object);
+            retained.props.push((Some("enabled".into()), "no".into()));
+            self.net.untyped_objects_mut().push(retained);
+            self.warn(&C::READ_DSS_SOURCE_DISABLED, format!(
+                "Vsource.{} is disabled: retained as inactive source data without electrical branches or voltage constraints", object.name,
+            ));
+        }
+    }
+
     fn resolved_sources(&mut self, raw: &RawDss) -> SourceResult<()> {
         // Resolve every source before modifying the reader. Then register
         // every original port before any source can allocate a virtual node.
         let resolved = raw
             .of_class("vsource")
+            .filter(|object| raw.source_replay(object).enabled)
             .map(|object| {
                 let source = resolve(raw, object, self.net.base_frequency())?;
                 let start = source_bus(&source.bus1)?;
@@ -32,6 +47,7 @@ impl Reader<'_> {
                 Ok((object.name.clone(), source, start, end))
             })
             .collect::<SourceResult<Vec<_>>>()?;
+        self.retain_disabled_sources(raw);
         let ports: Vec<_> = resolved
             .into_iter()
             .map(|(name, source, start, end)| {
@@ -235,6 +251,21 @@ fn source_decomposition_does_not_resolve_a_dangling_linecode_or_ground_a_return(
     assert!(!net.line_codes().iter().any(|c| c.name == original.linecode));
     assert_eq!(net.lines()[1].linecode, "_pio_vsource_source_impedance_1");
     assert!(net.buses().iter().all(|b| b.grounded.is_empty()));
+}
+
+#[test]
+fn disabled_sources_contribute_no_terminals_or_impedance_and_retain_the_final_state() {
+    let net = staged_read("New Circuit.c bus1=unused.1.2.3\nDisable Vsource.source");
+    assert!(net.sources().is_empty());
+    assert!(net.lines().is_empty());
+    assert!(net.line_codes().is_empty());
+    assert!(net.buses().is_empty());
+    let retained = &net.untyped_objects()[0];
+    assert_eq!(retained.class, "vsource");
+    assert_eq!(
+        retained.props.last(),
+        Some(&(Some("enabled".into()), "no".into()))
+    );
 }
 
 #[test]

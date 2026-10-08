@@ -107,6 +107,8 @@ def native(path):
         if not name.startswith(("line.", "vsource.")):
             continue
         engine.Circuit.SetActiveElement(name)
+        if not engine.CktElement.Enabled():
+            continue
         n = engine.CktElement.NumConductors()
         assert engine.CktElement.NumTerminals() == 2
         buses = engine.CktElement.BusNames()

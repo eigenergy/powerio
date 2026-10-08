@@ -249,8 +249,8 @@ pub struct RawDss {
     pub diagnostics: Vec<crate::diagnostics::Diagnostic>,
     index: BTreeMap<(String, String), usize>,
     active: Option<usize>,
-    /// Properties and source reset records retained across every object,
-    /// charged by each push and `like=` splice against `MAX_TOTAL_PROPS`.
+    /// Properties, source reset records and wildcard source state work,
+    /// charged against `MAX_TOTAL_PROPS`.
     total_props: usize,
     // Source MakeLike copies resolved state, including flags/defaults that
     // an appended property history alone cannot restore. Reset markers refer
@@ -273,6 +273,19 @@ pub struct RawDss {
 pub(super) struct SourceReplay {
     pub constructor_frequency: f64,
     pub resets: Vec<(usize, f64)>,
+    // MakeLike re-enables the target independently of the copied property
+    // history. Wildcard Enable/Disable changes this without an engine Edit.
+    pub enabled: bool,
+}
+
+impl SourceReplay {
+    fn record_property(&mut self, p: &RawProp) {
+        if p.name.as_deref() == Some("enabled") && !p.value.text.is_empty() {
+            // Native InterpretYesNo recognizes leading y/t only; numeric 1
+            // is false, unlike the legacy general Boolean helper.
+            self.enabled = matches!(p.value.text.as_bytes()[0].to_ascii_lowercase(), b'y' | b't');
+        }
+    }
 }
 
 impl RawDss {
@@ -587,6 +600,7 @@ impl<L: Loader> Executor<'_, L> {
             Some("setbusxy") => self.do_setbusxy(scan, ctx),
             Some("var") => self.do_var(scan, ctx),
             Some("clear" | "clearall") => self.raw.clear(),
+            Some("enable" | "disable") => self.do_source_enabled(&verb, scan, ctx),
             Some("//") => {}
             Some(canonical) => {
                 if self.raw.charge_preserved() {
@@ -853,6 +867,76 @@ impl<L: Loader> Executor<'_, L> {
                     .assignment(&mut position, &name, &p.value, &self.raw.vars);
                 self.raw.options.push((name, p.value));
             }
+        }
+    }
+
+    fn do_source_enabled(
+        &mut self,
+        verb: &str,
+        scan: &mut Scanner,
+        ctx: &dyn Fn(String) -> String,
+    ) {
+        let canonical = COMMANDS[command_index(verb).unwrap()];
+        if !self.raw.charge_preserved() {
+            return;
+        }
+        self.raw.commands.push(RawCommand {
+            verb: canonical.into(),
+            args: scan.remainder().into(),
+        });
+        let Some(parameter) = scan.next_param() else {
+            return;
+        };
+        if parameter
+            .name
+            .as_ref()
+            .is_some_and(|name| !"object".starts_with(&name.to_ascii_lowercase()))
+        {
+            self.raw.warn(
+                &C::PARSE_DSS_SOURCE_MALFORMED,
+                ctx("expected object=Class.Name".into()),
+            );
+            return;
+        }
+        let Some((class, name)) = parameter.value.text.split_once('.') else {
+            return; // Native Enable/Disable requires an explicit class.
+        };
+        if !class.eq_ignore_ascii_case("vsource") {
+            return; // Other equipment states remain outside this staged source path.
+        }
+        let enabled = canonical == "enable";
+        if name == "*" {
+            // Native wildcard assignment does not select an object or invoke
+            // RecalcElementData. Charge each visited state to bound repeated
+            // wildcard work even though no property history is appended.
+            let count = self.raw.source_replay.len();
+            if self.raw.total_props.saturating_add(count) > MAX_TOTAL_PROPS {
+                self.raw
+                    .halt("source state assignments exceeded the whole parse budget".into());
+                return;
+            }
+            self.raw.total_props += count;
+            for replay in self.raw.source_replay.values_mut() {
+                replay.enabled = enabled;
+            }
+        } else if let Some(&idx) = self
+            .raw
+            .index
+            .get(&("vsource".into(), name.to_ascii_lowercase()))
+        {
+            self.apply_props(
+                idx,
+                vec![RawProp {
+                    name: Some("enabled".into()),
+                    value: Value::new(if enabled { "true" } else { "false" }),
+                }],
+                ctx,
+            );
+        } else {
+            self.raw.warn(
+                &C::READ_DSS_REFERENCE_DROPPED,
+                ctx(format!("{canonical} names an unknown Vsource.{name}")),
+            );
         }
     }
 
@@ -1196,6 +1280,7 @@ impl<L: Loader> Executor<'_, L> {
                 SourceReplay {
                     constructor_frequency: frequency,
                     resets: Vec::new(),
+                    enabled: true,
                 },
             );
         }
@@ -1234,6 +1319,7 @@ impl<L: Loader> Executor<'_, L> {
                 .source_replay
                 .get_mut(&target)
                 .expect("source replay initialized");
+            target.enabled = true;
             target.resets.push((base, replay.constructor_frequency));
             target.resets.extend(
                 replay
@@ -1260,6 +1346,7 @@ impl<L: Loader> Executor<'_, L> {
                         if class == "vsource" && src == idx {
                             // Native source MakeLike(self) does not recalculate
                             // the current edit or reset its in-flight setters.
+                            self.raw.source_replay.get_mut(&idx).unwrap().enabled = true;
                             continue;
                         }
                         let base = self.raw.objects[idx].props.len();
@@ -1347,6 +1434,9 @@ impl<L: Loader> Executor<'_, L> {
                 continue;
             }
             self.raw.total_props += 1;
+            if let Some(replay) = self.raw.source_replay.get_mut(&idx) {
+                replay.record_property(&p);
+            }
             self.raw.objects[idx].props.push(p);
         }
         // This command line was one engine Edit; it ends in
@@ -1669,6 +1759,72 @@ mod tests {
 
     fn parse(text: &str) -> RawDss {
         __parse_raw_with(text, "test.dss", &mut no_files)
+    }
+
+    #[test]
+    fn source_copy_reenables_independently_of_the_templates_property_history() {
+        let raw = parse(
+            "New Circuit.c enabled=no\nNew Vsource.copy enabled=no like=source\nEdit Vsource.source like=source",
+        );
+        for object in raw.of_class("vsource") {
+            assert!(raw.source_replay(object).enabled);
+        }
+        let raw = parse("New Circuit.c enabled=no\nNew Vsource.copy like=source enabled=1");
+        assert!(
+            raw.of_class("vsource")
+                .all(|o| !raw.source_replay(o).enabled)
+        );
+    }
+
+    #[test]
+    fn source_wildcard_updates_current_objects_without_changing_active_selection() {
+        let raw = parse(
+            "New Circuit.c\nNew Vsource.aux\nDisable Vsource.*\n~ enabled=yes\nNew Vsource.later",
+        );
+        assert!(
+            !raw.source_replay(raw.find("vsource", "source").unwrap())
+                .enabled
+        );
+        assert!(
+            raw.source_replay(raw.find("vsource", "aux").unwrap())
+                .enabled
+        );
+        assert!(
+            raw.source_replay(raw.find("vsource", "later").unwrap())
+                .enabled
+        );
+        assert!(
+            raw.commands
+                .iter()
+                .any(|c| c.verb == "disable" && c.args == "Vsource.*")
+        );
+    }
+
+    #[test]
+    fn repeated_source_wildcards_charge_the_existing_whole_parse_budget() {
+        let mut raw = parse("New Circuit.c");
+        raw.total_props = MAX_TOTAL_PROPS;
+        let mut loader = no_files;
+        let mut executor = Executor {
+            raw,
+            loader: &mut loader,
+            dirs: Vec::new(),
+            root: None,
+            boundary: IncludeBoundary::CaseDirectory,
+            includes: 0,
+            include_bytes: 0,
+            budget_spent: false,
+            var_count: 0,
+            var_bytes: 0,
+            var_budget_spent: false,
+        };
+        executor.do_source_enabled("disable", &mut Scanner::new("Vsource.*", None), &|s| s);
+        let raw = executor.raw;
+        assert!(raw.halted);
+        assert!(
+            raw.source_replay(raw.find("vsource", "source").unwrap())
+                .enabled
+        );
     }
 
     #[test]
