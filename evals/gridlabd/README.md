@@ -120,7 +120,8 @@ child nominal voltages and names that collide under the current canonical
 case-insensitive lookup. Coordinates are available through the separate source
 API; network attachment remains unfinished and currently fails explicitly.
 Instrumentation remains in retained source with a remark. No recorder, assertion
-or controller executes during parsing. Facade format dispatch remains unfinished.
+or controller executes during parsing. Facade dispatch accepts `gridlabd`
+(PNNL 5.3, also inferred from `.glm`) and `gridlabd-arras` (Arras 4.3).
 
 Build and run the reader qualification with:
 
@@ -151,8 +152,8 @@ there is no retained-source path in this API. It supports the reader's initial
 phase-to-earth P/I/Z and explicit line-matrix profile. An unsupported electrical
 feature fails before any artifact is written. Non-electrical metadata losses,
 including coordinates, optimization bounds, ratings and source cost data, are
-reported. Facade format registration and exact source-project replay remain
-separate unfinished work.
+reported. Facade emission uses the same canonical writer for fresh, edited,
+IR-restored and cross-profile modules.
 
 The writer derives bus nominal voltages from connected fixed sources and
 reconstructs each load's coefficients using its own stated nominal voltage.
@@ -180,6 +181,35 @@ result and satisfy the edited network equations. Constant-impedance cases also
 match a separately solved analytic circuit. These checks qualify 80 canonical
 engine solves, not just parser acceptance or retained-source echo. OpenDSS
 cross-format equivalence remains unqualified.
+
+## Facade profiles and source-project replay
+
+Normal `powerio::parse` / `emit`, distribution dispatch and CLI conversion use
+the explicit profiles above. GLM targets emit directory inventories: retained
+same-profile projects keep their entrypoint and acquired includes under their
+original relative names; canonical output is `case.glm`. The retained project
+is never reopened from disk. Literal absolute includes cannot be relocated
+byte exactly and are refused. Explicit preprocessing inputs are stored in the
+module's `org.powerio.gridlabd` extension and replay reports when those external
+inputs are required. Profile identity is module source metadata, preserving the
+frozen IR network record and its existing `source_format` enum.
+
+```sh
+cargo build -p powerio --example glm_dispatch
+python evals/gridlabd/dispatch_oracle.py --pnnl-root "$PNNL_ROOT" \
+  --bridge target/debug/examples/glm_dispatch --output /tmp/gld-dispatch
+```
+
+This checks an included conditional that selects different load impedances
+under the two native profiles. Same-profile replay must preserve both files
+exactly. IR-restored, edited and cross-profile output must independently solve
+with the declared target engine and satisfy the typed equations and analytic
+circuit solution. The cross-profile result preserves the interpreted circuit,
+not the source conditional's different meaning in the other fork. Rust tests
+also cover deleting original files before replay, memory-only buffers, BOMs,
+a widened acquisition root, external definitions, and atomic refusal of
+nonportable projects. These checks add no device-family coverage to the
+initial electrical profile.
 
 ## Published references and limits
 

@@ -42,6 +42,10 @@ impl GlmProject {
         self.prepared.dependencies()
     }
 
+    pub(super) fn has_absolute_include(&self) -> bool {
+        self.prepared.has_absolute_include()
+    }
+
     /// Translate a span from this project's syntax into original source spans.
     #[must_use]
     pub fn original_spans(&self, span: &SourceSpan) -> Vec<SourceSpan> {

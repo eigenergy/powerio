@@ -26,6 +26,12 @@ pub fn parse(
     source: Source,
     options: PreprocessOptions,
 ) -> Result<PioModule<MulticonductorNetwork>, Error> {
+    let preprocessing =
+        serde_json::json!({"defines": options.defines, "reinclude": options.reinclude});
+    let source_format = match options.dialect {
+        super::GlmDialect::Pnnl5_3 => crate::DistTargetFormat::Gridlabd,
+        super::GlmDialect::Arras4_3 => crate::DistTargetFormat::GridlabdArras,
+    };
     let project = parse_project(source, options)?;
     let index = project.index_objects()?;
     let mut reader = Reader {
@@ -41,6 +47,9 @@ pub fn parse(
         nominal: BTreeMap::new(),
         line_capacitance: false,
     };
+    // Profile identity belongs to the module's source descriptors and context.
+    // Extending the legacy network source-format enum would change a frozen
+    // IR 2 record solely to carry non-electrical provenance.
     reader.top_level()?;
     reader.inventory()?;
     reader.buses()?;
@@ -48,14 +57,22 @@ pub fn parse(
     reader.lines()?;
     crate::require_electrical_readiness(&reader.net)
         .map_err(|e| e.with_source(project.source().clone()))?;
-    PioModule::parsed(
+    let mut module = PioModule::parsed(
         reader.net,
         project
             .source()
             .clone()
-            .with_format(FormatId::new("gridlabd")?),
+            .with_format(FormatId::new(source_format.name())?),
         reader.diagnostics,
-    )
+    )?;
+    module.insert_extension("org.powerio.gridlabd", serde_json::json!({
+        "version": 1,
+        "dialect": source_format.name(),
+        "dependencies": project.dependencies().iter().map(powerio_core::SourceId::as_str).collect::<Vec<_>>(),
+        "absolute_include": project.has_absolute_include(),
+        "preprocessing": preprocessing,
+    }))?;
+    Ok(module)
 }
 
 struct Reader<'a> {

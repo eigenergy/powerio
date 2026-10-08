@@ -49,6 +49,10 @@ pub mod codes {
             "non-electrical metadata has no expression in canonical GLM output";
         EMIT_GLM_VALUE_REBASED = "EMIT.GLM.VALUE_REBASED", Remark,
             "a GLM nominal voltage or identity was materialized without changing electrical behavior";
+        EMIT_GLM_PROJECT_UNREPRESENTABLE = "EMIT.GLM.PROJECT_UNREPRESENTABLE", Error,
+            "retained GLM project bytes cannot be replayed as a portable output inventory", category = Output;
+        EMIT_GLM_REPLAY_CONTEXT_REQUIRED = "EMIT.GLM.REPLAY_CONTEXT_REQUIRED", Remark,
+            "exact GLM project replay requires the original explicit preprocessing inputs";
 
         // READ.DSS: decoded, but not representable in the multiconductor model.
         /// A `Redirect`/`Compile`/`Buscoords` include the reader refused

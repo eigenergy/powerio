@@ -94,6 +94,8 @@ impl TransmissionFormat {
 #[non_exhaustive]
 pub enum DistributionFormat {
     Dss,
+    Gridlabd,
+    GridlabdArras,
     PmdJson,
     BmopfJson,
     /// Distribution CIM (CIM100 RDF/XML).
@@ -104,6 +106,8 @@ impl DistributionFormat {
     pub fn name(self) -> &'static str {
         match self {
             Self::Dss => "dss",
+            Self::Gridlabd => "gridlabd",
+            Self::GridlabdArras => "gridlabd-arras",
             Self::PmdJson => "pmd-json",
             Self::BmopfJson => "bmopf-json",
             Self::CimDist => "cim-dist",
@@ -184,6 +188,8 @@ pub fn parse_distribution_format(name: &str) -> Option<DistributionFormat> {
     let key = canonical_key(name);
     match key.as_str() {
         "dss" | "opendss" => Some(DistributionFormat::Dss),
+        "glm" | "gridlabd" | "gridlabdpnnl" => Some(DistributionFormat::Gridlabd),
+        "gridlabdarras" => Some(DistributionFormat::GridlabdArras),
         "pmd" | "pmdjson" | "engineering" => Some(DistributionFormat::PmdJson),
         "bmopf" | "bmopfjson" => Some(DistributionFormat::BmopfJson),
         "cimdist" => Some(DistributionFormat::CimDist),

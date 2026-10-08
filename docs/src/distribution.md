@@ -1,8 +1,8 @@
 # Distribution networks
 
 A multiconductor network is the conductor level distribution model, and
-OpenDSS, PowerModelsDistribution engineering JSON, BMOPF JSON, and
-distribution CIM all parse to it. When you need a calculation, construct an `McAcPfInstance`,
+OpenDSS, GridLAB-D, PowerModelsDistribution engineering JSON, BMOPF JSON,
+and distribution CIM all parse to it. When you need a calculation, construct an `McAcPfInstance`,
 `McAcOpfInstance`, or `LinDist3FlowOpfInstance` from it explicitly (see
 [Calculation instances and solutions](instances.md)).
 
@@ -31,10 +31,12 @@ reject this new physics; ordinary earth-referenced records are unchanged.
 `McAcPfInstance::source_boundary` borrows both voltage endpoints and their
 phasor differences. The additive C `PioVoltageSourceBoundaryView` serves
 network and PF instance callers without changing the existing ABI 7 layouts.
-Legacy C source views reject references they cannot describe. The OpenDSS writer preserves referenced constraints using exact equivalent
-circuits. Other exchange writers accept an already perfectly grounded reference
-but reject floating references. Balanced/LinDist3Flow projections and neutral
-Kron reduction still require their own reference-source integration.
+Legacy C source views reject references they cannot describe. The OpenDSS
+writer preserves referenced constraints through exact equivalent circuits.
+GridLAB-D and the JSON writers accept an already perfectly grounded reference;
+floating references still need a qualified mapping for those targets.
+Balanced/LinDist3Flow projections and neutral Kron reduction retain their
+explicit reference-source restrictions.
 
 The OpenDSS profile is the static circuit, meaning the element definitions
 and their electrical data. Load shapes, solve commands, monitors, and other
@@ -163,6 +165,55 @@ and the rest are UUIDv5 values, and the written numbers are the ones the reader
 maps back exactly, so write, read, write is byte stable. The output is not
 yet validated against the CIM17 profile schemas or an independent
 implementation such as CIM-Graph or CIMHub.
+
+## GridLAB-D profiles and projects
+
+The `.glm` extension selects the PNNL 5.3 profile (`gridlabd`, aliases `glm`
+and `gridlabd-pnnl`). Select `gridlabd-arras` explicitly for Arras 4.3. The
+profiles differ in source interpretation, including conditional preprocessing;
+sharing a file extension does not establish equivalent electrical behavior.
+
+```sh
+powerio summary feeder.glm --from gridlabd-arras
+powerio convert feeder.glm --from gridlabd-arras --to gridlabd-arras -o copy
+powerio serialize feeder.glm --from gridlabd-arras -o feeder.pio.json
+powerio convert feeder.pio.json --to gridlabd-arras -o canonical
+```
+
+Both GLM targets emit directories. An unchanged same-profile module retains
+the entrypoint's original relative path and all acquired include files, byte
+for byte. Parsing or writing never executes the simulator. Replay reads only
+the retained buffers, even if the original files have since disappeared.
+Absolute include paths cannot be relocated byte exactly and are refused.
+When a caller supplies external definitions through `glm::PreprocessOptions`,
+replay reports that those inputs must accompany the files; the module's
+`org.powerio.gridlabd` extension records them. The profile also appears in
+source descriptors. The legacy network `source_format` field stays unset so
+the existing IR 2 record remains compatible.
+
+Fresh networks, edited modules, IR-restored modules and cross-profile writes
+generate `case.glm` from the typed network. Rust's
+`powerio_dist::glm::emit_canonical` offers single-file output directly from a
+network value. Emission validates physical support before writing any output.
+
+The currently qualified electrical profile covers phase-to-earth sources,
+node/meter/load objects, independent P/I/Z load terms, parented loads, and
+overhead lines with explicit phase impedance and capacitance matrices.
+Three-phase subsets keep their A/B/C identities. Bus earth returns do not
+constitute explicit line neutrals. Geometry, transformers, split-phase and
+additional static devices remain unfinished and fail explicitly. Full OpenDSS
+static compatibility is not yet established.
+
+GridLAB-D object latitude and longitude are available through the source API,
+including partial pairs and native coordinate notation. Typed network
+attachment and coordinate emission remain unfinished. Declared link locations
+are distinct from the endpoint midpoints the engines calculate at startup;
+neither establishes a line route or electrical length. No geographic datum is
+inferred from the coordinate field names.
+
+The [GridLAB-D oracle harness](https://github.com/eigenergy/powerio/tree/main/evals/gridlabd)
+documents pinned engines, supported physics, canonical and project checks,
+and remaining limitations.
 
 ## BMOPF schema versions
 

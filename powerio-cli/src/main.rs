@@ -549,6 +549,12 @@ enum FormatArg {
     /// Parse an IEEE Common Data Format case (parse only).
     #[value(name = "ieee-cdf", alias = "cdf")]
     IeeeCdf,
+    /// GridLAB-D GLM with the PNNL 5.3 input profile.
+    #[value(name = "gridlabd", alias = "glm", alias = "gridlabd-pnnl")]
+    Gridlabd,
+    /// GridLAB-D GLM with the Arras 4.3 input profile.
+    #[value(name = "gridlabd-arras")]
+    GridlabdArras,
     /// OpenDSS `.dss` distribution case (parse and emit).
     #[value(name = "dss", alias = "opendss")]
     Dss,
@@ -604,6 +610,8 @@ impl FormatArg {
             | FormatArg::Pwb
             | FormatArg::IeeeCdf
             | FormatArg::Dss
+            | FormatArg::Gridlabd
+            | FormatArg::GridlabdArras
             | FormatArg::PmdJson
             | FormatArg::BmopfJson
             | FormatArg::Bmopf010
@@ -620,6 +628,8 @@ impl FormatArg {
         use powerio_dist::DistTargetFormat;
         match self {
             FormatArg::Dss => Some(DistTargetFormat::Dss),
+            FormatArg::Gridlabd => Some(DistTargetFormat::Gridlabd),
+            FormatArg::GridlabdArras => Some(DistTargetFormat::GridlabdArras),
             FormatArg::PmdJson => Some(DistTargetFormat::PmdJson),
             FormatArg::BmopfJson | FormatArg::Bmopf010 | FormatArg::Bmopf020 => {
                 Some(DistTargetFormat::BmopfJson)
@@ -678,6 +688,8 @@ impl FormatArg {
             FormatArg::Pwb => "pwb",
             FormatArg::IeeeCdf => "ieee-cdf",
             FormatArg::Dss => "dss",
+            FormatArg::Gridlabd => "gridlabd",
+            FormatArg::GridlabdArras => "gridlabd-arras",
             FormatArg::PmdJson => "pmd-json",
             FormatArg::BmopfJson => "bmopf-json",
             FormatArg::Bmopf010 => "bmopf-json@0.1.0",
@@ -2134,6 +2146,13 @@ fn convert_multiconductor_module(
     to: FormatArg,
     output: Option<&Path>,
 ) -> anyhow::Result<()> {
+    if matches!(to, FormatArg::Gridlabd | FormatArg::GridlabdArras) {
+        return convert_typed_module(
+            &module.clone().map_value(powerio::PioValue::from),
+            to,
+            output,
+        );
+    }
     let target = to.distribution().ok_or_else(|| {
         failure!(
             REQUEST_CLI_FAMILY_MISMATCH,
@@ -3042,6 +3061,81 @@ mod tests {
             .join("tests")
             .join("data")
             .join(path)
+    }
+
+    #[test]
+    fn gridlabd_cli_preserves_projects_and_canonicalizes_ir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let input = tmp.path().join("main.glm");
+        let head = "module powerflow; object node { name source; phases AN; bustype SWING; nominal_voltage 240; }\n#include \"load.glm\"\n";
+        let load = "object load { name demand; parent source; phases AN; nominal_voltage 240; constant_power_A 100+20j; }\n";
+        std::fs::write(&input, head).unwrap();
+        std::fs::write(tmp.path().join("load.glm"), load).unwrap();
+        assert_eq!(infer_input_family(&input).unwrap(), Some(true));
+        for (token, profile) in [
+            ("glm", FormatArg::Gridlabd),
+            ("gridlabd-pnnl", FormatArg::Gridlabd),
+            ("gridlabd-arras", FormatArg::GridlabdArras),
+        ] {
+            let cli = Cli::try_parse_from([
+                "powerio", "convert", "main.glm", "--from", token, "--to", token, "-o", "copy",
+            ])
+            .unwrap();
+            let Command::Convert { from, to, .. } = cli.command.unwrap() else {
+                panic!("expected convert");
+            };
+            assert_eq!(from, Some(profile));
+            assert_eq!(to, profile);
+            let output = tmp.path().join(token);
+            run_convert(
+                &input,
+                profile,
+                Some(&output),
+                Some(profile),
+                0,
+                GenCostCliOptions::preserve(),
+            )
+            .unwrap();
+            assert_eq!(
+                std::fs::read(output.join("main.glm")).unwrap(),
+                head.as_bytes()
+            );
+            assert_eq!(
+                std::fs::read(output.join("load.glm")).unwrap(),
+                load.as_bytes()
+            );
+        }
+        for output in [None, Some(Path::new("-"))] {
+            assert!(
+                run_convert(
+                    &input,
+                    FormatArg::Gridlabd,
+                    output,
+                    None,
+                    0,
+                    GenCostCliOptions::preserve()
+                )
+                .is_err()
+            );
+        }
+        let ir = tmp.path().join("network.pio.json");
+        run_serialize(&input, Some(&ir), None).unwrap();
+        let output = tmp.path().join("restored");
+        run_convert(
+            &ir,
+            FormatArg::Gridlabd,
+            Some(&output),
+            None,
+            0,
+            GenCostCliOptions::preserve(),
+        )
+        .unwrap();
+        let FamilyCase::Distribution(restored) =
+            parse_family_case(&output.join("case.glm"), None).unwrap()
+        else {
+            panic!("expected distribution");
+        };
+        assert_eq!(restored.value().loads()[0].p_nom, [100.0]);
     }
 
     fn deserialize_module(text: &str) -> powerio::PioModule<powerio::PioValue> {
