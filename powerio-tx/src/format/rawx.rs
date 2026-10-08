@@ -68,6 +68,14 @@ const TWO_TERMINAL_DC_FIELDS: &[&str] = &[
     "xci", "ebasi", "tri", "tapi", "tmxi", "tmni", "stpi", "ici", "ndi", "ifi", "iti", "idi",
     "xcapi",
 ];
+const VSC_DC_FIELDS: &[&str] = &[
+    "name", "mdc", "rdc", "o1", "f1", "o2", "f2", "o3", "f3", "o4", "f4", "ibus1", "type1",
+    "mode1", "dcset1", "acset1", "aloss1", "bloss1", "minloss1", "smax1", "imax1", "pwf1", "maxq1",
+    "minq1", "vsreg1", "nreg1", "rmpct1", "ibus2", "type2", "mode2", "dcset2", "acset2", "aloss2",
+    "bloss2", "minloss2", "smax2", "imax2", "pwf2", "maxq2", "minq2", "vsreg2", "nreg2", "rmpct2",
+];
+/// The control line and the two converter lines of a VSC DC line record.
+const VSC_DC_LINES: [std::ops::Range<usize>; 3] = [0..11, 11..27, 27..43];
 const SWITCHED_SHUNT_FIELDS: &[&str] = &[
     "ibus", "shntid", "modsw", "adjm", "stat", "vswhi", "vswlo", "swreg", "nreg", "rmpct",
     "rmidnt", "binit", "s1", "n1", "b1", "s2", "n2", "b2", "s3", "n3", "b3", "s4", "n4", "b4",
@@ -96,7 +104,6 @@ const SUBSTATION_TERMINAL_FIELDS: &[&str] =
 const EXPLICIT_NULL: &str = "null";
 
 const UNSUPPORTED_TABLES: &[(&str, &str)] = &[
-    ("vscdc", "voltage source converter DC lines"),
     ("impcor", "transformer impedance correction tables"),
     ("ntermdc", "multi-terminal DC lines"),
     ("ntermdcconv", "multi-terminal DC converters"),
@@ -426,6 +433,7 @@ pub(super) fn parse_rawx_source(
     raw.push_str("0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA\n");
     append_two_terminal_dc(network, &mut raw, warnings, &mut substituted_strings)?;
     raw.push_str("0 / END OF TWO-TERMINAL DC DATA, BEGIN VSC DC LINE DATA\n");
+    append_vsc_dc(network, &mut raw, warnings, &mut substituted_strings)?;
     raw.push_str("0 / END OF VSC DC LINE DATA, BEGIN IMPEDANCE CORRECTION DATA\n");
     raw.push_str("0 / END OF IMPEDANCE CORRECTION DATA, BEGIN MULTI-TERMINAL DC DATA\n");
     raw.push_str("0 / END OF MULTI-TERMINAL DC DATA, BEGIN MULTI-SECTION LINE DATA\n");
@@ -589,6 +597,31 @@ fn append_two_terminal_dc(
                 &table,
                 row,
                 fields,
+                strings,
+                substituted_strings,
+            )?);
+            out.push('\n');
+        }
+    }
+    Ok(())
+}
+
+fn append_vsc_dc(
+    network: &Map<String, Value>,
+    out: &mut String,
+    warnings: &mut Diagnostics,
+    substituted_strings: &mut usize,
+) -> Result<()> {
+    let Some(table) = Table::parse(network, "vscdc")? else {
+        return Ok(());
+    };
+    table.warn_unknown_fields(VSC_DC_FIELDS, warnings);
+    for row in table.rows {
+        for (line, strings) in VSC_DC_LINES.iter().zip([&["name"][..], &[], &[]]) {
+            out.push_str(&record_line(
+                &table,
+                row,
+                &VSC_DC_FIELDS[line.clone()],
                 strings,
                 substituted_strings,
             )?);
@@ -1972,6 +2005,7 @@ fn raw_to_rawx(net: &BalancedNetwork, raw: &str, diagnostics: &mut Diagnostics) 
     add_transformer_output_table(&mut network, &sections)?;
     add_simple_output_table(&mut network, "area", AREA_FIELDS, &["arname"], &sections);
     add_two_terminal_output_table(&mut network, &sections)?;
+    add_vsc_output_table(&mut network, &sections)?;
     add_simple_output_table(
         &mut network,
         "swshunt",
@@ -2222,6 +2256,37 @@ fn add_two_terminal_output_table(
         network.insert(
             "twotermdc".to_owned(),
             table_object(TWO_TERMINAL_DC_FIELDS, Value::Array(rows)),
+        );
+    }
+    Ok(())
+}
+
+fn add_vsc_output_table(
+    network: &mut Map<String, Value>,
+    sections: &BTreeMap<String, Vec<String>>,
+) -> Result<()> {
+    let Some(lines) = sections.get("VSC DC LINE") else {
+        return Ok(());
+    };
+    if lines.len() % 3 != 0 {
+        return Err(malformed("internal PSS/E VSC DC line record is truncated"));
+    }
+    let mut rows = Vec::new();
+    for record in lines.chunks(3) {
+        let mut flat = Vec::new();
+        for (line, fields) in record.iter().zip(VSC_DC_LINES.iter()) {
+            append_padded(&mut flat, &line_tokens(line), fields.len());
+        }
+        rows.push(Value::Array(tokens_as_values(
+            &flat,
+            VSC_DC_FIELDS,
+            &["name"],
+        )?));
+    }
+    if !rows.is_empty() {
+        network.insert(
+            "vscdc".to_owned(),
+            table_object(VSC_DC_FIELDS, Value::Array(rows)),
         );
     }
     Ok(())
@@ -3505,6 +3570,57 @@ mod tests {
         let back = parse_rawx_source(&emitted.text, None, &mut diagnostics).unwrap();
         assert_eq!(back.buses().len(), 2);
         close(back.loads()[0].p, 24.0);
+    }
+
+    #[test]
+    fn vsc_dc_lines_read_and_write_as_the_vscdc_table() {
+        // MINIMAL plus one VSC line from bus 1 to bus 2: converter 1 schedules
+        // 50 MW out of its AC bus, converter 2 holds 320 kV and regulates
+        // its AC bus at 1.01 per unit.
+        let mut root: Value = serde_json::from_str(MINIMAL).unwrap();
+        root["network"]["vscdc"] = serde_json::json!({
+            "fields": VSC_DC_FIELDS,
+            "data": [[
+                "LINK", 1, 1.5, 1, 1.0, null, null, null, null, null, null,
+                1, 2, 2, -50.0, 0.98, 100.0, 1.0, 200.0, 120.0, 400.0, 1.0, 40.0, -40.0, 0, 0, 100.0,
+                2, 1, 1, 320.0, 1.01, 100.0, 1.0, 200.0, 120.0, 400.0, 1.0, 45.0, -45.0, 0, 0, 250.0
+            ]]
+        });
+        let mut diagnostics = Diagnostics::new();
+        let net = parse_rawx_source(&root.to_string(), None, &mut diagnostics).unwrap();
+        assert!(
+            !diagnostics
+                .lines()
+                .iter()
+                .any(|line| line.contains("vscdc")),
+            "the table is read: {diagnostics:?}"
+        );
+        assert!(
+            diagnostics
+                .lines()
+                .iter()
+                .any(|line| line.contains("RMPCT 250 is outside (0, 100]")),
+            "{diagnostics:?}"
+        );
+        assert_eq!(net.hvdc().len(), 1);
+        let dc = &net.hvdc()[0];
+        close(dc.pf, 50.0);
+        assert!(dc.pt < 50.0 && dc.pt > 49.0, "{}", dc.pt);
+
+        let emitted = write_rawx(&net).unwrap();
+        let written: Value = serde_json::from_str(&emitted.text).unwrap();
+        assert_eq!(table_value(&written, "vscdc", 0, "name"), "LINK");
+        assert_eq!(table_value(&written, "vscdc", 0, "dcset1"), -50.0);
+        assert_eq!(table_value(&written, "vscdc", 0, "type2"), 1);
+        assert_eq!(table_value(&written, "vscdc", 0, "rmpct2"), 100.0);
+        assert!(written["network"].get("twotermdc").is_none());
+        let mut diagnostics = Diagnostics::new();
+        let back = parse_rawx_source(&emitted.text, None, &mut diagnostics).unwrap();
+        let again = &back.hvdc()[0];
+        close(again.pf, dc.pf);
+        close(again.pt, dc.pt);
+        close(again.qf, dc.qf);
+        assert_eq!(again.extras, dc.extras);
     }
 
     #[test]

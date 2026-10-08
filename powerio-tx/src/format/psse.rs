@@ -13,10 +13,11 @@
 //! step blocks on [`SwitchedShuntControl`]. Transformer impedance and winding
 //! bases (`CZ`/`CW`) are normalized to the system base and per unit tap ratios;
 //! the serializer emits the canonical `CZ = 1`, `CW = 1` form.
-//! Two-terminal DC lines parse and emit as the neutral
+//! Two-terminal and VSC DC lines parse and emit as the neutral
 //! [`Hvdc`] (power-setpoint model; converter firing-angle/transformer detail
-//! rides through in extras). The other advanced sections (VSC and multi-terminal
-//! DC, FACTS, GNE) are not modeled: during emission they become empty sections,
+//! and the VSC converter control fields ride through in extras). The other
+//! advanced sections (multi-terminal DC, FACTS, GNE) are not modeled: during
+//! emission they become empty sections,
 //! on read they're skipped, and storage carried on the `BalancedNetwork` is reported as
 //! dropped. Same format emission is byte exact through the retained source (see
 //! [`crate::emit`]); this serializer is the cross format path.
@@ -37,9 +38,10 @@ use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
     Area, BalancedNetwork, BalancedNetworkTables, Branch, BranchCharging, BranchRatingSet, Bus,
     BusId, BusType, ComponentMetadata, DetailedConnectivity, Extras, Generator,
-    GeneratorEnergySource, Hvdc, Impedance, Load, LoadVoltageModel, Shunt, ShuntBlock,
-    SolverParams, SourceFormat, Switch, SwitchedShuntControl, SwitchedShuntMode, TerminalReference,
-    Transformer3W, TransformerControl, TransformerControlMode, Winding,
+    GeneratorEnergySource, Hvdc, HvdcConverter, HvdcConverterKind, HvdcConvertersMode, Impedance,
+    Load, LoadVoltageModel, Shunt, ShuntBlock, SolverParams, SourceFormat, Switch,
+    SwitchedShuntControl, SwitchedShuntMode, TerminalReference, Transformer3W, TransformerControl,
+    TransformerControlMode, Winding,
 };
 use crate::{Error, Result};
 
@@ -1067,7 +1069,7 @@ fn write_psse_rev_inner(
     // emit their 3-line records (if any) between the begin/end markers, then the
     // remaining sections as bare terminators so the file parses as a complete case.
     let _ = writeln!(s, "{}", EMPTY_SECTIONS[0]);
-    for (i, dc) in net.hvdc().iter().enumerate() {
+    for (i, dc) in net.hvdc().iter().filter(|dc| !is_vsc_line(dc)).enumerate() {
         let raw_name = dc_str(&dc.extras, "psse_dc_name").unwrap_or_else(|| format!("DC{}", i + 1));
         let name = sanitize_quoted(&raw_name, NAME_FORBIDDEN, ' ');
         if matches!(name, std::borrow::Cow::Owned(_)) {
@@ -1132,8 +1134,23 @@ fn write_psse_rev_inner(
         let _ = writeln!(s, "{}, {rect_tail}", dc.from);
         let _ = writeln!(s, "{}, {inv_tail}", dc.to);
     }
+    // VSC DC lines fill the next section.
+    let _ = writeln!(s, "{}", EMPTY_SECTIONS[1]);
+    for (i, dc) in net.hvdc().iter().filter(|dc| is_vsc_line(dc)).enumerate() {
+        for line in vsc_record_lines(
+            net,
+            dc,
+            i,
+            rev,
+            &mut num,
+            &mut warnings,
+            &mut sanitized_quoted,
+        ) {
+            let _ = writeln!(s, "{line}");
+        }
+    }
     // Sections up to and including the SWITCHED SHUNT begin marker.
-    for line in &EMPTY_SECTIONS[1..=9] {
+    for line in &EMPTY_SECTIONS[2..=9] {
         let _ = writeln!(s, "{line}");
     }
     // Switched shunts: BINIT becomes the susceptance, the control record the rest.
@@ -1246,7 +1263,11 @@ fn write_psse_rev_inner(
     }
     let _ = writeln!(s, "Q");
 
-    if net.hvdc().iter().any(dc_states_beyond_record) {
+    if net
+        .hvdc()
+        .iter()
+        .any(|dc| !is_vsc_line(dc) && dc_states_beyond_record(dc))
+    {
         warnings.push(
             &F.value_defaulted,
             "DC line converter detail (firing angles, converter transformer taps, reactive \
@@ -1780,6 +1801,233 @@ const DEFAULT_CONTROL_TAIL: &str = "0.0, 0.0, 0.0, 'I', 0.0, 20, 1.0";
 /// spelled once.
 const SETVL_AT_INVERTER: &str = "psse_dc_setvl_at_inverter";
 
+/// Whether `dc` is a VSC line: both converters are voltage source converters.
+/// The writer states such a line in the VSC DC line section.
+fn is_vsc_line(dc: &Hvdc) -> bool {
+    [&dc.converter1, &dc.converter2]
+        .iter()
+        .all(|c| c.as_ref().is_some_and(|c| c.kind == HvdcConverterKind::Vsc))
+}
+
+/// The three lines of the VSC DC line record for `dc`.
+///
+/// The typed line states the operating point; the retained PSS/E control
+/// fields (`psse_vsc_converter1` and `2`) state everything the neutral model
+/// has no field for. The MW-controlling converter's `DCSET` is restated from
+/// `pf`/`pt` so an edited schedule reaches the record, and a converter's
+/// `MODE` and `ACSET` follow its typed regulation. A line from another format
+/// takes converter 1 as the MW-controlling end and converter 2 as the DC
+/// voltage-controlling one at the line's nominal voltage, whose constant loss
+/// (`ALOSS`) states what the DC line drop leaves of `pf - pt`. When the record
+/// read back would not reproduce the line's terminal powers (converter
+/// losses come from `ALOSS`/`BLOSS`/`MINLOSS` and the DC drop from `RDC`, and
+/// an AC voltage-controlling converter states no reactive power), the
+/// difference is reported.
+#[expect(clippy::too_many_lines)]
+fn vsc_record_lines(
+    net: &BalancedNetwork,
+    dc: &Hvdc,
+    index: usize,
+    rev: u32,
+    num: &mut impl FnMut(f64) -> String,
+    warnings: &mut Diagnostics,
+    sanitized_quoted: &mut usize,
+) -> [String; 3] {
+    let label = dc
+        .uid
+        .clone()
+        .unwrap_or_else(|| format!("{}-{}", dc.from, dc.to));
+    let raw_name =
+        dc_str(&dc.extras, "psse_vsc_name").unwrap_or_else(|| format!("VSC{}", index + 1));
+    let name = sanitize_quoted(&raw_name, NAME_FORBIDDEN, ' ');
+    if matches!(name, Cow::Owned(_)) {
+        *sanitized_quoted += 1;
+    }
+    let mdc = if dc.in_service {
+        dc_int(&dc.extras, "psse_vsc_mdc").unwrap_or(1)
+    } else {
+        0
+    };
+    let owners = dc
+        .extras
+        .get("psse_vsc_owners")
+        .and_then(Value::as_array)
+        .map(|tokens| {
+            tokens
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .filter(|tail| !tail.is_empty())
+        .unwrap_or_else(|| "1, 1.0".to_owned());
+    let rdc = dc.resistance_ohm.unwrap_or(0.0);
+    let base_kv = |bus: usize| {
+        net.buses()
+            .iter()
+            .find(|b| b.id.0 == bus)
+            .map(|b| b.base_kv)
+            .filter(|kv| *kv > 0.0)
+    };
+    let mut converters = Vec::with_capacity(2);
+    for side in 1..=2 {
+        let typed = if side == 1 {
+            dc.converter1.as_ref()
+        } else {
+            dc.converter2.as_ref()
+        };
+        let stored = dc
+            .extras
+            .get(&vsc_converter_key(side))
+            .and_then(Value::as_object);
+        let stored_f64 = |key: &str| {
+            stored
+                .and_then(|record| record.get(key))
+                .and_then(Value::as_f64)
+        };
+        let stored_int = |key: &str| {
+            stored
+                .and_then(|record| record.get(key))
+                .and_then(Value::as_i64)
+        };
+        let bus = if side == 1 { dc.from.0 } else { dc.to.0 };
+        let p_ac = if side == 1 { -dc.pf } else { dc.pt };
+        let q_ac = if side == 1 { dc.qf } else { dc.qt };
+        let kind = stored_int("type").unwrap_or(if side == 1 { 2 } else { 1 });
+        let mode = match typed.and_then(|c| c.voltage_regulator_on) {
+            Some(true) => 1,
+            Some(false) => 2,
+            None => stored_int("mode").unwrap_or(1),
+        };
+        let dcset = if kind == 2 {
+            p_ac
+        } else {
+            dc.nominal_voltage_kv
+                .or_else(|| stored_f64("dcset"))
+                .unwrap_or(0.0)
+        };
+        let vsreg = stored_int("vsreg")
+            .and_then(|v| usize::try_from(v).ok())
+            .unwrap_or(0);
+        let regulated = if vsreg == 0 { bus } else { vsreg };
+        let acset = if mode == 1 {
+            let typed_pu = typed
+                .and_then(|c| c.voltage_setpoint_kv)
+                .zip(base_kv(regulated))
+                .map(|(kv, base)| kv / base);
+            // A kV setpoint over a kV base rounds to the per unit value it
+            // names rather than carrying the division's last bit.
+            let typed_pu = typed_pu.map(|pu| (pu * 1e10).round() / 1e10);
+            match (typed_pu, stored_f64("acset")) {
+                // The stored setpoint restates the typed one exactly, so it
+                // is written as read rather than through a division.
+                (Some(pu), Some(acset)) if (pu - acset).abs() <= 1e-9 => acset,
+                (Some(pu), _) => pu,
+                (None, Some(acset)) => acset,
+                (None, None) => {
+                    if side == 1 {
+                        dc.vf
+                    } else {
+                        dc.vt
+                    }
+                }
+            }
+        } else if let Some(pf) = typed.and_then(|c| c.power_factor) {
+            pf
+        } else if p_ac == 0.0 || q_ac == 0.0 {
+            1.0
+        } else {
+            (p_ac.abs() / p_ac.hypot(q_ac)).copysign(q_ac * p_ac)
+        };
+        converters.push(VscConverter {
+            bus,
+            kind,
+            mode,
+            dcset,
+            acset,
+            aloss: stored_f64("aloss").unwrap_or(0.0),
+            bloss: stored_f64("bloss").unwrap_or(0.0),
+            minloss: stored_f64("minloss").unwrap_or(0.0),
+            smax: stored_f64("smax").unwrap_or(0.0),
+            imax: stored_f64("imax").unwrap_or(0.0),
+            pwf: stored_f64("pwf").unwrap_or(1.0),
+            maxq: if side == 1 { dc.qmaxf } else { dc.qmaxt },
+            minq: if side == 1 { dc.qminf } else { dc.qmint },
+            vsreg,
+            nreg: stored_int("nreg").unwrap_or(0),
+            rmpct: stored_f64("rmpct").unwrap_or(100.0),
+        });
+    }
+
+    // A line stated by another format carries its losses in `pf - pt` alone.
+    // State what the DC line drop leaves of them as a constant loss of the
+    // voltage-controlling converter, so the record reproduces the line.
+    let synthesized = dc.extras.keys().all(|key| !key.starts_with("psse_vsc_"));
+    if synthesized
+        && dc.in_service
+        && let Some((_, p2, _)) = calc_vsc_powers([&converters[0], &converters[1]], rdc)
+    {
+        let loss = p2 - dc.pt;
+        if loss > 0.0 {
+            converters[1].aloss = loss * 1000.0;
+        }
+    }
+
+    // What a reader recovers from the written record, against the line.
+    if dc.in_service {
+        let (p1, p2) = calc_vsc_powers([&converters[0], &converters[1]], rdc)
+            .map_or((0.0, 0.0), |(p1, p2, _)| (p1, p2));
+        let reread = [
+            ("pf", -p1, dc.pf),
+            ("pt", p2, dc.pt),
+            ("qf", calc_vsc_reactive_power(&converters[0], p1), dc.qf),
+            ("qt", calc_vsc_reactive_power(&converters[1], p2), dc.qt),
+        ];
+        let changed: Vec<String> = reread
+            .iter()
+            .filter(|(_, back, stated)| (back - stated).abs() > 1e-6 * stated.abs().max(1.0))
+            .map(|(field, back, stated)| format!("{field} {stated} reads back as {back}"))
+            .collect();
+        if !changed.is_empty() {
+            warnings.push(
+                &F.value_substituted,
+                format!(
+                    "VSC DC line `{label}`: the PSS/E record states converter losses, the DC line drop, and voltage-controlled reactive output through its own model; {}",
+                    changed.join(", ")
+                ),
+            );
+        }
+    }
+
+    let line1 = format!("'{name}', {mdc}, {}, {owners}", num(rdc));
+    let mut lines = [line1, String::new(), String::new()];
+    for (slot, c) in converters.iter().enumerate() {
+        let regulation = if rev >= 35 {
+            format!("{}, {}", c.vsreg, c.nreg)
+        } else {
+            c.vsreg.to_string()
+        };
+        lines[slot + 1] = format!(
+            "{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {regulation}, {}",
+            c.bus,
+            c.kind,
+            c.mode,
+            num(c.dcset),
+            num(c.acset),
+            num(c.aloss),
+            num(c.bloss),
+            num(c.minloss),
+            num(c.smax),
+            num(c.imax),
+            num(c.pwf),
+            num(c.maxq),
+            num(c.minq),
+            num(c.rmpct)
+        );
+    }
+    lines
+}
+
 const EMPTY_SECTIONS: [&str; 13] = [
     "0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA",
     "0 / END OF TWO-TERMINAL DC DATA, BEGIN VSC DC LINE DATA",
@@ -1882,7 +2130,9 @@ fn revision32_shape(section: Section) -> Option<Revision32Shape> {
         Section::Transformer => Revision32Shape::new("TRANSFORMER DATA", 12, "STAT"),
         Section::TwoTerminalDc => Revision32Shape::new("TWO-TERMINAL DC DATA", 5, "VSCHD"),
         Section::Area => Revision32Shape::new("AREA DATA", 4, "PTOL"),
-        Section::SystemSwitch | Section::SystemWide | Section::Skip => return None,
+        Section::SystemSwitch | Section::VscDc | Section::SystemWide | Section::Skip => {
+            return None;
+        }
     })
 }
 
@@ -2119,6 +2369,7 @@ fn parse_psse_source_inner(
     let mut bus_base_kv: BTreeMap<BusId, f64> = BTreeMap::new();
     let mut bus_area_zone: BTreeMap<BusId, (usize, usize)> = BTreeMap::new();
     let mut unmodeled_sections: BTreeMap<String, usize> = BTreeMap::new();
+    let mut vsc_lines = 0usize;
     let mut regulating_nodes = Vec::new();
 
     // Sections appear in fixed order, each ended by a record whose first field is
@@ -2327,6 +2578,32 @@ fn parse_psse_source_inner(
                     warnings,
                 )?);
             }
+            Section::VscDc => {
+                // 3-line record: control line, then one line per converter
+                // whose first field is its AC bus.
+                let first = next_continuation_line(
+                    &mut lines,
+                    warnings,
+                    "VSC DC line",
+                    "converter 1 line",
+                )?;
+                let second = next_continuation_line(
+                    &mut lines,
+                    warnings,
+                    "VSC DC line",
+                    "converter 2 line",
+                )?;
+                hvdc.push(read_vsc_line(
+                    &f,
+                    &fields(first),
+                    &fields(second),
+                    vsc_lines,
+                    raw_rev,
+                    &bus_base_kv,
+                    warnings,
+                )?);
+                vsc_lines += 1;
+            }
             Section::Area => areas.push(read_area(&f)?),
             Section::SystemWide => parse_solver_line(&f, &mut solver, warnings),
             Section::Skip => {
@@ -2389,6 +2666,7 @@ enum Section {
     SystemSwitch,
     Transformer,
     TwoTerminalDc,
+    VscDc,
     Area,
     SystemWide,
     Skip,
@@ -2420,6 +2698,9 @@ fn section_after_marker(line: &str, rev: u32) -> Section {
         Some("SYSTEM SWITCHING DEVICE") => Section::Transformer,
         Some("TRANSFORMER" | "TRANSFORMER BRANCH") => Section::Area,
         Some("AREA" | "AREA INTERCHANGE") => Section::TwoTerminalDc,
+        Some("TWO-TERMINAL DC" | "TWO TERMINAL DC" | "2-TERMINAL DC" | "2 TERMINAL DC") => {
+            Section::VscDc
+        }
         Some("FACTS DEVICE" | "FACTS CONTROL DEVICE") => Section::SwitchedShunt,
         _ => Section::Skip,
     }
@@ -2438,6 +2719,7 @@ fn section_from_name(name: &str) -> Section {
         "TWO-TERMINAL DC" | "TWO TERMINAL DC" | "2-TERMINAL DC" | "2 TERMINAL DC" => {
             Section::TwoTerminalDc
         }
+        "VSC DC LINE" | "VSC DC" => Section::VscDc,
         "AREA" | "AREA INTERCHANGE" => Section::Area,
         _ => Section::Skip,
     }
@@ -4525,6 +4807,323 @@ fn read_dc_line(
         converters_mode: None,
         converter1: None,
         converter2: None,
+        cost: None,
+        uid: None,
+        extras,
+    })
+}
+
+/// Extras key holding one VSC converter's PSS/E control fields
+/// (`psse_vsc_converter1` and `psse_vsc_converter2`).
+fn vsc_converter_key(side: usize) -> String {
+    format!("psse_vsc_converter{side}")
+}
+
+/// One converter line of a PSS/E VSC DC line record.
+#[derive(Debug, Clone, Copy)]
+struct VscConverter {
+    bus: usize,
+    /// 0 out of service, 1 DC voltage control, 2 MW control.
+    kind: i64,
+    /// 0 out of service, 1 AC voltage control, 2 fixed AC power factor.
+    mode: i64,
+    /// kV under TYPE 1, MW under TYPE 2 (positive feeds the AC network).
+    dcset: f64,
+    /// Regulated voltage (per unit) under MODE 1, power factor under MODE 2.
+    acset: f64,
+    /// Converter loss `ALOSS + BLOSS·Idc` in kW (BLOSS in kW per A), never
+    /// below `MINLOSS` kW.
+    aloss: f64,
+    bloss: f64,
+    minloss: f64,
+    smax: f64,
+    imax: f64,
+    pwf: f64,
+    maxq: f64,
+    minq: f64,
+    vsreg: usize,
+    nreg: i64,
+    rmpct: f64,
+}
+
+impl VscConverter {
+    /// Converter loss in MW at DC current `current_ka`.
+    fn calc_loss_mw(&self, current_ka: f64) -> f64 {
+        (self.aloss + self.bloss * current_ka.abs() * 1000.0).max(self.minloss) / 1000.0
+    }
+
+    fn to_extra(self) -> Value {
+        let mut record = serde_json::Map::new();
+        record.insert("type".into(), Value::from(self.kind));
+        record.insert("mode".into(), Value::from(self.mode));
+        for (key, value) in [
+            ("dcset", self.dcset),
+            ("acset", self.acset),
+            ("aloss", self.aloss),
+            ("bloss", self.bloss),
+            ("minloss", self.minloss),
+            ("smax", self.smax),
+            ("imax", self.imax),
+            ("pwf", self.pwf),
+            ("rmpct", self.rmpct),
+        ] {
+            record.insert(key.into(), jnum(value));
+        }
+        record.insert("vsreg".into(), Value::from(self.vsreg));
+        record.insert("nreg".into(), Value::from(self.nreg));
+        Value::Object(record)
+    }
+}
+
+/// Read one VSC converter line: `IBUS, TYPE, MODE, DCSET, ACSET, ALOSS,
+/// BLOSS, MINLOSS, SMAX, IMAX, PWF, MAXQ, MINQ`, then `REMOT, RMPCT` through
+/// revision 34 and `VSREG, NREG, RMPCT` at revision 35. An `RMPCT` outside
+/// `(0, 100]` is not a percentage PSS/E can apply, so it reads as 100 with a
+/// diagnostic.
+fn read_vsc_converter(
+    f: &[Cow<'_, str>],
+    raw_rev: u32,
+    record: usize,
+    side: usize,
+    warnings: &mut Diagnostics,
+) -> Result<VscConverter> {
+    let (nreg, rmpct_at) = if raw_rev >= 35 {
+        (int_at(f, 14, 0)?, 15)
+    } else {
+        (0, 14)
+    };
+    let mut rmpct = num_at(f, rmpct_at, 100.0)?;
+    if !(rmpct > 0.0 && rmpct <= 100.0) {
+        warnings.push(
+            &codes::READ_PSSE_VALUE_SUBSTITUTED,
+            format!(
+                "VSC DC line record {record} converter {side}: RMPCT {rmpct} is outside (0, 100]; read as 100"
+            ),
+        );
+        rmpct = 100.0;
+    }
+    Ok(VscConverter {
+        bus: id_at(f, 0, 0)?,
+        kind: int_at(f, 1, 0)?,
+        mode: int_at(f, 2, 1)?,
+        dcset: num_at(f, 3, 0.0)?,
+        acset: num_at(f, 4, 1.0)?,
+        aloss: num_at(f, 5, 0.0)?,
+        bloss: num_at(f, 6, 0.0)?,
+        minloss: num_at(f, 7, 0.0)?,
+        smax: num_at(f, 8, 0.0)?,
+        imax: num_at(f, 9, 0.0)?,
+        pwf: num_at(f, 10, 1.0)?,
+        maxq: num_at(f, 11, 9999.0)?,
+        minq: num_at(f, 12, -9999.0)?,
+        vsreg: id_at(f, 13, 0)?,
+        nreg,
+        rmpct,
+    })
+}
+
+/// The AC powers of a two-converter VSC line at its schedule, MW injected
+/// into the AC network at converter 1 and converter 2, and the DC voltage
+/// the voltage-controlling converter holds.
+///
+/// One converter schedules power (TYPE 2, `DCSET` MW, positive feeding the
+/// AC network); the other holds the DC voltage (TYPE 1, `DCSET` kV) and
+/// takes whatever the power schedule leaves after both converters' losses
+/// and the `I²·RDC` drop of the DC line. The DC current solves
+/// `V·I + RDC·I² = P_dc` at the voltage-controlling end, and each converter's
+/// loss depends on that current, so the two are iterated together. `None`
+/// when the pair is not one TYPE 2 and one TYPE 1 converter, the scheduled
+/// voltage is not positive, or the schedule has no real current.
+fn calc_vsc_powers(converters: [&VscConverter; 2], rdc: f64) -> Option<(f64, f64, f64)> {
+    let (power, voltage) = match (converters[0].kind, converters[1].kind) {
+        (2, 1) => (0, 1),
+        (1, 2) => (1, 0),
+        _ => return None,
+    };
+    let v = converters[voltage].dcset;
+    if v.is_nan() || v <= 0.0 {
+        return None;
+    }
+    // Power the scheduling converter takes from its AC bus into the DC line.
+    let withdrawn = -converters[power].dcset;
+    let mut current = withdrawn / v;
+    for _ in 0..50 {
+        let sent = withdrawn - converters[power].calc_loss_mw(current);
+        let next = if rdc > 0.0 {
+            let discriminant = v.mul_add(v, 4.0 * rdc * sent);
+            if discriminant < 0.0 {
+                return None;
+            }
+            (discriminant.sqrt() - v) / (2.0 * rdc)
+        } else {
+            sent / v
+        };
+        let settled = (next - current).abs() <= 1e-12 * next.abs().max(1.0);
+        current = next;
+        if settled {
+            break;
+        }
+    }
+    let arrived = v * current;
+    let delivered = arrived - converters[voltage].calc_loss_mw(current);
+    let mut powers = [0.0; 2];
+    powers[power] = -withdrawn;
+    powers[voltage] = delivered;
+    (powers.iter().all(|p| p.is_finite())).then_some((powers[0], powers[1], v))
+}
+
+/// The reactive power a converter injects into its AC bus at active
+/// injection `p`: zero under AC voltage control (MODE 1), whose reactive
+/// output the solution sets, and `p·tan(acos|PF|)` signed by the power
+/// factor under fixed power factor control (MODE 2).
+fn calc_vsc_reactive_power(converter: &VscConverter, p: f64) -> f64 {
+    if converter.mode != 2 {
+        return 0.0;
+    }
+    let pf = converter.acset.abs().min(1.0);
+    if pf == 0.0 {
+        return 0.0;
+    }
+    p * (1.0 - pf * pf).sqrt() / pf * converter.acset.signum()
+}
+
+/// Read one VSC DC line record into the neutral [`Hvdc`]: the control line
+/// `'NAME', MDC, RDC, O1, F1, ..., O4, F4`, then one line per converter.
+/// `MDC = 0`, or a converter with `TYPE` or `MODE` 0, blocks the line: it
+/// reads out of service and keeps its schedule, as a two-terminal line does.
+///
+/// `from` is converter 1's AC bus and `to` converter 2's, with `pf` the power
+/// converter 1 takes from its bus and `pt` the power converter 2 feeds into
+/// its bus ([`calc_vsc_powers`]), in the MATPOWER `dcline` convention every
+/// reader shares. A converter under AC voltage control states no reactive
+/// power and records its regulation; one under fixed power factor injects
+/// the reactive power that factor implies. The PSS/E control fields of each
+/// converter ride in extras so the writer restates the record.
+#[expect(clippy::too_many_lines)]
+fn read_vsc_line(
+    l1: &[Cow<'_, str>],
+    c1: &[Cow<'_, str>],
+    c2: &[Cow<'_, str>],
+    index: usize,
+    raw_rev: u32,
+    bus_base_kv: &BTreeMap<BusId, f64>,
+    warnings: &mut Diagnostics,
+) -> Result<Hvdc> {
+    let record = index + 1;
+    let name = l1.first().map_or_else(String::new, ToString::to_string);
+    let mdc = int_at(l1, 1, 1)?;
+    let rdc = num_at(l1, 2, 0.0)?;
+    let converters = [
+        read_vsc_converter(c1, raw_rev, record, 1, warnings)?,
+        read_vsc_converter(c2, raw_rev, record, 2, warnings)?,
+    ];
+    let blocked = mdc == 0 || converters.iter().any(|c| c.kind == 0 || c.mode == 0);
+    let schedule = calc_vsc_powers([&converters[0], &converters[1]], rdc);
+    let (p1, p2, nominal) = if let Some(powers) = schedule {
+        powers
+    } else {
+        if !blocked {
+            warnings.push(
+                &codes::READ_PSSE_VALUE_SUBSTITUTED,
+                format!(
+                    "VSC DC line record {record} states converter types {} and {} with DC setpoints {} and {}; a line needs one MW-controlling (TYPE 2) and one DC voltage-controlling (TYPE 1) converter at a positive voltage, so both ends read as zero",
+                    converters[0].kind, converters[1].kind, converters[0].dcset, converters[1].dcset
+                ),
+            );
+        }
+        (0.0, 0.0, 0.0)
+    };
+    let q = [
+        calc_vsc_reactive_power(&converters[0], p1),
+        calc_vsc_reactive_power(&converters[1], p2),
+    ];
+    let converter = |side: usize, c: &VscConverter| -> Result<HvdcConverter> {
+        let regulated = BusId(if c.vsreg == 0 { c.bus } else { c.vsreg });
+        let base_kv = bus_base_kv.get(&regulated).copied().filter(|kv| *kv > 0.0);
+        let local = if name.is_empty() {
+            format!("vsc{record}:{side}")
+        } else {
+            format!("{name}:{side}")
+        };
+        Ok(HvdcConverter {
+            component: powerio_core::ComponentId::new("hvdc_converter", local).map_err(
+                |error| Error::FormatRead {
+                    format: FMT,
+                    message: error.to_string(),
+                },
+            )?,
+            kind: HvdcConverterKind::Vsc,
+            // The losses are the record's own ALOSS/BLOSS/MINLOSS model,
+            // already folded into `pf - pt`.
+            loss_factor_percent: 0.0,
+            voltage_regulator_on: Some(c.mode == 1),
+            voltage_setpoint_kv: (c.mode == 1)
+                .then(|| base_kv.map(|kv| c.acset * kv))
+                .flatten(),
+            reactive_power_setpoint_mvar: None,
+            power_factor: (c.mode == 2).then_some(c.acset),
+            regulating_terminal: None,
+        })
+    };
+    let mut extras = Extras::new();
+    if name != format!("VSC{record}") {
+        extras.insert("psse_vsc_name".into(), Value::String(name.clone()));
+    }
+    if !(0..=1).contains(&mdc) {
+        extras.insert("psse_vsc_mdc".into(), Value::from(mdc));
+    }
+    // The owner tail; a RAWX row states every column, so trailing empty ones
+    // restate nothing.
+    let owners = l1.len()
+        - l1.iter()
+            .skip(3)
+            .rev()
+            .take_while(|token| token.is_empty())
+            .count();
+    if owners > 3 {
+        extras.insert("psse_vsc_owners".into(), tail_array(&l1[..owners], 3));
+    }
+    for (side, c) in converters.iter().enumerate() {
+        extras.insert(vsc_converter_key(side + 1), c.to_extra());
+    }
+    let limit = converters
+        .iter()
+        .map(|c| c.smax)
+        .filter(|s| *s > 0.0)
+        .fold(f64::INFINITY, f64::min);
+    let pmax = if limit.is_finite() {
+        limit
+    } else {
+        p1.abs().max(p2.abs())
+    };
+    let voltage = |c: &VscConverter| if c.mode == 1 { c.acset } else { 1.0 };
+    Ok(Hvdc {
+        from: BusId(converters[0].bus),
+        to: BusId(converters[1].bus),
+        in_service: !blocked,
+        pf: -p1,
+        pt: p2,
+        qf: q[0],
+        qt: q[1],
+        vf: voltage(&converters[0]),
+        vt: voltage(&converters[1]),
+        pmin: -pmax,
+        pmax,
+        qminf: converters[0].minq,
+        qmaxf: converters[0].maxq,
+        qmint: converters[1].minq,
+        qmaxt: converters[1].maxq,
+        loss0: 0.0,
+        loss1: 0.0,
+        resistance_ohm: Some(rdc),
+        nominal_voltage_kv: (nominal > 0.0).then_some(nominal),
+        converters_mode: Some(if p1 <= 0.0 {
+            HvdcConvertersMode::Side1RectifierSide2Inverter
+        } else {
+            HvdcConvertersMode::Side1InverterSide2Rectifier
+        }),
+        converter1: Some(converter(1, &converters[0])?),
+        converter2: Some(converter(2, &converters[1])?),
         cost: None,
         uid: None,
         extras,
@@ -6976,10 +7575,11 @@ COMMENT
 0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
 0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA
 0 / END OF TWO-TERMINAL DC DATA, BEGIN VSC DC LINE DATA
-'VSC1', 1
-2, 3
-0
 0 / END OF VSC DC LINE DATA, BEGIN IMPEDANCE CORRECTION DATA
+1, -30.0, 1.1
+2, 0.0, 1.0
+0
+0 / END OF IMPEDANCE CORRECTION DATA, BEGIN MULTI-TERMINAL DC DATA
 Q
 ";
         let mut warnings = Diagnostics::new();
@@ -6988,7 +7588,7 @@ Q
             warnings
                 .lines()
                 .iter()
-                .any(|w| w.contains("VSC DC LINE section (2 record line(s))")),
+                .any(|w| w.contains("IMPEDANCE CORRECTION section (2 record line(s))")),
             "bare terminator should not be counted as skipped data: {warnings:?}"
         );
     }
@@ -7037,6 +7637,272 @@ Q
         close(c.blocks[0].b, 25.0);
         assert_eq!(c.blocks[1].steps, 1);
         close(c.blocks[1].b, 50.0);
+    }
+
+    /// A three bus case at revision `rev` with one VSC DC line from bus 4 to
+    /// bus 5. `c1` and `c2` are the converter lines after `IBUS`; revision 35
+    /// states `VSREG, NREG, RMPCT` at their end and earlier revisions
+    /// `REMOT, RMPCT`.
+    fn vsc_case(rev: u32, mdc: &str, c1: &str, c2: &str) -> String {
+        format!(
+            "0, 100.00, {rev}, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+4,'B4          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+5,'B5          ', 345.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA
+0 / END OF TWO-TERMINAL DC DATA, BEGIN VSC DC LINE DATA
+'LINK A', {mdc}, 2.0, 1, 1.0
+4, {c1}
+5, {c2}
+0 / END OF VSC DC LINE DATA, BEGIN IMPEDANCE CORRECTION DATA
+Q
+"
+        )
+    }
+
+    /// Converter 1 schedules 200 MW out of its AC bus at power factor 0.95;
+    /// converter 2 holds 400 kV and regulates its AC bus at 1.02 per unit.
+    /// Both lose `500 + 2·I` kW, at least 600 kW.
+    fn vsc_converters(rev: u32, rmpct: &str) -> (String, String) {
+        let regulation = if rev >= 35 { "0, 0" } else { "0" };
+        (
+            format!(
+                "2, 2, -200.0, 0.95, 500.0, 2.0, 600.0, 300.0, 1000.0, 1.0, 100.0, -100.0, {regulation}, {rmpct}"
+            ),
+            format!(
+                "1, 1, 400.0, 1.02, 500.0, 2.0, 600.0, 300.0, 1000.0, 1.0, 120.0, -110.0, {regulation}, 100.0"
+            ),
+        )
+    }
+
+    /// The operating point of [`vsc_converters`], worked out independently:
+    /// `(pf, pt, qf)`.
+    fn vsc_expected() -> (f64, f64, f64) {
+        let (v, r) = (400.0_f64, 2.0_f64);
+        let loss = |i: f64| (500.0 + 2.0 * i * 1000.0).max(600.0) / 1000.0;
+        let mut i = 0.5_f64;
+        for _ in 0..100 {
+            let sent = 200.0 - loss(i);
+            i = ((v * v + 4.0 * r * sent).sqrt() - v) / (2.0 * r);
+        }
+        let pt = v * i - loss(i);
+        let qf = -200.0 * (1.0 - 0.95_f64 * 0.95).sqrt() / 0.95;
+        (200.0, pt, qf)
+    }
+
+    fn close_to(actual: f64, expected: f64, tol: f64) {
+        assert!((actual - expected).abs() < tol, "{actual} != {expected}");
+    }
+
+    #[test]
+    fn reads_a_vsc_dc_line_at_revisions_33_34_and_35() {
+        let (pf, pt, qf) = vsc_expected();
+        for rev in [33, 34, 35] {
+            let (c1, c2) = vsc_converters(rev, "100.0");
+            let mut warnings = Diagnostics::new();
+            let net = parse_psse_source(&vsc_case(rev, "1", &c1, &c2), None, &mut warnings)
+                .unwrap_or_else(|e| panic!("revision {rev}: {e}"));
+            assert!(
+                !warnings.lines().iter().any(|w| w.contains("VSC DC LINE")),
+                "revision {rev}: the section is read, not skipped: {warnings:?}"
+            );
+            assert_eq!(net.hvdc().len(), 1, "revision {rev}");
+            let dc = &net.hvdc()[0];
+            assert_eq!((dc.from, dc.to), (BusId(4), BusId(5)));
+            assert!(dc.in_service);
+            close_to(dc.pf, pf, 1e-9);
+            close_to(dc.pt, pt, 1e-9);
+            assert!(dc.pt < dc.pf - 2.0, "losses and the DC drop: {}", dc.pt);
+            // Fixed power factor: the rectifier absorbs reactive power.
+            close_to(dc.qf, qf, 1e-9);
+            // AC voltage control states no reactive power; the solution does.
+            close(dc.qt, 0.0);
+            close(dc.vt, 1.02);
+            close(dc.qmaxt, 120.0);
+            close(dc.qmint, -110.0);
+            assert_eq!(dc.resistance_ohm, Some(2.0));
+            assert_eq!(dc.nominal_voltage_kv, Some(400.0));
+            let c1 = dc.converter1.as_ref().unwrap();
+            let c2 = dc.converter2.as_ref().unwrap();
+            assert_eq!(c1.kind, HvdcConverterKind::Vsc);
+            assert_eq!(c1.voltage_regulator_on, Some(false));
+            assert_eq!(c1.power_factor, Some(0.95));
+            assert_eq!(c2.voltage_regulator_on, Some(true));
+            close_to(c2.voltage_setpoint_kv.unwrap(), 1.02 * 345.0, 1e-9);
+            assert_eq!(
+                dc.extras["psse_vsc_name"],
+                Value::String("LINK A".into()),
+                "revision {rev}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_vsc_line_injects_its_terminal_powers_into_the_indexed_view() {
+        let (c1, c2) = vsc_converters(35, "100.0");
+        let net = parse_psse(&vsc_case(35, "1", &c1, &c2)).unwrap();
+        let view = crate::IndexedNetwork::new(&net);
+        let (pf, pt, qf) = vsc_expected();
+        let at = |bus| view.bus_index(BusId(bus)).unwrap();
+        close_to(view.p_hvdc()[at(4)], -pf, 1e-9);
+        close_to(view.q_hvdc()[at(4)], qf, 1e-9);
+        close_to(view.p_hvdc()[at(5)], pt, 1e-9);
+        close(view.q_hvdc()[at(5)], 0.0);
+    }
+
+    #[test]
+    fn an_out_of_range_rmpct_reads_as_100_with_a_diagnostic() {
+        let (c1, c2) = vsc_converters(35, "278000.0");
+        let mut warnings = Diagnostics::new();
+        let net = parse_psse_source(&vsc_case(35, "1", &c1, &c2), None, &mut warnings).unwrap();
+        assert!(
+            warnings
+                .lines()
+                .iter()
+                .any(|w| w.contains("RMPCT 278000 is outside (0, 100]; read as 100")),
+            "{warnings:?}"
+        );
+        let stored = &net.hvdc()[0].extras["psse_vsc_converter1"];
+        assert_eq!(stored["rmpct"], Value::from(100.0));
+        // The power schedule does not depend on RMPCT.
+        close_to(net.hvdc()[0].pf, vsc_expected().0, 1e-9);
+    }
+
+    #[test]
+    fn a_vsc_line_with_mdc_0_is_out_of_service_and_keeps_its_record() {
+        let (c1, c2) = vsc_converters(35, "100.0");
+        let net = parse_psse(&vsc_case(35, "0", &c1, &c2)).unwrap();
+        let dc = &net.hvdc()[0];
+        // Blocked, with the schedule it would run at, as a two-terminal line.
+        assert!(!dc.in_service);
+        close_to(dc.pf, vsc_expected().0, 1e-9);
+        close_to(dc.pt, vsc_expected().1, 1e-9);
+        let back = parse_psse(&write_psse_rev(&net, 35).text).unwrap();
+        assert!(!back.hvdc()[0].in_service);
+        assert_eq!(
+            back.hvdc()[0].extras["psse_vsc_converter1"],
+            dc.extras["psse_vsc_converter1"]
+        );
+    }
+
+    #[test]
+    fn two_dc_voltage_controlling_converters_schedule_no_power() {
+        let (_, c2) = vsc_converters(35, "100.0");
+        let mut warnings = Diagnostics::new();
+        let net = parse_psse_source(&vsc_case(35, "1", &c2, &c2), None, &mut warnings).unwrap();
+        let dc = &net.hvdc()[0];
+        assert!(dc.in_service);
+        close(dc.pf, 0.0);
+        close(dc.pt, 0.0);
+        assert!(
+            warnings
+                .lines()
+                .iter()
+                .any(|w| w.contains("converter types 1 and 1")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn the_writer_restates_vsc_lines_in_their_own_section() {
+        for rev in [33, 34, 35] {
+            let (c1, c2) = vsc_converters(rev, "100.0");
+            let net = parse_psse(&vsc_case(rev, "1", &c1, &c2)).unwrap();
+            let written = write_psse_rev(&net, rev);
+            assert!(
+                written
+                    .diagnostics
+                    .iter()
+                    .all(|d| !d.message().contains("VSC")),
+                "revision {rev}: {:?}",
+                written.diagnostics
+            );
+            let vsc_section = written
+                .text
+                .split("BEGIN VSC DC LINE DATA")
+                .nth(1)
+                .and_then(|rest| rest.split("0 / END OF VSC DC LINE DATA").next())
+                .unwrap();
+            assert!(vsc_section.contains("'LINK A', 1, 2.0"), "{vsc_section}");
+            let two_terminal = written
+                .text
+                .split("BEGIN TWO-TERMINAL DC DATA")
+                .nth(1)
+                .and_then(|rest| rest.split("0 / END OF TWO-TERMINAL DC DATA").next())
+                .unwrap();
+            assert_eq!(two_terminal.trim(), "", "no LCC record for a VSC line");
+            let back = parse_psse(&written.text).unwrap();
+            let (dc, again) = (&net.hvdc()[0], &back.hvdc()[0]);
+            assert_eq!(again.extras, dc.extras, "revision {rev}");
+            for (a, b) in [
+                (again.pf, dc.pf),
+                (again.pt, dc.pt),
+                (again.qf, dc.qf),
+                (again.qt, dc.qt),
+            ] {
+                close_to(a, b, 1e-9);
+            }
+            assert_eq!(again.converter2, dc.converter2);
+        }
+
+        // An edited schedule reaches the MW-controlling converter's DCSET.
+        let (c1, c2) = vsc_converters(35, "100.0");
+        let mut net = parse_psse(&vsc_case(35, "1", &c1, &c2)).unwrap();
+        net.hvdc_mut()[0].pf = 150.0;
+        let written = write_psse_rev(&net, 35);
+        assert!(
+            written
+                .diagnostics
+                .iter()
+                .any(|d| d.message().contains("pt") && d.message().contains("reads back")),
+            "the stated pt no longer matches the record's loss model: {:?}",
+            written.diagnostics
+        );
+        let back = parse_psse(&written.text).unwrap();
+        close_to(back.hvdc()[0].pf, 150.0, 1e-9);
+    }
+
+    #[test]
+    fn a_vsc_line_from_another_format_is_written_with_a_synthesized_record() {
+        let (c1, c2) = vsc_converters(35, "100.0");
+        let mut net = parse_psse(&vsc_case(35, "1", &c1, &c2)).unwrap();
+        // What a reader of another format leaves: typed fields only.
+        let dc = &mut net.hvdc_mut()[0];
+        dc.extras = Extras::new();
+        dc.converter1.as_mut().unwrap().power_factor = None;
+        let written = write_psse_rev(&net, 35);
+        let back = parse_psse(&written.text).unwrap();
+        let again = &back.hvdc()[0];
+        assert_eq!(again.extras["psse_vsc_converter1"]["type"], Value::from(2));
+        assert_eq!(again.extras["psse_vsc_converter2"]["type"], Value::from(1));
+        close_to(again.pf, net.hvdc()[0].pf, 1e-9);
+        // The power factor is derived from the stated terminal powers.
+        close_to(again.qf, net.hvdc()[0].qf, 1e-9);
+        // The losses become a constant loss of the voltage-controlling
+        // converter, so the record delivers what the line states.
+        close_to(again.pt, net.hvdc()[0].pt, 1e-6);
+        assert!(
+            again.extras["psse_vsc_converter2"]["aloss"]
+                .as_f64()
+                .unwrap()
+                > 0.0
+        );
+        assert!(
+            written
+                .diagnostics
+                .iter()
+                .all(|d| !d.message().contains("VSC DC line")),
+            "{:?}",
+            written.diagnostics
+        );
     }
 
     #[test]

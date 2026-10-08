@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- The PSS/E reader reads the VSC DC line section, and the RAWX reader its
+  `vscdc` table, into `Hvdc` with two VSC converters; until now the section
+  was skipped with a `READ.PSSE.SECTION_UNSUPPORTED` diagnostic and its power
+  transfer was lost. The MW-controlling converter (`TYPE 2`) states the
+  schedule in MW, positive feeding the AC network. The DC voltage-controlling
+  converter (`TYPE 1`) takes the remainder after both converters'
+  `ALOSS + BLOSS·Idc` losses (at least `MINLOSS`) and the `I²·RDC` drop at
+  its scheduled DC voltage. A fixed power factor converter (`MODE 2`)
+  injects the reactive power its factor implies, and an AC voltage-controlling
+  one (`MODE 1`) states no reactive power and records its setpoint. `MDC 0`,
+  or a converter with `TYPE` or `MODE` 0, reads the line out of service with
+  its schedule kept. A record without exactly one `TYPE 1` and one `TYPE 2`
+  converter reads as zero power with a diagnostic, and an `RMPCT` outside
+  (0, 100] reads as 100 with a diagnostic. The converter control fields
+  ride in the `psse_vsc_converter1` and `psse_vsc_converter2` extras. PSS/E
+  and RAWX output write every line whose converters are both VSC into the VSC
+  section, restating the MW-controlling converter's `DCSET` from `pf` and
+  `pt`, and report a line whose stated terminal powers the record's own loss
+  model does not reproduce.
+
 - HVDC lines no longer vanish from the balanced calculations. Every reader
   stores an `Hvdc` line in the MATPOWER `dcline` convention, and
   `IndexedNetwork::p_hvdc` and `q_hvdc` now fold each in-service line onto
