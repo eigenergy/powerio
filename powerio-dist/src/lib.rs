@@ -65,6 +65,7 @@ pub mod pmd;
 pub mod readiness;
 #[cfg(test)]
 pub(crate) mod testkit;
+mod transform_audit;
 
 pub use bmopf::{BMOPF_SCHEMA_ID, BMOPF_SCHEMA_VERSION, BmopfEmitOptions, BmopfSchemaVersion};
 pub use cim::{

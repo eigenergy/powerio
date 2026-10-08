@@ -238,6 +238,13 @@ is removed, its complete point stays in the corresponding action's
 `details.source_location`; it is no longer an attachment in the output network.
 These actions are also retained in the network's transformation metadata for
 IR storage. Point metadata never changes the transformation's electrical data.
+When a later transformation replaces a stored audit, the previous record moves
+to the flat `powerio_transform_history` array in network metadata. Each entry
+has `metadata_key` and `record`; the established metadata keys still expose the
+latest audits. Identical records are not archived again. The archive is bounded
+at the module-history limit, and malformed or full archives cause an explicit
+error before replacing a record. Returned reports describe only the current
+call, while IR retains both current and archived records.
 
 The [GridLAB-D oracle harness](https://github.com/eigenergy/powerio/tree/main/evals/gridlabd)
 documents pinned engines, supported physics, canonical and project checks,

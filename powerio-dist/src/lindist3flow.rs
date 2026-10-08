@@ -788,13 +788,15 @@ pub fn prepare_lindist3flow_network(
     prepared
         .validate_component_locations()
         .map_err(|error| fail(error.to_string()))?;
-    prepared.extras_mut().insert(
-        "powerio_lindist3flow_preparation".to_owned(),
+    crate::transform_audit::store(
+        &mut prepared,
+        "powerio_lindist3flow_preparation",
         json!({
             "policy": report.policy,
             "actions": report.actions,
         }),
-    );
+    )
+    .map_err(fail)?;
     Ok(LinDist3FlowPreparedNetwork {
         network: prepared,
         report,

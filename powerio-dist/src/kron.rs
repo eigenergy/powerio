@@ -1033,15 +1033,17 @@ pub fn neutral_kron_reduce(
         .validate_component_locations()
         .map_err(|error| fail(error.to_string()))?;
     update_terminal_conventions(&mut reduced, &report.buses);
-    reduced.extras_mut().insert(
-        "powerio_neutral_kron".to_owned(),
+    crate::transform_audit::store(
+        &mut reduced,
+        "powerio_neutral_kron",
         json!({
             "method": "explicit_neutral_schur_complement",
             "buses": &report.buses,
             "recoveries": &report.recoveries,
             "actions": &report.actions,
         }),
-    );
+    )
+    .map_err(fail)?;
     Ok(NeutralKronReduction {
         network: reduced,
         report,
