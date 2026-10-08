@@ -169,7 +169,7 @@ fn distribution_geometry_is_optional_and_does_not_change_electrical_values() {
     powerio::to_mc_ac_pf_instance(&module).unwrap();
     let matrix =
         powerio_matrix::matrix::multiconductor::calc_multiconductor_admittance_matrix(net).unwrap();
-    assert!(matrix.diagnostics().is_empty());
+    assert_eq!(matrix.diagnostics(), []);
 }
 
 #[test]
