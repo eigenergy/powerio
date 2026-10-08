@@ -77,7 +77,7 @@ fn shunt_connections_obey_ohms_law_with_unbalanced_voltages() {
         }
         assert!(actual.iter().sum::<Complex64>().norm() < 1e-12);
         assert_eq!(circuit.bus.grounded.is_empty(), pair);
-        assert_eq!(bus().grounded.as_slice(), []);
+        assert_eq!(bus().grounded, Vec::<String>::new());
         assert!(
             !circuit
                 .switch
@@ -126,7 +126,7 @@ fn ungrounded_star_floats_at_the_phase_average() {
         .unwrap()
         .circuit(&bus())
         .unwrap();
-    assert_eq!(circuit.bus.grounded.as_slice(), []);
+    assert_eq!(circuit.bus.grounded, Vec::<String>::new());
     assert_eq!(circuit.bus.terminals, ["1", "2", "3", "star"]);
     let voltage = [
         Complex64::new(240.0, 0.0),

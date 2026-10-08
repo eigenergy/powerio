@@ -57,7 +57,7 @@ fn load_switches_preserve_every_supported_connection_and_voltage_model() {
             assert_eq!(open.switch.bus_from, native_bus.id);
             assert_eq!(open.switch.bus_to, open.load.bus);
             assert_eq!(open.switch.terminal_map_from, open.switch.terminal_map_to);
-            assert_eq!(native_bus.grounded.as_slice(), []);
+            assert_eq!(native_bus.grounded, Vec::<String>::new());
             let phases = super::semantics::Connection::decode(code)
                 .unwrap()
                 .phases()
@@ -450,7 +450,7 @@ fn undeclared_zero_sequence_does_not_invent_a_star_for_phase_to_phase_loads() {
                     "UPDATE Element SET Flag_Input=2; UPDATE Terminal SET Flag_Terminal={code}; UPDATE Load SET Flag_Lf={mode},Flag_LoadType={model},Flag_Z0_Input=NULL,R0=NULL,X0=NULL,Z0_Z1=NULL,R0_X0=NULL"
                 ));
                 let circuit = decoded.circuit(&bus(), 400.0).unwrap();
-                assert_eq!(circuit.bus.grounded.as_slice(), []);
+                assert_eq!(circuit.bus.grounded, Vec::<String>::new());
                 assert!(!circuit.load.terminal_map.contains(&"0".into()));
                 assert_eq!(
                     circuit.load.terminal_map.len(),

@@ -195,7 +195,7 @@ fn whole_network_maps_a_single_phase_feeder_without_inventing_remote_phases() {
     assert_eq!(net.lines()[0].terminal_map_to, ["3"]);
     assert_eq!(net.line_codes()[0].n_conductors, 1);
     assert_eq!(net.loads()[0].terminal_map, ["3", "0"]);
-    assert_eq!(net.bus("20").unwrap().grounded.as_slice(), []);
+    assert_eq!(net.bus("20").unwrap().grounded, Vec::<String>::new());
     let output = crate::convert::emit_value_text(&net, crate::DistTargetFormat::PmdJson);
     let parsed = crate::testkit::parse_str(&output.text, "pmd-json").unwrap();
     assert_eq!(parsed.bus("20").unwrap().terminals, ["3"]);
@@ -377,8 +377,8 @@ fn source_voltage_modes_switching_and_phase_maps_are_explicit() {
     let circuit = input.ideal_circuit(&bus, 400.0).unwrap();
     assert_eq!(circuit.switch.terminal_map_from, ["1", "2", "3"]);
     assert!(circuit.switch.open);
-    assert_eq!(bus.grounded.as_slice(), []);
-    assert_eq!(circuit.bus.grounded.as_slice(), []);
+    assert_eq!(bus.grounded, Vec::<String>::new());
+    assert_eq!(circuit.bus.grounded, Vec::<String>::new());
     for v in &circuit.source.v_magnitude {
         assert!((v - 420.0 / 3.0_f64.sqrt()).abs() < 1e-10);
     }
