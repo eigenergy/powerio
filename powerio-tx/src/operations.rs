@@ -83,9 +83,6 @@ impl BalancedNetwork {
     /// source); an empty `Selector` returns a clone-equivalent of the whole case,
     /// and a selector matching no bus returns an empty network.
     #[must_use]
-    // A flat filter pipeline, one stanza per element table; splitting it would add
-    // indirection without clarity.
-    #[expect(clippy::too_many_lines)]
     pub fn subset(&self, sel: &Selector, keep_boundary: bool) -> BalancedNetwork {
         let in_scope: HashSet<BusId> = self
             .buses()
@@ -93,7 +90,26 @@ impl BalancedNetwork {
             .filter(|b| sel.matches(b))
             .map(|b| b.id)
             .collect();
+        self.subset_scope(&in_scope, keep_boundary)
+    }
 
+    /// Carve out the sub-network on exactly `buses`, such as one island of
+    /// [`calc_islands`](BalancedNetwork::calc_islands): the
+    /// [`subset`](BalancedNetwork::subset) rules with no boundary buses, so a
+    /// branch, switch, HVDC line, or 3-winding transformer is kept when every
+    /// bus it touches is in the set. Ids the network does not declare are
+    /// ignored.
+    #[must_use]
+    pub fn subset_buses(&self, buses: &std::collections::BTreeSet<BusId>) -> BalancedNetwork {
+        let in_scope: HashSet<BusId> = buses.iter().copied().collect();
+        self.subset_scope(&in_scope, false)
+    }
+
+    /// [`subset`](BalancedNetwork::subset) over a bus set already chosen.
+    // A flat filter pipeline, one stanza per element table; splitting it would add
+    // indirection without clarity.
+    #[expect(clippy::too_many_lines)]
+    fn subset_scope(&self, in_scope: &HashSet<BusId>, keep_boundary: bool) -> BalancedNetwork {
         // Boundary: the out-of-scope endpoint of any branch/HVDC with exactly one
         // endpoint in scope.
         let mut boundary: HashSet<BusId> = HashSet::new();

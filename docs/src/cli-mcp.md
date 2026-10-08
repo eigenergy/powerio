@@ -31,7 +31,10 @@ closed switches, `exact` for those and branches with `r = 0` and `x = 0`,
 `psse` for those and PSS/E zero impedance lines at the case's `THRSHZ`,
 `psse=<x>` for the same at threshold `x`, or `impedance=<z>` for closed
 switches and non-transformer branches whose impedance magnitude is at most
-`z`. `summary` adds a `bus_merge` block with the counts.
+`z`. `summary` adds a `bus_merge` block with the counts. Its
+`topology.islands` block lists the AC islands with their bus counts, reference
+buses, and generators (see
+[Islands and reference buses](transmission.md#islands-and-reference-buses)).
 
 Format names, structural value types, and diagnostic codes are the same
 strings the language APIs use. Diagnostics print one per line on stderr as

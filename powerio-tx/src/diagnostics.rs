@@ -382,6 +382,18 @@ pub mod codes {
             "a normalize option is outside the range it is defined on", category = Data;
         CANONICALIZE_NORMALIZE_INVALID_BASE_MVA = "CANONICALIZE.NORMALIZE.INVALID_BASE_MVA", Error,
             "the case base MVA is not a positive finite number", category = Data;
+        CANONICALIZE_NORMALIZE_GENERATOR_BUS_RETYPED =
+            "CANONICALIZE.NORMALIZE.GENERATOR_BUS_RETYPED", Warning,
+            "PQ buses hosting an in-service generator were retyped PV, so the generator holds the bus voltage";
+
+        // CANONICALIZE.ISLAND: one reference bus per island.
+        CANONICALIZE_ISLAND_REFERENCE_DESIGNATED =
+            "CANONICALIZE.ISLAND.REFERENCE_DESIGNATED", Warning,
+            "an island stated no reference bus, so its largest generator's bus was designated";
+        CANONICALIZE_ISLAND_REFERENCE_DEMOTED = "CANONICALIZE.ISLAND.REFERENCE_DEMOTED", Warning,
+            "an island stated several reference buses; one was kept and the others demoted";
+        CANONICALIZE_ISLAND_DE_ENERGIZED = "CANONICALIZE.ISLAND.DE_ENERGIZED", Warning,
+            "an island no in-service generator supplies was de-energized";
 
         // CANONICALIZE.MERGE: the explicit bus merge.
         CANONICALIZE_MERGE_ZERO_IMPEDANCE = "CANONICALIZE.MERGE.ZERO_IMPEDANCE", Warning,

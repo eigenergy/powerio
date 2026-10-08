@@ -1327,3 +1327,46 @@ fn merge_buses_refuses_an_unknown_rule_and_a_missing_threshold() {
         "CANONICALIZE.MERGE.INVALID_RULE"
     );
 }
+
+/// Three islands: one with the reference bus, one with generation only, and
+/// one with load only.
+const THREE_ISLANDS: &str = "function mpc = islands
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+\t1\t3\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t2\t1\t50\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t3\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t4\t1\t30\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t5\t1\t20\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t6\t1\t10\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+];
+mpc.gen = [
+\t1\t50\t0\t100\t-100\t1\t100\t1\t200\t0;
+\t3\t30\t0\t100\t-100\t1\t100\t1\t150\t0;
+];
+mpc.branch = [
+\t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t3\t4\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t5\t6\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+];
+";
+
+#[test]
+fn summary_lists_the_islands() {
+    let out = run_with_stdin(
+        &["summary", "-", "--from", "matpower"],
+        THREE_ISLANDS.as_bytes(),
+    );
+    assert_success(&out);
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let islands = &value["topology"]["islands"];
+    assert_eq!(islands["count"], 3);
+    assert_eq!(islands["unsupplied"], 1);
+    assert_eq!(islands["without_reference"], 2);
+    assert_eq!(
+        islands["islands"][0]["reference_buses"],
+        serde_json::json!([1])
+    );
+    assert_eq!(islands["islands"][2]["generators"], 0);
+}
