@@ -982,11 +982,13 @@ Q
     else {
         panic!("PSS/E ZIP load pieces were not typed");
     };
-    close(*p_constant_power, 10.0);
+    // DGENF 1 nets DGENP 4 and DGENQ 2 out of PL and QL, and YQ 1.5 is
+    // capacitive: P = 10 - 4 + 1 + 2 and Q = 3 - 2 + 0.5 - 1.5.
+    close(*p_constant_power, 6.0);
     close(*q_constant_current, 0.5);
     close(*p_constant_impedance, 2.0);
-    close(net.loads()[0].p, 13.0);
-    close(net.loads()[0].q, 5.0);
+    close(net.loads()[0].p, 9.0);
+    close(net.loads()[0].q, 0.0);
 }
 
 #[test]

@@ -3421,7 +3421,8 @@ mod tests {
         let net = parse_rawx_source(MINIMAL, None, &mut diagnostics).unwrap();
         assert_eq!(net.buses().len(), 2);
         close(net.loads()[0].p, 24.0);
-        close(net.loads()[0].q, 11.0);
+        // YQ 4 is capacitive: Q = QL + IQ - YQ.
+        close(net.loads()[0].q, 3.0);
         assert_eq!(net.generators()[0].regulated_bus, Some(BusId(2)));
         close(net.branches()[0].rate_a, 100.0);
     }
