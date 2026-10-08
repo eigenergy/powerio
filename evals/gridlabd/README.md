@@ -116,7 +116,7 @@ Numeric setters are validated in source order even when later overwritten or
 assigned to an inactive phase.
 
 The reader rejects unmodeled physical properties, unknown globals, active
-device classes, geometry-dependent lines, traditional D and split-phase flags, conflicting
+device classes, geometry-dependent lines, split-phase flags, conflicting
 child nominal voltages and names that collide under the current canonical
 case-insensitive lookup. Coordinates attach to root buses, parented loads,
 lines and used line configurations. Unmapped coordinate-bearing objects still
@@ -224,8 +224,8 @@ coefficients follow the actual connection voltage angle; they are not fixed
 current phasors. The writer reconstructs each connection's physical coefficient
 from its own nominal voltage. It also emits complete three-channel typed delta
 loads as explicit pairs, diagnosing the identity split on subsequent import.
-Traditional GLM D flags, scalar real/reactive aliases and incomplete/open-delta
-channel layouts still require additional mapping.
+Traditional GLM D flags and scalar real/reactive aliases use the mappings below.
+Incomplete/open-delta typed channel layouts still require additional mapping.
 
 ```sh
 cargo build -p powerio --example glm_roundtrip
@@ -241,8 +241,38 @@ an independent nonlinear circuit solve: 192 runs and 5,376 complex comparisons.
 The reference checks KCL to 1e-9 A. Every case must reject a changed connection;
 current cases must also reject a fixed-phasor interpretation. Merely reversing
 an impedance's terminals is electrically identical and is not a valid negative
-control. This qualifies explicit connection laws, not broader delta/split-phase
+control. This qualifies explicit connection laws, not split-phase
 or cross-format compatibility.
+
+### Traditional delta flags and scalar setters
+
+On a `load`, the `D` flag connects legacy A/B/C demand terms to AB/BC/CA.
+`nominal_voltage` remains the phase-to-earth base; each pair uses √3 times
+that voltage. Legacy and explicit properties remain additive, even on the
+same pair. `D` on node/meter/load objects preserves ordinary source phasor
+references and does not introduce a line-neutral conductor. Link `D` flags
+are not yet qualified. A stated load channel with an absent endpoint fails,
+including an explicitly stated zero channel.
+
+The `_real` and `_reac` setters mutate the corresponding complex property in
+source order for all nine legacy/explicit suffixes and all three P/I/Z laws.
+Power parts use W/VAr, currents use A and impedances use Ohm; supported scaled
+units convert before assignment. A later full complex setter replaces both
+parts. Every setter is validated, including values subsequently overwritten.
+
+```sh
+python evals/gridlabd/delta_load_oracle.py --pnnl-root "$PNNL_ROOT" \
+  --bridge target/debug/examples/glm_roundtrip --output /tmp/gld-delta
+```
+
+Twelve synthetic circuits exercise individual legacy delta channels, phase
+subsets, mixed legacy/explicit laws, a root delta load and both setter orders
+in wye and delta. Both pinned forks run NR and FBS. Each native input and five
+canonical variants must match the independent nonlinear KCL reference. A
+wye/delta substitution must fail; current cases also reject fixed phasors.
+The generator asserts its root-object substitution so a missing injection
+cannot accidentally qualify the circuit. This covers these static demand
+laws; it does not establish transformer, split-phase or full feeder support.
 
 ## Facade profiles and source-project replay
 

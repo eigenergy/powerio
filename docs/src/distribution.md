@@ -220,9 +220,14 @@ explicit terms on the same connection. Explicit pairs map to two-terminal
 typed loads; current terms follow the connection voltage angle. Canonical
 output preserves each load's voltage base and can express a complete typed
 three-channel delta load as explicit pairs. It reports the resulting component
-identity split and any terminal orientation normalization. Traditional GLM D
-flags, scalar real/reactive aliases and incomplete delta channel layouts are
-not yet supported.
+identity split and any terminal orientation normalization. A load's traditional
+`D` flag maps legacy A/B/C terms to AB/BC/CA respectively; its stated nominal
+voltage remains phase-to-earth, so the pair voltage base is √3 times that value.
+Real/reactive setters (`_real`, `_reac`) update the corresponding complex part
+in source order, with native units. They work for legacy and explicit channels.
+The `D` flag on node/meter/load objects does not create a neutral conductor or
+change the source phasor reference. Incomplete typed delta channel layouts,
+split-phase services and explicit line neutrals remain under implementation.
 
 Ordinary-phase `switch` objects import their fixed status, banked or individual
 phase states and native contact impedance. Finite closed contacts become exact

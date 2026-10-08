@@ -3,8 +3,9 @@
 //! The source layer preserves statements and source spans without executing GLM
 //! scripts or certifying electrical meaning. Raw syntax keeps
 //! directives inert; preprocessing resolves only the supported local profile.
-//! [`parse`] separately imports phase-to-earth and explicit phase-pair P/I/Z
-//! loads and the explicit line-matrix profile, rejecting unmodeled physics.
+//! [`parse`] separately imports phase-to-earth and phase-pair P/I/Z loads,
+//! including traditional delta flags and scalar setters, and the explicit
+//! line-matrix profile, rejecting unmodeled physics.
 //! Distribution and facade dispatch select PNNL 5.3 for `.glm`/`gridlabd`, or
 //! Arras 4.3 for `gridlabd-arras`. Same-profile emission replays acquired project
 //! files; [`emit_canonical`] generates a single file from current typed values.

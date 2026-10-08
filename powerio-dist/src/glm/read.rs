@@ -283,8 +283,13 @@ impl Reader<'_> {
                     // assignment overwrites the value or its phase is absent.
                     let result = self.project.quantity(property, kind, Some(unit))?;
                     self.diagnostics.extend(result.diagnostics);
-                    self.quantities
-                        .insert((object.key(), name.to_owned()), result.value);
+                    Self::assign_quantity(
+                        &mut self.quantities,
+                        object.key(),
+                        class,
+                        name,
+                        result.value,
+                    );
                 }
             }
         }
@@ -336,7 +341,7 @@ impl Reader<'_> {
     fn buses(&mut self) -> Result<(), Error> {
         let roots: BTreeSet<_> = self.roots.values().copied().collect();
         for key in roots {
-            let phases = parse_phases(
+            let phases = parse_bus_phases(
                 self.text(key, "phases")?
                     .as_deref()
                     .ok_or_else(|| self.error(key, "explicit phases are required"))?,
@@ -363,13 +368,34 @@ impl Reader<'_> {
         Ok(())
     }
 
+    fn assign_quantity(
+        quantities: &mut BTreeMap<(ObjectKey, String), Complex64>,
+        key: ObjectKey,
+        class: &str,
+        name: &str,
+        value: Complex64,
+    ) {
+        if let Some((canonical, Some(imaginary), _, _)) =
+            (class == "load").then(|| loads::property(name)).flatten()
+        {
+            let previous = quantities.entry((key, canonical.to_owned())).or_default();
+            if imaginary {
+                previous.im = value.re;
+            } else {
+                previous.re = value.re;
+            }
+        } else {
+            quantities.insert((key, name.to_owned()), value);
+        }
+    }
+
     fn loads_and_sources(&mut self) -> Result<(), Error> {
         let entries: Vec<_> = self.roots.iter().map(|(&k, &r)| (k, r)).collect();
         for (key, root) in entries {
             let phases = if key == root {
                 self.phases[&root].clone()
             } else {
-                let phases = parse_phases(
+                let phases = parse_bus_phases(
                     self.text(key, "phases")?
                         .as_deref()
                         .ok_or_else(|| self.error(key, "child requires explicit phases"))?,
@@ -419,8 +445,13 @@ impl Reader<'_> {
             if class(&self.index.objects()[key.ordinal()]) != "load" {
                 continue;
             }
-            self.load_terms(key, root, &phases, nominal)?;
-            self.explicit_load_terms(key, root, &phases, nominal)?;
+            let delta = self
+                .text(key, "phases")?
+                .is_some_and(|flags| flags.contains('D'));
+            if !delta {
+                self.load_terms(key, root, &phases, nominal)?;
+            }
+            self.connected_load_terms(key, root, &phases, nominal, delta)?;
         }
         Ok(())
     }
@@ -745,18 +776,7 @@ fn allowed_property(class: &str, name: &str) -> bool {
                 | "voltage_B"
                 | "voltage_C"
         ))
-        || (class == "load"
-            && [
-                "constant_power_",
-                "constant_current_",
-                "constant_impedance_",
-            ]
-            .iter()
-            .any(|prefix| {
-                name.strip_prefix(prefix).is_some_and(|v| {
-                    matches!(v, "A" | "B" | "C" | "AB" | "BC" | "CA" | "AN" | "BN" | "CN")
-                })
-            }))
+        || (class == "load" && loads::property(name).is_some())
         || (class == "overhead_line"
             && matches!(name, "phases" | "from" | "to" | "length" | "configuration"))
         || (class == "line_configuration" && matrix_property(name))
@@ -793,20 +813,7 @@ fn quantity_spec(class: &str, name: &str) -> Option<(GlmQuantityKind, &'static s
         }
     }
     if class == "load" {
-        for (prefix, unit) in [
-            ("constant_power_", "VA"),
-            ("constant_current_", "A"),
-            ("constant_impedance_", "Ohm"),
-        ] {
-            if name.strip_prefix(prefix).is_some_and(|phase| {
-                matches!(
-                    phase,
-                    "A" | "B" | "C" | "AB" | "BC" | "CA" | "AN" | "BN" | "CN"
-                )
-            }) {
-                return Some((Complex, unit));
-            }
-        }
+        return loads::property(name).map(|(_, _, kind, unit)| (kind, unit));
     }
     if class == "overhead_line" && name == "length" {
         return Some((Real, "ft"));
@@ -833,6 +840,13 @@ pub(super) fn nominal_phasor(magnitude: f64, phase: usize) -> Complex64 {
         ][phase],
     )
 }
+fn parse_bus_phases(text: &str) -> Result<Vec<usize>, &'static str> {
+    if text.bytes().filter(|&c| c == b'D').count() > 1 {
+        return Err("duplicate delta phase flag");
+    }
+    parse_phases(&text.replace('D', ""))
+}
+
 fn parse_phases(text: &str) -> Result<Vec<usize>, &'static str> {
     let mut phases = BTreeSet::new();
     let mut neutral = false;

@@ -5,6 +5,50 @@ use crate::{Configuration, DistLoad, DistLoadVoltageModel, DistLocationTarget};
 use num_complex::Complex64;
 use powerio_core::Error;
 
+/// Canonical complex property, optional real/imaginary part, and native unit.
+pub(super) fn property(
+    name: &str,
+) -> Option<(
+    &str,
+    Option<bool>,
+    crate::glm::GlmQuantityKind,
+    &'static str,
+)> {
+    use crate::glm::GlmQuantityKind::{Complex, Real};
+    let (canonical, part) = if let Some(base) = name.strip_suffix("_real") {
+        (base, Some(false))
+    } else if let Some(base) = name.strip_suffix("_reac") {
+        (base, Some(true))
+    } else {
+        (name, None)
+    };
+    for (prefix, unit) in [
+        ("constant_power_", "VA"),
+        ("constant_current_", "A"),
+        ("constant_impedance_", "Ohm"),
+    ] {
+        if canonical.strip_prefix(prefix).is_some_and(|suffix| {
+            matches!(
+                suffix,
+                "A" | "B" | "C" | "AB" | "BC" | "CA" | "AN" | "BN" | "CN"
+            )
+        }) {
+            let unit = match (unit, part) {
+                ("VA", Some(false)) => "W",
+                ("VA", Some(true)) => "VAr",
+                _ => unit,
+            };
+            return Some((
+                canonical,
+                part,
+                if part.is_some() { Real } else { Complex },
+                unit,
+            ));
+        }
+    }
+    None
+}
+
 impl Reader<'_> {
     pub(super) fn explicit_load_term_count(&self, key: ObjectKey) -> usize {
         ["power", "current", "impedance"]
@@ -21,22 +65,45 @@ impl Reader<'_> {
             .sum()
     }
 
-    pub(super) fn explicit_load_terms(
+    pub(super) fn connected_load_terms(
         &mut self,
         key: ObjectKey,
         root: ObjectKey,
         phases: &[usize],
         nominal: f64,
+        delta: bool,
     ) -> Result<(), Error> {
-        let legacy_present = ["power", "current", "impedance"].iter().any(|law| {
-            phases.iter().any(|&p| {
-                self.quantity(key, &format!("constant_{law}_{}", super::phase_name(p)))
-                    .is_some()
+        let legacy_present = !delta
+            && ["power", "current", "impedance"].iter().any(|law| {
+                phases.iter().any(|&p| {
+                    self.quantity(key, &format!("constant_{law}_{}", super::phase_name(p)))
+                        .is_some()
+                })
+            });
+        let channels: Vec<_> = EXPLICIT
+            .into_iter()
+            .chain(
+                delta
+                    .then_some([("A", 0, Some(1)), ("B", 1, Some(2)), ("C", 2, Some(0))])
+                    .into_iter()
+                    .flatten(),
+            )
+            .collect();
+        let term_count: usize = ["power", "current", "impedance"]
+            .iter()
+            .map(|law| {
+                channels
+                    .iter()
+                    .filter(|(suffix, _, _)| {
+                        self.quantity(key, &format!("constant_{law}_{suffix}"))
+                            .is_some()
+                    })
+                    .count()
             })
-        });
-        let sole_term = self.explicit_load_term_count(key) == 1 && !legacy_present;
+            .sum();
+        let sole_term = term_count == 1 && !legacy_present;
         for law in ["power", "current", "impedance"] {
-            for (suffix, from, to) in EXPLICIT {
+            for &(suffix, from, to) in &channels {
                 let Some(value) = self.quantity(key, &format!("constant_{law}_{suffix}")) else {
                     continue;
                 };
