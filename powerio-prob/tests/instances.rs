@@ -337,20 +337,27 @@ fn zero_impedance_branches_are_preserved_until_the_explicit_merge() {
     // merged network projects.
     let (merged, mapping, diagnostics) = merge_zero_impedance_buses(&net).unwrap();
     assert_eq!(mapping.merged_buses.get(&BusId(6)), Some(&BusId(5)));
-    assert_eq!(mapping.removed_branches, vec!["tie-5-6".to_owned()]);
+    // The case's own 5-6 line is in parallel with the tie, so the merge
+    // shorts it and removes it rather than leaving a self loop.
+    assert_eq!(
+        mapping.removed_branches,
+        vec!["5-6".to_owned(), "tie-5-6".to_owned()]
+    );
     assert!(
         diagnostics
             .iter()
             .any(|d| d.code() == "CANONICALIZE.MERGE.ZERO_IMPEDANCE")
     );
-    assert_eq!(merged.buses().len(), net.buses().len() - 1);
-    assert_eq!(merged.branches().len(), branch_count - 1);
     assert!(
-        merged
-            .branches()
+        diagnostics
             .iter()
-            .all(|branch| { branch.from != BusId(6) && branch.to != BusId(6) })
+            .any(|d| d.code() == "CANONICALIZE.MERGE.ELEMENT_SHORTED")
     );
+    assert_eq!(merged.buses().len(), net.buses().len() - 1);
+    assert_eq!(merged.branches().len(), branch_count - 2);
+    assert!(merged.branches().iter().all(|branch| {
+        branch.from != BusId(6) && branch.to != BusId(6) && branch.from != branch.to
+    }));
     // The untouched input network still carries the branch.
     assert_eq!(net.branches().len(), branch_count);
 }

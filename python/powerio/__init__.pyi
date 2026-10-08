@@ -32,6 +32,7 @@ __all__ = [
     "ApparentPower",
     "Artifact",
     "BalancedNetwork",
+    "BusMerge",
     "CalculationUpdate",
     "ComponentId",
     "ContingencySet",
@@ -829,6 +830,75 @@ class DisplayData(NamedTuple):
     kind: Literal["powerworld"]
     data: PwdDisplay
 
+class BusGroup(TypedDict):
+    survivor: int
+    members: List[int]
+
+class RemovedBranch(TypedDict):
+    row: int
+    id: str
+    from_id: int
+    to_id: int
+    survivor: int
+    reason: Literal["zero_impedance", "closed_switch", "shorted"]
+    in_service: bool
+    r: float
+    x: float
+    b: float
+    rate_a: float
+    rate_b: float
+    rate_c: float
+
+class RemovedSwitch(TypedDict):
+    row: int
+    id: str
+    from_id: int
+    to_id: int
+    survivor: int
+    reason: Literal["zero_impedance", "closed_switch", "shorted"]
+    closed: bool
+    thermal_rating: Optional[float]
+
+class RemovedFlow(TypedDict):
+    p_from: float
+    method: Literal["out_of_service", "tree", "reactance", "minimum_norm"]
+
+class RemovedFlows(TypedDict):
+    branches: List[RemovedFlow]
+    switches: List[RemovedFlow]
+    diagnostics: List[Diagnostic]
+
+class BusMerge:
+    _inner: Any
+    def __init__(self, inner: Any) -> None: ...
+    @property
+    def network(self) -> "BalancedNetwork": ...
+    @property
+    def rule(self) -> str: ...
+    @property
+    def merged_buses(self) -> Dict[int, int]: ...
+    @property
+    def groups(self) -> List[BusGroup]: ...
+    @property
+    def removed_branches(self) -> List[RemovedBranch]: ...
+    @property
+    def removed_switches(self) -> List[RemovedSwitch]: ...
+    @property
+    def branch_rows(self) -> List[Optional[int]]: ...
+    @property
+    def switch_rows(self) -> List[Optional[int]]: ...
+    @property
+    def diagnostics(self) -> List[Diagnostic]: ...
+    def survivor(self, bus: int) -> int: ...
+    def calc_removed_flows(
+        self,
+        branch_p_from: Any,
+        branch_p_to: Any,
+        *,
+        generator_p: Any = ...,
+        transformer_3w_p: Any = ...,
+    ) -> RemovedFlows: ...
+
 class BalancedNetwork:
     # Data attributes and the non-matrix methods delegate to the compiled
     # `_powerio._BalancedNetwork` handle at runtime via `BalancedNetwork.__getattr__`.
@@ -964,6 +1034,13 @@ class BalancedNetwork:
         self,
         formula: BranchSusceptanceFormula = ...,
     ) -> Any: ...
+    def merge_buses(
+        self,
+        *,
+        closed_switches: bool = ...,
+        zero_impedance: Optional[Literal["exact", "psse", "impedance"]] = ...,
+        threshold: Optional[float] = ...,
+    ) -> "BusMerge": ...
     def to_normalized(
         self,
         *,

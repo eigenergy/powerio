@@ -923,6 +923,54 @@ impl PyBalancedNetwork {
         Ok(case_from_parts(normalized.network, diagnostics))
     }
 
+    /// Merge the buses closed switches and zero impedance branches join.
+    /// `zero_impedance` is `None`, `"exact"`, `"psse"`, or `"impedance"`;
+    /// `"psse"` reads the case's stated threshold unless `threshold` names
+    /// one, and `"impedance"` requires `threshold`.
+    #[pyo3(signature = (*, closed_switches=true, zero_impedance=None, threshold=None))]
+    fn merge_buses(
+        &self,
+        closed_switches: bool,
+        zero_impedance: Option<&str>,
+        threshold: Option<f64>,
+    ) -> PyResult<PyBusMerge> {
+        use powerio_tx::{BusMergeRule, ZeroImpedanceRule};
+        let branch_rule = match (zero_impedance, threshold) {
+            (None, None) => None,
+            (Some("exact"), None) => Some(ZeroImpedanceRule::Exact),
+            (Some("psse"), Some(threshold)) => Some(ZeroImpedanceRule::PsseThreshold(threshold)),
+            (Some("psse"), None) => {
+                BusMergeRule::psse(self.inner())
+                    .map_err(core_pyerr)?
+                    .zero_impedance
+            }
+            (Some("impedance"), Some(threshold)) => {
+                Some(ZeroImpedanceRule::ImpedanceMagnitude(threshold))
+            }
+            (Some("impedance"), None) => {
+                return Err(PyValueError::new_err(
+                    "zero_impedance=\"impedance\" requires a threshold",
+                ));
+            }
+            (None | Some("exact"), Some(_)) => {
+                return Err(PyValueError::new_err(
+                    "threshold applies only to zero_impedance=\"psse\" or \"impedance\"",
+                ));
+            }
+            (Some(other), _) => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown zero_impedance rule {other:?}; expected \"exact\", \"psse\", or \"impedance\""
+                )));
+            }
+        };
+        let rule = BusMergeRule::new(closed_switches, branch_rule);
+        let merge = self.inner().merge_buses(&rule).map_err(core_pyerr)?;
+        let mut diagnostics = self.diagnostics().to_vec();
+        diagnostics.extend(merge.diagnostics.iter().cloned());
+        let network = case_from_parts(merge.network.clone(), diagnostics);
+        Ok(PyBusMerge { merge, network })
+    }
+
     // --- matrix calculations: each returns a COO tuple -----------------
 
     /// MATPOWER FDPF Bp matrix. `skip_zero_impedance=False` refuses a zero
@@ -1679,6 +1727,212 @@ impl From<&powerio_core::SourceSpan> for PySourceSpan {
             byte_start: span.byte_start(),
             byte_end: span.byte_end(),
         }
+    }
+}
+
+/// The result of `BalancedNetwork.merge_buses`: the merged network and what
+/// the merge did.
+#[pyclass(name = "_BusMerge", module = "powerio._powerio", frozen)]
+struct PyBusMerge {
+    merge: powerio_tx::BusMerge,
+    /// The merged network as a handle, carrying the source's findings and
+    /// the merge's.
+    network: PyBalancedNetwork,
+}
+
+fn removal_reason(reason: powerio_tx::RemovalReason) -> &'static str {
+    match reason {
+        powerio_tx::RemovalReason::ZeroImpedance => "zero_impedance",
+        powerio_tx::RemovalReason::ClosedSwitch => "closed_switch",
+        powerio_tx::RemovalReason::Shorted => "shorted",
+        _ => "other",
+    }
+}
+
+fn removed_flow_dict<'py>(
+    py: Python<'py>,
+    flow: &powerio_tx::RemovedFlow,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("p_from", flow.p_from)?;
+    let method = match flow.method {
+        powerio_tx::RemovedFlowMethod::OutOfService => "out_of_service",
+        powerio_tx::RemovedFlowMethod::Tree => "tree",
+        powerio_tx::RemovedFlowMethod::Reactance => "reactance",
+        powerio_tx::RemovedFlowMethod::MinimumNorm => "minimum_norm",
+        _ => "other",
+    };
+    d.set_item("method", method)?;
+    Ok(d)
+}
+
+#[pymethods]
+impl PyBusMerge {
+    /// The merged network.
+    #[getter]
+    fn network(&self) -> PyBalancedNetwork {
+        PyBalancedNetwork {
+            module: self.network.module.clone(),
+            core: self.network.core.clone(),
+        }
+    }
+
+    /// The rule, in words.
+    #[getter]
+    fn rule(&self) -> String {
+        self.merge.rule.to_string()
+    }
+
+    /// Every merged bus to the bus that now carries it.
+    #[getter]
+    fn merged_buses(&self) -> HashMap<usize, usize> {
+        self.merge
+            .merged_buses
+            .iter()
+            .map(|(bus, survivor)| (bus.0, survivor.0))
+            .collect()
+    }
+
+    /// Every group of two or more buses, as `{"survivor", "members"}`.
+    #[getter]
+    fn groups<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyDict>>> {
+        self.merge
+            .groups
+            .iter()
+            .map(|group| {
+                let d = PyDict::new(py);
+                d.set_item("survivor", group.survivor.0)?;
+                let members: Vec<usize> = group.members.iter().map(|bus| bus.0).collect();
+                d.set_item("members", members)?;
+                Ok(d)
+            })
+            .collect()
+    }
+
+    /// Each removed branch with its source row, identity, endpoints,
+    /// survivor, reason, status, impedance, charging, and ratings.
+    #[getter]
+    fn removed_branches<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyDict>>> {
+        self.merge
+            .removed_branches
+            .iter()
+            .map(|removed| {
+                let d = PyDict::new(py);
+                d.set_item("row", removed.row)?;
+                d.set_item("id", &removed.identity)?;
+                d.set_item("from_id", removed.from.0)?;
+                d.set_item("to_id", removed.to.0)?;
+                d.set_item("survivor", removed.survivor.0)?;
+                d.set_item("reason", removal_reason(removed.reason))?;
+                d.set_item("in_service", removed.in_service)?;
+                d.set_item("r", removed.r)?;
+                d.set_item("x", removed.x)?;
+                d.set_item("b", removed.b)?;
+                d.set_item("rate_a", removed.rate_a)?;
+                d.set_item("rate_b", removed.rate_b)?;
+                d.set_item("rate_c", removed.rate_c)?;
+                Ok(d)
+            })
+            .collect()
+    }
+
+    /// Each removed switch with its source row, identity, endpoints,
+    /// survivor, reason, state, and thermal rating.
+    #[getter]
+    fn removed_switches<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyDict>>> {
+        self.merge
+            .removed_switches
+            .iter()
+            .map(|removed| {
+                let d = PyDict::new(py);
+                d.set_item("row", removed.row)?;
+                d.set_item("id", &removed.identity)?;
+                d.set_item("from_id", removed.from.0)?;
+                d.set_item("to_id", removed.to.0)?;
+                d.set_item("survivor", removed.survivor.0)?;
+                d.set_item("reason", removal_reason(removed.reason))?;
+                d.set_item("closed", removed.closed)?;
+                d.set_item("thermal_rating", removed.thermal_rating)?;
+                Ok(d)
+            })
+            .collect()
+    }
+
+    /// For each source branch row, its merged row or `None`.
+    #[getter]
+    fn branch_rows(&self) -> Vec<Option<usize>> {
+        self.merge.branch_rows.clone()
+    }
+
+    /// For each source switch row, its merged row or `None`.
+    #[getter]
+    fn switch_rows(&self) -> Vec<Option<usize>> {
+        self.merge.switch_rows.clone()
+    }
+
+    /// The merge's own findings.
+    #[getter]
+    fn diagnostics(&self) -> Vec<PyDiagnostic> {
+        self.merge
+            .diagnostics
+            .iter()
+            .map(PyDiagnostic::from)
+            .collect()
+    }
+
+    /// The bus that carries `bus` in the merged network.
+    fn survivor(&self, bus: usize) -> usize {
+        self.merge.survivor(powerio_tx::BusId(bus)).0
+    }
+
+    /// Recover the active power on every removed element from a merged
+    /// solution, in the network's units.
+    #[pyo3(signature = (branch_p_from, branch_p_to, *, generator_p=None, transformer_3w_p=None))]
+    fn calc_removed_flows<'py>(
+        &self,
+        py: Python<'py>,
+        branch_p_from: Vec<f64>,
+        branch_p_to: Vec<f64>,
+        generator_p: Option<Vec<f64>>,
+        transformer_3w_p: Option<Vec<[f64; 3]>>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let windings = transformer_3w_p.unwrap_or_default();
+        let mut flows = powerio_tx::MergedFlows::new(&branch_p_from, &branch_p_to)
+            .with_transformer_3w_p(&windings);
+        if let Some(generator_p) = generator_p.as_deref() {
+            flows = flows.with_generator_p(generator_p);
+        }
+        let recovered = self.merge.calc_removed_flows(&flows).map_err(core_pyerr)?;
+        let d = PyDict::new(py);
+        let branches = recovered
+            .branches
+            .iter()
+            .map(|flow| removed_flow_dict(py, flow))
+            .collect::<PyResult<Vec<_>>>()?;
+        let switches = recovered
+            .switches
+            .iter()
+            .map(|flow| removed_flow_dict(py, flow))
+            .collect::<PyResult<Vec<_>>>()?;
+        d.set_item("branches", branches)?;
+        d.set_item("switches", switches)?;
+        let diagnostics: Vec<PyDiagnostic> = recovered
+            .diagnostics
+            .iter()
+            .map(PyDiagnostic::from)
+            .collect();
+        d.set_item("diagnostics", diagnostics)?;
+        Ok(d)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "BusMerge(rule={:?}, merged_buses={}, removed_branches={}, removed_switches={})",
+            self.merge.rule.to_string(),
+            self.merge.merged_buses.len(),
+            self.merge.removed_branches.len(),
+            self.merge.removed_switches.len()
+        )
     }
 }
 
@@ -4690,6 +4944,7 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?;
     m.add("PANIC_CODE", codes::BIND_PY_PANIC.code)?;
     m.add_class::<PyBalancedNetwork>()?;
+    m.add_class::<PyBusMerge>()?;
     m.add_function(wrap_pyfunction!(parse_display, m)?)?;
     m.add_class::<PyMulticonductorNetwork>()?;
     m.add_class::<PyPioModule>()?;

@@ -100,10 +100,6 @@ pub mod codes {
             "the derived calculation does not carry part of the source instance";
         TRANSFORM_INSTANCE_ASSUMPTION = "TRANSFORM.INSTANCE.ASSUMPTION", Warning,
             "the derived calculation rests on a stated modeling assumption";
-        CANONICALIZE_MERGE_ZERO_IMPEDANCE = "CANONICALIZE.MERGE.ZERO_IMPEDANCE", Warning,
-            "a zero impedance branch was merged and its flow is no longer recoverable";
-        CANONICALIZE_MERGE_ATTRIBUTE_CONFLICT = "CANONICALIZE.MERGE.ATTRIBUTE_CONFLICT", Warning,
-            "merged buses stated different attributes; the surviving bus's values were kept";
         BUILD_INSTANCE_UNSUPPORTED_COST_MODEL = "BUILD.INSTANCE.UNSUPPORTED_COST_MODEL", Error,
             "a generator cost model the instance builder cannot state", category = Data;
         BUILD_INSTANCE_PIECEWISE_COST_INVALID = "BUILD.INSTANCE.PIECEWISE_COST_INVALID", Error,
@@ -118,6 +114,12 @@ pub mod codes {
             "the named GOC3 source format is not one this build reads",
             category = Request;
     }
+
+    /// The bus merge codes, which the balanced model crate owns now that the
+    /// merge lives there.
+    pub use powerio_tx::diagnostics::codes::{
+        CANONICALIZE_MERGE_ATTRIBUTE_CONFLICT, CANONICALIZE_MERGE_ZERO_IMPEDANCE,
+    };
 }
 
 /// Every code this crate declares.
