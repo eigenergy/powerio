@@ -123,7 +123,10 @@ def main() -> int:
         print(name, comparison)
     # A physical negative control, solved again by the engine: removing the
     # sink earth connection must change the measured neutral/phase voltages.
-    defect = compare(snapshots[True], snapshots[False])
+    witness = "sink.N.voltage"
+    defect = compare(
+        {witness: snapshots[True][witness]}, {witness: snapshots[False][witness]}
+    )
     report["removed_ground_detected"] = not defect["passed"]
     (output / "report.json").write_text(
         json.dumps(report, indent=2, allow_nan=False) + "\n"

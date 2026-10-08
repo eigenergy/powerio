@@ -23,11 +23,12 @@ From the repository root, using that environment:
 python -m unittest discover -s evals/gridlabd -v
 python evals/gridlabd/oracle.py --pnnl-root "$PNNL_ROOT" --output /tmp/gld-calibration
 python evals/gridlabd/neutral_oracle.py --output /tmp/gld-neutral
+python evals/gridlabd/transformer_oracle.py --pnnl-root "$PNNL_ROOT" --output /tmp/gld-transformers
 python evals/gridlabd/upstream.py --pnnl-root "$PNNL_ROOT" --output /tmp/gld-upstream
 ```
 
 Each output path must be new. Engine failures cannot leave stale recorder data
-that a later run mistakes for success. The first two engine checks run offline
+that a later run mistakes for success. The analytic engine checks run offline
 after provisioning; `upstream.py` downloads small hash-pinned public models.
 Docker uses file copying instead of host bind mounts so Colima and remote
 Docker daemons receive the actual inputs. Arras runs with networking disabled;
@@ -73,6 +74,31 @@ references. Empty comparisons cannot pass. Absolute-plus-relative tolerances
 are stated per physical quantity in `oracle.py`; they are not the broad
 tolerances used by the published feeder regressions.
 
+`transformer_oracle.py` checks a two-winding single-phase transformer and a
+center-tapped service transformer against all three engines. The latter has
+unequal secondary leakage impedances and simultaneous unequal leg-neutral
+loads and a leg-leg load. Its independent reference stamps ideal coil
+incidences and solves the internal core potential. Complex terminal currents,
+voltages, powers, neutral current and losses are compared. The OpenDSS checks
+also compare the complete winding primitive admittance, including return
+conductor rows. Reversing a secondary winding is a physical negative control.
+
+GridLAB-D stores the second split-phase leg voltage with reversed polarity,
+while its link current uses physical conductor polarity. The adapter negates
+that voltage, preserves current polarity, and checks the separately reported
+line-line voltage and powers. GridLAB-D's declared finite core shunt is included
+in its reference; OpenDSS uses a separately evaluated zero-core-loss reference.
+This calibration does not equate those two core models. OpenDSS fixtures contain
+a regulator requesting a different voltage, but control mode is off. The
+declared tap positions must remain unchanged before and after solving; outputs
+record both states and identify them as source-declared, not engine-settled.
+
+A reduced GridLAB-D triplex-line matrix is not an explicit-neutral model. Both
+the adapter and future conversion checks must respect the pinned engine's
+warning that a supplied 2×2 matrix cannot determine neutral/ground currents.
+The center-tapped tests establish grounded service-terminal conventions; they
+do not establish floating-neutral or triplex-cable equivalence.
+
 ## Published references and limits
 
 `upstream.json` records original PNNL source URLs, commit, hashes, license and
@@ -85,8 +111,8 @@ controls and solver settings remain intact. They are not evidence of frozen
 state conversion or high-precision feeder equivalence.
 
 Only generated, original microcases are used for analytic calibration. Public
-feeder inputs and generated engine outputs remain outside git. Transformer
-connections, split-phase polarity, load-law sweeps, explicit-neutral GLM
+feeder inputs and generated engine outputs remain outside git. Other transformer
+connections, floating split-phase services, load-law sweeps, explicit-neutral GLM
 equivalents and larger public feeders require additional qualification. The
 existing OpenDSS passive-admittance harness in `evals/validation/` remains a
 separate check; it intentionally excludes transformer physics.
