@@ -128,7 +128,10 @@ past the bound with `READ.MODULE.INVALID`, and `serialize` refuses a longer
 vector with `EMIT.MODULE.RECORD_CAP` rather than write a document the reader
 refuses. Time series and scenario sets carry at most 65,536 entries each, as
 do the three winding transformer power records of a solution. A stored
-operating point names at most 64 quantities.
+operating point names at most 64 quantities. The writer applies the same
+65,536-entry guard to time-series values and time points, scenario entries,
+and three-winding transformer power records, returning
+`EMIT.MODULE.RECORD_CAP` rather than emitting an unreadable document.
 
 These bounds count entries, not bytes. `deserialize` applies the primary file
 limit to a path, 64 MiB unless `POWERIO_MAX_PRIMARY_BYTES` sets another byte

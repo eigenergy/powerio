@@ -346,6 +346,7 @@ fn encode_scenario_entries<T>(
     set: &PioScenarioSet,
     mut encode: impl FnMut(&PioValue) -> Result<T>,
 ) -> Result<dto::StoredScenarioSet<T>> {
+    check_collection_len(set.values().len(), "scenario entries")?;
     let scenarios = set
         .values()
         .iter()
@@ -509,6 +510,24 @@ fn bounded_values(values: Vec<StoredF64>) -> Result<Vec<StoredF64>> {
     Ok(values)
 }
 
+fn check_collection_len(len: usize, kind: &str) -> Result<()> {
+    if len > dto::MAX_STORED_COLLECTION_ENTRIES {
+        return Err(powerio_core::Error::new(
+            &codes::EMIT_MODULE_RECORD_CAP,
+            format!(
+                "a stored record would carry {len} {kind}; PowerIO IR reads at most {}",
+                dto::MAX_STORED_COLLECTION_ENTRIES
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn bounded_collection<T>(values: Vec<T>, kind: &str) -> Result<Vec<T>> {
+    check_collection_len(values.len(), kind)?;
+    Ok(values)
+}
+
 fn stored_numbers<'a>(values: impl IntoIterator<Item = (&'a str, f64)>) -> Result<StoredQuantity> {
     let (identities, values) = values
         .into_iter()
@@ -630,6 +649,8 @@ fn ensure_same_network<'a, N: serde::Serialize + 'a>(
 fn encode_balanced_operating_point_series(
     series: &TimeSeries<powerio_prob::OperatingPoint<crate::BalancedNetwork>>,
 ) -> Result<dto::StoredOperatingPointTimeSeries<crate::BalancedNetwork>> {
+    check_collection_len(series.time_points().len(), "time-series time points")?;
+    check_collection_len(series.values().len(), "time-series values")?;
     let Some(first) = series.values().first() else {
         return Ok(dto::StoredOperatingPointTimeSeries {
             network: None,
@@ -666,6 +687,8 @@ fn encode_balanced_operating_point_series(
 fn encode_multiconductor_operating_point_series(
     series: &TimeSeries<powerio_prob::OperatingPoint<powerio_dist::MulticonductorNetwork>>,
 ) -> Result<dto::StoredOperatingPointTimeSeries<powerio_dist::MulticonductorNetwork>> {
+    check_collection_len(series.time_points().len(), "time-series time points")?;
+    check_collection_len(series.values().len(), "time-series values")?;
     let Some(first) = series.values().first() else {
         return Ok(dto::StoredOperatingPointTimeSeries {
             network: None,
@@ -695,6 +718,7 @@ fn encode_multiconductor_operating_point_series(
 fn encode_balanced_point_scenarios(
     set: &PioScenarioSet,
 ) -> Result<dto::StoredOperatingPointScenarioSet<crate::BalancedNetwork>> {
+    check_collection_len(set.values().len(), "scenario entries")?;
     let first = set.values().iter().next().map(|scenario| {
         let PioValue::BalancedOperatingPoint(point) = scenario.value() else {
             return Err(collection_element_mismatch(
@@ -746,6 +770,7 @@ fn encode_balanced_point_scenarios(
 fn encode_multiconductor_point_scenarios(
     set: &PioScenarioSet,
 ) -> Result<dto::StoredOperatingPointScenarioSet<powerio_dist::MulticonductorNetwork>> {
+    check_collection_len(set.values().len(), "scenario entries")?;
     let first = set.values().iter().next().map(|scenario| {
         let PioValue::MulticonductorOperatingPoint(point) = scenario.value() else {
             return Err(collection_element_mismatch(
@@ -1327,14 +1352,17 @@ fn encode_dispatch(
 
 fn encode_three_winding_transformer_terminal_powers(
     values: &[powerio_prob::ThreeWindingTransformerTerminalPower],
-) -> Vec<dto::ThreeWindingTransformerTerminalPower> {
-    values
-        .iter()
-        .map(|value| dto::ThreeWindingTransformerTerminalPower {
-            p_mw: value.p_mw.map(StoredF64),
-            q_mvar: value.q_mvar.map(StoredF64),
-        })
-        .collect()
+) -> Result<Vec<dto::ThreeWindingTransformerTerminalPower>> {
+    bounded_collection(
+        values
+            .iter()
+            .map(|value| dto::ThreeWindingTransformerTerminalPower {
+                p_mw: value.p_mw.map(StoredF64),
+                q_mvar: value.q_mvar.map(StoredF64),
+            })
+            .collect(),
+        "three-winding transformer terminal power records",
+    )
 }
 
 fn decode_three_winding_transformer_terminal_powers(
@@ -1353,13 +1381,16 @@ fn decode_three_winding_transformer_terminal_powers(
 
 fn encode_three_winding_transformer_terminal_active_powers(
     values: &[powerio_prob::ThreeWindingTransformerTerminalActivePower],
-) -> Vec<dto::ThreeWindingTransformerTerminalActivePower> {
-    values
-        .iter()
-        .map(|value| dto::ThreeWindingTransformerTerminalActivePower {
-            p_mw: value.p_mw.map(StoredF64),
-        })
-        .collect()
+) -> Result<Vec<dto::ThreeWindingTransformerTerminalActivePower>> {
+    bounded_collection(
+        values
+            .iter()
+            .map(|value| dto::ThreeWindingTransformerTerminalActivePower {
+                p_mw: value.p_mw.map(StoredF64),
+            })
+            .collect(),
+        "three-winding transformer active-power records",
+    )
 }
 
 fn decode_three_winding_transformer_terminal_active_powers(
@@ -1389,7 +1420,7 @@ fn encode_dc_pf_solution(solution: &powerio_prob::DcPfSolution) -> Result<dto::D
         three_winding_transformer_terminal_active_powers:
             encode_three_winding_transformer_terminal_active_powers(
                 solution.three_winding_transformer_terminal_active_powers(),
-            ),
+            )?,
         generator_dispatch: encode_dispatch(solution.generator_dispatch())?,
     })
 }
@@ -1411,9 +1442,10 @@ fn encode_ac_pf_solution(solution: &powerio_prob::AcPfSolution) -> Result<dto::A
         })?,
         branch_to_active_flow: branch_column(network, |id| solution.branch_to_active_flow(id))?,
         branch_to_reactive_flow: branch_column(network, |id| solution.branch_to_reactive_flow(id))?,
-        three_winding_transformer_terminal_powers: encode_three_winding_transformer_terminal_powers(
-            solution.three_winding_transformer_terminal_powers(),
-        ),
+        three_winding_transformer_terminal_powers:
+            encode_three_winding_transformer_terminal_powers(
+                solution.three_winding_transformer_terminal_powers(),
+            )?,
         generator_dispatch: encode_dispatch(solution.generator_dispatch())?,
     })
 }
@@ -1435,7 +1467,7 @@ fn encode_dc_opf_solution(solution: &powerio_prob::DcOpfSolution) -> Result<dto:
         three_winding_transformer_terminal_active_powers:
             encode_three_winding_transformer_terminal_active_powers(
                 solution.three_winding_transformer_terminal_active_powers(),
-            ),
+            )?,
         objective: StoredF64(solution.objective()),
         bus_active_power_marginal: optional_column(solution.bus_active_power_marginals())?,
         branch_from_limit_multiplier: optional_column(solution.branch_from_limit_multipliers())?,
@@ -1466,9 +1498,10 @@ fn encode_ac_opf_solution(solution: &powerio_prob::AcOpfSolution) -> Result<dto:
         generator_reactive_power: generator_column(network, |id| {
             solution.generator_reactive_power(id)
         })?,
-        three_winding_transformer_terminal_powers: encode_three_winding_transformer_terminal_powers(
-            solution.three_winding_transformer_terminal_powers(),
-        ),
+        three_winding_transformer_terminal_powers:
+            encode_three_winding_transformer_terminal_powers(
+                solution.three_winding_transformer_terminal_powers(),
+            )?,
         objective: StoredF64(solution.objective()),
         bus_active_power_marginal: optional_column(solution.bus_active_power_marginals())?,
         bus_reactive_power_marginal: optional_column(solution.bus_reactive_power_marginals())?,
@@ -1502,7 +1535,7 @@ fn encode_socwr_opf_solution(
             three_winding_transformer_terminal_powers:
                 encode_three_winding_transformer_terminal_powers(
                     &values.three_winding_transformer_terminal_powers,
-                ),
+                )?,
         },
         duals: dto::SocwrOpfDuals {
             bus_active_power_marginal: duals
@@ -3214,6 +3247,59 @@ mod write_bound_tests {
         assert!(
             error.to_string().contains("4194305 operating point values"),
             "{error}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod collection_write_bound_tests {
+    use super::*;
+
+    #[test]
+    fn collection_writer_accepts_and_rejects_at_the_reader_bound() {
+        let bound = dto::MAX_STORED_COLLECTION_ENTRIES;
+        let accepted = bounded_collection((0..bound).collect::<Vec<_>>(), "scenario entries");
+        assert!(accepted.is_ok());
+
+        let error =
+            bounded_collection((0..=bound).collect::<Vec<_>>(), "scenario entries").unwrap_err();
+        assert_eq!(
+            error.info().map(|info| info.code),
+            Some(codes::EMIT_MODULE_RECORD_CAP.code)
+        );
+        assert!(error.to_string().contains("65537 scenario entries"));
+    }
+
+    #[test]
+    fn time_series_writer_uses_the_same_collection_bound() {
+        let bound = dto::MAX_STORED_COLLECTION_ENTRIES;
+        assert!(check_collection_len(bound, "time-series values").is_ok());
+
+        let error = check_collection_len(bound + 1, "time-series values").unwrap_err();
+        assert_eq!(
+            error.info().map(|info| info.code),
+            Some(codes::EMIT_MODULE_RECORD_CAP.code)
+        );
+        assert!(error.to_string().contains("65537 time-series values"));
+    }
+
+    #[test]
+    fn three_winding_writer_uses_the_same_collection_bound() {
+        let bound = dto::MAX_STORED_COLLECTION_ENTRIES;
+        let values =
+            vec![
+                powerio_prob::ThreeWindingTransformerTerminalPower::new([0.0; 3], [0.0; 3],);
+                bound + 1
+            ];
+        let error = encode_three_winding_transformer_terminal_powers(&values).unwrap_err();
+        assert_eq!(
+            error.info().map(|info| info.code),
+            Some(codes::EMIT_MODULE_RECORD_CAP.code)
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("65537 three-winding transformer terminal power records")
         );
     }
 }

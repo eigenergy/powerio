@@ -39,11 +39,13 @@ env:
 
 jobs:
   release-preflight:
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    # PRs validate release identity/versioning against the source tree; only
+    # published releases/manual recovery validate an immutable release tag.
+    if: github.event_name == 'pull_request' || github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     outputs:
-      tag: ${{ steps.release.outputs.tag }}
-      sha: ${{ steps.release.outputs.sha }}
+      tag: ${{ github.event_name == 'pull_request' && steps.pr-release.outputs.tag || steps.release.outputs.tag }}
+      sha: ${{ github.event_name == 'pull_request' && steps.pr-release.outputs.sha || steps.release.outputs.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -51,7 +53,16 @@ jobs:
           fetch-depth: 0
       - name: Release identity agreement
         run: bash scripts/check-release-versions.sh
+      - name: Verify the PR source identity
+        if: github.event_name == 'pull_request'
+        id: pr-release
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 | jq -er '.packages[] | select(.name == "powerio-py") | .version')"
+          test -n "$version"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Verify the immutable published release
+        if: github.event_name != 'pull_request'
         id: release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -315,7 +326,6 @@ jobs:
 
   wheels:
     name: wheels (${{ matrix.platform.target }} on ${{ matrix.platform.runner }})
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     needs: release-preflight
     runs-on: ${{ matrix.platform.runner }}
     strategy:
@@ -369,7 +379,6 @@ jobs:
   # macOS x86_64 runs the cross compiled x86_64 wheel under Rosetta.
   wheel-smoke:
     name: wheel smoke (${{ matrix.platform.target }} on ${{ matrix.platform.runner }})
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     needs: [ release-preflight, wheels ]
     runs-on: ${{ matrix.platform.runner }}
     strategy:
@@ -425,7 +434,6 @@ jobs:
           "$py" scripts/wheel-smoke.py
 
   sdist:
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     needs: release-preflight
     runs-on: ubuntu-latest
     steps:
@@ -457,20 +465,24 @@ jobs:
           path: dist
 
   publish:
-    name: publish to PyPI
+    name: publish to PyPI (release only)
+    # On PRs this job validates the exact distributions and metadata that would
+    # be published, but never requests a PyPI token or uploads anything.
     # release-binaries.yml stages each release as a draft a human publishes, so
     # the release event fires with a user actor (events from a workflow's
     # GITHUB_TOKEN are swallowed by the recursion guard). Manual dispatch is the
     # recovery path for a missed event. A prerelease still builds wheels and an
     # sdist as run artifacts, but never uploads them to PyPI.
-    if: (github.event_name == 'release' && github.event.release.prerelease == false) || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'pull_request' || (github.event_name == 'release' && github.event.release.prerelease == false) || github.event_name == 'workflow_dispatch'
     needs: [ release-preflight, lint, quality, test, test-gridfm, goc3-reference, wheels, wheel-smoke, sdist ]
     runs-on: ubuntu-latest
     # Deployment protection (required reviewers, tag rules) lives on the pypi
     # environment in the repo settings, not in this file.
-    environment: pypi
+    environment:
+      name: ${{ github.event_name == 'pull_request' && 'pypi-validation' || 'pypi' }}
     permissions:
-      id-token: write  # PyPI trusted publishing; no stored token
+      contents: read
+      id-token: write  # OIDC is only consumed by the release-only publish step
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -483,9 +495,14 @@ jobs:
         run: |
           python -m pip install twine
           python -m twine check dist/*
-      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+      - name: Publish to PyPI
+        if: github.event_name != 'pull_request'
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           packages-dir: dist
           # A partially failed upload (e.g. wheels in, sdist rejected) is
           # recovered by re-running; already-uploaded files are skipped.
           skip-existing: true
+      - name: Confirm PR publish was validation-only
+        if: github.event_name == 'pull_request'
+        run: echo 'PR validation complete; no PyPI upload is permitted.'

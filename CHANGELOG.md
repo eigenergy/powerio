@@ -36,10 +36,11 @@
   `McAcPfSolution` that `serialize` wrote no longer fails `deserialize` with
   `READ.MODULE.INVALID`. Time series, scenario sets, and three winding
   transformer power records keep the 65,536 entry bound. Decoding still
-  refuses the first entry past a bound, and `serialize` refuses a longer
-  operating point or solution vector with the new `EMIT.MODULE.RECORD_CAP`
-  error instead of writing a document the reader refuses. The IR version and
-  the schema are unchanged.
+  refuses the first entry past a bound, and `serialize` refuses longer
+  operating point or solution vectors, time-series entries, scenario entries,
+  and three-winding transformer power records with the new
+  `EMIT.MODULE.RECORD_CAP` error instead of writing a document the reader
+  refuses. The IR version and the schema are unchanged.
 
 - `scripts/check-capi-v7.sh` checks the C entry point names in both
   directions against a paired PowerIO.jl checkout. Every entry point ABI 7

@@ -287,7 +287,7 @@ fn bounded_history<'de, D: Deserializer<'de>>(
     )
 }
 
-const MAX_STORED_COLLECTION_ENTRIES: usize = 65_536;
+pub(super) const MAX_STORED_COLLECTION_ENTRIES: usize = 65_536;
 const MAX_STORED_OPERATING_POINT_QUANTITIES: usize = 64;
 
 /// Entries one stored operating point or solution vector may carry, values
