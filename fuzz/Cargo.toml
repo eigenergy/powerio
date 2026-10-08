@@ -127,3 +127,9 @@ name = "glm_preprocess"
 path = "fuzz_targets/glm_preprocess.rs"
 test = false
 bench = false
+
+[[bin]]
+name = "glm_objects"
+path = "fuzz_targets/glm_objects.rs"
+test = false
+bench = false

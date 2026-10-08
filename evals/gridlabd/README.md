@@ -101,6 +101,26 @@ do not establish floating-neutral or triplex-cable equivalence.
 
 ## Published references and limits
 
+`object_oracle.py` checks the explicit object index against both native engines.
+Build `cargo build -p powerio-dist --example glm_objects` and pass that executable
+as `--indexer`, along with `--pnnl-root` and a new `--output` directory. The case
+uses sparse explicit IDs, a wildcard-class numeric reference, nested recorder
+parenting, an inline line configuration, and range/count declarations. Named
+parents and class inventories are compared with saved native objects. Native
+equality assertions verify full line references, with a wrong-configuration
+negative control; PNNL saved GLM omits inherited line fields and its recorder
+truncates object-reference strings. Electrical results must also match the
+independent analytic reference.
+
+`GlmProject` maps syntax/reference errors back to original project buffers.
+`ObjectIndex` borrows its properties and keeps explicit numeric IDs separate
+from local ordinals. It retains repeated scalar properties and uninterpreted
+syntax. This is not yet an electrical reader: dynamic object creation,
+namespaces, relative/wildcard-selection references, reassigned identities and
+deferred repeated-reference ordering remain unqualified and are not silently
+resolved by guessing. Duplicate numeric IDs are rejected, including Arras
+declarations that could otherwise shadow an earlier index entry.
+
 `preprocess_oracle.py` compares native include/define/conditional projects with
 PowerIO-preprocessed text in both engines, and checks both against the analytic
 single-phase reference. Build its driver with

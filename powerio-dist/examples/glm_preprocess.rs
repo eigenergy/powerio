@@ -2,7 +2,7 @@
 use std::io::Write;
 
 use powerio_core::Source;
-use powerio_dist::glm::{GlmDialect, PreprocessOptions, parse_raw_source, preprocess_source};
+use powerio_dist::glm::{GlmDialect, PreprocessOptions, parse_project};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
@@ -21,19 +21,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.next().is_some() {
         return Err("too many arguments".into());
     }
-    let prepared = preprocess_source(
+    let project = parse_project(
         source,
         PreprocessOptions {
             dialect,
             ..Default::default()
         },
     )?;
-    parse_raw_source(Source::from_memory(
-        "expanded.glm",
-        prepared.text().as_bytes(),
-    )?)?;
     std::io::stdout()
         .lock()
-        .write_all(prepared.text().as_bytes())?;
+        .write_all(project.expanded_text().as_bytes())?;
     Ok(())
 }

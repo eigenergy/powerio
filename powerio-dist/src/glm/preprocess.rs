@@ -72,21 +72,24 @@ impl PreparedGlm {
     /// Substitution segments point to the complete `${name}` reference.
     /// Empty or out-of-bounds ranges return an empty vector.
     #[must_use]
-    #[expect(
-        clippy::missing_panics_doc,
-        reason = "private expansion map contains validated ordered ranges"
-    )]
     pub fn original_spans(&self, range: Range<usize>) -> Vec<SourceSpan> {
+        self.original_span_iter(range).collect()
+    }
+
+    pub(crate) fn original_span_iter(
+        &self,
+        mut range: Range<usize>,
+    ) -> impl Iterator<Item = SourceSpan> + '_ {
         if range.start >= range.end || range.end > self.text.len() {
-            return Vec::new();
+            range = 0..0;
         }
         let first = self
             .origins
             .partition_point(|o| o.expanded.end <= range.start);
         self.origins[first..]
             .iter()
-            .take_while(|o| o.expanded.start < range.end)
-            .map(|o| {
+            .take_while(move |o| o.expanded.start < range.end)
+            .map(move |o| {
                 if o.exact {
                     let start = o.original.byte_start()
                         + (range.start.max(o.expanded.start) - o.expanded.start) as u64;
@@ -98,7 +101,6 @@ impl PreparedGlm {
                     o.original.clone()
                 }
             })
-            .collect()
     }
 }
 

@@ -9,13 +9,40 @@ from pathlib import Path
 import numpy as np
 from coordinate_oracle import check as check_coordinates
 from coordinate_oracle import expected as expected_coordinates
+from object_oracle import source_graph
 from oracle import add, analytic, cases, compare, parse_complex, recorded
 
 
 class OracleTests(unittest.TestCase):
+    def test_object_graph_rejects_ambiguous_or_missing_identity(self):
+        node = {
+            "key": 0,
+            "name": "source",
+            "class": "node",
+            "parent": None,
+            "references": {},
+        }
+        graph, classes = source_graph([node])
+        self.assertEqual(graph["source"]["class"], "node")
+        self.assertEqual(classes, {"node": 1})
+        for other in (
+            dict(node),
+            dict(node, key=1),
+            dict(node, key=1, name="sink", parent=2),
+            dict(node, key=1, name="sink", references={"from": 2}),
+        ):
+            with self.assertRaises(ValueError):
+                source_graph([node, other])
+
     def test_coordinate_negative_controls(self):
         check_coordinates(expected_coordinates())
-        for defect in ("axis", "missing_zero", "invented_zero", "nonfinite", "declared_line"):
+        for defect in (
+            "axis",
+            "missing_zero",
+            "invented_zero",
+            "nonfinite",
+            "declared_line",
+        ):
             with self.subTest(defect=defect):
                 actual = copy.deepcopy(expected_coordinates())
                 if defect == "axis":

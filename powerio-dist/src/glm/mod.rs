@@ -5,10 +5,14 @@
 //! directives inert; preprocessing resolves only the supported local profile.
 //! The facade does not yet dispatch `.glm` files to a network reader.
 
+mod objects;
 mod preprocess;
+mod project;
 mod syntax;
 
+pub use objects::{GlmObject, GlmProperty, GlmPropertyValue, ObjectIndex, ObjectKey};
 pub use preprocess::{
     ExpansionOrigin, GlmDialect, PreparedGlm, PreprocessOptions, preprocess_source,
 };
+pub use project::{GlmProject, parse_project};
 pub use syntax::{RawGlm, Statement, Token, TokenKind, parse_raw_source};
