@@ -1,6 +1,7 @@
 # PSS SINCAL delivery roadmap
 
 Updated 2026-10-08. Reader integration and validation are complete locally.
+The experimental Rust writer is also implemented for its declared subset.
 The five branches are ready for maintainer review; nothing has been pushed or
 published. The [review packet](pss-sincal-review.md) owns the detailed PR
 scopes, draft descriptions and evidence. The [user guide](../src/sincal.md)

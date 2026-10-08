@@ -276,3 +276,211 @@ fn two_sincal_selection_families_cannot_silently_shadow_each_other() {
         assert!(error.retained_source().is_some());
     }
 }
+
+#[test]
+fn experimental_balanced_backend_writes_edited_ir_without_native_source() {
+    let original = parsed();
+    let text = helpers::serialize_module_text(&original).unwrap();
+    let mut restored = helpers::deserialize_module_text(&text).unwrap();
+    let PioValue::BalancedNetwork(network) = restored.value_mut() else {
+        panic!("balanced IR value")
+    };
+    network.loads_mut()[0].p += 0.017;
+    let expected_power = network.loads()[0].p;
+    // The candidate backend takes only the typed value. The module's native
+    // source bytes are absent after IR transport and cannot enter this API.
+    let candidate = powerio_tx::format::__write_sincal_balanced_experimental(network).unwrap();
+    assert!(
+        candidate
+            .diagnostics
+            .iter()
+            .any(|d| d.code() == "EMIT.SINCAL.EXPERIMENTAL")
+    );
+    assert_ne!(candidate.database, ARCHIVE);
+    let fresh = powerio::parse_with_options(
+        Source::from_memory("fresh.db", candidate.database.clone()).unwrap(),
+        &ParseOptions::default().format("sincal-balanced").unwrap(),
+    )
+    .unwrap();
+    let PioValue::BalancedNetwork(network) = fresh.value() else {
+        panic!("fresh output retained balanced family")
+    };
+    assert!((network.loads()[0].p - expected_power).abs() < 1e-15);
+    assert_eq!(network.branches().len(), 14);
+    let echoed = powerio::emit(&fresh, "sincal", Destination::memory("copy.db").unwrap()).unwrap();
+    assert_eq!(echoed.fidelity(), Fidelity::ExactSameFormat);
+    assert_eq!(bytes(echoed), candidate.database);
+    // Ordinary emission stays source-echo-only. Fresh output requires the
+    // explicit facade experimental options, tested in sincal_emit.rs.
+    assert!(!powerio::resolve_format("sincal-balanced").unwrap().can_emit);
+    assert!(
+        powerio::emit(
+            &restored,
+            "sincal",
+            Destination::memory("no-implicit-write.db").unwrap()
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn experimental_multiconductor_backend_writes_edited_ir_with_floating_reference() {
+    use powerio_dist::{
+        Configuration, DistBus, DistLoad, DistLoadVoltageModel, ExperimentalMulticonductorOptions,
+        MulticonductorNetwork, VoltageSource,
+    };
+    let phases = vec!["1".into(), "2".into(), "3".into()];
+    let mut net = MulticonductorNetwork::new();
+    let mut bus = DistBus::new(
+        "b",
+        vec![
+            "1".into(),
+            "2".into(),
+            "3".into(),
+            "star".into(),
+            "earth".into(),
+        ],
+    );
+    bus.grounded.push("earth".into());
+    net.buses_mut().push(bus);
+    net.sources_mut().push(
+        VoltageSource::new(
+            "s",
+            "b",
+            phases,
+            vec![230.0; 3],
+            vec![
+                0.0,
+                -std::f64::consts::TAU / 3.0,
+                std::f64::consts::TAU / 3.0,
+            ],
+        )
+        .with_reference_terminal("star"),
+    );
+    let mut load = DistLoad::new(
+        "l",
+        "b",
+        vec!["1".into(), "2".into(), "3".into(), "earth".into()],
+        Configuration::Wye,
+        vec![1000.0, 2000.0, 3000.0],
+        vec![100.0, 200.0, 300.0],
+    );
+    load.voltage_model = DistLoadVoltageModel::ConstantImpedance {
+        v_nom: vec![230.0; 3],
+    };
+    net.loads_mut().push(load);
+    let module = powerio::PioModule::new(PioValue::from(net));
+    let mut restored =
+        helpers::deserialize_module_text(&helpers::serialize_module_text(&module).unwrap())
+            .unwrap();
+    let PioValue::MulticonductorNetwork(net) = restored.value_mut() else {
+        panic!("IR changed electrical family")
+    };
+    net.loads_mut()[0].p_nom[1] = 2500.0;
+    let options = ExperimentalMulticonductorOptions {
+        nominal_ll_volts: [("b".into(), 400.0)].into(),
+    };
+    let output = powerio_dist::__write_sincal_multiconductor_experimental(net, &options).unwrap();
+    let snapshot = powerio_sincal::DatabaseSnapshot::decode(&output.database, None).unwrap();
+    let readback = powerio_dist::__read_sincal_multiconductor_snapshot(snapshot).unwrap();
+    assert_eq!(readback.loads().len(), 3);
+    assert!((readback.loads()[1].p_nom[0] - 2500.0).abs() < 1e-10);
+    let source = &readback.sources()[0];
+    let reference = source
+        .reference_terminal
+        .as_ref()
+        .expect("floating star retained");
+    assert!(
+        !readback
+            .bus(&source.bus)
+            .unwrap()
+            .grounded
+            .contains(reference)
+    );
+    assert!(
+        output
+            .diagnostics
+            .iter()
+            .any(|d| d.code() == "EMIT.DIST.SINCAL_EXPERIMENTAL")
+    );
+}
+
+#[test]
+fn experimental_transformer_primitives_rewrite_after_real_ir_and_edit() {
+    use powerio_dist::{
+        DistBus, DistTransformer, DistWinding, DistWindingConn, ExperimentalMulticonductorOptions,
+        MulticonductorNetwork,
+    };
+    let mut net = MulticonductorNetwork::new();
+    let phases = ["1", "2", "3"].map(str::to_owned).to_vec();
+    net.buses_mut().push(DistBus::new("hv", phases.clone()));
+    let mut terminals = phases.clone();
+    terminals.push("earth".into());
+    let mut lv = DistBus::new("lv", terminals.clone());
+    lv.grounded.push("earth".into());
+    net.buses_mut().push(lv);
+    let mut windings = vec![
+        DistWinding::new("hv", phases, DistWindingConn::Delta, 11000.0, 100_000.0),
+        DistWinding::new("lv", terminals, DistWindingConn::Wye, 400.0, 100_000.0),
+    ];
+    windings[0].r_pct = 0.5;
+    windings[1].r_pct = 0.5;
+    net.transformers_mut()
+        .push(DistTransformer::new("tx", windings, vec![4.0], 3));
+    let options = ExperimentalMulticonductorOptions {
+        nominal_ll_volts: [("hv".into(), 11000.0), ("lv".into(), 400.0)].into(),
+    };
+    let first = powerio_dist::__write_sincal_multiconductor_experimental(&net, &options).unwrap();
+    let read = |bytes: &[u8]| {
+        powerio_dist::__read_sincal_multiconductor_snapshot(
+            powerio_sincal::DatabaseSnapshot::decode(bytes, None).unwrap(),
+        )
+        .unwrap()
+    };
+    let recovered = read(&first.database);
+    let levels = ExperimentalMulticonductorOptions {
+        nominal_ll_volts: recovered
+            .buses()
+            .iter()
+            .map(|b| {
+                let volts = if b.id == first.bus_ids["hv"].to_string() {
+                    11000.0
+                } else if b.id == first.bus_ids["lv"].to_string() {
+                    400.0
+                } else {
+                    1.0
+                };
+                (b.id.clone(), volts)
+            })
+            .collect(),
+    };
+    let module = powerio::PioModule::new(PioValue::from(recovered));
+    let mut restored =
+        helpers::deserialize_module_text(&helpers::serialize_module_text(&module).unwrap())
+            .unwrap();
+    let PioValue::MulticonductorNetwork(net) = restored.value_mut() else {
+        panic!("IR changed family");
+    };
+    let shunt = &mut net.shunts_mut()[0];
+    shunt.extras.clear();
+    for v in shunt.g.iter_mut().chain(&mut shunt.b).flatten() {
+        *v *= 1.2;
+    }
+    let changed = powerio_dist::__write_sincal_multiconductor_experimental(net, &levels).unwrap();
+    let second = read(&changed.database);
+    assert_eq!(second.shunts().len(), 1);
+    for (a, b) in [&net.shunts()[0].g, &net.shunts()[0].b]
+        .into_iter()
+        .zip([&second.shunts()[0].g, &second.shunts()[0].b])
+    {
+        for (a, b) in a.iter().flatten().zip(b.iter().flatten()) {
+            assert!((a - b).abs() < 1e-10);
+        }
+    }
+    assert!(
+        changed
+            .diagnostics
+            .iter()
+            .any(|d| d.message().contains("canonical 1 MVA"))
+    );
+}

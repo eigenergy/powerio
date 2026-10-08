@@ -398,3 +398,245 @@ POWERIO_CAPI=/path/to/libpowerio_capi.dylib \
 
 Use the platform's corresponding `.so` or `.dll` on Linux or Windows. These
 are reader/binding checks; fresh SINCAL desktop acceptance remains external.
+
+## Experimental writer branch
+
+The local `codex/sincal-experimental-writer` branch starts with shared source-free
+SQLite construction and deterministic candidate packaging in `powerio-sincal`.
+The tests create original small schemas at runtime. They check byte determinism,
+parameterized text (including quotes and newlines), strict integer/real/text
+cells, NULL preservation, bad identity/reference rejection, unsafe archive
+names and rejection of results/views/additional variants. They establish
+storage construction only, not a complete network writer or native acceptance.
+
+The balanced backend now authors fresh schema-14.8 rows for an explicitly
+selected static positive-sequence profile: ideal reference sources, fixed-PQ
+converters, PQ/current/impedance loads, lines and fixed two-winding transformers.
+It uses physical native units, preserves non-100-MVA electrical quantities and
+service states, and checks recovered electrical values before returning bytes.
+Unknown active controls, asymmetric branch shunts, PV buses and components
+outside the declared subset fail atomically. Unsupported metadata, capability
+limits and stored source/branch results produce explicit loss diagnostics.
+The staging API is hidden in `powerio-tx`; universal fresh emission stays off.
+
+Runtime-generated tests cover construction, deterministic bytes/packaging,
+source-free serde restoration and edits, numerical-loss rejection, fixed
+transformer loss/ratio/rotation and service states. The existing licensed
+SimBench fixture also passes fresh write/read without a template. No additional
+native model fixtures were added.
+
+```sh
+cargo test -p powerio-tx --lib sincal::write_tests
+cargo build -p powerio-tx --example sincal_balanced
+python3 evals/sincal/check_balanced_simbench.py target/debug/examples/sincal_balanced \
+  /tmp/writer-balanced-simbench.json --fresh
+```
+
+`writer-balanced-simbench.json` records an independent comparison of the actual
+fresh-write/read result with publisher CSV inputs and pandapower 3.2.2, including
+separate HV/LV fixed-tap perturbations. Baseline complex voltage error is below
+6.3e-14 pu; tap cases are below 5.1e-11 pu (2e-8 pu acceptance tolerance).
+These are electrical interoperability checks, not native desktop acceptance.
+
+An integration test restores a balanced module through the real PowerIO IR,
+edits its load, invokes the candidate backend and parses fresh bytes through
+the public balanced reader. It separately verifies byte-exact echo of the new
+output; the old native project cannot enter the backend.
+
+Complete multiconductor circuit coverage and broader writer subset coverage
+remain unfinished. The explicit Rust facade option is described below. The
+multiconductor staging implementation and IR evidence are described below. Canonical balanced transformer rows do not claim conductor/neutral
+semantics, and must not be used as an implicit multiconductor writer.
+
+### Multiconductor candidate writer
+
+The family-local hidden staging API now constructs fresh schema-14.8 inputs
+from `MulticonductorNetwork` for ideal positive-sequence sources (earth referenced
+or an isolated floating star), phase-resolved static loads, and sequence-
+representable lines. Unequal Wye and delta branch powers, phase pairs and single
+phases remain unbalanced. Loads split into native one-branch elements, preserving
+individual nominal voltages and PQ/current/impedance behavior. No balanced
+backend is called. Line matrices must fit the declared native sequence profile;
+unsupported conductor matrices are rejected, never approximated as balanced.
+
+`ExperimentalMulticonductorOptions.nominal_ll_volts` explicitly supplies a
+positive line-line voltage for every typed bus; the distribution model does not
+have a bus nominal-voltage field. No operating source voltage, bound or `extras`
+value is silently reinterpreted as nominal. Native node IDs are assigned
+canonically and returned as a bus-ID map. Closed switches collapse only when
+that does not connect an additional conductor. External neutral paths, open
+switches and attached floating references require further native circuit work.
+Native readback introduces explicit device-local buses/switches as needed.
+The candidate explicitly writes `Flag_LFmet=8`, `Flag_UsymElm=3` and
+`Flag_DIType=0`: phase-domain unbalanced calculation, asymmetric elements
+retained, no automatic method fallback. The balanced candidate separately
+writes `2/1/0`. These documented fields are present in the authentic 14.8
+catalog; their construction is tested, but native execution is still unverified.
+
+```sh
+cargo test -p powerio-dist --lib sincal::write_tests
+POWERIO_SINCAL_WRITER_ORACLE_DIR=/tmp/dist-writer-oracle cargo test -p powerio-dist \
+  --lib sincal::write_tests::export_writer_oracle -- --ignored
+python3 evals/sincal/check_multiconductor_writer.py /tmp/dist-writer-oracle \
+  --report /tmp/writer-multiconductor.json
+cargo test -p powerio --test sincal
+```
+
+`writer-multiconductor.json` records two original synthetic unequal-load
+circuits, with earth-referenced and floating-star sources. Dense MNA evaluates
+the typed input and actual fresh-write/read result, independently of PowerIO
+matrix code. A separate OpenDSS circuit uses the original electrical inputs.
+The fresh-readback voltage difference is below 4e-13 V; OpenDSS differs by less
+than 1.9e-5 V with an explicit 1e-6-ohm source-impedance approximation (1e-3 V
+acceptance tolerance). Grounding the floating source is an intentional
+counterexample that the oracle must detect. Neither input nor reference uses
+stored native results. Tests also cover actual IR restoration and editing
+while preserving the floating reference, malformed typed vectors and unsupported
+circuit rejection, deterministic output, and rewriting through closed device
+switches. Test circuits are generated at runtime; no native fixtures were added.
+
+This is incremental PR5 implementation. Selected typed transformer output is
+implemented below. Other shunt/generator output,
+external-neutral and general shunt authoring remain unfinished. Canonical open
+phase switches now have the verified writer profile described below. The Rust experimental
+facade option is now implemented as described below. The complete authentic unbalanced reader corpus targets in
+PR4 are unchanged; these writer tests do not establish their completion. Native
+SINCAL desktop acceptance remains a separate external gate.
+
+
+### Multiconductor transformer writer evidence
+
+The candidate now writes finite, three-phase, two-winding delta/delta and
+solidly grounded delta/Wye or Wye/delta transformers with equal VA ratings,
+nonnegative leakage resistance/reactance, and positive fixed taps. Winding
+resistances combine on their common base. Effective winding voltages include
+both taps, preserving the terminal-referred impedance as well as the turns
+ratio. Nominal bus voltage remains independently supplied by the caller.
+
+The generic winding convention follows the existing OpenDSS writer: mixed
+windings default to ANSI/lag; `leadlag` selects lead/Euro when present. The
+higher rated winding determines the direction, including when the primary
+winding is the lower-voltage side. This follows the
+[OpenDSS transformer property definition](https://dss-extensions.org/dss-format/Transformer.html).
+Nonzero core/anti-float/neutral physics and unmapped transformer extras fail
+explicitly. Wye/Wye, floating Wye stars, ideal zero-leakage transformers,
+autotransformers and partial windings still require separate representations.
+
+Every authored transformer is read back and checked against a direct coil-
+incidence primitive, independently of the reader's symmetrical-component
+construction. This checks all six phase coordinates and both terminal-switch
+connections, including negative- and zero-sequence behavior. The generic
+PowerIO matrix builder's ideal-Wye transformer support is not used to validate
+these finite transformer circuits.
+
+```sh
+cargo test -p powerio-dist --lib sincal::write_transformer_tests
+POWERIO_SINCAL_WRITER_ORACLE_DIR=/tmp/transformer-writer-oracle cargo test \
+  -p powerio-dist --lib sincal::write_transformer_tests::export_transformer_writer_oracle -- --ignored
+python3 evals/sincal/check_transformer_writer.py /tmp/transformer-writer-oracle \
+  --report /tmp/writer-transformer.json
+```
+
+`writer-transformer.json` records 24 original synthetic combinations of three
+connection arrangements, step-up/down winding order, lead/lag rotation and
+fixed taps. The oracle constructs OpenDSS from the original typed winding
+values, extracts its full six-phase YPrim, and compares the actual Rust
+fresh-write/read result. Maximum relative primitive error is 6.21e-16.
+Unequal-load solves with positive, negative and zero-sequence excitation agree
+within 1.18e-10 V. Reversed-rotation counterexamples must fail the mixed-winding
+cases. All 24 expected files are required; missing cases fail the harness.
+
+This establishes typed construction and source-free serde restoration/editing
+for the selected transformer subset. The report is small derived validation
+metadata; no native model fixtures were added.
+
+The writer also recognizes equivalent six-conductor transformer primitives
+from native reading. It requires an exclusive auxiliary bus and exactly two
+closed three-phase terminal switches. Switch direction and coordinate names
+do not supply winding physics. Candidate scalar parameters come from the
+matrix, and acceptance compares every conductor entry in each port block,
+including negative/zero sequence and sequence coupling. Incompatible edits,
+core terms, open ports and additional attached equipment are rejected. Native
+provenance is never used to reconstruct electrical values.
+
+Primitive shunts have no recoverable VA nameplate or split of winding losses.
+The candidate reports its canonical 1 MVA parameter base and equal resistance
+allocation explicitly; these choices reproduce the circuit and do not claim
+original thermal ratings. Eliminated auxiliary buses span two voltage levels,
+so their nominal-voltage option entries may be omitted and they have no single
+entry in the returned native node-ID map. All remaining bus levels are explicit.
+
+All 24 oracle cases now also check read/write/read and edited-primitives against
+OpenDSS. Multiplying typed admittance by 1.2 is independently checked by reducing
+the original OpenDSS winding resistances/reactance by that factor. Maximum
+relative primitive error is 6.00e-16 for rewriting and 1.17e-15 after editing;
+the edited unequal-load voltage difference is below 1.31e-10 V. A facade test
+separately serializes the reader-produced primitive through real PowerIO IR,
+removes provenance, edits the matrices and verifies fresh write/read. The
+ordinary family dispatch and source-echo API remain unchanged.
+
+
+### Explicit experimental facade option
+
+The Rust facade now offers `emit_with_options(module, format, options, destination)`.
+`EmitOptions::default()` is equivalent to `emit`. Setting `sincal_experimental`
+to `Some(SincalExperimentalOptions)` requests a fresh candidate and bypasses
+retained-source echo. Both typed and dynamic modules dispatch through their
+owning electrical backend; the generic `sincal` output target accepts either
+network family, while `sincal-balanced` rejects multiconductor values. Other
+value types and options used with other formats are rejected before writing.
+
+SQLite versus candidate archive packaging is an explicit container option.
+Distribution nominal line-line voltages are mandatory for every non-eliminated
+bus; balanced values reject that map because their bus nominal kV is already
+typed. Both emitters finish validation and packaging before committing output.
+Existing destination files retain the core destination collision behavior.
+The result is always `Fidelity::Canonical`, with experimental and loss warnings.
+The ordinary API still echoes unchanged native sources exactly and refuses
+fresh native output; format metadata intentionally remains `can_emit=false`.
+
+```sh
+cargo test -p powerio --test sincal_emit --test sincal --test crate_graph
+```
+
+Public tests cover both families and containers, deterministic output, actual
+IR edits, typed modules, non-network rejection, explicit family mismatch,
+missing/inapplicable voltage options, invalid archive names, no partial output
+or overwrite, preserved source echo, and unchanged default MATPOWER emission.
+The facade depends on the shared SINCAL crate only for model-neutral packaging;
+backend dependencies remain independent. CLI/Python/C experimental writer
+options remain separate work.
+
+### Experimental open-switch output
+
+Open switches now write for canonical phase selections L1/L2/L3/L12/L23/L31/L123.
+Their endpoints stay separate even when they carry unequal declared voltages.
+The canonical native representation is a one-metre ordinary line with exactly
+zero series and shunt parameters and an explicitly open first terminal. The
+reader represents it with an auxiliary bus, a closed ideal connection and an
+open terminal switch; it introduces no finite impedance or charging. A supplied
+uniform positive ampacity is retained on the ideal connection. No ampacity is
+invented when absent. Closed-switch collapse, including collapse of a readback
+carrier on a subsequent write, still reports omitted closed-switch ratings.
+Neutral switching, conductor permutations, nonuniform ampacities and unsafe
+partial closed-switch collapse remain explicit errors.
+
+Original synthetic tests cover all seven phase selections, optional ratings,
+deterministic bytes, read/edit/write, malformed limits, and source-free IR
+restoration followed by fresh SQLite/archive emission. `check_open_switch_writer.py`
+compares the actual original and fresh-readback typed circuits through independent
+dense MNA, then compares them with OpenDSS on the physical feeder with its tie
+open. Maximum fresh-readback voltage error is 6.36e-14 V; OpenDSS error is
+1.89e-5 V with the documented 1e-6-ohm ideal-source approximation. Closing each
+recovered tie changes voltage by at least 0.117 V. `writer-open-switches.json`
+records the seven cases, negative controls, tool versions and hashes. This
+establishes electrical writer/readback equivalence, not native SINCAL acceptance.
+
+```sh
+POWERIO_SINCAL_OPEN_SWITCH_EXPORT=/tmp/open-switch-circuits \
+  cargo test -p powerio-dist --lib export_open_switch_writer_oracle -- --ignored
+python3 evals/sincal/check_open_switch_writer.py /tmp/open-switch-circuits \
+  /tmp/writer-open-switches.json
+```
+
+No third-party model or new fixture is required; synthetic exports stay external.

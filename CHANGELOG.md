@@ -9,9 +9,20 @@
   supported; active profiles remain explicit mapping work. Unqualified SINCAL input
   requires profile selection; unsupported phase modes never fall back to a
   balanced projection. Unchanged modules echo native bytes exactly, while
-  edited and IR-restored modules refuse fresh native output. Cross-format
-  emission reports omitted source-only data. The writer remains a separate
-  experimental milestone; other schemas and unbalanced reading are in progress.
+  ordinary emission of edited and IR-restored modules refuses fresh native output.
+  Cross-format emission reports omitted source-only data; other schemas and
+  unbalanced reading are in progress.
+
+- Add Rust facade `emit_with_options` with an explicit experimental SINCAL writer
+  option. It creates fresh schema-14.8 SQLite or candidate `.sinx` output from
+  either existing network family, using separate electrical backends. The static
+  subset supports source/line/load/transformer circuits, including selected
+  finite multiconductor transformers and verified primitive read/edit/rewrite.
+  Distribution bus nominal voltages must be supplied explicitly. Unsupported
+  physics fails before output is committed; permitted losses are diagnosed.
+  Default emission and exact-source echo are unchanged; format metadata remains
+  `can_emit=false`. Native desktop acceptance and writer binding options remain
+  separate work.
 
 - Multiconductor voltage sources can prescribe voltages relative to an explicit
   terminal, preserving floating-star displacement and reference current in the

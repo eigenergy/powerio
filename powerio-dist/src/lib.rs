@@ -148,3 +148,9 @@ pub fn __audit_sincal_multiconductor_at(
 ) -> Result<String> {
     sincal::audit_snapshot_at(snapshot, hours)
 }
+
+#[doc(hidden)]
+pub use sincal::{
+    ExperimentalMulticonductorOptions, ExperimentalMulticonductorOutput,
+    write_experimental_multiconductor as __write_sincal_multiconductor_experimental,
+};

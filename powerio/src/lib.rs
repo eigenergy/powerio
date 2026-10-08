@@ -204,7 +204,9 @@ pub mod dist_geo;
 pub use __gridfm::codes as gridfm_codes;
 mod stored;
 mod write;
-pub use write::emit;
+pub use write::{EmitOptions, emit, emit_with_options};
+mod sincal_write;
+pub use sincal_write::{SincalContainer, SincalExperimentalOptions};
 mod ir;
 #[cfg(feature = "schema")]
 pub use ir::generate_ir_schema;

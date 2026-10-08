@@ -51,11 +51,23 @@ mod source_mapping;
 mod source_mapping_tests;
 mod source_sequence;
 mod topology;
+mod write;
+mod write_equipment;
+mod write_primitive;
+mod write_topology;
+mod write_transformer;
+mod write_validate;
+pub use write::{
+    ExperimentalMulticonductorOptions, ExperimentalMulticonductorOutput,
+    write_experimental_multiconductor,
+};
 mod transformer;
 mod transformer_impedance;
 mod transformer_mapping;
 #[cfg(test)]
 mod transformer_partial_tests;
+#[cfg(test)]
+mod write_tests;
 
 use crate::{Error, Result};
 use powerio_core::Source;
@@ -136,3 +148,6 @@ mod lpc_tests;
 
 #[cfg(test)]
 mod public_tests;
+
+#[cfg(test)]
+mod write_transformer_tests;

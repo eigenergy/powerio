@@ -95,6 +95,11 @@ powerio_core::diagnostic_codes! {
         "the module does not carry a multiconductor payload to lower",
         category = Request;
 
+    REQUEST_EMIT_INVALID_OPTIONS = "REQUEST.EMIT.INVALID_OPTIONS", Error,
+        "emission options do not apply to the requested format or value", category = Request;
+    EMIT_SINCAL_PACKAGING_FAILED = "EMIT.MODULE.SINCAL_PACKAGING_FAILED", Error,
+        "experimental native SINCAL container construction failed", category = Output;
+
     // Failures.
     REQUEST_MODULE_WRONG_MODEL_KIND = "REQUEST.MODULE.WRONG_MODEL_KIND", Error,
         "the call asks for a model family the document does not carry", category = Request;

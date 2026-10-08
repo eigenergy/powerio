@@ -209,6 +209,16 @@ fn unknown_format(format: &str) -> Error {
     )
 }
 
+/// Facade emission options. Defaults preserve the ordinary source-echo and
+/// canonical writer behavior for every format.
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
+pub struct EmitOptions {
+    /// Fresh SINCAL generation is experimental and must be requested explicitly.
+    /// When present, this bypasses retained-source echo even for unchanged input.
+    pub sincal_experimental: Option<crate::SincalExperimentalOptions>,
+}
+
 /// Emit one module as `format` into `output`. The concrete value routes to its
 /// grid exchange format implementation. PowerIO IR uses [`crate::serialize`]
 /// instead.
@@ -234,8 +244,31 @@ pub fn emit<T>(
 where
     T: Clone + Into<PioValue>,
 {
+    emit_with_options(module, format, &EmitOptions::default(), output)
+}
+
+/// Emit with explicit facade options. An experimental SINCAL request always
+/// creates fresh typed output; it does not fall back to retained source echo.
+/// The default options are equivalent to [`emit`].
+///
+/// # Errors
+/// The same failures as [`emit`], invalid options for the selected format/value,
+/// or unsupported physics in the explicitly selected experimental profile.
+pub fn emit_with_options<T>(
+    module: &PioModule<T>,
+    format: &str,
+    options: &EmitOptions,
+    output: impl powerio_core::IntoDestination,
+) -> Result<EmitResult, Error>
+where
+    T: Clone + Into<PioValue>,
+{
     let module = module.clone().map_value(Into::into);
-    let result = emit_dynamic(&module, format, output.into_destination()?)?;
+    let destination = output.into_destination()?;
+    if let Some(options) = &options.sincal_experimental {
+        return crate::sincal_write::emit(&module, format, options, destination);
+    }
+    let result = emit_dynamic(&module, format, destination)?;
     let from_sincal = module.sources().iter().any(|source| {
         source
             .format()

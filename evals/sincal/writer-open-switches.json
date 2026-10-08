@@ -1,0 +1,88 @@
+{
+  "scope": "Electrical checks for fresh native open-switch output; no SINCAL execution.\nIndependent MNA compares original typed circuits and native readbacks. OpenDSS\nsolves the original feeder with the tie disconnected (an open ideal tie has no\nadmittance). Deliberately closing each recovered tie must change the solution.\n",
+  "cases": [
+    {
+      "phases": [
+        "1"
+      ],
+      "fresh_voltage_error_v": 6.355287432313019e-14,
+      "opendss_voltage_error_v": 1.887914843046563e-05,
+      "closed_tie_counterexample_v": 0.11788862896749526,
+      "mna_residual": 1.6077746776921857e-12,
+      "export_sha256": "18276f16c86f438fbbdf40ba41b7da8f4a646e4388af74977175cdeeec5779af"
+    },
+    {
+      "phases": [
+        "2"
+      ],
+      "fresh_voltage_error_v": 6.355287432313019e-14,
+      "opendss_voltage_error_v": 1.887914843046563e-05,
+      "closed_tie_counterexample_v": 0.36863209994521107,
+      "mna_residual": 1.6077746776921857e-12,
+      "export_sha256": "46852d6370eff7a0e883f035395908d9ae2678dd6b7f6dbde647520a7eef1f4e"
+    },
+    {
+      "phases": [
+        "3"
+      ],
+      "fresh_voltage_error_v": 6.355287432313019e-14,
+      "opendss_voltage_error_v": 1.887914843046563e-05,
+      "closed_tie_counterexample_v": 0.6564170470353481,
+      "mna_residual": 1.6077746776921857e-12,
+      "export_sha256": "b8934c846d00f10ee8c0dea055a19de9a9a3f132db8a0b55d3fae5da9fcfdecc"
+    },
+    {
+      "phases": [
+        "1",
+        "2"
+      ],
+      "fresh_voltage_error_v": 6.355287432313019e-14,
+      "opendss_voltage_error_v": 1.887914843046563e-05,
+      "closed_tie_counterexample_v": 0.36863209994521107,
+      "mna_residual": 1.159382807962353e-12,
+      "export_sha256": "44590b61a2c9fc62dfae9840c3c3b182c04b19c074342bfbbfb45c4db93dd273"
+    },
+    {
+      "phases": [
+        "2",
+        "3"
+      ],
+      "fresh_voltage_error_v": 6.355287432313019e-14,
+      "opendss_voltage_error_v": 1.887914843046563e-05,
+      "closed_tie_counterexample_v": 0.6564170470352573,
+      "mna_residual": 1.159382807962353e-12,
+      "export_sha256": "cfa00a67d6cb7dce82a5698127aec6532d966820a0f92d8f69c79d4b4d5c2e11"
+    },
+    {
+      "phases": [
+        "3",
+        "1"
+      ],
+      "fresh_voltage_error_v": 6.355287432313019e-14,
+      "opendss_voltage_error_v": 1.887914843046563e-05,
+      "closed_tie_counterexample_v": 0.6564170470352968,
+      "mna_residual": 1.159382807962353e-12,
+      "export_sha256": "b5f006d095b4573623559b61b055f8ea0c0f52dcdf8b55240ffa5af2a2578805"
+    },
+    {
+      "phases": [
+        "1",
+        "2",
+        "3"
+      ],
+      "fresh_voltage_error_v": 6.355287432313019e-14,
+      "opendss_voltage_error_v": 1.887914843046563e-05,
+      "closed_tie_counterexample_v": 0.6564170470353481,
+      "mna_residual": 1.6077746776921857e-12,
+      "export_sha256": "a66c14d827e909f743d32397948554e8e65bce69bf99fa0c8c59241a374a11ae"
+    }
+  ],
+  "opendss_deck_sha256": "47c8051cc0e6255298e3048134395021dfd85ea94effa935a7136620a17e0d7f",
+  "tolerance_v": 0.001,
+  "fresh_tolerance_v": 1e-09,
+  "ideal_source_engine_approximation_ohms": 1e-06,
+  "numpy": "2.5.3",
+  "engine": "DSS C-API Library version 0.14.5 revision 87d85c2622c8281b92255335bc7c09b11191b21d based on OpenDSS SVN 3723 [FPC 3.2.2] (64-bit build) MVMULT INCREMENTAL_Y CONTEXT_API PM 20240329033829; License Status: Open \nDSS-Python version: 0.15.7\nOpenDSSDirect.py version: 0.9.4",
+  "native_execution": false,
+  "passed": true
+}
