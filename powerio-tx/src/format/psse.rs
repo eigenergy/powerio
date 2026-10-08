@@ -184,6 +184,13 @@ fn warn_generator_energy_sources_dropped(net: &BalancedNetwork, warnings: &mut D
 /// inline-comment delimiter (a PSS/E record splits on `/` before tokenizing).
 const NAME_FORBIDDEN: &[char] = &['\'', '/'];
 
+/// Characters that would corrupt a field replayed without quotes: either quote
+/// character opens a quoted span the reader extends to the end of the record,
+/// and `/` truncates the record. They become [`BARE_REPLACEMENT`], not a blank,
+/// which would split the field in two and shift every later column.
+const BARE_FORBIDDEN: &[char] = &['\'', '"', '/'];
+const BARE_REPLACEMENT: char = '_';
+
 fn write_system_switch(
     out: &mut String,
     switch: &Switch,
@@ -1753,7 +1760,7 @@ fn dc_converter_tail(extras: &Extras, key: &str, rev: u32) -> (String, Option<St
         // record, so they go through the quoting seam like every other
         // interpolated string: a terminator here would forge a whole DC
         // record or a section end.
-        .map(|field| sanitize_quoted(field, NAME_FORBIDDEN, ' ').into_owned())
+        .map(|field| sanitize_quoted(field, BARE_FORBIDDEN, BARE_REPLACEMENT).into_owned())
         .collect::<Vec<_>>();
     let mut dropped_bridges = None;
     match (fields.len() > CONVERTER_TAIL_FIELDS_33, states_bridges) {
@@ -3064,17 +3071,30 @@ fn parse_system_wide_enable(
 }
 
 /// Return the record body before an inline `/` comment, but only when the slash
-/// is outside a single-quoted PSS/E field.
+/// is outside a quoted PSS/E field.
 fn strip_inline_comment(line: &str) -> &str {
-    let mut quoted = false;
+    let mut quote = None;
     for (i, c) in line.char_indices() {
         match c {
-            '\'' => quoted = !quoted,
-            '/' if !quoted => return &line[..i],
+            '\'' | '"' if closes_or_opens(quote, c) => quote = toggle_quote(quote, c),
+            '/' if quote.is_none() => return &line[..i],
             _ => {}
         }
     }
     line
+}
+
+/// Whether quote character `c` opens or closes a quoted PSS/E field. PSS/E
+/// accepts strings in single or double quotes, and a field closes only on the
+/// character that opened it, so `'12" PIPE'` and `"OWNER'S TIE"` keep the other
+/// quote as text.
+fn closes_or_opens(quote: Option<char>, c: char) -> bool {
+    quote.is_none_or(|open| open == c)
+}
+
+/// The quote state after `c` opens or closes a field.
+fn toggle_quote(quote: Option<char>, c: char) -> Option<char> {
+    if quote.is_some() { None } else { Some(c) }
 }
 
 /// Split a PSS/E record into trimmed, unquoted fields, dropping a trailing
@@ -3087,6 +3107,8 @@ fn strip_inline_comment(line: &str) -> &str {
 /// blank padded, so `' 1'` and `'1 '` name one device and `'BUS A       '` is
 /// the name `BUS A`. The two delimiter styles used to disagree here, and the
 /// same record body tokenized differently depending on which a producer chose.
+///
+/// A field may be quoted with `'` or `"`; see [`closes_or_opens`].
 pub(super) fn fields(line: &str) -> Vec<Cow<'_, str>> {
     let code = strip_inline_comment(line);
     let comma_delimited = code.contains(',');
@@ -3101,22 +3123,22 @@ pub(super) fn fields(line: &str) -> Vec<Cow<'_, str>> {
     let mut owned: Option<String> = None;
     let mut field_start = 0usize;
     let mut segment_start = 0usize;
-    let mut quoted = false;
+    let mut quote = None;
     // A quoted span opened this field, so `''` holds its column instead of
     // vanishing and shifting every later one, as it does under commas.
     let mut was_quoted = false;
     let mut after_comma = false;
     for (i, c) in code.char_indices() {
         match c {
-            '\'' => {
+            '\'' | '"' if closes_or_opens(quote, c) => {
                 owned
                     .get_or_insert_with(String::new)
                     .push_str(&code[segment_start..i]);
                 segment_start = i + 1;
-                quoted = !quoted;
+                quote = toggle_quote(quote, c);
                 was_quoted = true;
             }
-            ',' if !quoted => {
+            ',' if quote.is_none() => {
                 let content = owned.is_some() || !code[field_start..i].trim().is_empty();
                 if content || was_quoted {
                     push_field(&mut out, owned.take(), &code[segment_start..i]);
@@ -3128,7 +3150,7 @@ pub(super) fn fields(line: &str) -> Vec<Cow<'_, str>> {
                 was_quoted = false;
                 after_comma = true;
             }
-            c if c.is_whitespace() && !quoted => {
+            c if c.is_whitespace() && quote.is_none() => {
                 let content = owned.is_some() || !code[field_start..i].trim().is_empty();
                 if content || was_quoted {
                     push_field(&mut out, owned.take(), &code[segment_start..i]);
@@ -4771,7 +4793,7 @@ fn dc_tail(extras: &Extras, key: &str, default: &str) -> String {
             // a record, so they go through the quoting seam like every other
             // interpolated string: a terminator here would forge a whole DC
             // record or a section end.
-            .map(|f| sanitize_quoted(f, NAME_FORBIDDEN, ' ').into_owned())
+            .map(|f| sanitize_quoted(f, BARE_FORBIDDEN, BARE_REPLACEMENT).into_owned())
             .collect::<Vec<_>>()
             .join(", "),
         _ => default.to_string(),
@@ -5019,6 +5041,113 @@ mod tests {
             vec!["1", "", "3"],
             "and holds under whitespace too"
         );
+    }
+
+    /// PSS/E strings may also be double quoted. A field closes only on the
+    /// quote character that opened it, so a comma, slash, or blank inside it is
+    /// text and the other quote character is kept literally.
+    #[test]
+    fn fields_accept_double_quoted_strings() {
+        assert_eq!(
+            fields(r#"1, "BUS A, N/S   ", 2.5 / trailing comment"#),
+            vec!["1", "BUS A, N/S", "2.5"]
+        );
+        assert_eq!(
+            fields(r#"1 "BUS A, N/S   " 2.5 / trailing comment"#),
+            vec!["1", "BUS A, N/S", "2.5"]
+        );
+        assert_eq!(
+            fields(r#"RATING, 1, "RATE1 ", "RATING SET 1                    ""#),
+            vec!["RATING", "1", "RATE1", "RATING SET 1"]
+        );
+        // A revision 35 FACTS device record ends with a blank double-quoted
+        // MNAME, which holds its column like a blank single-quoted field.
+        let facts = fields(
+            r#"'FACTS 1     ',3,0,1,0.0,0.0,1.0,9999.0,9999.0,0.9,1.1,1.0,0.0,0.05,100.0,1,0.0,0.0,0,0,0,"            ""#,
+        );
+        assert_eq!(facts.len(), 22);
+        assert_eq!(facts[0], "FACTS 1");
+        assert_eq!(facts[21], "");
+        assert_eq!(fields(r#"1 "" 3"#), vec!["1", "", "3"]);
+        assert_eq!(fields(r#"1, '12" PIPE', 2"#), vec!["1", r#"12" PIPE"#, "2"]);
+        assert_eq!(
+            fields(r#"1, "OWNER'S TIE", 2"#),
+            vec!["1", "OWNER'S TIE", "2"]
+        );
+        assert_eq!(
+            fields(r#"1, '12" A/B' / comment with "quotes""#),
+            vec!["1", r#"12" A/B"#]
+        );
+    }
+
+    /// A revision 35 case that double quotes its strings reads like the single
+    /// quoted spelling: every later column of a record stays in place, and the
+    /// FACTS and system-wide RATING records keep their shape.
+    #[test]
+    fn reads_double_quoted_string_fields() {
+        let raw = r#"0, 100.00, 35, 0, 1, 60.00 / synthetic
+CASE
+COMMENT
+GENERAL, THRSHZ=0.0001
+RATING, 1, "RATE1 ", "RATING SET 1                    "
+RATING, 2, "RATE2 ", "RATING SET 2                    "
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,"BUS A, N/S  ", 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'12" PIPE    ', 115.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+3,"OWNER'S TIE ", 69.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+2,"1 ",1,1,1,10.0,3.0,0.0,0.0,0.0,0.0,1,1,0,0.0,0.0,0,"            "
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+1,2,"1 ",0.01,0.05,0.001,"LINE A-B, N/S",100.0,90.0,80.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1,1,0.0,1,1.0
+0 / END OF BRANCH DATA, BEGIN FACTS DEVICE DATA
+"FACTS 1     ",3,0,1,0.0,0.0,1.0,9999.0,9999.0,0.9,1.1,1.0,0.0,0.05,100.0,1,0.0,0.0,0,0,0,"            "
+0 / END OF FACTS DEVICE DATA, BEGIN SWITCHED SHUNT DATA
+Q
+"#;
+        let mut warnings = Diagnostics::new();
+        let net = parse_psse_source(raw, None, &mut warnings).unwrap();
+
+        let names = net
+            .buses()
+            .iter()
+            .map(|bus| bus.name.as_deref())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            [Some("BUS A, N/S"), Some(r#"12" PIPE"#), Some("OWNER'S TIE")]
+        );
+        close(net.buses()[0].base_kv, 230.0);
+        close(net.buses()[1].base_kv, 115.0);
+        close(net.buses()[2].base_kv, 69.0);
+        close(net.loads()[0].p, 10.0);
+        close(net.loads()[0].q, 3.0);
+        let branch = &net.branches()[0];
+        assert_eq!(branch.name.as_deref(), Some("LINE A-B, N/S"));
+        close(branch.rate_a, 100.0);
+        close(branch.rate_c, 80.0);
+        assert!(branch.in_service);
+        close(
+            net.solver()
+                .as_ref()
+                .and_then(|solver| solver.zero_impedance_threshold)
+                .unwrap(),
+            0.0001,
+        );
+        assert!(
+            warnings
+                .lines()
+                .iter()
+                .any(|line| line.contains("FACTS DEVICE section (1 record line(s))")),
+            "the FACTS record is one skipped record: {warnings:?}"
+        );
+
+        // A name holding a double quote is written single quoted and reads
+        // back unchanged.
+        let again = parse_psse(&write_psse_rev(&net, 35).text).unwrap();
+        assert_eq!(again.buses()[1].name.as_deref(), Some(r#"12" PIPE"#));
+        close(again.buses()[0].base_kv, 230.0);
     }
 
     #[test]
@@ -7081,6 +7210,46 @@ Q
         assert!(dc2.in_service);
         close(dc2.pf, 350.0);
         close(dc2.pt, 348.775);
+    }
+
+    /// A retained DC tail is replayed without quotes, so a quote character in
+    /// one of its fields would open a quoted span that swallows the rest of
+    /// the record. The writer replaces it, and every later column survives.
+    #[test]
+    fn replayed_dc_tail_never_opens_a_quoted_field() {
+        let raw = r#"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+4,'B4          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+5,'B5          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA
+'DCLINE1', 1, 2.5, 350.0, 500.0, 0.0, 0.0, 0.0, '1"2', 0.0, 25, 1.0
+4, 1, 15.0, 5.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.5, 0.51, 0.00625, 0, 0, 0, '1', 0.0
+5, 1, 15.0, 5.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.5, 0.51, 0.00625, 0, 0, 0, '1', 0.0
+0 / END OF TWO-TERMINAL DC DATA, BEGIN VSC DC LINE DATA
+Q
+"#;
+        let net = parse_psse(raw).unwrap();
+        let tail = net.hvdc()[0].extras["psse_dc_control_tail"]
+            .as_array()
+            .expect("a non-default control tail is retained");
+        assert_eq!(tail[3], Value::from(r#"1"2"#));
+
+        let text = write_psse(&net).text;
+        let back = parse_psse(&text).unwrap();
+        let tail = back.hvdc()[0].extras["psse_dc_control_tail"]
+            .as_array()
+            .expect("the control tail survives the write");
+        assert_eq!(tail.len(), 7, "{text}");
+        assert_eq!(tail[3], Value::from("1_2"));
+        assert_eq!(tail[5], Value::from("25"));
     }
 
     /// The other two SETVL spellings, and the guard. A negative SETVL under
