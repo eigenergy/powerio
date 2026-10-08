@@ -1,8 +1,9 @@
 # GridLAB-D and OpenDSS oracle calibration
 
-These tools check independent engines against analytic static circuits before
-using those engines to validate PowerIO conversion. They currently make **no
-claim of PowerIO GLM support or full format compatibility**.
+These tools calibrate independent engines against analytic static circuits,
+then validate specific PowerIO conversion profiles. Electrical reader and IR
+checks cover the initial profile described below. They do not establish full
+format compatibility, canonical GLM writing or OpenDSS conversion equivalence.
 
 `engines.json` pins the PNNL 5.3.0 macOS archive and runtime files, the Arras
 4.3.17 Linux amd64 container by digest, and OpenDSSDirect 0.9.4 with DSS C-API
@@ -99,6 +100,49 @@ warning that a supplied 2×2 matrix cannot determine neutral/ground currents.
 The center-tapped tests establish grounded service-terminal conventions; they
 do not establish floating-neutral or triplex-cable equivalence.
 
+## Electrical reader and IR
+
+`powerio_dist::glm::parse` returns `PioModule<MulticonductorNetwork>` for an
+initial static profile: phase-to-earth node/meter/load objects, fixed SWING
+phasors, independent constant P/I/Z load terms, and overhead lines with explicit
+phase impedance matrices. It materializes an earth return on buses; this is
+not an explicit line-neutral model. Phase subsets retain their A/B/C identities.
+Parented loads share their root electrical bus. Line impedances become ohms
+per meter; enabled line capacitance becomes half the shunt admittance at each
+end. Quoted unit suffixes retain their native interpretation and diagnostics.
+Numeric setters are validated in source order even when later overwritten or
+assigned to an inactive phase.
+
+The reader rejects unmodeled physical properties, unknown globals, active
+device classes, geometry-dependent lines, delta/split-phase flags, conflicting
+child nominal voltages and names that collide under the current canonical
+case-insensitive lookup. Coordinates are available through the separate source
+API; network attachment remains unfinished and currently fails explicitly.
+Instrumentation remains in retained source with a remark. No recorder, assertion
+or controller executes during parsing. Facade format dispatch and canonical GLM
+emission remain unfinished.
+
+Build and run the reader qualification with:
+
+```sh
+cargo build -p powerio --example glm_network
+python evals/gridlabd/network_oracle.py --pnnl-root "$PNNL_ROOT" \
+  --reader target/debug/examples/glm_network --output /tmp/gld-network-reader
+```
+
+The bridge serializes the imported network to PowerIO IR, deserializes it and
+requires identical network data. The evaluator uses the restored typed tables
+to independently calculate branch currents, powers, losses and load-current
+balance at each engine's solved voltages. It covers eight circuits per engine:
+single-phase and coupled three-phase constant impedance, phase C alone, mixed
+P/I/Z, a shifted source phasor, enabled line charging, and parented loads with
+NR and FBS. The original constant-impedance circuits additionally match the
+independent linear solve. Deliberate resistance, load-power, source-angle and
+capacitance errors must fail. Reports include engine identity, input hashes,
+typed network data, IR equality and each residual's absolute-plus-relative
+bound. This qualifies reader physics and IR preservation; fresh/edited GLM
+output and cross-format engine validation need separate checks.
+
 ## Published references and limits
 
 `object_oracle.py` checks the explicit object index against both native engines.
@@ -115,7 +159,7 @@ independent analytic reference.
 `GlmProject` maps syntax/reference errors back to original project buffers.
 `ObjectIndex` borrows its properties and keeps explicit numeric IDs separate
 from local ordinals. It retains repeated scalar properties and uninterpreted
-syntax. This is not yet an electrical reader: dynamic object creation,
+syntax. The index alone does not establish electrical support: dynamic object creation,
 namespaces, relative/wildcard-selection references, reassigned identities and
 deferred repeated-reference ordering remain unqualified and are not silently
 resolved by guessing. Duplicate numeric IDs are rejected, including Arras

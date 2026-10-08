@@ -39,6 +39,10 @@ pub mod codes {
             "a GLM quantity or unit cannot be interpreted in the static profile", category = Parse;
         READ_GLM_UNIT_IGNORED = "READ.GLM.UNIT_IGNORED", Warning,
             "native quantity conversion ignores a stated unit suffix";
+        READ_GLM_ELECTRICAL_UNSUPPORTED = "READ.GLM.ELECTRICAL_UNSUPPORTED", Error,
+            "a GLM electrical feature has no verified static mapping", category = Data;
+        READ_GLM_SOURCE_ONLY = "READ.GLM.SOURCE_ONLY", Remark,
+            "non-electrical GLM data remains in the retained source";
 
         // READ.DSS: decoded, but not representable in the multiconductor model.
         /// A `Redirect`/`Compile`/`Buscoords` include the reader refused

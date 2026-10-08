@@ -53,6 +53,15 @@ impl GlmProject {
         mapped_error(&self.prepared, &codes::PARSE_GLM_OBJECT, span, message)
     }
 
+    pub(super) fn electrical_error(&self, span: &SourceSpan, message: impl Into<String>) -> Error {
+        mapped_error(
+            &self.prepared,
+            &codes::READ_GLM_ELECTRICAL_UNSUPPORTED,
+            span,
+            message,
+        )
+    }
+
     pub(super) fn quantity_error(&self, span: &SourceSpan, message: &str) -> Error {
         mapped_error(&self.prepared, &codes::PARSE_GLM_QUANTITY, span, message)
     }
