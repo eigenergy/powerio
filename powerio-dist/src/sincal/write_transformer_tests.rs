@@ -80,7 +80,7 @@ fn finite_transformers_preserve_conductor_primitive_and_winding_order() {
                     let recovered = super::read_snapshot(snapshot).unwrap();
                     assert_eq!(recovered.shunts().len(), 1);
                     assert_eq!(recovered.switches().len(), 2);
-                    assert!(recovered.transformers().is_empty());
+                    assert_eq!(recovered.transformers().as_slice(), []);
                     // Recreate from source-free serde data, including an edit.
                     let json = serde_json::to_vec(&net).unwrap();
                     let mut restored: MulticonductorNetwork =

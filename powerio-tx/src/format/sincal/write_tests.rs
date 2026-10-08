@@ -229,8 +229,8 @@ fn bus_only_and_unrated_lines_do_not_invent_sources_or_limits() {
     let mut net = BalancedNetwork::new("empty equipment", 100.0);
     net.buses_mut().push(Bus::new(BusId(7), BusType::Pq, 10.0));
     let out = reread(&net);
-    assert!(out.generators().is_empty());
-    assert!(out.branches().is_empty());
+    assert_eq!(out.generators().as_slice(), []);
+    assert_eq!(out.branches().as_slice(), []);
     net.buses_mut().push(Bus::new(BusId(8), BusType::Pq, 10.0));
     net.branches_mut()
         .push(Branch::new(BusId(7), BusId(8), 0.01, -0.02));
