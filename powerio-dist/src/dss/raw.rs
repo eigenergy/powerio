@@ -249,9 +249,13 @@ pub struct RawDss {
     pub diagnostics: Vec<crate::diagnostics::Diagnostic>,
     index: BTreeMap<(String, String), usize>,
     active: Option<usize>,
-    /// Properties retained across every object, charged by each push and
-    /// each `like=` splice against `MAX_TOTAL_PROPS`.
+    /// Properties and source reset records retained across every object,
+    /// charged by each push and `like=` splice against `MAX_TOTAL_PROPS`.
     total_props: usize,
+    // Source MakeLike copies resolved state, including flags/defaults that
+    // an appended property history alone cannot restore. Reset markers refer
+    // to offsets in the existing flattened history; no extra history tree.
+    source_replay: BTreeMap<usize, SourceReplay>,
     /// Diagnostic records retained, against `MAX_TOTAL_DIAGNOSTICS`. Survives
     /// `clear` with the channel it counts.
     total_diagnostics: usize,
@@ -264,7 +268,18 @@ pub struct RawDss {
     halted: bool,
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct SourceReplay {
+    pub constructor_frequency: f64,
+    pub resets: Vec<(usize, f64)>,
+}
+
 impl RawDss {
+    #[cfg(test)]
+    pub(super) fn source_replay(&self, object: &RawObject) -> &SourceReplay {
+        let index = self.index[&(object.class.clone(), object.name.to_ascii_lowercase())];
+        &self.source_replay[&index]
+    }
     pub fn find(&self, class: &str, name: &str) -> Option<&RawObject> {
         self.index
             .get(&(class.to_ascii_lowercase(), name.to_ascii_lowercase()))
@@ -1147,6 +1162,27 @@ impl<L: Loader> Executor<'_, L> {
             props: Vec::new(),
             edits: Vec::new(),
         });
+        if self.raw.objects[idx].class == "vsource" {
+            let frequency = self
+                .raw
+                .options
+                .iter()
+                .rev()
+                .find(|(name, _)| {
+                    name.len() >= "defaultb".len()
+                        && "defaultbasefrequency".starts_with(name.as_str())
+                })
+                .map_or(super::defaults::BASE_FREQUENCY, |(_, value)| {
+                    value.to_f64(Some(&self.raw.vars)).unwrap_or(f64::NAN)
+                });
+            self.raw.source_replay.insert(
+                idx,
+                SourceReplay {
+                    constructor_frequency: frequency,
+                    resets: Vec::new(),
+                },
+            );
+        }
         idx
     }
 
@@ -1166,6 +1202,32 @@ impl<L: Loader> Executor<'_, L> {
         self.apply_props(idx, props, ctx);
     }
 
+    fn retained_property_count(&self, idx: usize) -> usize {
+        self.raw.objects[idx].props.len()
+            + self
+                .raw
+                .source_replay
+                .get(&idx)
+                .map_or(0, |r| r.resets.len())
+    }
+
+    fn append_source_resets(&mut self, target: usize, source: usize, base: usize) {
+        if let Some(replay) = self.raw.source_replay.get(&source).cloned() {
+            let target = self
+                .raw
+                .source_replay
+                .get_mut(&target)
+                .expect("source replay initialized");
+            target.resets.push((base, replay.constructor_frequency));
+            target.resets.extend(
+                replay
+                    .resets
+                    .into_iter()
+                    .map(|(offset, frequency)| (base + offset, frequency)),
+            );
+        }
+    }
+
     fn apply_props(&mut self, idx: usize, props: Vec<RawProp>, ctx: &dyn Fn(String) -> String) {
         self.raw.active = Some(idx);
         for p in props {
@@ -1179,14 +1241,29 @@ impl<L: Loader> Executor<'_, L> {
                 let key = (class.clone(), p.value.text.to_ascii_lowercase());
                 match self.raw.index.get(&key).copied() {
                     Some(src) => {
+                        if class == "vsource" && src == idx {
+                            // Native source MakeLike(self) does not recalculate
+                            // the current edit or reset its in-flight setters.
+                            continue;
+                        }
                         let base = self.raw.objects[idx].props.len();
                         let src_len = self.raw.objects[src].props.len();
+                        let replay_charge = self
+                            .raw
+                            .source_replay
+                            .get(&src)
+                            .map_or(0, |r| r.resets.len() + 1);
                         // Refuse a splice that would push the object past the
                         // cap. A self reference (`Edit X like=X`) or a mutual
                         // chain otherwise doubles the prop count per edit; the
                         // guard turns that into a warning instead of unbounded
                         // growth.
-                        if base.saturating_add(src_len) > MAX_OBJECT_PROPS {
+                        if self
+                            .retained_property_count(idx)
+                            .saturating_add(src_len)
+                            .saturating_add(replay_charge)
+                            > MAX_OBJECT_PROPS
+                        {
                             self.raw.warn(
                                 &C::READ_DSS_VALUE_CLAMPED,
                                 ctx(format!(
@@ -1197,7 +1274,13 @@ impl<L: Loader> Executor<'_, L> {
                             );
                             continue;
                         }
-                        if self.raw.total_props.saturating_add(src_len) > MAX_TOTAL_PROPS {
+                        if self
+                            .raw
+                            .total_props
+                            .saturating_add(src_len)
+                            .saturating_add(replay_charge)
+                            > MAX_TOTAL_PROPS
+                        {
                             self.raw.warn(
                                 &C::READ_DSS_VALUE_CLAMPED,
                                 ctx(format!(
@@ -1208,7 +1291,8 @@ impl<L: Loader> Executor<'_, L> {
                             );
                             continue;
                         }
-                        self.raw.total_props += src_len;
+                        self.raw.total_props += src_len + replay_charge;
+                        self.append_source_resets(idx, src, base);
                         let cloned = self.raw.objects[src].props.clone();
                         let bounds: Vec<usize> = self.raw.objects[src]
                             .edit_bounds()
@@ -1224,7 +1308,7 @@ impl<L: Loader> Executor<'_, L> {
                 }
                 continue;
             }
-            if self.raw.objects[idx].props.len() >= MAX_OBJECT_PROPS {
+            if self.retained_property_count(idx) >= MAX_OBJECT_PROPS {
                 self.raw.warn(
                     &C::READ_DSS_VALUE_CLAMPED,
                     ctx(format!(
@@ -1569,6 +1653,22 @@ mod tests {
 
     fn parse(text: &str) -> RawDss {
         __parse_raw_with(text, "test.dss", &mut no_files)
+    }
+
+    #[test]
+    fn empty_source_copy_histories_are_bounded_even_without_properties() {
+        let mut text = String::from("New Circuit.c\nNew Vsource.other\n");
+        for _ in 0..24 {
+            text.push_str("Edit Vsource.source like=other\nEdit Vsource.other like=source\n");
+        }
+        let raw = parse(&text);
+        assert!(raw.warnings.iter().any(|w| w.contains("maximum")));
+        assert!(raw.total_props <= MAX_TOTAL_PROPS);
+        for object in &raw.objects {
+            assert!(
+                object.props.len() + raw.source_replay(object).resets.len() <= MAX_OBJECT_PROPS
+            );
+        }
     }
 
     #[test]

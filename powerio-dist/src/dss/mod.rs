@@ -11,6 +11,9 @@ pub mod prop;
 pub mod raw;
 pub mod read;
 mod rpn;
+// Calibrate the state replay before replacing the legacy source lowering.
+#[cfg(test)]
+mod source;
 mod write;
 
 pub use lex::{BusSpec, Param, Scanner, Value, VarMap};
