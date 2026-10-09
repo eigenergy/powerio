@@ -22,6 +22,10 @@ pub(super) struct Snapshot {
 pub(super) struct CopyPoint {
     pub start: usize,
     pub end: usize,
+    // Copied legacy edit checkpoints are not native EndEdit calls on the
+    // destination. Keep their exact span, including zero-property copies.
+    pub edit_start: usize,
+    pub edit_end: usize,
     pub source: Snapshot,
 }
 

@@ -9,6 +9,9 @@ pub mod defaults;
 mod frequency;
 pub mod lex;
 mod line_history;
+// Ordered electrical interpretation is qualified before public integration.
+#[cfg(test)]
+mod linecode;
 pub mod prop;
 pub mod raw;
 pub mod read;

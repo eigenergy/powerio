@@ -1472,10 +1472,14 @@ impl<L: Loader> Executor<'_, L> {
                 self.raw.total_props += src_len + replay_charge;
                 if self.raw.line_history.contains_key(&idx) {
                     let source = self.raw.line_snapshot(src);
+                    let edit_start = self.raw.objects[idx].edits.len();
+                    let edit_end = edit_start + self.raw.objects[src].edit_bounds().count();
                     self.raw.line_history.get_mut(&idx).unwrap().copies.push(
                         super::line_history::CopyPoint {
                             start: base,
                             end: base + src_len,
+                            edit_start,
+                            edit_end,
                             source,
                         },
                     );
